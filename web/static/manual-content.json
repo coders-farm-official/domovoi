@@ -287,6 +287,12 @@
     "dashboard": true
    }
   },
+  "settings/queue-history": {
+   "dashboard": "#settings/queue-history",
+   "app": {
+    "dashboard": true
+   }
+  },
   "settings/health": {
    "dashboard": "#settings/health",
    "app": {
@@ -349,7 +355,7 @@
       "text": "**Talk to a room.** Say {wake}, then what you want: \"set a timer for 10 minutes.\" Your household can also train a word of its own: see [Wake word and greeting](node:wake-word)."
      },
      {
-      "text": "**The dashboard.** Open it in any browser on your Wi-Fi, at the address whoever set up Domovoi gave you (it ends in `:6369`). You can manage music, files, chat, people and settings there."
+      "text": "**The dashboard.** Open it in any browser on your Wi-Fi: type `domovoi.local`. If that doesn't open, use the address whoever set up Domovoi gave you (it ends in `:6369`). The top of the dashboard shows the easiest address to give someone else: click it to copy it. You can manage music, files, chat, people and settings there."
      },
      {
       "text": "**The Domovoi app** on Android phones. It has the everyday pages, a music player and Chat. With no server in reach it still plays the phone's own music, and a chat on the phone can run on the phone itself."
@@ -409,7 +415,7 @@
     "platforms": [
      "dashboard"
     ],
-    "text": "**Claim the admin account** {admin}: the welcome that opens on a new Domovoi's dashboard asks for it (or [Settings → System → Advanced](route:settings/advanced), **set up admin**). Type the 8-word setup code and choose a password. Where the code is: the Windows installer shows it on its last page; on a Mac the Domovoi Setup window shows it; on Linux it is in a file on the server. Then keep the household token it shows: every phone and browser asks for it once. [More detail](doc:README.md#2-claim-the-admin-account)"
+    "text": "**Claim the admin account** {admin}: the welcome that opens on a new Domovoi's dashboard asks for it (or [Settings → System → Advanced](route:settings/advanced), **set up admin**). Type the 8-word setup code and choose a password. Where the code is: the Windows installer shows it on its last page; on Linux it is in a file on the server. Then keep the household token it shows: every phone and browser asks for it once. [More detail](doc:README.md#2-claim-the-admin-account)"
    },
    {
     "id": "internet",
@@ -553,6 +559,7 @@
    ],
    "pieces": [
     "chat",
+    "ask-video",
     "lookups",
     "good-and-not",
     "ai-off",
@@ -605,6 +612,7 @@
     "files",
     "documents",
     "printers",
+    "scan-reader",
     "calendar",
     "lists",
     "news"
@@ -953,13 +961,13 @@
        "text": "The **app** brings the everyday pages to your phone, with its own music player and Chat. Chat holds your chats on the home server and chats that run on the phone itself, with no server."
       },
       {
-       "text": "The dashboard's sidebar: **Chat**, then **Media** (Music, Podcasts, Audiobooks, Videos, and pages plugins add there, like Stations) and **Tools** (News, Calendar, Lists, Files), each opening in place, then **Plugins**. On a phone, Home's \"everything\" grid has the same groups."
+       "text": "The dashboard's sidebar: **Chat**, then **Media** (Music, Podcasts, Audiobooks, Videos) and **Tools** (News, Calendar, Lists, Files), each opening in place, then **Plugins**. A plugin's page joins Media or Tools, or gets a row of its own. On a phone, Home's \"everything\" grid has the same groups."
       },
       {
        "text": "That menu is the same in every browser, and an admin can change it in [Settings → System → App layout](route:settings/app-layout) → **Menu**: rename the groups, add or delete one, move any page into a group or to the top, and put things in another order. **Reset to default** brings the usual menu back. Nothing needs changing there; the phone app keeps its own layout."
       },
       {
-       "text": "**Settings** is in groups: Household (Rooms, People, Phones & browsers, Media folders, Printers & scanners), Voice, Chat & AI, Privacy, Documents (Fonts) and System (with App layout). The search box at the top finds a setting by name: try \"wake\", \"voice history\" or \"token\"."
+       "text": "**Settings** is in groups: Household (Rooms, People, Phones & browsers, Calendars, Media folders, Music mix, Queue history, Printers & scanners), Voice, Chat & AI, Privacy, Documents (Fonts) and System (About & updates, Health, App layout, Advanced). The search box at the top finds a setting by name: try \"wake\", \"voice history\" or \"token\"."
       }
      ]
     }
@@ -1061,7 +1069,7 @@
     },
     {
      "type": "p",
-     "text": "Your timers show on [Home](route:home) and in each room's **Timers** tab ([Settings → Household → Rooms](route:settings/rooms))."
+     "text": "Your timers show on [Home](route:home) and in each room's **Timers** tab ([Settings → Household → Rooms](route:settings/rooms)). Saying \"stop\" while a timer or an alarm is going off in the room stops it and leaves the music playing; say \"stop\" again to stop the music."
     },
     {
      "type": "p",
@@ -1311,7 +1319,7 @@
        "text": "play jazz upstairs",
        "handler": "music",
        "path": "fast",
-       "note": "a group of rooms you named in Settings → Rooms"
+       "note": "a group of rooms you named in Settings → Household → Rooms"
       },
       {
        "text": "join the kitchen",
@@ -1694,7 +1702,7 @@
        "only": "dashboard"
       },
       {
-       "text": "Every song in a list (Library, an artist's, album's or genre's songs, a playlist, a room's **Recently played**) has a **⋯** menu with **play next** and **add to queue**. It goes where the music plays: this browser (\"play next here\") or the room you're playing in (\"play next in kitchen\"); on a room's page it goes to that room.",
+       "text": "Every song in a list (Library, an artist's, album's or genre's songs, a playlist, a room's **Recently played**) has a **⋯** menu with **play next** and **add to queue**. It goes where the music plays: this browser (\"play next here\", \"add to queue here\") or the room you're playing in (\"play next in kitchen\", \"add to kitchen's queue\"); on a room's page it goes to that room.",
        "only": "dashboard"
       },
       {
@@ -1702,14 +1710,14 @@
        "only": "dashboard"
       },
       {
-       "text": "[Music](route:music/queue) → **room queue**: **move up**, **move down** and **remove from queue** on each song. **play next** on a song in the library puts it next in the room's queue.",
+       "text": "[Music](route:music/queue) → **room queue**: tap a song to play it now, hold its handle and drag to move it, and **×** takes it out. **play next** on a song in the library puts it next in this phone's queue, or in the room's queue while the phone plays to a room.",
        "only": "app"
       },
       {
        "text": "Playlists and favorites: [Music → Playlists](route:music/playlists)."
       },
       {
-       "text": "Browse by genre: [Music → Genres](route:music/genres). Each genre opens its songs, with **play**, **shuffle** and **add to queue** for a room, and **play here** / **shuffle here** for this browser. Genres come from your files, or from MusicBrainz for songs song recognition matched: a song whose file names no genre gets the genres MusicBrainz has for it (the song's own, else its album's, else its artist's). A genre in the file always wins. \"Rock; Indie\" counts under both; \"Hip-Hop\" and \"Rap\" are one. Songs with no genre are the **no genre** row at the end; while some of them are still waiting for MusicBrainz, the row says how many. Right after an update the server reads the genres of the songs already in your library in the background; until it is done the tab says \"reading genres from your files… N of M\".",
+       "text": "Browse by genre: [Music → Genres](route:music/genres). Each genre opens its songs, with **play**, **shuffle** and **add to queue** for a room, and **play here** / **shuffle here** for this browser. Genres come from your files, or from MusicBrainz for songs song recognition matched: a song whose file names no genre gets the genres MusicBrainz has for it (the song's own, else its album's, else its artist's). A genre in the file always wins. \"Rock; Indie\" counts under both; \"Hip-Hop\" and \"Rap\" are one. Songs with no genre are the **no genre** row at the end; while some of them are still waiting for MusicBrainz, the row says how many. While the server is still reading the genres of songs in the background, the tab says \"reading genres from your files… N of M\". A \"genre\" that is only a video site's category (like \"People & Blogs\") is ignored.",
        "only": "dashboard"
       },
       {
@@ -1747,7 +1755,7 @@
        "text": "**Library tools** {admin}: [Music → Tools](route:music/tools) (shown when you're signed in as admin) has four parts: **Duplicates**, **Needs review**, **Cover art** and **Trash**. Every change asks once before it happens."
       },
       {
-       "text": "**Duplicates** lists songs the library has more than once: the same MusicBrainz recording, or the same artist and title (a download's \"Artist - Title (Official Video)\" counts as the title). Each group says whether it is likely the same recording (lengths within 3 seconds), the same identified recording with different lengths, or the same song at a different length (a live take, a radio edit). The best copy is picked for you: the highest bitrate, then identified, then tagged, then the one with cover art. Pick another if you like, then **Move N other copies to trash**: the other files move to a `.domovoi-trash` folder inside your music folder (nothing is deleted), and the copy you keep takes over their places in playlists, their favourite and their listening history. **Keep both** hides the group until a copy joins or leaves it."
+       "text": "**Duplicates** lists songs the library has more than once: the same MusicBrainz recording, or the same artist and title (a download's \"Artist - Title (Official Video)\" counts as the title). Each group says whether it is likely the same recording (lengths within 3 seconds), the same identified recording with different lengths, or the same song at a different length (a live take, a radio edit). The best copy is picked for you: the highest bitrate, then identified, then tagged, then the one with cover art. Pick another if you like, then **Move N other copies to trash**: the other files move to a `.domovoi-trash` folder inside your music folder (nothing is deleted), and the copy you keep takes over their places in playlists, their favourite and their listening history. A room playing a copy that moves to the trash goes on to the next song, and queued copies of it are taken out. **Keep both** (**Keep all** for three or more) hides the group until a copy joins or leaves it."
       },
       {
        "text": "**Trash** lists what was moved; **Restore** puts a copy back where it was (not back into playlists). Empty the trash folder with a file manager when you're sure."
@@ -1760,9 +1768,6 @@
       },
       {
        "text": "Files tagged by another app (MusicBrainz Picard, a phone app) are read as they are: a MusicBrainz id in the file means song recognition never has to listen to it; every artist the file credits (its `ARTISTS` tag) finds the song, so \"play songs by\" a featured artist works, and the library shows them quietly next to the artist (\"with B, C\"); and `.m3u` playlist files in the music folder, and the songs' own `PLAYLIST` tags, become playlists. A playlist made from files follows the files and can't be edited in Domovoi, nor added to by a download or a plugin: **Copy to a new playlist** in it makes one you can change. One with the same name as a playlist you made is called \"<name> (from files)\"."
-      },
-      {
-       "text": "Right after this update the server reads every song's tags again in the background (the same reading as the Genres tab's), which also clears \"genres\" like \"People & Blogs\" that were a video site's category."
       }
      ]
     },
@@ -1860,6 +1865,9 @@
       },
       {
        "text": "**Listening history** is what Up next learns from: a song heard to its end counts toward more like it, one skipped early counts against it (only time actually heard counts, not pauses or skipping ahead). Each person's listening is kept apart once their phone or browser says **this is me**; clearing it, or not keeping it at all, is under [What's kept, and forgetting](node:kept)."
+      },
+      {
+       "text": "{admin} **Look back at what Up next picked:** [Settings → Household → Queue history](route:settings/queue-history) lists every Up next still kept, in each room, browser and phone. Open one to see its songs in order: why each was picked, the song it followed, and whether it played or was skipped (and for how long). A summary on top counts the picks, the artists and how close two songs by one artist came, the reasons and the decades; **download CSV** or **download JSON** saves the whole session. A finished one is kept 30 days."
       },
       {
        "text": "**Up next by voice.** In a room, the commands below act on that room's queue; most also take the room's name after them (\"what's next in the kitchen\"). \"Next\" and \"play the next song\" still skip. A command that changes the mix from a voice Domovoi knows makes it that person's mix."
@@ -2146,7 +2154,7 @@
    "blocks": [
     {
      "type": "p",
-     "text": "Shown when the radio plugin is installed. Find stations on the **Stations** page and star the ones you like. Domovoi plays favorites by name."
+     "text": "Shown when the radio plugin is installed. Find stations on the **Stations** page and star the ones you like. Ask for a station by name and Domovoi looks in your favorites first, then the other stations it has saved (ones you've played, and FM stations you imported), then, if the internet is allowed, online, and offers what it finds there. It goes by how a name sounds: \"lo-fi 24 slash 7\" finds \"Lofi 24/7\". If it isn't sure it heard the name right, it asks \"Did you mean …?\": answer yes, no, or the name. To hear a station in a room from the page, pick the room next to it, or send it to a room from the player."
     },
     {
      "type": "label",
@@ -2160,8 +2168,20 @@
        "text": "stream the jazz station",
        "handler": "radio",
        "path": "fast",
+       "plugin": "radio"
+      },
+      {
+       "text": "tune to lofi 24/7",
+       "handler": "radio",
+       "path": "fast",
+       "plugin": "radio"
+      },
+      {
+       "text": "add this to my favorites",
+       "handler": "radio",
+       "path": "fast",
        "plugin": "radio",
-       "note": "a station you starred"
+       "note": "while a station plays"
       },
       {
        "text": "stop the radio",
@@ -2218,6 +2238,9 @@
       },
       {
        "text": "**Documents:** the paperclip takes those too, up to 4 a message. See [Ask about a document](node:ask-document)."
+      },
+      {
+       "text": "**Videos:** the paperclip takes one short video a message (up to 3 minutes). See [Ask about a video](node:ask-video)."
       },
       {
        "text": "**Drafts and letters:** Chat can write drafts for you. Read them before you send them; it can get details wrong. See [Write a draft](node:drafts) and [Letters](node:letters)."
@@ -2282,6 +2305,105 @@
     "text": "More detail",
     "target": "doc:docs/FAQ.md#can-i-send-pictures-in-chat"
    }
+  },
+  {
+   "id": "ask-video",
+   "topic": "chat-and-help",
+   "title": "Ask about a video",
+   "subtitle": "attach a clip, ask what's in it",
+   "keywords": [
+    "video",
+    "clip",
+    "mp4",
+    "mov",
+    "attach a video",
+    "transcript",
+    "what did they say",
+    "might show",
+    "watching your video"
+   ],
+   "blocks": [
+    {
+     "type": "p",
+     "text": "Attach a short video to a chat and ask about it. Domovoi watches it on your home server, keeps what it heard and saw as text, and deletes the video."
+    },
+    {
+     "type": "label",
+     "role": "how",
+     "text": "How to"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "In [Chat](route:chat), the paperclip takes one video a message: MP4, MOV or WebM, up to 3 minutes and 2 GB. Add a question if you like.",
+       "only": "dashboard"
+      },
+      {
+       "text": "Videos are attached from the dashboard. What Domovoi found is in the chat on the phone too.",
+       "only": "app"
+      },
+      {
+       "text": "While Domovoi watches, the video says \"Watching your video… about 4 minutes left\", with **stop**. You can keep chatting meanwhile, or leave the page."
+      },
+      {
+       "text": "When it's done, Domovoi writes a short summary in the chat, and answers the question you sent with the video. Then ask anything about it."
+      },
+      {
+       "text": "What was said comes from a transcript, with times. What the pictures show is a small model's guess, so Domovoi says what a frame \"might show\", not what is there."
+      },
+      {
+       "text": "Only the text stays, with the chat. The video and every picture taken from it are deleted once it has been watched, or stopped. Deleting the chat deletes the text."
+      },
+      {
+       "text": "A question asked in a room goes first: watching pauses from the wake word until the answer has been spoken, then carries on."
+      },
+      {
+       "text": "One video is watched at a time in the house; another waits its turn."
+      }
+     ]
+    },
+    {
+     "type": "p",
+     "text": "**In a chat, type**"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "\"what's this video about?\""
+      },
+      {
+       "text": "\"what did they say about the cake?\""
+      },
+      {
+       "text": "\"is there a dog in it?\""
+      }
+     ]
+    },
+    {
+     "type": "label",
+     "role": "wrong",
+     "text": "If something's wrong"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "\"Videos up to 3 minutes can be attached\": trim it on the phone first, or send the part you want to ask about."
+      },
+      {
+       "text": "The paperclip doesn't offer videos: AI chat is off for your home (see [When AI is off](node:ai-off)), or the server has no ffmpeg."
+      },
+      {
+       "text": "\"I couldn't finish watching it\": the message says why. Attach the video again to try once more."
+      }
+     ]
+    }
+   ]
   },
   {
    "id": "lookups",
@@ -2480,7 +2602,7 @@
      "ordered": false,
      "items": [
       {
-       "text": "A **heads-up** is a short card that comes before an answer Domovoi has been measured to be weak at. It names the weakness and offers what works there: - rewriting, translating or proofreading a document over about two pages: **try anyway**, or ask for one part at a time; - a sum, an average, a difference, or the days between two dates, from numbers spread through a document: **calculate exactly** or **try anyway**; - a summary that will take more than 3 minutes here: **go ahead**; - a summary of a document with scanned pages: **go ahead**; - a document in a language other than English or Spanish: **try anyway**; - a blurry photo in a home-server chat: **choose another** or **send anyway**."
+       "text": "A **heads-up** is a short card that comes before an answer Domovoi has been measured to be weak at. It names the weakness and offers what works there: - rewriting, translating or proofreading a document over about two pages: **section by section** or **try anyway**; - a sum, an average, a difference, or the days between two dates, from numbers spread through a document: **calculate exactly** or **try anyway**; - a summary that will take more than 3 minutes here: **go ahead**, or **use home server** in a phone chat when the server would be faster; - a summary of a document with scanned pages: **go ahead**; - a document in a language other than English or Spanish: **try anyway**; - a blurry photo in a home-server chat: **choose another** or **send anyway**; - a handwritten letter: **try anyway**."
       },
       {
        "text": "Each kind shows once per chat. **don't warn me about this again** silences that kind on this browser or phone."
@@ -2786,7 +2908,7 @@
        "only": "dashboard"
       },
       {
-       "text": "In [Files](route:files), the speech-bubble button on a document (**ask about this document**) does the same. A file on this phone opens a phone chat; a file in the home server's Documents opens a home-server chat.",
+       "text": "In [Files](route:files), **Ask in chat** in a document's **⋮** menu does the same. A file on this phone opens a phone chat; a file in the home server's Documents opens a home-server chat.",
        "only": "app"
       },
       {
@@ -2830,7 +2952,7 @@
        "text": "An old .doc or .rtf file: save it as .docx or PDF, then attach it again."
       },
       {
-       "text": "\"pictures of text (scanned)\": some pages are scans, and Domovoi can't read those yet. The answer names the pages it skipped. A PDF that is all scan is refused (\"pictures of text (a scan)\"). Save the document from its own program as a PDF with text, or type the part you need."
+       "text": "\"pictures of text (scanned)\": some pages are scans, and Domovoi can't read those yet. The answer names the pages it skipped. A PDF that is all scan is refused (\"pictures of text (a scan)\"). Save the document from its own program as a PDF with text, or type the part you need. Scans from your own scanner are different: Domovoi reads them itself (see [What does this scan say?](node:scan-reader)), and then you can ask about them like any document."
       },
       {
        "text": "A file that isn't what its name says, or is built to overwhelm a reader, is refused, with a sentence saying why."
@@ -3252,7 +3374,7 @@
        "only": "dashboard"
       },
       {
-       "text": "**move to another folder** on a file.",
+       "text": "**Move** in a file's **⋮** menu, then pick the folder and press **move here**.",
        "only": "app"
       },
       {
@@ -3449,7 +3571,7 @@
        "text": "**Two-sided by default** and **Colour by default** follow the printer's own settings unless you set them per printer."
       },
       {
-       "text": "**Print** sits on files in [Files](route:files) and Documents when a printer is set up. It prints PDFs, pictures, text and markdown files, and spreadsheets (as a plain table). You pick the pages, copies, two-sided, colour and paper size, and see a preview first."
+       "text": "**Print** sits on files in [Files](route:files) and Documents when a printer is set up. It prints PDFs, pictures, text and markdown files, spreadsheets (as a plain table), and documents written in Domovoi (as their text, headings and lists; their own **Download** → **PDF** keeps fonts and photos). You pick the pages, copies, two-sided, colour and paper size, and see a preview first."
       },
       {
        "text": "Word and OpenDocument files don't print here. Save them as PDF in Word or Docs first, then print the PDF."
@@ -3458,7 +3580,7 @@
        "text": "**A draft from Chat:** **print** on the draft, or type \"print it\". You see the preview first."
       },
       {
-       "text": "**Scan** sits at the top of Documents when a scanner is set up. Scans are saved as one PDF in **Documents → Scans**, named by date."
+       "text": "**Scan** sits at the top of Documents when a scanner is set up. Scans are saved as one PDF in **Documents → Scans**, named by date. Domovoi then reads them: see [What does this scan say?](node:scan-reader)."
       },
       {
        "text": "Renaming or removing a printer needs the admin password {admin}."
@@ -3529,6 +3651,102 @@
       },
       {
        "text": "Each job is limited to 100 pages and 20 copies, and the house to 500 sheets a day; an admin can change the limits. The list of recent jobs is kept 90 days, and an admin can clear it."
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "scan-reader",
+   "topic": "chat-files-calendar",
+   "title": "What does this scan say?",
+   "subtitle": "a short summary of a scanned letter",
+   "keywords": [
+    "scan",
+    "scanned letter",
+    "what does it say",
+    "read my mail",
+    "ocr",
+    "letter",
+    "handwriting",
+    "might say",
+    "read the scan"
+   ],
+   "blocks": [
+    {
+     "type": "p",
+     "text": "Scan a letter, and Domovoi reads it for you on your home server: a short plain summary of what it says, and the whole text if you want it."
+    },
+    {
+     "type": "label",
+     "role": "how",
+     "text": "How to"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "After a scan, press **What does it say?** on the Scan sheet (on the dashboard, or in the app's Files → Documents). While Domovoi is still reading, the button says how far it has got (\"reading page 2 of 3\"); press it and the answer appears when it's ready. Older scans have the same button in [Settings → Household → Printers & scanners](route:settings/printers), under **recent jobs**."
+      },
+      {
+       "text": "**By voice:** \"scan this letter\". When it's saved, Domovoi asks \"Want me to tell you what it says?\". Say yes for the short summary, then yes again to hear all of it."
+      },
+      {
+       "text": "**Show the full text** shows every page's words."
+      },
+      {
+       "text": "Once a scan is read, [Ask about a document](node:ask-document) works on it, and \"read me\" reads it aloud, like any document."
+      },
+      {
+       "text": "Domovoi reads the printed words itself (OCR). A page it can't read well, such as handwriting or a photo, goes to the picture model, and Domovoi says what the page \"might say\": a guess, not the page's words. Check names, dates and amounts against the paper."
+      },
+      {
+       "text": "Dates and amounts in the summary are the letter's own sentences, quoted."
+      },
+      {
+       "text": "Everything happens on your server; nothing about the letter leaves the house."
+      },
+      {
+       "text": "A question asked in a room goes first: reading pauses from the wake word until the answer has been spoken."
+      }
+     ]
+    },
+    {
+     "type": "label",
+     "role": "say",
+     "text": "Try saying"
+    },
+    {
+     "type": "say",
+     "phrases": [
+      {
+       "text": "scan this letter",
+       "handler": "printing",
+       "path": "fast"
+      }
+     ]
+    },
+    {
+     "type": "label",
+     "role": "wrong",
+     "text": "If something's wrong"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "**No button:** the server can't read scans yet. Domovoi installs the reader (Tesseract) with its next update or Restart."
+      },
+      {
+       "text": "**\"couldn't read this page\":** the page was too faint, handwritten, or a photo, and the picture model wasn't asked: AI features are off, or there's no picture model. Rescan it in better light, or read the paper."
+      },
+      {
+       "text": "**AI features off:** Domovoi still reads printed pages, but there's no summary: you get the start of the text, and the full text."
+      },
+      {
+       "text": "English only for now."
       }
      ]
     }
@@ -4286,7 +4504,10 @@
        "text": "Make a room hear the wake word more or less easily, swap its greeting for a chime, or make its voice louder: its **Settings** tab, **Wake sensitivity** (0.7 by default; lower hears more easily), **Wake confirmation** (2: the word has to be heard a moment longer, which ignores short blips from the TV), **Wake acknowledgement**, **Voice loudness boost**. A Pi or PC room set up before November 2026 keeps 0.5 until you change it."
       },
       {
-       "text": "Saving a setting that only applies after a restart asks **Restart now** or **Later**."
+       "text": "Changes on the **Settings** tab are saved with **Save & restart**: the room restarts to apply them and drops offline for a few seconds."
+      },
+      {
+       "text": "A room can wake on up to five words: see [Wake word and greeting](node:wake-word)."
       },
       {
        "text": "A Pi or spare computer acting up: its **Overview** tab, under **maintenance**, **Restart room**. Updating it: **Upgrade room**, in the same place."
@@ -4309,7 +4530,7 @@
      "ordered": false,
      "items": [
       {
-       "text": "The house's hours: [Settings → Advanced](route:settings/advanced) → **Voice & speech** → **Quiet hours** (on, 10 pm to 7 am), **Quiet hours start** and **Quiet hours end**. They use the server's clock."
+       "text": "The house's hours: [Settings → System → Advanced](route:settings/advanced) → **show the settings** → **Voice & speech** → **Quiet hours** (on, 10 pm to 7 am), **Quiet hours start** and **Quiet hours end**. They use the server's clock."
       },
       {
        "text": "One room: its **Settings** tab → **quiet hours**: **Same as the house**, **Custom hours** (pick the times, then **Save**), or **Off for this room**."
@@ -4418,7 +4639,7 @@
        "text": "Start the Pi with the card. It makes its own Wi-Fi network, `Domovoi-Setup-<id>`. Join it from your phone, pick your home Wi-Fi and name the room."
       },
       {
-       "text": "The Pi says a six-digit code. Under **waiting for approval**, type it and press **approve**."
+       "text": "The Pi says a six-digit code. Under **waiting for approval**, type it and press **approve**. If the server's address was left blank in the setup page, the card says **Code sent**, and the room appears within about ten seconds; if the Pi doesn't accept the code, the card says so: type it again."
       }
      ]
     },
@@ -4541,7 +4762,7 @@
      "ordered": true,
      "items": [
       {
-       "text": "{admin} once: [Settings → Household → Rooms](route:settings/rooms) → **prepare a room's SD card** → **Refresh caches**. This gives phones the wake word."
+       "text": "{admin} once: [Settings → Household → Rooms](route:settings/rooms) → **prepare a room's SD card** → **details: what is kept for building cards** → **Refresh caches**. This gives phones the wake word."
       },
       {
        "text": "{admin} **add a spare device**, name the room, then **make the code**. A QR code appears. If the card says the app isn't on the server yet, press **Download the app to this server** on that card first."
@@ -4561,6 +4782,10 @@
      "type": "p",
      "text": "A phone that already has the app can do this from [Settings → Household → Rooms](route:settings/rooms) → **Use this device as a room**, or from the **Domovoi Room** icon. A phone you also use every day needs a screen lock, and while it's a room, the rest of the app is locked.",
      "only": "app"
+    },
+    {
+     "type": "p",
+     "text": "While it's a room, its screen shows what the room is playing, with pause, skip and back, and the room's timers and alarms counting down, with **stop** when one goes off. Reminders never show: anyone in the room can read the screen. The app and the server both need to be up to date for this."
     },
     {
      "type": "p",
@@ -4652,7 +4877,7 @@
        "text": "**Open in Raspberry Pi Imager** to write it to a USB stick (2 GB or more)."
       },
       {
-       "text": "Start the old computer from the stick (its boot-menu key, often F12), type **ERASE** when asked, and wait about half an hour."
+       "text": "Start the old computer from the stick (its boot-menu key, often F12), type **ERASE** when asked, and wait 10 to 30 minutes."
       },
       {
        "text": "Approve the code it shows."
@@ -4688,6 +4913,25 @@
     {
      "type": "live",
      "slot": "wake-word"
+    },
+    {
+     "type": "p",
+     "text": "**More than one word** {admin}"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "A room can wake on up to five words. With the room online, open its **Overview** tab, then **wake word** → **Add another wake word**, put the words in order (the main word first) and press **Save**; the room restarts."
+      },
+      {
+       "text": "A Raspberry Pi Zero 2 W runs three. A room on older software runs one until you upgrade it."
+      },
+      {
+       "text": "Most homes need only one: each extra word makes waking by mistake a little more likely."
+      }
+     ]
     },
     {
      "type": "label",
@@ -4953,10 +5197,10 @@
      "ordered": false,
      "items": [
       {
-       "text": "Sign in: [Settings → System → Advanced](route:settings/advanced), the **Admin** card at the top, **sign in**. A reload in that browser keeps you signed in for 60 minutes after you signed in; **sign out** ends it at once."
+       "text": "Sign in: [Settings → System → Advanced](route:settings/advanced), the **Admin** card at the top, **sign in**. Admin signs out after 1 hour idle: an hour with no change made as admin. A reload in that browser keeps you signed in until then; **sign out** ends it at once."
       },
       {
-       "text": "Change those minutes: on the same page, **show the settings**, then **Security** → **Stay signed in after a reload**."
+       "text": "Shorten the reload part: on the same page, **show the settings**, then **Security** → **Stay signed in after a reload**."
       },
       {
        "text": "Turn guest music control off: same group, **Guests can change the music in a playing room**."
@@ -5103,6 +5347,10 @@
        "1 year, or what **Keep listening history** says"
       ],
       [
+       "The songs Up next picked, and why (Queue history)",
+       "30 days after that Up next ends"
+      ],
+      [
        "The list of recent print jobs",
        "90 days (an admin can clear it)"
       ],
@@ -5154,7 +5402,7 @@
        "text": "Delete a chat: the bin icon in [Chat](route:chat). Its pictures, documents, letters and draft versions go with it."
       },
       {
-       "text": "{admin} turn recordings off in a room's **Overview** (**Stop and delete**); the commands kept so far are in [Settings → Privacy → Voice history](route:settings/voice-history)."
+       "text": "{admin} turn recordings off in a room's **Settings** tab (**Stop and delete**); the commands kept so far are in [Settings → Privacy → Voice history](route:settings/voice-history)."
       },
       {
        "text": "{admin} listen to a room's command recordings, mark whether each one ended at the right moment, and delete them: [Settings → Privacy → Voice history](route:settings/voice-history). A room keeps them only while an admin has turned them on for it."
@@ -5196,7 +5444,7 @@
        "text": "**Yes, always**: web answers, lyrics lookups, artists' other names, podcast downloads, and Chat lookups when you allow them."
       },
       {
-       "text": "**Sometimes**: the same, without automatic podcast downloads."
+       "text": "**Sometimes**: the same, without automatic podcast downloads or similar artists for Up next."
       },
       {
        "text": "**No, keep everything in the house**: nothing goes out. Online buttons show \"needs internet\", and Chat can't look anything up online. The manual and an offline library still answer."

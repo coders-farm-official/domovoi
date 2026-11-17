@@ -23,7 +23,7 @@ DOMOVOI = {"slug": "domovoi_v1", "name": "Domovoi", "phrase": "domovoi", "kind":
            "threshold": None}
 JARVIS = {"slug": "hey_jarvis", "name": "Hey Jarvis", "phrase": "hey jarvis", "kind": "builtin",
           "available": True, "reason": None, "threshold": None}
-WHY = ("internet access is turned off for this box (Settings → Internet), so the Domovoi "
+WHY = ("internet access is turned off for this box (Settings → Privacy → Internet), so the Domovoi "
        "wake word can't be downloaded")
 MISSING = {**DOMOVOI, "available": False, "reason": WHY}
 HERE = {**DOMOVOI, "available": True, "reason": None}

@@ -303,7 +303,9 @@ private fun PrinterCard(
     val context = LocalContext.current
     var showJobs by remember { mutableStateOf(false) }
     var jobs by remember { mutableStateOf<List<PrintJob>?>(null) }
+    var scans by remember { mutableStateOf<List<ScanJob>>(emptyList()) }
     var jobsTick by remember { mutableStateOf(0) }
+    var readingScan by remember { mutableStateOf<ScanJob?>(null) }
 
     PanelCard(p.name.ifBlank { p.makeAndModel }, listOf(p.makeAndModel, p.location).filter { it.isNotBlank() }.joinToString(" · ").ifBlank { null }) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -418,8 +420,8 @@ private fun PrinterCard(
                 }
                 if (showJobs) {
                     LaunchedEffect(p.id, jobsTick, p.activeJob?.state) {
-                        runAction { io.jobs(p.id) }
-                            .onSuccess { jobs = it }
+                        runAction { io.jobLog(p.id) }
+                            .onSuccess { jobs = it.jobs; scans = it.scans }
                             .onFailure { toast(printFailureText("recent jobs", it)) }
                     }
                     val list = jobs
@@ -455,8 +457,33 @@ private fun PrinterCard(
                             }
                         }
                     }
+                    // Scans made on it, each with "What does it say?" once it has
+                    // been read (or while it is being read), as on the dashboard.
+                    scans.forEach { sc -> ScanLogRow(sc, onRead = { readingScan = it }) }
                 }
             }
+        }
+    }
+    readingScan?.let { sc -> ScanReadSheet(sc, onDismiss = { readingScan = null }) }
+}
+
+/** A scan in the job log: "scan · done · 2 pages · Scan 2026-10-21 15.40 · Alex · 3d ago", its error, and the button. */
+@Composable
+private fun ScanLogRow(sc: ScanJob, onRead: (ScanJob) -> Unit) {
+    Column {
+        Text(
+            listOf(
+                scanLogLine(sc),
+                sc.createdAt?.let { relTime(it) }.orEmpty(),
+            ).filter { it.isNotBlank() }.joinToString(" · "),
+            style = MaterialTheme.typography.labelSmall,
+            color = if (sc.state == "failed") Domovoi.colors.err else Domovoi.colors.fgSubtle,
+        )
+        sc.error?.takeIf { it.isNotBlank() }?.let {
+            Text(it, style = MaterialTheme.typography.labelSmall, color = Domovoi.colors.err)
+        }
+        if (whatDoesItSayShown(sc)) {
+            TextButton(onClick = { onRead(sc) }) { Text(whatDoesItSayLabel(sc), color = Domovoi.colors.brand) }
         }
     }
 }
@@ -528,6 +555,9 @@ private fun AddPrinterDialog(
                         onSelect = { room = it },
                         modifier = Modifier.fillMaxWidth(),
                     )
+                }
+                if (askAddress) {
+                    Text(ADD_BY_ADDRESS_HINT, style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted)
                 }
             }
         },

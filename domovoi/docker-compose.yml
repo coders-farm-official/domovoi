@@ -115,7 +115,7 @@ services:
   # http://localhost:6888 if you want to inspect what it returns.
   #
   # Who starts it: it follows the internet answer (INTERNET_ACCESS,
-  # docs/INTERNET.md). Answering Yes or Sometimes in Settings → Internet
+  # docs/INTERNET.md). Answering Yes or Sometimes in Settings → Privacy → Internet
   # starts it, No stops it; dev.sh / dev.ps1 and the Linux update unit do
   # the same. By hand: `docker compose up -d searxng`.
   #

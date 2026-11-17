@@ -54,6 +54,7 @@ PRINTER_PICK = "core.printer_pick"
 SCAN_READY = "core.scan_ready"
 SCAN_MORE = "core.scan_more"
 SCAN_READ = "core.scan_read"
+SCAN_READ_ALL = "core.scan_read_all"
 PRINT_TEST = "core.print_test"
 
 _NUM = {"a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
@@ -147,7 +148,7 @@ class PrintingHandler(Handler):
     display = HandlerDisplay(label="Printing", tone="device")
     requires_network = "no"
     confirmation_kinds = (PRINT_CONFIRM, PRINT_PICK, PRINT_PRINTER, PRINTER_ADD, PRINTER_PICK,
-                          SCAN_READY, SCAN_MORE, SCAN_READ, PRINT_TEST)
+                          SCAN_READY, SCAN_MORE, SCAN_READ, SCAN_READ_ALL, PRINT_TEST)
     choice_kinds = (PRINT_PICK, PRINT_PRINTER, PRINTER_PICK, SCAN_MORE)
     example_phrases = (
         "print my cover letter",
@@ -544,7 +545,8 @@ class PrintingHandler(Handler):
         if not fresh:
             if any(f["already_added"] for f in result["found"]):
                 return self._reply(ctx, "Every printer I can find is already set up.")
-            return self._reply(ctx, "I couldn't find a printer. Make sure it's switched on and on the same Wi-Fi, "
+            return self._reply(ctx, "I couldn't find a printer. Domovoi works with Wi-Fi and network printers, "
+                                    "not USB ones. Make sure it's switched on and on the same Wi-Fi, "
                                     "or add it by its address in Settings, Printers and scanners.")
         if len(fresh) == 1:
             f = fresh[0]
@@ -653,7 +655,9 @@ class PrintingHandler(Handler):
                                                            else "s")
         if s.incomplete:
             text += " Some pages may be missing."
-        if scans.reader() is not None and s.path:
+        # Offered only when the scan reader took the scan (read_id: this
+        # server can read scans), never as a question it can't answer.
+        if scans.reader() is not None and s.path and getattr(s, "read_id", None):
             return await self._ask(ctx, session, SCAN_READ, text + " Want me to tell you what it says?",
                                    {"path": s.path})
         return self._reply(ctx, text)
@@ -693,12 +697,26 @@ class PrintingHandler(Handler):
             reader = scans.reader()
             if reader is None:
                 return self._reply(ctx, "It's in Documents, under Scans.")
+            path = str(data.get("path") or "")
             try:
-                said = await reader(str(data.get("path") or ""), {"room_id": ctx.satellite_room_id})
-            except Exception as e:  # noqa: BLE001 — the reader belongs to another feature
-                log.warning("printing: the scan reader failed: %s", e)
+                said = await reader(path, {"room_id": ctx.satellite_room_id})
+            except Exception as e:  # noqa: BLE001 — the reader is its own feature
+                log.warning("printing: the scan reader failed: %s", type(e).__name__)
                 return self._reply(ctx, "I couldn't read it just now. It's in Documents, under Scans.")
+            # The scan reader answers (spoken summary, whether there's more).
+            said, more = said if isinstance(said, tuple) else (said, False)
+            if more and path and ctx.session_id is not None and ctx.answerable:
+                return await self._ask(ctx, session, SCAN_READ_ALL, said + " Want me to read all of it?",
+                                       {"path": path})
             return self._reply(ctx, said)
+        if kind == SCAN_READ_ALL:
+            if not affirmative:
+                return self._reply(ctx, "OK. It's in Documents, under Scans.")
+            # The whole text, read aloud the way "read me ..." reads any
+            # document (it now has the scan's text: domovoi/doc_extract/runner.py).
+            from domovoi.handlers.documents import DocumentsHandler
+
+            return await DocumentsHandler()._open(str(data.get("path") or ""), ctx, session)
         if kind in (PRINT_PICK, PRINT_PRINTER, PRINTER_PICK):
             if not affirmative:
                 return self._reply(ctx, "OK.")

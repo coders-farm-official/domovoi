@@ -19,15 +19,17 @@ import Observation
 /// task, because the model is going away with the sheet and a cancel owned by
 /// its lifetime would be cancelled before it was sent.
 ///
-/// ### What this does not do, and why there is no control for it
+/// ### "What does it say?" (1.4.0)
 ///
-/// **"What does it say?"** Android's `ScanSheet` takes an `onWhatDoesItSay`
-/// parameter and **no caller passes one** (`ScanSheet.kt:51,178-180`;
-/// `grep onWhatDoesItSay android/` finds only its own declaration and doc
-/// comment), so on Android it is a control that cannot be reached. Porting it
-/// would ship a button on the strength of a seam nobody wired. Left out, and
-/// written up in `design-notes/ios/overnight/printing/DECISIONS.md` as an
-/// Android finding.
+/// A saved scan is queued for the server's scan reader as it is saved, and
+/// the scan carries its reading (``PrintingScanJob/read``). Once saved, the
+/// sheet keeps asking about the scan every ``pollMs`` **while it is being
+/// read** (``PrintingScanJob/followsRead``), so the button's label carries
+/// the progress ("What does it say? (reading page 2 of 3)") and turns plain
+/// when the reading is done. The button itself, and the screen it opens, are
+/// ``ScanReadModel``'s; the gate is ``scanReadShown(readable:read:)``.
+///
+/// ### What this does not do, and why there is no control for it
 ///
 /// **`Open` on a finished scan.** The sheet reloads the folder behind it, and
 /// a `.pdf` in Documents is already ``FileKinds/FileAction/save`` — the share
@@ -50,6 +52,12 @@ public final class PrintingScanModel {
     /// Called when a scan reached `done`, so the folder behind the sheet
     /// reloads and the new file is in it (`ScanSheet.kt:80`).
     private let onSaved: @MainActor () -> Void
+
+    /// The scan `onSaved` was last called for. The sheet goes on polling a
+    /// saved scan while it is being read, and every one of those answers is
+    /// `done`: without this the folder behind the sheet would reload every
+    /// 1.5 s for as long as the reading takes.
+    private var savedID: String?
 
     public let house: PrintersResponse
 
@@ -219,10 +227,11 @@ public final class PrintingScanModel {
     // MARK: - the poll
 
     /// While the scanner is working, ask again every 1.5 s
-    /// (`ScanSheet.kt:88-98`).
+    /// (`ScanSheet.kt:88-98`) — and, once the scan is saved, for as long as
+    /// the server is reading it (``PrintingScanJob/followsRead``).
     private func poll(_ job: PrintingScanJob) {
         pollTask?.cancel()
-        guard job.busy else { return }
+        guard Self.keepsPolling(job) else { return }
         // The scan's id, captured before any await: an answer about another
         // scan is not this sheet's.
         let scanID = job.id
@@ -230,12 +239,13 @@ public final class PrintingScanModel {
             while !Task.isCancelled {
                 guard let wait = self?.wait else { return }
                 do { try await wait(Self.pollMs) } catch { return }
-                guard !Task.isCancelled, let self, self.scan?.id == scanID, self.scan?.busy == true else { return }
+                guard !Task.isCancelled, let self, self.scan?.id == scanID,
+                      let held = self.scan, Self.keepsPolling(held) else { return }
                 do {
                     let now = try await self.io.scan(scanID)
                     guard !Task.isCancelled, self.scan?.id == scanID else { return }
                     self.land(now)
-                    if !now.busy { return }
+                    if !Self.keepsPolling(now) { return }
                 } catch {
                     // A failed poll is not a failed scan: ask again.
                     continue
@@ -244,9 +254,17 @@ public final class PrintingScanModel {
         }
     }
 
+    /// The scanner is working, or the saved scan is being read.
+    private static func keepsPolling(_ job: PrintingScanJob) -> Bool {
+        job.busy || job.followsRead
+    }
+
     private func land(_ job: PrintingScanJob) {
         scan = job
-        if job.state == "done" { onSaved() }
+        if job.state == "done", savedID != job.id {
+            savedID = job.id
+            onSaved()
+        }
     }
 
     private func call(

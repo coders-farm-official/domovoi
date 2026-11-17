@@ -2,7 +2,7 @@ package com.domovoi.app.ui.screens.home
 
 import com.domovoi.app.net.CAP_STATIONS
 import com.domovoi.app.net.Capabilities
-import com.domovoi.app.net.CapabilityPlugin
+import com.domovoi.app.testing.ourCaps
 import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.shell.DefaultNav
 import com.domovoi.app.ui.shell.Route
@@ -595,7 +595,7 @@ class HomeModelsTest {
             listOf(Route.Podcasts, Route.Audiobooks, Route.Calendar, Route.Lists, Route.Settings, Route.Manual),
             everythingTiles(Capabilities.EMPTY, shared = true),
         )
-        val radio = Capabilities(plugins = listOf(CapabilityPlugin(slug = "radio", androidCapabilities = listOf(CAP_STATIONS))))
+        val radio = ourCaps(CAP_STATIONS)
         assertTrue(Route.Stations in everythingTiles(radio, shared = true))
     }
 

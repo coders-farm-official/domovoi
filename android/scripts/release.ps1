@@ -9,7 +9,7 @@ bytes CI and F-Droid build from that commit), signs them with YOUR release
 key (apksigner --alignment-preserved, so the signature can be copied onto
 anyone's unsigned build of the commit), checks that copy works
 (apksigcopier compare) and checks them the way a Domovoi server will,
-writes android/release.json, commits it ("android: release <v> [skip ci]")
+writes android/release.json, commits it ("android: release <v>")
 and pushes it to the branch's upstream, then publishes the GitHub release
 v<Domovoi's version> (pyproject.toml's, NOT the app's versionName: owner
 decision 2026-11-14) on coders-farm-official/domovoi with gh, tagged at
@@ -125,10 +125,33 @@ function Invoke-Tool([string]$exe, [string[]]$arguments) {
     return , $script:LastToolOutput
 }
 
-# The first line of the last tool's output that says why it failed.
+# Why the last tool failed: a headline (the first line that says so), then
+# its whole output, stdout and stderr, the last 60 lines at most. The
+# signing passwords reach the tools only through the environment and the
+# tools don't print them, but any secret's value that did turn up is
+# replaced here before anything is shown.
+$script:SecretEnvNames = @('DOMOVOI_RELEASE_KS_PASS', 'DOMOVOI_RELEASE_KEY_PASS', 'ANDROID_KEYSTORE_PASSWORD',
+    'ANDROID_KEY_PASSWORD', 'GH_TOKEN', 'GITHUB_TOKEN')
+function Hide-Secrets([string]$line) {
+    foreach ($name in $script:SecretEnvNames) {
+        $value = [Environment]::GetEnvironmentVariable($name)
+        if ($value) { $line = $line.Replace($value, '***') }
+    }
+    return $line
+}
 function Show-ToolError {
-    $why = $script:LastToolOutput | Where-Object { $_ -match 'ERROR|Exception|Failed|failed' } | Select-Object -First 1
+    $lines = @($script:LastToolOutput | ForEach-Object { Hide-Secrets $_ })
+    if ($lines.Count -eq 0) { return }
+    $why = $lines | Where-Object { $_ -match 'ERROR|Exception|Failed|failed' } | Select-Object -First 1
     if ($why) { Write-Host "  $why" }
+    $max = 60
+    if ($lines.Count -gt $max) {
+        Write-Host "  (the tool's output, last $max of $($lines.Count) lines)"
+        $lines = $lines | Select-Object -Last $max
+    } else {
+        Write-Host "  (the tool's whole output)"
+    }
+    $lines | ForEach-Object { Write-Host "    $_" }
 }
 
 # The exit code of a native program, its output thrown away.
@@ -693,7 +716,7 @@ if ($notReproducible) {
 if ($NoPublish) {
     $kind = if ($isPrerelease) { 'a pre-release' } else { 'the Latest release' }
     Say "not published (-NoPublish). Signed APKs, SHA256SUMS and the manifest it would commit: $signed\"
-    Say "A real run commits that manifest (android: release $versionName [skip ci]), pushes it, and publishes $tag at that commit as $kind."
+    Say "A real run commits that manifest (android: release $versionName), pushes it, and publishes $tag at that commit as $kind."
     exit 0
 }
 
@@ -718,7 +741,7 @@ try {
     Remove-Item -LiteralPath $index -Force -ErrorAction SilentlyContinue
 }
 if ($null -eq $tree) { $script:LastToolOutput | ForEach-Object { Write-Host "  $_" }; Die 'making the release commit failed' }
-$made = Invoke-Tool $Git @('commit-tree', $tree[0].Trim(), '-p', $commit, '-m', "android: release $versionName [skip ci]")
+$made = Invoke-Tool $Git @('commit-tree', $tree[0].Trim(), '-p', $commit, '-m', "android: release $versionName")
 if ($null -eq $made) { $script:LastToolOutput | ForEach-Object { Write-Host "  $_" }; Die 'git commit-tree failed' }
 $releaseCommit = $made[0].Trim()
 if ($null -eq (Invoke-Tool $Git @('update-ref', '-m', "release: android/release.json for $versionName", 'HEAD', $releaseCommit, $commit))) {
@@ -729,5 +752,5 @@ if ($null -eq (Invoke-Tool $Git @('update-ref', '-m', "release: android/release.
 # The working tree and the index follow HEAD for that one file.
 Copy-Item -LiteralPath $staged -Destination 'android\release.json' -Force
 $null = Invoke-Tool $Git @('reset', '--quiet', '--', 'android/release.json')
-Say "committed android/release.json as $($releaseCommit.Substring(0, 12)) (android: release $versionName [skip ci]) on $($commit.Substring(0, 12)): the tag goes there"
+Say "committed android/release.json as $($releaseCommit.Substring(0, 12)) (android: release $versionName) on $($commit.Substring(0, 12)): the tag goes there"
 Publish-Release -ReleaseCommit $releaseCommit -BuiltFrom $commit -Exists $false

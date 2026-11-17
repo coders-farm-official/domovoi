@@ -621,7 +621,7 @@ def test_every_jobs_line(driven) -> None:
     ]
     assert d["reading"] == ["lyrics · 3,100 of 5,232 songs · 2,500 timed", "reading your files — 5,200 of 5,232"]
     assert d["off"] == "LRCLIB: off — Settings → Advanced → Library"
-    assert d["internet_off"] == "LRCLIB: off — this Domovoi stays off the internet (Settings → Internet)"
+    assert d["internet_off"] == "LRCLIB: off — this Domovoi stays off the internet (Settings → Privacy → Internet)"
     assert d["offline"] == "LRCLIB: paused — offline"
     assert d["rate_limited"] == "LRCLIB: paused — LRCLIB asked to slow down"
     # the 2026-10-06 review: the workers' codes, said in words

@@ -37,7 +37,24 @@ from __future__ import annotations
 #        fetch and a class of local, api or web; ctx.add_lookup_source;
 #        the core orders them by class) and the manifest's optional
 #        [plugin] help file, indexed by Domovoi's help desk.
-API_VERSION = "1.8.0"
+# 1.9.0: added speech.render(text, room_id=None): text to a WAV in the
+#        room's voice (no room: the server's voice), nothing played; and
+#        core_config.ollama_url / ollama_model (the house Q&A model).
+# 1.10.0: added spoken_names (the core's spoken-name folding and matching:
+#         fold, spoken_forms, phonetic_key, sounds_like, ...), choices
+#         (parse_choice_reply, the reader of a reply to "did you mean X?"),
+#         Handler.choice_kinds / handle_choice_reply for plugin handlers,
+#         playback.ensure_room(room_id) (is this a room of the house; wake its
+#         music player), and [[web.player_sources]] room_play_template (the
+#         browser player hands a plugin's item to a room).
+# 1.11.0: plugin websockets: a @device_endpoint @router.websocket route on
+#         the core router is served (the per-slug gate's websocket form:
+#         enabled, LAN Host and Origin, household token or admin Bearer at
+#         the upgrade, rechecked while open; per-plugin and per-device
+#         socket caps, message size and rate limits; open sockets closed
+#         on disable or reload). Any other plugin websocket is still
+#         refused at load, and the web process serves none.
+API_VERSION = "1.11.0"
 
 from domovoi.capabilities import (  # noqa: E402,F401
     CAPABILITIES,
@@ -90,8 +107,30 @@ from domovoi.plugins_runtime.workers import (  # noqa: E402,F401
     Worker,
 )
 
+# Bound on first use (PEP 562 module __getattr__), so ``from domovoi.sdk
+# import spoken_names`` works without the SDK importing the name matcher or
+# the choice reader (and the router behind it) itself.
+_LAZY_MODULES = {
+    "spoken_names": "domovoi.handlers.shared.spoken_names",
+    "choices": "domovoi.sdk.choices",
+}
+
+
+def __getattr__(name: str):
+    target = _LAZY_MODULES.get(name)
+    if target is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    import importlib
+
+    module = importlib.import_module(target)
+    globals()[name] = module
+    return module
+
+
 __all__ = [
     "API_VERSION",
+    "choices",
+    "spoken_names",
     "FieldSpec",
     "LongRunWorker",
     "Worker",

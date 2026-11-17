@@ -1,12 +1,17 @@
 import DomovoiKit
 import SwiftUI
 
-/// The band that says a screen belongs to a plugin: `PluginScreenFrame`
+/// The band that says which plugin of ours a screen uses: `PluginScreenFrame`
 /// (`android/.../ui/components/PluginFrame.kt:92`), which `ScreenRouter.kt`
-/// wraps both plugin screens in — Images at `:67`, Stations at `:72`.
+/// wraps both plugin-backed screens in — Images at `:67`, Stations at `:72`.
 ///
-/// The route's icon, the plugin's name, `by <publisher>`, a bordered `plugin`
-/// badge, a `manage` link to the dashboard's Plugins page, and a divider.
+/// **The screens are the app's own.** A plugin cannot ship app code: Stations
+/// and Images are written here, against the radio and image generation
+/// plugins' APIs. So the band says the screen *uses* the plugin — "Uses the
+/// Radio plugin", muted `by <publisher>` after it — rather than presenting the
+/// screen as the plugin's. Then a `manage` link to the dashboard's Plugins
+/// page, and a divider. The bordered `plugin` badge that stood beside the
+/// name is gone: the words say it now.
 ///
 /// ### One band, where there were two
 ///
@@ -42,19 +47,19 @@ import SwiftUI
 /// ``CapabilityPlugin/accent`` is decoded and unread, which is the server's
 /// shape kept rather than a seam.
 ///
-/// ### With no plugin in the manifest, the content is drawn bare
+/// ### With no plugin of ours in the manifest, the content is drawn bare
 ///
-/// `PluginFrame.kt:98-101`; here that is a nil ``PluginBand``. It is reachable
-/// even though ``Route/requiredCapability`` gates both routes: a manifest can
-/// land, be lost on a reconnect and come back while the screen is open, and a
-/// band built from a half-empty manifest would read `imagegen` where a name
-/// belongs. The screen itself still works — a plugin's routes are the
-/// plugin's whether or not the manifest mentions it.
+/// `PluginFrame.kt:98-101`; here that is a nil ``PluginBand``. The band reads
+/// ``Capabilities/pluginFor(_:)``, the same rule as the route's gate
+/// (``Capabilities/has(_:)``: exact slug and publisher), so it can never name
+/// a third-party plugin. A nil band is reachable only in the moment between a
+/// manifest that lost our plugin and the shell going home
+/// (``NavigationState/capabilitiesChanged(_:)``).
 struct PluginBandView<Content: View>: View {
 
     let model: ShellModel
 
-    /// The capability whose plugin this band names — ``capImagegen``,
+    /// The capability whose plugin of ours this band names — ``capImagegen``,
     /// ``capStations``.
     let capability: String
 
@@ -92,8 +97,8 @@ struct PluginBandView<Content: View>: View {
         }
     }
 
-    /// `:120-190`: the icon and the names on the left, the badge and `manage`
-    /// on the right.
+    /// `:120-190`: the icon and the "Uses the … plugin" line on the left,
+    /// `manage` on the right.
     ///
     /// Three shapes, not two, and the third is the answer to a measurement.
     /// At AX5 the band took **256 of 852 points** on a 393-point phone, which
@@ -111,19 +116,18 @@ struct PluginBandView<Content: View>: View {
             HStack(alignment: .center, spacing: 10) {
                 names(band)
                 Spacer(minLength: 8)
-                badge
                 manage(band)
             }
             .padding(.vertical, 10)
         }
     }
 
-    /// One row: the plugin's name, and `manage` in its menu.
+    /// One row: "Uses the … plugin", and `manage` in its menu.
     ///
-    /// The badge and `by <publisher>` are not drawn — that is the point of a
-    /// collapse — and they are **said**:
-    /// ``PluginBandStrings/collapsedLabel(name:publisher:)`` puts both into the
-    /// row's own label, so nothing of the band is lost to a screen reader.
+    /// `by <publisher>` is not drawn — that is the point of a collapse — and
+    /// it is **said**: ``PluginBandStrings/collapsedLabel(name:publisher:)``
+    /// puts it into the row's own label, so nothing of the band is lost to a
+    /// screen reader.
     ///
     /// **No chevron and no menu where there is nothing to open.** On a shell
     /// with no server there is no address for `manage` to go to, and a chevron
@@ -165,8 +169,8 @@ struct PluginBandView<Content: View>: View {
             nameRow(band)
                 .padding(.vertical, 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                // One element, because it is one fact: this screen is this
-                // plugin's. Two leaves here would be read as two.
+                // One element, because it is one fact: this screen uses this
+                // plugin. Two leaves here would be read as two.
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(
                     PluginBandStrings.collapsedLabel(name: band.name, publisher: band.publisher)
@@ -174,36 +178,51 @@ struct PluginBandView<Content: View>: View {
         }
     }
 
-    /// The collapsed row's visible half: the route's glyph and the plugin's
-    /// name, wrapping rather than truncating, like every other line in the
-    /// band.
+    /// The collapsed row's visible half: the route's glyph and "Uses the …
+    /// plugin", on **one line, truncated at the tail** — Android's frame
+    /// draws the same line with `maxLines = 1, overflow = Ellipsis`
+    /// (`PluginFrame.kt`).
+    ///
+    /// It wrapped, like the rest of the band, while the line was the bare
+    /// name. "Uses the Image Generation plugin" at AX5 wrapped to a row 310
+    /// of 852 points tall (train I056,
+    /// `testShell_ThePluginBandIsOneRowAtTheLargestTypeSize`, ceiling 200) —
+    /// more than the 256-point expanded band the collapse exists to replace.
+    /// Nothing is lost by the cut: the row's own accessibility label is the
+    /// whole sentence with the publisher
+    /// (``PluginBandStrings/collapsedLabel(name:publisher:)``), and the
+    /// expanded band, below the accessibility sizes, draws both lines in
+    /// full. Truncation and not `minimumScaleFactor`, which this app rejects:
+    /// shrinking the text at the sizes a person picked to read it is the
+    /// wrong way round.
     private func nameRow(_ band: PluginBand) -> some View {
         HStack(spacing: 8) {
             Image(systemName: icon)
                 .font(.subheadline)
                 .foregroundStyle(Color.fgMuted)
                 .accessibilityHidden(true)
-            Text(band.name)
+            Text(band.usesLine)
                 .font(.subheadline.weight(.semibold))
-                .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(1)
+                .truncationMode(.tail)
         }
     }
 
-    /// The route's icon, the plugin's name, and `by <publisher>` when there is
-    /// one (`:124`, `:144`).
+    /// The route's icon, "Uses the <name> plugin", and the muted
+    /// `by <publisher>` when there is one (`:124`, `:144`).
     ///
     /// A blank name falls back to the slug in ``PluginBand``, so this never
-    /// draws an empty space where a name should be; a blank publisher is nil
-    /// there, so this cannot draw a bare "by".
+    /// draws "Uses the  plugin"; a blank publisher is nil there, so this
+    /// cannot draw a bare "by".
     private func names(_ band: PluginBand) -> some View {
         HStack(spacing: 8) {
             Image(systemName: icon)
                 .font(.subheadline)
                 .foregroundStyle(Color.fgMuted)
-                // Decorative: the name beside it is what this says.
+                // Decorative: the line beside it is what this says.
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
-                Text(band.name)
+                Text(band.usesLine)
                     .font(.subheadline.weight(.semibold))
                     .fixedSize(horizontal: false, vertical: true)
                 if let line = band.publisherLine {
@@ -216,23 +235,9 @@ struct PluginBandView<Content: View>: View {
         }
     }
 
-    /// The bordered badge (`:151`).
-    ///
-    /// A border and the muted ink rather than ``HomeTonePill``: that type is
-    /// for a *tone* — a graded word with a colour that means something — and
-    /// `plugin` grades nothing. It is a label saying where this screen came
-    /// from, which is what Android's bordered badge is too.
-    private var badge: some View {
-        Text(PluginBandStrings.badge)
-            .font(.caption)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .foregroundStyle(Color.fgMuted)
-            .overlay {
-                Capsule().strokeBorder(Color(.separator), lineWidth: 1)
-            }
-    }
+    // The bordered `plugin` badge (`:151`) stood here. It is gone: the main
+    // line says "Uses the … plugin", so a badge saying `plugin` beside it
+    // would say the same word twice.
 
     /// `manage` → `<base>/#plugins/<slug>` in the browser (`:170-181`).
     ///

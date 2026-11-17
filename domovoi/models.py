@@ -137,6 +137,11 @@ class Context(BaseModel):
     # stamps it on a voice turn; None everywhere else (the line is simply
     # not said).
     speak_interim: Any = None
+    # What ``speak_interim`` actually said this turn, in order (the
+    # cold-start notice). The room's history lists everything a room says,
+    # so the turn's conversation_log row carries these before the reply
+    # (router.heard_text; S2-16). Shared across the router's shallow copies.
+    interim_said: list[str] = Field(default_factory=list)
     # Whether the caller can speak a Q&A answer while it is being written.
     # The streaming layer sets it on a voice turn: route() then hands back
     # the answer as a stream (Response.qa_stream) instead of waiting for the

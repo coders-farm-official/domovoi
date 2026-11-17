@@ -39,7 +39,7 @@ const _fitBadge = (estGb, freeGb, ramFreeGb) => {
   if (estGb <= freeGb * 0.85) return { label: 'fits', tone: 'ok' };
   if (estGb <= freeGb) return { label: 'tight', tone: 'warn' };
   if (ramFreeGb != null && estGb <= freeGb + ramFreeGb)
-    return { label: 'spills to CPU', tone: 'warn' };
+    return { label: 'partly in memory', tone: 'warn' };
   return { label: "won't fit", tone: 'err' };
 };
 
@@ -52,8 +52,8 @@ const FitBadge = ({ estGb, hw }) => {
   const b = _fitBadge(estGb, freeGb, hw ? hw.ramFreeGb : null);
   return (
     <span title={freeGb != null
-      ? `estimate: needs ~${estGb ?? '?'} GB vs ${freeGb.toFixed(1)} GB free on the largest GPU`
-      : 'no GPU detected — VRAM fit unknown'}>
+      ? `estimate: needs about ${estGb ?? '?'} GB; the graphics card has ${freeGb.toFixed(1)} GB free`
+      : "the model's size: Domovoi can't read a graphics card's memory on this server"}>
       <Pill tone={b.tone}>{b.label}</Pill>
     </span>
   );
@@ -86,7 +86,7 @@ const GpuCard = ({ g }) => {
       <div>
         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11,
                       color: 'var(--fg-muted)', marginBottom: 4 }}>
-          <span>VRAM</span>
+          <span>graphics memory</span>
           <span className="mono">{usedGb.toFixed(1)} / {totalGb.toFixed(1)} GB</span>
         </div>
         {_bar(memPct, memPct > 90 ? 'err' : memPct > 70 ? 'warn' : 'brand')}
@@ -105,13 +105,13 @@ const HardwarePanel = ({ data, loading }) => {
   const ram = data && data.ram;
   const disk = data && data.disk;
   return (
-    <Card title="Hardware" sub="Live host readout — the denominator for every fit estimate below.">
+    <Card title="Hardware" sub="What this server has free right now. Whether a model fits, below, is measured against it.">
       <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
         {loading && !data ? (
           <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>reading hardware…</div>
         ) : gpus.length === 0 ? (
           <div style={{ fontSize: 12, color: 'var(--fg-faint)' }}>
-            No GPU detected (nvidia-smi unavailable or CPU-only host) — fit badges will show as unknown.
+            Domovoi can't read a graphics card's memory on this server, so the models below show their size instead of whether they fit.
           </div>
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: 10 }}>
@@ -174,19 +174,19 @@ const SttStatusBanner = ({ stt }) => {
                   border: `1px solid var(${off ? '--err' : '--warn'})` }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, marginBottom: 4 }}>
         <Icon name="alert-triangle" size={14}/>
-        {off ? 'speech recognition is off' : 'speech recognition is on the cpu fallback'}
+        {off ? 'speech recognition is off' : 'speech recognition is on its backup model'}
       </div>
       <div>
         {off
-          ? <>Whisper didn't load at startup, so rooms can't be understood. Configured: </>
-          : <>The configured Whisper didn't load at startup; <span className="mono">{_sttDesc(stt.loaded)}</span> is
-              transcribing instead. Configured: </>}
+          ? <>The speech model didn't load when Domovoi started, so rooms can't be understood. Chosen: </>
+          : <>The chosen speech model didn't load when Domovoi started; <span className="mono">{_sttDesc(stt.loaded)}</span> is
+              listening instead. Chosen: </>}
         <span className="mono">{_sttDesc(configured)}</span>.
         {' '}Fix the Speech-to-text settings (Configuration → Advanced), then restart the Domovoi server.
       </div>
       {detail && (
         <details style={{ marginTop: 6 }}>
-          <summary style={{ cursor: 'pointer', color: 'var(--fg-muted)' }}>load error</summary>
+          <summary style={{ cursor: 'pointer', color: 'var(--fg-muted)' }}>what went wrong</summary>
           <pre className="mono" style={{ margin: '6px 0 0', whiteSpace: 'pre-wrap', fontSize: 11,
                                           color: 'var(--fg-muted)' }}>{detail}</pre>
         </details>
@@ -229,7 +229,7 @@ const SpeechTimingsLine = ({ data, error, loading }) => {
         <span>{capped ? `latest ${data.turns} turns`
           : `${data.turns} ${data.turns === 1 ? 'turn' : 'turns'}, last 7 days`}</span>
         <span>·</span>
-        <span title="Whisper time per turn — median, then 95th percentile">
+        <span title="time to turn speech into words, per turn: the typical turn (p50), then the slowest one in 20 (p95)">
           transcribe <span className="mono" style={{ color: 'var(--fg)' }}>{_speechMs(stt.p50)}</span>
           {' '}p50 · <span className="mono">{_speechMs(stt.p95)}</span> p95
         </span>
@@ -246,8 +246,8 @@ const SpeechTimingsLine = ({ data, error, loading }) => {
           </React.Fragment>
         )}
         {settingsSeen > 1 && (
-          <span title="the window spans a Whisper settings change, so these numbers mix both">
-            (mixes {settingsSeen} whisper settings)
+          <span title="the speech settings changed during these turns, so these numbers mix both">
+            (mixes {settingsSeen} speech settings)
           </span>
         )}
       </span>
@@ -268,10 +268,10 @@ const SpeechTimingsLine = ({ data, error, loading }) => {
 
 const ROLE_LABEL = { qa: 'Q&A', tool: 'Tool routing', vision: 'Vision', stt: 'Speech-to-text' };
 const ROLE_SUB = {
-  qa: "conversational fallthrough — 'tell me a joke'",
-  tool: 'routes voice commands to handlers',
-  vision: 'answers chat messages that carry images',
-  stt: 'Whisper transcription',
+  qa: "answers questions and chat, like 'tell me a joke'",
+  tool: 'works out what a spoken command should do',
+  vision: 'answers chat messages that carry pictures',
+  stt: 'turns what is said in a room into words',
 };
 
 // Why the role slots are empty. Every failure used to read "domovoi
@@ -353,7 +353,7 @@ const ActiveRow = ({ r, installed, whisperNames, hw, catalogByName, onSwitch, on
     else if (r.installed === false) status = <Pill tone="warn">not installed</Pill>;
     else if (r.installed === true) {
       status = (
-        <span title={r.chat_restart_required ? 'installed in Ollama' : 'installed — this role uses it now'}>
+        <span title={r.chat_restart_required ? 'installed on this server' : 'installed, and in use now'}>
           <Pill tone="ok">{r.chat_restart_required ? 'installed' : 'ready'}</Pill>
         </span>
       );
@@ -363,7 +363,7 @@ const ActiveRow = ({ r, installed, whisperNames, hw, catalogByName, onSwitch, on
     // this process's cache check says.)
     status = (
       <span className="stt-role-not-cached"
-            title="not in this host's model cache: Whisper downloads it when it loads, at the next restart">
+            title="not on this server yet: it downloads when Domovoi next restarts">
         <Pill tone="warn">not downloaded</Pill>
       </span>
     );
@@ -399,7 +399,7 @@ const ActiveRow = ({ r, installed, whisperNames, hw, catalogByName, onSwitch, on
         {r.tier === 'restart' && <Pill tone="warn">restart to apply</Pill>}
         {missing && (
           <Button variant="primary" icon="download" disabled={blocked}
-                  title={blocked ? NEEDS_INTERNET_TEXT : `download ${r.model} into Ollama`}
+                  title={blocked ? NEEDS_INTERNET_TEXT : `download ${r.model} to this server`}
                   onClick={() => onInstall(r.model)}>Install</Button>
         )}
         {missing && blocked && <NeedsInternetNote compact/>}
@@ -541,7 +541,8 @@ const SttRow = ({ m, hw, active, onSelect, internetOff }) => {
                   borderBottom: '1px solid var(--border-soft)', flexWrap: 'wrap' }}>
       <span className="mono" style={{ fontSize: 13, fontWeight: 500, minWidth: 130 }}>{m.name}</span>
       <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}
-            title={m.compute === 'auto' ? 'float16 on a GPU, int8 on the CPU' : undefined}>{m.compute}</span>
+            title={m.compute === 'auto' ? "the best setting for this server's hardware"
+              : m.compute === 'int8' ? 'about half the memory, nearly the same accuracy' : undefined}>{m.compute}</span>
       <span style={{ fontSize: 12, color: 'var(--fg-muted)', flex: 1, minWidth: 140 }}>{m.accuracy}</span>
       <FitBadge estGb={m.est_vram_gb} hw={hw}/>
       {notOnDisk && !isActive && (
@@ -803,7 +804,7 @@ const ModelsPanel = () => {
   // gone before it could be read on a phone).
   const [fire, node, dismissToast] = useToast();
   // Installing a model pulls it from the Ollama registry: greyed while the
-  // box is set to stay off the internet (Settings → Internet).
+  // box is set to stay off the internet (Settings → Privacy → Internet).
   // The internet answer, read once for the page (the GET /api/config the
   // dashboard's shell reads too) and handed down as a prop; one read per
   // page, never one per row.
@@ -831,6 +832,13 @@ const ModelsPanel = () => {
   // move while you look at the page.
   const { data: speechTimings, error: speechTimingsError, loading: speechTimingsLoading } =
     useApiObject('/api/stats/latency', { quiet: true });
+  // Whether this server can train a wake word, read the way the Wake
+  // words page reads it (settings.jsx WakeWordsTab: a trainer status that
+  // says `requirements.unsupported`), so the summary below never promises
+  // training a server can't do (sitting 2, S2-7).
+  const { data: wakeTrainer } = useApiObject('/api/wake-words/trainer', { quiet: true, refetchOnAuth: true });
+  const wakeTrainable = !(wakeTrainer && !wakeTrainer.enabled && wakeTrainer.requirements
+                          && wakeTrainer.requirements.unsupported);
 
   // Re-poll hardware on a light cadence so VRAM/util stay live-ish.
   React.useEffect(() => {
@@ -932,10 +940,10 @@ const ModelsPanel = () => {
     }
     fire(`Install ${j.model} failed: there is no model by that name`, {
       stay: true, key,
-      detail: [hint, `Ollama: ${err}`].filter(Boolean).join('\n'),
+      detail: [hint, `The AI service said: ${err}`].filter(Boolean).join('\n'),
       actions: pullable.map((s) => ({
         label: `install ${s.name}`,
-        title: `download ${s.name} into Ollama`,
+        title: `download ${s.name} to this server`,
         onClick: () => install(s.name),
       })),
     });
@@ -1079,8 +1087,8 @@ const ModelsPanel = () => {
                           words={[`the ${restartAsk.role === 'stt' ? 'speech-to-text' : restartAsk.role} model (${restartAsk.model})`]}/>
       )}
       <Card title="Active models" sub={aiOn
-              ? 'One model per role. Switching writes config — Ollama applies instantly; Whisper needs a restart.'
-              : 'Speech-to-text: voice control needs it, so it stays with AI off. Switching needs a restart.'}>
+              ? 'One model for each job. A change that only works after Domovoi restarts is marked on its row.'
+              : 'Speech recognition: rooms need it to understand you, so it stays on with AI off. A change works after Domovoi restarts.'}>
         {roles.length === 0
           ? <div style={{ padding: 14, fontSize: 12, color: 'var(--fg-muted)' }}>
               {activeMessage(activeData, activeError)}
@@ -1095,16 +1103,16 @@ const ModelsPanel = () => {
       </Card>
 
       {jobs.length > 0 && (
-        <Card title="Installs in progress" sub="Ollama pulls run in the background — you can leave this page.">
+        <Card title="Installs in progress" sub="Downloads carry on in the background, so you can leave this page.">
           {jobs.map((j) => <PullJob key={j.id} j={j} onCancel={cancel}/>)}
         </Card>
       )}
 
       {aiOn && (
       <Card title={`Installed (${installed.length})`}
-            sub="On-disk Ollama models. 'loaded' means it's resident in VRAM right now.">
+            sub="AI models on this server. 'loaded' means it is in memory now, so it answers quickest.">
         {!ollamaReachable ? (
-          <Empty title="Ollama offline" sub="The local Ollama server isn't reachable — start it to list installed models."/>
+          <Empty title="AI service not answering" sub="Domovoi's AI service isn't answering, so the installed models can't be listed."/>
         ) : installed.length === 0 ? (
           <Empty title="No models installed" sub="Install one from the catalog below."/>
         ) : (
@@ -1115,13 +1123,13 @@ const ModelsPanel = () => {
 
       {aiOn && (
       <Card title="Browse & install"
-            sub="Curated Ollama models with fit estimates. Or pull anything by name.">
+            sub="Models picked for Domovoi, each marked with whether it fits this server. Or install another by name.">
         <form onSubmit={submitPull}
               style={{ display: 'flex', gap: 8, padding: '10px 14px', alignItems: 'center',
                        flexWrap: 'wrap', borderBottom: '1px solid var(--border-soft)' }}>
           <input value={pullName} onChange={(e) => setPullName(e.target.value)}
-                 placeholder={internetOff ? 'Pull from a registry in the house (e.g. nas.local/library/qwen2.5:7b)'
-                                          : 'Pull by name (e.g. qwen2.5:7b)'}
+                 placeholder={internetOff ? 'Install from a registry in the house (e.g. nas.local/library/qwen2.5:7b)'
+                                          : 'Install by name (e.g. qwen2.5:7b)'}
                  title={internetOff ? 'only a registry on this network while the internet is off' : undefined}
                  style={{ font: 'inherit', fontSize: 13, padding: '7px 10px', borderRadius: 'var(--r-sm)',
                           border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--fg)',
@@ -1141,8 +1149,8 @@ const ModelsPanel = () => {
       </Card>
       )}
 
-      <Card title="Speech-to-text (Whisper)"
-            sub="Selecting a row writes whisper_model and its compute type — a restart-tier change. auto runs float16 on a GPU and int8 on the CPU; int8 halves VRAM at near-identical accuracy.">
+      <Card title="Speech recognition"
+            sub="How rooms turn what you say into words. Bigger models understand more but are slower and need more memory. A change works after Domovoi restarts. 'auto' picks the best setting for this server's hardware; 'int8' uses about half the memory with nearly the same accuracy.">
         <SpeechTimingsLine data={speechTimings} error={speechTimingsError}
                            loading={speechTimingsLoading}/>
         {catWhisper.map((m, i) => (
@@ -1153,11 +1161,14 @@ const ModelsPanel = () => {
       </Card>
 
       <Card title="Voices & wake words"
-            sub="Managed in full on the Settings page — surfaced here so everything model-shaped is in one place.">
+            sub="Set up in full under Settings; listed here so every model is in one place.">
         <FoldedSummary icon="volume-2" title="TTS voices"
           sub="Domovoi's voices, all on this server (Piper) — each room speaks in one." tab="voices"/>
         <FoldedSummary icon="mic" title="Wake words"
-          sub="Custom openWakeWord models — record clips in a room, train, push." tab="wakewords"/>
+          sub={wakeTrainable
+            ? 'The word each room listens for. Make your own: record clips in a room, train it here, then send it to the room.'
+            : "The word each room listens for. You can record clips for your own, but this server can't train them."}
+          tab="wakewords"/>
       </Card>
 
       {delConfirm.node}

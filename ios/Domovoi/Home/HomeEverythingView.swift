@@ -16,7 +16,7 @@ import SwiftUI
 ///
 /// **Under the sidebar's group headings** since the nav regroup
 /// (`HomeSections.kt:1035-1056`, ``tileRuns(_:)``): `media` over Podcasts,
-/// Audiobooks and the plugin pages, `tools` over News, Calendar and Files,
+/// Audiobooks, Stations and Images, `tools` over News, Calendar and Files,
 /// lowercase as the web's grid has them; a group left with one tile (its
 /// others on the bar) and the top-level tiles — Chat, Settings, the manual —
 /// sit in an unheaded run. People is not a tile: it is Settings → Household.

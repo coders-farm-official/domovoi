@@ -50,7 +50,8 @@ public final class ChatModel {
     public let threads: ApiRead<ChatThreadList>
     public let archivedThreads: ApiRead<ChatThreadList>
 
-    /// What the house has installed. Read for ``visionRefusal`` alone.
+    /// What the house has installed. Read for ``visionRefusal``, and for
+    /// whether the paperclip offers a video (``ChatVideoRules/offered(_:)``).
     public let models: ApiRead<ChatModelsInfo>
 
     /// Whether the house allows chat at all (`features.ai`).
@@ -545,7 +546,7 @@ public final class ChatModel {
 
     /// What the screen says in place of the whole conversation when the house's
     /// AI features are off (`RouteNotes.kt:10`, already ported as
-    /// ``ShellStrings/unavailableNote(label:isChat:aiEnabled:)``).
+    /// ``ShellStrings/unavailableNote(label:isChat:aiEnabled:needsCapability:)``).
     public var aiOffNote: (title: String, detail: String)? {
         guard !aiEnabled else { return nil }
         return ShellStrings.unavailableNote(label: ChatStrings.title, isChat: true, aiEnabled: false)
@@ -601,10 +602,16 @@ public final class ChatModel {
     /// Returns whether anything went out, as Android's `send` does
     /// (`ChatScreen.kt:734`): a blank message, a second send while one is
     /// running, and a house whose AI is off all send nothing.
+    ///
+    /// - Parameter videoToken: a video staged by ``ChatVideoModel`` (1.4.0),
+    ///   sent as `videos: [{token}]`. With one, a **blank** message goes: the
+    ///   clip is the message, and the server's reply ("I'm watching
+    ///   party.mp4 (2:31) now. …") comes back at once with no model asked.
     @discardableResult
-    public func send(_ text: String) -> Bool {
+    public func send(_ text: String, videoToken: String? = nil) -> Bool {
         let content = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !content.isEmpty, canSend, conversationOpen else { return false }
+        let video = videoToken.flatMap { $0.isEmpty ? nil : $0 }
+        guard !content.isEmpty || video != nil, canSend, conversationOpen else { return false }
         sending = true
         transcript.beginSend(content: content, atISO: nowISO())
         let who = deviceID
@@ -625,10 +632,18 @@ public final class ChatModel {
                 guard let id = try await self.ensureThread(epoch) else { return }
                 await self.run(
                     path: ChatPath.messages(id),
-                    body: ChatPath.sendBody(content: content, deviceID: who),
+                    body: ChatPath.sendBody(content: content, deviceID: who, videoToken: video),
                     verb: ChatStrings.verbSend,
                     on: epoch
                 )
+                // **A video's chip hangs off the person's own row**, by its
+                // id (`message_id`), and the server never sends that row back
+                // on the stream — the optimistic one has no id. So the thread
+                // is read again once the reply has landed, as `chat.jsx` does
+                // after a video send, and the chip finds its row.
+                if video != nil, !Task.isCancelled, self.stillHome(epoch), self.openThread == id {
+                    self.loadMessages(id)
+                }
             } catch {
                 // The thread could not even be made: the refusal goes where the
                 // reply would have been, as Android's `onFailure` puts it
@@ -773,6 +788,19 @@ public final class ChatModel {
     // MARK: - coming and going
 
     public func setToast(_ said: String?) { toast = said }
+
+    /// Read the open thread again, in place — what a video job that has just
+    /// finished asks for, because the core has written its summary (and the
+    /// answer to the clip's question) into the thread as new rows.
+    ///
+    /// Not ``open(thread:title:)``, which clears the transcript first and
+    /// would blank the conversation for a round trip. Nothing while a reply
+    /// is being written: ``ChatTranscript/load(_:thisDeviceID:)`` refuses it
+    /// then anyway, and the stream's own end reads the lists again.
+    public func reloadOpenThread() {
+        guard let openThread, !transcript.streaming else { return }
+        loadMessages(openThread)
+    }
 
     /// A push arrived.
     public func received(_ event: StateEvent) {

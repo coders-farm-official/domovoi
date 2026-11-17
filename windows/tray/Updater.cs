@@ -149,8 +149,12 @@ namespace Domovoi.Windows.Tray
             if (s.Internet == "never") return R(Outcome.InternetOff, "Internet access is turned off for this Domovoi (Settings > Privacy > Internet), and updates come from Domovoi's releases on the internet.");
             if (env.Helper == null) return R(Outcome.NotInstalled, "This PC's Domovoi wasn't installed by Domovoi Setup, so the tray can't update it. Run the newer DomovoiSetup.exe by hand.");
             if (s.LinuxBusy) return R(Outcome.Failed, "Domovoi is updating or restarting right now. Try again when it's done.");
-            bool windows = s.StepNeeded && s.TargetTag != null;
-            if (!windows && !linuxFirst) return R(Outcome.NothingNew, "The Windows side is already up to date.");
+            bool current = AlreadyCurrent(s, env.Installed);
+            bool windows = WindowsNeeded(s, env.Installed);
+            if (!windows && !linuxFirst)
+                return R(Outcome.NothingNew, current
+                    ? "The Windows side is already up to date: it is " + env.Installed + ", and the server's code includes Domovoi " + s.TargetVersion + "."
+                    : "The Windows side is already up to date.");
             runDir = UpdateRun.NewRunDir(env.UpdatesRoot, env.Now());
             string run = Path.GetFileName(runDir);
             if (!windows)
@@ -207,6 +211,32 @@ namespace Domovoi.Windows.Tray
             {
                 if (held != null && !keep) held.Dispose();
             }
+        }
+
+        // The core asks for the Windows step, but this tray (the Windows
+        // side's own programs, from Program Files, which only administrators
+        // can change) is already at that release or newer: the Setup would
+        // only be refused as not newer (SetupCheck), so it isn't downloaded,
+        // and the menu's run goes on with the Linux part alone. The core's
+        // record of the Windows side (side.json) lagged behind (2026-11-16:
+        // a failed provisioning left it at 1.2.0 under a 1.2.1 tray, and
+        // every "Update Domovoi" downloaded the 1.2.1 Setup, refused it and
+        // stopped without the Linux part). Only when both versions are known
+        // releases: anything else takes the usual path, which fails closed.
+        // This can't skip a needed update: an older target than the tray's
+        // own is one SetupCheck would never run, and the comparison is with
+        // the tray's own build, which nothing on the loopback can change.
+        public static bool AlreadyCurrent(UpdateState s, string installed)
+        {
+            if (s == null || !s.StepNeeded || s.TargetTag == null) return false;
+            if (!ReleaseVersion.IsValid(installed) || !ReleaseVersion.IsValid(s.TargetVersion)) return false;
+            return ReleaseVersion.Compare(s.TargetVersion, installed) <= 0;
+        }
+
+        // Whether there is a Windows step to run from this tray.
+        public static bool WindowsNeeded(UpdateState s, string installed)
+        {
+            return s != null && s.StepNeeded && s.TargetTag != null && !AlreadyCurrent(s, installed);
         }
 
         static StepResult Undownloaded(UpdateState s, string why)
@@ -288,8 +318,10 @@ namespace Domovoi.Windows.Tray
         }
     }
 
-    // What the tray does with a poll's answer.
-    public enum UpdateAction { Nothing, StartNow, Notify }
+    // What the tray does with a poll's answer. AlreadyCurrent: a request
+    // for a release this tray already is (WindowsStep.AlreadyCurrent):
+    // claimed and answered at once, nothing downloaded, nobody asked.
+    public enum UpdateAction { Nothing, StartNow, Notify, AlreadyCurrent }
 
     // What a report is about, in the core's words (domovoi/windows_side.py
     // RESULT_KINDS): "linux" only for the menu run's Linux part alone,
@@ -312,8 +344,18 @@ namespace Domovoi.Windows.Tray
         // tray has claimed it, or when the request no longer needs a step.
         public static UpdateAction OnState(UpdateState s, string seenRequest, bool stepRunning, bool pendingRun)
         {
+            return OnState(s, seenRequest, stepRunning, pendingRun, null);
+        }
+
+        // installed: this tray's own version. A request for a release it
+        // already is gets answered ("nothing_new", with the claim, which
+        // ends the request) instead of a download Setup's check would
+        // refuse, or a notification that leads nowhere.
+        public static UpdateAction OnState(UpdateState s, string seenRequest, bool stepRunning, bool pendingRun, string installed)
+        {
             if (s == null || s.RequestId == null || s.RequestId == seenRequest || stepRunning || pendingRun) return UpdateAction.Nothing;
             if (!s.StepNeeded || s.LinuxBusy || s.RequestClaimed) return UpdateAction.Nothing;
+            if (WindowsStep.AlreadyCurrent(s, installed)) return UpdateAction.AlreadyCurrent;
             return s.RequestOnThisPc ? UpdateAction.StartNow : UpdateAction.Notify;
         }
 
@@ -324,8 +366,15 @@ namespace Domovoi.Windows.Tray
         // "nothing new", not while an update still runs, not without a core.
         public static bool WindowsAfterLinux(string stepKind, StepResult linux, UpdateState now)
         {
+            return WindowsAfterLinux(stepKind, linux, now, null);
+        }
+
+        // installed: this tray's own version (no Windows part for a release
+        // it already is).
+        public static bool WindowsAfterLinux(string stepKind, StepResult linux, UpdateState now, string installed)
+        {
             if (stepKind != "linux" || linux == null || linux.Outcome != Outcome.Ok) return false;
-            if (now == null || !now.StepNeeded || now.TargetTag == null || now.LinuxBusy || now.Internet == "never") return false;
+            if (now == null || !WindowsStep.WindowsNeeded(now, installed) || now.LinuxBusy || now.Internet == "never") return false;
             return true;
         }
     }
@@ -339,9 +388,15 @@ namespace Domovoi.Windows.Tray
         public static UpdateAction Run(IUpdateServer srv, string root, string adminRoot, DateTime utcNow, string seenRequest, bool stepRunning,
             out UpdateState state, out PendingDone done)
         {
+            return Run(srv, root, adminRoot, utcNow, seenRequest, stepRunning, null, out state, out done);
+        }
+
+        public static UpdateAction Run(IUpdateServer srv, string root, string adminRoot, DateTime utcNow, string seenRequest, bool stepRunning,
+            string installed, out UpdateState state, out PendingDone done)
+        {
             done = stepRunning ? null : PendingFlow.Finish(srv, root, adminRoot, utcNow);
             state = srv.State();
-            return UpdateDecision.OnState(state, seenRequest, stepRunning, PendingRun.Load(root) != null);
+            return UpdateDecision.OnState(state, seenRequest, stepRunning, PendingRun.Load(root) != null, installed);
         }
     }
 

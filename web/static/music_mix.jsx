@@ -128,6 +128,7 @@ const MusicMixPanel = () => {
         How Up next picks the songs that follow when the queue runs out — in every room, browser and phone.
         {' '}Up next leans a little toward songs you haven’t heard in a while; each song in the queue can tell you why it was picked.
         {' '}<a href="#manual/up-next">More in the manual</a>.
+        {admin && <>{' '}What it picked, and why: <a href="#settings/queue-history">Queue history</a>.</>}
       </div>
 
       <Card title="The mix" sub="People can set their own in Settings → People; everyone else gets these.">
@@ -190,7 +191,7 @@ const MusicMixPanel = () => {
         )}
         {internetOff && (
           <div className="chat-note info" role="note" style={{ marginBottom: 10 }}>
-            This Domovoi stays off the internet (<a href="#settings/internet">Settings → Internet</a>): these never ask.
+            This Domovoi stays off the internet (<a href="#settings/internet">Settings → Privacy → Internet</a>): these never ask.
           </div>
         )}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>

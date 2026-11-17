@@ -84,6 +84,8 @@ ROUTES: dict[str, dict] = {
     # Listening history (2026-11-12): the app has no tab for it yet.
     "settings/listening-history": {"dashboard": "#settings/listening-history", "app": {"dashboard": True}},
     "settings/music-mix": {"dashboard": "#settings/music-mix", "app": {"dashboard": True}},
+    # Queue history (1.4.0): admin, on the dashboard only.
+    "settings/queue-history": {"dashboard": "#settings/queue-history", "app": {"dashboard": True}},
     "settings/health": {"dashboard": "#settings/health", "app": {"screen": "Settings", "tab": "health"}},
     "settings/advanced": {"dashboard": "#settings/advanced", "app": {"screen": "Settings", "tab": "advanced"}},
     # the app's own: plain text on the dashboard
@@ -150,6 +152,7 @@ PIECES: dict[str, tuple] = {
     "Radio": ("radio", "stations you star", ["radio", "station", "fm", "stream"], {"plugin": "radio"}),
     # Chat and help
     "Chat": ("chat", "type to Domovoi, at home or on the phone", ["chat", "text", "pictures", "vision", "images", "screenshot", "new chat", "rename", "archive"], {}),
+    "Ask about a video": ("ask-video", "attach a clip, ask what's in it", ["video", "clip", "mp4", "mov", "attach a video", "transcript", "what did they say", "might show", "watching your video"], {}),
     "Look things up": ("lookups", "online only when you say yes", ["look up", "search", "internet", "wikipedia", "web", "allow once", "always allow internet", "searxng", "brave", "sources", "kiwix"], {}),
     "What Domovoi is good and not so good at": ("good-and-not", "where to trust the answers, and where to check", ["trust", "accurate", "accuracy", "reliable", "wrong", "mistakes", "heads-up", "warning", "limits", "good at", "bad at", "weak"], {}),
     "When AI is off": ("ai-off", "what still works without the AI models", ["ai off", "no ai", "without ai", "turn off ai", "ai features", "optional", "commands only", "set up for home commands"], {}),
@@ -163,6 +166,7 @@ PIECES: dict[str, tuple] = {
     # Files, printing and calendar
     "Files and photos": ("files", "every library, one place", ["files", "upload", "photos", "pictures", "move", "delete", "usb drive", "from chat", "scans"], {}),
     "Documents and spreadsheets": ("documents", "write, edit and share, together", ["document", "spreadsheet", "sheet", "drawing", "text file", "markdown", "xlsx", "editor", "word", "docx", "pdf", "fonts", "photo", "picture", "caption", "crop", "co-editing", "together", "version history", "restore", "read-only"], {}),
+    "What does this scan say?": ("scan-reader", "a short summary of a scanned letter", ["scan", "scanned letter", "what does it say", "read my mail", "ocr", "letter", "handwriting", "might say", "read the scan"], {}),
     "Printers and scanners": ("printers", "print and scan, by voice too", ["print", "printer", "scan", "scanner", "ink", "toner", "paper", "airprint", "mopria", "test page", "print a draft", "print it"], {}),
     "Calendar": ("calendar", "the household's events", ["calendar", "event", "appointment", "what's on"], {}),
     "Lists": ("lists", "to-do, shopping, any list", ["list", "lists", "to-do", "todo", "to do", "shopping", "groceries", "grocery", "cross off", "check off", "tick off"], {}),
@@ -320,6 +324,8 @@ PHRASES: dict[str, tuple] = {
     "read me the headlines": ("news", "fast", {}),
     "any news about the city council": ("news", "fast", {}),
     "stream the jazz station": ("radio", "fast", {"plugin": "radio"}),
+    "tune to lofi 24/7": ("radio", "fast", {"plugin": "radio"}),
+    "add this to my favorites": ("radio", "fast", {"plugin": "radio"}),
     "stop the radio": ("radio", "fast", {"plugin": "radio"}),
     "what's on my calendar today": ("calendar", "fast", {}),
     "what's next on my calendar": ("calendar", "fast", {}),
@@ -338,6 +344,7 @@ PHRASES: dict[str, tuple] = {
     "is the printer out of paper": ("printing", "fast", {}),
     "set up the printer": ("printing", "fast", {}),
     "scan this to Documents": ("printing", "fast", {}),
+    "scan this letter": ("printing", "fast", {}),
     "stop printing": ("printing", "fast", {}),
     "read me the lease": ("documents", "fast", {}),
     "read it back": ("documents", "fast", {}),

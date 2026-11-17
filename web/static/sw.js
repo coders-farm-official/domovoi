@@ -74,6 +74,8 @@ const SHELL_ASSETS = [
   '/styles.css',
   '/auth.js',
   '/data.js',
+  // The address to share in the header (components.jsx ShareAddressButton).
+  '/share_address.js',
   '/components.jsx',
   '/player.jsx',
   '/lyrics.jsx',
@@ -89,6 +91,8 @@ const SHELL_ASSETS = [
   // Settings → Household → Media folders.
   '/media_folders.jsx',
   '/music_mix.jsx',
+  '/queue_history.jsx',
+  '/friend_houses.jsx',
   // Settings → Documents → Fonts, and the editors' font picker.
   '/fonts.jsx',
   '/font_picker.css',

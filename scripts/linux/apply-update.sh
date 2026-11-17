@@ -117,7 +117,8 @@
 #      in Settings takes effect at the next Restart. DOMOVOI_MANAGE_OS_JOBS=0
 #      leaves the jobs alone.
 #  11b. Ubuntu packages a newer Domovoi needs that this box lacks
-#      (reconcile_added_packages: xorriso, for old computers' room sticks)
+#      (reconcile_added_packages: xorriso, for old computers' room sticks;
+#      tesseract-ocr and tesseract-ocr-eng, for reading scans)
 #      are installed from Ubuntu's archive, --no-install-recommends, not
 #      held. Not under never; never fatal (a warn step); a step only when
 #      something was missing. A healthy plain restart ends with it too.
@@ -164,6 +165,18 @@
 # daemon-reload. A policy the household chose (on-abnormal, say) is left
 # as it is, with a warn step saying what it misses. Never fatal.
 #
+# Then the dashboard's low port (reconcile_short_address): the short
+# address (web/backend/short_address.py) listens on port 80 and hands
+# browsers over to 6369, which needs CAP_NET_BIND_SERVICE. The shipped
+# domovoi-web.service grants it (that capability alone, bounding set
+# included); a unit installed before 1.4.0 has none, so it gets the drop-in
+# domovoi-web.service.d/50-domovoi-short-address.conf that adds exactly
+# that one, and systemctl daemon-reload, before the services start again.
+# A unit that already has it is left alone; one where our drop-in is
+# there but systemd still says no (a later drop-in of the household's
+# overrides it) gets a warn step. Never fatal: without it the dashboard
+# still runs on 6369 and Settings says the short address is off.
+#
 # Then the journal (reconcile_journal): kept on disk, so what the core
 # logs about why it stopped survives a power cycle (on 2026-10-14 a box
 # whose journal lived in RAM lost the record of a frozen core). The
@@ -183,6 +196,18 @@
 # trim itself decides whether it trims (inside WSL only, unless
 # /etc/domovoi/cache-trim.conf says otherwise). DOMOVOI_MANAGE_CACHE_TRIM=0
 # leaves all of it alone. Never fatal.
+#
+# Then Friend Houses' firewall (reconcile_fh_firewall; docs/LINUX_HOST.md,
+# "Friend Houses' firewall"): the checkout's scripts/linux/fh-firewall.sh
+# becomes /usr/local/lib/domovoi-fh-firewall/fh-firewall.sh (root's, in a
+# folder only root can write) and units/domovoi-fh-firewall.service goes
+# into /etc/systemd/system; when either changed, or the unit isn't enabled,
+# systemctl daemon-reload, enable --now, and try-restart when a file changed,
+# so the rules apply now. They
+# keep the Tor container Friend Houses runs off this box's own ports and
+# the home network (threat-model finding 22), and are installed whether or
+# not Friend Houses is ever turned on; provision.sh installs the same
+# files. DOMOVOI_MANAGE_FH_FIREWALL=0 leaves all of it alone. Never fatal.
 #
 # Then Docker's order at boot (reconcile_docker_media_order): on a box
 # whose /etc/fstab has provision.sh's Domovoi media block (the Windows
@@ -326,6 +351,10 @@ DB_UNIT=domovoi-db.service
 # a scratch directory).
 CORE_DROPIN_DIR=${DOMOVOI_CORE_DROPIN_DIR:-/etc/systemd/system/$CORE_UNIT.d}
 CORE_RESTART_DROPIN=$CORE_DROPIN_DIR/50-domovoi-restart.conf
+# Where reconcile_short_address writes its drop-in (the harness points it
+# at a scratch directory).
+WEB_DROPIN_DIR=${DOMOVOI_WEB_DROPIN_DIR:-/etc/systemd/system/$WEB_UNIT.d}
+WEB_SHORT_ADDRESS_DROPIN=$WEB_DROPIN_DIR/50-domovoi-short-address.conf
 # The journal on disk (reconcile_journal); the harness points the drop-in
 # directory at a scratch one.
 MANAGE_JOURNAL=${DOMOVOI_MANAGE_JOURNAL:-1}
@@ -347,6 +376,14 @@ CACHE_TRIM_LIB=$CACHE_TRIM_LIB_DIR/cache-trim.py
 CACHE_TRIM_UNIT_DIR=$TEST_ROOT/etc/systemd/system
 CACHE_TRIM_UNITS=(domovoi-cache-trim.service domovoi-cache-trim.timer)
 CACHE_TRIM_TIMER=domovoi-cache-trim.timer
+# Friend Houses' firewall (reconcile_fh_firewall): the root-owned copy of
+# the script and its unit, under the harness's root in the tests.
+MANAGE_FH_FIREWALL=${DOMOVOI_MANAGE_FH_FIREWALL:-1}
+FH_FIREWALL_SRC=$SCRIPT_DIR/fh-firewall.sh
+FH_FIREWALL_LIB_DIR=$TEST_ROOT/usr/local/lib/domovoi-fh-firewall
+FH_FIREWALL_LIB=$FH_FIREWALL_LIB_DIR/fh-firewall.sh
+FH_FIREWALL_UNIT_DIR=$TEST_ROOT/etc/systemd/system
+FH_FIREWALL_UNIT=domovoi-fh-firewall.service
 
 # The search helper (docs/INTERNET.md): the compose service and the
 # container it runs as. DOMOVOI_MANAGE_SEARXNG=0 (or false/no/off) in
@@ -383,10 +420,25 @@ GPU_DOCKER_RESTARTED=0
 # Ubuntu packages a newer Domovoi needs that a box installed before them
 # lacks (provision.sh's apt step puts them on a new one): xorriso, the
 # program the core runs to make old computers' room sticks (2026-10-16,
-# domovoi/usb_stick/). DOMOVOI_MANAGE_PACKAGES=0 (or false/no/off) leaves
-# them to the administrator.
+# domovoi/usb_stick/); tesseract-ocr and its English data, what the core
+# runs to read scanned pages (1.4.0, domovoi/scan_reader/).
+# DOMOVOI_MANAGE_PACKAGES=0 (or false/no/off) leaves them to the
+# administrator.
 MANAGE_PACKAGES=${DOMOVOI_MANAGE_PACKAGES:-1}
-ADDED_PACKAGES=(xorriso)
+ADDED_PACKAGES=(xorriso tesseract-ocr tesseract-ocr-eng)
+
+# What each added package is for, said when it can't be installed.
+added_package_needs() {
+  local p out=() tess=0
+  for p in "$@"; do
+    case "$p" in
+      xorriso) out+=("USB sticks for old computers need xorriso") ;;
+      tesseract-ocr*) [ "$tess" -eq 1 ] || out+=("reading scans needs tesseract-ocr"); tess=1 ;;
+    esac
+  done
+  local IFS=';'
+  printf '%s' "${out[*]}" | sed 's/;/; /g'
+}
 
 # The wake-word trainer image (scripts/wake_word/docker), rebuilt when it is
 # out of date and only where a household built it (switched training on).
@@ -2390,7 +2442,7 @@ searxng_start() {
     ${as[@]+"${as[@]}"} "${cmd[@]}" || rc=$?
   fi
   if [ "$rc" -eq 124 ]; then
-    echo "the search helper did not start within ${SEARXNG_TIMEOUT}s (DOMOVOI_UPDATE_SEARXNG_TIMEOUT); start it again from Settings > Internet"
+    echo "the search helper did not start within ${SEARXNG_TIMEOUT}s (DOMOVOI_UPDATE_SEARXNG_TIMEOUT); start it again from Settings > Privacy > Internet"
     return 1
   fi
   [ "$rc" -eq 0 ] || return 1
@@ -2511,7 +2563,7 @@ reconcile_added_packages() {
   [ "${#missing[@]}" -gt 0 ] || return 0
   policy=$(internet_policy 2>/dev/null || true)
   if [ "$policy" = never ]; then
-    log "not installed while internet access is turned off: ${missing[*]} (USB sticks for old computers need xorriso)"
+    log "not installed while internet access is turned off: ${missing[*]} ($(added_package_needs "${missing[@]}"))"
     return 0
   fi
   t0=$(now_ms)
@@ -2528,7 +2580,7 @@ reconcile_added_packages() {
   if [ -n "$out" ]; then printf '%s\n' "$out" | tail -n 20 | sed 's/^/    /'; fi
   if [ "$rc" -ne 0 ]; then
     # The core shows this detail on the Version card: our words, not apt's.
-    add_step added-packages warn "$t0" "not installed: ${missing[*]} (apt-get failed, exit $rc, or another program was using apt; journalctl -u domovoi-update says why). The next update or Restart tries again. USB sticks for old computers need xorriso"
+    add_step added-packages warn "$t0" "not installed: ${missing[*]} (apt-get failed, exit $rc, or another program was using apt; journalctl -u domovoi-update says why). The next update or Restart tries again. $(added_package_needs "${missing[@]}")"
     log "step added-packages failed (exit $rc); not fatal, the run goes on"
   else
     add_step added-packages ok "$t0" "installed ${missing[*]}"
@@ -2799,6 +2851,55 @@ reconcile_core_restart() {
   return 0
 }
 
+# The drop-in reconcile_short_address writes.
+short_address_dropin() {
+  cat <<'EOF2'
+# Written by scripts/linux/apply-update.sh (domovoi-update.service). The
+# dashboard's short address (web/backend/short_address.py) listens on port
+# 80 and only redirects browsers to the dashboard on 6369; a port below
+# 1024 needs CAP_NET_BIND_SERVICE. This adds that one capability and no
+# other (the bounding set too), as the shipped domovoi-web.service does.
+# To keep the dashboard off port 80, switch the short address off in
+# Settings instead of deleting this file.
+[Service]
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+EOF2
+}
+
+# "cap_a cap_b" (systemctl show's spelling) holds cap_net_bind_service?
+has_net_bind() { case " $1 " in *" cap_net_bind_service "*) return 0 ;; esac; return 1; }
+
+# See the header: CAP_NET_BIND_SERVICE for a dashboard unit without it, and
+# only that. Records a step only when it wrote the drop-in (ok), or when
+# the dashboard still can't bind port 80 after it (warn).
+reconcile_short_address() {
+  local t0 load ambient bounding
+  command -v systemctl >/dev/null 2>&1 || return 0
+  load=$(systemctl show -p LoadState --value "$WEB_UNIT" 2>/dev/null || true)
+  if [ "$load" != loaded ]; then
+    log "systemd has no $WEB_UNIT loaded (${load:-no answer}): its low port left as it is"
+    return 0
+  fi
+  ambient=$(systemctl show -p AmbientCapabilities --value "$WEB_UNIT" 2>/dev/null || true)
+  bounding=$(systemctl show -p CapabilityBoundingSet --value "$WEB_UNIT" 2>/dev/null || true)
+  if has_net_bind "$ambient" && has_net_bind "$bounding"; then return 0; fi
+  t0=$(now_ms)
+  log "step short-address: $WEB_UNIT can't bind port 80 (AmbientCapabilities=${ambient:-none})"
+  if [ -f "$WEB_SHORT_ADDRESS_DROPIN" ]; then
+    add_step short-address warn "$t0" "$WEB_UNIT lacks CAP_NET_BIND_SERVICE although $WEB_SHORT_ADDRESS_DROPIN adds it (a drop-in after it, or the unit itself, overrides it), so the short address on port 80 stays off; the dashboard is on 6369 as always"
+    return 0
+  fi
+  if mkdir -p "$WEB_DROPIN_DIR" && write_atomic "$WEB_SHORT_ADDRESS_DROPIN" "$(short_address_dropin)"$'\n' \
+      && systemctl daemon-reload; then
+    add_step short-address ok "$t0" "$WEB_SHORT_ADDRESS_DROPIN lets the dashboard listen on port 80 for the short address (CAP_NET_BIND_SERVICE, nothing else)"
+  else
+    add_step short-address warn "$t0" "$WEB_SHORT_ADDRESS_DROPIN could not be written, so the short address on port 80 stays off; the dashboard is on 6369 as always"
+    log "step short-address failed; not fatal, the run goes on"
+  fi
+  return 0
+}
+
 # >>> docker-media-order block >>>
 # The same text in scripts/linux/provision.sh and scripts/linux/apply-update.sh,
 # character for character (domovoi/tests/test_docker_media_order.py holds the
@@ -2941,6 +3042,58 @@ install_if_changed() {
 
 # See the header. A step only when it installed something (ok) or could not
 # (warn); everything already in place is nothing to do.
+reconcile_fh_firewall() {
+  local t0 rc changed=() why=""
+  case "$(printf '%s' "$MANAGE_FH_FIREWALL" | tr '[:upper:]' '[:lower:]')" in
+    0|false|no|off) log "Friend Houses' firewall left alone (DOMOVOI_MANAGE_FH_FIREWALL=$MANAGE_FH_FIREWALL)"; return 0 ;;
+  esac
+  if [ "$(id -u)" != 0 ] && [ -z "$TEST_ROOT" ]; then log "not root: Friend Houses' firewall left as it is"; return 0; fi
+  if [ ! -f "$FH_FIREWALL_SRC" ]; then log "no $FH_FIREWALL_SRC: Friend Houses' firewall left as it is"; return 0; fi
+  if [ ! -f "$SCRIPT_DIR/units/$FH_FIREWALL_UNIT" ]; then log "no $SCRIPT_DIR/units/$FH_FIREWALL_UNIT: Friend Houses' firewall left as it is"; return 0; fi
+  t0=$(now_ms)
+  if [ ! -d "$FH_FIREWALL_LIB_DIR" ]; then mkdir -p "$FH_FIREWALL_LIB_DIR" && chmod 0755 "$FH_FIREWALL_LIB_DIR" || true; fi
+  if ! root_dir "$FH_FIREWALL_LIB_DIR"; then
+    why="$FH_FIREWALL_LIB_DIR is not a folder only root can write, so the firewall script was not put there"
+  else
+    rc=0; install_if_changed "$FH_FIREWALL_SRC" "$FH_FIREWALL_LIB" 0755 || rc=$?
+    case $rc in
+      0) changed+=("$FH_FIREWALL_LIB") ;;
+      2) why="$FH_FIREWALL_LIB could not be written" ;;
+    esac
+  fi
+  if [ -z "$why" ]; then
+    mkdir -p "$FH_FIREWALL_UNIT_DIR" || true
+    rc=0; install_if_changed "$SCRIPT_DIR/units/$FH_FIREWALL_UNIT" "$FH_FIREWALL_UNIT_DIR/$FH_FIREWALL_UNIT" 0644 || rc=$?
+    case $rc in
+      0) changed+=("$FH_FIREWALL_UNIT") ;;
+      2) why="$FH_FIREWALL_UNIT_DIR/$FH_FIREWALL_UNIT could not be written" ;;
+    esac
+  fi
+  local enabled=1
+  if command -v systemctl >/dev/null 2>&1 && ! systemctl is-enabled --quiet "$FH_FIREWALL_UNIT" 2>/dev/null; then
+    enabled=0
+  fi
+  if [ -z "$why" ] && [ "${#changed[@]}" -eq 0 ] && [ "$enabled" = 1 ]; then return 0; fi
+  if [ -z "$why" ] && [ "$enabled" = 0 ] && [ "${#changed[@]}" -eq 0 ]; then changed+=("$FH_FIREWALL_UNIT enabled"); fi
+  if [ -z "$why" ] && command -v systemctl >/dev/null 2>&1; then
+    # enable --now starts it when it isn't running; try-restart applies
+    # changed rules when it already was.
+    local files_changed=1
+    case " ${changed[*]} " in *" $FH_FIREWALL_UNIT enabled "*) files_changed=0 ;; esac
+    if ! { systemctl daemon-reload && systemctl enable --now "$FH_FIREWALL_UNIT"         && { [ "$files_changed" = 0 ] || systemctl try-restart "$FH_FIREWALL_UNIT"; }; }; then
+      why="the files are in place but $FH_FIREWALL_UNIT could not be started"
+    fi
+  fi
+  if [ -n "$why" ]; then
+    add_step fh-firewall warn "$t0" "$why; Friend Houses' Tor container is not fenced off"
+    log "step fh-firewall: $why; not fatal, the run goes on"
+  else
+    add_step fh-firewall ok "$t0" "Friend Houses' firewall is installed (${changed[*]}): its Tor container reaches the internet only"
+    log "step fh-firewall: installed ${changed[*]}"
+  fi
+  return 0
+}
+
 reconcile_cache_trim() {
   local t0 u rc changed=() why=""
   case "$(printf '%s' "$MANAGE_CACHE_TRIM" | tr '[:upper:]' '[:lower:]')" in
@@ -3227,7 +3380,7 @@ full_update() {
     if [ "${#what[@]}" -eq 2 ]; then why="$why and ${what[1]}"; fi
     if [ "${#what[@]}" -eq 3 ]; then why="$why, ${what[1]} and ${what[2]}"; fi
     add_step preflight refused "$t0" "$why; internet access is turned off for this box"
-    finish aborted "$why, and internet access is turned off for this box (Settings > Internet), so nothing was changed. Switch the answer to Sometimes, restart again, then switch it back to No and restart once more, so Ubuntu's own updaters are masked again (docs/INTERNET.md)."
+    finish aborted "$why, and internet access is turned off for this box (Settings > Privacy > Internet), so nothing was changed. Switch the answer to Sometimes, restart again, then switch it back to No and restart once more, so Ubuntu's own updaters are masked again (docs/INTERNET.md)."
     return
   fi
   if [ "$DEPS_CHANGED" = 1 ] && ! why=$(venv_writable); then
@@ -3478,8 +3631,10 @@ main() {
   if ! check_signature; then exit 1; fi
   reconcile_update_unit
   reconcile_core_restart
+  reconcile_short_address
   reconcile_journal
   reconcile_cache_trim
+  reconcile_fh_firewall
   reconcile_docker_media_order
 
   if [ "$PREV_SHA" = "$HEAD_SHA" ]; then

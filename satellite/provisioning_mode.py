@@ -1277,6 +1277,19 @@ def provisioning_active() -> bool:
 # ─── Apply ────────────────────────────────────────────────────────────────
 
 
+def asks_every_house(configured: str) -> bool:
+    """Whether a device set up with ``configured`` as its server address asks
+    every Domovoi server for approval (the client's ``_house_pairing_mode``
+    "every-house"): ``auto`` and no server key from the card. A key merely
+    recorded on first contact is no choice anyone made."""
+    if (configured or "").strip().lower() != proto.AUTO_DISCOVER_URL:
+        return False
+    from satellite import server_identity
+
+    _expected, source = server_identity.pinned_fingerprint()
+    return source in ("none", "recorded")
+
+
 def resolve_auto_url(configured: str) -> str | None:
     """Turn the ``auto`` sentinel into a real address, right after Wi-Fi joins.
 
@@ -1475,6 +1488,21 @@ def apply_provision(
         )
         if ok:
             url = resolve_auto_url(payload.get("domovoi_url", ""))
+            if asks_every_house(payload.get("domovoi_url", "")):
+                # SAT-17: no address and no key. The device asks EVERY
+                # Domovoi server for approval and trusts only the one that
+                # proves its code (satellite/house_pairing.py) — so the
+                # first one that answered here is nobody's choice: root
+                # records no address for it and takes no clock from it.
+                # Root's records are written at a later boot, once a server
+                # has proved the code and signed for its address
+                # (net_settings.refresh_server_pin).
+                log.info(
+                    "no server address and no server key: not recording %s for "
+                    "root nor taking its clock — the server that proves this "
+                    "device's code is recorded once it has", url or "any server",
+                )
+                return True, None
             # 5b. Root's own record of where this device's server is. The
             #     clock helper runs as root on the satellite user's say-so
             #     and reads this rather than trusting the address that

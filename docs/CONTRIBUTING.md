@@ -13,13 +13,6 @@ Related reading: [Architecture](ARCHITECTURE.md) ·
 Domovoi is MIT-licensed ([LICENSE](../LICENSE)); contributions are accepted
 under the same license.
 
-A new **Android dependency** needs its licence decided by hand: check it at
-the project's source, then add (or confirm) its rule in
-`android/app/src/main/java/com/domovoi/app/ui/screens/settings/OpenSourceLicences.kt`.
-The unit tests read the build's own list of libraries and fail until every
-one has a permissive rule its POM agrees with; the app's licences screen is
-made from the same list.
-
 ---
 
 ## Development setup
@@ -57,7 +50,7 @@ helper-container secrets that `docker-compose.yml` refuses to run without);
 an existing `.env` is never touched:
 
 ```powershell
-pip install -e ".[dev,real-clients,voice-profile]"
+pip install -e ".[dev,real-clients]"
 pip install --no-deps -r requirements-no-deps.in   # faster-whisper (see below)
 python -m domovoi.env_bootstrap           # creates domovoi/.env on a fresh checkout
 python -m domovoi.env_bootstrap --repair  # adds the two secrets to an older .env
@@ -84,7 +77,8 @@ pip install --no-deps -e .
 ```
 
 `requirements-linux-py314.lock` is what a Linux server installs: core,
-`real-clients` and `voice-profile` (no torch since 1.3.0), for CPython
+`real-clients` and `voice-profile` (an empty extra since 1.3.0, kept for older
+install commands and the lock; no torch), for CPython
 3.14 on x86_64 ([LINUX_HOST.md, Install](LINUX_HOST.md#install); the
 update unit's re-sync uses it on a box that opts in with
 `DOMOVOI_USE_LOCK=1`). Regenerate it with
@@ -219,7 +213,15 @@ pytest -n 4                              # 4 worker processes (pytest-xdist, in 
 * **One run per lane at a time** still holds, serial or parallel: copying
   needs the lane to have no other connections, and two runs on one set of
   copies truncate each other's tables. Different lanes
-  (`TEST_DATABASE_URL=…/domovoi8_test`) run side by side.
+  (`TEST_DATABASE_URL=…/domovoi8_test`) run side by side. A new lane is an
+  empty database whose name ends in `_test`, migrated like the test
+  database (from `domovoi/`; the password as in the URL above):
+
+  ```bash
+  docker compose exec postgres createdb -U domovoi domovoi8_test
+  docker compose run --rm flyway-test -url=jdbc:postgresql://postgres:5432/domovoi8_test \
+    -user=domovoi -password=<password> -connectRetries=20 migrate
+  ```
 * **Mind Postgres' connections.** A test that starts the core app opens
   about 18 connections at once while the lifespan brings its workers up,
   so each worker can burst to ~20, and N workers can line their bursts up.
@@ -322,7 +324,7 @@ all known exits 0 (and says so under the summary).
 
 ### CI
 
-`.github/workflows/ci.yml` runs on every push to `main`, and from the
+`.github/workflows/ci.yml` runs on every pull request into `main`, every push to `main`, and from the
 Actions tab ("ci" → "Run workflow"), which runs every job. GitHub's hosted
 runners are free for this public repository. A first job, *what changed*,
 compares the push's files and starts only what they touch; a push of
@@ -331,11 +333,16 @@ Markdown (and pictures under `docs/`) alone runs the docs gates only.
 | Job | Runner | What it runs |
 |---|---|---|
 | docs gates | ubuntu | `build_manual.py --check` and the file-only gate tests (privacy, licences, version copies, mermaid, the manual, the workflow pins); every push |
+| ruff (lint) | ubuntu | `ruff check` ([Linting](#linting)) |
 | pytest 1/6 … 6/6 | ubuntu | the whole suite (all three test trees), split by `scripts/dev/ci_shard.py` into six shards of whole files, each `pytest -n 4` on its own migrated Postgres |
 | web | ubuntu | `node scripts/dev/jsxcheck.js` (every `.jsx` compiles with the vendored Babel; no two dashboard scripts share a top-level name), then `web/openapi.json` and `web/static/manual-content.json` regenerated and diffed against the commit |
 | bash harnesses | ubuntu | `scripts/dev/run-linux-harness.sh all`, when `scripts/linux/` changed (a real install on each Linux system is its own workflow: [The fresh-install test](#the-fresh-install-test)) |
 | android | ubuntu | `./gradlew testDebugUnitTest assembleDebug`; uploads the debug APK (`domovoi-debug-apk`, 14 days) |
+| android repro build a/b, android repro compare | ubuntu | the release APKs built twice in deliberately different environments, unsigned, and compared byte for byte (reproducible builds) |
+| android release rehearsal | windows | the release's signing steps on leg a's APKs with a throwaway key: no environment, no secrets, nothing published |
 | windows | windows | `windows/build.ps1 -SkipInstaller` (the exes and the C# tests), then the installers when the image has Inno Setup 6 |
+| ios | macOS | the `DomovoiKit` package tests, and the app with its UI-test target compiled for the Simulator, unsigned (the UI test runs stay on a Mac with the stub house: [ios/README.md](../ios/README.md)) |
+| sbom | ubuntu | the server's, the web's and the app's SBOMs, made as the release makes them |
 
 Reading a red run: open it from the README's CI badge or the Actions tab
 and pick the red job. For a pytest shard, the end of its log has the
@@ -349,9 +356,10 @@ looks flaky; a second red is a real failure, so fix it or add it to
 `known_failures.toml` with its reason). Main stays green: a red run on
 `main` is fixed before anything else is pushed.
 
-No workflow uses a secret, and none may: release signing and publishing
-stay on the owner's PC ("Releasing", below). Actions are pinned by commit
-SHA (`domovoi/tests/test_ops_ci_workflow.py` holds the line).
+No workflow but the release's signing job uses a secret, and none may:
+the signing secrets live only in the `release` environment, behind the
+owner's approval ("Releasing", below). Actions are pinned by commit SHA
+(`domovoi/tests/test_ops_ci_workflow.py` holds the line).
 
 ### The fresh-install test
 
@@ -492,6 +500,13 @@ Replaced so far:
 `domovoi/tests/test_dependency_licences.py` fails if a replaced package
 comes back as an import in shipped code, a requirement or a lock pin.
 
+A new **Android dependency** needs its licence decided by hand: check it at
+the project's source, then add (or confirm) its rule in
+`android/app/src/main/java/com/domovoi/app/ui/screens/settings/OpenSourceLicences.kt`.
+The unit tests read the build's own list of libraries and fail until every
+one has a permissive rule its POM agrees with; the app's licences screen is
+made from the same list.
+
 Printing and scanning (`domovoi/printing/`, 2026-10-21) is Domovoi's own
 IPP, PWG Raster/URF, mDNS and eSCL code, plus two permissive libraries,
 each checked from its licence files: **pypdfium2** (Apache-2.0 or
@@ -621,7 +636,27 @@ wrong unless that migration has never shipped anywhere.
 
 ---
 
-## Pull request expectations
+## Pull requests
+
+`main` takes changes only through pull requests (2026-11-17). A branch rule
+refuses direct pushes, with no bypass at all; for a release, the owner
+switches it off while the release run pushes ("Releasing", step 0).
+
+1. Work on a branch: `git switch -c wf/<name> origin/main`, or a worktree.
+2. Open one pull request per batch of related work, not one per small
+   change: `gh pr create --base main --fill`. Small urgent fixes may go on
+   their own.
+3. Turn on auto-merge: `gh pr merge --auto --merge`. CI runs on the pull
+   request, and when the `ci passed` check is green GitHub merges it with a
+   merge commit and deletes the branch. No approval is needed.
+4. Red? Read the failed job (see "CI" above), push a fix to the same
+   branch, and the run starts again.
+5. An emergency that can't wait for CI: the owner switches the rule off in
+   **Settings → Rules**, pushes, and switches it back on. A release does the
+   same for its own pushes ("Releasing", step 0).
+
+### What a pull request should be
+
 
 * **Keep the suite green.** All tests pass locally before you push; new
   behavior comes with tests that fail without your change.
@@ -659,7 +694,7 @@ has its PEP 440 spelling (`1.0.0rc3`).
 `domovoi/tests/test_version_copies.py` holds every copy to `pyproject.toml`.
 Keep to fewer than ten release candidates (`rc10` sorts before `rc2`).
 
-**The Android app has its own version** (owner decision 2026-11-14):
+**The Android app has its own version**:
 `versionName` and `versionCode` (its `YYMMDDNN` counter, which only goes
 up) in `android/app/build.gradle.kts`, raised only when the app changes,
 and never ahead of the release it ships with. That `versionCode` is the
@@ -673,7 +708,8 @@ reproducible, and F-Droid can publish them as they are
 with a release that changes it, under that release's tag; a release that
 doesn't change it ships no APKs and leaves `android/release.json` as it
 is, still naming the earlier release that holds them, so servers keep
-fetching the app from there. (The iPhone app is separate again.)
+fetching the app from there. The iPhone app has its own version again and
+ships on the App Store ([ios/README.md](../ios/README.md)).
 
 The README's version badges read `pyproject.toml` and `android/release.json`
 on `stable`, so they follow each release by themselves. Its **tests** badge
@@ -684,8 +720,8 @@ is a fixed number: in the release commit, set it to the sum of
 
 Two branches: `main` carries every change; **`stable`** points at the
 latest release and only ever fast-forwards to one. Release candidates
-(`rcN`) are full GitHub releases (the suffix says what they are; owner
-decision 2026-10-15), tagged on `main`, and never move `stable`; only a
+(`rcN`) are full GitHub releases (the suffix says what they are), tagged
+on `main`, and never move `stable`; only a
 version without a suffix does. A published tag never moves
 and is never deleted, and `stable` is never rewound or force-pushed: a bad
 release gets a warning in its notes and a patch release.
@@ -696,8 +732,8 @@ only** (no APKs). Either is made by the release workflow, behind the
 owner's approval, or, as the fallback, by the same scripts on the owner's
 PC. Release from a `main` whose CI run is green ("CI", above); pushing a
 tag starts no workflow. The `android/release.json` commit the app path
-makes carries `[skip ci]`: it changes only that file, on a commit CI has
-already tested.
+makes is an ordinary commit and starts CI like any other (it changes only
+that file, so the run is quick).
 
 ### With GitHub Actions (the usual way)
 
@@ -706,11 +742,25 @@ and only from `main`'s tip. Its signing secrets live in the repository's
 `release` environment, which waits for the owner's approval; the one-time
 setup is [docs/release/ACTIONS-SETUP.md](release/ACTIONS-SETUP.md).
 
-1. **The release commit** on `main`, pushed, exactly as in step 1 below. It
-   must be `main`'s tip when the run starts: the workflow checks that the
+0. **Switch the branch rule off.** The release run pushes the Android
+   release record straight to `main` and moves `stable`, and a repository
+   owned by a personal account can't exempt GitHub Actions from the rule.
+   **Settings → Rules → Main through pull requests → Enforcement: Disabled.**
+   Switch it back to **Active** as soon as the run has finished, whether or
+   not it worked. (Once the repository belongs to the Coders Farm
+   organization, GitHub Actions goes on the rule's bypass list instead and
+   this step goes away.)
+1. **The release commit** on `main`, through its own pull request, exactly as
+   in step 1 below. It must be `main`'s tip when the run starts: the workflow checks that the
    commit raises `pyproject.toml`'s version and leaves
    `android/release.json` alone, and that GitHub has no tag
    `v<version>` yet.
+   Refresh the public status pages in the same commit: the README's
+   "Status and roadmap" (**This release**, **Coming in**)
+   and `docs/ROADMAP.md` (move what shipped out of **Now**, **Next** and
+   **Later**, and name the next work). The docs gates fail on a stale
+   version in either (`domovoi/tests/test_version_copies.py`); whether the
+   wording is still true is for the person releasing to read.
 2. Wait for CI to go green on that commit.
 3. **Actions → release → Run workflow**, branch `main` (leave *tag* empty:
    it is `v` + `pyproject.toml`'s version).
@@ -741,9 +791,14 @@ setup is [docs/release/ACTIONS-SETUP.md](release/ACTIONS-SETUP.md).
    libraries; finish-release attaches them (`--sbom-dir`) and lists them in
    `SHA256SUMS`. **attest** (Linux, after the release) records GitHub's
    build provenance for every file in that `SHA256SUMS`, once the release
-   on GitHub holds exactly those files. If attest fails, the release is
+   on GitHub holds exactly those files; the signing job hands it
+   `SHA256SUMS` as an artifact (`release-sums`), since GitHub drops a job
+   output that holds a secret's value. If attest fails, the release is
    already out: **Re-run failed jobs** runs it again, and nothing is
-   published twice. How a user checks a file:
+   published twice. A release whose run made no provenance at all (1.3.0)
+   gets it from **Run workflow** with the tag and **attest_published**
+   ticked: only attest runs, taking `SHA256SUMS` from the published
+   release (weaker than the signing job's own, so the release notes say so). How a user checks a file:
    [SECURITY.md, "Verifying a release"](../SECURITY.md#verifying-a-release).
 
 Every check the scripts make still runs; the workflow adds the plan, and a
@@ -780,10 +835,12 @@ workflow runs the same scripts. In order:
 
 1. **The release commit** on `main`, pushed: the version in every copy
    (the test above), the release notes, and `docs/release/v<version>.md`
-   when the release has a hand-written summary (the GitHub body; kept
-   under 20 KB). When the app changed, its `versionName` and `versionCode`
+   when the release has hand-written notes (the full notes, whose
+   `## At a glance` section is the GitHub body's: "The release page",
+   below; the page is kept under 20 KB). When the app changed, its `versionName` and `versionCode`
    too; when it didn't, `android/` stays as it is (`android/release.json`
    above all).
+   Include the README and roadmap refresh from step 1 of the workflow path.
 2. **Only when the app changed: `android/scripts/release.ps1`** (or `.sh`)
    from a clean, pushed checkout of `main`, **with Docker Desktop running**:
    builds the APKs in the pinned Linux image (`android/build-env`; it
@@ -862,11 +919,97 @@ workflow runs the same scripts. In order:
 
 The finished release holds the two APKs (only when the app changed),
 `DomovoiSetup.exe` (not code-signed), `DomovoiTray.exe`, `DomovoiSatelliteSetup.exe`, `SHA256SUMS`,
-and notes naming the tag's commit, how the Setup was built and the app's
-signing certificate. Neither script
+and notes (in the order of "The release page", below) naming the tag's
+commit, how the Setup was built and the app's signing certificate. Neither script
 touches a keystore or a password outside `release.ps1`'s own prompts (or,
 in the workflow, its `-KeystoreCredential`); finish-release never reads the
 release key (ssh-keygen does, or asks the agent for it).
+
+### The release page
+
+People open a release page to get Domovoi, so the files come first and
+the story after. finish-release writes the page in this order:
+
+1. **Download** (finish-release writes it): a direct link to each file on
+   the release, with one plain line on what it is for. `DomovoiSetup.exe`
+   for a Windows 11 PC as the server; the Linux one-line install, copied
+   from `docs/LINUX_HOST.md` at the tag (never retyped); Google Play and
+   both APKs, with which one to pick (a release that doesn't change the
+   app links the APKs on the release that holds them);
+   `DomovoiSatelliteSetup.exe` for a Windows PC as a room, and the
+   manual's page for a Raspberry Pi room; and for a house that has
+   Domovoi already, Settings → System → About & updates → **Update
+   Domovoi**.
+2. **What's new since <the previous release>** (finish-release writes the
+   heading), then a **More detail** line linking the release's full notes
+   (`docs/release/v<version>.md` at the tag) and its dated section of
+   `docs/RELEASE_NOTES.md` at the tag (`## 2026-11-16 — 1.3.0`, anchor
+   `#2026-11-16--130`). Under it, the `## At a glance` section of
+   `docs/release/v<version>.md` (yours), its `###` headings shown as `##`;
+   or, without that file, a summary of the `docs/RELEASE_NOTES.md` entries
+   since the previous tag.
+3. **Files and checksums** (finish-release writes it): how to check a
+   download (and its build provenance, from the release workflow), then,
+   collapsed, every file with its SHA-256 and where the files come from.
+
+`docs/release/v<version>.md` is the release's **full notes**: title, intro
+and every subsection, as long as it needs, read on GitHub through the More
+detail link. Only its one `## At a glance` section goes on the page, so
+whatever else is in the file, Download stays first. That section starts
+with the highlights (a list), and its own headings are `###` and none of
+finish-release's (`Download`, `What's new…`, `Files`, `Files and
+checksums`, `Install or update`). The plan job and finish-release both
+refuse a file that isn't so (`release_doc_problems` in
+`scripts/release/finish_release.py`). The template:
+
+```markdown
+# Domovoi 1.4.0
+
+The intro: what this release is, in a paragraph.
+
+## At a glance
+
+- **One highlight, in a line:** what a household gets. ([Manual page](https://github.com/coders-farm-official/domovoi/blob/v1.4.0/scripts/manual/manual.md#anchor))
+- 5 to 8 of these, each linking to its manual or doc section at the tag.
+
+**The one thing everyone must do after updating**, if there is one.
+
+### Security fixes
+
+- **package x.y.z:** what it fixes, in one line.
+
+### Upgrading
+
+- Only what needs someone to act, one line each.
+
+### Known limits
+
+- **The limit:** one line.
+
+### Verifying a release
+
+Only for something this release needs said (finish-release writes the
+commands under Files and checksums).
+
+## What is new since 1.3.0
+
+The full story: a ### subsection per area, every detail.
+
+## Security fixes
+
+Each fix in full, with the advisories.
+
+## Upgrading
+
+Every step, in full.
+```
+
+Leave out an empty section. Links point at the tag (`/blob/v<version>/`),
+not `main`, so the page keeps describing the release it is on. Inside At
+a glance, a longer how can go in a `<details>` block, which GitHub
+renders collapsed: leave a blank line after `</summary>`, or the Markdown
+inside shows raw. Releases up to 1.3.0 have no At a glance section: their
+pages were written before it.
 
 ---
 

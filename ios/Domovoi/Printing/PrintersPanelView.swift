@@ -34,16 +34,41 @@ struct PrintersPanelView: View {
     @State private var panel: PrintersPanelModel?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        // **The network-only line is a caption to the list, not a paragraph
+        // above it.** The 2026-11-16 wording is half again as long as the
+        // old line and took a third `footnote` line, which moved everything
+        // under it down by one line — and on an 852-point phone at the
+        // panel's top that put the first card's `Test page` across the foot
+        // of the scroll viewport (`y 738.7…782.7` against a viewport ending
+        // at 770). A control the viewport cuts has no pixels an audit can
+        // read, and train I058's `testPrinting_PanelAudit` failed on exactly
+        // that: "Contrast failed … label='Test page'".
+        //
+        // So the line takes back the height it added: `.caption`, Android's
+        // own size for it (`bodySmall`, 12sp, `PrintersPanel.kt:140`) and
+        // this panel's own size for the admin-only line beside the list, and
+        // six points to the first card rather than the sixteen between cards.
+        // That is one footnote line (≈18) less, which returns the first card
+        // to where it sat when the audit was green. The words are unchanged.
+        VStack(alignment: .leading, spacing: 6) {
             Text(PrintingStrings.networkOnlyLine)
-                .font(.footnote)
+                .font(.caption)
                 .foregroundStyle(Color.fgMuted)
                 .fixedSize(horizontal: false, vertical: true)
-            if let panel {
-                saved(panel)
-                foundCard(panel)
-            } else {
-                ProgressView()
+            VStack(alignment: .leading, spacing: 16) {
+                if let panel {
+                    saved(panel)
+                    foundCard(panel)
+                } else {
+                    ProgressView()
+                }
+            }
+            // "What does it say?" from a scan row. On this inner stack and
+            // **not** beside the add sheet below: two `.sheet`s on one view
+            // do not reliably coexist (``FilesView`` says why), and the two
+            // never need to be up at once.
+            .sheet(item: readSheet) { scan in
+                ScanReadSheet(scan: scan, model: model, onClose: { panel?.closeRead() })
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -172,7 +197,17 @@ struct PrintersPanelView: View {
         }
     }
 
-    // MARK: - which add sheet is up
+    // MARK: - which sheet is up
+
+    private var readSheet: Binding<PrintingScanJob?> {
+        Binding(
+            get: { panel?.readingScan },
+            set: { next in
+                guard next == nil else { return }
+                panel?.closeRead()
+            }
+        )
+    }
 
     private var addSheet: Binding<PrintingAddSheet?> {
         Binding(

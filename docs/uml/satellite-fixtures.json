@@ -115,6 +115,11 @@
       "unlocks": "a drop-in call's start chime and the peer's audio wait for the device's `dropin_ready` (it finishes the reply announcing the call first; the core marks such a dropin_start `await_ready`)",
       "assumed_without_supports": false,
       "hello_key": "dropin_ready"
+    },
+    "room_display": {
+      "unlocks": "the `room_display` frame (this room's music, timers and alarms, and one going off) and the `room_control` frame back; a paired room only; never assumed without `supports`",
+      "assumed_without_supports": false,
+      "hello_key": null
     }
   },
   "always_sent": [
@@ -172,6 +177,9 @@
     ],
     "announcement": [
       "announce_after_session_end"
+    ],
+    "room_display": [
+      "room_display"
     ]
   },
   "config_section_ability": {
@@ -193,6 +201,10 @@
         "type": "hello",
         "room_id": "kitchen",
         "wake_word": "hey_jarvis",
+        "wake_words": [
+          "hey_jarvis"
+        ],
+        "wake_words_max": 3,
         "synced_sha": "44f0fff",
         "supports_full_duplex": false,
         "pairing_token": "fixture-pairing-token-kitchen-0000000000000000000000",
@@ -245,7 +257,8 @@
           "wifi"
         ],
         "not_allowed": [
-          "full_duplex"
+          "full_duplex",
+          "room_display"
         ],
         "frames_sent": [
           "restart",
@@ -263,7 +276,8 @@
         ],
         "frames_never": [
           "chat_start",
-          "dropin_start"
+          "dropin_start",
+          "room_display"
         ],
         "upgrade_extra": {},
         "config_hidden_sections": [],
@@ -387,6 +401,10 @@
         "type": "hello",
         "room_id": "living-room",
         "wake_word": "hey_jarvis",
+        "wake_words": [
+          "hey_jarvis"
+        ],
+        "wake_words_max": 3,
         "synced_sha": "44f0fff",
         "supports_full_duplex": true,
         "pairing_token": "fixture-pairing-token-living-room-0000000000000000000000",
@@ -439,7 +457,9 @@
           "wake_models",
           "wifi"
         ],
-        "not_allowed": [],
+        "not_allowed": [
+          "room_display"
+        ],
         "frames_sent": [
           "restart",
           "upgrade",
@@ -456,7 +476,9 @@
           "end_capture",
           "announcement"
         ],
-        "frames_never": [],
+        "frames_never": [
+          "room_display"
+        ],
         "upgrade_extra": {},
         "config_hidden_sections": [],
         "pi_actions_kept": [
@@ -579,6 +601,10 @@
         "type": "hello",
         "room_id": "study",
         "wake_word": "hey_jarvis",
+        "wake_words": [
+          "hey_jarvis"
+        ],
+        "wake_words_max": 5,
         "synced_sha": "44f0fff",
         "supports_full_duplex": false,
         "pairing_token": "fixture-pairing-token-study-0000000000000000000000",
@@ -656,6 +682,7 @@
           "leds",
           "mic_gain",
           "plugin_payloads",
+          "room_display",
           "time_sync",
           "wifi"
         ],
@@ -675,7 +702,8 @@
         "frames_never": [
           "set_display",
           "chat_start",
-          "dropin_start"
+          "dropin_start",
+          "room_display"
         ],
         "upgrade_extra": {
           "plugin_payloads": false
@@ -789,6 +817,10 @@
         "type": "hello",
         "room_id": "den",
         "wake_word": "hey_jarvis",
+        "wake_words": [
+          "hey_jarvis"
+        ],
+        "wake_words_max": 5,
         "synced_sha": "44f0fff",
         "supports_full_duplex": false,
         "pairing_token": "fixture-pairing-token-den-000000000000000000000000",
@@ -866,6 +898,7 @@
           "leds",
           "mic_gain",
           "plugin_payloads",
+          "room_display",
           "time_sync",
           "wifi"
         ],
@@ -885,7 +918,8 @@
         "frames_never": [
           "set_display",
           "chat_start",
-          "dropin_start"
+          "dropin_start",
+          "room_display"
         ],
         "upgrade_extra": {
           "plugin_payloads": false
@@ -994,11 +1028,15 @@
       }
     },
     "android_room": {
-      "about": "An Android phone in room mode (android roommode/, what RoomProtocol.hello sends on a phone with an echo canceller; a phone without one leaves full_duplex and dropin_ready out): only `supports`, no boolean keys. Echo cancellation for drop-ins (finishing the reply that announces one first) but no chat mode; it mirrors the server's sounds and wake models; it updates through its app store, so no restart, code sync, settings, live log or clip recording.",
+      "about": "An Android phone in room mode (android roommode/, what RoomProtocol.hello sends on a phone with an echo canceller; a phone without one leaves full_duplex and dropin_ready out): only `supports`, no boolean keys. Echo cancellation for drop-ins (finishing the reply that announces one first) but no chat mode; it mirrors the server's sounds and wake models; it updates through its app store, so no restart, code sync, settings, live log or clip recording. Since 1.4.0 it shows the room display (`room_display`: the room's music, timers and alarms, and one going off); and it runs several wake words on one front end, saying which it loaded and how many it can run (`wake_words`, `wake_words_max`: 5, or 3 on a 32-bit or ~2 GB phone).",
       "hello": {
         "type": "hello",
         "room_id": "nursery",
         "wake_word": "hey_jarvis",
+        "wake_words": [
+          "hey_jarvis"
+        ],
+        "wake_words_max": 5,
         "pairing_token": "fixture-pairing-token-nursery-0000000000000000000000",
         "approval_code": "305117",
         "sat_type": "voice",
@@ -1011,7 +1049,8 @@
           "announce_after_session_end",
           "wake_models",
           "sounds",
-          "dropin_ready"
+          "dropin_ready",
+          "room_display"
         ]
       },
       "ready": {
@@ -1024,7 +1063,8 @@
           "end_capture",
           "music_failed",
           "health",
-          "log_push"
+          "log_push",
+          "room_display"
         ],
         "room_voice": null
       },
@@ -1035,6 +1075,7 @@
           "capture_control",
           "dropin_ready",
           "full_duplex",
+          "room_display",
           "sounds",
           "speech_pause",
           "wake_models"
@@ -1046,6 +1087,7 @@
           "capture_control",
           "dropin_ready",
           "full_duplex",
+          "room_display",
           "sounds",
           "speech_pause",
           "wake_models"
@@ -1072,7 +1114,8 @@
           "sounds_changed",
           "dropin_start",
           "end_capture",
-          "announcement"
+          "announcement",
+          "room_display"
         ],
         "frames_never": [
           "restart",

@@ -72,6 +72,7 @@ ABILITIES: dict[str, str] = {
     "capture_control": "`end_capture` (early commit; also needs speech_pause)",
     "turn_progress": "the `working` frame every 30 s while a request is still being worked out (keeps the device's reply backstop from giving up on a slow but working server)",
     "dropin_ready": "a drop-in call's audio (its start chime and the peer's relay) waits for the device's `dropin_ready`: it finishes the reply it is still playing (\"Dropping in on the kitchen\") before it opens the call",
+    "room_display": "the `room_display` frame (this room's music, timers and alarms, and one going off, for a screen in the room) and the `room_control` frame back (pause, resume, skip, previous, stop ringing); a paired room only (domovoi/room_display.py)",
 }
 
 #: The boolean hello keys from before ``supports``, and the ability each is.
@@ -89,12 +90,17 @@ NEGOTIATED: frozenset[str] = frozenset(
     {"full_duplex", "speech_pause", "capture_control", "dropin_ready"}
 )
 
+#: Abilities only a device that LISTS them gets (1.4.0): newer than every
+#: Pi, so never assumed for a hello without ``supports``, and with no
+#: boolean hello key either. ``room_display``: a Pi has no screen.
+DECLARED_ONLY: frozenset[str] = frozenset({"room_display"})
+
 #: What a hello WITHOUT ``supports`` (every Pi in the field) is taken to
 #: have: everything the core has always pushed to a satellite. Out-of-turn
 #: announcements go to such a satellite whether or not its hello carries
 #: ``announce_after_session_end`` — today's behaviour, with today's WARNING
 #: when it doesn't.
-ASSUMED_WITHOUT_SUPPORTS: frozenset[str] = frozenset(ABILITIES) - NEGOTIATED
+ASSUMED_WITHOUT_SUPPORTS: frozenset[str] = frozenset(ABILITIES) - NEGOTIATED - DECLARED_ONLY
 
 #: Board slugs for the spare-device kinds the dashboard names. A Pi's board
 #: (USB adoption writes e.g. ``raspberry_pi_zero_2_w``) is not listed: the

@@ -40,8 +40,13 @@ class RoomProtocolTest {
             pairingToken = want["pairing_token"]!!.jsonPrimitive.content,
             approvalCode = want["approval_code"]!!.jsonPrimitive.content,
             echoCanceller = true,
+            // 1.4.0: what it loaded, and how many it can run (a 64-bit phone with memory to spare).
+            wakeWords = want["wake_words"]!!.jsonArray.map { it.jsonPrimitive.content },
+            wakeWordsMax = WakeWords.limitFor(is64Bit = true, totalRamBytes = 6L shl 30),
         )
         assertEquals(want, ours)
+        assertEquals(listOf("hey_jarvis"), want["wake_words"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertEquals(5, want["wake_words_max"]!!.jsonPrimitive.content.toInt())
         assertEquals(RoomProtocol.BOARD, device["expect"]!!.jsonObject["board"]!!.jsonPrimitive.content)
     }
 
@@ -74,12 +79,25 @@ class RoomProtocolTest {
     @Test
     fun theReadyFeaturesGateTheNewMessageTypes() {
         val ready = RoomProtocol.parse(device["ready"]!!.toString()) as RoomProtocol.ServerFrame.Ready
-        assertEquals(setOf("speech_pause", "end_capture", "music_failed", "health", "log_push"), ready.features)
+        assertEquals(setOf("speech_pause", "end_capture", "music_failed", "health", "log_push", "room_display"), ready.features)
         val pause = buildJsonObject { put("type", "speech_pause") }
         assertTrue(RoomProtocol.maySend(pause, ready.features))
         assertFalse(RoomProtocol.maySend(pause, emptySet()))
         assertFalse(RoomProtocol.maySend(buildJsonObject { put("type", "health") }, setOf("speech_pause")))
         assertTrue(RoomProtocol.maySend(buildJsonObject { put("type", "utterance_end") }, emptySet()))
+        // The room display's controls go only to a core that sends the display.
+        val control = RoomDisplayFeed.control(RoomControl.Music(Transport.PAUSE))
+        assertTrue(RoomProtocol.maySend(control, ready.features))
+        assertFalse(RoomProtocol.maySend(control, ready.features - "room_display"))
+    }
+
+    @Test
+    fun theRoomDisplayIsDeclaredAndItsFrameGated() {
+        assertTrue("room_display" in RoomProtocol.supports(echoCanceller = true))
+        assertTrue("every phone shows the display", "room_display" in RoomProtocol.supports(echoCanceller = false))
+        val gate = fixtures["frame_gates"]!!.jsonObject["room_display"]!!.jsonArray.map { it.jsonPrimitive.content }
+        assertEquals(listOf("room_display"), gate)
+        assertTrue(RoomProtocol.parse("""{"type":"room_display"}""") is RoomProtocol.ServerFrame.Display)
     }
 
     @Test

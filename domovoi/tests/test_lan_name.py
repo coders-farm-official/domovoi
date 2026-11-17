@@ -862,3 +862,23 @@ def test_the_windows_side_reads_the_same_paths() -> None:
     assert "Every = TimeSpan.FromSeconds(" + str(svc.HOST_POLL_SEC) + ")" in cs
     for state in rmod.STATES:
         assert '"' + state + '"' in cs
+
+
+def test_the_mac_helpers_report_is_read(tmp_path, monkeypatch):
+    """The Mac helper writes the same schema-1 report inside its VM, at
+    /var/lib/domovoi-mac/lan_name.json; the core reads it as kind "mac"
+    when there is no Windows report, under the same root-only rule."""
+    assert ("mac", "/var/lib/domovoi-mac/lan_name.json") in svc.REPORT_FILES
+    assert svc.REPORT_FILES[0][0] == "windows"
+    win = tmp_path / "var" / "lib" / "domovoi-windows" / "lan_name.json"
+    mac = tmp_path / "var" / "lib" / "domovoi-mac" / "lan_name.json"
+    mac.parent.mkdir(parents=True)
+    monkeypatch.setenv("DOMOVOI_LAN_NAME_REPORT_WINDOWS", str(win))
+    monkeypatch.setenv("DOMOVOI_LAN_NAME_REPORT_MAC", str(mac))
+    monkeypatch.setattr(svc, "_root_only", lambda st: True)
+    mac.write_text(json.dumps({**REPORT, "addresses": ["192.168.1.30"]}), encoding="utf-8")
+    kind, doc = svc.read_report()
+    assert kind == "mac" and doc["addresses"] == ["192.168.1.30"]
+    # Not root's alone: not believed.
+    monkeypatch.setattr(svc, "_root_only", lambda st: False)
+    assert svc.read_report() is None

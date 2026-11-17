@@ -12,33 +12,37 @@ or as a [feature request](https://github.com/coders-farm-official/domovoi/issues
 
 ## Now
 
-Being worked on.
+Being worked on: the next release, 1.4.0. It is already on `main`, and its
+changes are listed under "1.4.0 (unreleased)" in the
+[release notes](RELEASE_NOTES.md).
 
-- **Tests on GitHub Actions.** Every change checked in the open, not only
-  on the maintainers' machines.
-- **Signed releases with provenance.** Release commits and tags signed,
-  release files published with build provenance, and servers on `stable`
-  checking the signature before they update (the update verifier already
-  checks wherever an `allowed_signers` file is in place:
-  [signed updates](LINUX_HOST.md#signed-updates)).
-- **Trust you can check.** A [security policy](../SECURITY.md) with a
-  promised reply time, a [code of conduct](../CODE_OF_CONDUCT.md), and an
-  [inventory of every host Domovoi can contact](INTERNET.md#egress-inventory),
-  held to the code by a test, with the commands to
-  [check it yourself](INTERNET.md#check-it-yourself).
+- **Up next history.** Look back at the songs Up next picked, and why, in
+  Settings.
+- **Up to five wake words per room,** as many as the room's device can run.
+- **A room display.** A phone or tablet in room mode shows what is playing
+  and the room's timers and alarms, not only listening.
+- **Short videos in chat.** Attach a video of up to three minutes; the
+  server watches it and answers questions about it.
+- **Radio by the name you say,** and played in a room you choose.
+- **Rooms that ask every house.** A new room asks every Domovoi server it
+  finds and joins only the one you approve it on.
+- **Admins signed out after an hour idle,** so a tab left open overnight
+  is not still an admin in the morning.
+- **Fixes from home testing:** the Windows tray no longer sticks on an
+  old Setup, printing says plainly that it is for network printers, and a
+  song deleted while it plays no longer leaves a room stuck on it.
 
 ## Next
 
 Planned, not started or only begun.
 
-- **The iPhone app.** Coming soon: its own track, apart from the server's
-  releases.
+- **The iPhone app.** Coming: its own track, apart from the server's
+  releases, with no dates yet.
 - **The Android app on F-Droid,** beside Google Play and the GitHub
-  releases.
-- **A permissive default wake word.** The "Domovoi" word a new install
-  wakes on is CC BY-NC-SA 4.0 because of its training data, so it stays
-  out of this repository and can't ride in anything sold. One trained on
-  permissively licensed data throughout could ship anywhere.
+  releases. The part that makes it possible is done and shipped: the app's
+  release builds are reproducible, so F-Droid can check them and publish
+  the signed file as it is ([how](../android/README.md#reproducible-builds)).
+  The listing itself is not in F-Droid's catalog yet.
 - **The Windows installer out of preview,** code-signed, so one download
   turns the household gaming PC into a Domovoi server.
 
@@ -52,11 +56,6 @@ Wanted, not yet scheduled.
 - **The previews out of preview:** the phone's own chat, satellites on
   spare devices, and the USB stick for old computers, once they have been
   tried on more real devices ([hardware validation](HARDWARE_VALIDATION.md)).
-- **More than one wake word per room,** up to about five. The limit is
-  the slowest satellite's processor and false wakes, which add up with
-  every extra word.
-- **A screen for room mode:** a phone or tablet in room mode showing the
-  clock, what's playing and timers, not only listening.
 - **Old smart speakers as rooms.** Some early Echo models can be unlocked
   and reflashed with open firmware; "Add a room" could walk you through
   turning one into a Domovoi satellite.

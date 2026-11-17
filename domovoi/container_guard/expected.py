@@ -199,6 +199,34 @@ def compose_expectations(
     return out
 
 
+# ─── Friend Houses' Tor daemon ────────────────────────────────────────────
+
+TOR_CONTAINER = "domovoi-tor"
+TOR_IMAGE_TAG = "domovoi-tor:latest"
+
+
+def tor_expectation(*, running: bool, image_id: str | None, hold: str | None = None) -> Expected:
+    """The Tor daemon Friend Houses runs (domovoi/friend_houses/tor_runtime.py).
+
+    RUNNING while Friend Houses wants it (an admin turned it on, the
+    internet answer isn't "never", and there's a friend or an open friend
+    file); otherwise STOPPED: it must not run, and if it does it must still
+    run the image the core built. The image is pinned by the exact local ID
+    the core built (:func:`domovoi.container_guard.engine.note_tor_image`),
+    like the music player's: nothing about it comes from a registry."""
+    return Expected(
+        name=TOR_CONTAINER,
+        owner="core",
+        role="tor",
+        label="the Friend Houses connection",
+        state=RUNNING if running else STOPPED,
+        required=running,
+        image_ref=TOR_IMAGE_TAG,
+        image_id=image_id,
+        hold=hold,
+    )
+
+
 # ─── the music players ────────────────────────────────────────────────────
 
 def mpd_expectations(

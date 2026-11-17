@@ -187,12 +187,17 @@ def canonical_json(doc: Any) -> bytes:
     ).encode("utf-8")
 
 
-def health_message(challenge: str, addr: str | None = None) -> bytes:
+def health_message(challenge: str, addr: str | None = None,
+                   pairing_proof: int | None = None) -> bytes:
     """What the core signs for a health challenge. With ``addr`` — the
-    ``host:port`` we dialed — the address is part of the message."""
+    ``host:port`` we dialed — the address is part of the message, and with
+    ``pairing_proof`` (only ever with an address) so is the version of the
+    approval exchange the server speaks: ``pairing_proof=N``, 0 for none."""
     message = HEALTH_CONTEXT + b"\n" + challenge.encode("utf-8")
     if addr is not None:
         message += b"\n" + addr.encode("utf-8")
+        if pairing_proof is not None:
+            message += b"\npairing_proof=" + str(int(pairing_proof)).encode("ascii")
     return message
 
 
@@ -222,8 +227,22 @@ def manifest_digest(manifest: Any) -> str:
     return hashlib.sha256(canonical_json(manifest)).hexdigest()
 
 
-def new_challenge() -> str:
-    return secrets.token_hex(_CHALLENGE_BYTES)
+#: A challenge that starts with this asks the server to SIGN whether it
+#: speaks the approval exchange (satellite/pairing_proof.py): a 1.4.0 core
+#: then adds ``pairing_proof=N`` to the signed message and to its answer.
+#: It rides in the challenge, not in a query flag of its own, because the
+#: challenge is the one thing a host in the middle cannot change without
+#: breaking the signature: stripping a flag AND the answer's field would
+#: otherwise pass a new server off as an old one — which a device asks the
+#: old way (its code in the hello, a bare ``ready`` believed). An older
+#: core signs such a challenge like any other, and an older device never
+#: sends one.
+PAIRING_PROOF_CHALLENGE_PREFIX = "pairing-proof."
+
+
+def new_challenge(*, pairing_proof: bool = False) -> str:
+    nonce = secrets.token_hex(_CHALLENGE_BYTES)
+    return PAIRING_PROOF_CHALLENGE_PREFIX + nonce if pairing_proof else nonce
 
 
 def dialed_address(http_base: str) -> str:
@@ -452,7 +471,7 @@ class IdentityUnavailable(IdentityError):
 
 def verify_health_document(
     doc: Any, *, challenge: str, expected_fingerprint: str | None,
-    addr: str | None = None,
+    addr: str | None = None, pairing_proof: int | None = None,
 ) -> str:
     """The fingerprint the answer proved, or raise :class:`IdentityError`.
 
@@ -470,7 +489,11 @@ def verify_health_document(
     connection. Either way it is not proof that THIS host is the server.
     Unpinned, an unbound answer is still accepted and recorded — a device
     with nothing to compare against cannot tell a relay from a core by any
-    means, and refusing would only strand it against an older core."""
+    means, and refusing would only strand it against an older core.
+
+    ``pairing_proof`` is the approval-exchange version the answer says the
+    server speaks, checked as part of the signed message
+    (:func:`verify_health_proof`); only a bound answer can carry it."""
     if not isinstance(doc, dict):
         raise IdentityError("the server's answer was not a document")
     identity = doc.get("identity")
@@ -507,8 +530,12 @@ def verify_health_document(
                 f"the signed address {signed_addr} is not the one dialed "
                 f"({addr}): this answer was signed for a different connection"
             )
-        message = health_message(challenge, addr)
+        message = health_message(challenge, addr, pairing_proof)
     else:
+        if pairing_proof is not None:
+            raise IdentityError(
+                "the server's approval-proof advert is not bound to the address dialed"
+            )
         message = health_message(challenge)
     if not verify(public, message, signature):
         raise IdentityError("the server's signature did not verify")
@@ -522,6 +549,34 @@ def verify_health_document(
             f"{expected_fingerprint} this device was prepared for"
         )
     return actual
+
+
+def verify_health_proof(
+    doc: Any, *, challenge: str, expected_fingerprint: str | None, addr: str,
+) -> tuple[str, int]:
+    """The fingerprint an answer to a :data:`PAIRING_PROOF_CHALLENGE_PREFIX`
+    challenge proved, and the approval-exchange version the server SIGNED
+    (0: it speaks none — an older server signs no such line). Raise
+    :class:`IdentityError` otherwise.
+
+    A 1.4.0 server signs ``pairing_proof=N`` for such a challenge, so an
+    answer whose field was stripped or changed on the way fails here
+    instead of passing for an older server's."""
+    if not challenge.startswith(PAIRING_PROOF_CHALLENGE_PREFIX):
+        raise ValueError("not a pairing-proof challenge")
+    advert = doc.get("pairing_proof") if isinstance(doc, dict) else None
+    if advert is None:
+        fingerprint = verify_health_document(
+            doc, challenge=challenge, expected_fingerprint=expected_fingerprint, addr=addr,
+        )
+        return fingerprint, 0
+    if not (isinstance(advert, int) and not isinstance(advert, bool) and advert >= 0):
+        raise IdentityError("the server's approval-proof advert is malformed")
+    fingerprint = verify_health_document(
+        doc, challenge=challenge, expected_fingerprint=expected_fingerprint, addr=addr,
+        pairing_proof=advert,
+    )
+    return fingerprint, advert
 
 
 def fetch_health(

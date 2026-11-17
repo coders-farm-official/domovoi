@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import functools
 import logging
 import re
@@ -141,12 +142,60 @@ async def _ready_for(client, ctx: Context, role: str):
     )
     speak = getattr(ctx, "speak_interim", None)
     if speak is not None and settings.ollama_cold_start_notice:
-        try:
-            await speak(_COLD_START_TEXT)
-        except Exception as e:  # noqa: BLE001
-            log.warning("cold-start notice failed: %s", e)
+        if await _still_cold_after_grace(check, role):
+            try:
+                spoke = await speak(_COLD_START_TEXT)
+            except Exception as e:  # noqa: BLE001
+                log.warning("cold-start notice failed: %s", e)
+                spoke = False
+            # Said in the room, so listed in its history (S2-16).
+            if spoke is True and isinstance(getattr(ctx, "interim_said", None), list):
+                ctx.interim_said.append(_COLD_START_TEXT)
+        else:
+            log.info("room=%s: the model came up within %.1f s; no cold-start notice",
+                     ctx.room_id, COLD_NOTICE_GRACE_SEC)
     twin = getattr(client, "for_cold_start", None)
     return twin() if callable(twin) else client
+
+
+#: How long a model reported not loaded may take to come up before the
+#: room says it is waking it (S2-16): the warm-up after a restart is often
+#: seconds from done when the first question comes, and the notice (about
+#: three seconds of speech) then only delays an answer that was nearly
+#: there. Looked at every COLD_NOTICE_POLL_SEC within it.
+COLD_NOTICE_GRACE_SEC = 1.5
+COLD_NOTICE_POLL_SEC = 0.5
+
+
+async def _still_cold_after_grace(check, role: str) -> bool:
+    """True when ``role``'s model is still not loaded after
+    :data:`COLD_NOTICE_GRACE_SEC` (or Ollama stops answering the question:
+    then the notice is said, as before)."""
+    loop = asyncio.get_running_loop()
+    end = loop.time() + COLD_NOTICE_GRACE_SEC
+    while True:
+        left = end - loop.time()
+        if left <= 0:
+            return True
+        await asyncio.sleep(min(COLD_NOTICE_POLL_SEC, left))
+        try:
+            cold = await check(role)
+        except Exception:  # noqa: BLE001
+            return True
+        if cold is None:
+            return True
+        if not cold:
+            return False
+
+
+def heard_text(ctx: Any, text: str) -> str:
+    """What the room said this turn: the interim lines it spoke first (the
+    cold-start notice), then the reply — what the room's history lists
+    (S2-16). Just the reply when nothing came before it."""
+    said = [s for s in (getattr(ctx, "interim_said", None) or []) if isinstance(s, str) and s]
+    if not said:
+        return text
+    return " ".join([*said, text or ""]).strip()
 
 
 def _end_sentence(text: str) -> str:
@@ -511,7 +560,7 @@ async def _persist_turn(
         room_id=ctx.room_id,
         person_id=ctx.person_id,
         user_text=intent.transcript,
-        assistant_text=response.text,
+        assistant_text=heard_text(ctx, response.text),
         matched_handler=matched_handler,
         matched_path=matched_path,
         presence_tier=ctx.presence_tier,
@@ -707,6 +756,14 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
             response = await handler.handle_choice_reply(kind, pending, transcript, ctx, session)
         except MPDNotProvisioned:
             response = _no_speakers_yet(session_id, ctx)
+        except Exception:
+            # A plugin's reader (SDK 1.10) that fails costs its question, not
+            # the turn: the reply is routed as an ordinary one. A core
+            # handler's failure is a bug and still raises.
+            if getattr(handler, "plugin_slug", None) is None:
+                raise
+            log.exception("choice reply for %s (%s) failed; routing on", handler.name, kind)
+            return None
         if response is None:
             return None
         response.matched_handler = response.matched_handler or handler.name

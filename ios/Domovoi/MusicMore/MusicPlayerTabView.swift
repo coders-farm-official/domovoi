@@ -200,7 +200,9 @@ struct MusicPlayerTabView: View {
                 // that says it didn't keeps everything and is said
                 // (``MusicLocalQueueModel/stopAndClose()``). The transport's
                 // `stop` below is `PlayerTab.kt:392`'s and is unchanged.
-                control("xmark", MusicMoreStrings.stopAndClose) {
+                // Casting to a room of a group, it stops the whole group,
+                // and says so (``stopAndCloseLabel(_:)``).
+                control("xmark", stopAndCloseLabel(player.stopGroup)) {
                     player.stopAndClose()
                 }
             }
@@ -278,7 +280,9 @@ struct MusicPlayerTabView: View {
                 player.engine?.next()
             }
         }
-        control("stop.fill", MusicTransportAction.stop.label) {
+        // Casting to a room of a group the stop stops every room of it
+        // (``MusicLocalQueueModel/stopGroup``).
+        control("stop.fill", groupStopLabel(player.stopGroup, plain: MusicTransportAction.stop.label)) {
             player.engine?.stop()
         }
         castControl

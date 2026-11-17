@@ -52,10 +52,12 @@ final class PhoneCalendarReader: @unchecked Sendable {
         }
     }
 
-    /// The calendars on the phone, by account then name; nil without access.
+    /// The calendars on the phone: signed-in accounts first, "On this
+    /// iPhone" last (``PhoneCalendarSource/ordered(_:)``), by account then
+    /// name within each; nil without access.
     func calendars() -> [PhoneCalendarInfo]? {
         guard allowed() else { return nil }
-        return lock.withLock {
+        let byAccount: [PhoneCalendarInfo] = lock.withLock {
             eventStore.calendars(for: .event)
                 .map { (c: EKCalendar) -> PhoneCalendarInfo in
                     let title: String = c.title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -63,7 +65,10 @@ final class PhoneCalendarReader: @unchecked Sendable {
                         id: c.calendarIdentifier,
                         name: title.isEmpty ? "Calendar" : title,
                         accountName: c.source?.title,
-                        colorHex: Self.hex(c.cgColor)
+                        colorHex: Self.hex(c.cgColor),
+                        // The title is read only to tell iCloud apart; the
+                        // row shows the label, never the title.
+                        source: PhoneCalendarSource.of(Self.kind(c.source), sourceTitle: c.source?.title)
                     )
                 }
                 .sorted { (a: PhoneCalendarInfo, b: PhoneCalendarInfo) -> Bool in
@@ -71,6 +76,21 @@ final class PhoneCalendarReader: @unchecked Sendable {
                     let right = (b.accountName ?? "", b.name)
                     return left < right
                 }
+        }
+        return PhoneCalendarSource.ordered(byAccount)
+    }
+
+    /// `EKSourceType`, as the package's own enum.
+    private static func kind(_ source: EKSource?) -> PhoneCalendarSourceKind {
+        guard let source else { return .unknown }
+        switch source.sourceType {
+        case .local: return .local
+        case .exchange: return .exchange
+        case .calDAV: return .calDAV
+        case .mobileMe: return .mobileMe
+        case .subscribed: return .subscribed
+        case .birthdays: return .birthdays
+        @unknown default: return .unknown
         }
     }
 

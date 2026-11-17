@@ -443,6 +443,45 @@ SCENARIOS.update({
     ),
 })
 
+# ── a plugin's station, cast to a room by its plugin's route (SDK 1.9) ─────
+_RADIO_SOURCE = r"""
+window.DomovoiPlayerSources = { radio: {
+  plugin: 'radio', stream_url_template: '/api/plugins/radio/stations/{id}/stream',
+  room_play_template: '/api/plugins/radio/stations/{id}/play-in-room' } };
+window.__radio = (n) => ({ uid: 'r' + n, kind: 'radio', itemId: n, trackId: null,
+  title: 'Station ' + n, artist: 'online radio', album: '',
+  src: '/api/plugins/radio/stations/' + n + '/stream', coverUrl: null, durationSec: null,
+  seekable: false, cacheable: false, meta: {} });
+"""
+SCENARIOS.update({
+    "station_to_room": _scenario(
+        "await playing([W().__radio(7)], 0, 30);"
+        "const { r, err } = await castTo({ kind: 'room', roomId: 'office' });"
+        "return { r, err, acts: acts(), state: state(), paused: el0().paused };",
+        setup=_RADIO_SOURCE,
+    ),
+    "paused_station_to_room": _scenario(
+        "await playing([W().__radio(7)], 0, 30); P().pause(); await step(); clear();"
+        "const { err } = await castTo({ kind: 'room', roomId: 'office' });"
+        "return { err, acts: acts(), state: state() };",
+        setup=_RADIO_SOURCE,
+    ),
+    "station_refused_by_the_room": _scenario(
+        "await playing([W().__radio(7)], 0, 30);"
+        "W().__fail.push('/api/plugins/radio/stations/7/play-in-room');"
+        "const { err } = await castTo({ kind: 'room', roomId: 'office' });"
+        "return { err, acts: acts(), state: state(), paused: el0().paused };",
+        setup=_RADIO_SOURCE,
+    ),
+    "station_without_a_room_route": _scenario(
+        "await playing([W().__radio(7)], 0, 30);"
+        "const { err } = await castTo({ kind: 'room', roomId: 'office' });"
+        "return { err, log: log(), state: state() };",
+        setup=_RADIO_SOURCE.replace(
+            "room_play_template: '/api/plugins/radio/stations/{id}/play-in-room'", "room_play_template: null"),
+    ),
+})
+
 # ── a "play here" while a cast is still on its way (2026-10-01) ────────────
 SCENARIOS.update({
     "play_here_during_a_cast_from_this_browser": _scenario(
@@ -704,7 +743,7 @@ def _index(lines: list[str], prefix: str) -> int:
 def test_a_queue_a_room_cannot_play_is_refused_before_anything_changes(driven):
     out = driven["refused_before_anything"]
     assert out["err"]["castRefused"] is True
-    assert "only library songs" in out["err"]["message"]
+    assert "nothing from here on can play in a room" in out["err"]["message"]
     assert out["log"] == [], "something was paused or sent for a refused cast"
     assert out["paused"] is False
     assert out["state"] == {"kind": "browser", "room": None, "index": 0, "status": "playing"}
@@ -719,6 +758,41 @@ def test_the_room_starts_on_the_current_track_at_the_elements_time(driven):
     assert out["paused"] is True
     assert out["r"]["startIndex"] == 1 and out["r"]["startSec"] == 7.6
     assert out["r"]["left"] is None
+
+
+def test_a_station_is_cast_by_its_plugins_room_route(driven):
+    # SDK 1.9: a radio station is no longer refused ("only library songs
+    # can be cast"): the room is sent that station alone, by the route the
+    # plugin's [[web.player_sources]] room_play_template names, and this
+    # browser goes quiet only once the room took it.
+    out = driven["station_to_room"]
+    assert out["err"] is None
+    post = 'POST /api/plugins/radio/stations/7/play-in-room {"room_id":"office"}'
+    assert out["acts"][0] == post
+    assert _index(out["acts"], post) < _index(out["acts"], "el0.pause")
+    assert not any(a.startswith("POST /api/music/play-tracks") for a in out["acts"])
+    assert out["state"] == {"kind": "room", "room": "office", "index": 0, "status": "playing"}
+    assert out["paused"] is True
+    # Live radio starts playing in the room even from a paused browser.
+    paused = driven["paused_station_to_room"]
+    assert paused["err"] is None
+    assert paused["acts"][0] == post
+    assert paused["state"]["status"] == "playing"
+
+
+def test_a_station_the_room_refuses_keeps_playing_here(driven):
+    out = driven["station_refused_by_the_room"]
+    assert out["err"] is not None and out["err"]["castRefused"] is False
+    assert out["acts"] == ['POST /api/plugins/radio/stations/7/play-in-room {"room_id":"office"}']
+    assert out["paused"] is False
+    assert out["state"]["kind"] == "browser" and out["state"]["status"] == "playing"
+
+
+def test_a_plugin_item_with_no_room_route_is_still_refused(driven):
+    out = driven["station_without_a_room_route"]
+    assert out["err"]["castRefused"] is True
+    assert out["log"] == []
+    assert out["state"]["kind"] == "browser"
 
 
 def test_the_room_is_told_before_this_browser_goes_quiet(driven):

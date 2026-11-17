@@ -215,7 +215,7 @@ APKs, so servers keep fetching them from there ([docs/CONTRIBUTING.md,
    unchanged, which is what F-Droid does with its own build), and the
    server's own check (`python -m domovoi.android_app check`). Then it
    writes `android/release.json` (with each APK's own `version_code`),
-   commits it (`android: release <v> [skip ci]`) and pushes it, and
+   commits it (`android: release <v>`) and pushes it, and
    publishes the GitHub release `v<Domovoi's version>` (from
    `pyproject.toml`, e.g. `v1.3.0` or `v1.0.0-rc3`; not the app's
    `versionName`) on `coders-farm-official/domovoi` with `gh`, **tagged at
@@ -391,8 +391,8 @@ proved, after connecting and then every six hours.
 - **Which APK:** the first of the phone's own ABIs (`Build.SUPPORTED_ABIS`,
   most preferred first) that the release carries, never a lesser one, so a
   64-bit phone isn't moved to the 32-bit app.
-- **What the person sees:** on Home, one quiet card ("Domovoi 1.0.1 is
-  available from your server"), **get the update** and **dismiss**. Get
+- **What the person sees:** on Home, one quiet card ("Domovoi <version> is
+  available from your server."), **get the update** and **dismiss**. Get
   the update opens the server's join page in the browser as
   `/join?abi=<abi>&update=1` (`domovoi/join_page/join.js` puts that APK
   first and words the page as an update); the phone's installer does the
@@ -612,7 +612,7 @@ one credential the app has. The rules, all unit-tested under
 
 ## On-device assistant
 
-Phone chats: **Domovoi on this phone**. **A preview** in Domovoi 1.0: the
+Phone chats: **Domovoi on this phone**. **A preview**: the
 setup card says so beside the download (`PreviewLabel`, `ui/components/Kit.kt`).
 
 Domovoi can answer **on the phone itself**, with no server and, once its
@@ -792,6 +792,13 @@ they never share a conversation or data.
   them). Phone chats work with no server at all and in airplane mode.
 - **The model download** is shown inside Chat the first time a phone chat
   is started without the model; home-server chat works without it.
+- **A video** (`ui/screens/chat/ChatVideo.kt`): a home-server chat's
+  paperclip offers "a video (up to 3 minutes)" only when the server says
+  it can watch one (`GET /api/chat/models` → `video.available`: AI on and
+  ffmpeg there); a phone chat never does. The length and size are checked
+  on the phone first, in the server's words; the file streams up as the
+  request body with a bar and a remove that stops it, and the message
+  carries the job's chip (the server's line, stop, then "what was kept").
 - **The home server's AI off** (its capability manifest says
   `features.ai: false`): Chat offers no home-server chats, and keeps the
   phone's. A 32-bit install has no phone place; with neither, Chat is on
@@ -1049,7 +1056,7 @@ sends it only to a server that just proved the identity the phone pinned
 for it (`IdentityAdmission`: a verified pin, paired or not; a legacy
 server without a key is refused), signs in for that one delete
 (`/api/files/delete`) and signs out (residual: a kill in between leaves the
-session to its 30-day expiry; docs/SECURITY_PRIVACY.md).
+session open until it signs out after an hour idle; docs/SECURITY_PRIVACY.md).
 
 ## Layout
 
@@ -1245,8 +1252,8 @@ leaves the home network). What the phone does, exactly:
 
 ## Room mode
 
-**A preview** in Domovoi 1.0, labelled on Settings → Rooms' "Use this
-device as a room" card and at the top of the explainer.
+**A preview**, labelled on Settings → Rooms' "Use this device as a room"
+card and at the top of the explainer.
 
 A spare phone or tablet as a room satellite (the person's guide:
 [docs/SPARE_DEVICE_SATELLITES.md](../docs/SPARE_DEVICE_SATELLITES.md#phones-and-tablets-room-mode)).
@@ -1262,12 +1269,15 @@ Python. Package `roommode/` (not `satellite/`, which would sit beside
 | `RoomStore.kt` | What a room phone keeps; the room key sealed under its own Keystore key; `active` (the normal app is locked) and `running` (resume after a reboot) |
 | `RoomIdentity.kt` | `verify_server`'s port (the address-bound `/v1/health` proof, before every connect) and signed file lists (`signature_v2`, freshness) |
 | `RoomProtocol.kt`, `CaptureMachine.kt`, `HealthSample.kt`, `RoomSessionRules.kt` | Frames, the capture loop frame by frame (pause hints, `end_capture`, follow-ups), the health sample, what the refusals mean. Pure |
-| `WakeDetector.kt`, `OrtModels.kt` | openWakeWord's streaming pipeline (melspectrogram → embedding → wake model) and Silero VAD, on ONNX Runtime: the runtime the phone voice already ships for all four ABIs |
+| `WakeDetector.kt`, `OrtModels.kt` | openWakeWord's streaming pipeline (melspectrogram → embedding → wake models) and Silero VAD, on ONNX Runtime: the runtime the phone voice already ships for all four ABIs |
+| `WakeWords.kt`, `WakeGate.kt` | Up to five wake words per room, main word first (since 1.4.0; three on a 32-bit phone or one with about 2 GB of memory or less, sent as `wake_words_max`), and when a score counts as a wake (patience and cooldown, the Pi's `satellite/wake_gate.py`) |
 | `RoomModels.kt`, `RoomSounds.kt` | The models (`/v1/wake-base`, pinned like the core's `OWW_MODEL_FILES`; `/v1/wake-models`) and the clips (`/v1/sounds`), each from a signed list |
 | `RoomEngine.kt` | The room: the connect loop, the listening thread (wake, acknowledgement, capture, reply, follow-ups, drop-in relay), the core's frames, health |
 | `RoomMic.kt`, `RoomAudio.kt`, `RoomNetwork.kt`, `RoomDevice.kt` | The mic through `assistant/MicCapture.kt`'s `AndroidMic` (and "mic blocked": two seconds of exact zeros), the speaker / clips / music / volume, the Wi-Fi-bound client with no token interceptor, battery and Wi-Fi facts |
 | `RoomService.kt` | The foreground service (microphone + mediaPlayback, Wi-Fi lock, partial wake lock), its notification, the after-reboot "tap to resume" |
-| `RoomModeActivity.kt`, `RoomStatusText.kt` | The room display: own task, dark, drifting; ring, mic chip, Mute, Exit behind `KeyguardManager` |
+| `RoomModeActivity.kt`, `RoomDisplay.kt`, `RoomDisplayModel.kt`, `RoomStatusText.kt` | The room display: own task, dark, drifting; a clock, the voice state, mic chip, Mute, Exit behind `KeyguardManager`; and, from a 1.4.0 server, the room's music with its controls, its timers and alarms, and a Stop while one is going off |
+| `RoomDisplayFeed.kt` | The `room_display` frames that feed the display, and `room_control` for its buttons, over the room's own socket (docs/uml/satellite-protocol.md, "The room display"); an older server sends none and the display hides those parts |
+| `DropinAfterReply.kt`, `BatteryReporter.kt` | A drop-in opens once the reply announcing it has played; the battery is reported between health frames when it moves or the charger changes |
 
 Rules it keeps:
 
@@ -1288,8 +1298,9 @@ Rules it keeps:
   as long as it is on.
 - **`supports` says exactly what it handles** (`RoomProtocol.supports`):
   `speech_pause`, `capture_control`, `announce_after_session_end`,
-  `wake_models`, `sounds`, and `full_duplex` only where
-  `AcousticEchoCanceler.isAvailable()`. Never `chat_mode`.
+  `wake_models`, `sounds`, `room_display`, and `full_duplex` and
+  `dropin_ready` only where `AcousticEchoCanceler.isAvailable()`. Never
+  `chat_mode`.
 
 Tests: `app/src/test/java/com/domovoi/app/roommode/`,
 `audio/MicOwnershipTest.kt` and `net/HouseholdLockTest.kt` (JVM).

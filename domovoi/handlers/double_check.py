@@ -200,7 +200,7 @@ def _log_unreachable_once(client: object) -> None:
     log.warning(
         "SearXNG isn't answering at %s; start it with "
         "`docker compose up -d searxng` (from domovoi/), or answer Yes or "
-        "Sometimes in Settings → Internet and Domovoi starts it",
+        "Sometimes in Settings → Privacy → Internet and Domovoi starts it",
         url,
     )
 

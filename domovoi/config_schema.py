@@ -24,7 +24,7 @@ Tiers — how a saved change takes effect:
 Internet: a field marked ``needs_internet`` (or a choice listed in
 ``needs_internet_choices``) is greyed in the dashboard with "needs
 internet" when the household's internet answer is ``never``
-(INTERNET_ACCESS, Settings → Internet) — greyed, never hidden, so a
+(INTERNET_ACCESS, Settings → Privacy → Internet) — greyed, never hidden, so a
 household can find it and change its mind. The answer itself is the
 ``internet_access`` row (its own group, "Internet", which the
 Configuration tab shows as a single line pointing at Settings →
@@ -71,6 +71,7 @@ from dataclasses import dataclass
 from typing import Callable, Literal
 
 from domovoi.config import (
+    ADMIN_RELOAD_WINDOW_MAX_MIN,
     HOME_PROBLEMS_VISIBILITY_CHOICES,
     QA_THINK_CHOICES,
     MUSIC_LISTENS_KEEP_CHOICES,
@@ -223,7 +224,7 @@ WHISPER_COMPUTE_TYPE_CHOICES = (
 
 # Order here is the display order within each group.
 EDITABLE_FIELDS: list[FieldSpec] = [
-    # ─── Internet (its own tab: Settings → Internet) ───────────────────
+    # ─── Internet (its own tab: Settings → Privacy → Internet) ───────────────────
     FieldSpec(
         "internet_access", "Will this box use the internet?", "Internet",
         "Yes, always: the online extras are on (web answers, finding "
@@ -898,6 +899,17 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "finishes). Applies immediately.",
         "bool", section="advanced", tier="reapply", needs_internet=True,
     ),
+    # Friend Houses (domovoi/friend_houses/service.py): reapplied at once,
+    # which starts or stops the private connection.
+    FieldSpec(
+        "friend_houses_enabled", "Friend Houses", "Friend Houses",
+        "Serverless messaging and friend system between households. Off: "
+        "nothing runs and nothing connects. On: this house can be friended "
+        "by other Domovoi houses and reached only by them, through the Tor "
+        "network (a private connection; no Coders Farm server is involved). "
+        "Where using Tor is restricted, leave it off. Applies immediately.",
+        "bool", section="advanced", tier="reapply", needs_internet=True,
+    ),
     FieldSpec(
         "wake_word_train_timeout_sec", "Training time limit", "Wake words",
         "How long one wake word may train before it is stopped and marked "
@@ -1211,15 +1223,16 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     # the web reads the live value from the core's snapshot.
     FieldSpec(
         "admin_reload_window_min", "Stay signed in after a reload", "Security",
-        "How long after you enter the admin password a reload of the "
+        "How long after your last change as admin a reload of the "
         "dashboard, or a new tab in the same browser, keeps you signed in "
-        "with no password prompt. Counted from when you signed in, not "
-        "from when you last did something. Only the browser you signed in "
-        "with gets it back, and signing out ends it at once. After it, a "
-        "reload can still look at everything but asks for the password "
-        "before changing anything. 0 = every reload asks again. Applies "
-        "immediately.",
-        "int", tier="hot", min=0, max=1440, unit="min", step=15, widget="slider",
+        "with no password prompt. Admin always signs out after 1 hour idle "
+        "(an hour with no admin change), so this can't be longer than an "
+        "hour. Only the browser you signed in with gets it back, and "
+        "signing out ends it at once. After it, a reload can still look at "
+        "everything but asks for the password before changing anything. "
+        "0 = every reload asks again. Applies immediately.",
+        "int", tier="hot", min=0, max=ADMIN_RELOAD_WINDOW_MAX_MIN, unit="min", step=15,
+        widget="slider",
         slider_labels=("asks on every reload", "stays signed in longer"),
     ),
     FieldSpec(

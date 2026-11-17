@@ -24,7 +24,7 @@ const validityTone = (feed) => (feed.valid ? 'live' : 'idle');
 /* ---- A single topic row, expandable to its feeds ------------- */
 const TopicRow = ({ topic, onRemove, fire, internetOff = false }) => {
   // Adding or re-checking a feed fetches it: greyed while the box is set
-  // to stay off the internet (Settings → Internet; read by the page).
+  // to stay off the internet (Settings → Privacy → Internet; read by the page).
   const [open, setOpen] = React.useState(false);
   const [feeds, setFeeds] = React.useState(null);
   const [newUrl, setNewUrl] = React.useState('');

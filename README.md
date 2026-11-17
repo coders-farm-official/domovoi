@@ -68,11 +68,10 @@ per-person voice profiles, news briefings, song lyrics, a calendar, and a text
 chat that can read pictures and documents. Everything else is a plugin away —
 installed from the dashboard as a zip upload or a GitHub URL.
 
-> **Status: tested, and built in public.** Domovoi works today if you're
-> comfortable running your own server, and the easier ways in (a chat
-> that runs on your phone, a Windows installer, rooms on spare laptops,
-> phones and old PCs) are previews: see [Status and roadmap](#status-and-roadmap).
-> Ask questions in
+> **Status: released and maintained.** 1.0.0 shipped in October 2026 and
+> the current release is **1.3.0**. The USB stick for old PCs has been
+> tested in virtual machines only: see
+> [Status and roadmap](#status-and-roadmap). Ask questions in
 > [Discussions](https://github.com/coders-farm-official/domovoi/discussions).
 
 > **Why "Domovoi"?** In Slavic folklore, a *domovoi* is the guardian spirit of
@@ -93,10 +92,12 @@ curl -fsSL https://raw.githubusercontent.com/coders-farm-official/domovoi/stable
 
 It asks whether the server will have internet after setup, its time zone, and whether to include AI chat,
 checks that it downloaded a signed release, installs everything, and ends with the address to open from your phone.
+Then open that address, [claim the admin account](#2-claim-the-admin-account) and
+[add your first room](#3-add-your-first-satellite).
 To read the script first, run it without questions, or install by hand: [Running the server on Linux](docs/LINUX_HOST.md#install).
 Fedora, Arch and other systems are not supported yet ([which systems, and why](docs/LINUX_HOST.md#which-distro));
 to ask for yours, [open an issue](https://github.com/coders-farm-official/domovoi/issues).
-On Windows 11, use [the Windows installer](docs/WINDOWS_HOST.md).
+On Windows 11, use [the Windows installer](docs/WINDOWS_HOST.md) (preview).
 
 ---
 
@@ -161,69 +162,19 @@ changed when is in the [release notes](docs/RELEASE_NOTES.md).
 - **Licences in the open:** no GPL or LGPL libraries in the server's Python
   code, and every model and voice it downloads is listed with its licence
   in [docs/LICENSES.md](docs/LICENSES.md).
-
-**Previews**
-
-These ship with 1.0 and work, labelled *preview* wherever you choose them:
-they have been tried on fewer devices than the rest, aren't yet held to
-1.0's promise, and may still change.
-
-- **Chat on your phone, no server needed.** The Android app's
-  Chat can run on the phone itself (Gemma 4 E2B on LiteRT-LM)
-  for text chat and push-to-talk voice, in airplane mode too once its
-  about 2.6 GB of models are downloaded. It needs a 64-bit phone with 8 GB of
-  memory or more ([Android compatibility](docs/ANDROID_COMPATIBILITY.md)).
-  It answers the time and date from the phone's own clock, and questions
-  about the phone itself (what is playing, the battery, free space, Wi-Fi
-  or mobile data, its music, videos and saved books) from what the phone
-  reads at that moment; the house's rooms and calendar stay in home-server
-  chats. It also acts on the phone after a card or a yes: timers and alarms
-  in the Clock app ("remind me in 2 minutes to check the oven" becomes a
-  timer card with that label), the phone's player (with undo, and a
-  "did you mean" for a near spelling of an artist, never a guess played), a
-  saved audiobook or video. With a photo it can answer about a picture, on phones whose GPU
-  runs the model's photo encoder (the buttons show only there). A bad reply
-  can be reported (an email draft you send yourself), and its controls,
-  like room mode's, are labelled for screen readers.
-- **A Windows installer.** `DomovoiSetup.exe` puts the Linux
-  server inside WSL2 on a Windows 11 PC. It is not code-signed yet;
-  download it from the
-  [v1.3.0 release](https://github.com/coders-farm-official/domovoi/releases/tag/v1.3.0)
-  ([Windows installer](docs/WINDOWS_HOST.md)). Setup also puts
-  Domovoi's icon beside the clock: whether Domovoi is
-  running, the dashboard, a QR code for phones, and a helper that prepares
-  a Raspberry Pi's SD card from Windows (it fetches the setup Wi-Fi's
-  key itself, so nobody types it there)
-  ([the tray icon](docs/WINDOWS_HOST.md#the-tray-icon)). **Update Domovoi**
-  updates both the server and the Windows part; pressed on a phone, it
-  waits for someone at the PC, where the icon wears a blue **!** until it
-  is clicked ([a request from another device](docs/WINDOWS_HOST.md#a-request-from-another-device)).
-- **Satellites on spare devices.** A Linux or Windows laptop or PC, or an old
-  phone or tablet through the Android app's room mode, can be a room instead
-  of a Raspberry Pi. Each joins with a one-line command or a QR code from the
-  dashboard ([spare-device satellites](docs/SPARE_DEVICE_SATELLITES.md)). A
-  Windows PC can instead download a Setup to double-click from the same card
-  (`DomovoiSatelliteSetup.exe`, with a setup code in its file name; it
-  checks the server it reached is the one the code came from, and is not
-  code-signed yet, so SmartScreen asks first). A Windows server carries that
-  Setup in its own; a Linux server downloads it from a release that has it,
-  and until then shows the one-line command
-  ([Windows PCs](docs/SPARE_DEVICE_SATELLITES.md#windows-laptops-and-pcs)).
-  Older Linux laptops (Ubuntu 22.04, Mint 21, Debian 11) and Fedora,
-  openSUSE or Arch get the satellite's own pinned Python
-  ([older Linux](docs/SPARE_DEVICE_SATELLITES.md#older-linux-and-fedora-opensuse-arch)),
-  and a processor from before about 2009 is turned away before anything
-  is downloaded. A phone room changes its voice like any room ("switch to
-  Kristin's voice"); the server keeps the choice for it. An admin can also
-  pick any room's voice in its drawer on the dashboard (Settings → Household → Rooms). A phone room warns before its battery runs out: off its
-  charger, at 20 % and again at 10 %, the dashboard's Home and Health and
-  the app on the household's phones say so, and the room says it aloud
-  unless it is in its quiet hours; each room can turn the spoken and the
-  notified warning off in its Settings tab.
-- **A USB stick that turns an old PC into a room.** The dashboard prepares
-  the stick, and an old 64-bit PC, laptop or Intel Mac installs Debian and
-  the satellite from it after you type ERASE on it; a network cable for the
-  setup. Tested in virtual machines; real computers are next
+- **Chat on your phone, no server needed:** the Android app can run chat on
+  the phone itself, even in airplane mode. It needs a 64-bit phone with 8 GB
+  of memory or more and a large download
+  ([Android compatibility](docs/ANDROID_COMPATIBILITY.md)).
+- **A Windows installer:** `DomovoiSetup.exe` turns a Windows 11 PC into a
+  Domovoi server. It is not code-signed yet, so Windows asks before it runs
+  ([Windows installer](docs/WINDOWS_HOST.md)).
+- **Satellites on spare devices:** a spare laptop or PC, or an old phone or
+  tablet in the app's room mode, can be a room instead of a Raspberry Pi
+  ([spare-device satellites](docs/SPARE_DEVICE_SATELLITES.md)).
+- **A USB stick that turns an old PC into a room:** the dashboard prepares
+  the stick and the old PC installs from it. It has been tested in virtual
+  machines; real computers are next
   ([old computers](docs/SPARE_DEVICE_SATELLITES.md#old-computers-usb-stick)).
 
 **This release: Domovoi v1.3.0**
@@ -246,26 +197,18 @@ cover art; new installs that wake on "Domovoi"; one-command install on
 Linux, now also on Debian 13, Linux Mint 22 and Pop!_OS 24.04, with the
 phone app downloaded at install; and security updates.
 
-**Later**
+**Coming in 1.4.0**
 
-The whole plan, grouped Now / Next / Later, is in the
-[roadmap](docs/ROADMAP.md).
+Already on `main`, not yet released: a history of what Up next picked and
+why; up to five wake words per room; a room display for a phone in room
+mode; short videos in chat; radio stations found by how you say them, and
+played in a room; a new room that asks every Domovoi server and joins the
+one you approve it on; admins signed out after an hour idle; and fixes from
+a round of home testing.
 
-- **Guided resumes and letters, held out of 1.0.0.** The step-by-step
-  flows that ask questions to build a resume or letter are built but not
-  part of 1.0.0; plain "write a cover letter" in Chat ships.
-
-- **An iPhone app.** Its own track, apart from 1.0.0.
-- **The Windows installer out of preview,** so one download turns the household
-  gaming PC into a Domovoi server.
-- **A permissive default wake word.** The "Domovoi" word a new install
-  wakes on is CC BY-NC-SA 4.0 because of its training data, so it stays out
-  of this repository and can't ride in anything sold. One trained on
-  permissively licensed data throughout could ship anywhere.
-- **Signed releases.** Release commits and tags signed, and servers on
-  `stable` checking the signature before they update; the update verifier
-  already does the checking wherever an `allowed_signers` file is in place
-  ([signed updates](docs/LINUX_HOST.md#signed-updates)).
+What's planned is in the [roadmap](docs/ROADMAP.md), grouped Now / Next /
+Later: an iPhone app, the Android app on F-Droid, the Windows installer
+code-signed, and a few wishes beyond those.
 
 **How it's built.** Domovoi is written with AI coding agents and held to the
 same bar Coders Farm teaches: automated tests, review, and a written
@@ -306,19 +249,16 @@ Wi-Fi:
   list: [Satellite hardware guide](docs/SATELLITE_HARDWARE.md). A spare
   laptop, PC or old phone can be a room instead
   ([spare-device satellites](docs/SPARE_DEVICE_SATELLITES.md)).
-- **The wake word** is **"Domovoi"** on a new install: a model Coders Farm
-  trains on synthetic voices and publishes separately, which your server
-  downloads once and gives to each new room. An install from before keeps
-  what its rooms wake on (openWakeWord's `hey_jarvis`), and every room wakes
-  on "Hey Jarvis" until its server gives it its word, or while the
-  server can't download it (internet access "never"); Settings → Voice →
-  Wake words says which. You can also train your own from the dashboard:
-  record at least 15 clips through the room's own mic (or train on
-  synthetic voices alone), train on the server, push to the room. If a
-  room wakes on the TV or misses you, its Settings tab has **Wake
-  sensitivity** (0.7 by default) and **Wake confirmation** (2). Training runs on your server, not in a
-  cloud; it needs a server with 24 GB of memory and a one-time download of
-  about 22 GB ([wake-word training](scripts/wake_word/README.md)).
+- **The wake word** is **"Domovoi"** on a new install: Coders Farm's own
+  model, trained on synthetic voices, which your server downloads once and
+  gives to each room (until it has, or if the server can't download it, a
+  room wakes on "Hey Jarvis", which older installs keep). You can train
+  your own word on your server from the dashboard (it needs 24 GB of
+  memory and a one-time download of about 22 GB), and a room that wakes on
+  the TV or misses you has **Wake sensitivity** and **Wake confirmation**
+  in its Settings tab. More in the
+  [FAQ](docs/FAQ.md#can-i-rename-the-assistant-or-change-the-wake-word) and
+  [wake-word training](scripts/wake_word/README.md).
 
 ---
 
@@ -331,20 +271,26 @@ Wi-Fi:
 
 ### Prerequisites
 
+The one-command Linux install and the Windows installer set all of this up
+for you, with AI models sized to the computer. The table is what an
+install by hand needs.
+
 | What | Why |
 |---|---|
 | A PC that stays on, ideally with an **NVIDIA GPU** | With one, Whisper speech-to-text runs on CUDA. No NVIDIA GPU? It still runs, on the CPU — see [Running without an NVIDIA GPU](docs/CPU_HOST.md). The steps below are written Windows-first; on Linux see [Running the server on Linux](docs/LINUX_HOST.md). |
 | **Python 3.11+** | The core service and dashboard run natively (they need GPU access, so they're not containerized). |
 | **Docker** (Docker Desktop on Windows, Docker Engine on Linux) | Runs Postgres, database migrations, the web-search helper, and per-room audio (MPD) containers. |
-| **[Ollama](https://ollama.com)** | Local language models. Domovoi uses two: a small conversational model (`llama3.2:3b`) and a tool-routing model (`qwen2.5:14b`) — pull both (on a CPU-only server, `qwen2.5:7b` in place of the 14B). Pictures in chat use a third, small vision model (`qwen3-vl:2b-instruct-q4_K_M`), which an admin can add later from **Settings → Chat & AI → Models**. Both installers ask whether to include the AI chat and questions (the models above) at all; "No" keeps speech recognition, the voices and the wake word, and the household can turn it on later. |
+| **[Ollama](https://ollama.com)** | Local language models. Domovoi uses two: a small conversational model (`llama3.2:3b`) and a tool-routing model (`qwen2.5:14b`) — pull both (on a CPU-only server, `qwen2.5:7b` in place of the 14B). Pictures in chat use a third, small vision model (`qwen3-vl:2b-instruct-q4_K_M`), which an admin can add later from **Settings → Chat & AI → Models**. AI is optional: with it off, voice commands keep working ([Is AI optional?](docs/FAQ.md#is-ai-optional)). |
 | **Git** | To clone the repo. |
 | **Internet, while you install** | Packages, Docker images and the models all download during setup. After that it's your choice — see [Will your Domovoi have internet?](#will-your-domovoi-have-internet) below. |
 | **~20 GB free disk** | For the software and all default models — **plus** room for your own media library. See [Disk footprint](#disk-footprint) below. |
 
 #### Disk footprint
 
-A basic install (no plugins) with every default model runs **~15–20 GB**,
-dominated by the two Ollama models:
+An install by hand (no plugins) with every default model runs **~15–20 GB**,
+dominated by the two Ollama models. The installers' smaller models need
+less: about 6.4 GB of AI models, or about 9.1 GB on a server with more
+memory.
 
 | Item | Approx. |
 |---|---:|
@@ -366,8 +312,7 @@ asks for 40 GB free on the system drive
 
 **Shrink it:** swap the tool model to `qwen2.5:7b` (~4.7 GB) to save ~4 GB —
 the biggest single win; use a smaller Whisper (`medium` ~0.8 GB, `small`
-~0.5 GB) at some accuracy cost. (Voice ID costs a 25 MB model since 1.3.0;
-it no longer needs torch.)
+~0.5 GB) at some accuracy cost.
 
 ### Will your Domovoi have internet?
 
@@ -398,11 +343,9 @@ the first start (it writes the answer into the fresh `domovoi/.env`).
 Three ways in:
 
 - **Linux (Ubuntu 26.04, Debian 13, Mint 22, Pop!_OS 24.04), one command:** [Install on Linux](#install-on-linux)
-  above. It checks the latest release and runs `scripts/linux/provision.sh`,
-  which installs the server, its services and the models in one run, and
-  the server then follows the `stable` channel: releases only
-  ([Release channels](docs/LINUX_HOST.md#release-channels); before the
-  first release, `main`):
+  above. It installs the latest release, its services and the models in
+  one run, and the server then follows the `stable` channel, releases only
+  ([Release channels](docs/LINUX_HOST.md#release-channels)). Details:
   [One command](docs/LINUX_HOST.md#one-command), or
   [run the install script yourself](docs/LINUX_HOST.md#or-run-the-install-script-yourself).
 - **Windows 11, the installer (preview).** `DomovoiSetup.exe` runs that
@@ -414,7 +357,7 @@ Three ways in:
 
 ```powershell
 git clone https://github.com/coders-farm-official/domovoi   # every change (main); add
-cd domovoi                          # --branch stable for releases only, from v1.0.0 on
+cd domovoi                          # --branch stable for releases only
 
 # Python dependencies (run from the repo root, where pyproject.toml lives).
 # A Linux server installs from the hash-pinned lock instead:
@@ -454,35 +397,36 @@ python -m web.backend.main           # web dashboard on :6369
 
 ### 2. Claim the admin account
 
-On first boot the core service writes an 8-word **setup code** to
-`~/.domovoi/setup-code.txt` on the server (in the home of the user it runs
-as) and prints it to its console when it runs in a terminal. Run as a
-service, it never prints the code, so it stays out of the journal: read
-the file. Open the dashboard at
-`http://<server>:6369`: while nobody has claimed it, every page opens a
-welcome that asks for the setup code and an admin password (**Not now**
-puts it away for that browser; Home's **claim it** brings it back). The
-same form is under **Settings → System → Advanced → Admin → "set up
-admin"**, and also appears automatically the first time you attempt any
-admin-gated action. The code is valid for 24 hours (restart the core for a
-fresh one) and the file is deleted the moment setup completes. Until setup
-is done, configuration writes, service restarts, satellite code pushes and
-pairing changes answer 501 — finish setup first.
+Open the dashboard at `http://domovoi.local` (the server's name on your
+network; the server answers on port 80 too and sends the browser on to the
+dashboard). Where that doesn't open, use `http://domovoi.local:6369`, or
+the server's address, `http://<server>:6369`, which always works. While
+nobody has claimed it, every page opens a welcome that asks for the
+**setup code** and a new admin password.
 
-Once you have signed in, reloading the dashboard (or opening it in another
-tab of the same browser) keeps you signed in for an hour; **Settings → System →
-Advanced → Security → Stay signed in after a reload** changes the
-minutes, and **sign out** ends it at once.
+- **The setup code** is 8 words, in `~/.domovoi/setup-code.txt` on the
+  server (in the home of the account the core runs as). The core also
+  prints it when it runs in a terminal, but never as a service, so it
+  stays out of the journal. It is valid for 24 hours (restart the core for
+  a fresh one), and the file is deleted once setup is done.
+- **Not now** puts the welcome away for that browser; Home's **claim it**
+  brings it back. The same form is under **Settings → System → Advanced →
+  Admin → "set up admin"**, and opens by itself the first time you try
+  anything that needs an admin. Until setup is done, those changes are
+  refused (501).
+- **Signed in,** a reload or a new tab in the same browser keeps you
+  signed in for an hour (**Stay signed in after a reload**, in Settings →
+  System → Advanced → Security, changes it); **sign out** ends it at once.
+- **Forgot the password?** `python -m domovoi.main --reset-admin` on the
+  server clears it and writes a fresh setup code to the same file.
 
-Day-to-day features work without logging in — the admin password gates the
-risky operations (plugin installs, configuration, credentials). The
-**household token** in `~/.domovoi/device-token.txt` (shown right after the
-claim, under "You're all set!", and later in Settings → Household → Phones &
-browsers → Household token) is what your phones and dashboards present, once each, for
-ordinary actions; it is not the admin password. "Want an easier one?" there
-sets one of your own (at least 12 characters, e.g. `maple-river-lamp`). Forgot the password? Run
-`python -m domovoi.main --reset-admin` on the server to clear it and write a
-fresh setup code to the same file (printed too, in a terminal).
+Day-to-day features need no sign-in; the admin password guards the risky
+ones (plugins, configuration, credentials). Phones and browsers join the
+household once with the **household token**, which is not the admin
+password: it is shown after the claim ("You're all set!"), later in
+Settings → Household → Phones & browsers → Household token, and kept in
+`~/.domovoi/device-token.txt`. **Want an easier one?** there sets your own
+(at least 12 characters, e.g. `maple-river-lamp`).
 
 After that, the dashboard asks whether this
 Domovoi will have internet ([above](#will-your-domovoi-have-internet)).
@@ -617,9 +561,8 @@ connects. TTS is local by default — three public-domain neural **Piper**
 voices rendered on the server through Domovoi's own permissively licensed
 text-to-phoneme converter, so Domovoi's replies are spoken on your own
 hardware, and the engine chain falls back gracefully (`piper → system`)
-so the house keeps talking whatever happens. No online voice is offered:
-the Microsoft Edge voices were dropped in October 2026. See
-[What goes out](docs/INTERNET.md#what-goes-out).
+so the house keeps talking whatever happens. No online voice is offered
+([what goes out](docs/INTERNET.md#what-goes-out)).
 
 Deep dive: [Architecture](docs/ARCHITECTURE.md) ·
 [UML diagrams](docs/uml/) · [API reference](docs/API_REFERENCE.md)
@@ -719,9 +662,7 @@ Installing (dashboard → Plugins, admin login required):
    server, so only install ones you trust.
 
 A plugin's pages, on the dashboard and in the app, sit in a frame with its
-name, publisher and a "plugin" badge, in the plugin's own accent colour
-(a neutral slate when it declares none; Domovoi moves a declared colour
-that falls short until it passes contrast in both themes), so they read
+name, publisher, a "plugin" badge and its own accent colour, so they read
 as the plugin's rather than Domovoi's.
 
 Media-provider functionality (pulling from external sources) ships as
@@ -757,7 +698,7 @@ Want to write one? Start at the
 | [Video satellites](satellite/VIDEO_SATELLITE.md) | A satellite with a screen: the now-playing kiosk build on a Radxa Zero 3W |
 | [Satellites on spare devices](docs/SPARE_DEVICE_SATELLITES.md) | A Linux or Windows laptop or PC, an old phone or tablet in room mode, or an old computer from a USB stick, as a room (previews): the command, QR code or stick, the approval, what each can and can't do |
 | [Wake-word training](scripts/wake_word/README.md) | Training your own wake word from the dashboard: what it needs, what a training does to the server, the licence of what it makes |
-| [Hardware validation](docs/HARDWARE_VALIDATION.md) | The checks on real devices that satellite onboarding and video satellites still need |
+| [Hardware validation](docs/HARDWARE_VALIDATION.md) | For contributors: the checks to run on real devices for room setup and video satellites |
 | [Android compatibility](docs/ANDROID_COMPATIBILITY.md) | Which phones and Android versions the app runs on, which APK to install, what each version gets |
 | [The Android app](android/README.md) | Building and releasing the app, and how it works: offline mode, the phone's own chat, room mode, what the phone holds |
 | [Android app privacy policy](docs/PRIVACY_POLICY.md) | What the app keeps on the phone, what it sends and to whom (nothing reaches Coders Farm unless you email it) |

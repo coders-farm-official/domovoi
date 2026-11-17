@@ -8,9 +8,9 @@ with (a PC, a laptop, an Intel Mac) from a **USB stick** your server makes
 Domovoi server as a Pi, joins through the same approval code, and becomes a
 room like any other: wake word, answers, music, intercom, timers.
 
-**Spare devices as rooms are a preview** in Domovoi 1.0, labelled so on the
-dashboard's **add a spare device** card and in the app: they work, but have
-been tried on fewer devices than a Pi, and may still change.
+**Spare devices as rooms are a preview**, labelled so on the dashboard's
+**add a spare device** card and in the app: they work, but have been tried
+on fewer devices than a Pi, and may still change.
 
 This page is for people setting one up. How it works underneath:
 [uml/satellite-protocol.md](uml/satellite-protocol.md) ("Enrolling a spare
@@ -63,10 +63,15 @@ out of the house with a code on a web page. If the dashboard says the
 address it found isn't usable (a server with several network cards), tick
 **a different server address** and give the one your devices reach.
 
+A spare device always knows which server it belongs to (the enrolment code
+pins the server's key), so it asks only that one. (Asking every server in
+the house, coming in 1.4.0, is for Raspberry Pi rooms set up through the
+Wi-Fi portal with the server address left blank:
+[SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#asking-every-house-an-approval-the-device-can-check-140).)
 If a device cannot join for a reason only the server knows (it reached the
 server at an address the server can't prove is its own, or the room name is
-paired with another device), **Settings → Rooms** says so in a line above
-the approvals.
+paired with another device), **Settings → Household → Rooms** says so in a
+line above the approvals.
 
 ## Linux laptops and mini PCs
 
@@ -209,7 +214,8 @@ updates, so prefer Debian 12 on a laptop you reinstall anyway.
 The code is on the terminal, in a pop-up ("Waiting for approval, code
 123456"), and in the tray. Type it into the dashboard's approval card. The
 pop-up then says **Approved: this device is now the Kid's Room** and the
-wake word (the default "Hey Jarvis") works.
+room answers to the household's wake word ("Domovoi" on a new install;
+"Hey Jarvis" while the server doesn't have that model).
 
 Missed it? `cd ~/.local/share/domovoi-satellite && venv/bin/python -m
 satellite.client --approval-code`. The code is never written to the
@@ -407,11 +413,28 @@ Raspberry Pi satellite. It runs inside the normal Domovoi Android app as
 | | |
 |---|---|
 | A phone or tablet | Android 8.0 or later, 32-bit or 64-bit (the join page offers the app for most phones first and the 32-bit one, for older or cheaper phones, under it: [ANDROID_COMPATIBILITY.md](ANDROID_COMPATIBILITY.md)). About 1-2 GB of RAM is enough; room mode loads none of the on-device assistant's libraries. |
-| The Domovoi app | From your own server: the QR code's page downloads it from there. The installer puts the release named in its `android/release.json` on the server, from the project's GitHub release, with its other downloads (about 100 MB). If the install couldn't (no internet then), or the server was set up by hand, the card says the phone app isn't on this server and shows that step instead of the phone's QR code: press **Download the app to this server** once the server has internet, or **upload an APK** of that release when it has none; it hands out a file only when it is exactly that release's, signed by the project's release key. After an update brings a newer release, the release already on the server keeps serving until the new one is here, and a server whose internet answer is **Yes, always** fetches it by itself, once per start with retries; under **Sometimes**, **No** or no answer it waits for an admin's press. Until the first app release is published, the card and the page say "no app release yet". |
+| The Domovoi app | From your own server: the QR code's page offers it. The server gets it when Domovoi is installed ([below](#getting-the-app-onto-the-server)). |
 | Its charger | A room listens all day. Turn on the phone's battery-protection (charge limit) setting if it has one, and never use a phone whose battery has swollen. |
 | Your home Wi-Fi | Room mode uses Wi-Fi (or a wired dock) only, never mobile data: with no Wi-Fi it is offline. |
 | The server's wake-word models | The phone runs the same openWakeWord models as a Pi, fetched from your server. On the dashboard, **Settings → Household → Rooms → prepare a room's SD card → Refresh caches** once (it downloads them; it needs the internet that one time). A Pi you prepared already did this. |
 | A room code | On the dashboard, **Settings → Household → Rooms → add a spare device**: a QR code (a link to your server's join page with the code in it) and a line of text that starts `domovoi-room:1?…`. It names your server, the server's key and the room. It holds no secret. |
+
+#### Getting the app onto the server
+
+The installer downloads the phone app named in `android/release.json` from
+the project's GitHub release, with its other downloads (about 100 MB). If
+it couldn't (no internet at the time), or the server was set up by hand,
+the add-a-spare-device card says the phone app isn't on this server and
+shows that step instead of the phone's QR code: press **Download the app to
+this server** once the server has internet, or **upload an APK** of that
+release when it has none. The server hands out a file only when it is
+exactly that release's, signed by the project's release key.
+
+After an update brings a newer app release, the one already on the server
+keeps serving until the new one arrives. A server whose internet answer is
+**Yes, always** fetches it by itself (once per start, with retries); under
+**Sometimes**, **No** or no answer it waits for an admin to press the
+button.
 
 ### Setting it up (about ten minutes)
 
@@ -443,9 +466,9 @@ Raspberry Pi satellite. It runs inside the normal Domovoi Android app as
 7. The room screen shows **waiting for approval** and a six-digit code. On
    the dashboard, Settings → Household → Rooms shows an approval card for the
    room: type the code the phone shows and approve. Within about half a
-   minute the phone says **Say "Hey Jarvis"** (press **check now** to skip
-   the wait).
-8. Say "Hey Jarvis, what time is it?".
+   minute the phone shows the wake word to say, as **Say "…"** (press
+   **check now** to skip the wait).
+8. Say it, then "what time is it?".
 
 A household phone (not a room) gets the app the same way: **Settings →
 Household → Phones & browsers → get the Domovoi app** shows a QR code and a link to the same
@@ -454,12 +477,14 @@ Domovoi, which finds your server on the Wi-Fi.
 
 The phone starts on `hey_jarvis` and the server then gives it the
 household's wake word ("Domovoi" on a new install), as it does every new
-room; a wake word you train
-and push from the dashboard (Settings → Voice → Wake words) reaches the phone the
-same way it reaches a Pi. Phone and PC rooms start at the same wake defaults
-as a Pi: **Wake sensitivity** 0.7 and **Wake confirmation** 2, both in the
-room's Settings tab (set confirmation to 1 if the room misses you from
-across it).
+room; a wake word you train and push from the dashboard (Settings → Voice →
+Wake words) reaches the phone the same way it reaches a Pi. From 1.4.0 a
+phone room can wake on up to five words, like a Pi (three on a 32-bit or
+small-memory phone): see [More than one wake word in a
+room](SATELLITE_HARDWARE.md#more-than-one-wake-word-in-a-room). Phone and
+PC rooms start at the same wake defaults as a Pi: **Wake sensitivity** 0.7
+and **Wake confirmation** 2, both in the room's Settings tab (set
+confirmation to 1 if the room misses you from across it).
 
 ### The room screen
 
@@ -486,6 +511,11 @@ words under it, and:
 The screen moves its contents a few pixels every minute so a display left
 on does not burn in. It is shown over the lock screen.
 
+From 1.4.0 the room screen also shows what the room is playing (with
+pause, resume, skip and back) and the room's timers and alarms counting
+down, with a stop button when one goes off. Reminders never appear on it:
+anyone in the room can read it.
+
 ### What a phone room does
 
 | | |
@@ -505,12 +535,12 @@ The dashboard shows the room with an **Android room** badge, its battery
 and % on the card (with a charging marker), and its health block shows the
 battery and **mic blocked** when Android is handing the room silence.
 
-### The battery (2026-10-25)
+### The battery
 
 Keep the phone on its charger: rooms are always on. The phone sends its
 battery with its health sample once a minute, and again when the charger
-goes on or off or the level moves 5 % (1 % under 20 %, off its charger). Off its charger, at **20 %** and
-again at **10 %**, once per charge (`domovoi/room_battery.py`):
+goes on or off or the level moves 5 % (1 % under 20 %, off its charger).
+Off its charger, at **20 %** and again at **10 %**, once per charge:
 
 - Home and Health → Rooms show "Den's battery is low (15%) · plug it in",
   and the Domovoi app on the household's phones notifies "Den is at 15%.
@@ -524,8 +554,8 @@ again at **10 %**, once per charge (`domovoi/room_battery.py`):
   offline line.
 
 The room's **Settings** tab has **Say when the battery is low** and
-**Notify when the battery is low**, both on by default, kept on the server
-(V040) and read at each warning. Pis and laptops have none of this.
+**Notify when the battery is low**, both on by default and kept on the
+server. Pis and laptops have none of this.
 
 ### Android's rules
 
@@ -596,10 +626,9 @@ an account of its own that signs in automatically.
 **Not on the PC that runs your Domovoi server.** The installer refuses
 there (it looks for the server's Windows service, its install record, its
 data folder, a server's own files in your account, and a server answering on
-this PC). Using the server PC as a room will come with the server's own
-tray icon instead; today that icon shows Domovoi's state, opens the
-dashboard and prepares Raspberry Pi satellite cards
-([WINDOWS_HOST.md, The tray icon](WINDOWS_HOST.md#the-tray-icon)).
+this PC). The server PC can't be a room yet; its own tray icon shows
+Domovoi's state, opens the dashboard and prepares Raspberry Pi satellite
+cards ([WINDOWS_HOST.md, The tray icon](WINDOWS_HOST.md#the-tray-icon)).
 
 **It brings Microsoft's Visual C++ runtime with it.** The wake word's
 onnxruntime needs `msvcp140.dll` and `msvcp140_1.dll` (14.44 or newer) and
@@ -903,7 +932,7 @@ same question as on every Pi; see the wake-word notes).
 | The Setup says the server "does not know the code" | The code is more than 24 hours old, the server restarted since, or it was mistyped. Make a new code on the dashboard (the same room gets the same code again while it lives). |
 | The Setup says "that is not the address of a Domovoi server on your home network" | Type the server as the card shows it (`192.168.1.20`, or `192.168.1.20:6400` for another port). The Setup talks only to an address on your home network (or this PC), never anywhere else. |
 | The Setup says "no Domovoi server answered" | This PC is on another network (a guest Wi-Fi), or the server is off. |
-| The Setup says the server "did not prove it is the Domovoi server this code was made on" | The address or the code is not the one on the dashboard, or another machine answers at that address. Check both on the dashboard (Settings → Satellites); nothing was downloaded or installed. |
+| The Setup says the server "did not prove it is the Domovoi server this code was made on" | The address or the code is not the one on the dashboard, or another machine answers at that address. Check both on the dashboard (Settings → Household → Rooms); nothing was downloaded or installed. |
 | "This is not the download the dashboard expected" (or "the server signed for this code", in the Setup) | Domovoi was updated since the command was made (or the download was changed on the way). Make a new command. |
 | "this window runs as administrator" (or the Setup says it runs as administrator) | Open a normal PowerShell window and paste it again; for the Setup, start it with a double-click, not **Run as administrator**. |
 | "never installed on the PC that runs the Domovoi server" | This PC runs the server. Use another PC. |
@@ -933,8 +962,8 @@ disk, and nothing is touched until you type ERASE.
 
 **The USB stick is a preview**, like every spare device as a room (above),
 labelled so on the card's **old computer (usb stick)** column: so far it
-has been tried in virtual machines (BIOS, UEFI, Secure Boot); real
-computers are next.
+has been tried in virtual machines (BIOS, UEFI, Secure Boot), not yet on
+real computers.
 
 ### What it needs
 
@@ -945,7 +974,7 @@ computers are next.
 | **Internet** | The computer downloads part of Debian (~155 MB) and the satellite's libraries while it sets up. |
 | **The stick** | 2 GB or more (everything on it is replaced; the image is about 793 MB). |
 | **The computer's disk** | 8 GB or more. An installed room uses about 1.6 GB. |
-| **Your server** | Linux, or the Windows install (its Linux side). It downloads Debian's installer image from Debian the first time (793 MB, kept for the next stick) and keeps each stick's image (about 800 MB, removable on the card); it needs `xorriso`, which the installer and the next update add. |
+| **Your server** | Linux, or the Windows install (its Linux side). It downloads Debian's installer image from Debian the first time (793 MB, kept for the next stick) and keeps each stick's image (about 800 MB, removable on the card); it needs `xorriso`, which the installer and updates install. |
 
 **Not suitable:** 32-bit-only PCs; tablets and netbooks with 32-bit UEFI
 (Bay Trail, Cherry Trail); Macs with Apple's T2 chip (2018-2020: the stick
@@ -1124,8 +1153,8 @@ no password opens).
 
 ### Wi-Fi
 
-Off for now: the stick keeps every Wi-Fi
-driver from loading while it installs, so a computer without a cable gets
+Off for now: the stick keeps every Wi-Fi driver from loading while it
+installs, so a computer without a cable gets
 the "plug in a network cable" page. **USB_STICK_WIFI** (Settings →
 System → Advanced, "USB sticks may use Wi-Fi") makes the next stick ask Debian's own
 Wi-Fi questions instead (network, password); that path has not been tried

@@ -169,6 +169,15 @@ from domovoi.db.session import SessionLocal, engine
 #   * `plugins` and `registered_values` — registry data owned by core boot /
 #     plugin registration, not by individual tests.
 TABLES_TO_TRUNCATE = [
+    # Friend Houses (V066, V067): friends, friend files, requests, the epoch.
+    "friend_houses_friends",
+    "friend_houses_invites",
+    "friend_houses_requests",
+    "friend_houses_state",
+    "friend_houses_messages",
+    "friend_houses_spaces",
+    "friend_houses_space_ops",
+    "friend_houses_space_items",
     "timers",
     # The owner's "say it like" changes (V027); the defaults are a data file.
     "pronunciations",
@@ -235,6 +244,9 @@ TABLES_TO_TRUNCATE = [
     # seeded single row; the printing tests reset it themselves.
     "print_jobs",
     "scan_jobs",
+    # What the scan reader read from scans (V065).
+    "scan_reads",
+    "scan_read_pages",
     "printer_room_defaults",
     "printers",
     # Co-editing (V042): shared state, edits and version history.

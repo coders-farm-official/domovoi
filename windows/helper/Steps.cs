@@ -514,6 +514,7 @@ namespace Domovoi.Windows.Helper
             o.Kv("ai", st.Ai == null ? "" : (st.Ai.Value ? "yes" : "no"));
             o.Kv("phone_app", st.PhoneApp == null ? "" : (st.PhoneApp.Value ? "yes" : "no"));
             o.Kv("lan_name", st.LanName ?? "");
+            o.Kv("checkout_kept", st.CheckoutKept == null ? "" : (st.CheckoutKept.Value ? "yes" : "no"));
             o.Kv("generation", Inv.S(st.Generation));
             o.Kv("attempt", Inv.S(st.Attempt));
             if (st.Bytes != null) o.Kv("bytes", Inv.S(st.Bytes.Value));
@@ -575,7 +576,7 @@ namespace Domovoi.Windows.Helper
             o.Kv("change", "register the " + Paths.ServiceName + " service (Automatic, runs as " + HostService.Account + ", restarted by Windows if it fails; no dependency on WSLService)");
             o.Kv("change", "create the media folders under " + MediaPaths.DefaultRoot + " (unless chosen otherwise) and allow " + Paths.AccountName + " to read and write them");
             if (lan != null && lan.Private)
-                o.Kv("change", "add six Hyper-V firewall rules for WSL (every WSL VM on this PC), inbound TCP from " + lan.Subnet + ": 6369, 6370, 8050-8099, 8096, 7676, 9467");
+                o.Kv("change", "add seven Hyper-V firewall rules for WSL (every WSL VM on this PC), inbound TCP from " + lan.Subnet + ": 80 (the short address), 6369, 6370, 8050-8099, 8096, 7676, 9467");
             o.Kv("change", "as " + Paths.AccountName + ": write its .wslconfig (memory " + Inv.S(WslConfig.MemoryCapGb(ram)) + " GB, mirrored networking) and import the WSL distro 'domovoi' into " + Paths.Distro);
             if (!Preflight.VmpEnabled()) o.Kv("change", "turn on the Windows feature VirtualMachinePlatform (restart)");
             if (Preflight.WslStatus(Preflight.WslVersion()) != "ok") o.Kv("change", "install the WSL package 2.7.14 (restart)");

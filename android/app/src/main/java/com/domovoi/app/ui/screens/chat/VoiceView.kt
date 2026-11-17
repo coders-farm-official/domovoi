@@ -40,6 +40,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -68,6 +69,8 @@ import com.domovoi.app.AppContainer
 import com.domovoi.app.LocalApp
 import com.domovoi.app.assistant.PhoneSpeech
 import com.domovoi.app.LocalToast
+import com.domovoi.app.net.CAP_STATIONS
+import com.domovoi.app.net.LocalCapabilities
 import com.domovoi.app.net.failureText
 import com.domovoi.app.ui.theme.Domovoi
 import com.domovoi.app.voice.HoldToTalkRecorder
@@ -220,6 +223,10 @@ internal class VoiceController(
     private val threadId: Long,
     private val transcript: SnapshotStateList<LiveMessage>,
 ) {
+    /** Whether the server runs our Radio plugin (the view keeps it current
+     *  from the capability manifest): a reply's station is played only then. */
+    @Volatile var stations: Boolean = false
+
     var phase by mutableStateOf(TalkPhase.Idle)
         private set
     var level by mutableFloatStateOf(0f)
@@ -379,7 +386,7 @@ internal class VoiceController(
         if (reply.error == null) turn.error?.let { reply.error = it.detail; reply.errorCode = it.code }
         followup = turn.expect_followup
 
-        val actions = parseDeviceActions(turn.actions)
+        val actions = parseDeviceActions(turn.actions, stations)
         actions.filterNot { it.afterReply }.forEach(::apply)
         val wav = turn.wavBytes()
         var heardToTheEnd = true
@@ -509,6 +516,8 @@ internal fun VoiceView(
     val controller = remember(threadId) {
         VoiceController(app, context.applicationContext, scope, threadId, transcript)
     }
+    val stations = LocalCapabilities.current.has(CAP_STATIONS)
+    SideEffect { controller.stations = stations }
     DisposableEffect(controller) { onDispose { controller.dispose() } }
     BackHandler(onBack = onClose)
 

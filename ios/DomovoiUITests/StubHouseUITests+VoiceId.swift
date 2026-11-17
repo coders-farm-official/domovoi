@@ -36,7 +36,7 @@ extension StubHouseUITests {
         static let alexSays = "alex can say \u{201C}my name is alex\u{201D} in a room and answer yes."
         static let chevyPossessive = "Domovoi has to learn Chevy\u{2019}s voice again."
         static let dot = "has to say \u{201C}my name is \u{2026}\u{201D} again to be recognized by voice"
-        static let roomsLabel = "rooms that know this voice"
+        static let roomsLabel = "rooms that have learned this voice"
     }
 
     /// Reset the fixtures, set voice ID's mode, then launch into People and

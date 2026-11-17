@@ -650,8 +650,19 @@ const _noop = () => {};
 const _castTrackIds = (items) => (items || [])
   .filter((it) => it && it.kind === 'library' && it.trackId != null)
   .map((it) => it.trackId);
+/* A plugin's live item (a radio station) its plugin can start in a room by
+ * itself: the source's `room_play_template` (SDK 1.10, seeded by index.html
+ * from the plugin manifest) with the item's id filled in. The room is sent
+ * that one item, by the plugin's own route, with `{ room_id }`. Null for
+ * anything else, so a library song still goes as track ids. */
+const _castRoomPlayPath = (item) => {
+  if (!item || item.kind === 'library' || item.itemId == null) return null;
+  const src = (window.DomovoiPlayerSources || {})[item.kind];
+  const tpl = src && src.room_play_template;
+  return tpl ? tpl.replace('{id}', encodeURIComponent(item.itemId)) : null;
+};
 const _castRefused = () => {
-  const e = new Error('only library songs can be cast to a room — nothing from here on is in the library');
+  const e = new Error('nothing from here on can play in a room — podcasts, audiobooks and files outside the library play in this browser only');
   e.castRefused = true;
   return e;
 };
@@ -954,6 +965,11 @@ const PlaybackProvider = ({ children }) => {
     } catch (e) {
       console.warn('play failed', e);
       setStatus('paused');
+      // A library song that won't load may have been deleted: then it
+      // leaves the queue instead of sitting in the bar (S2-18).
+      if (item.kind === 'library' && item.trackId != null && dropGoneRef.current) {
+        dropGoneRef.current.check([item.trackId]);
+      }
     }
   }, [buildGraph, playbackRate, pushRecent]);
 
@@ -1042,6 +1058,66 @@ const PlaybackProvider = ({ children }) => {
   const queueRef = React.useRef(queue); queueRef.current = queue;
   const indexRef = React.useRef(index); indexRef.current = index;
   const advanceRef = React.useRef(advanceTo); advanceRef.current = advanceTo;
+
+  /* A library song deleted while it plays or waits in the queue (S2-18,
+   * the owner's rule): it doesn't stay in the bar. It (every copy of it)
+   * leaves the queue; the song after it plays, or, with nothing after it,
+   * the player stops. Looked at on every library change (an upload, a
+   * rescan, a delete: `library.indexer.changed`) for the song playing and
+   * the next one, and when a library song fails to load. A room the
+   * browser casts to is the server's to fix (it skips or stops the room,
+   * web/backend/api/music.py delete_track). */
+  const [goneNotice, setGoneNotice] = React.useState(null);
+  const dropGoneRef = React.useRef(null);
+  const dropGoneTracks = (goneIds) => {
+    const gone = new Set(goneIds);
+    const q = queueRef.current;
+    const cur = indexRef.current;
+    const isGone = (it) => !!it && it.kind === 'library' && gone.has(it.trackId);
+    if (!q.some(isGone)) return;
+    const curItem = cur >= 0 && cur < q.length ? q[cur] : null;
+    const nq = q.filter((it) => !isGone(it));
+    // Where an old index lands once the gone songs are out.
+    const moved = (i) => q.slice(0, i).filter((it) => !isGone(it)).length;
+    let after = -1;
+    for (let i = cur + 1; i < q.length; i++) { if (!isGone(q[i])) { after = i; break; } }
+    setQueue(nq);
+    if (!isGone(curItem)) { setIndex(curItem ? moved(cur) : -1); return; }
+    const browser = target.kind === 'browser';
+    setGoneNotice({ title: curItem.title || null, skipped: after >= 0, at: Date.now() });
+    if (after >= 0) {
+      const ni = moved(after);
+      setIndex(ni);
+      if (browser) { ListenLog.skip(); loadAndPlay(nq[ni]); }
+    } else {
+      if (browser) stop();
+      setIndex(-1);
+    }
+  };
+  dropGoneRef.current = {
+    drop: dropGoneTracks,
+    // Which of these library songs are no longer in the library (a 404 on
+    // the song's own row; any other answer keeps it).
+    check: async (ids) => {
+      const unique = Array.from(new Set(ids.filter((id) => id != null)));
+      const gone = [];
+      await Promise.all(unique.map(async (id) => {
+        try { await apiGet(`/api/music/library/${id}`, { quiet: true }); }
+        catch (e) { if (e && e.status === 404) gone.push(id); }
+      }));
+      if (gone.length && dropGoneRef.current) dropGoneRef.current.drop(gone);
+    },
+  };
+  React.useEffect(() => {
+    if (typeof stateBus === 'undefined' || !stateBus.subscribe) return undefined;
+    return stateBus.subscribe((ev) => {
+      if (!ev || ev.type !== 'library.indexer.changed') return;
+      const q = queueRef.current;
+      const i = indexRef.current;
+      const near = [q[i], q[i + 1]].filter((it) => it && it.kind === 'library' && it.trackId != null);
+      if (near.length && dropGoneRef.current) dropGoneRef.current.check(near.map((it) => it.trackId));
+    });
+  }, []);
 
   // The listening history (ListenLog): the library song playing in THIS
   // browser, and whether it is playing. A new item closes the one before
@@ -1694,6 +1770,9 @@ const PlaybackProvider = ({ children }) => {
   const castRoomJump = React.useCallback(async (roomId, i) => {
     // Re-cast from the chosen index onward so "play this queue item" works remotely.
     const items = queueRef.current.slice(i);
+    // A station the room plays through its plugin (SDK 1.10).
+    const roomPlay = _castRoomPlayPath(items[0]);
+    if (roomPlay) { await apiPost(roomPlay, { room_id: roomId }); return; }
     await castRoomLoad(roomId, items);
   }, [castRoomLoad]);
 
@@ -1754,12 +1833,17 @@ const PlaybackProvider = ({ children }) => {
         sourcePlaying = liveEl ? !liveEl.paused : statusRef.current === 'playing';
       }
       const items = queue.slice(at);
+      // A station (a plugin item with a room route, SDK 1.10) goes to the
+      // room by its plugin's route, alone: it is live, so it starts playing
+      // there whatever this browser was doing.
+      const roomPlay = _castRoomPlayPath(items[0]);
       // Nothing a room can play: say so before touching playback, and never
       // switch the target to a room that was sent nothing.
-      if (!_castTrackIds(items).length) throw _castRefused();
-      const paused = !sourcePlaying;
+      if (!roomPlay && !_castTrackIds(items).length) throw _castRefused();
+      const paused = !sourcePlaying && !roomPlay;
       try {
-        await castRoomLoad(nextTarget.roomId, items, startSec, { paused });
+        if (roomPlay) await apiPost(roomPlay, { room_id: nextTarget.roomId });
+        else await castRoomLoad(nextTarget.roomId, items, startSec, { paused });
       } catch (e) {
         // The room refused: this browser (or the old room) plays on.
         console.warn('cast to room failed', e);
@@ -1918,7 +2002,7 @@ const PlaybackProvider = ({ children }) => {
     queue, index, current, status,
     positionSec, durationSec, buffered,
     volume, muted, eqBands, eqEnabled, playbackRate,
-    target, remoteNp, sleepRemainingSec, recent,
+    target, remoteNp, sleepRemainingSec, recent, goneNotice,
     playItems, enqueue, playNext, removeAt, moveItem, clearQueue, jumpTo,
     // Up next.
     upNext, autoplay: autoplayPref, playFromList, playList, setAutoplay, lessLikeThis, setUpNextListener,
@@ -2015,6 +2099,15 @@ const MiniPlayer = () => {
   const hasItem = !!(p.available && p.current);
   // A failed "Stop and close" is said here, in the page's usual toast.
   const [fire, toastNode] = (typeof useToast === 'function' ? useToast : () => [null, null])();
+  // A song deleted from the library while it played (S2-18): say what
+  // happened to it, once.
+  const goneAt = p.goneNotice ? p.goneNotice.at : null;
+  React.useEffect(() => {
+    if (!goneAt || typeof fire !== 'function') return;
+    const n = p.goneNotice;
+    const what = n.title ? `“${n.title}”` : 'That song';
+    fire(`${what} isn't in the library any more, so ${n.skipped ? 'the next song is playing' : 'the music stopped'}.`);
+  }, [goneAt]); // eslint-disable-line
   const closeBar = async () => {
     try { await p.closePlayer(); }
     catch (e) {

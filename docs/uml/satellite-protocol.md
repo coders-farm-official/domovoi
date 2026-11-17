@@ -24,7 +24,7 @@ sequenceDiagram
 
     Pi->>S: (WS connect /v1/stream/kitchen)
     Note over S: hello gate — nothing is provisioned, registered<br/>or acknowledged until an accepted hello arrives.<br/>No hello within SATELLITE_HELLO_TIMEOUT_SEC (5 s) → close
-    Pi->>S: hello {room_id, wake_word, synced_sha,<br/>supports_full_duplex, pairing_token,<br/>sat_type?, mic_enabled?, speech_pause?,<br/>capture_control?, announce_after_session_end?,<br/>supports?, board?}
+    Pi->>S: hello {room_id, wake_word, synced_sha,<br/>supports_full_duplex, pairing_token,<br/>sat_type?, mic_enabled?, speech_pause?,<br/>capture_control?, announce_after_session_end?,<br/>supports?, board?, wake_words?, wake_words_max?}
     Note over S: pairing check (V002): a matching token is accepted,<br/>a first-time token is parked for approval (the default)<br/>or claims the room when SATELLITE_PAIRING_STRICT is off.<br/>Mismatch / missing token → error + close.
     Note over S: ensure_room("kitchen") — lazily provisions<br/>this room's MPD container, then registers the session
     S-->>Pi: ready {protocol_version:"0.1", room_id,<br/>bot_name, audio_sample_rate_in:16000, features}
@@ -55,8 +55,8 @@ sequenceDiagram
 
 | Frame | Payload | Meaning |
 |---|---|---|
-| `hello` | `room_id`, `wake_word`, `synced_sha`, `supports_full_duplex`, `pairing_token`, `sat_type?`, `mic_enabled?`, `supports?`, `board?` | **Must be the first frame.** The server creates and sends nothing for the room — no MPD provisioning, no `active_sessions` entry, no `ready` — until a `hello` has passed the pairing check; a socket that sends no `hello` within `SATELLITE_HELLO_TIMEOUT_SEC` (default 5 s), or sends any other frame first (`error{reason:"hello_required"}`), is closed with code 1008 and leaves no room behind. `supports_full_duplex` reports on-chip AEC (XVF3800 true, 2-Mic HAT false) — the server refuses drop-ins for rooms that can't capture while playing. `synced_sha` is the code-version label from the Pi's last satellite-code sync, used to flag out-of-date satellites on the dashboard. `pairing_token` (optional) is the Pi's per-device WS-auth secret (`~/.domovoi/pairing_token`); the server stores only its sha256 and binds the room to it **trust-on-first-use** — see [Pairing (WS auth)](#pairing-ws-auth) below. `sat_type` (optional, `"voice"`\|`"video"`, default voice) declares the satellite kind; when explicitly present it's also persisted to the `satellites` table so offline rooms keep their type. `mic_enabled` (optional, default true) reports whether the voice-input stack runs — false on mic-less video builds; the server then refuses wake-recording/drop-in/chat for the room. `speech_pause` (optional, default false) says this client reports its own pauses (`speech_pause` / `speech_resume`) and each capture's last voiced frame whenever `ready.features` lists `"speech_pause"`; the server then uses those instead of judging pauses from the audio. `capture_control` (optional, default false) says this client stops a capture on `end_capture` — only then is it ever ended early ([Early commit](#early-commit)); a Pi sends its `[listen] early_commit` setting here. `announce_after_session_end` (optional, default false) says a `response_start` clears the client's barge-in drop (`stop_playback`), so an announcement that arrives after a reconnect or a failed turn plays; the server cannot hear whether audio played, so for a client without it (satellite code from before 06f486b) it logs one WARNING per connection that timer and reminder announcements there will be silent until the satellite is upgraded. `prev_health` (optional, 2026-10-09, at most 16 KB) is the record the previous life of the satellite's process left in `~/.domovoi/last-health.json`: its last health sample, `prev_boot_id` (the kernel boot id it ran under, so a reboot can be told from a service restart), `offline_diag` (one entry per failed connect while it was disconnected — timestamp, failure class (`dns`, `tcp_refused`, `tcp_timeout`, `tls`, `handshake`, `close_<code>`, `closed_before_ready`), whether the gateway and the core answered, the Wi-Fi link and NetworkManager state, the action taken; at most 50), the self-check `actions` it took and `last_exit_reason` (why it exited, or `shutdown: requested` for a restart someone asked for). The server keeps it — only from a `hello` whose `pairing_token` matched the room, and at most 16 KB of it whichever field is large — as the room's last outage (memory and V022 `satellite_outages`, the last 20 per room; the same record carried again is stored once), logs it at WARNING (INFO for a requested shutdown), and the satellite carries it in every `hello` until a `ready` that lists `"health"` acknowledges it. An older server ignores the field, and its `ready` does not count as the acknowledgement. `supports` (optional list) and `board` (optional slug, e.g. `"linux_pc"`) say what the device can do and what it is: see [Declared abilities](#declared-abilities-supports-and-board). Without `supports` — every Pi — nothing changes. |
-| `utterance_start` | `trigger: "wake_word" \| "barge_in" \| "push_to_talk" \| "followup" \| "wake_clip"`, `utt?`, `backlog_ms?`, `wake_ms?`, `wake_score?` | Begins an utterance; cancels any in-flight response. `backlog_ms` / `wake_ms`: the [capture clock](#the-capture-clock). `wake_score` (after a wake word, 0..1, satellites from 2026-11-09): the wake's peak openWakeWord score, kept on the turn's history row (`conversation_log.wake_score`, V044). `wake_clip` marks a wake-word **training clip** (dashboard-initiated recording mode): the following PCM is saved as a positive clip WAV, never transcribed or routed. `utt` (optional) is the client's own number for this capture, increasing per connection; the capture's hints and its `utterance_end` repeat it, so a message about an older capture is recognisably stale. |
+| `hello` | `room_id`, `wake_word`, `synced_sha`, `supports_full_duplex`, `pairing_token`, `sat_type?`, `mic_enabled?`, `supports?`, `board?`, `wake_words?`, `wake_words_max?` | **Must be the first frame.** The server creates and sends nothing for the room — no MPD provisioning, no `active_sessions` entry, no `ready` — until a `hello` has passed the pairing check; a socket that sends no `hello` within `SATELLITE_HELLO_TIMEOUT_SEC` (default 5 s), or sends any other frame first (`error{reason:"hello_required"}`), is closed with code 1008 and leaves no room behind. `supports_full_duplex` reports on-chip AEC (XVF3800 true, 2-Mic HAT false) — the server refuses drop-ins for rooms that can't capture while playing. `synced_sha` is the code-version label from the Pi's last satellite-code sync, used to flag out-of-date satellites on the dashboard. `pairing_token` (optional) is the Pi's per-device WS-auth secret (`~/.domovoi/pairing_token`); the server stores only its sha256 and binds the room to it **trust-on-first-use** — see [Pairing (WS auth)](#pairing-ws-auth) below. `sat_type` (optional, `"voice"`\|`"video"`, default voice) declares the satellite kind; when explicitly present it's also persisted to the `satellites` table so offline rooms keep their type. `mic_enabled` (optional, default true) reports whether the voice-input stack runs — false on mic-less video builds; the server then refuses wake-recording/drop-in/chat for the room. `speech_pause` (optional, default false) says this client reports its own pauses (`speech_pause` / `speech_resume`) and each capture's last voiced frame whenever `ready.features` lists `"speech_pause"`; the server then uses those instead of judging pauses from the audio. `capture_control` (optional, default false) says this client stops a capture on `end_capture` — only then is it ever ended early ([Early commit](#early-commit)); a Pi sends its `[listen] early_commit` setting here. `announce_after_session_end` (optional, default false) says a `response_start` clears the client's barge-in drop (`stop_playback`), so an announcement that arrives after a reconnect or a failed turn plays; the server cannot hear whether audio played, so for a client without it (satellite code from before 06f486b) it logs one WARNING per connection that timer and reminder announcements there will be silent until the satellite is upgraded. `prev_health` (optional, 2026-10-09, at most 16 KB) is the record the previous life of the satellite's process left in `~/.domovoi/last-health.json`: its last health sample, `prev_boot_id` (the kernel boot id it ran under, so a reboot can be told from a service restart), `offline_diag` (one entry per failed connect while it was disconnected — timestamp, failure class (`dns`, `tcp_refused`, `tcp_timeout`, `tls`, `handshake`, `close_<code>`, `closed_before_ready`), whether the gateway and the core answered, the Wi-Fi link and NetworkManager state, the action taken; at most 50), the self-check `actions` it took and `last_exit_reason` (why it exited, or `shutdown: requested` for a restart someone asked for). The server keeps it — only from a `hello` whose `pairing_token` matched the room, and at most 16 KB of it whichever field is large — as the room's last outage (memory and V022 `satellite_outages`, the last 20 per room; the same record carried again is stored once), logs it at WARNING (INFO for a requested shutdown), and the satellite carries it in every `hello` until a `ready` that lists `"health"` acknowledges it. An older server ignores the field, and its `ready` does not count as the acknowledgement. `supports` (optional list) and `board` (optional slug, e.g. `"linux_pc"`) say what the device can do and what it is: see [Declared abilities](#declared-abilities-supports-and-board). Without `supports` — every Pi — nothing changes. `wake_words` (optional list, 1.4.0) names every word the device listens for, main word (`wake_word`) first; `wake_words_max` (optional int, 1-5) how many words it can run at once (satellite/wake_words.py: a Pi Zero 2 W 3, anything else 5; a phone in room mode 3 when it is 32-bit or has ~2 GB of memory or less, else 5, android roommode/WakeWords.kt). The server never sends it more than that and keeps the number (`room_wake_words.device_max`, V063); a device without the key runs one word and is sent its main word only. |
+| `utterance_start` | `trigger: "wake_word" \| "barge_in" \| "push_to_talk" \| "followup" \| "wake_clip"`, `utt?`, `backlog_ms?`, `wake_ms?`, `wake_score?`, `wake_word?` | Begins an utterance; cancels any in-flight response. `backlog_ms` / `wake_ms`: the [capture clock](#the-capture-clock). `wake_score` (after a wake word, 0..1, satellites from 2026-11-09): the wake's peak openWakeWord score, kept on the turn's history row (`conversation_log.wake_score`, V044). `wake_word` (after a wake word, 1.4.0): which of the room's words fired, kept on the same row (`conversation_log.wake_word`, V063) and logged by the core. `wake_clip` marks a wake-word **training clip** (dashboard-initiated recording mode): the following PCM is saved as a positive clip WAV, never transcribed or routed. `utt` (optional) is the client's own number for this capture, increasing per connection; the capture's hints and its `utterance_end` repeat it, so a message about an older capture is recognisably stale. |
 | `utterance_end` | `greeting_played`, `greeting_clip?`, `ack_before_capture?`, `utt?`, `frames?`, `last_voiced_frame?`, `exit_reason?`, `voiced_frames?`, `trailing_silent_frames?`, `silence_limit_frames?`, `sat_ms?`, `backlog_ms?` | Ends the utterance; the server transcribes and routes (or saves the clip). `greeting_played` tells the server to strip a wake greeting that bled past the AEC, and to drop a turn whose transcript is nothing but that greeting. `greeting_clip` (optional, sent with `greeting_played`) names the clip that played (`greet_<hash>.mp3`), so the server matches only that line; without it the whole enabled greeting bank is used. `ack_before_capture` (optional, sent only as `true`) says the wake acknowledgement — greeting or chime — played to its end BEFORE this capture opened, and the Pi dropped what its mic heard meanwhile (see [The wake acknowledgement](#the-wake-acknowledgement)): the server still strips a leading greeting copy (the safety net for an echo tail) but never drops the turn as greeting-only, since such a capture cannot hold the whole greeting. `frames` (30 ms frames this capture sent), `last_voiced_frame` (0-based index of the last one the Pi's detector called speech) and `exit_reason` (`vad_silence_after_speech` \| `max_record_seconds` \| `shutdown` \| `server_endpoint`) let the server tell exactly whether a transcript it started at a pause covers everything said (see [Speculative transcription](#speculative-transcription)). An older satellite, which plays the greeting over its capture, may also send `no_speech_after_greeting`: a capture that heard voice only under the greeting and then waited out its `[greeting] reply_wait`, with a null `last_voiced_frame`. `voiced_frames`, `trailing_silent_frames` (the silent run it ended on) and `silence_limit_frames` (the run that ends one) complete the counts. Numbers only; with the reason, the core keeps them solely in the sidecar of an **opted-in room's command recording** (see SECURITY_PRIVACY.md). On a `server_endpoint` exit a satellite from 2026-09-30 on adds `voiced_after_end_ms` and `listened_after_end_ms`: it kept reading its mic, sending nothing, until its own silence timeout would have ended the capture (or the reply's audio may be playing), and says when speech came back after its last frame (0: it didn't) and how long it listened — see [Early commit](#early-commit). An older server ignores them all: they are new fields on an existing frame, which is safe both ways. A new frame TYPE would not be: an older core answers an unknown type with `error`, which the satellite treats as the end of the turn. |
 | `speech_pause` | `utt`, `frame`, `last_voiced_frame`, `greeting_played`, `greeting_clip?`, `ack_before_capture?`, `sat_ms?`, `backlog_ms?` | **Only when `ready.features` lists `"speech_pause"`.** The capture has had 8 silent frames (240 ms; the Pi's `[listen] speech_pause_ms`, 90-600 in whole frames) after speech: `frame` is how many frames it has sent, `last_voiced_frame` the last voiced one. Once per silence run. The server may start transcribing. `greeting_played` / `greeting_clip` / `ack_before_capture` as in `utterance_end`: the early-commit check screens the copy for the greeting the way the turn will. |
 | `speech_resume` | `utt`, `frame`, `sat_ms?`, `backlog_ms?` | **Only when `ready.features` lists `"speech_pause"`.** Speech came back after a reported pause. Sent *before* the audio of the frame that resumed it (`frame` is the frames sent before it), so every frame the server receives while a pause stands is one the Pi called silence — the early-commit hold is counted on exactly that. |
@@ -75,6 +75,7 @@ sequenceDiagram
 | `dropin_end` | — | Pi-side end of an active drop-in call (hardware button / client hang-up). The *spoken* "hang up" instead routes as a normal utterance. |
 | `dropin_ready` | — | **Since 2026-11-12; only in answer to a `dropin_start` marked `await_ready`.** The reply that was still playing when the call started ("Dropping in on the kitchen.", or the target's "Okay, connecting you with the office.") has played out and the call is open here; the server now sends this room the start chime and the peer's audio. A satellite waits at most 8 s for its playback; the server opens the call there anyway after `DROPIN_READY_WAIT_SEC` (10 s). A stray one is ignored. |
 | `chat_end` | — | Pi-side exit of conversational chat mode (e.g. a non-AEC board refusing `chat_start`). Clears the mode server-side. |
+| `room_control` | `action: "pause" \| "resume" \| "skip" \| "previous" \| "stop_ringing"`, `fire_id` (with `stop_ringing` only) | **1.4.0; only when `ready.features` lists `"room_display"`.** A button on the room's screen ([The room display](#the-room-display-room_display)). No room in it: the socket is the authority. Never answered; the next `room_display` shows the result. Anything else, an action the last `room_display` did not offer, or more than 5 at once (then one per 0.5 s) is ignored. |
 | `ping` | — | Keep-alive probe; answered with `pong`. |
 | *binary* | raw PCM | Normally meaningful only between `utterance_start`/`utterance_end`. **During a drop-in** the Pi streams every mic frame continuously (no framing) and the server relays each frame verbatim to the peer room — except while an utterance is active (a mid-call wake command like "hang up"), which is captured for STT instead. |
 
@@ -94,7 +95,7 @@ sequenceDiagram
 | `sounds_changed` | `room_voice?` | Greeting/canned clips were re-rendered; the Pi re-syncs its sound cache. A device whose voice the server keeps also gets it when the room's voice changes, with `room_voice` as in `ready`. |
 | `start_wake_recording` | `wake_word_id`, `slug`, `clip_seconds`, `target_count` | Enter wake-word clip-recording mode: suspend the wake loop, capture positive clips framed with `trigger:"wake_clip"`. |
 | `stop_wake_recording` | — | Leave clip-recording mode early (dashboard Stop). |
-| `set_wake_word` | `slug`, `threshold`? | Push a trained model: the Pi writes the slug to its wake sidecar (`~/.domovoi/wake`), writes `threshold` (when present, 0-1) into `[wake] threshold` with the same merge and `.bak` as `set_config` (absent: the setting stays), syncs the model from `/v1/wake-models`, and self-restarts. Older satellites kept the threshold in `~/.domovoi/wake_threshold`, which overrode the setting; current ones move that file into `[wake] threshold` at start and delete it. The slug is simultaneously the model file stem, the effective wake word, and the openWakeWord prediction key. |
+| `set_wake_word` | `slug`, `threshold`?, `words`? | Push a trained model: the Pi writes the slug to its wake sidecar (`~/.domovoi/wake`), writes `threshold` (when present, 0-1) into `[wake] threshold` with the same merge and `.bak` as `set_config` (absent: the setting stays), syncs the model from `/v1/wake-models`, and self-restarts. Older satellites kept the threshold in `~/.domovoi/wake_threshold`, which overrode the setting; current ones move that file into `[wake] threshold` at start and delete it. The slug is simultaneously the model file stem, the effective wake word, and the openWakeWord prediction key. `words` (1.4.0, only to a device whose `hello` sent `wake_words_max`, never longer than it): the room's whole list, `[{slug, threshold?}]`, `slug` first; the device keeps it in `~/.domovoi/wake_words.json` and loads every word, each at its own threshold (none: `[wake] threshold`). Without `words` the device runs `slug` alone. |
 | `wake_models_changed` | — | Served wake models changed; the Pi re-syncs its `~/.domovoi/wake_models` cache. |
 | `get_logs` | `request_id`, `max_bytes` | Ask a device that declared `logs` for the tail of its in-memory log ring; answered by `logs_chunk` frames. The only request/response pair in the protocol. |
 | `set_config` | `changes` (flat `section.key` map) | Push dashboard-edited config: the Pi merges into `config.toml` (preserving comments), validates, writes a `.bak`, and self-restarts. Every satellite takes only the settings the dashboard's form lists, by exact key, and refuses an audio device name that is not a plain ALSA device (`satellite/remote_config.py`, `satellite/alsa_names.py`); a spare computer also refuses `wifi.`, `leds.`, `mic_gain.` and `display.`. |
@@ -107,6 +108,7 @@ sequenceDiagram
 | `chat_end` | `reason` | Exit chat mode; restore the wake loop. |
 | `error` | `message`, `reason?` | Something went wrong; paired with a terminal `response_end` when a response task fails so the Pi's mic never stays parked. Carries `reason:"pairing_rejected"` when the `hello` pairing check refuses the connection, or `reason:"hello_required"` when the first frame was not a `hello` (the socket is then closed either way). |
 | `pong` | — | Reply to `ping`. |
+| `room_display` | `sent_at_ms`, `now_playing`, `timers`, `ringing` | **1.4.0; only to a paired device that declared `room_display`.** What the room's screen shows: its music, its timers and alarms, one going off. Once after `ready`, then on change, at most one a second ([The room display](#the-room-display-room_display)). |
 | *binary* | raw PCM | TTS audio at `audio_sample_rate`. During a drop-in: live 16 kHz relay audio from the peer room. |
 
 > `music_start` / `music_stop` are emitted by the music-coordination code
@@ -167,6 +169,7 @@ Android phone in room mode can do some of that and not the rest, so a
 | `speech_pause` | no — `speech_pause` | the core reads the device's `speech_pause` / `speech_resume` and last voiced frame |
 | `capture_control` | no — `capture_control` | `end_capture` (early commit, which also needs `speech_pause`) |
 | `turn_progress` | yes | `working` (2026-11-09): every 30 s while a request is still being worked out, so the device's reply backstop doesn't give up on a slow but working server |
+| `room_display` | no, and no boolean key: only a device that lists it, on a socket paired with its token | 1.4.0: the `room_display` frame and the `room_control` frame back ([The room display](#the-room-display-room_display)); `ready.features` then lists `"room_display"` |
 | `dropin_ready` | no — `dropin_ready` | 2026-11-12: `dropin_start` marked `await_ready`: the device finishes the reply announcing the call before it opens it, and the server holds the call's audio to it until its `dropin_ready` (see the frame tables). Without it the call's audio follows `dropin_start` at once, which cut that reply off |
 
 Always sent, whatever the list: `ready`, `error`, `pong`, `transcript`,
@@ -200,6 +203,78 @@ A phone in room mode runs openWakeWord on ONNX Runtime with the same
 models as a Pi; it fetches the base models from the core's signed
 `/v1/wake-base` channel (docs/API_REFERENCE.md) and a pushed wake word from
 `/v1/wake-models`, as a Pi does.
+
+## The room display (`room_display`)
+
+1.4.0: a phone or tablet in room mode shows what the room is playing, its
+controls, and its timers and alarms (`domovoi/room_display.py`). A room
+phone holds only its room key, which the core takes on this socket's
+`hello` and on no HTTP route, so all of it goes over the socket. Only a
+device that lists `room_display` in `supports`, on a socket whose `hello`
+proved its room with the pairing token, gets any of it: `ready.features`
+then lists `"room_display"`. A Pi never does; nothing else changes for it.
+
+**`room_display`** (server → room):
+
+```json
+{"type": "room_display",
+ "sent_at_ms": 123456789,
+ "now_playing": {"state": "play", "title": "Ember Waltz", "artist": "Hearth Cats",
+                 "album": "Embers", "source": "library", "art": "/v1/music/cover/42",
+                 "duration_sec": 201.0, "elapsed_sec": 42.0,
+                 "controls": ["pause", "skip", "previous"]},
+ "timers": [{"id": 7, "kind": "timer", "label": "pasta", "remaining_ms": 299000, "total_ms": 600000},
+            {"id": 9, "kind": "alarm", "label": "7 AM alarm", "remaining_ms": 32400000, "total_ms": 36000000}],
+ "ringing": null}
+```
+
+* `sent_at_ms`: this server's monotonic clock in ms: for ordering frames
+  only, never a time of day.
+* `now_playing`: null when the room's player is stopped or the room has
+  none. In a group it is the group host's music, the same in every member.
+  `state` `play` \| `pause`; `title`, `artist`, `album` strings or null
+  (a stream has only a title: the station's); `source` `library` \|
+  `radio` \| `sleep` \| `podcast` \| `audiobook` \| `other`; `art` the
+  library song's cover on the open `GET /v1/music/cover/{track_id}` (see
+  docs/API_REFERENCE.md), null for anything else, never guessed;
+  `duration_sec` null for a stream; `elapsed_sec` at `sent_at_ms` (the phone
+  counts it on while playing).
+* `controls`: only what works in this room right now: `pause` while
+  playing, `resume` while paused; `skip` when the queue has a next song;
+  `previous` for a song in a queue (back one, or the first one again from
+  its start). A stream (the radio) has only `pause` / `resume`.
+* `timers`: this room's timers and alarms, soonest first, at most 20; never
+  a reminder (anyone in the room can read the screen) and never another
+  room's. `kind` `timer` \| `alarm` (an alarm is what "set an alarm" and
+  "wake me up" make: a label like "7 AM alarm"); `label` null for a timer
+  set without one; `remaining_ms` at `sent_at_ms`; `total_ms` the whole
+  length.
+* `ringing`: `{fire_id, kind, label}` for a timer or alarm going off in
+  this room that nobody has acknowledged, within the window "stop the
+  timer" takes (announced here in the last 30 s, set here and fired in the
+  last 30 s, or still waiting its turn here); else null.
+
+Sent once after `ready`, then whenever it changes (this room's or its group
+host's music, its timers or alarms, one going off), at most one a second.
+Time passing is not a change; a seek, or a position or end more than 2.5 s
+from where the last frame put it, is.
+
+**`room_control`** (room → server), no room in it:
+
+* `{"type": "room_control", "action": "pause" | "resume" | "skip" | "previous"}`
+  goes the way the dashboard's `POST /v1/admin/music/{action}/{room}` goes:
+  the spoken equivalent routed for this room (so it acts on the group in a
+  group, as saying it there would) with the same `intents_log` row. Only an
+  action the last `room_display` offered is taken.
+* `{"type": "room_control", "action": "stop_ringing", "fire_id": N}`
+  acknowledges fire `N` in this room (a timer or an alarm; the same
+  acknowledgement "stop the timer" makes) and ends its announcement here if
+  it is being spoken.
+
+A bare "stop" said in the room while a timer or alarm is ringing there does
+the same (and leaves the music playing; the next "stop" stops it); with
+nothing ringing it is the music's, as before. "Stop the timer" also stops a
+ringing alarm. Volume stays where it was: `volume_status` / `set_volume`.
 
 ## Enrolling a spare device (`domovoi-room:1`)
 
@@ -559,6 +634,29 @@ provisioning or relaying anything. Resetting a room's pairing (admin-gated
 connect re-pairs — needed after re-flashing a Pi or moving a room to new
 hardware. Full model + the first-connect race caveat:
 [../SECURITY_PRIVACY.md](../SECURITY_PRIVACY.md#satellite-pairing-ws-auth).
+
+### An approval the device can check (1.4.0)
+
+A device with no server address and no server key asks every server whose
+`/v1/health` SIGNS `pairing_proof >= 1` (for a `pairing-proof.` challenge,
+[../API_REFERENCE.md](../API_REFERENCE.md)) (satellite/house_pairing.py) and
+checks the approval itself — SPAKE2, `satellite/pairing_proof.py`. Its
+frames, all before `ready`:
+
+| Direction | Frame | Payload | Meaning |
+|---|---|---|---|
+| device → core | `hello` | `pairing_token` (this server's own: `HMAC-SHA256(device token, server fingerprint)`), `approval_pake` (`X`, 512 hex chars), **no** `approval_code` | Park (or refresh) a proof request. Never pairs on trust, strict or not; a malformed `approval_pake` is `error{reason:"approval_pake_invalid"}`. A room already paired takes the ordinary token check. |
+| core → device | `error` | `reason:"awaiting_approval"`, `proof:true`, no `code` | Parked; nothing typed for it yet. The device asks again in ten seconds. |
+| core → device | `approval_challenge` | `pake` (`Y`) | A code was typed on the dashboard: run the exchange with it. The typed code is used up only by a confirmation that does not check out (a guess); a run the device declines, does not answer within 20 s or leaves puts it back for the next visit. |
+| device → core | `approval_confirm` | `tag` (64 hex) | The device's confirmation. The core checks it in constant time within 20 s. |
+| device → core | `approval_decline` | `reason` (`busy`, `budget`) | The device will not answer now: another server's exchange is running or one has approved it, its answer budget is spent, or it is holding this server back after a run that proved nothing. The core keeps the typed code (original typing time) and counts nothing; answered `error{reason:"approval_declined"}`. After its confirmation the device waits 6 s for `approval_proof` and accepts nothing else, and a whole visit is bounded at 30 s. |
+| core → device | `error` | `reason:"approval_code_mismatch"` | The confirmation did not check out (a different code was typed). Counted on the request; nothing is bound. |
+| core → device | `approval_proof` | `tag` (64 hex) | Sent only after the device's confirmation checked out, with the room already bound; the device checks it before believing anything, then `ready` follows. A `ready` without a valid `approval_proof` first is ignored by the device. |
+| device → core | `hello` | `pairing_token` (as parked), `approval_withdraw:true` | Another server approved the device: drop this request. Answered `error{reason:"approval_withdrawn", withdrawn}`; only the token the request was parked with removes it, and a pairing is never touched. |
+
+Other new refusals: `approval_unavailable` (the core could not record or
+run the exchange; it fails closed), `approval_throttled` (the per-source
+limit, consulted before any arithmetic; withdrawals count too).
 
 See [voice-turn.md](voice-turn.md) for what happens between `utterance_end`
 and `response_start`, and [../SATELLITE_HARDWARE.md](../SATELLITE_HARDWARE.md)

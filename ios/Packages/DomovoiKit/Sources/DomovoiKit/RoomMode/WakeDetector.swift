@@ -10,8 +10,15 @@ import Foundation
 ///   before it, transformed `x / 10 + 2` (what makes the ONNX model match
 ///   Google's), and kept (at most 970 frames, ~10 s);
 /// - one embedding per chunk, of the last 76 mel frames, kept (at most 120);
-/// - the wake model scores the last 16 embeddings;
+/// - each wake model scores the last 16 embeddings;
 /// - the first five scores after a reset are 0, as openWakeWord's are.
+///
+/// Several words (1.4.0, up to five per room) share ONE front end: the
+/// melspectrogram and the embedding run once per chunk, and each word adds
+/// only its own classifier over the same embeddings, as openWakeWord's
+/// `Model` does with several `wakeword_models` (satellite/wake_words.py).
+/// ``acceptAll(_:count:)`` gives every word's score, in the order the
+/// classifiers were given (the room's main word first).
 ///
 /// After a reset the embedding history is seeded with the embeddings of four
 /// seconds of low noise, as openWakeWord seeds it; computed once per model
@@ -33,7 +40,10 @@ public final class WakeDetector {
     /// same noise history a phone running Android makes.
     public static let noiseSeed: Int64 = 0x0D0E
 
-    public let nets: any WakeNets
+    /// The shared melspectrogram + embedding.
+    public let frontEnd: any WakeFrontEnd
+    /// One per wake word, main word first.
+    public let classifiers: [any WakeClassifier]
     private let noise: [[Float]]
     private var raw = [Int16](repeating: 0, count: WakeDetector.chunk + WakeDetector.context)
     private var rawFill = 0
@@ -46,10 +56,20 @@ public final class WakeDetector {
     /// the ears' timing divides by.
     public private(set) var chunksSeen = 0
 
-    /// `seed`: the history after a reset; ``noiseFeatures(_:noise:)`` by default.
-    public init(nets: any WakeNets, seed: [[Float]]? = nil) throws {
-        self.nets = nets
-        self.noise = try seed ?? WakeDetector.noiseFeatures(nets)
+    /// One word: `nets`' front end and its own wake model. `seed`: the
+    /// history after a reset; ``noiseFeatures(_:noise:)`` by default.
+    public convenience init(nets: any WakeNets, seed: [[Float]]? = nil) throws {
+        try self.init(frontEnd: nets, classifiers: [WakeNetsClassifier(nets)], seed: seed)
+    }
+
+    /// Several words on one front end: `classifiers` main word first (at
+    /// least one). The noise history is the front end's, so it is computed
+    /// once for all of them.
+    public init(frontEnd: any WakeFrontEnd, classifiers: [any WakeClassifier], seed: [[Float]]? = nil) throws {
+        guard !classifiers.isEmpty else { throw OnnxModel.Failure(note: "no wake-word model to run") }
+        self.frontEnd = frontEnd
+        self.classifiers = classifiers
+        self.noise = try seed ?? WakeDetector.noiseFeatures(frontEnd)
         reset()
     }
 
@@ -64,11 +84,18 @@ public final class WakeDetector {
     }
 
     /// Feed `count` samples of `samples` (any length; the room feeds 30 ms
-    /// frames). The highest score of the chunks this completed, or nil when
-    /// no 80 ms chunk completed.
+    /// frames). The main word's highest score of the chunks this completed,
+    /// or nil when no 80 ms chunk completed.
     public func accept(_ samples: [Int16], count: Int? = nil) throws -> Float? {
+        try acceptAll(samples, count: count)?.first
+    }
+
+    /// ``accept(_:count:)`` for every word: each word's highest score of the
+    /// chunks this completed (one per classifier, in their order), or nil
+    /// when no 80 ms chunk completed.
+    public func acceptAll(_ samples: [Int16], count: Int? = nil) throws -> [Float]? {
         let total = min(max(count ?? samples.count, 0), samples.count)
-        var best: Float?
+        var best: [Float]?
         var at = 0
         while at < total {
             let take = min(Self.chunk - pendingFill, total - at)
@@ -80,16 +107,21 @@ public final class WakeDetector {
             pendingFill += take
             at += take
             if pendingFill == Self.chunk {
-                let score = try chunk()
+                let scores = try chunk()
                 pendingFill = 0
-                best = best.map { max($0, score) } ?? score
+                if let was = best {
+                    best = zip(was, scores).map { max($0, $1) }
+                } else {
+                    best = scores
+                }
             }
         }
         return best
     }
 
-    /// One 80 ms chunk (`pending`): its score.
-    private func chunk() throws -> Float {
+    /// One 80 ms chunk (`pending`): every word's score. The front end runs
+    /// once; each classifier reads the same embeddings.
+    private func chunk() throws -> [Float] {
         // The raw history: the 480 samples before this chunk, then the chunk.
         let keep = min(rawFill, Self.context)
         raw.withUnsafeMutableBufferPointer { r in
@@ -103,19 +135,22 @@ public final class WakeDetector {
         raw.withUnsafeBufferPointer { r in
             for i in 0..<rawFill { input[i] = Float(r[i]) }
         }
-        for frame in try nets.melspectrogram(input) {
+        for frame in try frontEnd.melspectrogram(input) {
             mel.append(Self.transform(frame))
         }
         if mel.count > Self.melMax { mel.removeFirst(mel.count - Self.melMax) }
         if mel.count >= Self.window {
-            features.append(try nets.embedding(Array(mel.suffix(Self.window))))
+            features.append(try frontEnd.embedding(Array(mel.suffix(Self.window))))
             if features.count > Self.featuresMax { features.removeFirst(features.count - Self.featuresMax) }
         }
-        let n = nets.wakeInputFrames
-        let score: Float = features.count >= n ? try nets.wake(Array(features.suffix(n))) : 0
+        var scores = [Float](repeating: 0, count: classifiers.count)
+        for (i, classifier) in classifiers.enumerated() {
+            let n = classifier.inputFrames
+            if n > 0 && features.count >= n { scores[i] = try classifier.score(Array(features.suffix(n))) }
+        }
         predictions += 1
         chunksSeen += 1
-        return predictions <= Self.warmup ? 0 : score
+        return predictions <= Self.warmup ? [Float](repeating: 0, count: classifiers.count) : scores
     }
 
     /// `x / 10 + 2` over the first 32 bins (Android's `FloatArray(MEL_BINS)
@@ -131,13 +166,13 @@ public final class WakeDetector {
     /// every 8th 76-frame window's embedding. `noise` nil: Android's seeded
     /// noise (``JavaRandom`` with ``noiseSeed``), so every load is alike, and
     /// alike on both phones.
-    public static func noiseFeatures(_ nets: any WakeNets, noise: [Int16]? = nil) throws -> [[Float]] {
+    public static func noiseFeatures(_ frontEnd: any WakeFrontEnd, noise: [Int16]? = nil) throws -> [[Float]] {
         let audio = noise ?? seededNoise()
-        let spec = try nets.melspectrogram(audio.map { Float($0) }).map(transform)
+        let spec = try frontEnd.melspectrogram(audio.map { Float($0) }).map(transform)
         var out: [[Float]] = []
         var i = 0
         while i + window <= spec.count {
-            out.append(try nets.embedding(Array(spec[i..<(i + window)])))
+            out.append(try frontEnd.embedding(Array(spec[i..<(i + window)])))
             i += step
         }
         return out

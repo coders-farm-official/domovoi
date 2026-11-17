@@ -150,9 +150,11 @@ extension StubHouseUITests {
         /// What `…/models` says when the fixture is set to `unavailable`.
         static let pluginSilent = "the plugin is not answering"
 
-        /// The band (`PluginFrame.kt:124`, `:144`, `:151`).
-        static let pluginName = "Image Generation"
+        /// The band (`PluginFrame.kt:124`, `:144`): its main line says the
+        /// screen uses the plugin (``PluginBandStrings/uses(_:)``).
+        static let pluginName = "Uses the Image Generation plugin"
         static let pluginBy = "by Coders Farm"
+        /// The bordered badge the main line replaced: asserted **absent**.
         static let pluginBadge = "plugin"
     }
 
@@ -424,9 +426,9 @@ extension StubHouseUITests {
             containing(app, StubImages.pluginBy).exists,
             "the band does not say who publishes it"
         )
-        XCTAssertTrue(
+        XCTAssertFalse(
             app.staticTexts[StubImages.pluginBadge].exists,
-            "the `plugin` badge is missing, so nothing says this screen is a plugin's"
+            "the bordered `plugin` badge is drawn again beside \"Uses the … plugin\""
         )
     }
 

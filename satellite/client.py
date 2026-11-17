@@ -66,6 +66,7 @@ from satellite import (
     sound_sync,
     wake_gate,
     wake_model_sync,
+    wake_words,
     wifi_adapt,
     wifi_profiles,
 )
@@ -234,6 +235,10 @@ WIFI_ADAPT_TIMEOUT_SEC = 150.0
 # the 30 s this used to allow, and a kill here cancels nothing in
 # NetworkManager — it only stops waiting for the answer.
 NMCLI_UP_TIMEOUT_SEC = 45.0
+#: `nmcli device status` on a Pi Zero 2 W under load (a boot, a wake
+#: model loading) has taken over five seconds; a slow answer must not read
+#: as "no NetworkManager" and send the recovery to wpa_cli (S2-15).
+NMCLI_STATUS_TIMEOUT_SEC = 12.0
 # The radio reset: off, 3 s, on, up to 15 s for the radio to come back, then
 # `nmcli --wait 45 connection up` (satellite/scripts/domovoi-wifi-reset).
 WIFI_RESET_TIMEOUT_SEC = 90.0
@@ -315,6 +320,40 @@ def _wifi_reset_helper_installed(cfg: Any) -> bool:
     return not engine_platform.is_windows_pc(cfg) and WIFI_RESET_HELPER.exists()
 
 
+#: Where a wpa_supplicant that wpa_cli can talk to keeps its per-interface
+#: control socket (Debian's ctrl_interface=DIR=/run/wpa_supplicant).
+WPA_CTRL_DIRS = (Path("/run/wpa_supplicant"), Path("/var/run/wpa_supplicant"))
+NMCLI_PATHS = (Path("/usr/bin/nmcli"),)
+
+
+def _wpa_ctrl_socket(iface: str, dirs: tuple[Path, ...] | None = None) -> bool | None:
+    """True when a wpa_supplicant control socket for ``iface`` exists (wpa_cli
+    can reach it), False when none does, None when a folder that may hold it
+    can't be read by this account."""
+    unreadable = False
+    for d in dirs or WPA_CTRL_DIRS:
+        try:
+            if (d / iface).exists():
+                return True
+        except OSError:
+            unreadable = True
+            continue
+        try:
+            if d.exists() and not os.access(d, os.X_OK):
+                unreadable = True
+        except OSError:
+            unreadable = True
+    return None if unreadable else False
+
+
+def _nm_installed(paths: tuple[Path, ...] | None = None) -> bool:
+    """NetworkManager is on this image (its nmcli is), answering or not."""
+    try:
+        return any(p.exists() for p in (paths or NMCLI_PATHS)) or shutil.which("nmcli") is not None
+    except OSError:
+        return False
+
+
 def _hard_exit(code: int) -> None:
     """The backstop for a self-check exit stuck in its own shutdown."""
     try:
@@ -355,6 +394,12 @@ VOICE_SIDECAR = CONFIG_DIR / "voice"
 # `_effective_voice` sidecar-override pattern exactly.
 WAKE_SIDECAR = CONFIG_DIR / "wake"
 WAKE_MODELS_DIR = CONFIG_DIR / "wake_models"
+# Several wake words per room (1.4.0, satellite/wake_words.py): the room's
+# whole list, main word first, each with its own threshold (null = the
+# [wake] threshold). Kept only while the room has more than one word, and
+# used only while its first entry is the main word WAKE_SIDECAR / the config
+# names, so a single-word push from an older core leaves one word running.
+WAKE_WORDS_SIDECAR = CONFIG_DIR / "wake_words.json"
 # LEGACY: the per-word detection threshold older satellites stored beside a
 # pushed wake model. It overrode the [wake] threshold, so a room woke at the
 # pushed word's 0.5 while its Settings tab showed the 0.8 set there
@@ -455,6 +500,9 @@ def _read_synced_sha() -> str | None:
     return None
 
 
+_PAIRING_TOKEN_OVERRIDE: str | None = None
+
+
 def _effective_pairing_token() -> str | None:
     """This satellite's WS pairing token (V002), generated on first boot.
 
@@ -465,6 +513,10 @@ def _effective_pairing_token() -> str | None:
     (older-protocol) hello rather than crashing the client. The value is sent as the
     hello frame's ``pairing_token``; the server binds the room to its sha256
     on first sight and refuses any later mismatch."""
+    if _PAIRING_TOKEN_OVERRIDE:
+        # The approving house's own token, when it could not be saved over
+        # the sidecar (_adopt_approved_house): still the right one this boot.
+        return _PAIRING_TOKEN_OVERRIDE
     try:
         if PAIRING_TOKEN_SIDECAR.is_file():
             tok = PAIRING_TOKEN_SIDECAR.read_text(encoding="utf-8").strip()
@@ -559,6 +611,67 @@ def _effective_wake_threshold(cfg: "Config") -> float:
     except (OSError, ValueError):
         pass
     return cfg.wake_threshold
+
+
+def _wake_words_limit(cfg: "Config") -> int:
+    """How many wake words this device runs at once
+    (satellite/wake_words.py ``device_limit``): it says so in its hello, and
+    loads no more whatever it is sent."""
+    try:
+        is_pc = bool(pc_engine.is_pc(cfg))
+    except Exception:  # noqa: BLE001 - a stand-in config in a test
+        is_pc = False
+    return wake_words.device_limit(is_pc=is_pc, model=None if is_pc else wake_words.board_model())
+
+
+#: openWakeWord's own words, which it can load by name (no file here).
+_STOCK_WAKE_WORDS = frozenset({"hey_jarvis", "alexa", "hey_mycroft", "hey_rhasspy",
+                               "timer", "weather"})
+
+
+def _effective_wake_words(cfg: "Config") -> list[dict[str, Any]]:
+    """The words this room listens for, main word first, at most
+    `_wake_words_limit`: ``[{"slug", "path", "threshold"}]``. ``path`` is
+    the model file to load (None: openWakeWord's built-in of that name);
+    ``threshold`` the word's own (the main word's is always the effective
+    [wake] threshold, as before; an extra word without one of its own uses
+    the [wake] threshold too). An extra word whose model isn't in the cache
+    is left out (logged): loading it by name would fail the whole load."""
+    first = _effective_wake_word(cfg)
+    main_threshold = _effective_wake_threshold(cfg)
+    words = [{"slug": first, "path": _effective_wake_model_path(cfg), "threshold": main_threshold}]
+    stored = wake_words.read_list(WAKE_WORDS_SIDECAR, first) or []
+    if len(stored) < 2:
+        return words
+    limit = _wake_words_limit(cfg)
+    for extra in stored[1:]:
+        if len(words) >= limit:
+            log.info("wake words: this device runs %d; %r and any after it are not loaded",
+                     limit, extra["slug"])
+            break
+        model = WAKE_MODELS_DIR / f"{extra['slug']}.onnx"
+        if model.is_file():
+            path: str | None = str(model)
+        elif extra["slug"] in _STOCK_WAKE_WORDS:
+            path = None
+        else:
+            log.warning("wake words: no model for %r in %s yet; not listening for it",
+                        extra["slug"], WAKE_MODELS_DIR)
+            continue
+        words.append({"slug": extra["slug"], "path": path,
+                      "threshold": extra["threshold"] if extra["threshold"] is not None
+                      else main_threshold})
+    return words
+
+
+def _hello_wake_words(cfg: "Config") -> list[str]:
+    """The words this room listens for, for its hello (main word first).
+    Never fails the hello: the main word alone when the list can't be read."""
+    try:
+        return [w["slug"] for w in _effective_wake_words(cfg)]
+    except Exception as e:  # noqa: BLE001 - a hello always goes out
+        log.debug("wake words for the hello: %s", e)
+        return [_effective_wake_word(cfg)]
 
 
 def _clear_wake_threshold_sidecar(why: str) -> None:
@@ -1720,6 +1833,10 @@ class Satellite(pc_engine.SpareDeviceEngine):
         # Cached like _wake_word; refreshed in _load_wake_model. Every
         # pred.get(...) compares against this, not the raw cfg value.
         self._wake_threshold = _effective_wake_threshold(cfg)
+        # The room's extra wake words (1.4.0) and each one's threshold: more
+        # openWakeWord prediction keys beside `_wake_word`. Set by
+        # `_load_wake_model`; none until then.
+        self._wake_thresholds: dict[str, float] = {}
         # Self-upgrade (Feature 10) rollback latch. Set True by the `ready`
         # frame handler once the freshly-upgraded code connects successfully;
         # the post-restart watchdog reads it to decide whether the upgrade
@@ -2324,8 +2441,13 @@ class Satellite(pc_engine.SpareDeviceEngine):
         # a later one.
         woke, self._woke_at = self._woke_at, None
         score, self._wake_score = self._wake_score, None
+        fired, self._wake_fired = self._wake_fired, None
         if trigger == "wake_word" and woke is not None:
             msg["wake_ms"] = max(0, int(round((self._utt_started - woke) * 1000)))
+            # Which of the room's words fired (1.4.0), so the room's history
+            # says what woke it. An older core ignores the field.
+            if fired:
+                msg["wake_word"] = fired
             # The wake's peak score (satellite/wake_gate.py), kept with the
             # turn on the core. An older core ignores the field.
             if score is not None:
@@ -3016,7 +3138,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
                     log.warning(
                         "wake ack: %s is not installed, so the spoken greetings "
                         "cannot play; acknowledging with the chime (aplay) until "
-                        "it is - a reboot runs the boot step that installs it",
+                        "it is (the 'system packages' lines in this log say why "
+                        "it is missing)",
                         argv[0],
                     )
                 clip = None
@@ -3716,21 +3839,70 @@ class Satellite(pc_engine.SpareDeviceEngine):
         connect`. Under NM, wpa_supplicant is driven over D-Bus and wpa_cli
         usually cannot reach its control socket at all, so the reassociate
         below is a no-op on exactly the devices the portal creates.
+
+        Why it said no is kept in ``_nm_probe_note`` (nmcli missing, timed
+        out, NetworkManager not running, wlan0 unmanaged or not listed), for
+        :meth:`_wifi_stack` and the log.
         """
+        self._nm_probe_note = None
         try:
             r = subprocess.run(
                 ["nmcli", "-t", "-f", "DEVICE,STATE", "device", "status"],
-                capture_output=True, text=True, timeout=5.0,
+                capture_output=True, text=True, timeout=NMCLI_STATUS_TIMEOUT_SEC,
             )
-        except (OSError, subprocess.SubprocessError):
+        except FileNotFoundError:
+            self._nm_probe_note = "no nmcli"
+            return False
+        except subprocess.TimeoutExpired:
+            self._nm_probe_note = f"nmcli did not answer within {NMCLI_STATUS_TIMEOUT_SEC:.0f} s"
+            return False
+        except (OSError, subprocess.SubprocessError) as e:
+            self._nm_probe_note = f"nmcli: {e}"
             return False
         if r.returncode != 0:
+            err = ((r.stderr or "") + (r.stdout or "")).strip().splitlines()
+            self._nm_probe_note = f"nmcli rc={r.returncode}" + (f": {err[-1][:160]}" if err else "")
             return False
         for line in (r.stdout or "").splitlines():
             device, _, state = line.partition(":")
             if device.strip() == "wlan0":
-                return state.strip() != "unmanaged"
+                if state.strip() == "unmanaged":
+                    self._nm_probe_note = "NetworkManager lists wlan0 as unmanaged"
+                    return False
+                return True
+        self._nm_probe_note = "NetworkManager does not list wlan0"
         return False
+
+    _nm_probe_note: str | None = None
+    _wifi_stack_said: str | None = None
+
+    def _wifi_stack(self) -> str:
+        """Which network stack owns wlan0, for the link recovery (S2-15).
+
+        * ``"nm"``: NetworkManager answers and manages wlan0.
+        * ``"wpa_supplicant"``: a wpa_supplicant with its own control socket
+          for wlan0 (``/run/wpa_supplicant/wlan0``), the one thing
+          ``wpa_cli -i wlan0`` can talk to. NetworkManager's supplicant has
+          no such socket (it is driven over D-Bus): wpa_cli then fails with
+          "Failed to connect to non-global ctrl_ifname: wlan0", which is
+          what the Mac test sitting's Pi logged on every recovery.
+        * ``"nm_unreachable"``: no such socket, but NetworkManager is on this
+          image and did not answer (or called wlan0 unmanaged).
+        * ``"other"``: neither (systemd-networkd, iwd, ...): nothing here
+          can reconnect it; the self-check's restart is what brings it back.
+        * ``"unknown"``: the socket folder can't be read by this account:
+          wpa_cli is tried as before.
+        """
+        if self._nm_manages_wifi():
+            return "nm"
+        sock = _wpa_ctrl_socket("wlan0")
+        if sock is True:
+            return "wpa_supplicant"
+        if sock is None:
+            return "unknown"
+        if _nm_installed():
+            return "nm_unreachable"
+        return "other"
 
     def _reconnect_wifi_nm(self) -> bool:
         """Bring the HOUSE network back, through NetworkManager.
@@ -3951,8 +4123,12 @@ class Satellite(pc_engine.SpareDeviceEngine):
         # voice request): each loop honours the other's last recovery, so
         # they never take turns tearing the link down seconds apart.
         self._last_reassociate_at = time.monotonic()
-        if self._nm_manages_wifi():
+        # Which stack owns wlan0 (NetworkManager first, via _nm_manages_wifi).
+        stack = self._wifi_stack()
+        if stack == "nm":
             return self._reconnect_wifi_nm()
+        if stack in ("nm_unreachable", "other"):
+            return self._recover_wifi_without_wpa_cli(stack)
         try:
             result = subprocess.run(
                 ["sudo", "-n", "/usr/sbin/wpa_cli", "-i", "wlan0", "reassociate"],
@@ -3975,6 +4151,31 @@ class Satellite(pc_engine.SpareDeviceEngine):
             result.returncode, result.stdout.strip(), result.stderr.strip(),
         )
         return False
+
+    def _recover_wifi_without_wpa_cli(self, stack: str) -> bool:
+        """The link recovery where ``wpa_cli`` can't work (S2-15): never
+        run it there, say once why, and on NetworkManager's image try the
+        radio reset (it goes through nmcli, so it helps only once
+        NetworkManager answers again, and it never touches a link that is
+        associated). False otherwise: the self-check counts the failure and
+        brings its restart forward, which is what restores a stack nobody
+        here can drive."""
+        why = self._nm_probe_note or "unknown"
+        if stack == "nm_unreachable":
+            words = (f"NetworkManager runs this room's network but did not answer ({why}); "
+                     "wpa_cli can't reach its supplicant")
+        else:
+            words = (f"this room's network is run by neither NetworkManager ({why}) nor a "
+                     "wpa_supplicant with its own control socket; nothing here can reconnect it")
+        if self._wifi_stack_said != words:
+            self._wifi_stack_said = words
+            log.warning("wifi recovery: %s", words)
+        if stack != "nm_unreachable":
+            return False
+        link = self._check_wifi_link() if self.cfg.wifi_enabled else None
+        associated = bool(link and link.get("rx_mbits") is not None) or bool(link and link.get("ssid"))
+        ap_active = bool(link and link.get("mode") == "ap")
+        return self._wifi_reset_radio("NetworkManager did not answer", associated, ap_active)
 
     @property
     def _platform(self) -> "engine_platform.Platform":
@@ -4207,6 +4408,12 @@ class Satellite(pc_engine.SpareDeviceEngine):
             return
         self._base_checked_at = now
         report = base_packages.read_report()
+        if (report is not None and report.get("state") == "failed"
+                and not report.get("detail") and report.get("errors")):
+            # A run recorded by an older boot step: no reason on "failed",
+            # only apt's errors. Make one, for the log and the card (S2-13).
+            report = dict(report, detail=base_packages.failure_reason(
+                [str(e) for e in report.get("errors") or []]))
         if report is not None:
             run_id = f"{report.get('boot_id')}:{report.get('ts')}"
             if run_id != self._base_report_logged:
@@ -4221,6 +4428,9 @@ class Satellite(pc_engine.SpareDeviceEngine):
                         state, ", ".join(map(str, report.get("still_missing") or [])),
                         f" ({report.get('detail')})" if report.get("detail") else "",
                     )
+                    errors = [str(e) for e in (report.get("errors") or [])]
+                    if errors:
+                        log.warning("base packages: apt said: %s", " | ".join(errors)[-600:])
         gone = base_packages.missing()
         offline = base_packages.internet_off()
         self._base_missing = gone
@@ -5720,36 +5930,37 @@ class Satellite(pc_engine.SpareDeviceEngine):
     def _load_wake_model(self):  # -> openwakeword.model.Model
         from openwakeword.model import Model as WakeWordModel
 
-        # Resolve the EFFECTIVE wake word + model, honoring the runtime
-        # sidecar (a model pushed from the dashboard) over the [wake] config.
-        # The openWakeWord prediction dict is keyed by the loaded model's
-        # STEM, which the effective wake word MUST match — they derive from
-        # the same sidecar slug (or both from cfg) so they can't disagree.
-        # Cache the effective wake word once at load: every `pred.get(...)`
-        # site reads `self._wake_word`, not the raw cfg value, so a sidecar
-        # override is honored without re-reading the file per chunk.
-        self._wake_word = _effective_wake_word(self.cfg)
-        self._wake_threshold = _effective_wake_threshold(self.cfg)
-        model_path = _effective_wake_model_path(self.cfg)
+        # Resolve the EFFECTIVE wake words + models, honoring the runtime
+        # sidecars (words pushed from the dashboard) over the [wake] config.
+        # The openWakeWord prediction dict is keyed by each loaded model's
+        # STEM, which each slug MUST match — they derive from the same
+        # sidecar slug (or both from cfg) so they can't disagree. Cached
+        # once at load: every `pred.get(...)` site reads
+        # `self._wake_thresholds`, not the raw cfg value. The words share
+        # one audio front end (satellite/wake_words.py); each extra one is a
+        # small classifier with its own threshold.
+        words = _effective_wake_words(self.cfg)
+        self._wake_word = words[0]["slug"]
+        self._wake_threshold = words[0]["threshold"]
+        self._wake_thresholds = {w["slug"]: float(w["threshold"]) for w in words[1:]}
+        model_path = words[0]["path"]
 
         # Custom-trained model (e.g. "Hey Domovoi") if a path resolved — the
-        # openWakeWord prediction key is the model file's stem, which
-        # `self._wake_word` must match. Otherwise use the named pre-bundled
-        # model and auto-download on first use.
+        # openWakeWord prediction key is the model file's stem, which the
+        # slug must match. Otherwise the named pre-bundled model, downloaded
+        # on first use.
         if model_path:
             log.info(
                 "loading custom wake model from %s (wake word %r)",
                 model_path, self._wake_word,
             )
-            oww = WakeWordModel(
-                wakeword_models=[model_path],
-                inference_framework="onnx",
-            )
-        else:
-            oww = WakeWordModel(
-                wakeword_models=[self._wake_word],
-                inference_framework="onnx",
-            )
+        if len(words) > 1:
+            log.info("loading %d wake words: %s", len(words),
+                     ", ".join(f"{w['slug']} (threshold {w['threshold']:.2f})" for w in words))
+        oww = WakeWordModel(
+            wakeword_models=[w["path"] or w["slug"] for w in words],
+            inference_framework="onnx",
+        )
         # What the health sample reports as this room's wake word: the model
         # that loaded, by the name openWakeWord keys it on (the file's stem,
         # or the built-in's name). Set only once the load succeeded.
@@ -5799,22 +6010,38 @@ class Satellite(pc_engine.SpareDeviceEngine):
         # and after a turn that went wrong (ignored as background talk, cut
         # off at the recording cap, an error or no reply) nothing wakes the
         # room for `cooldown_sec`. After an ordinary turn, no cooldown.
-        gate = wake_gate.WakeGate(
-            self._wake_threshold,
-            getattr(self.cfg, "wake_patience_frames", wake_gate.PATIENCE_DEFAULT),
-            getattr(self.cfg, "wake_cooldown_sec", wake_gate.COOLDOWN_SEC_DEFAULT),
-        )
-        # The last few chunk scores and the near-miss tracker, for the log:
-        # what a real wake word looks like around its peak (one chunk or
-        # several), and how often a real attempt falls just short of the
-        # threshold, are what the threshold and the patience are tuned with
-        # (2026-11-10: a real far-field wake scored 0.90 on ONE chunk).
-        recent_scores: deque[float] = deque(maxlen=wake_gate.SCORE_WINDOW)
-        near = wake_gate.NearMiss(gate.threshold)
+        # One gate per word, each at its own threshold (1.4.0: a room may
+        # have several words; satellite/wake_words.py). The patience and the
+        # cooldown are the room's, the same for every word.
+        thresholds = self._wake_word_thresholds()
+        many = len(thresholds) > 1
+        gates = {
+            slug: wake_gate.WakeGate(
+                threshold,
+                getattr(self.cfg, "wake_patience_frames", wake_gate.PATIENCE_DEFAULT),
+                getattr(self.cfg, "wake_cooldown_sec", wake_gate.COOLDOWN_SEC_DEFAULT),
+            )
+            for slug, threshold in thresholds.items()
+        }
+        gate = next(iter(gates.values()))
+        # The last few chunk scores and the near-miss tracker, per word, for
+        # the log: what a real wake word looks like around its peak (one
+        # chunk or several), and how often a real attempt falls just short
+        # of the threshold, are what the threshold and the patience are
+        # tuned with (2026-11-10: a real far-field wake scored 0.90 on ONE
+        # chunk).
+        recents: dict[str, deque[float]] = {
+            slug: deque(maxlen=wake_gate.SCORE_WINDOW) for slug in gates}
+        nears = {slug: wake_gate.NearMiss(g.threshold) for slug, g in gates.items()}
         quiet, self._quiet_next_wake = self._quiet_next_wake, False
-        gate.quiet_for(time.monotonic(), None if quiet else 0.0)
+        for g in gates.values():
+            g.quiet_for(time.monotonic(), None if quiet else 0.0)
         cooldown_logged = not quiet or gate.cooldown_sec <= 0
-        log.info("listening for wake word %r in room %r", self._wake_word, self.cfg.room_id)
+        if many:
+            log.info("listening for wake words %s in room %r",
+                     ", ".join(repr(w) for w in gates), self.cfg.room_id)
+        else:
+            log.info("listening for wake word %r in room %r", self._wake_word, self.cfg.room_id)
         # openwakeword's predict() requires chunks that are multiples of 80 ms
         # (1280 samples at 16 kHz). Mic frames are 30 ms (480 samples), so we
         # batch them into a remainder buffer and call predict() once per
@@ -5877,45 +6104,61 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 except Exception as e:
                     log.warning("wake-word predict failed: %s", e)
                     # A gap in the scores: a run across it is not "in a row".
-                    gate.reset()
+                    for g in gates.values():
+                        g.reset()
                     continue
                 chunk_at = time.monotonic()
-                score = pred.get(self._wake_word, 0.0)
-                try:
-                    recent_scores.append(float(score))
-                except (TypeError, ValueError):
-                    recent_scores.append(0.0)
-                fired = gate.feed(score, chunk_at)
-                missed = near.feed(recent_scores[-1], chunk_at)
-                if missed is not None and not fired:
-                    log.info(
-                        "wake score peaked %.3f, under the threshold %.2f: not a wake "
-                        "(scores %s)",
-                        missed, gate.threshold, wake_gate.format_scores(recent_scores),
-                    )
-                if not cooldown_logged and not gate.in_cooldown(chunk_at):
-                    cooldown_logged = True
-                    swallowed = gate.take_cooldown_peak()
-                    if swallowed is not None:
+                fired = False
+                fired_slug = self._wake_word
+                recent_scores = recents[fired_slug] if fired_slug in recents else deque()
+                for slug, word_gate in gates.items():
+                    scores = recents[slug]
+                    score = pred.get(slug, 0.0)
+                    try:
+                        scores.append(float(score))
+                    except (TypeError, ValueError):
+                        scores.append(0.0)
+                    which = f" {slug!r}" if many else ""
+                    if word_gate.feed(score, chunk_at) and not fired:
+                        fired, fired_slug = True, slug
+                        gate, recent_scores = word_gate, scores
+                    missed = nears[slug].feed(scores[-1], chunk_at)
+                    if missed is not None and not fired:
                         log.info(
-                            "wake word ignored in the %.1fs after the last turn "
-                            "(peak score %.3f, threshold %.2f)",
-                            gate.cooldown_sec, swallowed, gate.threshold,
+                            "wake%s score peaked %.3f, under the threshold %.2f: not a wake "
+                            "(scores %s)",
+                            which, missed, word_gate.threshold, wake_gate.format_scores(scores),
                         )
-                short = gate.take_short_run()
-                if short is not None:
-                    log.info(
-                        "wake score %.3f for %d chunk(s), %d needed in a row: not a wake "
-                        "(scores %s)",
-                        short[0], short[1], gate.patience,
-                        wake_gate.format_scores(recent_scores),
-                    )
+                    short = word_gate.take_short_run()
+                    if short is not None:
+                        log.info(
+                            "wake%s score %.3f for %d chunk(s), %d needed in a row: not a wake "
+                            "(scores %s)",
+                            which, short[0], short[1], word_gate.patience,
+                            wake_gate.format_scores(scores),
+                        )
+                if not cooldown_logged and not any(g.in_cooldown(chunk_at) for g in gates.values()):
+                    cooldown_logged = True
+                    for slug, word_gate in gates.items():
+                        swallowed = word_gate.take_cooldown_peak()
+                        if swallowed is not None:
+                            log.info(
+                                "wake word%s ignored in the %.1fs after the last turn "
+                                "(peak score %.3f, threshold %.2f)",
+                                f" {slug!r}" if many else "",
+                                word_gate.cooldown_sec, swallowed, word_gate.threshold,
+                            )
                 if fired:
                     woke_at = chunk_at
                     # For the capture's `utterance_start` (`wake_ms`,
-                    # `wake_score`).
+                    # `wake_score`, `wake_word`).
                     self._woke_at = woke_at
                     self._wake_score = gate.last_peak
+                    self._wake_fired = fired_slug
+                    # The other words' runs don't carry into the next listen.
+                    for g in gates.values():
+                        if g is not gate:
+                            g.reset()
                     # A turn is open from here until this thread is back at
                     # the top of this method: no music starts in it. Marked
                     # BEFORE the `_stop_music` below, which is what makes the
@@ -5924,12 +6167,13 @@ class Satellite(pc_engine.SpareDeviceEngine):
                     # The peak score, in the log ring: what a false wake from
                     # the TV scored is the number a threshold is tuned with.
                     log.info(
-                        "wake word detected (peak score %.3f over %d chunk(s); "
+                        "wake word%s detected (peak score %.3f over %d chunk(s); "
                         "threshold %.2f, %d in a row needed; scores %s)",
-                        gate.last_peak or 0.0, gate.last_run, gate.threshold, gate.patience,
-                        wake_gate.format_scores(recent_scores),
+                        f" {fired_slug!r}" if many else "", gate.last_peak or 0.0, gate.last_run, gate.threshold,
+                        gate.patience, wake_gate.format_scores(recent_scores),
                     )
-                    near.reset()
+                    for n in nears.values():
+                        n.reset()
                     # Network-degraded short-circuit — when the WS is
                     # genuinely down OR the watcher gave up on a
                     # reassociate, the server round-trip will
@@ -5973,7 +6217,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
                             self._drain_mic()
                             self._turn_open = False
                             # No server: a turn that went wrong.
-                            gate.quiet_for(time.monotonic())
+                            for g in gates.values():
+                                g.quiet_for(time.monotonic())
                             cooldown_logged = gate.cooldown_sec <= 0
                             continue  # back to listening
                     # Flip the LED to "listening" immediately so the
@@ -6635,6 +6880,28 @@ class Satellite(pc_engine.SpareDeviceEngine):
 
         return "shutdown"
 
+    def _wake_word_thresholds(self) -> dict[str, float]:
+        """Every word this room listens for and its threshold, main word
+        first: the main word at ``self._wake_threshold`` (what the room's
+        Wake sensitivity is), the extras `_load_wake_model` loaded
+        (``self._wake_thresholds``) at their own."""
+        out = {self._wake_word: self._wake_threshold}
+        for slug, threshold in (getattr(self, "_wake_thresholds", None) or {}).items():
+            out.setdefault(slug, threshold)
+        return out
+
+    def _wake_hit(self, pred: dict[str, Any]) -> str | None:
+        """The first of the room's words whose score in ``pred`` is over its
+        own threshold (one chunk: barge-in and the drop-in watch don't use
+        the patience), else None."""
+        for slug, threshold in self._wake_word_thresholds().items():
+            try:
+                if float(pred.get(slug, 0.0)) > threshold:
+                    return slug
+            except (TypeError, ValueError):
+                continue
+        return None
+
     def _await_response_with_wake_barge(self, oww) -> str:
         """Wake-word-gated barge: only the wake word interrupts playback.
 
@@ -6683,7 +6950,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 except Exception as e:
                     log.warning("wake-barge predict failed: %s", e)
                     continue
-                if pred.get(self._wake_word, 0.0) > self._wake_threshold:
+                if self._wake_hit(pred) is not None:
                     log.info("barge-in detected (wake word)")
                     self._emit_text({"type": "barge_in"})
                     self.stop_playback.set()
@@ -7139,8 +7406,10 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 except Exception as e:
                     log.warning("drop-in wake predict failed: %s", e)
                     continue
-                if pred.get(self._wake_word, 0.0) > self._wake_threshold:
+                hit = self._wake_hit(pred)
+                if hit is not None:
                     self._woke_at = time.monotonic()   # the capture's wake_ms
+                    self._wake_fired = hit
                     detected.set()
                     return
 
@@ -7254,7 +7523,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
             self._leds.set_state("idle")
         log.info("exiting wake-recording loop: %d/%d clips sent", recorded, target)
 
-    def _apply_wake_switch(self, slug: str | None, threshold: float | None = None) -> None:
+    def _apply_wake_switch(self, slug: str | None, threshold: float | None = None,
+                           words: list[dict[str, Any]] | None = None) -> None:
         """Persist a wake-model switch (a model pushed from the dashboard) so
         it survives restarts, mirror the model into the local cache, then
         restart the service to load it. ``threshold`` (the registry word's
@@ -7263,6 +7533,10 @@ class Satellite(pc_engine.SpareDeviceEngine):
         sensitivity the device uses (one number; the old separate threshold
         file overrode the setting unseen, 2026-11-11). No threshold → the
         [wake] setting stays as it is.
+
+        ``words`` (1.4.0): the room's whole list, ``slug`` first, each with
+        its own threshold; kept in WAKE_WORDS_SIDECAR. Without it (an older
+        core, or one word) the room runs ``slug`` alone.
 
         Writing the slug to WAKE_SIDECAR makes `_effective_wake_word` /
         `_effective_wake_model_path` resolve to ``<slug>`` + ``<slug>.onnx`` on
@@ -7289,6 +7563,17 @@ class Satellite(pc_engine.SpareDeviceEngine):
         except (OSError, ValueError) as e:
             log.warning("set_wake_word: could not persist %r: %s", slug, e)
             return
+        listed = [w for w in (words or []) if isinstance(w, dict) and w.get("slug")]
+        if not listed or listed[0]["slug"] != slug.strip():
+            listed = [{"slug": slug.strip(), "threshold": None}]
+        try:
+            wake_words.write_list(WAKE_WORDS_SIDECAR, listed)
+            if len(listed) > 1:
+                log.info("set_wake_word: also listening for %s (restart to apply)",
+                         ", ".join(repr(w["slug"]) for w in listed[1:]))
+        except (OSError, ValueError) as e:
+            # The main word still switches; the extras wait for the next push.
+            log.warning("set_wake_word: could not keep the extra wake words: %s", e)
         if value is None:
             # A word pushed without a threshold of its own uses the [wake]
             # setting, not one an earlier word left behind.
@@ -7609,6 +7894,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
     _woke_at: float | None = None
     # Its peak wake score (`wake_score`, satellite/wake_gate.py).
     _wake_score: float | None = None
+    # Which of the room's words fired it (`wake_word` in utterance_start).
+    _wake_fired: str | None = None
     # The last turn went wrong (ignored as background talk, cut off at the
     # recording cap, an error, no reply): the next wake waits out
     # [wake] cooldown_sec (satellite/wake_gate.py). Read once.
@@ -8230,14 +8517,21 @@ class Satellite(pc_engine.SpareDeviceEngine):
             # it does blocking HTTP + a service restart and must not stall the
             # asyncio receiver loop.
             slug = payload.get("slug")
+            # `words` (1.4.0): the room's whole list, main word first, sent
+            # only to a device whose hello gave `wake_words_max`.
+            words = wake_words.parse_words(payload.get("words")) or None
+            what = (f"the wake words {', '.join(repr(w['slug']) for w in words)} pushed to this room"
+                    if words and len(words) > 1 else f"the wake word {slug!r} pushed to this room")
             if self._held(
-                "wake_word", f"the wake word {slug!r} pushed to this room",
-                lambda s_=slug, t_=payload.get("threshold"): self._apply_wake_switch(s_, t_),
+                "wake_word", what,
+                lambda s_=slug, t_=payload.get("threshold"), w_=words:
+                    self._apply_wake_switch(s_, t_, words=w_),
             ):
                 return
             threading.Thread(
                 target=self._apply_wake_switch,
                 args=(slug, payload.get("threshold")),
+                kwargs={"words": words},
                 daemon=True,
                 name="set-wake-word",
             ).start()
@@ -8301,6 +8595,11 @@ class Satellite(pc_engine.SpareDeviceEngine):
             # push installed, else the [wake] config — so the
             # server's per-room view matches what we listen for.
             "wake_word": _effective_wake_word(self.cfg),
+            # Every word it listens for (main word first) and how many it
+            # can run at once (satellite/wake_words.py): the core never
+            # pushes more. An older core ignores both.
+            "wake_words": _hello_wake_words(self.cfg),
+            "wake_words_max": _wake_words_limit(self.cfg),
             # Version LABEL of the last applied self-upgrade (Feature
             # 10), so the dashboard can show which code this room runs.
             # None until the first upgrade lands. Supersedes the old
@@ -8315,7 +8614,11 @@ class Satellite(pc_engine.SpareDeviceEngine):
             # mismatch. None only if the sidecar couldn't be read/written
             # (degrades to a tokenless older-style hello).
             "pairing_token": _effective_pairing_token(),
-            "approval_code": _effective_approval_code(),
+            # Never to a server this device has seen prove approvals
+            # (SAT-16): that one is asked with the proof, or not at all.
+            "approval_code": (
+                _legacy_approval_code(self.cfg) if self._legacy_allowed else None
+            ),
             # Satellite kind ("voice" | "video") — drives which
             # per-type controls the dashboard offers, and is
             # persisted server-side for offline display.
@@ -8609,6 +8912,139 @@ class Satellite(pc_engine.SpareDeviceEngine):
         except Exception:
             pass
 
+    _house_pairing: Any = None
+    _house_status: str | None = None
+    _code_said_at: float | None = None
+    _legacy_reported: frozenset = frozenset()
+    _budget_reported: bool = False
+    # SAT-16: the one-server flow is re-decided before EVERY session that
+    # would ask the old way, not once per boot.
+    _house_mode: str | None = None
+    _legacy_allowed: bool = True
+    _house_probe_stale: bool = False
+    _one_house_said: str | None = None
+
+    async def _start_house_pairing(self) -> None:
+        """Decide whether this device asks houses (``_house_pairing_mode``)
+        and build the coordinator. A pinned or typed server that PROVED,
+        just now, that it cannot prove approvals gets the old way — the
+        code in the hello. Anything else that leaves the single-server flow
+        in charge (no answer, an answer that did not verify, a server this
+        device has seen prove approvals before) gets the session WITHOUT
+        the code (``_legacy_allowed`` False): it still connects, so a
+        server that moved is found again and an older one hands out its
+        own code, but nothing in the hello is worth stripping an advert
+        for."""
+        mode = _house_pairing_mode(self.cfg)
+        self._house_mode = mode
+        self._legacy_allowed = True
+        self._house_probe_stale = False
+        if mode is None:
+            return
+        anchor = None
+        if mode == "one-house":
+            status, anchor = await asyncio.to_thread(_probe_one_house, self.cfg)
+            if status != "proof":
+                self._legacy_allowed = status == "legacy"
+                if status != self._one_house_said:
+                    if status == "legacy":
+                        log.info("the server this device was set up for cannot prove an "
+                                 "approval (it signed so): asking it the way older "
+                                 "servers are asked")
+                    else:
+                        log.info("the server this device was set up for did not answer "
+                                 "in a way that can be checked: connecting without "
+                                 "this device's code, and asking again next time")
+                self._one_house_said = status
+                return
+        try:
+            self._house_pairing = _new_house_pairing(self.cfg, mode, anchor,
+                                                     hello=self._hello_frame)
+        except ValueError as e:
+            log.warning("cannot ask for a provable approval: %s", e)
+            self._house_pairing = None
+
+    async def _before_legacy_session(self) -> str:
+        """SAT-16: before every session of a device that is not approved yet
+        and whose ONE server was chosen for it (a typed address, a pinned
+        key), ask that server again whether it can prove an approval — not
+        once per boot. ``"proof"`` (a coordinator is ready: ask it that
+        way) or ``"legacy"``: the session the device always opened, with
+        its code in the hello only when the server signed just now that
+        it cannot prove an approval (``_legacy_allowed``)."""
+        if self._house_mode != "one-house":
+            return "legacy"
+        if self._house_probe_stale:
+            await self._start_house_pairing()
+            if self._house_pairing is not None:
+                return "proof"
+        self._house_probe_stale = True
+        return "legacy"
+
+    async def _house_pairing_round(self) -> bool:
+        """One round of asking. True once a house has proved this device's
+        code and is now this device's server (the caller connects at once)."""
+        coord = self._house_pairing
+        try:
+            rnd = await coord.round()
+        except Exception as e:  # noqa: BLE001 — never take the run loop down
+            log.warning("asking for approval failed this round: %s", e)
+            return False
+        if rnd.approved is not None:
+            house = rnd.approved
+            await asyncio.to_thread(_adopt_approved_house, self.cfg, CONFIG_PATH,
+                                    house, coord.token_for(house))
+            gone = await coord.withdraw_others(house)
+            if coord.asked:
+                log.info("withdrew this device's request from %d other server(s)", gone)
+            self._house_pairing = None
+            self._house_status = None
+            return True
+        legacy = frozenset(h.url for h in rnd.legacy)
+        if legacy and legacy != self._legacy_reported:
+            log.warning(
+                "found Domovoi server(s) at %s that cannot prove an approval (older "
+                "than 1.4.0). This device does not ask them: update that server, "
+                "or set its address in the setup portal to use it as it is",
+                ", ".join(sorted(legacy)),
+            )
+        self._legacy_reported = legacy
+        if rnd.budget_spent:
+            if not self._budget_reported:
+                wait = coord.budget.retry_after()
+                log.warning(
+                    "this device has checked as many typed codes as it may for now "
+                    "(%d per %d minutes, %d a day); it keeps its requests alive and "
+                    "declines to check another %s — a code typed meanwhile waits",
+                    coord.budget.max_attempts, int(coord.budget.window_sec // 60),
+                    coord.budget.daily_max,
+                    "until it restarts with a working budget file" if wait == float("inf")
+                    else f"for {int(wait)} s",
+                )
+            self._budget_reported = True
+        else:
+            self._budget_reported = False
+        for url, result in rnd.visits.items():
+            if result.kind == "mismatch":
+                log.warning("a code typed on the dashboard of %s is not this "
+                            "device's code — still waiting", url)
+        status = "parked" if rnd.parked else "none"
+        if status == "parked":
+            if self._house_status != "parked":
+                await asyncio.to_thread(_setup_status, "awaiting-approval")
+                log.info("waiting for approval on %d server(s): %s", len(rnd.parked),
+                         ", ".join(f"{h.url} ({h.name})" for h in rnd.parked))
+            now = time.monotonic()
+            if self._code_said_at is None or now - self._code_said_at >= _SAY_CODE_EVERY_SEC:
+                self._code_said_at = now
+                await asyncio.to_thread(_setup_status, "say-code", coord.code)
+        elif self._house_status != "none" and not rnd.budget_spent:
+            await asyncio.to_thread(_setup_status, "no-server")
+            log.warning("no Domovoi server that can prove an approval answered "
+                        "on this network; looking again")
+        self._house_status = status
+        return False
+
     async def run(self) -> None:
         self.loop = asyncio.get_running_loop()
         self._async_shutdown = asyncio.Event()
@@ -8767,12 +9203,29 @@ class Satellite(pc_engine.SpareDeviceEngine):
             self._health_thread.start()
 
         try:
+            # Not approved yet, and no server chosen (or one that can prove
+            # an approval): ask the houses first (satellite/house_pairing.py)
+            # and only open a session once one has proved this device's code.
+            await self._start_house_pairing()
             backoff = 1.0
             # Consecutive CONNECTION failures. A session that ends normally -
             # including one the core rejects, which has its own colour - means
             # the server was reachable, so it resets this.
             unreachable = 0
             while not self.shutdown_event.is_set():
+                if self._house_pairing is not None:
+                    if await self._house_pairing_round():
+                        continue        # approved: connect to it now
+                    try:
+                        await asyncio.wait_for(self._async_shutdown.wait(),
+                                               timeout=_HOUSE_ASK_EVERY_SEC)
+                        break
+                    except asyncio.TimeoutError:
+                        continue
+                    except asyncio.CancelledError:
+                        break
+                if await self._before_legacy_session() == "proof":
+                    continue            # it proves approvals now: ask it that way
                 try:
                     await self._run_session()
                     unreachable = 0
@@ -8905,6 +9358,9 @@ _RELOCATE_EVERY_SEC = 600.0
 # the core closed before `ready` (refused, parked), which used to reset
 # the backoff to 1 s and redial at about 1 Hz for as long as it lasted.
 _BACKOFF_MAX_SEC = 60.0
+# Every-house approval (satellite/house_pairing.py): how often each house
+# is asked again while the device waits.
+_HOUSE_ASK_EVERY_SEC = 10.0
 
 
 def _mb(kb: Any) -> str | None:
@@ -9812,6 +10268,267 @@ def _adopt_located(cfg: "Config", config_path: Path, found: Any, is_auto: bool) 
                         "it shows the old one until it is restarted")
 
 
+# ─── asking every house (1.4.0, satellite/house_pairing.py) ───────────────
+
+# What the device remembers of the challenges it answered (its budget).
+APPROVAL_BUDGET_PATH = CONFIG_DIR / "approval-proof-budget.json"
+# How often the code is said again while the device waits (the single-server
+# flow says it on every retry, which backs off to a minute).
+_SAY_CODE_EVERY_SEC = 60.0
+
+
+def _house_pairing_mode(cfg: "Config") -> str | None:
+    """How a device that is not approved yet looks for approval:
+
+    * ``"every-house"`` — no server address (``auto``) and no server key
+      from the card or config.toml: ask EVERY Domovoi server it finds,
+      and join the one that proves this device's code;
+    * ``"one-house"`` — an address typed in the portal, or a pinned key:
+      that one server only; the proof is used when the server offers it,
+      the old way otherwise (the person or the card already chose it);
+    * None — approved already, a spare computer (pinned by its enrolment
+      code, its own flow), or no pairing token to derive from: the
+      single-server flow, exactly as before."""
+    from satellite import discovery
+
+    if pc_engine.is_pc(cfg):
+        return None
+    try:
+        opened, _why = _approval_decision()
+    except Exception:  # noqa: BLE001 — undecidable: the flow that always ran
+        return None
+    if opened:
+        return None
+    configured = (cfg.domovoi_url or "").strip()
+    is_auto = not configured or configured.lower() == discovery.AUTO
+    _expected, source = _pinned_fingerprint(cfg)
+    # A fingerprint "recorded" on first contact is not a choice anyone
+    # made: it is exactly the first-server-wins this replaces.
+    if is_auto and source in ("none", "recorded"):
+        return "every-house"
+    return "one-house"
+
+
+def _proof_code() -> str:
+    """The six-digit code this device proves approvals with: the setup
+    portal's, or — on a device that has none, or an older four-digit one —
+    a fresh one, kept in the same sidecar and said the same way."""
+    from satellite import pairing_proof
+
+    code = _effective_approval_code()
+    if pairing_proof.valid_code(code):
+        return code
+    fresh = f"{secrets.randbelow(10 ** pairing_proof.CODE_DIGITS):0{pairing_proof.CODE_DIGITS}d}"
+    return _remember_approval_code(fresh) or fresh
+
+
+# The servers this device has seen SIGN that they prove approvals (by
+# fingerprint). One of them is never asked the old way again, whatever a
+# later answer says — an answer can be changed on the way (SAT-16).
+APPROVAL_PROOF_SERVERS_PATH = CONFIG_DIR / "approval-proof-servers.json"
+
+
+def _proof_servers() -> set[str]:
+    try:
+        doc = json.loads(APPROVAL_PROOF_SERVERS_PATH.read_text(encoding="utf-8"))
+        return {str(f) for f in doc.get("fingerprints", []) if isinstance(f, str)}
+    except (OSError, ValueError, AttributeError, TypeError):
+        return set()
+
+
+def _remember_proof_server(fingerprint: str | None) -> None:
+    if not fingerprint:
+        return
+    known = _proof_servers()
+    if fingerprint in known:
+        return
+    known.add(fingerprint)
+    tmp = APPROVAL_PROOF_SERVERS_PATH.with_name(APPROVAL_PROOF_SERVERS_PATH.name + ".tmp")
+    try:
+        APPROVAL_PROOF_SERVERS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps({"fingerprints": sorted(known)}), encoding="utf-8")
+        os.replace(tmp, APPROVAL_PROOF_SERVERS_PATH)
+    except OSError as e:
+        log.warning("could not remember that %s proves approvals: %s", fingerprint, e)
+
+
+def _proof_server_remembered(*fingerprints: str | None) -> bool:
+    known = _proof_servers()
+    return any(f and f in known for f in fingerprints)
+
+
+def _legacy_approval_code(cfg: "Config") -> str | None:
+    """The code the old flow puts in the hello — None for a server this
+    device has seen prove approvals (its pinned key is remembered)."""
+    try:
+        expected, _source = _pinned_fingerprint(cfg)
+    except Exception:  # noqa: BLE001 — undecidable: the hello it always sent
+        expected = None
+    if expected and _proof_server_remembered(expected):
+        return None
+    return _effective_approval_code()
+
+
+def _probe_one_house(cfg: "Config") -> tuple[str, Any]:
+    """Ask the single server a typed address or a pinned key names whether
+    it proves approvals, and how far to trust the answer:
+
+    * ``("proof", House)`` — it SIGNED ``pairing_proof >= 1`` for the
+      address dialled (and the pinned key, if any): use the proof. It is
+      remembered on disk, so it is never asked the old way again;
+    * ``("legacy", None)`` — it proved its identity (or, on a device with
+      no pin, offered none at all: a server from before identities) and
+      signed that it does NOT prove approvals: an older server, which the
+      person or the card chose — the old flow, as before;
+    * ``("unknown", None)`` — no answer, an answer that did not verify (a
+      stripped or changed advert, a relay, another key), or a "no" from a
+      server this device has seen say yes: nothing is sent the old way;
+      the caller asks again shortly."""
+    from satellite import discovery
+
+    expected, _source = _pinned_fingerprint(cfg)
+    configured = (cfg.domovoi_url or "").strip()
+    url = configured if configured and configured.lower() != discovery.AUTO else None
+    if url is None:
+        found, _is_auto, _last = _locate_server(cfg)
+        url = found.url if found is not None else None
+    if not url:
+        return "unknown", None
+    host, port = discovery.host_port_of(url)
+    if not host:
+        return "unknown", None
+    scheme = "https" if url.lower().startswith("wss://") else "http"
+    house = discovery.probe_house(host, port=port, timeout=2.0, scheme=scheme,
+                                  expected_fingerprint=expected)
+    if house is None:
+        return "unknown", None
+    if house.proof and house.fingerprint and (not expected or house.fingerprint == expected):
+        _remember_proof_server(house.fingerprint)
+        return "proof", discovery.House(url=url, fingerprint=house.fingerprint, proof=True,
+                                        name=house.name, via="address", identity="proved")
+    if _proof_server_remembered(expected, house.fingerprint):
+        log.error(
+            "%s has proved before that it can prove an approval, and now says it "
+            "cannot (or its answer was changed on the way): not asking it the old way",
+            url,
+        )
+        return "unknown", None
+    if house.identity == "proved" or (house.identity == "absent" and not expected):
+        return "legacy", None
+    return "unknown", None
+
+
+def _one_house(cfg: "Config") -> Any:
+    """The single server a typed address or a pinned key names, as a
+    ``discovery.House`` when it proves approvals right now, else None."""
+    status, house = _probe_one_house(cfg)
+    return house if status == "proof" else None
+
+
+def _verify_house(house: Any) -> bool:
+    """Before each visit: the server at this address still proves the key
+    the exchange will be bound to (a signature over a fresh nonce AND the
+    address dialled)."""
+    from satellite import discovery, server_identity
+
+    try:
+        server_identity.verify_server(
+            discovery.http_base_of(house.url), expected_fingerprint=house.fingerprint,
+        )
+    except server_identity.IdentityError as e:
+        log.info("%s did not prove its identity this time: %s", house.url, e)
+        return False
+    return True
+
+
+def _discover_houses() -> list[Any]:
+    from satellite import discovery, server_identity
+
+    pending, _fp = server_identity.read_pending_server()
+    # Everything found: the coordinator chooses who is asked
+    # (discovery.choose_houses), not the order hosts answered in.
+    return discovery.locate_all(names=discovery.server_names(), last_known=pending, cap=None)
+
+
+def _new_house_pairing(cfg: "Config", mode: str, anchor: Any,
+                       hello: Any) -> Any:
+    """The coordinator for ``mode`` (every house, or the one ``anchor``).
+    ``hello`` builds the hello every visit starts from (the session's, so a
+    house sees the same board and kind it always did)."""
+    from satellite import house_pairing
+
+    master = _effective_pairing_token()
+    if not master:
+        return None
+    if mode == "one-house":
+        if anchor is None:
+            return None
+
+        def discover() -> list[Any]:
+            again = _one_house(cfg)
+            return [again] if again is not None else []
+    else:
+        discover = _discover_houses
+    return house_pairing.Coordinator(
+        room_id=cfg.room_id,
+        code=_proof_code(),
+        master_token=master,
+        hello=hello,
+        discover=discover,
+        connect=lambda url: websockets.connect(url, max_size=2**20, open_timeout=10),
+        budget=house_pairing.ProofBudget(APPROVAL_BUDGET_PATH),
+        verify=_verify_house,
+    )
+
+
+def _adopt_approved_house(cfg: "Config", config_path: Path, house: Any, token: str) -> None:
+    """A house proved this device's code: make it THE server. Its own
+    pairing token replaces the device's (the one it was approved with),
+    and its address and key go into config.toml — from here on the device
+    talks to that key-checked server only, exactly like one approved the
+    old way."""
+    global _PAIRING_TOKEN_OVERRIDE
+    from satellite import config_writer, server_identity
+
+    _PAIRING_TOKEN_OVERRIDE = token
+    tmp = PAIRING_TOKEN_SIDECAR.with_name(PAIRING_TOKEN_SIDECAR.name + ".tmp")
+    try:
+        PAIRING_TOKEN_SIDECAR.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(token + "\n", encoding="utf-8")
+        try:
+            tmp.chmod(0o600)
+        except OSError:
+            pass
+        os.replace(tmp, PAIRING_TOKEN_SIDECAR)
+    except OSError as e:
+        log.error("approved, but could not save this server's pairing key (%s); it is "
+                  "used from memory until the next restart", e)
+    cfg.domovoi_url = house.url
+    cfg.server_fingerprint = house.fingerprint or ""
+    changes: dict[str, object] = {"satellite.domovoi_url": house.url}
+    if house.fingerprint:
+        changes["satellite.server_fingerprint"] = house.fingerprint
+    ctmp = config_path.with_name(config_path.name + ".tmp")
+    try:
+        original = config_path.read_text(encoding="utf-8")
+        ctmp.write_text(config_writer.apply_changes(original, changes),
+                        encoding="utf-8", newline="\n")
+        os.replace(ctmp, config_path)
+    except OSError as e:
+        log.warning("approved, but could not save %s to %s: %s", house.url, config_path, e)
+    # The proof IS the approval: record it now, not at the first `ready`.
+    # A restart in between used to come back asking that one server for a
+    # proof the core no longer runs (the room is bound), ignore its plain
+    # `ready` as unproven, and stay half-paired until Reset pairing.
+    _remember_approved()
+    server_identity.clear_pending_server()
+    log.info(
+        "approved by the Domovoi server at %s (%s%s): it proved it knows this "
+        "device's code. Saved; this device talks to that server only from now on",
+        house.url, house.fingerprint, f", {house.name}" if house.name else "",
+    )
+
+
 def _resolve_server_url(cfg: "Config", config_path: Path) -> bool:
     """Find this boot's server address.
 
@@ -9832,6 +10549,16 @@ def _resolve_server_url(cfg: "Config", config_path: Path) -> bool:
     A device with no pinned fingerprint and an address someone typed keeps
     that address untouched: there is no identity to hold a name to.
     """
+    if _house_pairing_mode(cfg) == "every-house":
+        # Not one server: every one it can find, asked by the run loop
+        # (satellite/house_pairing.py). Nothing to pick here, and nothing to
+        # write down until one of them proves the code.
+        log.info(
+            "no server address and no server key: this device asks every "
+            "Domovoi server it finds for approval, and joins the one that "
+            "proves it knows this device's code"
+        )
+        return True
     found, is_auto, last_known = _locate_server(cfg)
     if found is not None:
         _adopt_located(cfg, config_path, found, is_auto)

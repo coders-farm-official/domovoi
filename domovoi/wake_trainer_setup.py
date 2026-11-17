@@ -486,7 +486,7 @@ async def requirements(force: bool = False) -> dict[str, Any]:
 
     if egress.internet_turned_off():
         refusals.append(
-            "Internet access is turned off for this server (Settings → Internet), and "
+            "Internet access is turned off for this server (Settings → Privacy → Internet), and "
             f"training downloads about {DOWNLOAD_GB} GB the first time."
         )
     if not info.get("ok"):
@@ -972,7 +972,7 @@ def on_internet_answer() -> None:
     build or the 18 GB download) and the update's image rebuild stop."""
     if not egress.internet_turned_off():
         return
-    reason = "internet access was turned off (Settings > Internet)"
+    reason = "internet access was turned off (Settings > Privacy > Internet)"
     cancel_job(reason)
     try:
         loop = asyncio.get_running_loop()

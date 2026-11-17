@@ -18,17 +18,20 @@ journal, so the log says where the code is, never what it is.
 with **argon2id**, and deletes the code file.
 ``POST /api/auth/login`` verifies the password (behind a per-source
 exponential backoff that counts the attempt BEFORE the verify) and mints
-a 256-bit bearer token of which only the sha256 is stored, with a
-**30-day sliding expiry** under a **90-day absolute cap**. Mutating admin
+a 256-bit bearer token of which only the sha256 is stored. A session
+**ends after :data:`SESSION_IDLE_TIMEOUT_MIN` (1 hour) without an admin
+action** — a write that passed an admin write gate with the Bearer
+(:func:`is_admin_activity`); reads, polls, sockets and resumes never
+count — under a **90-day absolute cap**. Mutating admin
 endpoints accept ONLY ``Authorization: Bearer`` — the ``SameSite=Strict``
 cookie set at login is a secret of its own, never the Bearer
 (:func:`issue_session_cookie`): it lets plain GET page loads render
 authenticated state (CSRF: a cross-site POST carries nothing that
-authorizes it), and for the reload window after the password was proved
-(default 60 minutes) lets the page that holds it take its Bearer back
-(``POST /api/auth/resume``: same origin, ``X-Requested-With``;
-:func:`resume_session`). The cookie itself authorizes no mutation
-anywhere. Changing the password
+authorizes it), and inside the reload window — the idle hour, counted
+from the session's last admin action — lets the page that holds it take
+its Bearer back (``POST /api/auth/resume``: same origin,
+``X-Requested-With``; :func:`resume_session`). The cookie itself
+authorizes no mutation anywhere. Changing the password
 revokes every other session.
 ``python -m domovoi.main --reset-admin`` clears the credential + sessions
 and regenerates the setup code.
@@ -94,18 +97,43 @@ from fastapi import Depends, HTTPException, Request
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from domovoi.config import ADMIN_RELOAD_WINDOW_MAX_MIN
+from domovoi.config import ADMIN_IDLE_TIMEOUT_MIN, ADMIN_RELOAD_WINDOW_MAX_MIN
 from domovoi.db.session import session_scope
 
 log = logging.getLogger(__name__)
 
 # ─── Tunables (module constants; tests monkeypatch these) ─────────────────
 
-SESSION_TTL_DAYS = 30
+# The idle timeout (2026-11-16: a dashboard tab left open all night was
+# still admin in the morning and updated the server with no password). A
+# session ends this long after its last ADMIN ACTION — a write that passed
+# an admin write gate with the session's Bearer (:func:`is_admin_activity`).
+# Nothing a page does by itself counts: status and health polls, the
+# version check, the state socket, a reload taking its sign-in back. One
+# number, in domovoi/config.py; the dashboard reads it off the auth
+# answers (``idle_timeout_min``) and says it in words.
+#
+# It replaces the 30-day sliding expiry, which an hour of idleness always
+# beats: a session can only reach 30 days by acting at least once an hour
+# for 30 days. ``expires_at`` is now the idle deadline itself.
+SESSION_IDLE_TIMEOUT_MIN = ADMIN_IDLE_TIMEOUT_MIN
 # Absolute cap on a session's life: however often it is used, a token
-# minted more than this long ago is refused and its sliding expiry never
+# minted more than this long ago is refused and its idle deadline never
 # extends past ``created_at + SESSION_MAX_AGE_DAYS``.
 SESSION_MAX_AGE_DAYS = 90
+# How far in the FUTURE a session's last-activity stamp may sit and still
+# count. All the stamps and every comparison use the database's own clock
+# (``now()``), so the two processes, the phones and the browsers can never
+# disagree about an hour; the only skew left is that clock stepping BACK
+# after a stamp. A stamp further ahead than this is refused rather than
+# trusted: otherwise a step back of a day would keep an idle session alive
+# for a day. The slack is what an NTP correction looks like.
+SESSION_CLOCK_SLACK_SEC = 60.0
+# A dead session's row is deleted at the next sign-in once it has been
+# dead this long. The day in between lets a tab that idled out still be
+# told "signed out after an hour without admin activity" rather than
+# "your sign-in has ended" (:func:`session_end_reason`).
+SESSION_PRUNE_AFTER_DAYS = 1
 # The setup code is single-use AND time-boxed: a code file older than this
 # is refused by ``verify_setup_code`` and replaced by the next core boot
 # (with a fresh banner when the core runs in a terminal). Sized to the day
@@ -448,47 +476,220 @@ def token_sha256(token: str) -> str:
 _sha256 = token_sha256  # internal alias
 
 
+# ─── When a session is live: the idle hour and the 90-day cap ─────────────
+#
+# The model (2026-11-16): a session is ONE password sign-in — one row,
+# one Bearer, one browser cookie. Tabs of the browser that signed in share
+# it (a reload or a new tab resumes that same row); another browser, another
+# device, or a second sign-in in the same browser is another row with its
+# own idle clock. So one device's activity never keeps another's session
+# alive.
+#
+# ``last_used_at`` is the session's last ADMIN ACTION (it used to be
+# stamped by every use, polls included, which is how a forgotten tab stayed
+# admin for weeks). A session that has not acted since it was minted counts
+# from ``created_at``; a sign-in stamps both. A session minted before this
+# change keeps its old ``last_used_at`` — the last request it made, polls
+# included — so a tab that was open across the update stays admin for at
+# most one more hour unless someone acts in it, and nobody is signed out
+# in the middle of the update itself.
+
+# When the session last acted (or, never having acted, was minted).
+_LAST_ACTIVE_SQL = "COALESCE(last_used_at, created_at)"
+# When it stops: an hour after that, or at the 90-day cap if sooner.
+_IDLE_DEADLINE_SQL = (
+    f"LEAST({_LAST_ACTIVE_SQL} + make_interval(mins => :idle_min), "
+    "created_at + make_interval(days => :max_age_days))"
+)
+# The deadline an admin action RIGHT NOW sets: what ``expires_at`` holds.
+_DEADLINE_FROM_NOW_SQL = (
+    "LEAST(now() + make_interval(mins => :idle_min), "
+    "created_at + make_interval(days => :max_age_days))"
+)
+# A live session by its row's own rules. ``expires_at`` is the idle
+# deadline for every session this code wrote; for one from before it is the
+# old 30-day expiry, which the last-activity rule bounds. A last-activity
+# stamp from the future (the database clock stepped back) beyond the slack
+# is refused, never trusted to stretch the hour.
+_SESSION_LIVE_SQL = (
+    "expires_at > now() "
+    "AND created_at > now() - make_interval(days => :max_age_days) "
+    f"AND {_LAST_ACTIVE_SQL} > now() - make_interval(mins => :idle_min) "
+    f"AND {_LAST_ACTIVE_SQL} <= now() + make_interval(secs => :slack_sec)"
+)
+
+
+def _clock_params() -> dict[str, Any]:
+    """The bind values every statement above needs, read at call time so a
+    test that monkeypatches a tunable gets what it set."""
+    return {
+        "idle_min": int(SESSION_IDLE_TIMEOUT_MIN),
+        "max_age_days": int(SESSION_MAX_AGE_DAYS),
+        "slack_sec": float(SESSION_CLOCK_SLACK_SEC),
+    }
+
+
+_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+
+def is_admin_activity(conn: Any) -> bool:
+    """Whether a request that passes an admin WRITE gate counts as the
+    person acting — the only thing that moves a session's idle clock.
+
+    How the two kinds of request are told apart, and why this way: the
+    activity is MARKED BY THE SERVER, never claimed by the client. Only
+    the admin write gates (:func:`require_admin_mutation`,
+    :func:`require_admin_security`, :func:`domovoi.auth.require_admin`,
+    the plugin SDK's ``admin_required`` and the web's own session and
+    password routes) ask for it, and only for a request whose HTTP method
+    changes something. Everything else that checks a Bearer — the admin
+    reads, the device tier's admin fallback, the "is this caller an admin?"
+    probes, a WebSocket upgrade, the reload resume — checks it read-only.
+
+    A header the dashboard set on "user-initiated" calls was the other
+    choice, and the worse one: every call site would have to remember it,
+    a missed one silently stops counting (or a background one silently
+    starts), and any script holding the Bearer adds the header to a poll
+    and keeps the session alive for ever. Here a script that wants to keep
+    a session alive has to keep CHANGING things as admin, which is what an
+    admin does, and the 90-day cap ends even that. Every write the
+    dashboard sends by itself (device registration, presence, listens, up
+    next, printer discovery) is on the device tier and answered by the
+    household token before the admin check runs."""
+    scope = getattr(conn, "scope", None) or {}
+    if scope.get("type") != "http":
+        return False   # a WebSocket upgrade is never the person acting
+    return str(scope.get("method") or "").upper() not in _SAFE_METHODS
+
+
+async def prune_dead_sessions(session: AsyncSession) -> int:
+    """Delete sessions that have been over (idle, expired or past the cap)
+    for :data:`SESSION_PRUNE_AFTER_DAYS`. Run at each sign-in, so the table
+    holds the live sessions and the recently ended ones and nothing else."""
+    result = await session.execute(
+        text(
+            "DELETE FROM admin_sessions WHERE "
+            f"LEAST(expires_at, {_IDLE_DEADLINE_SQL}) "
+            "< now() - make_interval(days => :prune_days) RETURNING 1"
+        ),
+        {**_clock_params(), "prune_days": int(SESSION_PRUNE_AFTER_DAYS)},
+    )
+    return len(result.all())
+
+
 async def create_session(session: AsyncSession, label: str | None = None) -> str:
     """Mint a 256-bit bearer token; store only its sha256. Returns the
     raw token — the ONLY time it exists outside the caller's memory.
 
     Called only once the password (login) or the setup code plus a new
     password (first-run setup) has been proved, so the row is stamped
-    ``signed_in_at = now()``: the moment the reload window
-    (:func:`resume_session`) counts from."""
+    ``signed_in_at = now()`` and ``last_used_at = now()``: signing in is
+    the first admin action, and the idle hour counts from it."""
+    await prune_dead_sessions(session)
     token = secrets.token_hex(32)  # 256 bits
     await session.execute(
         text(
-            "INSERT INTO admin_sessions (token_hash, label, expires_at, signed_in_at) "
-            f"VALUES (:h, :label, now() + interval '{SESSION_TTL_DAYS} days', now())"
+            "INSERT INTO admin_sessions "
+            "(token_hash, label, expires_at, signed_in_at, last_used_at) "
+            "VALUES (:h, :label, now() + make_interval(mins => :idle_min), now(), now())"
         ),
-        {"h": _sha256(token), "label": label},
+        {"h": _sha256(token), "label": label, "idle_min": int(SESSION_IDLE_TIMEOUT_MIN)},
     )
     return token
 
 
-async def validate_token(session: AsyncSession, token: str) -> bool:
-    """True iff the token maps to a live session. SLIDES the expiry
-    (§7.3: 30-day sliding) and stamps ``last_used_at`` on success — but
-    never past ``created_at + SESSION_MAX_AGE_DAYS``: a session older than
-    the absolute cap is refused however recently it was used."""
+async def validate_token(
+    session: AsyncSession, token: str | None, *, activity: bool = False
+) -> bool:
+    """True iff the token maps to a live session: inside its idle hour and
+    its 90-day cap.
+
+    ``activity=True`` (an admin action: see :func:`is_admin_activity`)
+    also stamps ``last_used_at = now()`` and moves ``expires_at`` to an
+    hour from now — never past ``created_at + SESSION_MAX_AGE_DAYS``. One
+    statement, so nothing can end the session between the check and the
+    stamp. Without it this is a pure read: a poll, a socket or a page load
+    holding the Bearer writes nothing and moves nothing."""
     if not token:
         return False
+    params = {"h": _sha256(token), **_clock_params()}
+    if activity:
+        stmt = (
+            "UPDATE admin_sessions SET last_used_at = now(), "
+            f"expires_at = {_DEADLINE_FROM_NOW_SQL} "
+            f"WHERE token_hash = :h AND {_SESSION_LIVE_SQL} RETURNING 1"
+        )
+    else:
+        stmt = f"SELECT 1 FROM admin_sessions WHERE token_hash = :h AND {_SESSION_LIVE_SQL}"
+    row = (await session.execute(text(stmt), params)).first()
+    return row is not None
+
+
+@dataclass(frozen=True)
+class IdleClock:
+    """When a live session idles out, by the DATABASE's clock, and how
+    many whole seconds of it are left (rounded up, so at least 1 while it
+    is live). A browser counts from ``remaining_sec`` on its own clock,
+    never from ``until`` — the same rule as :class:`ResumeWindow`."""
+
+    until: datetime
+    remaining_sec: int
+
+    def as_json(self) -> dict[str, Any]:
+        return {"idle_until": self.until.isoformat(), "idle_in_sec": self.remaining_sec}
+
+
+async def session_idle_clock(
+    session: AsyncSession, *, token: str | None = None, cookie: str | None = None
+) -> IdleClock | None:
+    """Read-only: the idle clock of the live session ``token`` (the
+    Bearer) or else ``cookie`` (the browser cookie) names; None when it
+    names no live session. Moves nothing — the status probe calls it."""
+    if token:
+        where, value = "token_hash = :k", _sha256(token)
+    elif cookie:
+        where, value = "cookie_hash = :k", _sha256(cookie)
+    else:
+        return None
     row = (
         await session.execute(
             text(
-                "UPDATE admin_sessions SET last_used_at = now(), "
-                "expires_at = LEAST("
-                f"now() + interval '{SESSION_TTL_DAYS} days', "
-                f"created_at + interval '{SESSION_MAX_AGE_DAYS} days') "
-                "WHERE token_hash = :h AND expires_at > now() "
-                f"AND created_at > now() - interval '{SESSION_MAX_AGE_DAYS} days' "
-                "RETURNING 1"
+                f"SELECT {_IDLE_DEADLINE_SQL} AS until, "
+                f"ceil(EXTRACT(EPOCH FROM ({_IDLE_DEADLINE_SQL} - now())))::int AS remaining "
+                f"FROM admin_sessions WHERE {where} AND {_SESSION_LIVE_SQL}"
             ),
-            {"h": _sha256(token)},
+            {"k": value, **_clock_params()},
         )
     ).first()
-    return row is not None
+    if row is None:
+        return None
+    return IdleClock(until=row.until, remaining_sec=max(1, int(row.remaining)))
+
+
+SessionEnd = Literal["idle", "ended"]
+
+
+async def session_end_reason(session: AsyncSession, token: str | None) -> SessionEnd | None:
+    """Why the session ``token`` names is over, for the page that held it:
+    ``"idle"`` when it ran out its hour without an admin action (inside
+    its 90-day cap), ``"ended"`` for anything else (signed out, revoked,
+    a password change elsewhere, the cap, or a row long since pruned).
+    None while it is live. Read-only."""
+    if not token:
+        return None
+    if await validate_token(session, token):
+        return None
+    row = (
+        await session.execute(
+            text(
+                "SELECT 1 FROM admin_sessions WHERE token_hash = :h "
+                "AND created_at > now() - make_interval(days => :max_age_days) "
+                f"AND {_LAST_ACTIVE_SQL} <= now() - make_interval(mins => :idle_min)"
+            ),
+            {"h": _sha256(token), **_clock_params()},
+        )
+    ).first()
+    return "idle" if row is not None else "ended"
 
 
 async def revoke_session(session: AsyncSession, token_hash: str) -> bool:
@@ -571,31 +772,18 @@ async def issue_session_cookie(session: AsyncSession, token: str) -> str:
     return cookie
 
 
-# A live session by the row's own rules: the sliding expiry and the 90-day
-# cap. Shared by the cookie's checks below.
-_SESSION_LIVE_SQL = (
-    "expires_at > now() "
-    f"AND created_at > now() - interval '{SESSION_MAX_AGE_DAYS} days'"
-)
-
-
 async def validate_cookie(session: AsyncSession, cookie: str | None) -> bool:
     """:func:`validate_token` for the browser cookie: True iff it names a
-    live session, sliding that session's expiry like any use. A pre-V028
-    cookie (the raw Bearer) matches nothing."""
+    live session. Read-only: the cookie authorizes no change, so nothing it
+    does is an admin action, and a page load (or a script reloading one)
+    never keeps a session alive. A pre-V028 cookie (the raw Bearer)
+    matches nothing."""
     if not cookie:
         return False
     row = (
         await session.execute(
-            text(
-                "UPDATE admin_sessions SET last_used_at = now(), "
-                "expires_at = LEAST("
-                f"now() + interval '{SESSION_TTL_DAYS} days', "
-                f"created_at + interval '{SESSION_MAX_AGE_DAYS} days') "
-                f"WHERE cookie_hash = :ch AND {_SESSION_LIVE_SQL} "
-                "RETURNING 1"
-            ),
-            {"ch": _sha256(cookie)},
+            text(f"SELECT 1 FROM admin_sessions WHERE cookie_hash = :ch AND {_SESSION_LIVE_SQL}"),
+            {"ch": _sha256(cookie), **_clock_params()},
         )
     ).first()
     return row is not None
@@ -615,41 +803,43 @@ async def cookie_session_hash(session: AsyncSession, cookie: str | None) -> str 
     return row.token_hash if row else None
 
 
-# ─── Resuming the sign-in after a reload (owner decision 2026-10-14) ──────
+# ─── Resuming the sign-in after a reload ─────────────────────────────────
 #
-# "If someone logs in with admin, from that device, that exact session,
-# they should be good for within 60 mins of signing in. Refreshing should
-# not lose admin on the same machine, same session."
+# Owner decision 2026-10-14: "Refreshing should not lose admin on the same
+# machine, same session." Revised 2026-11-16 with the idle timeout: the
+# window counts from the session's last ADMIN ACTION, not from the sign-in.
+# A reload inside the idle hour keeps admin — the "Domovoi has been updated,
+# reload" toast right after pressing Update included — and after it the
+# person signs in again, the same rule as an open tab.
 #
 # The dashboard holds its Bearer in JS memory only, so a reload forgets it;
-# the HttpOnly ``SameSite=Strict`` cookie the sign-in set survives.
-# ``signed_in_at`` (V028) is when the session last PROVED the password: the
-# login or first-run setup that minted it (:func:`create_session`), or a
-# password change made with it (:func:`mark_signed_in`). For ``window_min``
-# minutes after that moment the web process unwraps the session's Bearer
-# with the cookie and hands it back to the page holding the cookie
-# (``POST /api/auth/resume``, which adds the same-origin and
-# ``X-Requested-With`` rules). ABSOLUTE, not sliding: using the session
-# never moves ``signed_in_at``; only the password does. A session minted
-# before V028 has neither ``signed_in_at`` nor a cookie of its own and
-# never resumes.
+# the HttpOnly ``SameSite=Strict`` cookie the sign-in set survives. While
+# the session is live and acted less than ``window`` minutes ago (the
+# setting, never more than the idle hour), the web process unwraps the
+# session's Bearer with the cookie and hands it back to the page holding the
+# cookie (``POST /api/auth/resume``, which adds the same-origin and
+# ``X-Requested-With`` rules).
 #
-# Nothing new is minted. The resumed page holds exactly the session the
-# sign-in made, so signing out from any tab, revoking it, a password change
-# from another session and ``--reset-admin`` (which all delete the row) end
-# the resume too, and another browser — which has its own cookie, or none —
-# never inherits it.
+# A resume is NOT an admin action and moves nothing: a page that reloads
+# itself on a timer (a kiosk, an auto-refresh extension) must not keep a
+# session alive. Nothing new is minted either. The resumed page holds
+# exactly the session the sign-in made, so signing out from any tab,
+# revoking it, a password change from another session and
+# ``--reset-admin`` (which all delete the row) end the resume too, and
+# another browser — which has its own cookie, or none — never inherits it.
+# A session minted before V028 has no cookie of its own and never resumes.
 
-# The longest window an admin may choose (Settings → Advanced). One
-# day: past that, "stay signed in" is a different feature with a different
-# threat model, not a reload. One number, in domovoi/config.py.
+# The longest window an admin may choose (Settings → Advanced): the idle
+# hour. A reload window longer than the session it resumes would be a
+# setting that says something the server does not do. One number, in
+# domovoi/config.py.
 RELOAD_WINDOW_MAX_MIN = ADMIN_RELOAD_WINDOW_MAX_MIN
 
 
 @dataclass(frozen=True)
 class ResumeWindow:
     """When a session's reload window ends, by the DATABASE's clock (the
-    one ``signed_in_at`` was stamped with), and how many seconds of it are
+    one its last action was stamped with), and how many seconds of it are
     left (rounded up, so at least 1 while it is open). A browser counts
     from ``remaining_sec`` on its own clock, never from ``until``: a phone
     whose clock is off would otherwise say "signed in until" a time that
@@ -667,12 +857,13 @@ class ResumeWindow:
 
 def clamp_reload_window(value: Any) -> int:
     """A window in whole minutes, 0..:data:`RELOAD_WINDOW_MAX_MIN`, from
-    whatever the setting holds. Anything that is not a whole number —
-    ``True`` included, which Python counts as one — is 0: closed, the
-    behaviour before the setting existed."""
+    whatever the setting holds, and never more than the idle hour
+    (:data:`SESSION_IDLE_TIMEOUT_MIN`). Anything that is not a whole
+    number — ``True`` included, which Python counts as one — is 0: closed,
+    the behaviour before the setting existed."""
     if isinstance(value, bool) or not isinstance(value, int):
         return 0
-    return max(0, min(RELOAD_WINDOW_MAX_MIN, value))
+    return max(0, min(RELOAD_WINDOW_MAX_MIN, int(SESSION_IDLE_TIMEOUT_MIN), value))
 
 
 # The deadline is the end of the window or the session's 90-day absolute
@@ -680,17 +871,15 @@ def clamp_reload_window(value: Any) -> int:
 # _RESUME_LIVE_SQL holds, both are after now(), so the seconds left (rounded
 # up) are at least 1.
 _RESUME_DEADLINE_SQL = (
-    "LEAST(signed_in_at + make_interval(mins => :w), "
-    f"created_at + interval '{SESSION_MAX_AGE_DAYS} days')"
+    f"LEAST({_LAST_ACTIVE_SQL} + make_interval(mins => :w), "
+    "created_at + make_interval(days => :max_age_days))"
 )
-# `signed_in_at <= now()` (review finding 3): a stamp from the future — the
-# database clock stepped back after the sign-in — would otherwise stretch
-# the window by the size of the step. Such a session does not resume.
+# The session is live (its idle hour, its cap, and no last-activity stamp
+# from the future past the slack — review finding 3's rule, now on the
+# stamp the window counts from) and acted less than `w` minutes ago.
 _RESUME_LIVE_SQL = (
     f"cookie_hash = :ch AND {_SESSION_LIVE_SQL} "
-    "AND signed_in_at IS NOT NULL "
-    "AND signed_in_at <= now() "
-    "AND signed_in_at > now() - make_interval(mins => :w)"
+    f"AND {_LAST_ACTIVE_SQL} > now() - make_interval(mins => :w)"
 )
 
 
@@ -699,9 +888,9 @@ async def resume_deadline(
 ) -> ResumeWindow | None:
     """Read-only: the reload window of the live session the browser
     ``cookie`` names, or None when it has none (no cookie, an unknown /
-    expired / revoked session, a session from before V028, a window of 0,
-    or a window that has closed). Moves nothing — the status probe calls it
-    on every page load."""
+    idle / expired / revoked session, a session from before V028, a window
+    of 0, or a window that has closed). Moves nothing — the status probe
+    calls it on every page load."""
     window = clamp_reload_window(window_min)
     if not cookie or window <= 0:
         return None
@@ -713,39 +902,39 @@ async def resume_deadline(
                 "AS remaining "
                 f"FROM admin_sessions WHERE {_RESUME_LIVE_SQL}"
             ),
-            {"ch": _sha256(cookie), "w": window},
+            {"ch": _sha256(cookie), "w": window, **_clock_params()},
         )
     ).first()
     if row is None:
         return None
-    return ResumeWindow(until=row.until, remaining_sec=int(row.remaining))
+    return ResumeWindow(until=row.until, remaining_sec=max(1, int(row.remaining)))
 
 
 async def resume_session(
     session: AsyncSession, cookie: str | None, window_min: int
 ) -> tuple[str, ResumeWindow] | None:
     """The resume itself: find the live session the browser ``cookie``
-    names, inside its reload window, slide its expiry the way any use does
-    — one statement, so nothing can revoke it between the checks — and
-    unwrap its Bearer with the cookie. Returns ``(token, window)``, or None
-    when the session is not resumable for any reason. The unwrapped token
-    must hash to the row's own ``token_hash``, or nothing is returned."""
+    names, inside its reload window, and unwrap its Bearer with the
+    cookie. Returns ``(token, window)``, or None when the session is not
+    resumable for any reason. The unwrapped token must hash to the row's
+    own ``token_hash``, or nothing is returned.
+
+    Read-only, on purpose: a resume is not an admin action (see the
+    section comment), so the idle clock does not move. A session ended
+    between this read and the page's next request simply answers that
+    request 401, as it would have a moment later anyway."""
     window = clamp_reload_window(window_min)
     if not cookie or window <= 0:
         return None
     row = (
         await session.execute(
             text(
-                "UPDATE admin_sessions SET last_used_at = now(), "
-                "expires_at = LEAST("
-                f"now() + interval '{SESSION_TTL_DAYS} days', "
-                f"created_at + interval '{SESSION_MAX_AGE_DAYS} days') "
-                f"WHERE {_RESUME_LIVE_SQL} "
-                f"RETURNING token_hash, cookie_token, {_RESUME_DEADLINE_SQL} AS until, "
+                f"SELECT token_hash, cookie_token, {_RESUME_DEADLINE_SQL} AS until, "
                 f"ceil(EXTRACT(EPOCH FROM ({_RESUME_DEADLINE_SQL} - now())))::int "
-                "AS remaining"
+                "AS remaining "
+                f"FROM admin_sessions WHERE {_RESUME_LIVE_SQL}"
             ),
-            {"ch": _sha256(cookie), "w": window},
+            {"ch": _sha256(cookie), "w": window, **_clock_params()},
         )
     ).first()
     if row is None:
@@ -754,17 +943,21 @@ async def resume_session(
     if token is None or not hmac.compare_digest(_sha256(token), row.token_hash):
         log.warning("a session cookie matched, but the token it wraps did not; not resumed")
         return None
-    return token, ResumeWindow(until=row.until, remaining_sec=int(row.remaining))
+    return token, ResumeWindow(until=row.until, remaining_sec=max(1, int(row.remaining)))
 
 
 async def mark_signed_in(session: AsyncSession, token_hash: str | None) -> None:
-    """Restart a session's reload window: it has just proved the password
-    again (a password change re-verifies the old one)."""
+    """A session has just proved the password again (a password change
+    re-verifies the old one): stamp it, and restart its idle hour — that
+    was an admin action too."""
     if not token_hash:
         return
     await session.execute(
-        text("UPDATE admin_sessions SET signed_in_at = now() WHERE token_hash = :h"),
-        {"h": token_hash},
+        text(
+            "UPDATE admin_sessions SET signed_in_at = now(), last_used_at = now(), "
+            f"expires_at = {_DEADLINE_FROM_NOW_SQL} WHERE token_hash = :h"
+        ),
+        {"h": token_hash, **_clock_params()},
     )
 
 
@@ -1146,12 +1339,20 @@ def device_token_from_request(request: Request) -> str | None:
 
 
 async def list_sessions(session: AsyncSession) -> list[dict[str, Any]]:
+    """Every session row, newest first. ``expires_at`` is when it ends —
+    its idle deadline or its cap, whichever is sooner (for a row from
+    before the idle timeout, sooner than the old 30-day expiry it holds);
+    ``last_used_at`` is its last admin action; ``live`` says whether it
+    still works."""
     rows = (
         await session.execute(
             text(
-                "SELECT token_hash, label, created_at, expires_at, last_used_at "
+                "SELECT token_hash, label, created_at, last_used_at, "
+                f"LEAST(expires_at, {_IDLE_DEADLINE_SQL}) AS ends_at, "
+                f"({_SESSION_LIVE_SQL}) AS live "
                 "FROM admin_sessions ORDER BY created_at DESC"
-            )
+            ),
+            _clock_params(),
         )
     ).all()
     return [
@@ -1159,8 +1360,9 @@ async def list_sessions(session: AsyncSession) -> list[dict[str, Any]]:
             "token_hash": r.token_hash,
             "label": r.label,
             "created_at": r.created_at.isoformat() if r.created_at else None,
-            "expires_at": r.expires_at.isoformat() if r.expires_at else None,
+            "expires_at": r.ends_at.isoformat() if r.ends_at else None,
             "last_used_at": r.last_used_at.isoformat() if r.last_used_at else None,
+            "live": bool(r.live),
         }
         for r in rows
     ]
@@ -1243,11 +1445,17 @@ class AuthCheckUnavailable(HTTPException):
 
 
 async def check_admin_request(
-    request: Request, session: AsyncSession | None = None
+    request: Request, session: AsyncSession | None = None, *, activity: bool = False
 ) -> CheckResult:
     """Classify a request against the admin tier.
 
-    * ``ok`` — live Bearer session (expiry slid).
+    ``activity=True`` is for the admin WRITE gates only: when the request
+    is also a write (:func:`is_admin_activity`), a live Bearer's idle hour
+    restarts. Every other caller — reads, probes, the device tier, sockets
+    — leaves the default, and the check moves nothing.
+
+    * ``ok`` — live Bearer session (its idle hour restarted when this was
+      an admin action).
     * ``pre-setup`` — no admin credential exists yet; the caller decides
       whether its surface keeps the open LAN-trust grace or fails
       closed (plugin management does, design §7.1).
@@ -1261,7 +1469,8 @@ async def check_admin_request(
             return "pre-setup"
         token = bearer_token(request)
         if token is not None:
-            if await validate_token(s, token):
+            acted = activity and is_admin_activity(request)
+            if await validate_token(s, token, activity=acted):
                 return "ok"
             # An invalid Bearer with a valid cookie alongside still
             # classifies as invalid — the caller sent broken credentials.
@@ -1290,8 +1499,9 @@ async def require_admin_mutation(request: Request) -> None:
     Keeps the pre-setup LAN-trust grace (daily surfaces work on a fresh
     install; plugin management uses :func:`domovoi.auth.require_admin`
     which fails closed instead). A valid cookie without a Bearer is 403
-    — cookies never authorize mutations."""
-    result = await check_admin_request(request)
+    — cookies never authorize mutations. A write that passes is an
+    admin action: it restarts the session's idle hour."""
+    result = await check_admin_request(request, activity=True)
     if result in ("ok", "pre-setup"):
         return
     if result == "cookie-only":
@@ -1330,8 +1540,9 @@ async def require_admin_security(request: Request) -> None:
     :func:`require_admin_mutation`, but with NO pre-setup grace: 501 until
     an admin password exists, the posture plugin management has always
     had (:mod:`domovoi.auth`). ``--reset-admin`` returns the install to
-    the pre-setup state, so it reopens only the daily surface."""
-    result = await check_admin_request(request)
+    the pre-setup state, so it reopens only the daily surface. A write
+    that passes is an admin action: it restarts the session's idle hour."""
+    result = await check_admin_request(request, activity=True)
     if result == "ok":
         return
     if result == "pre-setup":
@@ -1352,8 +1563,9 @@ async def require_admin_security_read(request: Request) -> None:
     token, and the command recordings (their list and their audio).
     BEARER-ONLY since 2026-10-14 (review round 2): the dashboard cookie
     reaches every port of its host, so a cookie that read these would hand
-    the household token — and, replayed, a session kept sliding up to its
-    90-day cap — to any other service on the box. A reloaded tab inside the
+    the household token to any other service on the box (and, before the
+    idle timeout, a replayed cookie kept its session alive up to the
+    90-day cap; a cookie moves nothing now). A reloaded tab inside the
     reload window takes its Bearer back (``POST /api/auth/resume``); past
     it the tab is view only, and these say "sign in again". 501 before
     setup — the token has no value while everything is open, and it is
@@ -1528,6 +1740,34 @@ async def websocket_device_ok(ws: Any) -> bool:
         return await check_device_websocket(ws) in ("ok", "admin", "pre-setup")
     except AuthCheckUnavailable:
         return False   # a socket has no status to carry the 503 into
+
+
+async def device_websocket_still_admitted(ws: Any, admitted: DeviceCheckResult) -> bool:
+    """Would the credential that opened ``ws`` on the device tier still
+    open it now? For a socket that stays open (a plugin websocket): an HTTP
+    caller is judged on every request, a socket only at its upgrade, so the
+    upgrade's answer is re-read while it lives.
+
+    ``admitted`` is what :func:`check_device_websocket` answered then:
+
+    * ``ok`` — the household token it presented is still the household's
+      (a rotation, including the one setup does, ends it);
+    * ``admin`` — its Bearer is still a live session: inside the idle hour
+      and the 90-day cap, not signed out. Read only (``activity`` stays
+      off), so a socket never keeps an admin session alive;
+    * ``pre-setup`` — still no admin: the LAN grace ends at setup.
+
+    Pure reads: nothing is charged to the wrong-token backoff (the socket
+    presents nothing new) and no clock moves. A database that does not
+    answer raises, for the caller to judge."""
+    async with session_scope() as s:
+        if admitted == "ok":
+            return await validate_device_token(s, device_token_from_websocket(ws))
+        if admitted == "admin":
+            return await has_admin_auth(s) and await validate_token(s, bearer_token(ws))
+        if admitted == "pre-setup":
+            return not await has_admin_auth(s)
+    return False
 
 
 async def check_live_mic_websocket(

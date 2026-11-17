@@ -12,7 +12,7 @@
           "auth"
         ],
         "summary": "Auth Status",
-        "description": "Open probe the dashboard uses to decide setup-vs-login-vs-quiet.\n``authenticated`` reflects the cookie OR a Bearer (GET state).\n\n``resume_in_sec`` / ``resume_until`` are set while THIS browser's\nsession cookie is inside its reload window \u2014 what tells a reloaded\npage to ask ``POST /resume`` for its sign-in back, and what the\nSettings Admin card says it lasts until. Read-only: nothing slides.",
+        "description": "Open probe the dashboard uses to decide setup-vs-login-vs-quiet.\n``authenticated`` reflects the Bearer when one is sent, else the\ncookie (GET state).\n\n``resume_in_sec`` / ``resume_until`` are set while THIS browser's\nsession cookie is inside its reload window \u2014 what tells a reloaded\npage to ask ``POST /resume`` for its sign-in back, and what the\nSettings Admin card says it lasts until.\n\n``idle_in_sec`` / ``idle_until``: how long the session the request's\ncredential names (the Bearer, else the cookie) has before it signs out\nfor want of an admin action. A page holding a Bearer asks with it when\nits own count runs out: still live (another tab of this browser acted)\nand it counts again; over, and ``ended`` says why \u2014 ``\"idle\"`` (an hour\nwithout an admin action) or ``\"ended\"`` (signed out, revoked, a\npassword change, the 90-day cap) \u2014 so it can say so in plain words.\n\nRead-only: nothing slides. A cookie whose session is over is cleared,\nso the browser stops carrying it.",
         "operationId": "auth_status_api_auth_status_get",
         "responses": {
           "200": {
@@ -115,7 +115,7 @@
           "auth"
         ],
         "summary": "Auth Resume",
-        "description": "Give a reloaded dashboard page its admin sign-in back (owner\ndecision 2026-10-14).\n\nThe page's Bearer lived in its memory and the reload forgot it; the\nHttpOnly session cookie the sign-in set survived. The cookie is not the\nBearer, but the session row keeps the Bearer wrapped under it\n(:func:`domovoi.admin_auth.resume_session`), so this hands the\nsession's own Bearer back \u2014 nothing new is minted \u2014 when ALL of these\nhold:\n\n* ``X-Requested-With`` (the dependency, and the process-wide write\n  backstop in front of it): a cross-site page cannot send it without\n  a preflight this server refuses;\n* the request is same-origin (:func:`same_origin`): not another port\n  on this host, not a second dashboard through the server switcher;\n* the cookie names a live session (not revoked, signed out, expired or\n  past the 90-day cap) whose ``signed_in_at`` is less than\n  ``ADMIN_RELOAD_WINDOW_MIN`` minutes ago (0 = never).\n\n403 for the first two, 401 for the rest; nothing about the session\nchanges on a refusal. A success slides the session's expiry like any\nuse of it does, and says when the window ends. The cookie is not\nre-set: it is the one the sign-in set, unchanged.",
+        "description": "Give a reloaded dashboard page its admin sign-in back (owner\ndecision 2026-10-14).\n\nThe page's Bearer lived in its memory and the reload forgot it; the\nHttpOnly session cookie the sign-in set survived. The cookie is not the\nBearer, but the session row keeps the Bearer wrapped under it\n(:func:`domovoi.admin_auth.resume_session`), so this hands the\nsession's own Bearer back \u2014 nothing new is minted \u2014 when ALL of these\nhold:\n\n* ``X-Requested-With`` (the dependency, and the process-wide write\n  backstop in front of it): a cross-site page cannot send it without\n  a preflight this server refuses;\n* the request is same-origin (:func:`same_origin`): not another port\n  on this host, not a second dashboard through the server switcher;\n* the cookie names a live session (not idle for an hour, revoked,\n  signed out, expired or past the 90-day cap) whose last admin action\n  is less than ``ADMIN_RELOAD_WINDOW_MIN`` minutes ago (0 = never).\n\n403 for the first two, 401 for the rest. Nothing about the session\nchanges, on a refusal or a success: a resume is not an admin action,\nso a page that reloads itself on a timer never keeps a session alive.\nThe answer says when the window ends and when the session idles out.\nThe cookie is not re-set: it is the one the sign-in set, unchanged.",
         "operationId": "auth_resume_api_auth_resume_post",
         "responses": {
           "200": {
@@ -179,7 +179,7 @@
           "auth"
         ],
         "summary": "Auth Revoke Session",
-        "description": "Revoke by token hash (the list endpoint's identifier). Mutation \u21d2\nBearer-only.",
+        "description": "Revoke by token hash (the list endpoint's identifier). Mutation \u21d2\nBearer-only, and an admin action (the caller's idle hour restarts).",
         "operationId": "auth_revoke_session_api_auth_sessions__token_hash__delete",
         "parameters": [
           {
@@ -1388,7 +1388,7 @@
           "music"
         ],
         "summary": "Delete Track",
-        "description": "Remove a library track. By default the disk file is left in\nplace; pass ``?also_file=true`` to also unlink it.\n\nOrder matters when ``also_file=true``: file first, then row. If\nthe unlink fails (permission denied, file locked by an active\nMPD playback, etc.) we propagate the error and leave the row\nintact so the user can retry. If the unlink succeeds but the\nrow delete somehow fails, the next indexer sweep won't resurrect\nthe row (the file is gone), so we're still consistent.\n\nReturns 404 if no row matches. With ``also_file=true``, the\nfile-not-found case is treated as success (the user wanted it\ngone; it already is) \u2014 just a debug log.",
+        "description": "Remove a library track. By default the disk file is left in\nplace; pass ``?also_file=true`` to also unlink it.\n\nOrder matters when ``also_file=true``: file first, then row. If\nthe unlink fails (permission denied, file locked by an active\nMPD playback, etc.) we propagate the error and leave the row\nintact so the user can retry. If the unlink succeeds but the\nrow delete somehow fails, the next indexer sweep won't resurrect\nthe row (the file is gone), so we're still consistent.\n\nReturns 404 if no row matches. With ``also_file=true``, the\nfile-not-found case is treated as success (the user wanted it\ngone; it already is) \u2014 just a debug log.\n\nThen the song leaves every room's player (S2-18, the owner's rule):\na room playing it goes on to the next song in its queue, or stops when\nnothing comes after it (the core's ``/v1/admin/music/tracks-removed``,\nbest-effort: the delete stands either way). The dashboard's own player\ndrops it on the library change this makes.",
         "operationId": "delete_track_api_music_library__track_id__delete",
         "parameters": [
           {
@@ -3734,6 +3734,279 @@
                   "additionalProperties": true,
                   "title": "Response Move Session Api Music Up Next Sessions  Session Id  Move Post"
                 }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/up-next/history": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "List Sessions",
+        "description": "Every Up next session still kept, newest first: where it played,\nwhen, whose mix, the song it started from and how many picks it made.\nPaged (default 50, max 200).",
+        "operationId": "list_sessions_api_music_up_next_history_get",
+        "parameters": [
+          {
+            "name": "room",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only this room's sessions.",
+              "title": "Room"
+            },
+            "description": "Only this room's sessions."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 200,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Page size (default 50, max 200). Sending any of limit / cursor / offset asks for the paged answer.",
+              "title": "Limit"
+            },
+            "description": "Page size (default 50, max 200). Sending any of limit / cursor / offset asks for the paged answer."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 2048
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque position from the previous page's next_cursor. Keyset-based: rows added or removed between pages are neither repeated nor skipped.",
+              "title": "Cursor"
+            },
+            "description": "Opaque position from the previous page's next_cursor. Keyset-based: rows added or removed between pages are neither repeated nor skipped."
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Row offset (stable only while the list doesn't change; prefer cursor).",
+              "title": "Offset"
+            },
+            "description": "Row offset (stable only while the list doesn't change; prefer cursor)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Sessions Api Music Up Next History Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/up-next/history/{session_id}": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Session Detail",
+        "description": "One session, the summary of all its picks, and one page of its picks\nin the order they were made (``seq``), each with its reason, the song\nit followed and, when it played, how long and how it ended.",
+        "operationId": "session_detail_api_music_up_next_history__session_id__get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 200,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Page size (default 50, max 200). Sending any of limit / cursor / offset asks for the paged answer.",
+              "title": "Limit"
+            },
+            "description": "Page size (default 50, max 200). Sending any of limit / cursor / offset asks for the paged answer."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 2048
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque position from the previous page's next_cursor. Keyset-based: rows added or removed between pages are neither repeated nor skipped.",
+              "title": "Cursor"
+            },
+            "description": "Opaque position from the previous page's next_cursor. Keyset-based: rows added or removed between pages are neither repeated nor skipped."
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Row offset (stable only while the list doesn't change; prefer cursor).",
+              "title": "Offset"
+            },
+            "description": "Row offset (stable only while the list doesn't change; prefer cursor)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Session Detail Api Music Up Next History  Session Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/up-next/history/{session_id}/download": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Download Session",
+        "description": "Every pick of one session as a file: CSV (one row per pick) or JSON\n(``{session, summary, picks}``, the same shapes as the reads above).",
+        "operationId": "download_session_api_music_up_next_history__session_id__download_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "csv",
+                "json"
+              ],
+              "type": "string",
+              "description": "csv or json",
+              "default": "csv",
+              "title": "Format"
+            },
+            "description": "csv or json"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           },
@@ -10142,7 +10415,7 @@
           "config"
         ],
         "summary": "Patch Editable Config",
-        "description": "Apply config changes through the Domovoi server (validate \u2192 persist to\n.env \u2192 live-apply where the tier allows). Returns\n``{applied, restart_required, rejected, normalized, followed}``. The web\nprocess never mutates its own settings copy \u2014 every write fans out to\n:6370. ``follow_internet`` (Settings \u2192 Internet's \"follow the answer\nagain\") rides along only when it names something.",
+        "description": "Apply config changes through the Domovoi server (validate \u2192 persist to\n.env \u2192 live-apply where the tier allows). Returns\n``{applied, restart_required, rejected, normalized, followed}``. The web\nprocess never mutates its own settings copy \u2014 every write fans out to\n:6370. ``follow_internet`` (Settings \u2192 Privacy \u2192 Internet's \"follow the answer\nagain\") rides along only when it names something.",
         "operationId": "patch_editable_config_api_config_editable_patch",
         "requestBody": {
           "required": true,
@@ -10320,7 +10593,7 @@
           "config"
         ],
         "summary": "Get Internet",
-        "description": "Settings \u2192 Internet: the household's internet answer, the three\nchoices, connectivity, and every setting whose default follows the\nanswer. Read-only proxy of the core's ``GET /v1/admin/internet`` (the\ncore owns the live settings). Changing the answer is a PATCH of\n``/api/config/editable`` with ``{changes: {internet_access}}``.",
+        "description": "Settings \u2192 Privacy \u2192 Internet: the household's internet answer, the three\nchoices, connectivity, and every setting whose default follows the\nanswer. Read-only proxy of the core's ``GET /v1/admin/internet`` (the\ncore owns the live settings). Changing the answer is a PATCH of\n``/api/config/editable`` with ``{changes: {internet_access}}``.",
         "operationId": "get_internet_api_config_internet_get",
         "responses": {
           "200": {
@@ -10340,7 +10613,7 @@
           "config"
         ],
         "summary": "Start Search Helper",
-        "description": "Settings \u2192 Internet's \"start it again\": the core runs the search\nhelper's start/stop for the current answer in the background and\nreturns its state (proxy of ``POST /v1/admin/internet/search-helper``).",
+        "description": "Settings \u2192 Privacy \u2192 Internet's \"start it again\": the core runs the search\nhelper's start/stop for the current answer in the background and\nreturns its state (proxy of ``POST /v1/admin/internet/search-helper``).",
         "operationId": "start_search_helper_api_config_internet_search_helper_post",
         "responses": {
           "200": {
@@ -10703,6 +10976,72 @@
             "content": {
               "application/json": {
                 "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/short-address": {
+      "get": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Get Short Address",
+        "description": "``{enabled, state, port, dashboard_port, message}``. ``state``:\n``on`` (port 80 sends browsers to the dashboard), ``off`` (switched\noff), ``taken`` (something else on this computer uses port 80),\n``no_permission`` (the dashboard may not use a low port: an install\nwhose service unit predates the feature), ``failed`` or\n``unsupported`` (not a Linux server). ``message`` is the line\nSettings shows.",
+        "operationId": "get_short_address_api_short_address_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Short Address Api Short Address Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Put Short Address",
+        "description": "Turn the short address off or on (admin). Saved in\n``~/.domovoi/short_address.json``; applies at once. The answer is the\nread above, after the change.",
+        "operationId": "put_short_address_api_short_address_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShortAddressRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Put Short Address Api Short Address Put"
+                }
               }
             }
           },
@@ -11901,6 +12240,84 @@
         }
       }
     },
+    "/api/wake-words/tuning": {
+      "get": {
+        "tags": [
+          "wake-words"
+        ],
+        "summary": "Tuning Status",
+        "description": "Whether Domovoi can be tuned here, the copy's state (off, recording,\ntraining, failed, in_use, standard), its word id for recording and\ntraining, and the rooms on each word.",
+        "operationId": "tuning_status_api_wake_words_tuning_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "wake-words"
+        ],
+        "summary": "Tuning Start",
+        "description": "\"Tune Domovoi to your household\": make the copy's word, ready for\nclips. Rooms keep the standard word until it is trained. 409 with the\nreason when it can't start (training off, word not published).",
+        "operationId": "tuning_start_api_wake_words_tuning_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/wake-words/tuning/undo": {
+      "post": {
+        "tags": [
+          "wake-words"
+        ],
+        "summary": "Tuning Undo",
+        "description": "\"Go back to the standard Domovoi word\" in every room.",
+        "operationId": "tuning_undo_api_wake_words_tuning_undo_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/wake-words/tuning/use": {
+      "post": {
+        "tags": [
+          "wake-words"
+        ],
+        "summary": "Tuning Use",
+        "description": "Use the tuned copy again after going back.",
+        "operationId": "tuning_use_api_wake_words_tuning_use_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/wake-words/{wake_word_id}/train/stop": {
       "post": {
         "tags": [
@@ -12849,6 +13266,46 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/WakeUseBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/wake-words/room": {
+      "put": {
+        "tags": [
+          "wake-words"
+        ],
+        "summary": "Wake Room Words",
+        "description": "Set a connected room's wake words, main word first (1.4.0): 409 with\nthe reason when its device can't run that many or a word can't be\ngiven; the room restarts to load them.",
+        "operationId": "wake_room_words_api_wake_words_room_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WakeRoomBody"
               }
             }
           },
@@ -16188,6 +16645,1067 @@
             "schema": {
               "type": "string",
               "title": "Scan Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/scan/reads": {
+      "get": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "Scan Read For Path",
+        "description": "The newest reading of a scan in Documents/Scans (``read`` null when\nit was never read) and whether this server can read scans.",
+        "operationId": "scan_read_for_path_api_scan_reads_get",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1000,
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "Scan Read Start",
+        "description": "Read a scan in Documents/Scans (or return the reading already under\nway or done for those bytes).",
+        "operationId": "scan_read_start_api_scan_reads_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScanReadBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/scan/reads/{read_id}": {
+      "get": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "Scan Read Get",
+        "operationId": "scan_read_get_api_scan_reads__read_id__get",
+        "parameters": [
+          {
+            "name": "read_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Read Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/scan/reads/{read_id}/summary": {
+      "get": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "Scan Read Summary",
+        "description": "\"What does it say?\": a short summary (made once by the chat model;\nthe start of the text with AI features off).",
+        "operationId": "scan_read_summary_api_scan_reads__read_id__summary_get",
+        "parameters": [
+          {
+            "name": "read_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Read Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/scan/reads/{read_id}/text": {
+      "get": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "Scan Read Text",
+        "description": "The scan's full text, page by page.",
+        "operationId": "scan_read_text_api_scan_reads__read_id__text_get",
+        "parameters": [
+          {
+            "name": "read_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Read Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses": {
+      "get": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Status",
+        "description": "Whether the private connection runs (and why not), this house's\nfingerprint and name, the default friend-file length and the limits.",
+        "operationId": "friend_houses_status_api_friend_houses_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/settings": {
+      "put": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Settings",
+        "operationId": "friend_houses_settings_api_friend_houses_settings_put",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/invites": {
+      "get": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Invites",
+        "operationId": "friend_houses_invites_api_friend_houses_invites_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Make Invite",
+        "description": "Make a friend file. ``file`` is null while the private connection\nis still being set up; the page reads ``/invites/{id}`` until it is\nthere. The first start builds an image, so this may take a while.",
+        "operationId": "friend_houses_make_invite_api_friend_houses_invites_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/invites/{invite_id}": {
+      "get": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Invite",
+        "operationId": "friend_houses_invite_api_friend_houses_invites__invite_id__get",
+        "parameters": [
+          {
+            "name": "invite_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Invite Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Cancel Invite",
+        "operationId": "friend_houses_cancel_invite_api_friend_houses_invites__invite_id__delete",
+        "parameters": [
+          {
+            "name": "invite_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Invite Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/preview": {
+      "post": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Preview",
+        "description": "What a friend file says. Nothing is sent to the other house.",
+        "operationId": "friend_houses_preview_api_friend_houses_preview_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/requests": {
+      "get": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Requests",
+        "operationId": "friend_houses_requests_api_friend_houses_requests_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Send Request",
+        "operationId": "friend_houses_send_request_api_friend_houses_requests_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/requests/{request_id}/accept": {
+      "post": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Accept",
+        "operationId": "friend_houses_accept_api_friend_houses_requests__request_id__accept_post",
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/requests/{request_id}/decline": {
+      "post": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Decline",
+        "operationId": "friend_houses_decline_api_friend_houses_requests__request_id__decline_post",
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/friends": {
+      "get": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Friends",
+        "operationId": "friend_houses_friends_api_friend_houses_friends_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/friends/{friend_id}/verified": {
+      "post": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Verified",
+        "operationId": "friend_houses_verified_api_friend_houses_friends__friend_id__verified_post",
+        "parameters": [
+          {
+            "name": "friend_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Friend Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/friends/{friend_id}": {
+      "patch": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Rename",
+        "operationId": "friend_houses_rename_api_friend_houses_friends__friend_id__patch",
+        "parameters": [
+          {
+            "name": "friend_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Friend Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Unfriend",
+        "operationId": "friend_houses_unfriend_api_friend_houses_friends__friend_id__delete",
+        "parameters": [
+          {
+            "name": "friend_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Friend Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/conversations": {
+      "get": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Conversations",
+        "description": "The house inbox: every friend (or former friend) with messages.",
+        "operationId": "friend_houses_conversations_api_friend_houses_conversations_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/conversations/{house}": {
+      "get": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Conversation",
+        "description": "One house's messages, oldest first; ``before`` for earlier ones.",
+        "operationId": "friend_houses_conversation_api_friend_houses_conversations__house__get",
+        "parameters": [
+          {
+            "name": "house",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "House"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Delete Conversation",
+        "operationId": "friend_houses_delete_conversation_api_friend_houses_conversations__house__delete",
+        "parameters": [
+          {
+            "name": "house",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "House"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/conversations/{house}/read": {
+      "post": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Mark Read",
+        "operationId": "friend_houses_mark_read_api_friend_houses_conversations__house__read_post",
+        "parameters": [
+          {
+            "name": "house",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "House"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/conversations/{house}/export": {
+      "get": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Export",
+        "description": "Every message with one house, each with its signed envelope.",
+        "operationId": "friend_houses_export_api_friend_houses_conversations__house__export_get",
+        "parameters": [
+          {
+            "name": "house",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "House"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/messages": {
+      "post": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Send",
+        "description": "Queue a message to a friend (1\u20132000 characters).",
+        "operationId": "friend_houses_send_api_friend_houses_messages_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/friends/{friend_id}/alert": {
+      "put": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Alert",
+        "description": "What a new message from this friend does in the rooms.",
+        "operationId": "friend_houses_alert_api_friend_houses_friends__friend_id__alert_put",
+        "parameters": [
+          {
+            "name": "friend_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Friend Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/shared-lists": {
+      "get": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Shared Lists",
+        "description": "Lists shared with friend houses, both ways, and offers waiting here.",
+        "operationId": "friend_houses_shared_lists_api_friend_houses_shared_lists_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Share List",
+        "description": "Share one of this house's lists with a friend.",
+        "operationId": "friend_houses_share_list_api_friend_houses_shared_lists_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/shared-lists/{space_id}/accept": {
+      "post": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Accept List",
+        "description": "Take a friend's list: it becomes a new list here (``name`` optional).",
+        "operationId": "friend_houses_accept_list_api_friend_houses_shared_lists__space_id__accept_post",
+        "parameters": [
+          {
+            "name": "space_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Space Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/shared-lists/{space_id}/decline": {
+      "post": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Decline List",
+        "description": "Forget a friend's offer (they aren't told).",
+        "operationId": "friend_houses_decline_list_api_friend_houses_shared_lists__space_id__decline_post",
+        "parameters": [
+          {
+            "name": "space_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Space Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/shared-lists/{space_id}": {
+      "delete": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Leave List",
+        "description": "Stop sharing. Both houses keep their own copy as an ordinary list.",
+        "operationId": "friend_houses_leave_list_api_friend_houses_shared_lists__space_id__delete",
+        "parameters": [
+          {
+            "name": "space_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Space Id"
             }
           }
         ],
@@ -20064,6 +21582,194 @@
         }
       }
     },
+    "/api/chat/videos": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Upload Video",
+        "description": "Stage one video for a chat message. The body is the file. The answer\nis ``{token, name, duration_s, size, width, height, has_audio,\nestimate_s, estimate_text}``; ``token`` goes in the send's ``videos``.",
+        "operationId": "upload_video_api_chat_videos_post",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255,
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Upload Video Api Chat Videos Post"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "AI features are off (X-Domovoi-Refusal: ai-off)"
+          },
+          "413": {
+            "description": "Too large: {\"detail\", \"code\": \"video_too_large\", \"max_mb\": 2048}"
+          },
+          "415": {
+            "description": "Not a video chat takes: {\"detail\", \"code\": \"video_unsupported\"}"
+          },
+          "422": {
+            "description": "Too long or unreadable: {\"detail\", \"code\": \"video_too_long\" | \"video_unreadable\", \"duration_s\"?}"
+          },
+          "503": {
+            "description": "The server has no ffmpeg: {\"detail\", \"code\": \"video_no_tools\"}"
+          },
+          "507": {
+            "description": "Not enough disk space: {\"detail\", \"code\": \"video_no_room\"}"
+          }
+        }
+      }
+    },
+    "/api/chat/video-jobs/{job_id}": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Get Video Job",
+        "description": "One video's progress: ``state`` queued | running | done | failed |\ncancelled, ``line`` (\"Watching your video\u2026 about 4 minutes left\"),\n``waiting_for_voice``, ``eta_s``, ``progress``, and once ended the\nsummary or the error (``error_code`` has a help-desk entry).",
+        "operationId": "get_video_job_api_chat_video_jobs__job_id__get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Video Job Api Chat Video Jobs  Job Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/video-jobs/{job_id}/results": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Get Video Results",
+        "description": "What was kept from a watched video: the summary, the transcript\npieces with their times, and the frame descriptions, each worded\n``might_show`` (a small model's guess, never a fact).",
+        "operationId": "get_video_results_api_chat_video_jobs__job_id__results_get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Video Results Api Chat Video Jobs  Job Id  Results Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/video-jobs/{job_id}/cancel": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Cancel Video Job",
+        "description": "Stop watching: a queued job ends now, a running one within about a\nsecond. The video, its frames and what was understood so far go.",
+        "operationId": "cancel_video_job_api_chat_video_jobs__job_id__cancel_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Cancel Video Job Api Chat Video Jobs  Job Id  Cancel Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/help/search": {
       "get": {
         "tags": [
@@ -23588,6 +25294,28 @@
               }
             ],
             "title": "Wake Score"
+          },
+          "wake_word": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wake Word"
+          },
+          "wake_word_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wake Word Name"
           },
           "voice_match": {
             "anyOf": [
@@ -30310,6 +32038,34 @@
           "text": {
             "type": "string",
             "title": "Text"
+          },
+          "words": {
+            "items": {
+              "$ref": "#/components/schemas/RoomWakeWordItem"
+            },
+            "type": "array",
+            "title": "Words"
+          },
+          "device_max": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Max"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit",
+            "default": 1
+          },
+          "max_words": {
+            "type": "integer",
+            "title": "Max Words",
+            "default": 5
           }
         },
         "type": "object",
@@ -30318,6 +32074,30 @@
         ],
         "title": "RoomWakeWord",
         "description": "Which wake word a room answers to (domovoi/wake_default.py\n``room_word``). ``source``: ``device`` \u2014 the model the room device\nreported loading (its health sample, else its hello); ``assigned`` /\n``chosen`` \u2014 no report, the household default the server gave it / the\nword an admin pushed; ``pending`` \u2014 it is waiting for this word's model;\n``unknown`` \u2014 nothing says (a room older than the household default, on\nsoftware that doesn't report its word): ``name`` is null and ``text``\nsays so. ``pending_*``: the word a room that reports its own is still\nwaiting to be given. ``text``: the line the dashboard shows after\n\"Wakes on:\"."
+      },
+      "RoomWakeWordItem": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "running": {
+            "type": "boolean",
+            "title": "Running",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "name"
+        ],
+        "title": "RoomWakeWordItem",
+        "description": "One of a room's wake words (V063). ``running``: the room's device is\nlistening for it (false: the server gave it, but the device runs fewer\nwords or hasn't loaded it yet)."
       },
       "SampleSources": {
         "properties": {
@@ -30938,6 +32718,21 @@
         "type": "object",
         "title": "ScanBody"
       },
+      "ScanReadBody": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Path"
+          }
+        },
+        "type": "object",
+        "required": [
+          "path"
+        ],
+        "title": "ScanReadBody"
+      },
       "SearchTestRequest": {
         "properties": {
           "kind": {
@@ -31003,6 +32798,17 @@
             "type": "array",
             "maxItems": 4,
             "title": "Documents"
+          },
+          "videos": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "type": "array",
+            "maxItems": 1,
+            "title": "Videos"
           },
           "model": {
             "anyOf": [
@@ -31353,6 +33159,19 @@
           "rows"
         ],
         "title": "SheetWriteRequest"
+      },
+      "ShortAddressRequest": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "enabled"
+        ],
+        "title": "ShortAddressRequest"
       },
       "SpareDeviceEnrolRequest": {
         "properties": {
@@ -33191,6 +35010,31 @@
         ],
         "title": "WakeDefaultBody"
       },
+      "WakeRoomBody": {
+        "properties": {
+          "room_id": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Room Id"
+          },
+          "slugs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 5,
+            "minItems": 1,
+            "title": "Slugs"
+          }
+        },
+        "type": "object",
+        "required": [
+          "room_id",
+          "slugs"
+        ],
+        "title": "WakeRoomBody"
+      },
       "WakeUseBody": {
         "properties": {
           "room_id": {
@@ -33311,6 +35155,17 @@
               }
             ],
             "title": "Trained Clips From"
+          },
+          "tuned_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tuned From"
           }
         },
         "type": "object",

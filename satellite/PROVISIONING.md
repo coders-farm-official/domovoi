@@ -13,50 +13,35 @@
 > info**, then **Run anyway**. Both are described in
 > [docs/SPARE_DEVICE_SATELLITES.md](../docs/SPARE_DEVICE_SATELLITES.md).
 
-> **Shipped units use the Wi-Fi setup portal.** A card prepared with
-> `setup_transport = "portal"` never touches this checklist and never
-> touches the server: power the device on, join its `Domovoi-Setup-<id>`
-> network from a phone, and the setup page opens itself. Type the device's
-> six-digit code into the dashboard's approval card to finish. See
-> [docs/SATELLITE_HARDWARE.md](../docs/SATELLITE_HARDWARE.md). USB adoption
-> below remains the bench and manufacturing route. (A server on the Windows
-> install can't see USB devices, so it offers the portal only.)
+> **Most rooms don't need this checklist.** A card prepared from the
+> dashboard (**Settings → Household → Rooms → prepare a room's SD card**)
+> sets itself up in one of two ways:
 >
-> **The setup network's password, on the Windows install.** The dashboard
-> can't write the card there, so it builds a zip and the tray icon's
-> **Prepare a room's SD card** writes it. The zip carries no password, only
-> a one-time pass (`domovoi/claim.json`: the build's number and a random
-> secret). The tray trades it, once, over the PC's own loopback, for the
-> setup key and writes `domovoi/ap.json` onto the card itself, so nobody
-> types the key there; the pass never goes on the card and stops working
-> a day after the build. The person still needs the key for their phone:
-> **show setup details** in the dashboard shows it. If the pass was used,
-> has expired, or the server restarted since the build (the key lives in
-> its memory only), the tray says which and offers **Sign in as admin to
-> fetch it** (after a restart that makes a new key for the same network
-> and a new console login, since the zip holds the old login only as a
-> hash; the tray writes the new login's `userconf.txt` line in place of
-> the zip's, checks it, and shows both, and so does **show setup
-> details**), and typing the key stays the last way. A card written with
-> the pass while the server still remembers the build keeps the build's
-> own console login. After a restart, a build row whose details are gone
-> says so instead of offering **show setup details**. A card
-> written straight to a drive gets `ap.json` from the server, as before.
+> - **The Wi-Fi setup portal** (`setup_transport = "portal"`, the way
+>   shipped units are set up): power the device on, join its
+>   `Domovoi-Setup-<id>` network from a phone, and the setup page opens
+>   itself. Type the device's six-digit code into the dashboard's approval
+>   card to finish. With the server address left blank, the device asks
+>   every Domovoi server it finds (since 1.4.0) and joins only the one you
+>   typed the code into. See
+>   [docs/SATELLITE_HARDWARE.md](../docs/SATELLITE_HARDWARE.md). On the
+>   Windows install the tray icon's **Prepare a room's SD card** writes the
+>   card, and the dashboard's **show setup details** shows the setup
+>   network's key for your phone (how the tray gets the key without anyone
+>   typing it: `POST /api/satellites/media/claim` in
+>   [docs/API_REFERENCE.md](../docs/API_REFERENCE.md)).
+> - **USB adoption**, the bench and manufacturing route: boot the device
+>   and plug it into the Domovoi server's USB port; it presents as a
+>   `DOMOVOI-SET` flash drive (`satellite/provisioning_mode.py`; it needs
+>   `mtools`/`dosfstools` on the image and the USB-gadget boot config media
+>   prep writes) and an
+>   "adopt" card appears in Settings → Household → Rooms. Name it, enter
+>   Wi-Fi, and the device configures itself, pre-paired, and reboots onto
+>   your network. A wrong Wi-Fi password re-presents the drive with the
+>   error on the dashboard. A server on the Windows install can't see USB
+>   devices, so it offers the portal only.
 >
-> **Zero-touch path first (USB adoption).** If your SD card was prepared
-> with the Domovoi satellite payload (dashboard → Settings → Household →
-> Rooms → prepare a room's SD card, or an image that boots into provisioning
-> mode), you don't need
-> most of this checklist: **boot the device, plug it into the Domovoi
-> server's USB port**, and an "adopt" card appears in the dashboard's
-> Settings → Household → Rooms. Name it, enter Wi-Fi, done — the device configures
-> itself, pre-paired, and reboots onto your network. The device presents
-> as a `DOMOVOI-SET` flash drive while waiting (see
-> `satellite/provisioning_mode.py`; requires `mtools`/`dosfstools` on the
-> image and the USB-gadget boot config the media-prep pipeline writes).
-> A wrong Wi-Fi password re-presents the drive with the error shown on
-> the dashboard — re-adopt with corrected credentials. Everything below
-> is the MANUAL fallback path, still fully supported.
+> Everything below is the manual path, still fully supported.
 
 One-time setup per Pi Zero 2 W + ReSpeaker 2-Mics Pi HAT. Goal: a Pi that can capture audio from the HAT mics, play audio out the HAT's 3.5mm jack to powered speakers, and is ready to run the satellite client.
 
@@ -141,7 +126,7 @@ No DKMS / kernel headers needed — the audio driver is now a device-tree overla
 - `portaudio19-dev` + `libasound2-dev` — headers for `sounddevice`/PortAudio (mic capture, TTS playback).
 - `alsa-utils` — `arecord`/`aplay`/`alsamixer` for the smoke test in step 5.
 - `device-tree-compiler` — needed to build the ReSpeaker dtoverlay in step 4.
-- **`mpg123`** — MP3 stream consumer. The satellite client spawns `mpg123` as a subprocess to decode and play MPD's HTTP audio stream from the Domovoi server. Without it, "Hey Jarvis, play creep by radiohead" succeeds end-to-end on the server side but produces no sound on the Pi.
+- **`mpg123`** — MP3 stream consumer. The satellite client spawns `mpg123` as a subprocess to decode and play MPD's HTTP audio stream from the Domovoi server. Without it, a "play ..." request succeeds end-to-end on the server side but produces no sound on the Pi.
 
 ## 4. ReSpeaker driver — device-tree overlay
 
@@ -358,6 +343,8 @@ domovoi_url = "ws://<server-ip-or-hostname>:6370"    # or "auto": find it (below
 
 **How the satellite finds the server** (every start, and again after it has been unable to reach the server for a while): first the server's **name** — `domovoi.local`, plus any name the server told it about on an earlier connect — then the **last address that worked** (what `domovoi_url` holds), then, only as a last resort, a sweep of its own `/24` for `GET /v1/health`. A name is resolved on the satellite and each address it resolves to must sign a fresh challenge for that exact address with the pinned server key before it is used, so a name can never hand a paired satellite to another machine. What worked is written back: into `domovoi_url` once the device is approved (or was told an address), into `~/.domovoi/pending-server.json` before that. This is what keeps a satellite with its server when the server's DHCP lease moves it. A unit with no `server_fingerprint` pinned anywhere and an address you typed keeps that address as typed: there is no identity to check a name against.
 
+**Before it is approved, with `auto` and no server key (1.4.0): every server.** Such a unit does not pick one server. It looks the same way (names, the last address, the sweep) but collects every Domovoi server that answers — asking up to eight at a time (a server found by name or at the last address always, the rest in turns; one that cannot prove its identity takes no place), looking again every two minutes — parks a request with each, asks each again every ten seconds, and joins only the one that proves it knows the six digits the unit says (`satellite/house_pairing.py`; the check is `satellite/pairing_proof.py`, and the unit never sends its code). That server's address and key then go into `domovoi_url` and `server_fingerprint`, its own pairing token replaces `~/.domovoi/pairing_token`, and the unit withdraws from the others. Servers older than 1.4.0 are found but not asked — the journal says so, with their addresses: update that server, or type its address in the setup portal (a typed address, or a card prepared with the server's key, means that server only, and an older one is then asked the old way). The unit answers at most five challenges in thirty minutes and twenty a day of running time across all servers, holds back for a while a server whose run proved nothing, and declines (keeping its requests alive, the typed code waiting on the server) while it may not answer (`~/.domovoi/approval-proof-budget.json`), so a server that does not know the code cannot guess it. Setup writes no root record of a server for such a unit and takes no clock from one: the boot step after the approval records the server that proved the code (`/etc/domovoi/server.url` and `server-identity.json`), once that address has signed for that key to root itself. Why, in the threat-model terms: [docs/SECURITY_PRIVACY.md](../docs/SECURITY_PRIVACY.md#asking-every-house-an-approval-the-device-can-check-140).
+
 ```toml
 [wake]
 wake_word = "hey_jarvis"                             # boot word; the server then gives the room the household's
@@ -430,11 +417,11 @@ Expected log lines:
 
 ```
 connecting to ws://<server>:6370/v1/stream/<room>
-server ready: protocol=0.1 bot=Domovoi
+server ready: protocol=0.1 bot=Domovoi features=[...]
 listening for wake word 'hey_jarvis' in room '<room>'
 ```
 
-If you see all three, the Pi is provisioned. Say the wake word once: the LED turns to listening, the satellite acknowledges it (a spoken greeting by default — `[wake] ack_mode` picks greeting, chime or none), and only once that has finished does it listen, logging for example `wake ack: greet_121aac55.mp3 played 1106 ms; … listening 1331 ms after the wake word`. Wait for the greeting before you speak; anything said over it is not heard, by design. Hit Ctrl+C — the autostart wiring (systemd unit) is set up in step 9 below.
+If you see all three, the Pi is provisioned. Say the wake word once: the LED turns to listening, the satellite acknowledges it (a spoken greeting by default — `[wake] ack_mode` picks greeting, chime or none), and only once that has finished does it listen, logging for example `wake ack: greet_121aac55.mp3 played 1106 ms; … listening 1331 ms after the wake word`. Wait for the greeting before you speak; anything said over it is not heard, by design. Hit Ctrl+C — the autostart wiring (systemd unit) is set up in step 8 below.
 
 If you see the WebSocket connect immediately drop, or never see `server ready`, the Domovoi server isn't reachable from the Pi — check the server's firewall (port 6370 inbound from LAN) and `ping <server-ip-or-hostname>` from the Pi.
 
@@ -483,7 +470,7 @@ sudo -n /usr/sbin/wpa_cli -i wlan0 reassociate
 - [ ] If it prints `OK`, you're set — the watcher will autonomously recover from rate-stuck WiFi without intervention.
 - [ ] If it prompts for a password or says `sudo: a password is required`, the username, path, or syntax is off. Re-check the line you pasted; `which wpa_cli` confirms the path (it's almost always `/usr/sbin/wpa_cli`).
 
-If you skip this step, the satellite still runs — the watcher will simply log a warning every time it decides the path to the server is broken, and you'll be back to manually running `sudo wpa_cli -i wlan0 reassociate` when chop appears.
+If you skip this step, the satellite still runs — the watcher will simply log a warning every time it decides the path to the server is broken, and you'll be back to running `sudo wpa_cli -i wlan0 reassociate` by hand when the audio starts breaking up.
 
 ## 7. Networking — names and addresses
 
@@ -827,7 +814,7 @@ You should have:
 4. `~/.domovoi/config.toml` populated with the right `room_id` and `domovoi_url` (and, on a prepared card, `server_fingerprint`)
 5. The satellite client running under systemd as `domovoi-satellite.service` and auto-starting on boot
 6. Network reachability confirmed both directions between the Pi and the Domovoi server
-7. Both sudoers entries in place: WiFi self-heal (§6.7) and self-restart (§8.1)
+7. The sudoers entries in place: Wi-Fi self-heal (§6.7), self-restart (§8.1), the clock helper (§8.2) and the reboot and Wi-Fi helpers (§8.3)
 
 ---
 
@@ -854,7 +841,7 @@ rsync -av --exclude __pycache__ \
 ssh domovoi-<room>.local "sudo systemctl restart domovoi-satellite"
 ```
 
-**Status output to expect** when healthy: `Active: active (running)` plus a recent log line like `listening for wake word 'hey_jarvis' in room '<room>'`. If `Active:` shows `failed`, `journalctl --since "10 min ago"` gets you the death log. After fixing the underlying issue, `start` brings it back.
+**Status output to expect** when healthy: `Active: active (running)` plus a recent log line like `listening for wake word 'domovoi_v1' in room '<room>'` (`listening for wake words [...]` on a room with more than one). If `Active:` shows `failed`, `journalctl --since "10 min ago"` gets you the death log. After fixing the underlying issue, `start` brings it back.
 
 **Hard reset path** (rare — only if the satellite is wedged in a way `restart` doesn't fix): `sudo reboot` on the Pi. The systemd unit auto-starts on boot, so the satellite comes back without manual intervention.
 
@@ -988,7 +975,7 @@ Selecting the profile auto-disables the ALSA mic-gain tune and the software nois
 
 ### G. Shared remaining steps
 
-§6.7 (wifi sudoers), §7 (DHCP reservation), §8 (systemd autostart), §9 (label — note "XVF3800 USB" instead of HAT version) all apply unchanged.
+§6.7 (wifi sudoers), §7 (networking), §8 (systemd autostart), §9 (label — note "XVF3800 USB" instead of HAT version) all apply unchanged.
 
 ---
 
@@ -1002,4 +989,4 @@ Selecting the profile auto-disables the ALSA mic-gain tune and the software nois
 - **Default codec gain is near-silent** — first playback after install will sound barely audible. Run `alsamixer -c 0` and push playback channels to 80%, then `sudo alsactl store` to persist.
 - **`pulseaudio` vs `pipewire`** — Pi OS Lite ships neither by default; ALSA direct is fine and simpler. Don't install pulseaudio unless something else demands it.
 - **Changed your router's security?** The satellite adapts (§8.5): mixed mode and WPA2 just work, at the next boot or within minutes. **WPA3-only needs mixed mode on a Pi Zero 2 W**: its radio can't do WPA3, so the ring goes red and the room's log says so, and it rejoins on its own once the router is back on WPA2/WPA3 mixed.
-- **Pi Zero 2 W memory** — 512 MB RAM. openWakeWord runs but is tight. If you hit OOMs later, swap is your friend; we'll deal with it then.
+- **Pi Zero 2 W memory** — 512 MB RAM. openWakeWord runs, with little headroom; it is one reason a Zero runs at most three wake words at once (a bigger Pi runs five).

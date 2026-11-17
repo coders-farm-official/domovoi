@@ -143,6 +143,9 @@ _WEB_BACKEND_CORE_IMPORTS = (
     "domovoi.workers.library_indexer",
     "domovoi.workers.podcast_feed_poller",
     "domovoi.host_time",
+    # Wake-word tuning (the household's own copy of the published word):
+    # the wake-words router imports it lazily inside request handlers.
+    "domovoi.wake_tuning",
     # Satellite-media prepare (SAT-1) bakes this server's Ed25519 fingerprint
     # into the image, so the WEB process signs and therefore needs the
     # identity module, the crypto backend it signs through, and the
@@ -508,10 +511,10 @@ class PluginHost:
                     "route(s) carry both @open_endpoint and @device_endpoint: "
                     + "; ".join(conflicts)
                 )
-            # A websocket route cannot take this gate: its dependency takes
-            # a Request, so the handshake would die with a TypeError at
-            # connect. Refused up front, with the reason, until the gate
-            # has a websocket form.
+            # The dashboard process serves no plugin websocket: this gate
+            # is HTTP-only (its dependency takes a Request). A plugin page
+            # opens the CORE's socket instead, a @device_endpoint route on
+            # the core router, where the gate has a websocket form.
             sockets = websocket_routes(ctx.routers)
             if sockets:
                 raise RuntimeError(

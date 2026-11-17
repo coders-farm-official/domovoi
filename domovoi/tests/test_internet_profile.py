@@ -1,7 +1,7 @@
 """The internet answer as DEFAULTS: ``config.PROFILE_DEFAULTS``, the
 ``Settings`` validator that applies it at boot, and the runtime half in
 ``domovoi/internet_profile.py`` (re-derive on a change, "follow the answer
-again", the Settings → Internet document), plus the ``.env`` helpers they
+again", the Settings → Privacy → Internet document), plus the ``.env`` helpers they
 stand on.
 
 DB-free. Every test builds its own ``Settings`` or points

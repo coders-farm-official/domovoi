@@ -216,11 +216,11 @@ class PrintModelsTest {
         assertNull(scanResolution(null))
     }
 
-    @Test fun whatDoesItSayOnlyWhenReadable() {
+    @Test fun whatDoesItSayOnlyWhenReadOrBeingRead() {
+        // The full gate is ScanReadTest's; here: a saved scan never read has none.
         val done = ScanJob(id = "x", state = "done", name = "Scan 2026-10-21 15.40.pdf", path = "Scans/Scan 2026-10-21 15.40.pdf")
-        assertFalse(offersWhatDoesItSay(done))
-        assertTrue(offersWhatDoesItSay(done.copy(readable = true)))
-        assertFalse(offersWhatDoesItSay(done.copy(readable = true, state = "waiting")))
+        assertFalse(whatDoesItSayShown(done))
+        assertTrue(whatDoesItSayShown(done.copy(readable = true)))
         assertEquals("Saved to Documents as Scan 2026-10-21 15.40.pdf", scanEndMessage(done))
         assertEquals("Scan canceled; nothing was saved.", scanEndMessage(done.copy(state = "canceled")))
         assertEquals("The feeder is jammed.", scanEndMessage(done.copy(state = "failed", error = "The feeder is jammed.")))
@@ -264,5 +264,20 @@ class PrintModelsTest {
         assertEquals("That address isn't on your home network.", serverDetail(e))
         assertEquals("That address isn't on your home network.", printFailureText("add", e))
         assertNull(serverDetail(ApiException(500, "500", body = "oops")))
+    }
+
+    @Test fun theNetworkOnlyWordsMatchTheDashboard() {
+        // Handoff 2026-11-16, section 3: "Wi-Fi" is the word households
+        // know, and the Add by address hint says a USB printer can't be added.
+        assertEquals(
+            "Domovoi works with Wi-Fi and network printers (AirPrint, IPP Everywhere or Mopria), and their " +
+                "scanners. USB printers aren't supported.",
+            NETWORK_ONLY_LINE,
+        )
+        assertEquals(
+            "The address is on the printer's own screen or settings page. Only printers on your Wi-Fi or " +
+                "plugged into your router work: a printer on a USB cable can't be added.",
+            ADD_BY_ADDRESS_HINT,
+        )
     }
 }

@@ -440,7 +440,7 @@ def fetch() -> tuple[bool, str]:
         return False, ("this server came with Domovoi's Windows Setup, which brings the spare-PC room Setup "
                        "with it: run the newest DomovoiSetup.exe to update it")
     if egress.internet_turned_off():
-        return False, ("internet access is off (Settings → Internet), so this server can't download "
+        return False, ("internet access is off (Settings → Privacy → Internet), so this server can't download "
                        "the Windows Setup")
     dest = _bucket()
     problems: list[str] = []

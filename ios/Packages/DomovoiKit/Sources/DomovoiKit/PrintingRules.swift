@@ -68,6 +68,25 @@ public func printingOffersScan(printers: PrintersResponse?, libraryID: String?, 
     return libraryID == FileLibrary.documents
 }
 
+/// Whether a home-server chat draft offers Print — on its card and in the
+/// canvas: the server says the house has a printer (`has_printer`).
+///
+/// Android's own rule, word for word: `draftPrinters?.hasPrinter == true`
+/// (`ChatScreen.kt:970,1014`). Nil — the read has not answered, failed, or
+/// was refused (a guest, an unpaired phone: `/api/printers` is device tier)
+/// — offers nothing, so a Print that could only fail is never drawn.
+public func printingOffersDraftPrint(printers: PrintersResponse?) -> Bool {
+    printers?.hasPrinter == true
+}
+
+/// What the Print sheet calls a draft before the preview names it:
+/// `"<title> v<version>"`, and `"draft"` for a draft with no title
+/// (`ChatScreen.kt:1100-1102`).
+public func printingDraftName(title: String?, version: Int) -> String {
+    let named = (title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    return "\(named.isEmpty ? "draft" : named) v\(version)"
+}
+
 // MARK: - which controls the sheets show
 
 /// Each control is shown only when it can change something.
@@ -374,9 +393,18 @@ public enum PrintingStrings {
 
     // ---- the panel ---------------------------------------------------------
 
-    /// `NETWORK_ONLY_LINE` (`PrintModels.kt:435`).
+    /// `NETWORK_ONLY_LINE` (`PrintModels.kt`): network printers only (owner
+    /// rule 2026-11-16), in the dashboard's words — "Wi-Fi" is the word
+    /// households know.
     public static let networkOnlyLine =
-        "Works with network printers (AirPrint, IPP Everywhere, Mopria). USB printers aren't supported."
+        "Domovoi works with Wi-Fi and network printers (AirPrint, IPP Everywhere or Mopria), "
+        + "and their scanners. USB printers aren't supported."
+
+    /// `ADD_BY_ADDRESS_HINT`: under Add by address's fields, as on the
+    /// dashboard — where the address is, and that a USB printer can't be added.
+    public static let addByAddressHint =
+        "The address is on the printer's own screen or settings page. Only printers on your Wi-Fi "
+        + "or plugged into your router work: a printer on a USB cable can't be added."
 
     /// `ADMIN_ONLY_LINE` (`PrintModels.kt:433`) — the whole answer to Rename
     /// and Remove, which are admin at both hops (`printers.py:185,192`).

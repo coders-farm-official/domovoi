@@ -9,10 +9,9 @@ phones](#spare-laptops-pcs-and-phones).) This guide takes you from a
 shopping cart to a working Pi satellite, then covers living with a fleet of
 them.
 
-The **canonical step-by-step checklist** (every command, every gotcha,
-kept battle-tested) is [`satellite/PROVISIONING.md`](../satellite/PROVISIONING.md).
-This page is the friendly tour of the same journey — when the two ever
-disagree, PROVISIONING.md wins.
+The full step-by-step checklist, with every command, is
+[`satellite/PROVISIONING.md`](../satellite/PROVISIONING.md). This page is
+the overview; where the two disagree, PROVISIONING.md is right.
 
 Related: [ARCHITECTURE.md](ARCHITECTURE.md) for how satellites talk to the
 core, [TROUBLESHOOTING.md](TROUBLESHOOTING.md) when something squeaks,
@@ -69,7 +68,7 @@ You don't have to buy anything to try a room. A spare **Linux laptop or
 mini PC**, a **Windows laptop or PC**, an old **phone or tablet** (room mode
 in the Android app) or an old computer booted from a **USB stick** your
 server makes can be a room, with the same approval code and the same
-features as a Pi. They are a preview in 1.0: tried on fewer devices than a
+features as a Pi. They are a preview: tried on fewer devices than a
 Pi. In the dashboard: **Settings → Household → Rooms → add a spare
 device**. A Windows PC gets a Setup to double-click. It is not code-signed
 yet, so Windows SmartScreen stops it once ("Windows protected your PC"):
@@ -78,67 +77,7 @@ including what a laptop's microphone can and can't do, is in
 [SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md). The rest of this
 page is about Pi builds.
 
-## The shipped path — the satellite's own setup Wi-Fi
-
-A satellite built for **portal onboarding** needs no cable to the server, no
-card handling and no tools. Powered on for the first time it raises its own
-WPA2 network, `Domovoi-Setup-<id>`, with a per-device key that the dashboard
-shows when you prepare the card (the next sections say where to keep it).
-Join it from a phone and the setup page opens by itself — the same captive
-portal mechanism hotel Wi-Fi uses. Pick the house network, name the room,
-done: the satellite joins your Wi-Fi and appears on the dashboard.
-
-Two details that are load-bearing rather than cosmetic:
-
-- **Approve it on the dashboard.** As the setup network closes the portal
-  shows a six-digit code, the satellite says that code out loud, and it
-  presents the code when it connects. Because the server took no part in
-  the exchange, it has nothing preseeded to match — so it parks the device
-  under *waiting for approval* until a human types the code in. The
-  dashboard never shows you the code: you read it off the device, which is
-  what ties the request on screen to the unit in the room. That is what
-  stops whoever connects first from claiming a room. (A satellite
-  provisioned by hand presents no code; with strict pairing on, the
-  default, it parks for approval too and the server gives it a code to
-  say. Only a server that turned `SATELLITE_PAIRING_STRICT` off keeps the
-  older trust-on-first-use behaviour — see docs/SECURITY_PRIVACY.md.)
-- **No USB gadget overlay.** Portal builds deliberately skip
-  `dtoverlay=dwc2,dr_mode=peripheral`. Nothing ever reverts it, and on a Pi
-  Zero 2 W it pins the only data port as a peripheral — where a USB mic array
-  can never enumerate. USB-adopted units get the overlay and now remove it
-  themselves once adoption succeeds.
-
-The server address is found automatically, in this order: the server's
-name (`domovoi.local`, and any name the server has told the satellite
-since), then the address that worked last time, then — only as a last
-resort — a sweep of the satellite's own /24 for `/v1/health`. Every
-candidate must sign a fresh challenge for the exact address dialled with
-the server key the card was prepared with, so a name cannot redirect a
-satellite to another machine, and mDNS is never load-bearing: a name that
-does not resolve (multicast over Wi-Fi is what fails at 3 a.m.) falls
-through to the next step. What worked is saved, and the search runs again
-when the server stays unreachable, so a server that moves to a new address
-keeps its satellites. Type an address into the portal to start from it instead of a sweep: `ws://192.168.1.20:6370` or
-`ws://domovoi.local:6370` (a bare host gets `ws://` and the port). The
-portal accepts a `ws://` or `wss://` address on a private range (RFC 1918)
-or a `.local` name and nothing else, refuses a form body over 8 KB without
-reading it, and shows the address it resolved on the confirmation page so a
-typo is visible before the setup network closes.
-
-Choose the route when you prepare the card: **Settings → Household →
-Rooms → prepare a room's SD card → wi-fi setup portal** (the default) or **usb
-adoption**.
-
-On a Windows install, where Domovoi runs inside WSL, the portal is the
-only route and the card's files come as a download. WSL can't see USB
-drives or SD cards, so USB adoption and writing straight to a card aren't
-offered there. Domovoi's tray icon writes the card instead: **Prepare a
-room's SD card** in its menu ([WINDOWS_HOST.md, Prepare a room's SD
-card](WINDOWS_HOST.md#prepare-a-rooms-sd-card)) takes the download, puts
-it on the card exactly as the server would, and asks for the setup network
-password. The zip's `README.txt` keeps the steps by hand (below).
-
-## The golden path — prepare media from the dashboard
+## The easy way: prepare the card from the dashboard
 
 Skip most of the manual steps below: flash **stock Raspberry Pi OS Lite
 (64-bit)** with any tool (no pre-configure needed), re-insert the card
@@ -147,11 +86,9 @@ prepare a room's SD card**. The dashboard writes a first-boot overlay + a
 fully-offline payload (all Python wheels, packages, the satellite code from
 this machine, and any plugin payloads) onto the card's boot partition. Then
 boot the device. With the default Wi-Fi setup portal, join its
-`Domovoi-Setup-<id>` network from a phone and finish there (above). With
-USB adoption, plug it into the server's USB port and adopt it from
-Settings → Household → Rooms (name + Wi-Fi, done). Everything below
-remains the manual path, still the reference for custom setups and
-debugging.
+`Domovoi-Setup-<id>` network from a phone and finish there (next
+section). With USB adoption, plug it into the server's USB port and adopt
+it from Settings → Household → Rooms (name + Wi-Fi, done).
 
 **Write down the passwords the dashboard shows you when the build
 finishes** — the console login, and for a Wi-Fi setup (portal) card the
@@ -172,6 +109,71 @@ nowhere else, so a dashboard restart loses them.
   `config.txt` and `cmdline.txt` rather than replacing them: a replaced
   `cmdline.txt` doesn't boot. Without `ap.json` the unit falls back to
   USB adoption.
+
+## Finishing on the satellite's own setup Wi-Fi
+
+A satellite built for **portal onboarding** needs no cable to the server, no
+card handling and no tools. Powered on for the first time it raises its own
+WPA2 network, `Domovoi-Setup-<id>`, with a per-device key that the dashboard
+shows when you prepare the card (write it down, as above).
+Join it from a phone and the setup page opens by itself — the same captive
+portal mechanism hotel Wi-Fi uses. Pick the house network, name the room,
+done: the satellite joins your Wi-Fi and appears on the dashboard.
+
+Two details that are load-bearing rather than cosmetic:
+
+- **Approve it on the dashboard.** As the setup network closes the portal
+  shows a six-digit code, the satellite says that code out loud, and it
+  presents the code when it connects. Because the server took no part in
+  the exchange, it has nothing preseeded to match — so it parks the device
+  under *waiting for approval* until a human types the code in. The
+  dashboard never shows you the code: you read it off the device, which is
+  what ties the request on screen to the unit in the room. That is what
+  stops whoever connects first from claiming a room. (A satellite
+  provisioned by hand presents no code; with strict pairing on, the
+  default, it parks for approval too and the server gives it a code to
+  say. Only a server that turned `SATELLITE_PAIRING_STRICT` off keeps the
+  older trust-on-first-use behaviour: see
+  [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md).)
+- **No USB gadget overlay.** Portal builds deliberately skip
+  `dtoverlay=dwc2,dr_mode=peripheral`. Nothing ever reverts it, and on a Pi
+  Zero 2 W it pins the only data port as a peripheral — where a USB mic array
+  can never enumerate. USB-adopted units get the overlay and remove it
+  themselves once adoption succeeds.
+
+The server address is found automatically, in this order: the server's
+name (`domovoi.local`, and any name the server has told the satellite
+since), then the address that worked last time, then — only as a last
+resort — a sweep of the satellite's own /24 for `/v1/health`. Every
+candidate must sign a fresh challenge for the exact address dialled with
+the server key the card was prepared with, so a name cannot redirect a
+satellite to another machine, and mDNS is never load-bearing: a name that
+does not resolve (multicast over Wi-Fi is what fails at 3 a.m.) falls
+through to the next step. What worked is saved, and the search runs again
+when the server stays unreachable, so a server that moves to a new address
+keeps its satellites. Type an address into the portal to start from it
+instead of a sweep: `ws://192.168.1.20:6370` or
+`ws://domovoi.local:6370` (a bare host gets `ws://` and the port). The
+portal accepts a `ws://` or `wss://` address on a private range (RFC 1918)
+or a `.local` name and nothing else, refuses a form body over 8 KB without
+reading it, and shows the address it resolved on the confirmation page so a
+typo is visible before the setup network closes.
+
+Choose the route when you prepare the card: **Settings → Household →
+Rooms → prepare a room's SD card → wi-fi setup portal** (the default) or **usb
+adoption**.
+
+On a Windows install, where Domovoi runs inside WSL, the portal is the
+only route and the card's files come as a download. WSL can't see USB
+drives or SD cards, so USB adoption and writing straight to a card aren't
+offered there. Domovoi's tray icon writes the card instead: **Prepare a
+room's SD card** in its menu ([WINDOWS_HOST.md, Prepare a room's SD
+card](WINDOWS_HOST.md#prepare-a-rooms-sd-card)) takes the download, puts
+it on the card exactly as the server would, and asks for the setup network
+password. The zip's `README.txt` keeps the steps by hand (above).
+
+The steps from here on are the manual path: the reference for custom
+setups and for debugging.
 
 ## Step 1 — Flash the SD card
 
@@ -319,8 +321,8 @@ Three finishing moves, all from PROVISIONING.md:
      and Pi OS boots in Europe/London.
    - *(XVF3800 only)* a further entry for the `xvf_host` LED binary
      ([Appendix §E](../satellite/PROVISIONING.md)).
-3. A physical label (hostname, room, board + HAT version). Future you
-   says thanks. A **DHCP reservation** on the router is optional
+3. A physical label (hostname, room, board + HAT version). A **DHCP
+   reservation** on the router is optional
    ([§7](../satellite/PROVISIONING.md)): the satellite is `domovoi-<room>`
    on the network and finds the server by name; never set a static
    address on the Pi itself.
@@ -376,11 +378,9 @@ greeting, and it needs no echo cancellation for it, so the greeting works
 on a HAT as well as on the XVF3800. A player still going after 4 s (1.5 s
 for the chime) is stopped and listening starts anyway.
 
-Measured on the shipped greeting bank as rendered (2,184 clips, 28 voices):
-Piper clips run a median 1.0 s (90th percentile 1.5 s). (The Microsoft
-Edge voices of that measurement, a median 1.8 s with 0.85 s of trailing
-silence, were dropped in October 2026.) If the wait matters in a room,
-`chime` keeps an audible acknowledgement at under half the cost.
+Measured on the shipped greeting bank, Piper clips run a median 1.0 s
+(90th percentile 1.5 s). If the wait matters in a room, `chime` keeps an
+audible acknowledgement at under half the cost.
 
 When music was playing, the spoken greeting is skipped — the music stopping
 and the LED say "listening" — and the capture starts at once. The chime
@@ -427,14 +427,14 @@ gaps between words, and each one it fires on costs the server a
 transcript it throws away. Leave it at 240 unless the server decodes fast
 (`capture_timing` and `speculative` in `GET /v1/stats/latency` show what
 it buys and costs).
-A satellite from before 2026-09-30 doesn't have this setting: the
-dashboard shows **needs a satellite upgrade** in its place.
+An older satellite that doesn't have this setting shows **needs a
+satellite upgrade** in its place on the dashboard.
 
 ## Custom wake words
 
 A new room boots on `hey_jarvis`, and its server then gives it the
-household's wake word ("Domovoi" on a new install). **"Hey Domovoi" is the
-documented destination**, and you train it in-product:
+household's wake word ("Domovoi" on a new install; set under **Settings →
+Voice → Wake words → Household wake word**). To train a word of your own:
 
 1. Dashboard → **Settings → Voice → Wake words**: record positive clips — the
    recording happens **on the satellite itself**, through the actual mic
@@ -450,6 +450,36 @@ documented destination**, and you train it in-product:
    value in use; change it there afterwards as usual. A newly trained word
    starts at 0.7, the rooms' own default.
 
+### More than one wake word in a room
+
+From 1.4.0 a room can wake on up to five words. Most rooms need one; to
+add another, open the room's **Settings** on the dashboard (the room drawer,
+"wake word"), with the room online and an admin signed in: **Add another
+wake word**, put the words in order, **Save**. The room restarts to load
+them. The first is the room's main word (the one in `~/.domovoi/wake`);
+the whole list, each word with its own threshold, is kept in
+`~/.domovoi/wake_words.json`. A word without a threshold of its own (Hey
+Jarvis, Domovoi) uses the room's Wake sensitivity.
+
+**Each extra word makes accidental wake-ups a little more likely:** every
+word listens on its own, at its own threshold, so a TV saying something
+close to any of them can wake the room. The patience and the cooldown
+(above) apply to every word.
+
+**How many a device runs.** openWakeWord turns the audio into features once
+and runs each word as a small classifier on them, so an extra word costs
+little: measured on a desktop (openWakeWord 0.6.0, one thread), the shared
+part took 1.79 ms per 80 ms of audio and each word 0.012-0.026 ms, with
+about 1 MB of memory per word. A **Pi Zero 2 W runs at most 3** anyway:
+it is the weakest board, its wake loop is the first thing to fall behind
+when it runs hot or swaps, and it has 512 MB. A Pi 3, 4 or 5 and a spare
+PC run 5; a phone in room mode runs 5, or 3 on a 32-bit or small-memory
+phone. The satellite says its number to the server, which never sends
+more, and it loads no more than that whatever it is sent. Satellite
+software from before 1.4.0 runs one word: it is given the main word only.
+The log names the word that fired (`wake word 'porch_cat' detected …`),
+and so does the room's history on the dashboard.
+
 **Model sync is automatic and verified.** Satellites mirror the server's
 wake-model set over HTTP (`/v1/wake-models/manifest` +
 `/v1/wake-models/<file>`) into `~/.domovoi/wake_models/` on the Pi,
@@ -460,7 +490,7 @@ trusted. You never scp `.onnx` files around.
 
 You also never scp *code* around. From the dashboard's Settings → Household → Rooms (or
 `POST /v1/admin/satellite/upgrade` — admin-gated, since it makes a Pi
-execute freshly-synced code; see
+execute freshly synced code; see
 [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#what-the-admin-password-actually-gates)),
 a connected satellite:
 
@@ -514,9 +544,8 @@ same room history; the server side doesn't change at all.
 - **First two rooms:** provision #1 fully, live with it for a few days,
   *then* batch the rest. Every acoustic lesson from room #1 (gain, noise
   gate, barge-in sensitivity) makes rooms #2–#N faster.
-- **Label everything.** Hostname, room, IP, board type on the case. A
-  `satellites.txt` in your notes. This is the cheapest observability you
-  will ever buy.
+- **Label everything.** Hostname, room, IP and board type on the case,
+  and a list of them in your notes.
 
 ---
 

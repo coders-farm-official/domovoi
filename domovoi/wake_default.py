@@ -33,6 +33,28 @@ keeps waking on its boot word, "Hey Jarvis", while that model is on the
 server, and the dashboard says why. When the model arrives, the pending
 rooms are given it. When neither model is on the server, the dashboard
 says plainly that rooms can't wake yet and what would fix it.
+
+**Several words per room** (1.4.0, V063). A room may wake on up to
+:data:`MAX_ROOM_WORDS` words, in order; the first is its main word, the one
+everything above is about. ``room_wake_words.slugs`` keeps the list the
+server last gave the room (``slug`` is always its first entry). The
+household default stays one word: a new room gets one, and adding more is
+an admin's choice on the room's Settings tab. Each word keeps its own
+threshold, and each can fire on its own, so every extra word makes an
+accidental wake-up a little more likely: the dashboard says so where words
+are added.
+
+A device says how many words it can run at once in its hello
+(``wake_words_max``; satellite/wake_words.py: a Pi Zero 2 W runs 3, a
+bigger Pi or a PC 5). The server never pushes more than that
+(:func:`words_for_device`), and keeps the number
+(``room_wake_words.device_max``) so the dashboard can say it while the room
+is offline. A device that doesn't say (software from before 1.4.0, the
+phone apps until they learn it) runs one word: it is sent the main word
+only, in the ``set_wake_word`` frame it has always understood, and keeps
+working. Which word woke a turn comes with the wake
+(``utterance_start.wake_word``) and is kept on the turn's history row
+(``conversation_log.wake_word``).
 """
 
 from __future__ import annotations
@@ -118,7 +140,12 @@ RESERVED_SLUGS = STOCK_SLUGS | frozenset(PUBLISHED)
 
 
 def is_reserved_slug(slug: str) -> bool:
-    return slug in RESERVED_SLUGS
+    """A slug no household word may be created under: the stock and
+    published words', and a published word's household copy
+    (``domovoi_v1_tuned``, made only by "Tune Domovoi", domovoi/wake_tuning.py)."""
+    from domovoi import wake_tuning
+
+    return slug in RESERVED_SLUGS or wake_tuning.is_tuned(slug)
 
 
 # ─── the published model on this server ──────────────────────────────────
@@ -321,42 +348,175 @@ async def set_household_default(s, slug: str) -> dict[str, Any]:
     return word
 
 
+# ─── several words per room (V063) ───────────────────────────────────────
+
+#: The most wake words a room may have.
+MAX_ROOM_WORDS = 5
+
+#: What the dashboard says where words are added.
+FALSE_WAKE_NOTE = "Each extra word makes accidental wake-ups a little more likely."
+
+_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+
+
+def clean_slug(raw: object) -> str | None:
+    """A wake word's slug as a device or the dashboard may send it (an
+    openWakeWord model stem), else None."""
+    if isinstance(raw, str) and _SLUG_RE.match(raw.strip()):
+        return raw.strip()
+    return None
+
+
+def device_max(raw: object) -> int | None:
+    """A hello's ``wake_words_max``: how many words the device can run at
+    once, 1..MAX_ROOM_WORDS (more reads as the most a room may have). None
+    when it didn't say or said something unusable: then it runs one."""
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None
+    if isinstance(raw, float) and (raw != raw or raw != int(raw)):
+        return None
+    n = int(raw)
+    if n < 1:
+        return None
+    return min(n, MAX_ROOM_WORDS)
+
+
+def device_limit(declared: int | None) -> int:
+    """How many words a device runs: what it said, else one."""
+    return declared if declared else 1
+
+
+def reported_words(raw: object) -> list[str] | None:
+    """A hello's ``wake_words`` (the words the device listens for, main
+    word first), cleaned: slug-shaped, no repeats, at most MAX_ROOM_WORDS.
+    None when it didn't send a usable list."""
+    if not isinstance(raw, list):
+        return None
+    out: list[str] = []
+    for item in raw[:MAX_ROOM_WORDS * 2]:
+        slug = clean_slug(item)
+        if slug and slug not in out:
+            out.append(slug)
+    return out[:MAX_ROOM_WORDS] or None
+
+
+def check_word_list(raw: object) -> list[str]:
+    """An admin's list of words for a room, or ValueError saying why not:
+    1 to MAX_ROOM_WORDS slugs, no repeats."""
+    if not isinstance(raw, list) or not raw:
+        raise ValueError("a room needs at least one wake word")
+    out: list[str] = []
+    for item in raw:
+        slug = clean_slug(item)
+        if slug is None:
+            raise ValueError(f"{str(item)[:40]!r} isn't a wake word")
+        if slug in out:
+            raise ValueError(f"{word_name(slug)} is in the list twice")
+        out.append(slug)
+    if len(out) > MAX_ROOM_WORDS:
+        raise ValueError(f"a room can have at most {MAX_ROOM_WORDS} wake words")
+    return out
+
+
+def words_for_device(words: list[dict[str, Any]], declared: int | None) -> list[dict[str, Any]]:
+    """The words a device is sent: no more than it said it can run (one
+    when it didn't say)."""
+    return list(words[:device_limit(declared)])
+
+
+def with_main_word(current: list[str] | None, slug: str) -> list[str]:
+    """A room's list after one word is pushed to it the old way (Wake words
+    → Push, "Use … here"): that word becomes the main word, the extras an
+    admin added stay after it."""
+    rest = [w for w in (current or [])[1:] if w != slug]
+    return [slug, *rest][:MAX_ROOM_WORDS]
+
+
+async def word_payload(s, slugs: list[str]) -> list[dict[str, Any]]:
+    """``[{"slug", "threshold"}]`` for a push: a trained word carries its
+    own threshold, the others none (the room's Wake sensitivity applies).
+    ValueError naming the first word that can't be given now."""
+    out = []
+    for slug in slugs:
+        word = await describe(s, slug)
+        if not word["available"]:
+            raise ValueError(f"{word['name']}: {word['reason']}")
+        t = word["threshold"]
+        # REAL in the registry: 0.62 reads back 0.6200000047...
+        out.append({"slug": slug, "threshold": round(float(t), 4) if t is not None else None})
+    return out
+
+
 # ─── rooms ───────────────────────────────────────────────────────────────
 
 async def room_state(s, room_id: str) -> dict | None:
     row = (await s.execute(
-        text("SELECT state, slug FROM room_wake_words WHERE room_id = :r"),
+        text("SELECT state, slug, slugs, device_max FROM room_wake_words WHERE room_id = :r"),
         {"r": room_id})).first()
-    return {"state": row[0], "slug": row[1]} if row else None
+    return ({"state": row[0], "slug": row[1], "slugs": list(row[2]) if row[2] else None,
+             "device_max": row[3]} if row else None)
 
 
-async def _put(s, room_id: str, state: str, slug: str | None) -> None:
+async def _put(s, room_id: str, state: str, slug: str | None,
+               slugs: list[str] | None = None) -> None:
+    """Write a room's row. ``slugs`` defaults to ``[slug]`` (one word);
+    ``device_max`` is never touched here (:func:`record_device_max`)."""
+    if slug is None:
+        slugs = None
+    elif not slugs or slugs[0] != slug:
+        slugs = [slug]
     await s.execute(
-        text("INSERT INTO room_wake_words (room_id, state, slug, updated_at) "
-             "VALUES (:r, :st, :sl, now()) "
+        text("INSERT INTO room_wake_words (room_id, state, slug, slugs, updated_at) "
+             "VALUES (:r, :st, :sl, :sls, now()) "
              "ON CONFLICT (room_id) DO UPDATE SET state = EXCLUDED.state, "
-             "slug = EXCLUDED.slug, updated_at = now()"),
-        {"r": room_id, "st": state, "sl": slug},
+             "slug = EXCLUDED.slug, slugs = EXCLUDED.slugs, updated_at = now()"),
+        {"r": room_id, "st": state, "sl": slug, "sls": slugs},
     )
 
 
-async def mark_chosen(s, room_id: str, slug: str) -> None:
-    """An admin pushed ``slug`` to the room: it is the room's own choice
-    from now on, and the household default never applies to it again."""
-    await _put(s, room_id, "chosen", slug)
+async def mark_chosen(s, room_id: str, slug: str, slugs: list[str] | None = None) -> None:
+    """An admin pushed ``slug`` (or the list ``slugs``, ``slug`` first) to
+    the room: its own choice from now on, and the household default never
+    applies to it again."""
+    await _put(s, room_id, "chosen", slug, slugs)
+
+
+async def record_device_max(s, room_id: str, declared: int | None) -> None:
+    """Keep what the room's device said it can run (None: it didn't say,
+    an older device). Only on a room that has a row."""
+    await s.execute(
+        text("UPDATE room_wake_words SET device_max = :m WHERE room_id = :r "
+             "AND device_max IS DISTINCT FROM :m"),
+        {"r": room_id, "m": declared},
+    )
 
 
 Push = Callable[[str, "float | None"], Awaitable[None]]
 
 
 async def on_hello(room_id: str, reported: str | None, can_push: bool, push: Push,
-                   *, session_scope=None) -> str:
+                   *, session_scope=None, wake_max: int | None = None,
+                   record_max: bool = False) -> str:
     """A room said hello. Apply the household default if this room may
     still get it (a room seen for the first time, or a ``pending`` one).
     ``push(slug, threshold)`` sends ``set_wake_word``. Returns the room's
-    state afterwards. Never raises for the caller's hello path."""
+    state afterwards. Never raises for the caller's hello path.
+    ``record_max``: keep ``wake_max`` (what the device said it can run,
+    None for a device that didn't say) as the room's ``device_max``."""
     if session_scope is None:
         from domovoi.db.session import session_scope
+    state = await _on_hello(room_id, reported, can_push, push, session_scope)
+    if record_max and state != "error":
+        try:
+            async with session_scope() as s:
+                await record_device_max(s, room_id, wake_max)
+        except Exception as e:  # noqa: BLE001 - a hello never fails over this
+            log.warning("wake words: room %s's limit not kept: %s", room_id, e)
+    return state
+
+
+async def _on_hello(room_id: str, reported: str | None, can_push: bool, push: Push,
+                    session_scope) -> str:
     try:
         async with session_scope() as s:
             row = await room_state(s, room_id)
@@ -420,7 +580,9 @@ def word_name(slug: str, names: dict[str, str] | None = None) -> str:
 
 
 def room_word(reported: str | None, row: dict | None,
-              names: dict[str, str] | None = None) -> dict[str, Any]:
+              names: dict[str, str] | None = None, *,
+              reported_list: list[str] | None = None,
+              declared_max: int | None = None) -> dict[str, Any]:
     """Which word a room wakes on, for the dashboard: ``{slug, name,
     source, pending_slug, pending_name}``.
 
@@ -431,7 +593,43 @@ def room_word(reported: str | None, row: dict | None,
     as pending. Otherwise (a ``kept`` room on older software, or no record
     at all) the word is ``unknown``. ``pending_*`` names the word a room
     that reports its own is still waiting to be given. ``text`` is the
-    line after "Wakes on:"."""
+    line after "Wakes on:".
+
+    Several words (V063): ``words`` is the room's list, main word first,
+    each ``{slug, name, running}``: the words its device reported
+    (``reported_list``, from its hello) are running; a word the server gave
+    the room that the device isn't running (more than it can run, or its
+    model not there yet) is listed with ``running`` false. ``device_max``
+    is what the device said it can run (``declared_max``, else the row's
+    ``device_max``), None when it never said; ``limit`` what it runs
+    (one when it never said); ``max_words`` the most a room may have."""
+    out = _room_main_word(reported, row, names)
+    declared = declared_max if declared_max is not None else (row or {}).get("device_max")
+    stored = list((row or {}).get("slugs") or [])
+    running = list(reported_list or [])
+    if out["source"] == "device" and running and running[0] != out["slug"]:
+        running = []      # a hello from before the word's health report: not this list
+    if running:
+        slugs = running + [w for w in stored if w not in running]
+        on = set(running)
+    else:
+        slugs = stored or ([out["slug"]] if out["slug"] else [])
+        if out["slug"] and slugs and slugs[0] != out["slug"]:
+            slugs = [out["slug"], *[w for w in slugs if w != out["slug"]]]
+        on = set(slugs[:device_limit(declared)])
+    out["words"] = [{"slug": w, "name": word_name(w, names), "running": w in on}
+                    for w in slugs[:MAX_ROOM_WORDS]]
+    out["device_max"] = declared
+    out["limit"] = device_limit(declared)
+    out["max_words"] = MAX_ROOM_WORDS
+    if len(out["words"]) > 1 and out["source"] != "unknown":
+        extra = ", ".join(w["name"] for w in out["words"][1:])
+        out["text"] = f"{out['text']} (also {extra})"
+    return out
+
+
+def _room_main_word(reported: str | None, row: dict | None,
+                    names: dict[str, str] | None = None) -> dict[str, Any]:
     state = (row or {}).get("state")
     slug = (row or {}).get("slug") or None
     out: dict[str, Any] = {"slug": None, "name": None, "source": "unknown",
@@ -459,14 +657,17 @@ async def word_names(s) -> dict[str, str]:
 
 
 async def room_states(s, room_id: str | None = None) -> dict[str, dict]:
-    """room -> ``{state, slug}`` from ``room_wake_words`` (one room, or all)."""
+    """room -> ``{state, slug, slugs, device_max}`` from ``room_wake_words``
+    (one room, or all)."""
+    cols = "room_id, state, slug, slugs, device_max"
     if room_id is None:
-        rows = (await s.execute(text("SELECT room_id, state, slug FROM room_wake_words"))).all()
+        rows = (await s.execute(text(f"SELECT {cols} FROM room_wake_words"))).all()
     else:
         rows = (await s.execute(
-            text("SELECT room_id, state, slug FROM room_wake_words WHERE room_id = :r"),
+            text(f"SELECT {cols} FROM room_wake_words WHERE room_id = :r"),
             {"r": room_id})).all()
-    return {r[0]: {"state": r[1], "slug": r[2]} for r in rows}
+    return {r[0]: {"state": r[1], "slug": r[2], "slugs": list(r[3]) if r[3] else None,
+                   "device_max": r[4]} for r in rows}
 
 
 async def pending_rooms(s) -> list[dict[str, Any]]:
@@ -524,7 +725,7 @@ async def status(s, room_words: dict[str, str]) -> dict[str, Any]:
     else:
         note = (f"New rooms can't wake yet: {current['reason']}, and the \"Hey Jarvis\" model "
                 "they would wake on meanwhile isn't on this server either. "
-                + ("Turn internet access on (Settings → Internet) so the server can download "
+                + ("Turn internet access on (Settings → Privacy → Internet) so the server can download "
                    "them." if egress.internet_turned_off() else
                    "Refresh the satellite caches when the internet works "
                    "(Settings → Rooms → prepare satellite media)."))

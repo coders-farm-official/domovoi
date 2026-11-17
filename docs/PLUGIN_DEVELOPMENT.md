@@ -41,6 +41,15 @@ extend every plane of the system:
 | **Events** | subscribe to the `core.*` event catalog; emit your own under `plugin.<slug>.*` | core process |
 | **Sounds & assets** | canned TTS clips rendered in the household's voice and mirrored to satellites; static web assets served from `web/static/` | core + web |
 
+**What a plugin does not get: phone-app screens.** A plugin adds dashboard
+pages, voice handlers, workers, routes, and the rest of the table above. It
+adds nothing to the Android or iPhone app: the apps run no plugin code and
+render no plugin pages. The Stations and Images screens in the apps are the
+apps' own native screens, written by Coders Farm for its own plugins (Radio
+and image generation) and shown only when the server has that plugin; they
+call the plugin's HTTP routes like any client. A third-party plugin is used
+from a phone through the dashboard in the phone's browser, and by voice.
+
 Two hard boundaries shape everything:
 
 * **Core and web are separate processes.** `core.py` registers into the voice
@@ -242,14 +251,11 @@ curl -X POST http://localhost:6370/v1/intent \
   -d '{"transcript":"give me a compliment","room_id":"kitchen"}'
 ```
 
-> The header above carries a chosen household token verbatim, whatever is
-> in it — spaces, `$`, backticks and double quotes included. The shell does
-> not re-scan the result of `$(cat …)` for quoting, so the token arrives as
-> one argument exactly as stored.
-
 > `/v1/intent` is on the device tier: pass the household token from
 > `~/.domovoi/device-token.txt` as `X-Device-Token` (an admin Bearer works
-> too). Before first-run setup the call needs no header at all.
+> too). Before first-run setup the call needs no header at all. The shell
+> does not re-scan the result of `$(cat …)`, so a token with spaces, `$`,
+> backticks or quotes in it still arrives exactly as stored.
 
 Iterate with `domovoi plugin dev ./compliments --watch` — it polls for file
 changes and re-validates, printing a reminder that code changes need a core
@@ -375,7 +381,7 @@ runs in `domovoi plugin dev`, `pack`, and the install pipeline.
 | `publisher` | Shown on the install preview. Bundled radio declares `"Coders Farm"`. |
 | `license` | SPDX-style string. |
 | `description` | One or two sentences — shown on the install preview. |
-| `domovoi_api` | A comma-separated specifier set evaluated against the core SDK version (currently `1.8.0`). Supported operators: `>=`, `<=`, `==`, `!=`, `>`, `<`, `~=`. An unsatisfiable range fails the parse with a "targets a different Domovoi release" message. Recommended: `">=1.0,<2.0"`. |
+| `domovoi_api` | A comma-separated specifier set evaluated against the core SDK version (currently `1.11.0`). Supported operators: `>=`, `<=`, `==`, `!=`, `>`, `<`, `~=`. An unsatisfiable range fails the parse with a "targets a different Domovoi release" message. Recommended: `">=1.0,<2.0"`. |
 | `homepage` | Optional URL. |
 | `help` | Optional (SDK 1.8): a short Markdown help file inside the plugin, e.g. `"HELP.md"`. Domovoi's help desk indexes it with the manual (see [your plugin's help file](#your-plugins-help-file-sdk-18)). Optional for third-party plugins; **required for Coders Farm's own**. |
 | `accent` | Optional. Your dashboard page's colour, `"#rrggbb"` (or `"#rgb"`): its primary buttons, links, selection washes and the frame the dashboard draws around it. Checked for contrast at load; see [the frame and your accent](#the-frame-and-your-accent). Without it the page gets the neutral plugin slate. |
@@ -583,6 +589,7 @@ badge = { endpoint = "/api/plugins/radio/badge", key = "favorites" }
 [[web.player_sources]]
 kind = "radio"
 stream_url_template = "/api/plugins/radio/stations/{id}/stream"
+room_play_template = "/api/plugins/radio/stations/{id}/play-in-room"   # SDK 1.10, optional
 ```
 
 * `scripts` — zero-build JSX files, Babel-compiled by the dashboard shell and
@@ -620,9 +627,9 @@ stream_url_template = "/api/plugins/radio/stations/{id}/stream"
   sort by `nav_order` with the core ones. Any other value refuses the
   load (`web.pages.nav_group must be one of 'media', 'tools'`). A group
   showing a single page shows it as a plain row, and Home's "everything"
-  grid on a phone uses the same groups. A household may later rearrange
-  the sidebar itself; your `nav_group` is where the page starts. The
-  Android app has no plugin pages and ignores the key.
+  grid on a phone uses the same groups. A household can rearrange the
+  menu (Settings → System → App layout); your `nav_group` is where the
+  page starts. The phone apps show no plugin pages (§1) and ignore the key.
 * `nav_icon` — the page's icon in the sidebar, the phone bar and Home's
   grid: a file under `web/static/` (a path outside it, `..` or a URL is
   ignored, with a warning in the load log). Draw it like the dashboard's
@@ -639,7 +646,15 @@ stream_url_template = "/api/plugins/radio/stations/{id}/stream"
   beside a `nav_icon`, follows the same rules, and if it fails to load the
   dashboard falls back to `nav_icon`. Most plugins don't need it.
 * `[[web.player_sources]]` — teaches the browser player how to stream your
-  `kind` of media (the template is a dashboard-relative URL).
+  `kind` of media (the template is a dashboard-relative URL). Optional
+  `room_play_template` (SDK 1.10): when someone casts one of your items to a
+  room from the player, it POSTs `{"room_id": "<room>"}` to this route
+  (`{id}` is the item's `itemId`) instead of refusing it as "not in the
+  library". It must be one of your own `/api/plugins/<slug>/` routes with
+  `{id}` in it (the manifest is refused otherwise); make it
+  `@device_endpoint` and play with `sdk.playback.ensure_room`, `play_url`
+  and `dispatch` on the core side (§4.5). The radio plugin's
+  `/stations/{id}/play-in-room` is the example.
 
 #### The frame and your accent
 
@@ -871,10 +886,15 @@ on the Plugins page says "containers not watched". A core older than SDK
 
 ### `[android]`
 
-`capabilities = ["stations"]` — free-form strings the Android app gates
-features on. See [API Reference](API_REFERENCE.md). The app reads the
-manifest only after the user has trusted the server in its picker, so a
-capability-gated screen never appears for a server nobody confirmed.
+`capabilities = ["stations"]` — free-form strings the phone apps read to
+know which of **their own** built-in screens the server can feed. It does not
+add a screen, and an app shows nothing for a string it doesn't already know:
+the Stations screen exists in the apps because Coders Farm wrote it for the
+Radio plugin, and it appears when a server's Radio plugin declares
+`"stations"`. A third-party plugin has no reason to set the key (see
+"What a plugin does not get" in §1). The apps read the manifest only after
+the user has trusted the server in their picker, so a capability-gated
+screen never appears for a server nobody confirmed.
 
 ### `[assets]`
 
@@ -908,21 +928,25 @@ from domovoi.sdk import (
 
 `PluginSDK` instances are **injected** — your `register(ctx)` receives a
 `PluginContext` whose `ctx.sdk` is your facade. You never construct one.
-`domovoi.sdk.API_VERSION` (currently `"1.8.0"` — 1.3 added
-`device_endpoint`; 1.4 added `egress`, the internet-access gate, and
-`connectivity.policy` / `.reason` / `.internet_allowed`, and made
-`sdk.http` refuse non-local requests when the answer is `never`; 1.5 added
-the `[[containers]]` table and `ctx.add_container` /
-`ContainerExpectation`, §4.18; 1.6 added `sdk.playback.dispatch`, §4.5;
-1.7 added `sdk.core_config.ai_features` and made `sdk.http` refuse a model
-request to this box's Ollama while the household's AI features are off,
-§4.14; 1.8 added lookup sources, `ctx.add_lookup_source`, §4.19, and the
-manifest's optional `help` file) is
-the semver your `domovoi_api` range is checked against. Ask for `">=1.4"`
-if you use the 1.4 names; for 1.5's, either ask for `">=1.5"` or call
-`ctx.add_container` only `if hasattr(ctx, "add_container")` so an older
-core still loads you; likewise `getattr(sdk.playback, "dispatch", None)`
-for 1.6's.
+`domovoi.sdk.API_VERSION` (currently `"1.11.0"`) is the semver your
+`domovoi_api` range is checked against. What each minor version added:
+
+| SDK | Added |
+|---|---|
+| 1.3 | `device_endpoint` (§4.15) |
+| 1.4 | `egress`, the internet-access gate; `connectivity.policy` / `.reason` / `.internet_allowed`; `sdk.http` refuses non-local requests when the answer is `never` (§4.14) |
+| 1.5 | the `[[containers]]` table, `ctx.add_container` / `ContainerExpectation` (§4.18) |
+| 1.6 | `sdk.playback.dispatch` (§4.5) |
+| 1.7 | `sdk.core_config.ai_features`; `sdk.http` refuses a model request to this box's Ollama while the household's AI features are off (§4.14) |
+| 1.8 | lookup sources, `ctx.add_lookup_source` (§4.19); the manifest's optional `help` file |
+| 1.9 | `sdk.speech.render` (§4.17); `core_config.ollama_url` / `ollama_model` (§4.13) |
+| 1.10 | `spoken_names` and `choices` (§4.20); `choice_kinds` on plugin handlers (§4.2); `playback.ensure_room` (§4.5); the player source's `room_play_template` (§3) |
+| 1.11 | `@device_endpoint` websocket routes on the core router (§4.15) |
+
+Ask for the version whose names you use (`">=1.4"` for 1.4's), or
+feature-test so an older core still loads you: call `ctx.add_container` only
+`if hasattr(ctx, "add_container")`, and likewise
+`getattr(sdk.playback, "dispatch", None)` for 1.6's.
 
 ### 4.1 `register(ctx)` — the PluginContext
 
@@ -988,6 +1012,19 @@ class Handler(ABC):
   `confirmation_kinds = ("<slug>.<kind>",)` and call
   `sdk.sessions.request_confirmation(...)`; the router resumes you via
   `handle_confirmation` with a kind guaranteed to be one you declared.
+* **Choices** (SDK 1.10): a question whose answer may be free text ("Did you
+  mean Lofi 24/7?" answered "no, the jazz one", "Lofi 24/7 or Lofi Hip
+  Hop?" answered "the second one"). List the kind in `choice_kinds` as
+  well as `confirmation_kinds` and override
+  `handle_choice_reply(kind, data, transcript, ctx, session)`: the router
+  hands it the WHOLE next reply (yes and no included) before anything else
+  runs. Read the reply with `domovoi.sdk.choices.parse_choice_reply` (§4.20)
+  and return `None` for a reply that isn't about your question, so it is
+  routed as a new turn. Park a question only when `ctx.answerable` is True
+  (the dashboard's play box can't answer one), and put an expiry in the
+  data. The load refuses a `choice_kinds` entry missing from
+  `confirmation_kinds` or a handler that declares them without the
+  reader; a reader that raises costs its question, not the turn.
 * `Handler.name` lands in `intents_log` — treat it as a stable identifier and
   never rename it cosmetically.
 * **Tool-offer gate**: `offers_tool(transcript)` decides whether your
@@ -1139,6 +1176,14 @@ MPD, so a later connect joins a live stream) or `music_stop`, the way the
 dashboard's own room controls do, and does nothing for a refused play.
 Never dispatch a Response your handler returns from a voice turn: the
 streaming layer already delivers that one.
+
+**A room someone named** (SDK 1.10): before playing in a room a request
+named (a page's room picker, a phone), `await
+sdk.playback.ensure_room(room_id)`. False means the house has no such room:
+answer 404 and play nothing (a name in a URL never creates a room). True
+also wakes the room's music player if it was down. A failed lookup raises
+(answer 503). `domovoi.sdk.testing`'s recording playback takes
+`known_rooms={...}` for tests.
 
 ```python
 @router.post("/play")
@@ -1358,8 +1403,11 @@ variables shadow the file**.
 `sdk.core_config` is a read-only whitelist of core facts: `bot_name`,
 `music_dir`, `podcasts_dir`, `audiobooks_dir`, `mpd_host`,
 `mpd_port_base_control`, `mpd_port_base_http`, `mpd_http_base`, `use_stubs`,
-`log_level`, and since SDK 1.7 `ai_features` (the household's AI switch,
-live: false means nothing may ask a language model). Anything else raises
+`log_level`, since SDK 1.7 `ai_features` (the household's AI switch,
+live: false means nothing may ask a language model), and since SDK 1.9
+`ollama_url` and `ollama_model` (the house's Ollama and the model its
+answers come from; send requests through `sdk.http` so the AI switch
+still applies). Anything else raises
 — and it's read-only. `mpd_http_base`
 reads back as a usable URL prefix (`http://<host>`) even when the setting
 is `auto`, which the core resolves to its current LAN address.
@@ -1411,7 +1459,7 @@ is `auto`, which the core resolves to its current LAN address.
   are httpx clients with the check as their first request hook;
   `egress.http_exception("what")` is the standard refusal for a route —
   `409` with the fixed detail `"internet access is turned off for this box
-  (Settings → Internet)"` and the header `X-Domovoi-Refusal: internet-off`,
+  (Settings → Privacy → Internet)"` and the header `X-Domovoi-Refusal: internet-off`,
   which the dashboard recognises; `egress.spoken_offline_phrase()` is the
   start of a voice reply ("I'm set to stay off the internet" under `never`,
   "I don't have internet right now" otherwise). Two rules: refuse **before**
@@ -1518,17 +1566,71 @@ with the router's own decorators or `add_api_route` (nested routers via
 `router.mount(...)` is mounted by FastAPI without the gate dependency —
 no tier, and no `404` while disabled — so it fails the load too.
 
-**Plugin websocket routes are not supported yet.** The gate that gives a
-route its tier and its disabled-`404` is written for HTTP requests; on a
-websocket FastAPI cannot call it, so a `@router.websocket(...)` route used
-to mount and then fail every handshake with a `TypeError`. Until the gate
-has a websocket form, a plugin router carrying any websocket route —
-`@router.websocket`, `add_api_websocket_route`, or a Starlette
-`add_websocket_route` — fails the load in both processes with "plugin
-websocket routes are not supported yet", naming the route. For live
-dashboard updates, declare `[[realtime]]` channels in the manifest
-([§4.12](#412-realtime--sdkrealtime)): they ride the dashboard's own
-`/ws/state` socket.
+**Plugin websocket routes (SDK 1.11): the core process, the device tier
+only.** A live, two-way stream (a game, a remote control) gets a websocket
+on the CORE router, marked `@device_endpoint`. Ask for
+`domovoi_api = ">=1.11,<2.0"`: an older core refuses the route at load.
+
+```python
+from fastapi import WebSocket, WebSocketDisconnect
+from domovoi.sdk import device_endpoint
+
+@router.websocket("/live")
+@device_endpoint
+async def live(ws: WebSocket):
+    await ws.accept()
+    try:
+        while True:
+            await ws.send_text(await ws.receive_text())
+    except WebSocketDisconnect:
+        pass
+```
+
+It is served at `ws://<server>:6370/v1/plugins/<slug>/live`. The per-slug
+gate runs on the upgrade, before your function, and refuses it before the
+socket is accepted (uvicorn answers the handshake `403`; your function
+never runs) when:
+
+* the plugin is disabled;
+* the `Host` is not a name of this server on the LAN, or a browser's
+  `Origin` is not a LAN page (the rules the HTTP routes and the core's own
+  sockets follow; a client that sends no `Origin`, like the phone apps, is
+  not a browser);
+* the caller has no household credential: the household token as the
+  `X-Device-Token` header, or as `?token=<household token>` from a browser
+  (which cannot set headers on an upgrade), or an admin `Bearer`. This is
+  the HTTP device tier's rule exactly: the pre-setup grace applies, the
+  dashboard cookie alone is refused, and wrong tokens count toward the same
+  per-device backoff. `?device_token=` (the media reads' parameter) is not
+  accepted on a socket;
+* the plugin already holds 32 open sockets, or this device 8 of them
+  (close `1013`, try again later).
+
+While it is open the socket is held to the same rule. The credential that
+opened it is checked again every 30 seconds, and the socket is closed
+(`1008`) once it would no longer open it: the household token was changed,
+the admin session behind a `Bearer` signed out or went an hour without an
+admin action, or setup finished (the pre-setup grace ended). A socket never
+counts as admin activity, so holding one open does not keep an admin
+session alive. Each message may be at most the size of a request body
+(`MAX_REQUEST_BYTES`, 1 MiB by default; close `1009`), and a socket may
+send 50 messages a second, with bursts of 100 (close `1008`). When the
+plugin is disabled, re-enabled or upgraded the core closes every socket
+its routes hold open (`1001`), so a socket never outlives the load that
+accepted it. Your function sees each of these as a `WebSocketDisconnect`
+carrying the code. The `?token=` value never reaches a log line: both
+processes blank it (`token=***`) in every record.
+
+Anything else fails the load (and the mount) with "plugin websocket
+routes must be @device_endpoint routes on the core router (core.py)",
+naming the route: an unmarked or `@open_endpoint` socket, a Starlette
+`add_websocket_route` (FastAPI would mount it without the gate), and any
+websocket on the dashboard's `web.py` router (a plugin page opens the
+core's socket instead). The trust screen lists each socket among the
+device-tier routes as `WS /v1/plugins/<slug>/...`. For dashboard state
+alone, `[[realtime]]` channels in the manifest
+([§4.12](#412-realtime--sdkrealtime)) are still the lighter tool: they
+ride the dashboard's own `/ws/state` socket.
 
 ### 4.16 The web entry point — `register_web(ctx)`
 
@@ -1609,34 +1711,43 @@ wires your manifest `[[realtime]]` declarations. Import rules are strict:
 `core.py` — tripwired at install, enforced at runtime by a `sys.meta_path`
 guard.
 
----
-
-### 4.17 Speech -- `sdk.speech` (SDK 1.1)
+### 4.17 Speech — `sdk.speech` (SDK 1.1)
 
 ```python
 reached = await sdk.speech.announce(room_id, "The summary is ready: ...")
 if not reached:
-    ...  # nobody connected in that room -- park it for the dashboard instead
+    ...  # nobody connected in that room: park it for the dashboard instead
 ```
 
-Out-of-turn spoken announcements -- for work that finishes AFTER your
+Out-of-turn spoken announcements, for work that finishes AFTER your
 handler's Response was spoken (a background summarization, a long
 download, a print completing). Rides the same fan-out as the core's
 timers and `/v1/admin/announce`: a Pi mid-response is skipped (its
 in-flight TTS would clip the announcement) and resumable music is
 auto-restored afterwards. `room_id=None` broadcasts to every connected
 room. Returns the room_ids actually reached and never raises on
-delivery problems -- branch on the returned list. Announcements to one
+delivery problems: branch on the returned list. Announcements to one
 room play one at a time (yours waits for a timer or an intercom broadcast
 already playing there), and a wake word or barge-in in that room cuts
 yours off: that room is then reported as not reached and the reason is
 logged. So is a room where the text-to-speech engines produced no audio
-at all (it used to count as reached with nothing heard). It stays
-best-effort. Don't spam it: an
+at all. It stays best-effort. Don't spam it: an
 announcement interrupts the household; reserve it for things a person
 asked for or needs to know now.
 
----
+```python
+wav = await sdk.speech.render(passage, room_id="bedroom")   # SDK 1.9
+```
+
+`render` turns text into audio without playing it: one mono 16-bit WAV,
+in the voice `room_id` speaks in (picked the way that room's own replies
+pick it), or in the server's voice when `room_id` is None, for audio a
+browser plays itself. Long text is rendered a sentence at a time and
+joined, so there is no length cap. Where the audio goes is up to you:
+write it into the music library and queue it in the room's player, or
+serve it to the dashboard. Rendering takes real CPU on a box without a
+GPU; render ahead of playback rather than in a request handler. Empty
+text raises `ValueError`. Core process only.
 
 ### 4.18 Containers — `ctx.add_container` (SDK 1.5)
 
@@ -1669,7 +1780,7 @@ never call Docker. It returns a `ContainerExpectation`:
 | `name`, `image` | What you **last created** the container with (None: the manifest's values). Not a setting the household just changed: until your watchdog recreates the container it still runs the old image, and the guard would read the difference as a swapped image. |
 | `state` | `"running"` (must exist and run — every failure rule applies), `"stopped"` (you stopped it on purpose; it may be stopped or gone, and if it runs it must run your image), or `"unmanaged"` (`ContainerExpectation.unmanaged()`: you don't manage it right now; not watched at all). |
 | `busy` | You are creating, pulling or recreating it this minute. The guard waits instead of reporting it missing or swapped — for 30 minutes, then it checks anyway, so a container you can never bring up still alerts. |
-| `pulling` | While `busy`: the image you are moving the container TO. Past the 30 minutes the guard keeps waiting while that image isn't on the host yet (a long pull), up to 6 hours in all. |
+| `pulling` | While `busy`: the image you are moving the container TO. Past the 30 minutes the guard keeps waiting while that image (else `image`) isn't on the host yet (a long pull), up to 6 hours in all. |
 | `reason` | Shown on the guard's status while busy or unmanaged. |
 
 No resolver: the manifest's name and image, expected to run whenever the
@@ -1678,9 +1789,7 @@ The guard also holds your containers on its own while the plugin is being
 installed, upgraded, enabled, disabled or uninstalled, and for 5 minutes
 after, and while an upgrade waits for a restart (the registry already has
 the new manifest while your old code still runs the old container). A
-`busy` past 30 minutes is still believed while the image you report in
-`pulling` (else `image`) isn't on the host yet — a long pull — up to 6
-hours in all. A resolver that raises holds them for
+resolver that raises holds them for
 30 minutes (and is logged); after that the container shows as "not
 watched · resolver failing" on Settings → Health and only its
 repository and settings are checked, until the resolver answers again.
@@ -1752,6 +1861,38 @@ def register(ctx):
   person allows it. A local source must never leave the box (Kiwix
   answers only while its server is on this network).
 
+### 4.20 Spoken names and replies — `spoken_names`, `choices` (SDK 1.10)
+
+Speech-to-text writes what it hears: "lo-fi 24 slash 7" for a station called
+"Lofi 24/7", "3 doors down" for "Three Doors Down". Compare a spoken name
+with a stored one through the core's own rules, never with `LIKE`:
+
+```python
+from domovoi.sdk import spoken_names as sn   # loaded on first use
+
+sn.spoken_forms("Lofi 24/7")      # ("lofi twenty four seven",)
+sn.same_name("3 Doors Down", "Three Doors Down")   # True
+sn.sounds_like("dead mouse", "deadmau5")            # True
+sn.phonetic_key("lofi")           # Double Metaphone of each word
+```
+
+They fold case, punctuation, accents and lookalike letters, read numbers as
+words both ways round, and give a sounds-alike key (`fold`, `compact` and
+`speakable` are there too); `rapidfuzz`, a core dependency, scores what is
+close. Pick a play bar and an ask bar and ask "did you mean …?" between
+them rather than playing a guess: the radio plugin's `station_match.py` is
+a worked example (play at 0.90, ask from 0.75, and the words each side has
+that the other lacks are scored on their own, so a shared "twenty four
+seven" can't carry "chill 24/7" to "Lofi 24/7").
+
+`domovoi.sdk.choices.parse_choice_reply(transcript, n)` reads the reply to a
+question that offered `n` things, the way the core's music question does:
+`action` is `"pick"` (yes, "the second one", "either": `index`),
+`"decline"` (no, "never mind"), `"name"` (a name: `name`, with `negated`,
+`explicit`, and `otherwise` for what it means if it names nothing), or
+`"pass"` (not an answer: return None from `handle_choice_reply`). See §4.2,
+"Choices".
+
 ## 5. Worked example — the bundled radio plugin
 
 [`plugins/radio/`](../plugins/radio/) is the reference plugin, published by
@@ -1775,23 +1916,23 @@ story. Here is the developer's tour, file by file.
   **no `python` pins and ships no lockfile**, and that is particular to a
   bundled plugin: it runs in the core's own interpreter and is loaded from
   the checkout, never installed through pip, so a lock of its own would
-  describe an environment nobody installs. (It used to ship one; it had
-  drifted below the core's lock, carried dependency advisories and no
-  longer resolved, so it was removed rather than kept as a false record.)
+  describe an environment nobody installs.
   Its heavy dependencies (`numpy`, `scipy`, `shazamio`) are imported
   lazily and degrade when absent; they come from the core's `fingerprint`
-  and `shazam` extras. Audio is decoded by the `ffmpeg` program (no
-  librosa since 2026-10-15). **A plugin you distribute as a zip is
+  and `shazam` extras. Audio is decoded by the `ffmpeg` program. **A plugin you distribute as a zip is
   different** — it must pin and lock everything it imports, as
   [`[requirements]`](#requirements) describes.
 * **One handler** at band **280** — the anchored-media neighborhood, between
   spoken-audio (270) and playlists (290), deliberately *ahead of* the music
   handler's greedy `^play (.+)$` at 300 so "play 97.5 fm" is claimed first.
-  `requires_network = "degraded"`, `chat_exposed = true`, corpus
-  `["play 97.5 fm", "tune to the news station"]`.
-* **SDK range** `domovoi_api = ">=1.4,<2.0"` (version 1.4.0): it reads
-  `sdk.connectivity.policy` and uses `sdk.egress`. It ships inside the
-  core, so the range can never be unmet.
+  `requires_network = "degraded"`, `chat_exposed = true`, and a corpus of
+  five phrases (`"play 97.5 fm"`, `"tune to the news station"`, `"play the
+  station lofi"`, `"play lofi radio"`, `"favorite this station"`).
+* **SDK range** `domovoi_api = ">=1.10,<2.0"` (plugin version 1.5.0): it
+  uses `sdk.egress` and `sdk.connectivity.policy` (1.4) and
+  `spoken_names`, `choices`, `playback.ensure_room` and
+  `room_play_template` (1.10). It ships inside the core, so the range can
+  never be unmet.
 * **Six `[[workers]]`**: four `poll` (`radio_sampler`, `radio_icy_poller`,
   `radio_detections_reaper`, `track_fingerprinter`) and two `startup`
   (`fcc_import`, `simulcast_backfill`) — the startup entries cross-check
@@ -1802,8 +1943,9 @@ story. Here is the developer's tour, file by file.
   downloads; it queries external directories; it runs
   ffmpeg/rtl_fm, and SDR hardware is optional).
 * **Web**: one script (`stations.jsx`), one page (`StationsPage`, nav label
-  "Stations", a favorites-count badge), one player source (`kind = "radio"`
-  with a stream proxy template).
+  "Stations" in the Media group, a favorites-count badge), one player
+  source (`kind = "radio"` with a stream proxy template and a
+  `room_play_template` for casting to a room).
 * **Accent** `accent = "#146859"` and `accent_dark = "#5fb8a4"`, a deep and
   a light teal well away from the dashboard's amber: the Stations page's
   buttons, selected scope chip, starred icons and the frame's band take it
@@ -1844,10 +1986,13 @@ story. Here is the developer's tour, file by file.
    third hook (`sdr_probe`) probes the dongle and, on failure, removes the
    tuner from `sdk.state` so the handler degrades to a friendly explainer.
 6. **Core router** (`ctx.add_router(...)`): the FCC import runs as a
-   *background job* behind `POST /v1/plugins/radio/fcc-import` (admin-gated
-   by default — no opt-outs here) with a GET for progress polling; plus
-   `/state` for live tuner/job state (deliberately not `/status`, which core
-   owns).
+   *background job* behind `POST /v1/plugins/radio/fcc-import` (the admin
+   default: a bulk server-side job) with a GET for progress polling;
+   `POST /stations/{id}/resolve-simulcast` and
+   `POST /stations/{id}/play-in-room` are `@device_endpoint` (household
+   actions; play-in-room checks the room with `ensure_room`, plays with
+   `play_url` and tells the room with `dispatch`); plus `/state` for live
+   tuner/job state (deliberately not `/status`, which core owns).
 7. **Event traffic in both directions**: it subscribes to
    `core.library_track_deleted` for soft-ref hygiene (delete orphaned
    fingerprints, null `library_track_id` on detections), and it *publishes*
@@ -1869,8 +2014,14 @@ falling through to the music handler. Per-path offline behavior:
 `stop` and `play <freq> fm` are `offline_ok=True` (SDR + MPD are local);
 `stream` and `tune` are `offline_ok=False`, so offline they auto-fallback to
 `fallback_offline()`, which tries FM-via-SDR — the half of the feature that
-genuinely works without internet. Multi-candidate "stream X" parks a
-mediated confirmation with the namespaced kind `radio.station_choice`.
+genuinely works without internet. Station names are matched by how they
+are said (`station_match.py`, on the SDK's `spoken_names`): "lo-fi 24 slash
+7" plays "Lofi 24/7", "low 5 24-7" is asked about. A near match, two close
+ones, or the internet directory's best one or two (searched only when the
+household allows the internet and nothing saved fits) are offered through
+the namespaced choice `radio.station_choice`, read with `sdk.choices`.
+"Add this to my favorites" stars the station playing in the room, and is
+left to the rest of the router when no station plays.
 
 Playback goes through `sdk.playback.play_url(..., source="radio")`, online
 and FM alike — station name stamped as title, now-playing stamped, history
@@ -1934,8 +2085,8 @@ with cursor pagination, the sidebar badge (which the page reuses as its
 favorites-pagination total, so there's no second count query), and a browser
 stream proxy (so the dashboard player dodges CORS/mixed-content — with
 honest 409s for FM stations the browser can't reach). Live-core actions
-(FCC import, simulcast resolve) are **proxied to the plugin's own core
-endpoints** through the context's `CoreClient`, forwarding the caller's
+(FCC import, simulcast resolve, playing a station in a room) are **proxied
+to the plugin's own core endpoints** through the context's `CoreClient`, forwarding the caller's
 request so the core's gate sees the same credential — the web process
 never imports core code. The router shows all three tiers' choices:
 playing, favoriting, editing and forgetting stations and the simulcast

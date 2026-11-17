@@ -257,7 +257,7 @@ fi
 cat >&2 <<NEXT
   $step. Commit the build number, so the next iPhone or Android build goes above it:
        git add ios/project.yml
-       git commit -m "iOS build $build ($version) [skip ci]"
+       git commit -m "iOS build $build ($version)"
        git push
   $((step + 1)). App Store Connect > Domovoi > TestFlight: wait for the build to finish
      processing. The encryption question is already answered by the app

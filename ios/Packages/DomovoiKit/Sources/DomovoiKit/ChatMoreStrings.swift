@@ -194,6 +194,15 @@ public enum ChatMoreStrings {
     public static let open = "open"
     public static let save = "save"
     public static let share = "share"
+
+    /// Print, on a card and in the canvas, only when the house has a printer
+    /// (``printingOffersDraftPrint(printers:)``). `DraftUi.kt:260` (`"print"`
+    /// on a card that wrote a version, and the canvas's version menu `:415`)
+    /// and `:254` (`"Print"`, the primary button of a card whose reply asked
+    /// to print, ``ChatMoreDraftRef/action`` == `"print"`).
+    public static let print = "print"
+    public static let printPrimary = "Print"
+
     public static let edit = "edit"
     public static let cancel = "cancel"
     public static let backToTheChat = "back to the chat"

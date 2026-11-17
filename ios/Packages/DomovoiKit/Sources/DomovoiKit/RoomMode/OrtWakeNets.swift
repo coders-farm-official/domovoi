@@ -1,37 +1,25 @@
 import Foundation
 
-/// openWakeWord's three networks on ONNX Runtime, through ``OnnxModel``
-/// (`roommode/OrtModels.kt:16-87`, `OrtWakeNets`). One intra-op thread each:
-/// a room listens all day, on old phones.
+/// openWakeWord's shared front end on ONNX Runtime: the melspectrogram and
+/// embedding models (`roommode/OrtModels.kt:16-87`), loaded once however
+/// many wake words run on them. One intra-op thread each: a room listens
+/// all day, on old phones.
 ///
 /// Not thread-safe and not `Sendable`: the listening thread that loads it is
 /// the only one that runs it.
-public final class OrtWakeNets: WakeNets {
+public final class OrtWakeFrontEnd: WakeFrontEnd {
     private let mel: OnnxModel
     private let emb: OnnxModel
-    private let wakeModel: OnnxModel
     private let melInput: String
     private let melOutput: String
     private let embInput: String
     private let embOutput: String
-    private let wakeInput: String
-    private let wakeOutput: String
 
-    /// The stock models' embedding size: the wake model reads frames x 96.
-    static let embeddingSize = 96
-    /// What a wake model reads when it says nothing else (Android's default).
-    static let defaultWakeFrames = 16
-
-    public let wakeInputFrames: Int
-
-    public init(melspectrogram: URL, embedding: URL, wake: URL) throws {
+    public init(melspectrogram: URL, embedding: URL) throws {
         mel = try OnnxModel(contentsOf: melspectrogram, threads: 1)
         emb = try OnnxModel(contentsOf: embedding, threads: 1)
-        wakeModel = try OnnxModel(contentsOf: wake, threads: 1)
-        (melInput, melOutput) = try Self.names(mel, melspectrogram)
-        (embInput, embOutput) = try Self.names(emb, embedding)
-        (wakeInput, wakeOutput) = try Self.names(wakeModel, wake)
-        wakeInputFrames = try Self.probeFrames(wakeModel, input: wakeInput, output: wakeOutput)
+        (melInput, melOutput) = try OrtWakeNets.names(mel, melspectrogram)
+        (embInput, embOutput) = try OrtWakeNets.names(emb, embedding)
     }
 
     public func melspectrogram(_ samples: [Float]) throws -> [[Float]] {
@@ -52,26 +40,73 @@ public final class OrtWakeNets: WakeNets {
 
     public func embedding(_ window: [[Float]]) throws -> [Float] {
         let bins = window.first?.count ?? 0
-        let out = try emb.run([embInput: .float(Self.flat(window), shape: [1, window.count, bins, 1])], outputs: [embOutput])
+        let out = try emb.run([embInput: .float(OrtWakeNets.flat(window), shape: [1, window.count, bins, 1])], outputs: [embOutput])
         return out[embOutput] ?? []
     }
+}
 
-    public func wake(_ features: [[Float]]) throws -> Float {
-        let dim = features.first?.count ?? 0
-        let out = try wakeModel.run([wakeInput: .float(Self.flat(features), shape: [1, features.count, dim])], outputs: [wakeOutput])
-        return out[wakeOutput]?.first ?? 0
+/// One wake word's model on ONNX Runtime: a classifier over the shared
+/// front end's embeddings (`OrtModels.kt`, the wake session).
+public final class OrtWakeClassifier: WakeClassifier {
+    private let model: OnnxModel
+    private let input: String
+    private let output: String
+    public let inputFrames: Int
+
+    public init(contentsOf url: URL) throws {
+        model = try OnnxModel(contentsOf: url, threads: 1)
+        (input, output) = try OrtWakeNets.names(model, url)
+        inputFrames = try OrtWakeNets.probeFrames(model, input: input, output: output)
     }
+
+    public func score(_ features: [[Float]]) throws -> Float {
+        let dim = features.first?.count ?? 0
+        let out = try model.run([input: .float(OrtWakeNets.flat(features), shape: [1, features.count, dim])], outputs: [output])
+        return out[output]?.first ?? 0
+    }
+}
+
+/// openWakeWord's three networks for one word on ONNX Runtime, through
+/// ``OnnxModel`` (`roommode/OrtModels.kt:16-87`, `OrtWakeNets`): an
+/// ``OrtWakeFrontEnd`` and one ``OrtWakeClassifier``. The room loads the
+/// two parts itself to put several words on one front end
+/// (``OnnxRoomEarsLoader``); this is the one-word shape the real-model
+/// tests check against openWakeWord's own scores.
+///
+/// Not thread-safe and not `Sendable`: the listening thread that loads it is
+/// the only one that runs it.
+public final class OrtWakeNets: WakeNets {
+    public let frontEnd: OrtWakeFrontEnd
+    public let classifier: OrtWakeClassifier
+
+    /// The stock models' embedding size: the wake model reads frames x 96.
+    static let embeddingSize = 96
+    /// What a wake model reads when it says nothing else (Android's default).
+    static let defaultWakeFrames = 16
+
+    public var wakeInputFrames: Int { classifier.inputFrames }
+
+    public init(melspectrogram: URL, embedding: URL, wake: URL) throws {
+        frontEnd = try OrtWakeFrontEnd(melspectrogram: melspectrogram, embedding: embedding)
+        classifier = try OrtWakeClassifier(contentsOf: wake)
+    }
+
+    public func melspectrogram(_ samples: [Float]) throws -> [[Float]] { try frontEnd.melspectrogram(samples) }
+
+    public func embedding(_ window: [[Float]]) throws -> [Float] { try frontEnd.embedding(window) }
+
+    public func wake(_ features: [[Float]]) throws -> Float { try classifier.score(features) }
 
     // MARK: - helpers
 
-    private static func names(_ model: OnnxModel, _ url: URL) throws -> (String, String) {
+    static func names(_ model: OnnxModel, _ url: URL) throws -> (String, String) {
         guard let input = model.inputNames.first, let output = model.outputNames.first else {
             throw OnnxModel.Failure(note: "\(url.lastPathComponent) has no input or no output")
         }
         return (input, output)
     }
 
-    private static func flat(_ rows: [[Float]]) -> [Float] {
+    static func flat(_ rows: [[Float]]) -> [Float] {
         var out: [Float] = []
         out.reserveCapacity(rows.count * (rows.first?.count ?? 0))
         for row in rows { out.append(contentsOf: row) }

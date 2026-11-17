@@ -115,6 +115,7 @@ from web.backend.api import chat_documents as _docs
 from web.backend.api import chat_letters as _letters
 from domovoi.doc_qa import letter as _letter
 from web.backend.api import chat_drafts as _drafts
+from web.backend.api import chat_videos as _videos
 from web.backend.api.devices import valid_device_id
 from web.backend.db import session_scope
 from web.backend.domovoi_client import auth_forward_headers, domovoi_url
@@ -360,6 +361,8 @@ async def delete_thread(thread_id: int) -> dict[str, Any]:
             )
         ).scalars().all()
         doc_tokens = {d.get("token") for d in await _docs.thread_documents(thread_id, s)}
+        # Its videos' files (a job still under way); their text goes by CASCADE.
+        video_files = await _videos.thread_tokens(s, thread_id)
         # Its long-document jobs stop first (their rows go with the thread).
         await _jobs.cancel_thread(thread_id)
         r = await s.execute(text("DELETE FROM chat_threads WHERE id = :id"), {"id": thread_id})
@@ -400,6 +403,8 @@ async def delete_thread(thread_id: int) -> dict[str, Any]:
                     p.unlink(missing_ok=True)
     # The thread's documents, and the text read from them (chat_documents).
     _docs.remove({t for t in doc_tokens if t and t not in docs_still_used})
+    # The thread's videos and any frames a job still had (chat_videos).
+    _videos.remove_files(video_files)
     return {"deleted": thread_id}
 
 
@@ -632,7 +637,13 @@ async def list_messages(thread_id: int) -> dict[str, Any]:
     except Exception as e:  # noqa: BLE001 — the messages still show
         log.warning("chat: the jobs of thread %s are unreadable: %s", thread_id, type(e).__name__)
         jobs = []
-    return {"messages": [_msg_dict(r) for r in rows], "jobs": jobs}
+    # Videos attached here (chat_videos.py): each one's progress or result.
+    try:
+        videos = await _videos.thread_videos(thread_id)
+    except Exception as e:  # noqa: BLE001 — the messages still show
+        log.warning("chat: the videos of thread %s are unreadable: %s", thread_id, type(e).__name__)
+        videos = []
+    return {"messages": [_msg_dict(r) for r in rows], "jobs": jobs, "videos": videos}
 
 
 class SendBody(BaseModel):
@@ -642,6 +653,9 @@ class SendBody(BaseModel):
     images: list[dict[str, str]] = Field(default_factory=list, max_length=_MAX_IMAGES_PER_MESSAGE)
     # Documents staged with POST /api/chat/documents: [{token}].
     documents: list[dict[str, str]] = Field(default_factory=list, max_length=4)
+    # A video staged with POST /api/chat/videos: [{token}] (one per message,
+    # chat_videos.py). The message queues the core's job; the reply says so.
+    videos: list[dict[str, str]] = Field(default_factory=list, max_length=1)
     model: Optional[str] = Field(None, max_length=200)
     # The sending install (the device tier's usual id), for the details view.
     device_id: Optional[str] = Field(None, max_length=64)
@@ -969,7 +983,11 @@ async def send_message(thread_id: int, body: SendBody, request: Request) -> Stre
     # Documents staged for this message (chat_documents.py); a thread with
     # any is answered from them unless the message carries pictures.
     documents = _docs.resolve(body.documents)
-    if not body.content.strip() and not documents:
+    # A video staged for this message (chat_videos.py): watched by the core.
+    videos = _videos.resolve(body.videos)
+    if body.videos and not videos:
+        raise HTTPException(status_code=404, detail="the attached video is no longer on this Domovoi; attach it again")
+    if not body.content.strip() and not documents and not videos:
         raise HTTPException(status_code=422, detail="a message needs some words, or a document attached")
     # Well-formed or nothing, as every other route that reads a device id.
     device_id = valid_device_id(body.device_id)
@@ -999,6 +1017,7 @@ async def send_message(thread_id: int, body: SendBody, request: Request) -> Stre
                  "docs": json.dumps(documents) if documents else None},
             )
         ).scalar_one()
+        video_jobs = await _videos.queue_jobs(s, thread_id, user_row_id, videos, body.content) if videos else []
         # The first user message titles the thread: its first five words;
         # an attachment with no words titles it after the document.
         await s.execute(
@@ -1011,10 +1030,19 @@ async def send_message(thread_id: int, body: SendBody, request: Request) -> Stre
                 """
             ),
             {"t": thread_id, "c": chat_titles.first_words_title(body.content)
-                                  or (f"About {documents[0]['name']}" if documents else None)},
+                                  or (f"About {documents[0]['name']}" if documents else None)
+                                  or (f"About {videos[0]['name']}" if videos else None)},
         )
         await _notify_chat(s, "message")
         await s.commit()
+
+    if video_jobs:
+        # A video: the core watches it in the background; the reply says
+        # so at once, and the core writes what it found when it's done.
+        return await _immediate_reply(
+            thread_id, await _videos.attach_reply(video_jobs, body.content),
+            {"model_role": "video", "video_job": video_jobs[0]["job_id"]},
+        )
 
     return await _answer(
         thread_id, thread.person_id, has_images=bool(images), override=body.model,
@@ -1350,6 +1378,16 @@ async def _answer(
                 fixed_reply = help_answer.not_covered_answer(help_turn)
     if plan is not None and plan.immediate is None:
         system["content"] += "\n\n" + plan.rules
+    # A chat with videos (chat_videos.py): a plain text turn is told what
+    # was heard and what the frames might show, and answers from that.
+    if refusal is None and plan is None and dturn is None and help_turn is None and not vision_call:
+        try:
+            video_rules = await _videos.chat_rules(thread_id)
+        except Exception as e:  # noqa: BLE001 — the question is still answered
+            log.warning("chat: the videos of thread %s are unreadable: %s", thread_id, type(e).__name__)
+            video_rules = None
+        if video_rules:
+            system["content"] += "\n\n" + video_rules
     # Lookups (part 5, W1): a plain text turn (not help, documents,
     # pictures, a draft or a retry) is told about LOOK_UP / READ_PAGE, and a
     # "look up …" or "what does this page say: …" needs no model to say so.
@@ -1683,6 +1721,19 @@ async def _answer(
     )
 
 
+async def _immediate_reply(thread_id: int, content: str, stats: dict[str, Any]) -> StreamingResponse:
+    """A reply the app says itself (no model asked), as the send's SSE:
+    one ``delta`` with the whole text, then ``done`` with the row."""
+    row = await _insert_assistant_row(thread_id, content=content, model=None, error=None, stats=stats)
+
+    async def sse() -> AsyncIterator[str]:
+        yield f"event: delta\ndata: {json.dumps({'text': content})}\n\n"
+        yield f"event: done\ndata: {json.dumps(_msg_dict(row), default=str)}\n\n"
+
+    return StreamingResponse(sse(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 async def _insert_assistant_row(
     thread_id: int, *, content: str, model: str | None, error: str | None, stats: dict[str, Any],
     used_internet: bool = False, doc: dict[str, Any] | None = None,
@@ -1839,7 +1890,7 @@ async def _lookup_turn(
             return
     if not internet_on:
         text_ = (lookup_answer.NEVER_REPLY if proposal.kind == "search" else
-                 "This Domovoi is set to stay off the internet (Settings → Internet), so I can't read that page.")
+                 "This Domovoi is set to stay off the internet (Settings → Privacy → Internet), so I can't read that page.")
         async for ev in _fixed(thread_id, text_, proposal, {"internet_used": False}, reason="internet_off"):
             yield ev
         return
@@ -2818,6 +2869,8 @@ async def chat_models() -> dict[str, Any]:
         "default_model": core_settings.ollama_model,
         "vision_model": vision,
         "vision_installed": None if tags is None else ollama_client.model_installed(vision, tags),
+        # Videos in chat (chat_videos.py): offered only when they can work.
+        "video": _videos.availability(),
     }
 
 
@@ -2828,3 +2881,5 @@ router.include_router(_drafts.router)
 # Long documents' map/reduce jobs (chat_doc_jobs.py), and a phone's private ones.
 router.include_router(_jobs.router)
 router.include_router(_letters.router)
+# Videos in chats (chat_videos.py): the upload, each job's progress and results.
+router.include_router(_videos.router)

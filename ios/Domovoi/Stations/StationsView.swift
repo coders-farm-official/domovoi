@@ -1,8 +1,10 @@
 import DomovoiKit
 import SwiftUI
 
-/// Stations: the radio plugin's screen — search a catalogue, keep the ones
-/// worth keeping, and see what the sampler has heard on them.
+/// Stations: the app's own screen over our radio plugin's API — search a
+/// catalogue, keep the ones worth keeping, and see what the sampler has heard
+/// on them. Offered only when the radio plugin from Coders Farm is installed
+/// (``Capabilities/has(_:)``, ``requiredPlugins``).
 ///
 /// `android/.../ui/screens/stations/StationsScreen.kt` (685 lines) plus
 /// `StationSearch.kt` (598), wrapped on Android in
@@ -60,9 +62,9 @@ import SwiftUI
 /// standing decision of 2026-10-11: both lists load as you scroll. The
 /// favourites **count** stays, from `/badge`.
 ///
-/// **A room.** Not an omission: nothing under Android's `screens/stations/`
-/// or `player/` posts a station to a room — grepped, MAP §3.6 — so there is
-/// no room control on this screen to port.
+/// **A room.** `play in a room` (Radio 1.5.0) is in a favourite's detail
+/// sheet, as Android's is in a favourite's controls and its detail card
+/// (``StationsRoomPlayButton``, ``StationsRoomPlay``).
 ///
 /// ### Why the rows are not inside their cards
 ///
@@ -109,7 +111,11 @@ struct StationsView: View {
             // model needs the container and a `@State` initialiser runs
             // before the view has one.
             if stations == nil {
-                stations = StationsModel(in: model.container, playback: playback)
+                stations = StationsModel(
+                    in: model.container,
+                    playback: playback,
+                    roomPlayBackstop: model.stationsRoomPlayBackstop
+                )
             }
             // **Re-pointed on every appearance**, not only on the first one.
             // The witness the route slot handed in was built from
@@ -122,6 +128,8 @@ struct StationsView: View {
             // `AudiobooksPhonePlayer.over(_:_:)` twice.
             stations?.use(playback)
             stations?.start()
+            // After `start()`, so a gate that is open reads the rooms now.
+            stations?.use(roomGate: model.stationsRoomPlayGate)
         }
         .onAppear { visible = true }
         .onDisappear {
@@ -143,6 +151,13 @@ struct StationsView: View {
             // the one the next tap must reach.
             stations?.use(playback)
             stations?.serverChanged()
+            stations?.use(roomGate: model.stationsRoomPlayGate)
+        }
+        // A manifest that loaded (or changed) can open or close "play in a
+        // room": our Radio's version is in it.
+        .onChange(of: model.stationsRoomPlayGate) { _, gate in
+            guard visible else { return }
+            stations?.use(roomGate: gate)
         }
         // One sheet, keyed on the station — `.sheet(item:)` rebuilds on a
         // changed id and not otherwise, so opening a second favourite

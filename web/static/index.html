@@ -80,6 +80,8 @@
   <script type="text/babel" data-presets="react" src="chat_markdown.js"></script>
   <script type="text/babel" data-presets="react" src="chat_details.js"></script>
   <script type="text/babel" data-presets="react" src="data.js"></script>
+  <!-- The header's address to share (domovoi.local, else :6369, else the IP). -->
+  <script type="text/babel" data-presets="react" src="share_address.js"></script>
   <script type="text/babel" data-presets="react" src="components.jsx"></script>
   <script type="text/babel" data-presets="react" src="player.jsx"></script>
   <script type="text/babel" data-presets="react" src="lyrics.jsx"></script>
@@ -93,6 +95,7 @@
   <script type="text/babel" data-presets="react" src="chat_documents.jsx"></script>
   <script type="text/babel" data-presets="react" src="chat_drafts.jsx"></script>
   <script type="text/babel" data-presets="react" src="chat_lookups.jsx"></script>
+  <script type="text/babel" data-presets="react" src="chat_videos.jsx"></script>
   <script type="text/babel" data-presets="react" src="chat.jsx"></script>
   <script type="text/babel" data-presets="react" src="people.jsx"></script>
   <script type="text/babel" data-presets="react" src="satellite_media.jsx"></script>
@@ -109,6 +112,9 @@
   <!-- Settings → Household → Media folders (registers its panel). -->
   <script type="text/babel" data-presets="react" src="media_folders.jsx"></script>
   <script type="text/babel" data-presets="react" src="music_mix.jsx"></script>
+  <script type="text/babel" data-presets="react" src="queue_history.jsx"></script>
+  <!-- Settings → Household → Friend Houses (registers its panel). -->
+  <script type="text/babel" data-presets="react" src="friend_houses.jsx"></script>
   <script type="text/babel" data-presets="react" src="settings.jsx"></script>
   <!-- Files is a multi-library browser. It MUST load before doc_editor.jsx /
        sheet_editor.jsx (which register window.DocEditor / window.SheetEditor,
@@ -283,12 +289,21 @@
       window.DomovoiPlayerSources = window.DomovoiPlayerSources || {};
       // Seed the browser player's source registry (player.jsx reads it
       // to resolve queue-item kinds → stream URLs; unknown kinds are
-      // hidden with a console warn, never a crash).
+      // hidden with a console warn, never a crash). `room_play_template`
+      // (SDK 1.10) is where a cast sends one of the kind's items to a room;
+      // only one of the plugin's own routes is kept.
       (manifest.plugins || []).forEach((p) => {
         (p.player_sources || []).forEach((src) => {
+          const own = `/api/plugins/${p.slug}/`;
+          const roomPlay = typeof src.room_play_template === 'string'
+            && src.room_play_template.startsWith(own)
+            && src.room_play_template.includes('{id}')
+            && !src.room_play_template.includes('..')
+            ? src.room_play_template : null;
           window.DomovoiPlayerSources[src.kind] = {
             plugin: p.slug,
             stream_url_template: src.stream_url_template,
+            room_play_template: roomPlay,
           };
         });
       });
@@ -454,6 +469,9 @@
               {/* A household token this server refused, or its "wait"
                   after wrong ones: said once, here (components.jsx). */}
               <DeviceTokenNotice/>
+              {/* "Signed out after 1 hour without admin activity": this
+                  tab's admin sign-in ended on its own (components.jsx). */}
+              <AdminSignedOutNotice/>
               {/* A plugin's page sits in the plugin frame (components.jsx
                   PluginPageFrame): its name, publisher and a link to its
                   Plugins row above it, and its own accent in place of

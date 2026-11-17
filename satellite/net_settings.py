@@ -595,6 +595,18 @@ def _pinned_fingerprint_root(path: Path) -> str | None:
     return fp if isinstance(fp, str) and fp.startswith("SHA256:") else None
 
 
+def _configured_fingerprint(config_path: Path) -> str | None:
+    import tomllib
+
+    try:
+        with open(config_path, "rb") as f:
+            doc = tomllib.load(f)
+    except (OSError, ValueError):
+        return None
+    fp = (doc.get("satellite") or {}).get("server_fingerprint")
+    return fp.strip() if isinstance(fp, str) and fp.strip().startswith("SHA256:") else None
+
+
 def _configured_url(config_path: Path) -> str | None:
     import tomllib
 
@@ -627,18 +639,29 @@ def refresh_server_pin(
     root-owned identity pin names (a fresh nonce signed for the address
     dialled). Without that pin nothing is changed. A server that does not
     answer this boot is left for the next one (not an error: the core may
-    be restarting)."""
+    be restarting).
+
+    SAT-17 — a device set up with no address and no key (it asks every
+    server and joins the one that proves its code) has NEITHER root record:
+    setup records none, because the first server that answered was nobody's
+    choice. Once a server has proved the code, config.toml carries its
+    address and key; root writes both of its records from them here — only
+    when it has none at all, and only after the address signs, to this
+    process, for that key."""
     from satellite import discovery, server_identity
 
     pin_path = pin_path or ROOT_SERVER_URL_PIN
+    identity_path = identity_path or ROOT_IDENTITY_PIN
     try:
         pinned = pin_path.read_text(encoding="utf-8").strip() or None
     except OSError:
         pinned = None
     if pinned is None:
-        report.same("no root server-address record (the clock helper is unpinned)")
+        _first_server_pins(report, config_path=config_path or CONFIG_PATH,
+                           pin_path=pin_path, identity_path=identity_path,
+                           probe=probe, attempts=attempts, sleep=sleep)
         return
-    fingerprint = _pinned_fingerprint_root(identity_path or ROOT_IDENTITY_PIN)
+    fingerprint = _pinned_fingerprint_root(identity_path)
     configured = _configured_url(config_path or CONFIG_PATH)
     if configured is None:
         report.same("no server address in config.toml to compare with root's record")
@@ -677,6 +700,57 @@ def refresh_server_pin(
         return
     report.change(f"root's server address {pinned} -> {configured} (it signed for that "
                   "address with the pinned key); the clock follows it")
+
+
+def _proved_by(configured: str, fingerprint: str, probe: Callable[..., bool] | None,
+               attempts: int, sleep: Callable[[float], None]) -> bool:
+    from satellite import discovery
+
+    host, port = discovery.host_port_of(configured)
+    probe = discovery.probe if probe is None else probe
+    for i in range(max(1, attempts)):
+        try:
+            if host and probe(host, port=port, timeout=3.0, expected_fingerprint=fingerprint):
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+        if i + 1 < attempts:
+            sleep(5.0)
+    return False
+
+
+def _first_server_pins(
+    report: Report, *, config_path: Path, pin_path: Path, identity_path: Path,
+    probe: Callable[..., bool] | None, attempts: int, sleep: Callable[[float], None],
+) -> None:
+    """Root has no address record (SAT-17: a device that asked every
+    server). Write it — and the identity pin, when root has none either —
+    from config.toml's address and key, once the address proves the key to
+    this process."""
+    root_fp = _pinned_fingerprint_root(identity_path)
+    configured = _configured_url(config_path)
+    fingerprint = root_fp or _configured_fingerprint(config_path)
+    if configured is None or fingerprint is None:
+        report.same("no root server-address record (the clock helper is unpinned), and no "
+                    "proven server in config.toml to record yet")
+        return
+    if not _proved_by(configured, fingerprint, probe, attempts, sleep):
+        report.skip(f"{configured} did not prove to root that it is {fingerprint} this "
+                    "boot; root records no server yet (tried again next boot)")
+        return
+    try:
+        pin_path.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+        if root_fp is None:
+            doc = {"algorithm": "ed25519", "fingerprint": fingerprint,
+                   "source": "proved approval"}
+            safe_write(identity_path.parent, identity_path.name,
+                       (json.dumps(doc, indent=2) + "\n").encode("utf-8"))
+        safe_write(pin_path.parent, pin_path.name, (configured + "\n").encode("utf-8"))
+    except OSError as e:
+        report.error(f"record the server {configured} for root: {e}")
+        return
+    report.change(f"root records the server {configured} ({fingerprint}): it signed for "
+                  "that address with that key; the clock follows it")
 
 
 def satellite_home() -> Path | None:

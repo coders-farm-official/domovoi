@@ -658,7 +658,9 @@ const VoicesPanel = () => {
  * "linux" is the tray menu's Linux part alone: nothing on Windows ran, so
  * it is never "the Windows side updated" (2026-11-14: a 1.1.0 tray's
  * "Update Domovoi" updated the Linux side only, and its "ok" sat beside a
- * Windows side still at 1.1.0).
+ * Windows side still at 1.1.0). A Setup run on the PC that didn't finish
+ * (`windows_side.setup.result` "failed": DomovoiHost's word) is said too,
+ * with its step, its error and what to do.
  *
  * One update action on a Windows install too: while the Windows step is
  * needed, "Update Domovoi" is the only button ("Check for updates" is only
@@ -730,10 +732,16 @@ const VoicesPanel = () => {
  * how the owner signed out, signed in, reloaded, and never saw Advanced.
  *
  * Since 2026-10-14 a reload inside the reload window (default an hour
- * after the password was entered in this browser) takes the live sign-in
+ * after the last admin change in this browser) takes the live sign-in
  * back by itself (auth.js resume), so the card says "signed in" and when a
  * reload stops keeping it ("until 14:32" — once, no countdown). Only past
  * the window is a reloaded tab "view only" (adminReloadState, components.jsx).
+ *
+ * Since 2026-11-16 the sign-in itself signs out after an hour with no
+ * admin change (the idle timeout): the card says so in its subtitle, says
+ * when ("at 14:32 unless you change something as admin before then"), and
+ * once it has happened says "Signed out after 1 hour without admin
+ * activity" beside the "sign in" button.
  *
  * On an unclaimed box, arriving here (the tab, or its address
  * #settings/advanced) opens the first-run welcome (2026-11-04; the admin
@@ -796,7 +804,7 @@ const AdminSection = ({ setupAsked = false }) => {
   try { signOutError = Auth.signOutError || null; } catch { /* older Auth */ }
   return (
     <Card title="Admin"
-          sub="Gates settings edits, plugin management, room upgrades, and deleting files. Saving a document, everyday playback and browsing never need it.">
+          sub={`Gates settings edits, plugin management, room upgrades, and deleting files. Saving a document, everyday playback and browsing never need it. Signs out after ${reload.idleWords} idle.`}>
       <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center',
                     gap: 12, flexWrap: 'wrap' }}>
         {st === null
@@ -831,6 +839,16 @@ const AdminSection = ({ setupAsked = false }) => {
             <button type="button" className="home-link" onClick={signOut}>try again</button>
           </span>
         )}
+        {live && reload.idleUntil && (
+          // When the sign-in idles out, unless someone acts as admin before
+          // then: said once, in its own row — no countdown. auth.js signs
+          // the tab out itself when it passes.
+          <span className="admin-idle-until"
+                style={{ fontSize: 12, color: 'var(--fg-muted)', flexBasis: '100%', order: 1 }}>
+            Signs out at {reload.idleUntil} unless you change something as
+            admin before then.
+          </span>
+        )}
         {live && reload.until && (
           // When a reload stops keeping the sign-in: said once, in its own
           // row, gone when it passes (useAdminReloadState) — no countdown.
@@ -840,6 +858,14 @@ const AdminSection = ({ setupAsked = false }) => {
             browser, keeps you signed in until {reload.until}.
           </span>
         )}
+        {!live && !viewOnly && !needsSetup && reload.signedOut && (
+          // This tab's sign-in ended on its own: why the card says
+          // "signed out" when nobody pressed "sign out".
+          <span className="admin-signed-out-why"
+                style={{ fontSize: 12, color: 'var(--fg-muted)', flexBasis: '100%', order: 1 }}>
+            {reload.signedOut}.
+          </span>
+        )}
         {viewOnly && (
           // Its own row UNDER the pill and both buttons (order: 1): inline, the
           // long sentence pushed "sign out" onto a line of its own, away
@@ -847,7 +873,7 @@ const AdminSection = ({ setupAsked = false }) => {
           <span className="admin-view-only"
                 style={{ fontSize: 12, color: 'var(--fg-muted)', flexBasis: '100%', order: 1 }}>
             {reload.windowWords
-              ? `A page reload more than ${reload.windowWords} after you signed in keeps this browser signed in for viewing, but forgets`
+              ? `A page reload more than ${reload.windowWords} after your last admin change keeps this browser signed in for viewing, but forgets`
               : 'A page reload keeps this browser signed in for viewing, but forgets'}
             {' '}the admin sign-in this tab needs to change settings or see
             Advanced. Sign in again to get it back.
@@ -1018,6 +1044,20 @@ const WindowsSideNotes = ({ win, channel, busy, onRetry, requesting, onCancel, c
   const linuxOnly = !!(result && result.kind === 'linux');
   const target = win.target || null;
   const lines = [];
+  // The last Setup run on the PC didn't finish (DomovoiHost's word, in
+  // side.json): what failed and what to do, here and in the PC's icon, not
+  // only in host.log (2026-11-16).
+  const setup = win.setup && win.setup.result === 'failed' ? win.setup : null;
+  if (setup) {
+    const when = windowsWhen(setup.at);
+    lines.push(<div key="su" className="version-windows-setup" style={{ color: 'var(--err-ink)', overflowWrap: 'anywhere' }}>
+      {`Domovoi Setup${setup.version ? ` ${setup.version}` : ''} didn’t finish on the PC${when ? ` (${when})` : ''}. It stopped${setup.step ? ` at its “${setup.step}” step` : ''}: ${setup.error}`}
+      <span style={{ display: 'block', color: 'var(--fg-muted)' }}>
+        Domovoi keeps running what it had. Run the newest Domovoi Setup on the PC again; if it stops at the
+        same place, choose “Save logs for support” in the Domovoi icon’s menu on the PC.
+      </span>
+    </div>);
+  }
   if (channel === 'main' && target) {
     lines.push(<div key="ch" className="version-windows-channel" style={{ color: 'var(--fg-muted)' }}>
       The Linux side follows every change on main; the Windows side follows releases (the latest this
@@ -1100,7 +1140,7 @@ const WindowsSideNotes = ({ win, channel, busy, onRetry, requesting, onCancel, c
 const VersionSection = () => {
   const { data: cfg } = useApiObject('/api/config');
   // Checking and pulling talk to the git remote: greyed under "No"
-  // (Settings → Internet). Restarting stays — it never leaves the box.
+  // (Settings → Privacy → Internet). Restarting stays — it never leaves the box.
   const internetOff = internetOffIn(cfg);
   const { data: core, error: coreError, refresh: refreshCore } = useApiObject('/api/config/version');
   // The web answered for the core: it could not reach it (bridge_response's
@@ -1323,8 +1363,8 @@ const VersionSection = () => {
 
   const pull = async () => {
     if (!window.confirm(
-      'Pull the latest domovoi code (git pull --ff-only)?\n\n' +
-      'This updates the files on the Domovoi host but does not load them — ' +
+      'Update Domovoi?\n\n' +
+      'This puts the newest version on the Domovoi server but does not start it yet — ' +
       'this panel will then offer the restart that does. Rooms can be ' +
       'upgraded individually afterwards.'
     )) return;
@@ -1732,7 +1772,7 @@ const configLoadMessage = (error) => {
  * help and "test the key". The test asks AcoustID once — about the key
  * typed in the box, else the saved one — and only when the household's
  * internet answer lets song recognition go out: under No there is no
- * button, just a line pointing at Settings → Internet (no dead controls).
+ * button, just a line pointing at Settings → Privacy → Internet (no dead controls).
  * #settings/advanced/acoustid-key (ACOUSTID_KEY_ROUTE) lands here:
  * `marked` lights the block up for a moment.
  *
@@ -1792,7 +1832,7 @@ const AcoustidKeyField = ({ f, value, onChange, internetOff, marked }) => {
       {internetOff ? (
         <div className="config-acoustid-off" style={{ fontSize: 12, color: 'var(--fg-muted)', padding: '0 0 10px' }}>
           Song recognition is off: this box doesn’t use the internet. Change that in{' '}
-          <a href="#settings/internet">Settings → Internet</a>.
+          <a href="#settings/internet">Settings → Privacy → Internet</a>.
         </div>
       ) : canTest && (
         <div className="config-acoustid-test"
@@ -1987,7 +2027,7 @@ const ConfigPanel = ({ setupAsked = false, mark = null, startFolded = false }) =
              || internetField.value || 'not answered'}</span>
       <span style={{ color: 'var(--fg-muted)' }}> · change it in </span>
       <a href="#settings/internet" className="home-link">
-        Settings → Internet
+        Settings → Privacy → Internet
       </a>
     </div>
   );
@@ -2000,6 +2040,7 @@ const ConfigPanel = ({ setupAsked = false, mark = null, startFolded = false }) =
     {/* The server's name on the home network: under Admin, above the
      * configuration (owner, 2026-11-12; it was in About & updates). */}
     <div data-settings-mark="network-name"><NetworkNameCard/></div>
+    <div data-settings-mark="short-address"><ShortAddressCard/></div>
     <Card title="Domovoi configuration"
           sub="Live-editable settings. Some changes apply instantly; those marked “restart” need a Domovoi server restart."
           action={folded && (
@@ -2039,7 +2080,7 @@ const ConfigPanel = ({ setupAsked = false, mark = null, startFolded = false }) =
                   </div>
                   <div style={{ marginTop: 4 }}>
                     {reloadWords
-                      ? `A page reload more than ${reloadWords} after you signed in keeps you signed in for viewing, but forgets the admin sign-in that Advanced and saving changes here need — sign in again to get it back.`
+                      ? `A page reload more than ${reloadWords} after your last admin change keeps you signed in for viewing, but forgets the admin sign-in that Advanced and saving changes here need — sign in again to get it back.`
                       : 'A page reload keeps you signed in for viewing, but forgets the admin sign-in that Advanced and saving changes here need — sign in again after a reload.'}
                   </div>
                   <div style={{ marginTop: 8 }}>
@@ -3583,6 +3624,127 @@ const HouseholdWakeCard = ({ rooms, trained, onPushTrained, fire }) => {
   );
 };
 
+/* ---- "Tune Domovoi to your household" (GET/POST /api/wake-words/tuning) ----
+ * A household copy of the published Domovoi word, trained with the house's
+ * own recordings (domovoi/wake_tuning.py). Rooms keep the standard word
+ * until the copy is trained, then switch; "Go back to the standard Domovoi
+ * word" undoes it. The clips and the copy never leave the house. No button
+ * that can't work: when training isn't on here, the card says so instead. */
+
+const TuneDomovoiCard = ({ items, rooms, minClips, onRecordStart, onRecordStop, onTrain, fire }) => {
+  const { data: st, refresh } = useApiObject('/api/wake-words/tuning',
+    { eventTypes: ['wake_words.changed'], quiet: true, refetchOnAuth: true });
+  const [busy, setBusy] = React.useState(false);
+  const [room, setRoom] = React.useState('');
+  if (!st || !st.state) return null;
+  const word = (items || []).find((x) => x.id === st.wake_word_id) || null;
+  const pick = room || (rooms[0] && rooms[0].room_id) || '';
+  const act = async (path, ok) => {
+    setBusy(true);
+    try {
+      const out = await apiPost(path, {});
+      const moved = (out && out.moved && out.moved.moved) || [];
+      fire(moved.length ? `${ok} (${moved.join(', ')} switched)` : ok);
+    } catch (e) {
+      if (!isAuthFailure(e)) fire(apiErrorText(e));
+    } finally {
+      setBusy(false);
+      await refresh();
+    }
+  };
+  const onTuned = st.rooms_on_tuned || [];
+  const onStandard = st.rooms_on_standard || [];
+  const clips = word ? word.clip_count : st.clip_count;
+  const recording = st.state === 'recording' || st.state === 'failed';
+  return (
+    <Card title="Tune Domovoi to your household"
+          sub="Teach the “Domovoi” wake word how the people in this home say it.">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '10px 14px', fontSize: 13 }}>
+        <div style={{ fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
+          Record a few clips of everyone saying “Domovoi”, in the rooms you use, then train.
+          Your rooms keep the standard word until the tuned one is ready, then switch to it.
+          The recordings and the tuned word stay on this server and its rooms: they are never
+          uploaded or shared.
+        </div>
+        {st.state === 'off' && (st.can_start ? (
+          <div>
+            <Button variant="primary" disabled={busy}
+                    onClick={() => act('/api/wake-words/tuning', 'ready to record “Domovoi”')}>
+              Tune Domovoi to your household</Button>
+          </div>
+        ) : (
+          <div role="status" style={{ fontSize: 12 }}>Not available yet: {st.reason}.</div>
+        ))}
+        {recording && word && (
+          <React.Fragment>
+            <div>
+              {clips} clip{clips === 1 ? '' : 's'} recorded; {minClips} or more to train.
+              Ask each person to say “Domovoi” a few times, at their usual distance.
+            </div>
+            {st.state === 'failed' && st.error && (
+              <div role="alert" style={{ fontSize: 12, color: 'var(--danger, #c0392b)' }}>
+                The last training didn’t finish: {st.error}</div>
+            )}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              {rooms.length > 0 ? (
+                <React.Fragment>
+                  <select value={pick} disabled={busy} style={_wakeFieldStyle}
+                          onChange={(e) => setRoom(e.target.value)} aria-label="room to record in">
+                    {rooms.map((r) => <option key={r.room_id} value={r.room_id}>{r.room_id}</option>)}
+                  </select>
+                  <Button variant="secondary" disabled={busy || !pick}
+                          onClick={() => onRecordStart(word, pick)}>Record</Button>
+                  <Button variant="ghost" disabled={busy || !pick}
+                          onClick={() => onRecordStop(word, pick)}>Stop</Button>
+                </React.Fragment>
+              ) : (
+                <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+                  No room is online to record in.</span>
+              )}
+              {clips >= minClips && (
+                <Button variant="primary" disabled={busy} onClick={() => onTrain(word)}>
+                  Train the tuned word</Button>
+              )}
+            </div>
+          </React.Fragment>
+        )}
+        {st.state === 'training' && (
+          <div role="status">
+            Training the tuned word… Your rooms keep {st.ready ? 'the word they have' : 'the standard word'} until it is done.
+          </div>
+        )}
+        {st.state === 'in_use' && (
+          <React.Fragment>
+            <div>
+              <Pill tone="ok">in use</Pill>{' '}
+              {onTuned.length ? `Rooms on the tuned word: ${onTuned.join(', ')}.` : 'New rooms get the tuned word.'}
+              {onStandard.length > 0 && ` Still switching: ${onStandard.join(', ')} (offline rooms switch when they connect).`}
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <Button variant="secondary" disabled={busy}
+                      onClick={() => act('/api/wake-words/tuning/undo', 'back to the standard Domovoi word')}>
+                Go back to the standard Domovoi word</Button>
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+              To improve it, record more clips on “{st.name}” in the list below and train it again.
+            </div>
+          </React.Fragment>
+        )}
+        {st.state === 'standard' && (
+          <React.Fragment>
+            <div>Your rooms use the standard Domovoi word. The tuned word is kept on this server.</div>
+            <div>
+              <Button variant="secondary" disabled={busy}
+                      onClick={() => act('/api/wake-words/tuning/use', 'using the tuned Domovoi word')}>
+                Use the tuned word again</Button>
+            </div>
+          </React.Fragment>
+        )}
+      </div>
+    </Card>
+  );
+};
+
 const WakeWordsPanel = () => {
   // Live clip-count/status updates ride the net-new `wake_words.changed`
   // channel (the streaming clip-write, the trainer, and these CRUD routes all
@@ -3703,6 +3865,10 @@ const WakeWordsPanel = () => {
       <HouseholdWakeCard rooms={rooms} trained={items} onPushTrained={push} fire={fire}/>
 
       <WakeTrainerCard status={trainer} error={trainerError} refresh={refreshTrainer} fire={fire}/>
+
+      <TuneDomovoiCard items={items} rooms={rooms.filter((r) => satCan(r, 'wake_clips'))}
+                       minClips={minClips} onRecordStart={recordStart} onRecordStop={recordStop}
+                       onTrain={train} fire={fire}/>
 
       <Card title="Create a wake word"
             sub="Name it, then record clips in a room and train, or train on synthetic voices only.">
@@ -4003,6 +4169,80 @@ const NetworkNameCard = () => {
         )}
         <div style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
           a name on your network isn’t proof — satellites still check the server’s key
+        </div>
+      </div>
+      {node}
+    </Card>
+  );
+};
+
+/* The short address (GET/PUT /api/short-address, web/backend/short_address.py):
+ * port 80 hands browsers over to the dashboard, so "domovoi.local" opens
+ * without ":6369". On by default when nothing else on this computer uses
+ * port 80; off quietly when something does, said here. An admin switches
+ * it off or on (on tries port 80 again). Hidden where it can't exist (a
+ * development box that isn't a Linux server). */
+const SHORT_ADDRESS_STATE = {
+  on: { tone: 'ok', word: 'on' },
+  off: { tone: 'idle', word: 'off' },
+  taken: { tone: 'warn', word: 'off: port 80 in use' },
+  no_permission: { tone: 'warn', word: 'off: not allowed' },
+  failed: { tone: 'err', word: 'off: failed' },
+};
+const ShortAddressCard = () => {
+  const admin = useAdminSignedIn();
+  const { data, error, refresh } = useApiObject('/api/short-address', { quiet: true });
+  const lan = useApiObject('/api/lan-name', { quiet: true }).data;
+  const [fire, node] = useToast();
+  const [saving, setSaving] = React.useState(false);
+  if (error && !data) return null;     // an older server, or not paired
+  if (!data || !SHORT_ADDRESS_STATE[data.state]) return null;
+  const st = SHORT_ADDRESS_STATE[data.state];
+  const name = lan && lan.claimed && ['announced', 'held', 'taken', 'checking'].includes(lan.state)
+    ? (lan.fqdn || `${lan.claimed}.local`) : null;
+  const put = async (enabled) => {
+    setSaving(true);
+    try {
+      const d = await apiFetch('/api/short-address', { method: 'PUT', body: JSON.stringify({ enabled }) });
+      if (d && d.message) fire(d.message);
+      refresh();
+      try { ShareAddressStore.refresh(); } catch { /* the header catches up within a minute */ }
+    } catch (e) {
+      fire(`short address: ${apiErrorText(e)}`);
+    } finally { setSaving(false); }
+  };
+  const retry = data.enabled && ['taken', 'no_permission', 'failed'].includes(data.state);
+  return (
+    <Card title="Short address"
+          sub={`Lets browsers open this server without :${data.dashboard_port}. Links, rooms and the apps keep using :${data.dashboard_port}.`}>
+      <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 8, fontSize: 13 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <span style={{ color: 'var(--fg-muted)', minWidth: 96 }}>short address</span>
+          {data.state === 'on' && name
+            ? <a className="mono" href={`http://${name}`} style={{ color: 'var(--brand-ink)' }}>{name}</a>
+            : null}
+          <Pill tone={st.tone}>{st.word}</Pill>
+          {admin && retry && (
+            <Button icon="refresh-cw" disabled={saving} onClick={() => put(true)}>check again</Button>
+          )}
+        </div>
+        {data.state !== 'on' && data.state !== 'off' && (
+          <div style={{ color: 'var(--fg-muted)', paddingLeft: 108 }}>{data.message}</div>
+        )}
+        {data.state === 'on' && !name && (
+          <div style={{ color: 'var(--fg-muted)', paddingLeft: 108 }}>
+            No network name is announced: type this server’s address, without :{data.dashboard_port}.
+          </div>
+        )}
+        {admin && (
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, color: 'var(--fg-muted)', paddingLeft: 108 }}>
+            <input type="checkbox" checked={!!data.enabled} disabled={saving}
+                   onChange={(e) => put(e.target.checked)}/>
+            answer on port 80 and send browsers on to :{data.dashboard_port}
+          </label>
+        )}
+        <div style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
+          port 80 only redirects: it serves nothing else, and only for this server’s own name or address
         </div>
       </div>
       {node}
@@ -5650,7 +5890,7 @@ const CapturesPanel = () => {
 const SETTINGS_GROUPS = [
   // "Rooms & devices" until 2026-11-09: its old address still opens it.
   { id: 'household', label: 'Household', icon: 'house', aliases: ['rooms-and-devices'],
-    sections: ['rooms', 'people', 'phones-and-browsers', 'calendars', 'media-folders', 'music-mix', 'printers'] },
+    sections: ['rooms', 'people', 'phones-and-browsers', 'calendars', 'media-folders', 'music-mix', 'queue-history', 'printers', 'friend-houses'] },
   { id: 'voice', label: 'Voice', icon: 'audio-lines', sections: ['wake-words', 'voices', 'greetings'] },
   { id: 'chat-and-ai', label: 'Chat & AI', icon: 'sparkles', sections: ['models', 'search', 'chat'] },
   { id: 'privacy', label: 'Privacy', icon: 'shield', sections: ['internet', 'voice-history', 'listening-history'] },
@@ -5685,9 +5925,19 @@ const SETTINGS_SECTIONS = [
   { id: 'music-mix', label: 'Music mix', optional: true, aliases: ['mix', 'up-next'],
     sub: 'How Up next picks the songs that follow: discovery or favorites, close or wandering, autoplay, repeats, similar artists.',
     words: 'music mix up next autoplay shuffle discovery favorites favourites wander similar artists popularity listenbrainz repeats radio station' },
+  // queue_history.jsx registers it (1.4.0): what Up next picked, and why
+  // (admin; read-only).
+  { id: 'queue-history', label: 'Queue history', optional: true,
+    sub: 'What Up next picked in each room and on each phone, why, and how each song went — admins only.',
+    words: 'queue history up next picks picked played skipped why reason session sessions download csv json autoplay' },
   { id: 'printers', label: 'Printers & scanners', optional: true,
     sub: 'Printers and scanners on your network.',
     words: 'printer printers print printing scanner scanners scan scanning ink toner paper' },
+  // friend_houses.jsx registers it (F2): friend files, requests, friends
+  // (admin; off by default).
+  { id: 'friend-houses', label: 'Friend Houses', optional: true,
+    sub: 'Serverless messaging and friend system between households.',
+    words: 'friend friends house houses household households friending friend file invite request requests tor fingerprint code verify' },
   { id: 'app-layout', label: 'App layout', aliases: ['phone-bar', 'phonebar'],
     sub: 'The menu every browser on this Domovoi shows (admin), and this browser’s phone bar.',
     words: 'phone bar tabs bottom bar layout menu navigation sidebar group groups media tools rename reorder' },
@@ -5744,6 +5994,7 @@ const SETTINGS_SEARCH_ITEMS = [
   { label: 'Files access', section: 'phones-and-browsers', mark: 'files-access', words: 'files documents' },
   { label: 'Your own music mix', section: 'people', mark: 'music-mix', words: 'music mix person own discovery favorites wander' },
   { label: 'Network name', section: 'advanced', mark: 'network-name', words: 'network name local domovoi.local mdns hostname address' },
+  { label: 'Short address', section: 'advanced', mark: 'short-address', words: 'short address port 80 6369 domovoi.local without port redirect url link' },
   { label: 'Updates', section: 'about', mark: 'updates', words: 'update check pull restart version channel' },
   { label: 'User manual', section: 'about', mark: 'manual', words: 'manual help guide' },
   { label: 'Admin account', section: 'advanced', mark: 'admin', words: 'admin password sign in sign out claim setup' },

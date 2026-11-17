@@ -78,6 +78,45 @@ const downloadDoc = (rel) => {
   a.remove();
 };
 
+/* A formatted Domovoi document is stored as an .html page (the live
+ * editor's format). Handed over raw it is a broken download to anyone who
+ * expected a document, so its Download is Word, the same Word file the
+ * editor's own Download menu makes (the server's /export/doc route); PDF is
+ * the editor's print / save-as-PDF path; the raw page only when asked. */
+const docExportUrl = (rel) => `${API_BASE}/api/documents/export/doc/${encodeURIComponent(rel)}?fmt=docx`;
+const docStem = (rel) => {
+  const name = String(rel).split('/').pop();
+  const i = name.lastIndexOf('.');
+  return i > 0 ? name.slice(0, i) : name;
+};
+const downloadDocAsWord = (rel) => {
+  const a = document.createElement('a');
+  a.href = withDeviceToken(docExportUrl(rel));
+  a.download = `${docStem(rel)}.docx`;   // the server's attachment name wins across origins
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+};
+/* The content part of a saved document page: between Domovoi's markers, else
+ * the <body> (mirrors domovoi/richdoc/fileformat.document_body). */
+const DOC_BODY_START = '<!-- domovoi:document-body -->';
+const DOC_BODY_END = '<!-- /domovoi:document-body -->';
+const docBodyOf = (text) => {
+  const t = String(text || '');
+  const a = t.indexOf(DOC_BODY_START);
+  if (a !== -1) {
+    const b = t.indexOf(DOC_BODY_END, a);
+    if (b !== -1) return t.slice(a + DOC_BODY_START.length, b).trim();
+  }
+  return new DOMParser().parseFromString(t, 'text/html').body.innerHTML;
+};
+const downloadDocAsPdf = async (rel) => {
+  const ed = window.DomovoiDocEditor;
+  if (!ed || !ed.printDocument || !window.sanitizeDocumentHtml) throw new Error('the document editor is not loaded');
+  const r = await apiFetchRaw(`/api/documents/raw/${encodeURIComponent(rel)}`);
+  ed.printDocument(window.sanitizeDocumentHtml(docBodyOf(await r.text())), docStem(rel));
+};
+
 /* Bulk download → server-built zip. Streams the response so we can report
  * real progress (download-zip sets Content-Length). `onProgress` gets a
  * 0..1 fraction, or null when the length is unknown. */
@@ -271,9 +310,14 @@ const TextEditorOverlay = ({ rel_path, onClose, fire, blockedReason = null }) =>
  *   newtab (pdf/img) → Open in a new tab
  *   download         → legacy office formats — Download is the action
  */
+const DOC_DOWNLOADS = [
+  { key: 'word', label: 'Word (.docx)', icon: 'file-text', hint: 'Opens in Word and most apps' },
+  { key: 'pdf',  label: 'PDF', icon: 'printer', hint: 'Print, or save as PDF' },
+  { key: 'html', label: 'Web page (.html)', icon: 'globe', hint: 'The page as stored' },
+];
 const DocRow = ({ doc, selected, onToggleSelect,
                   onOpenDoc, onOpenSheet, onOpenText, onOpenDrawing, onDelete,
-                  onDragStartEntry }) => {
+                  onDragStartEntry, fire }) => {
   const cat = doc.category || 'text';
   // A formatted document is a "Document": its name, never ".html".
   const formatted = FILES_FORMATTED_EXTS.has(doc.ext);
@@ -330,7 +374,19 @@ const DocRow = ({ doc, selected, onToggleSelect,
         {window.PrintFileButton && (
           <window.PrintFileButton libraryId="core:documents" path={doc.rel_path} name={doc.name + doc.ext}/>
         )}
-        {cat !== 'download' && (
+        {formatted ? (
+          <FilesActionMenu label="Download" icon="download" title="download this document"
+                           items={DOC_DOWNLOADS}
+                           onPick={(k) => {
+                             if (k === 'word') downloadDocAsWord(doc.rel_path);
+                             else if (k === 'html') downloadDoc(doc.rel_path);
+                             else {
+                               downloadDocAsPdf(doc.rel_path).catch((e) => {
+                                 if (fire) fire(`Couldn’t make the PDF: ${String((e && e.message) || e).slice(0, 80)}`);
+                               });
+                             }
+                           }}/>
+        ) : cat !== 'download' && (
           <Button icon="download" title="download"
                   onClick={() => downloadDoc(doc.rel_path)}>Download</Button>
         )}
@@ -1907,6 +1963,7 @@ const FilesPage = () => {
                         selected={selected.has(entry.rel)} onToggleSelect={toggleSelect}
                         onOpenDoc={setDocRel} onOpenSheet={setSheetRel}
                         onOpenText={setTextRel}
+                        fire={fire}
                         onOpenDrawing={(d) => setDrawing(d)}
                         onDragStartEntry={canWrite ? onDragStartEntry : null}
                         onDelete={(d) => requestDelete([entries.find((e) => e.rel === d.rel_path)])}/>

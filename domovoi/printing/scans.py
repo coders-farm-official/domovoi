@@ -15,11 +15,14 @@ voice flow asks first and the dashboard simply scans.
 One scan at a time per scanner (:data:`ScanBusy`), at most
 ``print_limits.max_scan_pages`` pages per scan.
 
-**The seam for "what does this letter say?"** belongs to the documents
-work: :func:`register_reader` installs the reader; until one exists
-``readable`` is False everywhere, the dashboard and app show no "What
-does it say?" button and voice doesn't offer to read (no misleading
-controls).
+**"What does this letter say?"** is the scan reader's
+(:mod:`domovoi.scan_reader`): the core registers it at start
+(:func:`register_reader`). A saved scan is queued for reading when this
+server can read scans (tesseract, or the picture model), and its JSON carries ``read`` (the read's
+state and progress) and ``readable`` (true once it is read:
+:func:`json_full`). With no reader, ``readable`` stays False everywhere,
+the dashboard and app show no "What does it say?" button and voice
+doesn't offer to read (no misleading controls).
 """
 
 from __future__ import annotations
@@ -46,13 +49,14 @@ SCANS_FOLDER = "Scans"
 IDLE_SAVE_SEC = 600.0
 FINISHED_KEEP_SEC = 3600.0
 
-ScanReader = Callable[[str, dict[str, Any]], Awaitable[str]]
+#: ``async (documents_rel_path, context) -> spoken text`` or ``(spoken
+#: text, whether there is more to read aloud)``.
+ScanReader = Callable[[str, dict[str, Any]], Awaitable[Any]]
 _reader: ScanReader | None = None
 
 
 def register_reader(reader: ScanReader | None) -> None:
-    """The documents work installs ``async (documents_rel_path, context) ->
-    spoken text`` here."""
+    """The scan reader installs itself here (domovoi/main.py)."""
     global _reader
     _reader = reader
 
@@ -86,6 +90,7 @@ class Session:
     name: str | None = None
     path: str | None = None
     incomplete: bool = False
+    read_id: str | None = None
     touched: float = field(default_factory=time.monotonic)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
@@ -96,11 +101,41 @@ class Session:
             "thumbs": self.thumbs, "can_scan_more": self.state == "waiting",
             "name": self.name, "library_id": "core:documents", "path": self.path,
             "incomplete": self.incomplete, "error": self.error,
-            "readable": _reader is not None and self.state == "done",
+            # True once the scan reader has read it (json_full); never before.
+            "readable": False, "read": None,
         }
 
 
 _sessions: dict[str, Session] = {}
+
+
+async def json_full(s: Session) -> dict[str, Any]:
+    """:meth:`Session.json` with the scan reader's ``read`` (state and
+    progress) and ``readable`` (the read is done and found words)."""
+    out = s.json()
+    if s.read_id:
+        try:
+            from domovoi.scan_reader import store as read_store
+
+            read = await read_store.read_json_for(await read_store.get(s.read_id))
+        except Exception as e:  # noqa: BLE001 — the scan stands without its reading
+            log.warning("printing: couldn't look up the reading of scan %s: %s", s.id, type(e).__name__)
+            read = None
+        out["read"] = read
+        out["readable"] = bool(read and read["readable"])
+    return out
+
+
+async def queue_read(s: Session) -> None:
+    """Queue the scan reader on a saved scan (when one is registered)."""
+    if _reader is None or not s.path or s.read_id:
+        return
+    try:
+        from domovoi.scan_reader import runner as read_runner
+
+        s.read_id = await read_runner.queue_scan(s.path, scan_id=s.id)
+    except Exception as e:  # noqa: BLE001 — a scan is saved even if it can't be read
+        log.warning("printing: couldn't queue scan %s for reading: %s", s.id, type(e).__name__)
 
 
 def scan_log_json(row: dict[str, Any]) -> dict[str, Any]:
@@ -114,6 +149,29 @@ def scan_log_json(row: dict[str, Any]) -> dict[str, Any]:
         "error": row.get("error"), "who": row.get("who") or "", "source": row.get("source") or "",
         "created_at": store.iso(row.get("created_at")), "finished_at": store.iso(row.get("finished_at")),
     }
+
+
+async def scan_log_with_reads(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """:func:`scan_log_json` for each row, with its newest ``read`` and
+    ``readable`` (the scan reader's; null / false when it was never read)."""
+    out = [scan_log_json(r) for r in rows]
+    reads: dict[str, Any] = {}
+    counts: dict[str, Any] = {}
+    try:
+        from domovoi.scan_reader import store as read_store
+
+        reads = await read_store.for_scans([r["id"] for r in out if r.get("state") == "done"])
+        counts = await read_store.page_counts([r["id"] for r in reads.values()])
+        for r in out:
+            row = reads.get(r["id"])
+            r["read"] = read_store.read_json(row, counts.get(row["id"])) if row else None
+            r["readable"] = bool(r["read"] and r["read"]["readable"])
+    except Exception as e:  # noqa: BLE001 — the log stands without the readings
+        log.warning("printing: couldn't look up scan readings: %s", type(e).__name__)
+    for r in out:
+        r.setdefault("read", None)
+        r.setdefault("readable", False)
+    return out
 
 
 def get(session_id: str) -> Session:
@@ -382,6 +440,7 @@ async def finish(session_id: str) -> Session:
         await _persist(s, finished=True)
         log.info("printing: saved a %d-page scan to Documents/%s", len(s.pages), rel)
         _drop_spool(s)
+        await queue_read(s)
     return s
 
 

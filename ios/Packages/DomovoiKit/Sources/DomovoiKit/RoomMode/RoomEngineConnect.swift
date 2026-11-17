@@ -49,6 +49,12 @@ extension RoomEngine {
                 let closed = shared.withLock { $0.closed }
                 _ = closed?.wait(while: { [self] in isRunning(run) })
                 guard isRunning(run) else { break }
+                // Closed here to say a new hello (``maybeRehello()``): dial
+                // again at once.
+                if takeRehello() {
+                    update { $0.link = .connecting }
+                    continue
+                }
                 update { $0.link = .offline(reason: "the connection to the server dropped") }
                 sleep(backoff, run: run)
             case "awaiting_approval", "pairing_rejected", "approval_conflict", "approval_throttled":
@@ -90,15 +96,22 @@ extension RoomEngine {
         guard let token = store.pairingToken() else { return "no_key" }
         let outcome = RoomOneShot<String>()
         let closed = RoomOneShot<Bool>()
-        let (gen, word) = shared.withLock { s -> (Int, String) in
+        let wordsMax = parts.wakeWordsMax
+        let (gen, word, words) = shared.withLock { s -> (Int, String, [String]) in
             s.sessionGen += 1
             s.outcome = outcome
             s.closed = closed
-            return (s.sessionGen, s.wakeWord)
+            s.rehello = false
+            // What the room listens for (1.4.0): the words loaded or about
+            // to load, else the main word.
+            let said = Self.reportedWords(s)
+            s.helloWords = said
+            return (s.sessionGen, s.wakeWord, said)
         }
         let hello = RoomProtocol.text(RoomProtocol.hello(
             roomID: enrol.roomID, wakeWord: word, pairingToken: token,
-            approvalCode: store.approvalCode, echoCanceller: parts.echoCanceller
+            approvalCode: store.approvalCode, echoCanceller: parts.echoCanceller,
+            wakeWords: words, wakeWordsMax: wordsMax
         ))
         // The hello goes the moment the socket opens, whichever of "opened"
         // and "open returned" comes first.
@@ -184,14 +197,16 @@ extension RoomEngine {
         case let .soundsChanged(voice, saysVoice):
             if saysVoice { shared.withLock { $0.roomVoice = voice } }
             worker.async { [self] in syncSounds() }
-        case let .setWakeWord(slug, threshold):
-            worker.async { [self] in switchWakeWord(slug, threshold: threshold) }
+        case let .setWakeWord(slug, threshold, words):
+            worker.async { [self] in switchWakeWord(slug, threshold: threshold, words: words) }
         case .wakeModelsChanged:
             worker.async { [self] in refreshModels() }
         case let .dropinStart(peerRoom, peerLabel, rate, fullDuplex, awaitReady):
             onDropinStart(peerRoom: peerRoom, peerLabel: peerLabel, sampleRate: rate, fullDuplex: fullDuplex, awaitReady: awaitReady)
         case .dropinEnd:
             onDropinEnd()
+        case let .display(feed):
+            onDisplay(feed)
         }
     }
 
@@ -399,6 +414,8 @@ extension RoomEngine {
             if inCall { leaveCall() }
         }
         update { $0.peerRoom = nil }
+        // What the server said about this room is not known any more.
+        displayChannel.update { _ in nil }
         closed?.complete(true)
     }
 
@@ -411,12 +428,13 @@ extension RoomEngine {
     // MARK: - models and sounds
 
     func syncModels(_ enrol: RoomEnrolment) {
-        let word = shared.withLock { $0.wakeWord }
-        switch models.sync(http: parts.http, coreURL: enrol.coreURL, fingerprint: enrol.fingerprint, wakeWord: word) {
+        let words = configuredWakeWords()
+        switch models.sync(http: parts.http, coreURL: enrol.coreURL, fingerprint: enrol.fingerprint, wakeWords: words) {
         case .ready(let files):
             let wakeReady = status.wakeReady
             shared.withLock { s in
-                if s.wantModels?.files.wake != files.wake || !wakeReady {
+                // Any change of word or of the words with it reloads.
+                if s.wantModels?.files != files || !wakeReady {
                     s.modelsGen += 1
                     s.wantModels = (s.modelsGen, files)
                 }
@@ -444,16 +462,65 @@ extension RoomEngine {
     /// A pushed wake word. A push with no usable threshold keeps the room's
     /// (the store's rule, ``RoomWakeSettings/thresholdValue(_:)``); either
     /// way the core hears the threshold the room now wakes at.
-    func switchWakeWord(_ slug: String?, threshold: Double?) {
+    ///
+    /// `words` (1.4.0): the room's whole list, `slug` first. The room keeps
+    /// at most its own limit of them (``RoomEngineParts/wakeWordsMax``),
+    /// whatever arrives, each with its own threshold; without `words` it
+    /// runs `slug` alone and drops the extras it had. The models sync, the
+    /// listening thread loads them on one front end, and the room then says
+    /// a new hello listing what loaded (``maybeRehello()``).
+    func switchWakeWord(_ slug: String?, threshold: Double?, words: [RoomWakeWord]? = nil) {
         guard let slug, RoomModels.isSlug(slug) else { return }
-        store.setWakeWord(slug, threshold: threshold)
+        // A list without a top-level threshold: the main word's own, if any.
+        var mainThreshold = threshold
+        if mainThreshold == nil, let first = words?.first, first.slug == slug, let own = first.threshold {
+            mainThreshold = Double(own)
+        }
+        store.setWakeWord(slug, threshold: mainThreshold)
         let t = store.wakeThreshold
+        let list = RoomWakeWords.pushed(slug: slug, threshold: nil, words: words, max: parts.wakeWordsMax)
+        store.setWakeWords(list)
+        let extras = Array(list.dropFirst())
         shared.withLock { s in
             s.wakeWord = slug
             s.wakeThreshold = t
+            s.wakeExtras = extras
         }
         sendConfigStatus()
         refreshModels()
+    }
+
+    /// The words that loaded are not what this session's hello said (a
+    /// push changed them, or an extra word's model would not load): close
+    /// the session so the connect loop dials again with a hello listing
+    /// them. Only between turns, never in a call or while the room speaks;
+    /// the listening thread asks every frame, so it happens at the first
+    /// quiet moment. Each session's hello is checked once it is ready.
+    func maybeRehello() {
+        if parts.speaker.active { return }
+        let target: (socket: any RoomSocket, gen: Int)? = shared.withLock { s in
+            guard s.ready, let socket = s.socket, let said = s.helloWords, !s.rehello,
+                  !s.inCall, s.phase == .listening, s.captureUtt == nil,
+                  let loaded = s.loadedWakeWords, loaded != said,
+                  // Nothing newer waiting to load: the next hello says `loaded`.
+                  s.wantModels.map({ $0.gen == s.loadedGen }) ?? true
+            else { return nil }
+            s.rehello = true
+            return (socket, s.sessionGen)
+        }
+        guard let found = target else { return }
+        found.socket.close()
+        if current(found.gen) { sessionEnded() }
+    }
+
+    /// Whether the session just closed was closed for a new hello (and
+    /// forget it).
+    func takeRehello() -> Bool {
+        shared.withLock { s in
+            let r = s.rehello
+            s.rehello = false
+            return r
+        }
     }
 
     func syncSounds() {

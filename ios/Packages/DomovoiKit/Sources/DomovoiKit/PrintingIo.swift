@@ -101,6 +101,12 @@ public struct PrintingIo: Sendable {
         ).jobs
     }
 
+    /// A printer's recent print jobs **and** the scans made on it, each with
+    /// its reading — the whole wrapper. Android's `jobLog`.
+    public func jobLog(printerID: Int, limit: Int = 10) async throws(DomovoiError) -> PrintingJobsResponse {
+        try await client.get(Path.jobs(printerID: printerID, limit: limit), as: PrintingJobsResponse.self)
+    }
+
     public func job(_ id: Int) async throws(DomovoiError) -> PrintingJob {
         try await client.get(Path.job(id), as: PrintingJob.self)
     }
@@ -239,6 +245,44 @@ public struct PrintingIo: Sendable {
         try await client.post(Path.scanCancel(id), as: PrintingScanJob.self)
     }
 
+    // MARK: - "What does it say?" (the scan reader, 1.4.0)
+    //
+    // The paths are ``ScanReadPath``'s. All five are here, as Android's
+    // `PrintIo` has them; the screens use the progress, the summary and the
+    // text. Lookup-by-path and start are for a scan found in Documents,
+    // which neither phone offers the button on (owner decision 2026-11-17,
+    // Android 54d46869): they are the API, tested, and not a control.
+
+    /// The newest reading of a scan by its Documents path (`Scans/….pdf`).
+    public func scanReadFor(documentsPath: String) async throws(DomovoiError) -> ScanReadLookup {
+        try await client.get(ScanReadPath.lookup(documentsPath), as: ScanReadLookup.self)
+    }
+
+    /// Read a scan: `201` with the reading (the one already under way for the
+    /// same bytes when there is one); `409` when this server can't read scans.
+    public func startScanRead(documentsPath: String) async throws(DomovoiError) -> ScanRead {
+        try await client.post(
+            ScanReadPath.reads,
+            body: ScanReadPath.startBody(documentsPath),
+            as: ScanRead.self
+        )
+    }
+
+    public func scanRead(_ id: String) async throws(DomovoiError) -> ScanRead {
+        try await client.get(ScanReadPath.read(id), as: ScanRead.self)
+    }
+
+    /// `409` while the scan is still being read. The client's own wait
+    /// (60 s): a first summary the chat model takes longer over is asked
+    /// again (``ScanReadModel``).
+    public func scanReadSummary(_ id: String) async throws(DomovoiError) -> ScanReadSummary {
+        try await client.get(ScanReadPath.summary(id), as: ScanReadSummary.self)
+    }
+
+    public func scanReadText(_ id: String) async throws(DomovoiError) -> ScanReadFullText {
+        try await client.get(ScanReadPath.text(id), as: ScanReadFullText.self)
+    }
+
     // MARK: - the bodies, built by hand
 
     /// `{"<key>": true|false|null}` — the one body that **must** carry a
@@ -337,11 +381,9 @@ public struct PrintingIo: Sendable {
 /// of a chat draft — each through its own routes, with the same options and
 /// the same preview. `PrintTarget` (`PrintIo.kt:108-121`).
 ///
-/// **No view in this item opens the draft case.** `/api/chat/drafts/{id}/print/*`
-/// belongs to whoever ports the draft panel, and both cases are written here
-/// so that item has nothing to change in this file. A seam with no caller is
-/// the pattern this track has been bitten by, so it is said out loud rather
-/// than left to look shipped.
+/// The draft case is opened by Chat: a home-server draft card's Print and the
+/// canvas's print (``ChatMoreDraftCardView``, ``ChatMoreDraftCanvasView``),
+/// as Android's `PrintTarget.ChatDraft` is (`ChatScreen.kt:970,1014,1104`).
 public enum PrintingTarget: Equatable, Sendable {
 
     /// A file the home server holds: `library_id` + a path relative to it.
@@ -349,8 +391,9 @@ public enum PrintingTarget: Equatable, Sendable {
     /// target with an empty path is a 422 and never a print.
     case file(libraryID: String, path: String)
 
-    /// A home-server chat draft's version (documents plan D4).
-    case chatDraft(draftID: Int, version: Int)
+    /// A home-server chat draft's version (documents plan D4). The id is the
+    /// draft's own (``ChatMoreDraftRef/id``), an `Int64` like every chat id.
+    case chatDraft(draftID: Int64, version: Int)
 
     public var previewPath: String {
         switch self {

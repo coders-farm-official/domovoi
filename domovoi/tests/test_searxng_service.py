@@ -220,7 +220,11 @@ def test_boot_only_schedules_the_stop() -> None:
     from domovoi import main
 
     lifespan_src = inspect.getsource(main.lifespan)
-    assert "reconcile" not in lifespan_src
+    # Nothing at boot reconciles SearXNG. (Friend Houses schedules its own
+    # background reconcile there, which may only ever touch its own container.)
+    reconciles = [l.strip() for l in lifespan_src.splitlines()
+                  if "reconcile" in l and not l.strip().startswith("#")]
+    assert reconciles == ["_friend_houses.schedule_reconcile()"], reconciles
     assert "searxng_service.schedule_boot_stop()" in lifespan_src
     mentions = [l.strip() for l in lifespan_src.splitlines() if "searxng" in l.lower()]
     assert all(

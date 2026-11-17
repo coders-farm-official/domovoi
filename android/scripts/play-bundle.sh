@@ -17,7 +17,7 @@
 # twin is play-bundle.ps1 beside it.
 #
 #   bash android/scripts/play-bundle.sh                  # build, sign, check
-#   bash android/scripts/play-bundle.sh --skip-build     # sign what the last build left
+#   bash android/scripts/play-bundle.sh --skip-build     # sign what the last build left (after a failed signing)
 #   bash android/scripts/play-bundle.sh --keystore ~/domovoi-release.jks --alias domovoi
 #   bash android/scripts/play-bundle.sh --allow-dirty    # a test run from uncommitted changes
 #
@@ -220,6 +220,13 @@ mapping="android/app/build/outputs/mapping/release/mapping.txt"
 kept_map="$out_dir/domovoi-$version_name-$version_code-mapping.txt"
 if [ -f "$mapping" ]; then cp "$mapping" "$kept_map"; else kept_map="(none: the build left no mapping.txt)"; fi
 
+# Play refuses the unsigned Gradle output ("All uploaded bundles must be
+# signed"), and it sits one folder over under a plainer name: the 1.2.0 and
+# 1.3.0 uploads both picked it up first. Once the signed copy has passed
+# every check, remove it, so release-signed/ holds the only .aab. A run
+# that fails stops before this line, so --skip-build can still re-sign.
+rm -f "$unsigned"
+
 say "done."
 echo "  bundle:      $signed ($((size / 1048576)) MB)"
 echo "  SHA-256:     $sha"
@@ -227,5 +234,5 @@ echo "  certificate: $cert (SHA-256 of the signing certificate)"
 echo "  version:     $version_name ($version_code), commit $commit"
 echo "  R8 mapping:  in the bundle (Play reads it), and $kept_map"
 echo
-echo "  Next: Play Console -> Test and release -> Testing -> Internal testing -> Create new release, upload the .aab"
-echo "  (android/play/PUBLISH-CHECKLIST.md; the first upload needs App signing set up first)."
+echo "  Next: upload $signed (the unsigned app-release.aab is removed)"
+echo "  in Play Console -> Test and release -> Production -> Create new release (android/play/PUBLISH-CHECKLIST.md)."

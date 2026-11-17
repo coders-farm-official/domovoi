@@ -501,6 +501,32 @@ const _deviceToken = () => {
   catch { return null; }
 };
 
+/* ── The admin idle timeout (2026-11-16) ─────────────────────────────
+ *
+ * The server ends an admin sign-in an hour after its last admin change.
+ * A request refused 401 while it carried this tab's Bearer may be the
+ * first to find that out (a background tab's timers run late): auth.js
+ * asks the server once, and if the sign-in is over it drops the token and
+ * says "Signed out after 1 hour without admin activity". That moves the
+ * credential, so a READ refused for it opens no prompt (the stale-refusal
+ * rule below) — the page just drops to signed out — while a change
+ * someone pressed still gets the password prompt and its replay.
+ * Resolves true when the sign-in was dropped. */
+const _checkAdminIdle = async (status, sentToken) => {
+  if (status !== 401 || !sentToken) return false;
+  try {
+    if (typeof Auth === 'undefined' || !Auth.checkIdle) return false;
+    return await Auth.checkIdle(sentToken);
+  } catch { return false; }
+};
+
+// A change that went through on this tab's Bearer: if it was an admin
+// action the server restarted the hour, so auth.js reads the new count.
+const _noteAdminWrite = (method, sentToken, ok) => {
+  if (!ok || !sentToken || !_isMutation(method)) return;
+  try { if (typeof Auth !== 'undefined' && Auth.noteAdminWrite) Auth.noteAdminWrite(sentToken); } catch {}
+};
+
 const _pairAgain = async (refusedDeviceToken) => {
   try {
     if (typeof Auth === 'undefined' || !Auth.ensurePaired) return false;
@@ -625,6 +651,9 @@ const _sendWithAuthRetry = async (send, { method, body, raw, quiet, noPrompt } =
       deviceBlock = await _deviceBlockRefusal(text);
     }
   }
+  // Refused for the Bearer: is this tab's admin sign-in over (the idle
+  // hour)? If so it is dropped before anything below decides on a prompt.
+  if (!deviceRefusal) await _checkAdminIdle(r.status, refusedToken);
   // While the server makes this address wait, pairing cannot be answered
   // (the token is held until the wait is over): no prompt, no replay; the
   // notice counts the wait down.
@@ -637,6 +666,7 @@ const _sendWithAuthRetry = async (send, { method, body, raw, quiet, noPrompt } =
     if (await again) { r = await send(); text = null; }
     else signInDismissed = true;
   }
+  _noteAdminWrite(method, _authToken(), r.ok);
 
   if (!r.ok) {
     if (text === null) text = await r.text().catch(() => '');

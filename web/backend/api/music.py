@@ -486,6 +486,7 @@ async def list_track_playlists(track_id: int) -> list[Playlist]:
 )
 async def delete_track(
     track_id: int,
+    request: Request,
     also_file: bool = Query(
         default=False,
         description=(
@@ -512,13 +513,25 @@ async def delete_track(
     Returns 404 if no row matches. With ``also_file=true``, the
     file-not-found case is treated as success (the user wanted it
     gone; it already is) — just a debug log.
+
+    Then the song leaves every room's player (S2-18, the owner's rule):
+    a room playing it goes on to the next song in its queue, or stops when
+    nothing comes after it (the core's ``/v1/admin/music/tracks-removed``,
+    best-effort: the delete stands either way). The dashboard's own player
+    drops it on the library change this makes.
     """
     import os
     from pathlib import Path
 
     from domovoi.config import settings as core_settings
 
+    removed_path: str | None = None
     async with session_scope() as s:
+        if not also_file:
+            row = (await s.execute(
+                text("SELECT file_path FROM library_tracks WHERE id = :id"), {"id": track_id},
+            )).first()
+            removed_path = row[0] if row is not None else None
         if also_file:
             row = await s.execute(
                 text(
@@ -532,6 +545,7 @@ async def delete_track(
                     status_code=404, detail=f"track {track_id} not found"
                 )
             file_path_str = existing[0]
+            removed_path = file_path_str
             music_dir = Path(core_settings.music_dir).expanduser().resolve(strict=False)
             target = Path(file_path_str).resolve(strict=False)
             try:
@@ -567,8 +581,30 @@ async def delete_track(
         result = await s.execute(
             text("DELETE FROM library_tracks WHERE id = :id"), {"id": track_id}
         )
+        if (result.rowcount or 0) > 0:
+            # The Library tab and every open player hear of it at once.
+            await s.execute(text("SELECT pg_notify('library_changed', 'deleted')"))
     if (result.rowcount or 0) == 0:
         raise HTTPException(status_code=404, detail=f"track {track_id} not found")
+    if removed_path:
+        await tell_rooms_tracks_removed(request, [removed_path])
+
+
+async def tell_rooms_tracks_removed(request: Request, file_paths: list[str]) -> None:
+    """Ask the core to take these library files out of every room's player
+    (``/v1/admin/music/tracks-removed``). Never raises: the delete already
+    happened, and a room's player that can't be reached plays on until its
+    song ends."""
+    try:
+        status, payload = await post_admin(
+            "/v1/admin/music/tracks-removed",
+            {"file_paths": [p for p in file_paths if p][:200]},
+            headers=auth_forward_headers(request),
+        )
+        if status >= 400:
+            log.warning("tracks removed: the core answered %s: %s", status, payload)
+    except Exception as e:  # noqa: BLE001
+        log.warning("tracks removed: the core wasn't told: %s", e)
 
 
 # ─── Upload ────────────────────────────────────────────────────────────────

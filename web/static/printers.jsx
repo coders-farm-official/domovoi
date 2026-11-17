@@ -433,6 +433,102 @@ const PrintFileButton = ({ libraryId, path, name, title }) => {
 };
 
 /* ==================================================================== *
+ *  "What does it say?" — a read scan (domovoi/scan_reader)
+ * ==================================================================== */
+/* The button shows for a scan that has been read (`readable`) or is being
+ * read (`read.reading`, with its progress); never for a scan this server
+ * can't read (no misleading controls). */
+const scanReadShown = (scan) => !!(scan && (scan.readable || (scan.read && scan.read.reading)));
+
+const scanReadProgress = (read) => {
+  if (!read) return '';
+  if (read.waiting_for_voice) return 'paused while someone talks to Domovoi';
+  if (read.state === 'queued') return 'waiting to be read';
+  if (read.pages) return `reading page ${Math.min(read.pages_done + 1, read.pages)} of ${read.pages}`;
+  return 'reading…';
+};
+
+const ScanReadButton = ({ scan, onRead }) => {
+  if (!onRead || !scanReadShown(scan)) return null;
+  const reading = !scan.readable;
+  return (
+    <Button icon="text" onClick={() => onRead(scan)}
+            title={reading ? scanReadProgress(scan.read) : 'a short summary, and the full text'}>
+      {reading ? `What does it say? (${scanReadProgress(scan.read)})` : 'What does it say?'}
+    </Button>
+  );
+};
+
+/* Opened with a scan that has `read`: follows the reading while it runs,
+ * then shows the short summary (GET /api/scan/reads/{id}/summary) and, on
+ * request, the full text (…/text). */
+const ScanReadSheet = ({ scan, onClose }) => {
+  const [read, setRead] = React.useState(scan.read || null);
+  const [says, setSays] = React.useState(null);
+  const [full, setFull] = React.useState(null);
+  const [err, setErr] = React.useState(null);
+  const readId = read && read.id;
+  const done = !!(read && read.state === 'done');
+  const ended = !!(read && ['failed', 'cancelled'].includes(read.state));
+  React.useEffect(() => {
+    if (!readId || done || ended) return undefined;
+    let stop = false;
+    const t = setInterval(async () => {
+      try {
+        const r = await apiGet(`/api/scan/reads/${encodeURIComponent(readId)}`, { quiet: true });
+        if (!stop && r) setRead(r);
+      } catch { /* next tick */ }
+    }, 1500);
+    return () => { stop = true; clearInterval(t); };
+  }, [readId, done, ended]);
+  React.useEffect(() => {
+    if (!readId || !done || says) return;
+    apiGet(`/api/scan/reads/${encodeURIComponent(readId)}/summary`, { quiet: true })
+      .then(setSays)
+      .catch((e) => setErr(printingErrorText(e) || "Domovoi couldn't sum it up just now."));
+  }, [readId, done]);
+  const showAll = async () => {
+    try { setFull(await apiGet(`/api/scan/reads/${encodeURIComponent(readId)}/text`, { quiet: true })); }
+    catch (e) { setErr(printingErrorText(e) || "The text couldn't be loaded."); }
+  };
+  const md = (t) => (typeof window.chatMarkdownHtml === 'function'
+    ? <div className="chat-md" dangerouslySetInnerHTML={{ __html: window.chatMarkdownHtml(t) }}/>
+    : <div style={{ whiteSpace: 'pre-wrap' }}>{t}</div>);
+  const foot = <>
+    {done && !full && <Button icon="file-text" onClick={showAll}>Show the full text</Button>}
+    <Button variant="primary" icon="check" onClick={onClose}>Close</Button>
+  </>;
+  return (
+    <PrintingModal title="What does it say?" icon="text" onClose={onClose} foot={foot} wide>
+      {scan.name && <PrintingMuted>{scan.name}</PrintingMuted>}
+      {read && !done && !ended && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+          <StatusDot tone="brand" live/>
+          <span>{scanReadProgress(read)}</span>
+        </div>
+      )}
+      {read && read.state === 'failed' && (
+        <PrintingNotice tone="err">{read.error || "This scan couldn't be read."}</PrintingNotice>
+      )}
+      {done && !says && !err && <PrintingMuted>summing it up…</PrintingMuted>}
+      {says && (says.content ? md(says.content) : <div style={{ fontSize: 13, lineHeight: 1.5 }}>{says.said}</div>)}
+      {says && !says.ai && !says.failed && says.content == null && (
+        <PrintingMuted>AI features are off, so there's no summary: this is the start of the text.</PrintingMuted>
+      )}
+      {says && (says.notes || []).map((n) => <PrintingNotice key={n.code}>{n.text}</PrintingNotice>)}
+      {full && (
+        <div className="mono" style={{ whiteSpace: 'pre-wrap', fontSize: 12, lineHeight: 1.5, maxHeight: 360,
+                                       overflowY: 'auto', padding: 10, border: '1px solid var(--border)',
+                                       borderRadius: 'var(--r-md)' }}>
+          {full.text}
+        </div>
+      )}
+      {err && <PrintingNotice tone="err">{err}</PrintingNotice>}
+    </PrintingModal>
+  );
+};
+
+/* ==================================================================== *
  *  Scan sheet
  * ==================================================================== */
 const PRINTING_SCAN_BUSY = new Set(['scanning', 'saving']);
@@ -449,8 +545,8 @@ const printingOpenScan = (scan) => {
     + `&path=${encodeURIComponent(scan.path)}`), '_blank', 'noopener');
 };
 
-/* `onRead(scan)` is the seam for "What does it say?": the button shows
- * only when the scan is readable AND a caller passed a reader. */
+/* `onRead(scan)` opens "What does it say?": the button shows when a caller
+ * passed it AND the scan has been read or is being read (scanReadShown). */
 const ScanSheet = ({ onClose, onDone, onRead, fire }) => {
   const avail = usePrintingAvailability();
   const scanners = ((avail.data && avail.data.printers) || []).filter((p) => p.can_scan);
@@ -470,8 +566,10 @@ const ScanSheet = ({ onClose, onDone, onRead, fire }) => {
 
   const state = scan ? scan.state : null;
   const working = PRINTING_SCAN_BUSY.has(state);
+  // A saved scan is read in the background: follow it until it's read.
+  const reading = !!(scan && state === 'done' && scan.read && scan.read.reading);
   React.useEffect(() => {
-    if (!scan || !working) return undefined;
+    if (!scan || !(working || reading)) return undefined;
     let stop = false;
     const t = setInterval(async () => {
       try {
@@ -480,7 +578,7 @@ const ScanSheet = ({ onClose, onDone, onRead, fire }) => {
       } catch { /* next tick */ }
     }, 1500);
     return () => { stop = true; clearInterval(t); };
-  }, [scan && scan.id, working]);
+  }, [scan && scan.id, working, reading]);
 
   const doneRef = React.useRef(null);
   React.useEffect(() => {
@@ -526,7 +624,7 @@ const ScanSheet = ({ onClose, onDone, onRead, fire }) => {
     </>;
   } else if (state === 'done') {
     foot = <>
-      {scan.readable && onRead && <Button icon="text" onClick={() => onRead(scan)}>What does it say?</Button>}
+      <ScanReadButton scan={scan} onRead={onRead}/>
       <Button icon="external-link" disabled={!scan.path} onClick={() => printingOpenScan(scan)}>Open</Button>
       <Button variant="primary" icon="check" onClick={onClose}>Close</Button>
     </>;
@@ -606,11 +704,14 @@ const ScanSheet = ({ onClose, onDone, onRead, fire }) => {
 const PrintingScanButton = ({ onDone, fire }) => {
   const avail = usePrintingAvailability();
   const [open, setOpen] = React.useState(false);
+  const [reading, setReading] = React.useState(null);
   if (!avail.hasScanner) return null;
   return (
     <>
       <Button icon="scan-line" onClick={() => setOpen(true)}>Scan</Button>
-      {open && <ScanSheet fire={fire} onDone={onDone} onClose={() => setOpen(false)}/>}
+      {open && <ScanSheet fire={fire} onDone={onDone} onRead={(sc) => { setOpen(false); setReading(sc); }}
+                          onClose={() => setOpen(false)}/>}
+      {reading && <ScanReadSheet scan={reading} onClose={() => setReading(null)}/>}
     </>
   );
 };
@@ -687,21 +788,28 @@ const PrintingRecentJobs = ({ printerId, fire, label = 'recent jobs', extra = nu
   );
 };
 
-/* Scans in the household's job log (the same 90 days). */
-const PrintingScanLog = ({ scans }) => (
-  <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
-    {scans.map((s) => (
-      <div key={s.id} style={{ fontSize: 12, color: 'var(--fg-muted)', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-        <span>scan</span>
-        <span>· {s.state}</span>
-        <span>· {s.pages} page{s.pages === 1 ? '' : 's'}</span>
-        {s.name && <span style={{ color: 'var(--fg)' }}>· {s.name}</span>}
-        {s.who && <span>· {s.who}</span>}
-        {s.error && <span style={{ color: 'var(--warn-ink, var(--warn))' }}>· {s.error}</span>}
-      </div>
-    ))}
-  </div>
-);
+/* Scans in the household's job log (the same 90 days), each with "What
+ * does it say?" once it has been read (or while it is being read). */
+const PrintingScanLog = ({ scans }) => {
+  const [reading, setReading] = React.useState(null);
+  return (
+    <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+      {scans.map((s) => (
+        <div key={s.id} style={{ fontSize: 12, color: 'var(--fg-muted)', display: 'flex', gap: 6, flexWrap: 'wrap',
+                                 alignItems: 'center' }}>
+          <span>scan</span>
+          <span>· {s.state}</span>
+          <span>· {s.pages} page{s.pages === 1 ? '' : 's'}</span>
+          {s.name && <span style={{ color: 'var(--fg)' }}>· {s.name}</span>}
+          {s.who && <span>· {s.who}</span>}
+          {s.error && <span style={{ color: 'var(--warn-ink, var(--warn))' }}>· {s.error}</span>}
+          <ScanReadButton scan={s} onRead={setReading}/>
+        </div>
+      ))}
+      {reading && <ScanReadSheet scan={reading} onClose={() => setReading(null)}/>}
+    </div>
+  );
+};
 
 const PrinterSupplies = ({ printer }) => {
   if (!printer.supplies_reported) return <PrintingMuted>this printer doesn't report ink levels</PrintingMuted>;
@@ -1050,6 +1158,10 @@ const PrintingAddByAddress = ({ rooms, onAdded, onCancel }) => {
           </PrintingField>
         )}
       </div>
+      <PrintingMuted style={{ fontSize: 12 }}>
+        The address is on the printer's own screen or settings page. Only printers on your Wi-Fi or plugged
+        into your router work: a printer on a USB cable can't be added.
+      </PrintingMuted>
       <div style={{ display: 'flex', gap: 8 }}>
         <Button variant="primary" icon="plus" disabled={busy || !address.trim()} onClick={save}>{busy ? 'Adding…' : 'Add'}</Button>
         <Button icon="x" disabled={busy} onClick={onCancel}>Cancel</Button>
@@ -1246,8 +1358,8 @@ const PrintersPanel = () => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginTop: 16 }}>
       <PrintingMuted style={{ fontSize: 12 }}>
-        Domovoi works with network printers and scanners: AirPrint, IPP Everywhere and Mopria, which most
-        network printers from the last decade speak. USB printers aren't supported.
+        Domovoi works with Wi-Fi and network printers (AirPrint, IPP Everywhere or Mopria), and their
+        scanners. USB printers aren't supported.
       </PrintingMuted>
 
       {justAdded && justAdded.can_print && (
@@ -1323,6 +1435,7 @@ const PrintersPanel = () => {
 Object.assign(window, {
   PrintingAvailability, usePrintingAvailability, printingKindFor,
   PrintFileButton, PrintDialog, ScanSheet, PrintingScanButton, PrintersPanel,
+  ScanReadSheet, ScanReadButton, scanReadShown,
 });
 
 window.DomovoiSettingsSections = window.DomovoiSettingsSections || {};

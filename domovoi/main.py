@@ -45,6 +45,10 @@ from domovoi import voice_activity  # noqa: E402
 from domovoi import turn_watchdog  # noqa: E402
 from domovoi import join_problems, server_identity  # noqa: E402
 from domovoi import crypto_backend  # noqa: E402
+try:  # noqa: E402 — the satellite tree ships beside the core (it serves it to rooms)
+    from satellite.pairing_proof import VERSION as PAIRING_PROOF_VERSION
+except ImportError:  # pragma: no cover — a core without it advertises no proof
+    PAIRING_PROOF_VERSION = None
 from domovoi.container_guard import freeze as container_freeze  # noqa: E402
 from domovoi.admin_auth import (  # noqa: E402
     GUEST_PLAYING_ENTRY_DETAIL,
@@ -271,6 +275,15 @@ def _register_core_reapply_hooks() -> None:
             _W.start_worker("core", "wake_word_trainer")
 
     reapply.on_reapply("wake_word_trainer_enabled", _start_wake_trainer)
+    # Friend Houses (domovoi/friend_houses/service.py): turning it on or off,
+    # and the internet answer, start or stop its Tor daemon ("never" stops
+    # the container, not just the calls).
+    from domovoi.friend_houses import service as friend_houses_service
+
+    reapply.on_reapply("friend_houses_enabled", friend_houses_service.schedule_reconcile)
+    reapply.on_reapply(
+        "internet_access", friend_houses_service.schedule_reconcile, key="friend_houses"
+    )
     # Saving the internet answer starts the local search helper (SearXNG)
     # for always / sometimes and stops it for never, in the background
     # (domovoi/searxng_service.py). At boot only the stop under never runs
@@ -591,6 +604,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         from domovoi import wake_trainer_setup
 
         wake_trainer_setup.on_internet_answer()
+        # Friend Houses (off by default): start its Tor daemon and listener
+        # when it's on and wanted, or stop a daemon left running when it
+        # isn't (domovoi/friend_houses/service.py). Background, and quiet
+        # on a house that never turned it on.
+        from domovoi.friend_houses import service as _friend_houses
+
+        _friend_houses.schedule_reconcile()
     # Groups (domovoi/music_groups.py): the named groups, and the shared
     # queues that were playing before the restart (best-effort).
     from domovoi import music_groups
@@ -648,6 +668,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from domovoi.sdk import speech as _sdk_speech
 
     _sdk_speech.bind_active_sessions(lambda: app.state.active_sessions)
+    # sdk.speech.render reads each room's voice from here (SDK 1.9).
+    _sdk_speech.bind_room_voices(lambda: app.state.satellite_voice)
 
     # "Read me …" (documents plan D7) decides from an in-memory index of
     # Documents' titles: walk it once now, in a worker thread, so the
@@ -741,6 +763,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # the user manual's "say ...". Kept across a disconnect: a room's last
     # known word (streaming.py).
     app.state.satellite_wake_word = {}
+    # Several words per room (1.4.0): the words each satellite's hello said
+    # it listens for, and how many it can run (None: it didn't say, so one).
+    # Kept across a disconnect, like the word above.
+    app.state.satellite_wake_words = {}
+    app.state.satellite_wake_max = {}
+    # "Tune Domovoi": the trainer worker moves the rooms to the household's
+    # copy when it finishes training (domovoi/wake_tuning.py).
+    from domovoi import wake_tuning as _wake_tuning
+
+    _wake_tuning.attach(app)
     # The satellite upgrades this core asked for and how each ended
     # (domovoi/satellite_upgrades.py): room → record, from the request until
     # the satellite says hello again, then kept a while. NOT cleared on
@@ -776,7 +808,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     #   podcast_feed_poller → calendar_feed_refresher → audiobook_indexer →
     #   room_book_positions →
     #   command_capture_pruner → guests_seen_pruner → printer_status → print_jobs →
-    #   print_history → voice_history_pruner → container_guard →
+    #   print_history → voice_history_pruner → container_guard → chat_video → scan_reader →
     #   listenbrainz_fetch →
     #   library_alias_fetch → lyrics_scan → lyrics_fetch →
     #   library_tag_backfill → library_year_fetch → library_cover_art.
@@ -856,6 +888,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from domovoi.workers.container_guard import ContainerGuardWorker
 
     WORKERS.add_worker(ContainerGuardWorker(), owner="core")
+    # Videos attached in chat (V064): watched one at a time, holding off
+    # while any voice turn is under way (domovoi/chat_video/runner.py).
+    from domovoi.workers.chat_video import ChatVideoWorker
+
+    WORKERS.add_worker(ChatVideoWorker(), owner="core")
+    # Reading scans (V065): Tesseract OCR first, the vision model for a page
+    # OCR can't read, one read at a time, holding off for voice the same way
+    # (domovoi/scan_reader/runner.py). Registered as the scan reader the
+    # "scan this" flow and the Scan sheet use; whether a scan can be read
+    # is asked per scan (tesseract may arrive with an update after start).
+    from domovoi.printing import scans as _scans
+    from domovoi.scan_reader import answer_for_voice as _scan_answer
+    from domovoi.workers.scan_reader import ScanReaderWorker
+
+    WORKERS.add_worker(ScanReaderWorker(), owner="core")
+    _scans.register_reader(_scan_answer)
     # Up next P7 (V056): similar artists and song popularity from
     # ListenBrainz, each behind its own switch, the internet answer and the
     # probe; the ONLY code that asks ListenBrainz (the picker reads the
@@ -1034,6 +1082,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         signal_shutdown("lifespan teardown")  # no-op after a signal
         from domovoi.wake_preview import shutdown as wake_preview_shutdown
         from domovoi.wake_trainer_setup import shutdown as wake_trainer_setup_shutdown
+        from domovoi.friend_houses.service import shutdown as friend_houses_shutdown
 
         teardown_started = asyncio.get_running_loop().time()
         await lifecycle.run_teardown(
@@ -1054,6 +1103,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 ("wake-word training setup", wake_trainer_setup_shutdown, 3.0),
                 # "Hear the training voices": its container stops too.
                 ("wake-word voice preview", wake_preview_shutdown, 3.0),
+                # Friend Houses' listener process (its Tor container stays up
+                # so a restart doesn't take the house offline).
+                ("Friend Houses listener", friend_houses_shutdown, 12.0),
                 # Announcements still in flight stop here; their rows stay
                 # pending/sending and the next boot resumes them.
                 ("timer delivery", app.state.timer_delivery.shutdown, 2.0),
@@ -1097,6 +1149,11 @@ app.include_router(plugins_admin_router)
 from domovoi.printing.routes import router as printing_router  # noqa: E402
 
 app.include_router(printing_router)
+
+# Reading scans (domovoi/scan_reader/routes.py): "What does it say?".
+from domovoi.scan_reader.routes import router as scan_reader_router  # noqa: E402
+
+app.include_router(scan_reader_router)
 
 # Groups: named sets of rooms and the shared queues (domovoi/music_groups.py,
 # domovoi/music_groups_routes.py).
@@ -1365,9 +1422,22 @@ async def alive() -> dict[str, Any]:
     return {"alive": True, "pid": os.getpid()}
 
 
+def _arrival_ports(request: Any) -> set[int] | None:
+    """The port a request reached this core at (the listening socket's), or
+    None when it cannot be told (a direct call): the identity proof is
+    signed for this box's own addresses at that port only."""
+    try:
+        server = request.scope.get("server") if request is not None else None
+        port = int(server[1]) if server and server[1] else None
+    except (AttributeError, TypeError, ValueError, IndexError):
+        port = None
+    return {port} if port else None
+
+
 @app.get("/v1/health")
 async def health(
-    challenge: str | None = None, addr: str | None = None
+    challenge: str | None = None, addr: str | None = None,
+    request: Request = None,  # type: ignore[assignment] — injected; None when called directly
 ) -> dict[str, Any]:
     """Liveness, plus this install's cryptographic identity.
 
@@ -1386,9 +1456,22 @@ async def health(
     the core will not sign for the relay's address, and an answer signed
     for the core's own address does not match what the satellite dialed.
     A refused address comes back as ``addr_refused`` with no signature.
+    The address's PORT counts too (SAT-13): an address of this box is
+    signed for only at the port this request arrived at (the core's own),
+    so something else on this machine listening elsewhere and forwarding
+    here is refused like any other relay; a host vouches for a changed
+    port explicitly (``server_identity.VOUCHED_ADDRESS_SOURCES``).
     The bare ``challenge`` form is still answered, for satellites running
     code from before the binding; they take the new code on their next
     upgrade.
+
+    A challenge that starts with ``pairing-proof.`` (1.4.0 devices) asks
+    for the approval-proof advert to be signed: the bound answer then
+    carries ``pairing_proof`` (the exchange version, 0 for none) and the
+    signature covers ``pairing_proof=N`` as a last line, so a host in the
+    middle that strips the field breaks the signature rather than passing
+    this server off as one that cannot prove an approval. It rides in the
+    challenge because a separate flag could be stripped too.
 
     The pre-identity fields are untouched, so a satellite that predates
     this (and any other caller) reads exactly what it always read.
@@ -1419,6 +1502,11 @@ async def health(
         # and time. No room names: this answer is open.
         "speech": turn_watchdog.speech_health(),
     }
+    if PAIRING_PROOF_VERSION:
+        # 1.4.0: this server can PROVE an approval to a room device — the
+        # exchange in satellite/pairing_proof.py. A device that asks every
+        # server it finds for approval asks only those that say so.
+        doc["pairing_proof"] = PAIRING_PROOF_VERSION
     global _UNBOUND_CHALLENGE_SEEN
     if challenge is not None and len(challenge) > server_identity.CHALLENGE_MAX_LEN:
         raise HTTPException(status_code=400, detail="challenge is too long")
@@ -1443,8 +1531,14 @@ async def health(
                     "upgrade (this is logged once per start)"
                 )
             doc["identity"] = identity.health_answer(challenge)
-        elif server_identity.dialed_address_is_ours(addr):
-            doc["identity"] = identity.health_answer(challenge, addr=addr)
+        elif server_identity.dialed_address_is_ours(addr, listen_ports=_arrival_ports(request)):
+            signed_proof = None
+            if server_identity.asks_for_pairing_proof(challenge):
+                signed_proof = int(PAIRING_PROOF_VERSION or 0)
+                doc["pairing_proof"] = signed_proof
+            doc["identity"] = identity.health_answer(
+                challenge, addr=addr, pairing_proof=signed_proof,
+            )
         else:
             log.warning(
                 "refused to sign the identity proof for %s: it is not an "
@@ -1482,6 +1576,30 @@ async def server_time() -> dict[str, Any]:
     from domovoi.host_time import server_time_document
 
     return server_time_document()
+
+
+@app.get("/v1/music/cover/{track_id}")
+async def music_cover(track_id: int, request: Request) -> Any:
+    """A library track's cover art, for a room's screen (the room display,
+    domovoi/room_display.py: its ``now_playing.art``).
+
+    Open, as the dashboard's ``/api/music/library/{id}/cover`` is: an image
+    request carries no credential, and a room phone holds only its room
+    key, which no HTTP route takes. It IS that route: the same bytes, the
+    same content type sniffed from the picture's first bytes, the same
+    strong ``ETag`` / ``Cache-Control`` and ``304``. A library track only:
+    the id is looked up in ``library_tracks`` and its file is
+    containment-checked inside MUSIC_DIR (an integer id, so no path from
+    the caller ever reaches the disk). ``404`` for an unknown id, a track
+    with no cover, or a server without the web package."""
+    if not 1 <= track_id <= 2**31 - 1:
+        raise HTTPException(status_code=404, detail=f"track {track_id} not found")
+    try:
+        from web.backend.api.music import track_cover
+    except Exception as e:  # noqa: BLE001 — a core installed without web/
+        log.debug("cover route: the web package is not importable: %s", e)
+        raise HTTPException(status_code=404, detail="no cover art") from None
+    return await track_cover(track_id, request)
 
 
 @app.get(
@@ -2677,6 +2795,11 @@ async def admin_snapshot() -> dict[str, Any]:
         # Per-room wake word (the slug each satellite named in its hello,
         # last known), so the manual names the words the rooms answer to.
         "satellite_wake_word": dict(getattr(app.state, "satellite_wake_word", None) or {}),
+        # Several words per room (1.4.0): each room's words as its hello
+        # named them (main word first), and how many its device can run
+        # (null: it didn't say, so it runs one).
+        "satellite_wake_words": dict(getattr(app.state, "satellite_wake_words", None) or {}),
+        "satellite_wake_max": dict(getattr(app.state, "satellite_wake_max", None) or {}),
         # Per-room satellite upgrades under way or just finished
         # (domovoi/satellite_upgrades.py: running | done | rolled_back |
         # no_news), so every dashboard and the app lock a room's Upgrade
@@ -3651,6 +3774,343 @@ class _AdminChatToolBody(BaseModel):
     args: dict[str, Any] = Field(default_factory=dict)
 
 
+# ─── Friend Houses (domovoi/friend_houses/) ───────────────────────────────
+# "Serverless messaging and friend system between households". Every route
+# is admin security tier, GETs included: friend files are bearer secrets,
+# and who this house's friends are is the household's business
+# (threat-model finding 10). FriendingError / BadFriendFile messages are
+# written for the person at the dashboard.
+
+_FH_READ = [Depends(require_admin_security_read)]
+_FH_WRITE = [Depends(require_admin_security)]
+
+
+def _fh_error(e: Exception) -> HTTPException:
+    return HTTPException(status_code=400, detail=str(e))
+
+
+class _FhSettingsBody(BaseModel):
+    house_name: str | None = None
+    invite_days: int | None = None
+
+
+class _FhInviteBody(BaseModel):
+    days: int | None = None
+    label: str | None = None
+
+
+class _FhFileBody(BaseModel):
+    # Plain str: a validation error must never echo a friend file back.
+    file: str
+    name: str | None = None
+
+
+class _FhNameBody(BaseModel):
+    name: str
+
+
+@app.get("/v1/admin/friend-houses", dependencies=_FH_READ)
+async def admin_friend_houses_status() -> dict[str, Any]:
+    """Friend Houses at a glance: whether its private connection runs, why
+    not, this house's public fingerprint and name, the default friend-file
+    length and the limits. No keys, no addresses."""
+    from domovoi.friend_houses import friending
+    from domovoi.friend_houses import service as friend_houses_service
+
+    out = friend_houses_service.status()
+    from domovoi.friend_houses import messages
+
+    out["house_name"] = await friending.house_name()
+    out["unread"] = await messages.unread_total()
+    out["invite_days"] = await friending.invite_days_default()
+    out["limits"] = {"min_days": friending.MIN_DAYS, "max_days": friending.MAX_DAYS,
+                     "max_open_files": friending.MAX_OPEN_INVITES}
+    return out
+
+
+@app.put("/v1/admin/friend-houses/settings", dependencies=_FH_WRITE)
+async def admin_friend_houses_settings(body: _FhSettingsBody) -> dict[str, Any]:
+    from domovoi.friend_houses import friending
+
+    try:
+        if body.house_name is not None:
+            await friending.set_house_name(body.house_name)
+        if body.invite_days is not None:
+            await friending.set_invite_days_default(body.invite_days)
+    except friending.FriendingError as e:
+        raise _fh_error(e) from e
+    return {"house_name": await friending.house_name(),
+            "invite_days": await friending.invite_days_default()}
+
+
+@app.get("/v1/admin/friend-houses/invites", dependencies=_FH_READ)
+async def admin_friend_houses_invites() -> dict[str, Any]:
+    from domovoi.friend_houses import friending
+
+    return {"invites": await friending.list_invites()}
+
+
+@app.post("/v1/admin/friend-houses/invites", dependencies=_FH_WRITE)
+async def admin_friend_houses_make_invite(body: _FhInviteBody) -> dict[str, Any]:
+    """Make a friend file. ``file`` is null while the pairing address is
+    still being set up (the first time, the Tor image is built): fetch it
+    again from ``GET .../invites/{id}``."""
+    from domovoi.friend_houses import friending
+
+    try:
+        return await friending.make_invite(days=body.days, label=body.label, created_by="admin")
+    except friending.FriendingError as e:
+        raise _fh_error(e) from e
+
+
+@app.get("/v1/admin/friend-houses/invites/{invite_id}", dependencies=_FH_READ)
+async def admin_friend_houses_invite(invite_id: str) -> dict[str, Any]:
+    from domovoi.friend_houses import friending
+
+    try:
+        return await friending.invite_with_file(invite_id)
+    except friending.FriendingError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@app.delete("/v1/admin/friend-houses/invites/{invite_id}", dependencies=_FH_WRITE)
+async def admin_friend_houses_cancel_invite(invite_id: str) -> dict[str, Any]:
+    from domovoi.friend_houses import friending
+
+    if not await friending.cancel_invite(invite_id):
+        raise HTTPException(status_code=404,
+                            detail="That friend file is already used, cancelled or expired.")
+    return {"cancelled": True}
+
+
+@app.post("/v1/admin/friend-houses/preview", dependencies=_FH_WRITE)
+async def admin_friend_houses_preview(body: _FhFileBody) -> dict[str, Any]:
+    """What a friend file says. Nothing is sent (POST, so the file never
+    sits in a URL or an access log)."""
+    from domovoi.friend_houses import friend_file, friending
+
+    try:
+        return await friending.preview(body.file)
+    except (friending.FriendingError, friend_file.BadFriendFile) as e:
+        raise _fh_error(e) from e
+
+
+@app.post("/v1/admin/friend-houses/requests", dependencies=_FH_WRITE)
+async def admin_friend_houses_send_request(body: _FhFileBody) -> dict[str, Any]:
+    from domovoi.friend_houses import friend_file, friending
+
+    try:
+        return await friending.send_request(body.file, local_name=body.name or "", by="admin")
+    except (friending.FriendingError, friend_file.BadFriendFile) as e:
+        raise _fh_error(e) from e
+
+
+@app.get("/v1/admin/friend-houses/requests", dependencies=_FH_READ)
+async def admin_friend_houses_requests() -> dict[str, Any]:
+    from domovoi.friend_houses import friending
+
+    return {"requests": await friending.list_requests()}
+
+
+@app.post("/v1/admin/friend-houses/requests/{request_id}/accept", dependencies=_FH_WRITE)
+async def admin_friend_houses_accept(request_id: str, body: _FhNameBody) -> dict[str, Any]:
+    from domovoi.friend_houses import friending
+
+    try:
+        return await friending.accept(request_id, local_name=body.name, by="admin")
+    except friending.FriendingError as e:
+        raise _fh_error(e) from e
+
+
+@app.post("/v1/admin/friend-houses/requests/{request_id}/decline", dependencies=_FH_WRITE)
+async def admin_friend_houses_decline(request_id: str) -> dict[str, Any]:
+    from domovoi.friend_houses import friending
+
+    if not await friending.decline(request_id):
+        raise HTTPException(status_code=404, detail="That request isn't waiting any more.")
+    return {"declined": True}
+
+
+@app.get("/v1/admin/friend-houses/friends", dependencies=_FH_READ)
+async def admin_friend_houses_friends() -> dict[str, Any]:
+    from domovoi.friend_houses import friending
+
+    return {"friends": await friending.list_friends()}
+
+
+@app.post("/v1/admin/friend-houses/friends/{friend_id}/verified", dependencies=_FH_WRITE)
+async def admin_friend_houses_verified(friend_id: str) -> dict[str, Any]:
+    """Someone compared the 4-digit codes and they matched."""
+    from domovoi.friend_houses import friending
+
+    if not await friending.mark_verified(friend_id):
+        raise HTTPException(status_code=404, detail="No such friend house.")
+    return {"verified": True}
+
+
+@app.patch("/v1/admin/friend-houses/friends/{friend_id}", dependencies=_FH_WRITE)
+async def admin_friend_houses_rename(friend_id: str, body: _FhNameBody) -> dict[str, Any]:
+    from domovoi.friend_houses import friending
+
+    try:
+        renamed = await friending.rename(friend_id, body.name)
+    except friending.FriendingError as e:
+        raise _fh_error(e) from e
+    if not renamed:
+        raise HTTPException(status_code=404, detail="No such friend house.")
+    return {"renamed": True}
+
+
+@app.delete("/v1/admin/friend-houses/friends/{friend_id}", dependencies=_FH_WRITE)
+async def admin_friend_houses_unfriend(friend_id: str) -> dict[str, Any]:
+    from domovoi.friend_houses import friending
+
+    if not await friending.unfriend(friend_id):
+        raise HTTPException(status_code=404, detail="No such friend house.")
+    return {"removed": True}
+
+
+class _FhMessageBody(BaseModel):
+    friend_id: str
+    text: str
+
+
+class _FhAlertBody(BaseModel):
+    alert: str
+
+
+def _fh_house(house: str) -> bytes:
+    try:
+        raw = bytes.fromhex(house)
+    except ValueError:
+        raw = b""
+    if len(raw) != 32:
+        raise HTTPException(status_code=404, detail="No such conversation.")
+    return raw
+
+
+@app.get("/v1/admin/friend-houses/conversations", dependencies=_FH_READ)
+async def admin_friend_houses_conversations() -> dict[str, Any]:
+    """The house inbox: every friend (or former friend) with messages, its
+    unread count and how many of ours weren't delivered."""
+    from domovoi.friend_houses import messages
+
+    return {"conversations": await messages.conversations(),
+            "unread": await messages.unread_total()}
+
+
+@app.get("/v1/admin/friend-houses/conversations/{house}", dependencies=_FH_READ)
+async def admin_friend_houses_conversation(house: str, before: int | None = None,
+                                           limit: int = 50) -> dict[str, Any]:
+    from domovoi.friend_houses import messages
+
+    return {"messages": await messages.conversation(_fh_house(house), before=before, limit=limit)}
+
+
+@app.post("/v1/admin/friend-houses/conversations/{house}/read", dependencies=_FH_WRITE)
+async def admin_friend_houses_mark_read(house: str) -> dict[str, Any]:
+    from domovoi.friend_houses import messages
+
+    return {"marked": await messages.mark_read(_fh_house(house))}
+
+
+@app.get("/v1/admin/friend-houses/conversations/{house}/export", dependencies=_FH_READ)
+async def admin_friend_houses_export(house: str) -> dict[str, Any]:
+    """Every message with one house, each with its signed envelope (proof of
+    what was said; checkable against the sender's public house key)."""
+    from domovoi.friend_houses import messages
+
+    return await messages.export(_fh_house(house))
+
+
+@app.delete("/v1/admin/friend-houses/conversations/{house}", dependencies=_FH_WRITE)
+async def admin_friend_houses_delete_conversation(house: str) -> dict[str, Any]:
+    from domovoi.friend_houses import messages
+
+    return {"deleted": await messages.delete_conversation(_fh_house(house))}
+
+
+@app.post("/v1/admin/friend-houses/messages", dependencies=_FH_WRITE)
+async def admin_friend_houses_send(body: _FhMessageBody) -> dict[str, Any]:
+    from domovoi.friend_houses import messages
+
+    try:
+        return await messages.send(body.friend_id, body.text)
+    except messages.MessageError as e:
+        raise _fh_error(e) from e
+
+
+@app.put("/v1/admin/friend-houses/friends/{friend_id}/alert", dependencies=_FH_WRITE)
+async def admin_friend_houses_alert(friend_id: str, body: _FhAlertBody) -> dict[str, Any]:
+    """What a new message from this friend does: ``inbox`` (the default),
+    ``sender`` (the rooms hear who it's from) or ``read`` (and the message)."""
+    from domovoi.friend_houses import messages
+
+    try:
+        if not await messages.set_alert(friend_id, body.alert):
+            raise HTTPException(status_code=404, detail="No such friend house.")
+    except messages.MessageError as e:
+        raise _fh_error(e) from e
+    return {"alert": body.alert}
+
+
+class _FhShareBody(BaseModel):
+    list_id: int
+    friend_id: str
+
+
+class _FhAcceptListBody(BaseModel):
+    name: str | None = None
+
+
+@app.get("/v1/admin/friend-houses/shared-lists", dependencies=_FH_READ)
+async def admin_friend_houses_shared_lists() -> dict[str, Any]:
+    """Lists shared with friend houses: ours they have, theirs we have, and
+    theirs waiting for an admin here (``state`` invited)."""
+    from domovoi.friend_houses import shared_lists
+
+    return {"shared_lists": await shared_lists.overview()}
+
+
+@app.post("/v1/admin/friend-houses/shared-lists", dependencies=_FH_WRITE)
+async def admin_friend_houses_share_list(body: _FhShareBody) -> dict[str, Any]:
+    from domovoi.friend_houses import shared_lists
+
+    try:
+        return await shared_lists.share(body.list_id, body.friend_id)
+    except shared_lists.SharedListError as e:
+        raise _fh_error(e) from e
+
+
+@app.post("/v1/admin/friend-houses/shared-lists/{space}/accept", dependencies=_FH_WRITE)
+async def admin_friend_houses_accept_list(space: str, body: _FhAcceptListBody) -> dict[str, Any]:
+    from domovoi.friend_houses import shared_lists
+
+    try:
+        return await shared_lists.accept(space, name=body.name)
+    except shared_lists.SharedListError as e:
+        raise _fh_error(e) from e
+
+
+@app.post("/v1/admin/friend-houses/shared-lists/{space}/decline", dependencies=_FH_WRITE)
+async def admin_friend_houses_decline_list(space: str) -> dict[str, Any]:
+    from domovoi.friend_houses import shared_lists
+
+    if not await shared_lists.decline(space):
+        raise HTTPException(status_code=404, detail="That shared list isn't waiting any more.")
+    return {"declined": True}
+
+
+@app.delete("/v1/admin/friend-houses/shared-lists/{space}", dependencies=_FH_WRITE)
+async def admin_friend_houses_leave_list(space: str) -> dict[str, Any]:
+    """Stop sharing. Both houses keep their copy as an ordinary list."""
+    from domovoi.friend_houses import shared_lists
+
+    if not await shared_lists.leave(space):
+        raise HTTPException(status_code=404, detail="No such shared list.")
+    return {"stopped": True}
+
+
 @app.get(
     "/v1/admin/device-token",
     # Security-tier READ: the household token is a credential. Bearer-only
@@ -3978,6 +4438,11 @@ async def admin_wake_push(body: _AdminWakePushBody) -> dict[str, Any]:
             detail=f"wake word {body.wake_word_id} is not trained (status={row['status']!r})",
         )
 
+    # The word becomes the room's main word; extra words an admin added
+    # stay after it (1.4.0, domovoi/wake_default.py).
+    from domovoi import wake_default
+
+    slugs, words = await _room_words_with_main(body.room_id, row["slug"])
     try:
         # set_wake_word already triggers a model sync + restart on the Pi;
         # sending wake_models_changed too would just race a second concurrent
@@ -3985,7 +4450,7 @@ async def admin_wake_push(body: _AdminWakePushBody) -> dict[str, Any]:
         # the satellite writes it into its [wake] threshold, the room's Wake
         # sensitivity setting, so its Settings tab shows the value in use.
         await target.request_set_wake_word(
-            slug=row["slug"], threshold=row.get("threshold")
+            slug=row["slug"], threshold=row.get("threshold"), words=words
         )
     except Exception as e:
         log.warning("admin wake push to room=%s failed: %s", body.room_id, e)
@@ -3993,10 +4458,8 @@ async def admin_wake_push(body: _AdminWakePushBody) -> dict[str, Any]:
             status_code=502, detail=f"couldn't reach the room device: {e}"
         ) from e
     # The room's own choice now: the household default never applies to it.
-    from domovoi import wake_default
-
     async with session_scope() as s:
-        await wake_default.mark_chosen(s, body.room_id, row["slug"])
+        await wake_default.mark_chosen(s, body.room_id, row["slug"], slugs)
     return {
         "pushed": True,
         "room_id": body.room_id,
@@ -4018,6 +4481,83 @@ class _AdminWakeUseBody(BaseModel):
 
 def _wake_room_words() -> dict[str, str]:
     return dict(getattr(app.state, "satellite_wake_word", None) or {})
+
+
+def _wake_room_lists() -> dict[str, list[str]]:
+    return dict(getattr(app.state, "satellite_wake_words", None) or {})
+
+
+async def _room_words_with_main(room_id: str, slug: str) -> tuple[list[str], list[dict] | None]:
+    """A room's words after ``slug`` is pushed the old way (one word): it
+    becomes the main word, the extras stay. ``(slugs, words)``: ``words``
+    is the push's list with thresholds, None when the room has one word
+    (or an extra can't be given now: then only the main word goes)."""
+    from domovoi import wake_default
+
+    async with session_scope() as s:
+        row = await wake_default.room_state(s, room_id)
+        slugs = wake_default.with_main_word((row or {}).get("slugs"), slug)
+        if len(slugs) == 1:
+            return slugs, None
+        try:
+            return slugs, await wake_default.word_payload(s, slugs)
+        except ValueError as e:
+            log.info("wake push to %s: only the main word goes (%s)", room_id, e)
+            return [slug], None
+
+
+class _AdminWakeRoomBody(BaseModel):
+    room_id: str
+    slugs: list[str]
+
+
+@app.put("/v1/admin/wake/room", dependencies=[Depends(require_admin_mutation)])
+async def admin_wake_room(body: _AdminWakeRoomBody) -> dict[str, Any]:
+    """Set a connected room's wake words (1.4.0): 1 to 5, main word first,
+    each a built-in, published or trained word that is here. The room's
+    device is sent no more than it said it can run: 409 when the list is
+    longer (the dashboard doesn't offer it). The device keeps the list,
+    syncs the models and restarts to load them. The room's own choice from
+    then on. 404 when the room isn't connected; 409 when a word can't be
+    given; 502 on a send failure."""
+    from domovoi import wake_default
+
+    try:
+        slugs = wake_default.check_word_list(body.slugs)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    target = app.state.active_sessions.get(body.room_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail=f"room {body.room_id!r} not connected")
+    _require_declared(target, "wake_models", "a wake-word model")
+    declared = getattr(target, "wake_max", None)
+    limit = wake_default.device_limit(declared)
+    if len(slugs) > limit:
+        raise HTTPException(status_code=409, detail=(
+            f"{body.room_id}'s device can run {limit} wake word{'s' if limit != 1 else ''}"
+            + ("" if declared else ": its software is older than several words per room, "
+               "and upgrading it lets it run more")))
+    for slug in slugs:
+        if slug in wake_default.PUBLISHED and not wake_default.published_ready(slug):
+            await wake_default.ensure_published(slug, force=True)
+    try:
+        async with session_scope() as s:
+            words = await wake_default.word_payload(s, slugs)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    try:
+        await target.request_set_wake_word(
+            slug=slugs[0], threshold=words[0]["threshold"],
+            words=words if len(words) > 1 else None)
+    except Exception as e:
+        log.warning("admin wake room words to room=%s failed: %s", body.room_id, e)
+        raise HTTPException(
+            status_code=502, detail=f"couldn't reach the room device: {e}"
+        ) from e
+    async with session_scope() as s:
+        await wake_default.mark_chosen(s, body.room_id, slugs[0], slugs)
+    log.info("wake words: room %s now wakes on %s", body.room_id, ", ".join(slugs))
+    return {"pushed": True, "room_id": body.room_id, "slugs": slugs, "limit": limit}
 
 
 @app.get("/v1/admin/wake/default", dependencies=[Depends(require_admin_read)])
@@ -4089,16 +4629,86 @@ async def admin_wake_use(body: _AdminWakeUseBody) -> dict[str, Any]:
         word["available"] = ok
     if not word["available"]:
         raise HTTPException(status_code=409, detail=f"{word['name']}: {word['reason']}")
+    slugs, words = await _room_words_with_main(body.room_id, slug)
     try:
-        await target.request_set_wake_word(slug=slug, threshold=None)
+        await target.request_set_wake_word(slug=slug, threshold=None, words=words)
     except Exception as e:
         log.warning("admin wake use to room=%s failed: %s", body.room_id, e)
         raise HTTPException(
             status_code=502, detail=f"couldn't reach the room device: {e}"
         ) from e
     async with session_scope() as s:
-        await wake_default.mark_chosen(s, body.room_id, slug)
+        await wake_default.mark_chosen(s, body.room_id, slug, slugs)
     return {"pushed": True, "room_id": body.room_id, "slug": slug}
+
+
+# ─── "Tune Domovoi to your household" (domovoi/wake_tuning.py) ───────────
+# A household copy of the published Domovoi word, trained with the house's
+# own recordings, used only in this house. Same tier as the trainer's own
+# create/train routes (admin mutation; reading it is an admin read).
+
+
+@app.get("/v1/admin/wake/tuning", dependencies=[Depends(require_admin_read)])
+async def admin_wake_tuning_status() -> dict[str, Any]:
+    """Whether the household can tune Domovoi, its copy's state, and which
+    rooms wake on the standard word and on the copy."""
+    from domovoi import wake_tuning
+
+    async with session_scope() as s:
+        return await wake_tuning.status(s, _wake_room_words(), _wake_room_lists())
+
+
+@app.post("/v1/admin/wake/tuning", dependencies=[Depends(require_admin_mutation)])
+async def admin_wake_tuning_start() -> dict[str, Any]:
+    """Start tuning: the copy's word is made (ready for clips: record
+    everyone saying "Domovoi", then Train). Rooms keep the standard word
+    until the copy is trained. 409 with the reason when it can't start."""
+    from domovoi import wake_tuning
+
+    async with session_scope() as s:
+        st = await wake_tuning.status(s, _wake_room_words(), _wake_room_lists())
+        if not st["can_start"] and st["wake_word_id"] is None:
+            raise HTTPException(status_code=409, detail=st["reason"])
+        try:
+            await wake_tuning.start(s, st["base"])
+        except ValueError as e:
+            raise HTTPException(status_code=409, detail=str(e)) from e
+        await s.execute(text("SELECT pg_notify('wake_words_changed', 'tuning')"))
+    moved = await wake_tuning.apply(app.state.active_sessions, _wake_room_words(), _wake_room_lists())
+    async with session_scope() as s:
+        out = await wake_tuning.status(s, _wake_room_words(), _wake_room_lists())
+    out["moved"] = moved
+    return out
+
+
+async def _wake_tuning_use(use: bool) -> dict[str, Any]:
+    from domovoi import wake_tuning
+
+    async with session_scope() as s:
+        if await wake_tuning.set_use(s, use) is None:
+            raise HTTPException(status_code=409,
+                                detail="Domovoi hasn't been tuned to this household")
+        await s.execute(text("SELECT pg_notify('wake_words_changed', 'tuning')"))
+    moved = await wake_tuning.apply(app.state.active_sessions, _wake_room_words(), _wake_room_lists())
+    async with session_scope() as s:
+        out = await wake_tuning.status(s, _wake_room_words(), _wake_room_lists())
+    out["moved"] = moved
+    return out
+
+
+@app.post("/v1/admin/wake/tuning/undo", dependencies=[Depends(require_admin_mutation)])
+async def admin_wake_tuning_undo() -> dict[str, Any]:
+    """"Go back to the standard Domovoi word": every room on the copy is
+    given the published word again (an offline room on its next hello), and
+    the household default goes back with them. The copy and its clips stay."""
+    return await _wake_tuning_use(False)
+
+
+@app.post("/v1/admin/wake/tuning/use", dependencies=[Depends(require_admin_mutation)])
+async def admin_wake_tuning_use() -> dict[str, Any]:
+    """Use the tuned copy again (after an undo): rooms on the standard word
+    move to it, once it is trained."""
+    return await _wake_tuning_use(True)
 
 
 @app.post(
@@ -4872,6 +5482,22 @@ async def admin_satellite_approve(
                 "so it asks again with one"
             ),
         )
+    if result == "entered":
+        # A device that proves approvals (1.4.0) never sent its code: the
+        # core cannot say yet whether this one is right. The DEVICE checks
+        # it on its next visit (every ten seconds while it waits), and the
+        # room is bound only if it confirms. Not "approved", so the
+        # dashboard does not say so before it is true.
+        log.info(
+            "pairing: room=%s code typed; waiting for the device to confirm it",
+            room_id,
+        )
+        return {"approved": False, "waiting_for_device": True, "room_id": room_id}
+    if result == "malformed":
+        raise HTTPException(
+            status_code=422,
+            detail="an approval code is six digits — type the six the room device is saying",
+        )
     if result != "approved":
         log.warning("pairing: room=%s approval code did not match", room_id)
         # 422, not 403: a wrong code is a wrong VALUE in the body, not a
@@ -5497,13 +6123,21 @@ async def admin_music_play_track(body: _AdminPlayTrackBody) -> dict[str, Any]:
     if track is None:
         raise HTTPException(
             status_code=404,
-            detail=f"track {body.track_id} not found in library_tracks",
+            detail="That song isn't in the library any more.",
         )
     title = track[2]
     artist = track[3]
     file_path = track[1]
 
     await _ensure_room_mpd(body.room_id)
+    # (After the room check: an unknown room is refused as such.)
+    # Its file deleted and the library not swept yet (S2-18): say so, rather
+    # than let the player's database, which may still list it, try it.
+    if file_path and not await asyncio.to_thread(_library_file_present, file_path):
+        raise HTTPException(
+            status_code=404,
+            detail="That song's file isn't on this server any more.",
+        )
     mpd = get_mpd_client_for(body.room_id)
     # Three-stage lookup mirroring MusicHandler._play_random's
     # bulletproof pattern (music.py:329-352): tag → filename
@@ -5602,6 +6236,22 @@ async def admin_music_play_track(body: _AdminPlayTrackBody) -> dict[str, Any]:
         "latency_ms": latency_ms,
         "up_next": {"session_id": session_id} if session_id else None,
     }
+
+
+def _library_file_present(file_path: str) -> bool:
+    """Whether a library row's file is still there. True when the answer
+    is unclear (the folder can't be read): only a file known to be gone
+    stops a play."""
+    import os
+    from pathlib import Path
+
+    try:
+        p = Path(file_path)
+        if p.exists():
+            return True
+        return not p.parent.exists() or not os.access(p.parent, os.R_OK)
+    except OSError:
+        return True
 
 
 async def _ensure_room_mpd(room_id: str) -> None:
@@ -6918,7 +7568,7 @@ class _AdminConfigUpdateBody(BaseModel):
     plugin: str | None = None
     # Settings whose default follows the internet answer and that someone
     # pinned by hand: "follow the answer again" comments their .env line
-    # out (never deletes it) and re-derives them (Settings → Internet).
+    # out (never deletes it) and re-derives them (Settings → Privacy → Internet).
     follow_internet: list[str] = Field(default_factory=list, max_length=16)
 
 
@@ -7212,7 +7862,7 @@ async def admin_voice_history_delete_all() -> dict[str, Any]:
     return {"job": job}
 
 
-# ─── Settings → Internet ──────────────────────────────────────────────────
+# ─── Settings → Privacy → Internet ──────────────────────────────────────────────────
 
 
 @app.get(
@@ -7224,7 +7874,7 @@ async def admin_voice_history_delete_all() -> dict[str, Any]:
 )
 async def admin_internet() -> dict[str, Any]:
     """The household's internet answer and what follows from it — the
-    document behind Settings → Internet: the answer and where it is set
+    document behind Settings → Privacy → Internet: the answer and where it is set
     (locked when the process environment pins it), the three choices in
     the installer's words, the privacy note, connectivity (reason
     ``turned_off`` under ``never``), and every setting whose default
@@ -7242,7 +7892,7 @@ async def admin_internet() -> dict[str, Any]:
     dependencies=[Depends(require_admin_mutation)],
 )
 async def admin_internet_search_helper() -> dict[str, Any]:
-    """Settings → Internet's "start it again": run the search helper's
+    """Settings → Privacy → Internet's "start it again": run the search helper's
     start/stop for the CURRENT answer in the background — the same thing
     saving the answer does (``domovoi/searxng_service.py``). For a first
     start that failed or timed out, or a helper somebody stopped by hand.
@@ -7856,6 +8506,28 @@ async def admin_music_mpd_rescan() -> dict[str, Any]:
         except Exception as e:
             log.warning("mpd-rescan: MPD update failed for room=%s: %s", room_id, e)
     return {"rooms": len(rooms), "updated": updated}
+
+
+class _TracksRemovedBody(BaseModel):
+    file_paths: list[str] = Field(default_factory=list, max_length=200)
+
+
+@app.post(
+    "/v1/admin/music/tracks-removed",
+    # Admin tier: only an admin takes a song out of the library (the web's
+    # DELETE /api/music/library/{id} and the duplicates clean-up), and this
+    # is that delete's second half.
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def admin_music_tracks_removed(body: _TracksRemovedBody) -> dict[str, Any]:
+    """Library songs just taken out of the library leave every room's
+    player (S2-18): a room playing one goes on to the next song in its
+    queue, or stops when nothing comes after it; every copy leaves the
+    queues. See ``domovoi/music_track_removed.py``."""
+    from domovoi.music_track_removed import drop_removed_tracks
+
+    rooms = await drop_removed_tracks(app, body.file_paths)
+    return {"rooms": rooms}
 
 
 @app.post(

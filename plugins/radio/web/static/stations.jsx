@@ -56,7 +56,7 @@ const browserPlayable = (st) => {
   return !['localhost', '127.0.0.1', '://0.0.0.0'].some((h) => url.includes(h));
 };
 
-/* INTERNET_ACCESS=never (Settings → Internet): the server refuses an
+/* INTERNET_ACCESS=never (Settings → Privacy → Internet): the server refuses an
  * internet stream with a 409, so the page greys those up front. A stream
  * on the house network (a LAN Icecast, an SDR box) is not the internet and
  * stays playable — the same "local" the server's egress check uses: a
@@ -111,6 +111,9 @@ const radioQueueItem = (st) => ({
   uid: `radio-${st.id}-${Math.random().toString(36).slice(2, 7)}`,
   kind: 'radio',
   trackId: null,
+  // itemId is what the player's cast fills into the manifest's
+  // room_play_template (SDK 1.10): a station cast to a room plays there.
+  itemId: st.id,
   stationId: st.id,
   title: st.name || 'radio',
   artist: st.now_playing || (st.source === 'fm' ? 'FM' : 'online radio'),
@@ -122,6 +125,33 @@ const radioQueueItem = (st) => ({
   cacheable: false,
   meta: {},
 });
+
+/* ---- Play in a room ------------------------------------------- */
+/*
+ * The house's rooms as chips (the same list the Music page's "play in room"
+ * uses: the rooms /api/music/now-playing reports). A chip plays the saved
+ * station in that room through POST /stations/{id}/play-in-room, which the
+ * core turns into the same play a voice request makes. With no rooms there
+ * is nothing to offer, so nothing is shown; an internet station while the
+ * internet is set to No can't play anywhere, so its chips are greyed.
+ */
+const RoomPlayChips = ({ s, rooms, onPlayInRoom, blocked = false, label = 'play in' }) => {
+  if (!s || !s.id || !rooms || rooms.length === 0 || !onPlayInRoom) return null;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+      <Icon name="speaker" size={12}/>
+      <span style={{ fontSize: 11, color: 'var(--fg-muted)' }}>{label}</span>
+      {rooms.map((r) => (
+        <button key={r} onClick={() => onPlayInRoom(s, r)} disabled={blocked}
+                title={blocked ? NEEDS_INTERNET_TEXT : `play ${s.name} in ${r}`}
+                style={{ font: 'inherit', fontSize: 12, cursor: blocked ? 'default' : 'pointer',
+                         padding: '3px 10px', borderRadius: 'var(--r-full)',
+                         border: '1px solid var(--border)', background: 'var(--card)',
+                         color: 'var(--fg)', opacity: blocked ? 0.5 : 1 }}>{r}</button>
+      ))}
+    </div>
+  );
+};
 
 /* ---- Search bar (online catalog + local FM browser) ------------- */
 /*
@@ -559,7 +589,8 @@ const SearchResultRow = ({ hit, scope, onFavorite, onPlay, fire, internetOff = f
 };
 
 /* ---- Favorited stations list ----------------------------------- */
-const FavoritesList = ({ stations, loading, page, selectedId, onSelect, onPlay, onDelete, fire, refresh, internetOff = false }) => {
+const FavoritesList = ({ stations, loading, page, selectedId, onSelect, onPlay, onDelete, fire, refresh, internetOff = false,
+                         rooms = [], onPlayInRoom = null }) => {
   if (loading && stations.length === 0)
     return <div style={{ padding: 24, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading favorites…</div>;
   if (stations.length === 0)
@@ -575,6 +606,7 @@ const FavoritesList = ({ stations, loading, page, selectedId, onSelect, onPlay, 
                      onPlay={onPlay}
                      onDelete={onDelete}
                      refresh={refresh}
+                     rooms={rooms} onPlayInRoom={onPlayInRoom}
                      fire={fire}/>
       ))}
     </div>
@@ -587,7 +619,8 @@ const FavoritesList = ({ stations, loading, page, selectedId, onSelect, onPlay, 
  * by design. A row here can be a favorite or a station played once out of
  * search; the star tells them apart and promotes the latter.
  */
-const RecentList = ({ stations, loading, onPlay, onFavorite, fire, internetOff = false }) => {
+const RecentList = ({ stations, loading, onPlay, onFavorite, fire, internetOff = false,
+                      rooms = [], onPlayInRoom = null }) => {
   if (loading && stations.length === 0)
     return <div style={{ padding: 20, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading…</div>;
   if (stations.length === 0)
@@ -599,14 +632,18 @@ const RecentList = ({ stations, loading, onPlay, onFavorite, fire, internetOff =
   return (
     <div style={{ display: 'flex', flexDirection: 'column' }}>
       {stations.map(s => <RecentRow key={s.id} s={s} onPlay={onPlay} internetOff={internetOff}
+                                    rooms={rooms} onPlayInRoom={onPlayInRoom}
                                     onFavorite={onFavorite} fire={fire}/>)}
     </div>
   );
 };
 
-const RecentRow = ({ s, onPlay, onFavorite, fire, internetOff = false }) => {
+const RecentRow = ({ s, onPlay, onFavorite, fire, internetOff = false, rooms = [], onPlayInRoom = null }) => {
   const blocked = radioInternetBlocked(s, internetOff);
   const [busy, setBusy] = React.useState(false);
+  // The room chips open under the row from its speaker button.
+  const [roomsOpen, setRoomsOpen] = React.useState(false);
+  const canRoom = !!onPlayInRoom && rooms.length > 0;
   // Recent rows are already persisted, so favoriting is a PATCH either
   // way — no POST /stations path to worry about here.
   const toggleFavorite = async () => {
@@ -623,8 +660,8 @@ const RecentRow = ({ s, onPlay, onFavorite, fire, internetOff = false }) => {
     }
   };
   return (
-    <div style={{ borderTop: '1px solid var(--border-soft)', display: 'flex',
-                  alignItems: 'center' }}>
+    <div style={{ borderTop: '1px solid var(--border-soft)' }}>
+    <div style={{ display: 'flex', alignItems: 'center' }}>
       <button onClick={() => onPlay(s)} disabled={blocked}
               title={blocked ? NEEDS_INTERNET_TEXT : `play ${s.name}`}
               style={{ font: 'inherit', textAlign: 'left', cursor: 'pointer',
@@ -643,11 +680,22 @@ const RecentRow = ({ s, onPlay, onFavorite, fire, internetOff = false }) => {
           </span>
         )}
       </button>
-      <div style={{ paddingRight: 8, flexShrink: 0 }}>
+      <div style={{ paddingRight: 8, flexShrink: 0, display: 'flex' }}>
+        {canRoom && (
+          <IconButton name="speaker" onClick={() => setRoomsOpen(!roomsOpen)}
+                      title={roomsOpen ? 'hide rooms' : 'play in a room'}/>
+        )}
         <IconButton name="star" onClick={toggleFavorite}
                     title={s.favorited ? 'unfavorite' : 'favorite'}
                     style={s.favorited ? { color: 'var(--brand-ink)' } : undefined}/>
       </div>
+    </div>
+    {canRoom && roomsOpen && (
+      <div style={{ padding: '0 14px 10px 14px' }}>
+        <RoomPlayChips s={s} rooms={rooms} blocked={blocked}
+                       onPlayInRoom={(st, r) => { setRoomsOpen(false); onPlayInRoom(st, r); }}/>
+      </div>
+    )}
     </div>
   );
 };
@@ -699,7 +747,8 @@ const NowPlayingLine = ({ s }) => {
   );
 };
 
-const FavoriteRow = ({ s, active, onSelect, onPlay, onDelete, refresh, fire, internetOff = false }) => {
+const FavoriteRow = ({ s, active, onSelect, onPlay, onDelete, refresh, fire, internetOff = false,
+                      rooms = [], onPlayInRoom = null }) => {
   const blocked = radioInternetBlocked(s, internetOff);
   const [editing, setEditing] = React.useState(false);
   const [intervalDraft, setIntervalDraft] = React.useState(s.sample_interval_sec);
@@ -786,6 +835,11 @@ const FavoriteRow = ({ s, active, onSelect, onPlay, onDelete, refresh, fire, int
               </Button>
             </>
           )}
+        </div>
+      )}
+      {active && !editing && (
+        <div style={{ padding: '0 14px 12px 14px' }}>
+          <RoomPlayChips s={s} rooms={rooms} onPlayInRoom={onPlayInRoom} blocked={blocked}/>
         </div>
       )}
     </div>
@@ -941,7 +995,7 @@ const StreamUrlEditor = ({ s, fire, internetOff = false }) => {
 };
 
 /* ---- Detail pane (overview + detection feed) ------------------- */
-const StationDetail = ({ s, fire, internetOff = false }) => (
+const StationDetail = ({ s, fire, internetOff = false, rooms = [], onPlayInRoom = null }) => (
   <Card>
     <div style={{ padding: '20px 16px', borderBottom: '1px solid var(--border-soft)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -956,6 +1010,12 @@ const StationDetail = ({ s, fire, internetOff = false }) => (
       <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 4 }}>
         station · #{s.id} · {s.source}{s.frequency_mhz != null ? ` · ${s.frequency_mhz} mhz` : ''}
       </div>
+      {onPlayInRoom && rooms.length > 0 && (
+        <div style={{ marginTop: 10 }}>
+          <RoomPlayChips s={s} rooms={rooms} onPlayInRoom={onPlayInRoom}
+                         blocked={radioInternetBlocked(s, internetOff)}/>
+        </div>
+      )}
     </div>
     {/* Freshest signal first: the ICY now-playing callout. */}
     {s.now_playing && (
@@ -1146,6 +1206,28 @@ const StationsPage = () => {
     }
   };
 
+  // The house's rooms, for the "play in" chips: the same read the Music
+  // page's room picker uses (every room the server has a player for).
+  const { items: roomRows } = useApiList('/api/music/now-playing', { quiet: true });
+  const rooms = (roomRows || []).map((r) => r && r.room_id).filter(Boolean);
+  const roomPending = React.useRef(false);
+  const playInRoom = async (st, room) => {
+    if (roomPending.current || !st || !st.id) return;
+    if (radioInternetBlocked(st, internetOff)) { fire(INTERNET_OFF_MESSAGE); return; }
+    roomPending.current = true;
+    try {
+      await apiPost(`${RADIO_API}/stations/${st.id}/play-in-room`, { room_id: room });
+      fire(`playing ${st.name} in ${room}`);
+      refreshRecent();
+    } catch (e) {
+      if (isInternetOffError(e)) fire(INTERNET_OFF_MESSAGE);
+      else if (e && e.status === 409 && typeof e.detail === 'string') fire(e.detail);
+      else reportFailure(fire, `play in ${room}`, e);
+    } finally {
+      roomPending.current = false;
+    }
+  };
+
   const onFavorite = async (hit) => {
     // POST the search-hit shape — the server is idempotent on external_id.
     // Answers the saved row: the search row keeps its id for the next tap.
@@ -1202,6 +1284,7 @@ const StationsPage = () => {
             </div>
             <RecentList stations={recent} loading={recentLoading}
                         onPlay={playStation} internetOff={internetOff}
+                        rooms={rooms} onPlayInRoom={playInRoom}
                         onFavorite={() => { refresh(); refreshRecent(); }}
                         fire={fire}/>
           </Card>
@@ -1218,6 +1301,7 @@ const StationsPage = () => {
             <FavoritesList stations={favorites} loading={loading} page={favPage}
                            selectedId={selectedId} onSelect={setSelectedId}
                            onPlay={playStation} internetOff={internetOff}
+                           rooms={rooms} onPlayInRoom={playInRoom}
                            onDelete={onDelete} refresh={refresh} fire={fire}/>
             {(hasPrevFav || hasNextFav) && (
               <div style={{ padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 8,
@@ -1236,7 +1320,8 @@ const StationsPage = () => {
         </div>
 
         {selected ? (
-          <StationDetail s={selected} fire={fire} internetOff={internetOff}/>
+          <StationDetail s={selected} fire={fire} internetOff={internetOff}
+                         rooms={rooms} onPlayInRoom={playInRoom}/>
         ) : (
           <Card>
             <div style={{ padding: '64px 24px', textAlign: 'center' }}>

@@ -186,6 +186,11 @@ NOTIFY_CHANNEL_TO_REALTIME: dict[str, str] = {
     # open dashboard's thread list stays fresh (the sending client renders
     # its own SSE stream and doesn't need the event).
     "chat_changed": "chat",
+    # A video being watched in a chat (V064, domovoi/chat_video/runner.py):
+    # each saved step and the pause for a voice turn. An open chat reads
+    # the job again on `chat.video.changed`; the job's end (its reply in
+    # the chat) fires `chat_changed` as any message does.
+    "chat_video_changed": "chat.video",
     # Satellite media-prep builds (V004). Fires from the prepare/progress/
     # finish writes in web/backend/api/satellite_media.py so the card's
     # progress bar tracks the build live. Subscribers see the resulting

@@ -24,10 +24,17 @@ namespace Domovoi.Windows
         // Reached from the LAN, so it gets a firewall rule (PLAN 4.10).
         public readonly bool Lan;
         public readonly string RuleName;
+        // Nice to have, never needed: a program of the household's on it
+        // is no clash (no pop-up, Setup goes on), and Domovoi does without
+        // it. The short address on port 80 (web/backend/short_address.py).
+        public readonly bool Optional;
 
         public PortSpec(int first, int last, string what, bool lan, string ruleName)
+            : this(first, last, what, lan, ruleName, false) { }
+
+        public PortSpec(int first, int last, string what, bool lan, string ruleName, bool optional)
         {
-            First = first; Last = last; What = what; Lan = lan; RuleName = ruleName;
+            First = first; Last = last; What = what; Lan = lan; RuleName = ruleName; Optional = optional;
         }
 
         public bool Contains(int port) { return port >= First && port <= Last; }
@@ -65,8 +72,15 @@ namespace Domovoi.Windows
         // Kiwix 9467, and 8050-8099 for the room streams. 6650-6699 (the MPD
         // control ports, loopback in the distro) is checked too: under
         // mirrored networking a Windows listener there would stop a room.
+        //
+        // Port 80 is the short address (1.4.0): the dashboard listens there
+        // too, only to send browsers on to 6369, so domovoi.local opens
+        // without :6369. Optional: when IIS or another program holds it,
+        // the dashboard leaves it alone and Settings says so; it still gets
+        // its firewall rule, so it works once the port is free.
         public static readonly PortSpec[] All =
         {
+            new PortSpec(80, 80, "the short address (domovoi.local without :6369)", true, "Domovoi-ShortAddress-80", true),
             new PortSpec(6369, 6369, "the dashboard", true, "Domovoi-Dashboard-6369"),
             new PortSpec(6370, 6370, "the voice service (satellites connect here)", true, "Domovoi-Core-6370"),
             new PortSpec(6432, 6432, "the database", false, null),
@@ -78,11 +92,15 @@ namespace Domovoi.Windows
             new PortSpec(11434, 11434, "the AI models (Ollama)", false, null),
         };
 
+        // A port Domovoi can't do without (an optional one is not).
         public static bool Needed(int port)
         {
-            foreach (var s in All) if (s.Contains(port)) return true;
+            foreach (var s in All) if (!s.Optional && s.Contains(port)) return true;
             return false;
         }
+
+        // The short address's port (Optional above).
+        public const int ShortAddressPort = 80;
 
         public static PortSpec SpecFor(int port)
         {
@@ -187,6 +205,7 @@ namespace Domovoi.Windows
                 {
                     foreach (var s in DomovoiPorts.All)
                     {
+                        if (s.Optional) continue;
                         int a = Math.Max(r.First, s.First), b = Math.Min(r.Last, s.Last);
                         for (int p = a; p <= b; p++)
                             if (!taken.Contains(p) && !reserved.Ports.Contains(p)) reserved.Ports.Add(p);
@@ -274,6 +293,59 @@ namespace Domovoi.Windows
                 if (s != null && !whats.Contains(s.What)) whats.Add(s.What);
             }
             return string.Join("; ", whats.ToArray());
+        }
+    }
+
+    // Is port 80 free on this PC for the short address? Read-only and for
+    // the log only: Setup never stops for it, and never changes what it
+    // finds. Under mirrored networking a Windows program on port 80 (IIS,
+    // or anything through HTTP.sys, which shows as the System process)
+    // stops the dashboard binding it inside the distro, and the dashboard
+    // then says in Settings that the short address is off. A URL
+    // reservation (`netsh http show urlacl`) holds no port by itself, but
+    // says a program may take port 80 through HTTP.sys later.
+    public static class ShortAddressCheck
+    {
+        static readonly Regex UrlLine = new Regex(@"^\s*[^:]+:\s*(https?://\S+)\s*$", RegexOptions.IgnoreCase);
+        static readonly Regex PortIn = new Regex(@"^https?://[^/]*:(\d{1,5})(/|$)", RegexOptions.IgnoreCase);
+
+        // The URL Windows reserves on every PC (WCF's), which no program
+        // listens on unless it asks: not worth a line.
+        public const string WindowsDefault = "http://+:80/Temporary_Listen_Addresses/";
+
+        // The reserved URLs on port 80 in `netsh http show urlacl`, the
+        // Windows default left out. Only lines whose value is a URL count,
+        // so the localized labels ("Reserved URL", "Reservierte URL")
+        // don't matter.
+        public static List<string> ParseUrlAcl(string netshOutput)
+        {
+            var list = new List<string>();
+            if (netshOutput == null) return list;
+            foreach (string raw in netshOutput.Split('\n'))
+            {
+                Match m = UrlLine.Match(raw.TrimEnd('\r'));
+                if (!m.Success) continue;
+                string url = m.Groups[1].Value;
+                Match p = PortIn.Match(url);
+                if (!p.Success || p.Groups[1].Value != Inv.S(DomovoiPorts.ShortAddressPort)) continue;
+                if (string.Equals(url, WindowsDefault, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!list.Contains(url)) list.Add(url);
+            }
+            return list;
+        }
+
+        // "free", or "taken|<who>" when a Windows program listens on port 80.
+        public static string State(IEnumerable<Listener> listeners)
+        {
+            foreach (var l in listeners)
+            {
+                if (l.Port != DomovoiPorts.ShortAddressPort) continue;
+                string who = string.IsNullOrEmpty(l.Process) ? "PID " + Inv.S(l.Pid)
+                    : string.Equals(l.Process, "System", StringComparison.OrdinalIgnoreCase) ? "Windows (the System process: IIS or another HTTP.sys program)"
+                    : l.Process;
+                return "taken|" + who;
+            }
+            return "free";
         }
     }
 }

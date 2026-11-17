@@ -11,8 +11,9 @@ dashboard is **Stations**.
 1. Open **Stations** on the dashboard.
 2. Type a station's name or genre in the search box. Your favorites that
    match show first, then the station directory's results.
-3. Click a station to play it. It plays in this browser. To hear a station
-   in a room, say "stream" and its name there (see below).
+3. Click a station to play it. It plays in this browser. To hear it in a
+   room instead, use the room names next to it (**play in**), or send it to
+   a room from the player the way you send songs.
 
 Clicking plays a station without making it a favorite. **Recent** lists
 the last 10 stations you played. An FM station with no internet copy can't
@@ -20,9 +21,13 @@ play in the browser; tell a room to tune it by voice.
 
 ## How do I play a station by voice?
 
-Star the station on the Stations page first: voice finds stations by name
-only among your favorites. Then say "stream KEXP" or "tune to the jazz
-station" in any room. "Stop the radio" stops it.
+Say "stream KEXP", "play lofi radio" or "play the station Lofi 24/7" in
+any room. Domovoi looks in your favorites first, then the other stations
+it has saved (ones you've played, and FM stations you imported), then (if the internet is allowed) the station directory,
+and offers what it finds there. It goes by how a name sounds: "lo-fi 24
+slash 7" finds "Lofi 24/7". If it isn't sure it heard the name right,
+it asks "Did you mean …?": answer yes, no, or the name. While a station
+plays, "add this to my favorites" stars it. "Stop the radio" stops it.
 
 ## How do I listen to FM radio?
 
@@ -37,9 +42,10 @@ loads the FM stations for your state.
 
 ## Why does a station not play?
 
-- With the internet set to No (Settings → Internet), internet stations
+- With the internet set to No (Settings → Privacy → Internet), internet stations
   can't play; FM still can.
-- Voice can't find a station that isn't a favorite: star it first.
+- Voice offers stations from the internet directory only when the
+  internet is allowed; with it set to No, star the station first.
 - "Play 97.5 FM" answers with an explanation when no dongle was found at
   start-up: plug it in and restart the server.
 - Some stations stop broadcasting or change their address. Search for the
@@ -51,7 +57,7 @@ For your favorite stations, Radio notes the songs that are playing: from
 the station's own titles, and from short clips it identifies against your
 own music library first, then an online song-identification service (Shazam).
 That means a short clip of a favorite station can leave your home. Set
-the internet to No (Settings → Internet) and nothing is sent; to keep the
+the internet to No (Settings → Privacy → Internet) and nothing is sent; to keep the
 internet on but stop the clips, set `RADIO_SAMPLER_ENABLED=false` in
 `~/.domovoi/plugins/radio.env` and restart the server. Radio only
 records what it heard; it never downloads anything.

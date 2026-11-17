@@ -43,7 +43,7 @@ Contract:
     offline / metered are accepted) records the household's internet answer
     as ``INTERNET_ACCESS=`` in the SAME create-only write. An existing
     ``.env`` is still never touched: the answer is changed later in the
-    dashboard (Settings → Internet), which owns it from then on.
+    dashboard (Settings → Privacy → Internet), which owns it from then on.
 
 DB-free and import-light on purpose: it runs before Postgres exists.
 """
@@ -131,7 +131,7 @@ def _internet_block(internet: str) -> str:
     return (
         "\n"
         "# ─── Internet (written by `python -m domovoi.env_bootstrap --internet`) ──\n"
-        "# Change it later in Settings → Internet. docs/INTERNET.md explains the answers.\n"
+        "# Change it later in Settings → Privacy → Internet. docs/INTERNET.md explains the answers.\n"
         f"INTERNET_ACCESS={internet}\n"
     )
 
@@ -407,7 +407,7 @@ def main(argv: list[str] | None = None) -> int:
         if internet:
             print(
                 f"{result.path} exists; left untouched (change the internet answer "
-                "in Settings → Internet)"
+                "in Settings → Privacy → Internet)"
             )
         else:
             print(f"{result.path} exists; left untouched")
@@ -420,7 +420,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(f"created {result.path} (fresh install: random Postgres password and helper secrets written)")
     if result.created and internet:
-        print(f"  internet: INTERNET_ACCESS={internet} (change it later in Settings → Internet)")
+        print(f"  internet: INTERNET_ACCESS={internet} (change it later in Settings → Privacy → Internet)")
     if result.created:
         # CORE-9. The example ships SATELLITE_PAIRING_STRICT=true, so the
         # household this file just created starts closed. Say so here

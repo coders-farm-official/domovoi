@@ -235,9 +235,10 @@ const useAdminSignedIn = () => {
 };
 
 /* The admin sign-in as THIS tab holds it, with the reload window (owner
- * decision 2026-10-14: a reload within an hour of signing in stays signed
- * in). What the Settings Admin card, the sidebar footer and the Advanced
- * note all read, so they never disagree:
+ * decision 2026-10-14: a reload within the hour stays signed in; counted
+ * from the last admin change since the idle timeout, 2026-11-16). What the
+ * Settings Admin card, the sidebar footer and the Advanced note all read,
+ * so they never disagree:
  *   live       — the Bearer is in this tab's memory;
  *   resumable  — not yet, but this browser's session cookie is inside its
  *                reload window: the first action takes the sign-in back
@@ -248,12 +249,19 @@ const useAdminSignedIn = () => {
  *   until      — "14:32", when a reload stops being signed in, while it
  *                still is (null otherwise); endsAt is the same instant;
  *   windowWords— the window's length ("an hour"), null when it is off or
- *                the server is too old to say.
+ *                the server is too old to say;
+ *   idleEndsAt / idleUntil — when the sign-in signs out with no further
+ *                admin change ("14:32"), while signed in;
+ *   idleWords  — the idle timeout in words ("1 hour");
+ *   signedOut  — "Signed out after 1 hour without admin activity" (or
+ *                that the sign-in ended), once this tab's sign-in was
+ *                dropped and until someone signs in or dismisses it.
  * Every Auth method is optional here: a page under an older auth.js (or a
  * test's stub) reads as it did before the window existed. */
 const adminReloadState = () => {
   const out = { live: false, resumable: false, signedIn: false, viewOnly: false,
-                endsAt: null, until: null, windowWords: null };
+                endsAt: null, until: null, windowWords: null,
+                idleEndsAt: null, idleUntil: null, idleWords: '1 hour', signedOut: null };
   try {
     if (typeof Auth === 'undefined') return out;
     const st = Auth.status;
@@ -268,6 +276,13 @@ const adminReloadState = () => {
       out.until = new Date(ends).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
     }
     out.windowWords = (Auth.reloadWindowWords && Auth.reloadWindowWords()) || null;
+    out.idleWords = (Auth.idleWords && Auth.idleWords()) || out.idleWords;
+    const idleEnds = out.signedIn && Auth.idleEndsAt ? Auth.idleEndsAt() : null;
+    if (idleEnds) {
+      out.idleEndsAt = idleEnds;
+      out.idleUntil = new Date(idleEnds).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    }
+    out.signedOut = (!out.signedIn && Auth.signedOutNotice && Auth.signedOutNotice()) || null;
   } catch { /* auth.js absent or older: the defaults above */ }
   return out;
 };
@@ -287,10 +302,38 @@ const useAdminReloadState = () => {
     const t = setTimeout(force, Math.max(0, state.endsAt - Date.now()) + 500);
     return () => clearTimeout(t);
   }, [state.endsAt]);
+  // auth.js drops the sign-in itself when the idle hour runs out (and
+  // notifies); this only re-renders a resumable tab's "until" away.
+  React.useEffect(() => {
+    if (!state.idleEndsAt || state.live) return undefined;
+    const t = setTimeout(force, Math.max(0, state.idleEndsAt - Date.now()) + 500);
+    return () => clearTimeout(t);
+  }, [state.idleEndsAt, state.live]);
   return state;
 };
 
-/* ---- the internet answer (INTERNET_ACCESS, Settings → Internet) ----
+/* "Signed out after 1 hour without admin activity" (2026-11-16): said
+ * once, in the shared toast stack, when THIS tab's admin sign-in ends on
+ * its own (auth.js signedOutNotice), so the page dropping to signed out is
+ * explained rather than noticed. It stays until someone signs in or
+ * dismisses it; the login prompt says the same while it is open, so the
+ * toast steps aside for it. */
+const AdminSignedOutNotice = () => {
+  const { signedOut } = useAdminReloadState();
+  let modalOpen = false;
+  try { modalOpen = typeof Auth !== 'undefined' && !!Auth.modalOpen; } catch { /* older Auth */ }
+  if (!signedOut || modalOpen) return null;
+  return (
+    <ToastNotice text={signedOut}
+                 detail="Admin changes ask for the password again. Everyday use carries on as before."
+                 actions={[
+                   { label: 'sign in', onClick: () => Auth.openModal() },
+                   { label: 'not now', onClick: () => Auth.dismissSignedOutNotice() },
+                 ]}/>
+  );
+};
+
+/* ---- the internet answer (INTERNET_ACCESS, Settings → Privacy → Internet) ----
  * The household says once whether this box has internet: '' (not
  * answered yet — today's behaviour), 'always', 'sometimes' or 'never'.
  * Under 'never' the server refuses everything that would reach the
@@ -305,8 +348,8 @@ const useAdminReloadState = () => {
  * useInternetPolicy() is ONE shared read of /api/config for the whole
  * page (a module-level cache plus subscribers, re-read every 60 s and on
  * INTERNET_CHANGED_EVENT) — never one fetch per component. */
-const INTERNET_OFF_MESSAGE = 'internet access is turned off for this box (Settings → Internet)';
-const NEEDS_INTERNET_TEXT = 'needs internet · Settings → Internet';
+const INTERNET_OFF_MESSAGE = 'internet access is turned off for this box (Settings → Privacy → Internet)';
+const NEEDS_INTERNET_TEXT = 'needs internet · Settings → Privacy → Internet';
 const INTERNET_CHANGED_EVENT = 'domovoi:internet-changed';   // window CustomEvent, detail {access}
 const INTERNET_ANSWERS = ['always', 'sometimes', 'never'];
 const INTERNET_POLICY_REFRESH_MS = 60 * 1000;
@@ -375,7 +418,7 @@ const useInternetPolicy = () => {
   };
 };
 
-/* Tell every page the answer changed (Settings → Internet, the first-run
+/* Tell every page the answer changed (Settings → Privacy → Internet, the first-run
  * step): the shared read takes the new value at once and re-reads. */
 const announceInternetChange = (access) => {
   InternetPolicyStore.set(access);
@@ -518,7 +561,7 @@ const openSettingsTab = (tab) => {
   try { window.location.hash = `settings/${tab}`; } catch { /* no location */ }
 };
 
-/* "needs internet · Settings → Internet", the link opening that tab. */
+/* "needs internet · Settings → Privacy → Internet", the link opening that tab. */
 const NeedsInternetNote = ({ compact = false }) => (
   <span className={`needs-internet${compact ? ' compact' : ''}`} title={INTERNET_OFF_MESSAGE}
         style={{ display: 'inline-flex', alignItems: 'center', gap: 4,
@@ -526,7 +569,7 @@ const NeedsInternetNote = ({ compact = false }) => (
     <Icon name="wifi-off" size={compact ? 12 : 13}/>
     <span>needs internet · </span>
     <a href="#settings/internet" className="needs-internet-link">
-      Settings → Internet
+      Settings → Privacy → Internet
     </a>
   </span>
 );
@@ -2655,9 +2698,92 @@ const Sidebar = ({ route, setRoute, counts, manifest, badges: given }) => {
   );
 };
 
+/* The address to share (share_address.js picks it): domovoi.local when the
+ * short address and the network name both work, else domovoi.local:6369,
+ * else the IP with :6369. One read of /api/lan-name and /api/short-address
+ * for the whole page (the topbar and the sidebar both show it), again every
+ * minute and when this browser pairs or signs in. Display only: it never
+ * changes which address the page talks to. null until known, and for a
+ * browser that may read neither: the header then shows ServerStore's label. */
+const ShareAddressStore = (() => {
+  let value = null;
+  let loading = null;
+  let timer = null;
+  const subs = new Set();
+  const here = () => {
+    try {
+      const base = ServerStore.current();
+      return { hostname: new URL(base || window.location.href).hostname };
+    } catch { return { hostname: window.location.hostname }; }
+  };
+  const load = () => {
+    if (loading) return loading;
+    loading = Promise.all([
+      apiGet('/api/lan-name', { quiet: true }).catch(() => null),
+      apiGet('/api/short-address', { quiet: true }).catch(() => null),
+    ]).then(([lan, short]) => {
+      let next = null;
+      try { next = window.ShareAddress ? window.ShareAddress.pick(lan, short, here()) : null; } catch { next = null; }
+      const changed = JSON.stringify(next) !== JSON.stringify(value);
+      value = next;
+      if (changed) subs.forEach((fn) => { try { fn(); } catch { /* one bad subscriber */ } });
+    }).finally(() => { loading = null; });
+    return loading;
+  };
+  return {
+    get: () => value,
+    refresh: load,
+    subscribe(fn) {
+      subs.add(fn);
+      if (subs.size === 1) {
+        load();
+        timer = setInterval(load, 60000);
+      }
+      return () => {
+        subs.delete(fn);
+        if (subs.size === 0 && timer) { clearInterval(timer); timer = null; }
+      };
+    },
+  };
+})();
+
+const useShareAddress = () => {
+  const [, force] = React.useReducer((n) => n + 1, 0);
+  React.useEffect(() => ShareAddressStore.subscribe(force), []);
+  // Pairing or signing in may make the reads possible.
+  React.useEffect(() => {
+    try { return Auth.subscribe(() => ShareAddressStore.refresh()); } catch { return undefined; }
+  }, []);
+  return ShareAddressStore.get();
+};
+
+// The address, click to copy ("copied" for a moment). `fallback` is shown
+// (and copied) while no shareable address is known.
+const ShareAddressButton = ({ className, fallback, style }) => {
+  const addr = useShareAddress();
+  const [copied, setCopied] = React.useState(false);
+  const text = addr ? addr.text : fallback;
+  const copyText = addr ? addr.url : fallback;
+  const onClick = async (e) => {
+    e.stopPropagation();
+    const ok = await copyToClipboard(copyText);
+    setCopied(ok ? 'copied' : 'couldn’t copy');
+    setTimeout(() => setCopied(false), 1500);
+  };
+  return (
+    <button type="button" className={`share-address ${className || ''}`} onClick={onClick} style={style}
+            title={`${copyText} · click to copy this address to share`}
+            aria-label={`copy the address ${text}`}>
+      <Icon name={copied === 'copied' ? 'check' : 'copy'} size={12} className="ic"/>
+      <span className="mono" aria-live="polite">{copied || text}</span>
+    </button>
+  );
+};
+
 // Who you are and which server you're pointed at.
 //
-//   * host — ServerStore.currentLabel(), the same origin the Topbar shows.
+//   * host — the address to share (ShareAddressButton), the same one the
+//     Topbar shows; ServerStore.currentLabel() until it is known.
 //   * name — Domovoi has no per-user login, only an admin gate. So report
 //     the auth state honestly rather than inventing a person: the sidebar
 //     doubles as the answer to "why is that page asking me to sign in?".
@@ -2680,7 +2806,7 @@ const SidebarFooter = () => {
         <Avatar name={signedIn || viewOnly ? 'Admin' : 'Guest'}/>
         <div>
           <div className="name">{signedIn ? 'Admin' : (viewOnly ? 'Admin (view only)' : 'Not signed in')}</div>
-          <div className="host" title={host}>{host}</div>
+          <ShareAddressButton className="host" fallback={host}/>
         </div>
       </div>
     </div>
@@ -2868,7 +2994,7 @@ const ConfigField = ({ f, value, onChange, internetOff = false }) => {
           ? <Pill tone={f.is_set ? 'ok' : 'idle'}>{f.is_set ? 'set' : 'not set'}</Pill>
           : f.masked && <Pill>hidden</Pill>}
         {f.follows_internet && (
-          <span className="config-follows-internet" title="its default follows the answer in Settings → Internet; saving a value here pins it"
+          <span className="config-follows-internet" title="its default follows the answer in Settings → Privacy → Internet; saving a value here pins it"
                 style={{ fontSize: 11, color: 'var(--fg-muted)' }}>follows the internet answer</span>
         )}
         {greyed && <NeedsInternetNote compact/>}
@@ -2923,10 +3049,13 @@ const Topbar = ({ route, setRoute, theme, setTheme }) => {
       {/* No search box here: there is no command palette yet, and a
           tab-focusable "search anything ⌘K" that did nothing advertised
           one (F-007). Add the control back together with the feature. */}
+      {/* Where this Domovoi is, to share (click copies it), and beside it
+          the switch to another Domovoi. */}
+      <ShareAddressButton className="theme-toggle" fallback={ServerStore.currentLabel()}
+                          style={{ fontSize: 12 }}/>
       <button className="theme-toggle" onClick={() => setShowServers(true)}
-              title="switch domovoi">
+              title="switch domovoi" aria-label="switch domovoi">
         <Icon name="server" size={14} className="ic"/>
-        <span style={{ fontSize: 12 }} className="mono">{ServerStore.currentLabel()}</span>
       </button>
       {/* Help (help.jsx): Domovoi's own help desk, about this page. */}
       <button className="theme-toggle" title="help: ask about this page" aria-label="help"
@@ -3314,7 +3443,10 @@ const LoginModal = ({ onClose }) => {
   try { signingOut = !needsSetup && Auth.loginReason === 'sign-out'; } catch { /* older Auth */ }
   // Inside the reload window a sign-out never gets here (auth.js takes the
   // sign-in back and signs it out); past it, the hint says how long it was.
-  const reloadWords = signingOut ? adminReloadState().windowWords : null;
+  const authState = adminReloadState();
+  const reloadWords = signingOut ? authState.windowWords : null;
+  // This tab's sign-in ended on its own (the idle hour): said at the top.
+  const signedOutWhy = !needsSetup && !signingOut ? authState.signedOut : null;
   // The first field of the form on screen: the setup code on an unclaimed
   // box, the password otherwise. Once the status read says which, the
   // caret is there.
@@ -3359,6 +3491,9 @@ const LoginModal = ({ onClose }) => {
           <IconButton name="x" onClick={onClose}/>
         </div>
         <div className="cal-modal-body">
+          {signedOutWhy && (
+            <div className="hint login-signed-out-why">{signedOutWhy}.</div>
+          )}
           {needsSetup ? (
             <>
               <div className="hint setup-code-where">
@@ -3400,7 +3535,7 @@ const LoginModal = ({ onClose }) => {
           {signingOut ? (
             <div className="hint login-sign-out-why">
               {reloadWords
-                ? `This page was reloaded more than ${reloadWords} after you signed in, so `
+                ? `This page was reloaded more than ${reloadWords} after your last admin change, so `
                 : 'This page was reloaded, so '}
               this tab no longer holds the admin sign-in, and the server ends
               a session only for a tab that can prove it holds one. Enter the
@@ -3410,6 +3545,7 @@ const LoginModal = ({ onClose }) => {
             <div className="hint">
               Admin actions (deleting files, settings, plugins, room
               upgrades) need this; saving, playback and browsing never do.
+              {' '}Signs out after {authState.idleWords} idle.
             </div>
           )}
         </div>
@@ -3548,7 +3684,7 @@ const PairModal = ({ onClose }) => {
  * Exactly one modal is ever on screen. */
 /* ---- First-run: "Will this Domovoi have internet?" -----------------
  * The third step of first-run setup, after the admin password: the same
- * three answers as Settings → Internet, plus "Decide later" (which leaves
+ * three answers as Settings → Privacy → Internet, plus "Decide later" (which leaves
  * the Home row asking). Offered only when /api/config says nobody has
  * answered — the Windows installer and `env_bootstrap --internet` answer
  * before the dashboard ever opens. The save is the same PATCH Settings →
@@ -3609,7 +3745,7 @@ const InternetFirstRunStep = ({ onClose }) => {
           <div className="hint">
             Domovoi understands everything you say right here on this box either way.
             The internet only adds extras — web answers, podcast downloads, finding
-            artists by the names people say. Change it any time in Settings → Internet.
+            artists by the names people say. Change it any time in Settings → Privacy → Internet.
           </div>
           {INTERNET_FIRST_RUN_CHOICES.map((c) => (
             <label key={c.value} className={`internet-choice${choice === c.value ? ' on' : ''}`} data-choice={c.value}
@@ -5137,7 +5273,7 @@ Object.assign(window, {
   ConnectAsk, connectShows, ConnectPrompt,
   satCan, satBoardLabel, SAT_BOARD_LABELS,
   DeleteConfirmDialog, useDeleteConfirm, TrustServerPrompt, WriteBlockedNotice,
-  CaptureChip, useAdminSignedIn, adminReloadState, useAdminReloadState,
+  CaptureChip, useAdminSignedIn, adminReloadState, useAdminReloadState, AdminSignedOutNotice,
   TimerFireAlerts,
   CoverArt, libraryCoverUrl, coverMisses, coverVersions, creditedWith,
   ContainerGuardStore, useContainerGuard, containerGuardBanner, ContainerGuardBanner,

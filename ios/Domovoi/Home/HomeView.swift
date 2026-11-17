@@ -544,6 +544,10 @@ struct HomeView: View {
                 verb: verb
             )
             busyRooms.remove(room.roomID)
+            // A stop in a room of a group ends its shared queue
+            // (2026-11-15): the share menus re-read, as after a leave —
+            // a household read, never a guest's.
+            if verb == "stop", model.isPaired { groups?.refresh() }
             home.rooms.refresh()
         }
     }

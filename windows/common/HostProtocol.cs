@@ -162,6 +162,11 @@ namespace Domovoi.Windows
         // The network name DomovoiHost holds ("domovoi2.local"), for Setup's
         // last page; null when none (MdnsResponder.cs).
         public string LanName;
+        // This job's provision.sh found the server's code already checked
+        // out and left it where it was (InstalledHead.Kept): Setup's last
+        // page says the code updates through Update Domovoi. Null: unknown
+        // (no run in this host, or a HEAD that couldn't be compared).
+        public bool? CheckoutKept;
         public string Updated;
         public string Holder = "stopped";
         public int HostPid;
@@ -187,6 +192,7 @@ namespace Domovoi.Windows
             d["ai"] = Ai == null ? null : (object)Ai.Value;
             d["phone_app"] = PhoneApp == null ? null : (object)PhoneApp.Value;
             d["lan_name"] = LanName;
+            d["checkout_kept"] = CheckoutKept == null ? null : (object)CheckoutKept.Value;
             d["updated"] = Updated;
             d["holder"] = Holder;
             d["host_pid"] = HostPid;
@@ -216,6 +222,7 @@ namespace Domovoi.Windows
             string ln = Json.Str(d, "lan_name");
             s.LanName = ln != null && ln.EndsWith(".local", StringComparison.Ordinal)
                 && Domovoi.Windows.LanName.Exact(ln.Substring(0, ln.Length - 6)) != null ? ln : null;
+            s.CheckoutKept = Json.Bool(d, "checkout_kept");
             s.Updated = Json.Str(d, "updated");
             s.Holder = Json.Str(d, "holder") ?? "";
             s.HostPid = Json.Int(d, "host_pid") ?? 0;

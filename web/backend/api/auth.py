@@ -11,7 +11,11 @@ that code (proof of possession of the server — 403 without it, even
 though no admin row exists yet), stores the argon2id hash, deletes the
 code file, and returns a first session token. ``POST /login`` verifies
 the password behind the per-source exponential backoff and mints a
-256-bit token (sha256-stored, 30-day sliding expiry). Login/setup also
+256-bit token (sha256-stored). A session ends after an hour with no admin
+action (``admin_auth.SESSION_IDLE_TIMEOUT_MIN``: a change made as admin;
+polls, reloads and page loads never count) and at 90 days whatever
+happens. Every answer here says how long is left (``idle_in_sec``), so the
+page drops to "signed out" on time instead of failing. Login/setup also
 set the ``SameSite=Strict`` ``HttpOnly`` cookie so plain GET page loads
 render authenticated state — mutations everywhere accept ONLY
 ``Authorization: Bearer`` (the dashboard JS holds the token in memory).
@@ -21,10 +25,11 @@ cookie to every port of its host, so whatever else runs on the box sees
 it.
 
 A reload forgets that in-memory token. For ``ADMIN_RELOAD_WINDOW_MIN``
-(default 60) minutes after the password was entered, ``POST /resume``
-gives the page holding the cookie its session's token back — owner
-decision 2026-10-14, "refreshing should not lose admin on the same
-machine, same session". It answers only a same-origin request
+(default 60, never more than the idle hour) minutes after the session's
+last admin action, ``POST /resume`` gives the page holding the cookie its
+session's token back — owner decision 2026-10-14, "refreshing should not
+lose admin on the same machine, same session", counted from the last
+action since 2026-11-16. It answers only a same-origin request
 (:func:`same_origin`) carrying ``X-Requested-With``, and only for the
 cookie's own session inside its window
 (:func:`domovoi.admin_auth.resume_session`). ``GET /status`` says whether
@@ -46,7 +51,7 @@ import logging
 from typing import Any
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -61,7 +66,10 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
-COOKIE_MAX_AGE_SEC = admin_auth.SESSION_TTL_DAYS * 86400
+# The cookie lasts as long as a session ever could (the 90-day cap); the
+# session it names usually ends long before, at its idle hour, and the
+# status read then clears it (auth_status).
+COOKIE_MAX_AGE_SEC = admin_auth.SESSION_MAX_AGE_DAYS * 86400
 
 
 # The last live window the core's snapshot carried, clamped; None until the
@@ -81,37 +89,56 @@ def reload_window_min() -> int:
     While the snapshot is missing (the core down, restarting, or slow to
     answer one poll) the answer may only get SMALLER, never wider than what
     an admin last set (review finding 2): the smaller of this process's
-    boot-time copy and the last live value seen, and 0 — no resume — when
-    no live value has been seen since this process started. An admin who
-    turned it off is not turned back on by a core restart."""
+    boot-time copy and the last live value seen. An admin who turned it off
+    is not turned back on by a core restart.
+
+    Before ANY live value has been seen since this process started it is
+    the boot-time copy — read from the same ``.env`` a Settings save
+    writes, so current for a process that started after the save. (It used
+    to be 0 then, and a server update restarts this process: the "Domovoi
+    has been updated, reload" reload, made while the core was still coming
+    back, lost the admin sign-in of someone who had just pressed Update.)
+    The idle hour bounds it either way: nothing resumes a session that has
+    gone an hour without an admin action."""
     global _last_live_window
     live = (get_cached_snapshot() or {}).get("admin_reload_window_min")
     if isinstance(live, int) and not isinstance(live, bool):
         _last_live_window = admin_auth.clamp_reload_window(live)
         return _last_live_window
+    own = admin_auth.clamp_reload_window(core_settings.admin_reload_window_min)
     if _last_live_window is None:
-        return 0
-    return min(
-        _last_live_window,
-        admin_auth.clamp_reload_window(core_settings.admin_reload_window_min),
-    )
+        return own
+    return min(_last_live_window, own)
 
 
 def _resume_fields(
-    window: int, resume: admin_auth.ResumeWindow | None
+    window: int,
+    resume: admin_auth.ResumeWindow | None,
+    idle: admin_auth.IdleClock | None = None,
 ) -> dict[str, Any]:
-    """What every auth answer says about the reload window: its length,
-    and — when this browser's session is inside it — when it ends
-    (``resume_until``, the server's clock) and how many seconds are left
-    (``resume_in_sec``, what a browser counts from). ``None`` for both
-    when there is nothing to resume."""
+    """What every auth answer says about the session's clocks.
+
+    * the reload window: its length (``reload_window_min``) and — when this
+      browser's session is inside it — when it ends (``resume_until``, the
+      server's clock) and how many seconds are left (``resume_in_sec``,
+      what a browser counts from); ``None`` for both when there is nothing
+      to resume;
+    * the idle timeout: its length (``idle_timeout_min``, always) and, for
+      the session the answer is about, when it signs out with no further
+      admin action (``idle_until``) and the seconds left (``idle_in_sec``);
+      ``None`` for both when there is no live session."""
     fields: dict[str, Any] = {
         "reload_window_min": window,
         "resume_until": None,
         "resume_in_sec": None,
+        "idle_timeout_min": int(admin_auth.SESSION_IDLE_TIMEOUT_MIN),
+        "idle_until": None,
+        "idle_in_sec": None,
     }
     if resume is not None:
         fields.update(resume.as_json())
+    if idle is not None:
+        fields.update(idle.as_json())
     return fields
 
 
@@ -233,27 +260,50 @@ class PasswordChangeRequest(BaseModel):
 
 
 @router.get("/status")
-async def auth_status(request: Request) -> dict[str, Any]:
+async def auth_status(request: Request, response: Response) -> dict[str, Any]:
     """Open probe the dashboard uses to decide setup-vs-login-vs-quiet.
-    ``authenticated`` reflects the cookie OR a Bearer (GET state).
+    ``authenticated`` reflects the Bearer when one is sent, else the
+    cookie (GET state).
 
     ``resume_in_sec`` / ``resume_until`` are set while THIS browser's
     session cookie is inside its reload window — what tells a reloaded
     page to ask ``POST /resume`` for its sign-in back, and what the
-    Settings Admin card says it lasts until. Read-only: nothing slides."""
+    Settings Admin card says it lasts until.
+
+    ``idle_in_sec`` / ``idle_until``: how long the session the request's
+    credential names (the Bearer, else the cookie) has before it signs out
+    for want of an admin action. A page holding a Bearer asks with it when
+    its own count runs out: still live (another tab of this browser acted)
+    and it counts again; over, and ``ended`` says why — ``"idle"`` (an hour
+    without an admin action) or ``"ended"`` (signed out, revoked, a
+    password change, the 90-day cap) — so it can say so in plain words.
+
+    Read-only: nothing slides. A cookie whose session is over is cleared,
+    so the browser stops carrying it."""
     window = reload_window_min()
     resume = None
+    idle = None
+    ended = None
+    bearer = admin_auth.bearer_token(request)
+    cookie = admin_auth.cookie_token(request)
     async with session_scope() as s:
         setup_complete = await admin_auth.has_admin_auth(s)
         result = await admin_auth.check_admin_request(request, s)
         if result in ("ok", "cookie-only"):
-            resume = await admin_auth.resume_deadline(
-                s, admin_auth.cookie_token(request), window
-            )
+            resume = await admin_auth.resume_deadline(s, cookie, window)
+            idle = await admin_auth.session_idle_clock(s, token=bearer, cookie=cookie)
+        if bearer is not None and result != "ok" and setup_complete:
+            ended = await admin_auth.session_end_reason(s, bearer)
+        cookie_dead = cookie is not None and setup_complete and not (
+            await admin_auth.validate_cookie(s, cookie)
+        )
+    if cookie_dead:
+        response.delete_cookie(admin_auth.COOKIE_NAME, path="/")
     return {
         "setup_complete": setup_complete,
         "authenticated": result in ("ok", "cookie-only"),
-        **_resume_fields(window, resume),
+        "ended": ended,
+        **_resume_fields(window, resume, idle),
     }
 
 
@@ -281,10 +331,11 @@ async def auth_setup(body: SetupRequest, request: Request) -> JSONResponse:
         cookie = await admin_auth.issue_session_cookie(s, token)
         window = reload_window_min()
         resume = await admin_auth.resume_deadline(s, cookie, window)
+        idle = await admin_auth.session_idle_clock(s, token=token)
     admin_auth.LOGIN_BACKOFF.record_success(source)
     admin_auth.delete_setup_code()
     admin_auth.write_device_token_file(device_token)
-    response = JSONResponse({"ok": True, "token": token, **_resume_fields(window, resume)})
+    response = JSONResponse({"ok": True, "token": token, **_resume_fields(window, resume, idle)})
     _set_session_cookie(response, cookie)
     return response
 
@@ -306,8 +357,9 @@ async def auth_login(body: LoginRequest, request: Request) -> JSONResponse:
         cookie = await admin_auth.issue_session_cookie(s, token)
         window = reload_window_min()
         resume = await admin_auth.resume_deadline(s, cookie, window)
+        idle = await admin_auth.session_idle_clock(s, token=token)
     admin_auth.LOGIN_BACKOFF.record_success(source)
-    response = JSONResponse({"ok": True, "token": token, **_resume_fields(window, resume)})
+    response = JSONResponse({"ok": True, "token": token, **_resume_fields(window, resume, idle)})
     _set_session_cookie(response, cookie)
     return response
 
@@ -318,8 +370,9 @@ _RESUME_CROSS_SITE_DETAIL = (
 )
 _RESUME_NO_COOKIE_DETAIL = "no admin sign-in in this browser to resume — sign in"
 _RESUME_CLOSED_DETAIL = (
-    "this browser's admin sign-in can't be resumed — it ended, or it is "
-    "more than the reload window old; sign in again"
+    "this browser's admin sign-in can't be resumed — it ended, or there "
+    "has been no admin change in it for longer than the reload window; "
+    "sign in again"
 )
 
 
@@ -340,14 +393,15 @@ async def auth_resume(request: Request) -> JSONResponse:
       a preflight this server refuses;
     * the request is same-origin (:func:`same_origin`): not another port
       on this host, not a second dashboard through the server switcher;
-    * the cookie names a live session (not revoked, signed out, expired or
-      past the 90-day cap) whose ``signed_in_at`` is less than
-      ``ADMIN_RELOAD_WINDOW_MIN`` minutes ago (0 = never).
+    * the cookie names a live session (not idle for an hour, revoked,
+      signed out, expired or past the 90-day cap) whose last admin action
+      is less than ``ADMIN_RELOAD_WINDOW_MIN`` minutes ago (0 = never).
 
-    403 for the first two, 401 for the rest; nothing about the session
-    changes on a refusal. A success slides the session's expiry like any
-    use of it does, and says when the window ends. The cookie is not
-    re-set: it is the one the sign-in set, unchanged."""
+    403 for the first two, 401 for the rest. Nothing about the session
+    changes, on a refusal or a success: a resume is not an admin action,
+    so a page that reloads itself on a timer never keeps a session alive.
+    The answer says when the window ends and when the session idles out.
+    The cookie is not re-set: it is the one the sign-in set, unchanged."""
     if not same_origin(request):
         log.info(
             "refused a sign-in resume from another origin (Origin %r, Sec-Fetch-Site %r)",
@@ -360,10 +414,13 @@ async def auth_resume(request: Request) -> JSONResponse:
     window = reload_window_min()
     async with session_scope() as s:
         resumed = await admin_auth.resume_session(s, cookie, window)
+        idle = (
+            await admin_auth.session_idle_clock(s, token=resumed[0]) if resumed else None
+        )
     if resumed is None:
         raise HTTPException(status_code=401, detail=_RESUME_CLOSED_DETAIL)
     token, resume = resumed
-    response = JSONResponse({"ok": True, "token": token, **_resume_fields(window, resume)})
+    response = JSONResponse({"ok": True, "token": token, **_resume_fields(window, resume, idle)})
     # The answer is a credential: never kept by a cache on the way.
     response.headers["Cache-Control"] = "no-store"
     return response
@@ -407,8 +464,8 @@ async def auth_sessions(request: Request) -> dict:
 @router.delete("/sessions/{token_hash}")
 async def auth_revoke_session(token_hash: str, request: Request) -> dict:
     """Revoke by token hash (the list endpoint's identifier). Mutation ⇒
-    Bearer-only."""
-    result = await admin_auth.check_admin_request(request)
+    Bearer-only, and an admin action (the caller's idle hour restarts)."""
+    result = await admin_auth.check_admin_request(request, activity=True)
     if result == "cookie-only":
         raise HTTPException(
             status_code=403,
@@ -433,7 +490,7 @@ async def auth_change_password(
     reload window it had (``POST /resume``); the calling session stays
     logged in, and having just proved the password, its own reload window
     starts again."""
-    result = await admin_auth.check_admin_request(request)
+    result = await admin_auth.check_admin_request(request, activity=True)
     if result == "cookie-only":
         raise HTTPException(
             status_code=403,

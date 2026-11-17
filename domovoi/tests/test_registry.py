@@ -193,20 +193,23 @@ def test_confirmation_kinds_are_core_namespaced() -> None:
 def test_choice_kinds_are_confirmation_kinds_with_a_reply_handler() -> None:
     # Handler.choice_kinds: kinds whose reply may be free text. Each must be
     # a declared confirmation kind (the mediated API parks only those), the
-    # handler must answer handle_choice_reply, and only core handlers have
-    # them (the router's choice check is core-only).
+    # handler must answer handle_choice_reply. Plugin handlers may declare
+    # them too since SDK 1.9 (contracts.py checks the same two rules at load).
     for h in HANDLERS:
         assert set(h.choice_kinds) <= set(h.confirmation_kinds), (
             f"{h.name}: choice_kinds {h.choice_kinds!r} not all in "
             f"confirmation_kinds {h.confirmation_kinds!r}"
         )
         if h.choice_kinds:
-            assert getattr(h, "plugin_slug", None) is None, h.name
             assert type(h).handle_choice_reply is not Handler.handle_choice_reply, (
                 f"{h.name} declares choice_kinds but does not override "
                 f"handle_choice_reply"
             )
-    assert {h.name: set(h.choice_kinds) for h in HANDLERS if h.choice_kinds} == {
+    core_choices = {
+        h.name: set(h.choice_kinds) for h in HANDLERS
+        if h.choice_kinds and getattr(h, "plugin_slug", None) is None
+    }
+    assert core_choices == {
         "music": {"core.music_choice"},
         "music_alias": {"core.alias_target"},
         "voice_profile": {
@@ -241,7 +244,8 @@ def test_declared_confirmation_kinds_cover_known_flows() -> None:
         "voice": {"core.voice_download"},
         "printing": {
             "core.print_confirm", "core.print_pick", "core.print_printer", "core.printer_add",
-            "core.printer_pick", "core.scan_ready", "core.scan_more", "core.scan_read", "core.print_test",
+            "core.printer_pick", "core.scan_ready", "core.scan_more", "core.scan_read", "core.scan_read_all",
+                "core.print_test",
         },
         "help_desk": {"core.help_send", "core.help_who"},
         "lists": {"core.lists_create", "core.lists_clear", "core.lists_delete"},

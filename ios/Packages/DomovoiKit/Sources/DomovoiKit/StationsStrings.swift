@@ -354,4 +354,32 @@ public enum StationsStrings {
         let shown = name.trimmingCharacters(in: .whitespacesAndNewlines)
         return "\(shown.isEmpty ? "that station" : shown) has no playable stream URL"
     }
+
+    // MARK: - playing in a room (Radio 1.5.0, ``StationsRoomPlay``)
+    //
+    // Android's words, verbatim (`StationRoomPlay.kt`, `StationDetail.kt`,
+    // wf/android-radio-print 062cf519).
+
+    /// The control in a favourite's detail, and the picker's title.
+    public static let playInARoom = "play in a room"
+
+    /// The picker's one button per room: Music's own word,
+    /// ``MusicStrings/playIn(room:)``, which is Android's `"play in $room"`.
+    public static func playIn(room: String) -> String { MusicStrings.playIn(room: room) }
+
+    /// The action word for ``failureText(_:_:)``: "play failed (offline?)".
+    public static let verbPlay = "play"
+
+    public static let roomOrStationGone = "That room or station is gone."
+    public static let stationCantPlayNow = "That station can't play right now."
+    public static let roomPlayerRefused = "The room's player didn't take it."
+    public static let roomUnreachable = "Couldn't reach the room. Try again."
+
+    /// The route turned out to be missing; the control hides (`ROOM_PLAY_MISSING`).
+    public static let roomPlayMissing = "This server's Radio can't play in a room yet."
+
+    /// What the toast says when the server sent no `text` of its own.
+    public static func playingIn(_ name: String, room: String) -> String {
+        "playing \(name) in \(room)"
+    }
 }

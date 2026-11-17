@@ -559,7 +559,7 @@ final class ManualRulesTests: XCTestCase {
                 stations,
                 RouteVisibility(
                     capabilities: Capabilities(plugins: [
-                        CapabilityPlugin(slug: "stations", appCapabilities: [capStations]),
+                        OurPlugins.radio,
                     ]),
                     sharedScreen: false,
                     phoneCanChat: false

@@ -41,7 +41,7 @@ NOTHING_FOUND = "I looked, but found nothing about that."
 NOTHING_FOUND_LOCAL = "I couldn't find that in this server's offline library or its manual."
 NEVER_REPLY = (
     "I couldn't find that in this server's offline library or its manual, and this "
-    "Domovoi is set to stay off the internet (Settings → Internet), so I didn't look online."
+    "Domovoi is set to stay off the internet (Settings → Privacy → Internet), so I didn't look online."
 )
 DECLINED_NOTE = (
     "The person chose not to look this up online. Answer from what you already know, say "

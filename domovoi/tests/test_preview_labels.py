@@ -48,8 +48,9 @@ def test_the_usb_stick_for_old_computers_is_labelled_a_preview_too():
     notes = _read("docs/RELEASE_NOTES.md").split("— Old computers become rooms from a USB stick", 1)[1]
     assert "A **preview**" in notes.split("\n## ", 1)[0]
     readme = _read("README.md")
-    previews = readme.split("**Previews**", 1)[1].split("\n**", 1)[0]
-    assert "USB stick" in previews
+    works = readme.split("**Works today**", 1)[1].split("\n**", 1)[0]
+    usb = " ".join(next(p for p in works.split("\n- ") if "USB stick" in p).split())
+    assert "virtual machines" in usb and "real computers" in usb
 
 
 def test_the_join_page_says_a_phone_room_is_a_preview():
@@ -65,7 +66,11 @@ def test_the_app_labels_the_assistant_s_setup_and_room_mode():
         assert "PreviewLabel(" in (app / rel).read_text(encoding="utf-8"), rel
 
 
-def test_the_readme_lists_the_previews_under_their_name():
+def test_the_readme_has_no_previews_section_and_says_what_is_untested():
     readme = _read("README.md")
-    assert "**Previews**" in readme
+    assert "**Previews**" not in readme
     assert "early build" not in readme and "test build" not in readme
+    works = readme.split("**Works today**", 1)[1].split("\n**", 1)[0]
+    for line in ("Chat on your phone", "A Windows installer", "Satellites on spare devices"):
+        assert f"- **{line}" in works, line
+    assert "not code-signed" in works

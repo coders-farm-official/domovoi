@@ -401,7 +401,8 @@ public struct ChatMessageList: Equatable, Sendable, Decodable {
 
 /// `GET /api/chat/models` (`ChatErrors.kt:48`).
 ///
-/// Read for one reason in this port: ``visionMissing(_:)``, so the composer
+/// Read for two reasons in this port: ``video`` (1.4.0), which is the whole
+/// of whether the paperclip offers a video, and ``visionMissing(_:)``, so the composer
 /// can say why a picture cannot be read **rather than offering a paperclip
 /// that cannot work**. Nothing else is drawn from it, and the vision sentences
 /// are the only place `vision_*` reaches a screen.
@@ -421,20 +422,28 @@ public struct ChatModelsInfo: Equatable, Sendable, Decodable {
     /// and must not be read as one.
     public let visionInstalled: Bool?
 
+    /// Whether the house can watch a video sent to a chat, and its limits
+    /// (1.4.0). **Nil from a server that predates it**, which
+    /// ``ChatVideoRules/offered(_:)`` reads as "not available": the paperclip
+    /// offers no video at all rather than one the house would refuse.
+    public let video: ChatVideoOffer?
+
     public init(
         installed: [String] = [],
         defaultModel: String? = nil,
         visionModel: String? = nil,
-        visionInstalled: Bool? = nil
+        visionInstalled: Bool? = nil,
+        video: ChatVideoOffer? = nil
     ) {
         self.installed = installed
         self.defaultModel = defaultModel
         self.visionModel = visionModel
         self.visionInstalled = visionInstalled
+        self.video = video
     }
 
     enum CodingKeys: String, CodingKey {
-        case installed
+        case installed, video
         case defaultModel = "default_model"
         case visionModel = "vision_model"
         case visionInstalled = "vision_installed"
@@ -446,6 +455,9 @@ public struct ChatModelsInfo: Equatable, Sendable, Decodable {
         defaultModel = try values.decodeIfPresent(String.self, forKey: .defaultModel)
         visionModel = try values.decodeIfPresent(String.self, forKey: .visionModel)
         visionInstalled = try values.decodeIfPresent(Bool.self, forKey: .visionInstalled)
+        // `try?`: a `video` object this app cannot read is a house that did
+        // not say yes, and must not cost the vision sentences above.
+        video = try? values.decodeIfPresent(ChatVideoOffer.self, forKey: .video)
     }
 }
 
@@ -501,9 +513,15 @@ public enum ChatPath {
     /// `device_id` **is** sent, because it is what the message's own row
     /// records about which install typed it, and a message with no device is a
     /// message the house cannot attribute.
-    public static func sendBody(content: String, deviceID: String?) -> Data {
+    ///
+    /// `videos` (1.4.0) is `[{"token": …}]` — at most one, the token
+    /// `POST /api/chat/videos` answered with — and only when there is one:
+    /// `content` may then be empty, and whatever words go with the clip are
+    /// its question, answered once it has been watched.
+    public static func sendBody(content: String, deviceID: String?, videoToken: String? = nil) -> Data {
         var object: [String: Any] = ["content": content]
         if let deviceID, !deviceID.isEmpty { object["device_id"] = deviceID }
+        if let videoToken, !videoToken.isEmpty { object["videos"] = [["token": videoToken]] }
         return json(object)
     }
 

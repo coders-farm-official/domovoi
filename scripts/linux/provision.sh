@@ -127,7 +127,12 @@
 #                /usr/local/lib/domovoi-cache-trim/cache-trim.py, its
 #                domovoi-cache-trim.service and .timer, the timer enabled;
 #                it trims inside WSL only; DOMOVOI_MANAGE_CACHE_TRIM=0
-#                leaves it alone); on WSL with media folders, Docker
+#                leaves it alone), and Friend Houses' firewall
+#                (scripts/linux/fh-firewall.sh as root's
+#                /usr/local/lib/domovoi-fh-firewall/fh-firewall.sh and
+#                domovoi-fh-firewall.service, enabled and started: the Tor
+#                container's network reaches the internet only;
+#                DOMOVOI_MANAGE_FH_FIREWALL=0 leaves it alone); on WSL with media folders, Docker
 #                ordered after their mounts
 #                (docker.service.d/50-domovoi-media.conf, Wants= and
 #                After=, a daemon-reload, never a Docker restart)
@@ -1343,6 +1348,15 @@ do_preflight() {
 # build (1:1.5.6-1.1ubuntu4 when this was written) is the one tested; an
 # install from before it gets the same package from apply-update.sh
 # (ADDED_PACKAGES, reconcile_added_packages).
+# tesseract-ocr and its English data tesseract-ocr-eng read scanned pages
+# (domovoi/scan_reader, 1.4.0): run as a separate program, never bundled.
+# Licences as Ubuntu 26.04's packages state them (/usr/share/doc/*/copyright,
+# read 2026-11-16 on tesseract-ocr 5.5.0-1build1 and tesseract-ocr-eng
+# 1:4.1.0-2build1): tesseract-ocr and libtesseract5 Apache-2.0 (a few files
+# MIT), tesseract-ocr-eng and tesseract-ocr-osd (pulled in with it)
+# Apache-2.0; liblept5 under the BSD-style Leptonica licence. Other languages are not
+# installed: Domovoi has no household language setting yet. Boxes installed
+# before 1.4.0 get both from apply-update.sh's ADDED_PACKAGES.
 # The same names on every system this installs on: each of them is a
 # package of that name in Debian 13 (trixie) and Ubuntu 24.04 (noble) too
 # (checked against both archives on 2026-11-15; Debian's pkg-config is the
@@ -1352,7 +1366,7 @@ do_preflight() {
 # it (/usr/bin/python3: the cache trim, the checkout-owner check), and the
 # list stays one list.
 APT_PACKAGES=(python3 python3-venv python3-dev build-essential pkg-config libasound2-dev
-  git ffmpeg mpg123 libchromaprint-tools xorriso
+  git ffmpeg mpg123 libchromaprint-tools xorriso tesseract-ocr tesseract-ocr-eng
   zstd ca-certificates curl gnupg tzdata sudo)
 
 pkgs_installed() {
@@ -3361,7 +3375,7 @@ do_env() {
     policy=$(svc_py -m domovoi.egress --print-policy | tr -d '[:space:]') || policy=""
     if [ "$policy" != "$INTERNET" ]; then
       if [ "$existed" = 1 ]; then
-        warn "domovoi/.env already answers the internet question with '${policy:-unanswered}'; --internet $INTERNET is not written over it (Settings, Internet changes it)"
+        warn "domovoi/.env already answers the internet question with '${policy:-unanswered}'; --internet $INTERNET is not written over it (Settings, Privacy, Internet changes it)"
       else
         die "domovoi/.env should answer the internet question with $INTERNET, the core reads '${policy:-unanswered}'"
       fi
@@ -4241,7 +4255,7 @@ do_searxng() {
       STEP_DONE_MSG="Search helper off (internet: never)"
       ;;
     *)
-      log "the internet question is unanswered: the search helper is left to Settings, Internet"
+      log "the internet question is unanswered: the search helper is left to Settings, Privacy, Internet"
       STEP_DONE_MSG="Search helper left as it is"
       ;;
   esac
@@ -4363,6 +4377,56 @@ install_cache_trim() {
   fi
 }
 
+# Friend Houses' firewall (scripts/linux/fh-firewall.sh; docs/LINUX_HOST.md,
+# "Friend Houses' firewall"): root's copy of the script and its unit, the
+# unit enabled and started. It keeps the Tor container Friend Houses runs
+# (when an admin turns it on) off this box's own ports and the home
+# network: threat-model finding 22. Installed whether or not Friend Houses
+# is ever turned on, so the fence is there before the network is. The
+# update unit installs the same files (apply-update.sh,
+# reconcile_fh_firewall). DOMOVOI_MANAGE_FH_FIREWALL=0 (or false/no/off)
+# in /etc/default/domovoi-update leaves them to the administrator.
+FH_FIREWALL_LIB=$ROOT/usr/local/lib/domovoi-fh-firewall/fh-firewall.sh
+FH_FIREWALL_UNIT=domovoi-fh-firewall.service
+manage_fh_firewall() {
+  local v
+  v=$(update_default DOMOVOI_MANAGE_FH_FIREWALL)
+  case ${v,,} in 0|false|no|off) return 1 ;; esac
+  return 0
+}
+fh_firewall_inputs() {
+  if ! manage_fh_firewall; then echo "fh firewall: left alone"; return 0; fi
+  cat "$(src_file scripts/linux/fh-firewall.sh)" 2>/dev/null
+  cat "$(src_file "scripts/linux/units/$FH_FIREWALL_UNIT")" 2>/dev/null
+}
+fh_firewall_in_place() {
+  manage_fh_firewall || return 0
+  cmp -s "$(src_file scripts/linux/fh-firewall.sh)" "$FH_FIREWALL_LIB" || return 1
+  cmp -s "$(src_file "scripts/linux/units/$FH_FIREWALL_UNIT")" "$UNIT_DIR/$FH_FIREWALL_UNIT" || return 1
+  if systemd_running; then systemctl is-enabled --quiet "$FH_FIREWALL_UNIT" 2>/dev/null || return 1; fi
+}
+install_fh_firewall() {
+  local src changed=0
+  if ! manage_fh_firewall; then log "Friend Houses' firewall left as it is (DOMOVOI_MANAGE_FH_FIREWALL in /etc/default/domovoi-update)"; return 0; fi
+  src=$(src_file scripts/linux/fh-firewall.sh)
+  [ -f "$src" ] || die "the checkout has no scripts/linux/fh-firewall.sh"
+  [ -f "$(src_file "scripts/linux/units/$FH_FIREWALL_UNIT")" ] || die "the checkout has no scripts/linux/units/$FH_FIREWALL_UNIT"
+  install -d -m 0755 "$(dirname "$FH_FIREWALL_LIB")" || die "can't create $(dirname "$FH_FIREWALL_LIB")"
+  chmod 0755 "$(dirname "$FH_FIREWALL_LIB")" && chown root:root "$(dirname "$FH_FIREWALL_LIB")"     || die "can't make $(dirname "$FH_FIREWALL_LIB") root's alone"
+  if write_if_changed "$FH_FIREWALL_LIB" 0755 <"$src"; then changed=1; fi
+  if write_if_changed "$UNIT_DIR/$FH_FIREWALL_UNIT" 0644 <"$(src_file "scripts/linux/units/$FH_FIREWALL_UNIT")"; then changed=1; fi
+  if [ "$changed" = 1 ]; then
+    log "installed Friend Houses' firewall (/usr/local/lib/domovoi-fh-firewall/fh-firewall.sh, $FH_FIREWALL_UNIT)"
+  fi
+  # Enabled (and its rules applied) whenever it isn't, and started again
+  # when a file changed so the new rules apply now.
+  if systemd_running && { [ "$changed" = 1 ] || ! systemctl is-enabled --quiet "$FH_FIREWALL_UNIT" 2>/dev/null; }; then
+    # enable --now starts it when it isn't running; try-restart applies
+    # changed rules when it already was (a first run restarts nothing).
+    { systemctl daemon-reload && systemctl enable --now "$FH_FIREWALL_UNIT"         && { [ "$changed" = 0 ] || systemctl try-restart "$FH_FIREWALL_UNIT"; }; }       || warn "$FH_FIREWALL_UNIT could not be started; Friend Houses' Tor container is not fenced off until it is"
+  fi
+}
+
 # A shipped unit with this box's checkout, home and user (docs/LINUX_HOST.md,
 # Make it an appliance: "change User=, WorkingDirectory=, ExecStart=,
 # Environment=HOME= and the ReadWritePaths= / BindPaths= lines").
@@ -4462,6 +4526,7 @@ inputs_units() {
   printf '%s\n' "${SLEEP_TARGETS[@]}"
   if manage_journal; then cat "$(journald_dropin_src)" 2>/dev/null; else echo "journal: left alone"; fi
   cache_trim_inputs
+  fh_firewall_inputs
 }
 check_units() {
   local u d
@@ -4478,6 +4543,7 @@ check_units() {
   masks_in_place "${SLEEP_TARGETS[@]}" || return 1
   if manage_journal; then cmp -s "$(journald_dropin_src)" "$JOURNALD_DROPIN" || return 1; fi
   cache_trim_in_place || return 1
+  fh_firewall_in_place || return 1
 }
 plan_units() {
   printf '%s\n' "${SHIPPED_UNITS[@]/#//etc/systemd/system/}"
@@ -4489,6 +4555,8 @@ plan_units() {
   else echo "the journal left as it is (DOMOVOI_MANAGE_JOURNAL in /etc/default/domovoi-update)"; fi
   if manage_cache_trim; then echo "/usr/local/lib/domovoi-cache-trim/cache-trim.py and domovoi-cache-trim.{service,timer} (the file-cache trim), the timer enabled"
   else echo "the file-cache trim left as it is (DOMOVOI_MANAGE_CACHE_TRIM in /etc/default/domovoi-update)"; fi
+  if manage_fh_firewall; then echo "/usr/local/lib/domovoi-fh-firewall/fh-firewall.sh and $FH_FIREWALL_UNIT (Friend Houses' firewall), enabled and started"
+  else echo "Friend Houses' firewall left as it is (DOMOVOI_MANAGE_FH_FIREWALL in /etc/default/domovoi-update)"; fi
 }
 do_units() {
   local u d out changed=() reload=0
@@ -4537,6 +4605,7 @@ do_units() {
   mask_units "${SLEEP_TARGETS[@]}"
   install_journald_dropin
   install_cache_trim
+  install_fh_firewall
   if [ "${#changed[@]}" -gt 0 ]; then
     printf '%s\n' "${changed[@]}" >>"$UNITS_CHANGED_FILE"
     systemctl daemon-reload

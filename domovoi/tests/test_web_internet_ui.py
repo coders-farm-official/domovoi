@@ -1,6 +1,6 @@
 """The internet answer in the dashboard, driven outside a browser.
 
-* Settings → Internet (``InternetPanel``): the status line for each state,
+* Settings → Privacy → Internet (``InternetPanel``): the status line for each state,
   the three choices, the privacy note, Save through the config PATCH (and
   the change announced to the rest of the page), a locked answer, the
   feature chips and "follow the answer again", the restart badge, the
@@ -15,7 +15,7 @@
 * The first-run step after the admin password, its "Decide later", and
   that it is never offered when the answer is already set.
 * Home's admin row "tell Domovoi whether this box has internet" while the
-  answer is unset, and that it opens Settings → Internet.
+  answer is unset, and that it opens Settings → Privacy → Internet.
 * The search helper's state and "start it again", the plugins that may
   reach the internet on their own, the never-only warnings, and the
   internet answer's restart note shown without a technical label.
@@ -43,7 +43,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 HARNESS = Path(__file__).with_name("jsx_interact_harness.js")
 COMPONENTS = "web/static/components.jsx"
 SETTINGS = "web/static/settings.jsx"
-NEEDS = "needs internet · Settings → Internet"
+NEEDS = "needs internet · Settings → Privacy → Internet"
 
 # ─── the sandbox: sessionStorage, window events, the /api/config read ────
 
@@ -539,7 +539,7 @@ def driven(tmp_path_factory) -> dict:
     return out
 
 
-# ─── Settings → Internet ──────────────────────────────────────────────────
+# ─── Settings → Privacy → Internet ──────────────────────────────────────────────────
 
 
 def test_an_unanswered_box_says_so_and_offers_the_three_answers(driven) -> None:
@@ -661,7 +661,7 @@ def test_configuration_greys_what_needs_the_internet_under_never(driven) -> None
     assert cloud["disabled"] is True and cloud["text"] == "cloud · needs internet"
     assert next(x for x in o["options"] if x["value"] == "piper")["disabled"] is False
     assert o["notes"] >= 2
-    assert o["line"] == ["Internet: No, keep everything in the house · change it in Settings → Internet"]
+    assert o["line"] == ["Internet: No, keep everything in the house · change it in Settings → Privacy → Internet"]
     assert "Will this box use the internet?" not in o["labels"]                  # one line, not a field
     assert o["follows"] == 1
     assert o["check"] == {"disabled": True, "title": NEEDS}                      # About & updates: check greyed
@@ -673,10 +673,10 @@ def test_configuration_greys_nothing_when_the_internet_is_allowed(driven) -> Non
     assert not any(i["disabled"] for i in o["inputs"])
     assert not any(x["disabled"] for x in o["options"])
     assert o["notes"] == 0
-    assert o["line"] == ["Internet: Yes, always · change it in Settings → Internet"]
+    assert o["line"] == ["Internet: Yes, always · change it in Settings → Privacy → Internet"]
     assert o["check"] == {"disabled": False, "title": None}
     unset = driven["config_unset"]
-    assert unset["line"] == ["Internet: not answered · change it in Settings → Internet"]
+    assert unset["line"] == ["Internet: not answered · change it in Settings → Privacy → Internet"]
     assert unset["follows"] == 0
 
 

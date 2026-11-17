@@ -28,12 +28,20 @@ final class RoomProtocolTests: XCTestCase {
         let (d, isIOS) = try device()
         guard case .object(var want)? = d["hello"] else { return XCTFail("no hello in \(d)") }
         if !isIOS { want["board"] = .string("ios_room") }
+        // Several words per room (1.4.0): a fresh room (no model loaded yet)
+        // says its main word alone, and a phone with more than 2.5 GiB says
+        // it runs five: what the fixture's room says once it carries the keys.
+        let wakeWord = want["wake_word"]?.stringValue ?? ""
+        let words = want["wake_words"] == nil ? [] : RoomWakeWords.reported(main: wakeWord, pending: nil, loaded: nil)
+        let wordsMax: Int? = want["wake_words_max"] == nil ? nil : RoomWakeWords.deviceMax(physicalMemory: 8 * 1024 * 1024 * 1024)
         let ours = RoomProtocol.hello(
             roomID: want["room_id"]?.stringValue ?? "",
-            wakeWord: want["wake_word"]?.stringValue ?? "",
+            wakeWord: wakeWord,
             pairingToken: want["pairing_token"]?.stringValue ?? "",
             approvalCode: want["approval_code"]?.stringValue,
-            echoCanceller: true
+            echoCanceller: true,
+            wakeWords: words,
+            wakeWordsMax: wordsMax
         )
         XCTAssertEqual(RoomJSON.object(want), RoomJSON.object(ours))
         XCTAssertEqual("ios_room", RoomProtocol.board)
@@ -77,7 +85,20 @@ final class RoomProtocolTests: XCTestCase {
         guard let ready = d["ready"], case let .ready(features, _, _, _) = RoomProtocol.parse(ready.serialized) else {
             return XCTFail("the fixture's ready did not parse")
         }
-        XCTAssertEqual(["speech_pause", "end_capture", "music_failed", "health", "log_push"], features)
+        XCTAssertEqual(["speech_pause", "end_capture", "music_failed", "health", "log_push", "room_display"], features)
+        // The room display (1.4.0): the core sends `room_display` only to a
+        // room that declared it, and takes `room_control` only from one whose
+        // ready listed it.
+        XCTAssertTrue(RoomProtocol.maySend(RoomDisplayFeed.control(.music(.pause)), features: features))
+        XCTAssertFalse(RoomProtocol.maySend(RoomDisplayFeed.control(.music(.pause)), features: ["speech_pause"]))
+        guard case .array(let gate)? = try fixtures()["frame_gates"]?["room_display"] else {
+            return XCTFail("the fixture has no frame gate for room_display")
+        }
+        let ours = Set(RoomProtocol.supports(echoCanceller: true))
+        XCTAssertFalse(gate.isEmpty)
+        for ability in gate.compactMap(\.stringValue) {
+            XCTAssertTrue(ours.contains(ability), "room_display is gated on \(ability), which the hello does not declare")
+        }
         let pause: RoomProtocol.Frame = ["type": .string("speech_pause")]
         XCTAssertTrue(RoomProtocol.maySend(pause, features: features))
         XCTAssertFalse(RoomProtocol.maySend(pause, features: []))
@@ -93,7 +114,7 @@ final class RoomProtocolTests: XCTestCase {
                        RoomProtocol.parse(#"{"type":"response_end","interrupted":false,"expect_followup":true}"#))
         XCTAssertEqual(.endCapture(utt: 7), RoomProtocol.parse(#"{"type":"end_capture","utt":7}"#))
         XCTAssertEqual(.setVolume(level: 100), RoomProtocol.parse(#"{"type":"set_volume","level":140}"#))
-        XCTAssertEqual(.setWakeWord(slug: "hey_house", threshold: 0.6), RoomProtocol.parse(#"{"type":"set_wake_word","slug":"hey_house","threshold":0.6}"#))
+        XCTAssertEqual(.setWakeWord(slug: "hey_house", threshold: 0.6, words: nil), RoomProtocol.parse(#"{"type":"set_wake_word","slug":"hey_house","threshold":0.6}"#))
         XCTAssertEqual(.dropinStart(peerRoom: "office", peerLabel: "Office", sampleRate: 16_000, fullDuplex: true, awaitReady: false),
                        RoomProtocol.parse(#"{"type":"dropin_start","peer_room":"office","peer_label":"Office","audio_sample_rate":16000,"full_duplex":true}"#))
         XCTAssertEqual(.other(type: nil), RoomProtocol.parse("not json"))
@@ -213,11 +234,11 @@ final class RoomProtocolTests: XCTestCase {
     }
 
     func testAPushedThresholdIsTheRoomsOneThresholdAndAMissingOneKeepsIt() {
-        guard case let .setWakeWord(_, pushed) = RoomProtocol.parse(#"{"type":"set_wake_word","slug":"hey_house","threshold":0.62}"#) else {
+        guard case let .setWakeWord(_, pushed, _) = RoomProtocol.parse(#"{"type":"set_wake_word","slug":"hey_house","threshold":0.62}"#) else {
             return XCTFail("no set_wake_word")
         }
         XCTAssertEqual(0.62, RoomWakeSettings.thresholdValue(pushed))
-        guard case let .setWakeWord(_, bare) = RoomProtocol.parse(#"{"type":"set_wake_word","slug":"hey_domovoi"}"#) else {
+        guard case let .setWakeWord(_, bare, _) = RoomProtocol.parse(#"{"type":"set_wake_word","slug":"hey_domovoi"}"#) else {
             return XCTFail("no set_wake_word")
         }
         XCTAssertNil(RoomWakeSettings.thresholdValue(bare))

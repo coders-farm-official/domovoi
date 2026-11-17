@@ -44,6 +44,8 @@ ALLOWANCES = frozenset({"privileged", "host_network", "host_pid", "docker_socket
 RESERVED_CONTAINER_NAMES = frozenset({
     "domovoi-postgres", "domovoi-flyway", "domovoi-flyway-test",
     "domovoi-searxng", "domovoi-letta",
+    # Friend Houses' Tor daemon (domovoi/friend_houses/tor_runtime.py).
+    "domovoi-tor",
 })
 RESERVED_CONTAINER_PREFIXES = ("domovoi-mpd-",)
 # A Docker container name.
@@ -118,7 +120,7 @@ class Expected:
 
     name: str
     owner: str                     # "core" or "plugin:<slug>"
-    role: str                      # postgres | flyway | searxng | letta | mpd | plugin | compose
+    role: str                      # postgres | flyway | searxng | letta | mpd | tor | plugin | compose
     label: str                     # plain words: "the database", "the music player for kitchen"
     state: str                     # one of STATES
     required: bool = True

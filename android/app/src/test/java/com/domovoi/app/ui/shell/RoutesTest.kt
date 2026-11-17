@@ -3,7 +3,6 @@ package com.domovoi.app.ui.shell
 import com.domovoi.app.net.CAP_IMAGEGEN
 import com.domovoi.app.net.CAP_STATIONS
 import com.domovoi.app.net.Capabilities
-import com.domovoi.app.net.CapabilityPlugin
 import com.domovoi.app.net.FEATURE_AI
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -12,6 +11,7 @@ import org.junit.Assert.assertTrue
 import org.junit.After
 import org.junit.Test
 import com.domovoi.app.ui.screens.home.everythingTiles
+import com.domovoi.app.testing.ourCaps
 
 /** Route visibility is data-driven by the capability manifest (design section 8). */
 class RoutesTest {
@@ -20,8 +20,8 @@ class RoutesTest {
         onDeviceAssistant = { com.domovoi.app.assistant.AssistantSupport.available }
     }
 
-    private fun caps(vararg c: String) =
-        Capabilities(plugins = listOf(CapabilityPlugin(slug = "p", androidCapabilities = c.toList())))
+    /** Our plugin behind each capability (testing/OurPlugins.kt). */
+    private fun caps(vararg c: String) = ourCaps(*c)
 
     @Test fun onlyPluginBackedRoutesRequireACapability() {
         assertEquals(CAP_STATIONS, Route.Stations.requiredCapability())

@@ -194,6 +194,10 @@ var
   { Whether provision.sh put the phone app on the server: yes, no (it
     couldn't download it: the last page says so), or '' (unknown). }
   PhoneAppReported: String;
+  { Whether this run found the server's code already checked out and left
+    it where it was (DomovoiHost's checkout_kept, common\Provision.cs
+    InstalledHead.Kept): yes, no, or '' (unknown). Only yes is said. }
+  CheckoutKept: String;
   InternetPage: TWizardPage;
   InternetIntro: TNewStaticText;
   RadioAlways, RadioSometimes, RadioNever: TNewRadioButton;
@@ -700,7 +704,7 @@ begin
   S := S + IntToStr(N) + '. A private WSL distro named "domovoi" (Ubuntu 26.04) that belongs to domovoi-svc, stored in C:\ProgramData\Domovoi. WSL settings for domovoi-svc alone: mirrored networking, memory up to ' + WslMemGb + ' GB. Your own WSL distros, your .wslconfig and Docker Desktop are not touched.' + #13#10#13#10;
   N := N + 1;
   if LanPrivate = '1' then
-    S := S + IntToStr(N) + '. Six Hyper-V firewall rules for WSL, named Domovoi-..., so phones and rooms on your home network (' + LanSubnet + ') reach Domovoi: TCP 6369 (dashboard), 6370 (voice), 8050-8099 (music streams), 8096, 7676 and 9467 (plugins). They apply to every WSL VM on this PC, your own WSL distros and Docker Desktop''s included: anything of yours listening on those ports in mirrored mode becomes reachable from your home network too. And one Windows firewall rule, Domovoi-mDNS-5353: DomovoiHost.exe may receive UDP 5353 (mDNS) from your home network on Private and Domain networks, so other devices find this PC as domovoi.local.' + #13#10#13#10
+    S := S + IntToStr(N) + '. Seven Hyper-V firewall rules for WSL, named Domovoi-..., so phones and rooms on your home network (' + LanSubnet + ') reach Domovoi: TCP 80 (the short address: domovoi.local opens without :6369, when nothing else on this PC uses port 80), 6369 (dashboard), 6370 (voice), 8050-8099 (music streams), 8096, 7676 and 9467 (plugins). They apply to every WSL VM on this PC, your own WSL distros and Docker Desktop''s included: anything of yours listening on those ports in mirrored mode becomes reachable from your home network too. And one Windows firewall rule, Domovoi-mDNS-5353: DomovoiHost.exe may receive UDP 5353 (mDNS) from your home network on Private and Domain networks, so other devices find this PC as domovoi.local.' + #13#10#13#10
   else
     S := S + IntToStr(N) + '. No firewall rules: this PC has no private home-network address, so Domovoi answers on this PC only.' + #13#10#13#10;
   N := N + 1;
@@ -856,7 +860,7 @@ begin
   L.OnLinkClick := @InternetDocClick;
   L.AdjustHeight;
   Y := L.Top + L.Height + ScaleY(6);
-  AddText(InternetPage, 'You can change this later in the dashboard: Settings > Internet.', Y, 0, False, False);
+  AddText(InternetPage, 'You can change this later in the dashboard: Settings > Privacy > Internet.', Y, 0, False, False);
 end;
 
 function InternetAnswer: String;
@@ -867,7 +871,7 @@ begin
   if UpdateMode then
   begin
     { The answer Setup recorded; an existing domovoi/.env's own answer is
-      never written over (provision.sh), so Settings > Internet stands. }
+      never written over (provision.sh), so Settings > Privacy > Internet stands. }
     Result := SavedInternet;
     Exit;
   end;
@@ -1086,6 +1090,11 @@ begin
     CodeEdit.Text := SetupCodeText;
     if SetupCodeText = '' then
       WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10#13#10 + 'Setup could not read the setup code. Restarting the DomovoiHost service writes a fresh one (see docs/WINDOWS_HOST.md).';
+    { Over an existing install, provision.sh leaves the server's code where
+      the dashboard's updates put it (2026-11-16: "Setup didn't update
+      Linux"). Said only when DomovoiHost saw it really wasn't moved. }
+    if CheckoutKept = 'yes' then
+      WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10#13#10 + 'Setup updated Domovoi''s programs on this PC. It didn''t change the server''s own code, which stays as it was: that updates with "Update Domovoi" in the Domovoi icon''s menu, or in the dashboard (Settings > About & updates).';
     LanText.Caption := 'Phones and rooms reach Domovoi at http://' + LanIp + ':6369. If it changes, rooms look for Domovoi again by themselves; to keep it fixed, reserve it for this PC in your router (DHCP reservation for ' + LanMac + ').' + #13#10;
     { The network name is for browsers; a phone pairs with the address. }
     if LanName <> '' then
@@ -1236,6 +1245,7 @@ begin
         install record keeps it, not the click. }
       AiReported := KvValue(Lines, 'ai');
       PhoneAppReported := KvValue(Lines, 'phone_app');
+      CheckoutKept := KvValue(Lines, 'checkout_kept');
       if AiReported <> '' then
         if not RunHelper(AppHelper, 'record-ai', Ignored, Code) or (Code <> 0) then
           Log('record-ai did not work: ' + KvValue(Ignored, 'error'));

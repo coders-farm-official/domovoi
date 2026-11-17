@@ -45,9 +45,11 @@ network.
 - **Talk to a room.** Say {wake}, then what you want: "set a timer for 10
   minutes." Your household can also train a word of its own: see [Wake
   word and greeting](#node:wake-word).
-- **The dashboard.** Open it in any browser on your Wi-Fi, at the address
-  whoever set up Domovoi gave you (it ends in `:6369`). You can manage
-  music, files, chat, people and settings there.
+- **The dashboard.** Open it in any browser on your Wi-Fi: type
+  `domovoi.local`. If that doesn't open, use the address whoever set up
+  Domovoi gave you (it ends in `:6369`). The top of the dashboard shows
+  the easiest address to give someone else: click it to copy it. You can
+  manage music, files, chat, people and settings there.
 - **The Domovoi app** on Android phones. It has the everyday pages, a
   music player and Chat. With no server in reach it still plays the
   phone's own music, and a chat on the phone can run on the phone itself.
@@ -67,8 +69,7 @@ network.
    Domovoi's dashboard asks for it (or [Settings → System → Advanced](#settings/advanced),
    **set up admin**). Type the 8-word setup code and choose a password.
    Where the code is: the Windows installer shows it on its last page; on
-   a Mac the Domovoi Setup window shows it; on Linux it is in a file on
-   the server. Then keep the household token it shows: every phone and
+   Linux it is in a file on the server. Then keep the household token it shows: every phone and
    browser asks for it once. [More detail](README.md#2-claim-the-admin-account)
 2. **Answer the internet question**: Yes, Sometimes or No. You can change
    it later in [Settings → Privacy → Internet](#settings/internet).
@@ -181,19 +182,21 @@ A graphics card is optional everywhere. [More detail](docs/WINDOWS_HOST.md#which
   player and Chat. Chat holds your chats on the home server and chats
   that run on the phone itself, with no server.
 - The dashboard's sidebar: **Chat**, then **Media** (Music, Podcasts,
-  Audiobooks, Videos, and pages plugins add there, like Stations) and
-  **Tools** (News, Calendar, Lists, Files), each opening in place, then
-  **Plugins**. On a phone, Home's "everything" grid has the same groups.
+  Audiobooks, Videos) and **Tools** (News, Calendar, Lists, Files), each
+  opening in place, then **Plugins**. A plugin's page joins Media or
+  Tools, or gets a row of its own. On a phone, Home's "everything" grid
+  has the same groups.
 - That menu is the same in every browser, and an admin can change it in
-  [Settings → System → App layout](route:settings/app-layout) → **Menu**:
+  [Settings → System → App layout](#settings/app-layout) → **Menu**:
   rename the groups, add or delete one, move any page into a group or to
   the top, and put things in another order. **Reset to default** brings
   the usual menu back. Nothing needs changing there; the phone app keeps
   its own layout.
 - **Settings** is in groups: Household (Rooms, People, Phones &
-  browsers, Media folders, Printers & scanners), Voice, Chat & AI,
-  Privacy, Documents (Fonts) and System (with App layout). The search box at the top finds a setting by name:
-  try "wake", "voice history" or "token".
+  browsers, Calendars, Media folders, Music mix, Queue history, Printers
+  & scanners), Voice, Chat & AI, Privacy, Documents (Fonts) and System
+  (About & updates, Health, App layout, Advanced). The search box at the
+  top finds a setting by name: try "wake", "voice history" or "token".
 
 [More detail](README.md#what-each-interface-can-do)
 
@@ -224,7 +227,9 @@ time it comes; add morning, evening, am or pm to be sure.
 - "what reminders do I have"
 
 **Also:** your timers show on [Home](#home) and in each room's **Timers**
-tab ([Settings → Household → Rooms](#settings/rooms)).
+tab ([Settings → Household → Rooms](#settings/rooms)). Saying "stop" while
+a timer or an alarm is going off in the room stops it and leaves the music
+playing; say "stop" again to stop the music.
 
 **App:** if Home's timers card says "Timers may ring a few minutes late on
 this phone", tap **allow alarms**.
@@ -288,7 +293,8 @@ it.
 - "what's playing in the office"
 - "play some music everywhere" · "play this in the office too" (the rooms
   play the same music together)
-- "play jazz upstairs" (a group of rooms you named in Settings → Rooms)
+- "play jazz upstairs" (a group of rooms you named in Settings →
+  Household → Rooms)
 - "join the kitchen" · "leave the group" · "which rooms are playing this"
 - "stop the music" · "stop here" (in a room of a group, stop stops the
   whole group, as pause pauses it; stop here, or leave the group, stops
@@ -415,8 +421,9 @@ Your music library, on the server, played in any room or in the browser.
 - **Dashboard:** every song in a list (Library, an artist's, album's or
   genre's songs, a playlist, a room's **Recently played**) has a **⋯**
   menu with **play next** and **add to queue**. It goes where the music
-  plays: this browser ("play next here") or the room you're playing in
-  ("play next in kitchen"); on a room's page it goes to that room.
+  plays: this browser ("play next here", "add to queue here") or the room
+  you're playing in ("play next in kitchen", "add to kitchen's queue"); on
+  a room's page it goes to that room.
 - **Dashboard:** the **Queue** panel (the bar's queue button, or the
   player's **Queue** tab) shows this browser's queue; the menu at its top
   switches it to any room's queue, with everything Room queue does. Songs
@@ -425,9 +432,10 @@ Your music library, on the server, played in any room or in the browser.
   keys; the arrow button plays a song next. On Home, a playing room's
   **queue** button, and **open queue** on a room's page in
   [Settings → Household → Rooms](#settings/rooms), open that room's queue.
-- **App:** [Music](#music/queue) → **room queue**: **move up**, **move
-  down** and **remove from queue** on each song. **play next** on a song
-  in the library puts it next in the room's queue.
+- **App:** [Music](#music/queue) → **room queue**: tap a song to play it
+  now, hold its handle and drag to move it, and **×** takes it out. **play
+  next** on a song in the library puts it next in this phone's queue, or
+  in the room's queue while the phone plays to a room.
 - Playlists and favorites: [Music → Playlists](#music/playlists).
 - **Dashboard:** browse by genre: [Music → Genres](#music/genres). Each
   genre opens its songs, with **play**, **shuffle** and **add to queue**
@@ -438,10 +446,10 @@ Your music library, on the server, played in any room or in the browser.
   its artist's). A genre in the file always wins. "Rock; Indie" counts
   under both; "Hip-Hop" and "Rap" are one. Songs with no genre are the
   **no genre** row at the end; while some of them are still waiting for
-  MusicBrainz, the row says how many. Right after an update the server
-  reads the genres of the songs already in your library in the
-  background; until it is done the tab says "reading genres from your
-  files… N of M".
+  MusicBrainz, the row says how many. While the server is still reading
+  the genres of songs in the background, the tab says "reading genres
+  from your files… N of M". A "genre" that is only a video site's
+  category (like "People & Blogs") is ignored.
 - Each queued song says which device added it.
 - When the songs you asked for run out, [Up next](#node:up-next) keeps
   the music going with songs like them, in the browser and in a room.
@@ -497,7 +505,9 @@ Your music library, on the server, played in any room or in the browser.
   trash**: the other files move to a `.domovoi-trash` folder inside your
   music folder (nothing is deleted), and the copy you keep takes over
   their places in playlists, their favourite and their listening history.
-  **Keep both** hides the group until a copy joins or leaves it.
+  A room playing a copy that moves to the trash goes on to the next song,
+  and queued copies of it are taken out. **Keep both** (**Keep all** for
+  three or more) hides the group until a copy joins or leaves it.
 - **Trash** lists what was moved; **Restore** puts a copy back where it
   was (not back into playlists). Empty the trash folder with a file
   manager when you're sure.
@@ -534,9 +544,6 @@ Your music library, on the server, played in any room or in the browser.
   the files and can't be edited in Domovoi, nor added to by a download
   or a plugin: **Copy to a new playlist** in it makes one you can change. One with the same name as a playlist you
   made is called "<name> (from files)".
-- Right after this update the server reads every song's tags again in the
-  background (the same reading as the Genres tab's), which also clears
-  "genres" like "People & Blogs" that were a video site's category.
 
 [More detail](docs/FAQ.md#who-added-that-song-and-can-i-stop-someone-adding-more)
 
@@ -615,6 +622,14 @@ browser, and in a room.
   person's listening is kept apart once their phone or browser says
   **this is me**; clearing it, or not keeping it at all, is under
   [What's kept, and forgetting](#node:kept).
+- *(admin)* **Look back at what Up next picked:**
+  [Settings → Household → Queue history](#settings/queue-history) lists
+  every Up next still kept, in each room, browser and phone. Open one to
+  see its songs in order: why each was picked, the song it followed, and
+  whether it played or was skipped (and for how long). A summary on top
+  counts the picks, the artists and how close two songs by one artist
+  came, the reasons and the decades; **download CSV** or **download JSON**
+  saves the whole session. A finished one is kept 30 days.
 - **Up next by voice.** In a room, the commands below act on that room's
   queue; most also take the room's name after them ("what's next in the
   kitchen"). "Next" and "play the next song" still skip. A command that
@@ -685,12 +700,19 @@ where you stopped. [Videos](#videos)
 ### Radio *(plugin)*
 
 Shown when the radio plugin is installed. Find stations on the
-**Stations** page and star the ones you like. Domovoi plays favorites by
-name.
+**Stations** page and star the ones you like. Ask for a station by name and
+Domovoi looks in your favorites first, then the other stations it has
+saved (ones you've played, and FM stations you imported), then, if the
+internet is allowed, online, and offers what it finds there. It goes by
+how a name sounds: "lo-fi 24 slash 7" finds "Lofi 24/7". If it isn't sure it heard the name right, it asks "Did you mean …?":
+answer yes, no, or the name. To hear a station in a room from the page,
+pick the room next to it, or send it to a room from the player.
 
 **Try saying**
 
-- "stream the jazz station" (a station you starred)
+- "stream the jazz station"
+- "tune to lofi 24/7"
+- "add this to my favorites" (while a station plays)
 - "stop the radio"
 
 [More detail](plugins/radio/README.md)
@@ -723,6 +745,8 @@ phone](#node:phone-chat).
   model reads them on your server.
 - **Documents:** the paperclip takes those too, up to 4 a message. See
   [Ask about a document](#node:ask-document).
+- **Videos:** the paperclip takes one short video a message (up to 3
+  minutes). See [Ask about a video](#node:ask-video).
 - **Drafts and letters:** Chat can write drafts for you. Read them before
   you send them; it can get details wrong. See [Write a draft](#node:drafts)
   and [Letters](#node:letters).
@@ -747,6 +771,49 @@ experiment. It is off unless whoever set up Domovoi turned it on.
 **Try saying:** "let's chat" (in a room, while voice chat mode is on)
 
 [More detail](docs/FAQ.md#can-i-send-pictures-in-chat)
+
+### Ask about a video
+
+Attach a short video to a chat and ask about it. Domovoi watches it on
+your home server, keeps what it heard and saw as text, and deletes the
+video.
+
+**How to**
+
+- **Dashboard:** in [Chat](#chat), the paperclip takes one video a
+  message: MP4, MOV or WebM, up to 3 minutes and 2 GB. Add a question if
+  you like.
+- **App:** videos are attached from the dashboard. What Domovoi found is
+  in the chat on the phone too.
+- While Domovoi watches, the video says "Watching your video… about 4
+  minutes left", with **stop**. You can keep chatting meanwhile, or leave
+  the page.
+- When it's done, Domovoi writes a short summary in the chat, and answers
+  the question you sent with the video. Then ask anything about it.
+- What was said comes from a transcript, with times. What the pictures
+  show is a small model's guess, so Domovoi says what a frame "might
+  show", not what is there.
+- Only the text stays, with the chat. The video and every picture taken
+  from it are deleted once it has been watched, or stopped. Deleting the
+  chat deletes the text.
+- A question asked in a room goes first: watching pauses from the wake
+  word until the answer has been spoken, then carries on.
+- One video is watched at a time in the house; another waits its turn.
+
+**In a chat, type**
+
+- "what's this video about?"
+- "what did they say about the cake?"
+- "is there a dog in it?"
+
+**If something's wrong**
+
+- "Videos up to 3 minutes can be attached": trim it on the phone first,
+  or send the part you want to ask about.
+- The paperclip doesn't offer videos: AI chat is off for your home (see
+  [When AI is off](#node:ai-off)), or the server has no ffmpeg.
+- "I couldn't finish watching it": the message says why. Attach the video
+  again to try once more.
 
 ### Look things up
 
@@ -805,16 +872,18 @@ anything leaves your home.
   been measured to be weak at. It names the weakness and offers what
   works there:
   - rewriting, translating or proofreading a document over about two
-    pages: **try anyway**, or ask for one part at a time;
+    pages: **section by section** or **try anyway**;
   - a sum, an average, a difference, or the days between two dates, from
     numbers spread through a document: **calculate exactly** or **try
     anyway**;
-  - a summary that will take more than 3 minutes here: **go ahead**;
+  - a summary that will take more than 3 minutes here: **go ahead**, or
+    **use home server** in a phone chat when the server would be faster;
   - a summary of a document with scanned pages: **go ahead**;
   - a document in a language other than English or Spanish: **try
     anyway**;
   - a blurry photo in a home-server chat: **choose another** or **send
-    anyway**.
+    anyway**;
+  - a handwritten letter: **try anyway**.
 - Each kind shows once per chat. **don't warn me about this again**
   silences that kind on this browser or phone.
 - [Settings → Chat & AI → Chat](#settings/chat), **heads-up before shaky
@@ -968,8 +1037,8 @@ the document, and shows you where.
   the document." It doesn't guess.
 - **Dashboard:** in [Files](#files) → Documents, **Ask** on a document
   starts a chat about it.
-- **App:** in [Files](#files), the speech-bubble button on a document
-  (**ask about this document**) does the same. A file on this phone opens
+- **App:** in [Files](#files), **Ask in chat** in a document's **⋮** menu
+  does the same. A file on this phone opens
   a phone chat; a file in the home server's Documents opens a home-server
   chat.
 - A very large file: about the first 4 million characters (roughly 1,000
@@ -992,7 +1061,10 @@ the document, and shows you where.
 - "pictures of text (scanned)": some pages are scans, and Domovoi can't
   read those yet. The answer names the pages it skipped. A PDF that is all
   scan is refused ("pictures of text (a scan)"). Save the document from
-  its own program as a PDF with text, or type the part you need.
+  its own program as a PDF with text, or type the part you need. Scans
+  from your own scanner are different: Domovoi reads them itself (see
+  [What does this scan say?](#node:scan-reader)), and then you can ask
+  about them like any document.
 - A file that isn't what its name says, or is built to overwhelm a
   reader, is refused, with a sentence saying why.
 - Documents can't be added while AI chat and questions are off.
@@ -1195,7 +1267,8 @@ Podcasts, Audiobooks, and plugged-in drives.
 - [Files](#files) → **Upload**.
 - **Dashboard:** drag files in from your computer to upload them. Move a
   file by dragging it onto a folder.
-- **App:** **move to another folder** on a file.
+- **App:** **Move** in a file's **⋮** menu, then pick the folder and
+  press **move here**.
 - **Import** copies from a plugged-in drive.
 - Deleting needs the admin password *(admin)*.
 - Something changed on disk and isn't showing? Press **Rescan**.
@@ -1291,15 +1364,18 @@ too (often called AirScan or eSCL).
 - **Two-sided by default** and **Colour by default** follow the printer's
   own settings unless you set them per printer.
 - **Print** sits on files in [Files](#files) and Documents when a printer
-  is set up. It prints PDFs, pictures, text and markdown files, and
-  spreadsheets (as a plain table). You pick the pages, copies, two-sided,
+  is set up. It prints PDFs, pictures, text and markdown files,
+  spreadsheets (as a plain table), and documents written in Domovoi (as
+  their text, headings and lists; their own **Download** → **PDF** keeps
+  fonts and photos). You pick the pages, copies, two-sided,
   colour and paper size, and see a preview first.
 - Word and OpenDocument files don't print here. Save them as PDF in Word
   or Docs first, then print the PDF.
 - **A draft from Chat:** **print** on the draft, or type "print it". You
   see the preview first.
 - **Scan** sits at the top of Documents when a scanner is set up. Scans
-  are saved as one PDF in **Documents → Scans**, named by date.
+  are saved as one PDF in **Documents → Scans**, named by date. Domovoi
+  then reads them: see [What does this scan say?](#node:scan-reader).
 - Renaming or removing a printer needs the admin password *(admin)*.
 
 **Try saying**
@@ -1326,6 +1402,50 @@ too (often called AirScan or eSCL).
 - Each job is limited to 100 pages and 20 copies, and the house to 500
   sheets a day; an admin can change the limits. The list of recent jobs
   is kept 90 days, and an admin can clear it.
+
+### What does this scan say?
+
+Scan a letter, and Domovoi reads it for you on your home server: a short
+plain summary of what it says, and the whole text if you want it.
+
+**How to**
+
+- After a scan, press **What does it say?** on the Scan sheet (on the
+  dashboard, or in the app's Files → Documents). While Domovoi is still
+  reading, the button says how far it has got ("reading page 2 of 3");
+  press it and the answer appears when it's ready. Older scans have the same button in [Settings → Household →
+  Printers & scanners](#settings/printers), under **recent jobs**.
+- **By voice:** "scan this letter". When it's saved, Domovoi asks
+  "Want me to tell you what it says?". Say yes for the short summary, then
+  yes again to hear all of it.
+- **Show the full text** shows every page's words.
+- Once a scan is read, [Ask about a document](#node:ask-document) works
+  on it, and "read me" reads it aloud, like any document.
+- Domovoi reads the printed words itself (OCR). A page it can't read
+  well, such as handwriting or a photo, goes to the picture model, and
+  Domovoi says what the page "might say": a guess, not the page's words.
+  Check names, dates and amounts against the paper.
+- Dates and amounts in the summary are the letter's own sentences,
+  quoted.
+- Everything happens on your server; nothing about the letter leaves the
+  house.
+- A question asked in a room goes first: reading pauses from the wake
+  word until the answer has been spoken.
+
+**Try saying**
+
+- "scan this letter"
+
+**If something's wrong**
+
+- **No button:** the server can't read scans yet. Domovoi installs the
+  reader (Tesseract) with its next update or Restart.
+- **"couldn't read this page":** the page was too faint, handwritten, or
+  a photo, and the picture model wasn't asked: AI features are off, or
+  there's no picture model. Rescan it in better light, or read the paper.
+- **AI features off:** Domovoi still reads printed pages, but there's no
+  summary: you get the start of the text, and the full text.
+- English only for now.
 
 ### Calendar
 
@@ -1693,8 +1813,10 @@ played**, **Notes**, **Timers**, **Logs**, and **Settings** (the gear).
   ignores short blips from the TV), **Wake acknowledgement**, **Voice
   loudness boost**. A Pi or PC room set up before November 2026 keeps
   0.5 until you change it.
-- Saving a setting that only applies after a restart asks **Restart
-  now** or **Later**.
+- Changes on the **Settings** tab are saved with **Save & restart**: the
+  room restarts to apply them and drops offline for a few seconds.
+- A room can wake on up to five words: see [Wake word and
+  greeting](#node:wake-word).
 - A Pi or spare computer acting up: its **Overview** tab, under
   **maintenance**, **Restart room**. Updating it: **Upgrade
   room**, in the same place.
@@ -1707,9 +1829,10 @@ Quiet hours: Domovoi won't speak announcements in a room, like low
 battery or printer problems. Alarms, timers and reminders still ring, and
 it still answers when you ask it something.
 
-- The house's hours: [Settings → Advanced](#settings/advanced) → **Voice & speech** →
-  **Quiet hours** (on, 10 pm to 7 am), **Quiet hours start** and **Quiet
-  hours end**. They use the server's clock.
+- The house's hours: [Settings → System → Advanced](#settings/advanced)
+  → **show the settings** → **Voice & speech** → **Quiet hours** (on, 10
+  pm to 7 am), **Quiet hours start** and **Quiet hours end**. They use the
+  server's clock.
 - One room: its **Settings** tab → **quiet hours**: **Same as the
   house**, **Custom hours** (pick the times, then **Save**), or **Off for
   this room**.
@@ -1759,7 +1882,10 @@ About the price of a smart speaker. [Parts list](docs/SATELLITE_HARDWARE.md)
    `Domovoi-Setup-<id>`. Join it from your phone, pick your home Wi-Fi and
    name the room.
 5. The Pi says a six-digit code. Under **waiting for approval**, type it
-   and press **approve**.
+   and press **approve**. If the server's address was left blank in the
+   setup page, the card says **Code sent**, and the room appears within
+   about ten seconds; if the Pi doesn't accept the code, the card says so:
+   type it again.
 
 **If something's wrong:** **show setup details** on the card lists the
 setup network and its page. [More detail](README.md#3-add-your-first-satellite)
@@ -1811,8 +1937,8 @@ announcements.
 **How to**
 
 1. *(admin, once)* [Settings → Household → Rooms](#settings/rooms) →
-   **prepare a room's SD card** → **Refresh caches**. This gives phones the
-   wake word.
+   **prepare a room's SD card** → **details: what is kept for building
+   cards** → **Refresh caches**. This gives phones the wake word.
 2. *(admin)* **add a spare device**, name the room, then **make the
    code**. A QR code appears. If the card says the app isn't on the server
    yet, press **Download the app to this server** on that card first.
@@ -1826,6 +1952,12 @@ announcements.
 Household → Rooms](#settings/rooms) → **Use this device as a room**,
 or from the **Domovoi Room** icon. A phone you also use every day needs a
 screen lock, and while it's a room, the rest of the app is locked.
+
+While it's a room, its screen shows what the room is playing, with
+pause, skip and back, and the room's timers and alarms counting down,
+with **stop** when one goes off. Reminders never show: anyone in the room
+can read the screen. The app and the server both need to be up to date
+for this.
 
 To leave, hold **exit room mode**, unlock, then choose **Keep this room**
 or **Forget this room**.
@@ -1866,7 +1998,7 @@ that computer's disk.** It needs a network cable while it sets up.
 2. **Open in Raspberry Pi Imager** to write it to a USB stick (2 GB or
    more).
 3. Start the old computer from the stick (its boot-menu key, often F12),
-   type **ERASE** when asked, and wait about half an hour.
+   type **ERASE** when asked, and wait 10 to 30 minutes.
 4. Approve the code it shows.
 
 [More detail](docs/SPARE_DEVICE_SATELLITES.md#old-computers-usb-stick)
@@ -1877,6 +2009,17 @@ A new room wakes to {wake}. After waking, it greets you or chimes, then
 listens.
 
 [live slot: wake-word]
+
+**More than one word** *(admin)*
+
+- A room can wake on up to five words. With the room online, open its
+  **Overview** tab, then **wake word** → **Add another wake word**, put
+  the words in order (the main word first) and press **Save**; the room
+  restarts.
+- A Raspberry Pi Zero 2 W runs three. A room on older software runs one
+  until you upgrade it.
+- Most homes need only one: each extra word makes waking by mistake a
+  little more likely.
 
 **Train your own wake word** *(admin)*
 
@@ -1988,10 +2131,10 @@ Domovoi?"). It doesn't mean Domovoi has forgotten you.
 **How to** *(admin)*
 
 - Sign in: [Settings → System → Advanced](#settings/advanced), the
-  **Admin** card at the top, **sign in**. A reload in that browser keeps
-  you signed in for 60 minutes after you signed in; **sign out** ends it
-  at once.
-- Change those minutes: on the same page, **show the settings**, then
+  **Admin** card at the top, **sign in**. Admin signs out after 1 hour
+  idle: an hour with no change made as admin. A reload in that browser
+  keeps you signed in until then; **sign out** ends it at once.
+- Shorten the reload part: on the same page, **show the settings**, then
   **Security** → **Stay signed in after a reload**.
 - Turn guest music control off: same group, **Guests can change the
   music in a playing room**.
@@ -2038,6 +2181,7 @@ Everything stays on your server, or on your phone.
 | Command recordings (off unless an admin turns them on for a room) | 14 days |
 | Play history | 90 days |
 | The songs each room, phone and browser played, and who for | 1 year, or what **Keep listening history** says |
+| The songs Up next picked, and why (Queue history) | 30 days after that Up next ends |
 | The list of recent print jobs | 90 days (an admin can clear it) |
 | News stories | 90 days (saved ones always) |
 | The server's own log | no words, only how many |
@@ -2068,7 +2212,7 @@ each room's **Conversations** tab.
 - "never save my voice": Domovoi stops learning it.
 - Delete a chat: the bin icon in [Chat](#chat). Its pictures, documents,
   letters and draft versions go with it.
-- *(admin)* turn recordings off in a room's **Overview** (**Stop and
+- *(admin)* turn recordings off in a room's **Settings** tab (**Stop and
   delete**); the commands kept so far are in [Settings → Privacy → Voice
   history](#settings/voice-history).
 - *(admin)* listen to a room's command recordings, mark whether each one
@@ -2086,7 +2230,8 @@ decides the online extras.
 
 - **Yes, always**: web answers, lyrics lookups, artists' other names,
   podcast downloads, and Chat lookups when you allow them.
-- **Sometimes**: the same, without automatic podcast downloads.
+- **Sometimes**: the same, without automatic podcast downloads or
+  similar artists for Up next.
 - **No, keep everything in the house**: nothing goes out. Online buttons
   show "needs internet", and Chat can't look anything up online. The
   manual and an offline library still answer.

@@ -108,6 +108,12 @@ if [ "${1-}" = show ]; then
   case "$*" in *"-p Restart "*) cat "$SHIM_STATE/show-restart" 2>/dev/null || echo on-failure ;; esac
   # Its RestartSec= (show-restartusec), else systemd's default.
   case "$*" in *"-p RestartUSec "*) cat "$SHIM_STATE/show-restartusec" 2>/dev/null || echo 100ms ;; esac
+  # The dashboard unit (reconcile_short_address): loaded, and with the
+  # shipped unit's CAP_NET_BIND_SERVICE unless show-ambient / show-bounding
+  # / show-loadstate say otherwise.
+  case "$*" in *"-p LoadState "*) cat "$SHIM_STATE/show-loadstate" 2>/dev/null || echo loaded ;; esac
+  case "$*" in *"-p AmbientCapabilities "*) cat "$SHIM_STATE/show-ambient" 2>/dev/null || echo cap_net_bind_service ;; esac
+  case "$*" in *"-p CapabilityBoundingSet "*) cat "$SHIM_STATE/show-bounding" 2>/dev/null || echo cap_net_bind_service ;; esac
   exit 0
 fi
 # Every unit is enabled unless disabled-<unit> says otherwise; enable
@@ -819,6 +825,8 @@ run_update() {
   # Off unless a case asks (the cache_trim_* cases), so every other case's
   # step list stays as it is.
   gpu_env+=(DOMOVOI_MANAGE_CACHE_TRIM="${MANAGE_CACHE_TRIM:-0}")
+  # Off unless a case asks (the fh_firewall_* cases), the same way.
+  gpu_env+=(DOMOVOI_MANAGE_FH_FIREWALL="${MANAGE_FH_FIREWALL:-0}")
   # Unset, EPOCHREALTIME is an ordinary (empty) variable in that shell.
   if [ "${NO_BASH_CLOCK:-0}" = 1 ]; then run=(bash -c 'unset EPOCHREALTIME; . "$0"' "$SCRIPT"); fi
   # The script as the update verifier runs it (scripts/linux/update-verifier.sh):
@@ -861,6 +869,7 @@ run_update() {
     DOMOVOI_USER=tester \
     DOMOVOI_CORE_STATE_DIR="$CORE_STATE" \
     DOMOVOI_CORE_DROPIN_DIR="$CASE/dropins" \
+    DOMOVOI_WEB_DROPIN_DIR="$CASE/web-dropins" \
     DOMOVOI_JOURNALD_DROPIN_DIR="$CASE/journald" \
     DOMOVOI_UPDATE_HEALTH_TIMEOUT=1 \
     DOMOVOI_UPDATE_HEALTH_INTERVAL=0.2 \
@@ -1530,6 +1539,88 @@ case_core_restart_overridden_drop_in_is_a_warn() {
   end_case
 }
 
+# 1.4.0, the short address: the dashboard listens on port 80 too, which
+# needs CAP_NET_BIND_SERVICE. A web unit from before it has no capability
+# at all (CapabilityBoundingSet= empty), so the update unit adds that one,
+# in a drop-in, before the services start (reconcile_short_address).
+case_short_address_drop_in_for_an_old_web_unit() {
+  new_case short_address_drop_in_for_an_old_web_unit
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  : >"$STATE/show-ambient"
+  : >"$STATE/show-bounding"
+  run_update
+  local f=$CASE/web-dropins/50-domovoi-short-address.conf
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "the drop-in is there" test -f "$f"
+  check "a [Service] section" grep -qx '\[Service\]' "$f"
+  check "the capability, ambient" grep -qx 'AmbientCapabilities=CAP_NET_BIND_SERVICE' "$f"
+  check "and the bounding set holds just that one" grep -qx 'CapabilityBoundingSet=CAP_NET_BIND_SERVICE' "$f"
+  check "nothing else is granted" eq "$(grep -c '^[A-Za-z]*Capabilit' "$f")" 2
+  check "no other capability named" bash -c '! grep -v "^#" "$1" | grep -i "cap_" | grep -vi "cap_net_bind_service"' _ "$f"
+  check "systemd reads it" called "systemctl daemon-reload"
+  check "before the services start" before "systemctl daemon-reload" "systemctl start domovoi-core.service"
+  check "an ok step" step_is short-address ok
+  check "after the signature check, before the restart" eq "$(step_names)" "signature short-address stop-services start-services health searxng"
+  end_case
+}
+
+case_short_address_drop_in_on_a_full_update() {
+  new_case short_address_drop_in_on_a_full_update
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  commit_all "B: app" >/dev/null
+  : >"$STATE/show-ambient"
+  : >"$STATE/show-bounding"
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "mode update" eq "$(field mode)" '"update"'
+  check "written" grep -qx 'AmbientCapabilities=CAP_NET_BIND_SERVICE' "$CASE/web-dropins/50-domovoi-short-address.conf"
+  check "before the backup" before "systemctl daemon-reload" "pg_dump"
+  check "an ok step" step_is short-address ok
+  end_case
+}
+
+# The shipped unit (or a drop-in already read) has it: nothing to do.
+case_short_address_left_alone_when_the_unit_has_it() {
+  new_case short_address_left_alone_when_the_unit_has_it
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  echo "cap_chown cap_net_bind_service cap_kill" >"$STATE/show-bounding"
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "no drop-in" test ! -e "$CASE/web-dropins/50-domovoi-short-address.conf"
+  check "no reload" not_called "systemctl daemon-reload"
+  check "no step" eq "$(step_names)" "signature stop-services start-services health searxng"
+  end_case
+}
+
+# No dashboard unit loaded (a hand-run dashboard): nothing to change.
+case_short_address_left_alone_without_a_web_unit() {
+  new_case short_address_left_alone_without_a_web_unit
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  echo not-found >"$STATE/show-loadstate"
+  : >"$STATE/show-ambient"
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "no drop-in" test ! -e "$CASE/web-dropins/50-domovoi-short-address.conf"
+  check "no step" eq "$(step_names)" "signature stop-services start-services health searxng"
+  end_case
+}
+
+case_short_address_overridden_drop_in_is_a_warn() {
+  new_case short_address_overridden_drop_in_is_a_warn
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  mkdir -p "$CASE/web-dropins"
+  printf '[Service]\nAmbientCapabilities=CAP_NET_BIND_SERVICE\n' >"$CASE/web-dropins/50-domovoi-short-address.conf"
+  : >"$STATE/show-ambient"
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "a warn step" step_is short-address warn
+  check "that names the override" grep -qF "overrides it" "$RESULT"
+  check "no rewrite, no reload" not_called "systemctl daemon-reload"
+  end_case
+}
+
 # Docker after the media folders on a box provisioned before provision.sh
 # wrote the drop-in (incident 2026-11-11): the update unit reads /etc/fstab's
 # Domovoi block and writes docker.service.d/50-domovoi-media.conf once,
@@ -1675,6 +1766,81 @@ case_cache_trim_installed_once() {
   : >"$STATE/calls.log"
   MANAGE_CACHE_TRIM=1 run_update
   check "then left alone" not_called "enable --now domovoi-cache-trim.timer"
+  end_case
+}
+
+# Friend Houses' firewall (2026-11-17, threat-model finding 22): an install
+# from before it gets root's copy of fh-firewall.sh and its unit with the
+# next update, enabled and started once; a second run has nothing to do; an
+# edited copy is put back and the unit started again to apply it.
+case_fh_firewall_installed_once() {
+  new_case fh_firewall_installed_once
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  local lib=$OSROOT/usr/local/lib/domovoi-fh-firewall/fh-firewall.sh units=$OSROOT/etc/systemd/system
+  MANAGE_FH_FIREWALL=1 run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "the script is the commit's" cmp -s "$lib" "$HERE/../fh-firewall.sh"
+  check "executable by root, not writable by others" eq "$(stat -c %a "$lib")" 755
+  check "its folder 0755" eq "$(stat -c %a "$(dirname "$lib")")" 755
+  check "the unit" cmp -s "$units/domovoi-fh-firewall.service" "$HERE/../units/domovoi-fh-firewall.service"
+  check "the unit runs the root-owned copy" grep -qx 'ExecStart=/usr/local/lib/domovoi-fh-firewall/fh-firewall.sh apply' "$units/domovoi-fh-firewall.service"
+  check "it follows Docker" grep -qx 'PartOf=docker.service' "$units/domovoi-fh-firewall.service"
+  check "daemon-reload" called "systemctl daemon-reload"
+  check "enabled and started" called "systemctl enable --now domovoi-fh-firewall.service"
+  check "and its rules applied now" called "systemctl try-restart domovoi-fh-firewall.service"
+  check "an ok step" step_is fh-firewall ok
+  check "where it sits" eq "$(step_names)" "signature fh-firewall stop-services start-services health searxng"
+  : >"$STATE/calls.log"
+  MANAGE_FH_FIREWALL=1 run_update
+  check "second run ok" eq "$(field status)" '"ok"'
+  check "no second start" not_called "enable --now domovoi-fh-firewall.service"
+  check "no step the second time" eq "$(step_names)" "signature stop-services start-services health searxng"
+  printf '#!/bin/sh\nexit 0\n' >"$lib"
+  : >"$STATE/calls.log"
+  MANAGE_FH_FIREWALL=1 run_update
+  check "an edited copy is put back" cmp -s "$lib" "$HERE/../fh-firewall.sh"
+  check "and the rules applied again" called "systemctl try-restart domovoi-fh-firewall.service"
+  : >"$STATE/disabled-domovoi-fh-firewall.service"
+  : >"$STATE/calls.log"
+  MANAGE_FH_FIREWALL=1 run_update
+  check "a disabled unit is enabled" called "systemctl enable --now domovoi-fh-firewall.service"
+  check "nothing changed, so no try-restart" not_called "try-restart domovoi-fh-firewall.service"
+  check "an ok step that says so" grep -qF "domovoi-fh-firewall.service enabled" "$RESULT"
+  end_case
+}
+
+case_fh_firewall_start_failure_is_a_warn() {
+  new_case fh_firewall_start_failure_is_a_warn
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  echo "enable --now domovoi-fh-firewall.service" >"$STATE/fail-systemctl"
+  MANAGE_FH_FIREWALL=1 run_update
+  check "the restart still ok" eq "$(field status)" '"ok"'
+  check "a warn step" step_is fh-firewall warn
+  check "that says so" grep -qF "could not be started" "$RESULT"
+  end_case
+}
+
+case_fh_firewall_refuses_a_folder_others_can_write() {
+  new_case fh_firewall_refuses_a_folder_others_can_write
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  local dir=$OSROOT/usr/local/lib/domovoi-fh-firewall
+  mkdir -p "$dir" && chmod 0777 "$dir"
+  MANAGE_FH_FIREWALL=1 run_update
+  check "the restart still ok" eq "$(field status)" '"ok"'
+  check "a warn step" step_is fh-firewall warn
+  check "nothing put there" test ! -e "$dir/fh-firewall.sh"
+  check "the unit not started" not_called "enable --now domovoi-fh-firewall.service"
+  end_case
+}
+
+case_fh_firewall_opt_out() {
+  new_case fh_firewall_opt_out
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  MANAGE_FH_FIREWALL=0 run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "no script" test ! -e "$OSROOT/usr/local/lib/domovoi-fh-firewall/fh-firewall.sh"
+  check "no unit started" not_called "domovoi-fh-firewall.service"
+  check "no step" eq "$(step_names)" "signature stop-services start-services health searxng"
   end_case
 }
 
@@ -4070,17 +4236,35 @@ case_added_packages_installed_on_a_restart() {
   check "mode restart" eq "$(field mode)" '"restart"'
   check "a step of its own, after the search helper" eq "$(step_names)" "signature stop-services start-services health searxng added-packages"
   check "an ok step" step_is added-packages ok
-  check "it says what it installed" grep -qF '"detail": "installed xorriso"' "$RESULT"
-  check "no recommends, a short wait for apt's lock" called "apt-get -o Dpkg::Use-Pty=0 -o DPkg::Lock::Timeout=20 -q install -y --no-install-recommends xorriso"
+  check "it says what it installed" grep -qF '"detail": "installed xorriso tesseract-ocr tesseract-ocr-eng"' "$RESULT"
+  check "no recommends, a short wait for apt's lock" called "apt-get -o Dpkg::Use-Pty=0 -o DPkg::Lock::Timeout=20 -q install -y --no-install-recommends xorriso tesseract-ocr tesseract-ocr-eng"
   check "installed after health" before "curl http://127.0.0.1:6369/api/health" "install -y --no-install-recommends xorriso"
   check "with the lists apt had: no update" not_called "DPkg::Lock::Timeout=20 -q update"
   check "not held" not_called "apt-mark"
   check "installed" grep -qx "xorriso=1" "$STATE/dpkg"
+  check "the scan reader's OCR installed" grep -qx "tesseract-ocr-eng=1" "$STATE/dpkg"
   : >"$STATE/calls.log"
   MANAGE_PACKAGES=1 run_update "$CASE/pkgbin"
   check "again: status ok" eq "$(field status)" '"ok"'
   check "again: no step" eq "$(step_names)" "signature stop-services start-services health searxng"
   check "again: no apt" not_called "apt-get"
+  end_case
+}
+
+# A box from before 1.4.0 already has xorriso: the next Restart installs
+# only the scan reader's OCR, and the failure text names only what's missing.
+case_added_packages_only_what_is_missing() {
+  new_case added_packages_only_what_is_missing
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  write_gpu_shims "$CASE/pkgbin"
+  echo "xorriso=1" >"$STATE/dpkg"
+  echo always >"$STATE/internet-policy"
+  MANAGE_PACKAGES=1 run_update "$CASE/pkgbin"
+  check "status ok" eq "$(field status)" '"ok"'
+  check "an ok step" step_is added-packages ok
+  check "it says what it installed" grep -qF '"detail": "installed tesseract-ocr tesseract-ocr-eng"' "$RESULT"
+  check "only the missing ones" called "install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng"
+  check "not xorriso again" not_called "--no-install-recommends xorriso"
   end_case
 }
 
@@ -4096,7 +4280,7 @@ case_added_packages_on_an_update_and_never_under_never() {
   check "never: status ok" eq "$(field status)" '"ok"'
   check "never: no step" eq "$(step_names)" "signature stop-services start-services health searxng"
   check "never: no apt" not_called "apt-get"
-  check "never: the journal says why" grep -qF "not installed while internet access is turned off: xorriso" "$CASE/output.log"
+  check "never: the journal says why" grep -qF "not installed while internet access is turned off: xorriso tesseract-ocr tesseract-ocr-eng (USB sticks for old computers need xorriso; reading scans needs tesseract-ocr)" "$CASE/output.log"
   printf 'print("b")\n' >"$REPO/domovoi/app.py"
   local sha_b; sha_b=$(commit_all "B: code")
   echo sometimes >"$STATE/internet-policy"
@@ -4124,7 +4308,7 @@ case_added_packages_failure_is_a_warning_and_opt_out_is_honoured() {
   check "exit 0" eq "$RC" 0
   check "status ok" eq "$(field status)" '"ok"'
   check "a warn step" step_is added-packages warn
-  check "its detail is ours" grep -qF '"detail": "not installed: xorriso (apt-get failed, exit 100, or another program was using apt; journalctl -u domovoi-update says why). The next update or Restart tries again. USB sticks for old computers need xorriso"' "$RESULT"
+  check "its detail is ours" grep -qF '"detail": "not installed: xorriso tesseract-ocr tesseract-ocr-eng (apt-get failed, exit 100, or another program was using apt; journalctl -u domovoi-update says why). The next update or Restart tries again. USB sticks for old computers need xorriso; reading scans needs tesseract-ocr"' "$RESULT"
   check "tried again with fresh lists" called "apt-get -o Dpkg::Use-Pty=0 -o DPkg::Lock::Timeout=20 -q update"
   check "no error on the run" eq "$(field error)" null
   check "no rollback" not_called "reset --keep"
@@ -5448,6 +5632,11 @@ CASES=(
   case_core_restart_keeps_a_households_restart_sec
   case_core_restart_left_alone_when_the_unit_restarts
   case_core_restart_overridden_drop_in_is_a_warn
+  case_short_address_drop_in_for_an_old_web_unit
+  case_short_address_drop_in_on_a_full_update
+  case_short_address_left_alone_when_the_unit_has_it
+  case_short_address_left_alone_without_a_web_unit
+  case_short_address_overridden_drop_in_is_a_warn
   case_starts_do_not_wait_for_the_cores_ready
   case_journal_made_persistent_once
   case_docker_media_order_written_once
@@ -5456,6 +5645,10 @@ CASES=(
   case_journal_restart_failure_is_a_warn
   case_journal_opt_out
   case_cache_trim_installed_once
+  case_fh_firewall_installed_once
+  case_fh_firewall_start_failure_is_a_warn
+  case_fh_firewall_refuses_a_folder_others_can_write
+  case_fh_firewall_opt_out
   case_cache_trim_enable_failure_is_a_warn
   case_cache_trim_refuses_a_folder_others_can_write
   case_cache_trim_opt_out
@@ -5583,6 +5776,7 @@ CASES=(
   case_a_rewound_upstream_still_restarts
   case_a_replace_ref_never_passes_an_enforced_signature
   case_added_packages_installed_on_a_restart
+  case_added_packages_only_what_is_missing
   case_added_packages_on_an_update_and_never_under_never
   case_added_packages_failure_is_a_warning_and_opt_out_is_honoured
   case_gpu_runtime_installed_while_the_services_are_stopped

@@ -274,7 +274,8 @@ async def test_set_up_the_printer_by_voice(voice, monkeypatch):
 async def test_set_up_finds_nothing(voice, monkeypatch):
     monkeypatch.setattr(discovery, "browse_mdns", lambda: mdns.BrowseResult(services=[], heard={}, errors=[]))
     r = await voice("set up the printer")
-    assert r.text.startswith("I couldn't find a printer. Make sure it's switched on")
+    assert r.text.startswith("I couldn't find a printer. Domovoi works with Wi-Fi and network printers, not USB")
+    assert "Make sure it's switched on" in r.text
 
 
 @requires_db
@@ -366,3 +367,39 @@ async def test_ink_names_from_the_printer_are_not_spoken(voice):
         assert r.text == "The office printer is low on toner."
     finally:
         await fake.close()
+
+
+@requires_db
+async def test_yes_reads_the_scan_and_offers_the_whole_text(voice, monkeypatch):
+    """"Want me to tell you what it says?" (plan Q13) → yes: the scan reader
+    reads it right then (OCR; a fake here), says the short summary, and
+    offers the whole text, which is read the way "read me ..." reads."""
+    from domovoi.scan_reader import answer_for_voice, ocr
+
+    words = "Your water bill is due on the third. Please pay online."
+
+    async def fake_ocr(png, *, hold=None, langs=None):
+        return ocr.parse_tsv("\n".join("5\t1\t1\t1\t1\t%d\t0\t0\t9\t9\t95\t%s" % (i, w)
+                                        for i, w in enumerate(words.split(), 1)))
+
+    monkeypatch.setattr(ocr, "read_page", fake_ocr)
+    scans.register_reader(answer_for_voice)
+    fake = FakeScanner()
+    voice.lan(fake.port)
+    try:
+        from domovoi.printing import devices, lan_target
+
+        t = lan_target.vet("http", "127.0.0.1", fake.port, "/eSCL")
+        await devices.add_device(ipp_target=None, escl_target=t, name="office printer", room_id=None,
+                                 room_label=None, added_via="typed")
+        await voice("scan this to documents")
+        await voice("yes")
+        r = await voice("done")
+        assert r.text.endswith("Want me to tell you what it says?")
+        r = await voice("yes")
+        assert r.text.startswith("It's from the stub company.")
+        assert r.text.endswith("Want me to read all of it?")
+        r = await voice("yes")
+        assert r.text == words
+    finally:
+        fake.close()

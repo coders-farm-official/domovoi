@@ -21,6 +21,12 @@
  * runs shows it from the message list's `jobs`, polled until it ends; a
  * stopped summary offers "carry on".
  *
+ * Videos (chat_videos.jsx, ChatVideos): one short video a message rides
+ * the same paperclip when the server can watch one; the attachment shows
+ * "Watching your video… about N minutes left" (the thread's `videos`,
+ * polled while live), and Domovoi's summary arrives in the chat when it's
+ * done. Optional here (window.ChatVideos): the page works without it.
+ *
  * Lookups (chat_lookups.jsx, ChatLookups): a reply that would look
  * something up online arrives as a permission card (Allow once / Allow
  * in this chat / Not now); the header's chip says whether this chat may go
@@ -305,7 +311,8 @@ const ChatDetailsDialog = ({ m, threadId, onCopy, onClose }) => {
 // A touch held this long opens the menu (iOS fires no contextmenu event).
 const CHAT_LONG_PRESS_MS = 500;
 
-const ChatMessage = ({ m, threadId, onCopy, admin, onLookup, onHeadsUp, busy, stoppedJob, onCarryOn, draftHooks = null }) => {
+const ChatMessage = ({ m, threadId, onCopy, admin, onLookup, onHeadsUp, busy, stoppedJob, onCarryOn, draftHooks = null,
+                       videoJobs = null, onStopVideo = null }) => {
   const isUser = m.role === 'user';
   const [menuAt, setMenuAt] = React.useState(null);
   const [details, setDetails] = React.useState(false);
@@ -369,7 +376,14 @@ const ChatMessage = ({ m, threadId, onCopy, admin, onLookup, onHeadsUp, busy, st
       {(m.documents || []).map((d) => (
         <ChatDocs.DocChip key={d.token} doc={d} mine={isUser}/>
       ))}
-      {isUser && !m.content && (m.documents || []).length > 0 ? null : isUser ? (
+      {window.ChatVideos && (m.videos_staged || []).map((v) => (
+        <window.ChatVideos.StagedChip key={v.token} item={v}/>
+      ))}
+      {window.ChatVideos && (videoJobs || []).map((j) => (
+        <window.ChatVideos.JobChip key={j.id} job={j} onStop={onStopVideo}/>
+      ))}
+      {isUser && !m.content && ((m.documents || []).length > 0 || (m.videos_staged || []).length > 0
+        || (videoJobs || []).length > 0) ? null : isUser ? (
         <div {...bubbleEvents}
              style={{ maxWidth: '76%', padding: '9px 13px', fontSize: 13, lineHeight: 1.55,
                       background: 'var(--card)', border: '1px solid var(--border)',
@@ -554,6 +568,11 @@ const ChatPageMain = () => {
   // Documents staged for the next message (chat_documents.jsx): their metadata.
   const [docAttachments, setDocAttachments] = React.useState([]);
   const [docBusy, setDocBusy] = React.useState(0);
+  // A video staged for the next message (chat_videos.jsx): {token, name,
+  // duration_s, size, estimate_text}, or {uploading, pct, name, abort}.
+  const Videos = window.ChatVideos || null;
+  const [videoStaged, setVideoStaged] = React.useState(null);
+  const videoOffered = !!(Videos && Videos.available(modelsInfo));
   const [sending, setSending] = React.useState(false);
   const pageRef = React.useRef(null);
   const narrow = useChatNarrow(pageRef);
@@ -594,15 +613,19 @@ const ChatPageMain = () => {
   // The thread's long-document jobs (chat_doc_jobs.py): running ones show
   // their progress, stopped ones let their reply carry on.
   const [jobs, setJobs] = React.useState([]);
+  // The thread's videos (chat_videos.py): each one's progress or result.
+  const [videos, setVideos] = React.useState([]);
   const loadMessages = async (id) => {
     try {
       const r = await apiGet(`/api/chat/threads/${id}/messages`);
       setMessages(r.messages || []);
       setJobs(r.jobs || []);
+      setVideos(r.videos || []);
       setMessagesRefusal(null);
     } catch (e) {
       setMessages([]);
       setJobs([]);
+      setVideos([]);
       setMessagesRefusal(e && (e.status === 401 || e.status === 403
         || (e.status === 429 && e.deviceTokenWait)) ? e : null);
     }
@@ -642,6 +665,36 @@ const ChatPageMain = () => {
     const v = await ChatDocs.resumeJob(job);
     setJobs((cur) => [...cur.filter((j) => j.id !== v.id), v]);
   };
+  // A video being watched (chat_videos.py): its progress, read every
+  // three seconds until it ends, then the thread again (the summary is in).
+  const liveVideos = Videos ? videos.filter((v) => Videos.isLive(v)) : [];
+  const liveVideoKey = liveVideos.map((v) => v.id).join(',');
+  React.useEffect(() => {
+    if (!liveVideoKey || threadId == null || !Videos) return undefined;
+    let gone = false;
+    const tick = async () => {
+      const next = [];
+      let ended = false;
+      for (const v of liveVideos) {
+        try {
+          const n = await Videos.getJob(v.id);
+          next.push(n);
+          if (!Videos.isLive(n)) ended = true;
+        } catch { ended = true; }
+      }
+      if (gone) return;
+      if (ended) { if (!sendingRef.current) loadMessages(threadId); return; }
+      setVideos((cur) => cur.map((v) => next.find((n) => n.id === v.id) || v));
+    };
+    const timer = setInterval(tick, 3000);
+    return () => { gone = true; clearInterval(timer); };
+  }, [liveVideoKey, threadId]);
+  const stopVideo = async (job) => {
+    const v = await Videos.stopJob(job);
+    setVideos((cur) => cur.map((x) => (x.id === v.id ? v : x)));
+  };
+  const videosByMessage = {};
+  videos.forEach((v) => { (videosByMessage[v.message_id] = videosByMessage[v.message_id] || []).push(v); });
   const stoppedJobs = jobs.filter((j) => j.state === 'stopped' || j.state === 'failed');
   // The newest reply of a stopped job is the one that offers carry on.
   const carryOnAt = {};
@@ -801,10 +854,37 @@ const ChatPageMain = () => {
     } catch { fire(t.archived ? 'could not move it back' : 'archive failed'); }
   };
 
+  // One video a message (chat_videos.jsx): its length is checked here
+  // before anything is sent, then it goes up with a progress bar.
+  const attachVideo = async (f) => {
+    if (!videoOffered) { fire("videos can't be attached on this server"); return; }
+    if (videoStaged) { fire('one video a message'); return; }
+    const max = (modelsInfo.video && modelsInfo.video.max_seconds) || 180;
+    const maxMb = (modelsInfo.video && modelsInfo.video.max_mb) || 2048;
+    if (f.size > maxMb * 1024 * 1024) { fire('Videos up to 2 GB can be attached.'); return; }
+    const secs = await Videos.durationOf(f);
+    if (secs != null && secs > max + 0.5) {
+      fire(`Videos up to 3 minutes can be attached. This one is ${Videos.clock(secs)} long.`);
+      return;
+    }
+    const up = Videos.upload(f, (pct) => setVideoStaged((cur) => (cur && cur.uploading ? { ...cur, pct } : cur)));
+    setVideoStaged({ token: `up-${Date.now()}`, name: f.name, uploading: true, pct: 0, abort: up.abort });
+    try {
+      const meta = await up.promise;
+      setVideoStaged(meta);
+    } catch (e) {
+      setVideoStaged(null);
+      if (!e.aborted) fire(Videos.refusalText(e));
+    }
+  };
+
   const attach = async (files) => {
     const all = Array.from(files);
-    const pictures = all.filter((f) => ChatDocs.isPicture(f));
-    const documents = all.filter((f) => !ChatDocs.isPicture(f));
+    const videoFiles = Videos ? all.filter((f) => Videos.isVideo(f)) : [];
+    if (videoFiles.length) attachVideo(videoFiles[0]);
+    const rest = all.filter((f) => !videoFiles.includes(f));
+    const pictures = rest.filter((f) => ChatDocs.isPicture(f));
+    const documents = rest.filter((f) => !ChatDocs.isPicture(f));
     // A picture with no vision model to read it: the note says why.
     if (pictures.length && visionMissing) {
       setPictureNote(true);
@@ -879,7 +959,8 @@ const ChatPageMain = () => {
   const send = async (revise = null) => {
     const content = revise ? revise.text : draft.trim();
     const docs = revise ? [] : docAttachments;
-    if ((!content && docs.length === 0) || sending || docBusy) return;
+    const video = !revise && videoStaged && !videoStaged.uploading ? videoStaged : null;
+    if ((!content && docs.length === 0 && !video) || sending || docBusy || (videoStaged && videoStaged.uploading)) return;
     let id = threadId;
     if (id == null) {
       try {
@@ -893,12 +974,14 @@ const ChatPageMain = () => {
       setDraft('');
       setAttachments([]);
       setDocAttachments([]);
+      setVideoStaged(null);
     }
     setSending(true);
     sendingRef.current = true;
     setMessages((cur) => [
       ...cur,
       { id: `u-${Date.now()}`, role: 'user', content, images, documents: docs,
+        videos_staged: video ? [video] : [],
         created_at: new Date().toISOString(), device: 'this browser' },
       { id: 'pending', role: 'assistant', content: '', pending: true },
     ]);
@@ -908,6 +991,7 @@ const ChatPageMain = () => {
       const body = { content, images, documents: docs.map((d) => ({ token: d.token })),
                      device_id: DeviceIdentity.id(), heads_up: ChatDocs.headsUpPrefs() };
       if (revise) body.revise_draft = revise.draftId;
+      if (video) body.videos = [{ token: video.token }];
       const { done, errorDetail, errorCode, errorModel } = await chatSendStream(id, body, (delta) => {
         setMessages((cur) => cur.map((m) =>
           m.id === 'pending' ? { ...m, content: m.content + delta } : m));
@@ -942,9 +1026,12 @@ const ChatPageMain = () => {
     }
     setSending(false);
     sendingRef.current = false;
-    // A stopped summary can carry on: the thread's jobs, read again.
+    // A stopped summary can carry on: the thread's jobs, read again; a
+    // video sent is being watched now: the thread again, for its chip.
     if (id != null) {
-      try { setJobs((await apiGet(`/api/chat/threads/${id}/messages`)).jobs || []); } catch { /* next open */ }
+      if (video) { loadMessages(id); } else {
+        try { setJobs((await apiGet(`/api/chat/threads/${id}/messages`)).jobs || []); } catch { /* next open */ }
+      }
     }
   };
 
@@ -1034,13 +1121,15 @@ const ChatPageMain = () => {
     <IconButton name="paperclip"
                 title={visionMissing
                   ? "attach documents (pictures need the vision model, which isn't installed)"
-                  : 'attach pictures or documents (up to 4 of each)'}
+                  : videoOffered ? 'attach pictures or documents (up to 4 of each), or one short video'
+                    : 'attach pictures or documents (up to 4 of each)'}
                 aria-label="attach pictures or documents"
                 onClick={pickPictures}/>
   );
   const sendButton = (
     <Button variant="primary" icon="send" className="btn btn-primary chat-send" onClick={() => send()}
-            disabled={sending || docBusy > 0 || (!draft.trim() && docAttachments.length === 0)}
+            disabled={sending || docBusy > 0 || !!(videoStaged && videoStaged.uploading)
+                      || (!draft.trim() && docAttachments.length === 0 && !videoStaged)}
             aria-label={sending ? 'thinking…' : 'send'}
             title={narrow ? (sending ? 'thinking…' : 'send') : undefined}>
       <span className="chat-send-label">{sending ? 'thinking…' : 'send'}</span>
@@ -1133,7 +1222,8 @@ const ChatPageMain = () => {
                          onLookup={decideLookup} onHeadsUp={pickHeadsUp} busy={sending}
                          stoppedJob={m.doc && m.doc.job && carryOnAt[m.doc.job.id] === m.id
                            ? stoppedJobs.find((j) => j.id === m.doc.job.id) : null}
-                         onCarryOn={carryOn} draftHooks={draftHooks}/>
+                         onCarryOn={carryOn} draftHooks={draftHooks}
+                         videoJobs={videosByMessage[m.id] || null} onStopVideo={Videos ? stopVideo : null}/>
           ))}
           {!sending && jobs.filter((j) => j.state === 'interrupted' || (j.line === 'stopped (AI is off)')).map((j) => (
             <div key={`int-${j.id}`} style={{ display: 'flex', gap: 10, maxWidth: '86%' }}>
@@ -1183,7 +1273,16 @@ const ChatPageMain = () => {
             <ChatPictureNote model={modelsInfo.vision_model} admin={admin}
                              onClose={() => setPictureNote(false)}/>
           )}
-          <input ref={fileRef} type="file" accept={ChatDocs.ACCEPT} multiple hidden
+          {videoStaged && Videos && (
+            <div className="chat-doc-staged" style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              <Videos.StagedChip item={videoStaged} onRemove={() => {
+                if (videoStaged.uploading && videoStaged.abort) videoStaged.abort();
+                setVideoStaged(null);
+              }}/>
+            </div>
+          )}
+          <input ref={fileRef} type="file"
+                 accept={videoOffered ? `${ChatDocs.ACCEPT},${modelsInfo.video.accept}` : ChatDocs.ACCEPT} multiple hidden
                  onChange={(e) => { attach(e.target.files); e.target.value = ''; }}/>
           {narrow ? (
             <div className="chat-composer-row">{clip}{textarea}{sendButton}</div>

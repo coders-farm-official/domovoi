@@ -5966,7 +5966,7 @@ enum ChatStringsUnderTest {
     /// ``ChatMoreStrings/talk`` and not a Chat string at all.
     static let showEarlier = "show earlier"
 
-    /// ``ShellStrings/unavailableNote(label:isChat:aiEnabled:)`` for a house
+    /// ``ShellStrings/unavailableNote(label:isChat:aiEnabled:needsCapability:)`` for a house
     /// whose AI features are off, which is what the **route** answers with
     /// before Chat is a screen at all.
     static let aiOffTitle = "chat is turned off"

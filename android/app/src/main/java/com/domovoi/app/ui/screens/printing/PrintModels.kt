@@ -194,7 +194,11 @@ data class PrintPreview(
 )
 
 @Serializable
-data class PrintJobsResponse(val jobs: List<PrintJob> = emptyList())
+data class PrintJobsResponse(
+    val jobs: List<PrintJob> = emptyList(),
+    /** The household's scans in the same log, newest first, each with its reading (1.4.0). */
+    val scans: List<ScanJob> = emptyList(),
+)
 
 @Serializable
 data class ScanJob(
@@ -211,7 +215,14 @@ data class ScanJob(
     val path: String? = null,
     val incomplete: Boolean = false,
     val error: String? = null,
+    /** The scan reader's newest reading of the saved scan; null when it was
+     *  never read (an old scan, or a server that can't read scans). */
+    val read: ScanRead? = null,
+    /** True once the reading is done and found words. */
     val readable: Boolean = false,
+    /** The job log's rows ([PrintJobsResponse.scans]) say who scanned and when. */
+    val who: String = "",
+    @SerialName("created_at") val createdAt: String? = null,
 ) {
     /** The scanner is still working: the sheet polls until it isn't. */
     val busy: Boolean get() = state == "scanning" || state == "saving"
@@ -388,9 +399,6 @@ internal fun scanEndMessage(scan: ScanJob): String = when (scan.state) {
     else -> scan.state
 }
 
-/** "What does it say?" is offered only when the server can read the scan. */
-internal fun offersWhatDoesItSay(scan: ScanJob): Boolean = scan.readable && scan.state == "done"
-
 /** A supply bar's level, 0..1, or null when the printer gave none (or "unknown", -1..-3 in IPP). */
 internal fun supplyFraction(s: PrinterSupply): Float? =
     s.level?.takeIf { it in 0..100 }?.let { it / 100f }
@@ -432,5 +440,14 @@ internal fun printFailureText(action: String, e: Throwable): String =
 /** The line for admin-only actions this app can't take. */
 internal const val ADMIN_ONLY_LINE = "An admin can rename or remove printers on the web dashboard."
 
+/** The panel's top line: network printers only (owner rule 2026-11-16), in
+ *  the words the dashboard uses ("Wi-Fi" is the word households know). */
 internal const val NETWORK_ONLY_LINE =
-    "Works with network printers (AirPrint, IPP Everywhere, Mopria). USB printers aren't supported."
+    "Domovoi works with Wi-Fi and network printers (AirPrint, IPP Everywhere or Mopria), and their scanners. " +
+        "USB printers aren't supported."
+
+/** Under Add by address's fields, as on the dashboard: where the address
+ *  is, and that a printer on a USB cable can't be added. */
+internal const val ADD_BY_ADDRESS_HINT =
+    "The address is on the printer's own screen or settings page. Only printers on your Wi-Fi or plugged " +
+        "into your router work: a printer on a USB cable can't be added."

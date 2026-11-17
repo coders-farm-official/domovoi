@@ -905,7 +905,7 @@ const CalendarsPanel = () => {
           <div className="cal-notice" style={{ marginBottom: 12 }}>
             <StatusDot tone="idle"/>
             <span className="why">
-              Internet access is turned off for this server (Settings → Internet), so these calendars
+              Internet access is turned off for this server (Settings → Privacy → Internet), so these calendars
               can’t refresh. The last copy of each stays on the calendar.
             </span>
           </div>

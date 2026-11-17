@@ -410,6 +410,7 @@ def real_lan(monkeypatch, home: str = "192.168.1.0/24", me: str = "192.168.1.20"
     from domovoi.printing import lan_target
 
     _snapshot_real_lan()
+    monkeypatch.setattr(lan_target, "ALLOW_LOOPBACK_UNDER_STUBS", False)
     for k in ("_REFUSED_V4", "_PRIVATE_V4", "IPP_PORTS", "ESCL_PORTS"):
         monkeypatch.setattr(lan_target, k, _REAL_LAN[k])
     monkeypatch.setattr(lan_target, "home_networks", lambda: [ipaddress.IPv4Network(home)])
@@ -420,7 +421,8 @@ def real_lan(monkeypatch, home: str = "192.168.1.0/24", me: str = "192.168.1.20"
 def fake_lan(monkeypatch):
     """Make 127.0.0.0/24 the "home network" for one test, so the fakes on
     127.0.0.x pass the LAN check the way a real printer on 192.168.1.x
-    would (no operator allowlist involved), and the server itself is
+    would (through ``lan_target.ALLOW_LOOPBACK_UNDER_STUBS``, never the
+    operator allowlist, which can't reach loopback), and the server itself is
     127.0.0.250. Returns ``open_port(port)``: the fakes listen on random
     ports, which the usual-ports rule would refuse."""
     import ipaddress
@@ -428,6 +430,9 @@ def fake_lan(monkeypatch):
     from domovoi.printing import lan_target
 
     _snapshot_real_lan()
+    # The test-only switch (honoured under USE_STUBS only, which the
+    # conftest forces): loopback is otherwise refused before anything else.
+    monkeypatch.setattr(lan_target, "ALLOW_LOOPBACK_UNDER_STUBS", True)
     loop = ipaddress.IPv4Network("127.0.0.0/8")
     monkeypatch.setattr(lan_target, "_REFUSED_V4", tuple(n for n in lan_target._REFUSED_V4 if n != loop))
     monkeypatch.setattr(lan_target, "_PRIVATE_V4", lan_target._PRIVATE_V4 + (loop,))

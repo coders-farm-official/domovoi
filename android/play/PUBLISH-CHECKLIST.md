@@ -66,6 +66,9 @@ own phones.
    prints the `.aab` path (`android\app\build\outputs\bundle\release-signed\domovoi-<versionName>-<versionCode>.aab`,
    where `<versionCode>` is the bundle's own, base\*10),
    its SHA-256 and the certificate's SHA-256. Bash: `bash android/scripts/play-bundle.sh`.
+   Upload that file. Gradle's unsigned `bundle\release\app-release.aab`
+   is what Play refuses ("All uploaded bundles must be signed"); the
+   script removes it once the signed copy passes its checks.
 
 ## 1. Create the app
 
@@ -209,7 +212,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File android\scripts\release.ps1
 ```
 It builds the arm64-v8a and armeabi-v7a APKs, signs them with **the same
 key**, checks them as a Domovoi server will, commits and pushes
-`android/release.json` (`[skip ci]`), and publishes the GitHub release
+`android/release.json`, and publishes the GitHub release
 `v<Domovoi's version>` (pyproject.toml's, not the app's `versionName`)
 with `gh`, tagged at that commit (a full release, release
 candidates included; `-Prerelease` makes it a pre-release);

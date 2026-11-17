@@ -287,7 +287,7 @@ def test_no_secret_code_or_address_ever_reaches_the_text() -> None:
 def test_update_details_are_an_admins() -> None:
     household = troubleshoot.findings(_state(), admin=False)
     upd = next(f for f in household if f.key == "update")
-    assert upd.details == () and "an admin can read why in Settings → Configuration" in upd.text
+    assert upd.details == () and "an admin can read why in Settings → System → About & updates" in upd.text
     assert not [f for f in household if f.key == "internet"]
     admin = troubleshoot.findings(_state(), admin=True)
     upd = next(f for f in admin if f.key == "update")
@@ -448,7 +448,7 @@ def test_a_plugin_registers_one_source_through_its_context() -> None:
 def test_the_sdk_exports_it_at_1_8() -> None:
     import domovoi.sdk as sdk
 
-    assert sdk.API_VERSION == "1.8.0"
+    assert tuple(int(p) for p in sdk.API_VERSION.split(".")) >= (1, 8, 0)
     assert sdk.LookupSource is lookup.LookupSource and sdk.LOOKUP_SOURCE == "lookup-source"
 
 

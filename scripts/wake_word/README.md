@@ -1,8 +1,11 @@
 # Custom wake words ("Hey Domovoi")
 
-A satellite wakes on one openWakeWord model. The shipped default is
-`hey_jarvis`. A household can train its own ("Hello Domo", "Hey Domovoi")
-on the Domovoi server, from the dashboard, with no shell. This page covers
+A room wakes on openWakeWord models: one main word, and since 1.4.0 up to
+five per room (a Pi Zero 2 W runs three). A new install's rooms are given
+**Domovoi** (`domovoi_v1`, [section 5](#5-licence-sharing-a-model-trained-here));
+rooms from an older install keep `hey_jarvis`, which is also every room's
+word until its server gives it one. A household can train its own
+("Hello Domo", "Hey Domovoi") on the Domovoi server, from the dashboard, with no shell. This page covers
 turning training on, training a word, the settings, what a training does to
 the server while it runs, and the licence of what it makes. How the trainer
 image is built and run: [DOCKER_TRAINER.md](DOCKER_TRAINER.md).
@@ -132,8 +135,9 @@ On a Linux server or the Windows install, an update that changes
    model and the reason on its row.
 
 Three wake words ("Hello Domo", "Hey Domovoi", "Domovoi") are three
-models. A satellite runs one at a time: each room wakes on the one pushed
-to it. The recipe trains the parts of a phrase as near misses, so a "Hey
+models. Pushing one makes it a room's main word; an admin can add more on
+the room's own Settings tab (up to five, or three on a Pi Zero 2 W), and
+each extra word makes an accidental wake-up a little more likely. The recipe trains the parts of a phrase as near misses, so a "Hey
 Domovoi" model is meant not to wake on "Domovoi" alone; train "Domovoi" as
 its own word for that.
 
@@ -152,6 +156,35 @@ synthetic clips it generated before are kept and reused. Each training
 copies the selected clips afresh into `<slug>/.training/`, so a grown set
 is a different set (new names, new contents) and its features are computed
 again; the same set trained twice reuses them.
+
+### Tune Domovoi to your household
+
+The published "Domovoi" word is trained on synthetic voices only. **Tune
+Domovoi to your household** (a card on the same page) makes the household's
+own copy of it: one wake word, "Domovoi (tuned to this home)" (slug
+`domovoi_v1_tuned`, which no other word may take), with the published
+word's phrase. Record clips of everyone saying "Domovoi" on it as above,
+then train: it trains like any word, plus the published word's own near
+misses (`domovoi/wake_tuning.py` `RECIPES`, passed as
+`WAKE_EXTRA_NEGATIVES`). Rooms on the published word keep it until the copy
+is trained, then move to it, and the household default follows. **Go back
+to the standard Domovoi word** moves them back. The copy never leaves the
+house; its Download's model card says it includes the household's
+recordings and is private.
+
+### Extra training material (the published models' recipe)
+
+A run can be given more than the cache's datasets, none of it recordings
+(the published models use these; Settings doesn't set them):
+
+| Mount / variable | What |
+|---|---|
+| `/data/synthetic` | more synthetic positives (other voices, speeds, pitches), copied into `positive_train` |
+| `/data/synthetic_negatives` | more synthetic near misses, copied into `negative_train` |
+| `/data/rirs`, `/data/background` | more room echoes and noise/music beds (WAVs) |
+| `WAKE_EXTRA_NEGATIVES` | more near-miss phrases for the generator ("domino;the movie") |
+| `WAKE_SKIP_MIT_RIRS=1` | leave out the MIT impulse responses (no licence stated) when `/data/rirs` has some |
+| `WAKE_FP_VAL_NPY` | a validation features file to use instead of the dataset's (which includes MUSDB18) |
 
 ## 3. Settings
 

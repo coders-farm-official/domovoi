@@ -197,6 +197,7 @@ build_origin() {
   cp "$REAL_REPO"/scripts/linux/units/*.service "$REAL_REPO"/scripts/linux/units/*.timer \
     "$REAL_REPO/scripts/linux/units/journald-domovoi.conf" "$o/scripts/linux/units/"
   cp "$REAL_REPO/scripts/linux/cache-trim.py" "$o/scripts/linux/cache-trim.py"
+  cp "$REAL_REPO/scripts/linux/fh-firewall.sh" "$o/scripts/linux/fh-firewall.sh"
   # The real helpers: provision.sh runs them from the checkout, under the
   # same harness root.
   cp "$REAL_REPO/scripts/linux/os-jobs.sh" "$o/scripts/linux/os-jobs.sh"
@@ -1548,6 +1549,11 @@ case_full_run_wsl() {
   check "db unit in the checkout's domovoi/" has_line "$ROOT/etc/systemd/system/domovoi-db.service" "WorkingDirectory=$CHECKOUT/domovoi"
   check "units otherwise as shipped" eq "$(sed "s#$CHECKOUT#/opt/domovoi#g" "$ROOT/etc/systemd/system/domovoi-web.service")" \
     "$(cat "$REAL_REPO/scripts/linux/units/domovoi-web.service")"
+  # The short address (port 80): the dashboard's unit alone gets the one
+  # low-port capability, its bounding set cut down to it.
+  check "web unit may bind port 80" has_line "$ROOT/etc/systemd/system/domovoi-web.service" "AmbientCapabilities=CAP_NET_BIND_SERVICE"
+  check "and nothing more" has_line "$ROOT/etc/systemd/system/domovoi-web.service" "CapabilityBoundingSet=CAP_NET_BIND_SERVICE"
+  check "core unit doesn't" bash -c '! grep -q CAP_NET_BIND_SERVICE "$1"' _ "$ROOT/etc/systemd/system/domovoi-core.service"
   check "restart grant" has_line "$ROOT/etc/sudoers.d/domovoi-restart" \
     "domovoi ALL=(root) NOPASSWD: /usr/bin/systemctl --no-block restart domovoi-core.service domovoi-web.service"
   check "grant checked by visudo first" called "visudo -cf"
@@ -2536,7 +2542,7 @@ case_debian_13_bare_metal() {
   check "result ok" eq "$(final_field result)" '"ok"'
   check "said what it is" said "Debian GNU/Linux 13 (trixie), "
   check "no warning about the system" not_said "made for 26.04"
-  check "the same system packages" called "install -y python3 python3-venv python3-dev build-essential pkg-config libasound2-dev git ffmpeg mpg123 libchromaprint-tools xorriso zstd ca-certificates curl gnupg tzdata sudo"
+  check "the same system packages" called "install -y python3 python3-venv python3-dev build-essential pkg-config libasound2-dev git ffmpeg mpg123 libchromaprint-tools xorriso tesseract-ocr tesseract-ocr-eng zstd ca-certificates curl gnupg tzdata sudo"
   # Docker
   check "Docker's key from its Debian repository" called "curl https://download.docker.com/linux/debian/gpg"
   check "nothing from its Ubuntu one" not_called "download.docker.com/linux/ubuntu"
@@ -2885,6 +2891,42 @@ case_cache_trim_installed() {
   run_prov "${wsl_args[@]}" --skip-models
   check "a disabled timer: units ran again" eq "$(state_of units)" done
   check "and enabled it" called "systemctl enable --now domovoi-cache-trim.timer"
+  end_case
+}
+
+# Friend Houses' firewall (2026-11-17, threat-model finding 22): the units
+# step installs root's copy of the script and its unit, enables and starts
+# it, once; an edited copy is put back; DOMOVOI_MANAGE_FH_FIREWALL=0 leaves
+# it alone.
+case_fh_firewall_installed() {
+  new_case fh_firewall_installed
+  local lib=$ROOT/usr/local/lib/domovoi-fh-firewall/fh-firewall.sh
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 0" eq "$RC" 0
+  check "the script is the commit's" cmp -s "$lib" "$REAL_REPO/scripts/linux/fh-firewall.sh"
+  check "executable" test -x "$lib"
+  check "the unit" cmp -s "$ROOT/etc/systemd/system/domovoi-fh-firewall.service" "$REAL_REPO/scripts/linux/units/domovoi-fh-firewall.service"
+  check "enabled and started" called "systemctl enable --now domovoi-fh-firewall.service"
+  check "no Domovoi restart on a first run" not_called "systemctl restart domovoi"
+  check "said so" said "installed Friend Houses' firewall"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "second run: units skipped" eq "$(state_of units)" skip
+  printf '#!/bin/sh\nexit 0\n' >"$lib"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "an edited copy: units ran again" eq "$(state_of units)" done
+  check "and put it back" cmp -s "$lib" "$REAL_REPO/scripts/linux/fh-firewall.sh"
+  end_case
+}
+
+case_fh_firewall_opt_out() {
+  new_case fh_firewall_opt_out
+  mkdir -p "$ROOT/etc/default"
+  printf 'DOMOVOI_MANAGE_FH_FIREWALL=0\n' >"$ROOT/etc/default/domovoi-update"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 0" eq "$RC" 0
+  check "no script" absent "$ROOT/usr/local/lib/domovoi-fh-firewall/fh-firewall.sh"
+  check "no unit started" not_called "domovoi-fh-firewall.service"
+  check "says why" said "Friend Houses' firewall left as it is (DOMOVOI_MANAGE_FH_FIREWALL in /etc/default/domovoi-update)"
   end_case
 }
 
@@ -3591,6 +3633,8 @@ case_apt_step_installs_the_stick_tool() {
   check "the apt step ran" marker apt
   check "xorriso asked for with the rest" grep -qE '^apt-get .* install -y .*\bmpg123\b.*\bxorriso\b' "$STATE/calls.log"
   check "installed" grep -qx "xorriso=1" "$STATE/dpkg"
+  check "the scan reader's OCR asked for with the rest" grep -qE '^apt-get .* install -y .*\bxorriso tesseract-ocr tesseract-ocr-eng\b' "$STATE/calls.log"
+  check "tesseract installed" grep -qx "tesseract-ocr=1" "$STATE/dpkg"
   check "not held" not_called "apt-mark"
   end_case
 }
@@ -5325,6 +5369,8 @@ CASES=(
   case_journal_kept_on_disk
   case_cache_trim_installed
   case_cache_trim_opt_out
+  case_fh_firewall_installed
+  case_fh_firewall_opt_out
   case_starts_do_not_block_on_ready
   case_a_unit_that_fails_after_a_no_block_start_stops_the_wait
   case_the_database_failing_after_a_no_block_start_stops_the_wait

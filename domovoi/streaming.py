@@ -78,8 +78,21 @@ Client → Server
                            "android_room") names the hardware kind; kept in
                            `satellites.board` on approval and on every hello
                            that carries it. Neither bumps PROTOCOL_VERSION.
+                           `wake_words` (optional list, 1.4.0) names every
+                           word the device listens for, main word first;
+                           `wake_words_max` (optional int) how many it can
+                           run at once (Pi Zero 2 W 3, else 5;
+                           satellite/wake_words.py). The server never sends
+                           more words than that, and a device without the
+                           key is sent its main word only
+                           (domovoi/wake_default.py). Kept in
+                           `room_wake_words.device_max` (V063).
   text  utterance_start    {"type":"utterance_start","trigger":"wake_word"|"barge_in"|"push_to_talk"|"followup"|"wake_clip",
-                            "utt":N,"backlog_ms":N,"wake_ms":N,"wake_score":F}
+                            "utt":N,"backlog_ms":N,"wake_ms":N,"wake_score":F,"wake_word":...}
+                           — `wake_word` (optional, 1.4.0, after a wake word
+                           only): which of the room's words fired, kept on
+                           the turn's history row (conversation_log.wake_word,
+                           V063) and in the core's log.
                            — `wake_score` (optional, 0..1, after a wake word
                            only): the wake's peak openWakeWord score
                            (satellite/wake_gate.py), kept on the turn's
@@ -321,6 +334,11 @@ Server → Client
                            it. `slug` is the model file stem AND the Pi's new
                            effective wake word AND the openWakeWord
                            prediction-dict key — they must all agree.
+                           `words` (optional, 1.4.0): the room's whole list,
+                           [{"slug","threshold"}], `slug` first, at most the
+                           hello's `wake_words_max`; sent only to a device
+                           whose hello gave `wake_words_max`. Without it the
+                           device runs `slug` alone.
   text  wake_models_changed {"type":"wake_models_changed"} — Feature 5. The
                            served wake models changed; the Pi re-syncs its
                            ~/.domovoi/wake_models cache from /v1/wake-models.
@@ -522,6 +540,7 @@ from domovoi.music_pause import note_paused_by_person, paused_by_person
 from domovoi.now_playing import NOW_PLAYING
 from domovoi.router import (
     goes_to_the_tool_model,
+    heard_text,
     is_question_about_the_world,
     is_request_for_a_story,
     route,
@@ -537,7 +556,7 @@ from domovoi.turn_timings import (
     whisper_block,
 )
 from domovoi.log_privacy import said
-from domovoi import overheard, turn_history, turn_watchdog
+from domovoi import overheard, room_display, turn_history, turn_watchdog, wake_default
 from domovoi.turn_watchdog import (
     STAGE_IDENTIFY,
     STAGE_REPLY,
@@ -562,6 +581,21 @@ APPROVAL_HELLO_LIMITER = SlidingWindowLimiter(
     max_per_window=APPROVAL_HELLO_MAX_PER_WINDOW,
     window_sec=APPROVAL_HELLO_WINDOW_SEC,
 )
+# 1.4.0 — a device that PROVES approvals (satellite/pairing_proof.py) comes
+# back every ten seconds while it waits, because the code typed on the
+# dashboard is checked on its next visit, not at the click. Its visits
+# refresh its OWN request — they add no room name to the list — so they
+# spend this budget, per source, instead of the one above: a new name still
+# costs what it always did.
+APPROVAL_REFRESH_MAX_PER_WINDOW = 90
+APPROVAL_REFRESH_LIMITER = SlidingWindowLimiter(
+    max_per_window=APPROVAL_REFRESH_MAX_PER_WINDOW,
+    window_sec=APPROVAL_HELLO_WINDOW_SEC,
+)
+# How long the core waits for the device's `approval_confirm` after sending
+# its `approval_challenge`. The device's side is a few modular
+# exponentiations — about a second on a Pi Zero 2 W.
+APPROVAL_CONFIRM_TIMEOUT_SEC = 20.0
 
 # CORE-22 — how long the first device to park a room name holds it against
 # a DIFFERENT device. Inside the window a second device is refused as a
@@ -1560,7 +1594,7 @@ async def run_voice_profile_hooks(
                 )
                 """
             ),
-            {"t": response.text, "sid": str(response.session_id)},
+            {"t": heard_text(ctx, response.text), "sid": str(response.session_id)},
         )
 
 
@@ -1580,9 +1614,11 @@ class _InterimSpeech:
         self.text = ""
         self.sample_rate = 0
 
-    async def say(self, text: str) -> None:
+    async def say(self, text: str) -> bool:
+        """True when the line went out (the router lists it in the room's
+        history then); False when it was not said."""
         if self.started:
-            return
+            return False
         sess = self._session
         try:
             engine, voice = await resolve_voice(self._voice)
@@ -1591,7 +1627,7 @@ class _InterimSpeech:
             )
         except Exception as e:  # noqa: BLE001
             log.warning("stream %s: interim line TTS failed: %s", sess.room_id, e)
-            return
+            return False
         self.started, self.text, self.sample_rate = True, text, sr
         await sess._safe_send_text({
             "type": "response_start",
@@ -1606,8 +1642,9 @@ class _InterimSpeech:
             try:
                 await sess.ws.send_bytes(chunk)
             except Exception:
-                return  # Pi went away; the turn's own send path will notice
+                return True  # Pi went away mid-line; the turn's own send path will notice
             sess._note_audio_sent(len(chunk), sr)
+        return True
 
 
 def _awaits_dropin_ready(sess: Any) -> bool:
@@ -1666,6 +1703,9 @@ class StreamSession:
         # only its own room's timers and reminders (timer_delivery.py), since
         # any LAN device can open /v1/stream/<a new room name>.
         self.token_authenticated = False
+        # The room display (domovoi/room_display.py): started after `ready`
+        # for a paired device that declared `room_display`, else None.
+        self.room_display: room_display.RoomDisplayFeed | None = None
         self._response_task: asyncio.Task[None] | None = None
         # ── Out-of-turn announcements (announce(), announce_block) ────
         # `_playout_until`: monotonic estimate of when the audio already
@@ -1735,6 +1775,12 @@ class StreamSession:
         # the final clip can never route a training clip through STT/route().
         self._utterance_trigger: str | None = None
         self._wake_score: float | None = None
+        # Which of the room's words opened the latest capture (V063).
+        self._wake_fired: str | None = None
+        # The hello's `wake_words` / `wake_words_max` (1.4.0); None until
+        # a hello said them.
+        self.wake_words_reported: list[str] | None = None
+        self.wake_max: int | None = None
         # Whether a drop-in call was live at ANY point of the in-flight
         # utterance: set at utterance_start when already in a call, and by
         # _begin_dropin when one starts mid-capture. Read at utterance_end so
@@ -1918,6 +1964,12 @@ class StreamSession:
             except Exception as e:  # noqa: BLE001
                 log.debug("timer delivery: room-connected hook failed for %s: %s",
                           self.room_id, e)
+        # A screen in the room (a phone in room mode): its music, timers and
+        # alarms, from now until the socket closes. Only for what `ready`
+        # listed `room_display` to.
+        if room_display.ABILITY in ready["features"]:
+            self.room_display = room_display.RoomDisplayFeed(self)
+            self.room_display.start()
         try:
             while True:
                 msg = await self.ws.receive()
@@ -1947,6 +1999,9 @@ class StreamSession:
             log.warning("ws %s receive loop ended with %s: %s",
                         self.room_id, type(e).__name__, e)
         finally:
+            if self.room_display is not None:
+                feed, self.room_display = self.room_display, None
+                await feed.stop()
             if self._response_task and not self._response_task.done():
                 self._response_task.cancel()
             # A music_start held for this socket has nobody to go to.
@@ -2630,7 +2685,7 @@ class StreamSession:
                 hold_ms=hold_ms,
                 capture_meta=capture_meta,
                 capture_clock=clock,
-                wake_score=self._wake_score,
+                wake_score=self._wake_score, wake_word=self._wake_fired,
             )
         )
 
@@ -2921,6 +2976,267 @@ class StreamSession:
         })
         return False
 
+    async def _proof_pairing(self, ctrl: dict[str, Any], token_hash: str) -> bool | None:
+        """The hello of a device that PROVES approvals (1.4.0).
+
+        Such a device (``approval_pake`` in its hello: its half of the
+        exchange in ``satellite/pairing_proof.py``) never sends its code.
+        It may be asking several Domovoi servers at once, and it accepts
+        only the one that proves it knows the code a person read off the
+        device and typed into that server's dashboard. Returns None when the
+        room is already paired (the ordinary token check decides, cases 2
+        and 3 of :meth:`_validate_pairing`), else the verdict:
+
+        * nothing typed for it yet → park (or refresh) the request with no
+          code on file, answer ``awaiting_approval`` with ``proof: true``;
+        * a code typed for it → run the exchange now
+          (:meth:`_prove_approval`);
+        * ``approval_withdraw: true`` → another house approved the device:
+          drop its request here, if the token is the one it parked with.
+
+        Every failure refuses. Strict or lenient pairing makes no difference
+        here: this path never pairs on trust.
+
+        CORE-41: the per-source limiter is consulted BEFORE anything costs
+        arithmetic — checking the device's element is a 2048-bit modular
+        exponentiation — and that arithmetic runs off the event loop. A
+        withdraw counts against the same per-source budget as a new name."""
+        withdraw = ctrl.get("approval_withdraw") is True
+        pake = ctrl.get("approval_pake")
+        source = self._hello_source()
+        try:
+            async with session_scope() as s:
+                row = await SatellitePairingRepository(s).get_pairing(self.room_id)
+                if row is not None:
+                    if withdraw:
+                        await self._safe_send_text({
+                            "type": "error", "reason": "approval_withdrawn",
+                            "withdrawn": False,
+                        })
+                        return False
+                    return None
+                existing = None if withdraw else await SatelliteApprovalRepository(s).get(
+                    self.room_id
+                )
+        except Exception as e:  # noqa: BLE001 — fail CLOSED, whatever the posture
+            return await self._proof_unavailable(e)
+        refresh = existing is not None and secrets.compare_digest(
+            str(existing.get("token_hash") or ""), token_hash
+        )
+        limiter = APPROVAL_REFRESH_LIMITER if refresh else APPROVAL_HELLO_LIMITER
+        if not limiter.allow(source):
+            join_problems.throttled(source)
+            log.warning(
+                "pairing: room=%s approval %s throttled for this source", self.room_id,
+                "withdrawal" if withdraw else "request",
+            )
+            await self._safe_send_text({
+                "type": "error", "reason": "approval_throttled",
+                "message": "too many approval requests — try again shortly",
+            })
+            return False
+        if withdraw:
+            try:
+                async with session_scope() as s:
+                    gone = await SatelliteApprovalRepository(s).withdraw(self.room_id, token_hash)
+            except Exception as e:  # noqa: BLE001
+                return await self._proof_unavailable(e)
+            log.info(
+                "pairing: room=%s request %s by its device (another server approved it)",
+                self.room_id, "withdrawn" if gone else "already gone",
+            )
+            await self._safe_send_text({
+                "type": "error", "reason": "approval_withdrawn", "withdrawn": gone,
+            })
+            return False
+        from satellite import pairing_proof
+
+        if await asyncio.to_thread(pairing_proof.decode, pake) is None:
+            log.warning(
+                "pairing: room=%s approval request refused — its approval_pake "
+                "is not a valid exchange message", self.room_id,
+            )
+            await self._safe_send_text({
+                "type": "error", "reason": "approval_pake_invalid",
+                "message": "the approval exchange message is not valid",
+            })
+            return False
+        entered: tuple[str, Any] | None = None
+        try:
+            async with session_scope() as s:
+                approvals = SatelliteApprovalRepository(s)
+                outcome, _code = await approvals.request(
+                    self.room_id,
+                    token_hash=token_hash,
+                    code=None,
+                    mac=ctrl.get("mac"),
+                    board=satellite_abilities.clean_board(ctrl.get("board")),
+                    sat_type=ctrl.get("sat_type") or "voice",
+                    takeover_after_sec=APPROVAL_TAKEOVER_SEC,
+                    proof=True,
+                )
+                if outcome == "conflict":
+                    join_problems.name_taken(self.room_id)
+                    log.warning(
+                        "pairing: room=%s REFUSED — a different device is already "
+                        "waiting for approval under that room name", self.room_id,
+                    )
+                    await self._safe_send_text({
+                        "type": "error", "reason": "approval_conflict",
+                        "message": (
+                            "another device is already waiting for approval for "
+                            "this room — reject that request on the dashboard, or "
+                            f"wait {int(APPROVAL_TAKEOVER_SEC // 60)} minutes and "
+                            "this one takes its place"
+                        ),
+                    })
+                    return False
+                entered = await approvals.take_entered(self.room_id, token_hash)
+        except Exception as e:  # noqa: BLE001 — fail CLOSED, whatever the posture
+            return await self._proof_unavailable(e)
+        if entered is None:
+            log.info(
+                "pairing: room=%s awaiting approval (the device proves the code)",
+                self.room_id,
+            )
+            await self._safe_send_text({
+                "type": "error",
+                "reason": "awaiting_approval",
+                "message": "waiting for approval on the dashboard",
+                "proof": True,
+            })
+            return False
+        return await self._prove_approval(token_hash, entered[0], pake, entered_at=entered[1])
+
+    async def _proof_unavailable(self, e: BaseException) -> bool:
+        log.warning("pairing: room=%s proof request failed: %s", self.room_id, e)
+        await self._safe_send_text({
+            "type": "error", "reason": "approval_unavailable",
+            "message": "the server could not record the approval request",
+        })
+        return False
+
+    async def _receive_text_frame(self, timeout: float) -> dict[str, Any] | None:
+        """The next text frame as a dict, or None on a timeout, a
+        disconnect, binary, or anything that is not a JSON object."""
+        try:
+            msg = await asyncio.wait_for(self.ws.receive(), timeout)
+        except (asyncio.TimeoutError, WebSocketDisconnect):
+            return None
+        if msg.get("type") == "websocket.disconnect" or msg.get("text") is None:
+            return None
+        try:
+            frame = json.loads(msg["text"])
+        except json.JSONDecodeError:
+            return None
+        return frame if isinstance(frame, dict) else None
+
+    async def _put_code_back(self, token_hash: str, code: str, entered_at: Any) -> None:
+        """A run in which the device made no guess — it declined, timed
+        out, went away: the typed code waits for its next visit, as typed
+        (the ten minutes still count from the typing)."""
+        try:
+            async with session_scope() as s:
+                await SatelliteApprovalRepository(s).restore_entered_code(
+                    self.room_id, token_hash, code, entered_at,
+                )
+        except Exception as e:  # noqa: BLE001
+            log.debug("pairing: could not keep the typed code: %s", e)
+
+    async def _prove_approval(self, token_hash: str, code: str, pake: Any,
+                              *, entered_at: Any = None) -> bool:
+        """Run the exchange for a code an operator typed (taken off the row
+        for this run).
+
+        Order matters: the core sends its ``Y``, the device answers with its
+        confirmation, the core checks that in constant time — and only then
+        binds the room and sends ITS half (``approval_proof``). A device
+        that does not hold the typed code gets nothing it could test codes
+        against.
+
+        Only a confirmation that does not check out is a GUESS: it uses the
+        typed code up and is counted on the request for the dashboard. A
+        run that ends any other way — the device declines
+        (``approval_decline``: it is busy with another house's exchange,
+        out of budget, or holding this server back), says nothing for
+        :data:`APPROVAL_CONFIRM_TIMEOUT_SEC`, or goes away — tested nothing,
+        so the code is put back for the next visit and nothing is counted."""
+        from domovoi import server_identity as core_identity
+        from satellite import pairing_proof
+
+        try:
+            fingerprint = core_identity.load_or_create().fingerprint
+            # Four 2048-bit exponentiations: off the event loop.
+            exchange = await asyncio.to_thread(
+                pairing_proof.ServerExchange, code, pake,
+                room_id=self.room_id, fingerprint=fingerprint,
+            )
+        except (OSError, ValueError) as e:
+            await self._put_code_back(token_hash, code, entered_at)
+            log.warning("pairing: room=%s cannot run the approval exchange: %s",
+                        self.room_id, e)
+            await self._safe_send_text({
+                "type": "error", "reason": "approval_unavailable",
+                "message": "the server could not run the approval exchange",
+            })
+            return False
+        await self._safe_send_text({"type": "approval_challenge", "pake": exchange.message})
+        frame = await self._receive_text_frame(APPROVAL_CONFIRM_TIMEOUT_SEC)
+        kind = frame.get("type") if frame else None
+        if kind != "approval_confirm":
+            await self._put_code_back(token_hash, code, entered_at)
+            log.info(
+                "pairing: room=%s the device %s — the typed code waits for its next visit",
+                self.room_id,
+                "declined the exchange for now" if kind == "approval_decline"
+                else "did not answer the exchange",
+            )
+            if kind == "approval_decline":
+                await self._safe_send_text({"type": "error", "reason": "approval_declined"})
+            return False
+        if not exchange.device_proved(frame.get("tag")):
+            try:
+                async with session_scope() as s:
+                    await SatelliteApprovalRepository(s).note_proof_failure(
+                        self.room_id, token_hash
+                    )
+            except Exception as e:  # noqa: BLE001
+                log.debug("pairing: could not count the failed exchange: %s", e)
+            log.warning(
+                "pairing: room=%s the device did not confirm the code typed on "
+                "the dashboard — the request stays parked", self.room_id,
+            )
+            await self._safe_send_text({
+                "type": "error", "reason": "approval_code_mismatch",
+                "message": (
+                    "the code typed on the dashboard is not this device's — "
+                    "type the code it is saying"
+                ),
+            })
+            return False
+        try:
+            async with session_scope() as s:
+                result = await SatelliteApprovalRepository(s).promote_proven(
+                    self.room_id, token_hash
+                )
+        except Exception as e:  # noqa: BLE001 — fail closed
+            log.warning("pairing: room=%s could not record the approval: %s", self.room_id, e)
+            result = "error"
+        if result != "approved":
+            await self._safe_send_text({
+                "type": "error", "reason": "approval_unavailable",
+                "message": "the approval could not be recorded — the device asks again",
+            })
+            return False
+        await self._safe_send_text({"type": "approval_proof", "tag": exchange.proof})
+        self.token_authenticated = True
+        log.info(
+            "pairing: room=%s APPROVED — the device confirmed the code an "
+            "operator typed, and the server proved it to the device",
+            self.room_id,
+        )
+        return True
+
     async def _validate_pairing(self, ctrl: dict[str, Any]) -> bool:
         """Pairing-token WS auth for the hello frame (V002).
 
@@ -2961,6 +3277,17 @@ class StreamSession:
                  "message": "pairing rejected"}
             )
             return False
+
+        # 1.4.0 — a device that proves approvals (``approval_pake``) or asks
+        # to withdraw a request (``approval_withdraw``). Outside the try
+        # below on purpose: that handler ACCEPTS on an error when strict
+        # pairing is off, and nothing about this path may ever fail open.
+        if presented is not None and (
+            "approval_pake" in ctrl or ctrl.get("approval_withdraw") is True
+        ):
+            verdict = await self._proof_pairing(ctrl, token_sha256(presented))
+            if verdict is not None:
+                return verdict
 
         try:
             async with session_scope() as s:
@@ -3246,6 +3573,21 @@ class StreamSession:
             # trained word. Rooms that already existed are never touched
             # (domovoi/wake_default.py). In its own task: a download never
             # holds up the hello.
+            # Several words per room (1.4.0, domovoi/wake_default.py): the
+            # words the device listens for and how many it can run. A
+            # device that doesn't say runs one, and is sent one.
+            self.wake_words_reported = wake_default.reported_words(ctrl.get("wake_words"))
+            self.wake_max = wake_default.device_max(ctrl.get("wake_words_max"))
+            state = self.ws.app.state
+            if not isinstance(getattr(state, "satellite_wake_words", None), dict):
+                state.satellite_wake_words = {}
+            if not isinstance(getattr(state, "satellite_wake_max", None), dict):
+                state.satellite_wake_max = {}
+            if self.wake_words_reported is not None:
+                state.satellite_wake_words[self.room_id] = self.wake_words_reported
+            else:
+                state.satellite_wake_words.pop(self.room_id, None)
+            state.satellite_wake_max[self.room_id] = self.wake_max
             self._apply_wake_default(wake)
             # An upgrade the core asked this room for is over: the code
             # version it came back on says how it went
@@ -3328,6 +3670,10 @@ class StreamSession:
             self._followup_hold_until = 0.0
             self._last_audio_at = time.monotonic()
             self.utterance_active = True
+            # From the wake word on, a background job (a video being
+            # watched in chat) holds off: this capture counts as voice
+            # activity while it is live (domovoi/voice_activity.py).
+            voice_activity.watch_capture(self)
             self.dropped_overflow = False
             self.audio_buf.clear()
             # Latch the trigger now; utterance_end reads it to decide
@@ -3336,6 +3682,13 @@ class StreamSession:
             # The wake word's peak score (satellite/wake_gate.py), kept with
             # the turn's history row (V044). An older satellite sends none.
             self._wake_score = overheard.wake_score(ctrl.get("wake_score"))
+            # Which of the room's words fired (V063), likewise; logged so
+            # the core's journal says what woke the room.
+            self._wake_fired = (wake_default.clean_slug(ctrl.get("wake_word"))
+                                if ctrl.get("trigger") == "wake_word" else None)
+            if self._wake_fired:
+                log.info("stream %s: woken by %r%s", self.room_id, self._wake_fired,
+                         f" (score {self._wake_score:.2f})" if self._wake_score is not None else "")
             self._utterance_in_call = self.dropin_peer is not None
             self._utt_id = ctrl.get("utt")
             self._reset_utterance_tracking(self._utterance_trigger)
@@ -3422,7 +3775,7 @@ class StreamSession:
                     endpoint_silence_ms=endpoint_silence_ms,
                     capture_meta=capture_meta,
                     capture_clock=clock,
-                    wake_score=self._wake_score,
+                    wake_score=self._wake_score, wake_word=self._wake_fired,
                 )
             )
             return
@@ -3604,6 +3957,15 @@ class StreamSession:
             # exit phrase). No-op when not in chat mode.
             await self._clear_chat_mode()
             return
+        if t == "room_control":
+            # The room display's buttons (domovoi/room_display.py): only from
+            # a session that was told `room_display`. Never answered, never
+            # an `error` (that would end the device's turn).
+            if self.room_display is not None:
+                await self.room_display.on_control(ctrl)
+            else:
+                log.debug("ignoring room_control from %s: no room display here", self.room_id)
+            return
         await self._safe_send_text({"type": "error", "message": f"unknown control type: {t!r}"})
 
     # ── Satellite health, outage reports and retained logs ──────────────
@@ -3623,8 +3985,13 @@ class StreamSession:
         """What `ready` lists for THIS session: everything, or everything
         but :data:`AUTHENTICATED_FEATURES` for a tokenless one."""
         if self.token_authenticated:
-            return list(CORE_FEATURES)
-        return [f for f in CORE_FEATURES if f not in AUTHENTICATED_FEATURES]
+            features = list(CORE_FEATURES)
+        else:
+            features = [f for f in CORE_FEATURES if f not in AUTHENTICATED_FEATURES]
+        # The room display (1.4.0): a paired device that declared it.
+        if room_display.wanted(self):
+            features.append(room_display.ABILITY)
+        return features
 
     def _health_frame_allowed(self, kind: str) -> bool:
         """`health` / `log_push` only from the room's own authenticated
@@ -4348,15 +4715,25 @@ class StreamSession:
     def _apply_wake_default(self, reported: str | None) -> None:
         """Hand this hello to :func:`domovoi.wake_default.on_hello` in a
         task of its own, held until done."""
-        from domovoi import wake_default
-
         async def push(slug: str, threshold: float | None) -> None:
             await self.request_set_wake_word(slug=slug, threshold=threshold)
 
-        task = asyncio.create_task(
-            wake_default.on_hello(self.room_id, reported,
-                                  self.abilities.allows("wake_models"), push),
-            name=f"wake-default:{self.room_id}")
+        from domovoi import wake_tuning
+
+        can_push = self.abilities.allows("wake_models")
+
+        async def both() -> None:
+            await wake_default.on_hello(self.room_id, reported, can_push, push,
+                                        wake_max=getattr(self, "wake_max", None),
+                                        record_max=True)
+            # "Tune Domovoi": a room with the word the household moved away
+            # from (offline when it moved) is given the other one now, in
+            # that word's place in its list (V063).
+            await wake_tuning.on_hello(
+                self.room_id, reported, can_push, wake_tuning.session_push(self),
+                reported_list=getattr(self, "wake_words_reported", None))
+
+        task = asyncio.create_task(both(), name=f"wake-default:{self.room_id}")
         _TIMING_WRITES.add(task)
         task.add_done_callback(_TIMING_WRITES.discard)
 
@@ -4404,6 +4781,7 @@ class StreamSession:
         audio_ms: int,
         turn_at: datetime,
         wake_score: float | None = None,
+        wake_word: str | None = None,
     ) -> None:
         """A stage of this turn ran past its limit (domovoi/turn_watchdog.py):
         one line naming the room and the stage, the stall noted for
@@ -4424,7 +4802,7 @@ class StreamSession:
                 self._track_history_write(turn_history.record_unheard(
                     room_id=self.room_id, session_id=self.session_id, trigger=trigger,
                     audio_ms=audio_ms, reason=turn_history.TIMED_OUT, at=turn_at,
-                    wake_score=wake_score,
+                    wake_score=wake_score, wake_word=wake_word,
                 ))
         else:
             self._close_history_later(history, turn_history.TIMED_OUT)
@@ -4483,6 +4861,7 @@ class StreamSession:
         audio_ms: int,
         turn_at: datetime,
         wake_score: float | None,
+        wake_word: str | None = None,
     ) -> None:
         """A long capture that is background talk: no answer, no routing (so
         no action and no intents_log row, like a blank capture), the history
@@ -4499,7 +4878,7 @@ class StreamSession:
         entry = turn_history.start_entry(
             room_id=self.room_id, session_id=self.session_id,
             user_text=transcript, trigger=trigger,
-            audio_ms=audio_ms, at=turn_at, wake_score=wake_score,
+            audio_ms=audio_ms, at=turn_at, wake_score=wake_score, wake_word=wake_word,
         )
         self._close_history_later(entry, turn_history.OVERHEARD)
         await self._safe_send_text({
@@ -4564,6 +4943,7 @@ class StreamSession:
         audio_ms: int,
         turn_at: datetime,
         wake_score: float | None = None,
+        wake_word: str | None = None,
     ) -> None:
         """The turn raised: error + response_end, the history entry closed
         ("no answer — something went wrong"; a request that never got a
@@ -4588,7 +4968,7 @@ class StreamSession:
                 self._track_history_write(turn_history.record_unheard(
                     room_id=self.room_id, session_id=self.session_id, trigger=trigger,
                     audio_ms=audio_ms, reason=turn_history.ERROR, at=turn_at,
-                    wake_score=wake_score,
+                    wake_score=wake_score, wake_word=wake_word,
                 ))
         else:
             self._close_history_later(history, turn_history.ERROR)
@@ -4624,6 +5004,7 @@ class StreamSession:
         capture_meta: dict[str, Any] | None = None,
         capture_clock: _CaptureClock | None = None,
         wake_score: float | None = None,
+        wake_word: str | None = None,
     ) -> None:
         interrupted = False
         response = None
@@ -4692,7 +5073,7 @@ class StreamSession:
                             room_id=self.room_id, session_id=self.session_id,
                             trigger=trigger, audio_ms=audio_ms,
                             reason=turn_history.SPEECH_OFF, at=turn_at,
-                            wake_score=wake_score,
+                            wake_score=wake_score, wake_word=wake_word,
                         ))
                     return
                 transcript = await self._clean_transcript(
@@ -4728,7 +5109,7 @@ class StreamSession:
                 if verdict.action == overheard.IGNORE:
                     await self._ignore_overheard(
                         transcript, verdict=verdict, trigger=trigger,
-                        audio_ms=audio_ms, turn_at=turn_at, wake_score=wake_score,
+                        audio_ms=audio_ms, turn_at=turn_at, wake_score=wake_score, wake_word=wake_word,
                     )
                     return
                 if verdict.text != transcript:
@@ -4748,7 +5129,7 @@ class StreamSession:
                 history = turn_history.start_entry(
                     room_id=self.room_id, session_id=self.session_id,
                     user_text=transcript, trigger=trigger,
-                    audio_ms=audio_ms, at=turn_at, wake_score=wake_score,
+                    audio_ms=audio_ms, at=turn_at, wake_score=wake_score, wake_word=wake_word,
                 )
                 await self._safe_send_text({"type": "transcript", "text": transcript})
 
@@ -4970,13 +5351,13 @@ class StreamSession:
                 await self._end_stalled_turn(
                     e.stage, e.limit_s, trigger=trigger, timings=timings,
                     response=response, history=history,
-                    audio_ms=audio_ms, turn_at=turn_at, wake_score=wake_score,
+                    audio_ms=audio_ms, turn_at=turn_at, wake_score=wake_score, wake_word=wake_word,
                 )
             elif reply_guard.expired():
                 await self._end_stalled_turn(
                     stage, time.perf_counter() - turn_t0, trigger=trigger,
                     timings=timings, response=response,
-                    history=history, audio_ms=audio_ms, turn_at=turn_at, wake_score=wake_score,
+                    history=history, audio_ms=audio_ms, turn_at=turn_at, wake_score=wake_score, wake_word=wake_word,
                 )
             else:
                 # A TimeoutError of somebody else's (a client's own limit):
@@ -4984,14 +5365,14 @@ class StreamSession:
                 await self._fail_turn(
                     e, timings=timings, trigger=trigger, response=response,
                     history=history,
-                    stage=stage, audio_ms=audio_ms, turn_at=turn_at, wake_score=wake_score,
+                    stage=stage, audio_ms=audio_ms, turn_at=turn_at, wake_score=wake_score, wake_word=wake_word,
                 )
             return
         except Exception as e:
             await self._fail_turn(
                 e, timings=timings, trigger=trigger, response=response,
                 history=history,
-                stage=stage, audio_ms=audio_ms, turn_at=turn_at, wake_score=wake_score,
+                stage=stage, audio_ms=audio_ms, turn_at=turn_at, wake_score=wake_score, wake_word=wake_word,
             )
             return
         finally:
@@ -6894,6 +7275,9 @@ class StreamSession:
             # it (`hold_music_start`) — dropped BEFORE the send, so the held
             # one cannot go out behind this frame.
             self._drop_music_hold()
+            # The music changed: every room display looks again (a group's
+            # other rooms show it too).
+            room_display.poke_all(self.ws.app)
         try:
             await self.ws.send_text(json.dumps(payload))
         except Exception:
@@ -7040,7 +7424,8 @@ class StreamSession:
             return
         await self.ws.send_text(json.dumps({"type": "stop_wake_recording"}))
 
-    async def request_set_wake_word(self, *, slug: str, threshold: float | None = None) -> None:
+    async def request_set_wake_word(self, *, slug: str, threshold: float | None = None,
+                                    words: list[dict[str, Any]] | None = None) -> None:
         """Push a trained wake model to this satellite: the Pi writes ``slug``
         to its wake sidecar, syncs the model from /v1/wake-models, and
         self-restarts to load it. ``slug`` is the load-bearing identifier —
@@ -7049,12 +7434,23 @@ class StreamSession:
         registry's per-word detection threshold, which the satellite writes into
         its ``[wake] threshold`` (the room's Wake sensitivity setting; None →
         the setting stays as it is).
+        ``words`` (1.4.0): the room's whole list, ``[{"slug", "threshold"}]``
+        with ``slug`` first. Sent as ``words`` only to a device whose hello
+        said how many it can run (``wake_words_max``), and never more than
+        that; any other device gets ``slug`` alone, as before.
         Raw send so a dead socket propagates to the admin caller.
         :class:`NotDeclared` for a device that didn't declare "wake_models"."""
         self._require("wake_models", "set_wake_word")
         frame: dict[str, Any] = {"type": "set_wake_word", "slug": slug}
         if threshold is not None:
             frame["threshold"] = threshold
+        declared = getattr(self, "wake_max", None)
+        if words and declared is not None and words[0].get("slug") == slug:
+            frame["words"] = [
+                {"slug": w["slug"], **({"threshold": w["threshold"]}
+                                       if w.get("threshold") is not None else {})}
+                for w in wake_default.words_for_device(words, declared)
+            ]
         await self.ws.send_text(json.dumps(frame))
 
     async def notify_wake_models_changed(self) -> None:

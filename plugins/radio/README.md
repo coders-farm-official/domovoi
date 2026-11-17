@@ -8,8 +8,9 @@ development** — see the note for developers at the bottom.
 
 * **Internet radio.** Search a community station directory
   (radio-browser.info) from the dashboard's Stations page, favorite
-  stations, and play them by voice ("stream KEXP", "tune to the news
-  station") in any room, or in the browser via the page's player.
+  stations, and play them by voice ("stream KEXP", "play lofi radio") in
+  any room, in a room picked on the page (the **play in** room chips, or
+  casting from the player), or in the browser via the page's player.
 * **Play without favoriting.** Clicking any station — a search hit, a
   favorite, a Recent entry — starts it. Favoriting is a separate act (the
   star), because a favorite also puts the station on the background
@@ -46,14 +47,22 @@ development** — see the note for developers at the bottom.
 
 | Say | Does |
 |---|---|
-| "stream KEXP" / "tune to the jazz station" | play a favorited station by name |
+| "stream KEXP" / "tune to the jazz station" | play a station by name |
+| "play lofi radio" / "play the station Lofi 24/7" | the same, said another way |
 | "play 97.5 FM" | tune a frequency (FM/SDR, or a favorited simulcast) |
+| "add this to my favorites" / "favorite this station" | star the station playing in the room |
 | "stop the radio" / "stop streaming" | stop playback in the room |
 
-Station-name commands work on **favorited** stations — favorite them on
-the Stations page first. (Clicking a station on the page plays it without
-favoriting, so voice by name and one-off listening are deliberately
-different things.)
+A station name is looked for in your favorites first, then among the other
+stations the plugin knows (played before, imported from the FCC list), and
+then, when the household lets Domovoi on the internet (Settings →
+Internet), in the station directory, which offers its best one or two
+("Online there's Groove Salad or Groove Salad Classic. Which one?").
+Names are compared by how they are said, so "lo-fi 24 slash 7" finds
+"Lofi 24/7"; when it is close but not sure, Domovoi asks "Did you mean
+Lofi 24/7?" and "yes", "no", "the second one" or another name answers.
+"Play radio …" ("play radio paradise") looks only at saved stations,
+because "play radio ga ga" is a song.
 
 ## Hardware notes (FM / RTL-SDR)
 
@@ -92,8 +101,7 @@ file, `~/.domovoi/plugins/radio.env` (in the home of the user the core
 runs as; on a server installed with the Windows installer that is inside
 its private Linux environment). The dashboard has no editor for plugin
 settings yet: edit the file, then restart the core. A `RADIO_*` variable
-in the core process's
-own environment overrides the file. `RADIO_*` lines in `domovoi/.env` are
+in the core process's own environment overrides the file. `RADIO_*` lines in `domovoi/.env` are
 **not** read — that file is the core's, and the core has no radio settings
 of its own. The interesting ones:
 
@@ -116,8 +124,7 @@ A track whose file the decoder refuses (or that gives no hashes) is marked at on
 
 Radio follows the server's internet answer (`INTERNET_ACCESS`, Settings →
 Internet; see `docs/INTERNET.md` in the main repository), which it reads
-through `sdk.connectivity` (SDK 1.4, so this plugin needs a core with SDK
-`>=1.4`).
+through `sdk.connectivity`.
 
 * **FM over an RTL-SDR keeps working** with no internet at all: "play 97.5
   FM", the FM stations you imported earlier, and the local-fingerprint
@@ -134,7 +141,7 @@ through `sdk.connectivity` (SDK 1.4, so this plugin needs a core with SDK
   plugin reaches the internet: the directory search, "resolve" for a
   simulcast (and the startup backfill), the FCC import (and the boot
   import), playing an internet station and its browser stream all refuse
-  with "internet access is turned off for this box (Settings → Internet)"
+  with "internet access is turned off for this box (Settings → Privacy → Internet)"
   (HTTP 409 from the API). The Stations page greys those controls with
   "needs internet" and opens on local FM. Saving, editing and forgetting
   stations still work: nothing is fetched until the answer changes.
@@ -183,8 +190,10 @@ This plugin is the worked example the Domovoi plugin-dev guide walks
 through — it exercises every extension plane:
 
 * **voice**: a handler at priority band 280 with anchored fast paths,
-  per-path `offline_ok`, a reachable `fallback_offline`, and a
-  namespaced confirmation kind (`radio.station_choice`);
+  per-path `offline_ok`, a reachable `fallback_offline`, station names
+  matched with `domovoi.sdk.spoken_names`, and a namespaced choice
+  (`radio.station_choice`, in both `confirmation_kinds` and
+  `choice_kinds`) whose free-text reply is read with `domovoi.sdk.choices`;
 * **background work**: four poll workers, two connectivity-gated
   startup hooks, and an in-process hardware manager shared via
   `sdk.state`;
@@ -195,14 +204,20 @@ through — it exercises every extension plane:
 * **UI**: a web router at `/api/plugins/radio`, a zero-build JSX page
   registered through `window.DomovoiPlugins.radio`, manifest-declared
   realtime channels, and a sidebar badge;
-* **auth tiers**: the everyday mutations (play, favorite, edit, forget,
-  simulcast lookup) are `@device_endpoint` — any paired phone or browser —
-  while the FCC bulk import keeps the admin default; nothing is open to
-  the whole LAN;
+* **auth tiers**: the everyday mutations (play, play in a room, favorite,
+  edit, forget, simulcast lookup) are `@device_endpoint` — any paired phone
+  or browser — while the FCC bulk import keeps the admin default; nothing
+  is open to the whole LAN;
 * **couplings**: detections published as `plugin.radio.detection_recorded`
   events (no provider vocabulary anywhere), now-playing stamping via
-  `sdk.playback.play_url(source="radio")`, and a favorites matcher via
-  `sdk.now_playing.register_matcher`.
+  `sdk.playback.play_url(source="radio")`, a favorites matcher via
+  `sdk.now_playing.register_matcher`, and playing in a room outside a voice
+  turn (`POST /api/plugins/radio/stations/{id}/play-in-room`, the player
+  source's `room_play_template`) through `sdk.playback.ensure_room` and
+  `dispatch`.
+
+This version of the plugin (1.5.0) declares `domovoi_api = ">=1.10,<2.0"`,
+so it loads only on a Domovoi with SDK 1.10 or later (Domovoi 1.4.0).
 
 Layout, manifest spec, and test-harness docs:
 [`docs/PLUGIN_DEVELOPMENT.md`](../../docs/PLUGIN_DEVELOPMENT.md) in the

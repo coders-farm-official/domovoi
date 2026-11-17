@@ -1,9 +1,12 @@
 import DomovoiKit
 import SwiftUI
 
-/// Printing one of the home server's files: the options that can change
-/// something, the preview the server draws of them, and then the job itself
-/// to the end.
+/// Printing one of the home server's files, or a version of a home-server
+/// chat draft: the options that can change something, the preview the server
+/// draws of them, and then the job itself to the end.
+///
+/// What is printed is a ``PrintingTarget`` — Android's `PrintTarget`, whose
+/// `ChatDraft` case Chat opens this same sheet with (`ChatScreen.kt:1104`).
 ///
 /// `PrintSheet()` (`PrintSheet.kt:59-244`). Every decision is
 /// ``PrintingJobModel``'s — which controls exist, whether Print may be
@@ -37,8 +40,10 @@ import SwiftUI
 /// the server says it can be cancelled.
 struct PrintSheetView: View {
 
-    let entry: FileEntry
-    let libraryID: String
+    /// What is printed: a file (`library_id` + `path`) or a draft's version.
+    let target: PrintingTarget
+    /// What the title says before the preview names it.
+    let name: String
     let printers: PrintersResponse
     let model: ShellModel
     let onClose: () -> Void
@@ -62,7 +67,7 @@ struct PrintSheetView: View {
                 .padding(16)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .navigationTitle(job?.title ?? PrintingStrings.printTitle(entry.displayTitle))
+            .navigationTitle(job?.title ?? PrintingStrings.printTitle(name))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -76,8 +81,8 @@ struct PrintSheetView: View {
             if job == nil {
                 job = PrintingJobModel(
                     in: model.container,
-                    target: .file(libraryID: libraryID, path: entry.rel),
-                    fileName: entry.displayTitle,
+                    target: target,
+                    fileName: name,
                     printers: printers
                 )
                 job?.start()

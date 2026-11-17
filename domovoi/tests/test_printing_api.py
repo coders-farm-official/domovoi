@@ -3,9 +3,11 @@ web door), on the test database, against our fake printer and scanner.
 
 Tiers: the household (device token) adds, prints, scans; only the admin
 renames, removes, changes limits and clears the log; a guest gets nothing.
-The fakes live on 127.0.0.1, which the LAN check refuses — each test names
-its fake's exact port in the operator allowlist (``OUTBOUND_ALLOW_HOSTS``'s
-reader), the same hatch the functional-test harness uses.
+The fakes live on 127.0.0.x, which the LAN check refuses whatever
+``OUTBOUND_ALLOW_HOSTS`` says. ``printing_fakes.fake_lan`` lets them in
+for one test through the test-only switch
+``lan_target.ALLOW_LOOPBACK_UNDER_STUBS`` (honoured under ``USE_STUBS``
+only) and makes 127.0.0.0/24 the "home network".
 """
 
 from __future__ import annotations
@@ -183,6 +185,7 @@ async def test_something_that_is_not_a_printer_is_not_saved(house):
                              headers=house["device"])
             assert r.status_code == 409
             assert "answered like a printer" in r.json()["detail"]
+            assert "USB printers aren't supported" in r.json()["detail"]
             assert (await c.get("/v1/printers", headers=house["device"])).json()["printers"] == []
     finally:
         server.close()
@@ -485,7 +488,21 @@ async def test_a_loaded_feeder_is_used_and_the_reader_seam(house):
             assert "Grayscale8" in fake.settings[0]
             scans.register_reader(reader)
             done = (await c.post("/v1/scan/jobs/%s/finish" % s["id"], headers=house["device"])).json()
-            assert done["readable"] is True
+            # Saved, and queued for the scan reader: readable only once read.
+            assert done["readable"] is False
+            assert done["read"]["state"] == "queued" and done["read"]["reading"] is True
+            from domovoi.scan_reader import ocr
+            from domovoi.scan_reader import runner as read_runner
+
+            async def fake_ocr(png, *, hold=None, langs=None):
+                return ocr.parse_tsv("\n".join("5\t1\t1\t1\t1\t%d\t0\t0\t9\t9\t95\tword%d" % (i, i)
+                                                for i in range(1, 6)))
+
+            await read_runner.Runner(ocr_fn=fake_ocr, poll_sec=0.01, quiet_sec=0).run_next()
+            got = (await c.get("/v1/scan/jobs/%s" % s["id"], headers=house["device"])).json()
+            assert got["readable"] is True and got["read"]["pages_done"] == 3
+            log = (await c.get("/v1/print/jobs", headers=house["device"])).json()["scans"]
+            assert log[0]["readable"] is True and log[0]["read"]["id"] == got["read"]["id"]
     finally:
         scans.register_reader(None)
         fake.close()
@@ -614,9 +631,11 @@ async def test_announcing_a_uuid_does_not_move_a_saved_printer(house, monkeypatc
         await rogue.close()
 
 
-async def test_the_operator_allowlist_is_for_an_admin_typed_address_only(house, monkeypatch):
-    """Review: OUTBOUND_ALLOW_HOSTS let mDNS-announced loopback through."""
-    real_lan(monkeypatch)                                       # loopback refused again
+async def test_an_allowlisted_loopback_printer_is_refused_even_for_the_admin(house, monkeypatch):
+    """Owner, 2026-11-16 (Q20 closed): OUTBOUND_ALLOW_HOSTS used to let an
+    admin add a printer on loopback (a local CUPS queue). Now nobody can:
+    not a household device, not an mDNS announcement, not the admin."""
+    real_lan(monkeypatch)                                       # loopback refused again, switch off
     fake = await FakeIppPrinter().start()
     house["allowed"].append(("127.0.0.1", fake.port))
     url = "ipp://127.0.0.1:%d/ipp/print" % fake.port
@@ -628,12 +647,10 @@ async def test_the_operator_allowlist_is_for_an_admin_typed_address_only(house, 
             r = await c.post("/v1/printers/discover", json={"look_again": False}, headers=house["device"])
             assert r.json()["found"] == []                      # announced: no
             r = await c.post("/v1/printers", json={"address": url}, headers=bearer(house["admin"]))
-            assert r.status_code == 201, r.text                 # the admin typed it: yes
-            [row] = await store.list_printers()
-            assert row["operator_allowed"] is True
-            r = await _upload(c, house, "Test.pdf", _pdf(1))
-            assert r.status_code == 202
-            assert (await _wait_job(c, house, r.json()["id"]))["state"] == "done"
+            assert r.status_code == 400, r.text                 # the admin typed it: no as well
+            assert "not USB or local ones" in r.json()["detail"]
+            assert await store.list_printers() == []
+            assert fake.requests == []                          # nothing was ever sent to it
     finally:
         await fake.close()
 

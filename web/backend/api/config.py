@@ -96,7 +96,7 @@ async def get_config() -> ConfigResponse:
         home_problems_visibility=home_problems_visibility(),
         # The internet answer, read the way both processes read it
         # (environment, then domovoi/.env — egress.policy), so a save in
-        # Settings → Internet shows here on the next read.
+        # Settings → Privacy → Internet shows here on the next read.
         internet_access=egress.policy(),
     )
 
@@ -137,7 +137,7 @@ async def patch_editable_config(body: ConfigUpdateRequest, request: Request):
     .env → live-apply where the tier allows). Returns
     ``{applied, restart_required, rejected, normalized, followed}``. The web
     process never mutates its own settings copy — every write fans out to
-    :6370. ``follow_internet`` (Settings → Internet's "follow the answer
+    :6370. ``follow_internet`` (Settings → Privacy → Internet's "follow the answer
     again") rides along only when it names something."""
     payload: dict = {"changes": body.changes}
     if body.follow_internet:
@@ -253,7 +253,7 @@ async def search_key_test(body: SearchTestRequest, request: Request):
     dependencies=[Depends(require_admin_read)],
 )
 async def get_internet(request: Request):
-    """Settings → Internet: the household's internet answer, the three
+    """Settings → Privacy → Internet: the household's internet answer, the three
     choices, connectivity, and every setting whose default follows the
     answer. Read-only proxy of the core's ``GET /v1/admin/internet`` (the
     core owns the live settings). Changing the answer is a PATCH of
@@ -270,7 +270,7 @@ async def get_internet(request: Request):
     dependencies=[Depends(require_admin_mutation)],
 )
 async def start_search_helper(request: Request):
-    """Settings → Internet's "start it again": the core runs the search
+    """Settings → Privacy → Internet's "start it again": the core runs the search
     helper's start/stop for the current answer in the background and
     returns its state (proxy of ``POST /v1/admin/internet/search-helper``)."""
     status, payload = await post_admin(

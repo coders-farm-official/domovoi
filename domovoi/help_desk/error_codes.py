@@ -52,8 +52,8 @@ ERROR_CODES: dict[str, ErrorHelp] = {
     ),
     "internet-off": _e(
         "The internet is turned off for Domovoi",
-        "This Domovoi is set to never use the internet (Settings → Internet), so anything that "
-        "would go online is refused. An admin can change the answer to Yes or Sometimes.",
+        "This Domovoi is set to never use the internet (Settings → Privacy → Internet), so anything "
+        "that would go online is refused. An admin can change the answer to Yes or Sometimes.",
         "internet",
     ),
     # ── chat replies (stats.error_code) ──────────────────────────────────
@@ -66,7 +66,7 @@ ERROR_CODES: dict[str, ErrorHelp] = {
     "model_unreachable": _e(
         "The model service isn't answering",
         "Domovoi couldn't reach Ollama, the service that runs its models. Restarting the server "
-        "usually brings it back (Settings → Configuration → Restart).",
+        "usually brings it back (Settings → System → About & updates → Restart Domovoi).",
         "troubleshooting",
     ),
     "model_timeout": _e(
@@ -195,6 +195,60 @@ ERROR_CODES: dict[str, ErrorHelp] = {
         "picker, and make your change there.",
         "drafts",
     ),
+    # ── videos in chat (domovoi/chat_video, web/backend/api/chat_videos.py)
+    "video_too_long": _e(
+        "That video is too long",
+        "Videos up to 3 minutes can be attached. Trim it on the phone first, or send the part you want to "
+        "ask about.",
+        "ask-video",
+    ),
+    "video_too_large": _e(
+        "That video file is too large",
+        "Videos up to 2 GB can be attached. Send a shorter clip, or record it at a lower quality.",
+        "ask-video",
+    ),
+    "video_unsupported": _e(
+        "That video format isn't supported",
+        "Chat takes MP4, MOV and WebM videos (H.264 or HEVC, the way phones record them). Share the video "
+        "from your phone as MP4 and try again.",
+        "ask-video",
+    ),
+    "video_unreadable": _e(
+        "That video couldn't be read",
+        "Domovoi couldn't read the video: it may be damaged, or it was still being saved on the phone when "
+        "it was sent. Open it on the phone to check it plays, then attach it again.",
+        "ask-video",
+    ),
+    "video_no_room": _e(
+        "The home server is short of disk space",
+        "There isn't room on the server for the video while it is watched. Free some space (Settings → "
+        "System → Health shows the disks), then attach it again.",
+        "ask-video",
+    ),
+    "video_no_tools": _e(
+        "This server can't read videos",
+        "Watching a video needs ffmpeg on the home server, and it isn't installed there. Whoever looks "
+        "after the server installs it (on Linux, the package is called ffmpeg).",
+        "ask-video",
+    ),
+    "video_missing": _e(
+        "The video was gone",
+        "The video wasn't on the server any more when Domovoi went to watch it (it may have been removed "
+        "during a restart). Attach it again to try once more.",
+        "ask-video",
+    ),
+    "video_interrupted": _e(
+        "Watching the video kept being interrupted",
+        "The server stopped several times while watching this video, so Domovoi stopped trying. Attach it "
+        "again; if it keeps happening, use Report a problem.",
+        "ask-video",
+    ),
+    "video_failed": _e(
+        "Domovoi couldn't finish watching the video",
+        "Something went wrong while watching it. Attach it again to try once more; if it keeps happening, "
+        "use Report a problem.",
+        "ask-video",
+    ),
     # ── the app's chat mic ───────────────────────────────────────────────
     "core_timeout": _e(
         "Domovoi took too long to answer",
@@ -281,8 +335,8 @@ ERROR_CODES: dict[str, ErrorHelp] = {
                          "Something went wrong while installing; nothing was left half-installed." + _PLUGIN_RETRY,
                          "plugins"),
     "internet_off": _e("Installing from the internet is turned off",
-                       "This Domovoi is set to never use the internet (Settings → Internet). Install the "
-                       "plugin from a zip file instead.", "plugins"),
+                       "This Domovoi is set to never use the internet (Settings → Privacy → Internet). Install "
+                       "the plugin from a zip file instead.", "plugins"),
     "layout_invalid": _e("The plugin's files aren't laid out right", "The plugin's folders are wrong." + _PLUGIN_ZIP,
                          "plugins"),
     "lockfile_unreadable": _e("The plugin's requirements list can't be read",

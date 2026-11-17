@@ -138,15 +138,18 @@ extension StubHouseUITests {
         /// case's subject is what a presentation takes out of the window.
         static let inlineFallback = "shell-dialog-inline-fallback"
 
-        /// ``PluginBandStrings/badge``, ``by(_:)``, ``manageLabel(name:)`` and
-        /// ``collapsedLabel(name:publisher:)`` — the words one band draws now.
+        /// ``PluginBandStrings/uses(_:)``, ``by(_:)``, ``manageLabel(name:)``
+        /// and ``collapsedLabel(name:publisher:)`` — the words one band draws
+        /// now. `pluginBadge` is the bordered badge the main line replaced,
+        /// asserted **absent**.
         static let pluginBadge = "plugin"
+        static func uses(_ name: String) -> String { "Uses the \(name) plugin" }
         static func by(_ who: String) -> String { "by \(who)" }
         static func manageLabel(_ name: String) -> String {
             "manage \(name) on the dashboard's Plugins page"
         }
         static func collapsedBand(_ name: String, _ who: String) -> String {
-            "\(name), plugin, by \(who)"
+            "Uses the \(name) plugin, by \(who)"
         }
     }
 
@@ -1452,8 +1455,8 @@ extension StubHouseUITests {
 
         let images = launch(push: "Images", pushDelay: Self.pushDelay)
         XCTAssertTrue(
-            images.staticTexts[StubShell.imagegenName].waitForExistence(timeout: 40),
-            "no `\(StubShell.imagegenName)` above Images. Either the push "
+            images.staticTexts[StubShell.uses(StubShell.imagegenName)].waitForExistence(timeout: 40),
+            "no `\(StubShell.uses(StubShell.imagegenName))` above Images. Either the push "
                 + "bounced back to Home — the route is capability-gated, and it "
                 + "is visible only because `fixtures/stations.py` adds the "
                 + "`plugins` array to `/api/capabilities` — or the band drew "
@@ -1465,9 +1468,9 @@ extension StubHouseUITests {
             "the band does not draw `\(StubShell.by(StubShell.publisher))` "
                 + "(`PluginFrame.kt:144`)"
         )
-        XCTAssertTrue(
+        XCTAssertFalse(
             images.staticTexts[StubShell.pluginBadge].exists,
-            "the bordered `plugin` badge is not drawn (`PluginFrame.kt:152`)"
+            "the bordered `plugin` badge is drawn again beside \"Uses the … plugin\""
         )
         XCTAssertTrue(
             anything(images, labelled: StubShell.manageLabel(StubShell.imagegenName)).exists,
@@ -1475,16 +1478,16 @@ extension StubHouseUITests {
                 + "is a server address to open, and this launch has one."
         )
         XCTAssertFalse(
-            images.staticTexts[StubShell.stationsName].exists,
-            "`\(StubShell.stationsName)` is named above Images — the band took "
+            images.staticTexts[StubShell.uses(StubShell.stationsName)].exists,
+            "`\(StubShell.uses(StubShell.stationsName))` is named above Images — the band took "
                 + "the manifest's first plugin instead of the one declaring "
                 + "this screen's capability"
         )
 
         let stations = launch(push: "Stations", pushDelay: Self.pushDelay)
         XCTAssertTrue(
-            stations.staticTexts[StubShell.stationsName].waitForExistence(timeout: 40),
-            "no `\(StubShell.stationsName)` above Stations — the folded band's "
+            stations.staticTexts[StubShell.uses(StubShell.stationsName)].waitForExistence(timeout: 40),
+            "no `\(StubShell.uses(StubShell.stationsName))` above Stations — the folded band's "
                 + "other call site (`StationsView.swift:86`) drew nothing"
         )
         evidence(stations, "shell-band-stations")
@@ -1495,8 +1498,8 @@ extension StubHouseUITests {
                 + "copies that was not layout."
         )
         XCTAssertFalse(
-            stations.staticTexts[StubShell.imagegenName].exists,
-            "`\(StubShell.imagegenName)` is named above Stations"
+            stations.staticTexts[StubShell.uses(StubShell.imagegenName)].exists,
+            "`\(StubShell.uses(StubShell.imagegenName))` is named above Stations"
         )
     }
 

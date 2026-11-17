@@ -72,10 +72,16 @@ Read these core files before writing a screen:
     `NavOverride`; one-item-flat and empty-group rules): a new launcher
     screen goes in `WorkspaceRoutes` and `NavKeys`, and in
     `DefaultNav.groupOf` (or `PluginNavGroups` for a plugin's) if grouped.
-13. **Plugin-backed screens are capability-gated.** If a screen's endpoints
-    come from a plugin router (`/api/plugins/<slug>/...`), declare its
-    capability in `Route.requiredCapability()` (`ui/shell/Routes.kt`) and it
-    will only render when `GET /api/capabilities` lists that capability
-    (`net/Capabilities.kt`, provided via `LocalCapabilities`). Never hardcode
+13. **Screens that use a plugin of ours are gated on that plugin.** A plugin
+    can't ship app code, so a screen whose endpoints come from a plugin
+    router (`/api/plugins/<slug>/...`) is the app's own and talks to one
+    particular plugin of ours. Declare its capability in
+    `Route.requiredCapability()` (`ui/shell/Routes.kt`) and add the plugin's
+    slug to `AppScreenPlugins` (`net/Capabilities.kt`): it then shows only
+    while `GET /api/capabilities` lists a plugin with that exact slug and
+    publisher `Coders Farm` declaring the capability (provided via
+    `LocalCapabilities`; `Capabilities.has`). Every launcher, count, manual
+    piece and player item that mentions the screen asks the same `has`.
+    Its frame (`PluginScreenFrame`) says "Uses the <plugin> plugin". Never hardcode
     provider names, provider tabs, or provider tone maps — labels/tones come
     from the manifest's `handler_display`; unknown values render neutral.

@@ -383,8 +383,9 @@ async def print_submit(request: Request, file: UploadFile = File(...), meta: str
 @router.get("/v1/print/jobs", dependencies=READ)
 async def list_jobs(printer_id: int | None = Query(None), limit: int = Query(20, ge=1, le=200)) -> dict[str, Any]:
     """The household's job log: print jobs, and scans (``scans``)."""
+    rows = await store.list_scans(printer_id=printer_id, limit=limit)
     return {"jobs": [jobs.job_json(j) for j in await store.list_jobs(printer_id=printer_id, limit=limit)],
-            "scans": [scans.scan_log_json(r) for r in await store.list_scans(printer_id=printer_id, limit=limit)]}
+            "scans": await scans.scan_log_with_reads(rows)}
 
 
 @router.get("/v1/print/jobs/{job_id}", dependencies=READ)
@@ -456,13 +457,13 @@ async def scan_start(request: Request, body: ScanBody) -> dict[str, Any]:
                               who=who.label, origin=who.source)
     except scans.ScanRefused as e:
         raise _refuse(e) from e
-    return s.json()
+    return await scans.json_full(s)
 
 
 @router.get("/v1/scan/jobs/{scan_id}", dependencies=READ)
 async def scan_get(scan_id: str) -> dict[str, Any]:
     try:
-        return scans.get(_scan_id(scan_id)).json()
+        return await scans.json_full(scans.get(_scan_id(scan_id)))
     except scans.ScanRefused as e:
         raise _refuse(e) from e
 
@@ -471,7 +472,7 @@ async def scan_get(scan_id: str) -> dict[str, Any]:
 async def scan_next(request: Request, scan_id: str) -> dict[str, Any]:
     await _assert_documents_writable(request)
     try:
-        return (await scans.more(_scan_id(scan_id))).json()
+        return await scans.json_full(await scans.more(_scan_id(scan_id)))
     except scans.ScanRefused as e:
         raise _refuse(e) from e
 
@@ -480,7 +481,7 @@ async def scan_next(request: Request, scan_id: str) -> dict[str, Any]:
 async def scan_finish(request: Request, scan_id: str) -> dict[str, Any]:
     await _assert_documents_writable(request)
     try:
-        return (await scans.finish(_scan_id(scan_id))).json()
+        return await scans.json_full(await scans.finish(_scan_id(scan_id)))
     except scans.ScanRefused as e:
         raise _refuse(e) from e
 
@@ -488,6 +489,6 @@ async def scan_finish(request: Request, scan_id: str) -> dict[str, Any]:
 @router.post("/v1/scan/jobs/{scan_id}/cancel", dependencies=DEVICE)
 async def scan_cancel(scan_id: str) -> dict[str, Any]:
     try:
-        return (await scans.cancel(_scan_id(scan_id))).json()
+        return await scans.json_full(await scans.cancel(_scan_id(scan_id)))
     except scans.ScanRefused as e:
         raise _refuse(e) from e

@@ -7,9 +7,8 @@ Most coding agents read `AGENTS.md` on their own (Codex, Cursor, GitHub
 Copilot's agent, Windsurf, Cline, Roo Code, Junie, Kiro, Zed, Continue,
 Amp, opencode, Devin, Jules, Warp, among others). A few get it through a
 small shim, and each shim only points here: `CLAUDE.md` and `GEMINI.md`
-import this file, `.aider.conf.yml` reads it into every chat, and
-`.amazonq/rules/agents.md` tells Amazon Q to follow it. If your tool reads
-none of these, point it here.
+import this file, and `.aider.conf.yml` reads it into every chat. If your
+tool reads none of these, point it here.
 
 Rules go in this file, never in a tool-specific copy, so every agent works
 from the same text. Don't add `.github/copilot-instructions.md`, `.rules`,
@@ -93,7 +92,7 @@ lives). Docker commands run from `domovoi/` (where the compose file lives).
 ./domovoi/scripts/dev.ps1            # PowerShell
 
 # Manual equivalent
-pip install -e ".[dev,real-clients,voice-profile]"
+pip install -e ".[dev,real-clients]"
 pip install -e ".[cuda]"                  # only on an NVIDIA host
 pip install --no-deps -r requirements-no-deps.in   # faster-whisper: without its
                                           # declared deps (PyAV; the file says why)
@@ -173,14 +172,22 @@ right knob.
 Standing instructions from the repo owner for every agent session, local
 or in the cloud; they override your tool's defaults.
 
-- **No pull requests.** Don't open one unless the owner asks for it in
-  that session.
-- **CI runs on every push to main.** `.github/workflows/ci.yml` (the
-  pytest suite in shards, the web and docs checks, the bash harnesses, the
-  Android app, the Windows build) runs on GitHub's hosted runners, free for
+- **Changes reach `main` only through pull requests** (owner decision
+  2026-11-17). Work on your own branch; open one pull request per batch of
+  related work, not one per small change, and turn on auto-merge
+  (`gh pr create` then `gh pr merge --auto --merge`). It merges itself once
+  the `ci passed` check is green; nobody needs to approve it. A small,
+  urgent fix may be its own pull request. A branch rule enforces this: a
+  push straight to `main` is refused, with no bypass (the owner switches
+  the rule off only while a release runs). docs/CONTRIBUTING.md,
+  "Pull requests", has the steps.
+- **CI runs on every pull request and every push to main.**
+  `.github/workflows/ci.yml` (the pytest suite in shards, ruff, the web and
+  docs checks, the bash harnesses, the Android app, the iPhone app's build,
+  the Windows build) runs on GitHub's hosted runners, free for
   this public repo (2026-11-14). Don't put `[skip ci]` in commit messages.
-  Main stays green: a red run on main is fixed before anything else is
-  pushed. It fails on NEW test failures only; one listed in
+  Main stays green: a pull request can't merge until its run passes.
+  It fails on NEW test failures only; one listed in
   `domovoi/tests/known_failures.toml` is reported, not fatal.
   docs/CONTRIBUTING.md, "CI", says how to read and re-run a failure.
 - **Signing secrets live only in the `release` environment.** Releases
@@ -207,7 +214,7 @@ or in the cloud; they override your tool's defaults.
   mv cmdline-tools/{bin,lib,NOTICE.txt,source.properties} cmdline-tools/latest/
   export ANDROID_HOME=/opt/android-sdk
   yes | cmdline-tools/latest/bin/sdkmanager --licenses >/dev/null
-  cmdline-tools/latest/bin/sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+  cmdline-tools/latest/bin/sdkmanager "platforms;android-36" "build-tools;35.0.0" "platform-tools"
   cd <repo>/android && gradle --no-daemon testDebugUnitTest assembleDebug
   # -> android/app/build/outputs/apk/debug/app-debug.apk
   ```

@@ -16,7 +16,7 @@ class CapabilitiesTest {
           "domovoi_api": "1",
           "server_version": "0.9.0",
           "plugins": [
-            {"slug": "radio", "version": "1.2", "android_capabilities": ["stations"]},
+            {"slug": "radio", "version": "1.2", "publisher": "Coders Farm", "android_capabilities": ["stations"]},
             {"slug": "provider", "android_capabilities": []},
             {"slug": "future", "android_capabilities": ["holograms"], "extra_field": true}
           ],
@@ -52,10 +52,13 @@ class CapabilitiesTest {
         assertEquals("ai", FEATURE_AI)
     }
 
-    @Test fun has_matchesAnyPluginDeclaringIt() {
+    /** [Capabilities.has] asks for our plugin behind the capability
+     *  (PluginGateTest has the cases): a capability no app screen uses
+     *  lights nothing up, however many plugins declare it. */
+    @Test fun has_needsOurPluginBehindTheCapability() {
         val caps = DomovoiJson.parseToJsonElement(manifest).decode<Capabilities>()
         assertTrue(caps.has(CAP_STATIONS))
-        assertTrue(caps.has("holograms")) // unknown slugs are still data
+        assertFalse(caps.has("holograms")) // no app screen uses it: fail closed
         assertFalse(caps.has(CAP_IMAGEGEN))
         assertFalse(Capabilities.EMPTY.has(CAP_STATIONS))
     }

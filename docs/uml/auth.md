@@ -2,7 +2,8 @@
 
 Domovoi's v1 admin model is deliberately small: **one admin password, claimed
 on first run with a setup code that proves you own the server**, then bearer
-tokens with a sliding 30-day expiry under a 90-day cap. Ordinary household
+tokens that sign out after 1 hour idle (an hour with no admin action),
+under a 90-day cap. Ordinary household
 actions use a weaker, separate credential, the household device token
 ([The gates](#the-gates)). The admin model is shared by both processes — a token minted
 by the web dashboard (:6369) authorizes gated routes on the core (:6370),
@@ -65,17 +66,25 @@ sequenceDiagram
     U->>W: POST /api/auth/login {password, label}
     W->>W: per-source failed-login backoff<br/>(1 s doubling, 5 min cap → 429 + Retry-After)
     W->>PG: verify argon2id hash
-    W->>PG: INSERT admin_sessions — 256-bit token,<br/>only its sha256 stored, 30-day sliding expiry<br/>(90-day cap from creation)
+    W->>PG: INSERT admin_sessions — 256-bit token,<br/>only its sha256 stored, signs out 1 hour<br/>after its last admin action (90-day cap from creation)
     W-->>U: token (the only time it exists in the clear)<br/>+ SameSite=Strict cookie "domovoi_admin"
     Note over U: the cookie lets plain GET page loads render<br/>authenticated state, but it NEVER authorizes a<br/>mutation — CSRF: a cross-site POST carries<br/>nothing that authorizes it
     U->>W: subsequent requests: Authorization: Bearer <token>
-    W->>PG: sha256 lookup, sliding expiry refreshed on use
+    W->>PG: sha256 lookup — a READ moves nothing,<br/>an admin WRITE restarts the hour
 ```
 
+The idle hour (`ADMIN_IDLE_TIMEOUT_MIN`, 1.4.0) counts only admin
+actions: a `POST`/`PUT`/`PATCH`/`DELETE` that passed an admin write gate
+with the Bearer (`admin_auth.is_admin_activity`). Polls, the status probe,
+the device tier, sockets and reloads never move it, so a tab left open
+overnight is signed out in the morning. Each sign-in is its own session
+with its own clock; the tabs of the browser that signed in share it.
+
 The dashboard keeps the token in page memory only. For a window after the
-password was typed (60 minutes by default, `ADMIN_RELOAD_WINDOW_MIN`) a
-reloaded page takes its sign-in back with `POST /api/auth/resume`: same
-origin only, and the cookie is a secret of its own, never the token.
+session's last admin action (60 minutes by default and at most,
+`ADMIN_RELOAD_WINDOW_MIN`) a reloaded page takes its sign-in back with
+`POST /api/auth/resume`: same origin only, and the cookie is a secret of its
+own, never the token. A resume is not an admin action.
 
 Sessions are listable and revocable (`GET /api/auth/sessions`,
 `DELETE /api/auth/sessions/{token_hash}`; `POST /api/auth/logout` revokes the
@@ -96,6 +105,7 @@ they accept and in what happens **before setup has ever run**:
 |---|---|---|---|
 | `require_admin` (`domovoi/auth.py`) | Bearer only | **Fails closed — 501 "auth not configured"** | Plugin management (install/confirm/enable/disable/uninstall/upgrade). Installing a plugin is code execution, so there is no grace period. Local dev uses the `domovoi plugin dev` CLI, which never crosses HTTP. |
 | `require_admin_security` (`domovoi/admin_auth.py`) | Bearer only | **Fails closed — 501** | Config writes, service restart, satellite code push, pairing preseed and reset, approving a parked satellite, satellite delete, device-token rotation, opening a drop-in from HTTP, pulling new code, clearing a container-guard tamper incident, the command recordings. These reach code, the microphone or the whole house, so `--reset-admin` closes them again until a new password exists. |
+| `require_admin_security_read` | Bearer only | **Fails closed — 501** | The read half of the security tier: showing the household device token, and the command recordings' list and audio. The cookie never reads these: it reaches every port of the host. |
 | `require_admin_mutation` | Bearer only | LAN-trust grace (allowed) | Other admin-only changes (for example stopping wake-word training or acknowledging a container-guard failure) — a fresh clone works before setup, and the moment a password exists the gate is real. |
 | `require_device` / `require_device_read` | `X-Device-Token` (the household token, `household_device_tokens`) **or** an admin Bearer; the read half also takes the dashboard cookie and a `?device_token=` query for URLs a browser fetches | LAN-trust grace; the live-microphone socket has none | Ordinary household actions: playback, the room queue, chat, announcements, and reading back conversations and files. A room that is playing also lets a person with no credential at all pause, skip and edit its queue (guests; see [SECURITY_PRIVACY.md](../SECURITY_PRIVACY.md#guests-on-a-playing-room)). Wrong tokens are throttled like wrong passwords. |
 | `require_admin_read` | Bearer **or** cookie | LAN-trust grace | Gated GETs whose responses carry secrets (e.g. config reads) — the cookie may render state, never mutate. |
@@ -110,7 +120,7 @@ sequenceDiagram
     CL->>G: request with credentials (or not)
     G->>PG: classify: check_admin_request()
     alt valid Bearer
-        G-->>CL: proceed (expiry slid forward)
+        G-->>CL: proceed (an admin write restarts the idle hour)
     else no admin_auth row yet
         alt plugin management
             G-->>CL: 501 — complete first-run setup first

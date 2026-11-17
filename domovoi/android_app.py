@@ -702,12 +702,12 @@ def auto_fetch_decision(manifest: dict[str, Any], policy: str | None = None) -> 
         return False, f"Domovoi {rel['version_name']} is already on this server"
     pol = egress.policy() if policy is None else policy
     if pol == "never":
-        return False, "internet access is turned off for this box (Settings → Internet): upload the APKs instead"
+        return False, "internet access is turned off for this box (Settings → Privacy → Internet): upload the APKs instead"
     if pol == "sometimes":
         return False, ("internet access is “sometimes”, so big downloads wait for an admin: press "
                        "“Download the app to this server”")
     if pol != "always":
-        return False, ("internet access hasn't been answered yet (Settings → Internet), so downloads wait "
+        return False, ("internet access hasn't been answered yet (Settings → Privacy → Internet), so downloads wait "
                        "for an admin: press “Download the app to this server”")
     fb = _fallback(manifest)
     if fb is None:

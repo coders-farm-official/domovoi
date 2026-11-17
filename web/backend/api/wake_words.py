@@ -105,6 +105,9 @@ class WakeWord(BaseModel):
     # from before V047).
     trained_clips: int | None = None
     trained_clips_from: str | None = None
+    # "Tune Domovoi": the published word this is the household's own copy
+    # of (domovoi_v1), else None. Private to the house.
+    tuned_from: str | None = None
 
 
 class WakeWordCreate(BaseModel):
@@ -323,7 +326,10 @@ def _to_model(row: dict, *, new_clips: int = 0,
         trained = ((int(row["trained_clips"]), "model")
                    if row.get("model_ref") and row.get("trained_clips") is not None
                    else (None, None))
+    from domovoi import wake_tuning
+
     return WakeWord(
+        tuned_from=wake_tuning.base_of(row.get("slug")),
         new_clips=new_clips,
         synthetic_only=bool(row.get("synthetic_only")),
         trained_clips=trained[0],
@@ -448,6 +454,49 @@ async def trainer_disable(request: Request):
         "/v1/admin/wake/trainer/disable", {}, timeout=600.0,
         headers=auth_forward_headers(request),
     )
+    return bridge_response(status, payload)
+
+
+# ─── "Tune Domovoi to your household" ──────────────────────────────────────
+# A household copy of the published Domovoi word, trained with the house's
+# own recordings (domovoi/wake_tuning.py). The core moves the rooms, so
+# these proxy /v1/admin/wake/tuning*, at the trainer's own tiers. Declared
+# before the /{wake_word_id} routes.
+
+
+@router.get("/tuning", dependencies=[Depends(require_admin_read)])
+async def tuning_status(request: Request):
+    """Whether Domovoi can be tuned here, the copy's state (off, recording,
+    training, failed, in_use, standard), its word id for recording and
+    training, and the rooms on each word."""
+    status, payload = await get_admin(
+        "/v1/admin/wake/tuning", timeout=15.0, headers=auth_forward_headers(request))
+    return bridge_response(status, payload)
+
+
+@router.post("/tuning", dependencies=[Depends(require_admin_mutation)])
+async def tuning_start(request: Request):
+    """"Tune Domovoi to your household": make the copy's word, ready for
+    clips. Rooms keep the standard word until it is trained. 409 with the
+    reason when it can't start (training off, word not published)."""
+    status, payload = await post_admin(
+        "/v1/admin/wake/tuning", {}, timeout=60.0, headers=auth_forward_headers(request))
+    return bridge_response(status, payload)
+
+
+@router.post("/tuning/undo", dependencies=[Depends(require_admin_mutation)])
+async def tuning_undo(request: Request):
+    """"Go back to the standard Domovoi word" in every room."""
+    status, payload = await post_admin(
+        "/v1/admin/wake/tuning/undo", {}, timeout=120.0, headers=auth_forward_headers(request))
+    return bridge_response(status, payload)
+
+
+@router.post("/tuning/use", dependencies=[Depends(require_admin_mutation)])
+async def tuning_use(request: Request):
+    """Use the tuned copy again after going back."""
+    status, payload = await post_admin(
+        "/v1/admin/wake/tuning/use", {}, timeout=120.0, headers=auth_forward_headers(request))
     return bridge_response(status, payload)
 
 
@@ -981,6 +1030,22 @@ async def wake_use(body: WakeUseBody, request: Request):
     return bridge_response(status, payload)
 
 
+class WakeRoomBody(BaseModel):
+    room_id: str = Field(..., min_length=1, max_length=120)
+    slugs: list[str] = Field(..., min_length=1, max_length=5)
+
+
+@router.put("/room", dependencies=[Depends(require_admin_mutation)])
+async def wake_room_words(body: WakeRoomBody, request: Request):
+    """Set a connected room's wake words, main word first (1.4.0): 409 with
+    the reason when its device can't run that many or a word can't be
+    given; the room restarts to load them."""
+    status, payload = await put_admin(
+        "/v1/admin/wake/room", {"room_id": body.room_id, "slugs": body.slugs}, timeout=120.0,
+        headers=auth_forward_headers(request))
+    return bridge_response(status, payload)
+
+
 @router.post("/{wake_word_id}/push", dependencies=[Depends(require_admin_mutation)])
 async def push_wake_word(wake_word_id: int, body: RoomBody, request: Request):
     """Push a trained wake model to a connected satellite. Proxies the
@@ -997,8 +1062,17 @@ async def push_wake_word(wake_word_id: int, body: RoomBody, request: Request):
 
 @router.delete("/{wake_word_id}", status_code=204, dependencies=[Depends(require_admin_mutation)])
 async def delete_wake_word(wake_word_id: int, request: Request) -> None:
+    from domovoi import wake_tuning
+
     async with session_scope() as s:
         repo = WakeWordsRepository(s)
+        current = await repo.get(wake_word_id)
+        if current is not None and await wake_tuning.in_use(s, current["slug"]):
+            # The rooms would be left on a model that's gone.
+            raise HTTPException(
+                status_code=409,
+                detail="rooms use this word: Go back to the standard Domovoi word first",
+            )
         removed = await repo.delete(wake_word_id)
         if removed is None:
             # Either not found, or it's the default (which delete refuses).

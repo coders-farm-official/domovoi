@@ -96,6 +96,10 @@ public enum FileStrings {
     /// line. **iOS-only.**
     public static let unnamedFile = "file"
 
+    /// The stem of a Domovoi document saved as Word when its name has none
+    /// (`.html` alone). Android's `wordSaveName` fallback, word for word.
+    public static let unnamedDocument = "document"
+
     public static let verbOpen = "open"
     public static let verbRead = "read"
     public static let verbView = "view"

@@ -88,18 +88,37 @@ public enum PlayerServerSwitch {
         item.kind != .device && item.savedKey == nil
     }
 
-    public static func plan(queue: [PlayerItem], index: Int) -> PlayerServerSwitchPlan {
-        let kept = queue.filter { !fromServer($0) }
-        let removed = queue.indices.filter { fromServer(queue[$0]) }.sorted(by: >)
+    /// What leaving the queue's entries that `goes` picks leaves of it.
+    /// `goes` defaults to ``fromServer(_:)``, the server switch; the other
+    /// caller is ``pluginKeeps(_:_:)``, when our radio plugin leaves a house
+    /// while a station is queued.
+    public static func plan(
+        queue: [PlayerItem],
+        index: Int,
+        goes: (PlayerItem) -> Bool = PlayerServerSwitch.fromServer
+    ) -> PlayerServerSwitchPlan {
+        let kept = queue.filter { !goes($0) }
+        let removed = queue.indices.filter { goes(queue[$0]) }.sorted(by: >)
         let current = (index >= 0 && index < queue.count) ? queue[index] : nil
-        let currentGoes = current.map(fromServer) ?? true
-        // The phone's songs before the play head: the current one's place
+        let currentGoes = current.map(goes) ?? true
+        // The kept entries before the play head: the current one's place
         // among them, or — when the current one goes — the next one's.
         let head = min(max(index, 0), queue.count)
-        let before = queue[0..<head].filter { !fromServer($0) }.count
+        let before = queue[0..<head].filter { !goes($0) }.count
         let keptIndex = kept.isEmpty ? 0 : min(before, kept.count - 1)
         return PlayerServerSwitchPlan(
             kept: kept, keptIndex: keptIndex, removed: removed, currentGoes: currentGoes
         )
+    }
+
+    /// Whether `item` may stay in the phone's queue on a house with these
+    /// capabilities. A **station** (``PlayerKind/radio``) streams through our
+    /// radio plugin (`/api/plugins/radio/stations/{id}/stream`), so it stays
+    /// only while that plugin is ours and installed
+    /// (``Capabilities/has(_:)`` for ``capStations``). Once it is gone the
+    /// mini player, Now Playing and the lock screen must not go on showing a
+    /// station or offering to play it. Everything else is unaffected.
+    public static func pluginKeeps(_ item: PlayerItem, _ capabilities: Capabilities) -> Bool {
+        item.kind != .radio || capabilities.has(capStations)
     }
 }

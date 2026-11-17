@@ -220,10 +220,10 @@ targets:
           Domovoi sets the timers and alarms you ask it for, so they ring even
           when your phone is silent.
 
-        # NO NSSpeechRecognitionUsageDescription. Owner answer Q12: speech to
-        # text is our own Moonshine on ONNX Runtime, pinned, the same model
-        # Android uses. Apple's speech framework is not used, so that prompt
-        # never appears — and if a later batch adds this key, something has
+        # NO NSSpeechRecognitionUsageDescription. The app does no speech
+        # recognition on the phone: Chat's talk button and room mode send
+        # the audio to the Domovoi server, which turns it into text. Apple's
+        # speech framework is not used, so that prompt never appears — and if a later batch adds this key, something has
         # gone wrong.
 
         # ---- what the app may reach in the clear ---------------------------

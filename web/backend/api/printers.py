@@ -26,6 +26,8 @@ import re
 from typing import Any, Optional
 
 import httpx
+from urllib.parse import quote
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
@@ -407,4 +409,49 @@ async def scan_finish(scan_id: str, request: Request):
 @router.post("/api/scan/jobs/{scan_id}/cancel", dependencies=DEVICE)
 async def scan_cancel(scan_id: str, request: Request):
     status, out = await post_admin(f"/v1/scan/jobs/{_scan_id(scan_id)}/cancel", {}, headers=_headers(request))
+    return bridge_response(status, out)
+
+
+# ─── Reading scans ("What does it say?", domovoi/scan_reader) ────────────
+
+
+class ScanReadBody(BaseModel):
+    path: str = Field(..., min_length=1, max_length=1000)
+
+
+@router.get("/api/scan/reads", dependencies=READ)
+async def scan_read_for_path(request: Request, path: str = Query(..., min_length=1, max_length=1000)):
+    """The newest reading of a scan in Documents/Scans (``read`` null when
+    it was never read) and whether this server can read scans."""
+    status, out = await get_admin(f"/v1/scan/reads?path={quote(path, safe='')}", headers=_headers(request))
+    return bridge_response(status, out)
+
+
+@router.post("/api/scan/reads", dependencies=DEVICE, status_code=201)
+async def scan_read_start(request: Request, body: ScanReadBody):
+    """Read a scan in Documents/Scans (or return the reading already under
+    way or done for those bytes)."""
+    status, out = await post_admin("/v1/scan/reads", body.model_dump(), headers=_headers(request))
+    return bridge_response(status, out)
+
+
+@router.get("/api/scan/reads/{read_id}", dependencies=READ)
+async def scan_read_get(read_id: str, request: Request):
+    status, out = await get_admin(f"/v1/scan/reads/{_scan_id(read_id)}", headers=_headers(request))
+    return bridge_response(status, out)
+
+
+@router.get("/api/scan/reads/{read_id}/summary", dependencies=READ)
+async def scan_read_summary(read_id: str, request: Request):
+    """"What does it say?": a short summary (made once by the chat model;
+    the start of the text with AI features off)."""
+    status, out = await get_admin(f"/v1/scan/reads/{_scan_id(read_id)}/summary", timeout=180.0,
+                                  headers=_headers(request))
+    return bridge_response(status, out)
+
+
+@router.get("/api/scan/reads/{read_id}/text", dependencies=READ)
+async def scan_read_text(read_id: str, request: Request):
+    """The scan's full text, page by page."""
+    status, out = await get_admin(f"/v1/scan/reads/{_scan_id(read_id)}/text", headers=_headers(request))
     return bridge_response(status, out)

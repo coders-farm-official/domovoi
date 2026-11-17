@@ -113,7 +113,7 @@ final class ShellNavigationTests: XCTestCase {
     /// goes home rather than rendering a stub — and the history goes with it,
     /// because every screen in it was reached under the old manifest.
     func testARouteThatLosesItsCapabilitySendsTheShellHome() {
-        let withRadio = Capabilities(plugins: [CapabilityPlugin(slug: "r", appCapabilities: [capStations])])
+        let withRadio = Capabilities(plugins: [OurPlugins.radio])
         var state = NavigationState()
         state.go(.music)
         state.go(.stations)

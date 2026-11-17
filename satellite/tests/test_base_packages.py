@@ -40,9 +40,10 @@ class FakeApt:
     """dpkg-query / apt-cache / apt-get / ip, as a dict of installed names."""
 
     def __init__(self, installed, *, candidates=None, route=True, install_ok=True,
-                 unpacked=(), configure_fixes=False, tick=None):
+                 unpacked=(), configure_fixes=False, tick=None, update_ok=True):
         self.installed = set(installed)
         self.unpacked = set(unpacked)
+        self.update_ok = update_ok
         self.configure_fixes = configure_fixes
         # Each call costs this much of a fake clock: (clock list, seconds).
         self.tick = tick
@@ -82,6 +83,25 @@ class FakeApt:
             out = f"{name}:\n  Installed: (none)\n  Candidate: {'1.0-1' if name in self.candidates else '(none)'}\n"
         elif argv[:3] == ["ip", "route", "show"]:
             out = "default via 192.168.1.1 dev wlan0" if self.route else ""
+        elif argv[0] == "apt-get" and "update" in argv:
+            if not self.update_ok:
+                rc, out = 100, "E: Failed to fetch http://deb.example/dists/x/InRelease"
+        elif argv[0] == "apt-get" and "install" in argv and "-f" in argv:
+            # apt's repair: fetches what the unpacked packages need and
+            # configures them; never removes (asked with --no-remove).
+            assert "--no-remove" in argv, argv
+            if self.install_ok:
+                self.installed |= self.unpacked
+                self.unpacked = set()
+            else:
+                rc, out = 100, "E: Unable to fetch some archives"
+        elif argv[0] == "apt-get" and "install" in argv and self.unpacked:
+            # Real apt: while ANY package is unpacked with its dependencies
+            # missing, an install by name is refused (S2-12).
+            rc, out = 100, ("The following packages have unmet dependencies:\n"
+                            " mpg123 : Depends: libmpg123-0t64 but it is not installed\n"
+                            "E: Unmet dependencies. Try 'apt --fix-broken install' with no "
+                            "packages (or specify a solution).")
         elif argv[0] == "apt-get" and "install" in argv:
             if self.install_ok:
                 for target in argv[argv.index("--no-remove") + 1:]:
@@ -142,23 +162,62 @@ def test_the_office_unit_gets_mpg123_back(tmp_path, done):
     doc = base_packages.repair(run=apt, stage2_done=done, report_path=tmp_path / "r.json",
                                sleep=lambda s: None)
     assert doc["state"] == "repaired"
-    assert doc["missing"] == ["mpg123"] and doc["installed"] == ["mpg123"]
+    assert doc["missing"] == ["mpg123"]
     apt_calls = [c for c in apt.calls if c[0] == "apt-get"]
-    assert apt_calls[0][-2:] == ["update", "-qq"]
-    install = apt_calls[1]
-    assert install[-5:] == ["install", "-y", "--no-install-recommends", "--no-remove", "mpg123"]
-    assert "DPkg::Lock::Timeout=120" in install
+    assert apt_calls[0][-3:] == ["update", "-qq", "--error-on=any"]
+    repair = apt_calls[1]
+    assert repair[-4:] == ["-f", "install", "-y", "--no-remove"]
+    assert "DPkg::Lock::Timeout=120" in repair
     record = json.loads((tmp_path / "r.json").read_text())
     assert record["state"] == "repaired" and record["still_missing"] == []
 
 
-def test_apt_is_never_asked_to_remove_or_repair(tmp_path, done):
-    apt = FakeApt(set())
+def test_a_removed_package_is_installed_by_name(tmp_path, done):
+    apt = FakeApt(_everything_but("mpg123"))
+    doc = base_packages.repair(run=apt, stage2_done=done, report_path=tmp_path / "r.json",
+                               sleep=lambda s: None)
+    assert doc["state"] == "repaired" and doc["installed"] == ["mpg123"]
+    install = [c for c in apt.calls if c[0] == "apt-get" and "install" in c][-1]
+    assert install[-5:] == ["install", "-y", "--no-install-recommends", "--no-remove", "mpg123"]
+
+
+def test_the_mac_sitting_pi_heals_three_half_installed_packages(tmp_path, done):
+    # S2-12 (2026-11-16): stage 2 never got online, so stage 1's
+    # unpacked mpg123, libportaudio2 and libjack-jackd2-0 reached this step
+    # with their libraries missing. Each install by name was refused for the
+    # others' unmet dependencies, every boot; apt's repair fixes all three.
+    three = ("mpg123", "libportaudio2", "libjack-jackd2-0")
+    apt = FakeApt(_everything_but(*three), unpacked=set(three))
+    doc = base_packages.repair(run=apt, stage2_done=done, report_path=tmp_path / "r.json",
+                               sleep=lambda s: None)
+    assert doc["state"] == "repaired", doc
+    assert doc["still_missing"] == []
+
+
+def test_without_the_repair_apt_refuses_by_name(tmp_path, done):
+    # The fake holds apt to its real rule: what made every boot fail.
+    apt = FakeApt(_everything_but("mpg123", "libportaudio2"), unpacked={"mpg123", "libportaudio2"})
+    r = apt(["apt-get", "install", "-y", "--no-install-recommends", "--no-remove", "mpg123"])
+    assert r.returncode == 100 and "Unmet dependencies" in r.stdout
+
+
+def test_no_repair_on_stale_lists(tmp_path, done):
+    apt = FakeApt(_everything_but("mpg123"), unpacked={"mpg123"}, update_ok=False)
+    doc = base_packages.repair(run=apt, stage2_done=done, report_path=tmp_path / "r.json",
+                               sleep=lambda s: None)
+    assert not any(c[0] == "apt-get" and "-f" in c for c in apt.calls)
+    assert doc["state"] == "failed"
+    assert "Unmet dependencies" in doc["detail"] or "could not be checked" in doc["detail"] \
+        or "downloaded" in doc["detail"], doc["detail"]
+
+
+def test_apt_is_never_asked_to_remove(tmp_path, done):
+    apt = FakeApt(set(), unpacked={"mpg123"})
     base_packages.repair(run=apt, stage2_done=done, report_path=tmp_path / "r.json",
                          sleep=lambda s: None)
     for c in apt.calls:
         if c[0] == "apt-get":
-            assert not {"remove", "purge", "autoremove", "-f", "--fix-broken"} & set(c), c
+            assert not {"remove", "purge", "autoremove", "--fix-broken"} & set(c), c
             if "install" in c:
                 assert "--no-remove" in c
 
@@ -191,6 +250,19 @@ def test_a_failed_install_is_recorded_as_failed(tmp_path, done):
                                sleep=lambda s: None)
     assert doc["state"] == "failed" and doc["still_missing"] == ["mpg123"]
     assert any("Unable to fetch" in e for e in doc["errors"])
+    # S2-13: a failed run says why, in its own record.
+    assert doc["detail"].startswith("some packages could not be downloaded")
+    assert "Unable to fetch" in doc["detail"]
+    assert json.loads((tmp_path / "r.json").read_text())["detail"] == doc["detail"]
+
+
+def test_the_failure_reason_in_plain_words():
+    assert base_packages.failure_reason([]) == "apt gave no reason"
+    why = base_packages.failure_reason([
+        "apt-get update: rc=100: W: Failed\nE: Release file for http://x is not valid yet",
+    ])
+    assert why.startswith("the room's clock is behind") and "not valid yet" in why
+    assert len(base_packages.failure_reason(["x" * 1000])) <= 240
 
 
 def test_a_missing_tool_or_a_timeout_never_raises(tmp_path, done):
@@ -223,10 +295,23 @@ def test_the_record_is_0644_and_never_written_through_a_link(tmp_path):
 def test_the_reboot_note():
     assert base_packages.reboot_note([], None, "b1") is None
     note = base_packages.reboot_note(["mpg123"], {"boot_id": "b1", "state": "no_network"}, "b1")
-    assert note.startswith("system packages missing (mpg123): reboot") and "no network" in note
+    assert note.startswith("system packages missing (mpg123):") and "no network" in note
+    assert "restart it with the network up" in note
     assert len(note) <= 200
     other_boot = base_packages.reboot_note(["mpg123"], {"boot_id": "b0", "state": "failed"}, "b1")
-    assert "failed" not in other_boot
+    assert "couldn't install" not in other_boot
+
+
+def test_a_failed_install_says_why_not_that_a_reboot_fixes_it():
+    # S2-12: "a reboot ... installs them" proved false; a failed run says
+    # what went wrong instead.
+    note = base_packages.reboot_note(
+        ["mpg123", "libportaudio2"],
+        {"boot_id": "b1", "state": "failed", "detail": "the card is full (E: No space left on device)"},
+        "b1")
+    assert note.startswith("system packages missing (mpg123, libportaudio2): the room couldn't install them")
+    assert "the card is full" in note and "reboot" not in note
+    assert len(note) <= 200
 
 
 # ─── who runs it ──────────────────────────────────────────────────────────
@@ -298,6 +383,19 @@ def test_no_reboot_note_where_no_boot_step_runs(monkeypatch):
     sat = _client(monkeypatch, unit="missing")
     sat._check_base_packages(0.0)
     assert sat._base_reboot_needed is None
+
+
+def test_a_failed_run_from_an_older_boot_step_still_says_why(monkeypatch, caplog):
+    # S2-13: an older boot step's "failed" record has `errors` and no
+    # `detail`; the room's log and card said nothing about why.
+    sat = _client(monkeypatch, gone=("mpg123",), report={
+        "boot_id": "b1", "ts": 4.0, "state": "failed", "still_missing": ["mpg123"],
+        "errors": ["mpg123: rc=100: E: Unmet dependencies. Try 'apt --fix-broken install'"]})
+    with caplog.at_level(logging.WARNING, logger="satellite"):
+        sat._check_base_packages(0.0)
+    assert "failed - still missing mpg123 (the packages need others" in caplog.text
+    assert "apt said: mpg123: rc=100" in caplog.text
+    assert "couldn't install them: the packages need others" in sat._base_reboot_needed
 
 
 def test_a_repair_is_logged(monkeypatch, caplog):

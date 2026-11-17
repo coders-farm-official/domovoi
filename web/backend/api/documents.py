@@ -840,6 +840,20 @@ async def download_zip(req: ZipRequest) -> Response:
     path is containment-checked; missing ones are skipped."""
     buf = io.BytesIO()
     added = 0
+    used: set[str] = set()
+
+    def _arcname(name: str) -> str:
+        # two files can share a name from different folders: keep both
+        stem, dot, ext = name.rpartition(".")
+        if not dot:
+            stem, ext = name, ""
+        out, n = name, 1
+        while out.lower() in used:
+            n += 1
+            out = f"{stem} ({n}).{ext}" if ext else f"{stem} ({n})"
+        used.add(out.lower())
+        return out
+
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for rp in req.rel_paths:
             try:
@@ -847,7 +861,28 @@ async def download_zip(req: ZipRequest) -> Response:
             except HTTPException:
                 continue
             if target.exists() and target.is_file():
-                z.write(target, arcname=target.name)
+                word = None
+                if (
+                    target.suffix.lower() in _FORMATTED_EXTS
+                    and target.stat().st_size <= _DOC_MAX_BYTES
+                ):
+                    # A formatted document is a Word file to anyone who
+                    # opens the zip, as with the single Download. One that
+                    # can't be converted goes in as it is rather than
+                    # failing the whole zip.
+                    try:
+                        word = await _word_copy(
+                            richdoc.document_body(
+                                target.read_bytes().decode("utf-8", errors="replace")
+                            ),
+                            target.stem,
+                        )
+                    except HTTPException:
+                        word = None
+                if word is not None:
+                    z.writestr(_arcname(f"{target.stem}.docx"), word)
+                else:
+                    z.write(target, arcname=_arcname(target.name))
                 added += 1
     if not added:
         raise HTTPException(status_code=404, detail="none of the requested files exist")

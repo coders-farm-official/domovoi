@@ -11,10 +11,14 @@ final class RoomListening {
     var frame = [Int16](repeating: 0, count: RoomAudioFrame.samples)
     var ears: (any RoomEars)?
     var earsGen = 0
-    /// The wake gate (rebuilt when the threshold changes).
-    var gate: WakeGate?
+    /// The words the ears run, main word first (1.4.0), one per score.
+    var words: [String] = []
+    /// One wake gate per word (rebuilt when a threshold changes).
+    var gates: WakeGateSet?
     /// The peak score of the wake that opened the next turn.
     var wakePeak: Float?
+    /// The word that opened the next turn (its `utterance_start.wake_word`).
+    var wakeFired: String?
     var uttSeq = 0
 
     init(run: Int, mic: RoomMic) {
@@ -50,6 +54,9 @@ extension RoomEngine {
         }
         while isRunning(run) {
             loadEarsIfWanted(l)
+            // The words that loaded changed: a new hello says so (between
+            // turns only).
+            maybeRehello()
             if muted {
                 if mic.openAs != nil { mic.close() }
                 update {
@@ -95,7 +102,7 @@ extension RoomEngine {
             do {
                 if inCall {
                     if let heard = try callFrame(l, n), let ears = l.ears {
-                        try callCommand(l, ears, wakeScore: heard)
+                        try callCommand(l, ears, wakeScore: heard.score, wakeWord: heard.word)
                     }
                 } else if let ears = l.ears {
                     if try listenFrame(l, n, ears) { try turn(l, ears, firstTrigger: "wake_word") }
@@ -120,13 +127,27 @@ extension RoomEngine {
         guard let want = shared.withLock({ $0.wantModels }), want.gen != l.earsGen else { return }
         l.earsGen = want.gen
         l.ears = nil
-        l.gate = nil
+        l.gates = nil
+        l.words = []
         do {
-            l.ears = try parts.ears.load(want.files)
-            shared.withLock { $0.loadedWake = want.files.wakeKey }
+            let ears = try parts.ears.load(want.files)
+            // One front end, a classifier per word: what loaded, main first
+            // (ears that do not say ran the files they were given).
+            let words = ears.wakeWords.isEmpty ? want.files.wakeKeys : ears.wakeWords
+            l.ears = ears
+            l.words = words
+            shared.withLock { s in
+                s.loadedWake = want.files.wakeKey
+                s.loadedWakeWords = words
+                s.loadedGen = want.gen
+            }
             update { $0.wakeReady = true }
         } catch {
-            shared.withLock { $0.loadedWake = nil }
+            shared.withLock { s in
+                s.loadedWake = nil
+                s.loadedWakeWords = nil
+                s.loadedGen = want.gen
+            }
             let why = (error as? OnnxModel.Failure)?.note ?? RoomIdentity.describe(error)
             update {
                 $0.wakeReady = false
@@ -150,11 +171,17 @@ extension RoomEngine {
         maybeStartMusic()
     }
 
-    func wakeGate(_ l: RoomListening) -> WakeGate {
-        let threshold = shared.withLock { $0.wakeThreshold }
-        if let g = l.gate, g.threshold == threshold { return g }
-        let g = WakeGate(threshold: threshold)
-        l.gate = g
+    /// One gate per loaded word, each at its own threshold
+    /// (``RoomWakeWords/thresholds(for:room:extras:)``); rebuilt when
+    /// a threshold changes.
+    func wakeGates(_ l: RoomListening) -> WakeGateSet {
+        let words = l.words
+        let thresholds = shared.withLock { s in
+            RoomWakeWords.thresholds(for: words, room: s.wakeThreshold, extras: s.wakeExtras)
+        }
+        if let g = l.gates, g.words == words, g.thresholds == thresholds { return g }
+        let g = WakeGateSet(words: words, thresholds: thresholds)
+        l.gates = g
         return g
     }
 
@@ -166,7 +193,7 @@ extension RoomEngine {
             if phase != .speaking { setPhase(.speaking) }
             return false
         }
-        let g = wakeGate(l)
+        let g = wakeGates(l)
         if phase == .speaking {
             setPhase(.listening)
             ears.resetWake()
@@ -181,9 +208,10 @@ extension RoomEngine {
         }
         if quiet { g.quietFor(now: parts.clock()) }
         maybeStartMusic()
-        guard let score = try ears.wakeScore(l.slice(n)) else { return false }
-        if g.feed(score, now: parts.clock()) {
-            l.wakePeak = g.lastPeak
+        guard let scores = try ears.wakeScores(l.slice(n)) else { return false }
+        if let fired = g.feed(scores, now: parts.clock()) {
+            l.wakePeak = g.lastPeak(fired)
+            l.wakeFired = fired < g.words.count ? g.words[fired] : nil
             return true
         }
         return false
@@ -192,15 +220,20 @@ extension RoomEngine {
     /// A whole turn from the wake: acknowledge, capture, reply, follow-ups.
     func turn(_ l: RoomListening, _ ears: any RoomEars, firstTrigger: String) throws {
         let wokeAt = parts.clock()
-        // Taken once: a wake's score is about the capture right after it.
+        // Taken once: a wake's score and word are about the capture right
+        // after it.
         let wakeScore = l.wakePeak
+        let wakeWord = l.wakeFired
         l.wakePeak = nil
-        // Whatever run the gate was in is over with the turn.
-        defer { l.gate?.reset() }
-        try turnAfterWake(l, ears, firstTrigger: firstTrigger, wokeAt: wokeAt, wakeScore: wakeScore)
+        l.wakeFired = nil
+        // Whatever run the gates were in is over with the turn.
+        defer { l.gates?.reset() }
+        try turnAfterWake(l, ears, firstTrigger: firstTrigger, wokeAt: wokeAt, wakeScore: wakeScore, wakeWord: wakeWord)
     }
 
-    func turnAfterWake(_ l: RoomListening, _ ears: any RoomEars, firstTrigger: String, wokeAt: Int64, wakeScore: Float?) throws {
+    func turnAfterWake(
+        _ l: RoomListening, _ ears: any RoomEars, firstTrigger: String, wokeAt: Int64, wakeScore: Float?, wakeWord: String? = nil
+    ) throws {
         shared.withLock { $0.pendingMusic = nil }
         let musicWas = parts.music.playing
         parts.music.stop()
@@ -246,8 +279,11 @@ extension RoomEngine {
         var wakeMS: Int? = Int(parts.clock() - wokeAt)
         var first = true
         while isRunning(l.run) && !muted {
+            // The wake's word and score go with the first capture only: a
+            // follow-up was not woken by a word.
             let outcome = try capture(l, ears, trigger: trigger, ack: first ? ack : [:], wakeMS: wakeMS,
-                                      preSpeech: preSpeech, wakeScore: first ? wakeScore : nil)
+                                      preSpeech: preSpeech, wakeScore: first ? wakeScore : nil,
+                                      wakeWord: first ? wakeWord : nil)
             first = false
             wakeMS = nil
             if outcome != .sent { break }
@@ -288,7 +324,8 @@ extension RoomEngine {
         ack: [String: RoomJSON],
         wakeMS: Int?,
         preSpeech: Int?,
-        wakeScore: Float? = nil
+        wakeScore: Float? = nil,
+        wakeWord: String? = nil
     ) throws -> RoomCaptureOutcome {
         l.uttSeq += 1
         let utt = l.uttSeq
@@ -309,7 +346,8 @@ extension RoomEngine {
             shared.withLock { $0.captureUtt = nil }
             return .cancelled
         }
-        guard send(RoomProtocol.utteranceStart(trigger: trigger, utt: utt, backlogMS: 0, wakeMS: wakeMS, wakeScore: wakeScore)) else {
+        guard send(RoomProtocol.utteranceStart(trigger: trigger, utt: utt, backlogMS: 0, wakeMS: wakeMS,
+                                               wakeScore: wakeScore, wakeWord: wakeWord)) else {
             shared.withLock { $0.captureUtt = nil }
             return .dropped
         }
@@ -394,24 +432,26 @@ extension RoomEngine {
         return false
     }
 
-    /// One frame of a drop-in: relayed as it is. The wake word's score when
-    /// it was heard ("hey jarvis, hang up"), else nil. One chunk over the
-    /// threshold is enough here, as on a Pi: the wake gate's patience and
-    /// cooldown are the main wake loop's only.
-    func callFrame(_ l: RoomListening, _ n: Int) throws -> Float? {
+    /// One frame of a drop-in: relayed as it is. A wake word's score and
+    /// slug when one was heard ("hey jarvis, hang up"), else nil: EVERY
+    /// loaded word listens (1.4.0), each over its own threshold. One chunk
+    /// over the threshold is enough here, as on a Pi: the wake gate's
+    /// patience and cooldown are the main wake loop's only.
+    func callFrame(_ l: RoomListening, _ n: Int) throws -> (score: Float, word: String?)? {
         if phase != .call { setPhase(.call) }
         update { if !$0.micLive { $0.micLive = true } }
         sendAudio(l.frame, n)
-        guard let ears = l.ears, let score = try ears.wakeScore(l.slice(n)) else { return nil }
-        let threshold = shared.withLock { $0.wakeThreshold }
-        return score > threshold ? score : nil
+        guard let ears = l.ears, let scores = try ears.wakeScores(l.slice(n)) else { return nil }
+        let g = wakeGates(l)
+        guard let i = g.heard(scores) else { return nil }
+        return (scores[i], i < g.words.count ? g.words[i] : nil)
     }
 
     /// A command in the middle of a call: framed as a turn, so the core
     /// transcribes it instead of relaying it; the call goes on after.
-    func callCommand(_ l: RoomListening, _ ears: any RoomEars, wakeScore: Float) throws {
+    func callCommand(_ l: RoomListening, _ ears: any RoomEars, wakeScore: Float, wakeWord: String? = nil) throws {
         let outcome = try capture(l, ears, trigger: "wake_word", ack: CaptureMachine.ackFields(greetingClip: nil, ackBeforeCapture: false),
-                                  wakeMS: 0, preSpeech: nil, wakeScore: wakeScore)
+                                  wakeMS: 0, preSpeech: nil, wakeScore: wakeScore, wakeWord: wakeWord)
         if outcome == .sent { _ = awaitReply(l) }
         ears.resetWake()
         setPhase(inCall ? .call : .listening)

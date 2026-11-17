@@ -6,7 +6,8 @@ Checks:
 1. Handler contract: ``name == tool_schema["name"]``; band in a
    plugin-usable range; unanchored greedy catch-all ⇒ band ≥ 900;
    ``requires_network != "no"`` ⇒ ``fallback_offline`` overridden;
-   ``confirmation_kinds`` all ``<slug>.``-prefixed; ``display`` present;
+   ``confirmation_kinds`` all ``<slug>.``-prefixed; ``choice_kinds`` a
+   subset of them, with ``handle_choice_reply`` overridden; ``display`` present;
    ``offline_ok`` only set on degraded handlers' paths.
 2. **Utterance-corpus collision test**: the core-owned corpus merged with
    every currently-enabled plugin's manifest-declared ``corpus`` phrases,
@@ -26,8 +27,8 @@ Checks:
    must be one the install preview's source walk lists on that tier; and
    every route must be one FastAPI runs the plugin gate for — a plain
    Starlette ``Route`` / ``Mount`` would mount with no gate at all. A
-   websocket route is refused too: plugin websocket routes are not
-   supported yet (the gate is HTTP-only). Each is a load failure
+   websocket route must be a ``@device_endpoint`` FastAPI websocket route
+   (the gate's websocket form is the device tier only). Each is a load failure
    (:func:`check_route_tiers`).
 7. Web page routes: every ``[[web.pages]].route`` is a valid hash slug
    and collides with neither a core dashboard route nor another enabled
@@ -226,6 +227,22 @@ def check_handlers(
                 report.errors.append(
                     f"handler {name!r}: confirmation kind {kind!r} must be "
                     f"namespaced {prefix}<kind>"
+                )
+        choice = tuple(getattr(h, "choice_kinds", ()) or ())
+        if choice:
+            # SDK 1.10: a plugin's free-text question. Every reply to it
+            # reaches handle_choice_reply first, so it must be one of the
+            # handler's own (namespaced) kinds and have a reader.
+            stray = [k for k in choice if k not in getattr(h, "confirmation_kinds", ())]
+            if stray:
+                report.errors.append(
+                    f"handler {name!r}: choice_kinds {stray!r} are not in its "
+                    f"confirmation_kinds"
+                )
+            if type(h).handle_choice_reply is Handler.handle_choice_reply:
+                report.errors.append(
+                    f"handler {name!r}: declares choice_kinds but does not "
+                    f"override handle_choice_reply"
                 )
         rn = getattr(h, "requires_network", "no")
         if rn != "no" and type(h).fallback_offline is Handler.fallback_offline:
@@ -514,17 +531,17 @@ def check_route_tiers(
     of a decorator — fails the load instead of serving a route the admin
     was never shown. And a route FastAPI would mount without the gate
     dependency (a plain Starlette ``Route``, ``Mount`` or ``Host``) fails
-    it too, as does any websocket route
-    (:func:`domovoi.webkit.websocket_routes` — the gate is HTTP-only, so
-    one used to fail its handshake with a ``TypeError`` instead). Nested
+    it too, as does a websocket route that is not a ``@device_endpoint``
+    FastAPI websocket route (:func:`domovoi.webkit.refused_websocket_routes`
+    — the gate's websocket form is the device tier only, SDK 1.11). Nested
     routers are walked (:func:`domovoi.webkit.iter_plugin_routes`). The
     web process refuses the same routes when it mounts them."""
     from domovoi.webkit import (
         WEBSOCKET_UNSUPPORTED,
+        refused_websocket_routes,
         tier_conflicts,
         ungated_routes,
         unlisted_tier_routes,
-        websocket_routes,
     )
 
     for conflict in tier_conflicts(routers):
@@ -532,11 +549,11 @@ def check_route_tiers(
             f"route {conflict} carries both @open_endpoint and "
             f"@device_endpoint — pick one tier"
         )
-    for ws in websocket_routes(routers):
+    for ws in refused_websocket_routes(routers):
         report.errors.append(
-            f"route {ws}: {WEBSOCKET_UNSUPPORTED} (the plugin gate is "
-            "HTTP-only; for live dashboard updates declare [[realtime]] "
-            "channels in the manifest)"
+            f"route {ws}: {WEBSOCKET_UNSUPPORTED} (a socket takes the "
+            "household device token at the handshake; for live dashboard "
+            "updates alone, [[realtime]] channels in the manifest are enough)"
         )
     for ungated in ungated_routes(routers):
         report.errors.append(
