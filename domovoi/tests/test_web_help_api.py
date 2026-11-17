@@ -248,7 +248,7 @@ def test_an_admins_help_chat_holds_no_admin_only_details(quiet_state, stub_strea
         system = stub_stream[-1]["messages"][0]["content"]
         assert "secret-build-dir" not in system and "the step that failed" not in system
         assert "tell Domovoi whether this box has internet" not in system
-        assert "an admin can read why in Settings → Configuration" in system
+        assert "an admin can read why in Settings → System → About & updates" in system
         # The admin's own view (the checks page) still has them.
         found = c.get("/api/help/checks").json()["findings"]
         assert any("the step that failed: deps" in d for f in found for d in f["details"])
