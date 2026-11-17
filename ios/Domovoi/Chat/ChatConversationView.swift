@@ -1,4 +1,5 @@
 import DomovoiKit
+import PhotosUI
 import SwiftUI
 
 /// One conversation: the title row, the transcript, and the composer.
@@ -32,6 +33,16 @@ struct ChatConversationView: View {
     /// One draft at a time, open in the canvas.
     @State private var draft: ChatMoreDraftModel?
     @State private var sheet: ChatMoreSheet?
+
+    /// A video in this chat (1.4.0): the clip on the composer and the jobs
+    /// under the person's rows (``ChatVideoModel``). Built in `.task` for
+    /// ``more``'s reason.
+    @State private var video: ChatVideoModel?
+    /// The two doors' sheets, and the wait while a Photos clip comes across.
+    @State private var pickingPhoto = false
+    @State private var photoItem: PhotosPickerItem?
+    @State private var importingVideo = false
+    @State private var readingVideo = false
 
     /// The ordinal of the bubble that was at the top of the window when
     /// "show earlier" was tapped, waiting for the page above it to be drawn
@@ -119,6 +130,22 @@ struct ChatConversationView: View {
             if draft == nil {
                 draft = ChatMoreDraftModel(in: model.container, deviceID: model.deviceID)
             }
+            if video == nil {
+                let measure: @Sendable (URL) async -> ChatVideoMeasure
+                if let fake = ChatVideoFake.active {
+                    measure = ChatVideoFake.measure(fake)
+                } else {
+                    measure = { await ChatVideoMeasure.of($0) }
+                }
+                video = ChatVideoModel(
+                    in: model.container,
+                    measure: measure,
+                    // A job that ended has written its summary into the
+                    // thread: read it again, in place (Android reloads the
+                    // thread when the job ends too).
+                    onEnded: { [weak chat] in chat?.reloadOpenThread() }
+                )
+            }
             openExtras()
         }
         // A thread opened from this screen (a new chat's first send makes
@@ -127,7 +154,10 @@ struct ChatConversationView: View {
         // A reopen, a pagination or a `chat.changed` moved the transcript, so
         // the extras -- which are a **second read of the same route** -- have
         // to follow it. ``ChatMoreDetail`` says at length why there are two.
-        .onChange(of: chat.transcript.messages.count) { _, _ in more?.refresh() }
+        .onChange(of: chat.transcript.messages.count) { _, _ in
+            more?.refresh()
+            video?.refresh()
+        }
         // **And the end of a stream, which the count cannot see.** The count
         // changes exactly once per send, at `ChatTranscript.beginSend`, which
         // appends the user row and the pending reply *before* the POST goes
@@ -144,7 +174,11 @@ struct ChatConversationView: View {
         // that failed and still wrote a row, which is why it and not
         // `messages.last?.id` is the thing watched.
         .onChange(of: chat.sending) { _, now in
-            if !now { more?.refresh() }
+            if !now {
+                more?.refresh()
+                // A video's job exists from the moment its send answered.
+                video?.refresh()
+            }
         }
         // Either list landing can be the first sight of this thread's own
         // internet flag (``seedInternet()``).
@@ -153,6 +187,7 @@ struct ChatConversationView: View {
         .onChange(of: model.inputs.serverURL) { _, _ in
             more?.serverChanged()
             draft?.serverChanged()
+            video?.serverChanged()
         }
         // **The toast is the shell's**, as ``ChatView`` does it: a toast about
         // a stop that failed must outlive this screen.
@@ -170,6 +205,11 @@ struct ChatConversationView: View {
             guard let text = said ?? nil else { return }
             model.showToast(text)
             draft?.setToast(nil)
+        }
+        .onChange(of: video?.toast) { _, said in
+            guard let text = said ?? nil else { return }
+            model.showToast(text)
+            video?.setToast(nil)
         }
         // **One `.sheet` over four cases**, which is ``ChatSheet``'s shape and
         // not a preference: several `.sheet` modifiers on one view do not
@@ -196,9 +236,11 @@ struct ChatConversationView: View {
     private func openExtras() {
         guard let id = chat.openThread else {
             more?.close()
+            video?.close()
             return
         }
         more?.open(thread: id, internetAllowed: threadInternet(id))
+        video?.open(thread: id)
     }
 
     private func threadInternet(_ id: Int64) -> Bool? {
@@ -601,7 +643,9 @@ struct ChatConversationView: View {
                                 // card may be answered (`ChatScreen.kt:1008`):
                                 // the server 409s a pick on anything else.
                                 isLastRow: index == messages.count - 1,
-                                actions: rowActions
+                                actions: rowActions,
+                                video: video,
+                                newestUnsent: message.ordinal == newestUnsentOrdinal
                             )
                             .id(message.ordinal)
                         }
@@ -766,6 +810,13 @@ struct ChatConversationView: View {
         }
     }
 
+    /// The person's newest row that has no id yet -- the one a clip just
+    /// sent is drawn under until the re-read brings its job
+    /// (``ChatVideoModel/justSent``).
+    private var newestUnsentOrdinal: Int? {
+        chat.transcript.messages.last { $0.role == "user" && $0.id == nil }?.ordinal
+    }
+
     /// The transcript's accessibility identifier — see ``transcript``.
     static let transcriptID = "chat-transcript"
 
@@ -895,11 +946,42 @@ struct ChatConversationView: View {
 
     // MARK: - the composer
 
+    /// Whether the paperclip is drawn: a home-server chat whose house said
+    /// it can watch a video (``ChatVideoRules/offered(_:)``).
+    private var videoOffered: Bool {
+        video != nil && ChatVideoRules.offered(chat.models.data)
+    }
+
     @ViewBuilder
     private var composer: some View {
         if chat.composerOffered {
             Divider()
+            if let video, let staged = video.staged {
+                ChatVideoStagedChip(staged: staged) { video.removeStaged() }
+                    .padding(.horizontal, 12)
+                    .padding(.top, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if readingVideo {
+                HStack(spacing: 8) {
+                    ProgressView()
+                    Text(ChatVideoStrings.readingVideo)
+                        .font(.caption)
+                        .foregroundStyle(Color.fgMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
             HStack(spacing: 8) {
+                if videoOffered {
+                    ChatVideoAttachMenu(
+                        enabled: video?.staged == nil && !readingVideo,
+                        photos: { pickVideo(fromPhotos: true) },
+                        files: { pickVideo(fromPhotos: false) }
+                    )
+                }
                 // **No `submitLabel(.send)` and no `onSubmit`.** A
                 // vertical-axis field is a multi-line one, and its Return key
                 // puts in a newline rather than submitting, so `onSubmit`
@@ -933,7 +1015,9 @@ struct ChatConversationView: View {
                 // and a thread is ``ChatModel``'s to create. So a brand-new
                 // chat keeps the send button until its first message has made
                 // the thread -- rather than a mic that would 404.
-                if let more, chat.openThread != nil, more.micOffered(typed: typed) {
+                // A clip on the composer takes the mic's place: the clip is
+                // the message, and it goes with the send.
+                if let more, chat.openThread != nil, video?.staged == nil, more.micOffered(typed: typed) {
                     Button {
                         sheet = .talk
                     } label: {
@@ -946,7 +1030,7 @@ struct ChatConversationView: View {
                     .foregroundStyle(Color.brandInk)
                     .accessibilityLabel(ChatMoreStrings.talk)
                     .disabled(!chat.canSend)
-                } else if ChatRules.sendOffered(typed: typed) {
+                } else if ChatVideoRules.sendOffered(typed: typed, videoReady: video?.staged != nil) {
                     // **Something is typed** — ``ChatRules/sendOffered(typed:)``,
                     // which is the send's own question and deliberately not the
                     // mic's read backwards. That rule's doc comment has the
@@ -1022,7 +1106,9 @@ struct ChatConversationView: View {
                         Text(ChatStrings.send)
                     }
                     .buttonStyle(BrandFillButtonStyle())
-                    .disabled(!chat.canSend)
+                    // And while a clip is still going up: the message waits
+                    // for its token (the dashboard and Android do the same).
+                    .disabled(!chat.canSend || video?.uploading == true)
                 }
                 // **Nothing at all with a blank box and no mic to put there**
                 // (D8). That is the brand-new chat: Android's spot holds the
@@ -1039,6 +1125,19 @@ struct ChatConversationView: View {
                 // avoids for the reply-in-progress state above.)
             }
             .padding(12)
+            .photosPicker(isPresented: $pickingPhoto, selection: $photoItem, matching: .videos)
+            .fileImporter(
+                isPresented: $importingVideo,
+                allowedContentTypes: ChatVideoFiles.types,
+                allowsMultipleSelection: false
+            ) { result in
+                guard case .success(let urls) = result, let url = urls.first else { return }
+                attachVideo(ChatVideoFiles.file(at: url))
+            }
+            .onChange(of: photoItem) { _, item in
+                guard let item else { return }
+                Task { await readPhoto(item) }
+            }
         }
     }
 
@@ -1046,7 +1145,50 @@ struct ChatConversationView: View {
         // The model answers whether anything went out — a blank message, a
         // second send while one is running and a house with AI off all send
         // nothing — and the box is cleared only when something did.
-        if chat.send(typed) { typed = "" }
+        //
+        // **Every send takes the clip, or nothing**: ``ChatVideoModel/takeForSend()``
+        // is what keeps the clip drawn under the newest row this send's own.
+        // A send that did not go puts it back on the composer.
+        guard video?.uploading != true else { return }
+        let token = video?.takeForSend()
+        if chat.send(typed, videoToken: token) {
+            typed = ""
+        } else {
+            video?.sendRefused(token)
+        }
+    }
+
+    // MARK: - a video
+
+    private func pickVideo(fromPhotos: Bool) {
+        // The UI tests' clip, in place of both system sheets (DEBUG only).
+        if let fake = ChatVideoFake.active {
+            if let file = ChatVideoFake.file(fake) { attachVideo(file) }
+            return
+        }
+        if fromPhotos { pickingPhoto = true } else { importingVideo = true }
+    }
+
+    private func attachVideo(_ file: ChatVideoFile) {
+        guard let video else {
+            file.release()
+            return
+        }
+        video.attach(file, offer: chat.models.data?.video)
+    }
+
+    /// A clip from Photos: copied out of the picker's process first.
+    private func readPhoto(_ item: PhotosPickerItem) async {
+        // Cleared whichever way this goes, so the same clip picked twice is
+        // two picks (`onChange` does not fire for an unchanged value).
+        defer { photoItem = nil }
+        readingVideo = true
+        defer { readingVideo = false }
+        guard let pick = try? await item.loadTransferable(type: ChatVideoPick.self) else {
+            video?.setToast(PhoneMediaStrings.cannotReadOnThisPhone("the video"))
+            return
+        }
+        attachVideo(pick.file)
     }
 }
 
@@ -1065,6 +1207,9 @@ struct ChatBubbleView: View {
     let more: ChatMoreModel?
     let isLastRow: Bool
     let actions: ChatMoreRowActions
+    /// A video's chips under the person's own row (``ChatVideoRowChips``).
+    var video: ChatVideoModel? = nil
+    var newestUnsent: Bool = false
 
     private var mine: Bool { message.role == "user" }
 
@@ -1095,6 +1240,11 @@ struct ChatBubbleView: View {
                 ChatMoreRowBottom(
                     message: message, more: more, isLastRow: isLastRow, actions: actions
                 )
+                // Under the person's own message, as the job's `message_id`
+                // says (Android and the dashboard draw it there too).
+                if mine, let video {
+                    ChatVideoRowChips(message: message, video: video, newestUnsent: newestUnsent)
+                }
             }
             .padding(10)
             .background(
