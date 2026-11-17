@@ -529,6 +529,9 @@ private fun AddPrinterDialog(
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
+                if (askAddress) {
+                    Text(ADD_BY_ADDRESS_HINT, style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted)
+                }
             }
         },
         confirmButton = {
