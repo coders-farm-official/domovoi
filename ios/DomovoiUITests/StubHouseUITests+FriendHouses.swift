@@ -37,7 +37,10 @@ extension StubHouseUITests {
         static let inboxLevel = "New messages: only in the inbox"
         static let notVerified = "not verified"
         static let friendsAdmin =
-            "Only an admin can add or remove friends, compare the codes, or change what a new message does, on the dashboard."
+            "Only an admin can add, remove or block friends, compare the codes, or change what a new message does, on the dashboard."
+        static let online = "Online"
+        static let notReachedYet = "Not reached yet"
+        static let lastSeen = "Last seen "
         static let invited = "The Patels shared a list: Camping trip. An admin can accept it in the dashboard."
         static let listsAdmin = "Only an admin can share a list, accept one or stop sharing, on the dashboard."
         static let refused = "That house isn't a friend any more."
@@ -71,6 +74,14 @@ extension StubHouseUITests {
             // delivered: …": one text.
             "fh.message.state",
             "fh.counter", "fh.send",
+        ]
+        /// The Friends tab, audited since presence (2026-11-17) put a new
+        /// line under each friend.
+        static let friendsMeasured = [
+            "fh.title", "fh.description",
+            "fh.tab.messages", "fh.tab.friends", "fh.tab.shared",
+            "fh.friend.name", "fh.friend.verified", "fh.friend.presence", "fh.friend.alert",
+            "fh.friend.message", "fh.friends.note",
         ]
     }
 
@@ -370,11 +381,19 @@ extension StubHouseUITests {
         XCTAssertTrue(friendHousesSays(app, FriendHousesUnderTest.senderLevel))
         XCTAssertTrue(friendHousesSays(app, FriendHousesUnderTest.inboxLevel))
         XCTAssertTrue(friendHousesSays(app, FriendHousesUnderTest.notVerified))
-        let admin = app.staticTexts[FriendHousesUnderTest.friendsAdmin]
-        XCTAssertTrue(admin.waitForExistence(timeout: 10) || navReach(app, admin), "no admin sentence")
+        XCTAssertTrue(friendHousesSays(app, FriendHousesUnderTest.friendsAdmin), "no admin sentence")
+        // Presence, one of each: the Smiths online, the Patels last seen,
+        // the Okafors never reached.
+        XCTAssertTrue(friendHousesSays(app, FriendHousesUnderTest.online))
+        XCTAssertTrue(friendHousesSays(app, FriendHousesUnderTest.notReachedYet))
+        let seen = app.staticTexts.matching(NSPredicate(
+            format: "identifier == %@ AND label BEGINSWITH %@", "fh.friend.presence", FriendHousesUnderTest.lastSeen
+        )).firstMatch
+        XCTAssertTrue(seen.waitForExistence(timeout: 10), "no Last seen line")
+        XCTAssertEqual(3, app.staticTexts.matching(identifier: "fh.friend.presence").count, "one presence line per friend")
         evidence(app, "fh-09-friends")
         let messages = app.buttons.matching(identifier: "fh.friend.message")
-        XCTAssertEqual(2, messages.count, "one message button per friend, and no other control")
+        XCTAssertEqual(3, messages.count, "one message button per friend, and no other control")
         messages.element(boundBy: 1).tap()
         XCTAssertTrue(app.buttons["fh.back"].waitForExistence(timeout: 20))
         XCTAssertTrue(friendHousesSays(app, FriendHousesUnderTest.patels))
@@ -446,6 +465,19 @@ extension StubHouseUITests {
                 + " measured=\(inboxSplit.excused.count) ours=\(inboxSplit.rest.count)"
         )
         XCTAssertTrue(inboxSplit.rest.isEmpty, "Apple's audit on the inbox: " + inboxSplit.rest.joined(separator: " | "))
+        let friendsTab = app.buttons["fh.tab.friends"]
+        XCTAssertTrue(friendsTab.waitForExistence(timeout: 10))
+        friendsTab.tap()
+        XCTAssertTrue(friendHousesSays(app, FriendHousesUnderTest.online))
+        evidence(app, "fh-12-audit-friends")
+        let friends = Self.floorAndRest(try auditIssues(app, "friend-houses-friends"))
+        let friendsSplit = Self.friendHousesUnmeasured(friends.rest, ids: FriendHousesUnderTest.friendsMeasured)
+        print(
+            "FRIEND HOUSES AUDIT friends floor=\(friends.floor) rest=\(friends.rest.count)"
+                + " measured=\(friendsSplit.excused.count) ours=\(friendsSplit.rest.count)"
+        )
+        XCTAssertTrue(friendsSplit.rest.isEmpty, "Apple's audit on friends: " + friendsSplit.rest.joined(separator: " | "))
+        app.buttons["fh.tab.messages"].tap()
         XCTAssertTrue(friendHousesOpen(app, FriendHousesUnderTest.smiths))
         evidence(app, "fh-12-audit-conversation")
         let thread = Self.floorAndRest(try auditIssues(app, "friend-houses-conversation"))
@@ -480,6 +512,11 @@ extension StubHouseUITests {
             for id in FriendHousesUnderTest.inboxMeasured {
                 seen["inbox/" + id] = friendHousesSize(app, id)
             }
+            app.buttons["fh.tab.friends"].tap()
+            for id in FriendHousesUnderTest.friendsMeasured {
+                seen["friends/" + id] = friendHousesSize(app, id)
+            }
+            app.buttons["fh.tab.messages"].tap()
             guard friendHousesOpen(app, FriendHousesUnderTest.smiths) else {
                 return XCTFail("the Smiths did not open at \(label)")
             }
@@ -499,6 +536,7 @@ extension StubHouseUITests {
         var stuck: [String] = []
         var missing: [String] = []
         let all = FriendHousesUnderTest.inboxMeasured.map { "inbox/" + $0 }
+            + FriendHousesUnderTest.friendsMeasured.map { "friends/" + $0 }
             + FriendHousesUnderTest.conversationMeasured.map { "conversation/" + $0 }
         for key in all {
             guard let was = small[key], let grown = big[key], was != .zero, grown != .zero else {

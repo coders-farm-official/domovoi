@@ -12,8 +12,10 @@ import Foundation
 public enum FhWords {
     public static let title = "Friend houses"
 
+    /// Blocking joined the admin's list on 2026-11-17 (hand-off: blocking,
+    /// unblocking and the blocked list answer 403 to a phone).
     public static let friendsAdmin =
-        "Only an admin can add or remove friends, compare the codes, or change what a new message does, on the dashboard."
+        "Only an admin can add, remove or block friends, compare the codes, or change what a new message does, on the dashboard."
     public static let listsAdmin =
         "Only an admin can share a list, accept one or stop sharing, on the dashboard."
     public static let conversationAdmin =
@@ -66,6 +68,12 @@ public enum FhWords {
         }
     }
 
+    /// Presence, the hand-off's words: the other house is running and
+    /// reachable — never who is home.
+    public static let online = "Online"
+    public static let notReachedYet = "Not reached yet"
+    public static func lastSeen(_ relative: String) -> String { "Last seen \(relative)" }
+
     public static func unread(_ n: Int) -> String { "\(n) unread" }
     public static func notDelivered(_ n: Int) -> String { "\(n) not delivered" }
     public static func waiting(_ n: Int) -> String { "\(n) \(n == 1 ? "change" : "changes") waiting to send" }
@@ -103,6 +111,19 @@ public enum FhTab: String, CaseIterable, Sendable {
         case .shared: return FhWords.tabShared
         }
     }
+}
+
+/// A friend house's presence line: "Online"; else "Last seen <relative>"
+/// (the app's ``relTime(_:nowMs:)`` words: "4m ago", "yesterday"…); else
+/// "Not reached yet". Nil — nothing drawn — when the server sent no presence
+/// (`online` absent: a server from before it).
+public func fhPresence(_ friend: FhFriend, nowMs: Int64) -> String? {
+    guard let online = friend.online else { return nil }
+    if online { return FhWords.online }
+    if let seen = friend.lastSeenAt, parseInstant(seen) != nil {
+        return FhWords.lastSeen(relTime(seen, nowMs: nowMs))
+    }
+    return FhWords.notReachedYet
 }
 
 /// An outgoing message's state in plain words, with its tone.
