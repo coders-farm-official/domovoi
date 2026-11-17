@@ -80,6 +80,21 @@ def test_the_folder_writes_tors_key_formats(tmp_path) -> None:
         folder.authorize("../escape", reach.public)
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permissions")
+def test_every_folder_tor_reads_is_private(tmp_path) -> None:
+    # Tor refuses to start when an onion folder is group- or world-readable
+    # (found by the F1 two-house rig).
+    import stat
+
+    os.umask(0o022)
+    folder = tc.TorFolder(tmp_path / "fh" / "tor")
+    folder.ensure()
+    for path in (folder.root, folder.data, folder.data / "hs-main",
+                 folder.data / "hs-main" / "authorized_clients", folder.data / "hs-pairing",
+                 folder.data / "clientauth", folder.data / "tor", folder.run):
+        assert stat.S_IMODE(os.stat(path).st_mode) == 0o700, path
+
+
 def test_the_onion_key_comes_from_tors_hostname_file(tmp_path) -> None:
     folder = tc.TorFolder(tmp_path)
     folder.ensure()

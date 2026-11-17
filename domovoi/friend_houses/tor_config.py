@@ -153,9 +153,12 @@ class TorFolder:
         return cls(CONFIG_DIR / "friend-houses" / "tor")
 
     def ensure(self) -> None:
-        for d in (self.data, self.data / "tor", self.data / "clientauth",
-                  self.data / "hs-main" / "authorized_clients", self.data / "hs-pairing",
-                  self.run):
+        # Every level gets 0700 itself: tor refuses an onion folder that is
+        # group- or world-readable, and mkdir(parents=True) would leave the
+        # parents at the umask's mode.
+        for d in (self.root, self.data, self.data / "tor", self.data / "clientauth",
+                  self.data / "hs-main", self.data / "hs-main" / "authorized_clients",
+                  self.data / "hs-pairing", self.run):
             d.mkdir(parents=True, exist_ok=True)
             _chmod(d, 0o700)
 
