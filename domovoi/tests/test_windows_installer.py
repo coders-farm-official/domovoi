@@ -976,3 +976,62 @@ def test_the_update_mode_after_review_round_1():
     assert "'job --image ' + AddQuotes(ImagePath)" in s
     result = _pascal_block(s, "procedure WriteUpdateResult")
     assert r"ExpandConstant('{commonappdata}\Domovoi\updates')" in result and "Pos('..', Path) > 0" in result
+
+
+def test_the_resume_copy_reports_windows_error_and_never_dead_ends():
+    """A household's Setup stopped with a bare "Runtime error (at 141:610):
+    Setup could not copy itself to ... resume folder ... DomovoiSetup.exe" (2026-11):
+    the copy before a restart raised, with no Windows error code. Now Setup
+    calls Windows itself so the error has its code (log and message), says
+    what to do in plain words with the log's path, offers Try again, and
+    otherwise stops with that message instead of a Runtime error."""
+    s = SCRIPT.read_text(encoding="ascii")
+    setup = s.split("[Code]")[0]
+    assert "SetupLogging=yes" in setup and r"SetupMutex=Global\DomovoiSetup" in setup
+    code = s.split("[Code]", 1)[1]
+    assert "RaiseException('Setup could not copy itself" not in code
+    assert "CopyFile(ExpandConstant('{srcexe}')" not in code
+    # Windows' own calls, so DLLGetLastError is the real error.
+    assert "external 'CopyFileW@kernel32.dll stdcall'" in code
+    assert "external 'CreateDirectoryW@kernel32.dll stdcall'" in code
+    copy = _pascal_block(s, "function MakeResumeCopy(")
+    assert "if CopyFileW(Src, ResumeExe, 0) <> 0 then" in copy
+    assert copy.index("if CopyFileW(Src, ResumeExe, 0) <> 0 then") < copy.index("Code := DLLGetLastError;")
+    assert "Log('Resume copy: copying to ' + ResumeExe + ' failed (try '" in copy
+    assert "WinError(Code)" in copy
+    mkdir = _pascal_block(s, "function MakeResumeDir(")
+    assert "CreateDirectoryW(Dir, 0) = 0" in mkdir and "Code := DLLGetLastError;" in mkdir
+    assert "IsPlainDir(Dir)" in mkdir
+    assert "SysErrorMessage(Code)" in _pascal_block(s, "function WinError(")
+    # The copy already there and identical (size and SHA-256) is used as it is.
+    same = _pascal_block(s, "function SameCopy(")
+    assert "FileSize64(Path, A) and FileSize64(Src, B) and (A = B)" in same
+    assert "SameText(GetSHA256OfFile(Path), SrcSha)" in same
+    assert copy.index("SrcSha := GetSHA256OfFile(Src);") < copy.index("if Existed and SameCopy(ResumeExe, Src, SrcSha) then")
+    assert copy.index("if Existed and SameCopy(ResumeExe, Src, SrcSha) then") < copy.index("if CopyFileW(")
+    assert "is already this Setup; using it" in copy
+    # A locked earlier copy: retried, then another name in the same folder only.
+    assert "Sleep(1000);" in copy and "IsLockError(Code)" in copy
+    assert r"ResumeExe := Dir + '\DomovoiSetup-' + IntToStr(I) + '.exe';" in copy
+    assert r"Dir := ExpandConstant('{app}\resume');" in copy
+    assert "ResumeExe := Src;" in copy and "if SameText(ExtractFileDir(Src), Dir) then" in copy
+    # The folder's rules: SYSTEM and Administrators full, Users read only.
+    acl = _pascal_block(s, "procedure LockDownResumeDir(")
+    assert "/inheritance:r /grant:r *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F *S-1-5-32-545:(OI)(CI)RX" in acl
+    assert copy.index("LockDownResumeDir(Dir);") < copy.index("if CopyFileW(")
+    # Plain words: what happened, what to do, where the log is.
+    advice = _pascal_block(s, "function ResumeAdvice(")
+    assert "Your antivirus may have blocked it" in advice and "quarantine" in advice
+    assert "Close any other Domovoi Setup window" in advice
+    arrange = _pascal_block(s, "function ArrangeResume(")
+    assert "'Setup couldn''t copy itself to carry on after the restart'" in arrange
+    assert "['Try again', 'Stop Setup']" in arrange
+    assert "'Setup''s log: ' + ExpandConstant('{log}')" in arrange
+    assert "Stop := UpdateMode or WizardSilent;\n    if not Stop then\n      Stop := TaskDialogMsgBox(" in arrange
+    assert "and run Setup again." in arrange
+    # PrepareToInstall stops with that message (no restart, no entry) when it fails.
+    prep = _pascal_block(s, "function PrepareToInstall")
+    for what in ("turning on Virtual Machine Platform", "installing WSL"):
+        i = prep.index(f"Result := ArrangeResume('{what}');")
+        assert prep.index("FailureText := Result;", i) < prep.index("NeedsRestart := True;", i)
+    assert "CreateRunOnceEntry;" not in prep

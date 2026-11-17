@@ -138,7 +138,11 @@ signature, before it runs it.
    [Building it](#building-it)).
 7. **Turns on Virtual Machine Platform** and installs WSL 2.7.14 only if
    they are missing. If Windows needs a restart, Setup asks, and starts
-   again by itself after you sign in.
+   again by itself after you sign in, from a copy of itself in
+   `C:\Program Files\Domovoi\resume` (administrators only). If Windows
+   refuses that copy (an antivirus, or a copy from an earlier try still
+   open), Setup says why with Windows' error and its log's path, and
+   offers **Try again** ([TROUBLESHOOTING.md](TROUBLESHOOTING.md#on-the-windows-installer)).
 8. **Makes the hidden account and the service**, sets the folders' access,
    adds the firewall rules, and hands the rest to the service:
    `DomovoiHost`, running as the hidden account, writes that account's
