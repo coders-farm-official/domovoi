@@ -16,6 +16,32 @@ home_isolation.start_guard()
 
 import pytest  # noqa: E402
 
+from domovoi.tests import live_port_guard  # noqa: E402 — stdlib only
+
+
+@pytest.fixture(autouse=True)
+def no_live_domovoi_ports():
+    """No test reaches the Domovoi installed on this machine: a connection to
+    loopback at 6369/6370 is refused, and the test fails even if the code
+    under test swallowed the refusal (domovoi/tests/live_port_guard.py).
+
+    Its own MonkeyPatch, not the ``monkeypatch`` fixture: requesting that
+    here would set it up before every other fixture and so tear it down
+    after them, which changes the order other fixtures undo their patches
+    in (domovoi/tests/test_egress.py's ``live_policy`` relies on it)."""
+    patcher = pytest.MonkeyPatch()
+    guard = live_port_guard.install(patcher)
+    try:
+        yield guard
+    finally:
+        patcher.undo()
+    reached = guard.clear()
+    if reached:
+        pytest.fail(
+            "this test tried to reach the Domovoi installed on this machine at "
+            + ", ".join(reached) + " — see domovoi/tests/live_port_guard.py"
+        )
+
 
 @pytest.hookimpl(trylast=True)  # after xdist has taken its workers down
 def pytest_sessionfinish(session):

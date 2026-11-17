@@ -59,7 +59,58 @@ def config_file(tmp_path):
 
 
 # ─── a discovered address is a candidate, not configuration ───────────────
+#
+# Since 1.4.0 a device that has never been approved and has neither an
+# address nor a key asks EVERY server (satellite/house_pairing.py), so the
+# single pick below is the path of a device a core HAS accepted whose
+# address still lives in the pending sidecar (approved, but config.toml
+# could not be written). `approved_device` puts the tests there.
 
+
+@pytest.fixture
+def approved_device(monkeypatch):
+    monkeypatch.setattr(client, "_approval_decision", lambda: (True, "test: approved"))
+
+
+def test_an_unapproved_device_with_no_address_asks_every_house(config_file, monkeypatch):
+    """No single pick at boot: the run loop asks every server it finds,
+    and nothing is written down until one proves the code."""
+    from satellite import discovery
+
+    def never(*a, **k):
+        raise AssertionError("picked a single server at boot")
+
+    monkeypatch.setattr(client, "_approval_decision", lambda: (False, "test: never approved"))
+    monkeypatch.setattr(discovery, "find_core", never)
+    monkeypatch.setattr(discovery, "probe", never)
+    cfg = _cfg()
+    assert client._house_pairing_mode(cfg) == "every-house"
+    assert client._resolve_server_url(cfg, config_file) is True
+    assert cfg.domovoi_url == "auto"
+    assert server_identity.read_pending_server() == (None, None)
+
+
+def test_a_typed_address_or_a_pinned_key_is_one_house(monkeypatch):
+    monkeypatch.setattr(client, "_approval_decision", lambda: (False, "test"))
+    assert client._house_pairing_mode(_cfg("ws://192.168.1.5:6370")) == "one-house"
+    assert client._house_pairing_mode(_cfg("auto", "SHA256:" + "A" * 43)) == "one-house"
+
+
+def test_an_approved_device_keeps_the_single_server_flow(monkeypatch):
+    monkeypatch.setattr(client, "_approval_decision", lambda: (True, "test"))
+    assert client._house_pairing_mode(_cfg()) is None
+
+
+def test_a_first_contact_record_does_not_count_as_a_choice(monkeypatch):
+    """A key RECORDED on first contact (older code, first server wins) is
+    exactly what every-house replaces: it does not anchor the device."""
+    monkeypatch.setattr(client, "_approval_decision", lambda: (False, "test"))
+    server_identity.record_fingerprint("SHA256:" + "B" * 43)
+    assert server_identity.pinned_fingerprint()[1] == "recorded"
+    assert client._house_pairing_mode(_cfg()) == "every-house"
+
+
+@pytest.mark.usefixtures("approved_device")
 def test_a_discovered_address_is_used_this_boot(config_file, monkeypatch):
     from satellite import discovery
 
@@ -69,6 +120,7 @@ def test_a_discovered_address_is_used_this_boot(config_file, monkeypatch):
     assert cfg.domovoi_url == "ws://192.168.1.20:6370"
 
 
+@pytest.mark.usefixtures("approved_device")
 def test_a_discovered_address_does_not_reach_the_config_file(config_file, monkeypatch):
     from satellite import discovery
 
@@ -79,6 +131,7 @@ def test_a_discovered_address_does_not_reach_the_config_file(config_file, monkey
     assert server_identity.read_pending_server()[0] == "ws://192.168.1.20:6370"
 
 
+@pytest.mark.usefixtures("approved_device")
 def test_a_second_boot_reuses_the_pending_address_instead_of_sweeping(config_file, monkeypatch):
     """The pending address is the last-known one: asked first (after the
     core's name), and when it answers as the server nothing is swept."""
@@ -98,6 +151,7 @@ def test_a_second_boot_reuses_the_pending_address_instead_of_sweeping(config_fil
     assert asked == ["192.168.1.20"]
 
 
+@pytest.mark.usefixtures("approved_device")
 def test_a_pending_address_that_does_not_answer_is_still_used_when_nothing_else_does(config_file, monkeypatch):
     """The core is down at boot: nothing verifies anywhere. The pending
     address is still the best there is, exactly as before."""

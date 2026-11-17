@@ -160,7 +160,8 @@ def canonical_json(doc: Any) -> bytes:
     ).encode("utf-8")
 
 
-def health_message(challenge: str, addr: str | None = None) -> bytes:
+def health_message(challenge: str, addr: str | None = None,
+                   pairing_proof: int | None = None) -> bytes:
     """The bytes signed in a ``/v1/health`` challenge answer. The satellite
     builds this string too; they must agree byte for byte.
 
@@ -168,10 +169,20 @@ def health_message(challenge: str, addr: str | None = None) -> bytes:
     bound into the message, so the signature proves not only "the key
     holder saw this nonce" but "the key holder agreed it is reachable at
     that address". See :data:`_CHALLENGE_RE` for why neither part may
-    carry a newline."""
+    carry a newline.
+
+    With ``pairing_proof`` as well (only for a challenge that asks,
+    :data:`PAIRING_PROOF_CHALLENGE_PREFIX`, and only bound to an address) a
+    last line ``pairing_proof=N`` says which approval exchange this server
+    speaks, 0 for none: a host in the middle that strips the answer's
+    ``pairing_proof`` field breaks the signature instead of passing this
+    server off as an older one. No address can contain ``=`` or a newline,
+    so the three shapes never collide."""
     message = HEALTH_CONTEXT + b"\n" + challenge.encode("utf-8")
     if addr is not None:
         message += b"\n" + addr.encode("utf-8")
+        if pairing_proof is not None:
+            message += b"\npairing_proof=" + str(int(pairing_proof)).encode("ascii")
     return message
 
 
@@ -207,8 +218,18 @@ def manifest_digest(manifest: Any) -> str:
     return hashlib.sha256(canonical_json(manifest)).hexdigest()
 
 
+#: A satellite whose challenge starts with this asks for the approval-proof
+#: advert to be SIGNED (satellite/server_identity.py says why it rides in
+#: the challenge rather than in a query flag of its own).
+PAIRING_PROOF_CHALLENGE_PREFIX = "pairing-proof."
+
+
 def new_challenge() -> str:
     return secrets.token_hex(_CHALLENGE_BYTES)
+
+
+def asks_for_pairing_proof(challenge: object) -> bool:
+    return isinstance(challenge, str) and challenge.startswith(PAIRING_PROOF_CHALLENGE_PREFIX)
 
 
 def valid_challenge(challenge: object) -> bool:
@@ -305,13 +326,42 @@ def _lan_name_report_addresses() -> list[str]:
 #: host (root) can write: an address in here is one the core will sign
 #: its identity proof for. A host integration appends its source; a source
 #: that fails is skipped.
+#:
+#: An entry is an IP literal (``192.168.1.30``), which vouches for that
+#: address at the port the core itself listens on — a forward that keeps
+#: the port, like the Windows host's — or ``ip:port`` (``[v6]:port``),
+#: which vouches for exactly that port, for a forward that changes it.
 VOUCHED_ADDRESS_SOURCES: list[Any] = [_lan_name_report_addresses]
+
+#: The port the core serves on (``main.main`` runs uvicorn there). The
+#: identity proof is signed for an address of this box only at a port the
+#: core really listens on: the one the question arrived at, else this.
+CORE_PORT = 6370
+
+
+def _vouched_entry(value: object) -> str | None:
+    text = str(value).strip()
+    host, port = split_host_port(text)
+    if not host:
+        return None
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return None
+    if ip.is_unspecified or ip.is_multicast:
+        return None
+    if port is None:
+        return str(ip)
+    if not 0 < port < 65536:
+        return None
+    return f"[{ip}]:{port}" if ip.version == 6 else f"{ip}:{port}"
 
 
 def host_vouched_addresses() -> set[str]:
-    """Every IP literal some :data:`VOUCHED_ADDRESS_SOURCES` entry vouches
-    for, normalised (names are dropped: a name is never vouched for here,
-    for the same reason it is never resolved)."""
+    """Every address some :data:`VOUCHED_ADDRESS_SOURCES` entry vouches
+    for, normalised: a bare IP (``192.168.1.30``, at the core's own port)
+    or ``ip:port``. Names are dropped: a name is never vouched for here,
+    for the same reason it is never resolved."""
     out: set[str] = set()
     for source in list(VOUCHED_ADDRESS_SOURCES):
         try:
@@ -320,17 +370,14 @@ def host_vouched_addresses() -> set[str]:
             log.debug("vouched-address source %r failed: %s", source, e)
             continue
         for value in values:
-            try:
-                ip = ipaddress.ip_address(str(value).strip().strip("[]"))
-            except ValueError:
-                continue
-            if ip.is_unspecified or ip.is_multicast:
-                continue
-            out.add(str(ip))
+            entry = _vouched_entry(value)
+            if entry is not None:
+                out.add(entry)
     return out
 
 
-def dialed_address_is_ours(addr: str, *, can_bind=None, vouched=None) -> bool:
+def dialed_address_is_ours(addr: str, *, can_bind=None, vouched=None,
+                           listen_ports=None) -> bool:
     """Whether ``addr`` — the ``host:port`` a satellite says it dialed — is
     an address this server is actually reachable at, and so one it may
     sign for.
@@ -353,10 +400,19 @@ def dialed_address_is_ours(addr: str, *, can_bind=None, vouched=None) -> bool:
     Last, an IP literal no interface here owns is still ours when the
     machine hosting this core VOUCHES for it (:func:`host_vouched_addresses`,
     ``vouched`` in tests): the host's LAN address in front of a core that
-    runs in a VM or a NAT'd distro, forwarded to it. Any port, like a
-    ``TRUSTED_HOSTS`` entry without one.
+    runs in a VM or a NAT'd distro, forwarded to it.
+
+    **The port counts** (SAT-13). An address this box owns, a loopback,
+    ``localhost`` or a bare vouched IP is ours only at a port the core
+    listens on — ``listen_ports``: the port the question arrived at (the
+    caller passes it), else :data:`CORE_PORT`. Anything else listening on
+    this machine at another port and forwarding to the core is a relay the
+    device must not mistake for its server. A vouched ``ip:port`` is ours
+    at exactly that port; a ``TRUSTED_HOSTS`` entry with a port at that
+    port, and one without a port — the operator's explicit word — at any.
     """
     can_bind = _can_bind if can_bind is None else can_bind
+    ports = {CORE_PORT} if listen_ports is None else {int(p) for p in listen_ports if p}
     host, port = split_host_port(addr)
     if not host:
         return False
@@ -375,20 +431,27 @@ def dialed_address_is_ours(addr: str, *, can_bind=None, vouched=None) -> bool:
             continue
         if host == ehost:
             return True
+    at_core_port = port is not None and port in ports
     if host in ("localhost", "localhost.localdomain"):
-        return True
+        return at_core_port
     try:
         ip = ipaddress.ip_address(host)
     except ValueError:
         return False      # a name: only TRUSTED_HOSTS can vouch for it
-    if ip.is_loopback:
-        return True
     if ip.is_unspecified or ip.is_multicast:
         return False
-    if can_bind(ip):
+    if ip.is_loopback or can_bind(ip):
+        return at_core_port
+    if vouched is None:
+        known = host_vouched_addresses()
+    else:
+        known = {e for e in (_vouched_entry(v) for v in vouched) if e is not None}
+    if at_core_port and str(ip) in known:
         return True
-    known = host_vouched_addresses() if vouched is None else set(vouched)
-    return str(ip) in known
+    if port is None:
+        return False
+    exact = f"[{ip}]:{port}" if ip.version == 6 else f"{ip}:{port}"
+    return exact in known
 
 
 # ─── the identity itself ──────────────────────────────────────────────────
@@ -421,18 +484,23 @@ class ServerIdentity:
             "public_key": self.public_key_b64,
         }
 
-    def health_answer(self, challenge: str, addr: str | None = None) -> dict[str, str]:
+    def health_answer(self, challenge: str, addr: str | None = None,
+                      pairing_proof: int | None = None) -> dict[str, str]:
         """The identity block for ``/v1/health?challenge=…``.
 
         With ``addr`` the answer carries it back and the signature covers
         it: the caller checks that the address signed is the one it dialed.
         The caller (``main.health``) has already decided the address is
-        one of ours — this method only signs what it is handed."""
+        one of ours — this method only signs what it is handed. With
+        ``pairing_proof`` too (a bound answer only) the signature covers
+        ``pairing_proof=N`` (:func:`health_message`); the caller puts the
+        same N in the answer's ``pairing_proof``."""
         doc = self.public_document()
         doc["challenge"] = challenge
         if addr is not None:
             doc["addr"] = addr
-        doc["signature"] = b64(self.sign(health_message(challenge, addr)))
+        signed_proof = pairing_proof if addr is not None else None
+        doc["signature"] = b64(self.sign(health_message(challenge, addr, signed_proof)))
         return doc
 
     def serials_path(self) -> Path:

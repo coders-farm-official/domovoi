@@ -455,6 +455,9 @@ def _read_synced_sha() -> str | None:
     return None
 
 
+_PAIRING_TOKEN_OVERRIDE: str | None = None
+
+
 def _effective_pairing_token() -> str | None:
     """This satellite's WS pairing token (V002), generated on first boot.
 
@@ -465,6 +468,10 @@ def _effective_pairing_token() -> str | None:
     (older-protocol) hello rather than crashing the client. The value is sent as the
     hello frame's ``pairing_token``; the server binds the room to its sha256
     on first sight and refuses any later mismatch."""
+    if _PAIRING_TOKEN_OVERRIDE:
+        # The approving house's own token, when it could not be saved over
+        # the sidecar (_adopt_approved_house): still the right one this boot.
+        return _PAIRING_TOKEN_OVERRIDE
     try:
         if PAIRING_TOKEN_SIDECAR.is_file():
             tok = PAIRING_TOKEN_SIDECAR.read_text(encoding="utf-8").strip()
@@ -8315,7 +8322,11 @@ class Satellite(pc_engine.SpareDeviceEngine):
             # mismatch. None only if the sidecar couldn't be read/written
             # (degrades to a tokenless older-style hello).
             "pairing_token": _effective_pairing_token(),
-            "approval_code": _effective_approval_code(),
+            # Never to a server this device has seen prove approvals
+            # (SAT-16): that one is asked with the proof, or not at all.
+            "approval_code": (
+                _legacy_approval_code(self.cfg) if self._legacy_allowed else None
+            ),
             # Satellite kind ("voice" | "video") — drives which
             # per-type controls the dashboard offers, and is
             # persisted server-side for offline display.
@@ -8609,6 +8620,139 @@ class Satellite(pc_engine.SpareDeviceEngine):
         except Exception:
             pass
 
+    _house_pairing: Any = None
+    _house_status: str | None = None
+    _code_said_at: float | None = None
+    _legacy_reported: frozenset = frozenset()
+    _budget_reported: bool = False
+    # SAT-16: the one-server flow is re-decided before EVERY session that
+    # would ask the old way, not once per boot.
+    _house_mode: str | None = None
+    _legacy_allowed: bool = True
+    _house_probe_stale: bool = False
+    _one_house_said: str | None = None
+
+    async def _start_house_pairing(self) -> None:
+        """Decide whether this device asks houses (``_house_pairing_mode``)
+        and build the coordinator. A pinned or typed server that PROVED,
+        just now, that it cannot prove approvals gets the old way — the
+        code in the hello. Anything else that leaves the single-server flow
+        in charge (no answer, an answer that did not verify, a server this
+        device has seen prove approvals before) gets the session WITHOUT
+        the code (``_legacy_allowed`` False): it still connects, so a
+        server that moved is found again and an older one hands out its
+        own code, but nothing in the hello is worth stripping an advert
+        for."""
+        mode = _house_pairing_mode(self.cfg)
+        self._house_mode = mode
+        self._legacy_allowed = True
+        self._house_probe_stale = False
+        if mode is None:
+            return
+        anchor = None
+        if mode == "one-house":
+            status, anchor = await asyncio.to_thread(_probe_one_house, self.cfg)
+            if status != "proof":
+                self._legacy_allowed = status == "legacy"
+                if status != self._one_house_said:
+                    if status == "legacy":
+                        log.info("the server this device was set up for cannot prove an "
+                                 "approval (it signed so): asking it the way older "
+                                 "servers are asked")
+                    else:
+                        log.info("the server this device was set up for did not answer "
+                                 "in a way that can be checked: connecting without "
+                                 "this device's code, and asking again next time")
+                self._one_house_said = status
+                return
+        try:
+            self._house_pairing = _new_house_pairing(self.cfg, mode, anchor,
+                                                     hello=self._hello_frame)
+        except ValueError as e:
+            log.warning("cannot ask for a provable approval: %s", e)
+            self._house_pairing = None
+
+    async def _before_legacy_session(self) -> str:
+        """SAT-16: before every session of a device that is not approved yet
+        and whose ONE server was chosen for it (a typed address, a pinned
+        key), ask that server again whether it can prove an approval — not
+        once per boot. ``"proof"`` (a coordinator is ready: ask it that
+        way) or ``"legacy"``: the session the device always opened, with
+        its code in the hello only when the server signed just now that
+        it cannot prove an approval (``_legacy_allowed``)."""
+        if self._house_mode != "one-house":
+            return "legacy"
+        if self._house_probe_stale:
+            await self._start_house_pairing()
+            if self._house_pairing is not None:
+                return "proof"
+        self._house_probe_stale = True
+        return "legacy"
+
+    async def _house_pairing_round(self) -> bool:
+        """One round of asking. True once a house has proved this device's
+        code and is now this device's server (the caller connects at once)."""
+        coord = self._house_pairing
+        try:
+            rnd = await coord.round()
+        except Exception as e:  # noqa: BLE001 — never take the run loop down
+            log.warning("asking for approval failed this round: %s", e)
+            return False
+        if rnd.approved is not None:
+            house = rnd.approved
+            await asyncio.to_thread(_adopt_approved_house, self.cfg, CONFIG_PATH,
+                                    house, coord.token_for(house))
+            gone = await coord.withdraw_others(house)
+            if coord.asked:
+                log.info("withdrew this device's request from %d other server(s)", gone)
+            self._house_pairing = None
+            self._house_status = None
+            return True
+        legacy = frozenset(h.url for h in rnd.legacy)
+        if legacy and legacy != self._legacy_reported:
+            log.warning(
+                "found Domovoi server(s) at %s that cannot prove an approval (older "
+                "than 1.4.0). This device does not ask them: update that server, "
+                "or set its address in the setup portal to use it as it is",
+                ", ".join(sorted(legacy)),
+            )
+        self._legacy_reported = legacy
+        if rnd.budget_spent:
+            if not self._budget_reported:
+                wait = coord.budget.retry_after()
+                log.warning(
+                    "this device has checked as many typed codes as it may for now "
+                    "(%d per %d minutes, %d a day); it keeps its requests alive and "
+                    "declines to check another %s — a code typed meanwhile waits",
+                    coord.budget.max_attempts, int(coord.budget.window_sec // 60),
+                    coord.budget.daily_max,
+                    "until it restarts with a working budget file" if wait == float("inf")
+                    else f"for {int(wait)} s",
+                )
+            self._budget_reported = True
+        else:
+            self._budget_reported = False
+        for url, result in rnd.visits.items():
+            if result.kind == "mismatch":
+                log.warning("a code typed on the dashboard of %s is not this "
+                            "device's code — still waiting", url)
+        status = "parked" if rnd.parked else "none"
+        if status == "parked":
+            if self._house_status != "parked":
+                await asyncio.to_thread(_setup_status, "awaiting-approval")
+                log.info("waiting for approval on %d server(s): %s", len(rnd.parked),
+                         ", ".join(f"{h.url} ({h.name})" for h in rnd.parked))
+            now = time.monotonic()
+            if self._code_said_at is None or now - self._code_said_at >= _SAY_CODE_EVERY_SEC:
+                self._code_said_at = now
+                await asyncio.to_thread(_setup_status, "say-code", coord.code)
+        elif self._house_status != "none" and not rnd.budget_spent:
+            await asyncio.to_thread(_setup_status, "no-server")
+            log.warning("no Domovoi server that can prove an approval answered "
+                        "on this network; looking again")
+        self._house_status = status
+        return False
+
     async def run(self) -> None:
         self.loop = asyncio.get_running_loop()
         self._async_shutdown = asyncio.Event()
@@ -8767,12 +8911,29 @@ class Satellite(pc_engine.SpareDeviceEngine):
             self._health_thread.start()
 
         try:
+            # Not approved yet, and no server chosen (or one that can prove
+            # an approval): ask the houses first (satellite/house_pairing.py)
+            # and only open a session once one has proved this device's code.
+            await self._start_house_pairing()
             backoff = 1.0
             # Consecutive CONNECTION failures. A session that ends normally -
             # including one the core rejects, which has its own colour - means
             # the server was reachable, so it resets this.
             unreachable = 0
             while not self.shutdown_event.is_set():
+                if self._house_pairing is not None:
+                    if await self._house_pairing_round():
+                        continue        # approved: connect to it now
+                    try:
+                        await asyncio.wait_for(self._async_shutdown.wait(),
+                                               timeout=_HOUSE_ASK_EVERY_SEC)
+                        break
+                    except asyncio.TimeoutError:
+                        continue
+                    except asyncio.CancelledError:
+                        break
+                if await self._before_legacy_session() == "proof":
+                    continue            # it proves approvals now: ask it that way
                 try:
                     await self._run_session()
                     unreachable = 0
@@ -8905,6 +9066,9 @@ _RELOCATE_EVERY_SEC = 600.0
 # the core closed before `ready` (refused, parked), which used to reset
 # the backoff to 1 s and redial at about 1 Hz for as long as it lasted.
 _BACKOFF_MAX_SEC = 60.0
+# Every-house approval (satellite/house_pairing.py): how often each house
+# is asked again while the device waits.
+_HOUSE_ASK_EVERY_SEC = 10.0
 
 
 def _mb(kb: Any) -> str | None:
@@ -9812,6 +9976,267 @@ def _adopt_located(cfg: "Config", config_path: Path, found: Any, is_auto: bool) 
                         "it shows the old one until it is restarted")
 
 
+# ─── asking every house (1.4.0, satellite/house_pairing.py) ───────────────
+
+# What the device remembers of the challenges it answered (its budget).
+APPROVAL_BUDGET_PATH = CONFIG_DIR / "approval-proof-budget.json"
+# How often the code is said again while the device waits (the single-server
+# flow says it on every retry, which backs off to a minute).
+_SAY_CODE_EVERY_SEC = 60.0
+
+
+def _house_pairing_mode(cfg: "Config") -> str | None:
+    """How a device that is not approved yet looks for approval:
+
+    * ``"every-house"`` — no server address (``auto``) and no server key
+      from the card or config.toml: ask EVERY Domovoi server it finds,
+      and join the one that proves this device's code;
+    * ``"one-house"`` — an address typed in the portal, or a pinned key:
+      that one server only; the proof is used when the server offers it,
+      the old way otherwise (the person or the card already chose it);
+    * None — approved already, a spare computer (pinned by its enrolment
+      code, its own flow), or no pairing token to derive from: the
+      single-server flow, exactly as before."""
+    from satellite import discovery
+
+    if pc_engine.is_pc(cfg):
+        return None
+    try:
+        opened, _why = _approval_decision()
+    except Exception:  # noqa: BLE001 — undecidable: the flow that always ran
+        return None
+    if opened:
+        return None
+    configured = (cfg.domovoi_url or "").strip()
+    is_auto = not configured or configured.lower() == discovery.AUTO
+    _expected, source = _pinned_fingerprint(cfg)
+    # A fingerprint "recorded" on first contact is not a choice anyone
+    # made: it is exactly the first-server-wins this replaces.
+    if is_auto and source in ("none", "recorded"):
+        return "every-house"
+    return "one-house"
+
+
+def _proof_code() -> str:
+    """The six-digit code this device proves approvals with: the setup
+    portal's, or — on a device that has none, or an older four-digit one —
+    a fresh one, kept in the same sidecar and said the same way."""
+    from satellite import pairing_proof
+
+    code = _effective_approval_code()
+    if pairing_proof.valid_code(code):
+        return code
+    fresh = f"{secrets.randbelow(10 ** pairing_proof.CODE_DIGITS):0{pairing_proof.CODE_DIGITS}d}"
+    return _remember_approval_code(fresh) or fresh
+
+
+# The servers this device has seen SIGN that they prove approvals (by
+# fingerprint). One of them is never asked the old way again, whatever a
+# later answer says — an answer can be changed on the way (SAT-16).
+APPROVAL_PROOF_SERVERS_PATH = CONFIG_DIR / "approval-proof-servers.json"
+
+
+def _proof_servers() -> set[str]:
+    try:
+        doc = json.loads(APPROVAL_PROOF_SERVERS_PATH.read_text(encoding="utf-8"))
+        return {str(f) for f in doc.get("fingerprints", []) if isinstance(f, str)}
+    except (OSError, ValueError, AttributeError, TypeError):
+        return set()
+
+
+def _remember_proof_server(fingerprint: str | None) -> None:
+    if not fingerprint:
+        return
+    known = _proof_servers()
+    if fingerprint in known:
+        return
+    known.add(fingerprint)
+    tmp = APPROVAL_PROOF_SERVERS_PATH.with_name(APPROVAL_PROOF_SERVERS_PATH.name + ".tmp")
+    try:
+        APPROVAL_PROOF_SERVERS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps({"fingerprints": sorted(known)}), encoding="utf-8")
+        os.replace(tmp, APPROVAL_PROOF_SERVERS_PATH)
+    except OSError as e:
+        log.warning("could not remember that %s proves approvals: %s", fingerprint, e)
+
+
+def _proof_server_remembered(*fingerprints: str | None) -> bool:
+    known = _proof_servers()
+    return any(f and f in known for f in fingerprints)
+
+
+def _legacy_approval_code(cfg: "Config") -> str | None:
+    """The code the old flow puts in the hello — None for a server this
+    device has seen prove approvals (its pinned key is remembered)."""
+    try:
+        expected, _source = _pinned_fingerprint(cfg)
+    except Exception:  # noqa: BLE001 — undecidable: the hello it always sent
+        expected = None
+    if expected and _proof_server_remembered(expected):
+        return None
+    return _effective_approval_code()
+
+
+def _probe_one_house(cfg: "Config") -> tuple[str, Any]:
+    """Ask the single server a typed address or a pinned key names whether
+    it proves approvals, and how far to trust the answer:
+
+    * ``("proof", House)`` — it SIGNED ``pairing_proof >= 1`` for the
+      address dialled (and the pinned key, if any): use the proof. It is
+      remembered on disk, so it is never asked the old way again;
+    * ``("legacy", None)`` — it proved its identity (or, on a device with
+      no pin, offered none at all: a server from before identities) and
+      signed that it does NOT prove approvals: an older server, which the
+      person or the card chose — the old flow, as before;
+    * ``("unknown", None)`` — no answer, an answer that did not verify (a
+      stripped or changed advert, a relay, another key), or a "no" from a
+      server this device has seen say yes: nothing is sent the old way;
+      the caller asks again shortly."""
+    from satellite import discovery
+
+    expected, _source = _pinned_fingerprint(cfg)
+    configured = (cfg.domovoi_url or "").strip()
+    url = configured if configured and configured.lower() != discovery.AUTO else None
+    if url is None:
+        found, _is_auto, _last = _locate_server(cfg)
+        url = found.url if found is not None else None
+    if not url:
+        return "unknown", None
+    host, port = discovery.host_port_of(url)
+    if not host:
+        return "unknown", None
+    scheme = "https" if url.lower().startswith("wss://") else "http"
+    house = discovery.probe_house(host, port=port, timeout=2.0, scheme=scheme,
+                                  expected_fingerprint=expected)
+    if house is None:
+        return "unknown", None
+    if house.proof and house.fingerprint and (not expected or house.fingerprint == expected):
+        _remember_proof_server(house.fingerprint)
+        return "proof", discovery.House(url=url, fingerprint=house.fingerprint, proof=True,
+                                        name=house.name, via="address", identity="proved")
+    if _proof_server_remembered(expected, house.fingerprint):
+        log.error(
+            "%s has proved before that it can prove an approval, and now says it "
+            "cannot (or its answer was changed on the way): not asking it the old way",
+            url,
+        )
+        return "unknown", None
+    if house.identity == "proved" or (house.identity == "absent" and not expected):
+        return "legacy", None
+    return "unknown", None
+
+
+def _one_house(cfg: "Config") -> Any:
+    """The single server a typed address or a pinned key names, as a
+    ``discovery.House`` when it proves approvals right now, else None."""
+    status, house = _probe_one_house(cfg)
+    return house if status == "proof" else None
+
+
+def _verify_house(house: Any) -> bool:
+    """Before each visit: the server at this address still proves the key
+    the exchange will be bound to (a signature over a fresh nonce AND the
+    address dialled)."""
+    from satellite import discovery, server_identity
+
+    try:
+        server_identity.verify_server(
+            discovery.http_base_of(house.url), expected_fingerprint=house.fingerprint,
+        )
+    except server_identity.IdentityError as e:
+        log.info("%s did not prove its identity this time: %s", house.url, e)
+        return False
+    return True
+
+
+def _discover_houses() -> list[Any]:
+    from satellite import discovery, server_identity
+
+    pending, _fp = server_identity.read_pending_server()
+    # Everything found: the coordinator chooses who is asked
+    # (discovery.choose_houses), not the order hosts answered in.
+    return discovery.locate_all(names=discovery.server_names(), last_known=pending, cap=None)
+
+
+def _new_house_pairing(cfg: "Config", mode: str, anchor: Any,
+                       hello: Any) -> Any:
+    """The coordinator for ``mode`` (every house, or the one ``anchor``).
+    ``hello`` builds the hello every visit starts from (the session's, so a
+    house sees the same board and kind it always did)."""
+    from satellite import house_pairing
+
+    master = _effective_pairing_token()
+    if not master:
+        return None
+    if mode == "one-house":
+        if anchor is None:
+            return None
+
+        def discover() -> list[Any]:
+            again = _one_house(cfg)
+            return [again] if again is not None else []
+    else:
+        discover = _discover_houses
+    return house_pairing.Coordinator(
+        room_id=cfg.room_id,
+        code=_proof_code(),
+        master_token=master,
+        hello=hello,
+        discover=discover,
+        connect=lambda url: websockets.connect(url, max_size=2**20, open_timeout=10),
+        budget=house_pairing.ProofBudget(APPROVAL_BUDGET_PATH),
+        verify=_verify_house,
+    )
+
+
+def _adopt_approved_house(cfg: "Config", config_path: Path, house: Any, token: str) -> None:
+    """A house proved this device's code: make it THE server. Its own
+    pairing token replaces the device's (the one it was approved with),
+    and its address and key go into config.toml — from here on the device
+    talks to that key-checked server only, exactly like one approved the
+    old way."""
+    global _PAIRING_TOKEN_OVERRIDE
+    from satellite import config_writer, server_identity
+
+    _PAIRING_TOKEN_OVERRIDE = token
+    tmp = PAIRING_TOKEN_SIDECAR.with_name(PAIRING_TOKEN_SIDECAR.name + ".tmp")
+    try:
+        PAIRING_TOKEN_SIDECAR.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(token + "\n", encoding="utf-8")
+        try:
+            tmp.chmod(0o600)
+        except OSError:
+            pass
+        os.replace(tmp, PAIRING_TOKEN_SIDECAR)
+    except OSError as e:
+        log.error("approved, but could not save this server's pairing key (%s); it is "
+                  "used from memory until the next restart", e)
+    cfg.domovoi_url = house.url
+    cfg.server_fingerprint = house.fingerprint or ""
+    changes: dict[str, object] = {"satellite.domovoi_url": house.url}
+    if house.fingerprint:
+        changes["satellite.server_fingerprint"] = house.fingerprint
+    ctmp = config_path.with_name(config_path.name + ".tmp")
+    try:
+        original = config_path.read_text(encoding="utf-8")
+        ctmp.write_text(config_writer.apply_changes(original, changes),
+                        encoding="utf-8", newline="\n")
+        os.replace(ctmp, config_path)
+    except OSError as e:
+        log.warning("approved, but could not save %s to %s: %s", house.url, config_path, e)
+    # The proof IS the approval: record it now, not at the first `ready`.
+    # A restart in between used to come back asking that one server for a
+    # proof the core no longer runs (the room is bound), ignore its plain
+    # `ready` as unproven, and stay half-paired until Reset pairing.
+    _remember_approved()
+    server_identity.clear_pending_server()
+    log.info(
+        "approved by the Domovoi server at %s (%s%s): it proved it knows this "
+        "device's code. Saved; this device talks to that server only from now on",
+        house.url, house.fingerprint, f", {house.name}" if house.name else "",
+    )
+
+
 def _resolve_server_url(cfg: "Config", config_path: Path) -> bool:
     """Find this boot's server address.
 
@@ -9832,6 +10257,16 @@ def _resolve_server_url(cfg: "Config", config_path: Path) -> bool:
     A device with no pinned fingerprint and an address someone typed keeps
     that address untouched: there is no identity to hold a name to.
     """
+    if _house_pairing_mode(cfg) == "every-house":
+        # Not one server: every one it can find, asked by the run loop
+        # (satellite/house_pairing.py). Nothing to pick here, and nothing to
+        # write down until one of them proves the code.
+        log.info(
+            "no server address and no server key: this device asks every "
+            "Domovoi server it finds for approval, and joins the one that "
+            "proves it knows this device's code"
+        )
+        return True
     found, is_auto, last_known = _locate_server(cfg)
     if found is not None:
         _adopt_located(cfg, config_path, found, is_auto)

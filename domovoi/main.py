@@ -45,6 +45,10 @@ from domovoi import voice_activity  # noqa: E402
 from domovoi import turn_watchdog  # noqa: E402
 from domovoi import join_problems, server_identity  # noqa: E402
 from domovoi import crypto_backend  # noqa: E402
+try:  # noqa: E402 — the satellite tree ships beside the core (it serves it to rooms)
+    from satellite.pairing_proof import VERSION as PAIRING_PROOF_VERSION
+except ImportError:  # pragma: no cover — a core without it advertises no proof
+    PAIRING_PROOF_VERSION = None
 from domovoi.container_guard import freeze as container_freeze  # noqa: E402
 from domovoi.admin_auth import (  # noqa: E402
     GUEST_PLAYING_ENTRY_DETAIL,
@@ -1367,9 +1371,22 @@ async def alive() -> dict[str, Any]:
     return {"alive": True, "pid": os.getpid()}
 
 
+def _arrival_ports(request: Any) -> set[int] | None:
+    """The port a request reached this core at (the listening socket's), or
+    None when it cannot be told (a direct call): the identity proof is
+    signed for this box's own addresses at that port only."""
+    try:
+        server = request.scope.get("server") if request is not None else None
+        port = int(server[1]) if server and server[1] else None
+    except (AttributeError, TypeError, ValueError, IndexError):
+        port = None
+    return {port} if port else None
+
+
 @app.get("/v1/health")
 async def health(
-    challenge: str | None = None, addr: str | None = None
+    challenge: str | None = None, addr: str | None = None,
+    request: Request = None,  # type: ignore[assignment] — injected; None when called directly
 ) -> dict[str, Any]:
     """Liveness, plus this install's cryptographic identity.
 
@@ -1388,9 +1405,22 @@ async def health(
     the core will not sign for the relay's address, and an answer signed
     for the core's own address does not match what the satellite dialed.
     A refused address comes back as ``addr_refused`` with no signature.
+    The address's PORT counts too (SAT-13): an address of this box is
+    signed for only at the port this request arrived at (the core's own),
+    so something else on this machine listening elsewhere and forwarding
+    here is refused like any other relay; a host vouches for a changed
+    port explicitly (``server_identity.VOUCHED_ADDRESS_SOURCES``).
     The bare ``challenge`` form is still answered, for satellites running
     code from before the binding; they take the new code on their next
     upgrade.
+
+    A challenge that starts with ``pairing-proof.`` (1.4.0 devices) asks
+    for the approval-proof advert to be signed: the bound answer then
+    carries ``pairing_proof`` (the exchange version, 0 for none) and the
+    signature covers ``pairing_proof=N`` as a last line, so a host in the
+    middle that strips the field breaks the signature rather than passing
+    this server off as one that cannot prove an approval. It rides in the
+    challenge because a separate flag could be stripped too.
 
     The pre-identity fields are untouched, so a satellite that predates
     this (and any other caller) reads exactly what it always read.
@@ -1421,6 +1451,11 @@ async def health(
         # and time. No room names: this answer is open.
         "speech": turn_watchdog.speech_health(),
     }
+    if PAIRING_PROOF_VERSION:
+        # 1.4.0: this server can PROVE an approval to a room device — the
+        # exchange in satellite/pairing_proof.py. A device that asks every
+        # server it finds for approval asks only those that say so.
+        doc["pairing_proof"] = PAIRING_PROOF_VERSION
     global _UNBOUND_CHALLENGE_SEEN
     if challenge is not None and len(challenge) > server_identity.CHALLENGE_MAX_LEN:
         raise HTTPException(status_code=400, detail="challenge is too long")
@@ -1445,8 +1480,14 @@ async def health(
                     "upgrade (this is logged once per start)"
                 )
             doc["identity"] = identity.health_answer(challenge)
-        elif server_identity.dialed_address_is_ours(addr):
-            doc["identity"] = identity.health_answer(challenge, addr=addr)
+        elif server_identity.dialed_address_is_ours(addr, listen_ports=_arrival_ports(request)):
+            signed_proof = None
+            if server_identity.asks_for_pairing_proof(challenge):
+                signed_proof = int(PAIRING_PROOF_VERSION or 0)
+                doc["pairing_proof"] = signed_proof
+            doc["identity"] = identity.health_answer(
+                challenge, addr=addr, pairing_proof=signed_proof,
+            )
         else:
             log.warning(
                 "refused to sign the identity proof for %s: it is not an "
@@ -4873,6 +4914,22 @@ async def admin_satellite_approve(
                 "that request carries no code — power-cycle the room device "
                 "so it asks again with one"
             ),
+        )
+    if result == "entered":
+        # A device that proves approvals (1.4.0) never sent its code: the
+        # core cannot say yet whether this one is right. The DEVICE checks
+        # it on its next visit (every ten seconds while it waits), and the
+        # room is bound only if it confirms. Not "approved", so the
+        # dashboard does not say so before it is true.
+        log.info(
+            "pairing: room=%s code typed; waiting for the device to confirm it",
+            room_id,
+        )
+        return {"approved": False, "waiting_for_device": True, "room_id": room_id}
+    if result == "malformed":
+        raise HTTPException(
+            status_code=422,
+            detail="an approval code is six digits — type the six the room device is saying",
         )
     if result != "approved":
         log.warning("pairing: room=%s approval code did not match", room_id)

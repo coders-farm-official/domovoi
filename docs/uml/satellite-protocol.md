@@ -560,6 +560,29 @@ connect re-pairs — needed after re-flashing a Pi or moving a room to new
 hardware. Full model + the first-connect race caveat:
 [../SECURITY_PRIVACY.md](../SECURITY_PRIVACY.md#satellite-pairing-ws-auth).
 
+### An approval the device can check (1.4.0)
+
+A device with no server address and no server key asks every server whose
+`/v1/health` SIGNS `pairing_proof >= 1` (for a `pairing-proof.` challenge,
+[../API_REFERENCE.md](../API_REFERENCE.md)) (satellite/house_pairing.py) and
+checks the approval itself — SPAKE2, `satellite/pairing_proof.py`. Its
+frames, all before `ready`:
+
+| Direction | Frame | Payload | Meaning |
+|---|---|---|---|
+| device → core | `hello` | `pairing_token` (this server's own: `HMAC-SHA256(device token, server fingerprint)`), `approval_pake` (`X`, 512 hex chars), **no** `approval_code` | Park (or refresh) a proof request. Never pairs on trust, strict or not; a malformed `approval_pake` is `error{reason:"approval_pake_invalid"}`. A room already paired takes the ordinary token check. |
+| core → device | `error` | `reason:"awaiting_approval"`, `proof:true`, no `code` | Parked; nothing typed for it yet. The device asks again in ten seconds. |
+| core → device | `approval_challenge` | `pake` (`Y`) | A code was typed on the dashboard: run the exchange with it. The typed code is used up only by a confirmation that does not check out (a guess); a run the device declines, does not answer within 20 s or leaves puts it back for the next visit. |
+| device → core | `approval_confirm` | `tag` (64 hex) | The device's confirmation. The core checks it in constant time within 20 s. |
+| device → core | `approval_decline` | `reason` (`busy`, `budget`) | The device will not answer now: another server's exchange is running or one has approved it, its answer budget is spent, or it is holding this server back after a run that proved nothing. The core keeps the typed code (original typing time) and counts nothing; answered `error{reason:"approval_declined"}`. After its confirmation the device waits 6 s for `approval_proof` and accepts nothing else, and a whole visit is bounded at 30 s. |
+| core → device | `error` | `reason:"approval_code_mismatch"` | The confirmation did not check out (a different code was typed). Counted on the request; nothing is bound. |
+| core → device | `approval_proof` | `tag` (64 hex) | Sent only after the device's confirmation checked out, with the room already bound; the device checks it before believing anything, then `ready` follows. A `ready` without a valid `approval_proof` first is ignored by the device. |
+| device → core | `hello` | `pairing_token` (as parked), `approval_withdraw:true` | Another server approved the device: drop this request. Answered `error{reason:"approval_withdrawn", withdrawn}`; only the token the request was parked with removes it, and a pairing is never touched. |
+
+Other new refusals: `approval_unavailable` (the core could not record or
+run the exchange; it fails closed), `approval_throttled` (the per-source
+limit, consulted before any arithmetic; withdrawals count too).
+
 See [voice-turn.md](voice-turn.md) for what happens between `utterance_end`
 and `response_start`, and [../SATELLITE_HARDWARE.md](../SATELLITE_HARDWARE.md)
 for the supported boards.

@@ -37,6 +37,7 @@ SATELLITE_FILES = (
     "net-settings.logged", "plugin_payload_state.json", "plugin_payload_manifest.json",
     "pending_payload.json", "provisioning_state.json", "image_sat_type", "image_device_profile",
     "ap.json", "setup_gadget.img", "control.sock", "install-pc.json", "not-started.txt",
+    "approval-proof-budget.json",
 )
 SATELLITE_DIRS = ("plugin_payloads",)
 #: satellite/sound_sync.py RECORD_NAME (a test holds them equal).

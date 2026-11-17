@@ -14,6 +14,51 @@ a way that would otherwise get reported as a bug.
 - **What to know.** A plugin that asks for SDK 1.9 won't install on an older
   server: update Domovoi first.
 
+## 1.4.0 (unreleased) — A new room asks every Domovoi server, and joins the one you approve it on (V062)
+
+- **What changed.** A room device set up through the Wi-Fi portal with the
+  server-address field left blank used to wait for approval on whichever
+  Domovoi server answered first — on a network with a test server, or a
+  neighbour's, it could wait for ever on the wrong one. It now asks every
+  Domovoi server it finds (up to eight) and joins only the one that proves
+  it knows the six digits the device says: the server you typed them into.
+  The device never sends its code anywhere any more; the check is a
+  password-authenticated exchange (SPAKE2) that lets neither side test
+  codes behind the other's back. Once one server approves it, the device
+  withdraws its request from the others. Details and the threat model:
+  [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#asking-every-house-an-approval-the-device-can-check-140).
+- **What you see.** Typing the code on **Settings → Rooms** now says "Code
+  sent" for such a device, and the room appears within about ten seconds,
+  when the device next checks in — not at the click. A code the device did
+  not accept says so on its card; type it again.
+- **What to know.** A new room device with the address left blank does
+  **not** ask a server older than this release: an approval from it can't
+  be checked. Update the server first, or type its address in the setup
+  portal (then the device asks only that server, the old way). Rooms set
+  up before, spare computers and phones in room mode work exactly as
+  before.
+- **Hardened after review (security audit round 5).** A server that keeps
+  a device's connection busy can no longer freeze it: each visit is bounded
+  as a whole, and the device adopts the server that proved the code at
+  once. A device that may not check another code right now (it allows 5
+  per 30 minutes and 20 a day of running time, and holds back for a while
+  a server whose run proved nothing) keeps visiting and declines, and the
+  server keeps the code you typed — a run in which the device made no
+  guess no longer uses your code up or marks it as rejected. The "can this
+  server prove an approval" answer is now signed, so it cannot be stripped
+  on the way. A device set up with the address left blank no longer records
+  the first server it found for its clock; it records the one that
+  approved it, at its next restart. And a server signs its identity for
+  its own address only at the port it actually listens on.
+- **What to know (ports).** If satellites reach the core through a
+  port-forward that CHANGES the port (outside 16370 to the core's 6370, for
+  example), list that `host:port` in `TRUSTED_HOSTS` (or, for a host
+  integration, vouch for it as `ip:port`); a forward that keeps the port
+  needs nothing. Every server a blank-address device asks sees its room
+  name on the approvals list for up to fifteen minutes.
+- **Migration.** V062 adds five columns to `satellite_approvals`. Nothing
+  to do: the update runs it.
+
 ## 2026-11-16 — 1.3.0
 
 Version 1.3.0: the server, the Windows Setup (1.3.0, with the Windows
