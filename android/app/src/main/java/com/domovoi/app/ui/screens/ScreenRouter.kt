@@ -73,6 +73,7 @@ fun ScreenRouter(route: Route, navigate: (Route) -> Unit, counts: SidebarCounts 
         Route.Satellites -> SatellitesScreen()
         Route.Calendar -> CalendarScreen()
         Route.Lists -> ListsScreen()
+        Route.FriendHouses -> com.domovoi.app.ui.screens.friendhouses.FriendHousesScreen(navigate)
         Route.Stations -> PluginScreenFrame(CAP_STATIONS, route.icon) { StationsScreen() }
         Route.Files -> SourceSwitchPage(DevicePage.Files, server = { FilesScreen() }, device = { YourDeviceFiles() })
         Route.Settings -> SettingsScreen(navigate)
