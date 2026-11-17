@@ -2632,20 +2632,32 @@ async def wake_models_manifest_signed() -> dict[str, Any]:
 
 
 @app.get("/v1/wake-models/{path:path}")
-async def wake_models_file(path: str) -> FileResponse:
+async def wake_models_file(path: str, request: Request) -> FileResponse:
     """Serve one wake-model file (.onnx / .onnx.json). Guarded against
     path-traversal and locked to the allowlisted extensions. The
     extension/existence check runs before the traversal check, mirroring
-    sounds_file / satellite_code_file."""
+    sounds_file / satellite_code_file. A model trained here (shaped by the
+    household's recordings) goes only to a room's address, a household
+    device or an admin: 403 otherwise (CORE-43,
+    :mod:`domovoi.wake_model_access`)."""
+    from domovoi import wake_model_access
+
     root = Path(settings.wake_models_dir).resolve()
     target = (root / path).resolve()
     if target.suffix not in _WAKE_MODEL_EXT_ALLOW or not target.is_file():
         raise HTTPException(status_code=404, detail="not found")
     try:
-        target.relative_to(root)
+        rel = target.relative_to(root).as_posix()
     except ValueError:
         raise HTTPException(status_code=404, detail="not found")
-    return FileResponse(target, media_type="application/octet-stream")
+    if not await wake_model_access.may_download(request, rel):
+        raise HTTPException(
+            status_code=403,
+            detail="this wake model was trained on this household's voices: "
+                   "only its rooms, household devices and an admin may download it",
+        )
+    return FileResponse(target, media_type="application/octet-stream",
+                        headers={"Cache-Control": "no-store"})
 
 
 # A fifth file channel, for spare-device satellites (an Android phone in room

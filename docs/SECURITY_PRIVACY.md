@@ -824,7 +824,18 @@ core starts. The training container runs on Docker's default network, so it
 could reach the internet while it trains; nothing in it needs to once the
 data is cached. What the household recorded only goes into it read-only and
 into the cache volume ([Data at rest](#data-at-rest)); nothing uploads it.
-A trained model leaves the server only when an admin presses **Download**
+Rooms take a trained model from the wake-model channel
+(`GET /v1/wake-models/{file}`), and since round 6 (CORE-43) a model
+trained here is served there only to the address a room that passed
+pairing connects from (its live socket, or one seen in the last 30 days:
+a phone checks its models before it reconnects), to a household device
+(`X-Device-Token`) or to an admin; any other host gets `403`. None of the
+room kinds sends a credential on that fetch, so the room's address is
+what ties a download to a room. The list (names and digests) stays open,
+and so do the published words, which anyone can download from where they
+are published. The channel is plain HTTP, so a host that can already read
+a room's traffic on the LAN can read a download too. Otherwise a trained
+model leaves the server only when an admin presses **Download**
 (`GET /v1/admin/wake/export/{wake_word_id}`): a zip of the `.onnx`,
 `SHA256SUMS`, `MODEL_CARD.md` and `LICENSE-NOTICE.md`, with no
 recordings, clip names, rooms or paths. Sharing it is allowed under
@@ -839,8 +850,9 @@ copy of the published "Domovoi" word, trained the same way plus its own
 recordings (`domovoi/wake_tuning.py`). It is an ordinary trained word under
 a reserved name (`domovoi_v1_tuned`, which no other word may take), so
 everything above holds for it: the clips stay under `wake_clips/`, the model
-under `wake_models/`, served only to this server's own rooms over the signed
-wake-model channel, and nothing uploads either. It is never one of the
+under `wake_models/`, served only to this server's own rooms, household
+devices and an admin over the signed wake-model channel (above: by the
+room's address, CORE-43), and nothing uploads either. It is never one of the
 published words: "use a published word" and the default-word download
 refuse it. Its **Download** is the same admin-only zip as any trained word's,
 and its model card says it includes the household's recordings and is
