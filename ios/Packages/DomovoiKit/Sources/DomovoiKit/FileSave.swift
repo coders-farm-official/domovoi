@@ -93,10 +93,61 @@ public final class FileSaveModel {
     /// rather than queued, because the sheet that opens can only be about one
     /// file and the person has not said which.
     public func save(_ entry: FileEntry, from libraryID: String) {
-        saver.save(
-            path: FilePath.download(libraryID: libraryID, rel: entry.rel),
-            named: Self.safeName(for: entry)
-        )
+        let plan = Self.plan(for: entry, from: libraryID)
+        saver.save(path: plan.path, named: plan.name)
+    }
+
+    /// What a save fetches, and the name the copy is written under.
+    public struct Plan: Equatable, Sendable {
+        public let path: String
+        public let name: String
+    }
+
+    /// The fetch and the name for one row.
+    ///
+    /// * A **Domovoi document** (``savesAsWord(_:from:)``) is converted by
+    ///   the server (``DocumentsPath/wordExport(rel:)``) and saved as
+    ///   `<stem>.docx` (``wordName(for:)``). A conversion the server refuses
+    ///   fails the save with its own sentence; it **never** falls back to the
+    ///   raw page, which would be a save that quietly did something other
+    ///   than what it said ([[no-misleading-controls]]).
+    /// * Everything else is ``FilePath/download(libraryID:rel:)`` under the
+    ///   row's own name, as it always was.
+    ///
+    /// Android's `downloadPlan` (`FileSource.kt`), rule for rule.
+    public static func plan(for entry: FileEntry, from libraryID: String) -> Plan {
+        if savesAsWord(entry, from: libraryID) {
+            return Plan(path: DocumentsPath.wordExport(rel: entry.rel), name: wordName(for: entry))
+        }
+        return Plan(path: FilePath.download(libraryID: libraryID, rel: entry.rel), name: safeName(for: entry))
+    }
+
+    /// A formatted `.html`/`.htm` in the Documents library — the editor's own
+    /// format. Its raw file is a web page, not a document a person can open,
+    /// so saving it saves Word instead. Any other library's `.html` is
+    /// somebody's web page and is saved as one; a folder is never converted.
+    public static func savesAsWord(_ entry: FileEntry, from libraryID: String) -> Bool {
+        guard libraryID == FileLibrary.documents, !entry.isDir else { return false }
+        let tail = Self.tail(of: entry.rel)
+        guard let dot = tail.lastIndex(of: ".") else { return false }
+        let ext = tail[tail.index(after: dot)...].lowercased()
+        return ext == "html" || ext == "htm"
+    }
+
+    /// `Letters/To Gran.html` saves as `To Gran.docx`: the server's own
+    /// attachment name (the file's stem, then `.docx`), hardened as every
+    /// saved name is. Only the last extension goes, as Python's `Path.stem`
+    /// takes it.
+    public static func wordName(for entry: FileEntry) -> String {
+        let tail = Self.tail(of: entry.rel.isEmpty ? entry.name : entry.rel)
+        let stem = tail.lastIndex(of: ".").map { String(tail[..<$0]) } ?? tail
+        let trimmed = stem.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (trimmed.isEmpty ? FileStrings.unnamedDocument : safeName(trimmed)) + ".docx"
+    }
+
+    /// The last path component, by either separator.
+    private static func tail(of raw: String) -> String {
+        raw.split(whereSeparator: { $0 == "/" || $0 == "\\" }).last.map(String.init) ?? ""
     }
 
     public func cancel() { saver.cancel() }
