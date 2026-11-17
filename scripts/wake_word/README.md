@@ -157,6 +157,35 @@ copies the selected clips afresh into `<slug>/.training/`, so a grown set
 is a different set (new names, new contents) and its features are computed
 again; the same set trained twice reuses them.
 
+### Tune Domovoi to your household
+
+The published "Domovoi" word is trained on synthetic voices only. **Tune
+Domovoi to your household** (a card on the same page) makes the household's
+own copy of it: one wake word, "Domovoi (tuned to this home)" (slug
+`domovoi_v1_tuned`, which no other word may take), with the published
+word's phrase. Record clips of everyone saying "Domovoi" on it as above,
+then train: it trains like any word, plus the published word's own near
+misses (`domovoi/wake_tuning.py` `RECIPES`, passed as
+`WAKE_EXTRA_NEGATIVES`). Rooms on the published word keep it until the copy
+is trained, then move to it, and the household default follows. **Go back
+to the standard Domovoi word** moves them back. The copy never leaves the
+house; its Download's model card says it includes the household's
+recordings and is private.
+
+### Extra training material (the published models' recipe)
+
+A run can be given more than the cache's datasets, none of it recordings
+(the published models use these; Settings doesn't set them):
+
+| Mount / variable | What |
+|---|---|
+| `/data/synthetic` | more synthetic positives (other voices, speeds, pitches), copied into `positive_train` |
+| `/data/synthetic_negatives` | more synthetic near misses, copied into `negative_train` |
+| `/data/rirs`, `/data/background` | more room echoes and noise/music beds (WAVs) |
+| `WAKE_EXTRA_NEGATIVES` | more near-miss phrases for the generator ("domino;the movie") |
+| `WAKE_SKIP_MIT_RIRS=1` | leave out the MIT impulse responses (no licence stated) when `/data/rirs` has some |
+| `WAKE_FP_VAL_NPY` | a validation features file to use instead of the dataset's (which includes MUSDB18) |
+
 ## 3. Settings
 
 **Settings → System → Advanced → Wake words** (admin only).

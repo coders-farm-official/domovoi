@@ -196,7 +196,7 @@ gate and `provision.sh`'s first step (`preflight`), from `/etc/os-release`
 Every system gets the same system packages: each name `provision.sh`
 installs (`python3`, `python3-venv`, `python3-dev`, `build-essential`,
 `pkg-config`, `libasound2-dev`, `git`, `ffmpeg`, `mpg123`,
-`libchromaprint-tools`, `xorriso`, `zstd`, `ca-certificates`, `curl`,
+`libchromaprint-tools`, `xorriso`, `tesseract-ocr`, `tesseract-ocr-eng`, `zstd`, `ca-certificates`, `curl`,
 `gnupg`, `tzdata`, `sudo`) is a package of that name in Debian 13 and
 Ubuntu 24.04 too, so nothing is mapped. What differs is Docker:
 
@@ -519,12 +519,15 @@ Follow them instead if you prefer, or to see what a step changed.
 Prerequisites:
 
 ```bash
-sudo apt update && sudo apt install -y python3 python3-venv python3-dev build-essential pkg-config libasound2-dev git ffmpeg mpg123 libchromaprint-tools xorriso
+sudo apt update && sudo apt install -y python3 python3-venv python3-dev build-essential pkg-config libasound2-dev git ffmpeg mpg123 libchromaprint-tools xorriso tesseract-ocr tesseract-ocr-eng
 ```
 
 `xorriso` is what the core runs to make an old computer's room stick
 (Settings → Household → Rooms → add a spare device → old computer; a GPL program
-run on its own, never bundled with Domovoi). `libchromaprint-tools`
+run on its own, never bundled with Domovoi). `tesseract-ocr` and its
+English data `tesseract-ocr-eng` (both Apache-2.0) read scanned pages for
+"What does it say?" (1.4.0); a box installed before then gets them at its
+next update or Restart. `libchromaprint-tools`
 provides `fpcalc` for library enrichment, and
 `python3-dev` + `build-essential` are what let the sdist-only pins
 (`metaphone`) compile. (No

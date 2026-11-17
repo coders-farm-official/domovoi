@@ -2536,7 +2536,7 @@ case_debian_13_bare_metal() {
   check "result ok" eq "$(final_field result)" '"ok"'
   check "said what it is" said "Debian GNU/Linux 13 (trixie), "
   check "no warning about the system" not_said "made for 26.04"
-  check "the same system packages" called "install -y python3 python3-venv python3-dev build-essential pkg-config libasound2-dev git ffmpeg mpg123 libchromaprint-tools xorriso zstd ca-certificates curl gnupg tzdata sudo"
+  check "the same system packages" called "install -y python3 python3-venv python3-dev build-essential pkg-config libasound2-dev git ffmpeg mpg123 libchromaprint-tools xorriso tesseract-ocr tesseract-ocr-eng zstd ca-certificates curl gnupg tzdata sudo"
   # Docker
   check "Docker's key from its Debian repository" called "curl https://download.docker.com/linux/debian/gpg"
   check "nothing from its Ubuntu one" not_called "download.docker.com/linux/ubuntu"
@@ -3591,6 +3591,8 @@ case_apt_step_installs_the_stick_tool() {
   check "the apt step ran" marker apt
   check "xorriso asked for with the rest" grep -qE '^apt-get .* install -y .*\bmpg123\b.*\bxorriso\b' "$STATE/calls.log"
   check "installed" grep -qx "xorriso=1" "$STATE/dpkg"
+  check "the scan reader's OCR asked for with the rest" grep -qE '^apt-get .* install -y .*\bxorriso tesseract-ocr tesseract-ocr-eng\b' "$STATE/calls.log"
+  check "tesseract installed" grep -qx "tesseract-ocr=1" "$STATE/dpkg"
   check "not held" not_called "apt-mark"
   end_case
 }

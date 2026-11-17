@@ -4,7 +4,8 @@ The native Swift and SwiftUI app, next to `android/` and under the same
 rules: permissive licences only (`licences/README.md`, read it before adding a
 package). It has its own version (`MARKETING_VERSION` in `project.yml`,
 `1.0.0` for its first App Store release) and ships on the App Store, not with
-the server's GitHub releases.
+the server's GitHub releases. CI runs on every push (`.github/workflows/ci.yml`'s
+`ios` job builds the app and runs the package tests).
 
 **The Android app is the specification.** Where the two could disagree (the
 cleartext rule, the token's scope, Ed25519, the satellite protocol) the Swift

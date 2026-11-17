@@ -126,6 +126,27 @@ a way that would otherwise get reported as a bug.
   group|legacy|both`) to see which way a network answers; it only asks,
   never announces.
 
+## 1.4.0 (unreleased) — Tune Domovoi to your household
+
+- **What changed.** Settings → Voice → Wake words has a new card, **Tune
+  Domovoi to your household**. Record a few clips of everyone saying
+  "Domovoi" (any room, as for any wake word), then train: the server makes
+  the household's own copy of the published "Domovoi" word, trained the
+  same way plus your recordings, and the near misses the published word is
+  trained against ("domino", "the movie", ...). Rooms keep the standard
+  word until the copy is trained, then switch to it (an offline room when
+  it next connects), and new rooms get it too. **Go back to the standard
+  Domovoi word** undoes it in every room; **Use the tuned word again**
+  switches back.
+- **What to know.** Wake-word training must be turned on (same card as
+  before). The recordings and the tuned word stay on your server and its
+  rooms: nothing uploads them, and the tuned word's model card says it
+  includes your recordings and is private. The tuned word appears in the
+  list as "Domovoi (tuned to this home)"; it can't be deleted while rooms
+  use it. The trainer also takes optional extra synthetic clips, near-miss
+  phrases, room echoes and noise beds (`scripts/wake_word/README.md`),
+  which the published models' recipe uses.
+
 ## 1.4.0 (unreleased) — Plugin SDK 1.9: speech in a room's voice
 
 - **What changed.** Plugins can turn text into speech without playing it
@@ -272,6 +293,32 @@ signed out and says "Signed out after 1 hour without admin activity".
   `set_wake_word` gains `words` (only to a device that sent
   `wake_words_max`). All optional, safe both ways. New routes:
   `PUT /v1/admin/wake/room` and its proxy `PUT /api/wake-words/room`.
+
+### What does this scan say? (dashboard and voice)
+
+- **What changed.** A scan saved to Documents → Scans is now read on the
+  server: Tesseract reads the printed words, and a page it can't read well
+  (handwriting, a photo) goes to the chat's vision model, worded as what
+  the page "might say". The Scan sheet and the scan list in Settings →
+  Printers & scanners show **What does it say?** once a scan is read (or
+  while it's being read, with its progress): a short plain summary from
+  the letter reader, and the full text on request. By voice, "scan this
+  letter" → "Want me to tell you what it says?" → yes now answers, then
+  offers to read all of it. A read scan is searchable like any document:
+  Ask about this document, chat and "read me" work on it. With AI
+  features off, printed pages are still read (OCR isn't AI); the picture
+  model is skipped and there's no summary, only the text.
+- **What to know.** The server needs `tesseract-ocr` and
+  `tesseract-ocr-eng` (Apache-2.0, Ubuntu/Debian packages): a new install
+  gets them, and an existing Linux, Windows or Mac server gets them at its
+  next update or Restart (apply-update.sh's added packages; not under
+  internet "never"). Until then a scan is read by the picture model alone,
+  or not at all with AI off, and the button doesn't show. English only:
+  Domovoi has no household language setting yet. One read at a time, at
+  the lowest priority, pausing for voice like videos in chat. Migration
+  **V065** adds `scan_reads` and `scan_read_pages`. Routes:
+  `/api/scan/reads` (docs/API_REFERENCE.md §2.9). The phone apps don't
+  show the button yet; the routes are ready for them.
 
 ### Videos in chat (dashboard)
 

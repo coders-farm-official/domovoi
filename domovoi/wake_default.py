@@ -140,7 +140,12 @@ RESERVED_SLUGS = STOCK_SLUGS | frozenset(PUBLISHED)
 
 
 def is_reserved_slug(slug: str) -> bool:
-    return slug in RESERVED_SLUGS
+    """A slug no household word may be created under: the stock and
+    published words', and a published word's household copy
+    (``domovoi_v1_tuned``, made only by "Tune Domovoi", domovoi/wake_tuning.py)."""
+    from domovoi import wake_tuning
+
+    return slug in RESERVED_SLUGS or wake_tuning.is_tuned(slug)
 
 
 # ─── the published model on this server ──────────────────────────────────

@@ -834,6 +834,22 @@ it, so sharing it is the household's call; a **Synthetic voices only**
 word carries nobody's voice
 ([`scripts/wake_word/README.md`, section 5](../scripts/wake_word/README.md#5-licence-sharing-a-model-trained-here)).
 
+**"Tune Domovoi to your household" (1.4.0).** A household can make its own
+copy of the published "Domovoi" word, trained the same way plus its own
+recordings (`domovoi/wake_tuning.py`). It is an ordinary trained word under
+a reserved name (`domovoi_v1_tuned`, which no other word may take), so
+everything above holds for it: the clips stay under `wake_clips/`, the model
+under `wake_models/`, served only to this server's own rooms over the signed
+wake-model channel, and nothing uploads either. It is never one of the
+published words: "use a published word" and the default-word download
+refuse it. Its **Download** is the same admin-only zip as any trained word's,
+and its model card says it includes the household's recordings and is
+private. The routes (`GET /v1/admin/wake/tuning`, admin read;
+`POST /v1/admin/wake/tuning`, `/tuning/undo`, `/tuning/use`, admin mutation)
+sit at the trainer's own tiers. Rooms move to the copy only once it is
+trained, and back with "Go back to the standard Domovoi word"; the copy
+can't be deleted while rooms use it.
+
 ### How much a request may weigh
 
 Both processes refuse a request body over 1 MiB with `413`, before it is
@@ -1999,7 +2015,7 @@ All of it on hardware you own. Locations, verified against the code:
 | **Postgres: rolled-back databases** (Linux update unit only) | When a rollback restores the pre-update dump, the database it replaced is renamed `domovoi_failed_<UTC time>` (and `domovoi_test_failed_<UTC time>`) and kept for inspection: a full copy of everything the row above lists. Only the newest one of each is kept (`DOMOVOI_UPDATE_KEEP_FAILED_DBS`, default 1); older ones are dropped at the next restore. Same credential as the live database. **Voice history in it is as old as the copy**: "Keep voice history", "Delete all voice history" and forgetting a person act on the live database only, so this copy keeps what was said until it is dropped (`DROP DATABASE` it by hand to be rid of it sooner). |
 | **`/var/lib/domovoi-update/` on the server** (Linux update unit only) | `backups/pre-<sha>-<UTC time>.dump` and `.test.dump`: a `pg_dump` of `domovoi` and `domovoi_test` taken before every full update, so **everything the database holds** — transcripts, voice embeddings, the admin password hash, session token hashes and the household device token, in plain text inside the dump. Directory 0700 and files 0600, root only; the newest 5 of each are kept (`DOMOVOI_UPDATE_KEEP_BACKUPS`). **They keep the voice history they were taken with**: a shorter "Keep voice history", "Delete all voice history" or forgetting a person doesn't reach them, so older history lasts until five more full updates have replaced them (delete the files as root to be rid of it sooner; a rollback then has nothing to restore). Also `last-result.json` (the last run's steps, with the tail of each failed command's output; mode 0640, readable by root and the service user's group, which is how the core reads it), `pip-freeze-pre.txt` (package versions) and the applied / bad commit SHAs. |
 | **The systemd journal on the server** (Linux; the Windows install keeps one inside its WSL distro) | What the core and the dashboard print to stdout: start-ups and shut-downs, warnings and errors, the loop watchdog's stall reports, one line per HTTP request but the routine polls (method, path, status, the caller's address), which room a turn came from and which handler answered it, and voice identification's scores (person ids and numbers). **Since 2026-10-16 no line holds a credential or what was said** at the default level: both processes blank the value of every credential-named parameter in every log line, whatever logger wrote it (`?device_token=` in the URLs the dashboard builds, a WebSocket's `?token=`, a Bearer: `device_token=***`, `domovoi/log_privacy.py`), and a transcript, a search, an announcement or a reply appears only as a word count (`<5 words>`); with `LOG_LEVEL=DEBUG` the words are written too, for as long as it is set. Kept **on disk** (`Storage=persistent`, installed by `provision.sh` and every update so a freeze's record survives a power cycle, [LINUX_HOST.md](LINUX_HOST.md#the-loop-watchdog)) within journald's own limits: by default at most 10% of the file system, capped at 4 GB, with **no time limit** — the oldest entries go only when the cap is reached, which on a quiet box can be months. Readable by root and members of `adm` / `systemd-journal`. **"Forget me", deleting a person or a chat conversation, "Keep voice history", "Delete all voice history" and "never save my voice" do not reach it**: lines already written stay until journald rotates them out. To remove them sooner, as root: `journalctl --vacuum-time=7d` (or set `MaxRetentionSec=` in a drop-in of your own). A journal from before 2026-10-16 can hold the household token (the dashboard's access log printed `?device_token=` URLs) and transcripts (the core logged some at INFO) until it rotates: rotate the household token (Settings → Phones & browsers) and vacuum the journal if that matters to you. Setup's **Copy logs** on Windows copies the last 200 journal lines of a failed start into `provision.log`, with `device_token=` blanked there too (`Redact.KeyValue`). |
-| **Media directories on the server** | Your music (`~/Music` by default) and documents (`~/Documents` by default), plus flat podcast and audiobook directories under the config dir (`~/.domovoi/podcasts` and `~/.domovoi/audiobooks` by default; all paths configurable). A page scanned through Domovoi is saved as a PDF in `Documents/Scans/`; a draft saved from a chat, a draft a phone sent home and a letter taken by voice are saved as files in `Documents/From Chat/`, and stay there until someone deletes them (deleting the chat does not). |
+| **Media directories on the server** | Your music (`~/Music` by default) and documents (`~/Documents` by default), plus flat podcast and audiobook directories under the config dir (`~/.domovoi/podcasts` and `~/.domovoi/audiobooks` by default; all paths configurable). A page scanned through Domovoi is saved as a PDF in `Documents/Scans/` (its words, as the server read them, are in the database: [Reading scans](#reading-scans)); a draft saved from a chat, a draft a phone sent home and a letter taken by voice are saved as files in `Documents/From Chat/`, and stay there until someone deletes them (deleting the chat does not). |
 | **Postgres: listening history** (V051 `music_listens`, `music_room_listeners`, 2026-11-12) | One row per library song each room, browser and phone played: the song id, the room or device id, when, how long, how it ended, and the person it was for (or the household); and, per room, whose its music is now. Kept 1 year by default, 90 days, or not at all ("Keep listening history"); see [Listening history](#listening-history-whats-kept-for-how-long-who-clears-it). |
 | **Postgres: chat** (`chat_threads`, `chat_messages`, V034–V039; `help_deliveries`, V035) | The home-server chats of the dashboard and the app: each thread's title, whether you or the chat model named it, whether it is archived, and every message (what was typed or, for a chat-mic turn, transcribed; the dictation of a letter taken by voice; the reply; the model; the device it came from; who the voice was recognized as). A reply that looked something up keeps the search words or page address, the sources shown under it and whether the internet was used, and the thread keeps whether "Allow in this chat" is on. A message that carried documents keeps a one-line summary of each (name, kind, pages, word count, notes); a reply answered from documents keeps the passages the model was given, with their text; a reply about a letter photo keeps the text read from the photo beside it. A long summary's per-part notes (`chat_doc_jobs`, V038) are kept only until the summary is finished, or while a stopped one waits to carry on. Drafts (`chat_drafts`, `chat_draft_versions`, V039) keep every version of a letter or other document the chat wrote: the text, the instruction that produced it, whether the model or a person wrote it, the model, the files saved from it, and the device (and person, when known) that made it. A "send the steps to my phone" leaves a `help_deliveries` row: the person, the chat and its title, no text. **Kept until the thread is deleted** (any paired device can delete one): there is no age limit, and "Keep voice history" does not touch chat. Deleting a thread removes its messages, document jobs, drafts and delivery rows; copies in the pre-update database dumps and in a rolled-back database (the rows above) stay until those are replaced. |
 | **`~/.domovoi/chat_uploads/` on the server** | Pictures sent into a home-server chat, letter photos included (the upload and the smaller copy the vision model was sent; up to 20 MB each and 4 a message) and, under `documents/`, the documents attached to a chat or copied in by "Ask about this document" (PDF, Word, OpenDocument, Excel, CSV, text or markdown; up to 100 MB each and 4 a message): the original as `<token><ext>` and the text read from it as `<token>-parts.json`, under random names. They go with the thread they belong to; a document picked in the composer and never sent is cleared out after an hour. Readable by a paired device only. See [Documents in chat](#documents-in-chat). |
@@ -2363,6 +2379,51 @@ letter and write drafts. Who may, where it lives, and what can't happen:
   summary or deletes the job (24 hours at most, 10 minutes once it is done
   with no phone watching, and a restart forgets them), and nothing is
   written to the database.
+
+## Reading scans
+
+A scan saved to `Documents/Scans/` is read on the household's own server so
+"What does it say?" can answer (1.4.0). Who may, where it lives, and what
+can't happen:
+
+* **Who.** Reading a scan's progress, summary and text is a household read
+  (`require_device_read`), the same as reading the Documents folder the
+  scan is in; asking for a read is device tier. Only PDFs inside
+  `Documents/Scans/` are taken (no `..`, no hidden names), resolved inside
+  Documents with links refused.
+* **The file is somebody's bytes.** A scan in Documents can be replaced by
+  anyone with write access, so its pages are drawn in a short-lived
+  worker process with memory and CPU caps (`domovoi/scan_reader/page_worker.py`,
+  the document reader's limits), never in the core. The page pictures go
+  to a work folder of the read's own in the system temp folder and are
+  deleted when the read ends (and at the next start, after a crash).
+* **On the household's server only.** Printed text is read by Tesseract
+  (an OS package, Apache-2.0, run as its own program at the lowest CPU
+  priority, one thread, no network). A page it can't read well goes to the
+  chat's vision model through the server's Ollama, and the summary is
+  written by the chat model, the same way a photo of a letter sent to chat
+  is read. With AI features off neither model is asked: the page is said
+  to be unreadable and there is no summary. Nothing goes anywhere else,
+  unless the house points `OLLAMA_URL` at a model off the box, the case
+  the internet switch warns about.
+* **What is kept.** Each page's text (and OCR's confidence) and the
+  summary, in the database (`scan_reads`, `scan_read_pages`, V065), with
+  the scan's path and the SHA-256 of its bytes, so the text is found
+  wherever Domovoi reads that exact file (or a copy) and never for an
+  edited one. Text from the picture model is always introduced as what
+  the page "might say". Clearing the print and scan history doesn't delete
+  it (the scan is still in Documents); the copies in the update unit's
+  database dumps ([Data at rest](#data-at-rest)) keep it until they are
+  replaced.
+* **Text from a letter is data, never instructions.** The summary goes
+  through the letter reader (`domovoi/doc_qa/letter.py`): the text sits in
+  a marked block, dates and amounts are shown only as the letter's own
+  sentences, and a line addressed to an AI is named, not followed.
+* **Voice answers come first.** One read at a time in the house, at the
+  lowest priority, holding off from a room's wake word until the reply has
+  been spoken (`domovoi/voice_first.py`, shared with videos in chat);
+  tesseract is held still during a turn and a picture-model step is
+  cancelled and asked again after it.
 
 ## Videos in chat
 

@@ -235,6 +235,9 @@ TABLES_TO_TRUNCATE = [
     # seeded single row; the printing tests reset it themselves.
     "print_jobs",
     "scan_jobs",
+    # What the scan reader read from scans (V065).
+    "scan_reads",
+    "scan_read_pages",
     "printer_room_defaults",
     "printers",
     # Co-editing (V042): shared state, edits and version history.

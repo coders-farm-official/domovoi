@@ -34,7 +34,9 @@ def main(argv: list[str]) -> int:
     from domovoi.doc_extract.safe import Refused
 
     try:
-        result = extract(Path(req["path"]), str(req["kind"]), single_pass=req.get("single_pass"))
+        scan = req.get("scan_text") if isinstance(req.get("scan_text"), dict) else None
+        result = extract(Path(req["path"]), str(req["kind"]), single_pass=req.get("single_pass"),
+                         scan_text={int(k): str(v) for k, v in scan.items()} if scan else None)
         result["ok"] = True
     except Refused as e:
         result = {"ok": False, "error": str(e)}

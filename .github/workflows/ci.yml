@@ -225,10 +225,10 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
-      - name: System tools some tests use (ffmpeg)
+      - name: System tools some tests use (ffmpeg; tesseract for the scan reader's real OCR test)
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends ffmpeg >/dev/null
+          sudo apt-get install -y -qq --no-install-recommends ffmpeg tesseract-ocr tesseract-ocr-eng >/dev/null
       - name: Install (requirements.lock, hash-checked)
         run: |
           python -m pip install --require-hashes -r requirements.lock

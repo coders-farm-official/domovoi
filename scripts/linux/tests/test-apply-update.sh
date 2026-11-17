@@ -4070,17 +4070,35 @@ case_added_packages_installed_on_a_restart() {
   check "mode restart" eq "$(field mode)" '"restart"'
   check "a step of its own, after the search helper" eq "$(step_names)" "signature stop-services start-services health searxng added-packages"
   check "an ok step" step_is added-packages ok
-  check "it says what it installed" grep -qF '"detail": "installed xorriso"' "$RESULT"
-  check "no recommends, a short wait for apt's lock" called "apt-get -o Dpkg::Use-Pty=0 -o DPkg::Lock::Timeout=20 -q install -y --no-install-recommends xorriso"
+  check "it says what it installed" grep -qF '"detail": "installed xorriso tesseract-ocr tesseract-ocr-eng"' "$RESULT"
+  check "no recommends, a short wait for apt's lock" called "apt-get -o Dpkg::Use-Pty=0 -o DPkg::Lock::Timeout=20 -q install -y --no-install-recommends xorriso tesseract-ocr tesseract-ocr-eng"
   check "installed after health" before "curl http://127.0.0.1:6369/api/health" "install -y --no-install-recommends xorriso"
   check "with the lists apt had: no update" not_called "DPkg::Lock::Timeout=20 -q update"
   check "not held" not_called "apt-mark"
   check "installed" grep -qx "xorriso=1" "$STATE/dpkg"
+  check "the scan reader's OCR installed" grep -qx "tesseract-ocr-eng=1" "$STATE/dpkg"
   : >"$STATE/calls.log"
   MANAGE_PACKAGES=1 run_update "$CASE/pkgbin"
   check "again: status ok" eq "$(field status)" '"ok"'
   check "again: no step" eq "$(step_names)" "signature stop-services start-services health searxng"
   check "again: no apt" not_called "apt-get"
+  end_case
+}
+
+# A box from before 1.4.0 already has xorriso: the next Restart installs
+# only the scan reader's OCR, and the failure text names only what's missing.
+case_added_packages_only_what_is_missing() {
+  new_case added_packages_only_what_is_missing
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  write_gpu_shims "$CASE/pkgbin"
+  echo "xorriso=1" >"$STATE/dpkg"
+  echo always >"$STATE/internet-policy"
+  MANAGE_PACKAGES=1 run_update "$CASE/pkgbin"
+  check "status ok" eq "$(field status)" '"ok"'
+  check "an ok step" step_is added-packages ok
+  check "it says what it installed" grep -qF '"detail": "installed tesseract-ocr tesseract-ocr-eng"' "$RESULT"
+  check "only the missing ones" called "install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng"
+  check "not xorriso again" not_called "--no-install-recommends xorriso"
   end_case
 }
 
@@ -4096,7 +4114,7 @@ case_added_packages_on_an_update_and_never_under_never() {
   check "never: status ok" eq "$(field status)" '"ok"'
   check "never: no step" eq "$(step_names)" "signature stop-services start-services health searxng"
   check "never: no apt" not_called "apt-get"
-  check "never: the journal says why" grep -qF "not installed while internet access is turned off: xorriso" "$CASE/output.log"
+  check "never: the journal says why" grep -qF "not installed while internet access is turned off: xorriso tesseract-ocr tesseract-ocr-eng (USB sticks for old computers need xorriso; reading scans needs tesseract-ocr)" "$CASE/output.log"
   printf 'print("b")\n' >"$REPO/domovoi/app.py"
   local sha_b; sha_b=$(commit_all "B: code")
   echo sometimes >"$STATE/internet-policy"
@@ -4124,7 +4142,7 @@ case_added_packages_failure_is_a_warning_and_opt_out_is_honoured() {
   check "exit 0" eq "$RC" 0
   check "status ok" eq "$(field status)" '"ok"'
   check "a warn step" step_is added-packages warn
-  check "its detail is ours" grep -qF '"detail": "not installed: xorriso (apt-get failed, exit 100, or another program was using apt; journalctl -u domovoi-update says why). The next update or Restart tries again. USB sticks for old computers need xorriso"' "$RESULT"
+  check "its detail is ours" grep -qF '"detail": "not installed: xorriso tesseract-ocr tesseract-ocr-eng (apt-get failed, exit 100, or another program was using apt; journalctl -u domovoi-update says why). The next update or Restart tries again. USB sticks for old computers need xorriso; reading scans needs tesseract-ocr"' "$RESULT"
   check "tried again with fresh lists" called "apt-get -o Dpkg::Use-Pty=0 -o DPkg::Lock::Timeout=20 -q update"
   check "no error on the run" eq "$(field error)" null
   check "no rollback" not_called "reset --keep"
@@ -5583,6 +5601,7 @@ CASES=(
   case_a_rewound_upstream_still_restarts
   case_a_replace_ref_never_passes_an_enforced_signature
   case_added_packages_installed_on_a_restart
+  case_added_packages_only_what_is_missing
   case_added_packages_on_an_update_and_never_under_never
   case_added_packages_failure_is_a_warning_and_opt_out_is_honoured
   case_gpu_runtime_installed_while_the_services_are_stopped

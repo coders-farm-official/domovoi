@@ -12174,6 +12174,84 @@
         }
       }
     },
+    "/api/wake-words/tuning": {
+      "get": {
+        "tags": [
+          "wake-words"
+        ],
+        "summary": "Tuning Status",
+        "description": "Whether Domovoi can be tuned here, the copy's state (off, recording,\ntraining, failed, in_use, standard), its word id for recording and\ntraining, and the rooms on each word.",
+        "operationId": "tuning_status_api_wake_words_tuning_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "wake-words"
+        ],
+        "summary": "Tuning Start",
+        "description": "\"Tune Domovoi to your household\": make the copy's word, ready for\nclips. Rooms keep the standard word until it is trained. 409 with the\nreason when it can't start (training off, word not published).",
+        "operationId": "tuning_start_api_wake_words_tuning_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/wake-words/tuning/undo": {
+      "post": {
+        "tags": [
+          "wake-words"
+        ],
+        "summary": "Tuning Undo",
+        "description": "\"Go back to the standard Domovoi word\" in every room.",
+        "operationId": "tuning_undo_api_wake_words_tuning_undo_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/wake-words/tuning/use": {
+      "post": {
+        "tags": [
+          "wake-words"
+        ],
+        "summary": "Tuning Use",
+        "description": "Use the tuned copy again after going back.",
+        "operationId": "tuning_use_api_wake_words_tuning_use_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/wake-words/{wake_word_id}/train/stop": {
       "post": {
         "tags": [
@@ -16501,6 +16579,209 @@
             "schema": {
               "type": "string",
               "title": "Scan Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/scan/reads": {
+      "get": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "Scan Read For Path",
+        "description": "The newest reading of a scan in Documents/Scans (``read`` null when\nit was never read) and whether this server can read scans.",
+        "operationId": "scan_read_for_path_api_scan_reads_get",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1000,
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "Scan Read Start",
+        "description": "Read a scan in Documents/Scans (or return the reading already under\nway or done for those bytes).",
+        "operationId": "scan_read_start_api_scan_reads_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScanReadBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/scan/reads/{read_id}": {
+      "get": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "Scan Read Get",
+        "operationId": "scan_read_get_api_scan_reads__read_id__get",
+        "parameters": [
+          {
+            "name": "read_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Read Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/scan/reads/{read_id}/summary": {
+      "get": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "Scan Read Summary",
+        "description": "\"What does it say?\": a short summary (made once by the chat model;\nthe start of the text with AI features off).",
+        "operationId": "scan_read_summary_api_scan_reads__read_id__summary_get",
+        "parameters": [
+          {
+            "name": "read_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Read Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/scan/reads/{read_id}/text": {
+      "get": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "Scan Read Text",
+        "description": "The scan's full text, page by page.",
+        "operationId": "scan_read_text_api_scan_reads__read_id__text_get",
+        "parameters": [
+          {
+            "name": "read_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Read Id"
             }
           }
         ],
@@ -31513,6 +31794,21 @@
         "type": "object",
         "title": "ScanBody"
       },
+      "ScanReadBody": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Path"
+          }
+        },
+        "type": "object",
+        "required": [
+          "path"
+        ],
+        "title": "ScanReadBody"
+      },
       "SearchTestRequest": {
         "properties": {
           "kind": {
@@ -33922,6 +34218,17 @@
               }
             ],
             "title": "Trained Clips From"
+          },
+          "tuned_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tuned From"
           }
         },
         "type": "object",
