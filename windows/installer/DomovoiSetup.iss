@@ -1426,7 +1426,7 @@ begin
   else if Locked and IsLockError(Code) then
     Result := 'A copy from an earlier attempt is still in use. Close any other Domovoi Setup window (Task Manager lists it as Domovoi Setup), then try again. If none is open, your antivirus may be checking that copy: wait a minute and try again, or restart Windows and run Setup again.'
   else
-    Result := 'Your antivirus may have blocked it: this preview of Setup isn''t code-signed, and it copies itself into Program Files to start again after the restart. Check your antivirus''s quarantine (in Windows Security: Virus & threat protection > Protection history), allow or restore DomovoiSetup.exe, then try again. Also close any other Domovoi Setup window.';
+    Result := 'Your antivirus may have blocked it: Setup isn''t code-signed yet, and it copies itself into Program Files to start again after the restart. Check your antivirus''s quarantine (in Windows Security: Virus & threat protection > Protection history), allow or restore DomovoiSetup.exe, then try again. Also close any other Domovoi Setup window.';
 end;
 
 { A folder for the copy: made if missing (False, with Windows' error code,
