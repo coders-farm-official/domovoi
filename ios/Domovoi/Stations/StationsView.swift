@@ -1,8 +1,10 @@
 import DomovoiKit
 import SwiftUI
 
-/// Stations: the radio plugin's screen — search a catalogue, keep the ones
-/// worth keeping, and see what the sampler has heard on them.
+/// Stations: the app's own screen over our radio plugin's API — search a
+/// catalogue, keep the ones worth keeping, and see what the sampler has heard
+/// on them. Offered only when the radio plugin from Coders Farm is installed
+/// (``Capabilities/has(_:)``, ``requiredPlugins``).
 ///
 /// `android/.../ui/screens/stations/StationsScreen.kt` (685 lines) plus
 /// `StationSearch.kt` (598), wrapped on Android in

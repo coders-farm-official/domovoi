@@ -439,8 +439,12 @@ public enum ShellStrings {
     public static let listeningAsHousehold = "listening as the household"
 }
 
-/// The plugin band's words: the band above a screen a plugin brought with it
-/// (`android/.../ui/components/PluginFrame.kt`, `PluginScreenFrame`).
+/// The plugin band's words: the band above one of this app's own screens that
+/// says which plugin of ours the screen uses (`PluginScreenFrame`,
+/// `android/.../ui/components/PluginFrame.kt`). Stations and Images are the
+/// app's code; a plugin cannot ship app code. The screen **uses** the plugin's
+/// API, and the band says exactly that rather than presenting the screen as
+/// one the plugin brought.
 ///
 /// **One band, so one copy of its words** (owner answer 58: "fold the two
 /// plugin bands into one view"). They were written twice the same night, into
@@ -454,11 +458,14 @@ public enum ShellStrings {
 /// into one screen's strings enum is how the next copy gets written.
 public enum PluginBandStrings {
 
-    /// `PluginFrame.kt:152`, the bordered badge.
-    public static let badge = "plugin"
+    /// The band's main line: "Uses the Radio plugin". It replaced the bare
+    /// name and the bordered `plugin` badge beside it — the words now say
+    /// what the badge said, and say it the right way round.
+    public static func uses(_ name: String) -> String { "Uses the \(name) plugin" }
 
-    /// `PluginFrame.kt:144`. Never a bare `by`: the caller passes a publisher
-    /// it has already checked is non-blank (``PluginBand/publisher``).
+    /// `PluginFrame.kt:144`, drawn muted after the main line. Never a bare
+    /// `by`: the caller passes a publisher it has already checked is
+    /// non-blank (``PluginBand/publisher``).
     public static func by(_ publisher: String) -> String { "by \(publisher)" }
 
     /// `PluginFrame.kt:178`, the word.
@@ -474,12 +481,11 @@ public enum PluginBandStrings {
     /// sizes where the band is one row (owner answer 29, and the shape
     /// answer 62 already approved for the source switch).
     ///
-    /// **An iOS-only composition of existing words, no new ones**: the badge
-    /// and `by <publisher>` are not drawn at those sizes, so they are said
-    /// instead. Nothing of the band is lost to a screen reader by the
-    /// collapse.
+    /// **A composition of the band's own words, no new ones**: `by
+    /// <publisher>` is not drawn at those sizes, so it is said instead.
+    /// Nothing of the band is lost to a screen reader by the collapse.
     public static func collapsedLabel(name: String, publisher: String?) -> String {
-        var said = [name, badge]
+        var said = [uses(name)]
         if let publisher { said.append(by(publisher)) }
         return said.joined(separator: ", ")
     }

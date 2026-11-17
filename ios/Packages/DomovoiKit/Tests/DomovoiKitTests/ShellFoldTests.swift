@@ -13,7 +13,8 @@ import XCTest
 /// ### Why this file exists at all
 ///
 /// Review 1 sabotaged `PluginBandStrings.collapsedLabel` — gutted it so the
-/// collapsed band stopped saying the `plugin` badge and `by <publisher>` — and
+/// collapsed band stopped saying the `plugin` badge and `by <publisher>` (the
+/// badge has since become the words "Uses the … plugin") — and
 /// **nothing in the repository caught it**: not `pkgtest.sh`, not
 /// `ios/DomovoiTests`, and no UI case, because when that review ran the stub
 /// house published a flat capability list that iOS does not decode and both
@@ -33,34 +34,37 @@ final class ShellFoldTests: XCTestCase {
 
     // MARK: - the folded band's words (owner answer 58)
 
-    /// The collapsed row at the accessibility sizes says all three things the
-    /// band draws at other sizes, because it draws only the name there.
+    /// The collapsed row at the accessibility sizes says both things the
+    /// band draws at other sizes, because it draws only the main line there.
     ///
     /// Written as the one sentence a screen reader reads, so a change to the
-    /// separator, the order or the badge fails here.
-    func testTheCollapsedBandSaysTheBadgeAndThePublisher() {
+    /// separator, the order or the wording fails here.
+    func testTheCollapsedBandSaysItUsesThePluginAndThePublisher() {
         XCTAssertEqual(
-            "Image Generation, plugin, by Coders Farm",
+            "Uses the Image Generation plugin, by Coders Farm",
             PluginBandStrings.collapsedLabel(name: "Image Generation", publisher: "Coders Farm")
         )
     }
 
     /// No publisher, no `by`: `PluginFrame.kt:144` draws that line only when
-    /// the manifest has a non-blank publisher, and a label reading
-    /// "Radio Stations, plugin, by" would be the bare `by` the band's own
-    /// fallback exists to prevent.
+    /// the manifest has a non-blank publisher, and a label ending
+    /// "plugin, by" would be the bare `by` the band's own fallback exists to
+    /// prevent.
     func testTheCollapsedBandSaysNoBareBy() {
         XCTAssertEqual(
-            "Radio Stations, plugin",
-            PluginBandStrings.collapsedLabel(name: "Radio Stations", publisher: nil)
+            "Uses the Radio plugin",
+            PluginBandStrings.collapsedLabel(name: "Radio", publisher: nil)
         )
     }
 
-    /// The three words the band draws, ported from Android word for word
-    /// (`PluginFrame.kt:152`, `:144`, `:178`, `:181`). One copy now, so this
+    /// The band's words. The main line says the screen **uses** the plugin
+    /// (the screens are the app's own; a plugin cannot ship app code), which
+    /// is what the bordered `plugin` badge used to stand for; the rest are
+    /// Android's (`PluginFrame.kt:144`, `:178`, `:181`). One copy, so this
     /// is the only place they are checked.
-    func testTheBandsWordsAreAndroids() {
-        XCTAssertEqual("plugin", PluginBandStrings.badge)
+    func testTheBandsWords() {
+        XCTAssertEqual("Uses the Radio plugin", PluginBandStrings.uses("Radio"))
+        XCTAssertEqual("Uses the Image Generation plugin", PluginBandStrings.uses("Image Generation"))
         XCTAssertEqual("manage", PluginBandStrings.manage)
         XCTAssertEqual("by Coders Farm", PluginBandStrings.by("Coders Farm"))
         XCTAssertEqual(
@@ -76,15 +80,16 @@ final class ShellFoldTests: XCTestCase {
     func testTheBandFallsBackToTheSlug() {
         let bare = PluginBand.of(CapabilityPlugin(slug: "imagegen", name: "   ", publisher: " "))
         XCTAssertEqual("imagegen", bare?.name)
+        XCTAssertEqual("Uses the imagegen plugin", bare?.usesLine)
         XCTAssertNil(bare?.publisher)
         XCTAssertEqual("/#plugins/imagegen", bare?.managePath)
         XCTAssertNil(PluginBand.of(nil), "no plugin in the manifest means no band")
     }
 
-    /// `pluginFor(_:)` picks the plugin that declares the capability, which is
-    /// what the one folded view is handed instead of a screen-specific type.
-    /// Two plugins in the manifest, so a band that read `plugins.first` would
-    /// name the wrong one on one of the two screens.
+    /// `pluginFor(_:)` picks our plugin that declares the capability, which
+    /// is what the one folded view is handed instead of a screen-specific
+    /// type. Two plugins in the manifest, so a band that read `plugins.first`
+    /// would name the wrong one on one of the two screens.
     func testTheBandNamesThePluginThatDeclaredTheCapability() {
         let manifest = Capabilities(plugins: [
             CapabilityPlugin(

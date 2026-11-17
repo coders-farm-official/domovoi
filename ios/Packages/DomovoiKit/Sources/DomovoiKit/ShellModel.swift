@@ -1274,6 +1274,11 @@ public final class ShellModel {
         guard asked == container.store.serverURL else { return }
         capabilities = fetched
         _ = navigation.capabilitiesChanged(visibility)
+        // A station queued on the phone needs our radio plugin; a manifest
+        // that loaded without it takes the station out of the player (mini
+        // player, Now Playing, the lock screen). A failed fetch is `.empty`
+        // and changes nothing there: a network blip must not stop the radio.
+        if fetched != .empty { heldPlayer?.capabilitiesChanged(fetched) }
     }
 
     /// The server's answer about whether this install is a shared screen,

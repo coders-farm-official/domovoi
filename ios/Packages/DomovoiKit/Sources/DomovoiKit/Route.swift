@@ -92,7 +92,10 @@ public enum Route: String, CaseIterable, Sendable {
     }
 
     /// The capability this route needs before it renders; nil = always.
-    /// Only the two plugin-backed screens are gated (`Routes.kt:74-80`).
+    /// Only the two plugin-backed screens are gated (`Routes.kt:74-80`), and
+    /// only **our** plugin's declaration counts (``Capabilities/has(_:)``,
+    /// ``requiredPlugins``) — a third-party plugin declaring `stations` does
+    /// not light up Stations.
     public var requiredCapability: String? {
         switch self {
         case .stations: return capStations

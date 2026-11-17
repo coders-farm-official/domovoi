@@ -13,8 +13,10 @@ import XCTest
 /// `Rooms` — is a single word in a single place.
 final class RouteTests: XCTestCase {
 
+    /// Our plugin for each capability (`OurPluginsFixture.swift`): only ours
+    /// lights a screen up (``requiredPlugins``).
     private func caps(_ capabilities: String...) -> Capabilities {
-        Capabilities(plugins: [CapabilityPlugin(slug: "p", appCapabilities: capabilities)])
+        Capabilities.ours(capabilities)
     }
 
     /// The visibility inputs, with the two that are usually not the point
@@ -259,7 +261,7 @@ final class RouteTests: XCTestCase {
             )
         }
         let radioAiOff = Capabilities(
-            plugins: [CapabilityPlugin(slug: "p", appCapabilities: [capStations])],
+            plugins: [OurPlugins.radio],
             features: [featureAI: false]
         )
         XCTAssertTrue(Route.stations.visibleWith(seen(radioAiOff)))
