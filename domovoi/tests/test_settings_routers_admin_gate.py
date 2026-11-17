@@ -102,8 +102,9 @@ def test_the_expected_surface_is_what_got_gated() -> None:
     # and DELETE {id}/clips ("Delete all clips") on 2026-11-10;
     # POST preview ("Hear the training voices") and {id}/synthetic-copy
     # on 2026-11-11; PUT default, POST default/download and POST use (the
-    # household's default wake word, V054) on 2026-11-14.
-    assert counts == {"greetings": 3, "voices": 3, "wake_words": 21}
+    # household's default wake word, V054) on 2026-11-14; PUT room (a
+    # room's wake-word list, V063) on 2026-11-16.
+    assert counts == {"greetings": 3, "voices": 3, "wake_words": 22}
 
 
 # ─── HTTP: the gate through the real dependency, classifier stubbed ────────
