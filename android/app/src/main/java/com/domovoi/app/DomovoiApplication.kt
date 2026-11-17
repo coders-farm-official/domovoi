@@ -29,6 +29,7 @@ class DomovoiApplication : Application(), ImageLoaderFactory {
         IncidentNotifier.createChannel(this)
         HelpNotifier.createChannel(this)
         RoomBatteryNotifier.createChannel(this)
+        com.domovoi.app.friendhouses.FriendHouseNotifier.createChannel(this)
         // Before anything can make a request: in room mode the household
         // token goes on none (net/HouseholdLock.kt).
         HouseholdLock.roomModeActive = RoomStore.isActive(this)
@@ -57,6 +58,7 @@ class DomovoiApplication : Application(), ImageLoaderFactory {
             container.containerAlerts.start()
             container.helpAlerts.start()
             container.batteryAlerts.start()
+            container.friendHouses.start()
         }
         // Earlier crashes and Android's exit history, read off the main thread.
         Diagnostics.onLaunch(this)

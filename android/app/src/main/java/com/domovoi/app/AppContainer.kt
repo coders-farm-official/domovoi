@@ -164,6 +164,11 @@ class AppContainer(context: Context) {
      *  (alerts/RoomBatteryAlerts.kt). Started by DomovoiApplication. */
     val batteryAlerts = RoomBatteryAlerts(context, api, bus, prefs)
 
+    /** Friend Houses: the shell's availability gate and unread badge, and
+     *  the notifications the background sync's tick posts
+     *  (friendhouses/FriendHouses.kt). Started by DomovoiApplication. */
+    val friendHouses = com.domovoi.app.friendhouses.FriendHouses(context, api, bus, prefs)
+
     /** The home-server chat a help notification's tap asked for (thread
      *  id, title); Chat opens it and clears it. */
     val pendingChatThread = MutableStateFlow<Pair<Long, String>?>(null)

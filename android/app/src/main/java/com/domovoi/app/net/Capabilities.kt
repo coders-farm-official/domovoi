@@ -118,6 +118,11 @@ data class Capabilities(
     val plugins: List<CapabilityPlugin> = emptyList(),
     @SerialName("handler_display") val handlerDisplay: List<HandlerDisplay> = emptyList(),
     val features: Map<String, Boolean> = emptyMap(),
+    /** Not part of the manifest: whether Friend Houses shows on this
+     *  server, from `GET /api/friend-houses` (friendhouses/FhGate). The
+     *  shell sets it on the manifest it provides, so every launcher and the
+     *  screen router read one gate. False until that read says "on". */
+    @kotlinx.serialization.Transient val friendHouses: Boolean = false,
 ) {
     /** True when the server runs the plugin of ours that the app's
      *  [capability] screen uses ([CapabilityPlugin.serves]). Every gate on
