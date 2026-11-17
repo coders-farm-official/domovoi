@@ -3951,6 +3951,7 @@ async def admin_friend_houses_status() -> dict[str, Any]:
     out["house_name"] = await friending.house_name()
     out["unread"] = await messages.unread_total()
     out["invite_days"] = await friending.invite_days_default()
+    out["changes"] = await friending.recent_changes()  # new friends, shared lists (R6 FH-8)
     out["limits"] = {"min_days": friending.MIN_DAYS, "max_days": friending.MAX_DAYS,
                      "max_open_files": friending.MAX_OPEN_INVITES}
     return out

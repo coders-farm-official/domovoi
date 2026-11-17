@@ -243,7 +243,15 @@ async def share(list_id: int, friend_id: str) -> dict[str, Any]:
             await _save_item(s, space_id, item, row.id)
         await _queue(s, space, ops, keys)
         await _set_space(s, space_id, clock=clock + 1, synced_at=the_list.updated_at)
-    log.info("Friend Houses: a list was shared with %s", friend.local_name)
+    log.warning("Friend Houses: a list was shared with %s", friend.local_name)
+    # Said aloud like a new friend, and on the status's notice for a week:
+    # a list shared without the household knowing mustn't go unnoticed
+    # (audit R6 FH-8).
+    from domovoi.friend_houses import friending, messages
+
+    phrases = await messages.wake_phrases()
+    await friending.announce(
+        f"{the_list.name} is now shared with {messages.safe_name(friend.local_name, phrases)}.")
     _service().spawn(_flush(friend.house_key), "friend-houses-flush")
     return {"id": space_id.hex(), "state": "active"}
 

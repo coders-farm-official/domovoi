@@ -38,6 +38,8 @@ import secrets
 import time
 from typing import Any
 
+from sqlalchemy import text
+
 from domovoi.friend_houses import connect as fc
 from domovoi.friend_houses import friend_file as ff
 from domovoi.friend_houses import identity as fid
@@ -461,18 +463,81 @@ async def on_accepted(event: dict[str, Any]) -> None:
 
 async def _new_friend(name: str) -> None:
     """Every new friend is announced aloud and logged (owner decision 13),
-    so an addition nobody in the house made can't go unnoticed (finding 3)."""
+    so an addition nobody in the house made can't go unnoticed (finding 3).
+    The dashboard and the phones also show it for a week (the status's
+    ``changes``), and during the house's quiet hours the announcement waits
+    for them to end instead of being dropped (audit R6 FH-8)."""
     log.warning("Friend Houses: %s is now a friend house", name)
+    from domovoi.friend_houses import messages
+
+    said = messages.safe_name(name, await messages.wake_phrases())
+    await announce(f"{said} is now a Friend House.")
+
+
+HELD_MAX = 20  # announcements waiting for quiet hours to end
+
+
+def _house_quiet_now() -> bool:
+    from domovoi import quiet_hours
+
+    hours = quiet_hours.house_hours()
+    return hours is not None and quiet_hours.in_window(quiet_hours._local_now(), *hours)
+
+
+async def announce(text: str) -> None:
+    """A trust change said aloud in the rooms: now, or (in the house's
+    quiet hours) as soon as they end. Never dropped."""
+    if _house_quiet_now():
+        async with _db() as s:
+            current = await store.household_settings(s)
+            held = list(current.get("held_announcements") or [])[-(HELD_MAX - 1):]
+            held.append(text[:200])
+            current["held_announcements"] = held
+            await store.save_household_settings(s, current)
+        log.info("Friend Houses: quiet hours; the announcement waits for them to end")
+        return
+    await _speak(text)
+
+
+async def _speak(text: str) -> None:
     try:
         from domovoi.sdk.speech import SpeechAPI
         from domovoi.speech_sanitize import sanitize_for_speech
 
-        from domovoi.friend_houses import messages
+        await SpeechAPI("core").announce(None, sanitize_for_speech(text))
+    except Exception as e:  # noqa: BLE001 — the log line and the status are the record
+        log.info("Friend Houses: an announcement failed: %s", e)
 
-        said = messages.safe_name(name, await messages.wake_phrases())
-        await SpeechAPI("core").announce(None, sanitize_for_speech(f"{said} is now a Friend House."))
-    except Exception as e:  # noqa: BLE001 — the log line above is the record
-        log.info("Friend Houses: announcing the new friend failed: %s", e)
+
+async def announce_held() -> int:
+    """Say what waited for quiet hours (run by the service's retry loop)."""
+    if _house_quiet_now():
+        return 0
+    async with _db() as s:
+        current = await store.household_settings(s)
+        held = list(current.get("held_announcements") or [])
+        if not held:
+            return 0
+        current["held_announcements"] = []
+        await store.save_household_settings(s, current)
+    for text_ in held:
+        await _speak(str(text_))
+    return len(held)
+
+
+async def recent_changes(days: int = 7) -> list[dict[str, Any]]:
+    """Trust changes of the last week, newest first, for the dashboard's
+    and the phones' notice: new friends and lists shared with a friend."""
+    async with _db() as s:
+        rows = (await s.execute(text(
+            "SELECT 'friend' AS kind, local_name, NULL AS list, added_at FROM friend_houses_friends "
+            "WHERE added_at > now() - make_interval(days => :d) "
+            "UNION ALL SELECT 'shared_list', f.local_name, sp.title, sp.created_at "
+            "FROM friend_houses_spaces sp JOIN friend_houses_friends f ON f.id = sp.friend_id "
+            "WHERE sp.origin = 'us' AND sp.state = 'active' "
+            "AND sp.created_at > now() - make_interval(days => :d) "
+            "ORDER BY 4 DESC LIMIT 20"), {"d": days})).all()
+    return [{"kind": r[0], "friend": r[1], "list": r[2], "at": r[3].isoformat()} for r in rows]
 
 
 async def list_friends() -> list[dict[str, Any]]:

@@ -372,3 +372,36 @@ async def test_fh11_removing_a_friend_clears_its_requests(house) -> None:
             session_key=v.session_key, their_name="V", local_name="V", days=5)
     assert await fr.unfriend("fv")
     assert await fr.list_requests() == []
+
+
+async def test_fh8_a_new_friend_in_quiet_hours_is_said_when_they_end(house, monkeypatch) -> None:
+    # Audit R6 FH-8: the announcement was a notice, and quiet hours (on by
+    # default, 22:00-07:00) dropped it for good.
+    from domovoi.friend_houses import messages
+
+    async def phrases():
+        return ["hey jarvis"]
+
+    monkeypatch.setattr(messages, "wake_phrases", phrases)
+    said: list[str] = []
+
+    async def speak(text_):
+        said.append(text_)
+
+    monkeypatch.setattr(fr, "_speak", speak)
+    quiet = {"now": True}
+    monkeypatch.setattr(fr, "_house_quiet_now", lambda: quiet["now"])
+    await fr.announce("The Smiths are now a Friend House.")
+    assert said == []
+    assert await fr.announce_held() == 0  # still quiet
+    quiet["now"] = False
+    assert await fr.announce_held() == 1 and said == ["The Smiths are now a Friend House."]
+    assert await fr.announce_held() == 0
+
+
+async def test_fh8_the_weeks_changes_name_new_friends(house) -> None:
+    fid.create(fid.keys_path())
+    v = _other(house.tmp, "v")
+    await _a_friend(v)
+    changes = await fr.recent_changes()
+    assert changes[0]["kind"] == "friend" and changes[0]["friend"] == "V"

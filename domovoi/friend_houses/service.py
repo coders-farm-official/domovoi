@@ -633,6 +633,7 @@ async def _retry_loop() -> None:
         # Presence: ping friends not heard from in 10 minutes, and tell any
         # still waiting for this house's new address (after a block).
         await _after_reconcile(presence.check_all)
+        await _after_reconcile(friending.announce_held)
 
 
 async def _shared_lists_loop() -> None:

@@ -169,6 +169,28 @@ const FhFirewallNote = ({ status }) => (
   ) : null
 );
 
+/* What changed who this house trusts in the last week (status.changes):
+   new friend houses and lists shared with one. Said aloud too, but quiet
+   hours hold that back, so it stays written here (audit R6 FH-8). */
+const FhChangesNote = ({ status }) => {
+  const changes = (status && Array.isArray(status.changes)) ? status.changes : [];
+  if (!changes.length) return null;
+  return (
+    <div className="chat-note" role="note">
+      <div><strong>This week</strong></div>
+      {changes.map((c, i) => (
+        <div key={i}>
+          {c.kind === 'friend'
+            ? <>{String(c.friend || 'A house')} became a friend house</>
+            : <>“{String(c.list || 'A list')}” was shared with {String(c.friend || 'a friend house')}</>}
+          {' '}<span style={fhMuted}>{fhDay(c.at)}</span>
+        </div>
+      ))}
+      <div style={fhMuted}>Not you? Remove or block the house below, and change the admin password.</div>
+    </div>
+  );
+};
+
 /* ---- off ------------------------------------------------------------ */
 
 const FhOffCard = ({ internetNever, detail, busy, onTurnOn, status }) => (
@@ -218,6 +240,7 @@ const FhHouseCard = ({ status, fire, onSaved, onTurnOff, busy }) => {
       <div style={{ ...fhStack, padding: '12px 16px' }}>
         <FhStatusLine status={status}/>
         <FhFirewallNote status={status}/>
+        <FhChangesNote status={status}/>
         <div style={fhRow}>
           <label htmlFor="fh-house-name" style={{ fontSize: 13 }}><strong>The name friends see</strong></label>
           <input id="fh-house-name" value={name} maxLength={FH_NAME_MAX} disabled={saving}
