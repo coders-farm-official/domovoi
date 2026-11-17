@@ -5890,7 +5890,7 @@ const CapturesPanel = () => {
 const SETTINGS_GROUPS = [
   // "Rooms & devices" until 2026-11-09: its old address still opens it.
   { id: 'household', label: 'Household', icon: 'house', aliases: ['rooms-and-devices'],
-    sections: ['rooms', 'people', 'phones-and-browsers', 'calendars', 'media-folders', 'music-mix', 'queue-history', 'printers'] },
+    sections: ['rooms', 'people', 'phones-and-browsers', 'calendars', 'media-folders', 'music-mix', 'queue-history', 'printers', 'friend-houses'] },
   { id: 'voice', label: 'Voice', icon: 'audio-lines', sections: ['wake-words', 'voices', 'greetings'] },
   { id: 'chat-and-ai', label: 'Chat & AI', icon: 'sparkles', sections: ['models', 'search', 'chat'] },
   { id: 'privacy', label: 'Privacy', icon: 'shield', sections: ['internet', 'voice-history', 'listening-history'] },
@@ -5933,6 +5933,11 @@ const SETTINGS_SECTIONS = [
   { id: 'printers', label: 'Printers & scanners', optional: true,
     sub: 'Printers and scanners on your network.',
     words: 'printer printers print printing scanner scanners scan scanning ink toner paper' },
+  // friend_houses.jsx registers it (F2): friend files, requests, friends
+  // (admin; off by default).
+  { id: 'friend-houses', label: 'Friend Houses', optional: true,
+    sub: 'Serverless messaging and friend system between households.',
+    words: 'friend friends house houses household households friending friend file invite request requests tor fingerprint code verify' },
   { id: 'app-layout', label: 'App layout', aliases: ['phone-bar', 'phonebar'],
     sub: 'The menu every browser on this Domovoi shows (admin), and this browser’s phone bar.',
     words: 'phone bar tabs bottom bar layout menu navigation sidebar group groups media tools rename reorder' },

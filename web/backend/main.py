@@ -47,6 +47,7 @@ from web.backend.api import audiobooks as audiobooks_api
 from web.backend.api import documents as documents_api
 from web.backend.api import files as files_api
 from web.backend.api import fonts as fonts_api
+from web.backend.api import friend_houses as friend_houses_api
 from web.backend.api import printers as printers_api
 from web.backend.api import files_security
 from web.backend.api import greetings as greetings_api
@@ -492,6 +493,8 @@ app.include_router(files_api.blocks_router)
 app.include_router(fonts_api.router)
 # Printers, printing and scanning: proxies to the core's /v1/printers, /v1/print, /v1/scan.
 app.include_router(printers_api.router)
+# Friend Houses: proxies to the core's /v1/admin/friend-houses (security tier at both hops).
+app.include_router(friend_houses_api.router)
 app.include_router(podcasts_api.router)
 app.include_router(audiobooks_api.router)
 app.include_router(videos_api.router)

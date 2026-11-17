@@ -63,6 +63,8 @@ CTX_ADDRESS = b"domovoi-fh-address-v1"
 CTX_RETIRE = b"domovoi-fh-retire-v1"
 CTX_FRIEND_FILE = b"domovoi-fh-friend-file-v1"
 CTX_MESSAGE = b"domovoi-fh-message-v1"
+# Not a signing context: the derivation label for invite secrets.
+CTX_INVITE_SECRET = b"domovoi-fh-invite-secret-v1"
 _CONTEXTS = frozenset({CTX_ADDRESS, CTX_RETIRE, CTX_FRIEND_FILE, CTX_MESSAGE})
 
 
@@ -199,6 +201,16 @@ class HouseKeys:
 
     def sign(self, context: bytes, body: bytes) -> bytes:
         return crypto_backend.ed25519_sign(self.house_seed, signed_bytes(context, body))
+
+    def invite_secret(self, invite_id: bytes) -> bytes:
+        """The secret in the friend file for ``invite_id``. Derived, never
+        stored: a database dump holds no invite secret, and a friend file
+        stops working as soon as its invite row is gone."""
+        import hmac
+
+        if len(invite_id) != 16:
+            raise ValueError("an invite id is 16 bytes")
+        return hmac.new(self.house_seed, CTX_INVITE_SECRET + invite_id, hashlib.sha256).digest()
 
     def address_statement(self, onion_key: bytes, issued_at: int) -> AddressStatement:
         draft = AddressStatement(self.house_key, self.session_key, onion_key, issued_at, b"")

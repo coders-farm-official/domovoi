@@ -206,6 +206,10 @@ class TorFolder:
         _check_id(friend_id)
         (self.data / "clientauth" / f"{friend_id}.auth_private").unlink(missing_ok=True)
 
+    def held(self) -> set[str]:
+        folder = self.data / "clientauth"
+        return {p.stem for p in folder.glob("*.auth_private")} if folder.is_dir() else set()
+
     def onion_key(self, service: str = "hs-main") -> bytes | None:
         """This house's onion key as tor wrote it (``hostname``), or None
         before the daemon has made one."""

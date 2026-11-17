@@ -2610,6 +2610,66 @@ happen:
   better web answer; an external Kiwix URL on the internet is never asked
   as a local source.
 
+## Friend Houses (house to house, off by default)
+
+"Serverless messaging and friend system between households"
+(`domovoi/friend_houses/`). It is **off** until an admin turns it on
+(Settings, `friend_houses_enabled`). While it's off, nothing runs and
+nothing connects: no keys are made, no image is built, no daemon starts.
+
+**How houses reach each other.** Each house runs C tor in a container the
+core builds itself (`domovoi-tor`; docs/CONTAINER_GUARD.md). A house is
+an onion service with client authorization: only its friends hold a key
+that lets them find it at all. The Tor network carries the connection, so
+neither house learns the other's IP address and no Coders Farm server is
+involved. A determined former friend can still narrow down which Tor guard
+a house uses over time, so "friends never see your IP" is a strong claim
+about the network, not an absolute one. The container's only openings are
+unix sockets in a folder it shares with the core: no control port and no
+TCP port, so nothing else on the box or the LAN can use it as a proxy.
+The internet answer "never" **stops the container**, not just Domovoi's
+calls.
+
+**Who can connect.** Tor's client authorization decides who can find the
+house; it doesn't prove who is calling, and a removed friend can keep
+reaching the onion for minutes. So every connection also runs a Noise
+handshake bound to both houses' keys, and the house checks the caller
+against its **current** friend list before reading anything else. The
+inbound side runs as its own process with no database and no network,
+reading only fixed-size, fixed-format frames.
+
+**Friend files are bearer secrets.** A friend file (one line,
+`domovoi-friend:1:…`) lets whoever holds it ask to be a friend, **once**,
+until it expires (1–30 days). Nothing happens unless an admin here
+accepts. While any file is unused, the house runs a second, open onion
+service for requests (the pairing address), rate-limited and answering
+only for open files; it is deleted, and a new address made for the next
+file, as soon as none is left. The file's secret isn't stored: it is
+derived from the house key when needed, so a database dump can't be used
+to answer a file. Making, listing and cancelling files, and every other
+Friend Houses route, is admin security tier, reads included.
+
+**The 4-digit code.** Both houses compute the same 4-digit code from
+random values each side committed to before seeing the other's, so
+someone who swapped a friend file in transit can't make the codes match
+except by a 1-in-10,000 chance, once per file. Comparing codes (by phone,
+in person) is optional; a friend shows "Not verified" until someone does.
+
+**Every new friend is announced** aloud in the rooms and logged, so a
+friend added without the household knowing (for example by someone on the
+LAN who captured an admin sign-in) doesn't go unnoticed.
+
+**What's stored, and where.**
+
+- The house's keys: a file in `~/.domovoi/friend-houses/`, mode 0600,
+  never in Postgres (so the update unit's database dump never holds them).
+  Losing it means friending everyone again.
+- Friends, friend files and requests: Postgres (`friend_houses_*`). A key
+  this house gives a friend to reach it, and a friend file it is still
+  trying to send, are kept only until delivered.
+- Encryption is **between houses**, not end to end between people: the
+  admins and the software of both houses can read what's stored there.
+
 ## The container guard (what it does and does not detect)
 
 Owner decision 2026-10-11: a container Domovoi expects that fails alerts
