@@ -235,6 +235,10 @@ WIFI_ADAPT_TIMEOUT_SEC = 150.0
 # the 30 s this used to allow, and a kill here cancels nothing in
 # NetworkManager — it only stops waiting for the answer.
 NMCLI_UP_TIMEOUT_SEC = 45.0
+#: `nmcli device status` on a Pi Zero 2 W under load (a boot, a wake
+#: model loading) has taken over five seconds; a slow answer must not read
+#: as "no NetworkManager" and send the recovery to wpa_cli (S2-15).
+NMCLI_STATUS_TIMEOUT_SEC = 12.0
 # The radio reset: off, 3 s, on, up to 15 s for the radio to come back, then
 # `nmcli --wait 45 connection up` (satellite/scripts/domovoi-wifi-reset).
 WIFI_RESET_TIMEOUT_SEC = 90.0
@@ -314,6 +318,40 @@ def _wifi_reset_helper_installed(cfg: Any) -> bool:
     """Whether the root radio-reset helper is there to ask (never on a
     Windows satellite, for the reason `_reboot_helper_installed` gives)."""
     return not engine_platform.is_windows_pc(cfg) and WIFI_RESET_HELPER.exists()
+
+
+#: Where a wpa_supplicant that wpa_cli can talk to keeps its per-interface
+#: control socket (Debian's ctrl_interface=DIR=/run/wpa_supplicant).
+WPA_CTRL_DIRS = (Path("/run/wpa_supplicant"), Path("/var/run/wpa_supplicant"))
+NMCLI_PATHS = (Path("/usr/bin/nmcli"),)
+
+
+def _wpa_ctrl_socket(iface: str, dirs: tuple[Path, ...] | None = None) -> bool | None:
+    """True when a wpa_supplicant control socket for ``iface`` exists (wpa_cli
+    can reach it), False when none does, None when a folder that may hold it
+    can't be read by this account."""
+    unreadable = False
+    for d in dirs or WPA_CTRL_DIRS:
+        try:
+            if (d / iface).exists():
+                return True
+        except OSError:
+            unreadable = True
+            continue
+        try:
+            if d.exists() and not os.access(d, os.X_OK):
+                unreadable = True
+        except OSError:
+            unreadable = True
+    return None if unreadable else False
+
+
+def _nm_installed(paths: tuple[Path, ...] | None = None) -> bool:
+    """NetworkManager is on this image (its nmcli is), answering or not."""
+    try:
+        return any(p.exists() for p in (paths or NMCLI_PATHS)) or shutil.which("nmcli") is not None
+    except OSError:
+        return False
 
 
 def _hard_exit(code: int) -> None:
@@ -3100,7 +3138,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
                     log.warning(
                         "wake ack: %s is not installed, so the spoken greetings "
                         "cannot play; acknowledging with the chime (aplay) until "
-                        "it is - a reboot runs the boot step that installs it",
+                        "it is (the 'system packages' lines in this log say why "
+                        "it is missing)",
                         argv[0],
                     )
                 clip = None
@@ -3800,21 +3839,70 @@ class Satellite(pc_engine.SpareDeviceEngine):
         connect`. Under NM, wpa_supplicant is driven over D-Bus and wpa_cli
         usually cannot reach its control socket at all, so the reassociate
         below is a no-op on exactly the devices the portal creates.
+
+        Why it said no is kept in ``_nm_probe_note`` (nmcli missing, timed
+        out, NetworkManager not running, wlan0 unmanaged or not listed), for
+        :meth:`_wifi_stack` and the log.
         """
+        self._nm_probe_note = None
         try:
             r = subprocess.run(
                 ["nmcli", "-t", "-f", "DEVICE,STATE", "device", "status"],
-                capture_output=True, text=True, timeout=5.0,
+                capture_output=True, text=True, timeout=NMCLI_STATUS_TIMEOUT_SEC,
             )
-        except (OSError, subprocess.SubprocessError):
+        except FileNotFoundError:
+            self._nm_probe_note = "no nmcli"
+            return False
+        except subprocess.TimeoutExpired:
+            self._nm_probe_note = f"nmcli did not answer within {NMCLI_STATUS_TIMEOUT_SEC:.0f} s"
+            return False
+        except (OSError, subprocess.SubprocessError) as e:
+            self._nm_probe_note = f"nmcli: {e}"
             return False
         if r.returncode != 0:
+            err = ((r.stderr or "") + (r.stdout or "")).strip().splitlines()
+            self._nm_probe_note = f"nmcli rc={r.returncode}" + (f": {err[-1][:160]}" if err else "")
             return False
         for line in (r.stdout or "").splitlines():
             device, _, state = line.partition(":")
             if device.strip() == "wlan0":
-                return state.strip() != "unmanaged"
+                if state.strip() == "unmanaged":
+                    self._nm_probe_note = "NetworkManager lists wlan0 as unmanaged"
+                    return False
+                return True
+        self._nm_probe_note = "NetworkManager does not list wlan0"
         return False
+
+    _nm_probe_note: str | None = None
+    _wifi_stack_said: str | None = None
+
+    def _wifi_stack(self) -> str:
+        """Which network stack owns wlan0, for the link recovery (S2-15).
+
+        * ``"nm"``: NetworkManager answers and manages wlan0.
+        * ``"wpa_supplicant"``: a wpa_supplicant with its own control socket
+          for wlan0 (``/run/wpa_supplicant/wlan0``), the one thing
+          ``wpa_cli -i wlan0`` can talk to. NetworkManager's supplicant has
+          no such socket (it is driven over D-Bus): wpa_cli then fails with
+          "Failed to connect to non-global ctrl_ifname: wlan0", which is
+          what the Mac test sitting's Pi logged on every recovery.
+        * ``"nm_unreachable"``: no such socket, but NetworkManager is on this
+          image and did not answer (or called wlan0 unmanaged).
+        * ``"other"``: neither (systemd-networkd, iwd, ...): nothing here
+          can reconnect it; the self-check's restart is what brings it back.
+        * ``"unknown"``: the socket folder can't be read by this account:
+          wpa_cli is tried as before.
+        """
+        if self._nm_manages_wifi():
+            return "nm"
+        sock = _wpa_ctrl_socket("wlan0")
+        if sock is True:
+            return "wpa_supplicant"
+        if sock is None:
+            return "unknown"
+        if _nm_installed():
+            return "nm_unreachable"
+        return "other"
 
     def _reconnect_wifi_nm(self) -> bool:
         """Bring the HOUSE network back, through NetworkManager.
@@ -4035,8 +4123,12 @@ class Satellite(pc_engine.SpareDeviceEngine):
         # voice request): each loop honours the other's last recovery, so
         # they never take turns tearing the link down seconds apart.
         self._last_reassociate_at = time.monotonic()
-        if self._nm_manages_wifi():
+        # Which stack owns wlan0 (NetworkManager first, via _nm_manages_wifi).
+        stack = self._wifi_stack()
+        if stack == "nm":
             return self._reconnect_wifi_nm()
+        if stack in ("nm_unreachable", "other"):
+            return self._recover_wifi_without_wpa_cli(stack)
         try:
             result = subprocess.run(
                 ["sudo", "-n", "/usr/sbin/wpa_cli", "-i", "wlan0", "reassociate"],
@@ -4059,6 +4151,31 @@ class Satellite(pc_engine.SpareDeviceEngine):
             result.returncode, result.stdout.strip(), result.stderr.strip(),
         )
         return False
+
+    def _recover_wifi_without_wpa_cli(self, stack: str) -> bool:
+        """The link recovery where ``wpa_cli`` can't work (S2-15): never
+        run it there, say once why, and on NetworkManager's image try the
+        radio reset (it goes through nmcli, so it helps only once
+        NetworkManager answers again, and it never touches a link that is
+        associated). False otherwise: the self-check counts the failure and
+        brings its restart forward, which is what restores a stack nobody
+        here can drive."""
+        why = self._nm_probe_note or "unknown"
+        if stack == "nm_unreachable":
+            words = (f"NetworkManager runs this room's network but did not answer ({why}); "
+                     "wpa_cli can't reach its supplicant")
+        else:
+            words = (f"this room's network is run by neither NetworkManager ({why}) nor a "
+                     "wpa_supplicant with its own control socket; nothing here can reconnect it")
+        if self._wifi_stack_said != words:
+            self._wifi_stack_said = words
+            log.warning("wifi recovery: %s", words)
+        if stack != "nm_unreachable":
+            return False
+        link = self._check_wifi_link() if self.cfg.wifi_enabled else None
+        associated = bool(link and link.get("rx_mbits") is not None) or bool(link and link.get("ssid"))
+        ap_active = bool(link and link.get("mode") == "ap")
+        return self._wifi_reset_radio("NetworkManager did not answer", associated, ap_active)
 
     @property
     def _platform(self) -> "engine_platform.Platform":
@@ -4291,6 +4408,12 @@ class Satellite(pc_engine.SpareDeviceEngine):
             return
         self._base_checked_at = now
         report = base_packages.read_report()
+        if (report is not None and report.get("state") == "failed"
+                and not report.get("detail") and report.get("errors")):
+            # A run recorded by an older boot step: no reason on "failed",
+            # only apt's errors. Make one, for the log and the card (S2-13).
+            report = dict(report, detail=base_packages.failure_reason(
+                [str(e) for e in report.get("errors") or []]))
         if report is not None:
             run_id = f"{report.get('boot_id')}:{report.get('ts')}"
             if run_id != self._base_report_logged:
@@ -4305,6 +4428,9 @@ class Satellite(pc_engine.SpareDeviceEngine):
                         state, ", ".join(map(str, report.get("still_missing") or [])),
                         f" ({report.get('detail')})" if report.get("detail") else "",
                     )
+                    errors = [str(e) for e in (report.get("errors") or [])]
+                    if errors:
+                        log.warning("base packages: apt said: %s", " | ".join(errors)[-600:])
         gone = base_packages.missing()
         offline = base_packages.internet_off()
         self._base_missing = gone

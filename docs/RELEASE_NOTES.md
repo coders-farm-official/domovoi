@@ -23,6 +23,45 @@ a way that would otherwise get reported as a bug.
   older server, simply doesn't show it. Protocol: docs/uml/satellite-protocol.md,
   "The room display".
 
+## 1.4.0 (unreleased) — Fixes from the Mac test sitting: rooms, the dashboard, deleted songs
+
+- **A deleted song stops being played.** Taking a song out of the library
+  while it plays (Music, or the duplicates clean-up) now moves every room
+  playing it on to the next song in its queue, or stops the room when
+  nothing comes after it; every queued copy of it goes too. The dashboard's
+  own player does the same and says what happened. Playing a song whose
+  row or file is gone says so in plain words ("That song isn't in the
+  library any more.") instead of an internal error.
+- **An offline room no longer looks like it's playing.** Settings → Rooms
+  showed an offline room's song with its progress bar still counting (its
+  player on the server plays on to nobody). It now says the room is offline
+  and its music isn't reaching it.
+- **Health updates on its own.** The server rows (speech recognition, the
+  database, the core) are read every ten seconds and when you come back to
+  the page, so a switch to the backup speech model shows without a reload.
+- **The waking-up line is in the room's history, and said less.** "Just a
+  moment, I'm waking up my language model." is now listed in the room's
+  history before the answer it came with, and is only said when the model
+  is still not ready after a second and a half (the warm-up after a restart
+  is often moments from done).
+- **A room device that can't install its system packages says why.** The
+  boot step that installs missing packages (mpg123, libportaudio2, ...) now
+  finishes half-installed ones the way setup does (`apt-get -f install
+  --no-remove`, on fresh package lists only), and a failed run records the
+  reason in plain words, which the room's log and its card show. The card
+  no longer promises that a reboot installs them. Rooms get this with their
+  next code upgrade from Settings → Rooms.
+- **Wi-Fi recovery fits the room's network.** A room whose Wi-Fi dropped
+  used `wpa_cli` even where NetworkManager runs the network, which can't
+  work there, so only the watchdog's restart brought it back. The recovery
+  now uses NetworkManager when it answers, `wpa_cli` only where a
+  wpa_supplicant with its own control socket exists, the radio reset when
+  NetworkManager doesn't answer (only on a link that is down), and nothing
+  on any other network stack (the room's self-check restart then).
+- **Plainer Models page.** The page's wording is for households, not
+  developers, and true on every kind of server; the wake-word summary only
+  mentions training where this server can train.
+
 ## 1.4.0 (unreleased) — Plugin SDK 1.9: speech in a room's voice
 
 - **What changed.** Plugins can turn text into speech without playing it

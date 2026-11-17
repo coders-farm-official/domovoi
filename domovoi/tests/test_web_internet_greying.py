@@ -80,12 +80,12 @@ def _scenarios(answer: str) -> dict:
                     "GET /api/models/jobs": {"jobs": []}},
             "script": ("h.render(); await h.settle(); h.rerender();"
                        " const installs = h.findAll({ type: 'button', text: 'Install' }).map((b) => h.plain(b).props);"
-                       " const box = h.find((el) => el.type === 'input' && String(el.props.placeholder || '').startsWith('Pull'));"
+                       " const box = h.find((el) => el.type === 'input' && String(el.props.placeholder || '').startsWith('Install'));"
                        " const uses = h.findAll({ type: 'button', text: 'Use (restart)' }).map((b) => h.plain(b).props);"
                        " const notOnDisk = h.findAll((el) => String(el.props.className || '').includes('stt-not-cached')).length;"
-                       " await h.type((el) => el.type === 'input' && String(el.props.placeholder || '').startsWith('Pull'), 'nas.local/library/qwen2.5:7b');"
+                       " await h.type((el) => el.type === 'input' && String(el.props.placeholder || '').startsWith('Install'), 'nas.local/library/qwen2.5:7b');"
                        " const lanInstall = h.plain(h.findAll({ type: 'button', text: 'Install' })[0]).props;"
-                       " await h.type((el) => el.type === 'input' && String(el.props.placeholder || '').startsWith('Pull'), 'qwen2.5:7b');"
+                       " await h.type((el) => el.type === 'input' && String(el.props.placeholder || '').startsWith('Install'), 'qwen2.5:7b');"
                        " const netInstall = h.plain(h.findAll({ type: 'button', text: 'Install' })[0]).props;"
                        " return { installs, box: box && h.plain(box).props, uses, notOnDisk, lanInstall, netInstall,"
                        "  calls: h.calls.length };"),

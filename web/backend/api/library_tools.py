@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Any
 
 import anyio
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
@@ -206,7 +206,7 @@ async def _repoint(s: Any, gone: int, keep: int) -> None:
 
 
 @router.post("/duplicates/resolve", dependencies=ADMIN)
-async def resolve_duplicates(body: ResolveBody) -> dict[str, Any]:
+async def resolve_duplicates(body: ResolveBody, request: Request) -> dict[str, Any]:
     """Keep ``keep_id``; move every other copy in ``member_ids`` into the
     trash folder (not deleted: Restore puts it back)."""
     ids = list(dict.fromkeys(int(i) for i in body.member_ids))
@@ -254,6 +254,11 @@ async def resolve_duplicates(body: ResolveBody) -> dict[str, Any]:
             failed.append({"id": tid, "reason": "the library couldn't be updated"})
             continue
         moved.append(tid)
+    # The copies moved out leave every room's player too (S2-18).
+    if moved:
+        from web.backend.api.music import tell_rooms_tracks_removed
+
+        await tell_rooms_tracks_removed(request, [rows[t].file_path for t in moved])
     return {"moved": moved, "failed": failed, "kept": body.keep_id}
 
 
