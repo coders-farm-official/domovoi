@@ -1486,6 +1486,30 @@ async def server_time() -> dict[str, Any]:
     return server_time_document()
 
 
+@app.get("/v1/music/cover/{track_id}")
+async def music_cover(track_id: int, request: Request) -> Any:
+    """A library track's cover art, for a room's screen (the room display,
+    domovoi/room_display.py: its ``now_playing.art``).
+
+    Open, as the dashboard's ``/api/music/library/{id}/cover`` is: an image
+    request carries no credential, and a room phone holds only its room
+    key, which no HTTP route takes. It IS that route: the same bytes, the
+    same content type sniffed from the picture's first bytes, the same
+    strong ``ETag`` / ``Cache-Control`` and ``304``. A library track only:
+    the id is looked up in ``library_tracks`` and its file is
+    containment-checked inside MUSIC_DIR (an integer id, so no path from
+    the caller ever reaches the disk). ``404`` for an unknown id, a track
+    with no cover, or a server without the web package."""
+    if not 1 <= track_id <= 2**31 - 1:
+        raise HTTPException(status_code=404, detail=f"track {track_id} not found")
+    try:
+        from web.backend.api.music import track_cover
+    except Exception as e:  # noqa: BLE001 — a core installed without web/
+        log.debug("cover route: the web package is not importable: %s", e)
+        raise HTTPException(status_code=404, detail="no cover art") from None
+    return await track_cover(track_id, request)
+
+
 @app.get(
     "/v1/stats/latency",
     # Device READ tier (2026-10-08, REV-11): counts per room and window say
