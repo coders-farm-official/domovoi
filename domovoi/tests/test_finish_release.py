@@ -786,24 +786,54 @@ def test_without_github_digests_each_file_is_downloaded_and_checked(tmp_path, mo
 
 
 @requires_git
-def test_docs_release_at_the_tag_is_the_summary(tmp_path, monkeypatch):
-    w = World(tmp_path, monkeypatch, hand_notes="## What's new\n\nThe summary for this release.\n")
+def test_docs_release_at_the_tag_is_the_full_notes_and_its_glance_the_page(tmp_path, monkeypatch):
+    w = World(tmp_path, monkeypatch, hand_notes=FULL_NOTES)
     assert w.run("--no-publish") == 0
     notes = (w.stage / "NOTES.md").read_text(encoding="utf-8")
-    assert "The summary for this release." in notes and "What's new since" not in notes
-    # The house order: the lead (a candidate's), Download, the hand-written part, the files last.
-    order = [notes.index(s) for s in ("is a candidate for", "## Download", "## What's new", "The summary for",
-                                      "## Files and checksums", "| DomovoiSetup.exe |")]
+    assert "- **A highlight**, in a line." in notes and "## Security fixes\n" in notes
+    assert "The long intro" not in notes and "The long story" not in notes, "the full notes stay in the file"
+    assert "# Domovoi" not in notes.replace("## ", "")
+    blob = f"https://github.com/coders-farm-official/domovoi/blob/{w.tag}"
+    assert (f"## What's new since 1.0.0-rc1\n\n**More detail:** [the full 1.0.0-rc2 release notes]"
+            f"({blob}/docs/release/{w.tag}.md) and [every change in 1.0.0-rc2]({blob}/docs/RELEASE_NOTES.md).") in notes
+    # The house order: the lead (a candidate's), Download, What's new, the glance, the files last.
+    order = [notes.index(s) for s in ("is a candidate for", "## Download", "## What's new", "**More detail:**",
+                                      "A highlight", "## Security fixes", "## Files and checksums",
+                                      "| DomovoiSetup.exe |")]
     assert order == sorted(order)
+
+
+FULL_NOTES = """# Domovoi 1.0.0-rc2
+
+The long intro of the full notes.
+
+## At a glance
+
+- **A highlight**, in a line.
+- Another.
+
+### Security fixes
+
+- **package 1.2.3:** one line.
+
+```
+### not a heading: code
+```
+
+## What is new since 1.0.0-rc1
+
+The long story.
+"""
 
 
 @requires_git
 @pytest.mark.parametrize("hand, why", [
-    ("# Domovoi 1.0.0\n\n## What's new\n\n- x\n", "first line must be"),
-    ("Intro first.\n\n## What's new\n\n- x\n", "first line must be"),
-    ("## What's new\n\n- x\n\n# A title\n", "has a \"# \" title"),
-    ("## What's new\n\n- x\n\n## Download\n\n- y\n", "\"## Download\" section"),
-    ("## What's new\n\n- x\n\n## Files\n\n- y\n", "\"## Files\" section"),
+    ("# Domovoi 1.0.0\n\nOnly the long form.\n", "needs exactly one \"## At a glance\" section (it has 0)"),
+    ("## At a glance\n\n- x\n\n## At a glance\n\n- y\n", "(it has 2)"),
+    ("## At a glance\n\nProse first.\n\n- x\n", "must start with the highlights"),
+    ("## At a glance\n\n- x\n\n### Download\n\n- y\n", "has a \"Download\" heading"),
+    ("## At a glance\n\n- x\n\n### Files\n\n- y\n", "has a \"Files\" heading"),
+    ("## At a glance\n\n- x\n\n### What's new in rooms\n\n- y\n", "has a \"What's new in rooms\" heading"),
 ])
 def test_a_docs_release_not_in_the_house_style_is_refused(tmp_path, monkeypatch, hand, why):
     w = World(tmp_path, monkeypatch, hand_notes=hand)
@@ -812,10 +842,41 @@ def test_a_docs_release_not_in_the_house_style_is_refused(tmp_path, monkeypatch,
     assert w.calls("edit") == [] and w.calls("upload") == []
 
 
-def test_the_house_style_check_takes_a_well_formed_file():
-    assert fr.release_doc_problems("\n## What's new since 1.2.1\n\n- x\n\n## Security fixes\n\n- y\n"
-                                   "\n```\n# a comment in code, not a title\n```\n") == []
-    assert fr.release_doc_problems("## What's new\r\n\r\n- x\r\n") == []
+def test_the_house_style_check_takes_full_notes_with_a_glance():
+    assert fr.release_doc_problems(FULL_NOTES) == []
+    assert fr.release_doc_problems(FULL_NOTES.replace("\n", "\r\n")) == []
+    page = fr.glance_notes(FULL_NOTES, since="v1.0.0-rc1")
+    assert page.startswith("## What's new since 1.0.0-rc1\n\n- **A highlight**")
+    assert "\n## Security fixes\n" in page and "\n### not a heading: code\n" in page, "code stays as it is"
+    assert "long" not in page
+
+
+def test_more_detail_links_the_full_notes_and_the_release_s_dated_section():
+    """The real 1.3.0 notes: the anchor GitHub gives ``## 2026-11-16 — 1.3.0``
+    (the line the live 1.3.0 page carries)."""
+    text = (REPO / "docs" / "RELEASE_NOTES.md").read_text(encoding="utf-8")
+    assert fr.notes_anchor(text, "1.3.0") == "2026-11-16--130"
+    assert fr.notes_anchor(text, "9.9.9") is None
+    rel = _release(tag="v1.3.0", version="1.3.0", full_notes=True, notes_anchor="2026-11-16--130",
+                   notes="## What's new since 1.2.1\n\n- A highlight.\n")
+    line = ("**More detail:** [the full 1.3.0 release notes](https://github.com/coders-farm-official/domovoi/blob/"
+            "v1.3.0/docs/release/v1.3.0.md) and [every change in 1.3.0](https://github.com/coders-farm-official/"
+            "domovoi/blob/v1.3.0/docs/RELEASE_NOTES.md#2026-11-16--130).")
+    assert fr.more_detail(rel) == line
+    assert f"## What's new since 1.2.1\n\n{line}\n\n- A highlight.\n" in fr.body(rel)
+    # Without docs/release/<tag>.md (a summary of RELEASE_NOTES.md), only the dated section.
+    rel.full_notes = False
+    assert fr.more_detail(rel) == ("**More detail:** [every change in 1.3.0](https://github.com/coders-farm-official/"
+                                   "domovoi/blob/v1.3.0/docs/RELEASE_NOTES.md#2026-11-16--130).")
+
+
+@requires_git
+def test_a_summary_release_gets_the_more_detail_line_under_what_s_new(tmp_path, monkeypatch):
+    w = World(tmp_path, monkeypatch)
+    assert w.run("--no-publish") == 0
+    notes = (w.stage / "NOTES.md").read_text(encoding="utf-8")
+    assert "## What's new since v1.0.0-rc1\n\n**More detail:** [every change in 1.0.0-rc2](" in notes
+    assert "docs/release/" not in notes
 
 
 def _release(**kw) -> "fr.Release":
@@ -878,16 +939,13 @@ def test_the_docs_the_download_links_have_their_headings(doc):
     assert heading in [fr._heading_text(h) for _, _, h in fr._headings(text)], f"{path} has no heading {heading!r}"
 
 
-def test_release_docs_from_1_3_0_on_are_in_the_house_style():
-    """docs/release/v<version>.md from 1.3.0 on (the earlier ones are
-    history: their tags hold them as published)."""
-    checked = 0
+def test_release_docs_after_1_3_0_are_in_the_house_style():
+    """docs/release/v<version>.md after 1.3.0 (1.3.0 and before are the full
+    notes their tags hold, from before the glance; their pages are set)."""
     for p in sorted((REPO / "docs" / "release").glob("v*.md")):
         v = re.fullmatch(r"v([0-9]+)\.([0-9]+)\.([0-9]+)(-.*)?", p.stem)
-        if v and tuple(int(x) for x in v.groups()[:3]) >= (1, 3, 0):
+        if v and tuple(int(x) for x in v.groups()[:3]) > (1, 3, 0):
             assert fr.release_doc_problems(p.read_text(encoding="utf-8")) == [], p.name
-            checked += 1
-    assert checked >= 1
 
 
 # ─── the notes, piece by piece ───────────────────────────────────────────
@@ -1418,12 +1476,12 @@ def test_plan_a_server_only_release_finishes_at_head(tmp_path, monkeypatch):
 
 @requires_git
 def test_plan_refuses_a_release_doc_not_in_the_house_style(tmp_path, monkeypatch):
-    """Before anyone approves the run: the Download section is the script's, first."""
+    """Before anyone approves the run: the page part of the full notes is checked."""
     w = World(tmp_path, monkeypatch, version="1.0.0")
     _write(w.work, "docs/release/v1.0.1.md", "# Domovoi 1.0.1\n\nIntro.\n")
     _git(w.work, "add", "docs/release/v1.0.1.md")
     _server_only(w)
-    with pytest.raises(fr.Refused, match="docs/release/v1.0.1.md: its first line must be"):
+    with pytest.raises(fr.Refused, match="docs/release/v1.0.1.md: it needs exactly one"):
         _plan(w)
 
 

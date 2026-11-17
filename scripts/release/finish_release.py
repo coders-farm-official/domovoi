@@ -97,8 +97,10 @@ every check has passed):
    "Releasing"): first a Download section, each file a direct link on
    the release with what it is for (the Linux one-liner copied from the
    tag's docs/LINUX_HOST.md, Google Play and the APKs, the room Setup, how
-   an installed Domovoi updates). Then ``docs/release/v<version>.md`` at
-   the tag if there is one (it must start at ``## What's new``: see
+   an installed Domovoi updates). Then What's new, with a line linking
+   the release's full notes and its RELEASE_NOTES.md section at the tag:
+   the ``## At a glance`` section of ``docs/release/v<version>.md`` at the
+   tag if there is one (the file is the full notes; see
    :func:`release_doc_problems`; refused otherwise), else a summary of the
    ``docs/RELEASE_NOTES.md`` entries added since the previous tag (a
    release candidate counts from the tag before it; a release from the
@@ -383,6 +385,8 @@ class Release:
     #: The one-line Linux install, exactly as the tag's docs/LINUX_HOST.md has
     #: it (:func:`linux_install_line`); None when it has none.
     linux_install: str | None = None
+    full_notes: bool = False          # docs/release/<tag>.md at the tag: the full notes
+    notes_anchor: str | None = None   # this release's section of RELEASE_NOTES.md (:func:`notes_anchor`)
 
 
 def _who(abi: str) -> str:
@@ -400,11 +404,11 @@ UPDATE_LINE = ("**Already installed?** Update from the dashboard: "
                "Settings → System → About & updates → **Update Domovoi**.")
 #: The one-line install in docs/LINUX_HOST.md, whole.
 LINUX_INSTALL_RE = re.compile(r"^curl -fsSL https://\S+/scripts/linux/install\.sh \| sudo bash$", re.M)
-#: The hand-written body (docs/release/v<version>.md) starts with this
-#: heading: the Download section above it is the script's.
-WHATS_NEW_RE = re.compile(r"^## What's new\b")
-#: Headings the script writes itself, never the hand-written body.
-GENERATED_HEADINGS = ("Download", "Files", "Files and checksums", "Install or update")
+#: The section of docs/release/v<version>.md (the release's FULL notes)
+#: that goes on the release page: the highlights, then short sections.
+GLANCE = "At a glance"
+#: Headings the script writes on the page itself: never in the page part.
+GENERATED_HEADINGS = ("Download", "What's new", "Files", "Files and checksums", "Install or update")
 
 
 def linux_install_line(linux_host: str | None) -> str | None:
@@ -414,22 +418,78 @@ def linux_install_line(linux_host: str | None) -> str | None:
     return m.group(0) if m else None
 
 
+def _glance(text: str) -> list[Entry]:
+    return [e for e in entries(text) if _heading_text(e.heading).strip() == GLANCE]
+
+
 def release_doc_problems(text: str) -> list[str]:
     """What keeps a ``docs/release/v<version>.md`` from the house style
-    (docs/CONTRIBUTING.md, "Releasing"): the script puts the Download
-    section first, so the file starts at ``## What's new``, has no title of
-    its own and none of the script's sections."""
+    (docs/CONTRIBUTING.md, "The release page"). The file is the release's
+    full notes, title, intro and all; only its one ``## At a glance``
+    section goes on the page, under the What's new heading the script
+    writes after Download, so Download stays first. That section starts
+    with the highlights (a list), and its own headings (``###``, shown as
+    ``##`` on the page) are none of the script's."""
+    text = text.replace("\r\n", "\n")
+    found = _glance(text)
+    if len(found) != 1:
+        return [f"it needs exactly one \"## {GLANCE}\" section (it has {len(found)}): the page carries that "
+                "section, the file the full notes"]
     problems = []
-    lines = [line for line in text.replace("\r\n", "\n").split("\n") if line.strip()]
-    if not lines or not WHATS_NEW_RE.match(lines[0]):
-        problems.append("its first line must be the \"## What's new\" heading (the Download section goes above it)")
-    heads = _headings(text.replace("\r\n", "\n"))
-    if any(level == 1 for _, level, _ in heads):
-        problems.append("it has a \"# \" title: GitHub shows the release's own title above the body")
-    for _, level, heading in heads:
-        if level == 2 and _heading_text(heading).strip() in GENERATED_HEADINGS:
-            problems.append(f"it has a \"## {heading}\" section, which finish_release.py writes itself")
+    lines = [line for line in found[0].body.split("\n") if line.strip()]
+    if not lines or not re.match(r"^[*+-]\s", lines[0].strip()):
+        problems.append(f"\"## {GLANCE}\" must start with the highlights, a list of one-line items")
+    for _, _level, heading in _headings(found[0].body):
+        if _heading_text(heading).strip() in GENERATED_HEADINGS or heading.startswith("What's new"):
+            problems.append(f"\"## {GLANCE}\" has a \"{heading}\" heading, which finish_release.py writes itself")
     return problems
+
+
+def glance_notes(text: str, *, since: str | None) -> str:
+    """The page's part of the full notes: ``## What's new since <since>``,
+    then the ``## At a glance`` section with its ``###`` headings as ``##``."""
+    body = _glance(text.replace("\r\n", "\n"))[0].body
+    out, fence = [], None
+    for line in body.split("\n"):
+        m = re.match(r"^\s*(`{3,}|~{3,})", line)
+        if m:
+            fence = None if fence else m.group(1)[0]
+        elif fence is None and line.startswith("### "):
+            line = line[1:]
+        out.append(line)
+    head = "## What's new"
+    if since:
+        head += f" since {since[1:] if since.startswith('v') else since}"
+    return head + "\n\n" + "\n".join(out).strip("\n") + "\n"
+
+
+def notes_anchor(release_notes: str, version: str) -> str | None:
+    """GitHub's anchor of RELEASE_NOTES.md's dated heading for this
+    release (``## 2026-11-16 — 1.3.0`` is ``2026-11-16--130``)."""
+    for e in entries(release_notes):
+        if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2} — " + re.escape(version), _heading_text(e.heading).strip()):
+            return e.anchor
+    return None
+
+
+def more_detail(rel: Release) -> str:
+    """The line under What's new: the release's full notes, and its section
+    of RELEASE_NOTES.md, both at the tag."""
+    links = []
+    if rel.full_notes:
+        links.append(f"[the full {rel.version} release notes]({REPO_URL}/blob/{rel.tag}/docs/release/{rel.tag}.md)")
+    changes = f"{REPO_URL}/blob/{rel.tag}/docs/RELEASE_NOTES.md" + (f"#{rel.notes_anchor}" if rel.notes_anchor else "")
+    links.append(f"[every change in {rel.version}]({changes})")
+    return "**More detail:** " + " and ".join(links) + "."
+
+
+def _with_more_detail(notes: str, line: str) -> str:
+    """``line`` right under the notes' What's new heading (on top without one)."""
+    rows = notes.strip("\n").split("\n")
+    for i, row in enumerate(rows):
+        if row.startswith("## What's new"):
+            return "\n".join(rows[:i + 1] + ["", line] + rows[i + 1:])
+    return "\n".join([line, "", *rows])
 
 
 def _asset_url(tag: str, name: str) -> str:
@@ -550,7 +610,7 @@ def body(rel: Release) -> str:
                       f"`gh attestation verify <file> -R {REPO_SLUG}` "
                       f"([SECURITY.md, Verifying a release]({REPO_URL}/blob/{rel.tag}/SECURITY.md#verifying-a-release))."]
     where = ["<details>", "<summary>Where these files come from</summary>", "", *facts, "", "</details>"]
-    parts = [*([lead, ""] if lead else []), *download(rel), "", rel.notes.strip(), "",
+    parts = [*([lead, ""] if lead else []), *download(rel), "", _with_more_detail(rel.notes, more_detail(rel)), "",
              *check, "", *files, "", *where]
     return "\n".join(parts).rstrip("\n") + "\n"
 
@@ -1095,7 +1155,7 @@ def plan(t: Tools, repo: Path, tag_arg: str | None = None) -> dict[str, Any]:
         problems = release_doc_problems(hand.decode("utf-8")) if hand is not None else []
         if problems:
             die(f"docs/release/{tag}.md: " + "; ".join(problems)
-                + " (docs/CONTRIBUTING.md, \"Releasing\", has the template)")
+                + " (docs/CONTRIBUTING.md, \"The release page\", has the template)")
         doc.update(path="app" if app_changed else "server", sign_app=app_changed, finish_at=head)
         if app_changed:
             doc["app"] = {"version_name": name, "version_code": code}
@@ -1438,15 +1498,17 @@ def _run(argv: list[str], *, tools: Tools | None, repo: Path | None,
                    sboms=sboms, provenance=args.provenance,
                    linux_install=linux_install_line((t.git_bytes("show", f"{tag_commit}:docs/LINUX_HOST.md")
                                                      or b"").decode("utf-8", "replace")))
+    current = (t.git_bytes("show", f"{tag_commit}:docs/RELEASE_NOTES.md") or b"").decode("utf-8")
+    info.notes_anchor = notes_anchor(current, version)
     if hand is not None:
         problems = release_doc_problems(hand.decode("utf-8"))
         if problems:
             die(f"docs/release/{tag}.md at the tag: " + "; ".join(problems)
-                + " (docs/CONTRIBUTING.md, \"Releasing\", has the template)")
-        info.notes = hand.decode("utf-8")
-        say(f"the notes: docs/release/{tag}.md at the tag")
+                + " (docs/CONTRIBUTING.md, \"The release page\", has the template)")
+        info.full_notes = True
+        info.notes = glance_notes(hand.decode("utf-8"), since=since)
+        say(f"the notes: docs/release/{tag}.md at the tag (its \"{GLANCE}\" on the page, linked in full)")
     else:
-        current = (t.git_bytes("show", f"{tag_commit}:docs/RELEASE_NOTES.md") or b"").decode("utf-8")
         previous = t.git_bytes("show", f"{since}:docs/RELEASE_NOTES.md") if since else None
         new = new_entries(current, previous.decode("utf-8") if previous is not None else None)
         info.notes = ""

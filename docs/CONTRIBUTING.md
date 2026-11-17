@@ -786,8 +786,9 @@ workflow runs the same scripts. In order:
 
 1. **The release commit** on `main`, pushed: the version in every copy
    (the test above), the release notes, and `docs/release/v<version>.md`
-   when the release has a hand-written summary (the GitHub body, in the
-   house style of "The release page", below; kept under 20 KB). When the app changed, its `versionName` and `versionCode`
+   when the release has hand-written notes (the full notes, whose
+   `## At a glance` section is the GitHub body's: "The release page",
+   below; the page is kept under 20 KB). When the app changed, its `versionName` and `versionCode`
    too; when it didn't, `android/` stays as it is (`android/release.json`
    above all).
 2. **Only when the app changed: `android/scripts/release.ps1`** (or `.sh`)
@@ -889,58 +890,76 @@ the story after. finish-release writes the page in this order:
    manual's page for a Raspberry Pi room; and for a house that has
    Domovoi already, Settings → System → About & updates → **Update
    Domovoi**.
-2. **`docs/release/v<version>.md`** (yours), or, without one, a summary of
-   the `docs/RELEASE_NOTES.md` entries since the previous tag.
+2. **What's new since <the previous release>** (finish-release writes the
+   heading), then a **More detail** line linking the release's full notes
+   (`docs/release/v<version>.md` at the tag) and its dated section of
+   `docs/RELEASE_NOTES.md` at the tag (`## 2026-11-16 — 1.3.0`, anchor
+   `#2026-11-16--130`). Under it, the `## At a glance` section of
+   `docs/release/v<version>.md` (yours), its `###` headings shown as `##`;
+   or, without that file, a summary of the `docs/RELEASE_NOTES.md` entries
+   since the previous tag.
 3. **Files and checksums** (finish-release writes it): how to check a
    download (and its build provenance, from the release workflow), then,
    collapsed, every file with its SHA-256 and where the files come from.
 
-`docs/release/v<version>.md` starts at `## What's new`: no `# ` title (GitHub
-shows the release's own), nothing above it, and none of finish-release's
-sections (`## Download`, `## Files`, `## Files and checksums`, `## Install
-or update`). The plan job and finish-release both refuse one that isn't
-(`release_doc_problems` in `scripts/release/finish_release.py`). The
-template:
+`docs/release/v<version>.md` is the release's **full notes**: title, intro
+and every subsection, as long as it needs, read on GitHub through the More
+detail link. Only its one `## At a glance` section goes on the page, so
+whatever else is in the file, Download stays first. That section starts
+with the highlights (a list), and its own headings are `###` and none of
+finish-release's (`Download`, `What's new…`, `Files`, `Files and
+checksums`, `Install or update`). The plan job and finish-release both
+refuse a file that isn't so (`release_doc_problems` in
+`scripts/release/finish_release.py`). The template:
 
 ```markdown
-## What's new since 1.3.0
+# Domovoi 1.4.0
+
+The intro: what this release is, in a paragraph.
+
+## At a glance
 
 - **One highlight, in a line:** what a household gets. ([Manual page](https://github.com/coders-farm-official/domovoi/blob/v1.4.0/scripts/manual/manual.md#anchor))
 - 5 to 8 of these, each linking to its manual or doc section at the tag.
 
 **The one thing everyone must do after updating**, if there is one.
-Every change is in the [release notes](https://github.com/coders-farm-official/domovoi/blob/v1.4.0/docs/RELEASE_NOTES.md).
 
-<details>
-<summary>More about what's new</summary>
-
-The longer story, if it helps (### headings are fine in here).
-
-</details>
-
-## Security fixes
+### Security fixes
 
 - **package x.y.z:** what it fixes, in one line.
 
-## Upgrading
+### Upgrading
 
-Only what needs someone to act: one line each, the longer how in a
-<details> block.
+- Only what needs someone to act, one line each.
 
-## Known limits
+### Known limits
 
 - **The limit:** one line.
 
-## Verifying a release
+### Verifying a release
 
 Only for something this release needs said (finish-release writes the
 commands under Files and checksums).
+
+## What is new since 1.3.0
+
+The full story: a ### subsection per area, every detail.
+
+## Security fixes
+
+Each fix in full, with the advisories.
+
+## Upgrading
+
+Every step, in full.
 ```
 
 Leave out an empty section. Links point at the tag (`/blob/v<version>/`),
-not `main`, so the page keeps describing the release it is on. GitHub
-renders `<details>` collapsed: leave a blank line after `</summary>`, or
-the Markdown inside shows raw.
+not `main`, so the page keeps describing the release it is on. Inside At
+a glance, a longer how can go in a `<details>` block, which GitHub
+renders collapsed: leave a blank line after `</summary>`, or the Markdown
+inside shows raw. Releases up to 1.3.0 have no At a glance section: their
+pages were written before it.
 
 ---
 
