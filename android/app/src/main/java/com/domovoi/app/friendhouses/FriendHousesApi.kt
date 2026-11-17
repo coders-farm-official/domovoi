@@ -7,6 +7,8 @@ import com.domovoi.app.net.failureText
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -57,7 +59,34 @@ data class FhStatus(
     @SerialName("house_name") val houseName: String? = null,
     /** Unread messages in the house inbox. */
     val unread: Int = 0,
+    /** The week's trust changes, `[{kind, friend, list, at}]`, newest
+     *  first; absent on an older server. Kept raw and read row by row
+     *  ([fhChanges]): one malformed row must never fail the status read,
+     *  which would hide the whole feature. */
+    val changes: JsonElement? = null,
 )
+
+/** One of the week's trust changes: `kind` is `friend` (a new friend
+ *  house) or `shared_list` (one of our lists shared with a friend);
+ *  `friend` and `list` are the other house's words (hostile text) and may
+ *  be null; `at` is this server's ISO time. */
+data class FhChange(val kind: String, val friend: String?, val list: String?, val at: String?)
+
+/** The kinds this build can say; any other row is skipped. */
+val FH_CHANGE_KINDS = setOf("friend", "shared_list")
+
+/** [status]'s changes this build can say, in the server's order (newest
+ *  first); null when the server sent none at all (an older server). */
+fun fhChanges(status: FhStatus): List<FhChange>? {
+    val raw = status.changes as? JsonArray ?: return null
+    return raw.mapNotNull { e ->
+        val o = e as? JsonObject ?: return@mapNotNull null
+        fun str(k: String) = (o[k] as? JsonPrimitive)?.takeIf { it.isString }?.content
+        val kind = str("kind") ?: return@mapNotNull null
+        if (kind !in FH_CHANGE_KINDS) return@mapNotNull null
+        FhChange(kind, str("friend"), str("list"), str("at"))
+    }
+}
 
 @Serializable
 data class FhFriend(

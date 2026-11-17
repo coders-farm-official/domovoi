@@ -1282,6 +1282,10 @@ shared lists (`ui/screens/friendhouses/`, `friendhouses/`).
   tick above (`FriendHouseAlerts`, Wi-Fi or Ethernet only, on its own
   "Friend houses" channel); the first look at a server is a baseline,
   not a notification. No push, nothing hosted.
+- **This week:** the status's `changes` (new friend houses, our lists
+  shared with one), newest first, at most five, in the dashboard's words
+  ("The Smiths became a friend house · 2d ago"), with "Not you? Only an
+  admin can …". Unknown kinds are skipped; an older server sends none.
 - **Presence:** under each friend, "Online" (their house heard from in
   the last 15 minutes), else "Last seen <2m ago…>", else "Not reached
   yet": the house running, never who is home. A server without it shows
