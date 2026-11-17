@@ -296,13 +296,32 @@ struct RoomNowPlayingCard: View {
     let loadArt: @MainActor (String) async -> Data?
     let onControl: (RoomControl) -> Void
     let onVolume: (Int) -> Void
+    /// The cover once it has loaded: nothing is drawn before, and nothing at
+    /// all when it cannot be had.
+    @State private var art: UIImage?
+
+    init(
+        nowPlaying: RoomDisplayModel.NowPlaying,
+        compact: Bool,
+        palette: RoomPalette,
+        loadArt: @escaping @MainActor (String) async -> Data?,
+        onControl: @escaping (RoomControl) -> Void,
+        onVolume: @escaping (Int) -> Void
+    ) {
+        self.nowPlaying = nowPlaying
+        self.compact = compact
+        self.palette = palette
+        self.loadArt = loadArt
+        self.onControl = onControl
+        self.onVolume = onVolume
+    }
 
     var body: some View {
         let np = nowPlaying
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 16) {
-                if let path = np.art {
-                    RoomArtTile(path: path, size: compact ? 64 : 96, palette: palette, load: loadArt)
+                if np.art != nil, let art {
+                    RoomArtTile(image: art, size: compact ? 64 : 96, palette: palette)
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(np.playing ? RoomModeStrings.nowPlaying : RoomModeStrings.paused)
@@ -358,6 +377,13 @@ struct RoomNowPlayingCard: View {
         .frame(maxWidth: .infinity)
         .background(palette.card, in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(palette.border, lineWidth: 1))
+        .task(id: nowPlaying.art) {
+            art = nil
+            guard let path = nowPlaying.art, let data = await loadArt(path) else { return }
+            // A thumbnail is all it draws.
+            let full = UIImage(data: data)
+            art = full?.preparingThumbnail(of: CGSize(width: 320, height: 320)) ?? full
+        }
     }
 
     @ViewBuilder
@@ -409,42 +435,21 @@ struct RoomNowPlayingCard: View {
     }
 }
 
-/// A cover from the room's server. Nothing is drawn until it has loaded,
-/// and nothing at all when it cannot be had.
+/// A cover from the room's server, a rounded thumbnail with a hairline.
 struct RoomArtTile: View {
-    let path: String
+    let image: UIImage
     let size: CGFloat
     let palette: RoomPalette
-    let load: @MainActor (String) async -> Data?
-    @State private var image: UIImage?
-
-    init(path: String, size: CGFloat, palette: RoomPalette, load: @escaping @MainActor (String) async -> Data?) {
-        self.path = path
-        self.size = size
-        self.palette = palette
-        self.load = load
-    }
 
     var body: some View {
-        Group {
-            if let image {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: size, height: size)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(palette.border, lineWidth: 1))
-                    .opacity(palette.artOpacity)
-            }
-        }
-        .accessibilityHidden(true)
-        .task(id: path) {
-            image = nil
-            guard let data = await load(path) else { return }
-            // A thumbnail is all it draws.
-            let full = UIImage(data: data)
-            image = full?.preparingThumbnail(of: CGSize(width: 320, height: 320)) ?? full
-        }
+        Image(uiImage: image)
+            .resizable()
+            .scaledToFill()
+            .frame(width: size, height: size)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(palette.border, lineWidth: 1))
+            .opacity(palette.artOpacity)
+            .accessibilityHidden(true)
     }
 }
 
