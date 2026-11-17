@@ -127,18 +127,34 @@ ROUTES: dict[str, tuple[str, str, dict | None]] = {
 _IDS = sorted(ROUTES)
 
 
-def test_every_route_wears_the_security_tier() -> None:
-    seen = 0
+# Owner decision 17: what every household phone may do with existing
+# friends wears the device tier; everything else the security tier.
+HOUSEHOLD_ROUTES = {
+    ("GET", "/api/friend-houses"), ("GET", "/api/friend-houses/friends"),
+    ("GET", "/api/friend-houses/conversations"), ("GET", "/api/friend-houses/conversations/{house}"),
+    ("POST", "/api/friend-houses/conversations/{house}/read"), ("POST", "/api/friend-houses/messages"),
+    ("GET", "/api/friend-houses/shared-lists"),
+}
+
+
+def test_every_route_wears_its_tier() -> None:
+    seen, household = 0, set()
     for r in iter_route_contexts(web_app.routes):
         if not getattr(r, "path", "").startswith("/api/friend-houses"):
             continue
         seen += 1
         deps = {d.call for d in r.dependant.dependencies}
-        if r.methods & {"POST", "PUT", "PATCH", "DELETE"}:
+        method = next(iter(r.methods))
+        if (method, r.path) in HOUSEHOLD_ROUTES:
+            household.add((method, r.path))
+            assert admin_auth.require_device in deps, r.path
+            assert admin_auth.require_admin_security not in deps, r.path
+        elif r.methods & {"POST", "PUT", "PATCH", "DELETE"}:
             assert admin_auth.require_admin_security in deps, r.path
         else:
             assert admin_auth.require_admin_security_read in deps, r.path
     assert seen == len(ROUTES)
+    assert household == HOUSEHOLD_ROUTES
 
 
 @pytest.fixture
@@ -150,7 +166,11 @@ def forwarded(monkeypatch):
 
     def fake(method):
         async def call(path, body=None, timeout=10.0, headers=None):
-            assert headers and headers.get("Authorization") == f"Bearer {ADMIN_TOKEN}"
+            # The caller's own credential goes on: the admin Bearer, or a
+            # household phone's token on the household routes.
+            assert headers and (headers.get("Authorization") == f"Bearer {ADMIN_TOKEN}"
+                                or headers.get(admin_auth.DEVICE_TOKEN_HEADER) == HOUSEHOLD_TOKEN
+                                or headers.get("Authorization") is None)
             calls.append((method, path, body))
             return 200, {"ok": True}
         return call
@@ -198,8 +218,38 @@ async def test_before_setup_everything_is_501(name, monkeypatch, forwarded) -> N
     install_fake_db(monkeypatch, admin=False)
     async with _client() as c:
         r = await _send(c, name)
+    if _is_household(name):
+        # The device tier keeps its pre-setup LAN grace; harmless here,
+        # since Friend Houses can't be turned on before an admin exists.
+        assert r.status_code != 501, r.text
+        return
     assert r.status_code == 501, r.text
     assert forwarded == []
+
+
+def _is_household(name: str) -> bool:
+    method, path, _ = ROUTES[name]
+    pattern = path.replace(HOUSE, "{house}")
+    return (method, pattern) in HOUSEHOLD_ROUTES
+
+
+HOUSEHOLD_TOKEN = "household-token-for-tests"
+
+
+@pytest.mark.parametrize("name", _IDS)
+@pytest.mark.asyncio
+async def test_the_household_token_reaches_only_the_household_routes(name, monkeypatch, forwarded) -> None:
+    # Owner decision 17: a household phone reads the inbox, sends, sees the
+    # friends and shared lists; trust and settings stay with the admin.
+    install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN}, device_token=HOUSEHOLD_TOKEN)
+    async with _client({admin_auth.DEVICE_TOKEN_HEADER: HOUSEHOLD_TOKEN}) as c:
+        r = await _send(c, name)
+    if _is_household(name):
+        assert r.status_code == 200, r.text
+        assert len(forwarded) == 1
+    else:
+        assert r.status_code in (401, 403), (name, r.status_code)
+        assert forwarded == []
 
 
 @pytest.mark.parametrize("name", _IDS)

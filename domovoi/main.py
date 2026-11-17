@@ -3783,6 +3783,12 @@ class _AdminChatToolBody(BaseModel):
 
 _FH_READ = [Depends(require_admin_security_read)]
 _FH_WRITE = [Depends(require_admin_security)]
+# What every household phone may do with existing friends (owner decision
+# 17, for the apps, which carry only the household token): read the house
+# inbox and send, see the friends and the shared lists. Header credentials
+# only (the household token or an admin Bearer): no cookie, no query token,
+# since these carry message text. Trust and household settings stay above.
+_FH_HOUSEHOLD = [Depends(require_device)]
 
 
 def _fh_error(e: Exception) -> HTTPException:
@@ -3809,7 +3815,7 @@ class _FhNameBody(BaseModel):
     name: str
 
 
-@app.get("/v1/admin/friend-houses", dependencies=_FH_READ)
+@app.get("/v1/admin/friend-houses", dependencies=_FH_HOUSEHOLD)
 async def admin_friend_houses_status() -> dict[str, Any]:
     """Friend Houses at a glance: whether its private connection runs, why
     not, this house's public fingerprint and name, the default friend-file
@@ -3931,7 +3937,7 @@ async def admin_friend_houses_decline(request_id: str) -> dict[str, Any]:
     return {"declined": True}
 
 
-@app.get("/v1/admin/friend-houses/friends", dependencies=_FH_READ)
+@app.get("/v1/admin/friend-houses/friends", dependencies=_FH_HOUSEHOLD)
 async def admin_friend_houses_friends() -> dict[str, Any]:
     from domovoi.friend_houses import friending
 
@@ -3989,7 +3995,7 @@ def _fh_house(house: str) -> bytes:
     return raw
 
 
-@app.get("/v1/admin/friend-houses/conversations", dependencies=_FH_READ)
+@app.get("/v1/admin/friend-houses/conversations", dependencies=_FH_HOUSEHOLD)
 async def admin_friend_houses_conversations() -> dict[str, Any]:
     """The house inbox: every friend (or former friend) with messages, its
     unread count and how many of ours weren't delivered."""
@@ -3999,7 +4005,7 @@ async def admin_friend_houses_conversations() -> dict[str, Any]:
             "unread": await messages.unread_total()}
 
 
-@app.get("/v1/admin/friend-houses/conversations/{house}", dependencies=_FH_READ)
+@app.get("/v1/admin/friend-houses/conversations/{house}", dependencies=_FH_HOUSEHOLD)
 async def admin_friend_houses_conversation(house: str, before: int | None = None,
                                            limit: int = 50) -> dict[str, Any]:
     from domovoi.friend_houses import messages
@@ -4007,7 +4013,7 @@ async def admin_friend_houses_conversation(house: str, before: int | None = None
     return {"messages": await messages.conversation(_fh_house(house), before=before, limit=limit)}
 
 
-@app.post("/v1/admin/friend-houses/conversations/{house}/read", dependencies=_FH_WRITE)
+@app.post("/v1/admin/friend-houses/conversations/{house}/read", dependencies=_FH_HOUSEHOLD)
 async def admin_friend_houses_mark_read(house: str) -> dict[str, Any]:
     from domovoi.friend_houses import messages
 
@@ -4030,7 +4036,7 @@ async def admin_friend_houses_delete_conversation(house: str) -> dict[str, Any]:
     return {"deleted": await messages.delete_conversation(_fh_house(house))}
 
 
-@app.post("/v1/admin/friend-houses/messages", dependencies=_FH_WRITE)
+@app.post("/v1/admin/friend-houses/messages", dependencies=_FH_HOUSEHOLD)
 async def admin_friend_houses_send(body: _FhMessageBody) -> dict[str, Any]:
     from domovoi.friend_houses import messages
 
@@ -4063,7 +4069,7 @@ class _FhAcceptListBody(BaseModel):
     name: str | None = None
 
 
-@app.get("/v1/admin/friend-houses/shared-lists", dependencies=_FH_READ)
+@app.get("/v1/admin/friend-houses/shared-lists", dependencies=_FH_HOUSEHOLD)
 async def admin_friend_houses_shared_lists() -> dict[str, Any]:
     """Lists shared with friend houses: ours they have, theirs we have, and
     theirs waiting for an admin here (``state`` invited)."""

@@ -145,7 +145,49 @@ def test_the_groups_list_is_a_device_read() -> None:
 # Device-tier reads (household token or admin Bearer).
 DEVICE_READS = [
     ("GET", "/v1/voice/activity"),
+    # Friend Houses, owner decision 17: what every household phone may do
+    # with existing friends. The rest of Friend Houses stays on the security
+    # tier (test_friend_houses_trust_stays_on_the_security_tier).
+    ("GET", "/v1/admin/friend-houses"),
+    ("GET", "/v1/admin/friend-houses/friends"),
+    ("GET", "/v1/admin/friend-houses/conversations"),
+    ("GET", "/v1/admin/friend-houses/conversations/{house}"),
+    ("POST", "/v1/admin/friend-houses/conversations/{house}/read"),
+    ("POST", "/v1/admin/friend-houses/messages"),
+    ("GET", "/v1/admin/friend-houses/shared-lists"),
 ]
+
+FRIEND_HOUSES_SECURITY = [
+    ("PUT", "/v1/admin/friend-houses/settings"),
+    ("GET", "/v1/admin/friend-houses/invites"),
+    ("POST", "/v1/admin/friend-houses/invites"),
+    ("GET", "/v1/admin/friend-houses/invites/{invite_id}"),
+    ("DELETE", "/v1/admin/friend-houses/invites/{invite_id}"),
+    ("POST", "/v1/admin/friend-houses/preview"),
+    ("POST", "/v1/admin/friend-houses/requests"),
+    ("GET", "/v1/admin/friend-houses/requests"),
+    ("POST", "/v1/admin/friend-houses/requests/{request_id}/accept"),
+    ("POST", "/v1/admin/friend-houses/requests/{request_id}/decline"),
+    ("POST", "/v1/admin/friend-houses/friends/{friend_id}/verified"),
+    ("PATCH", "/v1/admin/friend-houses/friends/{friend_id}"),
+    ("DELETE", "/v1/admin/friend-houses/friends/{friend_id}"),
+    ("PUT", "/v1/admin/friend-houses/friends/{friend_id}/alert"),
+    ("GET", "/v1/admin/friend-houses/conversations/{house}/export"),
+    ("DELETE", "/v1/admin/friend-houses/conversations/{house}"),
+    ("POST", "/v1/admin/friend-houses/shared-lists"),
+    ("POST", "/v1/admin/friend-houses/shared-lists/{space}/accept"),
+    ("POST", "/v1/admin/friend-houses/shared-lists/{space}/decline"),
+    ("DELETE", "/v1/admin/friend-houses/shared-lists/{space}"),
+]
+
+
+@pytest.mark.parametrize(("method", "path"), FRIEND_HOUSES_SECURITY,
+                         ids=[f"{m} {p}" for m, p in FRIEND_HOUSES_SECURITY])
+def test_friend_houses_trust_stays_on_the_security_tier(method, path) -> None:
+    gates = _gates_for(method, path)
+    assert (admin_auth.require_admin_security in gates
+            or admin_auth.require_admin_security_read in gates), (method, path)
+    assert admin_auth.require_device not in gates
 
 
 def _dependency_calls(dependant: Any) -> Iterator[Any]:
