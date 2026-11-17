@@ -322,6 +322,16 @@ two-way call into a room.
 - "tell the kitchen dinner's ready"
 - "drop in on the kitchen"
 - "hang up"
+- "any messages"
+- "read my messages"
+
+**Friend Houses** (serverless messaging and friend system between
+households): friends are other Domovoi houses, made on the dashboard
+*(admin)*: [Settings → Household → Friend Houses](#settings/friend-houses).
+To send one a message, say "message" and its name with the message, like
+"message the Smiths dinner's at six" (or "tell the Smiths …" when AI
+features are on): Domovoi reads it back and sends it when you say yes. Messages are read aloud only when you ask, and anyone in the
+room will hear them.
 
 **App:** on a room's page, tap **drop in from this phone** to talk to that
 room.
