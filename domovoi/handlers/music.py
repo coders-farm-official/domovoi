@@ -665,6 +665,21 @@ class MusicHandler(MusicRoomsMixin, MusicQueueMixin, MusicChoiceMixin, Handler):
         return await self._simple_ack("resume", ctx)
 
     async def _stop_from_match(self, m, ctx, session):
+        # A bare "stop" while a timer or an alarm is going off in this room
+        # silences that first, as the room display's stop button does
+        # (1.4.0); the next "stop" stops the music. Only the bare word said
+        # in a room: "stop the music" (the dashboard's Stop sends it too)
+        # always means the music, and with nothing ringing "stop" is the
+        # music's as before. A test's stand-in session is not asked.
+        if (
+            m.group(0) == "stop"
+            and ctx.satellite_room_id is not None
+            and isinstance(session, AsyncSession)
+        ):
+            from domovoi.room_display import stop_ringing_by_voice
+
+            if await stop_ringing_by_voice(session, ctx.satellite_room_id, ctx.app) is not None:
+                return Response(text="Okay.", session_id=ctx.session_id, matched_handler=self.name)
         return await self._simple_ack("stop", ctx)
 
     async def _next_from_match(self, m, ctx, session):

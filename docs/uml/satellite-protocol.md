@@ -75,6 +75,7 @@ sequenceDiagram
 | `dropin_end` | — | Pi-side end of an active drop-in call (hardware button / client hang-up). The *spoken* "hang up" instead routes as a normal utterance. |
 | `dropin_ready` | — | **Since 2026-11-12; only in answer to a `dropin_start` marked `await_ready`.** The reply that was still playing when the call started ("Dropping in on the kitchen.", or the target's "Okay, connecting you with the office.") has played out and the call is open here; the server now sends this room the start chime and the peer's audio. A satellite waits at most 8 s for its playback; the server opens the call there anyway after `DROPIN_READY_WAIT_SEC` (10 s). A stray one is ignored. |
 | `chat_end` | — | Pi-side exit of conversational chat mode (e.g. a non-AEC board refusing `chat_start`). Clears the mode server-side. |
+| `room_control` | `action: "pause" \| "resume" \| "skip" \| "previous" \| "stop_ringing"`, `fire_id` (with `stop_ringing` only) | **1.4.0; only when `ready.features` lists `"room_display"`.** A button on the room's screen ([The room display](#the-room-display-room_display)). No room in it: the socket is the authority. Never answered; the next `room_display` shows the result. Anything else, an action the last `room_display` did not offer, or more than 5 at once (then one per 0.5 s) is ignored. |
 | `ping` | — | Keep-alive probe; answered with `pong`. |
 | *binary* | raw PCM | Normally meaningful only between `utterance_start`/`utterance_end`. **During a drop-in** the Pi streams every mic frame continuously (no framing) and the server relays each frame verbatim to the peer room — except while an utterance is active (a mid-call wake command like "hang up"), which is captured for STT instead. |
 
@@ -107,6 +108,7 @@ sequenceDiagram
 | `chat_end` | `reason` | Exit chat mode; restore the wake loop. |
 | `error` | `message`, `reason?` | Something went wrong; paired with a terminal `response_end` when a response task fails so the Pi's mic never stays parked. Carries `reason:"pairing_rejected"` when the `hello` pairing check refuses the connection, or `reason:"hello_required"` when the first frame was not a `hello` (the socket is then closed either way). |
 | `pong` | — | Reply to `ping`. |
+| `room_display` | `sent_at_ms`, `now_playing`, `timers`, `ringing` | **1.4.0; only to a paired device that declared `room_display`.** What the room's screen shows: its music, its timers and alarms, one going off. Once after `ready`, then on change, at most one a second ([The room display](#the-room-display-room_display)). |
 | *binary* | raw PCM | TTS audio at `audio_sample_rate`. During a drop-in: live 16 kHz relay audio from the peer room. |
 
 > `music_start` / `music_stop` are emitted by the music-coordination code
@@ -167,6 +169,7 @@ Android phone in room mode can do some of that and not the rest, so a
 | `speech_pause` | no — `speech_pause` | the core reads the device's `speech_pause` / `speech_resume` and last voiced frame |
 | `capture_control` | no — `capture_control` | `end_capture` (early commit, which also needs `speech_pause`) |
 | `turn_progress` | yes | `working` (2026-11-09): every 30 s while a request is still being worked out, so the device's reply backstop doesn't give up on a slow but working server |
+| `room_display` | no, and no boolean key: only a device that lists it, on a socket paired with its token | 1.4.0: the `room_display` frame and the `room_control` frame back ([The room display](#the-room-display-room_display)); `ready.features` then lists `"room_display"` |
 | `dropin_ready` | no — `dropin_ready` | 2026-11-12: `dropin_start` marked `await_ready`: the device finishes the reply announcing the call before it opens it, and the server holds the call's audio to it until its `dropin_ready` (see the frame tables). Without it the call's audio follows `dropin_start` at once, which cut that reply off |
 
 Always sent, whatever the list: `ready`, `error`, `pong`, `transcript`,
@@ -200,6 +203,78 @@ A phone in room mode runs openWakeWord on ONNX Runtime with the same
 models as a Pi; it fetches the base models from the core's signed
 `/v1/wake-base` channel (docs/API_REFERENCE.md) and a pushed wake word from
 `/v1/wake-models`, as a Pi does.
+
+## The room display (`room_display`)
+
+1.4.0: a phone or tablet in room mode shows what the room is playing, its
+controls, and its timers and alarms (`domovoi/room_display.py`). A room
+phone holds only its room key, which the core takes on this socket's
+`hello` and on no HTTP route, so all of it goes over the socket. Only a
+device that lists `room_display` in `supports`, on a socket whose `hello`
+proved its room with the pairing token, gets any of it: `ready.features`
+then lists `"room_display"`. A Pi never does; nothing else changes for it.
+
+**`room_display`** (server → room):
+
+```json
+{"type": "room_display",
+ "sent_at_ms": 123456789,
+ "now_playing": {"state": "play", "title": "Ember Waltz", "artist": "Hearth Cats",
+                 "album": "Embers", "source": "library", "art": "/v1/music/cover/42",
+                 "duration_sec": 201.0, "elapsed_sec": 42.0,
+                 "controls": ["pause", "skip", "previous"]},
+ "timers": [{"id": 7, "kind": "timer", "label": "pasta", "remaining_ms": 299000, "total_ms": 600000},
+            {"id": 9, "kind": "alarm", "label": "7 AM alarm", "remaining_ms": 32400000, "total_ms": 36000000}],
+ "ringing": null}
+```
+
+* `sent_at_ms`: this server's monotonic clock in ms: for ordering frames
+  only, never a time of day.
+* `now_playing`: null when the room's player is stopped or the room has
+  none. In a group it is the group host's music, the same in every member.
+  `state` `play` \| `pause`; `title`, `artist`, `album` strings or null
+  (a stream has only a title: the station's); `source` `library` \|
+  `radio` \| `sleep` \| `podcast` \| `audiobook` \| `other`; `art` the
+  library song's cover on the open `GET /v1/music/cover/{track_id}` (see
+  docs/API_REFERENCE.md), null for anything else, never guessed;
+  `duration_sec` null for a stream; `elapsed_sec` at `sent_at_ms` (the phone
+  counts it on while playing).
+* `controls`: only what works in this room right now: `pause` while
+  playing, `resume` while paused; `skip` when the queue has a next song;
+  `previous` for a song in a queue (back one, or the first one again from
+  its start). A stream (the radio) has only `pause` / `resume`.
+* `timers`: this room's timers and alarms, soonest first, at most 20; never
+  a reminder (anyone in the room can read the screen) and never another
+  room's. `kind` `timer` \| `alarm` (an alarm is what "set an alarm" and
+  "wake me up" make: a label like "7 AM alarm"); `label` null for a timer
+  set without one; `remaining_ms` at `sent_at_ms`; `total_ms` the whole
+  length.
+* `ringing`: `{fire_id, kind, label}` for a timer or alarm going off in
+  this room that nobody has acknowledged, within the window "stop the
+  timer" takes (announced here in the last 30 s, set here and fired in the
+  last 30 s, or still waiting its turn here); else null.
+
+Sent once after `ready`, then whenever it changes (this room's or its group
+host's music, its timers or alarms, one going off), at most one a second.
+Time passing is not a change; a seek, or a position or end more than 2.5 s
+from where the last frame put it, is.
+
+**`room_control`** (room → server), no room in it:
+
+* `{"type": "room_control", "action": "pause" | "resume" | "skip" | "previous"}`
+  goes the way the dashboard's `POST /v1/admin/music/{action}/{room}` goes:
+  the spoken equivalent routed for this room (so it acts on the group in a
+  group, as saying it there would) with the same `intents_log` row. Only an
+  action the last `room_display` offered is taken.
+* `{"type": "room_control", "action": "stop_ringing", "fire_id": N}`
+  acknowledges fire `N` in this room (a timer or an alarm; the same
+  acknowledgement "stop the timer" makes) and ends its announcement here if
+  it is being spoken.
+
+A bare "stop" said in the room while a timer or alarm is ringing there does
+the same (and leaves the music playing; the next "stop" stops it); with
+nothing ringing it is the music's, as before. "Stop the timer" also stops a
+ringing alarm. Volume stays where it was: `volume_status` / `set_volume`.
 
 ## Enrolling a spare device (`domovoi-room:1`)
 

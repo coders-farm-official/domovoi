@@ -257,13 +257,15 @@ class TimerHandler(Handler):
         # also when another room, or this one, acknowledged it a moment
         # ago. Otherwise a kitchen "stop the timer" after the garage's timer
         # was announced there deleted the kitchen's own running timer. Only
-        # a TIMER that went off counts: after a reminder, "cancel the
-        # timer" still cancels this room's timer.
+        # a timer or an alarm that went off counts (an alarm since 1.4.0, so
+        # "stop the timer" over a ringing alarm and the room display's stop
+        # button agree): after any other reminder, "cancel the timer" still
+        # cancels this room's timer.
         if label is None and not everywhere and ctx.satellite_room_id is not None:
             from domovoi.timer_delivery import ACK_WITHIN_SEC, ack_recent_fire
 
             if await ack_recent_fire(
-                session, ctx.satellite_room_id, within_sec=ACK_WITHIN_SEC, kind="timer",
+                session, ctx.satellite_room_id, within_sec=ACK_WITHIN_SEC, timer_or_alarm=True,
             ) is not None:
                 return Response(
                     text="Okay.", session_id=ctx.session_id, matched_handler=self.name,

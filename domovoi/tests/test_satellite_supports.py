@@ -155,7 +155,11 @@ def test_the_fixtures_name_every_ability_the_core_knows_and_no_other():
 
 def test_the_core_s_ready_features_are_the_fixtures():
     for device in DEVICES.values():
-        assert device["ready"]["features"] == list(CORE_FEATURES)
+        # The room display (1.4.0) is listed for a paired device that
+        # declared it, after the features every paired device gets.
+        ab = sa.from_hello(device["hello"])
+        extra = ["room_display"] if ab.allows("room_display") else []
+        assert device["ready"]["features"] == list(CORE_FEATURES) + extra
         assert device["ready"]["protocol_version"] == streaming.PROTOCOL_VERSION == "0.1"
 
 
@@ -347,6 +351,23 @@ async def _trigger(session: StreamSession, ws: FakeWS, frame: str) -> Any:
 
             session._announce = fake_announce  # type: ignore[method-assign]
             await session.announce("dinner's ready")
+        elif frame == "room_display":
+            # What run() does after `ready`: a feed only for what `ready`
+            # listed it to (the frame's contents: test_room_display.py).
+            from domovoi.room_display import RoomDisplayFeed
+
+            if "room_display" in session._ready_features():
+                async def build(_room):
+                    return {"type": "room_display", "sent_at_ms": 0,
+                            "now_playing": None, "timers": [], "ringing": None}
+
+                feed = RoomDisplayFeed(session, builder=build)
+                feed.start()
+                for _ in range(200):
+                    if ws.sent:
+                        break
+                    await asyncio.sleep(0.01)
+                await feed.stop()
         else:  # pragma: no cover
             raise AssertionError(frame)
     except Exception as e:  # noqa: BLE001

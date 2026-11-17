@@ -64,7 +64,7 @@ import kotlin.math.sqrt
  *   speech to the speaker, `end_capture`, volume, music, drop-ins, wake
  *   model pushes, the sound cache.
  */
-class RoomEngine(private val context: Context, private val store: RoomStore) {
+class RoomEngine(private val context: Context, private val store: RoomStore) : RoomDisplaySource {
     // ── what the room screen shows ──────────────────────────────────────
 
     sealed class Link {
@@ -103,6 +103,33 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
 
     private fun update(f: (Status) -> Status) {
         synchronized(_status) { _status.value = f(_status.value) }
+    }
+
+    // ── what the room display shows beyond the status (RoomDisplayFeed) ─
+
+    private val _feed = MutableStateFlow<RoomFeed?>(null)
+    override val feed: StateFlow<RoomFeed?> = _feed
+
+    override fun control(action: RoomControl): Boolean {
+        if (!ready || RoomDisplayFeed.ABILITY !in features) return false
+        return send(RoomDisplayFeed.control(action))
+    }
+
+    override fun volume(): Int = volume.level()
+
+    override fun setVolume(level: Int): Boolean {
+        if (!ready) return false
+        volume.set(level)
+        return send(RoomProtocol.volumeStatus(volume.level()))
+    }
+
+    override suspend fun art(path: String): ByteArray? {
+        if (!RoomDisplayFeed.isArtPath(path)) return null
+        val client = http ?: return null
+        val core = store.enrolment?.coreUrl?.trimEnd('/') ?: return null
+        return withContext(Dispatchers.IO) {
+            runCatching { RoomModels.get(client, core + path, limit = MAX_ART_BYTES) }.getOrNull()
+        }
     }
 
     // ── parts ───────────────────────────────────────────────────────────
@@ -245,6 +272,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
         batteryReceiver = null
         runCatching { ws?.close(1000, "room mode stopped") }
         ws = null
+        _feed.value = null
         listenThread?.interrupt()
         listenThread?.join(2_000)
         listenThread = null
@@ -411,6 +439,13 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
             is RoomProtocol.ServerFrame.WakeModelsChanged -> background { refreshModels() }
             is RoomProtocol.ServerFrame.DropinStart -> onDropinStart(f)
             is RoomProtocol.ServerFrame.DropinEnd -> onDropinEnd()
+            // Only from a core that said it sends it: anything else is not
+            // this room's to show.
+            is RoomProtocol.ServerFrame.Display -> when {
+                RoomDisplayFeed.ABILITY !in features -> _feed.value = null
+                // One sent before the frame on screen: dropped.
+                RoomDisplayFeed.newer(_feed.value, f.feed) -> _feed.value = f.feed.copy(receivedAt = SystemClock.elapsedRealtime())
+            }
             is RoomProtocol.ServerFrame.Pong -> Unit
             is RoomProtocol.ServerFrame.Other -> Log.d(TAG, "ignored frame ${f.type}")
         }
@@ -585,6 +620,8 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
         ws = null
         ready = false
         features = emptySet()
+        // What the server said about this room is not known any more.
+        _feed.value = null
         downSince = SystemClock.elapsedRealtime()
         acceptingAudio = false
         speaker.stop()
@@ -1181,6 +1218,8 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
 
     companion object {
         private const val TAG = "RoomEngine"
+        /** A cover is a thumbnail: anything bigger is not drawn. */
+        const val MAX_ART_BYTES = 2L * 1024 * 1024
         const val NUDGE_FLOOR_MS = 10_000L
         const val REPLY_TIMEOUT_MS = 60_000L
         const val HEALTH_INTERVAL_MS = 60_000L

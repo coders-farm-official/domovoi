@@ -345,6 +345,10 @@ _ALARM_LABEL_SQL_RE = (
     r"^(?:[0-9]{1,2}(?::[0-9]{2})? (?:am|pm)|noon|midnight"
     r"|[0-9]+ (?:second|minute|hour)(?: and [0-9]+ minute)?) alarm$"
 )
+#: The same, for the room display (domovoi/room_display.py) and
+#: timer_delivery's "a timer or an alarm" filter: what tells an alarm from
+#: any other reminder.
+ALARM_LABEL_SQL_RE = _ALARM_LABEL_SQL_RE
 
 # ─── The tool-call ``message`` ───────────────────────────────────────────
 

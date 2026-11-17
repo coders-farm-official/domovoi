@@ -940,9 +940,11 @@ async def test_the_acknowledgement_is_asked_only_for_a_plain_room_cancel(monkeyp
 
     calls: list[str] = []
 
-    async def _no_ack(session, room_id, within_sec=30, *, kind=None):
+    async def _no_ack(session, room_id, within_sec=30, *, kind=None, timer_or_alarm=False):
         calls.append(room_id)
-        assert kind == "timer"
+        # A timer or an alarm (1.4.0: "stop the timer" over a ringing alarm
+        # stops it too), never any other reminder.
+        assert kind is None and timer_or_alarm is True
         return None
 
     monkeypatch.setattr(timer_delivery, "ack_recent_fire", _no_ack)
