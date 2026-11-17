@@ -442,16 +442,16 @@ def body(rel: Release) -> str:
     install = [
         "## Install or update",
         "",
-        f"- **A Domovoi server** updates from its dashboard: Settings, Configuration, Version, then check for updates. "
+        f"- **A Domovoi server** updates from its dashboard: Settings, System, About & updates, then check for updates. "
         f"A new Linux server: [docs/LINUX_HOST.md]({REPO_URL}/blob/{rel.tag}/docs/LINUX_HOST.md).",
-        "- **Phones** get the app from their own server (the join page, or Settings, Devices), "
+        "- **Phones** get the app from their own server (the join page, or Settings, Household, Phones & browsers), "
         "where the installer puts it (else an admin presses \"Download the app to this server\" there, "
         "or uploads it).",
         f"- **Windows (preview):** `{SETUP_ASSET}` puts the server on a Windows 11 PC.",
     ]
     if rel.satellite_setup_sha256:
         install.append(f"- **A spare Windows PC as a room (preview):** `{SATELLITE_SETUP_ASSET}`, from your own "
-                       "server's dashboard (Settings, Satellites, add a spare device) or from here. It is not "
+                       "server's dashboard (Settings, Household, Rooms, add a spare device) or from here. It is not "
                        "code-signed, so Windows SmartScreen says \"Windows protected your PC\": More info, then "
                        f"Run anyway ([docs/SPARE_DEVICE_SATELLITES.md]({REPO_URL}/blob/{rel.tag}/docs/"
                        "SPARE_DEVICE_SATELLITES.md#windows-laptops-and-pcs)).")

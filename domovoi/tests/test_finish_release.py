@@ -1507,3 +1507,16 @@ def test_the_sbom_names_are_the_generator_s():
     sbom = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(sbom)
     assert (sbom.ASSET_NAMES["server"], sbom.ASSET_NAMES["web"], sbom.ASSET_NAMES["android"]) == fr.SBOM_ASSETS
+
+
+def test_the_install_section_names_the_current_settings_pages():
+    """The release page's install steps use the dashboard's real paths."""
+    rel = fr.Release(tag="v9.9.9", version="9.9.9", prerelease=False, tag_commit="a" * 40,
+                     cert=CERT, apks=[{"abi": "arm64-v8a", "file": "x.apk", "sha256": "c" * 64}],
+                     setup_sha256="d" * 64, satellite_setup_sha256="e" * 64)
+    text = fr.body(rel)
+    assert "Settings, System, About & updates" in text
+    assert "Settings, Household, Phones & browsers" in text
+    assert "Settings, Household, Rooms, add a spare device" in text
+    for old in ("Settings, Configuration", "Settings, Devices", "Settings, Satellites"):
+        assert old not in text
