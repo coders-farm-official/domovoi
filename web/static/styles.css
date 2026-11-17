@@ -921,6 +921,15 @@ html.mp-docked { --player-h: 64px; }
 }
 .mp-panel > * { flex: none; }
 .mp-panel-lyrics { overflow: hidden; }
+/* A phone: the panel and the lyric list scroll themselves, but at their end
+   (or when there is nothing to scroll: the equalizer fits) a swipe goes on to
+   the sheet. With "contain" the finger was trapped in them and the sheet
+   only scrolled from a touch that began outside (owner report 2026-11-17).
+   The equalizer's sliders keep their own vertical drag. */
+@media (pointer: coarse) {
+  .mp-panel, .lyr-scroll { overscroll-behavior-y: auto; }
+  .mp-panel .eq-slider { touch-action: none; }
+}
 
 .viz-over .mp-panel { flex: 1 1 auto; height: auto; }
 
