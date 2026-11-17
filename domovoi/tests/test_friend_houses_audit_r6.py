@@ -130,3 +130,160 @@ async def test_fh2_off_stops_tor_even_if_stopping_the_listener_fails(monkeypatch
     monkeypatch.setattr(egress, "policy", lambda: "never")
     await svc.reconcile()
     assert calls == ["retries", "stop"]
+
+
+# ─── the listener: FH-3 (event floods), FH-9 (slots), FH-10 (removal) ────
+
+import os  # noqa: E402
+
+from domovoi.friend_houses import identity as fid  # noqa: E402
+from domovoi.friend_houses import listener as fl  # noqa: E402
+from domovoi.friend_houses import session as fs  # noqa: E402
+
+
+def _house(tmp_path, name):
+    keys = fid.create(tmp_path / f"{name}.json")
+    return keys, fs.Hello(keys.address_statement(bytes(32), 1_800_000_000), b"\x02" * 8)
+
+
+def _write_friends(folder, entries: dict) -> None:
+    path = folder / fl.FRIENDS_FILE
+    path.write_text(json.dumps(entries), encoding="utf-8")
+    stat = path.stat()  # seen even within one mtime tick
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
+
+
+def _entry(keys, pending=False) -> dict:
+    return {keys.session_key.hex(): {"house": keys.house_key.hex(), "pending": pending}}
+
+
+async def _listener(tmp_path, keys, hello):
+    folder = tmp_path / "listener"
+    folder.mkdir()
+    (folder / fl.HELLO_FILE).write_bytes(hello.to_bytes())
+    state = fl.State(folder, keys)
+    main = await asyncio.start_server(lambda r, w: fl.handle(r, w, state), "127.0.0.1", 0)
+    pairing = await asyncio.start_server(lambda r, w: fl.handle_pairing(r, w, state), "127.0.0.1", 0)
+    return main, pairing, folder, state
+
+
+def _port(server) -> int:
+    return server.sockets[0].getsockname()[1]
+
+
+async def _call(port, keys, hello, friend):
+    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    return await fs.initiate(reader, writer, keys=keys, me=hello, friend=friend)
+
+
+def _events(capsys) -> list[str]:
+    return [json.loads(x)["event"] for x in capsys.readouterr().out.splitlines() if x.startswith("{")]
+
+
+async def test_fh3_a_stream_of_accepts_is_one_event(tmp_path, capsys) -> None:
+    # The PoC: a house this one asked opens one session and streams ACCEPT
+    # frames; 20,000 reached core as 20,000 tasks. Now: one, and the
+    # connection ends.
+    us, our_hello = _house(tmp_path, "us")
+    asked, asked_hello = _house(tmp_path, "asked")
+    main, pairing, folder, _ = await _listener(tmp_path, us, our_hello)
+    _write_friends(folder, _entry(asked, pending=True))
+    async with main, pairing:
+        sess = await _call(_port(main), asked, asked_hello, fs.Friend(us.house_key, us.session_key))
+        for _ in range(200):
+            try:
+                await sess.send(fs.Kind.ACCEPT, b"\x09" * 32)
+            except (ConnectionError, fs.SessionRefused):
+                break
+        await asyncio.sleep(0.2)
+        await sess.close()
+    assert _events(capsys).count("accepted") == 1
+
+
+async def test_fh3_im_back_is_once_per_connection_and_capped_per_hour(tmp_path, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(fl, "EVENTS_PER_HOUR", 5)
+    us, our_hello = _house(tmp_path, "us")
+    them, their_hello = _house(tmp_path, "them")
+    main, pairing, folder, _ = await _listener(tmp_path, us, our_hello)
+    _write_friends(folder, _entry(them))
+    view = fs.Friend(us.house_key, us.session_key)
+    async with main, pairing:
+        for _ in range(4):
+            sess = await _call(_port(main), them, their_hello, view)
+            for _ in range(50):
+                await sess.send(fs.Kind.IM_BACK)
+            await sess.ping()
+            await sess.close()
+        await asyncio.sleep(0.1)
+    events = _events(capsys)
+    assert len(events) == 5  # 4 connected + 4 I'm back, cut at the hour's 5
+
+
+async def test_fh9_silent_connections_give_their_slots_back(tmp_path, monkeypatch) -> None:
+    # The PoC: 32 connections that send the preface and nothing else held
+    # every slot for a minute, for friends and friend requests alike.
+    monkeypatch.setattr(fl, "HANDSHAKE_DEADLINE_SEC", 0.3)
+    us, our_hello = _house(tmp_path, "us")
+    them, their_hello = _house(tmp_path, "them")
+    main, pairing, folder, state = await _listener(tmp_path, us, our_hello)
+    _write_friends(folder, _entry(them))
+    async with main, pairing:
+        idle = [await asyncio.open_connection("127.0.0.1", _port(main)) for _ in range(fl.MAX_CONNECTIONS)]
+        for _, w in idle:
+            w.write(fs.PREFACE)
+        await asyncio.sleep(0.1)
+        assert state._open == fl.MAX_CONNECTIONS and state._open_pairing == 0  # pairing has its own
+        await asyncio.sleep(0.6)
+        assert state._open == 0
+        sess = await _call(_port(main), them, their_hello, fs.Friend(us.house_key, us.session_key))
+        assert await sess.ping() >= 0
+        await sess.close()
+        for _, w in idle:
+            w.close()
+
+
+async def test_fh9_bare_connections_dont_spend_the_pairing_budget(tmp_path) -> None:
+    us, our_hello = _house(tmp_path, "us")
+    main, pairing, folder, state = await _listener(tmp_path, us, our_hello)
+    async with main, pairing:
+        for _ in range(fl.PAIRING_PER_HOUR + 5):
+            _, w = await asyncio.open_connection("127.0.0.1", _port(pairing))
+            w.close()
+        await asyncio.sleep(0.2)
+    assert len(state._pairing_times) == 0
+
+
+async def test_fh10_a_friend_removed_mid_session_is_cut_off(tmp_path) -> None:
+    us, our_hello = _house(tmp_path, "us")
+    them, their_hello = _house(tmp_path, "them")
+    main, pairing, folder, _ = await _listener(tmp_path, us, our_hello)
+    _write_friends(folder, _entry(them))
+    async with main, pairing:
+        sess = await _call(_port(main), them, their_hello, fs.Friend(us.house_key, us.session_key))
+        assert await sess.ping() >= 0
+        _write_friends(folder, {})  # removed
+        with pytest.raises((fs.SessionRefused, ConnectionError, asyncio.IncompleteReadError,
+                            asyncio.TimeoutError)):
+            await sess.ping(timeout=3)
+        await sess.close()
+
+
+async def test_fh3_core_handles_a_bounded_number_of_events_at_once(monkeypatch) -> None:
+    # Each event is a task with its own database connection: a flood is
+    # dropped past EVENT_TASKS_MAX instead of using up Postgres.
+    from domovoi.friend_houses import friending
+
+    gate = asyncio.Event()
+    started: list[int] = []
+
+    async def slow(event):
+        started.append(1)
+        await gate.wait()
+
+    monkeypatch.setattr(friending, "on_event", slow)
+    for _ in range(svc.EVENT_TASKS_MAX + 50):
+        svc.handle_event({"event": "accepted", "house": "00" * 32})
+    await asyncio.sleep(0.05)
+    assert len(started) == svc.EVENT_TASKS_MAX
+    gate.set()
+    await asyncio.gather(*list(svc._PENDING))

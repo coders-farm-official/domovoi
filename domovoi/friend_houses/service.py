@@ -490,18 +490,18 @@ def handle_event(event: dict) -> None:
         except ValueError:
             house_key, statement = b"", None
         if len(house_key) == 32:
-            spawn(presence.saw(house_key, statement), "friend-houses-presence")
+            _event(presence.saw(house_key, statement), "friend-houses-presence")
     elif kind in ("request", "accepted"):
         from domovoi.friend_houses import friending
 
-        spawn(friending.on_event(event), "friend-houses-event")
+        _event(friending.on_event(event), "friend-houses-event")
     elif kind == "message":
-        spawn(_store_and_answer(event), "friend-houses-message")
+        _event(_store_and_answer(event), "friend-houses-message")
     if kind == "im_back":
         from domovoi.friend_houses import messages
 
         try:
-            spawn(messages.flush(bytes.fromhex(str(event.get("house", "")))), "friend-houses-flush")
+            _event(messages.flush(bytes.fromhex(str(event.get("house", "")))), "friend-houses-flush")
         except ValueError:
             pass
 
@@ -540,6 +540,25 @@ def spawn(coro, name: str) -> None:
     task = asyncio.get_running_loop().create_task(coro, name=name)
     _PENDING.add(task)
     task.add_done_callback(_PENDING.discard)
+
+
+# At most this many listener events are handled at once. Each opens its own
+# database connection (NullPool), so a flood from one house mustn't use up
+# Postgres for the whole core (audit R6 FH-3). One over the limit is
+# dropped: a message isn't acknowledged and is sent again, a request or an
+# accept is retried by the other house, presence is seen next time.
+EVENT_TASKS_MAX = 24
+_EVENT_NAMES = ("friend-houses-presence", "friend-houses-event", "friend-houses-message",
+                "friend-houses-flush")
+
+
+def _event(coro, name: str) -> None:
+    busy = sum(1 for t in _PENDING if not t.done() and t.get_name() in _EVENT_NAMES)
+    if busy >= EVENT_TASKS_MAX:
+        coro.close()
+        log.warning("Friend Houses: %d events already running; dropped a %s", busy, name)
+        return
+    spawn(coro, name)
 
 
 # ─── retries: unsent requests and accepts ─────────────────────────────────

@@ -56,10 +56,14 @@ from domovoi.friend_houses import session as fs
 
 log = logging.getLogger("domovoi.friend_houses.listener")
 
-MAX_CONNECTIONS = 32
+MAX_CONNECTIONS = 32       # on main.sock
+MAX_PAIRING_CONNECTIONS = 8  # on pairing.sock: its own slots (audit R6 FH-9)
 MAX_PER_FRIEND = 4
-PAIRING_PER_HOUR = 20
+PAIRING_PER_HOUR = 20      # requests that name an open friend file
 MESSAGES_PER_HOUR = 60     # per friend (threat-model finding 32)
+EVENTS_PER_HOUR = 120      # per house: connected / I'm back / accepted (R6 FH-3)
+HANDSHAKE_DEADLINE_SEC = 20.0  # preface + handshake, all of it (R6 FH-9)
+PAIRING_DEADLINE_SEC = 90.0    # a whole friend request, round trips over Tor
 STORE_WAIT_SEC = 30.0      # how long a message waits for core to store it
 
 FRIENDS_FILE = "friends.json"     # {"<session key hex>": {"house": hex, "pending": bool}}
@@ -88,21 +92,22 @@ class State:
     _friends: _Cached = field(default_factory=_Cached)
     _invites: _Cached = field(default_factory=_Cached)
     _open: int = 0
+    _open_pairing: int = 0
     _per_friend: dict[bytes, int] = field(default_factory=dict)
+    _event_times: dict[bytes, deque] = field(default_factory=dict)
     _pairing_times: deque = field(default_factory=deque)
     _message_times: dict[bytes, deque] = field(default_factory=dict)
     # msg_id -> the future core's "stored"/"refused" line resolves
     _waiting: dict[bytes, asyncio.Future] = field(default_factory=dict)
 
     def message_allowed(self, house: bytes) -> bool:
-        now = time.monotonic()
-        times = self._message_times.setdefault(house, deque())
-        while times and now - times[0] > 3600:
-            times.popleft()
-        if len(times) >= MESSAGES_PER_HOUR:
-            return False
-        times.append(now)
-        return True
+        return _within(self._message_times.setdefault(house, deque()), MESSAGES_PER_HOUR)
+
+    def event_allowed(self, house: bytes) -> bool:
+        """Whether core hears about one more connected / I'm back / accept
+        from this house this hour. Each becomes a task in core with its own
+        database connection, so none of them is unbounded (R6 FH-3)."""
+        return _within(self._event_times.setdefault(house, deque()), EVENTS_PER_HOUR)
 
     async def stored(self, msg_id: bytes) -> bool:
         """Wait for core to say it stored (True) or refused (False) a
@@ -168,6 +173,16 @@ class State:
         return True
 
 
+def _within(times: deque, limit: int, window: float = 3600.0) -> bool:
+    now = time.monotonic()
+    while times and now - times[0] > window:
+        times.popleft()
+    if len(times) >= limit:
+        return False
+    times.append(now)
+    return True
+
+
 def _read_friends(path: Path) -> dict[bytes, Peer]:
     try:
         doc = json.loads(path.read_text(encoding="utf-8"))
@@ -224,20 +239,33 @@ async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, sta
                 return None
             return peer.friend
 
-        sess = await fs.respond(reader, writer, keys=state.keys, me=hello, friend_for=friend_for)
+        # One deadline for the preface and the whole handshake: a caller
+        # that connects and says nothing gives its slot back soon (R6 FH-9).
+        sess = await asyncio.wait_for(
+            fs.respond(reader, writer, keys=state.keys, me=hello, friend_for=friend_for),
+            HANDSHAKE_DEADLINE_SEC)
         assert peer is not None
         caller = sess.peer.statement.session_key
         state._per_friend[caller] = state._per_friend.get(caller, 0) + 1
         house = sess.peer_house_key.hex()
-        if not peer.pending:
+        house_key = sess.peer_house_key
+        if not peer.pending and state.event_allowed(house_key):
             emit("connected", house=house, statement=sess.peer.statement.to_bytes().hex(),
                  epoch=sess.peer.epoch.hex())
+        said_back = False
         while True:
             kind, body = await sess.recv()
+            # The friend list is checked on every frame, not just at the
+            # handshake: a friend removed (or blocked) mid-session is cut
+            # off at its next frame (R6 FH-10).
+            if state.peers().get(caller) != peer:
+                break
             if kind is fs.Kind.ACCEPT:
-                emit("accepted", house=house, statement=sess.peer.statement.to_bytes().hex(),
-                     reach_private=body.hex())
+                if state.event_allowed(house_key):
+                    emit("accepted", house=house, statement=sess.peer.statement.to_bytes().hex(),
+                         reach_private=body.hex())
                 await sess.send(fs.Kind.ACCEPT_OK)
+                break  # one accept per connection (R6 FH-3)
             elif kind is fs.Kind.BYE:
                 break
             elif peer.pending:
@@ -245,7 +273,9 @@ async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, sta
             elif kind is fs.Kind.PING:
                 await sess.send(fs.Kind.PONG, body)
             elif kind is fs.Kind.IM_BACK:
-                emit("im_back", house=house)
+                if not said_back and state.event_allowed(house_key):
+                    emit("im_back", house=house)
+                said_back = True  # once per connection
             elif kind is fs.Kind.MESSAGE:
                 if not state.message_allowed(sess.peer_house_key):
                     break  # over the hourly limit: the sender keeps it for later
@@ -254,7 +284,7 @@ async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, sta
                 if await state.stored(env.msg_id):
                     await sess.send(fs.Kind.MESSAGE_ACK, env.msg_id)
             # PONG without a PING of ours, ACCEPT_OK unasked: ignored.
-    except (fs.SessionRefused, fe.BadEnvelope) as e:
+    except (fs.SessionRefused, fe.BadEnvelope, asyncio.TimeoutError) as e:
         log.info("connection closed: %s", e)
     except Exception:  # noqa: BLE001 — one bad connection never stops the listener
         log.exception("connection failed")
@@ -272,24 +302,32 @@ async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, sta
 
 async def handle_pairing(reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
                          state: State) -> None:
-    """One friend request on pairing.sock. Never raises."""
-    if state._open >= MAX_CONNECTIONS or not state.pairing_allowed():
+    """One friend request on pairing.sock. Never raises.
+
+    Its connections have their own slots, separate from friends' (R6 FH-9),
+    and only a handshake that names an open friend file spends the hourly
+    budget: empty connections from anyone who once saw a file don't."""
+    if state._open_pairing >= MAX_PAIRING_CONNECTIONS:
         writer.close()
         return
-    state._open += 1
+    state._open_pairing += 1
     try:
         async def invite_open(invite_id: bytes) -> bool:
-            return state.invite_open(invite_id)
+            return state.invite_open(invite_id) and state.pairing_allowed()
 
-        req = await fp.answer(reader, writer, keys=state.keys, invite_open=invite_open)
+        req = await asyncio.wait_for(
+            fp.answer(reader, writer, keys=state.keys, invite_open=invite_open),
+            PAIRING_DEADLINE_SEC)
         emit("request", invite=req.invite_id.hex(), statement=req.statement.to_bytes().hex(),
              reach_private=req.reach_private.hex(), name=req.name, code=req.code)
     except fp.PairingRefused as e:
         log.info("friend request refused: %s", e)
+    except asyncio.TimeoutError:
+        log.info("friend request took too long")
     except Exception:  # noqa: BLE001 — one bad connection never stops the listener
         log.exception("friend request failed")
     finally:
-        state._open -= 1
+        state._open_pairing -= 1
         writer.close()
 
 
