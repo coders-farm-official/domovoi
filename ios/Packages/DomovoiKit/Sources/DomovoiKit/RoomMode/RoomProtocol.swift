@@ -26,7 +26,8 @@ public enum RoomProtocol {
     /// nothing it did not name. Never chat mode. `full_duplex` only with an
     /// echo canceller (an iPhone always has voice processing): it is what
     /// lets the core start a drop-in here. `dropin_ready` goes with it
-    /// (``DropinAfterReply``). `RoomProtocol.kt:46-54`.
+    /// (``DropinAfterReply``). `room_display`: the room display's frames
+    /// (``RoomDisplayFeed``, 1.4.0). `RoomProtocol.kt:46-54`.
     public static func supports(echoCanceller: Bool) -> [String] {
         var out: [String] = []
         if echoCanceller { out.append("full_duplex") }
@@ -36,7 +37,7 @@ public enum RoomProtocol {
         out.append("wake_models")
         out.append("sounds")
         if echoCanceller { out.append("dropin_ready") }
-        // Next: `out.append(RoomDisplayFeed.ability)` once satellite-fixtures.json's room hello lists room_display.
+        out.append(RoomDisplayFeed.ability)
         return out
     }
 

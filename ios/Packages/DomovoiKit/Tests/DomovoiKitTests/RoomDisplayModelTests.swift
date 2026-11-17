@@ -435,10 +435,105 @@ final class RoomDisplayModelTests: XCTestCase {
         XCTAssertTrue(RoomProtocol.maySend(pause, features: [RoomDisplayFeed.ability]))
     }
 
-    /// The hello is pinned to the shared fixture: `room_display` joins it only
-    /// when the fixture's room hello lists it (``RoomDisplayFeed/ability``).
-    func testTheHelloDoesNotDeclareTheDisplayUntilTheFixtureDoes() {
-        XCTAssertFalse(RoomProtocol.supports(echoCanceller: true).contains(RoomDisplayFeed.ability))
+    /// The shared fixture's room hello lists `room_display` (core 1.4.0), so
+    /// the iPhone declares it, last, with or without an echo canceller.
+    func testTheHelloDeclaresTheDisplay() {
+        XCTAssertEqual(RoomDisplayFeed.ability, RoomProtocol.supports(echoCanceller: true).last)
+        XCTAssertEqual(RoomDisplayFeed.ability, RoomProtocol.supports(echoCanceller: false).last)
+        let hello = RoomProtocol.hello(roomID: "kitchen", wakeWord: "hey_jarvis", pairingToken: "k", approvalCode: nil, echoCanceller: true)
+        XCTAssertEqual(.string("room_display"), hello["supports"].flatMap { v -> RoomJSON? in
+            if case .array(let items) = v { return items.last }
+            return nil
+        })
+    }
+
+    // MARK: - the server's final fields (core 1.4.0)
+
+    func testATimerLabelIsTheBareNameAndReadsAsATimer() {
+        func label(_ l: String?) -> String { RoomDisplayModel.timerLabel(timer(1, 60_000, l)) }
+        XCTAssertEqual("pasta timer", label("pasta"))
+        XCTAssertEqual("timer", label(nil), "unlabelled")
+        XCTAssertEqual("egg timer", label("egg timer"), "never \"timer timer\"")
+        XCTAssertEqual("Kitchen Timer", label("Kitchen Timer"), "whatever its case")
+        XCTAssertEqual("timer", label("timer"))
+        // The ringing card says the same.
+        let r = build(input(feed: feed(ringing: RoomFeedRinging(fireID: 1, kind: .timer, label: "egg timer")))).ringing
+        XCTAssertEqual("egg timer", r?.title)
+        XCTAssertEqual("timer", build(input(feed: feed(ringing: RoomFeedRinging(fireID: 2, kind: .timer, label: nil)))).ringing?.title)
+    }
+
+    func testAnAlarmLabelIsShownAsTheServerWroteIt() {
+        func label(_ l: String?) -> String { RoomDisplayModel.timerLabel(timer(1, 60_000, l, kind: .alarm)) }
+        XCTAssertEqual("7 AM alarm", label("7 AM alarm"))
+        XCTAssertEqual("20 minute alarm", label("20 minute alarm"))
+        XCTAssertEqual("wake up", label("wake up"), "an alarm's label never gets \"timer\" or \"alarm\" added")
+        XCTAssertEqual("alarm", label(nil))
+        let r = build(input(feed: feed(ringing: RoomFeedRinging(fireID: 3, kind: .alarm, label: "7 AM alarm")))).ringing
+        XCTAssertEqual("7 AM alarm", r?.title)
+        XCTAssertEqual("7 AM alarm: done", r?.announcement)
+    }
+
+    func testNullFieldsFromTheServer() throws {
+        let f = display(#"""
+            {"type":"room_display","sent_at_ms":12,
+             "now_playing":{"state":"play","title":"Late Night","artist":null,"album":null,"source":"library",
+                            "art":null,"duration_sec":null,"elapsed_sec":null,"controls":["pause","skip"]},
+             "timers":[{"id":4,"kind":"timer","label":null,"remaining_ms":30000,"total_ms":null},
+                       {"id":5,"kind":"alarm","label":null,"remaining_ms":3600000,"total_ms":null}],
+             "ringing":{"fire_id":9,"kind":"alarm","label":null}}
+            """#)
+        let np = try XCTUnwrap(f.nowPlaying)
+        XCTAssertNil(np.artist)
+        XCTAssertNil(np.album)
+        XCTAssertNil(np.durationSec)
+        XCTAssertNil(np.elapsedSec)
+        XCTAssertEqual([4, 5], f.timers.map(\.id))
+        XCTAssertEqual([nil, nil], f.timers.map(\.totalMS))
+        XCTAssertEqual([nil, nil], f.timers.map(\.label))
+        let s = build(input(feed: f))
+        let card = try XCTUnwrap(s.nowPlaying)
+        XCTAssertEqual("Late Night", card.title)
+        XCTAssertNil(card.subtitle, "a library song with no artist or album: no second line")
+        XCTAssertNil(card.progress, "no duration, no progress bar")
+        XCTAssertNil(card.art)
+        XCTAssertEqual(["timer"], s.timers.map(\.label))
+        XCTAssertEqual("alarm", try XCTUnwrap(s.ringing).title)
+        XCTAssertNotNil(s.nextAlarm)
+        // A song with no title at all is still not guessed at.
+        let untitled = display(#"{"type":"room_display","now_playing":{"state":"play","title":null,"source":"library","controls":[]}}"#)
+        XCTAssertNil(try XCTUnwrap(untitled.nowPlaying).title)
+        XCTAssertNil(build(input(feed: untitled)).nowPlaying)
+    }
+
+    func testAStreamIsTheStationWithPauseAndResumeOnly() throws {
+        let playing = display(#"""
+            {"type":"room_display","now_playing":{"state":"play","title":"Jazz FM","artist":null,"album":null,
+             "source":"radio","art":null,"duration_sec":null,"elapsed_sec":null,"controls":["pause"]},"timers":[]}
+            """#)
+        let np = try XCTUnwrap(build(input(feed: playing)).nowPlaying)
+        XCTAssertEqual("Jazz FM", np.title)
+        XCTAssertEqual("radio", np.subtitle)
+        XCTAssertNil(np.progress)
+        XCTAssertNil(np.art)
+        XCTAssertEqual(.pause, np.playPause)
+        XCTAssertFalse(np.next || np.previous, "a stream has no next or previous")
+        let paused = display(#"""
+            {"type":"room_display","now_playing":{"state":"pause","title":"Jazz FM","source":"radio",
+             "duration_sec":null,"elapsed_sec":12.5,"controls":["resume"]}}
+            """#)
+        let p = try XCTUnwrap(build(input(feed: paused)).nowPlaying)
+        XCTAssertEqual(.resume, p.playPause)
+        XCTAssertNil(p.progress, "an elapsed time without a duration draws no bar")
+    }
+
+    func testControlsComeOnlyFromTheLastFrame() throws {
+        let first = display(#"{"type":"room_display","sent_at_ms":1,"now_playing":{"state":"play","title":"x","controls":["pause","skip","previous"]}}"#)
+        let second = display(#"{"type":"room_display","sent_at_ms":2,"now_playing":{"state":"play","title":"x","controls":["pause"]}}"#)
+        XCTAssertTrue(RoomDisplayFeed.newer(first, second))
+        let np = try XCTUnwrap(build(input(feed: second)).nowPlaying)
+        XCTAssertEqual(.pause, np.playPause)
+        XCTAssertFalse(np.next, "skip was offered before, not now: no button")
+        XCTAssertFalse(np.previous)
     }
 }
 

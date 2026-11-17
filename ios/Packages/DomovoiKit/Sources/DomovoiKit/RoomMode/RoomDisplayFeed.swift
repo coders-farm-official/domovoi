@@ -163,8 +163,14 @@ public protocol RoomDisplaySource: AnyObject, Sendable {
     func art(_ path: String) async -> Data?
 }
 
-/// The frames, both on `/v1/stream/{room}` (shape accepted by the core team
-/// 2026-11-16; no released core sends or takes them yet):
+/// The frames, both on `/v1/stream/{room}` (the core's
+/// `domovoi/room_display.py`, docs/uml/satellite-protocol.md "The room
+/// display"; core 1.4.0). `title`, `artist`, `album`, `duration_sec`,
+/// `elapsed_sec`, `total_ms` and every `label` may be null. A timer's label
+/// is the bare name ("pasta", the server drops "the"/"my") or null; an
+/// alarm's is the handler's ("7 AM alarm") or null. A stream's title is the
+/// station's name, with no artist, album or duration and only
+/// pause/resume. A music action is taken only if the last frame offered it.
 ///
 /// Server → room, once after `ready` and then on change only (at most about
 /// once a second); only to a room whose `ready.features` lists ``ability``:
@@ -188,13 +194,10 @@ public protocol RoomDisplaySource: AnyObject, Sendable {
 ///     {"type":"room_control","action":"pause"|"resume"|"skip"|"previous"}
 ///     {"type":"room_control","action":"stop_ringing","fire_id":N}   (a timer or an alarm)
 public enum RoomDisplayFeed {
-    /// The ability name (hello `supports`, and the core's `ready.features`).
-    ///
-    /// Not in ``RoomProtocol/supports(echoCanceller:)`` yet: the hello is
-    /// pinned to docs/uml/satellite-fixtures.json (`RoomProtocolTests`). When
-    /// the fixture's room hello lists `room_display`, append it there. Until
-    /// then the room shows and sends nothing unless the core's `ready.features`
-    /// lists it.
+    /// The ability name: the hello's `supports` declares it
+    /// (``RoomProtocol/supports(echoCanceller:)``), and the room shows and
+    /// sends nothing unless the core's `ready.features` lists it back (a
+    /// paired room on a 1.4.0 core or later).
     public static let ability = "room_display"
 
     /// Longest text kept from the server (a title, a label).
