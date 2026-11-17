@@ -545,7 +545,7 @@ public final class ChatModel {
 
     /// What the screen says in place of the whole conversation when the house's
     /// AI features are off (`RouteNotes.kt:10`, already ported as
-    /// ``ShellStrings/unavailableNote(label:isChat:aiEnabled:)``).
+    /// ``ShellStrings/unavailableNote(label:isChat:aiEnabled:needsCapability:)``).
     public var aiOffNote: (title: String, detail: String)? {
         guard !aiEnabled else { return nil }
         return ShellStrings.unavailableNote(label: ChatStrings.title, isChat: true, aiEnabled: false)

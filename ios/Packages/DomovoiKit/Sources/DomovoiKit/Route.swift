@@ -235,12 +235,14 @@ public extension Route {
     }
 
     /// Why a route a link reached is not shown, when it is not
-    /// (``ShellStrings/unavailableNote(label:isChat:aiEnabled:)``).
+    /// (``ShellStrings/unavailableNote(label:isChat:aiEnabled:needsCapability:)``).
+    /// A plugin-backed screen's note names neither the screen nor the plugin.
     func unavailableNote(_ capabilities: Capabilities) -> (title: String, detail: String) {
         ShellStrings.unavailableNote(
             label: label,
             isChat: self == .chat,
-            aiEnabled: capabilities.aiEnabled
+            aiEnabled: capabilities.aiEnabled,
+            needsCapability: requiredCapability != nil
         )
     }
 }

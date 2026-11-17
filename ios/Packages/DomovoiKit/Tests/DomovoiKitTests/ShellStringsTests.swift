@@ -884,10 +884,21 @@ final class ShellStringsTests: XCTestCase {
         // (`RouteNotes.kt:11`); the detail beside it is a whole string.
         assertKotlinSays(" is turned off")
         assertKotlinSaysWhole(off.detail)
-        let missing = ShellStrings.unavailableNote(label: "Stations", isChat: false, aiEnabled: true)
-        XCTAssertEqual("stations isn't available", missing.title)
+        // A screen that needs a capability (Stations, Images) names neither
+        // the screen nor the plugin: both lines are whole Kotlin strings.
+        let gated = ShellStrings.unavailableNote(
+            label: "Stations", isChat: false, aiEnabled: true, needsCapability: true
+        )
+        XCTAssertEqual("this screen isn't available", gated.title)
+        XCTAssertEqual("this server doesn't offer it", gated.detail)
+        assertKotlinSaysWhole(gated.title)
+        assertKotlinSaysWhole(gated.detail)
+        // Any other route says its own name.
+        let missing = ShellStrings.unavailableNote(label: "News", isChat: false, aiEnabled: true)
+        XCTAssertEqual("news isn't available", missing.title)
+        XCTAssertEqual("this server doesn't offer it", missing.detail)
         // The tail of `"${label.lowercase()} isn't available"`
-        // (`RouteNotes.kt:13`).
+        // (`RouteNotes.kt`, the `else` arm).
         assertKotlinSays(" isn't available")
         assertKotlinSaysWhole(missing.detail)
         // Chat with the AI on is "isn't available", not "is turned off".

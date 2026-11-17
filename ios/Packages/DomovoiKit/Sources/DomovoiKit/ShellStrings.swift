@@ -319,16 +319,29 @@ public enum ShellStrings {
     // MARK: - §7.9 a hidden route's placeholder (ui/shell/RouteNotes.kt)
 
     /// Why a route a link reached is not shown here: the title and the line
-    /// under it. Chat hidden because the server's AI features are off says
-    /// so; anything else is a plugin that is not installed.
+    /// under it, word for word Android's `RouteNotes.kt`. Chat hidden because
+    /// the server's AI features are off says so. A screen that needs a
+    /// capability — Stations, Images, which use a plugin of ours this server
+    /// does not run — **names neither the screen nor the plugin**: on such a
+    /// server the app does not mention them at all, and the shell goes home
+    /// at once (``NavigationState/capabilitiesChanged(_:)``). Any other route
+    /// says its own name.
     ///
     /// `label` is the route's label; the title lowercases it, as the Kotlin
-    /// does.
-    public static func unavailableNote(label: String, isChat: Bool, aiEnabled: Bool) -> (title: String, detail: String) {
+    /// does. `needsCapability` is ``Route/requiredCapability`` being set.
+    public static func unavailableNote(
+        label: String,
+        isChat: Bool,
+        aiEnabled: Bool,
+        needsCapability: Bool = false
+    ) -> (title: String, detail: String) {
         if isChat && !aiEnabled {
             return ("\(label.lowercased()) is turned off", "this server has its AI features turned off")
         }
-        return ("\(label.lowercased()) isn't available", "the plugin providing this screen isn't installed on this server")
+        if needsCapability {
+            return ("this screen isn't available", "this server doesn't offer it")
+        }
+        return ("\(label.lowercased()) isn't available", "this server doesn't offer it")
     }
 
     // MARK: - §6/§7.9 Settings → Phones & browsers (ui/screens/settings/ConnectionPanel.kt)
