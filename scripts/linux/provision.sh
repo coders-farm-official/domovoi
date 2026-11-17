@@ -1343,11 +1343,13 @@ do_preflight() {
 # build (1:1.5.6-1.1ubuntu4 when this was written) is the one tested; an
 # install from before it gets the same package from apply-update.sh
 # (ADDED_PACKAGES, reconcile_added_packages).
-# tesseract-ocr (Apache-2.0) and its English data tesseract-ocr-eng
-# (Apache-2.0, tessdata_fast) read scanned pages (domovoi/scan_reader,
-# 1.4.0): run as a separate program, never bundled; apt brings their
-# libraries (libtesseract5 Apache-2.0, liblept5 the BSD-style Leptonica
-# licence) and tesseract-ocr-osd (Apache-2.0). Other languages are not
+# tesseract-ocr and its English data tesseract-ocr-eng read scanned pages
+# (domovoi/scan_reader, 1.4.0): run as a separate program, never bundled.
+# Licences as Ubuntu 26.04's packages state them (/usr/share/doc/*/copyright,
+# read 2026-11-16 on tesseract-ocr 5.5.0-1build1 and tesseract-ocr-eng
+# 1:4.1.0-2build1): tesseract-ocr and libtesseract5 Apache-2.0 (a few files
+# MIT), tesseract-ocr-eng and tesseract-ocr-osd (pulled in with it)
+# Apache-2.0; liblept5 under the BSD-style Leptonica licence. Other languages are not
 # installed: Domovoi has no household language setting yet. Boxes installed
 # before 1.4.0 get both from apply-update.sh's ADDED_PACKAGES.
 # The same names on every system this installs on: each of them is a
