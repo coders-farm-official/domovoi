@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The menu's password-free Restart (RestartService.swift; owner decision
+  2026-11-11, PLAN 4.9): launchd makes the UNIX socket (mode 0666, in a
+  root-owned 0755 folder) and starts this one fixed program as root when
+  someone connects. ONE process (launch_activate_socket and an accept loop)
+  answers every connection, at most a few dozen held at once, and leaves
+  when idle; launchd starts it again on the next connection. Connecting is
+  the request. No RunAtLoad, no KeepAlive, no inetdCompatibility. A
+  template: Installer.installRestartService fills the double-braced names
+  XML-escaped and checks the result parses.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>{{LABEL}}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{{HELPER}}</string>
+    <string>restart-trigger</string>
+    <string>--system</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>Sockets</key>
+  <dict>
+    <key>Listener</key>
+    <dict>
+      <key>SockPathName</key><string>{{SOCKET}}</string>
+      <key>SockPathMode</key><integer>438</integer>
+      <key>SockType</key><string>stream</string>
+    </dict>
+  </dict>
+  <key>StandardErrorPath</key><string>{{LOG_FILE}}</string>
+</dict>
+</plist>

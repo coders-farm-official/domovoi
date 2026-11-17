@@ -514,6 +514,115 @@ is a warning, not a failure. `--help` lists the options (`--media`,
 The steps below are the same install by hand, without the pre-downloads.
 Follow them instead if you prefer, or to see what a step changed.
 
+### ARM and VMs
+
+`provision.sh` runs on **aarch64** (64-bit ARM: a Raspberry Pi 5, an ARM
+mini PC, the Ubuntu VM the planned macOS installer runs) as well as on
+x86_64. What that covers, and what it doesn't:
+
+| | aarch64 |
+|---|---|
+| Python packages | The hash-pinned lock carries aarch64 wheels and hashes for every pin (CPU torch, CTranslate2 included). Checked once on a real arm64 VM, October 2026; not yet a gate on every lock change. |
+| Docker Engine | docker-ce from Docker's repository; the apt source names the box's own architecture (`dpkg --print-architecture`), so arm64 packages at the same pinned versions. |
+| Containers | The compose images (Postgres, Flyway, the search helper, Letta) are multi-architecture; the room player (`domovoi-mpd`) builds on arm64. Plugin images are each plugin's own: check them before relying on one. |
+| Ollama | The same pinned release, its `ollama-linux-arm64.tar.zst` (`OLLAMA_SHA256_ARM64` above). On a CPU this small the models are slow: a Raspberry Pi answers questions, but in tens of seconds. `--no-ai-models` leaves AI chat out, or `--ollama-url` uses an Ollama on a faster machine. |
+| GPU for containers | Not set up: the NVIDIA Container Toolkit pins are x86_64 packages, so the `gpu-runtime` step skips itself (wake-word training runs on the CPU). |
+| Which system | Ubuntu 26.04 only: its `python3` is the lock's 3.14. On Debian 13 or an Ubuntu 24.04 derivative the venv step stops, since the CPython it installs there (`scripts/linux/python-runtime.sh`) is an x86_64 build. |
+| Not tested | 32-bit ARM (`armv7l`, refused), boards with less than 8 GB of memory. |
+
+**An Ollama somewhere else: `--ollama-url URL`.** The script then installs
+no Ollama: the `models` step pulls and checks the tier's models through
+`URL`, and `domovoi/.env` gets `OLLAMA_URL=URL`. That Ollama must be
+**0.12.7 or newer** (what the vision model needs): the script stops before
+pulling into an older one, and the dashboard's Models page says so in
+words when the configured Ollama is older. Two more keys go in `.env`:
+
+- `OLLAMA_KEEP_ALIVE`: how long that Ollama keeps the models loaded after
+  the last question. `30m` on the floor tier, where the models hold the
+  other machine's memory (about 5.3 GB on a 16 GB Mac); `24h`, the core's
+  own default, on the standard tier. A value set in Settings is kept.
+- `LETTA_OLLAMA_BASE_URL`: the same Ollama by IP address, with `/v1`, for
+  chat mode's Letta container: containers resolve names through Docker's
+  DNS, which doesn't read this box's `/etc/hosts`. Without `--ollama-url`
+  it isn't written, and Letta keeps `host.docker.internal:11434`.
+
+**A VM that shares its host's loopback: `--vm-guard CIDR`.** Lima's
+user-mode network gives the VM `host.lima.internal` (192.168.5.2), which is
+the Mac's own `127.0.0.1`: every service anyone runs on the Mac for
+themselves. `--vm-guard 192.168.5.0/24 --vm-guard-dns 192.168.5.3`
+writes `/etc/domovoi/vm-guard.nft`, an nftables table of its own
+(`inet domovoi_vm_guard`) that `domovoi-vm-guard.service` loads at every
+boot, before Docker. The VM and its containers then reach that network
+only at the `--ollama-url` address and port, and DNS on port 53; replies
+to connections the host opens (`limactl shell`, the port forwards) still
+pass. It needs `--ollama-url`, and is for that kind of VM only: on bare
+metal or WSL leave it out. Running the script later without the option
+leaves an installed guard in place; to remove it,
+`sudo systemctl disable --now domovoi-vm-guard && sudo nft delete table inet domovoi_vm_guard && sudo rm /etc/domovoi/vm-guard.nft`.
+
+**The household's way in: `--vm-guard-lan IFACE`.** On a Mac, phones and
+room speakers reach the Mac's own LAN address, and the Mac's packet filter
+redirects Domovoi's ports to the VM's address on Lima's vzNAT network
+(`lima0` in the VM), keeping each device's own address. With
+`--vm-guard-lan lima0` the same table gets a `lan_in` chain (prerouting,
+after connection tracking and before Docker's port mapping): connections
+arriving on that interface reach only TCP 6369, 6370, 7676, 8050-8099, 8096
+and 9467 (the dashboard, the core, the rooms' streams and the plugin ports,
+the list the Windows installer's firewall rules use); replies, ICMP, DHCP
+and the host's own SSH pass, and anything else arriving there is dropped.
+Other interfaces are not touched. Without the option the file is exactly
+what it was.
+
+The guard **fails open**: if `domovoi-vm-guard.service` does not load the
+table at boot, Domovoi still starts (a household's music and rooms come
+first), and **Settings, System, Health** shows a *VM fence* warning
+("the VM fence isn't loaded") for as long as the unit isn't active. The
+check asks systemd about the unit; it does not list the nftables rules
+(the core has no right to), so a table flushed by hand after a good boot
+is not seen. A box provisioned without `--vm-guard` has no such row.
+
+**The guard is IPv4 only.** The table matches `ip daddr` and `--vm-guard`
+takes an IPv4 network, so it says nothing about IPv6. Whether the VM can
+reach the Mac over IPv6 (and so around the fence) has not been measured on
+the Mac yet; that check is pending (macOS installer spikes S3 and S4).
+Treat the fence as IPv4 protection until it is done.
+
+**What the host side must set up in the VM.** A host that runs this server
+in a VM (the macOS installer's Lima VM) talks to the core through files in
+`/var/lib/domovoi-mac/`, which the root helper on the host writes inside
+the VM: `side.json` (the host side's version and commit; the Version card's
+"Mac side"; `"updates": 1` when that Mac side can update itself from a
+signed release, so the card offers its step), `lan.json` (the host's LAN address, which the core hands to
+satellites; the host's helper rewrites it at every boot and whenever the
+host's address changes) and `lan_name.json` (the network-name report, the
+same schema as the Windows side's: the host's LAN addresses that forward
+to the core, which the core signs its identity for, and the state of the
+name the host announces, `domovoi.local`). With a Mac `side.json` the
+network name runs in host mode, as on Windows. The host's media watcher tells the core about
+files changed from the host side, which raise no inotify event in the VM:
+`POST /v1/host/media-changed`, answered over loopback only
+([API_REFERENCE.md](API_REFERENCE.md)). The core believes a file only while the folder is
+`root:root` with mode `0755` (nobody else can write it), and the file is
+root's too and not writable by group or others. A file that fails the test
+is ignored with a warning in the core's log, and the core falls back
+silently: the Version card shows no Mac side, and the satellites are given
+the VM's private address (which they cannot reach) instead of the host's.
+So if a Mac install's satellites cannot connect, check
+`ls -ld /var/lib/domovoi-mac /var/lib/domovoi-mac/*` first. This is a
+convention among root-owned processes, not a barrier: anyone in the
+`docker` group can mount the folder into a container and rewrite the files
+as root, so the container guard (which watches for unexpected containers
+and freezes risky operations) is the backstop. A household that adds
+people to the `docker` group has given them the VM.
+
+**Dropping `--ollama-url` later.** Running the script again without it
+puts back the two settings it wrote (`OLLAMA_KEEP_ALIVE` to the core's own
+`24h`, `LETTA_OLLAMA_BASE_URL` to blank), but only where `domovoi/.env`
+still holds exactly the value the script wrote; a value changed in
+Settings or by hand is left alone, and a box that never had the option is
+not touched. It does not remove an installed guard (above) or point the
+core at a local Ollama by itself.
+
 ### By hand
 
 Prerequisites:
@@ -569,11 +678,13 @@ CPU-only x86_64 box, with the check added.)
 
 ```bash
 OLLAMA_VERSION=0.34.4
-# ollama-linux-amd64.tar.zst of that release (on arm64: ollama-linux-arm64.tar.zst,
-# 96f50a1192133028cf4e010d8c333f8af14b1505db6be7b2034c11487e7fd7e6)
+# ollama-linux-amd64.tar.zst of that release (x86_64)
 OLLAMA_SHA256=c238986e61d40c0cc5f4a9b9e40b9eea104350b77efa34741fc134e105cb9533
+# ollama-linux-arm64.tar.zst of the same release (aarch64: see "ARM and VMs")
+OLLAMA_SHA256_ARM64=96f50a1192133028cf4e010d8c333f8af14b1505db6be7b2034c11487e7fd7e6
+ARCH=amd64   # on aarch64: ARCH=arm64; OLLAMA_SHA256=$OLLAMA_SHA256_ARM64
 sudo apt install -y zstd
-curl -fL -o /tmp/ollama.tar.zst   "https://github.com/ollama/ollama/releases/download/v$OLLAMA_VERSION/ollama-linux-amd64.tar.zst"
+curl -fL -o /tmp/ollama.tar.zst   "https://github.com/ollama/ollama/releases/download/v$OLLAMA_VERSION/ollama-linux-$ARCH.tar.zst"
 echo "$OLLAMA_SHA256  /tmp/ollama.tar.zst" | sha256sum -c -   # must say OK; stop if not
 sudo rm -rf /usr/local/lib/ollama
 sudo tar --zstd -xf /tmp/ollama.tar.zst -C /usr/local       # bin/ollama and lib/ollama

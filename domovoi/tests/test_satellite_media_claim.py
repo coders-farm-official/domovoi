@@ -83,6 +83,16 @@ def _fake_payload(monkeypatch, tmp_path):
     monkeypatch.setattr(payload, "assemble", _assemble)
     monkeypatch.setattr(payload, "finalize", _finalize)
     monkeypatch.setattr(builder, "BUILDS_ROOT", tmp_path / "builds")
+    # An offline build's cache fills, faked: no pip, docker or downloads.
+    # They run in a worker thread now (Train 1 finding 22), so the event
+    # loop answers the test's polls while they would still be running.
+    from domovoi.satellite_media import fetchers
+
+    for name in ("fetch_wheels", "fetch_debs", "fetch_oww_models", "fetch_xvf_host"):
+        monkeypatch.setattr(fetchers, name, lambda *a, **kw: (True, "cached (test)"))
+    monkeypatch.setattr(fetchers, "verify_oww_models", lambda *a, **kw: (len(fetchers.OWW_MODEL_FILES), []))
+    monkeypatch.setattr(fetchers, "missing_oww_models", lambda *a, **kw: [])
+    monkeypatch.setattr(fetchers, "base_debs_missing", lambda *a, **kw: [])
 
 
 def _build_zip(transport: str, claim: dict | None, job: str) -> tuple[dict, Path]:

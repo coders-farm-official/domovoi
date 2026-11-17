@@ -670,6 +670,15 @@ const VoicesPanel = () => {
  * step alone. While the PC has the request, nothing (finish on the PC);
  * after a failed step, "Try again" and the check.
  *
+ * A Mac install (`windows_side.kind` "mac") is the same two halves, "Linux
+ * side" and "Mac side". A Mac side with the updater (`updates`) gets the
+ * Windows flow worded for a Mac (HostSideNotes, kind "mac"): the Domovoi
+ * app in the Mac's menu bar downloads the release's signed
+ * DomovoiSetup-mac.pkg and installs it behind one administrator password.
+ * One from before the updater gets its row and a line only: open the
+ * release's package on the Mac by hand (MacSideNotes), no button. On both
+ * kinds a failure the side has since caught up with is no longer shown.
+ *
  * Whenever no restart is waiting, an admin also gets "Restart Domovoi": the
  * same restart with nothing to load, for a setting changed by hand in
  * domovoi/.env, a restart-tier setting, or a server that needs a kick. Never
@@ -1031,23 +1040,113 @@ const windowsRequestWords = (req, tray) => {
   return `${waiting} The Domovoi icon on the PC is running but hasn’t said it saw the request: click its notification there, or “Finish updating Domovoi” in its menu.`;
 };
 
-// The Windows half of the Version card: its row's extra lines, under the
-// version (request, tray, outcome, why not). `onRetry`: the button that
-// asks for the Windows step again; `onCancel`: the one that withdraws a
-// request nobody at the PC has started.
-const WindowsSideNotes = ({ win, channel, busy, onRetry, requesting, onCancel, cancelling }) => {
-  if (!win) return null;
-  const req = win.request;
-  const tray = win.tray || {};
-  const result = !req ? win.result : null;
-  // Only the tray menu's Linux part ran: not a Windows outcome at all.
+// The Mac half of the Version card for a Mac side from before the updater
+// (a Mac install, kind "mac", without "updates"): it changes only from a
+// release's DomovoiSetup-mac.pkg, opened on the Mac by hand, so this is
+// words only, no button (domovoi/windows_side.py, why_not "mac_by_hand").
+// A Mac side with the updater has HostSideNotes, as Windows does.
+const MAC_WHY_NOT = {
+  internet_off: 'The Mac side updates from Domovoi’s releases on the internet, and internet access is turned off here (Settings → Privacy → Internet).',
+  no_release: 'The Mac side updates on releases, and the code this server runs includes none yet.',
+};
+const MacSideNotes = ({ mac }) => {
+  if (!mac) return null;
+  const target = mac.target || null;
+  let line = null;
+  if (mac.why_not === 'mac_by_hand' && target) {
+    // Whether the release carries the Mac package isn't something this
+    // server can see (it knows release tags, not their downloads), so the
+    // line says "when", never "download it".
+    line = `Domovoi ${target.version} is out, and the Mac side is older. When that release includes `
+      + 'DomovoiSetup-mac.pkg, open it on the Mac to update the Mac side (it keeps this server’s settings and data).';
+  } else if (MAC_WHY_NOT[mac.why_not]) {
+    line = MAC_WHY_NOT[mac.why_not];
+  }
+  if (!line) return null;
+  return (
+    <div className="version-mac-notes" style={{ padding: '0 16px 12px', fontSize: 12, color: 'var(--fg-muted)' }}>
+      {line}
+    </div>
+  );
+};
+
+// The Mac side's words for the same outcomes (mac/Sources/DomovoiMacKit/
+// MacUpdate.swift MacOutcome: the tray's words, a package for a Setup).
+const MAC_OUTCOME = {
+  ...WINDOWS_OUTCOME,
+  declined: 'macOS didn’t get an administrator’s password',
+  download_failed: 'the release’s Mac package couldn’t be downloaded',
+  no_signed_setup: 'the release has no signed Mac package',
+  bad_signature: 'the downloaded package didn’t check out against Domovoi’s release key, so it wasn’t installed',
+  not_newer: 'the downloaded package isn’t newer than the Mac side, so it wasn’t installed',
+  no_key: 'the Mac side pins no release key, so it can’t check a package',
+  repair_failed: 'the package couldn’t update the Mac side',
+  not_installed: 'this Mac’s Domovoi wasn’t installed by Domovoi’s Mac package',
+};
+
+// The request's line on a Mac: the Domovoi app in the menu bar claims it
+// (then someone there started it), or isn't running, or is asked to show
+// it. The Mac app doesn't say when it saw a request, so there is no
+// "has seen it" line here.
+const macRequestWords = (req, tray) => {
+  if (req.claimed) {
+    return 'Someone at the Mac started the Mac part: macOS asks for an administrator’s password there, and this card shows how it went.';
+  }
+  if (tray.running === false) {
+    return 'Sign in on the Mac to finish: the Domovoi icon in its menu bar does the Mac part, and nobody '
+      + 'is signed in there now (or its icon isn’t running).';
+  }
+  if (req.on_this_pc) {
+    return 'macOS asks for an administrator’s password on this Mac next: the Domovoi icon is updating the Mac part.';
+  }
+  return 'Finish on your Mac: click the Domovoi notification there (or “Finish updating Domovoi” in its '
+    + 'menu-bar icon’s menu), and macOS asks for an administrator’s password.';
+};
+
+// A host side's words, by kind: the Windows tray's (as they always were)
+// and the Mac app's, which does the same step from the menu bar.
+const HOST_TEXT = {
+  windows: {
+    side: 'Windows side', part: 'Windows part', whyNot: WINDOWS_WHY_NOT, outcome: WINDOWS_OUTCOME,
+    asking: 'Asking the PC…', requestWords: windowsRequestWords,
+    halfDone: 'The update is half done: the Linux part is updated, the Windows part isn’t (Windows didn’t get an administrator’s permission).',
+    declined: 'The Windows part wasn’t updated: Windows didn’t get an administrator’s permission on the PC.',
+    unsigned: (t, v) => `Domovoi ${t} has no signed Windows Setup, so the Windows side stays at ${v} until a release that has one.`,
+    linuxFailed: 'The update from the PC’s Domovoi icon didn’t finish',
+    cancelTitle: 'withdraw the request: the Domovoi icon on the PC stops showing it',
+  },
+  mac: {
+    side: 'Mac side', part: 'Mac part', whyNot: MAC_WHY_NOT, outcome: MAC_OUTCOME,
+    asking: 'Asking the Mac…', requestWords: macRequestWords,
+    halfDone: 'The update is half done: the Linux part is updated, the Mac part isn’t (macOS didn’t get an administrator’s password).',
+    declined: 'The Mac part wasn’t updated: macOS didn’t get an administrator’s password on the Mac.',
+    unsigned: (t, v) => `Domovoi ${t} has no signed Mac package, so the Mac side stays at ${v} until a release that has one.`,
+    linuxFailed: 'The update from the Mac’s Domovoi icon didn’t finish',
+    cancelTitle: 'withdraw the request: the Domovoi icon on the Mac stops showing it',
+  },
+};
+
+// The host half of the Version card (a Windows install, or a Mac install
+// whose Mac side has the updater): its row's extra lines, under the version
+// (request, tray or Mac app, outcome, why not). `onRetry`: the button that
+// asks for the step again; `onCancel`: the one that withdraws a request
+// nobody at the PC (the Mac) has started. Class names say the kind
+// (version-windows-…, version-mac-…).
+const HostSideNotes = ({ host, kind = 'windows', channel, busy, onRetry, requesting, onCancel, cancelling }) => {
+  if (!host) return null;
+  const T = HOST_TEXT[kind] || HOST_TEXT.windows;
+  const cls = (what) => `version-${kind}-${what}`;
+  const req = host.request;
+  const tray = host.tray || {};
+  const result = !req ? host.result : null;
+  // Only the tray menu's Linux part ran: not a host-side outcome at all.
   const linuxOnly = !!(result && result.kind === 'linux');
-  const target = win.target || null;
+  const target = host.target || null;
   const lines = [];
   // The last Setup run on the PC didn't finish (DomovoiHost's word, in
   // side.json): what failed and what to do, here and in the PC's icon, not
-  // only in host.log (2026-11-16).
-  const setup = win.setup && win.setup.result === 'failed' ? win.setup : null;
+  // only in host.log (2026-11-16). A Mac side reports no Setup run.
+  const setup = kind === 'windows' && host.setup && host.setup.result === 'failed' ? host.setup : null;
   if (setup) {
     const when = windowsWhen(setup.at);
     lines.push(<div key="su" className="version-windows-setup" style={{ color: 'var(--err-ink)', overflowWrap: 'anywhere' }}>
@@ -1059,69 +1158,68 @@ const WindowsSideNotes = ({ win, channel, busy, onRetry, requesting, onCancel, c
     </div>);
   }
   if (channel === 'main' && target) {
-    lines.push(<div key="ch" className="version-windows-channel" style={{ color: 'var(--fg-muted)' }}>
-      The Linux side follows every change on main; the Windows side follows releases (the latest this
+    lines.push(<div key="ch" className={cls('channel')} style={{ color: 'var(--fg-muted)' }}>
+      The Linux side follows every change on main; the {T.side} follows releases (the latest this
       code includes: {target.version}).
     </div>);
   }
   if (req && !busy) {
-    lines.push(<div key="rq" className="version-windows-request" style={{ color: 'var(--warn-ink)' }}>
-      {windowsRequestWords(req, tray)}
+    lines.push(<div key="rq" className={cls('request')} style={{ color: 'var(--warn-ink)' }}>
+      {T.requestWords(req, tray)}
     </div>);
   }
   // Withdraw it: only while nobody at the PC has started it (a started step
   // carries on whatever this card says, so no button claims to stop it).
   const cancel = onCancel && req && !req.claimed && !busy;
-  // A failure the Windows side has since caught up with (why_not
-  // up_to_date) is history: the card kept an Oct 31 not_newer refusal in
-  // red for days while the side already ran the release (2026-11-02).
-  const caughtUp = win.why_not === 'up_to_date';
+  // A failure the host side has since caught up with (why_not up_to_date)
+  // is history: the card kept an Oct 31 not_newer refusal in red for days
+  // while the side already ran the release (2026-11-02).
+  const caughtUp = host.why_not === 'up_to_date';
   if (linuxOnly) {
-    if (win.step_needed && target && (result.outcome === 'ok' || result.outcome === 'nothing_new')) {
-      lines.push(<div key="rs" className="version-windows-result" style={{ color: 'var(--warn-ink)' }}>
-        The Domovoi icon’s update did the Linux part only; the Windows side is still {win.version}.
+    if (host.step_needed && target && (result.outcome === 'ok' || result.outcome === 'nothing_new')) {
+      lines.push(<div key="rs" className={cls('result')} style={{ color: 'var(--warn-ink)' }}>
+        The Domovoi icon’s update did the Linux part only; the {T.side} is still {host.version}.
         Update Domovoi below to bring it to {target.version}.
       </div>);
     } else if (result.outcome !== 'ok' && result.outcome !== 'nothing_new') {
-      lines.push(<div key="rs" className="version-windows-result" style={{ color: 'var(--err-ink)', overflowWrap: 'anywhere' }}>
-        {`The update from the PC’s Domovoi icon didn’t finish: ${result.detail || WINDOWS_OUTCOME[result.outcome] || result.outcome}`}
+      lines.push(<div key="rs" className={cls('result')} style={{ color: 'var(--err-ink)', overflowWrap: 'anywhere' }}>
+        {`${T.linuxFailed}: ${result.detail || T.outcome[result.outcome] || result.outcome}`}
       </div>);
     }
   } else if (result && result.outcome && result.outcome !== 'ok' && result.outcome !== 'nothing_new' && !caughtUp) {
     // Worded by what ran: "half done" only after a press that updated the
     // Linux side first.
     const declined = result.outcome === 'declined';
-    lines.push(<div key="rs" className="version-windows-result" style={{ color: 'var(--err-ink)', overflowWrap: 'anywhere' }}>
+    lines.push(<div key="rs" className={cls('result')} style={{ color: 'var(--err-ink)', overflowWrap: 'anywhere' }}>
       {declined && result.after_linux
-        ? 'The update is half done: the Linux part is updated, the Windows part isn’t (Windows didn’t get an administrator’s permission).'
+        ? T.halfDone
         : declined
-          ? 'The Windows part wasn’t updated: Windows didn’t get an administrator’s permission on the PC.'
-          : `The Windows part didn’t update: ${result.detail || WINDOWS_OUTCOME[result.outcome] || result.outcome}`}
+          ? T.declined
+          : `The ${T.part} didn’t update: ${result.detail || T.outcome[result.outcome] || result.outcome}`}
       {result.log && <span className="mono" style={{ display: 'block', fontSize: 11, color: 'var(--fg-muted)' }}>log: {result.log}</span>}
     </div>);
   } else if (result && result.outcome === 'ok' && result.version) {
-    lines.push(<div key="rs" className="version-windows-result" style={{ color: 'var(--ok-ink)' }}>
-      The Windows side updated to {result.version}.
+    lines.push(<div key="rs" className={cls('result')} style={{ color: 'var(--ok-ink)' }}>
+      The {T.side} updated to {result.version}.
     </div>);
   }
-  if (!win.step_needed && WINDOWS_WHY_NOT[win.why_not]) {
-    lines.push(<div key="wn" className="version-windows-why" style={{ color: 'var(--fg-muted)' }}>{WINDOWS_WHY_NOT[win.why_not]}</div>);
+  if (!host.step_needed && T.whyNot[host.why_not]) {
+    lines.push(<div key="wn" className={cls('why')} style={{ color: 'var(--fg-muted)' }}>{T.whyNot[host.why_not]}</div>);
   }
-  if (!win.step_needed && win.why_not === 'unsigned_release' && target) {
-    lines.push(<div key="us" className="version-windows-why" style={{ color: 'var(--fg-muted)' }}>
-      Domovoi {target.version} has no signed Windows Setup, so the Windows side stays at {win.version} until a
-      release that has one.
+  if (!host.step_needed && host.why_not === 'unsigned_release' && target) {
+    lines.push(<div key="us" className={cls('why')} style={{ color: 'var(--fg-muted)' }}>
+      {T.unsigned(target.version, host.version)}
     </div>);
   }
-  const retry = onRetry && win.step_needed && !req && !busy && windowsStepFailed(win);
+  const retry = onRetry && host.step_needed && !req && !busy && windowsStepFailed(host);
   if (!lines.length && !retry && !cancel) return null;
   return (
-    <div className="version-windows-notes" style={{ padding: '0 16px 12px', fontSize: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
+    <div className={cls('notes')} style={{ padding: '0 16px 12px', fontSize: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
       {lines}
       {cancel && (
         <span>
           <Button variant="secondary" icon="x" onClick={onCancel} disabled={cancelling}
-                  title="withdraw the request: the Domovoi icon on the PC stops showing it">
+                  title={T.cancelTitle}>
             {cancelling ? 'Cancelling…' : 'Cancel request'}
           </Button>
         </span>
@@ -1129,7 +1227,7 @@ const WindowsSideNotes = ({ win, channel, busy, onRetry, requesting, onCancel, c
       {retry && (
         <span>
           <Button variant="secondary" icon="rotate-cw" onClick={onRetry} disabled={requesting}>
-            {requesting ? 'Asking the PC…' : 'Try again'}
+            {requesting ? T.asking : 'Try again'}
           </Button>
         </span>
       )}
@@ -1227,51 +1325,69 @@ const VersionSection = () => {
   };
 
   // A Windows install's second half (windows_side, domovoi/windows_side.py).
-  const win = core && core.windows_side && core.windows_side.present ? core.windows_side : null;
+  // A Mac install (kind "mac") has a host side too: with the updater
+  // ("updates") it has the Windows flow, worded for a Mac (macStep); one
+  // from before it gets its row and a line only (the Mac side is updated by
+  // hand there). `host` is the side the one press and the request are for.
+  const hostSide = core && core.windows_side && core.windows_side.present ? core.windows_side : null;
+  const win = hostSide && (hostSide.kind || 'windows') === 'windows' ? hostSide : null;
+  const mac = hostSide && hostSide.kind === 'mac' ? hostSide : null;
+  const macStep = mac && mac.updates ? mac : null;
+  const host = win || macStep;
+  const hostKind = macStep ? 'mac' : 'windows';
   const [requesting, setRequesting] = React.useState(false);
-  // Ask the tray on the PC for the Windows step. afterLinux: this press
-  // updated the Linux side first (the card words a declined prompt by it).
-  // A press while one waits joins it (`joined`): never a second run.
+  // Ask the tray on the PC (the Domovoi app on the Mac) for the host step.
+  // afterLinux: this press updated the Linux side first (the card words a
+  // declined prompt by it). A press while one waits joins it (`joined`):
+  // never a second run.
   const requestWindows = async (afterLinux = false) => {
     setRequesting(true);
     try {
       const res = await apiPost('/api/config/version/windows-request', { after_linux: !!afterLinux });
       if (res && res.ok) {
-        fire(res.joined
-          ? 'the PC has been asked already: finish there'
-          : res.tray && res.tray.running === false
-            ? 'sign in on the PC to finish: its Domovoi icon does the Windows part'
-            : browserOnThisPc()
-              ? 'the Windows part is next: Windows asks for an administrator’s permission on this PC'
-              : 'finish on your PC: click the Domovoi notification there');
+        fire(macStep
+          ? (res.joined
+            ? 'the Mac has been asked already: finish there'
+            : res.tray && res.tray.running === false
+              ? 'sign in on the Mac to finish: its Domovoi icon does the Mac part'
+              : browserOnThisPc()
+                ? 'the Mac part is next: macOS asks for an administrator’s password on this Mac'
+                : 'finish on your Mac: click the Domovoi notification there')
+          : res.joined
+            ? 'the PC has been asked already: finish there'
+            : res.tray && res.tray.running === false
+              ? 'sign in on the PC to finish: its Domovoi icon does the Windows part'
+              : browserOnThisPc()
+                ? 'the Windows part is next: Windows asks for an administrator’s permission on this PC'
+                : 'finish on your PC: click the Domovoi notification there');
       } else {
-        fire(`the Windows part wasn’t asked for: ${(res && (res.detail || res.error)) || 'unknown'}`);
+        fire(`the ${macStep ? 'Mac' : 'Windows'} part wasn’t asked for: ${(res && (res.detail || res.error)) || 'unknown'}`);
       }
     } catch (e) {
-      reportMutationFailure(fire, 'the Windows update', e);
+      reportMutationFailure(fire, macStep ? 'the Mac update' : 'the Windows update', e);
     } finally {
       setRequesting(false);
       refreshCore();
     }
   };
-  // Withdraw a request nobody at the PC has started (the core's
-  // /v1/admin/windows/request/cancel); the tray stops showing it at its
-  // next poll.
+  // Withdraw a request nobody at the PC (or the Mac) has started (the
+  // core's /v1/admin/windows/request/cancel); the tray (the Mac app) stops
+  // showing it at its next poll.
   const [cancelling, setCancelling] = React.useState(false);
   const cancelWindows = async () => {
     setCancelling(true);
     try {
       const res = await apiPost('/api/config/version/windows-request/cancel', {});
-      fire(res && res.ok ? 'request withdrawn: the PC stops showing it' : `the request wasn’t withdrawn: ${(res && (res.detail || res.error)) || 'unknown'}`);
+      fire(res && res.ok ? `request withdrawn: the ${macStep ? 'Mac' : 'PC'} stops showing it` : `the request wasn’t withdrawn: ${(res && (res.detail || res.error)) || 'unknown'}`);
     } catch (e) {
-      reportMutationFailure(fire, 'cancelling the Windows update', e);
+      reportMutationFailure(fire, macStep ? 'cancelling the Mac update' : 'cancelling the Windows update', e);
     } finally {
       setCancelling(false);
       refreshCore();
     }
   };
-  // While the PC has a request, follow the tray's progress.
-  const pendingRequest = !!(win && win.request);
+  // While the PC (or the Mac) has a request, follow the tray's progress.
+  const pendingRequest = !!(host && host.request);
   React.useEffect(() => {
     if (!pendingRequest) return undefined;
     const t = setInterval(() => { refreshCore(); }, 10000);
@@ -1294,12 +1410,22 @@ const VersionSection = () => {
 
   // The one press: pull, then the restart that loads it (asked once, here),
   // then, on a Windows install, the Windows step when the release the Linux
-  // side now includes is newer than the Windows side. On a Linux server
+  // side now includes is newer than the Windows side (on a Mac install with
+  // the updater, the Mac step, the same way). On a Linux server
   // this is the press only where the restart can run unattended through the
   // update unit (backup, migrations, roll back); elsewhere the pull and the
   // restart stay two steps (pull, below).
   const updateOnePress = async () => {
-    if (!window.confirm(win
+    if (!window.confirm(macStep
+      ? 'Update Domovoi?\n\n' +
+        'First the Linux part: Domovoi pulls the latest code, then backs up, applies it and restarts ' +
+        '(the rooms, phones and this dashboard lose Domovoi for a minute or two; it rolls back if it ' +
+        'doesn’t come back healthy).\n\n' +
+        'Then the Mac part, when the release it now includes has a newer one: ' +
+        (browserOnThisPc()
+          ? 'macOS asks for an administrator’s password on this Mac.'
+          : 'you finish it on the Mac (the Domovoi icon in its menu bar shows a notification; macOS asks for an administrator’s password).')
+      : win
       ? 'Update Domovoi?\n\n' +
         'First the Linux part: Domovoi pulls the latest code, then backs up, applies it and restarts ' +
         '(the rooms, phones and this dashboard lose Domovoi for a minute or two; it rolls back if it ' +
@@ -1331,14 +1457,14 @@ const VersionSection = () => {
     }
     setStatus(null);
     const ok = await restart(false, true);
-    if (!ok || !win) return;
+    if (!ok || !host) return;
     let now = null;
     try { now = await apiGet('/api/config/version', { quiet: true }); } catch { /* the card reads it again */ }
     const w = now && now.windows_side;
     if (w && w.present && w.step_needed) await requestWindows(true);
   };
 
-  // "Update Domovoi" while the Windows step is needed and nothing says the
+  // "Update Domovoi" while the Windows step (the Mac step) is needed and nothing says the
   // Linux side is behind: a check first when there has been none (the
   // card hides "Check for updates" then), so the one press takes the Linux
   // side along when it is behind too; else the Windows step alone.
@@ -1430,7 +1556,7 @@ const VersionSection = () => {
   const updateUnit = !!(core && core.restart_mode === 'update');
   // One press (pull, then the restart) where the update unit can run the
   // restart unattended, and always on a Windows install; else two steps.
-  const onePress = !!win || (updateUnit && restartCapable);
+  const onePress = !!host || (updateUnit && restartCapable);
   const lastUpdate = core && core.last_update;
   const lastPill = lastUpdate && (UPDATE_RESULT_PILL[lastUpdate.status]
                                   || { tone: 'idle', label: lastUpdate.status });
@@ -1445,11 +1571,12 @@ const VersionSection = () => {
   // 'busy' first: while a restart is under way nothing else may start.
   const mode = serverRuns ? 'busy' : restartPending ? 'restart'
     : ((behind || 0) > 0 ? (upstreamIsBad ? 'held' : 'pull') : 'check');
-  // The Windows step is known to be pending (needed, and not after a
-  // failed run, which gets "Try again"): then "Check for updates" isn't
-  // offered; "Update Domovoi" (windowsUpdate), or the request the PC has.
-  const windowsPending = (mode === 'check' || mode === 'held') && !!(win && win.step_needed) && !windowsStepFailed(win);
-  const windowsUpdate = windowsPending && !win.request;
+  // The Windows step (on a Mac install with the updater, the Mac step) is
+  // known to be pending (needed, and not after a failed run, which gets
+  // "Try again"): then "Check for updates" isn't offered; "Update Domovoi"
+  // (windowsUpdate), or the request the PC (the Mac) has.
+  const windowsPending = (mode === 'check' || mode === 'held') && !!(host && host.step_needed) && !windowsStepFailed(host);
+  const windowsUpdate = windowsPending && !host.request;
   // Restart Domovoi: an admin's, whenever no restart is waiting (that one
   // is the primary action, and it restarts too). On a host that can't
   // restart itself, the command to run instead.
@@ -1493,7 +1620,7 @@ const VersionSection = () => {
                     rowGap: 8, fontSize: 13, alignItems: 'center' }}>
         <div className="label">web build</div>
         <div className="mono" style={{ color: webVer ? 'var(--fg)' : 'var(--fg-faint)' }}>{webVer || '—'}</div>
-        <div className="label">{win ? 'Linux side' : 'domovoi'}</div>
+        <div className="label">{win || mac ? 'Linux side' : 'domovoi'}</div>
         <div className="mono" style={{ color: coreSha ? 'var(--fg)' : 'var(--fg-faint)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           {coreLabel && <span className="version-label" style={{ userSelect: 'all' }}>{coreLabel}</span>}
           {(!coreLabel || !labelHasSha(coreLabel, coreSha)) && (
@@ -1521,6 +1648,25 @@ const VersionSection = () => {
               {win.step_needed && win.target && (
                 <span className="version-windows-behind" title={`the Linux side includes Domovoi ${win.target.version}`}>
                   <Pill tone="warn">Windows side is behind: {win.target.version} is out</Pill>
+                </span>
+              )}
+              <span style={{ color: 'var(--fg-muted)', fontSize: 12, fontFamily: 'var(--font-sans, inherit)' }}>updates on releases</span>
+            </div>
+          </React.Fragment>
+        )}
+        {mac && (
+          <React.Fragment>
+            <div className="label">Mac side</div>
+            <div className="version-mac mono" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ userSelect: 'all' }}>{mac.version}</span>
+              {mac.build_commit && (
+                <span style={{ color: 'var(--fg-muted)', userSelect: 'all' }} title={`built from ${mac.build_commit}`}>
+                  ({shortCommit(mac.build_commit)})
+                </span>
+              )}
+              {(mac.why_not === 'mac_by_hand' || mac.step_needed) && mac.target && (
+                <span className="version-mac-behind" title={`the Linux side includes Domovoi ${mac.target.version}`}>
+                  <Pill tone="warn">Mac side is behind: {mac.target.version} is out</Pill>
                 </span>
               )}
               <span style={{ color: 'var(--fg-muted)', fontSize: 12, fontFamily: 'var(--font-sans, inherit)' }}>updates on releases</span>
@@ -1651,6 +1797,7 @@ const VersionSection = () => {
           <Button variant="primary" icon="download" onClick={onePress ? updateOnePress : pull}
                   disabled={pulling || internetOff || !!restarting || requesting}
                   title={internetOff ? NEEDS_INTERNET_TEXT
+                    : macStep ? 'the Linux part (pull, then the update unit’s restart), then the Mac part when a newer one is out'
                     : win ? 'the Linux part (pull, then the update unit’s restart), then the Windows part when a newer one is out'
                       : onePress ? 'pulls the latest code and restarts with it through the update unit'
                         : 'pulls the latest code onto the server; the restart that loads it comes next'}>
@@ -1659,8 +1806,10 @@ const VersionSection = () => {
         )}
         {windowsUpdate && (
           <Button variant="primary" icon="download" onClick={updateWindowsSide} disabled={requesting || checking || pulling || !!restarting}
-                  title="the Windows part: the tray on the PC downloads the release’s signed Setup, checks it, and runs it behind one Windows permission prompt (and the Linux part first, when that is behind too)">
-            {requesting ? 'Asking the PC…' : checking ? 'Checking…' : pulling ? 'Pulling…' : 'Update Domovoi'}
+                  title={macStep
+                    ? 'the Mac part: the Domovoi app on the Mac downloads the release’s signed package, checks it, and installs it behind one administrator password (and the Linux part first, when that is behind too)'
+                    : 'the Windows part: the tray on the PC downloads the release’s signed Setup, checks it, and runs it behind one Windows permission prompt (and the Linux part first, when that is behind too)'}>
+            {requesting ? HOST_TEXT[hostKind].asking : checking ? 'Checking…' : pulling ? 'Pulling…' : 'Update Domovoi'}
           </Button>
         )}
         {(mode === 'check' || mode === 'held') && !windowsPending && (
@@ -1705,16 +1854,17 @@ const VersionSection = () => {
       )}
       {mode === 'pull' && (
         <div className="mono" style={{ padding: '0 16px 14px', fontSize: 11, color: 'var(--fg-faint)' }}>
-          {win
-            ? 'Update Domovoi pulls, then restarts with the new code, then does the Windows part when a newer one is out.'
+          {host
+            ? `Update Domovoi pulls, then restarts with the new code, then does the ${macStep ? 'Mac' : 'Windows'} part when a newer one is out.`
             : onePress
               ? 'Update Domovoi pulls, then restarts with the new code through the update unit.'
               : 'Update Domovoi pulls the latest onto the host — this panel will then offer the restart that loads it.'}
         </div>
       )}
-      <WindowsSideNotes win={win} channel={channel} busy={mode === 'busy' || !!restarting}
-                        onRetry={admin ? () => requestWindows(false) : null} requesting={requesting}
-                        onCancel={admin ? cancelWindows : null} cancelling={cancelling}/>
+      <HostSideNotes host={host} kind={hostKind} channel={channel} busy={mode === 'busy' || !!restarting}
+                     onRetry={admin ? () => requestWindows(false) : null} requesting={requesting}
+                     onCancel={admin ? cancelWindows : null} cancelling={cancelling}/>
+      <MacSideNotes mac={macStep ? null : mac}/>
       {status && status.tag_warning && mode !== 'busy' && (
         // A release tag that moved upstream (or tags that didn't arrive):
         // the labels may be off; the check and the pull work as ever.
@@ -2781,7 +2931,7 @@ const wakePushLabel = (w) => {
 
 const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onRecordStop, onTrain,
                    onRename, onThreshold, onSetDefault, onPush, onDelete, internetOff = false,
-                   trainerOn = true, onTrainStop, preview, onPhrase, onSyntheticCopy,
+                   trainerOn = true, trainable = true, onTrainStop, preview, onPhrase, onSyntheticCopy,
                    syntheticCopy = null, onDownload }) => {
   const [editing, setEditing] = React.useState(false);
   const [name, setName] = React.useState(w.name);
@@ -3000,6 +3150,10 @@ const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onR
         {/* Training downloads its data the first time: greyed under "No".
             Until training is turned on (the card above) a Train would only
             queue the word, so the button says why it waits. */}
+        {/* A server that can't train at all (an ARM one: the trainer card
+            above says why) gets no Train button, not one that waits for a
+            training that can never be turned on. */}
+        {trainable && (
         <Button variant="primary" icon="cpu" disabled={!canTrain || internetOff || !trainerOn || capturing}
                 title={internetOff ? NEEDS_INTERNET_TEXT
                   : !trainerOn ? 'turn on wake-word training first (above)'
@@ -3007,9 +3161,11 @@ const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onR
                   : synthetic ? 'train on the synthetic voices only; none of your recordings'
                   : retrain ? 'train on all selected clips; the current model stays in use until then' : undefined}
                 onClick={() => onTrain(w)}>{retrain ? 'Train again' : 'Train'}</Button>
+        )}
         {/* A model without anybody's voice, beside this one: its own word
-            and model file, so neither replaces the other. */}
-        {!synthetic && !syntheticCopy && onSyntheticCopy && (
+            and model file, so neither replaces the other. Not on a server
+            that can't train at all. */}
+        {trainable && !synthetic && !syntheticCopy && onSyntheticCopy && (
           <Button variant="ghost" icon="audio-lines"
                   disabled={internetOff || !trainerOn || capturing}
                   title={!trainerOn ? 'turn on wake-word training first (above)'
@@ -3027,7 +3183,7 @@ const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onR
                   title="stop this training; the word keeps its clips and isn't queued again">
             Stop training</Button>
         )}
-        {!internetOff && !trainerOn && canTrain && (
+        {trainable && !internetOff && !trainerOn && canTrain && (
           <span style={{ fontSize: 11, color: 'var(--fg-muted)' }}>turn on training above first</span>
         )}
         {/* The push sets the room's Wake sensitivity to this word's value
@@ -3164,7 +3320,7 @@ const TrainingVoices = ({ phrase, preview, fire }) => {
   );
 };
 
-const AddWakeWord = ({ onAdd, preview, fire }) => {
+const AddWakeWord = ({ onAdd, preview, fire, trainable = true }) => {
   const [name, setName] = React.useState('');
   const [phrase, setPhrase] = React.useState('');
   const [synthetic, setSynthetic] = React.useState(false);
@@ -3187,11 +3343,15 @@ const AddWakeWord = ({ onAdd, preview, fire }) => {
         <Button variant="primary" icon="plus" type="submit">Create</Button>
       </div>
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+        {/* A synthetic-only word is never recorded, only trained: not on a
+            server that can't train (an ARM one, a Mac). */}
+        {trainable && (
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
           <input type="checkbox" checked={synthetic} onChange={(e) => setSynthetic(e.target.checked)}/>
           Synthetic voices only
           <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>(no recordings: nobody’s voice is in the model)</span>
         </label>
+        )}
         <TrainingVoices phrase={phrase} preview={preview} fire={fire}/>
       </div>
     </form>
@@ -3390,7 +3550,12 @@ const WakeTrainerCard = ({ status, error, refresh, fire }) => {
 
   let body;
   let sub;
-  if (running) {
+  if (req.unsupported && !status.enabled && !running) {
+    // This server can't train at all (an ARM processor): the reason, and
+    // nothing about memory or disk that would be about the wrong machine.
+    sub = 'Not available on this server.';
+    body = <div style={{ fontSize: 13, color: 'var(--fg-muted)' }}>{req.unsupported}</div>;
+  } else if (running) {
     sub = 'Setting training up. You can leave this page; it carries on.';
     body = <TrainerProgress job={job}/>;
   } else if (status.enabled) {
@@ -3769,6 +3934,9 @@ const WakeWordsPanel = () => {
     '/api/wake-words/trainer', { quiet: true, refetchOnAuth: true });
   const trainerOn = !!(trainer && trainer.enabled);
   const trainerEst = trainer && trainer.requirements && trainer.requirements.estimate;
+  // An ARM server can't train at all (wake_trainer_setup.unsupported_reason).
+  const trainable = !(trainer && !trainer.enabled && trainer.requirements
+                      && trainer.requirements.unsupported);
   const cpuTrainer = trainerOn && trainerEst && trainerEst.device === 'cpu';
 
   // A spare device that declared neither clip recording nor wake models
@@ -3870,31 +4038,38 @@ const WakeWordsPanel = () => {
                        minClips={minClips} onRecordStart={recordStart} onRecordStop={recordStop}
                        onTrain={train} fire={fire}/>
 
+      {/* A server that can't train (an ARM one, a Mac: the card above says
+          why) says so here too, instead of promising training (Train 1
+          finding 10). */}
       <Card title="Create a wake word"
-            sub="Name it, then record clips in a room and train, or train on synthetic voices only.">
-        <AddWakeWord onAdd={add} preview={preview} fire={fire}/>
+            sub={trainable
+              ? 'Name it, then record clips in a room and train, or train on synthetic voices only.'
+              : "Name it and record clips in a room. Training isn't available on this server (above says why)."}>
+        <AddWakeWord onAdd={add} preview={preview} fire={fire} trainable={trainable}/>
       </Card>
 
       <div style={{ padding: '0 2px 10px', fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
         ⚠ Record clips on the <strong>same mic board</strong> the room uses at runtime — the
         XVF3800's on-chip beamforming/AGC reshapes the signal, so a model trained from HAT-recorded
-        clips can detect poorly on an XVF array. Training runs on this server once it is turned on
-        above. A model trained here is for this household: its training data's licences restrict
-        sharing it (non-commercial at best, see <code>scripts/wake_word/README.md</code>). Download
-        packs a ready model with a model card and the licence notice it needs if you share it.
+        clips can detect poorly on an XVF array.{trainable ? <React.Fragment> Training runs on this
+        server once it is turned on above. A model trained here is for this household: its training
+        data's licences restrict sharing it (non-commercial at best, see <code>scripts/wake_word/README.md</code>).
+        Download packs a ready model with a model card and the licence notice it needs if you share it.
+        </React.Fragment> : null}
       </div>
 
       {loading ? null : items.length === 0 ? (
         <Empty title="No wake words yet" sub="Create one above to start recording clips."/>
       ) : (
         <Card title={`Wake words (${items.length})`}
-              sub="Record clips, train, then push a ready model to a room.">
+              sub={trainable ? 'Record clips, train, then push a ready model to a room.'
+                : "Recorded clips are kept with each word; this server can't train them."}>
           {items.map((w) => (
             <WakeRow key={w.id} w={w} rooms={rooms} minClips={minClips} fire={fire}
                      onRecordStart={recordStart} onRecordStop={recordStop} onTrain={train}
                      onRename={rename} onThreshold={threshold} onSetDefault={setDefault}
                      onPush={push} onDelete={remove} internetOff={internetOff}
-                     trainerOn={trainerOn || !trainer} onTrainStop={trainStop}
+                     trainerOn={trainerOn || !trainer} trainable={trainable} onTrainStop={trainStop}
                      preview={preview} onPhrase={sayAs} onSyntheticCopy={syntheticCopy}
                      syntheticCopy={copyOf(w)} onDownload={download}/>
           ))}
@@ -4082,7 +4257,10 @@ const NetworkNameCard = () => {
   const st = LAN_STATE[data.state] || { tone: 'idle', word: data.state };
   const shown = data.fqdn || (data.requested ? `${data.requested}.local` : '');
   const problem = editing ? lanNameProblem(draft) : null;
-  const canEdit = admin && data.state !== 'no_host';
+  // A Mac announces domovoi.local itself (`fixed`): no change or on/off
+  // here, only the name and its state.
+  const fixed = !!data.fixed;
+  const canEdit = admin && data.state !== 'no_host' && !fixed;
 
   const put = async (body, after) => {
     setSaving(true);
@@ -4160,7 +4338,12 @@ const NetworkNameCard = () => {
             </div>
           </div>
         )}
-        {admin && data.state !== 'no_host' && (
+        {fixed && (
+          <div className="lan-name-fixed" style={{ color: 'var(--fg-muted)', paddingLeft: 108 }}>
+            the Mac announces this name itself; it can’t be changed here
+          </div>
+        )}
+        {admin && data.state !== 'no_host' && !fixed && (
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, color: 'var(--fg-muted)', paddingLeft: 108 }}>
             <input type="checkbox" checked={!!data.enabled} disabled={saving}
                    onChange={(e) => put({ enabled: e.target.checked })}/>

@@ -83,6 +83,17 @@ every check has passed):
    the tag's pinned public key before anything is published. A tag that
    pins a key is refused without one; a tag that pins none is released
    without signatures, and the Windows side then has no update step.
+   ``--mac-pkg FILE`` (absent by default, and then nothing below changes):
+   ``DomovoiSetup-mac.pkg``, the macOS installer, which builds on a Mac
+   only (mac-installer PLAN 4.12), handed in with its build record
+   (``DomovoiSetup-mac.build.json`` beside it, or ``--mac-build-record``:
+   kind, tag, the commit it was built from, the package's size and
+   SHA-256). The record must name this tag and its commit and describe that
+   very file, or the run stops. It is attached as ``DomovoiSetup-mac.pkg``,
+   and when the Windows Setup is signed, signed the same way (key file or
+   agent) under its own namespaces (``domovoi-mac-setup``,
+   ``domovoi-mac-setup-manifest``): ``DomovoiSetup-mac.manifest.json`` and
+   the two ``.sig`` files.
    Then, with ``--sbom-dir DIR`` (the release workflow's ``sbom`` job makes
    them with scripts/release/sbom.py), the software bills of materials,
    CycloneDX JSON: ``domovoi-server.cdx.json`` and ``domovoi-web.cdx.json``
@@ -92,7 +103,8 @@ every check has passed):
    local run) the release has none.
 3. One ``SHA256SUMS`` (LF line endings) for every asset: the APKs (from
    the manifest; path a only), the Setup and its signatures and manifest, the tray,
-   the satellite Setup and the SBOMs.
+   the satellite Setup, the Mac package and its signatures when given, and
+   the SBOMs.
 4. The release notes, in the house order (docs/CONTRIBUTING.md,
    "Releasing"): first a Download section, each file a direct link on
    the release with what it is for (the Linux one-liner copied from the
@@ -186,6 +198,19 @@ SETUP_SIG_ASSET = "DomovoiSetup.exe.sig"
 MANIFEST_ASSET = "DomovoiSetup.manifest.json"
 MANIFEST_SIG_ASSET = "DomovoiSetup.manifest.json.sig"
 SIGNATURE_ASSETS = (SETUP_SIG_ASSET, MANIFEST_ASSET, MANIFEST_SIG_ASSET)
+#: The macOS installer (mac-installer PLAN 4.11-4.12), built on a Mac from
+#: the tag and handed in with --mac-pkg; a release without it is unchanged.
+MAC_SETUP_ASSET = "DomovoiSetup-mac.pkg"
+MAC_SETUP_SIG_ASSET = "DomovoiSetup-mac.pkg.sig"
+MAC_MANIFEST_ASSET = "DomovoiSetup-mac.manifest.json"
+MAC_MANIFEST_SIG_ASSET = "DomovoiSetup-mac.manifest.json.sig"
+MAC_SIGNATURE_ASSETS = (MAC_SETUP_SIG_ASSET, MAC_MANIFEST_ASSET, MAC_MANIFEST_SIG_ASSET)
+MAC_SETUP_NAMESPACE = "domovoi-mac-setup"
+MAC_MANIFEST_NAMESPACE = "domovoi-mac-setup-manifest"
+MAC_MANIFEST_KIND = "domovoi-mac-setup"
+#: What the Mac build writes beside the package (and its "kind").
+MAC_BUILD_RECORD = "DomovoiSetup-mac.build.json"
+MAC_BUILD_KIND = "domovoi-mac-setup-build"
 #: The software bills of materials (scripts/release/sbom.py ASSET_NAMES),
 #: CycloneDX JSON, attached by --sbom-dir; the app's only with its APKs.
 SERVER_SBOM_ASSET = "domovoi-server.cdx.json"
@@ -387,6 +412,8 @@ class Release:
     linux_install: str | None = None
     full_notes: bool = False          # docs/release/<tag>.md at the tag: the full notes
     notes_anchor: str | None = None   # this release's section of RELEASE_NOTES.md (:func:`notes_anchor`)
+    mac_setup_sha256: str | None = None       # DomovoiSetup-mac.pkg, when --mac-pkg gave one
+    mac_signatures: dict[str, str] | None = None  # its signature files -> their SHA-256
 
 
 def _who(abi: str) -> str:
@@ -506,6 +533,9 @@ def download(rel: Release) -> list[str]:
     them), and one plain line on what it is for."""
     out = ["## Download", ""]
     out.append(f"- **Windows 11 PC — the server:** [{SETUP_ASSET}]({_asset_url(rel.tag, SETUP_ASSET)})")
+    if rel.mac_setup_sha256:
+        out.append(f"- **Mac — the server (preview; Apple Silicon, macOS 26 or later):** "
+                   f"[{MAC_SETUP_ASSET}]({_asset_url(rel.tag, MAC_SETUP_ASSET)})")
     linux_doc = _doc_url(rel.tag, LINUX_DOC)
     if rel.linux_install:
         out += [f"- **Linux — the server:** run this in a terminal ([what it does]({linux_doc}))", "",
@@ -566,6 +596,14 @@ def body(rel: Release) -> str:
     if rel.satellite_setup_sha256:
         files.append(f"| {SATELLITE_SETUP_ASSET} | makes a spare Windows PC a room (preview, not code-signed) | "
                      f"`{rel.satellite_setup_sha256}` |")
+    if rel.mac_setup_sha256:
+        files.append(f"| {MAC_SETUP_ASSET} | the macOS installer (preview; Apple Silicon, macOS 26 or later) | "
+                     f"`{rel.mac_setup_sha256}` |")
+        for name, what in ((MAC_SETUP_SIG_ASSET, "the Mac package's Ed25519 signature by Domovoi's release key, for the Mac update"),
+                           (MAC_MANIFEST_ASSET, "what the Mac package is (version, commit, size, SHA-256), for the Mac update"),
+                           (MAC_MANIFEST_SIG_ASSET, "the Mac manifest's Ed25519 signature by Domovoi's release key")):
+            if rel.mac_signatures and name in rel.mac_signatures:
+                files.append(f"| {name} | {what} | `{rel.mac_signatures[name]}` |")
     for name, what in ((SERVER_SBOM_ASSET, "the Python packages a server installs (SBOM, CycloneDX)"),
                        (WEB_SBOM_ASSET, "the dashboard's bundled browser libraries (SBOM, CycloneDX)"),
                        (ANDROID_SBOM_ASSET, "the libraries inside the Android app (SBOM, CycloneDX)")):
@@ -600,6 +638,10 @@ def body(rel: Release) -> str:
            "Domovoi's icon appears beside the clock and starts at every sign-in from then on "
            f"([docs/WINDOWS_HOST.md]({REPO_URL}/blob/{rel.tag}/docs/WINDOWS_HOST.md#the-tray-icon))."]
           if rel.tray_sha256 else []),
+        *([f"- `{MAC_SETUP_ASSET}` installs that commit on a Mac; it was built on a Mac from the tag's own files and "
+             "handed to this script with its build record, which names that commit."
+             + (f" Its signatures are made the same way, namespace `{MAC_SETUP_NAMESPACE}`." if rel.mac_signatures else "")]
+          if rel.mac_setup_sha256 else []),
         f"- The Android app's signing certificate SHA-256: `{rel.cert}` (check with `apksigner verify --print-certs <file>`).",
     ]
     check = ["## Files and checksums", "",
@@ -626,6 +668,11 @@ def sums_text(rel: Release) -> str:
         lines.append(f"{rel.tray_sha256}  {TRAY_ASSET}")
     if rel.satellite_setup_sha256:
         lines.append(f"{rel.satellite_setup_sha256}  {SATELLITE_SETUP_ASSET}")
+    if rel.mac_setup_sha256:
+        lines.append(f"{rel.mac_setup_sha256}  {MAC_SETUP_ASSET}")
+        for name in MAC_SIGNATURE_ASSETS:
+            if rel.mac_signatures and name in rel.mac_signatures:
+                lines.append(f"{rel.mac_signatures[name]}  {name}")
     for name in SBOM_ASSETS:
         if rel.sboms and name in rel.sboms:
             lines.append(f"{rel.sboms[name]}  {name}")
@@ -872,6 +919,7 @@ def _digest(asset: dict[str, Any]) -> str | None:
 def _check_published_apks(release: dict[str, Any], apks: list[dict[str, Any]]) -> None:
     assets = {a["name"]: a for a in release.get("assets") or []}
     allowed = ({e["file"] for e in apks} | {SETUP_ASSET, TRAY_ASSET, SATELLITE_SETUP_ASSET, SUMS_ASSET, *SIGNATURE_ASSETS}
+               | {MAC_SETUP_ASSET, *MAC_SIGNATURE_ASSETS}
                | {SERVER_SBOM_ASSET, WEB_SBOM_ASSET} | ({ANDROID_SBOM_ASSET} if apks else set()))
     unknown = sorted(set(assets) - allowed)
     if unknown:
@@ -1005,19 +1053,41 @@ def _build_setup(src: Path, tag: str, repo: Path) -> Path:
     return exe
 
 
-def setup_manifest(tag: str, version: str, tag_commit: str, setup: Path) -> bytes:
+def setup_manifest(tag: str, version: str, tag_commit: str, setup: Path, *,
+                   kind: str = MANIFEST_KIND, asset: str = SETUP_ASSET) -> bytes:
     """``DomovoiSetup.manifest.json``: what the tray checks a downloaded
     Setup against (windows/common/ReleaseSignature.cs SetupManifest), its
-    version and commit signed along with it."""
-    doc = {"kind": MANIFEST_KIND, "schema": 1, "tag": tag, "version": version, "commit": tag_commit,
-           "file": SETUP_ASSET, "size": setup.stat().st_size, "sha256": sha256_file(setup)}
+    version and commit signed along with it. The Mac package's
+    (``kind``/``asset``: the Mac's) has the same fields."""
+    doc = {"kind": kind, "schema": 1, "tag": tag, "version": version, "commit": tag_commit,
+           "file": asset, "size": setup.stat().st_size, "sha256": sha256_file(setup)}
     return (json.dumps(doc, indent=2, sort_keys=True) + "\n").encode("ascii")
 
 
+def check_mac_build_record(record: Path, pkg: Path, *, tag: str, tag_commit: str) -> None:
+    """The Mac build's record (``DomovoiSetup-mac.build.json``, written
+    beside the package by the Mac build) names this tag and its commit, and
+    the package it describes is this file (size and SHA-256). The package
+    can't be built here, so this is what ties it to the tag."""
+    try:
+        doc = json.loads(record.read_bytes().decode("utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError):
+        die(f"no readable Mac build record at {record} (--mac-build-record; the Mac build writes "
+            f"{MAC_BUILD_RECORD} beside the package)")
+    if not isinstance(doc, dict) or doc.get("kind") != MAC_BUILD_KIND or doc.get("schema") != 1:
+        die(f"{record} is not a Mac build record (kind {MAC_BUILD_KIND}, schema 1)")
+    if doc.get("tag") != tag or doc.get("commit") != tag_commit:
+        die(f"the Mac package was built from {doc.get('tag') or 'no tag'} at {str(doc.get('commit') or 'no commit')[:12]}, "
+            f"not {tag} at {tag_commit[:12]}: build it on the Mac from this tag")
+    if doc.get("size") != pkg.stat().st_size or doc.get("sha256") != sha256_file(pkg):
+        die(f"{record} describes another package than {pkg} (size or SHA-256 differ)")
+
+
 def sign_setup(stage: Path, setup: Path, *, tag: str, version: str, tag_commit: str, key: Path | None,
-               public: bytes, repo: Path, ssh_keygen: str | None = None) -> dict[str, str]:
-    """The Windows update's three files beside the staged Setup: the
-    manifest, and both signatures by the release key's private half
+               public: bytes, repo: Path, ssh_keygen: str | None = None, mac: bool = False) -> dict[str, str]:
+    """The Windows update's three files beside the staged Setup (``mac``:
+    the Mac update's, beside the staged package, under the Mac's names and
+    namespaces): the manifest, and both signatures by the release key's private half
     ``key`` (``ssh-keygen -Y sign``, which reads it and asks for its
     passphrase itself), each checked against the tag's pinned public key
     (``ssh-keygen -Y verify``). Their SHA-256, by name.
@@ -1043,11 +1113,16 @@ def sign_setup(stage: Path, setup: Path, *, tag: str, version: str, tag_commit: 
     parts = line.split()
     if len(parts) < 2 or parts[0] != "ssh-ed25519":
         die(f"{RELEASE_KEY} at the tag is not one ssh-ed25519 public key line")
-    manifest = stage / MANIFEST_ASSET
-    manifest.write_bytes(setup_manifest(tag, version, tag_commit, setup))
+    names = (MANIFEST_ASSET, SETUP_NAMESPACE, MANIFEST_NAMESPACE, MANIFEST_KIND, SETUP_ASSET, SIGNATURE_ASSETS)
+    if mac:
+        names = (MAC_MANIFEST_ASSET, MAC_SETUP_NAMESPACE, MAC_MANIFEST_NAMESPACE, MAC_MANIFEST_KIND, MAC_SETUP_ASSET,
+                 MAC_SIGNATURE_ASSETS)
+    manifest_name, file_ns, manifest_ns, kind, asset, sig_assets = names
+    manifest = stage / manifest_name
+    manifest.write_bytes(setup_manifest(tag, version, tag_commit, setup, kind=kind, asset=asset))
     allowed = stage / ".allowed_signers"
     # Bytes, so Windows doesn't turn the newline into CRLF.
-    allowed.write_bytes(f'{SIGNER} namespaces="{SETUP_NAMESPACE},{MANIFEST_NAMESPACE}" {parts[0]} {parts[1]}\n'
+    allowed.write_bytes(f'{SIGNER} namespaces="{file_ns},{manifest_ns}" {parts[0]} {parts[1]}\n'
                         .encode("ascii"))
     # With the agent: the tag's public key names which of its keys signs.
     agent_pub = stage / ".release-signing.pub"
@@ -1056,7 +1131,7 @@ def sign_setup(stage: Path, setup: Path, *, tag: str, version: str, tag_commit: 
     sign_with = str(agent_pub) if key is None else str(key)
     how = "the key in ssh-agent" if key is None else str(key)
     try:
-        for file, ns in ((setup, SETUP_NAMESPACE), (manifest, MANIFEST_NAMESPACE)):
+        for file, ns in ((setup, file_ns), (manifest, manifest_ns)):
             sig = file.with_name(file.name + ".sig")
             sig.unlink(missing_ok=True)
             print(f"finish-release: signing {file.name} ({ns}) with {how}...", flush=True)
@@ -1075,7 +1150,7 @@ def sign_setup(stage: Path, setup: Path, *, tag: str, version: str, tag_commit: 
     finally:
         allowed.unlink(missing_ok=True)
         agent_pub.unlink(missing_ok=True)
-    return {name: sha256_file(stage / name) for name in SIGNATURE_ASSETS}
+    return {name: sha256_file(stage / name) for name in sig_assets}
 
 
 def _pyproject_version_at(t: Tools, rev: str) -> str | None:
@@ -1205,6 +1280,9 @@ def _run(argv: list[str], *, tools: Tools | None, repo: Path | None,
     ap.add_argument("--tray", help="with --setup: the DomovoiTray.exe of that build (default: bin/DomovoiTray.exe beside the Setup)")
     ap.add_argument("--satellite-setup", help="with --setup: the DomovoiSatelliteSetup.exe of that build "
                     "(default: the one beside the Setup)")
+    ap.add_argument("--mac-pkg", help="a DomovoiSetup-mac.pkg built on a Mac from the tag, to attach (default: none, "
+                    "and the release has no Mac installer)")
+    ap.add_argument("--mac-build-record", help=f"with --mac-pkg: its build record (default: {MAC_BUILD_RECORD} beside it)")
     ap.add_argument("--since", help="the tag the notes' summary counts from (default: the previous one)")
     ap.add_argument("--signing-key", help="the private half of Domovoi's release key (an OpenSSH ed25519 key file, "
                     "outside the checkout; default DOMOVOI_RELEASE_SIGNING_KEY), for the Windows update's signatures")
@@ -1404,6 +1482,23 @@ def _run(argv: list[str], *, tools: Tools | None, repo: Path | None,
     staged_setup = stage / SETUP_ASSET
     staged_tray = stage / TRAY_ASSET
     staged_sat = stage / SATELLITE_SETUP_ASSET
+    # The Mac package, handed in (it builds on a Mac only), tied to the tag
+    # by its build record. Taken first, before the long Windows Setup build,
+    # so a wrong package stops the run in seconds; copied into the staging
+    # folder, and the record checked against that copy (the very file that
+    # gets signed and attached, not the one it was copied from).
+    staged_mac = stage / MAC_SETUP_ASSET
+    if args.mac_build_record and not args.mac_pkg:
+        die("--mac-build-record goes with --mac-pkg")
+    if args.mac_pkg:
+        mac_pkg = Path(args.mac_pkg).resolve()
+        if not mac_pkg.is_file():
+            die(f"no Mac package at {args.mac_pkg}")
+        record = Path(args.mac_build_record).resolve() if args.mac_build_record else mac_pkg.parent / MAC_BUILD_RECORD
+        shutil.copyfile(mac_pkg, staged_mac)
+        check_mac_build_record(record, staged_mac, tag=tag, tag_commit=tag_commit)
+        say(f"using {mac_pkg} (--mac-pkg: its build record names {tag} at {tag_commit[:12]})")
+
     if args.tray and not args.setup:
         die("--tray goes with --setup")
     if args.satellite_setup and not args.setup:
@@ -1454,6 +1549,7 @@ def _run(argv: list[str], *, tools: Tools | None, repo: Path | None,
     release_key = t.git_bytes("show", f"{tag_commit}:{RELEASE_KEY}")
     signing_key = None if args.signing_agent else (args.signing_key or os.environ.get("DOMOVOI_RELEASE_SIGNING_KEY") or None)
     signatures = None
+    mac_signatures = None
     if args.signing_agent:
         if release_key is None:
             die(f"--signing-agent given, but the tag pins no release key ({RELEASE_KEY}): its Windows side couldn't "
@@ -1461,6 +1557,10 @@ def _run(argv: list[str], *, tools: Tools | None, repo: Path | None,
         signatures = sign_setup(stage, staged_setup, tag=tag, version=version, tag_commit=tag_commit,
                                 key=None, public=release_key, repo=repo)
         say(f"signed {SETUP_ASSET} and its manifest with the agent's key; both check out against the tag's {RELEASE_KEY}")
+        if staged_mac.is_file():
+            mac_signatures = sign_setup(stage, staged_mac, tag=tag, version=version, tag_commit=tag_commit,
+                                        key=None, public=release_key, repo=repo, mac=True)
+            say(f"signed {MAC_SETUP_ASSET} and its manifest ({MAC_SETUP_NAMESPACE}) with the agent's key; both check out too")
     elif release_key is not None and not signing_key and not publish:
         say(f"warning: no signing key, so the Windows update's signatures are left out of this dry run "
             f"(the tag pins {RELEASE_KEY}; a real run needs --signing-key)")
@@ -1472,6 +1572,10 @@ def _run(argv: list[str], *, tools: Tools | None, repo: Path | None,
         signatures = sign_setup(stage, staged_setup, tag=tag, version=version, tag_commit=tag_commit,
                                 key=Path(signing_key), public=release_key, repo=repo)
         say(f"signed {SETUP_ASSET} and its manifest; both check out against the tag's {RELEASE_KEY}")
+        if staged_mac.is_file():
+            mac_signatures = sign_setup(stage, staged_mac, tag=tag, version=version, tag_commit=tag_commit,
+                                        key=Path(signing_key), public=release_key, repo=repo, mac=True)
+            say(f"signed {MAC_SETUP_ASSET} and its manifest ({MAC_SETUP_NAMESPACE}); both check out too")
     elif signing_key:
         die(f"--signing-key given, but the tag pins no release key ({RELEASE_KEY}): its Windows side couldn't "
             "check the signatures anyway")
@@ -1497,7 +1601,9 @@ def _run(argv: list[str], *, tools: Tools | None, repo: Path | None,
                    signatures=signatures, candidate_of=m.group(1) if by_name else None, app_from=app_from,
                    sboms=sboms, provenance=args.provenance,
                    linux_install=linux_install_line((t.git_bytes("show", f"{tag_commit}:docs/LINUX_HOST.md")
-                                                     or b"").decode("utf-8", "replace")))
+                                                     or b"").decode("utf-8", "replace")),
+                   mac_setup_sha256=sha256_file(staged_mac) if staged_mac.is_file() else None,
+                   mac_signatures=mac_signatures)
     current = (t.git_bytes("show", f"{tag_commit}:docs/RELEASE_NOTES.md") or b"").decode("utf-8")
     info.notes_anchor = notes_anchor(current, version)
     if hand is not None:
@@ -1531,9 +1637,13 @@ def _run(argv: list[str], *, tools: Tools | None, repo: Path | None,
         say(f"and {SATELLITE_SETUP_ASSET} ({staged_sat.stat().st_size} bytes)")
     else:
         say(f"no {SATELLITE_SETUP_ASSET}: this tag's build makes none (it predates the satellite Setup)")
+    if info.mac_setup_sha256:
+        say(f"and {MAC_SETUP_ASSET} ({staged_mac.stat().st_size} bytes)")
     uploads = [staged_setup, *([stage / n for n in SIGNATURE_ASSETS] if signatures else []),
                *([staged_tray] if info.tray_sha256 else []),
                *([staged_sat] if info.satellite_setup_sha256 else []),
+               *([staged_mac] if info.mac_setup_sha256 else []),
+               *([stage / n for n in MAC_SIGNATURE_ASSETS] if mac_signatures else []),
                *(stage / n for n in SBOM_ASSETS if sboms and n in sboms), stage / SUMS_ASSET]
 
     stable_push = f"{tag_commit}:refs/heads/stable"

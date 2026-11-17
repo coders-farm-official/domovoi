@@ -1,0 +1,68 @@
+# The Lima instance Domovoi's Linux side runs in (mac-installer PLAN 3.2).
+# A template: DomovoiMacKit (LimaTemplate.swift) fills each double-braced NAME with a
+# JSON-quoted value (valid YAML) and refuses to write a file with one left.
+# The helper writes the result to the state folder and runs `limactl create`
+# from it as the account that owns the VM.
+#
+# What matters here, and why:
+# - vz (Apple's Virtualization framework) on aarch64; no QEMU anywhere.
+# - The Ubuntu image is a local file the helper downloaded and checked
+#   against pins.conf; Lima checks the same digest again.
+# - containerd off: Lima's own nerdctl bundle is not wanted (it carries
+#   components under licences we don't ship); provision.sh installs docker-ce.
+# - Only the media folders are shared in (virtiofs, at /srv/media/<name>).
+#   The Mac home folder is never mounted.
+# - vzNAT beside Lima's user-mode network: the address the Mac's pf redirect
+#   targets later (PLAN 4.2a). host.lima.internal stays the Mac's loopback,
+#   where Ollama listens.
+# - Exactly two forwards, the dashboard and the core, onto the Mac's own
+#   127.0.0.1; every other guest port is ignored, so Postgres and the room
+#   players never appear on the Mac.
+# - The guest's admin user is `lima`: provision.sh refuses a service user
+#   that is in sudo, and its own service user is `domovoi`.
+vmType: vz
+arch: aarch64
+cpus: {{CPUS}}
+memory: {{MEMORY}}
+disk: {{DISK}}
+images:
+- location: {{IMAGE_LOCATION}}
+  arch: aarch64
+  digest: {{IMAGE_DIGEST}}
+containerd:
+  system: false
+  user: false
+mountType: virtiofs
+{{MOUNTS}}
+ssh:
+  loadDotSSHPubKeys: false
+  forwardAgent: false
+user:
+  name: lima
+networks:
+- vzNAT: true
+portForwards:
+- guestIP: 127.0.0.1
+  guestPort: 6369
+  hostIP: 127.0.0.1
+  hostPort: {{WEB_PORT}}
+- guestIP: 127.0.0.1
+  guestPort: 6370
+  hostIP: 127.0.0.1
+  hostPort: {{CORE_PORT}}
+- guestIP: 0.0.0.0
+  guestPort: 6369
+  hostIP: 127.0.0.1
+  hostPort: {{WEB_PORT}}
+- guestIP: 0.0.0.0
+  guestPort: 6370
+  hostIP: 127.0.0.1
+  hostPort: {{CORE_PORT}}
+- guestIP: 0.0.0.0
+  guestPortRange: [1, 65535]
+  proto: any
+  ignore: true
+- guestIP: 127.0.0.1
+  guestPortRange: [1, 65535]
+  proto: any
+  ignore: true

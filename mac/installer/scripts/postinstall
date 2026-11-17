@@ -1,0 +1,92 @@
+#!/bin/bash
+# postinstall: DomovoiSetup-mac.pkg's only install script (mac/build.sh).
+# Runs as root once the files are in place. Its one job: open Domovoi's Setup
+# for the person at the screen after Installer has quit.
+#
+# It never opens the app itself. Opening Domovoi.app while Installer still
+# ran made Installer's last step (its "touch" of the just-installed bundle)
+# wait about 12 s on an App Management prompt (P3-1). So this starts a
+# one-shot job in the console user's own GUI session (gui/UID, as that
+# user, never root's): share/installer/open-setup.sh waits until Installer
+# has exited (30 min at most, then gives up quietly), opens the app, and
+# unloads its own job. The job file is deleted as soon as launchd has read
+# it, so nothing is left on disk for uninstall to find.
+#
+# Does nothing for a command-line install (installer(8) sets
+# COMMAND_LINE_INSTALL), with nobody signed in at the screen, or when
+# Installer.app isn't running. Never fails the install: it always exits 0.
+# The conclusion page still says to open Domovoi from Applications.
+#
+# DOMOVOI_POSTINSTALL_TEST_PATH is for mac/tests/installer-scripts.sh, which
+# runs this with stand-ins for stat, id, pgrep, launchctl and mktemp.
+
+PATH=${DOMOVOI_POSTINSTALL_TEST_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}
+export PATH
+
+LABEL=com.domovoi.mac.open-setup
+WAIT_SECONDS=1800
+
+say() { echo "domovoi postinstall: $*"; }   # lands in /var/log/install.log
+
+main() {
+  local target=${3:-/}
+  target=${target%/}
+  local share="$target/Library/Application Support/Domovoi/share"
+  local waiter="$share/installer/open-setup.sh"
+  local app="$target/Applications/Domovoi.app"
+
+  if [ -n "${COMMAND_LINE_INSTALL:-}" ]; then
+    say "command-line install: Setup is not opened"; return 0
+  fi
+  local user
+  user=$(stat -f %Su /dev/console 2>/dev/null)
+  case $user in
+    ""|root|loginwindow|_mbsetupuser) say "nobody is signed in at the screen: Setup is not opened"; return 0 ;;
+  esac
+  local uid
+  uid=$(id -u "$user" 2>/dev/null) || { say "no such user $user"; return 0; }
+  case $uid in ''|*[!0-9]*) say "no UID for $user"; return 0 ;; esac
+  [ "$uid" -ge 500 ] || { say "$user is not a person's account: Setup is not opened"; return 0; }
+  if ! pgrep -x Installer >/dev/null 2>&1; then
+    say "Installer is not running: Setup is not opened"; return 0
+  fi
+  [ -f "$waiter" ] || { say "missing $waiter: Setup is not opened"; return 0; }
+  case "$waiter$app" in *[\&\<\>]*) say "odd install path: Setup is not opened"; return 0 ;; esac
+  launchctl print "gui/$uid" >/dev/null 2>&1 || { say "$user has no GUI session: Setup is not opened"; return 0; }
+
+  local dir
+  dir=$(mktemp -d "/private/tmp/domovoi-open-setup.XXXXXX" 2>/dev/null) || { say "no temporary folder: Setup is not opened"; return 0; }
+  local plist="$dir/$LABEL.plist"
+  cat >"$plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>$waiter</string>
+    <string>$LABEL</string>
+    <string>$app</string>
+    <string>$WAIT_SECONDS</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><false/>
+</dict>
+</plist>
+EOF
+  chmod 0644 "$plist"
+  # One left waiting by an earlier install: replace it.
+  launchctl bootout "gui/$uid/$LABEL" >/dev/null 2>&1
+  if launchctl bootstrap "gui/$uid" "$plist" >/dev/null 2>&1; then
+    say "Setup opens for $user once Installer quits"
+  else
+    say "could not start the job that opens Setup (open Domovoi from Applications)"
+  fi
+  rm -rf "$dir"
+  return 0
+}
+
+main "$@"
+exit 0

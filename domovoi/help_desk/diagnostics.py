@@ -44,7 +44,9 @@ WHAT_MAX = 2000
 
 
 def host_kind() -> str:
-    """"Linux", "Windows (WSL)", "macOS": the kind of machine, no more."""
+    """"Linux", "Windows (WSL)", "macOS (Linux VM)", "macOS": the kind of
+    machine, no more. "macOS (Linux VM)" is the Mac installer's VM
+    (domovoi/host_kind.py, the Mac helper's record)."""
     system = platform.system()
     if system == "Linux":
         try:
@@ -52,6 +54,13 @@ def host_kind() -> str:
                 if "microsoft" in f.read().lower():
                     return "Windows (WSL)"
         except OSError:
+            pass
+        try:
+            from domovoi.host_kind import read_mac_marker
+
+            if read_mac_marker():
+                return "macOS (Linux VM)"
+        except Exception:  # noqa: BLE001 - a label, never a failure
             pass
         return "Linux"
     return {"Darwin": "macOS"}.get(system, system or "unknown")

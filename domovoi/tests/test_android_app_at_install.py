@@ -3,11 +3,12 @@
 answer, never fatal.
 
 It is the ``phone-app`` step of scripts/linux/provision.sh (which the
-Windows installer runs inside its WSL distro too). The step runs two Python
-snippets as the service user; this file runs those very snippets, read out
-of the script, against the signed fixtures and the fake GitHub of
-test_android_app.py (no network), so the glue between the bash step and
-domovoi/android_app.py is tested as it ships. The step's bash side (the
+Windows installer runs inside its WSL distro too, and the Mac installer
+inside its Lima VM). The step runs two Python snippets as the service user;
+this file runs those very snippets, read out of the script, against the
+signed fixtures and the fake GitHub of test_android_app.py (no network), so
+the glue between the bash step and domovoi/android_app.py is tested as it
+ships. The step's bash side (the
 skip when the app is here, the warning and the finish step's repeat, the
 dry-run listing, the final line's ``phone_app``) is the hermetic harness's
 (scripts/linux/tests/test-provision.sh, ``phone_app_*`` and the full and

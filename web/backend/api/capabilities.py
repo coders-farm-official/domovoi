@@ -24,7 +24,7 @@ from typing import Any
 import httpx
 from fastapi import APIRouter
 
-from domovoi.host_kind import host_kind
+from domovoi.host_kind import host_kind, mac_card_helper
 from domovoi.plugins_runtime.accent import manifest_accent
 
 from web.backend.plugin_host import HOST
@@ -156,6 +156,9 @@ async def capabilities() -> dict[str, Any]:
         # Satellites page reads "wsl" to explain why USB adoption and
         # writing a card aren't offered on a Windows install.
         "host_kind": host_kind(),
+        # On a Mac: its menu-bar icon has Prepare an SD card... (the
+        # Satellites page's empty state points there instead of Finder).
+        "mac_card_helper": mac_card_helper(),
     }
 
 

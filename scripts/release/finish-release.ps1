@@ -75,6 +75,15 @@ With -Setup: the DomovoiTray.exe of that build.
 With -Setup: the DomovoiSatelliteSetup.exe of that build (default: the one
 beside the Setup).
 
+.PARAMETER MacPkg
+A DomovoiSetup-mac.pkg built on a Mac from the tag, to attach beside the
+Windows Setup (signed too when the tag pins the release key). Default: none,
+and the release has no Mac installer. Its build record
+(DomovoiSetup-mac.build.json, beside it) must name the tag's commit.
+
+.PARAMETER MacBuildRecord
+With -MacPkg: the build record, when it isn't beside the package.
+
 .PARAMETER Since
 The tag the notes' summary counts from (default: the previous one).
 
@@ -100,6 +109,8 @@ param(
     [string]$Setup,
     [string]$Tray,
     [string]$SatelliteSetup,
+    [string]$MacPkg,
+    [string]$MacBuildRecord,
     [string]$Since,
     [string]$SigningKey,
     [switch]$SigningAgent
@@ -128,6 +139,8 @@ if ($Prerelease) { $pyArgs += '--prerelease' }
 if ($Setup) { $pyArgs += @('--setup', $Setup) }
 if ($Tray) { $pyArgs += @('--tray', $Tray) }
 if ($SatelliteSetup) { $pyArgs += @('--satellite-setup', $SatelliteSetup) }
+if ($MacPkg) { $pyArgs += @('--mac-pkg', $MacPkg) }
+if ($MacBuildRecord) { $pyArgs += @('--mac-build-record', $MacBuildRecord) }
 if ($Since) { $pyArgs += @('--since', $Since) }
 if ($SigningKey) { $pyArgs += @('--signing-key', $SigningKey) }
 if ($SigningAgent) { $pyArgs += '--signing-agent' }

@@ -16,6 +16,7 @@ built only with every pinned model in the cache, verified (SAT-11).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import shutil
@@ -26,7 +27,7 @@ from typing import Any, Awaitable, Callable
 
 from domovoi import egress, git_version, host_time, server_identity
 from domovoi.config import settings
-from domovoi.host_kind import is_wsl
+from domovoi.host_kind import is_mac_vm, is_wsl, mac_card_helper
 from domovoi.satellite_media import cache, fetchers, overlay, payload
 from domovoi.satellite_media.boards import BOARDS, MIC_PROFILES
 
@@ -47,7 +48,8 @@ async def _noop_progress(phase: str, pct: int, text: str) -> None:
     return None
 
 
-def zip_readme(ap: dict | None, *, windows_host: bool) -> str:
+def zip_readme(ap: dict | None, *, windows_host: bool, mac_host: bool = False,
+               mac_card_helper: bool = False) -> str:
     """README.txt of an overlay zip.
 
     ``windows_host``: this server runs inside WSL on Windows (the Windows
@@ -57,9 +59,24 @@ def zip_readme(ap: dict | None, *, windows_host: bool) -> str:
     keeps the steps by hand below it, worded for a household: the two
     files are added to, never replaced (a replaced cmdline.txt doesn't
     boot), and ap.json is saved as "All files" so Notepad doesn't make it
-    ap.json.txt. Other hosts keep the short README they always had."""
+    ap.json.txt. Other hosts keep the short README they always had.
+
+    ``mac_host``: this server is the Mac installer's Linux VM, which can't
+    see SD cards either and has no card helper yet (mac-installer
+    PHASE8-PARITY.md 2.5), so that README is the steps by hand in Finder
+    and TextEdit, with TextEdit's two traps: a new document is rich text,
+    and smart quotes turn ap.json's straight quotes into curly ones that a
+    Pi can't read.
+
+    ``mac_card_helper``: that Mac's side says it has the menu-bar card
+    helper (``"card_helper": 1`` in side.json, host_kind.mac_card_helper),
+    so the README leads with Domovoi's menu-bar icon > Prepare an SD
+    card..., as the Windows one leads with the tray's, and keeps the
+    Finder steps below it. Without the flag, the Finder steps alone."""
     if windows_host:
         return _windows_readme(ap)
+    if mac_host:
+        return _mac_readme(ap, card_helper=mac_card_helper)
     readme = [
         "Domovoi satellite overlay",
         "1. Flash stock OS for your board with any imaging tool.",
@@ -163,6 +180,90 @@ def _windows_readme(ap: dict | None) -> str:
     return "\n".join(readme) + "\n"
 
 
+def _mac_readme(ap: dict | None, *, card_helper: bool = False) -> str:
+    portal = ap is not None
+    if card_helper and portal:
+        readme = [
+            "On a Mac, use Domovoi's menu-bar icon (the cat) → Prepare an SD card...",
+            "",
+            "It puts these files on the card for you, checks them and ejects",
+            "the card. It fills in the setup network password by itself, from",
+            "Domovoi on this Mac. You still need that password on your phone:",
+            "the dashboard shows it. No administrator password is needed.",
+            "",
+            "",
+            "Doing it by hand instead",
+            "------------------------",
+            "",
+            "Domovoi runs in a Linux system on this Mac, which can't see SD",
+            "cards. About ten minutes by hand.",
+            "",
+        ]
+    else:
+        readme = [
+            "Putting these files on a room's SD card, on a Mac",
+            "=================================================",
+            "",
+            "Domovoi runs in a Linux system on this Mac, which can't see SD",
+            "cards, so the card files are put on the card by hand. About ten",
+            "minutes.",
+            "",
+        ]
+    readme += [
+        "1. Flash the card with Raspberry Pi OS Lite (64-bit), using",
+        "   Raspberry Pi Imager. When Imager offers to apply OS customisation",
+        "   settings, choose No.",
+        "2. Put the card back in the Mac. Its boot partition appears in",
+        "   Finder's sidebar as \"bootfs\".",
+        "3. Double-click this zip in Downloads so Finder unpacks it. Drag the",
+        "   unpacked folder's \"domovoi\" folder and \"userconf.txt\" onto",
+        "   bootfs.",
+        "4. config.txt: on bootfs, open config.txt with TextEdit (Control-click,",
+        "   Open With, TextEdit). Go to the very end and paste all the lines",
+        "   of the unpacked folder's config.txt there, below everything else.",
+        "   Save it.",
+        "5. cmdline.txt: on bootfs, open cmdline.txt with TextEdit. It is one",
+        "   long line (TextEdit may wrap it on screen). Press Command and the",
+        "   down arrow to go to the very end; if the cursor is then on an",
+        "   empty line under the text, press delete once, so it sits right",
+        "   after the last character. Type a space, and paste the line from",
+        "   the unpacked folder's cmdline.txt there, so everything stays on",
+        "   that one line. Save it. Never replace the card's cmdline.txt with",
+        "   the zip's: a Pi doesn't start without the card's own line.",
+    ]
+    if portal:
+        readme += [
+            "6. ap.json: in TextEdit, choose File > New, then Format > Make",
+            "   Plain Text, and Edit > Substitutions > untick Smart Quotes",
+            "   (curly quotes break this file). Type exactly this one line,",
+            "   with the setup network password the dashboard showed you in",
+            "   place of <the password>:",
+            "",
+            '     {"ssid": "' + str(ap["ssid"]) + '", "psk": "<the password>"}',
+            "",
+            "   Save it on bootfs, in the domovoi folder, with the name",
+            "   ap.json. If TextEdit asks, choose Use .json (not .txt).",
+            "7. Eject bootfs in Finder, put the card in the Pi and switch it",
+            "   on. It raises its own Wi-Fi setup network: set it up from a",
+            "   phone, then approve it in the dashboard's Settings -> Rooms.",
+            "",
+            "Without ap.json the room device never raises its setup network.",
+        ]
+    else:
+        readme += [
+            "6. This card is set up over USB, which a Domovoi on a Mac can't",
+            "   do: in the dashboard, prepare the card again with the Wi-Fi",
+            "   setup portal.",
+        ]
+    readme += [
+        "",
+        "This zip deliberately contains no passwords. The dashboard shows",
+        f"the console login for {SAT_USER} once, when the build finishes —",
+        "write it down then. The card itself only carries its hash.",
+    ]
+    return "\n".join(readme) + "\n"
+
+
 async def build(
     *,
     board_id: str,
@@ -213,12 +314,15 @@ async def build(
     st = cache.status(board.python_version, board.os_release)
     # Only pinned, verified wake-word models ever reach a payload: anything
     # else in that bucket is removed first, and a short bucket is refilled.
-    oww_verified, _removed = fetchers.verify_oww_models()
+    # Every fetch below runs in a worker thread: they are minutes of
+    # pip, docker and downloads, and on the web process's event loop they
+    # stalled every other page (mac-installer Train 1 finding 22).
+    oww_verified, _removed = await asyncio.to_thread(fetchers.verify_oww_models)
     if offline:
         if not st["wheels"]["ok"]:
             await progress("fetch", 10, "downloading aarch64 wheels (first run is slow)")
-            ok, msg = fetchers.fetch_wheels(
-                repo_root, board.python_version, board.manylinux_platforms
+            ok, msg = await asyncio.to_thread(
+                fetchers.fetch_wheels, repo_root, board.python_version, board.manylinux_platforms
             )
             if not ok:
                 warnings.append(msg)
@@ -226,24 +330,24 @@ async def build(
         # lacked a base package (mpg123 on the office card) was never
         # fetched again and the build said nothing. Refetch when any base
         # package is missing, and say so loudly when it still is.
-        if not st["debs"]["ok"] or fetchers.base_debs_missing(board.os_release):
+        if not st["debs"]["ok"] or await asyncio.to_thread(fetchers.base_debs_missing, board.os_release):
             await progress("fetch", 30, "fetching arm64 packages")
             extra: list[str] = []
             for entry in await payload.enabled_satellite_plugins():
                 extra += entry["decl"]["apt_packages"]
-            ok, msg = fetchers.fetch_debs(board.os_release, tuple(extra))
+            ok, msg = await asyncio.to_thread(fetchers.fetch_debs, board.os_release, tuple(extra))
             # A partial fetch is ok=True with the missing names in the
             # message, which used to be dropped here.
             if not ok or "could not fetch" in msg:
                 warnings.append(msg)
-        gone = fetchers.base_debs_missing(board.os_release)
+        gone = await asyncio.to_thread(fetchers.base_debs_missing, board.os_release)
         if gone:
             log.warning("satellite media: %s", fetchers.base_debs_warning(gone))
             warnings.append(fetchers.base_debs_warning(gone))
         oww_problem = ""
         if oww_verified < len(fetchers.OWW_MODEL_FILES):
             await progress("fetch", 40, "caching wake-word base models")
-            ok, msg = fetchers.fetch_oww_models()
+            ok, msg = await asyncio.to_thread(fetchers.fetch_oww_models)
             if not ok:
                 oww_problem = msg
         # Unlike a missing wheel, a missing wake-word model does not degrade
@@ -251,7 +355,7 @@ async def build(
         # openWakeWord's own download, from the same release this pin
         # protects against. An offline card ships every pinned model,
         # verified, or is not built (SAT-11, 2026-10 review REV-17).
-        missing = fetchers.missing_oww_models()
+        missing = await asyncio.to_thread(fetchers.missing_oww_models)
         if missing:
             raise ValueError(
                 f"the wake-word model cache is incomplete: {len(missing)} of "
@@ -264,7 +368,7 @@ async def build(
             )
         if not st["xvf_host"]["ok"]:
             await progress("fetch", 45, "fetching the XVF3800 LED tool")
-            ok, msg = fetchers.fetch_xvf_host()
+            ok, msg = await asyncio.to_thread(fetchers.fetch_xvf_host)
             if not ok:
                 warnings.append(msg)
 
@@ -400,7 +504,9 @@ async def build(
                 json.dumps(claim, indent=2), encoding="utf-8",
             )
         (staging / "README.txt").write_text(
-            zip_readme(ap, windows_host=is_wsl()), encoding="utf-8",
+            zip_readme(ap, windows_host=is_wsl(), mac_host=is_mac_vm(),
+                       mac_card_helper=mac_card_helper()),
+            encoding="utf-8",
         )
         artifact = workspace / "domovoi-satellite-overlay.zip"
         with zipfile.ZipFile(artifact, "w", zipfile.ZIP_DEFLATED) as zf:

@@ -166,7 +166,7 @@ def test_the_builder_verifies_the_bucket_before_assembling() -> None:
     from domovoi.satellite_media import builder
 
     src = inspect.getsource(builder.build)
-    assert src.index("fetchers.verify_oww_models()") < src.index("payload.assemble(")
+    assert src.index("fetchers.verify_oww_models") < src.index("payload.assemble(")
 
 
 # ─── the pins themselves ──────────────────────────────────────────────────

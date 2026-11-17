@@ -288,6 +288,17 @@ def _scenario(roles: list[dict], *, jobs: list[dict] | None = None, internet: st
     }
 
 
+MAC_HW = {"gpus": [], "ram": {"used_mb": 2100, "total_mb": 6000, "percent": 35},
+          "cpu": {"percent": 5, "logical_cores": 4}, "host_kind": "mac",
+          "stt": {"state": "ok", "loaded": {"model": "small.en", "device": "cpu", "compute_type": "int8"},
+                  "engine": {"configured": "host", "active": "host", "host_state": "ok",
+                             "use_host": True, "local_standby": True}}}
+MAC_SCRIPT = ("const texts = h.findAll((el) => typeof el.text === 'string' && el.text).map((el) => el.text);"
+              " return { stt: state('Speech-to-text'),"
+              "  macNote: !!h.find((el) => (el.props || {}).className === 'hw-mac-note'),"
+              "  vmRam: texts.includes('Linux system RAM'),"
+              "  noGpu: texts.some((t) => t.includes(\"can't read a graphics card's memory\")) };")
+
 ALL_STATES = ("return { qa: state('Q&A'), tool: state('Tool routing'), vision: state('Vision'),"
               " stt: state('Speech-to-text'), calls: h.calls };")
 
@@ -330,6 +341,12 @@ SCENARIOS = {
                   "stt": {"state": "ok", "loaded": {"model": "small.en", "device": "cpu",
                                                      "compute_type": "int8"}}},
         script=ALL_STATES),
+    # mac-installer Train 1 findings 13 and 14: on a Mac with the speech
+    # service the STT row is the processor's backup, with no "restart to
+    # apply" when nothing waits, and the hardware card says it is the VM.
+    "mac_service": _scenario(_role_rows(), hardware=MAC_HW, script=MAC_SCRIPT),
+    "mac_pending": _scenario(_role_rows(stt={"model": "medium.en"}), hardware=MAC_HW, script=MAC_SCRIPT),
+    "linux_same": _scenario(_role_rows(), hardware={**MAC_HW, "host_kind": "linux"}, script=MAC_SCRIPT),
     "ollama_alias": _scenario(
         _role_rows(qa={"model": "llama3.2"}),
         installed=[{"name": "llama3.2:latest", "size_bytes": 2_000_000_000, "loaded": False},
@@ -452,3 +469,19 @@ def test_two_spellings_of_one_ollama_model_are_one_choice(driven) -> None:
     assert a["s0"]["value"] == "llama3.2"
     assert _switch(a["s0"])["disabled"]
     assert not _switch(a["s1"])["disabled"]
+
+
+def test_a_mac_with_the_speech_service_says_what_the_stt_row_is(driven) -> None:
+    m = driven["mac_service"]
+    assert "restart to apply" not in m["stt"]["texts"]
+    assert any("the processor's backup" in t for t in m["stt"]["texts"])
+    assert m["macNote"] and m["vmRam"] and not m["noGpu"]
+    # A saved model the core hasn't loaded yet still says so.
+    assert "restart to apply" in driven["mac_pending"]["stt"]["texts"]
+
+
+def test_other_hosts_keep_the_hardware_and_stt_words(driven) -> None:
+    o = driven["linux_same"]
+    assert "restart to apply" in o["stt"]["texts"]
+    assert not any("the processor's backup" in t for t in o["stt"]["texts"])
+    assert not o["macNote"] and not o["vmRam"] and o["noGpu"]

@@ -220,6 +220,14 @@ def setup_code_refusal() -> str:
             "Domovoi's Windows installer; a code older than a day, or a "
             "lost one, is replaced by running the installer again"
         )
+    if host_kind() == "mac":
+        # The Mac installer's VM: nobody on the Mac opens its ~/.domovoi.
+        # The Domovoi app reads the code out of it (mac/ InstalledPage).
+        return (
+            "setup code required — on the Mac, open Domovoi in Applications "
+            "and choose Show Setup Code; a code older than a day is "
+            "replaced when Domovoi restarts (restarting the Mac does it)"
+        )
     return (
         "setup code required — read it from "
         "~/.domovoi/setup-code.txt on the Domovoi server (the "

@@ -3291,10 +3291,11 @@ const loginErrorText = (e) => {
 };
 
 /* What kind of machine the Domovoi server is (GET /api/capabilities
- * host_kind: linux | wsl | windows | darwin, domovoi/host_kind.py), or null
- * until known and from a server too old to say. Asked once per page load
- * and shared; a failed ask is tried again by the next component that wants
- * it. "wsl" is the Linux system the Windows installer sets up. */
+ * host_kind: linux | wsl | windows | darwin | mac, domovoi/host_kind.py), or
+ * null until known and from a server too old to say. Asked once per page
+ * load and shared; a failed ask is tried again by the next component that
+ * wants it. "wsl" is the Linux system the Windows installer sets up, "mac"
+ * the one the Mac installer runs in its VM. */
 const HostKindStore = (() => {
   const kindOf = (caps) => (caps && typeof caps.host_kind === 'string' && caps.host_kind) || null;
   return {

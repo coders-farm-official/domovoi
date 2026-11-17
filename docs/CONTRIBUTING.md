@@ -915,7 +915,13 @@ workflow runs the same scripts. In order:
    backup off the repository, like the Android keystore. `finish-release.sh` is the same for bash; it needs `--setup FILE`
    (a Setup built that way) off Windows. `-NoPublish` leaves the files in
    `windows\build\release\<tag>\`; without a key it leaves the signatures
-   out and says so.
+   out and says so. `-MacPkg FILE` (`--mac-pkg`) also
+   attaches `DomovoiSetup-mac.pkg`, the macOS installer, built on a Mac
+   from the tag: its build record (`DomovoiSetup-mac.build.json`, beside
+   it) must name the tag and its commit and describe that file. With the
+   release key it is signed the same way under its own namespaces
+   (`domovoi-mac-setup`, `domovoi-mac-setup-manifest`). Without the option
+   the release is as before.
 
 The finished release holds the two APKs (only when the app changed),
 `DomovoiSetup.exe` (not code-signed), `DomovoiTray.exe`, `DomovoiSatelliteSetup.exe`, `SHA256SUMS`,

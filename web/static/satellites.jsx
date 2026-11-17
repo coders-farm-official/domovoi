@@ -4037,6 +4037,10 @@ const SatellitesPage = ({ embedded = false } = {}) => {
   // the Wi-Fi setup route instead of the USB port.
   const { data: caps } = useApiObject('/api/capabilities');
   const onWsl = caps?.host_kind === 'wsl';
+  // The Mac installer's VM: no USB adoption either; its menu-bar icon
+  // writes the card when the Mac side says it can.
+  const onMac = caps?.host_kind === 'mac';
+  const macHelper = onMac && caps?.mac_card_helper === true;
   const [adoptTarget, setAdoptTarget] = React.useState(null);   // {pending, force}
   const [adoptedIds, setAdoptedIds] = React.useState({});       // pending_id → room
 
@@ -4143,6 +4147,10 @@ const SatellitesPage = ({ embedded = false } = {}) => {
         <Card><Empty glyph="sleeping" title="no rooms set up yet"
                      sub={onWsl
                        ? "build the card's files below, write them with the tray icon's card helper, then set the room up from a phone — no USB adoption while Domovoi runs inside WSL on Windows"
+                       : macHelper
+                       ? "build the card's files below, write them with the menu-bar icon's Prepare an SD card..., then set the room up from a phone"
+                       : onMac
+                       ? "build the card's files below, copy them onto the card in Finder (the zip's README.txt has the steps), then set the room up from a phone"
                        : "plug a room device into this machine's USB port to adopt it — or set one up by hand"}/></Card>
       ) : labels.length === 0 ? (
         grid(sats)

@@ -24,8 +24,16 @@ ANNOUNCES it (:func:`mode`):
        "written_at": "<UTC>"}
 
   believed only while root owns it and its folder alone (as ``limits.json``
-  is). The Mac's helper writes ``/var/lib/domovoi-mac/lan_name.json`` (the
-  second entry of :data:`REPORT_FILES`) and reads the same request file.
+  is).
+
+  The Mac install is ``host`` too (its helper's ``side.json``, ``"kind":
+  "mac"``, :func:`windows_side.read_host_side`): the core runs in a Lima VM
+  and the helper on the Mac publishes ``domovoi.local`` through macOS's
+  own mDNSResponder. It writes ``/var/lib/domovoi-mac/lan_name.json`` (the
+  second entry of :data:`REPORT_FILES`, the same schema), but takes no
+  request: the name is ``domovoi`` and the Mac's to announce, so no
+  request file is written, Settings shows the name with no change or
+  on/off (``fixed``), and :func:`save` refuses one (:class:`FixedName`).
 * ``none`` — anything else (a development box on Windows or a Mac, WSL
   without DomovoiHost): nothing announces, Settings says so (``no_host``).
   A DomovoiHost from before this feature writes no report: also ``no_host``.
@@ -115,12 +123,22 @@ def _report_path(kind: str, default: str) -> Path:
     return Path(os.environ.get(f"DOMOVOI_LAN_NAME_REPORT_{kind.upper()}") or default)
 
 
+class FixedName(Exception):
+    """The host announces a name of its own (a Mac): nothing to change here."""
+
+
+#: Host kinds whose side announces a name of its own and reads no request.
+FIXED_NAME_HOSTS = ("mac",)
+
+
 def host_side() -> str | None:
     """``windows`` when DomovoiHost runs this install (its ``side.json``),
-    else None."""
+    ``mac`` when the Mac helper does (its ``side.json`` with ``"kind":
+    "mac"``, under the same root-only rule), else None."""
     from domovoi import windows_side
 
-    return "windows" if windows_side.read_side() is not None else None
+    side = windows_side.read_host_side()
+    return side["kind"] if side else None
 
 
 def mode() -> str:
@@ -575,7 +593,8 @@ async def start() -> None:
     try:
         m = await asyncio.to_thread(mode)
         if m == "host":
-            await asyncio.to_thread(sync_request)
+            if await asyncio.to_thread(host_side) not in FIXED_NAME_HOSTS:
+                await asyncio.to_thread(sync_request)
         elif m == "core":
             SERVICE = LanNameService()
             SERVICE.start()
@@ -592,7 +611,7 @@ async def stop() -> None:
 
 def status() -> dict[str, Any]:
     """``GET /v1/lan-name``: ``{requested, claimed, fqdn, state, taken,
-    error, enabled, host_kind, addresses, hint, help}``."""
+    error, enabled, host_kind, addresses, hint, help}``, and ``fixed: true`` on a Mac."""
     requested = requested_name()
     on = enabled()
     m = mode()
@@ -608,12 +627,18 @@ def status() -> dict[str, Any]:
                 snap["state"] = "checking"
         out.update({k: snap.get(k) for k in ("claimed", "state", "taken", "error", "addresses")})
     elif m == "host":
+        side = host_side() or "windows"
+        fixed = side in FIXED_NAME_HOSTS
         rep = read_report()
-        out["host_kind"] = rep[0] if rep else "windows"
-        req = read_request()
+        out["host_kind"] = rep[0] if rep else side
+        if fixed:
+            # The Mac announces domovoi.local itself: no change or on/off here.
+            out["fixed"] = True
+        req = None if fixed else read_request()
         if rep is None:
+            what = "Mac side" if side == "mac" else "Windows side"
             out.update({"claimed": None, "state": "no_host", "taken": None, "addresses": [],
-                        "error": "this version of the Windows side doesn't announce a name; update it"})
+                        "error": f"this version of the {what} doesn't announce a name; update it"})
         else:
             doc = rep[1]
             out.update({k: doc[k] for k in ("claimed", "state", "taken", "error", "addresses")})
@@ -646,6 +671,9 @@ def save(name: object | None, on: bool | None) -> dict[str, Any]:
     from domovoi.config import settings
     from domovoi.config_env_writer import write_env_values
 
+    if host_side() in FIXED_NAME_HOSTS:
+        raise FixedName("on a Mac the network name is domovoi.local, which the Mac announces itself; "
+                        "it can't be changed or turned off here")
     changes: dict[str, Any] = {}
     if name is not None:
         changes["lan_name"] = names.normalize(name)

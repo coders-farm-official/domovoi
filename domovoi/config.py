@@ -848,6 +848,38 @@ class Settings(BaseSettings):
     # 191 for 10 s alone), at a second decode for 16-34% of command
     # captures. false = route the short-window text as it is.
     whisper_short_window_recheck: bool = True
+    # A speech-to-text service on another machine in the house, used
+    # before this machine's own Whisper (domovoi/clients/whisper_remote.py):
+    # on a Mac the core's VM has no GPU, and the Mac runs Whisper on its
+    # graphics chip as a service of its own (mac-installer Phase 8a). The
+    # base URL of a whisper.cpp server, e.g. http://host.lima.internal:6371.
+    # Empty (the default) = off: every transcript is this machine's, exactly
+    # as before. The local Whisper above still loads at boot and takes over
+    # whenever the service doesn't answer; the Models page and the turn
+    # records say which one heard each turn. Only an address on this
+    # network is accepted, whatever the internet answer: household audio
+    # never leaves the house. Takes effect after a restart.
+    whisper_remote_url: str = ""
+    # The model that service runs, as a label for the records (and the
+    # short window: only an English-only .en model gets it, as locally).
+    whisper_remote_model: str = "small.en"
+    # The language the service decodes in ("en"; "auto" detects it).
+    whisper_remote_language: str = "en"
+    # How long one request may take before this machine's Whisper hears
+    # the turn instead: this many seconds plus a quarter of the audio's
+    # length. A connection that can't be opened fails after half a second.
+    whisper_remote_timeout_sec: float = 2.0
+    # After the service fails a request, every transcript stays local for
+    # this many seconds before the service is tried again, so a stopped
+    # service costs one wait, not one per turn.
+    whisper_remote_retry_sec: float = 30.0
+    # The household's switch for that service (Settings > Models, shown only
+    # on a Mac that has it): false = this machine's own Whisper hears every
+    # turn, the service is left alone. Applies on the next transcription.
+    whisper_remote_enabled: bool = True
+    # How often the core asks the service's /health in the background, so
+    # the Health page follows it without waiting for a turn.
+    whisper_remote_probe_sec: float = 30.0
     # Speculative transcription (early endpointing, part A): start Whisper
     # at the first ~240 ms pause in a satellite's capture instead of after
     # its whole silence timeout, and use that transcript when no speech
@@ -989,11 +1021,13 @@ class Settings(BaseSettings):
     # GET /v1/admin/version serves it as `last_update`. A host without the
     # unit simply has no file, and the field is null.
     update_result_file: str = "/var/lib/domovoi-update/last-result.json"
-    # What kind of machine this is: auto | linux | wsl | windows | darwin.
-    # "auto" reads the kernel (domovoi/host_kind.py) and is right on every
-    # normal install. Inside WSL the dashboard explains that USB satellite
-    # adoption and writing a card aren't available, because WSL sees no
-    # removable drives. Set it only if detection gets your host wrong.
+    # What kind of machine this is: auto | linux | wsl | windows | darwin |
+    # mac. "auto" reads the kernel (domovoi/host_kind.py), and inside the
+    # Mac installer's VM the Mac helper's root-written record; it is right
+    # on every normal install. Inside WSL and the Mac VM the dashboard
+    # explains that USB satellite adoption and writing a card aren't
+    # available, because neither sees removable drives. Set it only if
+    # detection gets your host wrong.
     domovoi_host_kind: str = "auto"
     # The server's name on the home network (domovoi/lan_name/): the label
     # without ".local". The default "domovoi" moves to domovoi2, domovoi3 ...
@@ -1885,6 +1919,14 @@ class Settings(BaseSettings):
     # POST /v1/admin/chat-tool endpoint. From inside the Letta container the host
     # is reached at host.docker.internal (same as OLLAMA_BASE_URL), NOT localhost.
     letta_tool_callback_url: str = "http://host.docker.internal:6370"
+    # The Ollama Letta's container uses (OLLAMA_BASE_URL in its compose
+    # service, which reads this key from domovoi/.env; the core never does).
+    # Blank = compose's own default, http://host.docker.internal:11434/v1,
+    # the Ollama on the Docker host. provision.sh --ollama-url writes the
+    # outside Ollama here by IP address: containers inside a Mac host's Lima
+    # VM can't resolve host.lima.internal, and host.docker.internal there is
+    # the VM, not the Mac (mac-installer Phase 0).
+    letta_ollama_base_url: str = ""
 
     @model_validator(mode="after")
     def _apply_internet_profile(self) -> "Settings":

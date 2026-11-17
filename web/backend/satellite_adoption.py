@@ -342,6 +342,7 @@ def advertised_domovoi_url() -> str:
 
 
 def _lan_ip() -> str:
-    # The lookup is shared with the core's MPD stream URLs; the 127.0.0.1
-    # last resort is this flow's own. Uncached: adoption is rare.
-    return lan_address.probe_lan_ipv4() or "127.0.0.1"
+    # The lookup is shared with the core's MPD stream URLs (the host side's
+    # address first, on a VM install); the 127.0.0.1 last resort is this
+    # flow's own. Uncached: adoption is rare.
+    return lan_address.host_lan_ipv4() or lan_address.probe_lan_ipv4() or "127.0.0.1"

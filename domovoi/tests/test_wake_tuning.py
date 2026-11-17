@@ -211,6 +211,19 @@ async def test_start_is_refused_with_a_reason_when_training_is_off(house, monkey
     assert "training" in st["reason"]
 
 
+async def test_a_server_that_cant_train_says_so_not_turn_it_on(house, monkeypatch):
+    """An ARM server (the Mac installer's VM) can never train: the card says
+    so instead of pointing at a switch that can't help."""
+    from domovoi import wake_trainer_setup
+
+    monkeypatch.setattr(settings, "wake_word_trainer_enabled", False)
+    monkeypatch.setattr(wake_trainer_setup, "machine_arch", lambda: "aarch64")
+    monkeypatch.setattr(wake_trainer_setup, "enabled", lambda: False)
+    st = await _status()
+    assert st["state"] == "off" and not st["can_start"]
+    assert "can't train" in st["reason"] and "Turn on" not in st["reason"]
+
+
 async def test_the_trainer_gets_the_published_words_near_misses():
     from domovoi.workers.wake_word_trainer import trainer_env
 

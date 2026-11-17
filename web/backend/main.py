@@ -581,6 +581,7 @@ async def health(challenge: str | None = None) -> HealthResponse:
     core_ok = False
     core_alive: bool | None = None
     stt: str | None = None
+    stt_engine: dict[str, Any] | None = None
     speech: dict[str, Any] | None = None
     identity: dict[str, str] | None = None
     import httpx
@@ -601,6 +602,11 @@ async def health(challenge: str | None = None) -> HealthResponse:
                 doc = r.json()
                 if isinstance(doc, dict) and isinstance(doc.get("stt"), str):
                     stt = doc["stt"]
+                # The Mac's speech service, when the core has one: passed
+                # through (only the known keys), the same signal-not-cause.
+                if isinstance(doc, dict) and isinstance(doc.get("stt_engine"), dict):
+                    stt_engine = {k: doc["stt_engine"].get(k) for k in (
+                        "active", "host_state", "local_standby", "use_host", "down_since")}
                 # The turn watchdog's speech-recognition block (ok / slow /
                 # stalled), for the Health page's row; absent from an older
                 # core.
@@ -628,6 +634,7 @@ async def health(challenge: str | None = None) -> HealthResponse:
         db_reachable=db_ok,
         domovoi_reachable=core_ok,
         stt=stt,
+        stt_engine=stt_engine,
         speech=speech,
         identity=identity,
         core_alive=core_alive,

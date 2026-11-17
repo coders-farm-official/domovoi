@@ -40,7 +40,13 @@ work, when:
   40 GB free;
 - **the server has less than 24 GB of memory** (on the Windows install, the
   card says it in the PC's terms: a PC with about 32 GB or more);
-- **Docker is not installed or not running**.
+- **Docker is not installed or not running**;
+- **the server's processor isn't x86-64** (Intel or AMD): the trainer's base
+  image (PyTorch's CUDA runtime) exists for x86-64 only, so on an ARM server,
+  the Mac installer's Linux system on Apple silicon among them, the card says
+  only that, with no list of needs and no **Train** buttons. A trainer set up
+  by hand (`WAKE_WORD_TRAINER_ENABLED` and `WAKE_WORD_TRAIN_COMMAND`) is left
+  alone.
 
 On **Turn on wake-word training** a confirm dialog repeats the needs. A
 server with no GPU that training can use asks once more: **Train wake words
