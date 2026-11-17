@@ -202,7 +202,7 @@ public enum RoomDisplayModel {
             ring: ring,
             voiceLabel: RoomStatusText.label(ring),
             ringing: ringing,
-            nowPlaying: (feed?.nowPlaying).flatMap { nowPlaying($0, since: since, linked: linked, volume: i.volume) },
+            nowPlaying: (feed?.nowPlaying).map { nowPlaying($0, since: since, linked: linked, volume: i.volume) },
             timers: timers.prefix(maxTimersShown).map { pair in
                 let (t, left) = pair
                 let label = timerLabel(t)
@@ -217,9 +217,11 @@ public enum RoomDisplayModel {
         )
     }
 
-    private static func nowPlaying(_ np: RoomFeedNowPlaying, since: Int64, linked: Bool, volume: Int?) -> NowPlaying? {
-        // A song with no name is not shown: the card would be a guess.
-        guard let title = np.title else { return nil }
+    private static func nowPlaying(_ np: RoomFeedNowPlaying, since: Int64, linked: Bool, volume: Int?) -> NowPlaying {
+        // Something is playing with no name the server knows: the card says
+        // what kind of thing it is ("radio", "music"), never a made-up title,
+        // and keeps its controls (hiding it would hide Pause).
+        let title = np.title ?? sourceWords(np.source) ?? "music"
         let playing = np.state == .play
         let wanted: RoomDisplayTransport = playing ? .pause : .resume
         let elapsed = np.elapsedSec.map { playing ? $0 + Double(since) / 1000 : $0 }
@@ -230,7 +232,7 @@ public enum RoomDisplayModel {
         let words = [np.artist, np.album].compactMap { $0 }.joined(separator: " · ")
         return NowPlaying(
             title: title,
-            subtitle: words.isEmpty ? sourceWords(np.source) : words,
+            subtitle: (words.isEmpty ? sourceWords(np.source) : words).flatMap { $0 == title ? nil : $0 },
             art: np.art,
             playing: playing,
             playPause: linked && np.controls.contains(wanted) ? wanted : nil,

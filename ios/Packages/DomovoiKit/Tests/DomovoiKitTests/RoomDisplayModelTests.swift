@@ -86,8 +86,27 @@ final class RoomDisplayModelTests: XCTestCase {
         XCTAssertNil(build(input(feed: feed(nowPlaying: nil))).nowPlaying)
     }
 
-    func testASongWithNoTitleIsNotGuessedAt() {
-        XCTAssertNil(build(input(feed: feed(nowPlaying: song(title: nil)))).nowPlaying)
+    func testSomethingPlayingWithNoTitleSaysWhatItIsAndKeepsPause() throws {
+        func card(_ source: RoomMediaSource?, artist: String? = nil, album: String? = nil) throws -> RoomDisplayModel.NowPlaying {
+            var np = song(title: nil)
+            np.artist = artist
+            np.album = album
+            np.source = source
+            return try XCTUnwrap(build(input(feed: feed(nowPlaying: np))).nowPlaying, "a card for \(String(describing: source))")
+        }
+        let radio = try card(.radio)
+        XCTAssertEqual("radio", radio.title)
+        XCTAssertNil(radio.subtitle, "not said twice")
+        XCTAssertEqual(.pause, radio.playPause)
+        XCTAssertTrue(radio.next && radio.previous, "every control the frame offers stays")
+        XCTAssertEqual("audiobook", try card(.audiobook).title)
+        XCTAssertEqual("podcast", try card(.podcast).title)
+        XCTAssertEqual("sleep sounds", try card(.sleep).title)
+        XCTAssertEqual("music", try card(.other).title)
+        XCTAssertEqual("music", try card(nil).title)
+        let untagged = try card(.library, artist: "The Lanterns", album: "Kitchen Radio")
+        XCTAssertEqual("music", untagged.title)
+        XCTAssertEqual("The Lanterns · Kitchen Radio", untagged.subtitle)
     }
 
     func testOfflineHidesWhatTheServerSaid() {
@@ -499,10 +518,16 @@ final class RoomDisplayModelTests: XCTestCase {
         XCTAssertEqual(["timer"], s.timers.map(\.label))
         XCTAssertEqual("alarm", try XCTUnwrap(s.ringing).title)
         XCTAssertNotNil(s.nextAlarm)
-        // A song with no title at all is still not guessed at.
-        let untitled = display(#"{"type":"room_display","now_playing":{"state":"play","title":null,"source":"library","controls":[]}}"#)
+        // A null title still shows the card, with its kind as the title and
+        // its controls: hiding it would hide Pause for something playing.
+        let untitled = display(#"{"type":"room_display","now_playing":{"state":"play","title":null,"source":"library","controls":["pause"]}}"#)
         XCTAssertNil(try XCTUnwrap(untitled.nowPlaying).title)
-        XCTAssertNil(build(input(feed: untitled)).nowPlaying)
+        let untitledCard = try XCTUnwrap(build(input(feed: untitled)).nowPlaying)
+        XCTAssertEqual("music", untitledCard.title)
+        XCTAssertNil(untitledCard.subtitle)
+        XCTAssertEqual(.pause, untitledCard.playPause)
+        // No now_playing at all is still no card.
+        XCTAssertNil(build(input(feed: display(#"{"type":"room_display","now_playing":null}"#))).nowPlaying)
     }
 
     func testAStreamIsTheStationWithPauseAndResumeOnly() throws {
