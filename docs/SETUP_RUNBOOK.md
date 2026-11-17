@@ -101,7 +101,7 @@ take:
 | Windows or **Linux** server? | Windows 11: the installer ([WINDOWS_HOST.md](WINDOWS_HOST.md)), or by hand. Linux: the install script, or by hand ([LINUX_HOST.md](LINUX_HOST.md) has the steps and the systemd units). Either way, rejoin here at Step 3. |
 | Which **mic board** is on each satellite? | The 2-Mics HAT and the XVF3800 array are genuinely different builds. The HAT also has a V1/V2.0 codec trap — identify it *before* flashing ([PROVISIONING §0](../satellite/PROVISIONING.md)). |
 | **Pi Zero 2 W or a bigger Pi?** | Zero 2 W with an XVF3800 needs a true **OTG adapter**, not a plain cable, and a `cmdline.txt` fix. Pi 3/4/5 need neither. |
-| **Stereo powered speakers?** | On the XVF3800, budget a **mono→stereo adapter** per room. Standing rule — see below. |
+| **Stereo powered speakers?** | On the XVF3800, budget a **mono→stereo adapter** per room (see below). |
 
 ---
 
@@ -134,10 +134,10 @@ ollama pull llama3.2:3b
 ollama pull qwen2.5:14b
 ```
 
-> **On a CPU-only server, pull `qwen2.5:7b` instead of the 14B** — it's
-> half the size and roughly twice the speed, and it's what
-> [CPU_HOST.md](CPU_HOST.md) recommends. You can always pull the 14B later
-> and switch with no restart.
+> **On a CPU-only server, pull a smaller tool model instead of the 14B**
+> (`qwen2.5:7b` or `qwen3:8b`): about half the size and roughly twice the
+> speed. [CPU_HOST.md](CPU_HOST.md) compares them. You can pull the 14B
+> later and switch with no restart.
 
 ---
 
@@ -298,7 +298,7 @@ yourself. Then, before you add music or build satellites:
   your town for local news, an AcoustID **application** key for song
   recognition (Settings → System → Advanced → Library → **AcoustID key**, or
   `ACOUSTID_API_KEY` in `domovoi/.env` and a restart), your radio market. Tracks the server looked at before it had a key are tried
-  again by themselves, so the order no longer matters.
+  again by themselves, so the order doesn't matter.
 - **No:** work through
   [Before you disconnect](INTERNET.md#before-you-disconnect) while the
   line is still there, then answer **No**.
@@ -342,17 +342,9 @@ TOKEN=$(cat ~/.domovoi/device-token.txt)
 curl -s -X POST http://localhost:6370/v1/intent -H 'Content-Type: application/json' -H "X-Device-Token: $TOKEN" -d '{"transcript":"set a timer for 2 minutes","room_id":"kitchen"}'
 ```
 
-> A household token an admin chose may hold any printable ASCII, including
-> spaces, `$`, a backtick and a `"`, and `-H "X-Device-Token: $TOKEN"`
-> carries every one of them unchanged. The shell does not re-scan the
-> result of a parameter expansion or a command substitution for quoting, so
-> the token arrives as a single argument exactly as it is stored — the
-> `$(cat …)` spelling used elsewhere in these docs is equally safe. What
-> does break the header: a stray carriage return in the mirror file (an
-> older Windows build wrote it CRLF, and `$(…)` strips the trailing newline
-> but not the CR — check with `od -c ~/.domovoi/device-token.txt | tail -2`;
-> the first boot on this build rewrites it), and an unquoted YAML scalar —
-> see [HOME_ASSISTANT.md](HOME_ASSISTANT.md).
+> If the token stops working in `curl` (a `401`), see
+> [Questions land on the wrong handler](TROUBLESHOOTING.md#questions-land-on-the-wrong-handler)
+> for the two things that break the header.
 
 A routed turn through the tool model and then the Q&A model — slower, and
 the one that proves your model settings are actually working:
@@ -443,8 +435,8 @@ type it under **waiting for approval** and press **approve**.
 ### The manual path (proven)
 
 [`satellite/PROVISIONING.md`](../satellite/PROVISIONING.md) is the
-canonical checklist — every command, every gotcha, battle-tested. Follow
-it start to finish. When it and the friendlier
+canonical checklist, with every command and known pitfall. Follow it
+start to finish. When it and the friendlier
 [SATELLITE_HARDWARE.md](SATELLITE_HARDWARE.md) disagree, PROVISIONING.md
 wins.
 
@@ -468,8 +460,7 @@ Pulled forward from the appendix because each one costs an evening:
    This is not optional.
 2. **Stereo powered pair? Add a mono→stereo adapter.** The array's output
    is genuinely mono — the right DAC channel isn't wired to the jack. A
-   daisy-chained second speaker sits silent otherwise. Standing rule: this
-   setup gets the adapter by default.
+   daisy-chained second speaker sits silent otherwise.
 3. **Pi Zero 2 W: add `dwc_otg.speed=1`** to the single line of
    `/boot/firmware/cmdline.txt`. The Pi's USB controller mis-clocks audio
    transfers at high speed and delivers audio ~8× too fast — the symptom
@@ -561,20 +552,20 @@ Some fleet-level things worth doing once you have two or more rooms:
 
 Optional, in rough order of payoff:
 
-**If your Domovoi has internet, finish the extras.** Answering **Yes**
-already started web answers and artist names; podcast downloads start
-after the next restart. What's left: your town for local news, a free AcoustID application key for badly
-tagged music (Settings → System → Advanced, with a button to test it), and your radio market for "play 97.5 FM". The exact settings
-and why each one helps:
-[If your Domovoi will have internet](INTERNET.md#if-your-domovoi-will-have-internet).
+**If your Domovoi has internet, finish the extras** you skipped in
+[Step 3](#tell-it-about-the-internet): local news, song recognition and
+your radio market
+([If your Domovoi will have internet](INTERNET.md#if-your-domovoi-will-have-internet)).
 
 **Tune the wake word per room.** If a room wakes on the TV or misses you
 across the room, its Settings tab has **Wake sensitivity** (0.7 by
 default; higher wakes less) and **Wake confirmation** (2 by default; 3
 ignores more blips, 1 wakes on the first strong moment).
 
-**Train a custom wake word.** A new install's rooms wake on "Domovoi" (Coders Farm's published model, which the server downloads; under internet access "never" they wake on `hey_jarvis` and Settings → Voice → Wake words says why).
-Record clips through a room's own mic (or use synthetic voices only),
+**Train a custom wake word.** A new install's rooms wake on "Domovoi", a
+model the server downloads when a room first needs it (without internet,
+rooms keep waking on "Hey Jarvis" and Settings → Voice → Wake words says
+why). Record clips through a room's own mic (or use synthetic voices only),
 train on the server, and push to the room — all from Settings → Voice →
 Wake words, no cloud, no third-party service. Covered in
 [`scripts/wake_word/README.md`](../scripts/wake_word/README.md) and

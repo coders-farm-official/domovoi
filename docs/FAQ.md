@@ -1,32 +1,48 @@
 # Frequently Asked Questions
 
-Honest answers to the questions people actually ask. For a term you don't recognize, see the [Glossary](GLOSSARY.md). When something's broken rather than confusing, head to [Troubleshooting](TROUBLESHOOTING.md).
+Short answers to common questions. For a term you don't recognize, see the [Glossary](GLOSSARY.md). When something's broken rather than confusing, head to [Troubleshooting](TROUBLESHOOTING.md).
 
+**Privacy and the internet**
 - [Is my voice data leaving my network?](#is-my-voice-data-leaving-my-network)
 - [What touches the internet, and how do I turn each thing off?](#what-touches-the-internet-and-how-do-i-turn-each-thing-off)
-- [What hardware do I need?](#what-hardware-do-i-need)
-- [Can it run without a GPU?](#can-it-run-without-a-gpu)
 - [Does it work offline?](#does-it-work-offline)
-- [How do I add rooms?](#how-do-i-add-rooms)
-- [Can another device on my network pretend to be one of my rooms?](#can-another-device-on-my-network-pretend-to-be-one-of-my-rooms)
-- [Can I rename the assistant or change the wake word?](#can-i-rename-the-assistant-or-change-the-wake-word)
-- [Which voice does Domovoi speak with, and can I fix how it says a word?](#which-voice-does-domovoi-speak-with-and-can-i-fix-how-it-says-a-word)
-- [What are plugins, and are they safe?](#what-are-plugins-and-are-they-safe)
-- [Can I use it with Home Assistant?](#can-i-use-it-with-home-assistant)
-- [Does it support multiple people?](#does-it-support-multiple-people)
-- [Why does music keep playing after my song ends?](#why-does-music-keep-playing-after-my-song-ends)
-- [What music sources exist out of the box?](#what-music-sources-exist-out-of-the-box)
-- [Can I save music, podcasts, or audiobooks to my phone or computer?](#can-i-save-music-podcasts-or-audiobooks-to-my-phone-or-computer)
-- [Does the music visualizer keep the screen on?](#does-the-music-visualizer-keep-the-screen-on)
-- [Can I send pictures in chat?](#can-i-send-pictures-in-chat)
-- [Can I ask a chat about a document?](#can-i-ask-a-chat-about-a-document)
 - [Does Domovoi look things up online?](#does-domovoi-look-things-up-online)
-- [Can Domovoi print and scan?](#can-domovoi-print-and-scan)
-- [How do I ask Domovoi for help?](#how-do-i-ask-domovoi-for-help)
 - [How long is what we say kept, and can we delete it?](#how-long-is-what-we-say-kept-and-can-we-delete-it)
 - [Where is my data?](#where-is-my-data)
 - [How do I back up and restore?](#how-do-i-back-up-and-restore)
+
+**The server and rooms**
+- [What hardware do I need?](#what-hardware-do-i-need)
+- [Can it run without a GPU?](#can-it-run-without-a-gpu)
+- [Is AI optional?](#is-ai-optional)
 - [Linux or Windows for the server?](#linux-or-windows-for-the-server)
+- [How do I add rooms?](#how-do-i-add-rooms)
+- [Can an old laptop or phone be a room?](#can-an-old-laptop-or-phone-be-a-room)
+- [Why does Windows or my antivirus warn about the Windows satellite?](#why-does-windows-or-my-antivirus-warn-about-the-windows-satellite)
+- [Can the PC that runs Domovoi also be a room?](#can-the-pc-that-runs-domovoi-also-be-a-room)
+- [Can another device on my network pretend to be one of my rooms?](#can-another-device-on-my-network-pretend-to-be-one-of-my-rooms)
+- [Can I drop in on a room from my phone?](#can-i-drop-in-on-a-room-from-my-phone)
+- [Can I rename the assistant or change the wake word?](#can-i-rename-the-assistant-or-change-the-wake-word)
+- [Which voice does Domovoi speak with, and can I fix how it says a word?](#which-voice-does-domovoi-speak-with-and-can-i-fix-how-it-says-a-word)
+- [Does it support multiple people?](#does-it-support-multiple-people)
+
+**Music, files and chat**
+- [Who added that song, and can I stop someone adding more?](#who-added-that-song-and-can-i-stop-someone-adding-more)
+- [Why does music keep playing after my song ends?](#why-does-music-keep-playing-after-my-song-ends)
+- [Can a guest change the music?](#can-a-guest-change-the-music)
+- [What music sources exist out of the box?](#what-music-sources-exist-out-of-the-box)
+- [Can I save music, podcasts, or audiobooks to my phone or computer?](#can-i-save-music-podcasts-or-audiobooks-to-my-phone-or-computer)
+- [Does the music visualizer keep the screen on?](#does-the-music-visualizer-keep-the-screen-on)
+- [Can I move files around without the command line?](#can-i-move-files-around-without-the-command-line)
+- [Why do long lists load as I scroll?](#why-do-long-lists-load-as-i-scroll)
+- [Can I send pictures in chat?](#can-i-send-pictures-in-chat)
+- [Can I ask a chat about a document?](#can-i-ask-a-chat-about-a-document)
+- [Can Domovoi print and scan?](#can-domovoi-print-and-scan)
+- [How do I ask Domovoi for help?](#how-do-i-ask-domovoi-for-help)
+
+**Plugins**
+- [What are plugins, and are they safe?](#what-are-plugins-and-are-they-safe)
+- [Can I use it with Home Assistant?](#can-i-use-it-with-home-assistant)
 
 ---
 
@@ -35,14 +51,12 @@ Honest answers to the questions people actually ask. For a term you don't recogn
 **No.** Everything in the voice path is local:
 
 - Your satellite streams microphone audio over your LAN to the Domovoi server (WebSocket on port 6370). It never goes further.
-- Speech-to-text is **Whisper running on your own machine** (`faster-whisper`, CUDA by default). No cloud STT.
+- Speech-to-text is **Whisper running on your own machine** (`faster-whisper`, on the processor or an NVIDIA GPU). No cloud STT.
 - The language models are **local Ollama models** on the same machine.
 - Voice-profile identification ("who's speaking") computes voice embeddings locally and stores them in your own Postgres.
+- Domovoi's replies are spoken by **local voices** (Piper, with the computer's own system voice as a fallback). There is no online voice, so the text of a reply never leaves either.
 
-Two honest notes, so you can decide for yourself:
-
-1. **Every voice is local.** Text-to-speech is `piper`, Domovoi's local neural voices, with the OS's robotic system voice beneath it; Domovoi's replies are spoken on your own hardware. (The Microsoft Edge online voices, which sent the text of each reply to Microsoft, were dropped in October 2026.)
-2. **Song identification sends short audio clips out — but not from your microphone.** The bundled radio plugin can sample short clips of *radio streams* you've favorited, and the library enricher can fingerprint *your music files*, sending those to online identification services (Shazam via `shazamio`, optionally AcoustID/MusicBrainz). Radio-stream audio and library files, never mic audio. Both are switchable off ([every touchpoint, and how to turn each off](INTERNET.md#every-touchpoint-and-how-to-turn-each-off)).
+**One thing does send audio out: song identification, and never from your microphone.** The bundled radio plugin can sample short clips of *radio streams* you've favorited, and the library enricher can fingerprint *your music files*, sending those to online identification services (Shazam via `shazamio`, optionally AcoustID/MusicBrainz). Radio-stream audio and library files, never mic audio. Both are switchable off ([every touchpoint, and how to turn each off](INTERNET.md#every-touchpoint-and-how-to-turn-each-off)).
 
 ## What touches the internet, and how do I turn each thing off?
 
@@ -165,11 +179,11 @@ tray icon on Windows.
 
 Not once the real one has connected. Each satellite generates a random **pairing token** on first boot (stored in `~/.domovoi/pairing_token`) and sends it when it connects. The server remembers only a hash of it and binds the room to that token the first time it sees one — *trust-on-first-use*. After that, a device connecting as `kitchen` must present the matching token or the server refuses it and closes the connection. So a random device that later tries to impersonate a paired room is turned away (it can't issue commands as that room, and can't receive that room's audio or drop-ins).
 
-Strict pairing (`SATELLITE_PAIRING_STRICT=true`) is the default, and it closes the one gap left: a tokenless connection is refused, and a room's first pairing waits for you to type in the six-digit code the satellite is showing and saying. The honest caveat applies only if you turn strict pairing off: then the *first* token wins, so there's a one-time window when a room has never paired — whoever connects first claims it — and a device with no token at all can connect under any room name nobody has paired. Such a tokenless room can use itself (timers, music, voice commands) but can never drop in on another room or announce into one. An install that upgrades into this release and never set the line becomes strict at its next restart: paired rooms are unaffected, and a satellite that hasn't paired yet asks for approval once.
+Strict pairing (`SATELLITE_PAIRING_STRICT=true`) is the default, and it closes the one gap left: a tokenless connection is refused, and a room's first pairing waits for you to type in the six-digit code the satellite is showing and saying. The honest caveat applies only if you turn strict pairing off: then the *first* token wins, so there's a one-time window when a room has never paired — whoever connects first claims it — and a device with no token at all can connect under any room name nobody has paired. Such a tokenless room can use itself (timers, music, voice commands) but can never drop in on another room or announce into one.
 
 **Re-flashed a Pi or moved a room to new hardware?** The new device has a new token that won't match, so it'll be refused. Clear the old pairing from the dashboard: Settings → Household → Rooms → open the room → **Overview → Reset pairing** (admin login required). The next connection re-pairs. Full details: [Security & Privacy](SECURITY_PRIVACY.md#satellite-pairing-ws-auth).
 
-One thing pairing does *not* do: encrypt the audio. LAN traffic is still unencrypted in v1 (TLS is on the hardening backlog), so keep satellites and the server on a network segment you control. See [Is my voice data leaving my network?](#is-my-voice-data-leaving-my-network).
+One thing pairing does *not* do: encrypt the audio. traffic on your home network isn't encrypted yet (TLS is on the [roadmap](ROADMAP.md)), so keep satellites and the server on a network segment you control. See [Is my voice data leaving my network?](#is-my-voice-data-leaving-my-network).
 
 ## Can I drop in on a room from my phone?
 
@@ -180,21 +194,21 @@ Yes. In the Android app, open a satellite's page and tap **drop in from this pho
 Those are two separate things:
 
 - **The name** — what Domovoi calls itself in speech and on screen — is the `BOT_NAME` setting (Settings → System → Advanced → Identity, takes effect on restart). Greeting and sample clips re-render with the new name.
-- **The wake word** — the phrase that opens the mic — is "Domovoi" on a new install: Coders Farm's published model (CC BY-NC-SA 4.0, downloaded by your server; [LICENSES](LICENSES.md)), given to each new room. An older install's rooms keep `hey_jarvis`, one of openWakeWord's prebuilt models, and every room wakes on it until its server gives it its word or while the server can't download it. Settings → Voice → Wake words sets the household's word for new rooms, and can give a room another. A room can also wake on **more than one word** (up to 5; 3 on a Pi Zero 2 W): **Add another wake word** in the room's Settings. Most homes need one, and each extra word makes accidental wake-ups a little more likely. You can also **train a custom one** entirely from the product: dashboard → Settings → Voice → Wake words. Training runs on the server, in a Docker container. An admin turns it on once there (**Turn on wake-word training**: about 32 GB of disk, a download of about 22 GB, once, a server with 24 GB of memory; it builds the trainer and downloads its data, no shell needed). Then record positive clips *on the actual satellite* (through its real mic), press Train (about 20 minutes on an NVIDIA GPU, over an hour on the CPU, where it asks first because voice answers more slowly meanwhile), and push the model to a room. **Download** packs a trained model to share, under CC BY-NC-SA 4.0 (non-commercial) with the licence notice in the zip; a model trained on your household's voices is your call to share. Details: `scripts/wake_word/README.md`.
+- **The wake word** — the phrase that opens the mic — is "Domovoi" on a new install: Coders Farm's published model (CC BY-NC-SA 4.0, downloaded by your server; [LICENSES](LICENSES.md)), given to each new room. An older install's rooms keep `hey_jarvis`, one of openWakeWord's prebuilt models, and a room also wakes on it until its server has given it its word (or while the server can't download it).
+  - **Settings → Voice → Wake words** sets the household's word for new rooms, and can give a room another.
+  - **More than one word:** a room can wake on up to 5 (3 on a Pi Zero 2 W): **Add another wake word** in the room's Settings. Most homes need one; each extra word makes accidental wake-ups a little more likely.
+  - **Your own word:** train one from the same page. An admin turns training on once (**Turn on wake-word training**: about 32 GB of disk, a one-time download of about 22 GB, and a server with 24 GB of memory; no shell needed). Then record clips *on the room's own mic*, press **Train** (about 20 minutes on an NVIDIA GPU, over an hour on the processor, where it asks first because voice answers slow down meanwhile) and push the model to a room. Training runs on your server, in a Docker container.
+  - **Sharing:** **Download** packs a trained model under CC BY-NC-SA 4.0 (non-commercial), with the licence notice in the zip; a model trained on your household's voices is your call to share. Details: [wake-word training](../scripts/wake_word/README.md).
 
 ## Which voice does Domovoi speak with, and can I fix how it says a word?
 
 One of three local voices, all public domain (recorded from LibriVox and the
 LJ Speech set, trained from scratch by Bryce Beattie): **Kristin** (female,
-the default since October 2026), **Norman** (male) and **Linda** (female).
-A server still on Norman, the old default, moves to Kristin once on the
-update (pick Norman again here to keep him). Pick one under Settings →
-Voice → Voices → *Domovoi's voice*, where each has a play button; the phone app
-offers the same three. Since October 2026 the words are turned into sounds
-by Domovoi's own converter (a pronouncing dictionary, rules and a small
-model, all permissively licensed), not by espeak-ng, which is GPL; an
-update moves a server off the voices Domovoi used to offer (lessac and the
-voices built on it) to the default, and fetches it.
+the default), **Norman** (male) and **Linda** (female). Pick one under
+Settings → Voice → Voices → *Domovoi's voice*, where each has a play
+button; the phone app offers the same three. The words are turned into
+sounds by Domovoi's own converter (a pronouncing dictionary, rules and a
+small model, all permissively licensed).
 
 When a word comes out wrong, add it under Settings → Voice → Voices → *Say it
 like*: the word, and how it sounds in plain letters, with the stressed
@@ -266,7 +280,7 @@ over. Each pick says why it was chosen ("same artist", "90s"), and
 the mix learns from comes from the listening history, kept 1 year by
 default; Settings → Privacy → **Listening history** sets 90 days or
 **Don't keep**. Details: the user manual's
-*Music and room queues*.
+[Up next](../scripts/manual/manual.md#up-next).
 
 ## Can a guest change the music?
 
@@ -372,7 +386,7 @@ Yes, while it plays full screen: the screen doesn't dim, lock or start the scree
 
 How, and where that was checked:
 
-- **Chrome and Edge** (Windows, checked 2026-11-11 by watching Windows' "display required" flag): on an `https://` or `localhost` address the browser's Screen Wake Lock does it. On the usual plain `http://192.168.1.20:6369` address that lock doesn't exist, so the dashboard plays a tiny invisible, silent video while full screen, which these browsers keep the screen on for. Both ways were measured to hold the screen on and to let go.
+- **Chrome and Edge** (checked on Windows): on an `https://` or `localhost` address the browser's Screen Wake Lock does it. On the usual plain `http://192.168.1.20:6369` address that lock doesn't exist, so the dashboard plays a tiny invisible, silent video while full screen, which these browsers keep the screen on for. Both ways were measured to hold the screen on and to let go.
 - **Firefox and Safari**: not measured. They offer the Screen Wake Lock on `https://` addresses, and the dashboard uses it there. On plain `http://` the same silent video is tried; whether it keeps the screen on there hasn't been checked.
 - **iPhone and iPad**: Safari there can only show a video full screen, not a page part, so the visualizer has no full-screen button.
 
@@ -506,11 +520,11 @@ Restore on a new machine: install Domovoi, start Postgres, restore the dump (`do
 
 **Windows 11, the installer (preview).** One download, `DomovoiSetup.exe`, sets up the same server as a Linux box, inside a private Linux (WSL2) that Windows runs for it. It is the easy way onto the household PC, which for many homes already has the best GPU in the house. It is unsigned for now (Windows asks first), and it has no backup tool or keep-data uninstall yet. Setup and what it changes: [WINDOWS_HOST.md](WINDOWS_HOST.md).
 
-**Linux** is the better host for a dedicated always-on machine. A headless install leaves several GB more RAM for models, speech recognition can use an NVIDIA GPU, wake-word training runs on the box's own Docker Engine (turned on from the dashboard, the GPU runtime set up by the install), and autostart is a systemd unit. On Ubuntu 26.04 one script installs it all. Setup: [LINUX_HOST.md](LINUX_HOST.md).
+**Linux** is the better host for a dedicated always-on machine. A headless install leaves several GB more RAM for models, speech recognition can use an NVIDIA GPU, wake-word training runs on the box's own Docker Engine (turned on from the dashboard, the GPU runtime set up by the install), and autostart is a systemd unit. On Ubuntu 26.04, Debian 13, Linux Mint 22 or Pop!_OS 24.04, one command installs it all. Setup: [LINUX_HOST.md](LINUX_HOST.md).
 
-**Windows by hand** (cloning the repository and running it in Windows itself) still works. It carries genuine Windows-specific engineering: CUDA DLL preloading for Whisper (`domovoi/bootstrap.py`), Docker Desktop networking, console-encoding-safe setup codes, and a SAPI voice as the last TTS fallback.
+**Windows by hand** (cloning the repository and running it in Windows itself, with Docker Desktop) still works, and is mostly for people working on Domovoi.
 
-Postgres, MPD, and SearXNG run in containers in every case, and the application code is plain Python. The differences are real but small, and each one is documented rather than assumed.
+Postgres, MPD and SearXNG run in containers in every case, and the application code is the same Python.
 
 ---
 

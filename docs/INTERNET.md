@@ -47,7 +47,7 @@ Any one of these; they all set the same thing, `INTERNET_ACCESS`:
 
 - **The dashboard.** Right after you claim the admin account, the setup
   dialog asks (or choose **Decide later**). Afterwards: **Settings →
-  Internet** (admin sign-in), or click the Home row.
+  Privacy → Internet** (admin sign-in), or click the Home row.
 - **A fresh install from the command line.** Create the first `.env` with
   the answer in it:
 
@@ -79,7 +79,7 @@ Any one of these; they all set the same thing, `INTERNET_ACCESS`:
 
 The answer only sets **defaults**. A setting you set yourself, in
 `domovoi/.env`, in the server's environment, or by saving it in the
-dashboard, stays the way you set it. Settings → Internet shows which is
+dashboard, stays the way you set it. Settings → Privacy → Internet shows which is
 which and can hand a setting back to the answer
 ([Changing it later](#changing-it-later)).
 
@@ -109,14 +109,14 @@ which and can hand a setting back to the answer
 
 **What no answer changes:**
 
-- **Topic news every morning** (`NEWS_AUTO_FETCH`, Settings → Advanced
+- **Topic news every morning** (`NEWS_AUTO_FETCH`, Settings → System → Advanced
   → News) stays each household's own opt-in, off by default.
 - **Your voice never leaves the box.** Whisper always loads its model from
   the server's own disk first; a model downloads only when it isn't there
   yet, and never under **No**.
 
 Restart-tier settings keep their current value until the core restarts,
-like any other restart-tier change: Settings → Internet lists them under
+like any other restart-tier change: Settings → Privacy → Internet lists them under
 "restart required". Switching to or from **No** also asks for a restart,
 so the Hugging Face libraries pick up `HF_HUB_OFFLINE`. Everything else in
 the second table applies the moment you save.
@@ -130,17 +130,17 @@ artist names from MusicBrainz, synced lyrics from LRCLIB and podcast
 downloads, and turns song recognition on as soon as it has a key. What
 stays yours to do:
 
-1. **Set your town for local news:** Settings → Advanced → News →
+1. **Set your town for local news:** Settings → System → Advanced → News →
    *Local news location* (`NEWS_LOCATION`). Applies at once.
 
    *Why:* the morning briefing gets a local block. Empty skips it.
 
 2. **Song recognition for badly tagged music:** create a free AcoustID
    **application** at [acoustid.org/new-application](https://acoustid.org/new-application)
-   and paste its API key into the dashboard: Settings → Advanced →
+   and paste its API key into the dashboard: Settings → System → Advanced →
    Library → **AcoustID key** (signed in as admin). The Music page's
    "song recognition needs a free AcoustID key" and the song-recognition
-   row of Settings → Internet open that field. **test the key** asks
+   row of Settings → Privacy → Internet open that field. **test the key** asks
    AcoustID once whether it takes the key (it isn't offered when the
    answer is **No**). It must be an application key: the key on your
    AcoustID user page is refused for lookups, and both the test and the
@@ -150,7 +150,7 @@ stays yours to do:
 
    The key applies at once. Where song recognition was off only because
    there was no key, it turns on after a restart: the save says so, and
-   Settings → Internet shows "→ on after a restart". A key never turns it
+   Settings → Privacy → Internet shows "→ on after a restart". A key never turns it
    on under **No**, or when you switched it off yourself.
 
    Without the dashboard, put the key in `domovoi/.env` instead and
@@ -186,11 +186,10 @@ stays yours to do:
    *Why:* "play 97.5 FM" finds the station in your market rather than any
    97.5 in the country.
 
-4. **Fill the satellite media cache.** Settings → Rooms → *prepare a room's
+4. **Fill the satellite media cache.** Settings → Household → Rooms → *prepare a room's
    SD card* → **Refresh caches** (admin sign-in; the wheel fetch can take
    minutes). The wake-word models come from pinned URLs and are checked
-   against pinned digests; the server no longer needs the `openwakeword`
-   package for that. An offline card is prepared only when the cache holds
+   against pinned digests. An offline card is prepared only when the cache holds
    every pinned model, and the satellite checks them again on first boot.
 
    *Why:* the SD cards you prepare from the dashboard carry the satellite's
@@ -203,7 +202,7 @@ stays yours to do:
    the Windows install runs the same update unit inside its own distro.
 
    *Why:* **Update Domovoi** and **Restart to apply changes** (Settings →
-   About & updates) then also re-sync dependencies, run
+   System → About & updates) then also re-sync dependencies, run
    migrations, rebuild the music image, keep the search helper in step
    with your answer, and roll back if the result isn't healthy.
 
@@ -216,7 +215,7 @@ stays yours to do:
   a few hundred MB, in the background); `dev.sh` / `dev.ps1` and the
   Linux update unit start it too, and Docker brings it back after every
   reboot. It listens on `127.0.0.1:6888`, so the LAN can't reach it.
-  Settings → Internet shows whether it is starting, running or couldn't
+  Settings → Privacy → Internet shows whether it is starting, running or couldn't
   start (and why), with a **start it again** button for a first start that
   failed or timed out. If it isn't running, Domovoi says so ("I can't
   search the web right now — my search helper isn't running") instead of
@@ -263,9 +262,7 @@ until you turn them on yourself (`PODCAST_FEED_POLLER_ENABLED=true` in
 `domovoi/.env`, then restart), because a slow or metered line is the wrong
 place for episodes to download on their own.
 
-- Do the whole [Before you disconnect](#before-you-disconnect) list too:
-  the first time Domovoi needs something it can only download is usually
-  the day the line is down.
+- Do the whole [Before you disconnect](#before-you-disconnect) list too.
 - Everything that is on waits for the internet by itself and picks up
   again when it's back: the search helper's answers, artist names, the news
   worker, song recognition. A lookup that fails because the line dropped is
@@ -310,7 +307,7 @@ needs something it can only download is usually the day the line is down.
       `sudo -u domovoi -H /opt/domovoi/.venv/bin/python -c "…"`.
 - [ ] **Check the phone app is on this server.** The installer already put
       it there with its other downloads (about 100 MB), so the server can
-      hand it to phones that have no internet: Settings → Phones & browsers
+      hand it to phones that have no internet: Settings → Household → Phones & browsers
       → **Get the Domovoi app** shows the code to scan once it is. If it
       says the phone app isn't on this server (the install had no internet,
       or the server was set up by hand), press **Download the app to this
@@ -318,11 +315,15 @@ needs something it can only download is usually the day the line is down.
       files instead: download them on a computer that has internet and use
       **upload an APK** on that card.
 - [ ] **Pull every Ollama model you'll want** (`ollama pull <model>`, or
-      Settings → Models, which shows the model each role uses).
+      Settings → Chat & AI → Models, which shows the model each role uses).
 - [ ] **The extra voices**, if you want them: `SEED_VOICE_CATALOG=true`
       in `domovoi/.env` and one restart while online downloads them.
-      Voices you upload on Settings → Voices are already on the server.
+      Voices you upload on Settings → Voice → Voices are already on the server.
 - [ ] **The fast lane**, if you use it: `python -m domovoi.fast_lane fetch`.
+- [ ] **Connect your first room.** The server downloads the "Domovoi"
+      wake-word model the first time a room needs it. Without it, new rooms
+      keep waking on "Hey Jarvis", and Settings → Voice → Wake words says
+      why.
 - [ ] **A custom wake word**, if you want one: turn training on in
       Settings → Voice → Wake words and train it now (about 22 GB, once). Under No
       training is refused, even with the data already downloaded.
@@ -348,7 +349,7 @@ needs something it can only download is usually the day the line is down.
 
 ### Then answer No
 
-Settings → Internet → **No, keep everything in the house** (or
+Settings → Privacy → Internet → **No, keep everything in the house** (or
 `INTERNET_ACCESS=never`). That is all: there is nothing else to switch
 off.
 
@@ -456,7 +457,7 @@ and sets `HF_HUB_OFFLINE` back, and on a Linux server with the update unit
 it masks Ubuntu's own updaters again (the first restart, under Sometimes,
 unmasked them: [LINUX_HOST.md → Internet or not](LINUX_HOST.md#internet-or-not)). To keep that window quiet, set
 `MUSIC_ALIAS_FETCH_ENABLED=false` and `LYRICS_LRCLIB_ENABLED=false`
-(Settings → Advanced) before you switch; they then stay off whatever
+(Settings → System → Advanced) before you switch; they then stay off whatever
 the answer says until you press **follow the answer again**.
 
 ---
@@ -490,7 +491,7 @@ What the answer can't reach, because it isn't the server:
 - **A plugin that makes its own connections** without the SDK (raw
   `httpx`, its own downloads, a `docker pull`) is its author's
   responsibility; its install screen lists what it does, and Settings →
-  Internet lists every enabled plugin that asks for the network as one
+  Privacy → Internet lists every enabled plugin that asks for the network as one
   that "may reach the internet on its own". Today that includes Coders
   Farm's own optional plugins: the media-provider plugin's dashboard
   search and stream, Image generation's engine, package and model
@@ -500,7 +501,7 @@ What the answer can't reach, because it isn't the server:
 - **A language model outside the house.** Ollama counts as local, but an
   `OLLAMA_URL` that points at a machine on the internet, or an Ollama
   "cloud" model (a name ending in `-cloud`), sends every question there.
-  Settings → Internet warns about both under **No**.
+  Settings → Privacy → Internet warns about both under **No**.
 
 If nothing in the house should reach out at all, block the server, and the
 satellites once they are set up, at your router as well.
@@ -547,7 +548,7 @@ the history list marks a chat that went online with a globe.
 
 ## Changing it later
 
-**Settings → Internet** (admin sign-in):
+**Settings → Privacy → Internet** (admin sign-in):
 
 - shows whether the server is connected right now, not connected, or
   turned off for this box;
@@ -567,10 +568,10 @@ the history list marks a chat that went online with a globe.
   - **set in the server's environment**: change it there;
 - lists the plugins that may reach the internet on their own, and, under
   **No**, warns about a language model outside the house;
-- says when a restart is needed, the same way Settings → Advanced
+- says when a restart is needed, the same way Settings → System → Advanced
   does.
 
-**Installed before October 2026?** Your `domovoi/.env` was copied from an
+**Installed before 1.0.0?** Your `domovoi/.env` was copied from an
 older `.env.example`, which set `SEED_VOICE_CATALOG=true` and
 `LIBRARY_ENRICHER_ENABLED=true` explicitly. Those two show as **set in
 domovoi/.env**, so the answer leaves them alone until you press **follow
@@ -639,8 +640,7 @@ Windows part of **Update Domovoi**: the tray on the PC downloads the
 release's `DomovoiSetup.exe`, its manifest and their signatures from
 github.com, after an admin asked for it in the dashboard or chose it in the
 tray's menu, never by itself
-([WINDOWS_HOST.md](WINDOWS_HOST.md#update-domovoi-both-halves)). No voice sends anything: they are all local
-(the Microsoft Edge online voices were dropped in October 2026).
+([WINDOWS_HOST.md](WINDOWS_HOST.md#update-domovoi-both-halves)). No voice sends anything: they are all local.
 
 ### Every touchpoint, and how to turn each off
 
@@ -664,9 +664,9 @@ Every optional outbound touchpoint, sourced from the code. One answer covers all
 | Cover art (Cover Art Archive) — **off unless your internet answer is Yes or Sometimes** | An identified song's album id (the MusicBrainz release, or release group, id; for a song whose album isn't known yet, first its recording id to musicbrainz.org): one lookup per song, the 1200- then 500-pixel front cover; a song the archive has no cover for is asked again after 30 days or after **Rescan library**. The cover is written into the MP3 or FLAC file (the file's own pictures are kept on the server so **Undo** puts them back); other kinds of file show Domovoi's own copy. Folder images (cover.jpg) are never touched | coverartarchive.org, which redirects to archive.org's storage; about one request a second, only while the server is online | On when the internet answer is **Yes** or **Sometimes**, off when it is **No** or not answered. Settings → System → Advanced → Library → "Cover art from the Cover Art Archive" (`library_cover_art_enabled` / `LIBRARY_COVER_ART_ENABLED`) overrides the answer, and "Cover art: which files" (`library_cover_art_mode`: replace existing art, the default, or only add missing art); switching it off stops it before its next request |
 | Podcasts | Feed polls + episode downloads; a show's name when you subscribe by voice or search in Discover; each show's artwork, once | Feeds you subscribe to; Apple's iTunes search | Automatic downloads follow the internet answer: on for **Yes**, off for **Sometimes**, **No** and not answered (`PODCAST_FEED_POLLER_ENABLED`). Search runs only when you ask. Show artwork is downloaded **by the server** and served to your browser and phone, which never contact the publisher |
 | Calendars by link — **only the ones an admin adds** | A request for each calendar's ICS file at its private address (with the last answer's ETag / date, so an unchanged calendar costs almost nothing), at most 10 MB | The calendar's own server: Google (`calendar.google.com`), Microsoft (`outlook.office365.com`, `outlook.live.com`), Apple (`p*-caldav.icloud.com`), or wherever the link points | Remove the calendar (Settings → Household → Calendars). Every 30 minutes under **Yes**, every 2 hours under **Sometimes**, never under **No**. Phones' shared calendars never use the internet: the phone sends them to the server over your network |
-| Extra voices | Downloads of the other two Piper voices (about 130 MB) | Hugging Face | Off once the internet question is answered (any answer), unless `SEED_VOICE_CATALOG` is set in your `domovoi/.env` — which a server installed before October 2026 has (its old template wrote `SEED_VOICE_CATALOG=true`; Settings → Privacy → Internet → **follow the answer again** hands it back). Not answered, it's on unless `SEED_VOICE_CATALOG=false` |
+| Extra voices | Downloads of the other two Piper voices (about 130 MB) | Hugging Face | Off once the internet question is answered (any answer), unless `SEED_VOICE_CATALOG` is set in your `domovoi/.env` — which a server installed before 1.0.0 has (its old template wrote `SEED_VOICE_CATALOG=true`; Settings → Privacy → Internet → **follow the answer again** hands it back). Not answered, it's on unless `SEED_VOICE_CATALOG=false` |
 | Wake-word training — **off until an admin turns it on** | The trainer image's build and its training data, about 22 GB, once; a rebuild when an update changes the trainer. On a box with an NVIDIA GPU, the install and the Linux update unit also fetch the NVIDIA Container Toolkit | Docker Hub, GitHub, PyPI and Ubuntu's archive (the build); Hugging Face and Backblaze B2 (the data); NVIDIA's apt repository (the toolkit) | Don't turn it on (Settings → Voice → Wake words). Under **No** it can't be turned on, no training starts, and the update unit downloads none of it ([SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#wake-word-training-the-gpu-runtime-the-trainer-image-and-what-it-downloads)) |
-| A USB stick for an old computer — **only when an admin prepares one** | Debian's installer image (793 MB), once, kept for the next stick; on a server installed before October 2026, the `xorriso` package at the next update or restart | cdimage.debian.org (held to a pinned SHA-256); Ubuntu's archive | Don't press **Prepare the stick**. Under **No** it is refused unless the image is already on the server, and the update unit installs nothing. The old computer itself downloads Debian's packages and the satellite's libraries while it sets up ([SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md#old-computers-usb-stick)) |
+| A USB stick for an old computer — **only when an admin prepares one** | Debian's installer image (793 MB), once, kept for the next stick; on a server installed before 1.0.0, the `xorriso` package at the next update or restart | cdimage.debian.org (held to a pinned SHA-256); Ubuntu's archive | Don't press **Prepare the stick**. Under **No** it is refused unless the image is already on the server, and the update unit installs nothing. The old computer itself downloads Debian's packages and the satellite's libraries while it sets up ([SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md#old-computers-usb-stick)) |
 | Things an admin starts | Downloads, only when an admin clicks: **Update Domovoi** (and, with the update unit, Python packages and the music image's Debian packages, and the search helper's image when it starts it), plugin installs, model installs, **Refresh caches** for satellite media, the font catalogue and a font added for Documents | GitHub (the fonts: GitHub's copy of Google Fonts); PyPI and the PyTorch CPU index; Debian's mirrors; Docker Hub; the Ollama registry; Hugging Face (a new Whisper size) | Nothing runs on its own; don't click them. Under **No** they are greyed and the server refuses them |
 
 The install-time trust screen for any *third-party* plugin lists that plugin's own network behavior — see [What are plugins, and are they safe?](FAQ.md#what-are-plugins-and-are-they-safe)
@@ -711,7 +711,7 @@ the download on to their own storage hosts, listed in the same row; under
 |---|---|---|---|---|---|
 | `1.1.1.1` (TCP 443, no data) | core | The internet check, every 30 s (`CONNECTIVITY_PROBE_TARGET`) | on | on | off |
 | `huggingface.co` · `cdn-lfs.huggingface.co` · `cas-bridge.xethub.hf.co` | core | Whisper models (a size not on disk yet), Piper voices (a voice not on disk yet; the extra voices) | asked | asked | refused |
-| `registry.ollama.ai` · `ollama.com` | Ollama, at the core's request | Model pulls (Settings → Models). An Ollama `-cloud` model sends every question to `ollama.com` | asked | asked | pulls refused; a `-cloud` model is Ollama's own connection, which Settings → Internet warns about |
+| `registry.ollama.ai` · `ollama.com` | Ollama, at the core's request | Model pulls (Settings → Chat & AI → Models). An Ollama `-cloud` model sends every question to `ollama.com` | asked | asked | pulls refused; a `-cloud` model is Ollama's own connection, which Settings → Privacy → Internet warns about |
 | `github.com` · `objects.githubusercontent.com` · `release-assets.githubusercontent.com` | core, the update unit | **Update Domovoi** (`git fetch` of the project); the Android app for phones; the Windows satellite Setup; the Linux satellite's pinned Python (python-build-standalone); the wake-word models (openWakeWord's release, Domovoi's wake-word models repository); voice ID's speaker model (Domovoi's models repository, else sherpa-onnx's `speaker-recongition-models` release; once, when it isn't on the server); the fast lane's model (sherpa-onnx); the XVF3800 host tool for satellite cards | asked; the newer Android app an update names, and voice ID's speaker model, are fetched by themselves | asked; voice ID's speaker model is fetched by itself | refused |
 | `api.github.com` · `codeload.github.com` | core | Installing a plugin from GitHub | asked | asked | refused |
 | `api.github.com` · `raw.githubusercontent.com` | dashboard | Fonts: the font catalogue, and the files of a font you add (Documents) | asked | asked | refused |
@@ -747,7 +747,7 @@ the download on to their own storage hosts, listed in the same row; under
 | `huggingface.co` · `en.wikipedia.org` · `api.search.brave.com`, your own SearXNG, a page you name | the Android app | On-device models and voices you choose to download; a phone chat's lookups away from home, after its card | not the server | not the server | not the server; at home the phone's lookups go through the server and follow its answer |
 
 Plugins installed from elsewhere make their own connections: each one's
-install screen lists them, and Settings → Internet lists every enabled
+install screen lists them, and Settings → Privacy → Internet lists every enabled
 plugin that "may reach the internet on its own". They are outside this
 inventory. Links in the dashboard and the app (to this repository, to
 AcoustID's sign-up page, to the Raspberry Pi imager) open in your browser
@@ -800,7 +800,7 @@ Shazam rows are.
 ## Check it yourself
 
 You don't have to take the inventory's word for it. Answer **No**, restart
-the core once (Settings → Internet asks for it), then watch the server's
+the core once (Settings → Privacy → Internet asks for it), then watch the server's
 traffic.
 
 **What you should still see under No,** all of it inside your network:

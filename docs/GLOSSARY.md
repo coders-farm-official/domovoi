@@ -1,27 +1,14 @@
 # Glossary
 
-## Room or satellite: the wording rule
-
-**What people read says "room".** The Android app, the dashboard, the join page, the room device's setup portal, what a room device says or shows, the Windows tray icon and its card writer, notifications, error messages and the [user manual](../scripts/manual/manual.md) all say *room*:
-
-* the hardware is a **room device**, or by its kind: "a Raspberry Pi room", "this phone as a room", "a spare laptop as a room";
-* setting one up is **"set up a room"**;
-* the card for a Raspberry Pi is prepared with **"prepare a room's SD card"** (the dashboard card) and **"Prepare a room's SD card"** (the tray icon's menu);
-* what an upgrade installs is the **room software**.
-
-**"Satellite" stays where builders look:** code identifiers, API paths and JSON keys, log lines meant for developers, file and service names (`satellite/`, `domovoi-satellite.service`), and the technical docs for builders ([PROVISIONING](../satellite/PROVISIONING.md), [API reference](API_REFERENCE.md), [Architecture](ARCHITECTURE.md), [Spare-device satellites](SPARE_DEVICE_SATELLITES.md)). Spoken commands that say "satellite" keep working beside the "room" ones.
-
-A satellite is the device that makes a room.
-
----
-
 Every Domovoi term you'll meet in these docs, in the dashboard, or in the code — alphabetical, defined in plain English. Cross-references in *italics* point at other entries here.
+
+**Room or satellite?** They are the same thing. What households read (the dashboard, the apps, the [user manual](../scripts/manual/manual.md), what a room device says or shows) says **room**: "set up a room", "prepare a room's SD card", "room software". *Satellite* stays where builders look: code, API paths, log lines, file and service names (`satellite/`, `domovoi-satellite.service`) and the technical docs ([PROVISIONING](../satellite/PROVISIONING.md), [API reference](API_REFERENCE.md), [Architecture](ARCHITECTURE.md)). Spoken commands that say "satellite" still work.
 
 ---
 
 **Acquisition** — a structured request to obtain media for the local library ("get me this song", by search text or URL). Acquisitions go into a queue table where a *fulfiller* picks them up; with no fulfiller installed they simply wait, visibly, until one is. See *media acquisition queue*.
 
-**Admin session** — the bearer token you get by logging in with the admin password: it signs out after 1 hour idle (an hour with no change made as admin), and lasts 90 days at most. Risky operations on both the dashboard (port 6369) and the core API (port 6370) accept only this token; it's minted once against a shared table, so one login covers both.
+**Admin session** — the bearer token you get by logging in with the admin password: it lasts 90 days at most, and from 1.4.0 it also signs out after 1 hour idle (an hour with no change made as admin). Risky operations on both the dashboard (port 6369) and the core API (port 6370) accept only this token; it's minted once against a shared table, so one login covers both.
 
 **AEC (acoustic echo cancellation)** — removing the satellite's own speaker output from its microphone signal. The XVF3800 array does this on-chip, which is what makes reliable *barge-in* and open-mic *chat mode* possible; the 2-mic HAT has no AEC. (The wake greeting does not need it: the satellite plays it before it listens — see *wake acknowledgement*.)
 
@@ -59,7 +46,7 @@ Every Domovoi term you'll meet in these docs, in the dashboard, or in the code �
 
 **Flyway** — the migration tool that owns the database schema. Core migrations are append-only SQL files under `domovoi/db/migrations/`; you run them with `docker compose run --rm flyway`.
 
-**Guest** — a phone or browser holding no household credential (not paired, not signed in) on a box that has finished setup. Since 2026-10-10 a guest may change the *room queue* of a room that is playing (add, remove one at a time, reorder — no clear, and never the song playing now) and pause, resume, skip or go back there (never stop), throttled per address, until an admin bans it (a *guest ban*). `GUEST_QUEUE_EDITING` turns it off.
+**Guest** — a phone or browser holding no household credential (not paired, not signed in) on a box that has finished setup. A guest may change the *room queue* of a room that is playing (add, remove one at a time, reorder — no clear, and never the song playing now) and pause, resume, skip or go back there (never stop), throttled per address, until an admin bans it (a *guest ban*). `GUEST_QUEUE_EDITING` turns it off.
 
 **Guest ban** — an admin rule barring a *guest* from changing the music in every room, queue and playback alike. Matches the guest's self-asserted browser id OR its network address, and never applies to a paired device or an admin. Household policy, not a security boundary, like a *queue block*. Managed in Settings → Household → Phones & browsers → Guests, from the guests the core recorded acting this week.
 
@@ -105,7 +92,7 @@ Every Domovoi term you'll meet in these docs, in the dashboard, or in the code �
 
 **openWakeWord** — the on-satellite wake-word engine. Ships prebuilt models (`hey_jarvis`, an older install's default and every room's word until its server gives it one) and supports custom models trained from your own recorded clips.
 
-**Piper** — the local neural TTS engine — second link in the TTS chain and the fully-offline voice. Domovoi offers three public-domain Piper voices (Norman, Kristin, Linda), run on ONNX Runtime and fed by its own text-to-phoneme converter (`domovoi/phonemizer`, no espeak-ng). Voice models download once or can be uploaded on the dashboard's Voices page.
+**Piper** — the local neural TTS engine that speaks every reply, with the computer's own system voice as the fallback. Domovoi offers three public-domain Piper voices (Norman, Kristin, Linda), run on ONNX Runtime and fed by its own text-to-phoneme converter (`domovoi/phonemizer`, no espeak-ng). Voice models download once or can be uploaded on the dashboard's Voices page.
 
 **Plugin schema** — the private Postgres schema (`plugin_<slug>`) where a plugin keeps its tables, with its own migration ledger. Plugins never run DDL against core tables; a linter enforces the boundary.
 
@@ -117,7 +104,7 @@ Every Domovoi term you'll meet in these docs, in the dashboard, or in the code �
 
 **Realtime channel** — the live-update path from database to browser: a feature fires a Postgres NOTIFY on commit, the dashboard's listener maps it to a named channel (e.g. `radio.stations`) and pushes a fresh snapshot over WebSocket. Plugins declare theirs in the manifest.
 
-**Release channel** — which updates a server follows: `stable` (releases only, the default for new installs) or `main` (every change as it lands). Chosen in Settings → System → About & updates, which also names the release the server runs (`1.2.0`, or `1.2.0 + 14 (abc1234)` between releases). The Android app has its own version number. See [LINUX_HOST.md](LINUX_HOST.md#release-channels).
+**Release channel** — which updates a server follows: `stable` (releases only, the default for new installs) or `main` (every change as it lands). Chosen in Settings → System → About & updates, which also names the release the server runs (`1.3.0`, or `1.3.0 + 14 (abc1234)` between releases). The Android app has its own version number. See [LINUX_HOST.md](LINUX_HOST.md#release-channels).
 
 **Room** — the logical unit of the household, identified by the stable `room_id` in a satellite's config. Rooms are what the intercom, drop-in, music playback, and Settings → Household → Rooms address; each room owns one satellite and one *MPD* instance.
 

@@ -12,8 +12,8 @@ Android emulator; see [What was tested](#what-was-tested) for exactly how.
   every phone from about 2017 on), 32-bit ARM (`armeabi-v7a`, older and
   budget phones, Android Go), and the x86 / x86_64 used by emulators and a
   few Chromebooks and tablets.
-- **The on-device assistant (a preview) needs a 64-bit phone** running the 64-bit
-  app. Its engine, LiteRT-LM, is published for 64-bit processors only.
+- **The on-device assistant (a preview) needs a 64-bit phone** running
+  the 64-bit app. Its engine, LiteRT-LM, is published for 64-bit processors only.
   Everything else is the same on every ABI.
 
 ## Which APK to install
@@ -23,7 +23,8 @@ carries only its own native libraries. A published release
 (`android/release.json`, android/README.md "Publishing a release") carries
 the two phones need, `domovoi-<version>-arm64-v8a.apk` and
 `domovoi-<version>-armeabi-v7a.apk`, and your Domovoi server's join page
-(the spare-device QR code, or Settings → Household → Phones & browsers → get the Domovoi app)
+(the spare-device QR code, or Settings → Household → Phones & browsers →
+get the Domovoi app)
 offers them as "the app" for most phones and "the 32-bit app" for older
 or cheaper ones. A browser on plain HTTP can't tell a phone's processor
 honestly, so the page puts the 64-bit one first unless the browser itself
@@ -39,8 +40,8 @@ reports a 32-bit system (`armv7l`).
 If Android answers the arm64-v8a APK with "App not installed" (from a
 computer, `adb install` says `INSTALL_FAILED_NO_MATCHING_ABIS`), the phone
 is 32-bit: install the armeabi-v7a APK. A 64-bit phone also runs the
-32-bit APK, without the assistant; Settings → System → About & updates then says the 64-bit
-app has it.
+32-bit APK, without the assistant; Settings → System → About & updates then
+says the 64-bit app has it.
 
 The app installed from an **App Bundle** (Google Play, or `bundletool`)
 gets the right libraries automatically: the bundle carries all four ABIs
@@ -87,15 +88,15 @@ Notes:
 - **The on-device assistant on old Android versions:** its engine's
   library links against Android 8.0's system libraries (checked symbol by
   symbol against the NDK's API 26 stubs, and loaded on the Android 8.0
-  image), and the card loads on every 64-bit emulator image above. Whether a given old phone is fast enough is
-  a separate question; the assistant needs a phone sold with 8 GB of
+  image), and the card loads on every 64-bit emulator image above. Whether
+  a given old phone is fast enough is a separate question; the assistant needs a phone sold with 8 GB of
   memory or more (`assistant/DeviceTier.kt`) and says so, with no download
   button, on a smaller one.
 - **32-bit phones:** the app checks once per start whether the assistant's
   engine library is in this install and this process can load it
   (`assistant/AssistantSupport.kt`). Where it isn't, Chat has no
-  "on this phone" place (it lists and starts home-server chats only, and local
-  mode keeps Music, Videos and Files, with no Chat tab), there
+  "on this phone" place (it lists and starts home-server chats only, and
+  local mode keeps Music, Videos and Files, with no Chat tab), there
   are no developer options (the app version line is plain text, and the
   benchmark card they hold is not shown), and the licences list leaves out
   the models only the assistant downloads.
@@ -111,7 +112,9 @@ Notes:
 - **Room mode** runs openWakeWord and the Silero voice detector on ONNX
   Runtime, the runtime the phone's voice already ships for all four ABIs,
   and loads nothing of the on-device assistant's (LiteRT-LM,
-  sherpa-onnx). The camera is asked for only when "Scan" is pressed (the room
+  sherpa-onnx). From 1.4.0 it runs up to five wake words, or three on a
+  32-bit phone, a phone with 2 GB of memory or less, or one Android marks
+  as low-memory. The camera is asked for only when "Scan" is pressed (the room
   code's QR scanner, CameraX) or when a picture is taken for a phone chat, and
   it is not required to install. Drop-ins need the
   phone's echo canceller (`AcousticEchoCanceler.isAvailable()`); a phone
@@ -119,8 +122,7 @@ Notes:
 
 ## Android 16 (API 36)
 
-Since 2026-10-15 the app is compiled against and targets API 36 (AGP
-8.13.2). What Android 16 changes for an app that targets it, and what the
+The app is compiled against and targets API 36 (AGP 8.13.2). What Android 16 changes for an app that targets it, and what the
 app does (`TargetApi36Test` holds the code to it):
 
 - **Edge to edge, with no opt-out.** Every activity draws behind the
@@ -155,12 +157,13 @@ app does (`TargetApi36Test` holds the code to it):
 
 Every run below used a debug build. The release build is shrunk by R8 and
 was not part of these runs. The runs also pre-date the phone chat's
-documents (drafts, letter photos, "calculate exactly"), so those have no
-per-version evidence on this page.
+documents (drafts, letter photos, "calculate exactly") and room mode's
+extra wake words and room display (1.4.0), so those have no per-version
+evidence on this page.
 
-2026-10-12, debug APKs from `wf/android-old-devices`, on the Android
-emulator (Google APIs images, x86_64 unless noted), one image at a time,
-against a throwaway Domovoi (core + dashboard, a stub language model):
+**Old Android versions, 2026-10-12**, on the Android emulator (Google APIs
+images, x86_64 unless noted), one image at a time, against a throwaway
+Domovoi (core + dashboard, a stub language model):
 
 | Image | Android | APK | Result |
 |---|---|---|---|
@@ -178,8 +181,8 @@ the media notification, the phone's video feed (and its pause / resume /
 screen-on checks), the Files tab, the local Settings screen, connect and
 pair, Home, a server song played on the phone, the server's video feed, a
 chat message and its answer, the chat mic view (open, cancel), Settings →
-Voices → play a sample, Settings → System → About & updates, and a timer going off in the
-house (its notification).
+Voices → play a sample, Settings → System → About & updates, and a timer
+going off in the house (its notification).
 
 **Heap note (Android 10 image only):** the `android-29` Google APIs x86_64
 image sets no `dalvik.vm.heapgrowthlimit`, so ART capped the app at 16 MB
@@ -188,15 +191,13 @@ as do the other images (192 MB). With the emulator given the same 192 MB
 (`setprop dalvik.vm.heapgrowthlimit 192m` as root, then a runtime restart)
 the same steps pass; the app's Java heap peaked at about 48 MB there.
 
-**Room mode, 2026-10-13** (`wf/room-mode`), against a throwaway core and
-dashboard (`ft.py up --with-core`, strict pairing on, Whisper tiny, the
-openWakeWord models seeded into the run's satellite media cache), the
-room's mic fed recorded speech through the debug build's feed (never the
-host's microphone). The core was reached as `127.0.0.1` through `adb
-reverse`; the security review's fix round (same day) made the room code
-refuse loopback, as the shared enrolment contract does, so a rerun dials
-the host as `10.0.2.2` (in 10/8) with that name in the throwaway core's
-`TRUSTED_HOSTS`:
+**Room mode, 2026-10-13**, against a throwaway core and dashboard
+(strict pairing on, Whisper tiny, the openWakeWord models seeded into the
+run's satellite media cache), the room's mic fed recorded speech through
+the debug build's feed (never the host's microphone). The core was reached
+as `127.0.0.1` through `adb reverse`. A room code now refuses loopback, as
+every enrolment code does, so a rerun dials the host as `10.0.2.2` (in
+10/8) with that name in the throwaway core's `TRUSTED_HOSTS`:
 
 | Image | APK | Result |
 |---|---|---|
@@ -209,8 +210,7 @@ Not tested on the emulator: drop-ins (no image has an echo canceller), a
 real microphone, wake accuracy at a distance, days on a charger. Those
 need real phones.
 
-**API 36 and 16 KB pages, 2026-10-15** (`wf/assistant-m3`, debug APKs,
-no server; the language model copied in after a hash check instead of
+**API 36 and 16 KB pages, 2026-10-15** (debug APKs, no server; the language model copied in after a hash check instead of
 downloaded, the speech files downloaded by the app; the voice turn fed a
 recorded question through the debug build's feed, never the host's
 microphone; every screen also dumped and checked for controls with no
