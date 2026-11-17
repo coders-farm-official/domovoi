@@ -10,8 +10,9 @@ import Foundation
 // `fingerprint_source`) becomes the default here exactly as it does on
 // Android, and the *rendering* is what says "—".
 //
-// The whole screen is gated on the `stations` capability (``capStations``),
-// so these routes exist whenever anything here is read.
+// The whole screen is gated on our radio plugin declaring the `stations`
+// capability (``capStations``, ``requiredPlugins``), so these routes exist
+// whenever anything here is read.
 // ---------------------------------------------------------------------------
 
 /// One `radio_stations` row — `web.py:92`'s `RadioStation`, and

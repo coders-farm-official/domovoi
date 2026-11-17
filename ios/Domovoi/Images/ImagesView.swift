@@ -4,15 +4,16 @@ import SwiftUI
 /// Images: ask the house's own GPU for a picture, watch it being made, and
 /// look at what it has made before.
 ///
-/// `android/.../ui/screens/images/ImagesScreen.kt`, the screen that the
-/// **Image Generation plugin** puts in the app rather than one of Domovoi's
-/// own. `ScreenRouter.kt:67` reaches it through
+/// `android/.../ui/screens/images/ImagesScreen.kt`. **The screen is the
+/// app's own** — a plugin cannot ship app code — and it **uses** our Image
+/// Generation plugin's API. `ScreenRouter.kt:67` reaches it through
 /// `PluginScreenFrame(CAP_IMAGEGEN)`, which is the ``PluginBandView`` row at
-/// the top of this page (owner answer 29 moved it inside the scroll view, so
-/// it is a row and not a wrapper), and the route itself is gated on the
-/// `imagegen` capability
-/// (``Route/requiredCapability``) — a house without the plugin never gets
-/// this far and sees ``Route/unavailableNote(_:)`` instead.
+/// the top of this page ("Uses the Image Generation plugin"; owner answer 29
+/// moved it inside the scroll view, so it is a row and not a wrapper), and
+/// the route itself is gated on our plugin declaring the `imagegen`
+/// capability (``Route/requiredCapability``, ``requiredPlugins``: slug
+/// `imagegen`, publisher Coders Farm) — a house without it never offers this
+/// screen anywhere.
 ///
 /// ### What is here
 ///

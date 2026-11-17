@@ -189,8 +189,10 @@ public struct PlayerItem: Equatable, Sendable, Identifiable {
     /// `PlayItem.kt:57`. The artist line is the literal `"live radio"`, and
     /// `seekable` is false: a live stream has no place to seek to.
     ///
-    /// Only reachable when the `stations` capability is present — the radio
-    /// plugin's own router serves the stream.
+    /// Only reachable when our radio plugin is installed and declares
+    /// `stations` (``Capabilities/has(_:)``) — its own router serves the
+    /// stream — and dropped from the queue when it goes
+    /// (``PlayerServerSwitch/pluginKeeps(_:_:)``).
     public static func fromStation(id: Int64, name: String) -> PlayerItem {
         PlayerItem(
             uid: "radio-\(id)", kind: .radio, itemID: id,

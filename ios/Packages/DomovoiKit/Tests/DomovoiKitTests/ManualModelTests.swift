@@ -153,8 +153,11 @@ final class ManualModelTests: XCTestCase {
             clock: { 0 },
             configuration: StubURLProtocol.session(timeout: 5)
         )
+        // Our radio plugin in the manifest, so the radio page is decided by
+        // `/api/plugins` alone in the cases that are about that; the cases
+        // about whose plugin it is pass their own visibility.
         let seen = visibility ?? RouteVisibility(
-            capabilities: Capabilities(features: ["ai": true]),
+            capabilities: Capabilities(plugins: [OurPlugins.radio], features: ["ai": true]),
             sharedScreen: false,
             phoneCanChat: false
         )
@@ -278,6 +281,41 @@ final class ManualModelTests: XCTestCase {
         model.plugins.refresh()
         await settleUntil({ !model.visiblePieces.contains("internet-radio") }, "the switch-off")
         model.stop()
+    }
+
+    /// The radio page sends a person to the **Stations** screen, which is
+    /// this app's only for our radio plugin. Installed and on per
+    /// `/api/plugins`, but someone else's (or an older server's with no
+    /// publisher) in the capability manifest: the page is not shown and
+    /// cannot be found.
+    func testThePagesOfOurPluginNeedOurPluginInTheManifest() async {
+        let notOurs: [(String, Capabilities)] = [
+            ("another publisher", Capabilities(plugins: [
+                CapabilityPlugin(slug: "radio", publisher: "Someone Else", appCapabilities: ["stations"]),
+            ])),
+            ("no publisher", Capabilities(plugins: [
+                CapabilityPlugin(slug: "radio", appCapabilities: ["stations"]),
+            ])),
+            ("a third party declaring stations", Capabilities(plugins: [
+                CapabilityPlugin(slug: "skywave", publisher: "Someone Else", appCapabilities: ["stations"]),
+            ])),
+        ]
+        for (house, caps) in notOurs {
+            StubURLProtocol.reset()
+            let (model, houseFixture, _) = rig(
+                visibility: RouteVisibility(capabilities: caps, sharedScreen: false, phoneCanChat: false)
+            )
+            houseFixture.plugins.set(
+                #"{"plugins":[{"slug":"radio","name":"Radio","enabled":true,"status":"ok"}]}"#
+            )
+            model.start()
+            await settleUntil({ model.doc != nil && model.plugins.data != nil }, house)
+            XCTAssertFalse(model.visiblePieces.contains("internet-radio"), house)
+            XCTAssertTrue(model.visiblePieces.contains("playlists"), house)
+            model.query = "radio"
+            XCTAssertEqual([], model.results.map(\.id), "found by search, \(house)")
+            model.stop()
+        }
     }
 
     /// A piece's footer offers the next **visible** sibling, so switching a

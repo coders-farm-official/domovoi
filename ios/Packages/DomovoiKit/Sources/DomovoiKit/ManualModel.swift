@@ -739,10 +739,21 @@ public final class ManualModel {
     /// plus those whose plugin is installed, enabled and at least degraded
     /// (`ManualScreen.kt:297`). The gate for the map, for search and for a
     /// piece's siblings.
+    ///
+    /// **A page about one of our plugins also needs the plugin to be ours**
+    /// (``Capabilities/hasOurPlugin(slug:)``, the same rule as the Stations
+    /// and Images routes). The radio page tells a person to open the
+    /// **Stations** page; on a house whose `radio` slug is someone else's, or
+    /// whose manifest has no publisher, that page is not in this app, so the
+    /// manual must not send anyone to it.
     public var visiblePieces: Set<String> {
         guard let doc else { return [] }
         let on = Set((plugins.data?.plugins ?? []).filter(\.carriesItsPieces).map(\.slug))
-        return Set(doc.pieces.filter { $0.plugin == nil || on.contains($0.plugin ?? "") }.map(\.id))
+        let capabilities = visibility().capabilities
+        return Set(doc.pieces.filter { piece in
+            guard let slug = piece.plugin else { return true }
+            return on.contains(slug) && manualPluginPieceShows(slug: slug, capabilities)
+        }.map(\.id))
     }
 
     public var results: [ManualPiece] {

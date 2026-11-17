@@ -92,7 +92,10 @@ public enum Route: String, CaseIterable, Sendable {
     }
 
     /// The capability this route needs before it renders; nil = always.
-    /// Only the two plugin-backed screens are gated (`Routes.kt:74-80`).
+    /// Only the two plugin-backed screens are gated (`Routes.kt:74-80`), and
+    /// only **our** plugin's declaration counts (``Capabilities/has(_:)``,
+    /// ``requiredPlugins``) — a third-party plugin declaring `stations` does
+    /// not light up Stations.
     public var requiredCapability: String? {
         switch self {
         case .stations: return capStations
@@ -232,12 +235,14 @@ public extension Route {
     }
 
     /// Why a route a link reached is not shown, when it is not
-    /// (``ShellStrings/unavailableNote(label:isChat:aiEnabled:)``).
+    /// (``ShellStrings/unavailableNote(label:isChat:aiEnabled:needsCapability:)``).
+    /// A plugin-backed screen's note names neither the screen nor the plugin.
     func unavailableNote(_ capabilities: Capabilities) -> (title: String, detail: String) {
         ShellStrings.unavailableNote(
             label: label,
             isChat: self == .chat,
-            aiEnabled: capabilities.aiEnabled
+            aiEnabled: capabilities.aiEnabled,
+            needsCapability: requiredCapability != nil
         )
     }
 }

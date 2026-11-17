@@ -105,9 +105,13 @@ extension StubHouseUITests {
         static let namelessArtist = "Thirteen Palisades"
         static let unknownSourceArtist = "Velvet Caiman"
 
-        /// The band, from this module's `PLUGIN` dict.
-        static let pluginName = "Radio Stations"
+        /// The band, from this module's `PLUGIN` dict: the main line says the
+        /// screen uses the plugin (``PluginBandStrings/uses(_:)``). **The
+        /// fixture must publish slug `radio` and publisher `Coders Farm`**, or
+        /// the gate (``requiredPlugins``) hides Stations altogether.
+        static let pluginName = "Uses the Radio Stations plugin"
         static let pluginBy = "by Coders Farm"
+        /// The bordered badge the main line replaced: asserted **absent**.
         static let pluginBadge = "plugin"
     }
 
@@ -413,7 +417,7 @@ extension StubHouseUITests {
             "the plugin band drew no name: the manifest's `plugins` never decoded"
         )
         XCTAssertTrue(app.staticTexts[StubStations.pluginBy].exists, "the band lost its publisher")
-        XCTAssertTrue(app.staticTexts[StubStations.pluginBadge].exists, "the band lost its badge")
+        XCTAssertFalse(app.staticTexts[StubStations.pluginBadge].exists, "the bordered badge is back")
 
         XCTAssertTrue(app.staticTexts[StationsWords.title].exists, "no title")
         XCTAssertTrue(app.staticTexts[StationsWords.recent].exists, "no Recent card")

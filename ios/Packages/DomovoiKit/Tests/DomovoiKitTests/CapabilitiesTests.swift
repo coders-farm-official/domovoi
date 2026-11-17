@@ -14,7 +14,7 @@ final class CapabilitiesTests: XCTestCase {
           "domovoi_api": "1",
           "server_version": "0.9.0",
           "plugins": [
-            {"slug": "radio", "version": "1.2", "android_capabilities": ["stations"]},
+            {"slug": "radio", "version": "1.2", "publisher": "Coders Farm", "android_capabilities": ["stations"]},
             {"slug": "provider", "android_capabilities": []},
             {"slug": "future", "android_capabilities": ["holograms"], "extra_field": true}
           ],
@@ -61,10 +61,13 @@ final class CapabilitiesTests: XCTestCase {
         XCTAssertNil(plugin.accent)
     }
 
-    func testHasMatchesAnyPluginDeclaringIt() throws {
+    /// Only our plugin's declaration counts (``requiredPlugins``); the
+    /// third-party and wrong-publisher cases are `PluginGateTests`'.
+    func testHasMatchesOurPluginDeclaringIt() throws {
         let caps = try decoded()
         XCTAssertTrue(caps.has(capStations))
-        XCTAssertTrue(caps.has("holograms"), "unknown slugs are still data")
+        XCTAssertEqual(3, caps.plugins.count, "an unknown capability still decodes as data")
+        XCTAssertFalse(caps.has("holograms"), "but this app has no screen for it, so it gates nothing on")
         XCTAssertFalse(caps.has(capImagegen))
         XCTAssertFalse(Capabilities.empty.has(capStations))
         XCTAssertEqual(caps.pluginFor(capStations)?.slug, "radio")

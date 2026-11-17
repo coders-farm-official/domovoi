@@ -10,7 +10,7 @@ import XCTest
 final class PhoneBarTests: XCTestCase {
 
     private let none = Capabilities.empty
-    private let radio = Capabilities(plugins: [CapabilityPlugin(slug: "radio", appCapabilities: [capStations])])
+    private let radio = Capabilities(plugins: [OurPlugins.radio])
     private let `default`: [Route] = [.home, .music, .videos, .chat]
 
     /// With an engine on the phone, so Chat is on the bar whatever a server
