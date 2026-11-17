@@ -302,3 +302,25 @@ async def test_the_pairing_address_is_forgotten_when_the_last_file_goes(house) -
     await svc.reconcile()
     assert house.docker.calls == ["start", "stop"]
     assert not (pairing / "hostname").exists()  # the next file gets a new address
+
+
+@linux_only
+async def test_a_new_address_after_a_block_restarts_tor_and_tells_friends(house) -> None:
+    house.enable()
+    house.friends.extend([_friend(1), _friend(2)])
+    await svc.reconcile()
+    main = house.root / "friend-houses" / "tor" / "data" / "hs-main"
+    (main / "hostname").write_text("old")
+    (main / "hs_ed25519_secret_key").write_text("old key")
+    house.spawned.clear()
+    await svc.move_to_new_address()
+    assert house.docker.calls == ["start", "restart"]  # a restart, never a reload
+    assert not (main / "hs_ed25519_secret_key").exists()  # Tor makes a new address
+    assert house.spawned == ["friend-houses-im-back"]  # friends get the new address
+
+
+@linux_only
+async def test_no_new_address_while_nothing_runs(house) -> None:
+    house.enable()
+    assert await svc.move_to_new_address() is False
+    assert house.docker.calls == []

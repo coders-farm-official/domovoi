@@ -447,7 +447,7 @@ const FhAddCard = ({ fire, onSent }) => {
     } finally { setBusy(false); }
   };
 
-  const blocked = preview && (preview.expired || preview.already_friends || preview.already_asked);
+  const blocked = preview && (preview.expired || preview.already_friends || preview.already_asked || preview.blocked);
   return (
     <Card title="Add a friend from their file" sub="Open the friend file another house gave you, or paste its text.">
       <div style={{ ...fhStack, padding: '12px 16px' }}>
@@ -481,6 +481,7 @@ const FhAddCard = ({ fire, onSent }) => {
             {preview.expired && <div className="chat-note" role="note">This friend file has expired. Ask them for a new one.</div>}
             {preview.already_friends && <div className="chat-note info" role="note">You’re already friends with this house.</div>}
             {preview.already_asked && <div className="chat-note info" role="note">You’ve already asked this house; the request is under Requests.</div>}
+            {preview.blocked && <div className="chat-note" role="note">You blocked this house. Unblock it first if you want to be friends again.</div>}
             {!blocked && (
               <div style={fhRow}>
                 <label htmlFor="fh-their-name" style={{ fontSize: 13 }}><strong>What do you call them?</strong></label>
@@ -668,11 +669,82 @@ const FhAlertChoice = ({ friend, fire, onChanged }) => {
   );
 };
 
+/* "5m ago", "3h ago", "2d ago": how long since a friend's house was heard. */
+const fhAgo = (iso) => {
+  const t = fhIsoMs(iso);
+  if (!Number.isFinite(t)) return null;
+  const min = Math.max(0, Math.round((Date.now() - t) / 60000));
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min}m ago`;
+  const h = Math.round(min / 60);
+  if (h < 48) return `${h}h ago`;
+  return `${Math.round(h / 24)}d ago`;
+};
+
+// Only whether the friend's HOUSE is online (owner decision): nothing
+// about the people in it.
+const FhPresence = ({ friend }) => {
+  if (friend.online) return <Pill tone="ok">Online</Pill>;
+  const ago = fhAgo(friend.last_seen_at);
+  return <span style={fhMuted}>{ago ? `Last seen ${ago}` : 'Not reached yet'}</span>;
+};
+
+const FhBlockDialog = ({ friend, open, onCancel, onBlocked, fire }) => {
+  const [keep, setKeep] = React.useState(true);
+  const [move, setMove] = React.useState(true);
+  const [busy, setBusy] = React.useState(false);
+  React.useEffect(() => { if (open) { setKeep(true); setMove(true); } }, [open]);
+  const name = String(friend.name || 'this house');
+  const saveCopy = async () => {
+    try {
+      const data = await apiGet(`${FH_API}/conversations/${friend.house}/export`);
+      fhSaveJson(data, fhExportName(friend.name));
+    } catch (e) { fhFail(fire, e); }
+  };
+  const block = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const r = await apiPost(`${FH_API}/friends/${encodeURIComponent(friend.id)}/block`,
+                              { keep_messages: keep, new_address: move });
+      fire(r && r.new_address
+        ? `${name} is blocked · this house is moving to a new private address`
+        : `${name} is blocked`, { tone: 'ok' });
+      onBlocked();
+    } catch (e) { fhFail(fire, e); } finally { setBusy(false); }
+  };
+  const box = { display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 13, lineHeight: 1.45, color: 'var(--fg)' };
+  return (
+    <DeleteConfirmDialog open={open} title={`Block ${name}?`} icon="ban" confirmLabel={busy ? 'Blocking…' : 'Block'}
+                         onCancel={busy ? undefined : onCancel} onConfirm={block}>
+      <div>{`Block ${name}? They’re removed and can’t ask to be friends again unless you unblock them.`}</div>
+      <label style={box}>
+        <input type="checkbox" checked={keep} disabled={busy} onChange={(e) => setKeep(e.target.checked)}/>
+        <span>Keep our messages with them</span>
+      </label>
+      {!keep && fhHouseOk(friend.house) && (
+        <div style={{ paddingLeft: 24 }}>
+          <Button icon="download" disabled={busy} onClick={saveCopy}>Save a copy first</Button>
+        </div>
+      )}
+      <label style={box}>
+        <input type="checkbox" checked={move} disabled={busy} onChange={(e) => setMove(e.target.checked)}/>
+        <span>
+          Move this house to a new private address (recommended): the blocked house can’t even reach the door.
+          Your other friends are told the new address automatically; messages may take a few minutes to get
+          through while it changes.
+        </span>
+      </label>
+    </DeleteConfirmDialog>
+  );
+};
+
 const FhFriend = ({ friend, fire, onChanged, onMessage, onShare }) => {
   const [editing, setEditing] = React.useState(false);
   const [name, setName] = React.useState(String(friend.name || ''));
   const [busy, setBusy] = React.useState(false);
   const [confirm, setConfirm] = React.useState(false);
+  const [blocking, setBlocking] = React.useState(false);
   const act = async (fn, said) => {
     setBusy(true);
     try { await fn(); if (said) fire(said, { tone: 'ok' }); onChanged(); return true; }
@@ -703,6 +775,7 @@ const FhFriend = ({ friend, fire, onChanged, onMessage, onShare }) => {
         ) : (
           <>
             <strong style={{ fontSize: 14, overflowWrap: 'anywhere' }}>{String(friend.name || '')}</strong>
+            <FhPresence friend={friend}/>
             {!friend.verified && <Pill tone="warn">not verified</Pill>}
             <IconButton name="pencil" title="rename" aria-label="rename" onClick={() => setEditing(true)}/>
             {fhHouseOk(friend.house) && (
@@ -727,11 +800,14 @@ const FhFriend = ({ friend, fire, onChanged, onMessage, onShare }) => {
       <div style={fhRow}>
         <span style={fhMuted}>friends since {fhDay(friend.added_at)}</span>
         <Button icon="trash-2" disabled={busy} onClick={() => setConfirm(true)}>Remove</Button>
+        <Button icon="ban" disabled={busy} onClick={() => setBlocking(true)}>Block</Button>
       </div>
       <DeleteConfirmDialog open={confirm} title={`Remove ${String(friend.name || 'this friend')}?`} confirmLabel="Remove"
                            busy={busy} onCancel={() => setConfirm(false)} onConfirm={remove}>
-        <div>They won’t be able to reach this house any more.</div>
+        <div>They won’t be able to reach this house any more. (Block also stops them asking again.)</div>
       </DeleteConfirmDialog>
+      <FhBlockDialog friend={friend} open={blocking} fire={fire} onCancel={() => setBlocking(false)}
+                     onBlocked={() => { setBlocking(false); onChanged(); }}/>
     </div>
   );
 };
@@ -743,6 +819,53 @@ const FhFriendsCard = ({ friends, fire, onChanged, onMessage, onShare }) => {
       <div style={{ padding: '0 16px 4px' }}>
         {!list.length && <div style={{ ...fhMuted, padding: '12px 0' }}>no friends yet</div>}
         {list.map((f) => <FhFriend key={f.id} friend={f} fire={fire} onChanged={onChanged} onMessage={onMessage} onShare={onShare}/>)}
+      </div>
+    </Card>
+  );
+};
+
+/* ---- blocked houses ------------------------------------------------- */
+
+const FhBlockedHouse = ({ house, fire, onChanged }) => {
+  const [busy, setBusy] = React.useState(false);
+  const [confirm, setConfirm] = React.useState(false);
+  const name = String(house.name || 'this house');
+  const unblock = async () => {
+    setBusy(true);
+    try {
+      await apiDelete(`${FH_API}/blocked/${house.house}`);
+      fire(`${name} is unblocked`, { tone: 'ok' });
+      setConfirm(false);
+      onChanged();
+    } catch (e) { fhFail(fire, e); } finally { setBusy(false); }
+  };
+  return (
+    <div style={fhItem}>
+      <div style={fhRow}>
+        <strong style={{ fontSize: 14, overflowWrap: 'anywhere' }}>{name}</strong>
+        <span style={fhMuted}>blocked {fhDay(house.blocked_at)}</span>
+      </div>
+      <div style={fhRow}>
+        <span style={fhMuted}>fingerprint</span>
+        <FhFingerprint value={house.fingerprint} fire={fire}/>
+      </div>
+      <div><Button icon="undo-2" disabled={busy} onClick={() => setConfirm(true)}>Unblock</Button></div>
+      <DeleteConfirmDialog open={confirm} title={`Unblock ${name}?`} icon="undo-2" confirmLabel="Unblock" busy={busy}
+                           onCancel={() => setConfirm(false)} onConfirm={unblock}>
+        <div>{`Unblock ${name}? They aren’t friends again; they can ask with a new friend file.`}</div>
+      </DeleteConfirmDialog>
+    </div>
+  );
+};
+
+// Hidden when nobody is blocked.
+const FhBlockedCard = ({ blocked, fire, onChanged }) => {
+  const list = ((blocked && blocked.blocked) || []).filter((b) => fhHouseOk(b.house));
+  if (!list.length) return null;
+  return (
+    <Card title="Blocked houses" sub="Houses that can’t ask to be friends with this house.">
+      <div style={{ padding: '0 16px 4px' }}>
+        {list.map((b) => <FhBlockedHouse key={b.house} house={b} fire={fire} onChanged={onChanged}/>)}
       </div>
     </Card>
   );
@@ -1175,8 +1298,10 @@ const FriendHousesPanel = () => {
   const convs = useApiObject(live && enabled ? `${FH_API}/conversations` : null, opts);
   const shared = useApiObject(live && enabled ? `${FH_API}/shared-lists` : null, opts);
   const lists = useApiObject(live && enabled ? '/api/lists' : null, opts);
+  const blockedHouses = useApiObject(live && enabled ? `${FH_API}/blocked` : null, opts);
   const refreshAll = () => {
     st.refresh(); inv.refresh(); req.refresh(); fr.refresh(); convs.refresh(); shared.refresh(); lists.refresh();
+    blockedHouses.refresh();
   };
   useFhEvery(FH_POLL_MS, refreshAll, live);
 
@@ -1281,8 +1406,10 @@ const FriendHousesPanel = () => {
       {workable && <FhInvitesCard status={status} invites={inv.data} fire={fire} onChanged={() => { inv.refresh(); st.refresh(); }}/>}
       {workable && <FhAddCard fire={fire} onSent={() => { req.refresh(); st.refresh(); }}/>}
       <FhRequestsCard requests={req.data} fire={fire} onChanged={() => { req.refresh(); fr.refresh(); st.refresh(); }}/>
-      <FhFriendsCard friends={fr.data} fire={fire} onChanged={() => { fr.refresh(); st.refresh(); }}
+      <FhFriendsCard friends={fr.data} fire={fire}
+                     onChanged={() => { fr.refresh(); st.refresh(); convs.refresh(); shared.refresh(); blockedHouses.refresh(); }}
                      onMessage={openConversation} onShare={shareWith}/>
+      <FhBlockedCard blocked={blockedHouses.data} fire={fire} onChanged={() => { blockedHouses.refresh(); }}/>
     </div>
   );
 };

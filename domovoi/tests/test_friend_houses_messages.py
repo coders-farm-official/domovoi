@@ -296,6 +296,8 @@ async def test_sending_queues_and_delivers_on_ack(house, monkeypatch) -> None:
     sent: list = []
 
     class _Sess:
+        peer = SimpleNamespace(statement=None)  # presence reads the friend's statement
+
         async def send(self, kind, body=b""):
             sent.append((kind, body))
 

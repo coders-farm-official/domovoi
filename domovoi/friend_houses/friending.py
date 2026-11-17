@@ -42,6 +42,7 @@ from domovoi.friend_houses import connect as fc
 from domovoi.friend_houses import friend_file as ff
 from domovoi.friend_houses import identity as fid
 from domovoi.friend_houses import pairing as fp
+from domovoi.friend_houses import presence
 from domovoi.friend_houses import session as fs
 from domovoi.friend_houses import store
 from domovoi.friend_houses import tor_config as tc
@@ -217,8 +218,11 @@ async def preview(text: str) -> dict[str, Any]:
     async with _db() as s:
         already = await store.friend_by_house(s, f.house_key)
         asked = await store.request_by_house(s, "out", f.house_key)
+    from domovoi.friend_houses import blocking
+
     return {"name": f.name, "fingerprint": f.fingerprint, "expired": expired,
-            "already_friends": already is not None, "already_asked": asked is not None}
+            "already_friends": already is not None, "already_asked": asked is not None,
+            "blocked": await blocking.is_blocked(f.house_key)}
 
 
 async def send_request(text: str, *, local_name: str, by: str | None = None) -> dict[str, Any]:
@@ -231,6 +235,10 @@ async def send_request(text: str, *, local_name: str, by: str | None = None) -> 
         raise FriendingError("That's this house's own friend file.")
     if f.expires_day * 86400 < time.time():
         raise FriendingError("That friend file has expired. Ask for a new one.")
+    from domovoi.friend_houses import blocking
+
+    if await blocking.is_blocked(f.house_key):
+        raise FriendingError("You blocked that house. Unblock it first if you want to be friends again.")
     reach = tc.ReachKey.generate()
     days = max(1, int((f.expires_day * 86400 - time.time()) // 86400) + 1 + ACCEPT_GRACE_DAYS)
     request_id = _new_id("r")
@@ -294,6 +302,11 @@ async def on_request(event: dict[str, Any]) -> None:
         return
     if statement is None or len(reach_private) != 32 or not (len(code) == 4 and code.isdigit()):
         log.warning("Friend Houses: a request event failed its checks and was dropped")
+        return
+    from domovoi.friend_houses import blocking
+
+    if await blocking.is_blocked(statement.house_key):
+        log.info("Friend Houses: a request from a blocked house was dropped")
         return
     async with _db() as s:
         if not await store.use_invite(s, invite_id):
@@ -391,6 +404,10 @@ async def on_accepted(event: dict[str, Any]) -> None:
         return
     if statement is None or len(gift) != 32:
         return
+    from domovoi.friend_houses import blocking
+
+    if await blocking.is_blocked(statement.house_key):
+        return
     async with _db() as s:
         existing = await store.friend_by_house(s, statement.house_key)
         if existing is not None:
@@ -430,7 +447,7 @@ async def list_friends() -> list[dict[str, Any]]:
     async with _db() as s:
         rows = await store.active_friends(s)
     return [{"id": f.id, "name": f.local_name, "fingerprint": fid.fingerprint(f.house_key),
-             "house": f.house_key.hex(), "alert": f.alert,
+             "house": f.house_key.hex(), "alert": f.alert, **presence.view(f.last_seen_at),
              "code": f.code, "verified": f.verified_at is not None,
              "added_at": f.added_at.isoformat() if f.added_at else None} for f in rows]
 

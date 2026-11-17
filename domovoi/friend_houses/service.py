@@ -232,6 +232,15 @@ async def _reconcile() -> None:
     folder.ensure()
     if before is not None and before.pairing_onion and not w.pairing_onion:
         folder.forget_onion("hs-pairing")
+    # A block asked for a new address (blocking.py): delete this house's
+    # onion keys so Tor makes a new one, restart rather than reload, and
+    # come online again so every friend is told the new address.
+    new_address = bool(_STATE.pop("new_address", False)) and w.main_onion
+    if new_address:
+        folder.forget_onion("hs-main")
+        _STATE["was_on"] = False
+        if action == "reload":
+            action = "restart"
     folder.write_torrc(w)
     _sync_key_files(folder, peers)
     _write_invites(invites)
@@ -266,6 +275,18 @@ async def _reconcile() -> None:
 
         # "I'm back": friends flush their outboxes to this house now.
         spawn(_after_reconcile_then(messages.say_im_back), "friend-houses-im-back")
+
+
+async def move_to_new_address() -> bool:
+    """Give this house a new onion address (after a block). False when the
+    private connection isn't running a house onion right now; the friends
+    marked announce_needed are told on its next start either way."""
+    old = _STATE.get("onion")
+    if not tor_wanted() or old is None:
+        return False
+    _STATE["new_address"] = True
+    await reconcile()
+    return _STATE.get("onion") not in (None, old)
 
 
 def _why_stopped(policy: str, friends: int) -> str:
@@ -425,6 +446,17 @@ def handle_event(event: dict) -> None:
     if kind in ("listening", "connected", "im_back"):
         house = str(event.get("house", ""))[:16]
         log.info("Friend Houses: %s%s", kind, f" ({house}…)" if house else "")
+    if kind in ("connected", "im_back"):
+        # Presence, and a friend's newer address (presence.py).
+        from domovoi.friend_houses import presence
+
+        try:
+            house_key = bytes.fromhex(str(event.get("house", "")))
+            statement = bytes.fromhex(str(event.get("statement", ""))) or None
+        except ValueError:
+            house_key, statement = b"", None
+        if len(house_key) == 32:
+            spawn(presence.saw(house_key, statement), "friend-houses-presence")
     elif kind in ("request", "accepted"):
         from domovoi.friend_houses import friending
 
@@ -509,12 +541,15 @@ async def _after_reconcile_then(fn) -> None:
 
 
 async def _retry_loop() -> None:
-    from domovoi.friend_houses import friending, messages
+    from domovoi.friend_houses import friending, messages, presence
 
     while True:
         await asyncio.sleep(RETRY_EVERY_SEC)
         await _after_reconcile(friending.deliver_pending)
         await _after_reconcile(messages.flush_all)
+        # Presence: ping friends not heard from in 10 minutes, and tell any
+        # still waiting for this house's new address (after a block).
+        await _after_reconcile(presence.check_all)
 
 
 async def _shared_lists_loop() -> None:

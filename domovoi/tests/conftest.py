@@ -178,6 +178,7 @@ TABLES_TO_TRUNCATE = [
     "friend_houses_spaces",
     "friend_houses_space_ops",
     "friend_houses_space_items",
+    "friend_houses_blocked",
     "timers",
     # The owner's "say it like" changes (V027); the defaults are a data file.
     "pronunciations",

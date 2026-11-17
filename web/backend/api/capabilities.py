@@ -56,6 +56,7 @@ CORE_HANDLER_DISPLAY: list[dict[str, str]] = [
     {"name": "repeat",        "label": "Repeat",         "tone": "info"},
     {"name": "double_check",  "label": "Double-Check",   "tone": "info"},
     {"name": "dropin",        "label": "Drop-In",        "tone": "comms"},
+    {"name": "friend_houses", "label": "Friend Houses",  "tone": "info"},
     {"name": "intercom",      "label": "Intercom",       "tone": "comms"},
     {"name": "chat_mode",     "label": "Chat Mode",      "tone": "comms"},
     {"name": "printing",      "label": "Printing",       "tone": "device"},

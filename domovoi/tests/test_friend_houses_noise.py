@@ -168,7 +168,7 @@ def test_the_pattern_and_psk_must_agree() -> None:
 
 def test_the_responder_can_learn_its_psk_from_the_first_message() -> None:
     si, sr = X25519PrivateKey.generate(), X25519PrivateKey.generate()
-    psk = b"" * 32
+    psk = b"\x07" * 32
     init = Handshake("IKpsk2", initiator=True, prologue=b"p", static=si,
                      remote_static=public_bytes(sr), psk=psk)
     resp = Handshake("IKpsk2", initiator=False, prologue=b"p", static=sr)
@@ -184,7 +184,7 @@ def test_the_responder_can_learn_its_psk_from_the_first_message() -> None:
 def test_a_responder_that_never_got_its_psk_cant_finish() -> None:
     si, sr = X25519PrivateKey.generate(), X25519PrivateKey.generate()
     init = Handshake("IKpsk2", initiator=True, prologue=b"p", static=si,
-                     remote_static=public_bytes(sr), psk=b"" * 32)
+                     remote_static=public_bytes(sr), psk=b"\x07" * 32)
     resp = Handshake("IKpsk2", initiator=False, prologue=b"p", static=sr)
     resp.read_message(init.write_message())
     with pytest.raises(NoiseError):

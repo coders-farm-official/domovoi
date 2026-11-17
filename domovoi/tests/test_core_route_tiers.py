@@ -178,6 +178,9 @@ FRIEND_HOUSES_SECURITY = [
     ("POST", "/v1/admin/friend-houses/shared-lists/{space}/accept"),
     ("POST", "/v1/admin/friend-houses/shared-lists/{space}/decline"),
     ("DELETE", "/v1/admin/friend-houses/shared-lists/{space}"),
+    ("POST", "/v1/admin/friend-houses/friends/{friend_id}/block"),
+    ("GET", "/v1/admin/friend-houses/blocked"),
+    ("DELETE", "/v1/admin/friend-houses/blocked/{house}"),
 ]
 
 

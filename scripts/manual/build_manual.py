@@ -72,6 +72,7 @@ ROUTES: dict[str, dict] = {
     # Calendars from elsewhere (1.3.0): links are added on the dashboard; a
     # phone shares its own calendars from the app's Phone calendars section.
     "settings/calendars": {"dashboard": "#settings/calendars", "app": {"dashboard": True}},
+    "settings/friend-houses": {"dashboard": "#settings/friend-houses", "app": {"dashboard": True}},
     "settings/voices": {"dashboard": "#settings/voices", "app": {"dashboard": True}},
     "settings/wake-words": {"dashboard": "#settings/wake-words", "app": {"screen": "Settings", "tab": "wake-words"}},
     "settings/phones-and-browsers": {"dashboard": "#settings/phones-and-browsers", "app": {"dashboard": True}},
@@ -138,7 +139,7 @@ PIECES: dict[str, tuple] = {
     "Timers and reminders": ("timers", "countdowns and nudges", ["timer", "reminder", "remind me", "countdown", "alarm", "kitchen timer", "at 6 pm"], {}),
     "Quick answers": ("quick-answers", "time, maths, questions", ["time", "date", "calculator", "math", "maths", "convert", "units", "weather", "question", "tip", "are you sure", "fact check"], {}),
     "Music by voice": ("music-voice", "play, pause, any room", ["play", "pause", "skip", "volume", "louder", "another room", "shuffle", "favorites"], {}),
-    "Talk to other rooms": ("talk", "announce, drop in", ["intercom", "announce", "broadcast", "drop in", "call", "tell everyone"], {}),
+    "Talk to other rooms": ("talk", "announce, drop in, friend houses", ["intercom", "announce", "broadcast", "drop in", "call", "tell everyone", "friend houses", "messages", "message a friend"], {}),
     "Notes and memory": ("notes", "jot it down, remember it", ["note", "jot", "remember", "memory", "favorite"], {}),
     "Everything it can do": ("everything", "every installed feature", ["what can you do", "features", "capabilities", "list", "help", "plugins"], {"live": "things-to-say"}),
     "When it mishears": ("mishears", "repeat, never mind, try again", ["repeat", "never mind", "misheard", "wake word not working", "doesn't hear", "sensitivity"], {}),
@@ -289,6 +290,8 @@ PHRASES: dict[str, tuple] = {
     "when I say Gramps I mean Hearth Ensemble": ("music_alias", "fast", {}),
     "tell the kitchen dinner's ready": ("intercom", "llm", {}),
     "drop in on the kitchen": ("dropin", "fast", {}),
+    "any messages": ("friend_houses", "fast", {}),
+    "read my messages": ("friend_houses", "fast", {}),
     "hang up": ("dropin", "fast", {}),
     "jot down buy milk and eggs": ("voice_notes", "fast", {}),
     "read my notes": ("voice_notes", "fast", {}),

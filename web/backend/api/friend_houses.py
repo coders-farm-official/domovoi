@@ -407,3 +407,41 @@ async def friend_houses_leave_list(space_id: str, request: Request):
     return bridge_response(
         *await delete_admin(f"{CORE}/shared-lists/{sid}", timeout=30.0, headers=auth_forward_headers(request))
     )
+
+
+# ─── blocking ────────────────────────────────────────────────────────────
+# Admin only (the security tier at both hops): blocking removes a friend,
+# refuses it for good and, by default, moves this house to a new address.
+
+
+class BlockBody(BaseModel):
+    keep_messages: bool = Field(default=True, strict=True)
+    new_address: bool = Field(default=True, strict=True)
+
+
+@router.post("/friends/{friend_id}/block", dependencies=WRITE)
+async def friend_houses_block(friend_id: str, request: Request):
+    """Block a friend house: removed, refused from now on, and (by default)
+    this house moves to a new private address its other friends are told."""
+    fid = _id(friend_id, "friend house")
+    body = await _body(request, BlockBody)
+    return bridge_response(
+        *await post_admin(f"{CORE}/friends/{fid}/block", body, timeout=120.0,
+                          headers=auth_forward_headers(request))
+    )
+
+
+@router.get("/blocked", dependencies=READ)
+async def friend_houses_blocked(request: Request):
+    """The houses this house blocked."""
+    return bridge_response(*await get_admin(f"{CORE}/blocked", headers=auth_forward_headers(request)))
+
+
+@router.delete("/blocked/{house}", dependencies=WRITE)
+async def friend_houses_unblock(house: str, request: Request):
+    """Unblock a house. It isn't a friend again; it can ask with a new file."""
+    if not _HOUSE.match(house or ""):
+        raise HTTPException(status_code=404, detail="That house isn't blocked.")
+    return bridge_response(
+        *await delete_admin(f"{CORE}/blocked/{house}", headers=auth_forward_headers(request))
+    )
