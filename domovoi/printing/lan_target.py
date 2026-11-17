@@ -38,11 +38,27 @@ The one escape hatch is the existing operator setting
 ``OUTBOUND_ALLOW_HOSTS`` (empty by default, :mod:`domovoi.net_safety`):
 an entry naming an exact ``host:port`` lets that endpoint through even
 though it sits in a refused range, and ONLY for an address an admin typed
-(``operator_ok``; the saved row keeps ``operator_allowed``). An address
-discovered by mDNS or the sweep, or typed by a household device, never
-uses it. The functional-test harness uses it to reach an ``ippeveprinter``
-on loopback; a real install's ``.env`` never has it. An entry without a
-port does NOT count.
+(``operator_ok``; the saved row keeps ``operator_allowed``): a printer on
+another private subnet, say. An address discovered by mDNS or the sweep,
+or typed by a household device, never uses it. An entry without a port
+does NOT count.
+
+**Loopback and the server's own addresses are refused whatever the
+allowlist says** (owner, 2026-11-16: network printers only, so no local
+CUPS or ipp-usb queue, ever): 127.0.0.0/8, ``::1`` (and its IPv4-mapped
+spellings), and every address this server holds. :func:`_never` runs
+before the allowlist is consulted, on every check, including each later
+connection to a saved row, so a row saved before this rule stops working.
+
+The test fakes live on 127.0.0.x. They get in through
+:data:`ALLOW_LOOPBACK_UNDER_STUBS`, the repo's usual shape for a test-only
+switch (``room_music.RESTORE_AT_STARTUP_IN_STUBS``,
+``wake_default.ALLOW_DOWNLOAD_UNDER_STUBS``): a module constant, not a
+setting, so neither ``.env`` nor Settings can reach it, and honoured only
+while ``USE_STUBS`` is on, which a real install never runs with. A test
+sets it with ``monkeypatch``. The bash harness (``test-printing.sh``)
+drives the IPP and eSCL clients directly and never passes through this
+check.
 """
 
 from __future__ import annotations
@@ -203,20 +219,49 @@ def _allowlisted(host: str, port: int) -> bool:
     return False
 
 
+#: Test-only: let the fakes on 127.0.0.x past :func:`_never`. Honoured only
+#: under ``USE_STUBS`` (the test suite); not a setting, so no ``.env`` or
+#: Settings value reaches it. Tests set it with ``monkeypatch``.
+ALLOW_LOOPBACK_UNDER_STUBS = False
+
+LOOPBACK_REFUSED = "That's this server itself. Domovoi only prints to printers on your network, not USB or local ones."
+
+
+def _loopback_for_tests() -> bool:
+    if not ALLOW_LOOPBACK_UNDER_STUBS:
+        return False
+    from domovoi.config import settings
+
+    return bool(settings.use_stubs)
+
+
+def _never(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> None:
+    """Refused whatever the operator allowlist says: loopback and the
+    server's own addresses (owner, 2026-11-16)."""
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    if ip.is_unspecified or (ip.is_loopback and not _loopback_for_tests()):
+        raise NotOnLan(LOOPBACK_REFUSED)
+    if str(ip) in own_addresses():
+        raise NotOnLan("That's this server's own address, not a printer.")
+
+
 def check_address(address: str, port: int, *, host: str | None = None, operator_ok: bool = False) -> None:
     """Raise :class:`NotOnLan` unless ``address`` may be dialled.
 
-    ``operator_ok`` lets the operator's ``OUTBOUND_ALLOW_HOSTS`` exact
-    ``host:port`` entries through. Only an address an ADMIN typed (and the
-    row saved from it) passes it: anything discovered, swept or typed by a
-    household device is held to the home-network rules, loopback refused
-    (owner rule Q20)."""
-    if operator_ok and (_allowlisted(host or address, port) or _allowlisted(address, port)):
-        return
+    Loopback and the server's own addresses are refused first, always
+    (:func:`_never`). After that, ``operator_ok`` lets the operator's
+    ``OUTBOUND_ALLOW_HOSTS`` exact ``host:port`` entries through. Only an
+    address an ADMIN typed (and the row saved from it) passes it: anything
+    discovered, swept or typed by a household device is held to the
+    home-network rules."""
     try:
         ip = ipaddress.ip_address(address)
     except ValueError as e:
         raise NotOnLan("That isn't an address.") from e
+    _never(ip)
+    if operator_ok and (_allowlisted(host or address, port) or _allowlisted(address, port)):
+        return
     if ip.version == 6:
         mapped = ip.ipv4_mapped
         if mapped is None:

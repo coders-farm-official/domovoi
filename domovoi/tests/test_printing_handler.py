@@ -274,7 +274,8 @@ async def test_set_up_the_printer_by_voice(voice, monkeypatch):
 async def test_set_up_finds_nothing(voice, monkeypatch):
     monkeypatch.setattr(discovery, "browse_mdns", lambda: mdns.BrowseResult(services=[], heard={}, errors=[]))
     r = await voice("set up the printer")
-    assert r.text.startswith("I couldn't find a printer. Make sure it's switched on")
+    assert r.text.startswith("I couldn't find a printer. Domovoi works with Wi-Fi and network printers, not USB")
+    assert "Make sure it's switched on" in r.text
 
 
 @requires_db

@@ -406,7 +406,7 @@ async def add_typed(text: str, *, name: str | None, room_id: str | None, room_la
         escl_target = cand
         break
     if ipp_target is None and escl_target is None:
-        raise devices.DeviceError("Nothing at that address answered like a printer or a scanner.")
+        raise devices.DeviceError(devices.NOT_A_PRINTER)
     operator = admin and any(lan_target.needs_operator(t_) for t_ in (ipp_target, escl_target) if t_ is not None)
     return await devices.add_device(ipp_target=ipp_target, escl_target=escl_target, name=name, room_id=room_id,
                                     room_label=room_label, added_via="typed", operator_allowed=operator)

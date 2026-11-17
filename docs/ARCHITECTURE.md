@@ -883,7 +883,7 @@ proxies its routes (`/v1/printers`, `/v1/print`, `/v1/scan` →
 | `http11.py` | A small HTTP/1.1 client: the vetted address only, `Content-Length` bodies, the TLS certificate pin checked before anything is sent |
 | `client.py` | The IPP operations: Get-Printer-Attributes, Validate-Job, Create-Job + Send-Document (Print-Job fallback), Get-Job-Attributes, Cancel-Job, Identify-Printer |
 | `lan_target.py` | The LAN-only check every address passes (the home subnet only; docs/SECURITY_PRIVACY.md) |
-| `mdns.py`, `discovery.py` | A one-shot mDNS look (group mode, then legacy unicast), saved printers followed by UUID, the /24 sweep on "Look again", typed addresses |
+| `mdns.py`, `discovery.py` | A one-shot mDNS look (group mode and legacy unicast at once), saved printers followed by UUID, the /24 sweep on "Look again", typed addresses |
 | `capabilities.py`, `options.py` | What a printer can do, its status in plain words and its supplies (`printer-supply`, else `marker-*`); options resolved against it, paper by country, the format to send (PDF, else PWG Raster, else URF) |
 | `raster.py` | PWG Raster and URF encoders, back sides per `sheet-back`, and an independent strict reader |
 | `render.py`, `render_worker.py`, `templates.py` | Page drawing in a short-lived worker process with a time limit: pypdfium2 for PDFs, ReportLab for the test page, text, tables, pictures and scan PDFs (DeviceRGB only) |

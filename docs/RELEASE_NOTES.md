@@ -62,6 +62,39 @@ a way that would otherwise get reported as a bug.
   developers, and true on every kind of server; the wake-word summary only
   mentions training where this server can train.
 
+## 1.4.0 (unreleased) — Printers: loopback and the server itself are refused, even through OUTBOUND_ALLOW_HOSTS
+
+- **What changed.** An admin could add a "printer" on this server's own
+  loopback (a local CUPS or ipp-usb queue) by listing its exact
+  `host:port` in `OUTBOUND_ALLOW_HOSTS` and typing the full address. That
+  is closed (network printers only, owner rule): printing and scanning
+  refuse 127.0.0.0/8, `::1`, `0.0.0.0` and every address the server holds,
+  whatever the setting says. The setting still lets an admin add a printer
+  on another private subnet by its exact `host:port`.
+- **What to know.** A printer saved that way before now shows "isn't on the
+  home network any more" and won't print; remove it (admin). Nothing else
+  changes: discovery, the sweep and addresses typed by household devices
+  never used the setting.
+
+## 1.4.0 (unreleased) — Printers: "network printers only" said where you add one
+
+- **What changed.** Domovoi has only ever printed to Wi-Fi and network
+  printers (AirPrint, IPP Everywhere or Mopria); USB printers, printers that
+  need a maker's driver, the Windows print spooler and a Linux box's own
+  CUPS queues are not supported, on any host. That is now said where people
+  add a printer, not only in the manual: under **Add by address** in
+  **Settings → Household → Printers & scanners**, in the answer when a typed
+  address isn't a printer ("Nothing at that address answered like a printer
+  or a scanner. Domovoi works with Wi-Fi and network printers…"), and in
+  the spoken answer when "set up the printer" finds none.
+- **What to know.** Looking for printers asks both ways at once, as it
+  already did: from UDP 5353 (answers come back to the group, which the
+  Windows install's WSL already lets in) and from an ordinary port. Nothing
+  changed in what it sends. `domovoi/printing/mdns.py` can now be run on
+  its own (`python3 mdns.py --iface <this machine's LAN address> --mode
+  group|legacy|both`) to see which way a network answers; it only asks,
+  never announces.
+
 ## 1.4.0 (unreleased) — Plugin SDK 1.9: speech in a room's voice
 
 - **What changed.** Plugins can turn text into speech without playing it
