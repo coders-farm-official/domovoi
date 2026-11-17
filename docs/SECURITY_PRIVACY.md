@@ -4698,7 +4698,12 @@ detaches, it does not stop another room's music.
 shows what its room is playing and its timers and alarms, sent over the
 room's own socket and nothing else; never a reminder, since anyone in the
 room can read the screen ([Timers and reminders](#timers-and-reminders-house-wide),
-"On a room phone's screen").
+"On a room phone's screen"). A song's cover is fetched only from the
+room's own core and only at `/v1/music/cover/<digits>` (any other path,
+percent-encoding or `..` is refused), and its size is read before it is
+decoded: a cover with a side over 4096 px or longer than 8:1 is not
+drawn, and the rest are decoded to at most 1024 px on the long side, so
+a crafted cover cannot crash the room.
 
 **One microphone owner:** room mode, the phone drop-in call, the chat mic
 and phone chats (Domovoi on this phone) ask `audio/MicArbiter` first; while room mode

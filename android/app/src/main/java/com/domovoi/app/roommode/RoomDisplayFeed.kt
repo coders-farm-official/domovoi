@@ -207,11 +207,41 @@ object RoomDisplayFeed {
         return now >= was
     }
 
-    /** Only a plain path on the room's own server: the room never follows
-     *  a link to another host, and nothing climbs out of `/v1/`. */
-    fun isArtPath(p: String): Boolean =
-        p.startsWith("/v1/") && p.length <= 300 && ".." !in p && "//" !in p && "\\" !in p &&
-            p.none { it.isWhitespace() || it.code < 0x20 || it.code == 0x7f }
+    /** Only the core's cover route, exactly as the core writes it
+     *  (`/v1/music/cover/{track_id}`, domovoi/room_display.py): the room
+     *  never follows a link to another host, and a path with anything else
+     *  in it (percent-encoding, `..`, a query, another route) is refused. */
+    fun isArtPath(p: String): Boolean = ART_PATH.matches(p)
+
+    private val ART_PATH = Regex("/v1/music/cover/[0-9]{1,10}")
+
+    /** A cover's longest side is decoded to at most about this. */
+    const val ART_LONG_SIDE = 1024
+
+    /** A cover with a side longer than this is not decoded at all. */
+    const val ART_MAX_SIDE = 4096
+
+    /** Nor one longer than this many times its width (or wider than tall). */
+    const val ART_MAX_ASPECT = 8
+
+    /**
+     * The `inSampleSize` for a cover of [width] x [height] (read with
+     * inJustDecodeBounds first), or null: do not decode it. Refused: no
+     * size, a side over [ART_MAX_SIDE], or a ratio past [ART_MAX_ASPECT]
+     * to 1 (a strip that small-side sampling would leave enormous). The
+     * sample is chosen from the LONGER side, so the bitmap's long side is
+     * at most [ART_LONG_SIDE].
+     */
+    fun artSampleSize(width: Int, height: Int): Int? {
+        if (width <= 0 || height <= 0) return null
+        val long = maxOf(width, height)
+        val short = minOf(width, height)
+        if (long > ART_MAX_SIDE) return null
+        if (long > short.toLong() * ART_MAX_ASPECT) return null
+        var sample = 1
+        while (long / sample > ART_LONG_SIDE) sample *= 2
+        return sample
+    }
 
     fun control(c: RoomControl): JsonObject = buildJsonObject {
         put("type", "room_control")

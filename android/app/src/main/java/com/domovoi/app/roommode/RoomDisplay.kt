@@ -645,14 +645,18 @@ private fun BigButton(text: String, bg: Color, fg: Color, compact: Boolean, modi
     }
 }
 
-/** A cover from the server, decoded small (a thumbnail is all it draws). */
+/** A cover from the server, decoded small (a thumbnail is all it draws).
+ *  Its size is read first: one too big or too narrow to draw is not
+ *  decoded, and the rest are sampled by the longer side
+ *  (RoomDisplayFeed.artSampleSize), so no cover can crash the room. */
 private suspend fun decodeArt(bytes: ByteArray): ImageBitmap? = withContext(Dispatchers.Default) {
     runCatching {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-        var sample = 1
-        while (bounds.outWidth / (sample * 2) >= 320 && bounds.outHeight / (sample * 2) >= 320) sample *= 2
-        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })?.asImageBitmap()
+        val sample = RoomDisplayFeed.artSampleSize(bounds.outWidth, bounds.outHeight) ?: return@runCatching null
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
+            ?.takeIf { maxOf(it.width, it.height) <= RoomDisplayFeed.ART_LONG_SIDE }
+            ?.asImageBitmap()
     }.getOrNull()
 }
 
