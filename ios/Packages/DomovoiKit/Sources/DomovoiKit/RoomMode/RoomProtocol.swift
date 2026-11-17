@@ -36,6 +36,7 @@ public enum RoomProtocol {
         out.append("wake_models")
         out.append("sounds")
         if echoCanceller { out.append("dropin_ready") }
+        // Next: `out.append(RoomDisplayFeed.ability)` once satellite-fixtures.json's room hello lists room_display.
         return out
     }
 
@@ -125,6 +126,9 @@ public enum RoomProtocol {
         "music_failed": "music_failed",
         "health": "health",
         "log_push": "log_push",
+        // The room display's controls (``RoomDisplayFeed``): only to a core
+        // that said it takes them.
+        "room_control": RoomDisplayFeed.ability,
     ]
 
     /// Whether `frame` may go to a core whose `ready` listed `features`.
@@ -174,6 +178,9 @@ public enum RoomProtocol {
         /// and say `dropin_ready`.
         case dropinStart(peerRoom: String?, peerLabel: String?, sampleRate: Int, fullDuplex: Bool, awaitReady: Bool)
         case dropinEnd(reason: String?)
+        /// This room's music, timers and ringing fire for the room display
+        /// (``RoomDisplayFeed``).
+        case display(RoomFeed)
         /// A type this client does not handle (logged, ignored).
         case other(type: String?)
     }
@@ -246,6 +253,8 @@ public enum RoomProtocol {
             )
         case "dropin_end":
             return .dropinEnd(reason: s("reason"))
+        case "room_display":
+            return .display(RoomDisplayFeed.parse(o))
         case let type:
             return .other(type: type)
         }

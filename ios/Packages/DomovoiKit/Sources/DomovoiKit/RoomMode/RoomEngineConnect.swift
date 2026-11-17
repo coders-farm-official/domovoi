@@ -192,6 +192,8 @@ extension RoomEngine {
             onDropinStart(peerRoom: peerRoom, peerLabel: peerLabel, sampleRate: rate, fullDuplex: fullDuplex, awaitReady: awaitReady)
         case .dropinEnd:
             onDropinEnd()
+        case let .display(feed):
+            onDisplay(feed)
         }
     }
 
@@ -399,6 +401,8 @@ extension RoomEngine {
             if inCall { leaveCall() }
         }
         update { $0.peerRoom = nil }
+        // What the server said about this room is not known any more.
+        displayChannel.update { _ in nil }
         closed?.complete(true)
     }
 

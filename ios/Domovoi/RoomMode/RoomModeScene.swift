@@ -208,6 +208,20 @@ struct RoomModeSceneRoot: View {
     @ObservedObject var scene: RoomModeScene
 
     var body: some View {
+        #if DEBUG
+        // The room display's design preview (``RoomDisplayPreviewScreen``):
+        // made-up scenes, nothing of the household or the room built.
+        if let preview = RoomDisplayPreviewScene.requested {
+            RoomDisplayPreviewScreen(scene: preview)
+        } else {
+            root
+        }
+        #else
+        root
+        #endif
+    }
+
+    private var root: some View {
         Group {
             if scene.roomActive {
                 RoomKioskScreen(scene: scene)

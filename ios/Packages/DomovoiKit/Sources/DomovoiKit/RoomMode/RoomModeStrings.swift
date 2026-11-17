@@ -153,6 +153,25 @@ public enum RoomModeStrings {
         return groups.joined(separator: " ")
     }
 
+    // MARK: - the room display (`RoomDisplay.kt`)
+
+    public static let nowPlaying = "now playing"
+    public static let paused = "paused"
+    public static let ringingDone = "done"
+    public static let stop = "stop"
+    public static let nextAlarm = "next alarm"
+    public static let previousSong = "previous song"
+    public static let pauseMusic = "pause the music"
+    public static let playMusic = "play the music"
+    public static let nextSong = "next song"
+    public static let quieter = "quieter"
+    public static let louder = "louder"
+
+    public static func volumeValue(_ level: Int) -> String { "volume \(level) percent" }
+
+    /// "+1 more timer", "+2 more timers".
+    public static func moreTimers(_ n: Int) -> String { n == 1 ? "+1 more timer" : "+\(n) more timers" }
+
     // MARK: - leaving (`RoomModeActivity.kt:160-180, 225-240`)
 
     public static let exitTitle = "Exit room mode?"
