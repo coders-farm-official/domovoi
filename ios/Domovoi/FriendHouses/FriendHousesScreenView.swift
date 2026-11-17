@@ -93,7 +93,10 @@ struct FhTabsScreen: View {
 
     var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 12) {
+            // A `VStack`, for the reason ``FhThreadView`` gives: text in a
+            // lazy container's cell is what Apple's audit reads as type that
+            // cannot grow. The inbox, friends and lists are short.
+            VStack(alignment: .leading, spacing: 12) {
                 FhHeader(status: fh?.status)
                 if let fh {
                     FhTabBar(fh: fh)
