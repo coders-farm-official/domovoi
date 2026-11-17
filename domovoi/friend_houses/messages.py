@@ -137,7 +137,10 @@ async def flush(house_key: bytes) -> int:
                 "SELECT id, msg_id, envelope, attempts FROM friend_houses_messages "
                 "WHERE house_key = :h AND direction = 'out' AND state = 'queued' "
                 "AND expires_at > now() ORDER BY id"), {"h": house_key})).all()
-        if friend is None or friend.state != "active" or not queued:
+        from domovoi.friend_houses import shared_lists
+
+        changes = await shared_lists.queued_envelopes(house_key)
+        if friend is None or friend.state != "active" or not (queued or changes):
             return 0
         keys = fid.load()
         hello = await _service().my_hello()
@@ -162,6 +165,15 @@ async def flush(house_key: bytes) -> int:
                         "UPDATE friend_houses_messages SET state = 'sent', delivered_at = now(), "
                         "attempts = attempts + 1, last_error = NULL WHERE id = :i"), {"i": row_id})
                 sent += 1
+            # Shared-list changes ride the same session (F4), after the
+            # messages, oldest batch first; each leaves the queue on its ack.
+            if len(queued) == sent:
+                for msg_id, env in changes:
+                    await sess.send(fs.Kind.MESSAGE, env)
+                    kind, _ = await _await_ack(sess, msg_id)
+                    if kind is not fs.Kind.MESSAGE_ACK:
+                        break
+                    await shared_lists.mark_sent(msg_id)
         except fs.SessionRefused as e:
             await _note_failure([r[0] for r in queued[sent:]], str(e))
         finally:
@@ -204,8 +216,10 @@ async def flush_all() -> None:
             "last_error = 'Not delivered: their house was offline for " + str(OUTBOX_DAYS) +
             " days.' WHERE direction = 'out' AND state = 'queued' AND expires_at <= now()"))
         houses = [bytes(r[0]) for r in await s.execute(text(
-            "SELECT DISTINCT house_key FROM friend_houses_messages "
-            "WHERE direction = 'out' AND state = 'queued'"))]
+            "SELECT house_key FROM friend_houses_messages WHERE direction = 'out' AND state = 'queued' "
+            "UNION SELECT sp.house_key FROM friend_houses_space_ops o "
+            "JOIN friend_houses_spaces sp ON sp.id = o.space_id "
+            "WHERE o.direction = 'out' AND o.state = 'queued'"))]
     for house in houses:
         try:
             await flush(house)
@@ -257,6 +271,14 @@ async def on_message(event: dict[str, Any]) -> bool:
     except (KeyError, ValueError, TypeError, fe.BadEnvelope):
         log.warning("Friend Houses: a message event failed its checks and was dropped")
         return False
+    if env.kind == fe.KIND_SPACE:
+        async with _db() as s:
+            friend = await store.friend_by_house(s, house)
+        if friend is None or friend.state != "active":
+            return False
+        from domovoi.friend_houses import shared_lists
+
+        return await shared_lists.on_envelope(friend, env)
     async with _db() as s:
         friend = await store.friend_by_house(s, house)
         if friend is None or friend.state != "active":
@@ -345,6 +367,8 @@ def safe_to_say(body: str, phrases: list[str], *, limit: int = READ_ALOUD_MAX_CH
         said = " ".join(kept)
     except Exception:  # noqa: BLE001 — the exact-phrase pass above still ran
         said = " ".join(said.split())
+    # What a removed phrase leaves at the edges (", unlock the door").
+    said = said.strip(" ,;:-")
     if len(said) > limit:
         said = said[:limit].rsplit(" ", 1)[0] + "… The rest is in the Friend Houses inbox."
     return said.strip()

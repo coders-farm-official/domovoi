@@ -2687,12 +2687,23 @@ to the chat model.
 Removing a friend keeps the conversation, marked "no longer a friend", so
 it can be read or exported before it is deleted.
 
+**Shared lists.** An admin can share a household list with a friend house.
+Each house keeps its own copy in its own Lists, and the two exchange
+signed changes (items added, edited, ticked off, removed; not the list's
+name, its order or who in the house did what). A friend's changes can
+only touch the one list its share is linked to here. A list a friend
+offers waits for an admin to accept it, and declining tells nobody. Text a
+friend adds to a list is cleaned, cut at 200 characters, and has every
+wake phrase taken out before it is stored, because the Lists voice
+handler reads items aloud. Either house can stop sharing at any time;
+both keep their copy.
+
 **What's stored, and where.**
 
 - The house's keys: a file in `~/.domovoi/friend-houses/`, mode 0600,
   never in Postgres (so the update unit's database dump never holds them).
   Losing it means friending everyone again.
-- Friends, friend files, requests and messages: Postgres (`friend_houses_*`). A key
+- Friends, friend files, requests, messages and shared-list changes: Postgres (`friend_houses_*`). A key
   this house gives a friend to reach it, and a friend file it is still
   trying to send, are kept only until delivered.
 - Encryption is **between houses**, not end to end between people: the

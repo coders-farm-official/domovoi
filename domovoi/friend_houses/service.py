@@ -517,17 +517,36 @@ async def _retry_loop() -> None:
         await _after_reconcile(messages.flush_all)
 
 
+async def _shared_lists_loop() -> None:
+    """Shared lists (F4): every few seconds, send what changed in a shared
+    list here. A cheap query while nothing is shared."""
+    from domovoi.friend_houses import shared_lists
+
+    while True:
+        await asyncio.sleep(shared_lists.SYNC_EVERY_SEC)
+        try:
+            if await shared_lists.any_active():
+                await shared_lists.sync_local()
+        except Exception:  # noqa: BLE001 — tried again on the next pass
+            log.exception("Friend Houses: checking shared lists failed")
+
+
 def _start_retries() -> None:
+    loop = asyncio.get_running_loop()
     task = _RETRY["task"]
     if task is None or task.done():
-        _RETRY["task"] = asyncio.get_running_loop().create_task(_retry_loop(), name="friend-houses-retry")
+        _RETRY["task"] = loop.create_task(_retry_loop(), name="friend-houses-retry")
+    lists_task = _RETRY.get("lists")
+    if lists_task is None or lists_task.done():
+        _RETRY["lists"] = loop.create_task(_shared_lists_loop(), name="friend-houses-shared-lists")
 
 
 def _stop_retries() -> None:
-    task = _RETRY["task"]
-    if task is not None and not task.done():
-        task.cancel()
-    _RETRY["task"] = None
+    for key in ("task", "lists"):
+        task = _RETRY.get(key)
+        if task is not None and not task.done():
+            task.cancel()
+        _RETRY[key] = None
 
 
 async def _stop_listener() -> None:
