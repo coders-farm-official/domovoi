@@ -265,4 +265,19 @@ class PrintModelsTest {
         assertEquals("That address isn't on your home network.", printFailureText("add", e))
         assertNull(serverDetail(ApiException(500, "500", body = "oops")))
     }
+
+    @Test fun theNetworkOnlyWordsMatchTheDashboard() {
+        // Handoff 2026-11-16, section 3: "Wi-Fi" is the word households
+        // know, and the Add by address hint says a USB printer can't be added.
+        assertEquals(
+            "Domovoi works with Wi-Fi and network printers (AirPrint, IPP Everywhere or Mopria), and their " +
+                "scanners. USB printers aren't supported.",
+            NETWORK_ONLY_LINE,
+        )
+        assertEquals(
+            "The address is on the printer's own screen or settings page. Only printers on your Wi-Fi or " +
+                "plugged into your router work: a printer on a USB cable can't be added.",
+            ADD_BY_ADDRESS_HINT,
+        )
+    }
 }

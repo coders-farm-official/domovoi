@@ -432,5 +432,14 @@ internal fun printFailureText(action: String, e: Throwable): String =
 /** The line for admin-only actions this app can't take. */
 internal const val ADMIN_ONLY_LINE = "An admin can rename or remove printers on the web dashboard."
 
+/** The panel's top line: network printers only (owner rule 2026-11-16), in
+ *  the words the dashboard uses ("Wi-Fi" is the word households know). */
 internal const val NETWORK_ONLY_LINE =
-    "Works with network printers (AirPrint, IPP Everywhere, Mopria). USB printers aren't supported."
+    "Domovoi works with Wi-Fi and network printers (AirPrint, IPP Everywhere or Mopria), and their scanners. " +
+        "USB printers aren't supported."
+
+/** Under Add by address's fields, as on the dashboard: where the address
+ *  is, and that a printer on a USB cable can't be added. */
+internal const val ADD_BY_ADDRESS_HINT =
+    "The address is on the printer's own screen or settings page. Only printers on your Wi-Fi or plugged " +
+        "into your router work: a printer on a USB cable can't be added."
