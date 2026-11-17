@@ -241,7 +241,7 @@ object RoomProtocol {
         ) : ServerFrame()
         data class DropinEnd(val reason: String?) : ServerFrame()
         /** This room's music, timers and ringing fire for the room display
-         *  (PROPOSED, [RoomDisplayFeed]). */
+         *  (the room display protocol, [RoomDisplayFeed]). */
         data class Display(val feed: RoomFeed) : ServerFrame()
 
         /** A type this client does not handle (logged, ignored). */
