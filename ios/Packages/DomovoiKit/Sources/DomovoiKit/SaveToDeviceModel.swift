@@ -244,6 +244,14 @@ public final class SaveToDeviceModel {
            why == TransferStrings.couldNotWrite {
             return why
         }
+        // A refusal the server explained (`{"detail": …}`) is said in its
+        // words rather than as "422: {"detail": …}" — a Domovoi document
+        // whose Word conversion failed, say (``FileSaveModel/plan(for:from:)``).
+        // Android's `downloadFailureText`, which reads the same field.
+        if let failure = (error as? DomovoiError)?.failure,
+           let detail = serverDetail(in: failure.body) {
+            return TransferStrings.couldNotSave(detail)
+        }
         return TransferStrings.couldNotSave(FilesModel.why(error))
     }
 
