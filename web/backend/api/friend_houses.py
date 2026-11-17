@@ -23,7 +23,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from domovoi.admin_auth import require_admin_security, require_admin_security_read
 from web.backend.api.csrf_guard import require_requested_with
@@ -330,4 +330,73 @@ async def friend_houses_alert(friend_id: str, request: Request):
         raise HTTPException(status_code=400, detail="Choose one of the three choices.")
     return bridge_response(
         *await put_admin(f"{CORE}/friends/{fid}/alert", body, headers=auth_forward_headers(request))
+    )
+
+
+# ─── shared lists (F4) ───────────────────────────────────────────────────
+# A shared list is addressed by its 32-hex id; a title or a name only ever
+# travels in a body.
+
+_SPACE = re.compile(r"^[0-9a-f]{32}$")
+
+
+def _space(value: str) -> str:
+    if not _SPACE.match(value or ""):
+        raise HTTPException(status_code=404, detail="No such shared list.")
+    return value
+
+
+class ShareListBody(BaseModel):
+    list_id: int = Field(ge=1, strict=True)
+    friend_id: str
+
+
+class AcceptListBody(BaseModel):
+    name: str | None = None
+
+
+@router.get("/shared-lists", dependencies=READ)
+async def friend_houses_shared_lists(request: Request):
+    """Lists shared with friend houses, both ways, and offers waiting here."""
+    return bridge_response(
+        *await get_admin(f"{CORE}/shared-lists", headers=auth_forward_headers(request))
+    )
+
+
+@router.post("/shared-lists", dependencies=WRITE)
+async def friend_houses_share_list(request: Request):
+    """Share one of this house's lists with a friend."""
+    body = await _body(request, ShareListBody)
+    _id(body.get("friend_id", ""), "friend house")
+    return bridge_response(
+        *await post_admin(f"{CORE}/shared-lists", body, timeout=30.0, headers=auth_forward_headers(request))
+    )
+
+
+@router.post("/shared-lists/{space_id}/accept", dependencies=WRITE)
+async def friend_houses_accept_list(space_id: str, request: Request):
+    """Take a friend's list: it becomes a new list here (``name`` optional)."""
+    sid = _space(space_id)
+    body = await _body(request, AcceptListBody)
+    return bridge_response(
+        *await post_admin(f"{CORE}/shared-lists/{sid}/accept", body, timeout=30.0,
+                          headers=auth_forward_headers(request))
+    )
+
+
+@router.post("/shared-lists/{space_id}/decline", dependencies=WRITE)
+async def friend_houses_decline_list(space_id: str, request: Request):
+    """Forget a friend's offer (they aren't told)."""
+    sid = _space(space_id)
+    return bridge_response(
+        *await post_admin(f"{CORE}/shared-lists/{sid}/decline", {}, headers=auth_forward_headers(request))
+    )
+
+
+@router.delete("/shared-lists/{space_id}", dependencies=WRITE)
+async def friend_houses_leave_list(space_id: str, request: Request):
+    """Stop sharing. Both houses keep their own copy as an ordinary list."""
+    sid = _space(space_id)
+    return bridge_response(
+        *await delete_admin(f"{CORE}/shared-lists/{sid}", timeout=30.0, headers=auth_forward_headers(request))
     )

@@ -4054,6 +4054,63 @@ async def admin_friend_houses_alert(friend_id: str, body: _FhAlertBody) -> dict[
     return {"alert": body.alert}
 
 
+class _FhShareBody(BaseModel):
+    list_id: int
+    friend_id: str
+
+
+class _FhAcceptListBody(BaseModel):
+    name: str | None = None
+
+
+@app.get("/v1/admin/friend-houses/shared-lists", dependencies=_FH_READ)
+async def admin_friend_houses_shared_lists() -> dict[str, Any]:
+    """Lists shared with friend houses: ours they have, theirs we have, and
+    theirs waiting for an admin here (``state`` invited)."""
+    from domovoi.friend_houses import shared_lists
+
+    return {"shared_lists": await shared_lists.overview()}
+
+
+@app.post("/v1/admin/friend-houses/shared-lists", dependencies=_FH_WRITE)
+async def admin_friend_houses_share_list(body: _FhShareBody) -> dict[str, Any]:
+    from domovoi.friend_houses import shared_lists
+
+    try:
+        return await shared_lists.share(body.list_id, body.friend_id)
+    except shared_lists.SharedListError as e:
+        raise _fh_error(e) from e
+
+
+@app.post("/v1/admin/friend-houses/shared-lists/{space}/accept", dependencies=_FH_WRITE)
+async def admin_friend_houses_accept_list(space: str, body: _FhAcceptListBody) -> dict[str, Any]:
+    from domovoi.friend_houses import shared_lists
+
+    try:
+        return await shared_lists.accept(space, name=body.name)
+    except shared_lists.SharedListError as e:
+        raise _fh_error(e) from e
+
+
+@app.post("/v1/admin/friend-houses/shared-lists/{space}/decline", dependencies=_FH_WRITE)
+async def admin_friend_houses_decline_list(space: str) -> dict[str, Any]:
+    from domovoi.friend_houses import shared_lists
+
+    if not await shared_lists.decline(space):
+        raise HTTPException(status_code=404, detail="That shared list isn't waiting any more.")
+    return {"declined": True}
+
+
+@app.delete("/v1/admin/friend-houses/shared-lists/{space}", dependencies=_FH_WRITE)
+async def admin_friend_houses_leave_list(space: str) -> dict[str, Any]:
+    """Stop sharing. Both houses keep their copy as an ordinary list."""
+    from domovoi.friend_houses import shared_lists
+
+    if not await shared_lists.leave(space):
+        raise HTTPException(status_code=404, detail="No such shared list.")
+    return {"stopped": True}
+
+
 @app.get(
     "/v1/admin/device-token",
     # Security-tier READ: the household token is a credential. Bearer-only
