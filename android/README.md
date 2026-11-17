@@ -1330,11 +1330,15 @@ holding `DUMP` (adb's shell) reaches it; a release APK does not contain it.
 
 ## Capability gating (plugins)
 
-The app fetches `GET /api/capabilities` from the web backend at connect
-(and again whenever the state WebSocket reconnects). Screens backed by a
-plugin are compiled in but *hidden* unless the manifest lists their
-capability — e.g. the Stations screen renders only when an installed
-plugin declares `"stations"` (the bundled radio plugin). Sidebar badges
+A plugin can't add anything to the app: the app runs no plugin code and
+renders no plugin pages. The app fetches `GET /api/capabilities` from the
+web backend at connect (and again whenever the state WebSocket
+reconnects). Its own screens for Coders Farm's plugins (Stations for the
+radio plugin, Images for the image plugin) are compiled in but *hidden*
+unless the manifest lists that exact plugin (slug and publisher Coders
+Farm) declaring the capability — e.g. the Stations screen renders only
+while the radio plugin declares `"stations"` (`AppScreenPlugins`,
+[CONVENTIONS.md](CONVENTIONS.md) rule 13). Sidebar badges
 for gated routes are skipped when the capability is absent, and history
 pill tones come from the manifest's `handler_display` entries (unknown
 names render neutral). If the endpoint is missing or unreachable, all

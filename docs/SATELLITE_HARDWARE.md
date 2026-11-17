@@ -1,10 +1,13 @@
 # Building a Domovoi Satellite
 
-A satellite is what makes a room a Domovoi room. Usually it is a small
-Raspberry Pi box that gives the room ears and a voice: it listens for the
-wake word on-device, streams your speech to the server, plays the answer,
-shows state on its LEDs, and pipes that room's music. (A spare laptop, PC,
-phone or tablet can be a room too: see [Spare laptops, PCs and
+A room is a place in the house (the Kitchen, the Den) with its own name,
+voice, music queue, wake words, timers and quiet hours. A satellite is the
+device that gives a room an ability; today's are voice satellites, and a
+room has exactly one. Usually it is a small Raspberry Pi box that gives the
+room ears and a voice: it listens for the wake word on-device, streams your
+speech to the server, plays the answer, shows state on its LEDs, and pipes
+that room's music. (A spare laptop, PC, phone or tablet can be a room's
+satellite too: see [Spare laptops, PCs and
 phones](#spare-laptops-pcs-and-phones).) This guide takes you from a
 shopping cart to a working Pi satellite, then covers living with a fleet of
 them.
@@ -66,8 +69,9 @@ Setup: [satellite/VIDEO_SATELLITE.md](../satellite/VIDEO_SATELLITE.md).
 
 You don't have to buy anything to try a room. A spare **Linux laptop or
 mini PC**, a **Windows laptop or PC**, an old **phone or tablet** (room mode
-in the Android app) or an old computer booted from a **USB stick** your
-server makes can be a room, with the same approval code and the same
+in the Android app turns it into a satellite for a room: voice, plus the
+room screen) or an old computer booted from a **USB stick** your server
+makes can be a room's satellite, with the same approval code and the same
 features as a Pi. (The USB stick is still a preview.) In the dashboard: **Settings → Household → Rooms → add a spare
 device**. A Windows PC gets a Setup to double-click. It is not code-signed
 yet, so Windows SmartScreen stops it once ("Windows protected your PC"):
@@ -431,7 +435,7 @@ satellite upgrade** in its place on the dashboard.
 
 ## Custom wake words
 
-A new room boots on `hey_jarvis`, and its server then gives it the
+A new satellite boots on `hey_jarvis`, and its server then gives it the
 household's wake word ("Domovoi" on a new install; set under **Settings →
 Voice → Wake words → Household wake word**). To train a word of your own:
 
@@ -453,8 +457,8 @@ Voice → Wake words → Household wake word**). To train a word of your own:
 
 From 1.4.0 a room can wake on up to five words. Most rooms need one; to
 add another, open the room's **Settings** on the dashboard (the room drawer,
-"wake word"), with the room online and an admin signed in: **Add another
-wake word**, put the words in order, **Save**. The room restarts to load
+"wake word"), with its satellite online and an admin signed in: **Add another
+wake word**, put the words in order, **Save**. The satellite restarts to load
 them. The first is the room's main word (the one in `~/.domovoi/wake`);
 the whole list, each word with its own threshold, is kept in
 `~/.domovoi/wake_words.json`. A word without a threshold of its own (Hey

@@ -438,7 +438,7 @@
      "dashboard",
      "app"
     ],
-    "text": "**Add your first room**: [Settings → Household → Rooms](route:settings/rooms). See [A Raspberry Pi room](node:pi-room)."
+    "text": "**Set up your first room** and its satellite, the device that listens there: [Settings → Household → Rooms](route:settings/rooms). See [A Raspberry Pi room](node:pi-room)."
    },
    {
     "id": "wake-word",
@@ -503,7 +503,7 @@
     "dashboard-and-app"
    ],
    "centre": true,
-   "intro": "A room hears you and the server thinks. The answer plays in the room you're in. Everything runs on machines in your home."
+   "intro": "The satellite in a room hears you and the server thinks. The answer plays in the room you're in. Everything runs on machines in your home."
   },
   {
    "id": "things-to-say",
@@ -730,7 +730,7 @@
    "blocks": [
     {
      "type": "p",
-     "text": "The wake word is heard by the room itself: a Raspberry Pi, a spare computer, or a phone in room mode. Nothing is sent until it hears it. Then the room streams what you say to the server over your home network. There, **Whisper** turns it into text."
+     "text": "The wake word is heard by the room's satellite: a Raspberry Pi, a spare computer, or a phone in room mode. Nothing is sent until it hears it. Then the satellite streams what you say to the server over your home network. There, **Whisper** turns it into text."
     },
     {
      "type": "list",
@@ -967,7 +967,7 @@
        "text": "The **app** brings the everyday pages to your phone, with its own music player and Chat. Chat holds your chats on the home server and chats that run on the phone itself, with no server."
       },
       {
-       "text": "The dashboard's sidebar: **Chat**, then **Media** (Music, Podcasts, Audiobooks, Videos) and **Tools** (News, Calendar, Lists, Files), each opening in place, then **Plugins**. A plugin's page joins Media or Tools, or gets a row of its own. On a phone, Home's \"everything\" grid has the same groups."
+       "text": "The dashboard's sidebar: **Chat**, then **Media** (Music, Podcasts, Audiobooks, Videos) and **Tools** (News, Calendar, Lists, Files), each opening in place, then **Plugins**. A plugin's page joins Media or Tools, or gets a row of its own. On a phone, Home's \"everything\" grid has the same groups, with the app's own screens."
       },
       {
        "text": "That menu is the same in every browser, and an admin can change it in [Settings → System → App layout](route:settings/app-layout) → **Menu**: rename the groups, add or delete one, move any page into a group or to the top, and put things in another order. **Reset to default** brings the usual menu back. Nothing needs changing there; the phone app keeps its own layout."
@@ -1657,7 +1657,7 @@
      "ordered": false,
      "items": [
       {
-       "text": "It doesn't wake: speak closer, or check the room is online in [Your rooms](node:rooms). An admin can lower **Wake sensitivity** (0.7 by default), or set **Wake confirmation** to 1, in the room's **Settings** tab."
+       "text": "It doesn't wake: speak closer, or check the room's satellite is online in [Your rooms](node:rooms). An admin can lower **Wake sensitivity** (0.7 by default), or set **Wake confirmation** to 1, in the room's **Settings** tab."
       },
       {
        "text": "It wakes on the TV: raise **Wake sensitivity**, or set **Wake confirmation** to 3."
@@ -4487,7 +4487,7 @@
     },
     {
      "type": "p",
-     "text": "Each room is one listening device: a Raspberry Pi, a spare laptop, or a phone. [Settings → Household → Rooms](route:settings/rooms) lists them. Each card shows:"
+     "text": "A room is a place in the house: its name, voice, music queue, wake words, timers and quiet hours. Each room has one satellite, the device that listens and plays there: a Raspberry Pi, a spare laptop, or a phone in room mode. [Settings → Household → Rooms](route:settings/rooms) lists the rooms. Each card shows:"
     },
     {
      "type": "list",
@@ -4523,10 +4523,10 @@
      "ordered": false,
      "items": [
       {
-       "text": "Make a room hear the wake word more or less easily, swap its greeting for a chime, or make its voice louder: its **Settings** tab, **Wake sensitivity** (0.7 by default; lower hears more easily), **Wake confirmation** (2: the word has to be heard a moment longer, which ignores short blips from the TV), **Wake acknowledgement**, **Voice loudness boost**. A Pi or PC room set up before November 2026 keeps 0.5 until you change it."
+       "text": "Make a room's satellite hear the wake word more or less easily, swap its greeting for a chime, or make its voice louder: its **Settings** tab, **Wake sensitivity** (0.7 by default; lower hears more easily), **Wake confirmation** (2: the word has to be heard a moment longer, which ignores short blips from the TV), **Wake acknowledgement**, **Voice loudness boost**. A Pi or PC satellite set up before November 2026 keeps 0.5 until you change it."
       },
       {
-       "text": "Changes on the **Settings** tab are saved with **Save & restart**: the room restarts to apply them and drops offline for a few seconds."
+       "text": "Changes on the **Settings** tab are saved with **Save & restart**: the satellite restarts to apply them and drops offline for a few seconds."
       },
       {
        "text": "A room can wake on up to five words: see [Wake word and greeting](node:wake-word)."
@@ -4535,7 +4535,7 @@
        "text": "A Pi or spare computer acting up: its **Overview** tab, under **maintenance**, **Restart room**. Updating it: **Upgrade room**, in the same place."
       },
       {
-       "text": "A room moved to new hardware: **Reset pairing** (also under **maintenance**), then approve the new device."
+       "text": "A room's satellite replaced with new hardware: **Reset pairing** (also under **maintenance**), then approve the new device."
       }
      ]
     },
@@ -4599,16 +4599,16 @@
      "ordered": false,
      "items": [
       {
-       "text": "*offline*: power and Wi-Fi first. If **every** room says *can't connect*, see [Restarting](node:restart)."
+       "text": "*offline*: power and Wi-Fi first. If **every** satellite says *can't connect*, see [Restarting](node:restart)."
       },
       {
-       "text": "The Wi-Fi bar is amber or red: move the room device or the router closer."
+       "text": "The Wi-Fi bar is amber or red: move the satellite or the router closer."
       },
       {
-       "text": "A room says \"having trouble reaching the network\": it has lost the server."
+       "text": "A satellite says \"having trouble reaching the network\": it has lost the server."
       },
       {
-       "text": "[Health](node:health) lists rooms that are offline, or were set up but never connected."
+       "text": "[Health](node:health) lists satellites that are offline, or were set up but never connected."
       }
      ]
     }
@@ -4636,7 +4636,7 @@
    "blocks": [
     {
      "type": "p",
-     "text": "The usual room: a Raspberry Pi with a microphone board and a speaker. About the price of a smart speaker. [Parts list](doc:docs/SATELLITE_HARDWARE.md)"
+     "text": "The usual satellite: a Raspberry Pi with a microphone board and a speaker. About the price of a smart speaker. [Parts list](doc:docs/SATELLITE_HARDWARE.md)"
     },
     {
      "type": "label",
@@ -4696,7 +4696,7 @@
    "blocks": [
     {
      "type": "p",
-     "text": "A Windows 10 or 11, or Linux, laptop or PC can be a room. Use one that stays plugged in, with sleep turned off, and not the computer that runs Domovoi."
+     "text": "A Windows 10 or 11, or Linux, laptop or PC can be a room's satellite. Use one that stays plugged in, with sleep turned off, and not the computer that runs Domovoi."
     },
     {
      "type": "label",
@@ -4770,7 +4770,7 @@
    "blocks": [
     {
      "type": "p",
-     "text": "An Android 8 or newer phone on its charger becomes a room (\"room mode\"). It hears the wake word, answers, plays the room's music, and takes announcements."
+     "text": "Room mode turns an Android 8 or newer phone, on its charger, into a satellite for a room (voice, plus the room screen). It hears the wake word, answers, plays the room's music, and takes announcements."
     },
     {
      "type": "label",
@@ -4788,7 +4788,7 @@
        "text": "{admin} **add a spare device**, name the room, then **make the code**. A QR code appears. If the card says the app isn't on the server yet, press **Download the app to this server** on that card first."
       },
       {
-       "text": "Scan the QR code with the phone's camera. The page installs the Domovoi app and opens it as that room."
+       "text": "Scan the QR code with the phone's camera. The page installs the Domovoi app and opens it as that room's satellite."
       },
       {
        "text": "Read the explainer, press **Start room mode**, allow the microphone, then press **Become this room**."
@@ -4800,12 +4800,12 @@
     },
     {
      "type": "p",
-     "text": "A phone that already has the app can do this from [Settings → Household → Rooms](route:settings/rooms) → **Use this device as a room**, or from the **Domovoi Room** icon. A phone you also use every day needs a screen lock, and while it's a room, the rest of the app is locked.",
+     "text": "A phone that already has the app can do this from [Settings → Household → Rooms](route:settings/rooms) → **Use this device as a room**, or from the **Domovoi Room** icon. A phone you also use every day needs a screen lock, and while it's in room mode, the rest of the app is locked.",
      "only": "app"
     },
     {
      "type": "p",
-     "text": "While it's a room, its screen shows what the room is playing, with pause, skip and back, and the room's timers and alarms counting down, with **stop** when one goes off. Reminders never show: anyone in the room can read the screen. The app and the server both need to be up to date for this."
+     "text": "In room mode, its screen (the room screen) shows what the room is playing, with pause, skip and back, and the room's timers and alarms counting down, with **stop** when one goes off. Reminders never show: anyone in the room can read the screen. The app and the server both need to be up to date for this."
     },
     {
      "type": "p",
@@ -4817,7 +4817,7 @@
     },
     {
      "type": "p",
-     "text": "Keep the phone on its charger: rooms are always on. The room's card shows its battery and whether it's charging. Off its charger, at 20% and again at 10%:"
+     "text": "Keep the phone on its charger: satellites are always on. The room's card shows its battery and whether it's charging. Off its charger, at 20% and again at 10%:"
     },
     {
      "type": "list",
@@ -4827,13 +4827,13 @@
        "text": "Home shows a notice, and the Domovoi app on your phones says \"Den is at 15%. Plug it in.\""
       },
       {
-       "text": "The room itself says \"This is Den. My battery is low. Please plug me in.\" Not during the room's quiet hours."
+       "text": "The phone itself says \"This is Den. My battery is low. Please plug me in.\" Not during the room's quiet hours."
       }
      ]
     },
     {
      "type": "p",
-     "text": "Each warning comes once per charge. A room that went offline nearly empty says **probably out of battery**. The room's **Settings** tab has **Say when the battery is low** and **Notify when the battery is low**, both on."
+     "text": "Each warning comes once per charge. A phone that went offline nearly empty says **probably out of battery**. The room's **Settings** tab has **Say when the battery is low** and **Notify when the battery is low**, both on."
     },
     {
      "type": "label",
@@ -4878,7 +4878,7 @@
    "blocks": [
     {
      "type": "p",
-     "text": "The server makes a USB stick. An old 64-bit PC, laptop or 2012–2017 Intel Mac starts from it and becomes a room that does nothing else. **This erases that computer's disk.** It needs a network cable while it sets up."
+     "text": "The server makes a USB stick. An old 64-bit PC, laptop or 2012–2017 Intel Mac starts from it and becomes a satellite that does nothing else. **This erases that computer's disk.** It needs a network cable while it sets up."
     },
     {
      "type": "label",
@@ -4943,10 +4943,10 @@
      "ordered": false,
      "items": [
       {
-       "text": "A room can wake on up to five words. With the room online, open its **Overview** tab, then **wake word** → **Add another wake word**, put the words in order (the main word first) and press **Save**; the room restarts."
+       "text": "A room can wake on up to five words. With its satellite online, open the room's **Overview** tab, then **wake word** → **Add another wake word**, put the words in order (the main word first) and press **Save**; the satellite restarts."
       },
       {
-       "text": "A Raspberry Pi Zero 2 W runs three. A room on older software runs one until you upgrade it."
+       "text": "A Raspberry Pi Zero 2 W runs three. A satellite on older software runs one until you upgrade it."
       },
       {
        "text": "Most homes need only one: each extra word makes waking by mistake a little more likely."
@@ -4970,7 +4970,7 @@
        "text": "What it needs: a server with 24 GB of memory, about 22 GB of downloads and about 32 GB of disk. A word takes about 20 minutes to train with an NVIDIA graphics card, and over an hour on the processor."
       },
       {
-       "text": "The steps: **Create** the word, **Record** 15 or more clips on the room device itself (or create it with **synthetic voices only**, which needs no recordings; you can hear those voices first), press **Train**, then **Push to room**. The button shows the wake sensitivity the room gets with the word; the room's Settings tab shows it after the push, and you can change it there."
+       "text": "The steps: **Create** the word, **Record** 15 or more clips on the room's satellite itself (or create it with **synthetic voices only**, which needs no recordings; you can hear those voices first), press **Train**, then **Push to room**. The button shows the wake sensitivity the room gets with the word; the room's Settings tab shows it after the push, and you can change it there."
       },
       {
        "text": "Each **Record** adds to the clips already there, from any room, until you train; each clip shows the room it came from. **Delete all clips** starts over."
@@ -5689,7 +5689,7 @@
     },
     {
      "type": "p",
-     "text": "**If every room is offline but the dashboard opens**, the server's core has stopped answering. It restarts itself within about a minute. If it doesn't, an admin presses **Restart the core**. It's on [Home](route:home), on [Settings → Household → Rooms](route:settings/rooms), on [Settings → System → About & updates](route:settings/about), and on the Domovoi server row of [Settings → System → Health](route:settings/health). The app says the core isn't answering, and reconnects by itself."
+     "text": "**If every satellite is offline but the dashboard opens**, the server's core has stopped answering. It restarts itself within about a minute. If it doesn't, an admin presses **Restart the core**. It's on [Home](route:home), on [Settings → Household → Rooms](route:settings/rooms), on [Settings → System → About & updates](route:settings/about), and on the Domovoi server row of [Settings → System → Health](route:settings/health). The app says the core isn't answering, and reconnects by itself."
     },
     {
      "type": "label",
@@ -5747,7 +5747,7 @@
     },
     {
      "type": "p",
-     "text": "Keep the identity and the rooms won't need setting up again. A server set up by the installers also saves the database before every update."
+     "text": "Keep the identity and the satellites won't need setting up again. A server set up by the installers also saves the database before every update."
     },
     {
      "type": "p",
@@ -5775,7 +5775,7 @@
    "blocks": [
     {
      "type": "p",
-     "text": "Plugins add features: voice commands, pages, app screens."
+     "text": "Plugins add features to the server: voice commands, dashboard pages and work in the background. They add nothing to the phone apps; use a plugin's pages from the phone's browser."
     },
     {
      "type": "label",
@@ -5871,7 +5871,7 @@
        "text": "**A room doesn't answer**: see [Your rooms](node:rooms)."
       },
       {
-       "text": "**Every room is offline**: see [Restarting](node:restart)."
+       "text": "**Every satellite is offline**: see [Restarting](node:restart)."
       },
       {
        "text": "**\"Just a moment, I'm waking up my language model\"**: normal once after a restart."

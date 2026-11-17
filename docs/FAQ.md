@@ -17,10 +17,10 @@ Short answers to common questions. For a term you don't recognize, see the [Glos
 - [Is AI optional?](#is-ai-optional)
 - [Linux or Windows for the server?](#linux-or-windows-for-the-server)
 - [How do I add rooms?](#how-do-i-add-rooms)
-- [Can an old laptop or phone be a room?](#can-an-old-laptop-or-phone-be-a-room)
+- [Can an old laptop or phone be a satellite?](#can-an-old-laptop-or-phone-be-a-satellite)
 - [Why does Windows or my antivirus warn about the Windows satellite?](#why-does-windows-or-my-antivirus-warn-about-the-windows-satellite)
-- [Can the PC that runs Domovoi also be a room?](#can-the-pc-that-runs-domovoi-also-be-a-room)
-- [Can another device on my network pretend to be one of my rooms?](#can-another-device-on-my-network-pretend-to-be-one-of-my-rooms)
+- [Can the PC that runs Domovoi also be a satellite?](#can-the-pc-that-runs-domovoi-also-be-a-satellite)
+- [Can another device on my network pretend to be one of my satellites?](#can-another-device-on-my-network-pretend-to-be-one-of-my-satellites)
 - [Can I drop in on a room from my phone?](#can-i-drop-in-on-a-room-from-my-phone)
 - [Can I rename the assistant or change the wake word?](#can-i-rename-the-assistant-or-change-the-wake-word)
 - [Which voice does Domovoi speak with, and can I fix how it says a word?](#which-voice-does-domovoi-speak-with-and-can-i-fix-how-it-says-a-word)
@@ -71,7 +71,7 @@ One answer turns them all off: **No, keep everything in the house** in Settings 
 - An NVIDIA GPU is **not required**. The installers (the Linux script and the Windows installer) set the server up for its processor: Whisper `small.en` on the CPU, Qwen3 8B for routing (Qwen3 4B on a server with less than 24 GB of memory), Llama 3.2 3B for answers and Qwen3-VL 2B for pictures; Ollama uses a GPU by itself when there is one. A server set up by hand starts from defaults that want an NVIDIA GPU (Whisper `large-v3` on CUDA, a 14B tool-routing model); on a CPU-only or non-NVIDIA box, four settings get you a system that's instant for everyday commands and slower only for open-ended questions — see [CPU_HOST.md](CPU_HOST.md).
 - **~20 GB of free disk** for the software and all default models (the two Ollama models alone are ~11 GB), **plus** room for your own media library on top (the Windows installer asks for 40 GB free on the system drive). The full breakdown and ways to shrink it are in the README's [Disk footprint](../README.md#disk-footprint) section.
 
-**Satellites** — one small box per room you want to talk to:
+**Satellites** — one small box per room you want to talk to (a room has exactly one today):
 
 - Raspberry Pi Zero 2 W (or a Pi 4) with either:
   - **ReSpeaker 2-Mics Pi HAT** (V1 or V2.0 — they use different codecs, check yours), or
@@ -131,27 +131,30 @@ admin, in **Settings → Household → Rooms**:
    card). The Pi starts its own setup Wi-Fi (`Domovoi-Setup-<id>`): join it
    from a phone, pick your home Wi-Fi and name the room.
    **A spare laptop or PC, or an old phone**: **add a spare
-   device** — see [Can an old laptop or phone be a room?](#can-an-old-laptop-or-phone-be-a-room).
+   device** — see [Can an old laptop or phone be a satellite?](#can-an-old-laptop-or-phone-be-a-satellite).
 2. The device says or shows a six-digit code: type it under **waiting for
    approval** and press **approve**.
 3. That's it — on first connection, the server provisions that room's own
    music daemon (an MPD container with its own queue and volume) and the
-   room appears in Settings → Household → Rooms.
+   room appears in Settings → Household → Rooms. Today a room has exactly
+   one satellite; a second device needs a room of its own.
 
 Room names matter: intercom ("announce in the kitchen…") and drop-in ("drop in on the kitchen") address rooms by the name you gave. The by-hand route (installing the satellite client and pointing it at `ws://<server>:6370` yourself) is in the [Satellite hardware guide](SATELLITE_HARDWARE.md) and `satellite/PROVISIONING.md`.
 
-## Can an old laptop or phone be a room?
+## Can an old laptop or phone be a satellite?
 
 Yes. A spare **Linux laptop or mini PC** (Debian or Ubuntu) or a
-**Windows 10/11 laptop or PC** can be a room: in the dashboard, as admin,
+**Windows 10/11 laptop or PC** can be a room's satellite: in the dashboard, as admin,
 **Settings → Household → Rooms → add a spare device**, name the room, and run the
 one-line command it shows on that computer (one for Linux, one for Windows
 PowerShell). It installs the satellite, makes sure it's talking to *your*
 server, and shows an approval code to type into the dashboard. A tray
 icon shows when its microphone is live and mutes it. An old **Android
-phone or tablet** joins through the app's room mode by scanning the QR code
-on the same card. Either is a real room: wake word, music, timers,
-announcements, and guests can control its music while it plays. What they
+phone or tablet** joins through the app's room mode, which turns it into a
+satellite for a room (voice, plus the room screen), by scanning the QR code
+on the same card. Either gives its room everything a Pi does: wake word,
+music, timers, announcements, and guests can control the room's music while
+it plays. What they
 don't do is the Pi-only part (LED ring, Wi-Fi self-healing, plugins that
 install something as root). Setup, power and battery advice:
 [Satellites on spare devices](SPARE_DEVICE_SATELLITES.md).
@@ -173,27 +176,27 @@ unsigned too: Windows SmartScreen says "Windows protected your PC", and
 `DomovoiSetup.exe`, and Smart App Control, if it is on, blocks that one
 outright ([Unsigned](WINDOWS_HOST.md#unsigned)).
 
-## Can the PC that runs Domovoi also be a room?
+## Can the PC that runs Domovoi also be a satellite?
 
 Not with the spare-device installer: it refuses on the server PC. The
-server runs whether or not anyone is signed in, a room needs a signed-in
+server runs whether or not anyone is signed in, a satellite needs a signed-in
 account for the microphone, and two programs would compete for the sound
-devices. The server PC can't be a room yet; nothing in the server's tray
+devices. The server PC can't be a satellite yet; nothing in the server's tray
 icon on Windows does that.
 
-## Can another device on my network pretend to be one of my rooms?
+## Can another device on my network pretend to be one of my satellites?
 
-Not once the real one has connected. Each satellite generates a random **pairing token** on first boot (stored in `~/.domovoi/pairing_token`) and sends it when it connects. The server remembers only a hash of it and binds the room to that token the first time it sees one — *trust-on-first-use*. After that, a device connecting as `kitchen` must present the matching token or the server refuses it and closes the connection. So a random device that later tries to impersonate a paired room is turned away (it can't issue commands as that room, and can't receive that room's audio or drop-ins).
+Not once the real one has connected. Each satellite generates a random **pairing token** on first boot (stored in `~/.domovoi/pairing_token`) and sends it when it connects. The server remembers only a hash of it and binds the room to that token the first time it sees one — *trust-on-first-use*. After that, a device connecting as `kitchen` must present the matching token or the server refuses it and closes the connection. So a random device that later tries to impersonate a paired satellite is turned away (it can't issue commands as that room, and can't receive that room's audio or drop-ins).
 
 Strict pairing (`SATELLITE_PAIRING_STRICT=true`) is the default, and it closes the one gap left: a tokenless connection is refused, and a room's first pairing waits for you to type in the six-digit code the satellite is showing and saying. The honest caveat applies only if you turn strict pairing off: then the *first* token wins, so there's a one-time window when a room has never paired — whoever connects first claims it — and a device with no token at all can connect under any room name nobody has paired. Such a tokenless room can use itself (timers, music, voice commands) but can never drop in on another room or announce into one.
 
-**Re-flashed a Pi or moved a room to new hardware?** The new device has a new token that won't match, so it'll be refused. Clear the old pairing from the dashboard: Settings → Household → Rooms → open the room → **Overview → Reset pairing** (admin login required). The next connection re-pairs. Full details: [Security & Privacy](SECURITY_PRIVACY.md#satellite-pairing-ws-auth).
+**Re-flashed a Pi or gave a room a new satellite?** The new device has a new token that won't match, so it'll be refused. Clear the old pairing from the dashboard: Settings → Household → Rooms → open the room → **Overview → Reset pairing** (admin login required). The next connection re-pairs. Full details: [Security & Privacy](SECURITY_PRIVACY.md#satellite-pairing-ws-auth).
 
 One thing pairing does *not* do: encrypt the audio. traffic on your home network isn't encrypted yet (TLS is on the [roadmap](ROADMAP.md)), so keep satellites and the server on a network segment you control. See [Is my voice data leaving my network?](#is-my-voice-data-leaving-my-network).
 
 ## Can I drop in on a room from my phone?
 
-Yes. In the Android app, open a satellite's page and tap **drop in from this phone** — your phone joins that room's live two-way audio bridge directly (it needs microphone permission and the room's satellite must support full-duplex/AEC audio). It works like a room-to-room drop-in, except your phone is one end instead of another Pi. Note it's one-directional in the sense that *you* call into a room; a room can't call your phone, because your phone isn't a registered room.
+Yes. In the Android app, open a satellite's page and tap **drop in from this phone** — your phone joins that room's live two-way audio bridge directly (it needs microphone permission and the room's satellite must support full-duplex/AEC audio). It works like a room-to-room drop-in, except your phone is one end instead of another Pi. Note it's one-directional in the sense that *you* call into a room; a room can't call your phone, because your phone isn't a room's satellite (unless it is in room mode).
 
 ## Can I rename the assistant or change the wake word?
 
@@ -224,7 +227,7 @@ or remove: Domovoi = `DOH-moe-voy`, Domo = `DOH-moe`, Nguyen = `win`.
 
 ## What are plugins, and are they safe?
 
-Plugins add features — new voice commands, dashboard pages, background workers, media providers. The bundled radio plugin (`plugins/radio`, published by Coders Farm) is the reference example; it's how Domovoi does internet radio and FM.
+Plugins add features to the server — new voice commands, dashboard pages, background workers, media providers. They never add code to the Android or iPhone app: the apps' Stations and Images screens are the apps' own, shown only when Coders Farm's Radio or image plugin is installed, and any other plugin is used from the dashboard in the phone's browser, or by voice. The bundled radio plugin (`plugins/radio`, published by Coders Farm) is the reference example; it's how Domovoi does internet radio and FM.
 
 The trust model, in plain words:
 
