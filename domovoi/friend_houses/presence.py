@@ -32,6 +32,7 @@ from typing import Any
 from sqlalchemy import text
 
 from domovoi.friend_houses import identity as fid
+from domovoi.friend_houses import store
 
 log = logging.getLogger(__name__)
 
@@ -65,6 +66,10 @@ async def saw(house_key: bytes, statement: bytes | fid.AddressStatement | None =
             return
         await s.execute(text(
             "UPDATE friend_houses_friends SET last_seen_at = now() WHERE id = :i"), {"i": row[0]})
+        if (parsed is not None and parsed.house_key == house_key and parsed.issued_at > int(row[1])
+                and await store.address_clash(s, house_key, parsed.onion_key, parsed.session_key)):
+            log.warning("Friend Houses: a friend house named an address another friend uses; ignored")
+            parsed = None
         if parsed is not None and parsed.house_key == house_key and parsed.issued_at > int(row[1]):
             moved = bytes(row[2]) != parsed.onion_key
             if bytes(row[3]) != parsed.session_key:

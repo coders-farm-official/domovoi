@@ -210,3 +210,25 @@ async def test_unblocking(house) -> None:
 async def test_blocking_an_unknown_friend(house) -> None:
     with pytest.raises(fb.BlockError):
         await fb.block("nobody")
+
+
+# ─── audit R6 FH-13: one onion, one friend ───────────────────────────────
+
+
+async def test_fh13_a_friend_cant_take_another_friends_onion(house) -> None:
+    await fp.saw(house.them.house_key, house.them.address_statement(ONION_B, 500).to_bytes())
+    assert (await _friend(house.them.house_key)).onion_key == ONION_A  # the Joneses' onion: ignored
+    assert "schedule_reconcile" not in house.calls
+
+
+async def test_fh13_the_database_refuses_two_friends_on_one_onion(house) -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    extra = fid.create(house.tmp / "extra" / "house-keys.json")
+    with pytest.raises(IntegrityError):
+        async with fp._db() as s:
+            await store.insert_friend(
+                s, id="fextra", house_key=extra.house_key, session_key=extra.session_key,
+                onion_key=ONION_A, statement=extra.address_statement(ONION_A, 100).to_bytes(),
+                statement_at=100, reach_public=b"\x01" * 32, reach_private=b"\x02" * 32,
+                local_name="Extra", code="1234", added_by="t")

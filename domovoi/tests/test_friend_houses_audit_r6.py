@@ -373,3 +373,35 @@ def test_fh7_a_friends_name_is_filtered_too() -> None:
 
 def test_fh7_ordinary_text_is_left_alone() -> None:
     assert fm.safe_to_say("Dinner's at six; bring the salad!", PHRASES) == "Dinner's at six; bring the salad!"
+
+
+# ─── FH-12: the listener's environment; FH-13: the image and onions ─────
+
+
+def test_fh12_the_listener_gets_no_database_address_or_tokens(monkeypatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://domovoi:secret@db/domovoi")
+    monkeypatch.setenv("DOMOVOI_ADMIN_TOKEN", "x")
+    env = svc._listener_env()
+    assert "DATABASE_URL" not in env and "DOMOVOI_ADMIN_TOKEN" not in env
+    assert set(env) <= {"PATH", "LANG", "LC_ALL", "TZ", "SYSTEMROOT"}
+
+
+def test_fh12_the_socks_port_reaches_onions_only() -> None:
+    torrc = tc.render_torrc(tc.wanted(enabled=True, internet_policy="always", friends=1, open_invites=0))
+    assert "OnionTrafficOnly" in next(line for line in torrc.splitlines() if line.startswith("SocksPort"))
+
+
+async def test_fh13_the_rebuild_runs_apt_again(monkeypatch) -> None:
+    from domovoi.friend_houses import tor_runtime as rt
+
+    seen: list[tuple] = []
+
+    async def docker(*args, **kw):
+        seen.append(args)
+        return 1, "", "stop here"
+
+    monkeypatch.setattr(rt, "_docker", docker)
+    with pytest.raises(Exception):  # noqa: B017 — only the arguments matter here
+        await rt.build_image()
+    assert "--no-cache" in seen[0]
+    assert "apt-get upgrade" in rt.DOCKERFILE.read_text(encoding="utf-8")

@@ -40,10 +40,10 @@ async def house(tmp_path, monkeypatch, db_session):
     monkeypatch.setattr(fm, "wake_phrases", phrases)
     async with sl._db() as s:
         await store.set_epoch(s, b"\x01" * 8, "marker")
-        for fid_, keys in (("fthem", them), ("fx", stranger)):
+        for fid_, keys, onion in (("fthem", them, bytes([5]) * 32), ("fx", stranger, bytes([6]) * 32)):
             await store.insert_friend(
                 s, id=fid_, house_key=keys.house_key, session_key=keys.session_key,
-                onion_key=bytes([5]) * 32, statement=keys.address_statement(bytes([5]) * 32, 1).to_bytes(),
+                onion_key=onion, statement=keys.address_statement(onion, 1).to_bytes(),
                 statement_at=1, reach_public=b"\x01" * 32, reach_private=b"\x02" * 32,
                 local_name="The Smiths" if fid_ == "fthem" else "Strangers", code="1234", added_by="t")
         friend = await store.friend(s, "fthem")

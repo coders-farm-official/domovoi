@@ -134,7 +134,9 @@ async def build_image() -> str:
     piped in). Returns the new image ID. Needs the internet (apt)."""
     sha = dockerfile_sha()
     rc, _, err = await _docker(
-        "build", "--pull", "-t", IMAGE_TAG, "--label", f"{DOCKERFILE_LABEL}={sha}", "-",
+        # --no-cache: the monthly rebuild must run apt again, or tor stays
+        # at its first build's version for ever (audit R6 FH-13).
+        "build", "--pull", "--no-cache", "-t", IMAGE_TAG, "--label", f"{DOCKERFILE_LABEL}={sha}", "-",
         timeout=BUILD_TIMEOUT_SEC, stdin=DOCKERFILE.read_bytes(),
     )
     if rc != 0:

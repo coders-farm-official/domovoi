@@ -437,6 +437,18 @@ async def _ensure_listener(folder: tc.TorFolder) -> None:
     )
 
 
+def _listener_env() -> dict[str, str]:
+    """The listener's whole environment: no database address, no tokens,
+    nothing from core's own environment beyond what Python needs (audit
+    R6 FH-12). It still runs as core's user; SECURITY_PRIVACY.md says so."""
+    import os
+
+    keep = ("PATH", "LANG", "LC_ALL", "TZ", "SYSTEMROOT")  # SYSTEMROOT: Python on Windows needs it
+    env = {k: os.environ[k] for k in keep if k in os.environ}
+    env.setdefault("LANG", "C.UTF-8")
+    return env
+
+
 def _listener_command(folder: tc.TorFolder) -> list[str]:
     return [sys.executable, "-I", "-m", "domovoi.friend_houses.listener",
             "--keys", str(fid.keys_path()), "--folder", str(_listener_folder()),
@@ -450,6 +462,7 @@ async def _run_listener(folder: tc.TorFolder) -> None:
         try:
             proc = await asyncio.create_subprocess_exec(
                 *_listener_command(folder),
+                env=_listener_env(),
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                 limit=EVENT_LINE_MAX,  # an envelope is up to 63 KiB, so ~126 KiB of hex

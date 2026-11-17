@@ -356,6 +356,9 @@ async def accept(request_id: str, *, local_name: str, by: str | None = None) -> 
     if already:
         raise FriendingError("You're already friends with that house.")
     async with _db() as s:
+        if await store.address_clash(s, statement.house_key, statement.onion_key, statement.session_key):
+            raise FriendingError("That house's address clashes with another friend house's. "
+                                 "Ask them for a new friend file.")
         # Our own request to the same house is done with (R6 FH-11).
         await store.delete_requests_for(s, statement.house_key, "out")
         await store.insert_friend(
@@ -448,6 +451,9 @@ async def on_accepted(event: dict[str, Any]) -> None:
             log.info("Friend Houses: an accept that matches no request was dropped")
             return
         name = row["local_name"] or row["their_name"] or "A friend house"
+        if await store.address_clash(s, statement.house_key, statement.onion_key, statement.session_key):
+            log.warning("Friend Houses: an accept naming another friend's address was dropped")
+            return
         await store.insert_friend(
             s, id=_new_id("f"), house_key=statement.house_key, session_key=statement.session_key,
             onion_key=statement.onion_key, statement=statement.to_bytes(),
