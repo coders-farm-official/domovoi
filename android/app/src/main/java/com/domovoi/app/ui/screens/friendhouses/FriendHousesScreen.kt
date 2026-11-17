@@ -76,7 +76,6 @@ import com.domovoi.app.ui.components.PageHeader
 import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.StatusDot
 import com.domovoi.app.ui.components.Tone
-import com.domovoi.app.ui.components.relTime
 import com.domovoi.app.ui.screens.lists.ListsSelection
 import com.domovoi.app.ui.shell.Route
 import com.domovoi.app.ui.theme.Domovoi
@@ -477,7 +476,7 @@ internal fun MessageBubble(m: FhMessage) {
             FhPlain(m.body.orEmpty())
         }
         val meta = buildList {
-            add(relTime(m.createdAt))
+            add(fhRelTime(m.createdAt))
             fhTheirClock(m)?.let { add(it) }
         }.joinToString(" · ")
         Row(

@@ -18,6 +18,7 @@ import com.domovoi.app.data.Prefs
 import com.domovoi.app.data.ServerCredentials
 import com.domovoi.app.net.ApiClient
 import com.domovoi.app.net.Discovery
+import com.domovoi.app.net.HouseholdLock
 import com.domovoi.app.net.StateBus
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -83,6 +84,7 @@ class FriendHouses(
         serverUrl = { prefs.serverUrl.value },
         serverKey = ::serverKey,
         onStatus = ::note,
+        roomMode = { HouseholdLock.roomModeActive },
         log = { Log.i(TAG, it) },
     )
 
@@ -99,9 +101,14 @@ class FriendHouses(
     private val requests = Channel<Unit>(Channel.CONFLATED)
     private var started = false
 
+    /** Start (or, after room mode, wake) the gate: the watchers start once,
+     *  and the status is read again either way. */
     @Synchronized
     fun start() {
-        if (started) return
+        if (started) {
+            refresh()
+            return
+        }
         started = true
         scope.launch {
             while (true) {
@@ -136,8 +143,10 @@ class FriendHouses(
     private suspend fun read() {
         val server = prefs.serverUrl.value
         if (server.isBlank()) return
-        // Not paired: the household routes would refuse it; nothing to show.
-        val availability = if (prefs.isPaired()) api.status() else FhAvailability.Hidden
+        // Not paired (the household routes would refuse it) or a room (no
+        // household request at all): nothing to show, nothing asked.
+        val availability =
+            if (prefs.isPaired() && !HouseholdLock.roomModeActive) api.status() else FhAvailability.Hidden
         note(server, availability)
     }
 
@@ -147,6 +156,18 @@ class FriendHouses(
     }
 
     fun onAppResumed() = refresh()
+
+    /**
+     * Room mode begins (RoomSetupActivity.begin): the phone is a room
+     * anyone nearby may pick up. Every Friend Houses notification already in
+     * the shade goes (at the "read" level they carry message text), the
+     * gate shows nothing, and nothing posts while it runs (the tick stands
+     * down, [FriendHouseAlerts] and [FriendHouseNotifier.post] check too).
+     */
+    fun pauseForRoomMode() {
+        notifier.withdrawAll()
+        note(prefs.serverUrl.value, FhAvailability.Hidden)
+    }
 
     /** A conversation was opened here (and marked read): its notification goes. */
     fun conversationOpened(house: String) {
@@ -203,7 +224,12 @@ class FriendHouseNotifier(context: Context) : FhSink {
             return channel == null || channel.importance != NotificationManager.IMPORTANCE_NONE
         }
 
-        fun tag(serverKey: String, house: String) = "friend_house:$serverKey:$house"
+        const val TAG_PREFIX = "friend_house:"
+
+        fun tag(serverKey: String, house: String) = "$TAG_PREFIX$serverKey:$house"
+
+        /** Of the tags in the shade, those that are ours (any server). */
+        fun ours(tags: List<String?>): List<String> = tags.filterNotNull().filter { it.startsWith(TAG_PREFIX) }.distinct()
     }
 
     override fun canPost(): Boolean = canPost(ctx)
@@ -228,7 +254,8 @@ class FriendHouseNotifier(context: Context) : FhSink {
 
     @SuppressLint("MissingPermission") // canPost() is checked first; a revoke in between is caught
     override fun post(serverKey: String, note: FhNote) {
-        if (!canPost()) return
+        // A room shows no household message, whoever asks.
+        if (HouseholdLock.roomModeActive || !canPost()) return
         val public = base().setContentTitle(PUBLIC_TITLE).build()
         // Plain strings only: no Html, no links, no styled spans.
         val builder = base()
@@ -246,6 +273,18 @@ class FriendHouseNotifier(context: Context) : FhSink {
             NotificationManagerCompat.from(ctx).notify(tag(serverKey, note.house), 0, builder.build())
         } catch (e: SecurityException) {
             Log.i(TAG, "friend house message not posted (no permission)")
+        }
+    }
+
+    /** Take back every Friend Houses notification in the shade, for any server. */
+    fun withdrawAll() {
+        try {
+            val nm = ctx.getSystemService(NotificationManager::class.java) ?: return
+            val shown = nm.activeNotifications.filter { it.tag != null }
+            val ours = ours(shown.map { it.tag }).toSet()
+            shown.filter { it.tag in ours }.forEach { nm.cancel(it.tag, it.id) }
+        } catch (e: RuntimeException) {
+            Log.i(TAG, "friend house notifications not withdrawn: ${e.javaClass.simpleName}")
         }
     }
 

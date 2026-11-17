@@ -105,6 +105,39 @@ class FriendHousesPlainTextTest {
         assertNull(fhTheirClock(FhMessage(direction = "out", createdAt = here, sentAt = at + 3600)))
     }
 
+    /** sent_at is another house's number, stored unchecked: one outside
+     *  0..9999-12-31 shows no "their clock" line rather than throwing in
+     *  the formatter on every open of the conversation. */
+    @Test fun anImpossibleSenderClockIsLeftOutNotACrash() {
+        val here = "2026-11-17T18:25:33+00:00"
+        for (bad in listOf(1L shl 62, Long.MAX_VALUE, Long.MIN_VALUE, -1L, FH_MAX_EPOCH_SEC + 1)) {
+            assertNull("$bad", fhTheirClock(FhMessage(direction = "in", createdAt = here, sentAt = bad)))
+        }
+        // The edges still show.
+        assertEquals("sent Dec 31, 11:59 PM (their clock)",
+            fhTheirClock(FhMessage(direction = "in", createdAt = here, sentAt = FH_MAX_EPOCH_SEC), java.time.ZoneOffset.UTC))
+        assertEquals("sent Jan 1, 12:00 AM (their clock)",
+            fhTheirClock(FhMessage(direction = "in", createdAt = here, sentAt = 0), java.time.ZoneOffset.UTC))
+        // And the bubble composes with one.
+        val shown = render { MessageBubble(FhMessage(id = 1, body = "x", createdAt = here, sentAt = 1L shl 62)) }
+        assertTrue(shown.texts.toString(), "x" in shown.texts)
+        assertTrue(shown.texts.none { it.contains("their clock") })
+    }
+
+    @Test fun serverTimesOutOfRangeShowADashOrNothing() {
+        assertEquals("—", fhRelTime("+999999999-12-31T23:59:59Z"))
+        assertEquals("—", fhRelTime("-000001-01-01T00:00:00Z"))
+        assertEquals("—", fhRelTime("not a time"))
+        assertEquals("—", fhRelTime(null))
+        assertNull(fhIso("+999999999-12-31T23:59:59Z"))
+        val ok = java.time.Instant.now().minusSeconds(120).toString()
+        assertEquals("2m ago", fhRelTime(ok))
+        // A friend's last-seen time that can't be shown says nothing.
+        assertNull(FhWords.presence(FhFriend(online = false, lastSeenAt = "+999999999-12-31T23:59:59Z")))
+        val shown = render { MessageBubble(FhMessage(id = 2, body = "y", createdAt = "+999999999-12-31T23:59:59Z")) }
+        assertTrue("—" in shown.texts.joinToString(" "))
+    }
+
     /** The screen and the notifications use none of the ways text turns
      *  into links, markup, previews or fetches; and log nothing. */
     @Test fun theSourceHoldsNoLinkMarkupOrFetch() {
@@ -126,7 +159,7 @@ class FriendHousesPlainTextTest {
                 val code = f.readLines().filterNot { it.trimStart().let { l -> l.startsWith("//") || l.startsWith("*") || l.startsWith("/*") } }
                     .joinToString("\n")
                 banned.forEach { b -> assertTrue("${f.name} uses $b", !code.contains(b)) }
-                if (d.name == "friendhouses" && d.parentFile.name == "screens") {
+                if (d.name == "friendhouses" && d.parentFile?.name == "screens") {
                     assertTrue("${f.name} logs", !code.contains("Log."))
                 }
             }
