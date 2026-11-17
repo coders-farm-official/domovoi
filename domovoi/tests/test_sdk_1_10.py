@@ -92,3 +92,48 @@ def test_room_play_template_must_be_the_plugins_own(tmp_path) -> None:
                 "/api/plugins/demo/../music/{id}", "/api/plugins/demo/{id}?x=1"):
         with pytest.raises(m.ManifestError):
             m._room_play_template({"room_play_template": bad}, "demo")
+
+
+class _Exploding(_Base):
+    name = "demo_choice"
+    tool_schema = {"name": "demo_choice"}
+    confirmation_kinds = ("demo.pick",)
+    choice_kinds = ("demo.pick",)
+    plugin_slug = "demo"
+
+    async def handle_choice_reply(self, kind, data, transcript, ctx, session):
+        raise RuntimeError("the plugin's reader broke")
+
+
+@requires_db
+async def test_a_plugin_reader_that_raises_costs_its_question_not_the_turn(db_session) -> None:
+    from domovoi import confirmations
+    from domovoi.db.repositories import SessionRepository
+    from domovoi.handlers import register_handler, unregister_handler
+    from domovoi.models import Context, Intent
+    from domovoi.router import route
+
+    handler = _Exploding()
+    register_handler(handler)
+    try:
+        sid = await SessionRepository(db_session).get_or_create(None, "kitchen")
+        await confirmations.request_confirmation(
+            db_session, sid, kind="demo.pick", handler="demo_choice",
+            data={"candidates": ["a"]}, prompt="A?",
+        )
+        await db_session.commit()
+        assert str(sid) in confirmations.CHOICE_PARKED
+
+        resp = await route(
+            Intent(transcript="What time is it?", room_id="kitchen", session_id=sid),
+            Context(session_id=sid, room_id="kitchen", online=True),
+            db_session,
+        )
+        # The reply was routed as an ordinary turn (the clock answered it),
+        # and the broken question is gone.
+        assert resp.matched_handler == "clock"
+        ctx = await SessionRepository(db_session).get_context(sid) or {}
+        assert ctx.get("pending_confirmation") is None
+    finally:
+        unregister_handler(handler)
+        confirmations.CHOICE_PARKED.clear()
