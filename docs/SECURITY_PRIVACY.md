@@ -4814,6 +4814,43 @@ unregistered developers on certified phones: the release key's
 certificate has to be registered before then
 (android/README.md, "Publishing a release").
 
+## A room phone (iPhone room mode)
+
+The iPhone app can be a room too (`ios/.../RoomMode/`), with the same
+protocol, approval, pinned server key and signed file lists as the Android
+room above. The room's pairing key is in the Keychain under room mode's own
+service; a phone that is also a household device keeps its household token,
+**unused**, while room mode is on (`HouseholdLock`), and the normal app is
+sealed until the person leaves room mode with Face ID, Touch ID or the
+passcode. As on Android, a phone that holds a household token needs a
+passcode to be a room.
+
+**The phone stays unlocked while it is a room.** iOS stops an app's
+microphone when the phone locks or the app leaves the screen, so a room
+only listens while Domovoi is open on its room screen, and the app keeps
+the screen from locking (`isIdleTimerDisabled`) for as long as the room
+runs; it dims instead. That means anyone in the room can swipe up to the
+phone's other apps: Messages, Photos, Mail and whatever else is on it. The
+Domovoi household app itself stays sealed (leaving room mode takes the
+phone's unlock), but nothing else on the phone is protected by room mode.
+Android's room screen, by contrast, shows over the lock screen and the
+phone itself stays locked.
+
+What to do about it, as the setup says:
+
+* **Guided Access** keeps the phone in Domovoi: Settings → Accessibility →
+  Guided Access, turn it on and set its passcode, then triple-click the
+  side button on the room screen and Start. Ending it takes a triple-click
+  and that passcode.
+* Or **use a spare iPhone with nothing personal on it**.
+
+The setup's explainer and its passcode screen say this in those words. On
+a phone that holds a household token (someone's own phone, not a spare
+used only as a room) the room screen keeps a line saying the phone stays
+unlocked, with the way to Guided Access, for as long as Guided Access is
+off (`UIAccessibility.isGuidedAccessEnabled`); it cannot be hidden. On a
+room-only phone it is a tip that can be hidden (`RoomGuidedAccessTip`).
+
 ## Response headers and cross-origin rules
 
 Every response this process makes — the dashboard shell, the static

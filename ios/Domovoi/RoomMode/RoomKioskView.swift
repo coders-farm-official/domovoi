@@ -326,13 +326,18 @@ struct RoomKioskView<Footer: View>: View {
     private func extras(_ c: RoomPalette, gap: CGFloat) -> some View {
         if model.showsGuidedAccessTip {
             HStack(spacing: 12) {
-                Button(RoomModeStrings.guidedAccessLine, action: onGuidedAccess)
+                Button(model.guidedAccessLine, action: onGuidedAccess)
                     .font(.footnote)
                     .foregroundStyle(c.text2)
                     .underline()
-                Button(RoomModeStrings.guidedAccessDismiss) { model.dismissGuidedAccessTip() }
-                    .font(.footnote)
-                    .foregroundStyle(c.text2)
+                    .accessibilityIdentifier("room-guided-access-tip")
+                // A household phone's line stays while Guided Access is off
+                // (security audit round 6, IOS-2).
+                if model.guidedAccessTipDismissible {
+                    Button(RoomModeStrings.guidedAccessDismiss) { model.dismissGuidedAccessTip() }
+                        .font(.footnote)
+                        .foregroundStyle(c.text2)
+                }
             }
             .multilineTextAlignment(.center)
             .padding(.top, gap)
