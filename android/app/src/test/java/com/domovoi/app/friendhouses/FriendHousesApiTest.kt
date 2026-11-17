@@ -386,6 +386,8 @@ class FriendHousesApiTest {
         assertEquals("New messages: the rooms say who it's from", FhWords.alert("sender"))
         assertEquals("New messages: read aloud in the rooms", FhWords.alert("read"))
         assertEquals("New messages: as set on the dashboard", FhWords.alert("loud"))
+        assertEquals("1 change waiting to send", FhWords.waiting(1))
+        assertEquals("2 changes waiting to send", FhWords.waiting(2))
     }
 
     @Test fun anErrorBodyWithoutADetailFallsBack() {

@@ -9,6 +9,7 @@ import com.domovoi.app.friendhouses.FriendHousesApi
 import com.domovoi.app.friendhouses.fhProblem
 import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.components.parseInstant
+import com.domovoi.app.ui.screens.home.plural
 import kotlinx.coroutines.CancellationException
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -57,7 +58,7 @@ object FhWords {
 
     fun unread(n: Int) = "$n unread"
     fun notDelivered(n: Int) = "$n not delivered"
-    fun waiting(n: Int) = "$n ${if (n == 1) "change" else "changes"} waiting to send"
+    fun waiting(n: Int) = "${plural(n, "change")} waiting to send"
 
     fun friendName(name: String?) = name?.takeIf { it.isNotBlank() } ?: "a former friend"
 }

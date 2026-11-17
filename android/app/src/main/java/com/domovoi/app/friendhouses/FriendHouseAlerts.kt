@@ -1,6 +1,7 @@
 package com.domovoi.app.friendhouses
 
 import com.domovoi.app.alerts.SYNC_BUDGET_MS
+import com.domovoi.app.ui.screens.home.plural
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -227,7 +228,7 @@ class FriendHouseAlerts(
             posted++
         }
         store.write(key, FhSeen(unread, seen.lastIds + inbox.associate { it.house to it.lastId }))
-        log("friend houses: ${fresh.size} conversations with new messages, $posted notified")
+        log("friend houses: ${plural(fresh.size, "conversation")} with new messages, $posted notified")
         return if (posted > 0) FhTick.NOTIFIED else FhTick.QUIET
     }
 }
