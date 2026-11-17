@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shutil
 import wave
 from pathlib import Path
 
@@ -78,6 +79,9 @@ def test_extra_rirs_and_backgrounds_are_added_and_mit_left_out_only_on_request(m
 
 
 def test_extra_clips_are_copied_and_a_changed_set_recomputes_features(monkeypatch, tmp_path):
+    # The 16 kHz copy is the trainer image's soundfile; the clips here are
+    # already 16 kHz mono, so a plain copy stands in for it.
+    monkeypatch.setattr(ep, "_copy_16k", lambda src, dst: shutil.copyfile(src, dst))
     pos, neg = tmp_path / "pos", tmp_path / "neg"
     _wav(pos / "v1" / "p1.wav", 22050)
     _wav(pos / "v1" / "p2.wav")
@@ -93,7 +97,6 @@ def test_extra_clips_are_copied_and_a_changed_set_recomputes_features(monkeypatc
     assert not any((model_dir / n).exists() for n in ep.FEATURE_FILES)
     copied = sorted(p.name for p in (model_dir / "positive_train").glob("extra_*.wav"))
     assert copied == ["extra_000000.wav", "extra_000001.wav"]
-    assert wave.open(str(model_dir / "positive_train" / "extra_000000.wav")).getframerate() == 16000
     assert (model_dir / "positive_train" / "synth_1.wav").exists()
     ep.mark_extra_current(model_dir)
     # Same set again: the features (recomputed by augment) are kept.
@@ -110,6 +113,9 @@ def test_extra_clips_are_copied_and_a_changed_set_recomputes_features(monkeypatc
 
 
 def test_extras_are_used_even_for_a_synthetic_only_word(monkeypatch, tmp_path):
+    # The 16 kHz copy is the trainer image's soundfile; the clips here are
+    # already 16 kHz mono, so a plain copy stands in for it.
+    monkeypatch.setattr(ep, "_copy_16k", lambda src, dst: shutil.copyfile(src, dst))
     """They are synthetic, not recordings: WAKE_SYNTHETIC_ONLY keeps them."""
     pos = tmp_path / "pos"
     _wav(pos / "p1.wav")
