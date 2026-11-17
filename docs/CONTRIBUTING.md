@@ -322,7 +322,7 @@ all known exits 0 (and says so under the summary).
 
 ### CI
 
-`.github/workflows/ci.yml` runs on every push to `main`, and from the
+`.github/workflows/ci.yml` runs on every pull request into `main`, every push to `main`, and from the
 Actions tab ("ci" → "Run workflow"), which runs every job. GitHub's hosted
 runners are free for this public repository. A first job, *what changed*,
 compares the push's files and starts only what they touch; a push of
@@ -622,7 +622,26 @@ wrong unless that migration has never shipped anywhere.
 
 ---
 
-## Pull request expectations
+## Pull requests
+
+`main` takes changes only through pull requests (2026-11-17). A branch rule
+refuses direct pushes, with no admin bypass; only the release workflow's own
+commits (the Android release record and `stable`) are exempt.
+
+1. Work on a branch: `git switch -c wf/<name> origin/main`, or a worktree.
+2. Open one pull request per batch of related work, not one per small
+   change: `gh pr create --base main --fill`. Small urgent fixes may go on
+   their own.
+3. Turn on auto-merge: `gh pr merge --auto --merge`. CI runs on the pull
+   request, and when the `ci passed` check is green GitHub merges it with a
+   merge commit and deletes the branch. No approval is needed.
+4. Red? Read the failed job (see "CI" above), push a fix to the same
+   branch, and the run starts again.
+5. An emergency that can't wait for CI: the owner switches the rule off in
+   **Settings → Rules**, pushes, and switches it back on.
+
+### What a pull request should be
+
 
 * **Keep the suite green.** All tests pass locally before you push; new
   behavior comes with tests that fail without your change.
