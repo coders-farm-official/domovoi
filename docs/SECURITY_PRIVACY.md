@@ -2960,7 +2960,14 @@ parts:
   and the server's own addresses are refused before anything else, on
   every check and every later connection, whatever any setting says**
   (owner, 2026-11-16: network printers only, so no local CUPS or ipp-usb
-  queue, ever). A row saved earlier that points there stops working;
+  queue, ever). A row saved earlier that points there stops working.
+  **Every IPv6 address that isn't an IPv4-mapped one is refused the same
+  way** (CORE-45, round 6): the list of the server's own addresses holds
+  IPv4 only, so `fd00::20` or `fe80::20` (the server itself), `::127.0.0.1`
+  and `64:ff9b::7f00:1` used to pass an admin's allowlisted entry; printers
+  are reached by IPv4. If the server's network interfaces can't be read,
+  nothing is dialled and the sweep doesn't run, rather than trusting a
+  short list;
 - the one escape hatch is the existing operator setting
   `OUTBOUND_ALLOW_HOSTS`, and only for an address an **admin typed**: an
   entry naming an exact `host:port` lets that address be added even though

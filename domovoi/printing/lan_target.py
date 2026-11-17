@@ -188,9 +188,26 @@ def home_networks() -> list[ipaddress.IPv4Network]:
     return nets
 
 
+class OwnAddressesUnknown(NotOnLan):
+    """The server's own addresses could not be listed, so no address can be
+    shown not to be one of them (CORE-45: fail closed)."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Domovoi couldn't check this server's own addresses just now, so it won't "
+            "dial that. Try again in a moment."
+        )
+
+
 def own_addresses() -> set[str]:
     """Every IPv4 address this server holds, on every interface (the LAN
-    one, Docker bridges, a VPN), plus what its host name resolves to."""
+    one, Docker bridges, a VPN), plus what its host name resolves to.
+
+    Raises :class:`OwnAddressesUnknown` when the interfaces can't be read
+    (CORE-45, round 6): a short list used to pass the server's other
+    addresses as if they were someone else's. IPv6 addresses are not
+    listed: :func:`_never` refuses every IPv6 address that isn't an
+    IPv4-mapped one, whoever typed it."""
     out: set[str] = set()
     ip = server_lan_ipv4()
     if ip:
@@ -202,8 +219,9 @@ def own_addresses() -> set[str]:
             for a in addrs:
                 if a.family == socket.AF_INET and a.address:
                     out.add(a.address)
-    except Exception:  # noqa: BLE001 — psutil missing or refused: the rest still counts
-        pass
+    except Exception as e:  # noqa: BLE001 — psutil missing or refused: fail closed
+        log.warning("printing: couldn't list this server's addresses: %s", e)
+        raise OwnAddressesUnknown() from e
     try:
         for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
             out.add(info[4][0])
@@ -235,10 +253,26 @@ def _loopback_for_tests() -> bool:
     return bool(settings.use_stubs)
 
 
+IPV6_REFUSED = "Use the printer's IPv4 address (like 192.168.1.50)."
+
+
 def _never(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> None:
-    """Refused whatever the operator allowlist says: loopback and the
-    server's own addresses (owner, 2026-11-16)."""
-    if ip.version == 6 and ip.ipv4_mapped is not None:
+    """Refused whatever the operator allowlist says: loopback, the
+    server's own addresses (owner, 2026-11-16), and every IPv6 address
+    that is not an IPv4-mapped one (CORE-45, round 6).
+
+    The IPv6 rule is the whole of the fix for the server's own IPv6
+    addresses: ``fd00::20`` or ``fe80::20`` could be this server, and so
+    could ``::127.0.0.1`` (IPv4-compatible), ``64:ff9b::7f00:1`` (NAT64)
+    or a 6to4/Teredo form, and the own-address list held IPv4 only, so an
+    admin's allowlisted entry let them through. Printers on a home network
+    are reached by IPv4; refusing the rest is simpler than proving each
+    IPv6 form isn't the server."""
+    if ip.version == 6:
+        if ip.ipv4_mapped is None:
+            if ip.is_unspecified or ip.is_loopback:
+                raise NotOnLan(LOOPBACK_REFUSED)
+            raise NotOnLan(IPV6_REFUSED)
         ip = ip.ipv4_mapped
     if ip.is_unspecified or (ip.is_loopback and not _loopback_for_tests()):
         raise NotOnLan(LOOPBACK_REFUSED)
@@ -264,8 +298,8 @@ def check_address(address: str, port: int, *, host: str | None = None, operator_
         return
     if ip.version == 6:
         mapped = ip.ipv4_mapped
-        if mapped is None:
-            raise NotOnLan("Use the printer's IPv4 address (like 192.168.1.50).")
+        if mapped is None:   # _never refused it already; kept for clarity
+            raise NotOnLan(IPV6_REFUSED)
         ip = mapped
     if any(ip in n for n in _REFUSED_V4) or not any(ip in p for p in _PRIVATE_V4):
         raise NotOnLan("That address isn't on your home network.")
