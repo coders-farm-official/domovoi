@@ -155,9 +155,13 @@ const SatWakeWord = ({ s }) => {
 const SatCard = ({ s, onOpen, tick, coreDown = false }) => {
   const online = s.status === 'online' && !coreDown;
   const np = s.now_playing;
-  const playing = np?.state === 'play' && np.song;
+  // An offline room hears nothing, whatever its player on the server still
+  // runs: no song and no counting bar for it (S2-14), as on Home.
+  const playing = online && np?.state === 'play' && np.song;
+  const unheard = !online && np?.state === 'play' && !!np.song;
   const songDur = np?.song?.duration_sec ?? 0;
-  const elapsed = playing ? (np.elapsed_sec ?? 0) + tick : 0;
+  const ran = playing ? (np.elapsed_sec ?? 0) + tick : 0;
+  const elapsed = songDur ? Math.min(ran, songDur) : ran;
   const progress = playing && songDur ? Math.min(100, (elapsed / songDur) * 100) : 0;
   const wTone = wifiTone(s.wifi);
   const wCol  = wifiColor(wTone);
@@ -224,6 +228,10 @@ const SatCard = ({ s, onOpen, tick, coreDown = false }) => {
               </span>
             </div>
           </>
+        ) : unheard ? (
+          <div className="sat-card-unheard" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+            offline · its music isn’t reaching it
+          </div>
         ) : (
           <div style={{ fontSize: 12, color: 'var(--fg-faint)' }}>no music</div>
         )}
@@ -548,6 +556,17 @@ const SatNetStep = ({ step, hostname }) => {
  * the firmware lacks Microsoft's 2023 certificate the card says so plainly,
  * with how to update the firmware by hand. Any other satellite sends no
  * `boot` and shows nothing here. */
+/* A room missing system packages (satellite/base_packages.py reboot_note)
+ * says what its boot step found, in its own words: not the network
+ * settings' "reboot needed" text, which promised a fix it wasn't (S2-12). */
+const satPackagesNote = (s) => {
+  const note = s && typeof s.reboot_needed === 'string' ? s.reboot_needed : '';
+  if (!note.startsWith('system packages missing')) return null;
+  const text = note.charAt(0).toUpperCase() + note.slice(1).replace(/\.?$/, '.');
+  return note.includes("couldn't install")
+    ? `${text} Restarting the room tries again; its log (the >_ tab) has the installer's full answer.`
+    : text;
+};
 const satNeeds2023 = (b) => !!(b && b.firmware === 'uefi' && b.secure_boot === true && b.ca_2023 === false);
 const SatBootSecurity = ({ boot }) => {
   if (!boot || !boot.stick) return null;
@@ -614,7 +633,7 @@ const SatHealthCard = ({ room, online }) => {
         {s && <Pill tone={satHealthAgeTone(ageSec)}>{ageSec == null ? 'sample' : ageSec < 90 ? 'live' : `last sample ${relTime(latest.received_at)}`}</Pill>}
         {s && !online && <Pill tone="idle">kept from before it went offline</Pill>}
         {s && s.reboot_needed &&
-          <Pill tone="warn" title={s.reboot_needed}>reboot needed</Pill>}
+          <Pill tone="warn" title={s.reboot_needed}>{satPackagesNote(s) ? 'system packages missing' : 'reboot needed'}</Pill>}
         {s && Array.isArray(s.settings_ignored) && s.settings_ignored.length > 0 &&
           <Pill tone="warn" title={s.settings_ignored.join('\n')}>settings ignored</Pill>}
         {s && s.wifi && s.wifi.mode === 'ap' &&
@@ -640,7 +659,12 @@ const SatHealthCard = ({ room, online }) => {
           It wakes at sensitivity {satWakeOverride(s).inUse}, not the {satWakeOverride(s).setting} in its settings below: a wake word pushed earlier left its own value behind. Setting the wake sensitivity again replaces it; updating the room device's software stops a push from doing this again.
         </div>
       )}
-      {s && s.reboot_needed && (
+      {s && s.reboot_needed && satPackagesNote(s) && (
+        <div className="sat-packages-note" style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 6 }}>
+          {satPackagesNote(s)}
+        </div>
+      )}
+      {s && s.reboot_needed && !satPackagesNote(s) && (
         <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 6 }}>
           {s.net_step && s.net_step.state === 'failed'
             ? 'Its network settings did not all apply at this boot (below); a reboot tries again.'
@@ -1137,7 +1161,11 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
   const [msg, setMsg] = React.useState('');
   const [peer, setPeer] = React.useState('');
   const np = s.now_playing;
-  const playing = np?.state === 'play' && np.song;
+  // Offline: nothing reaches the room, so no song is shown as playing in it
+  // (S2-14). Paused stays: the queue is where it was.
+  const roomOnline = s.status === 'online';
+  const playing = roomOnline && np?.state === 'play' && np.song;
+  const unheard = !roomOnline && np?.state === 'play' && !!np.song;
   const songDur = np?.song?.duration_sec ?? 0;
 
   // The server's current git SHA. A satellite whose last-synced SHA
@@ -1336,7 +1364,11 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
         </div>
         <div className="sat-nowplaying" style={{ padding: '14px 16px', minWidth: 0 }}>
           <div className="label">now playing</div>
-          {playing || (np?.state === 'pause' && np.song) ? (
+          {unheard ? (
+            <div className="sat-nowplaying-unheard" style={{ fontSize: 13, marginTop: 4, color: 'var(--fg-muted)' }}>
+              Nothing: the room is offline, so its music isn’t reaching it.
+            </div>
+          ) : playing || (np?.state === 'pause' && np.song) ? (
             <>
               <div style={{ fontSize: 13, marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 <strong style={{ fontWeight: 500 }}>{np.song.title || np.song.file?.split('/').pop() || 'unknown'}</strong>

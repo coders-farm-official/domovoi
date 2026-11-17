@@ -108,6 +108,7 @@ ADMIN_TIER = [
     ("POST", "/v1/admin/sounds/regenerate"),
     ("POST", "/v1/admin/sounds/setup-clips"),
     ("POST", "/v1/admin/library/reindex"),
+    ("POST", "/v1/admin/music/tracks-removed"),
     ("POST", "/v1/admin/library/enrich"),
     ("POST", "/v1/admin/library/enrich/repair"),
 ]

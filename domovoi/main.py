@@ -5556,13 +5556,21 @@ async def admin_music_play_track(body: _AdminPlayTrackBody) -> dict[str, Any]:
     if track is None:
         raise HTTPException(
             status_code=404,
-            detail=f"track {body.track_id} not found in library_tracks",
+            detail="That song isn't in the library any more.",
         )
     title = track[2]
     artist = track[3]
     file_path = track[1]
 
     await _ensure_room_mpd(body.room_id)
+    # (After the room check: an unknown room is refused as such.)
+    # Its file deleted and the library not swept yet (S2-18): say so, rather
+    # than let the player's database, which may still list it, try it.
+    if file_path and not await asyncio.to_thread(_library_file_present, file_path):
+        raise HTTPException(
+            status_code=404,
+            detail="That song's file isn't on this server any more.",
+        )
     mpd = get_mpd_client_for(body.room_id)
     # Three-stage lookup mirroring MusicHandler._play_random's
     # bulletproof pattern (music.py:329-352): tag → filename
@@ -5661,6 +5669,22 @@ async def admin_music_play_track(body: _AdminPlayTrackBody) -> dict[str, Any]:
         "latency_ms": latency_ms,
         "up_next": {"session_id": session_id} if session_id else None,
     }
+
+
+def _library_file_present(file_path: str) -> bool:
+    """Whether a library row's file is still there. True when the answer
+    is unclear (the folder can't be read): only a file known to be gone
+    stops a play."""
+    import os
+    from pathlib import Path
+
+    try:
+        p = Path(file_path)
+        if p.exists():
+            return True
+        return not p.parent.exists() or not os.access(p.parent, os.R_OK)
+    except OSError:
+        return True
 
 
 async def _ensure_room_mpd(room_id: str) -> None:
@@ -7915,6 +7939,28 @@ async def admin_music_mpd_rescan() -> dict[str, Any]:
         except Exception as e:
             log.warning("mpd-rescan: MPD update failed for room=%s: %s", room_id, e)
     return {"rooms": len(rooms), "updated": updated}
+
+
+class _TracksRemovedBody(BaseModel):
+    file_paths: list[str] = Field(default_factory=list, max_length=200)
+
+
+@app.post(
+    "/v1/admin/music/tracks-removed",
+    # Admin tier: only an admin takes a song out of the library (the web's
+    # DELETE /api/music/library/{id} and the duplicates clean-up), and this
+    # is that delete's second half.
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def admin_music_tracks_removed(body: _TracksRemovedBody) -> dict[str, Any]:
+    """Library songs just taken out of the library leave every room's
+    player (S2-18): a room playing one goes on to the next song in its
+    queue, or stops when nothing comes after it; every copy leaves the
+    queues. See ``domovoi/music_track_removed.py``."""
+    from domovoi.music_track_removed import drop_removed_tracks
+
+    rooms = await drop_removed_tracks(app, body.file_paths)
+    return {"rooms": rooms}
 
 
 @app.post(
