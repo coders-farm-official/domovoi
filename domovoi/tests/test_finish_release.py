@@ -787,10 +787,107 @@ def test_without_github_digests_each_file_is_downloaded_and_checked(tmp_path, mo
 
 @requires_git
 def test_docs_release_at_the_tag_is_the_summary(tmp_path, monkeypatch):
-    w = World(tmp_path, monkeypatch, hand_notes="## Hand-written\n\nThe summary for this release.\n")
+    w = World(tmp_path, monkeypatch, hand_notes="## What's new\n\nThe summary for this release.\n")
     assert w.run("--no-publish") == 0
     notes = (w.stage / "NOTES.md").read_text(encoding="utf-8")
     assert "The summary for this release." in notes and "What's new since" not in notes
+    # The house order: the lead (a candidate's), Download, the hand-written part, the files last.
+    order = [notes.index(s) for s in ("is a candidate for", "## Download", "## What's new", "The summary for",
+                                      "## Files and checksums", "| DomovoiSetup.exe |")]
+    assert order == sorted(order)
+
+
+@requires_git
+@pytest.mark.parametrize("hand, why", [
+    ("# Domovoi 1.0.0\n\n## What's new\n\n- x\n", "first line must be"),
+    ("Intro first.\n\n## What's new\n\n- x\n", "first line must be"),
+    ("## What's new\n\n- x\n\n# A title\n", "has a \"# \" title"),
+    ("## What's new\n\n- x\n\n## Download\n\n- y\n", "\"## Download\" section"),
+    ("## What's new\n\n- x\n\n## Files\n\n- y\n", "\"## Files\" section"),
+])
+def test_a_docs_release_not_in_the_house_style_is_refused(tmp_path, monkeypatch, hand, why):
+    w = World(tmp_path, monkeypatch, hand_notes=hand)
+    with pytest.raises(fr.Refused, match=re.escape(why)):
+        w.run("--no-publish")
+    assert w.calls("edit") == [] and w.calls("upload") == []
+
+
+def test_the_house_style_check_takes_a_well_formed_file():
+    assert fr.release_doc_problems("\n## What's new since 1.2.1\n\n- x\n\n## Security fixes\n\n- y\n"
+                                   "\n```\n# a comment in code, not a title\n```\n") == []
+    assert fr.release_doc_problems("## What's new\r\n\r\n- x\r\n") == []
+
+
+def _release(**kw) -> "fr.Release":
+    base = dict(tag="v2.0.0", version="2.0.0", prerelease=False, tag_commit="a" * 40, cert=CERT,
+                apks=[{"abi": "arm64-v8a", "file": "domovoi-2.0.0-arm64-v8a.apk", "sha256": "1" * 64},
+                      {"abi": "armeabi-v7a", "file": "domovoi-2.0.0-armeabi-v7a.apk", "sha256": "2" * 64}],
+                setup_sha256="3" * 64, satellite_setup_sha256="4" * 64, tray_sha256="5" * 64,
+                linux_install="curl -fsSL https://example.invalid/scripts/linux/install.sh | sudo bash",
+                notes="## What's new\n\n- Something.\n")
+    base.update(kw)
+    return fr.Release(**base)
+
+
+def test_download_comes_first_with_a_direct_link_to_each_file():
+    text = fr.body(_release())
+    assert text.startswith("## Download\n"), "right under the title: no lead for a plain release"
+    dl = text[:text.index("## What's new")]
+    get = "https://github.com/coders-farm-official/domovoi/releases/download/v2.0.0/"
+    for name in ("DomovoiSetup.exe", "domovoi-2.0.0-arm64-v8a.apk", "domovoi-2.0.0-armeabi-v7a.apk",
+                 "DomovoiSatelliteSetup.exe"):
+        assert f"[{name}]({get}{name})" in dl
+    assert "Windows 11 PC — the server" in dl and "Which one?" in dl and fr.PLAY_URL in dl
+    assert "  curl -fsSL https://example.invalid/scripts/linux/install.sh | sudo bash\n" in dl
+    assert fr.UPDATE_LINE in dl and "Raspberry Pi room" in dl
+    assert "Windows protected your PC" in dl
+    # Everything else comes after the summary: the checks, then the files.
+    assert text.index("## What's new") < text.index("## Files and checksums") < text.index("| DomovoiSetup.exe |")
+    assert "<summary>Every file, with its SHA-256</summary>\n\n|" in text, "a blank line, or GitHub shows raw Markdown"
+
+
+def test_download_without_a_room_setup_or_a_linux_line_still_says_where():
+    text = fr.body(_release(satellite_setup_sha256=None, linux_install=None))
+    dl = text[:text.index("## What's new")]
+    assert "DomovoiSatelliteSetup.exe" not in dl and "Raspberry Pi room" in dl
+    assert "curl" not in dl and "/blob/v2.0.0/docs/LINUX_HOST.md#one-command" in dl
+    assert "The Windows Setup is not code-signed" in dl
+
+
+def test_a_server_only_release_links_the_apks_on_the_release_that_holds_them():
+    app_from = {"version_name": "1.9.0", "version_code": 26101602, "tag": "v1.9.0",
+                "apks": [{"abi": "arm64-v8a", "file": "domovoi-1.9.0-arm64-v8a.apk"},
+                         {"abi": "armeabi-v7a", "file": "domovoi-1.9.0-armeabi-v7a.apk"}]}
+    text = "\n".join(fr.download(_release(apks=[], app_from=app_from)))
+    assert "/releases/download/v1.9.0/domovoi-1.9.0-arm64-v8a.apk" in text
+    assert "/releases/download/v1.9.0/domovoi-1.9.0-armeabi-v7a.apk" in text
+    assert "/releases/download/v2.0.0/domovoi-" not in text
+
+
+def test_the_linux_line_is_copied_from_linux_host_md_not_retyped():
+    doc = (REPO / "docs" / "LINUX_HOST.md").read_text(encoding="utf-8")
+    line = fr.linux_install_line(doc)
+    assert line and line in doc.splitlines() and line.endswith("install.sh | sudo bash")
+    assert fr.linux_install_line("no command here") is None
+
+
+@pytest.mark.parametrize("doc", [fr.LINUX_DOC, fr.PI_ROOM_DOC])
+def test_the_docs_the_download_links_have_their_headings(doc):
+    path, heading = doc
+    text = (REPO / path).read_text(encoding="utf-8")
+    assert heading in [fr._heading_text(h) for _, _, h in fr._headings(text)], f"{path} has no heading {heading!r}"
+
+
+def test_release_docs_from_1_3_0_on_are_in_the_house_style():
+    """docs/release/v<version>.md from 1.3.0 on (the earlier ones are
+    history: their tags hold them as published)."""
+    checked = 0
+    for p in sorted((REPO / "docs" / "release").glob("v*.md")):
+        v = re.fullmatch(r"v([0-9]+)\.([0-9]+)\.([0-9]+)(-.*)?", p.stem)
+        if v and tuple(int(x) for x in v.groups()[:3]) >= (1, 3, 0):
+            assert fr.release_doc_problems(p.read_text(encoding="utf-8")) == [], p.name
+            checked += 1
+    assert checked >= 1
 
 
 # ─── the notes, piece by piece ───────────────────────────────────────────
@@ -1079,6 +1176,8 @@ def test_a_server_only_dry_run_tags_nothing_and_ships_no_apks(tmp_path, monkeypa
     notes = (w.stage / "NOTES.md").read_text(encoding="utf-8")
     assert head in notes and "still 1.0.0 (versionCode 26101602)" in notes and "releases/tag/v1.0.0" in notes
     assert ".apk |" not in notes
+    assert "(https://github.com/coders-farm-official/domovoi/releases/download/v1.0.0/domovoi-1.0.0-arm64-v8a.apk)" \
+        in notes, "Download links the app's APKs on the release that holds them"
     assert (w.work / "android" / "release.json").read_bytes() == before
     assert any("the app is unchanged" in m for m in w.said)
 
@@ -1315,6 +1414,17 @@ def test_plan_a_server_only_release_finishes_at_head(tmp_path, monkeypatch):
                    "finish_at": head}
     assert _local_tag(w, "v1.0.1") == "" and not _origin_has_tag(w, "v1.0.1"), "a plan changes nothing"
     assert w.load()["calls"] == [], "nor reads GitHub's releases"
+
+
+@requires_git
+def test_plan_refuses_a_release_doc_not_in_the_house_style(tmp_path, monkeypatch):
+    """Before anyone approves the run: the Download section is the script's, first."""
+    w = World(tmp_path, monkeypatch, version="1.0.0")
+    _write(w.work, "docs/release/v1.0.1.md", "# Domovoi 1.0.1\n\nIntro.\n")
+    _git(w.work, "add", "docs/release/v1.0.1.md")
+    _server_only(w)
+    with pytest.raises(fr.Refused, match="docs/release/v1.0.1.md: its first line must be"):
+        _plan(w)
 
 
 @requires_git

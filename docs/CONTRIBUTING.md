@@ -786,8 +786,8 @@ workflow runs the same scripts. In order:
 
 1. **The release commit** on `main`, pushed: the version in every copy
    (the test above), the release notes, and `docs/release/v<version>.md`
-   when the release has a hand-written summary (the GitHub body; kept
-   under 20 KB). When the app changed, its `versionName` and `versionCode`
+   when the release has a hand-written summary (the GitHub body, in the
+   house style of "The release page", below; kept under 20 KB). When the app changed, its `versionName` and `versionCode`
    too; when it didn't, `android/` stays as it is (`android/release.json`
    above all).
 2. **Only when the app changed: `android/scripts/release.ps1`** (or `.sh`)
@@ -868,11 +868,79 @@ workflow runs the same scripts. In order:
 
 The finished release holds the two APKs (only when the app changed),
 `DomovoiSetup.exe` (not code-signed), `DomovoiTray.exe`, `DomovoiSatelliteSetup.exe`, `SHA256SUMS`,
-and notes naming the tag's commit, how the Setup was built and the app's
-signing certificate. Neither script
+and notes (in the order of "The release page", below) naming the tag's
+commit, how the Setup was built and the app's signing certificate. Neither script
 touches a keystore or a password outside `release.ps1`'s own prompts (or,
 in the workflow, its `-KeystoreCredential`); finish-release never reads the
 release key (ssh-keygen does, or asks the agent for it).
+
+### The release page
+
+People open a release page to get Domovoi, so the files come first and
+the story after. finish-release writes the page in this order:
+
+1. **Download** (finish-release writes it): a direct link to each file on
+   the release, with one plain line on what it is for. `DomovoiSetup.exe`
+   for a Windows 11 PC as the server; the Linux one-line install, copied
+   from `docs/LINUX_HOST.md` at the tag (never retyped); Google Play and
+   both APKs, with which one to pick (a release that doesn't change the
+   app links the APKs on the release that holds them);
+   `DomovoiSatelliteSetup.exe` for a Windows PC as a room, and the
+   manual's page for a Raspberry Pi room; and for a house that has
+   Domovoi already, Settings → System → About & updates → **Update
+   Domovoi**.
+2. **`docs/release/v<version>.md`** (yours), or, without one, a summary of
+   the `docs/RELEASE_NOTES.md` entries since the previous tag.
+3. **Files and checksums** (finish-release writes it): how to check a
+   download (and its build provenance, from the release workflow), then,
+   collapsed, every file with its SHA-256 and where the files come from.
+
+`docs/release/v<version>.md` starts at `## What's new`: no `# ` title (GitHub
+shows the release's own), nothing above it, and none of finish-release's
+sections (`## Download`, `## Files`, `## Files and checksums`, `## Install
+or update`). The plan job and finish-release both refuse one that isn't
+(`release_doc_problems` in `scripts/release/finish_release.py`). The
+template:
+
+```markdown
+## What's new since 1.3.0
+
+- **One highlight, in a line:** what a household gets. ([Manual page](https://github.com/coders-farm-official/domovoi/blob/v1.4.0/scripts/manual/manual.md#anchor))
+- 5 to 8 of these, each linking to its manual or doc section at the tag.
+
+**The one thing everyone must do after updating**, if there is one.
+Every change is in the [release notes](https://github.com/coders-farm-official/domovoi/blob/v1.4.0/docs/RELEASE_NOTES.md).
+
+<details>
+<summary>More about what's new</summary>
+
+The longer story, if it helps (### headings are fine in here).
+
+</details>
+
+## Security fixes
+
+- **package x.y.z:** what it fixes, in one line.
+
+## Upgrading
+
+Only what needs someone to act: one line each, the longer how in a
+<details> block.
+
+## Known limits
+
+- **The limit:** one line.
+
+## Verifying a release
+
+Only for something this release needs said (finish-release writes the
+commands under Files and checksums).
+```
+
+Leave out an empty section. Links point at the tag (`/blob/v<version>/`),
+not `main`, so the page keeps describing the release it is on. GitHub
+renders `<details>` collapsed: leave a blank line after `</summary>`, or
+the Markdown inside shows raw.
 
 ---
 
