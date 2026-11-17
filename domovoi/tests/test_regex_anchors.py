@@ -107,6 +107,14 @@ _PARSERS = (
 )
 _RE_CALLS = {"re.compile", "re.match", "re.search"}
 
+#: Patterns another engine reads too (a JSON schema, a bash ``=~``), where
+#: ``\Z`` is not syntax: they keep ``$``, and this module checks them with
+#: ``fullmatch`` only (asserted below).
+_SHARED = {
+    "satellite/devices.py": "_WINDOWS_DEVICE_NAME_RE",
+    "domovoi/satellite_linux.py": "_FILE_RE",
+}
+
 
 def _anchored_with_dollar(pattern: str) -> bool:
     i, n, in_class = 0, len(pattern), False
@@ -140,10 +148,22 @@ def _offenders() -> list[str]:
             if "/tests/" in rel or rel.startswith(_PARSERS):
                 continue
             try:
-                tree = ast.parse(p.read_text(encoding="utf-8"))
+                source = p.read_text(encoding="utf-8")
+                tree = ast.parse(source)
             except (SyntaxError, UnicodeDecodeError):
                 continue
+            shared = _SHARED.get(rel)
+            shared_lines = set()
+            if shared:
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Assign) and any(
+                            isinstance(t, ast.Name) and t.id == shared for t in node.targets):
+                        shared_lines.add(node.value.lineno)
+                if re.search(re.escape(shared) + r"\.(match|search)\(", source):
+                    out.append(f"{rel}: {shared} keeps $ for another engine, so use fullmatch only")
             for node in ast.walk(tree):
+                if isinstance(node, ast.Call) and node.lineno in shared_lines:
+                    continue
                 if not (isinstance(node, ast.Call) and ast.unparse(node.func) in _RE_CALLS and node.args):
                     continue
                 call = ast.unparse(node)

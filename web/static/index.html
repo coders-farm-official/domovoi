@@ -300,8 +300,9 @@
         if (/[%#?\\]/.test(tpl)) return false;
         const probe = tpl.split('{id}').join('x');
         try {
-          const u = new URL(probe, window.location.origin);
-          return u.origin === window.location.origin && u.pathname === probe && u.pathname.startsWith(own);
+          const base = 'http://player.invalid';   // only the path matters
+          const u = new URL(probe, base);
+          return u.origin === base && u.pathname === probe && u.pathname.startsWith(own);
         } catch { return false; }
       };
       (manifest.plugins || []).forEach((p) => {

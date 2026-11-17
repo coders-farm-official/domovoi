@@ -663,11 +663,11 @@ const _castRoomPlayPath = (item) => {
   const path = tpl.replace('{id}', encodeURIComponent(item.itemId));
   // PLG-13: the filled-in path must be what the browser will POST to,
   // under the plugin's own prefix (an id of ".." is a dot segment too).
-  try {
-    const u = new URL(path, window.location.origin);
-    const own = `/api/plugins/${src.plugin}/`;
-    if (u.origin !== window.location.origin || u.pathname !== path || !u.pathname.startsWith(own)) return null;
-  } catch { return null; }
+  // A browser resolves "." and ".." segments (and their %2e spellings), and
+  // treats a backslash as a slash: none may be in the path it POSTs to.
+  const own = `/api/plugins/${src.plugin}/`;
+  const bad = (seg) => seg === '.' || seg === '..' || /%2e/i.test(seg) || seg.includes('\\');
+  if (!path.startsWith(own) || /[#?]/.test(path) || path.split('/').some(bad)) return null;
   return path;
 };
 const _castRefused = () => {

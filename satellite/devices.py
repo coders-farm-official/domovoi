@@ -424,7 +424,7 @@ def resolve(name: str) -> DeviceProfile:
 # (satellite/win_player.py), so only this narrow shape is accepted: a
 # value the dashboard pushed that is anything else is refused before it is
 # written (Config.from_toml), and never passed on.
-_WINDOWS_DEVICE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ()._,:+\[\]-]{0,79}\Z")
+_WINDOWS_DEVICE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ()._,:+\[\]-]{0,79}$")
 
 
 def valid_windows_device(value: object) -> bool:
@@ -436,5 +436,5 @@ def valid_windows_device(value: object) -> bool:
     if isinstance(value, int):
         return 0 <= value <= 999
     if isinstance(value, str):
-        return value == "default" or bool(_WINDOWS_DEVICE_NAME_RE.match(value))
+        return value == "default" or bool(_WINDOWS_DEVICE_NAME_RE.fullmatch(value))
     return False

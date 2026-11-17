@@ -49,7 +49,7 @@ LOCK_REL = "locks/linux-python.txt"
 UPSTREAM = "https://github.com/astral-sh/python-build-standalone/releases/download/"
 MACHINES = ("x86_64", "aarch64")
 _FILE_RE = re.compile(
-    r"^cpython-(3\.[0-9]{1,2}\.[0-9]{1,3})\+([0-9]{8})-(x86_64|aarch64)-unknown-linux-gnu-install_only_stripped\.tar\.gz\Z")
+    r"^cpython-(3\.[0-9]{1,2}\.[0-9]{1,3})\+([0-9]{8})-(x86_64|aarch64)-unknown-linux-gnu-install_only_stripped\.tar\.gz$")
 _SHA_RE = re.compile(r"^[0-9a-f]{64}\Z")
 MAX_FILE_BYTES = 128 * 1024 * 1024
 
@@ -72,7 +72,7 @@ def parse_lock(text: str) -> dict[str, Any]:
         if len(fields) != 7 or fields[0] != "python":
             raise LockError(f"line {n}: not 'python <machine> <version> <file> <size> <sha256> <url>'")
         _, machine, version, name, size, sha, url = fields
-        m = _FILE_RE.match(name)
+        m = _FILE_RE.fullmatch(name)
         if not m or m.group(1) != version or m.group(3) != machine:
             raise LockError(f"line {n}: bad file name {name!r} for {machine} {version}")
         if machine in (p["machine"] for p in pythons):
@@ -111,7 +111,7 @@ def bucket() -> Path:
 def cached_file(lock: dict[str, Any], name: str) -> Path | None:
     """The cached file for ``name`` if the lock lists it and the bytes on
     disk are the pinned ones; else None."""
-    if not isinstance(name, str) or not _FILE_RE.match(name):
+    if not isinstance(name, str) or not _FILE_RE.fullmatch(name):
         return None
     entry = next((e for e in entries(lock) if e["file"] == name), None)
     if entry is None:
