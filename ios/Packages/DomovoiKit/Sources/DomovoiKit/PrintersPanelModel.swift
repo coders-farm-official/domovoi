@@ -80,6 +80,14 @@ public final class PrintersPanelModel {
     public private(set) var showingJobs: Set<Int> = []
     public private(set) var jobs: [Int: [PrintingJob]] = [:]
 
+    /// The scans made on each printer, from the same read as ``jobs`` (the
+    /// wrapper's `scans`), each with its reading — so a row can offer "What
+    /// does it say?" (Android's `PrintersPanel.kt` `ScanLogRow`, 54d46869).
+    public private(set) var scans: [Int: [PrintingScanJob]] = [:]
+
+    /// The scan whose "What does it say?" sheet is open, or nil.
+    public private(set) var readingScan: PrintingScanJob?
+
     /// One printer's row replaced by the answer a write came back with
     /// (`PrintersPanel.kt:109-111`). An overlay rather than a mutation of
     /// ``printers``'s value: ``ApiRead`` owns its data, and the next read
@@ -368,11 +376,12 @@ public final class PrintersPanelModel {
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                let landed = try await self.io.jobs(
+                let landed = try await self.io.jobLog(
                     printerID: printerID,
                     limit: Self.recentJobsLimit
                 )
-                self.jobs[printerID] = landed
+                self.jobs[printerID] = landed.jobs
+                self.scans[printerID] = landed.scans
             } catch let trouble as DomovoiError {
                 self.toast = printingFailureText(PrintingStrings.verbRecentJobs, trouble)
             } catch {
@@ -380,6 +389,16 @@ public final class PrintersPanelModel {
             }
         }
     }
+
+    /// "What does it say?" on a scan row. Offered only where
+    /// ``PrintingScanJob/offersRead`` says so, and refused here otherwise —
+    /// the same rule stated twice on purpose.
+    public func openRead(_ scan: PrintingScanJob) {
+        guard scan.offersRead else { return }
+        readingScan = scan
+    }
+
+    public func closeRead() { readingScan = nil }
 
     /// Cancel one queued or printing job from a card's recent list.
     ///

@@ -356,10 +356,10 @@ public struct PrintingJob: Equatable, Sendable, Decodable, Identifiable {
 }
 
 /// `GET /api/print/jobs` — **a wrapper with two keys**, `jobs` and `scans`
-/// (`routes.py:385-387`). The scans half is the household's scan log; the
-/// panel's recent list shows prints, as Android's does (`PrintIo.kt:66`,
-/// which reads `.jobs`), and `scans` is decoded so that a reader of this type
-/// can see it was not forgotten rather than wonder.
+/// (`routes.py:385-387`). The scans half is the scans made on that printer,
+/// each with its reading (1.4.0): the panel's recent list shows them under
+/// the prints, with "What does it say?", as Android's does (`jobLog`,
+/// `PrintersPanel.kt`).
 public struct PrintingJobsResponse: Equatable, Sendable, Decodable {
 
     public let jobs: [PrintingJob]
@@ -966,8 +966,18 @@ public struct PrintingScanJob: Equatable, Sendable, Decodable, Identifiable {
     public let path: String?
     public let incomplete: Bool
     public let error: String?
-    /// True only when a reader is wired **and** the state is `done`.
+    /// The saved scan's reading has finished and found words (1.4.0's scan
+    /// reader, V065). False on a server that can't read scans.
     public let readable: Bool
+    /// The scan's newest reading (``ScanRead``), or nil: never read (an old
+    /// scan, or a server that can't read scans). A saved scan is queued for
+    /// reading as it is saved, so a `done` scan usually carries one.
+    public let read: ScanRead?
+    /// Who scanned it, on a job-log row (`GET /api/print/jobs` → `scans[]`);
+    /// empty on the scan sheet's own answers.
+    public let who: String
+    /// When it started, on a job-log row.
+    public let createdAt: String?
 
     public init(
         id: String = "",
@@ -983,7 +993,10 @@ public struct PrintingScanJob: Equatable, Sendable, Decodable, Identifiable {
         path: String? = nil,
         incomplete: Bool = false,
         error: String? = nil,
-        readable: Bool = false
+        readable: Bool = false,
+        read: ScanRead? = nil,
+        who: String = "",
+        createdAt: String? = nil
     ) {
         self.id = id
         self.printerID = printerID
@@ -999,10 +1012,14 @@ public struct PrintingScanJob: Equatable, Sendable, Decodable, Identifiable {
         self.incomplete = incomplete
         self.error = error
         self.readable = readable
+        self.read = read
+        self.who = who
+        self.createdAt = createdAt
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, state, pages, thumbs, name, path, incomplete, error, readable
+        case id, state, pages, thumbs, name, path, incomplete, error, readable, read, who
+        case createdAt = "created_at"
         case printerID = "printer_id"
         case scannerName = "scanner_name"
         case sourceUsed = "source_used"
@@ -1026,6 +1043,12 @@ public struct PrintingScanJob: Equatable, Sendable, Decodable, Identifiable {
         incomplete = try values.decodeIfPresent(Bool.self, forKey: .incomplete) ?? false
         error = try values.decodeIfPresent(String.self, forKey: .error)
         readable = try values.decodeIfPresent(Bool.self, forKey: .readable) ?? false
+        // `try?`: a reading this app can't decode is no reading, never a
+        // scan that fails to decode — that would stop the sheet's poll on a
+        // scan that has been saved.
+        read = (try? values.decodeIfPresent(ScanRead.self, forKey: .read)) ?? nil
+        who = try values.decodeIfPresent(String.self, forKey: .who) ?? ""
+        createdAt = try values.decodeIfPresent(String.self, forKey: .createdAt)
     }
 
     /// `PrintModels.kt:218`'s `SCAN_END_STATES`.
@@ -1035,4 +1058,13 @@ public struct PrintingScanJob: Equatable, Sendable, Decodable, Identifiable {
     public var busy: Bool { state == "scanning" || state == "saving" }
 
     public var finished: Bool { Self.endStates.contains(state) }
+
+    /// Saved, and being read now: the Scan sheet keeps asking about it so
+    /// "What does it say?" carries the reading's progress (the handoff: poll
+    /// `GET /api/scan/jobs/{id}` every 1.5 s while `state == "done" &&
+    /// read.reading`; `printers.jsx:570`).
+    public var followsRead: Bool { state == "done" && read?.reading == true }
+
+    /// Whether this scan offers "What does it say?" (``scanReadShown(readable:read:)``).
+    public var offersRead: Bool { scanReadShown(readable: readable, read: read) }
 }

@@ -31,15 +31,16 @@ import com.domovoi.app.ui.components.SectionLabel
 import com.domovoi.app.ui.components.runAction
 import com.domovoi.app.ui.screens.settings.SettingsDropdown
 import com.domovoi.app.ui.theme.Domovoi
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
  * Scan into Documents through a scanner the home server has saved: glass or
  * feeder (automatic by default), colour or grey, Scan; then Scan another page
  * (glass) or Done, with thumbnails as pages arrive; then "Saved to Documents
- * as …" with Open. "What does it say?" appears only when the server says it
- * can read the scan ([onWhatDoesItSay] given and `readable` true).
+ * as …" with Open. "What does it say?" appears when a caller passes
+ * [onWhatDoesItSay] AND the saved scan has been read or is being read
+ * ([whatDoesItSayShown]); while it is being read the sheet keeps asking for
+ * the scan, so the button's progress moves ("reading page 2 of 3").
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -70,31 +71,32 @@ internal fun ScanSheet(
     var scan by remember { mutableStateOf<ScanJob?>(null) }
     var busy by remember { mutableStateOf(false) }
 
+    // Documents is reloaded once, when the scan is saved (not on every
+    // later ask while the saved scan is being read).
+    fun land(next: ScanJob) {
+        val saved = next.state == "done" && scan?.state != "done"
+        scan = next
+        if (saved) onSaved()
+    }
+
     fun call(action: String, block: suspend () -> ScanJob) {
         busy = true
         scope.launch {
             runAction(block)
-                .onSuccess {
-                    scan = it
-                    if (it.state == "done") onSaved()
-                }
+                .onSuccess { land(it) }
                 .onFailure { toast(printFailureText(action, it)) }
             busy = false
         }
     }
 
-    // While the scanner works (scanning, saving), ask again every 1.5 s.
+    // While the scanner works (scanning, saving), and then while the saved
+    // scan is being read, ask again every 1.5 s.
     val scanId = scan?.id
-    val scanBusy = scan?.busy == true
-    LaunchedEffect(scanId, scanBusy) {
-        if (scanId == null || !scanBusy) return@LaunchedEffect
-        while (scan?.busy == true) {
-            delay(1500)
-            runAction { io.scan(scanId) }.onSuccess {
-                scan = it
-                if (it.state == "done") onSaved()
-            }
-        }
+    val polls = scanSheetPolls(scan)
+    LaunchedEffect(scanId, polls) {
+        val start = scan
+        if (scanId == null || !polls || start == null) return@LaunchedEffect
+        follow(start, keepGoing = ::scanSheetPolls, fetch = { io.scan(scanId) }, onEach = ::land)
     }
 
     ModalBottomSheet(
@@ -175,10 +177,10 @@ internal fun ScanSheet(
                     if (s.state == "done" && s.path != null) {
                         Button(onClick = { onOpen(s) }) { Text("Open") }
                     }
-                    if (onWhatDoesItSay != null && offersWhatDoesItSay(s)) {
-                        OutlinedButton(onClick = { onWhatDoesItSay(s) }) { Text("What does it say?") }
-                    }
                     TextButton(onClick = onDismiss) { Text("close", color = Domovoi.colors.fgMuted) }
+                }
+                if (onWhatDoesItSay != null && whatDoesItSayShown(s)) {
+                    OutlinedButton(onClick = { onWhatDoesItSay(s) }) { Text(whatDoesItSayLabel(s)) }
                 }
                 return@Column
             }

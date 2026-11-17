@@ -63,6 +63,13 @@ struct PrintersPanelView: View {
                     ProgressView()
                 }
             }
+            // "What does it say?" from a scan row. On this inner stack and
+            // **not** beside the add sheet below: two `.sheet`s on one view
+            // do not reliably coexist (``FilesView`` says why), and the two
+            // never need to be up at once.
+            .sheet(item: readSheet) { scan in
+                ScanReadSheet(scan: scan, model: model, onClose: { panel?.closeRead() })
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .task {
@@ -190,7 +197,17 @@ struct PrintersPanelView: View {
         }
     }
 
-    // MARK: - which add sheet is up
+    // MARK: - which sheet is up
+
+    private var readSheet: Binding<PrintingScanJob?> {
+        Binding(
+            get: { panel?.readingScan },
+            set: { next in
+                guard next == nil else { return }
+                panel?.closeRead()
+            }
+        )
+    }
 
     private var addSheet: Binding<PrintingAddSheet?> {
         Binding(

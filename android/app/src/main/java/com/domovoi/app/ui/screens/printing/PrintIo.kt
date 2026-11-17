@@ -58,8 +58,9 @@ internal class PrintIo(private val api: ApiClient) {
 
     suspend fun testPage(id: Long): PrintJob = api.post("/api/printers/$id/test-page").decode()
 
-    suspend fun jobs(printerId: Long, limit: Int = 10): List<PrintJob> =
-        api.get("/api/print/jobs?printer_id=$printerId&limit=$limit").decode<PrintJobsResponse>().jobs
+    /** A printer's recent print jobs and the scans made on it (each with its reading). */
+    suspend fun jobLog(printerId: Long, limit: Int = 10): PrintJobsResponse =
+        api.get("/api/print/jobs?printer_id=$printerId&limit=$limit").decode()
 
     suspend fun job(id: Long): PrintJob = api.get("/api/print/jobs/$id").decode()
 
@@ -92,6 +93,14 @@ internal class PrintIo(private val api: ApiClient) {
     suspend fun scanNext(id: String): ScanJob = api.post("/api/scan/jobs/${enc(id)}/next").decode()
     suspend fun scanFinish(id: String): ScanJob = api.post("/api/scan/jobs/${enc(id)}/finish").decode()
     suspend fun scanCancel(id: String): ScanJob = api.post("/api/scan/jobs/${enc(id)}/cancel").decode()
+
+    // "What does it say?" (the scan reader): the paths are ScanRead.kt's.
+    suspend fun scanReadFor(documentsPath: String): ScanReadLookup = api.get(scanReadLookupPath(documentsPath)).decode()
+    suspend fun startScanRead(documentsPath: String): ScanRead =
+        api.post(SCAN_READ_START_PATH, scanReadStartBody(documentsPath)).decode()
+    suspend fun scanRead(id: String): ScanRead = api.get(scanReadPath(id)).decode()
+    suspend fun scanReadSummary(id: String): ScanReadSummary = api.get(scanReadSummaryPath(id)).decode()
+    suspend fun scanReadText(id: String): ScanReadText = api.get(scanReadTextPath(id)).decode()
 
     private fun enc(s: String) = android.net.Uri.encode(s)
 
