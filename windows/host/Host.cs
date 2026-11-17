@@ -96,6 +96,9 @@ namespace Domovoi.Windows.Host
         // them ran and how it went. Which restart ids to act on:
         // HardwareLimits.DecideRestart.
         DateTime limitsNext = DateTime.MinValue;
+        // The short address's switch (Ports.cs, ShortAddressSwitch; WIN-10):
+        // when it is next read.
+        DateTime shortAddressNext = DateTime.MinValue;
         string limitsLastReport;
         string limitsLastProblem;
         // The last restart of Domovoi's Linux system for new limits or new
@@ -317,6 +320,7 @@ namespace Domovoi.Windows.Host
                     MaybeReportWindowsSide();
                     if (ready) PeriodicCoreLog();
                     TrackLanName(ready);
+                    if (ready) PollShortAddress();
                     if (ready)
                     {
                         ready = PollLimits(job);
@@ -692,6 +696,29 @@ namespace Domovoi.Windows.Host
                 if (!(e is IOException || e is UnauthorizedAccessException)) throw;
                 return "can't write " + path + ": " + e.Message;
             }
+        }
+
+        // -- the short address's switch (WIN-10) ---------------------------
+
+        // Every HardwareLimits.Every while Domovoi runs: read the switch as
+        // the service user and keep a change in host-state.json, where
+        // Setup and the next update read it to add or leave out the port-80
+        // firewall rule (this account can't change the firewall itself).
+        void PollShortAddress()
+        {
+            if (DateTime.UtcNow < shortAddressNext) return;
+            shortAddressNext = DateTime.UtcNow + HardwareLimits.Every;
+            if (holder == null || SafeExited(holder)) return;   // a wsl.exe -d would start it
+            WslResult r;
+            try { r = Wsl.Run(ShortAddressSwitch.ReadArgs(Paths.DistroName), HardwareLimits.TimeoutMs, null, ShortAddressSwitch.MaxBytes + 64); }
+            catch (System.ComponentModel.Win32Exception e) { log.Write("can't read the short address's switch: " + e.Message); return; }
+            if (r.TimedOut) return;
+            bool? on = ShortAddressSwitch.Parse(r.ExitCode, r.Stdout);
+            if (on == null) return;
+            if (Json.Bool(ReadState(), ShortAddressSwitch.HostStateKey) == on) return;
+            if (UpdateState(ShortAddressSwitch.HostStateKey, on.Value))
+                log.Write("the short address is " + (on.Value ? "on" : "off")
+                    + "; its port-80 firewall rule follows at the next update or Setup run");
         }
 
         // -- the household's hardware limits (HardwareLimits.cs) ---------

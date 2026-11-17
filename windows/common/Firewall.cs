@@ -35,6 +35,14 @@ namespace Domovoi.Windows
 
         public static List<FirewallRule> Plan(string subnetCidr)
         {
+            return Plan(subnetCidr, true);
+        }
+
+        // shortAddress false leaves the port-80 rule out (WIN-10:
+        // ShortAddressSwitch.RuleWanted); the script that adds the plan takes
+        // every Domovoi rule away first, so an earlier one goes too.
+        public static List<FirewallRule> Plan(string subnetCidr, bool shortAddress)
+        {
             if (!Lan.IsCidr(subnetCidr)) throw new ArgumentException("not a subnet: " + subnetCidr);
             string net = subnetCidr.Substring(0, subnetCidr.IndexOf('/'));
             if (!Lan.IsPrivateIPv4(net)) throw new ArgumentException("not a private (home network) subnet: " + subnetCidr);
@@ -42,6 +50,7 @@ namespace Domovoi.Windows
             foreach (var s in DomovoiPorts.All)
             {
                 if (!s.Lan) continue;
+                if (!shortAddress && s.First == DomovoiPorts.ShortAddressPort) continue;
                 var r = new FirewallRule();
                 r.Name = s.RuleName;
                 r.DisplayName = "Domovoi: " + s.What + " (TCP " + s.Ports + ", from " + subnetCidr + ")";

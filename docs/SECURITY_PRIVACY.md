@@ -1403,7 +1403,17 @@ one answer.
   plugin's helper) don't inherit it. The core and database units hold no
   capability at all. On the Windows install, Setup adds the Hyper-V
   firewall rule `Domovoi-ShortAddress-80` (your home subnet only, removed
-  on uninstall like the others), and only reads what holds port 80 and
+  on uninstall like the others) only while the short address can use it:
+  its switch on (as DomovoiHost last read it from the distro, every 30
+  seconds, as the service user, into `host-state.json`) and no Windows
+  program on port 80. Otherwise Setup and every update leave it out and
+  remove an earlier one (WIN-10, round 6). The rule matches every WSL VM,
+  so while it is there a household distro of your own in mirrored mode
+  listening on port 80 is reachable from your subnet too. DomovoiHost is
+  not an administrator and can't change the firewall, so switching the
+  short address off takes the rule away at the next update, not at once
+  (`Remove-NetFirewallHyperVRule -Name Domovoi-ShortAddress-80`, as an
+  administrator, does it now). Setup only reads what holds port 80 and
   `netsh http show urlacl` for its log: it never changes a URL reservation.
 * **No new egress.** It sends nothing anywhere; it answers browsers on
   your network.

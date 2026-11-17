@@ -412,7 +412,11 @@ address) or `http://domovoi.local:6369` instead of an address. The short
 address works because the dashboard inside the distro also listens on
 port 80, which mirrored networking makes this PC's port 80, and sends
 every browser on to 6369; Setup's firewall rule `Domovoi-ShortAddress-80`
-lets your home subnet reach it. When IIS or another Windows program
+lets your home subnet reach it. Setup and each update add that rule only
+while the short address is switched on and no Windows program uses port
+80, and take it away otherwise; switching it off in Settings removes the
+rule at the next update (or now, as an administrator:
+`Remove-NetFirewallHyperVRule -Name Domovoi-ShortAddress-80`). When IIS or another Windows program
 already uses port 80, the dashboard leaves it to that program and Settings
 says "Short address off: something else on this computer uses port 80.";
 `domovoi.local:6369` keeps working. Domovoi's Linux system can't do it itself (its distro isn't the
