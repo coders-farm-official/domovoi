@@ -537,7 +537,7 @@ from domovoi.turn_timings import (
     whisper_block,
 )
 from domovoi.log_privacy import said
-from domovoi import overheard, turn_history, turn_watchdog
+from domovoi import overheard, room_display, turn_history, turn_watchdog
 from domovoi.turn_watchdog import (
     STAGE_IDENTIFY,
     STAGE_REPLY,
@@ -1666,6 +1666,9 @@ class StreamSession:
         # only its own room's timers and reminders (timer_delivery.py), since
         # any LAN device can open /v1/stream/<a new room name>.
         self.token_authenticated = False
+        # The room display (domovoi/room_display.py): started after `ready`
+        # for a paired device that declared `room_display`, else None.
+        self.room_display: room_display.RoomDisplayFeed | None = None
         self._response_task: asyncio.Task[None] | None = None
         # ── Out-of-turn announcements (announce(), announce_block) ────
         # `_playout_until`: monotonic estimate of when the audio already
@@ -1918,6 +1921,12 @@ class StreamSession:
             except Exception as e:  # noqa: BLE001
                 log.debug("timer delivery: room-connected hook failed for %s: %s",
                           self.room_id, e)
+        # A screen in the room (a phone in room mode): its music, timers and
+        # alarms, from now until the socket closes. Only for what `ready`
+        # listed `room_display` to.
+        if room_display.ABILITY in ready["features"]:
+            self.room_display = room_display.RoomDisplayFeed(self)
+            self.room_display.start()
         try:
             while True:
                 msg = await self.ws.receive()
@@ -1947,6 +1956,9 @@ class StreamSession:
             log.warning("ws %s receive loop ended with %s: %s",
                         self.room_id, type(e).__name__, e)
         finally:
+            if self.room_display is not None:
+                feed, self.room_display = self.room_display, None
+                await feed.stop()
             if self._response_task and not self._response_task.done():
                 self._response_task.cancel()
             # A music_start held for this socket has nobody to go to.
@@ -3604,6 +3616,15 @@ class StreamSession:
             # exit phrase). No-op when not in chat mode.
             await self._clear_chat_mode()
             return
+        if t == "room_control":
+            # The room display's buttons (domovoi/room_display.py): only from
+            # a session that was told `room_display`. Never answered, never
+            # an `error` (that would end the device's turn).
+            if self.room_display is not None:
+                await self.room_display.on_control(ctrl)
+            else:
+                log.debug("ignoring room_control from %s: no room display here", self.room_id)
+            return
         await self._safe_send_text({"type": "error", "message": f"unknown control type: {t!r}"})
 
     # ── Satellite health, outage reports and retained logs ──────────────
@@ -3623,8 +3644,13 @@ class StreamSession:
         """What `ready` lists for THIS session: everything, or everything
         but :data:`AUTHENTICATED_FEATURES` for a tokenless one."""
         if self.token_authenticated:
-            return list(CORE_FEATURES)
-        return [f for f in CORE_FEATURES if f not in AUTHENTICATED_FEATURES]
+            features = list(CORE_FEATURES)
+        else:
+            features = [f for f in CORE_FEATURES if f not in AUTHENTICATED_FEATURES]
+        # The room display (1.4.0): a paired device that declared it.
+        if room_display.wanted(self):
+            features.append(room_display.ABILITY)
+        return features
 
     def _health_frame_allowed(self, kind: str) -> bool:
         """`health` / `log_push` only from the room's own authenticated
@@ -6894,6 +6920,9 @@ class StreamSession:
             # it (`hold_music_start`) — dropped BEFORE the send, so the held
             # one cannot go out behind this frame.
             self._drop_music_hold()
+            # The music changed: every room display looks again (a group's
+            # other rooms show it too).
+            room_display.poke_all(self.ws.app)
         try:
             await self.ws.send_text(json.dumps(payload))
         except Exception:

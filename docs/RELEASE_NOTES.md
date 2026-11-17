@@ -4,6 +4,25 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.4.0 (unreleased) — the room display: a phone in room mode shows the room
+
+- **What changed.** A phone or tablet in room mode can show what its room
+  is playing, with pause, resume, skip and back, the room's timers and
+  alarms counting down, and a stop button when one goes off. The server
+  sends it over the room's own connection, only to a paired room whose app
+  asks for it (`room_display` in its hello); a Pi and a spare computer get
+  nothing new. Reminders never appear on the screen: anyone in the room can
+  read it. Song covers come from a new open route,
+  `GET /v1/music/cover/{track_id}`, the dashboard's cover for a library
+  song and nothing else.
+- **What to know.** Saying "stop" while a timer or an alarm is going off in
+  a room now silences it and leaves the music playing (the next "stop"
+  stops the music); with nothing going off, "stop" stops the music as
+  before. "Stop the timer" now also stops an alarm that is going off. The
+  phone app shows the display once it is updated too; an older app, or an
+  older server, simply doesn't show it. Protocol: docs/uml/satellite-protocol.md,
+  "The room display".
+
 ## 1.4.0 (unreleased) — Plugin SDK 1.9: speech in a room's voice
 
 - **What changed.** Plugins can turn text into speech without playing it
