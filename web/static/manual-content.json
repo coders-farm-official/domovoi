@@ -1061,7 +1061,7 @@
     },
     {
      "type": "p",
-     "text": "Your timers show on [Home](route:home) and in each room's **Timers** tab ([Settings → Household → Rooms](route:settings/rooms))."
+     "text": "Your timers show on [Home](route:home) and in each room's **Timers** tab ([Settings → Household → Rooms](route:settings/rooms)). Saying \"stop\" while a timer or an alarm is going off in the room stops it and leaves the music playing; say \"stop\" again to stop the music."
     },
     {
      "type": "p",

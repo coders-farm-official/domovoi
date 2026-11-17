@@ -135,6 +135,11 @@ public final class RoomEngine: RoomEngineControl, @unchecked Sendable {
 
     let batteryReporter = RoomBatteryReporter()
 
+    /// The room display's feed (RoomEngineDisplay.swift).
+    let displayChannel = RoomDisplayChannel()
+    /// Artwork fetches, off the socket's and the worker's threads.
+    let artQueue = DispatchQueue(label: "room-art", qos: .utility)
+
     // MARK: - making one
 
     /// The room with everything injectable: a package test's (fake transport,
@@ -399,6 +404,7 @@ public final class RoomEngine: RoomEngineControl, @unchecked Sendable {
             return c
         }
         for c in conts { c.finish() }
+        displayChannel.finish()
     }
 
     public func setMuted(_ on: Bool) {

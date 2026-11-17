@@ -26,7 +26,8 @@ public enum RoomProtocol {
     /// nothing it did not name. Never chat mode. `full_duplex` only with an
     /// echo canceller (an iPhone always has voice processing): it is what
     /// lets the core start a drop-in here. `dropin_ready` goes with it
-    /// (``DropinAfterReply``). `RoomProtocol.kt:46-54`.
+    /// (``DropinAfterReply``). `room_display`: the room display's frames
+    /// (``RoomDisplayFeed``, 1.4.0). `RoomProtocol.kt:46-54`.
     public static func supports(echoCanceller: Bool) -> [String] {
         var out: [String] = []
         if echoCanceller { out.append("full_duplex") }
@@ -36,6 +37,7 @@ public enum RoomProtocol {
         out.append("wake_models")
         out.append("sounds")
         if echoCanceller { out.append("dropin_ready") }
+        out.append(RoomDisplayFeed.ability)
         return out
     }
 
@@ -125,6 +127,9 @@ public enum RoomProtocol {
         "music_failed": "music_failed",
         "health": "health",
         "log_push": "log_push",
+        // The room display's controls (``RoomDisplayFeed``): only to a core
+        // that said it takes them.
+        "room_control": RoomDisplayFeed.ability,
     ]
 
     /// Whether `frame` may go to a core whose `ready` listed `features`.
@@ -174,6 +179,9 @@ public enum RoomProtocol {
         /// and say `dropin_ready`.
         case dropinStart(peerRoom: String?, peerLabel: String?, sampleRate: Int, fullDuplex: Bool, awaitReady: Bool)
         case dropinEnd(reason: String?)
+        /// This room's music, timers and ringing fire for the room display
+        /// (``RoomDisplayFeed``).
+        case display(RoomFeed)
         /// A type this client does not handle (logged, ignored).
         case other(type: String?)
     }
@@ -246,6 +254,8 @@ public enum RoomProtocol {
             )
         case "dropin_end":
             return .dropinEnd(reason: s("reason"))
+        case "room_display":
+            return .display(RoomDisplayFeed.parse(o))
         case let type:
             return .other(type: type)
         }

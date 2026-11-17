@@ -4,7 +4,12 @@ import android.app.Activity
 import android.app.KeyguardManager
 import android.app.admin.DevicePolicyManager
 import android.provider.Settings
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.os.BatteryManager
+import androidx.core.content.ContextCompat
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
@@ -15,89 +20,33 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawingPadding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.semantics.CustomAccessibilityAction
-import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.clearAndSetSemantics
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.customActions
-import androidx.compose.ui.semantics.heading
-import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextDecoration
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.domovoi.app.DomovoiApplication
 import com.domovoi.app.MainActivity
 import com.domovoi.app.update.AppUpdate
-import com.domovoi.app.update.AppUpdateNotice
 import com.domovoi.app.update.AppUpdates
 import com.domovoi.app.update.InstallFacts
 import com.domovoi.app.update.noticeFor
 import com.domovoi.app.update.openInBrowser
-import com.domovoi.app.ui.theme.DomovoiDarkColors
 import com.domovoi.app.ui.theme.DomovoiTheme
 import com.domovoi.app.ui.theme.ThemeMode
-import kotlinx.coroutines.delay
-import java.text.DateFormat
-import java.util.Date
-import kotlin.random.Random
 
 /**
  * The room display: a separate full-screen activity in its own task, dark
- * and plain so the phone reads as a room, not as the app — the room's name
- * and a clock, a state ring, an always-visible mic-live chip, a big Mute,
- * and Exit (long press, then the phone's own unlock). The content drifts a
- * few pixels every minute so a screen left on does not burn in.
+ * and plain so the phone reads as a room, not as the app — the room's name,
+ * a big clock, a state ring, this room's music and timers when the server
+ * tells it about them, an always-visible mic-live chip, a big Mute, and
+ * Exit (long press, then the phone's own unlock). What it draws is
+ * [RoomDisplay]. While the phone is plugged in the screen stays on; on
+ * battery it sleeps as the phone's settings say.
  *
  * Shown over the lock screen: anyone in the room may see it and mute it;
  * leaving room mode still takes the phone's PIN, pattern or fingerprint.
@@ -171,6 +120,7 @@ class RoomModeActivity : ComponentActivity() {
                     onCheckNow = { engine?.retryNow() },
                     onExit = { askToLeave() },
                     update = update,
+                    source = engine,
                 )
                 when (dialog) {
                     Dialog.CONFIRM_NO_LOCK -> AlertDialog(
@@ -198,6 +148,29 @@ class RoomModeActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    /** Plugged in: the screen stays on (a room display on a charger is
+     *  meant to be seen); on battery the phone's own timeout applies. */
+    private val power = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) = keepScreenOn(intent)
+    }
+
+    private fun keepScreenOn(battery: Intent?) {
+        val plugged = (battery?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0
+        if (plugged) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        // A sticky broadcast: the answer now, then every change.
+        keepScreenOn(ContextCompat.registerReceiver(this, power, IntentFilter(Intent.ACTION_BATTERY_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED))
+    }
+
+    override fun onStop() {
+        runCatching { unregisterReceiver(power) }
+        super.onStop()
     }
 
     override fun onResume() {
@@ -272,205 +245,3 @@ class RoomModeActivity : ComponentActivity() {
         finishAndRemoveTask()
     }
 }
-
-private val Ink = Color(0xFF000000)
-private val Text1 = Color(0xFFE9E5DE)
-private val Text2 = Color(0xFF8C877F)
-private val Dim = Color(0xFF3A3632)
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-fun RoomDisplay(
-    label: String,
-    status: RoomEngine.Status?,
-    running: Boolean,
-    approvalCode: String?,
-    wakeWord: String,
-    needsLock: Boolean,
-    onMute: () -> Unit,
-    onResume: () -> Unit,
-    onSetLock: () -> Unit,
-    onCheckNow: () -> Unit,
-    onExit: () -> Unit,
-    /** A newer app on the core, if there is one to show: a faint line at
-     *  the foot of the screen, never in the way. */
-    update: AppUpdateNotice? = null,
-) {
-    val amber = DomovoiDarkColors.brand
-    val red = DomovoiDarkColors.err
-    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    var drift by remember { mutableStateOf(Offset.Zero) }
-    LaunchedEffect(Unit) {
-        var tick = 0
-        while (true) {
-            delay(1_000)
-            now = System.currentTimeMillis()
-            if (++tick % 60 == 0) drift = Offset(Random.nextInt(-12, 13).toFloat(), Random.nextInt(-12, 13).toFloat())
-        }
-    }
-    val ring = RoomStatusText.ring(status, running)
-    val ringColor = when (ring) {
-        RoomStatusText.Ring.MIC_BLOCKED -> red
-        RoomStatusText.Ring.MUTED, RoomStatusText.Ring.OFFLINE -> Dim
-        RoomStatusText.Ring.IDLE -> amber.copy(alpha = 0.35f)
-        else -> amber
-    }
-    val spin = rememberInfiniteTransition(label = "ring")
-    val pulse by spin.animateFloat(0.55f, 1f, infiniteRepeatable(tween(900), RepeatMode.Reverse), label = "pulse")
-    val turn by spin.animateFloat(0f, 360f, infiniteRepeatable(tween(1400, easing = LinearEasing)), label = "turn")
-    BoxWithConstraints(Modifier.fillMaxSize().background(Ink).safeDrawingPadding()) {
-        // An old phone is about 640 dp tall: everything a size down there,
-        // so the room fits without scrolling.
-        val compact = maxHeight < 720.dp
-        val ringSize = if (compact) 150.dp else 200.dp
-        val gap = if (compact) 12.dp else 24.dp
-        Column(
-            Modifier.fillMaxSize().offset(drift.x.dp, drift.y.dp).padding(24.dp).verticalScroll(rememberScrollState()),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text("domovoi room", color = Text2, fontSize = 13.sp)
-                MicChip(open = status?.micOpen == true && running, live = status?.micLive == true, muted = status?.muted == true, red = red)
-            }
-            Spacer(Modifier.height(gap))
-            Text(label, color = Text1, fontSize = if (compact) 30.sp else 40.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center,
-                modifier = Modifier.semantics { heading() })
-            Text(DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(now)), color = Text2, fontSize = if (compact) 40.sp else 56.sp, fontWeight = FontWeight.Light)
-            Spacer(Modifier.height(gap))
-            // One node for a screen reader (the drawn ring and its word), read
-            // out as the room changes state.
-            Box(
-                Modifier.size(ringSize).clearAndSetSemantics {
-                    contentDescription = roomStateDescription(RoomStatusText.label(ring))
-                    liveRegion = LiveRegionMode.Polite
-                },
-                contentAlignment = Alignment.Center,
-            ) {
-                Canvas(Modifier.fillMaxSize()) {
-                    val stroke = 10.dp.toPx()
-                    when (ring) {
-                        RoomStatusText.Ring.THINKING -> {
-                            drawCircle(ringColor.copy(alpha = 0.2f), style = Stroke(stroke))
-                            drawArc(ringColor, turn, 90f, false, style = Stroke(stroke))
-                        }
-                        RoomStatusText.Ring.LISTENING, RoomStatusText.Ring.CALL ->
-                            drawCircle(ringColor.copy(alpha = pulse), style = Stroke(stroke))
-                        RoomStatusText.Ring.SPEAKING -> drawCircle(ringColor, style = Stroke(stroke * 1.6f))
-                        else -> drawCircle(ringColor, style = Stroke(stroke))
-                    }
-                }
-                Text(RoomStatusText.label(ring), color = if (ring == RoomStatusText.Ring.MIC_BLOCKED) red else Text1, fontSize = 22.sp)
-            }
-            Spacer(Modifier.height(gap * 2 / 3))
-            (if (needsLock) RoomStatusText.NEEDS_LOCK else RoomStatusText.detail(status, running, wakeWord))?.let {
-                Text(it, color = Text2, fontSize = if (compact) 14.sp else 16.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 8.dp))
-            }
-            if (approvalCode != null && running) {
-                Spacer(Modifier.height(12.dp))
-                Text(
-                    approvalCode.chunked(3).joinToString(" "), color = amber, fontSize = if (compact) 40.sp else 48.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.clearAndSetSemantics { contentDescription = approvalCodeDescription(approvalCode) },
-                )
-                BigButton("check now", Dim, Text1, compact, onCheckNow)
-            }
-            Spacer(Modifier.height(gap))
-            if (needsLock) {
-                BigButton("set a screen lock", amber, Color.Black, compact, onSetLock)
-            } else if (running) {
-                val isMuted = status?.muted == true
-                BigButton(if (isMuted) "unmute" else "mute", if (isMuted) amber else Dim, if (isMuted) Color.Black else Text1, compact, onMute)
-            } else {
-                BigButton("resume", amber, Color.Black, compact, onResume)
-            }
-            Spacer(Modifier.height(gap * 2 / 3))
-            // A tap does nothing (a room is not left by accident); a long press,
-            // or a screen reader's double-tap-and-hold or its "exit room mode"
-            // action, asks for the phone's unlock.
-            Box(
-                Modifier.clip(RoundedCornerShape(12.dp)).border(1.dp, Dim, RoundedCornerShape(12.dp))
-                    .combinedClickable(onClick = {}, onLongClick = onExit, onLongClickLabel = EXIT_ACTION, role = Role.Button)
-                    .padding(horizontal = 20.dp, vertical = 12.dp)
-                    .semantics {
-                        contentDescription = "exit room mode (long press)"
-                        customActions = listOf(CustomAccessibilityAction(EXIT_ACTION) { onExit(); true })
-                    },
-            ) {
-                Text("exit room mode · hold", color = Text2, fontSize = 14.sp)
-            }
-            if (update != null) {
-                Spacer(Modifier.height(gap))
-                Text(update.text, color = Text2, fontSize = 12.sp, textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(horizontal = 8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    update.onGet?.let { RoomLink("update", it) }
-                    RoomLink("hide", update.onDismiss)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun RoomLink(text: String, onClick: () -> Unit) {
-    Box(
-        Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClick = onClick, role = Role.Button)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-    ) {
-        Text(text, color = Text2, fontSize = 13.sp, textDecoration = TextDecoration.Underline)
-    }
-}
-
-@Composable
-private fun MicChip(open: Boolean, live: Boolean, muted: Boolean, red: Color) {
-    // Follows the recorder itself: "mic off" only once no recorder is open,
-    // whatever the Mute button says; "mic live" while what it hears goes to
-    // the server.
-    val off = !open
-    val color = when {
-        off -> Dim
-        live -> red
-        else -> Text2
-    }
-    Row(
-        Modifier.clip(RoundedCornerShape(50)).border(1.dp, color, RoundedCornerShape(50)).padding(horizontal = 12.dp, vertical = 6.dp)
-            .clearAndSetSemantics {
-                contentDescription = micChipDescription(off, live)
-                liveRegion = LiveRegionMode.Polite
-            },
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(Modifier.size(10.dp).clip(CircleShape).background(if (live && !off) red else color))
-        Spacer(Modifier.width(8.dp))
-        Text(
-            if (off) "mic off" else if (live) "mic live" else "mic",
-            color = color, fontSize = 13.sp,
-            textDecoration = if (off && muted) TextDecoration.LineThrough else null,
-        )
-    }
-}
-
-@Composable
-private fun BigButton(text: String, bg: Color, fg: Color, compact: Boolean, onClick: () -> Unit) {
-    Box(
-        Modifier.fillMaxWidth(0.7f).height(if (compact) 56.dp else 72.dp).clip(RoundedCornerShape(36.dp)).background(bg)
-            .clickable(role = Role.Button, onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(text, color = fg, fontSize = 24.sp, fontWeight = FontWeight.Medium)
-    }
-}
-
-/** The room display's words for a screen reader (RoomModeA11yTest). */
-internal const val EXIT_ACTION = "exit room mode"
-
-internal fun roomStateDescription(label: String): String = "room state: $label"
-
-internal fun micChipDescription(off: Boolean, live: Boolean): String = when {
-    off -> "microphone off"
-    live -> "microphone live"
-    else -> "microphone listening for the wake word"
-}
-
-/** "123456" read digit by digit, as it is typed on the dashboard. */
-internal fun approvalCodeDescription(code: String): String = "approval code " + code.toList().joinToString(" ")

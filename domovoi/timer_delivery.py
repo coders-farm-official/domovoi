@@ -723,16 +723,115 @@ class MemoryFireLedger:
 # ─── "Stop the timer" right after one went off ───────────────────────────
 
 
+# "Just went off in this room" (see ack_recent_fire), as SQL over a fire
+# ``f`` and this room's delivery row ``d``. Shared with ringing_fire, so the
+# room display's "ringing" card and "stop the timer" agree on what counts.
+_RECENT_FIRE_SQL = """
+        (d.outcome IN ('sending', 'spoken', 'interrupted')
+         AND COALESCE(d.finished_at, d.started_at)
+             >= now() - make_interval(secs => :within))
+     OR (d.is_origin
+         AND f.fired_at >= now() - make_interval(secs => :within))
+     OR (d.outcome = 'pending' AND f.settled_at IS NULL
+         AND f.fired_at >= now() - make_interval(secs => :pending_within))
+"""
+
+# A timer, or an alarm: a reminder with the label the reminder handler gives
+# an alarm ("7 AM alarm", "20 minute alarm"). Never any other reminder: its
+# words are household speech (the room display shows neither).
+_TIMER_OR_ALARM_SQL = (
+    "(f.kind = 'timer' OR (f.kind = 'reminder' AND lower(f.label) ~ :alarm_label))"
+)
+
+
+def _alarm_label_re() -> str:
+    from domovoi.handlers.reminder import ALARM_LABEL_SQL_RE
+
+    return ALARM_LABEL_SQL_RE
+
+
+def _pending_within() -> float:
+    return max(
+        float(ACK_PENDING_WITHIN_SEC),
+        float(settings.timer_announce_max_wait_sec) + float(settings.timer_offline_grace_sec),
+    )
+
+
+async def _v018_present(session: AsyncSession) -> bool:
+    return bool(
+        (
+            await session.execute(
+                text(
+                    "SELECT to_regclass('public.timer_fires') IS NOT NULL "
+                    "AND to_regclass('public.timer_fire_deliveries') IS NOT NULL"
+                )
+            )
+        ).scalar()
+    )
+
+
+@dataclass(frozen=True)
+class Ringing:
+    """A timer or alarm going off in a room right now (:func:`ringing_fire`)."""
+
+    fire_id: int
+    kind: str           # 'timer' | 'alarm'
+    label: str | None
+
+
+async def ringing_fire(
+    session: AsyncSession, room_id: str, within_sec: int = ACK_WITHIN_SEC,
+) -> Ringing | None:
+    """The timer or alarm going off for ``room_id`` that nobody has
+    acknowledged yet: the newest fire :func:`ack_recent_fire` would take
+    here (same window), a timer or an alarm only, with ``acked_at`` still
+    empty. None when there is none or V018 is missing. Read by the room
+    display (domovoi/room_display.py) for its "ringing" card."""
+    if not await _v018_present(session):
+        return None
+    row = (
+        await session.execute(
+            text(
+                f"""
+                SELECT f.id, f.kind, f.label
+                  FROM timer_fires f
+                  JOIN timer_fire_deliveries d
+                    ON d.fire_id = f.id AND d.room_id = :room
+                 WHERE f.acked_at IS NULL
+                   AND {_TIMER_OR_ALARM_SQL}
+                   AND ({_RECENT_FIRE_SQL})
+                 ORDER BY f.fired_at DESC, f.id DESC
+                 LIMIT 1
+                """
+            ),
+            {"room": room_id, "within": float(within_sec),
+             "pending_within": _pending_within(), "alarm_label": _alarm_label_re()},
+        )
+    ).first()
+    if row is None:
+        return None
+    return Ringing(
+        fire_id=int(row[0]),
+        kind="timer" if row[1] == "timer" else "alarm",
+        label=row[2],
+    )
+
+
 async def ack_recent_fire(
     session: AsyncSession,
     room_id: str,
     within_sec: int = ACK_WITHIN_SEC,
     *,
     kind: str | None = None,
+    timer_or_alarm: bool = False,
+    fire_id: int | None = None,
 ) -> int | None:
     """If a fire (of ``kind``, when given) just went off for ``room_id``,
     acknowledge it and return its id; else None (nothing recent, or V018
-    missing). "Just went off" is any of:
+    missing). ``timer_or_alarm`` narrows it to a timer or an alarm (never
+    another reminder: "stop the timer" and a bare "stop" with an alarm
+    ringing, and the room display's stop button); ``fire_id`` to that one
+    fire (the button names the fire it showed). "Just went off" is any of:
 
     * it was announced here (sending, spoken or interrupted) in the last
       ``within_sec`` seconds;
@@ -753,44 +852,28 @@ async def ack_recent_fire(
     Why: "stop the timer" said right after the garage's timer was
     announced in the kitchen means "I heard it", not "delete the kitchen's
     own pasta timer" — which is what it used to do."""
-    present = (
-        await session.execute(
-            text(
-                "SELECT to_regclass('public.timer_fires') IS NOT NULL "
-                "AND to_regclass('public.timer_fire_deliveries') IS NOT NULL"
-            )
-        )
-    ).scalar()
-    if not present:
+    if not await _v018_present(session):
         return None
-    pending_within = max(
-        float(ACK_PENDING_WITHIN_SEC),
-        float(settings.timer_announce_max_wait_sec) + float(settings.timer_offline_grace_sec),
-    )
+    narrow = f"AND {_TIMER_OR_ALARM_SQL}" if timer_or_alarm else ""
     row = (
         await session.execute(
             text(
-                """
+                f"""
                 SELECT f.id, f.acked_at IS NOT NULL
                   FROM timer_fires f
                   JOIN timer_fire_deliveries d
                     ON d.fire_id = f.id AND d.room_id = :room
                  WHERE (CAST(:kind AS text) IS NULL OR f.kind = CAST(:kind AS text))
-                   AND (
-                        (d.outcome IN ('sending', 'spoken', 'interrupted')
-                         AND COALESCE(d.finished_at, d.started_at)
-                             >= now() - make_interval(secs => :within))
-                     OR (d.is_origin
-                         AND f.fired_at >= now() - make_interval(secs => :within))
-                     OR (d.outcome = 'pending' AND f.settled_at IS NULL
-                         AND f.fired_at >= now() - make_interval(secs => :pending_within))
-                   )
+                   AND (CAST(:fire_id AS bigint) IS NULL OR f.id = CAST(:fire_id AS bigint))
+                   {narrow}
+                   AND ({_RECENT_FIRE_SQL})
                  ORDER BY f.fired_at DESC, f.id DESC
                  LIMIT 1
                 """
             ),
             {"room": room_id, "within": float(within_sec), "kind": kind,
-             "pending_within": pending_within},
+             "fire_id": fire_id, "pending_within": _pending_within(),
+             **({"alarm_label": _alarm_label_re()} if timer_or_alarm else {})},
         )
     ).first()
     if row is None:
@@ -918,6 +1001,14 @@ class TimerDelivery:
         # cut off, failed) or the task ends. A music restart after another
         # announcement in that room waits for them (`announcing_to`).
         self._coming: set[tuple[int, str]] = set()
+        # room -> the fire whose announcement is being spoken there right
+        # now (from the announce() call until it returns): what a room
+        # display's stop button ends (`stop_announcing`), and nothing else.
+        self._speaking: dict[str, int] = {}
+        # (fire, room) deliveries a room display stopped while they were
+        # live: an announcement that had not started yet gives up instead
+        # of trying again (the origin room's own would otherwise come back).
+        self._stopped: set[tuple[int, str]] = set()
         self._noted: dict[tuple[int, str], str] = {}
         self._aux: set[asyncio.Task[None]] = set()
         self._warned_unpaired: set[str] = set()
@@ -1003,6 +1094,29 @@ class TimerDelivery:
             return False
         sess = self._sessions().get(origin)
         return sess is not None and not self._house_wide(origin, sess)
+
+    def stop_announcing(self, fire_id: int, room_id: str) -> bool:
+        """End ``fire_id``'s announcement in ``room_id`` if it is being
+        spoken there now, exactly as a wake word cuts it off (the room's
+        delivery records it ``interrupted``: heard). Another announcement
+        playing there (an intercom, another fire) is left alone. True when
+        one was cut. The room display's stop button, after the fire was
+        acknowledged (domovoi/room_display.py)."""
+        if self._live((fire_id, room_id)):
+            self._stopped.add((fire_id, room_id))
+        if self._speaking.get(room_id) != fire_id:
+            return False
+        sess = self._sessions().get(room_id)
+        cut = getattr(sess, "_cut_announcement", None)
+        if cut is None:
+            return False
+        if getattr(sess, "_announce_callers", 1) > 1:
+            # Another announcement holds the room's turn (ours is queued
+            # behind it, or it is queued behind ours): which one is playing
+            # cannot be told, and the other must not be cut.
+            return False
+        cut()
+        return True
 
     def announcing_to(self, room_id: str) -> bool:
         """Whether a fire's announcement is still to come in ``room_id``:
@@ -1155,6 +1269,7 @@ class TimerDelivery:
         if self._tasks.get(key) is task:
             self._tasks.pop(key, None)
             self._coming.discard(key)
+            self._stopped.discard(key)
         if not task.cancelled() and task.exception() is not None:
             log.warning("timer fire %d room=%s: delivery task failed: %s",
                         key[0], key[1], task.exception())
@@ -1298,8 +1413,21 @@ class TimerDelivery:
                     # recording that began after the check above (the claim
                     # is a database round trip) makes announce() step aside
                     # instead of talking over it.
-                    await sess.announce(line, defer_to_capture=True, kind="alarm")
+                    self._speaking[room_id] = fid
+                    try:
+                        await sess.announce(line, defer_to_capture=True, kind="alarm")
+                    finally:
+                        if self._speaking.get(room_id) == fid:
+                            del self._speaking[room_id]
                 except AnnounceNotStarted as e:
+                    if (fid, room_id) in self._stopped:
+                        # Stopped from the room's display before a word
+                        # went out: it was acknowledged, nothing to say.
+                        self._coming.discard((fid, room_id))
+                        await self._finish(fire, room_id, "cancelled",
+                                           f"acknowledged:{room_id}",
+                                           retry_until=_end_budget())
+                        return
                     if e.reason == "unsupported":
                         # The room's device never declared announcements:
                         # nothing was sent, and waiting will not change it.

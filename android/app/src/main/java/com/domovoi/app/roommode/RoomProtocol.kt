@@ -41,7 +41,9 @@ object RoomProtocol {
      * it is what lets the core start a drop-in here, and a room that cannot
      * capture while it plays would howl. `dropin_ready` goes with it: a room
      * that can take a drop-in finishes the reply announcing the call before
-     * it opens it ([DropinAfterReply]).
+     * it opens it ([DropinAfterReply]). `room_display`: the room's screen
+     * shows this room's music and timers and sends `room_control`
+     * ([RoomDisplayFeed]), on every phone.
      */
     fun supports(echoCanceller: Boolean): List<String> = buildList {
         if (echoCanceller) add("full_duplex")
@@ -51,6 +53,7 @@ object RoomProtocol {
         add("wake_models")
         add("sounds")
         if (echoCanceller) add("dropin_ready")
+        add(RoomDisplayFeed.ABILITY)
     }
 
     fun hello(
@@ -131,6 +134,9 @@ object RoomProtocol {
         "music_failed" to "music_failed",
         "health" to "health",
         "log_push" to "log_push",
+        // The room display's controls (RoomDisplayFeed): only to a core
+        // that said it takes them.
+        "room_control" to RoomDisplayFeed.ABILITY,
     )
 
     /** Whether [frame] may go to a core whose `ready` listed [features]. */
@@ -191,6 +197,9 @@ object RoomProtocol {
             val awaitReady: Boolean = false,
         ) : ServerFrame()
         data class DropinEnd(val reason: String?) : ServerFrame()
+        /** This room's music, timers and ringing fire for the room display
+         *  (PROPOSED, [RoomDisplayFeed]). */
+        data class Display(val feed: RoomFeed) : ServerFrame()
 
         /** A type this client does not handle (logged, ignored). */
         data class Other(val type: String?) : ServerFrame()
@@ -226,6 +235,7 @@ object RoomProtocol {
                 s("peer_room"), s("peer_label"), i("audio_sample_rate") ?: SAMPLE_RATE, b("full_duplex"), b("await_ready"),
             )
             "dropin_end" -> ServerFrame.DropinEnd(s("reason"))
+            "room_display" -> ServerFrame.Display(RoomDisplayFeed.parse(o))
             else -> ServerFrame.Other(type)
         }
     }

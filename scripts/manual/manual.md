@@ -224,7 +224,9 @@ time it comes; add morning, evening, am or pm to be sure.
 - "what reminders do I have"
 
 **Also:** your timers show on [Home](#home) and in each room's **Timers**
-tab ([Settings → Household → Rooms](#settings/rooms)).
+tab ([Settings → Household → Rooms](#settings/rooms)). Saying "stop" while
+a timer or an alarm is going off in the room stops it and leaves the music
+playing; say "stop" again to stop the music.
 
 **App:** if Home's timers card says "Timers may ring a few minutes late on
 this phone", tap **allow alarms**.
