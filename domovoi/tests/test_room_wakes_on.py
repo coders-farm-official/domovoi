@@ -50,7 +50,8 @@ def test_without_a_report_the_server_s_record_names_the_word(row, slug, name, so
 def test_nothing_known_is_unknown_until_the_room_updates(row):
     out = wake_default.room_word(None, row, NAMES)
     assert out == {"slug": None, "name": None, "source": "unknown", "pending_slug": None,
-                   "pending_name": None, "text": "unknown until this room updates"}
+                   "pending_name": None, "text": "unknown until this room updates",
+                   "words": [], "device_max": None, "limit": 1, "max_words": 5}
 
 
 @pytest.mark.parametrize("row", [

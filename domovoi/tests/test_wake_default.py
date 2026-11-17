@@ -62,8 +62,10 @@ async def _set_default(slug: str) -> None:
 
 
 async def _state(room: str) -> dict | None:
+    """The room's state and main word (its list and limit: test_multi_wake.py)."""
     async with session_scope() as s:
-        return await wake_default.room_state(s, room)
+        row = await wake_default.room_state(s, room)
+    return {"state": row["state"], "slug": row["slug"]} if row else None
 
 
 def _place_model(data: bytes = MODEL) -> Path:

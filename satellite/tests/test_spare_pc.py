@@ -297,7 +297,7 @@ def test_ask_me_holds_what_the_core_pushes_until_the_person_says_yes(monkeypatch
     monkeypatch.setattr(sat, "_apply_upgrade", lambda p: ran.append("update"))
     monkeypatch.setattr(sat, "_deferred_pi_action", lambda a, arg=None: ran.append("restart"))
     monkeypatch.setattr(sat, "_apply_config_changes", lambda c: ran.append("config"))
-    monkeypatch.setattr(sat, "_apply_wake_switch", lambda s, t=None: ran.append("wake_word"))
+    monkeypatch.setattr(sat, "_apply_wake_switch", lambda s, t=None, words=None: ran.append("wake_word"))
     sat._handle_text_frame(frame)
     assert started == [] and ran == []
     pending = sat.control_status()["pending"]

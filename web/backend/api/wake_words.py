@@ -981,6 +981,22 @@ async def wake_use(body: WakeUseBody, request: Request):
     return bridge_response(status, payload)
 
 
+class WakeRoomBody(BaseModel):
+    room_id: str = Field(..., min_length=1, max_length=120)
+    slugs: list[str] = Field(..., min_length=1, max_length=5)
+
+
+@router.put("/room", dependencies=[Depends(require_admin_mutation)])
+async def wake_room_words(body: WakeRoomBody, request: Request):
+    """Set a connected room's wake words, main word first (1.4.0): 409 with
+    the reason when its device can't run that many or a word can't be
+    given; the room restarts to load them."""
+    status, payload = await put_admin(
+        "/v1/admin/wake/room", {"room_id": body.room_id, "slugs": body.slugs}, timeout=120.0,
+        headers=auth_forward_headers(request))
+    return bridge_response(status, payload)
+
+
 @router.post("/{wake_word_id}/push", dependencies=[Depends(require_admin_mutation)])
 async def push_wake_word(wake_word_id: int, body: RoomBody, request: Request):
     """Push a trained wake model to a connected satellite. Proxies the

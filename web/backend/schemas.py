@@ -546,6 +546,11 @@ class ConversationTurn(BaseModel):
     # The wake word's peak score, 0..1 (V044; satellites from 2026-11-09,
     # wake-word turns only); None otherwise.
     wake_score: float | None = None
+    # Which of the room's wake words opened the mic (V063; satellites from
+    # 1.4.0, wake-word turns only); None otherwise.
+    wake_word: str | None = None
+    # Its display name ("Domovoi", a trained word's name).
+    wake_word_name: str | None = None
     # How voice identification scored the turn (V049; satellite turns from
     # 2026-11-11). Admins only (web/backend/voice_match.py): null for every
     # other caller, for older rows and for turns not from a satellite.
@@ -757,6 +762,15 @@ class Satellite(BaseModel):
     battery: RoomBattery | None = None
 
 
+class RoomWakeWordItem(BaseModel):
+    """One of a room's wake words (V063). ``running``: the room's device is
+    listening for it (false: the server gave it, but the device runs fewer
+    words or hasn't loaded it yet)."""
+    slug: str
+    name: str
+    running: bool = True
+
+
 class RoomWakeWord(BaseModel):
     """Which wake word a room answers to (domovoi/wake_default.py
     ``room_word``). ``source``: ``device`` — the model the room device
@@ -774,6 +788,14 @@ class RoomWakeWord(BaseModel):
     pending_slug: str | None = None
     pending_name: str | None = None
     text: str
+    # Several words per room (1.4.0, V063): the room's words, main word
+    # first; how many its device said it can run (null: it never said, an
+    # older device, which runs one), what it runs (``limit``), and the most
+    # a room may have (``max_words``).
+    words: list[RoomWakeWordItem] = Field(default_factory=list)
+    device_max: int | None = None
+    limit: int = 1
+    max_words: int = 5
 
 
 class RoomBattery(BaseModel):
