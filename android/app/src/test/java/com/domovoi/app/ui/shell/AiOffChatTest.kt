@@ -2,9 +2,9 @@ package com.domovoi.app.ui.shell
 
 import com.domovoi.app.net.CAP_STATIONS
 import com.domovoi.app.net.Capabilities
-import com.domovoi.app.net.CapabilityPlugin
 import com.domovoi.app.net.FEATURE_AI
 import com.domovoi.app.ui.screens.home.everythingTiles
+import com.domovoi.app.testing.ourCaps
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -39,10 +39,7 @@ class AiOffChatTest {
         Route.entries.filter { it != Route.Chat }.forEach {
             assertEquals(it.name, it.visibleWith(Capabilities.EMPTY), it.visibleWith(aiOff))
         }
-        val radioAiOff = Capabilities(
-            plugins = listOf(CapabilityPlugin(slug = "p", androidCapabilities = listOf(CAP_STATIONS))),
-            features = mapOf(FEATURE_AI to false),
-        )
+        val radioAiOff = ourCaps(CAP_STATIONS, features = mapOf(FEATURE_AI to false))
         assertTrue(Route.Stations.visibleWith(radioAiOff))
         assertFalse(Route.Chat.visibleWith(radioAiOff))
         // Off every launcher: the drawer/rail list, Home's grid, the bar.
@@ -60,7 +57,8 @@ class AiOffChatTest {
             "chat is turned off" to "this server has its AI features turned off",
             Route.Chat.unavailableNote(aiOff),
         )
-        assertEquals("stations isn't available", Route.Stations.unavailableNote(aiOff).first)
+        // A screen that uses a plugin of ours names neither (PluginGateTest).
+        assertEquals("this screen isn't available", Route.Stations.unavailableNote(aiOff).first)
         assertEquals("chat isn't available", Route.Chat.unavailableNote(Capabilities.EMPTY).first)
     }
 }

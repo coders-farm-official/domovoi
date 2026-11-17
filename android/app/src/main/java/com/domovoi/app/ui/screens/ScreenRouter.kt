@@ -63,8 +63,10 @@ fun ScreenRouter(route: Route, navigate: (Route) -> Unit, counts: SidebarCounts 
         // Audiobooks' device side: the books saved on this phone.
         Route.Audiobooks -> SourceSwitchPage(DevicePage.Audiobooks, server = { AudiobooksScreen() }, device = { SavedBooksScreen() })
         Route.Videos -> SourceSwitchPage(DevicePage.Videos, server = { VideosScreen() }, device = { YourDeviceVideos() })
-        // Screens a plugin provides sit in its frame (ui/components/PluginFrame.kt):
-        // its name, publisher and colour, as the dashboard frames its pages.
+        // The app's own screens that use a plugin of ours sit in its frame
+        // (ui/components/PluginFrame.kt): "Uses the <plugin> plugin", its
+        // publisher and colour. Reached only while the server runs that
+        // plugin (visibleWith above; net/Capabilities.kt AppScreenPlugins).
         Route.Images -> PluginScreenFrame(CAP_IMAGEGEN, route.icon) { ImagesScreen() }
         Route.News -> NewsScreen()
         Route.People -> PeopleScreen()

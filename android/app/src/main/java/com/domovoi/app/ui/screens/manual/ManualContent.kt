@@ -355,13 +355,16 @@ internal fun searchManual(doc: ManualDoc, visible: Set<String>, query: String, m
 
 /** The manual's own phrases per handler (never a pending one, never one
  *  written with "…"): what "Everything it can do" lists where the server
- *  gives a feature none. */
-internal fun phrasesByHandler(doc: ManualDoc): Map<String, List<String>> {
+ *  gives a feature none. A phrase for a plugin of ours ([ManualPhrase.plugin])
+ *  only while the server runs it ([Capabilities.ourPluginPresent]), so
+ *  another plugin's handler of the same name doesn't borrow ours. */
+internal fun phrasesByHandler(doc: ManualDoc, caps: Capabilities? = null): Map<String, List<String>> {
     val out = LinkedHashMap<String, MutableList<String>>()
     (listOf(doc.start.blocks) + doc.pieces.map { it.blocks }).flatten().filter { it.type == "say" }.forEach { b ->
         b.phrases.forEach { p ->
             val h = p.handler ?: return@forEach
             if (p.pending != null || p.then || "…" in p.text) return@forEach
+            if (caps != null && p.plugin != null && caps.ourPluginPresent(p.plugin) == false) return@forEach
             val list = out.getOrPut(h) { mutableListOf() }
             if (p.text !in list) list += p.text
         }
@@ -380,6 +383,18 @@ internal fun JsonObject.str(key: String): String? = (this[key] as? JsonPrimitive
 /** The features "Everything it can do" lists: those the server has on. */
 internal fun listedHandlers(doc: ManualDoc, names: List<String>, features: Map<String, Boolean>): List<String> =
     names.filter { n -> doc.handlerNeedsFeature[n]?.let { features[it] == true } ?: true }
+
+/** The manual pieces shown on this server: a piece about no plugin always;
+ *  one about a plugin while the server runs it ([runningPlugins]: the
+ *  slugs `/api/plugins` lists enabled and loaded). A piece about a plugin
+ *  of ours that an app screen uses (the radio piece: Stations) follows the
+ *  same rule as that screen ([Capabilities.ourPluginPresent]: our slug and
+ *  publisher), so another plugin called "radio" doesn't bring it back. */
+internal fun shownManualPieces(doc: ManualDoc, runningPlugins: Set<String>, caps: Capabilities): Set<String> =
+    doc.pieces.filter { p ->
+        val plugin = p.plugin ?: return@filter true
+        caps.ourPluginPresent(plugin) ?: (plugin in runningPlugins)
+    }.map { it.id }.toSet()
 
 /** The app screen a manual link to [route] opens: its `app.screen`, by
  *  [Route] name; null when the link opens the dashboard or names no screen

@@ -81,6 +81,7 @@ import com.domovoi.app.net.LocalSharedScreen
 import com.domovoi.app.net.canRegister
 import com.domovoi.app.net.isSharedScreen
 import com.domovoi.app.net.registerDevice
+import com.domovoi.app.net.CAP_STATIONS
 import com.domovoi.app.net.LocalCapabilities
 import com.domovoi.app.net.rememberCapabilities
 import com.domovoi.app.ui.components.DomovoiGlyph
@@ -393,6 +394,15 @@ private fun ShellContent(
     val caps = capsState.data ?: Capabilities.EMPTY
     val connected by app.bus.connected.collectAsState()
     LaunchedEffect(connected) { if (connected) capsState.refresh() }
+    // A station in the phone's queue belongs to our Radio plugin: once a
+    // manifest has ANSWERED without it (removed, disabled, a server that
+    // never had it), its stations go from the queue, the mini player and
+    // the media notification. Not on a fetch that failed or hasn't landed
+    // (data null): a blip must not stop the radio.
+    LaunchedEffect(capsState.data) {
+        val answered = capsState.data ?: return@LaunchedEffect
+        if (!answered.has(CAP_STATIONS)) app.player.dropStations()
+    }
     // Introduce this install to the server (id + a seeded name) so room
     // queues can say "added by <device>". Idempotent; the server keeps any
     // name the user has since chosen. Re-run on reconnect, on a server

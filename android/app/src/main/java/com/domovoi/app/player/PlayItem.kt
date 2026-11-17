@@ -68,9 +68,10 @@ data class PlayItem(
                 durationSec = durationSec,
             )
 
-        // Radio streams come from the radio plugin's router (design §9.1) —
-        // this item kind is only reachable when the "stations" capability
-        // is present, i.e. the plugin is installed.
+        // Radio streams come from our Radio plugin's router (design §9.1):
+        // made only while the server runs it (Capabilities.has(CAP_STATIONS),
+        // the Stations screen and a voice turn's play), and taken out of the
+        // queue when it goes (PlayerController.dropStations).
         fun fromStation(id: Long, name: String) =
             PlayItem(
                 uid = "radio-$id", kind = PlayKind.Radio, id = id,

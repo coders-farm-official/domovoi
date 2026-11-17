@@ -11,11 +11,18 @@ import kotlinx.serialization.Serializable
  * answers even while the core is down.
  *
  * The app fetches it at connect (and again on WS reconnect) and gates
- * compiled-in screens on it: the Stations route renders only when some
- * installed plugin declares the `"stations"` capability; sidebar badges
- * for gated routes are skipped when the capability is absent. Unknown
- * capability strings are ignored (forward compat). The route table stays
- * a compiled-in enum — only *visibility* is data-driven.
+ * compiled-in screens on it. Two of the app's own screens, Stations and
+ * Images, talk to two particular plugins of ours (a plugin can't ship app
+ * code), so each shows only while the server runs THAT plugin: the slug
+ * and publisher in [AppScreenPlugins], declaring the screen's capability
+ * ([CapabilityPlugin.serves]). Another plugin declaring `"stations"` does
+ * not light Stations up. Sidebar badges, Home's tiles, the phone bar, the
+ * manual's pieces and the player's station items all follow [has]. The
+ * server lists only enabled plugins that loaded (status ok or degraded;
+ * web/backend/api/capabilities.py), so a disabled or failed plugin is
+ * already absent. Unknown capability strings are ignored (forward
+ * compat). The route table stays a compiled-in enum — only *visibility*
+ * is data-driven.
  *
  * Everything is defensive: if the endpoint is missing or the fetch fails,
  * the app falls back to [Capabilities.EMPTY], which hides all gated
@@ -28,6 +35,29 @@ import kotlinx.serialization.Serializable
 const val CAP_STATIONS = "stations"
 const val CAP_IMAGEGEN = "imagegen"
 
+/** The publisher our own plugins name in their manifests (`publisher =`
+ *  in domovoi-plugin.toml). A manifest string, not a signature: enough to
+ *  tell our plugins from someone else's that declares the same capability,
+ *  which is all the app's screens need. */
+const val OUR_PUBLISHER = "Coders Farm"
+
+/** One of the app's own screens and the plugin of ours it talks to: shown
+ *  only while the server lists a plugin with exactly this [slug] and
+ *  [publisher] that declares [capability]. */
+data class AppScreenPlugin(val capability: String, val slug: String, val publisher: String = OUR_PUBLISHER)
+
+/** THE rule, in one place: which plugin each capability-gated screen needs.
+ *  Stations talks to `/api/plugins/radio/`, Images to `/api/plugins/imagegen/`;
+ *  a capability with no row here lights nothing up (fail closed). */
+val AppScreenPlugins: Map<String, AppScreenPlugin> = listOf(
+    AppScreenPlugin(CAP_STATIONS, slug = "radio"),
+    AppScreenPlugin(CAP_IMAGEGEN, slug = "imagegen"),
+).associateBy { it.capability }
+
+/** The row for our plugin [slug], or null when no app screen needs it. */
+fun appScreenPluginForSlug(slug: String): AppScreenPlugin? =
+    AppScreenPlugins.values.firstOrNull { it.slug == slug }
+
 /** `features.ai`: the household's "AI features" switch on the server (the
  *  chat models). `false` = turned off, so the server's Chat (and its chat
  *  mic) can't answer and the app hides it ([Capabilities.aiEnabled]). Not
@@ -39,14 +69,24 @@ data class CapabilityPlugin(
     val slug: String = "",
     val version: String? = null,
     /** For the plugin screen frame (ui/components/PluginFrame.kt): the
-     *  manifest's name and publisher, and the page colour per theme. Absent
-     *  from an older server: the frame then shows the slug and keeps the
-     *  app's own colours. */
+     *  manifest's name and publisher, and the page colour per theme. Every
+     *  release from 1.0.0 sends name and publisher; the gate ([serves])
+     *  needs the publisher. No accent (an older server): the frame keeps
+     *  the app's own colours. */
     val name: String? = null,
     val publisher: String? = null,
     val accent: PluginAccent? = null,
     @SerialName("android_capabilities") val androidCapabilities: List<String> = emptyList(),
-)
+) {
+    /** Whether this is the plugin of ours the app's [capability] screen
+     *  talks to ([AppScreenPlugins]): the exact slug and publisher, and it
+     *  declares the capability. No publisher (a server older than 1.0.0)
+     *  is not ours: the screen stays hidden. */
+    fun serves(capability: String): Boolean {
+        val want = AppScreenPlugins[capability] ?: return false
+        return slug == want.slug && publisher == want.publisher && capability in androidCapabilities
+    }
+}
 
 /** A plugin's accent as the server derived it (plugins_runtime/accent.py):
  *  per theme, `brand`, `brand_hover`, `brand_press`, `brand_fg`,
@@ -79,13 +119,21 @@ data class Capabilities(
     @SerialName("handler_display") val handlerDisplay: List<HandlerDisplay> = emptyList(),
     val features: Map<String, Boolean> = emptyMap(),
 ) {
-    /** True when any installed plugin declares [capability]. */
-    fun has(capability: String): Boolean =
-        plugins.any { capability in it.androidCapabilities }
+    /** True when the server runs the plugin of ours that the app's
+     *  [capability] screen uses ([CapabilityPlugin.serves]). Every gate on
+     *  Stations and Images asks this. */
+    fun has(capability: String): Boolean = pluginFor(capability) != null
 
-    /** The plugin that provides [capability] (the first, as [has] counts). */
+    /** The plugin of ours the [capability] screen uses, or null when the
+     *  server doesn't run it ([has]). */
     fun pluginFor(capability: String): CapabilityPlugin? =
-        plugins.firstOrNull { capability in it.androidCapabilities }
+        plugins.firstOrNull { it.serves(capability) }
+
+    /** For things that name a plugin by its slug (a manual piece): null
+     *  when no app screen needs [slug], else whether the server runs that
+     *  plugin of ours, by the same rule as [has]. */
+    fun ourPluginPresent(slug: String): Boolean? =
+        appScreenPluginForSlug(slug)?.let { has(it.capability) }
 
     /** Server-supplied tone slug for a handler/source name; `"neutral"`
      *  when the name is unknown (design §8). */
