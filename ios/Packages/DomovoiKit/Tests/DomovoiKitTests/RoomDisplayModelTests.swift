@@ -6,13 +6,13 @@ import XCTest
 /// (``RoomDisplayModel``), and the `room_display` / `room_control` frames
 /// (``RoomDisplayFeed``): Android's `RoomDisplayModelTest`, case for case.
 final class RoomDisplayModelTests: XCTestCase {
-    static let zone = TimeZone(identifier: "America/Chicago")!
+    static let chicago = TimeZone(identifier: "America/Chicago")!
     static let us = Locale(identifier: "en_US")
 
     /// Monday 16 November 2026, `hour:minute` in the room.
     static func at(_ hour: Int, _ minute: Int = 0, day: Int = 16) -> Date {
         var cal = Calendar(identifier: .gregorian)
-        cal.timeZone = zone
+        cal.timeZone = chicago
         return cal.date(from: DateComponents(year: 2026, month: 11, day: day, hour: hour, minute: minute))!
     }
 
@@ -31,7 +31,7 @@ final class RoomDisplayModelTests: XCTestCase {
     ) -> RoomDisplayModel.Input {
         RoomDisplayModel.Input(
             status: status, running: running, feed: feed, volume: volume, now: now, elapsedMS: elapsed,
-            timeZone: Self.zone, locale: Self.us, use24h: use24h, width: width, height: height
+            timeZone: Self.chicago, locale: Self.us, use24h: use24h, width: width, height: height
         )
     }
 
@@ -231,7 +231,7 @@ final class RoomDisplayModelTests: XCTestCase {
     func testAlarmDaysReadPlainly() {
         let now = Self.at(18, 42)
         func alarm(_ at: Date, _ use24h: Bool) -> String {
-            RoomDisplayModel.alarmTime(at, now: now, timeZone: Self.zone, locale: Self.us, use24h: use24h)
+            RoomDisplayModel.alarmTime(at, now: now, timeZone: Self.chicago, locale: Self.us, use24h: use24h)
         }
         XCTAssertEqual("9:30 PM", alarm(Self.at(21, 30), false))
         XCTAssertEqual("Wed 7:00 AM", alarm(Self.at(7, 0, day: 18), false))
@@ -239,16 +239,17 @@ final class RoomDisplayModelTests: XCTestCase {
     }
 
     func testATimerNearlyDoneGoesAboveTheMusic() {
-        func first(_ left: [Int64], elapsed: Int64 = 10_000) -> Bool {
+        func lifted(_ left: [Int64], elapsed: Int64 = 10_000) -> Bool {
             let timers = left.enumerated().map { timer(Int64($0.offset + 1), $0.element) }
             return build(input(feed: feed(nowPlaying: song(), timers: timers), elapsed: elapsed)).timersFirst
         }
-        XCTAssertTrue(first([4 * 60_000]))
-        XCTAssertTrue(first([45 * 60_000, 9 * 60_000]), "the soonest decides")
-        XCTAssertFalse(first([10 * 60_000]))
-        XCTAssertFalse(first([25 * 60_000]))
-        XCTAssertTrue(first([10 * 60_000], elapsed: 10_000 + 1_000), "it becomes urgent as it counts down")
-        XCTAssertFalse(first([]), "no timers: nothing to lift")
+        let minute: Int64 = 60_000
+        XCTAssertTrue(lifted([4 * minute]))
+        XCTAssertTrue(lifted([45 * minute, 9 * minute]), "the soonest decides")
+        XCTAssertFalse(lifted([10 * minute]))
+        XCTAssertFalse(lifted([25 * minute]))
+        XCTAssertTrue(lifted([10 * minute], elapsed: 10_000 + 1_000), "it becomes urgent as it counts down")
+        XCTAssertFalse(lifted([]), "no timers: nothing to lift")
         let alarmOnly = build(input(feed: feed(timers: [timer(1, 60_000, "7 am alarm", kind: .alarm)])))
         XCTAssertFalse(alarmOnly.timersFirst, "an alarm is not a timer running out")
     }
@@ -287,7 +288,7 @@ final class RoomDisplayModelTests: XCTestCase {
         let day = build(input(now: Self.at(18, 42), use24h: true))
         XCTAssertEqual("18:42", day.time)
         XCTAssertNil(day.amPm)
-        let uk = RoomDisplayModel.dayAndDate(Self.at(9, 0), timeZone: Self.zone, locale: Locale(identifier: "en_GB"))
+        let uk = RoomDisplayModel.dayAndDate(Self.at(9, 0), timeZone: Self.chicago, locale: Locale(identifier: "en_GB"))
         XCTAssertEqual("Monday 16 November", uk)
         // The phone's setting, read from its locale's hour pattern.
         XCTAssertFalse(RoomDisplayModel.uses24HourClock(Self.us))
@@ -923,16 +924,14 @@ final class RoomEngineDisplayTests: XCTestCase {
         XCTAssertEqual(70, engine.volumeLevel)
         XCTAssertEqual(.int(70), socket.all("volume_status").last?["level"])
 
-        let got = RoomLock<Data?>(nil)
-        let done = expectation(description: "art")
+        let got = RoomLock<(done: Bool, data: Data?)>((false, nil))
         Task {
             let a = await engine.art("/v1/music/cover/12")
             let b = await engine.art("http://elsewhere/x.jpg")
-            got.withLock { $0 = b == nil ? a : nil }
-            done.fulfill()
+            got.withLock { $0 = (true, b == nil ? a : nil) }
         }
-        wait(for: [done], timeout: 5)
-        XCTAssertEqual(Data("COVER".utf8), got.withLock { $0 })
+        waitFor("the cover") { got.withLock { $0.done } }
+        XCTAssertEqual(Data("COVER".utf8), got.withLock { $0.data })
         XCTAssertFalse(http.asked.contains { $0.contains("elsewhere") }, "never asked another host")
 
         socket.serverClose()
