@@ -522,6 +522,7 @@ from domovoi.music_pause import note_paused_by_person, paused_by_person
 from domovoi.now_playing import NOW_PLAYING
 from domovoi.router import (
     goes_to_the_tool_model,
+    heard_text,
     is_question_about_the_world,
     is_request_for_a_story,
     route,
@@ -1575,7 +1576,7 @@ async def run_voice_profile_hooks(
                 )
                 """
             ),
-            {"t": response.text, "sid": str(response.session_id)},
+            {"t": heard_text(ctx, response.text), "sid": str(response.session_id)},
         )
 
 
@@ -1595,9 +1596,11 @@ class _InterimSpeech:
         self.text = ""
         self.sample_rate = 0
 
-    async def say(self, text: str) -> None:
+    async def say(self, text: str) -> bool:
+        """True when the line went out (the router lists it in the room's
+        history then); False when it was not said."""
         if self.started:
-            return
+            return False
         sess = self._session
         try:
             engine, voice = await resolve_voice(self._voice)
@@ -1606,7 +1609,7 @@ class _InterimSpeech:
             )
         except Exception as e:  # noqa: BLE001
             log.warning("stream %s: interim line TTS failed: %s", sess.room_id, e)
-            return
+            return False
         self.started, self.text, self.sample_rate = True, text, sr
         await sess._safe_send_text({
             "type": "response_start",
@@ -1621,8 +1624,9 @@ class _InterimSpeech:
             try:
                 await sess.ws.send_bytes(chunk)
             except Exception:
-                return  # Pi went away; the turn's own send path will notice
+                return True  # Pi went away mid-line; the turn's own send path will notice
             sess._note_audio_sent(len(chunk), sr)
+        return True
 
 
 def _awaits_dropin_ready(sess: Any) -> bool:
