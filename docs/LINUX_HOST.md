@@ -678,7 +678,7 @@ no hashes and installs whatever the index serves that day within the
 floors in `pyproject.toml`:
 
 ```bash
-pip install -e ".[real-clients,voice-profile]"
+pip install -e ".[real-clients]"
 pip install --no-deps -r requirements-no-deps.in    # faster-whisper
 ```
 
@@ -1567,7 +1567,7 @@ does this:
    `[project]`'s `version` line (every release's bump) is not a dependency
    change: no re-sync, and a box answered **No** still takes the release.
    By default the re-sync is pip's resolver,
-   `pip install -e ".[real-clients,voice-profile]"` from the index; when
+   `pip install -e ".[real-clients]"` from the index; when
    the checkout has `requirements-linux-py314.lock`, the step's detail
    says it is there to opt into. With `DOMOVOI_USE_LOCK=1`
    ([The hash-pinned lock](#the-hash-pinned-lock)), and when the venv runs

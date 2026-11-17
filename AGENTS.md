@@ -93,7 +93,7 @@ lives). Docker commands run from `domovoi/` (where the compose file lives).
 ./domovoi/scripts/dev.ps1            # PowerShell
 
 # Manual equivalent
-pip install -e ".[dev,real-clients,voice-profile]"
+pip install -e ".[dev,real-clients]"
 pip install -e ".[cuda]"                  # only on an NVIDIA host
 pip install --no-deps -r requirements-no-deps.in   # faster-whisper: without its
                                           # declared deps (PyAV; the file says why)

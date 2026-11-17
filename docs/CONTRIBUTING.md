@@ -50,7 +50,7 @@ helper-container secrets that `docker-compose.yml` refuses to run without);
 an existing `.env` is never touched:
 
 ```powershell
-pip install -e ".[dev,real-clients,voice-profile]"
+pip install -e ".[dev,real-clients]"
 pip install --no-deps -r requirements-no-deps.in   # faster-whisper (see below)
 python -m domovoi.env_bootstrap           # creates domovoi/.env on a fresh checkout
 python -m domovoi.env_bootstrap --repair  # adds the two secrets to an older .env

@@ -154,7 +154,7 @@ Everything below runs from the **repo root** — the directory holding
 relative to it.
 
 ```powershell
-pip install -e ".[real-clients,voice-profile]"
+pip install -e ".[real-clients]"
 ```
 
 (On a Linux server, install from the hash-pinned lock instead:
