@@ -242,7 +242,14 @@ fresh box, and again after `--reset-admin` — the upgrade is closed `1008`
 with `code: setup_required` whatever it presents, and the HTTP way of
 opening a call (`POST /v1/admin/dropin/start`) answers `501` with the
 security tier. Nothing needed to finish setting a box up listens to a
-room (CORE-14).
+room (CORE-14). While a call is open, the credential that opened it is
+read again every 30 seconds, as a plugin socket's is: once the household
+token has been rotated (a lost phone), or the admin session behind a
+Bearer has been signed out, idled out or revoked, the call ends and the
+socket is closed `1008`; if the database can't answer three checks in a
+row it is closed `1011` (CORE-44, round 6). Before that only the upgrade
+was checked, and an open call kept carrying the room's microphone until
+it was hung up or fell silent.
 
 **The chat mic.** A push-to-talk turn from the app's chat screen
 (`POST /v1/phone/voice`, reached through the dashboard's

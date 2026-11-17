@@ -1864,14 +1864,93 @@ async def check_live_mic_websocket(
 
     ``setup_required`` before setup, ``unauthorized`` for anything short of
     the device tier after it, ``ok`` otherwise."""
+    verdict = await live_mic_websocket_admission(ws)
+    return "ok" if verdict in ("ok", "admin") else verdict
+
+
+async def live_mic_websocket_admission(
+    ws: Any,
+) -> Literal["ok", "admin", "setup_required", "unauthorized"]:
+    """:func:`check_live_mic_websocket`, saying WHICH credential let the
+    socket in (``ok``: the household token; ``admin``: a Bearer), so the
+    open socket can be re-checked against it (:func:`run_while_admitted`)."""
     try:
         if await check_admin_request(ws) == "pre-setup":
             return "setup_required"
-        if await check_device_websocket(ws) in ("ok", "admin"):
-            return "ok"
+        admitted = await check_device_websocket(ws)
+        if admitted in ("ok", "admin"):
+            return admitted
     except AuthCheckUnavailable:
         pass   # fail closed; a socket has no status to carry the 503 into
     return "unauthorized"
+
+
+#: CORE-44 (round 6). How often an open live-microphone socket (the phone
+#: drop-in) has the credential that opened it read again: the longest the
+#: call outlives a rotated household token, a sign-out or an idled-out
+#: admin session. The plugin sockets' cadence (plugin_http.WS_RECHECK_SEC).
+LIVE_MIC_RECHECK_SEC = 30.0
+#: Consecutive rechecks the database may fail before the call is ended.
+LIVE_MIC_RECHECK_MAX_FAILURES = 3
+
+
+async def run_while_admitted(
+    ws: Any, admitted: DeviceCheckResult, work: Any, *, what: str = "socket"
+) -> None:
+    """Run ``work`` (the socket's session coroutine) while re-reading the
+    credential that opened ``ws`` every :data:`LIVE_MIC_RECHECK_SEC`
+    (:func:`device_websocket_still_admitted`). Once it would no longer open
+    the socket, the socket is closed 1008 and the session cancelled (its own
+    teardown ends the call); after :data:`LIVE_MIC_RECHECK_MAX_FAILURES`
+    checks the database could not answer, closed 1011 the same way.
+
+    Before CORE-44 only plugin sockets were re-checked: a drop-in opened
+    with a household token kept carrying the room's microphone after the
+    token was rotated (a lost phone) or the admin signed out, until the
+    call itself ended."""
+    import asyncio
+
+    task = asyncio.ensure_future(work)
+    ended: list[int] = []
+
+    async def _end(code: int, reason: str) -> None:
+        ended.append(code)
+        try:
+            await ws.close(code=code, reason=reason)
+        except Exception:  # noqa: BLE001 — already closed
+            pass
+        task.cancel()
+
+    async def _watch() -> None:
+        failures = 0
+        while not task.done():
+            await asyncio.sleep(LIVE_MIC_RECHECK_SEC)
+            if task.done():
+                return
+            try:
+                still = await device_websocket_still_admitted(ws, admitted)
+            except Exception as e:  # noqa: BLE001 — a DB blip: judged below
+                failures += 1
+                log.warning("%s: credential recheck failed (%d/%d): %s", what, failures,
+                            LIVE_MIC_RECHECK_MAX_FAILURES, type(e).__name__)
+                if failures >= LIVE_MIC_RECHECK_MAX_FAILURES:
+                    await _end(1011, "credentials could not be checked")
+                    return
+                continue
+            failures = 0
+            if not still:
+                log.info("%s closed: its credential no longer opens it", what)
+                await _end(1008, "household device token or admin session required")
+                return
+
+    watcher = asyncio.ensure_future(_watch())
+    try:
+        await task
+    except asyncio.CancelledError:
+        if not ended:
+            raise   # cancelled from outside, not by the recheck
+    finally:
+        watcher.cancel()
 
 
 async def require_device(request: Request) -> None:

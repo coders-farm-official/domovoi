@@ -390,3 +390,82 @@ async def test_the_origin_check_runs_before_the_token_check(monkeypatch):
     up = Upgrade(headers={"origin": "https://attacker.example"})
     await _dropin(up)
     assert up.error_code() == "cross_origin"
+
+
+# ─── CORE-44: an open drop-in is re-checked like a plugin socket ──────────
+
+
+@pytest.fixture
+def open_call(monkeypatch):
+    """A drop-in whose call stays open (carrying audio) until the socket
+    goes: the real route and gate, a session that only pumps."""
+    from domovoi import phone_dropin as pd
+
+    monkeypatch.setattr(admin_auth, "LIVE_MIC_RECHECK_SEC", 0.02)
+    calls = {"ended": False, "frames": 0}
+
+    async def run(self) -> None:
+        await self.ws.accept()
+        try:
+            while True:
+                msg = await self.ws.receive()
+                if msg.get("type") == "websocket.disconnect":
+                    return
+                calls["frames"] += 1
+        finally:
+            calls["ended"] = True
+
+    monkeypatch.setattr(pd.PhoneDropinSession, "run", run)
+    return calls
+
+
+@pytest.mark.parametrize(
+    ("label", "headers", "revoke"),
+    [
+        ("household token rotated (a lost phone)", device(),
+         lambda st: setattr(st, "device_token", "the-new-household-token")),
+        ("admin signed out / idled out", {"authorization": f"Bearer {ADMIN_TOKEN}"},
+         lambda st: st.sessions.discard(ADMIN_TOKEN)),
+    ],
+)
+async def test_an_open_dropin_ends_when_its_credential_goes(monkeypatch, open_call, label, headers, revoke):
+    """The card's proof of concept: open /v1/dropin/kitchen, rotate the
+    household token (or end the admin session), and the room's microphone
+    must not keep flowing. Closed 1008 within a recheck."""
+    state = install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN},
+                            device_token=DEVICE_TOKEN)
+    up = Upgrade(headers=headers)
+    task = asyncio.ensure_future(phone_dropin(up.ws, "kitchen"))
+    await asyncio.sleep(0.1)                  # several rechecks: still open
+    assert up.accepted and not task.done() and not open_call["ended"], label
+    up._inbox.put_nowait({"type": "websocket.receive", "bytes": b"\0" * 320})
+    await asyncio.sleep(0.03)
+    assert open_call["frames"] == 1
+    revoke(state)
+    await asyncio.wait_for(task, timeout=2)
+    assert up.close_code == 1008, label
+    assert open_call["ended"], label
+
+
+async def test_an_open_dropin_ends_when_the_credential_can_not_be_checked(monkeypatch, open_call):
+    install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN}, device_token=DEVICE_TOKEN)
+    up = Upgrade(headers=device())
+    task = asyncio.ensure_future(phone_dropin(up.ws, "kitchen"))
+    await asyncio.sleep(0.05)
+
+    async def down(*_a, **_k):
+        raise OSError("database down")
+
+    monkeypatch.setattr(admin_auth, "validate_device_token", down)
+    await asyncio.wait_for(task, timeout=2)
+    assert up.close_code == 1011 and open_call["ended"]
+
+
+async def test_a_dropin_that_hangs_up_stops_its_recheck(monkeypatch, open_call):
+    install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN}, device_token=DEVICE_TOKEN)
+    up = Upgrade(headers=device())
+    task = asyncio.ensure_future(phone_dropin(up.ws, "kitchen"))
+    await asyncio.sleep(0.05)
+    up.disconnect()
+    await asyncio.wait_for(task, timeout=2)
+    assert open_call["ended"] and up.close_code is None

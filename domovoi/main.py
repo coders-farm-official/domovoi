@@ -8777,7 +8777,8 @@ async def phone_dropin(ws: WebSocket, room_id: str) -> None:
 
     No pre-setup grace (CORE-14): before an admin exists the upgrade is
     closed 1008 with ``code: setup_required`` whatever it presents — the
-    WebSocket form of the security tier's 501.
+    WebSocket form of the security tier's 501. While the call is open the
+    credential is read again every 30 s, as a plugin socket's is (CORE-44).
     """
     from domovoi.phone_dropin import PhoneDropinSession
 
@@ -8787,7 +8788,7 @@ async def phone_dropin(ws: WebSocket, room_id: str) -> None:
             f"/v1/dropin/{room_id} from Origin {ws.headers.get('origin')!r}",
         )
         return
-    verdict = await admin_auth_mod.check_live_mic_websocket(ws)
+    verdict = await admin_auth_mod.live_mic_websocket_admission(ws)
     if verdict == "setup_required":
         await _refuse_ws(
             ws, "setup_required",
@@ -8795,7 +8796,7 @@ async def phone_dropin(ws: WebSocket, room_id: str) -> None:
             "live microphone is not part of the pre-setup grace",
         )
         return
-    if verdict != "ok":
+    if verdict not in ("ok", "admin"):
         await _refuse_ws(
             ws, "unauthorized",
             f"/v1/dropin/{room_id} needs {admin_auth_mod.DEVICE_TOKEN_HEADER} "
@@ -8809,7 +8810,10 @@ async def phone_dropin(ws: WebSocket, room_id: str) -> None:
     if not phone_id.startswith("phone-"):
         phone_id = f"phone-{phone_id}"
     session = PhoneDropinSession(ws, phone_id=phone_id, target_room=room_id)
-    await session.run()
+    # CORE-44: the credential that opened the call is read again every 30 s;
+    # a rotated token, a sign-out or an idled-out session ends it (1008).
+    await admin_auth_mod.run_while_admitted(
+        ws, verdict, session.run(), what=f"drop-in {phone_id}->{room_id}")
 
 
 def _reset_admin_cli() -> None:
