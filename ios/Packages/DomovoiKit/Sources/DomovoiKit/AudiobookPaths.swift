@@ -191,7 +191,7 @@ public enum AudiobookPath {
         // backslash, and one escaper in the module is one place for that to
         // be right.
         var out = #"{"device_id":"# + VideoPath.quoted(deviceID)
-        out += #","position_sec":\#(Int64(max(0, positionSec.isFinite ? positionSec : 0)))"#
+        out += #","position_sec":\#(max(0, WireNumber.int64(positionSec) ?? 0))"#
         if let personID, let number = Int64(personID) {
             out += #","person_id":\#(number)"#
         }

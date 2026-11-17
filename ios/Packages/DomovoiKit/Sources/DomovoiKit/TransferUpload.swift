@@ -125,7 +125,7 @@ extension DomovoiClient {
 public func transferPercent(sent: Int64, of total: Int64) -> Int? {
     guard total > 0, sent >= 0 else { return nil }
     let share = Double(sent) / Double(total)
-    return max(0, min(100, Int((share * 100).rounded(.down))))
+    return WireNumber.int((share * 100).rounded(.down), in: 0...100)
 }
 
 /// How far round a progress ring goes, or nil for "draw the spinner".

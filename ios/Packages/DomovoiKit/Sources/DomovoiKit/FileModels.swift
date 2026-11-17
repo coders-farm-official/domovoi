@@ -468,6 +468,6 @@ public struct FileChange: Equatable, Sendable, Decodable {
 /// gives for a missing string: a `mtime` the server could not read is not a
 /// file modified at the epoch.
 public func relFromEpochSec(_ seconds: Double?, nowMs: Int64) -> String {
-    guard let seconds, seconds.isFinite else { return "—" }
-    return relTimeMs(Int64((seconds * 1000).rounded()), nowMs: nowMs)
+    guard let ms = WireNumber.epochMs(seconds: seconds) else { return "—" }
+    return relTimeMs(ms, nowMs: nowMs)
 }

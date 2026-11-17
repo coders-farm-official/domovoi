@@ -136,7 +136,7 @@ public struct ListenTracker {
         // 0:10 to 5:50 of a 6:00 song logged 360 s. Only the seconds change:
         // a natural end is still `finished` (below).
         if let duration {
-            playedMs = min(playedMs, Int64(duration * 1000))
+            playedMs = min(playedMs, max(0, WireNumber.int64(duration * 1000) ?? 0))
         }
         let played = Double(playedMs) / 1000.0
         guard played >= 1.0 else { return nil }
@@ -144,8 +144,8 @@ public struct ListenTracker {
             trackID: c.trackID,
             server: c.server,
             startedAtMs: c.startedAtMs,
-            playedSec: Int(played.rounded()),
-            durationSec: duration.map { Int($0.rounded()) },
+            playedSec: WireNumber.int(played.rounded()) ?? 0,
+            durationSec: duration.flatMap { WireNumber.int($0.rounded()) },
             outcome: natural
                 ? "finished"
                 : Self.outcome(playedSec: played, durationSec: duration, skipped: c.skipped),

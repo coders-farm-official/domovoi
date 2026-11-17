@@ -33,8 +33,11 @@ public func roomsSummary(_ rooms: [RoomsSatellite]) -> String {
 /// Signal readings are negative dBm and land on halves often enough that this
 /// matters for one digit on screen; the two phones should print the same digit
 /// for the same reading.
+///
+/// NaN or ±infinity is 0, and a number past `Int` sticks at its end:
+/// `Int(Double.nan)` traps (security audit round 6, IOS-1).
 func roomsRoundHalfUp(_ value: Double) -> Int {
-    Int((value + 0.5).rounded(.down))
+    WireNumber.int((value + 0.5).rounded(.down)) ?? 0
 }
 
 // MARK: - Wi-Fi

@@ -240,8 +240,8 @@ public enum RoomDisplayFeed {
             album: text(o, "album"),
             source: RoomMediaSource.of(str(o, "source")),
             art: str(o, "art").flatMap { isArtPath($0) ? $0 : nil },
-            durationSec: num(o, "duration_sec").flatMap { $0 > 0 ? $0 : nil },
-            elapsedSec: num(o, "elapsed_sec").flatMap { $0 >= 0 ? $0 : nil },
+            durationSec: num(o, "duration_sec").flatMap { $0 > 0 ? min($0, WireNumber.maxMediaSeconds) : nil },
+            elapsedSec: num(o, "elapsed_sec").flatMap { $0 >= 0 ? min($0, WireNumber.maxMediaSeconds) : nil },
             controls: controls
         )
     }
@@ -254,8 +254,11 @@ public enum RoomDisplayFeed {
             id: id,
             kind: timerKind,
             label: text(o, "label"),
-            remainingMS: max(0, remaining),
-            totalMS: long(o, "total_ms").flatMap { $0 > 0 ? $0 : nil }
+            // Held to 0...a year as it is read: the display counts these down
+            // every second, and a number past that is a server's mistake that
+            // must not reach the arithmetic (security audit round 6, IOS-1).
+            remainingMS: WireNumber.clamp(remaining, to: 0...WireNumber.maxCountdownMs),
+            totalMS: long(o, "total_ms").flatMap { $0 > 0 ? min($0, WireNumber.maxCountdownMs) : nil }
         )
     }
 

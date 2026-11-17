@@ -51,7 +51,9 @@ public func parseInstant(_ iso: String?) -> Date? {
 /// `isoMs` (`HomeModels.kt:216`) — a server timestamp as epoch milliseconds.
 public func isoMs(_ iso: String?) -> Int64? {
     guard let date = parseInstant(iso) else { return nil }
-    return Int64((date.timeIntervalSince1970 * 1000).rounded())
+    // Held to ±JavaScript's last date, so the difference of any two stamps
+    // is an Int64 (security audit round 6, IOS-1).
+    return WireNumber.epochMs(date)
 }
 
 /// `3:04`, `1:02:33` — `fmtDur` (`Format.kt:43`), a room's elapsed and its
@@ -67,7 +69,9 @@ public func isoMs(_ iso: String?) -> Int64? {
 /// only appears when there is one — `0:07`, not `0:00:07`.
 public func fmtDur(_ seconds: Double?) -> String {
     guard let seconds, seconds.isFinite, seconds >= 0 else { return "—" }
-    let total = Int(seconds.rounded())
+    // `Int(1e30)` traps where Kotlin's `toInt()` saturates (security audit
+    // round 6, IOS-1): clamped instead.
+    let total = WireNumber.int(seconds.rounded()) ?? 0
     let h = total / 3600
     let m = (total % 3600) / 60
     let s = total % 60
@@ -87,7 +91,7 @@ public func fmtDur(_ seconds: Double?) -> String {
 /// because `roundToInt()` on a NaN is `Int.MIN_VALUE`.
 public func fmtBigDur(_ seconds: Double?) -> String {
     guard let seconds, seconds.isFinite, seconds >= 0 else { return "—" }
-    let total = Int(seconds.rounded())
+    let total = WireNumber.int(seconds.rounded()) ?? 0
     let h = total / 3600
     let m = (total % 3600) / 60
     return h > 0 ? "\(h)h \(m)m" : "\(m)m"
@@ -141,9 +145,13 @@ public func relTime(_ iso: String?, nowMs: Int64) -> String {
 /// alternative being a Files copy that disagreed with Home about what
 /// "3d ago" means.
 public func relTimeMs(_ thenMs: Int64?, nowMs: Int64) -> String {
-    guard let then = thenMs else { return "—" }
-    let seconds = (nowMs - then) / 1000
-    if seconds < 0 { return relFuture(-seconds) }
+    // Held to ±JavaScript's last date: a stamp past that is a server's
+    // mistake, and the date below must stay one the calendar can name.
+    guard let then = thenMs.map({ WireNumber.clamp($0, to: -WireNumber.maxEpochMs...WireNumber.maxEpochMs) }) else {
+        return "—"
+    }
+    let seconds = WireNumber.sub(nowMs, then) / 1000
+    if seconds < 0 { return relFuture(WireNumber.sub(0, seconds)) }
     switch seconds {
     case ..<45:
         return "just now"
@@ -180,7 +188,7 @@ private func relFuture(_ seconds: Int64) -> String {
 /// rounding for its "N minutes" line: two roundings of one number in one
 /// module is how two screens come to disagree about a duration by a minute.
 func rounded(_ value: Double) -> Int {
-    Int(value.rounded())
+    WireNumber.int(value.rounded()) ?? 0
 }
 
 /// `DateTimeFormatter.ofPattern("MMM d, yyyy")` in the JVM's default locale

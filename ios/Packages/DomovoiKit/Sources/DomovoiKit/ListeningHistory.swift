@@ -211,9 +211,9 @@ func parseClaimTime(_ raw: String) -> Int64? {
     }
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    if let d = formatter.date(from: s) { return Int64((d.timeIntervalSince1970 * 1000).rounded()) }
+    if let d = formatter.date(from: s) { return WireNumber.epochMs(d) }
     formatter.formatOptions = [.withInternetDateTime]
-    if let d = formatter.date(from: s) { return Int64((d.timeIntervalSince1970 * 1000).rounded()) }
+    if let d = formatter.date(from: s) { return WireNumber.epochMs(d) }
     return nil
 }
 

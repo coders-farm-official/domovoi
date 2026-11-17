@@ -153,7 +153,7 @@ public enum BookContinueRules {
     /// spaces (`Format.swift:88`). Two wordings, two functions: porting this
     /// to the other one would quietly change a sentence the owner reads.
     public static func hm(_ sec: Double) -> String {
-        let total = Int64(max(0, sec.isFinite ? sec : 0))
+        let total = max(0, WireNumber.int64(sec) ?? 0)
         let h = total / 3600
         let m = (total % 3600) / 60
         if h > 0 { return "\(h) h \(m) m" }
