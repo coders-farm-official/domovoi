@@ -1517,7 +1517,11 @@ async def health(
     _engine = engine_status()
     if _engine is not None:
         doc["stt_engine"] = {k: _engine.get(k) for k in (
-            "active", "host_state", "local_standby", "use_host", "down_since")}
+            "active", "host_state", "local_standby", "use_host", "down_since",
+            # Who heard the latest turn and why (a Mac whose speech service
+            # shares the graphics chip hears a turn on the processor while
+            # the language model is busy: gpu_shared_llm_busy).
+            "shares_gpu", "last_engine", "last_reason", "last_at")}
     if PAIRING_PROOF_VERSION:
         # 1.4.0: this server can PROVE an approval to a room device — the
         # exchange in satellite/pairing_proof.py. A device that asks every

@@ -82,6 +82,7 @@ from domovoi.clients.whisper import (
     SHORT_WINDOW_SEC,
     SttUnavailableError,
     can_decode_full_window,
+    for_turn as stt_for_turn,
     get_whisper_client,
     transcribe_full_window,
     transcribe_with_window,
@@ -381,7 +382,9 @@ async def _transcribe(pcm: bytes, stages: dict[str, int]) -> str:
     )
 
     try:
-        whisper = get_whisper_client()
+        # One engine for both hearings of this turn (a Mac whose speech
+        # service shares the graphics chip: clients.whisper.for_turn).
+        whisper = stt_for_turn(get_whisper_client())
     except SttUnavailableError as e:
         log.warning("phone voice: speech recognition is unavailable: %s", e)
         raise PhoneTurnRefused(

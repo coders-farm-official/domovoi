@@ -880,6 +880,15 @@ class Settings(BaseSettings):
     # How often the core asks the service's /health in the background, so
     # the Health page follows it without waiting for a turn.
     whisper_remote_probe_sec: float = 30.0
+    # The speech service shares its graphics chip with the household's
+    # language models (a Mac: whisper.cpp and Ollama both on Metal; the Mac
+    # install writes true, never blank). true = a turn that starts while
+    # this core is waiting on a language-model answer is heard by this
+    # machine's own Whisper instead, so speech never queues behind the
+    # model on the shared chip; the choice is made once per turn
+    # (domovoi/clients/whisper_remote.py, domovoi/llm_activity.py). false
+    # (the default) = the service hears every turn it can, as before.
+    whisper_remote_shares_gpu: bool = False
     # Speculative transcription (early endpointing, part A): start Whisper
     # at the first ~240 ms pause in a satellite's capture instead of after
     # its whole silence timeout, and use that transcript when no speech

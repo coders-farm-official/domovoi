@@ -123,7 +123,8 @@ async def test_the_speech_engine_is_passed_through_with_only_its_keys(monkeypatc
            "down_since": None, "url": "http://host.lima.internal:6371", "last_error": "x"}
     body, _ = await _health(monkeypatch, _Resp(200, {"status": "ok", "stt": "ok", "stt_engine": eng}))
     assert body["stt_engine"] == {"active": "host", "host_state": "ok", "local_standby": True,
-                                  "use_host": True, "down_since": None}
+                                  "use_host": True, "down_since": None, "shares_gpu": None,
+                                  "last_engine": None, "last_reason": None, "last_at": None}
 
 
 @pytest.mark.asyncio
