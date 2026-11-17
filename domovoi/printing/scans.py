@@ -17,8 +17,8 @@ One scan at a time per scanner (:data:`ScanBusy`), at most
 
 **"What does this letter say?"** is the scan reader's
 (:mod:`domovoi.scan_reader`): the core registers it at start
-(:func:`register_reader`) when this server can read scans. A saved scan
-is then queued for reading, and its JSON carries ``read`` (the read's
+(:func:`register_reader`). A saved scan is queued for reading when this
+server can read scans (tesseract, or the picture model), and its JSON carries ``read`` (the read's
 state and progress) and ``readable`` (true once it is read:
 :func:`json_full`). With no reader, ``readable`` stays False everywhere,
 the dashboard and app show no "What does it say?" button and voice

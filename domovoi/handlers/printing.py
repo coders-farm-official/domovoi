@@ -654,7 +654,9 @@ class PrintingHandler(Handler):
                                                            else "s")
         if s.incomplete:
             text += " Some pages may be missing."
-        if scans.reader() is not None and s.path:
+        # Offered only when the scan reader took the scan (read_id: this
+        # server can read scans), never as a question it can't answer.
+        if scans.reader() is not None and s.path and getattr(s, "read_id", None):
             return await self._ask(ctx, session, SCAN_READ, text + " Want me to tell you what it says?",
                                    {"path": s.path})
         return self._reply(ctx, text)

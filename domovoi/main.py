@@ -875,15 +875,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Reading scans (V065): Tesseract OCR first, the vision model for a page
     # OCR can't read, one read at a time, holding off for voice the same way
     # (domovoi/scan_reader/runner.py). Registered as the scan reader the
-    # "scan this" flow and the Scan sheet use, when this server can read.
+    # "scan this" flow and the Scan sheet use; whether a scan can be read
+    # is asked per scan (tesseract may arrive with an update after start).
     from domovoi.printing import scans as _scans
     from domovoi.scan_reader import answer_for_voice as _scan_answer
-    from domovoi.scan_reader.runner import can_read as _scan_can_read
     from domovoi.workers.scan_reader import ScanReaderWorker
 
     WORKERS.add_worker(ScanReaderWorker(), owner="core")
-    if _scan_can_read():
-        _scans.register_reader(_scan_answer)
+    _scans.register_reader(_scan_answer)
     # Up next P7 (V056): similar artists and song popularity from
     # ListenBrainz, each behind its own switch, the internet answer and the
     # probe; the ONLY code that asks ListenBrainz (the picker reads the
