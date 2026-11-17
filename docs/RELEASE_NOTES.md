@@ -149,6 +149,32 @@ signed out and says "Signed out after 1 hour without admin activity".
   `wake_words_max`). All optional, safe both ways. New routes:
   `PUT /v1/admin/wake/room` and its proxy `PUT /api/wake-words/room`.
 
+### What does this scan say? (dashboard and voice)
+
+- **What changed.** A scan saved to Documents → Scans is now read on the
+  server: Tesseract reads the printed words, and a page it can't read well
+  (handwriting, a photo) goes to the chat's vision model, worded as what
+  the page "might say". The Scan sheet and the scan list in Settings →
+  Printers & scanners show **What does it say?** once a scan is read (or
+  while it's being read, with its progress): a short plain summary from
+  the letter reader, and the full text on request. By voice, "scan this
+  letter" → "Want me to tell you what it says?" → yes now answers, then
+  offers to read all of it. A read scan is searchable like any document:
+  Ask about this document, chat and "read me" work on it. With AI
+  features off, printed pages are still read (OCR isn't AI); the picture
+  model is skipped and there's no summary, only the text.
+- **What to know.** The server needs `tesseract-ocr` and
+  `tesseract-ocr-eng` (Apache-2.0, Ubuntu/Debian packages): a new install
+  gets them, and an existing Linux, Windows or Mac server gets them at its
+  next update or Restart (apply-update.sh's added packages; not under
+  internet "never"). Until then a scan is read by the picture model alone,
+  or not at all with AI off, and the button doesn't show. English only:
+  Domovoi has no household language setting yet. One read at a time, at
+  the lowest priority, pausing for voice like videos in chat. Migration
+  **V065** adds `scan_reads` and `scan_read_pages`. Routes:
+  `/api/scan/reads` (docs/API_REFERENCE.md §2.9). The phone apps don't
+  show the button yet; the routes are ready for them.
+
 ### Videos in chat (dashboard)
 
 - **What changed.** A home-server chat takes one short video a message
