@@ -51,6 +51,9 @@ OP_NAMES = {v: k for k, v in OPS.items()}
 MAX_OPS_PER_BATCH = 200
 MAX_VALUE_BYTES = 800          # 200 characters of UTF-8 at worst
 MAX_CLOCK_JUMP = 100_000
+# No clock ever reaches this: far below BIGINT's top, so +1 can't overflow
+# the column (audit R6 FH-5: a first share at 2^63-2 broke every sync).
+CLOCK_MAX = 1 << 50
 NO_ITEM = bytes(16)
 
 _HEAD = struct.Struct(">16sBH")          # space id, kind, count
@@ -202,4 +205,10 @@ def next_clock(current: int, seen: int) -> int:
 
 
 def clock_allowed(current: int, seen: int) -> bool:
-    return 0 < seen <= current + MAX_CLOCK_JUMP
+    return 0 < seen <= current + MAX_CLOCK_JUMP and seen < CLOCK_MAX
+
+
+def first_clock_allowed(seen: int) -> bool:
+    """A space's first change (a friend's share) sets its clock, so it is
+    held to the same jump as every later one: from zero (R6 FH-5)."""
+    return clock_allowed(0, seen)

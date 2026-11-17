@@ -228,3 +228,76 @@ async def test_deleting_the_list_here_stops_sharing(house) -> None:
     await sl.sync_local()
     assert (await _queued_ops(house))[-1].op == "leave"
     assert await sl.overview() == []
+
+
+# ─── audit R6: FH-4 (quotas), FH-5 (the first clock), FH-15 (tombstones) ──
+
+
+async def test_fh5_a_runaway_first_clock_is_refused_and_sync_survives(house) -> None:
+    # The PoC: a share op at 2^63-2 set the stored clock to BIGINT's top;
+    # the first local edit overflowed and every list's sync rolled back.
+    space_id = secrets.token_bytes(16)
+    await sl.on_envelope(house.friend, _env(house.them, house.us, space_id,
+                                            [sp.Op("share", (1 << 63) - 2, value="Trap")]))
+    assert await sl.overview() == []
+    # An honest list keeps syncing even if another one fails.
+    good, _ = await _offer(house, items=("Tent",))
+    made = await sl.accept(good.hex())
+    async with sl._db() as s:
+        await core_lists.add_item(s, made["list_id"], "Matches")
+    await _bump(made["list_id"])
+    assert await sl.sync_local() >= 1
+
+
+async def test_fh5_one_failing_list_doesnt_stop_the_others(house, monkeypatch) -> None:
+    a, _ = await _offer(house, items=("Tent",))
+    b, _ = await _offer(house, items=("Stove",))
+    la = (await sl.accept(a.hex()))["list_id"]
+    lb = (await sl.accept(b.hex(), name="Camping 2"))["list_id"]
+    for lid in (la, lb):
+        async with sl._db() as s:
+            await core_lists.add_item(s, lid, "More")
+        await _bump(lid)
+    real = sl._diff
+
+    async def broken_for_a(s, space, keys):
+        if space["id"] == a:
+            raise OverflowError("value out of int64 range")
+        return await real(s, space, keys)
+
+    monkeypatch.setattr(sl, "_diff", broken_for_a)
+    assert await sl.sync_local() == 1  # b's change went out
+
+
+async def test_fh4_one_friend_cant_offer_endless_lists(house) -> None:
+    for _ in range(sl.MAX_OFFERS_PER_FRIEND + 3):
+        await _offer(house, items=())
+    assert len(await sl.overview()) == sl.MAX_OFFERS_PER_FRIEND
+
+
+async def test_fh4_an_offer_holds_a_bounded_number_of_changes(house, monkeypatch) -> None:
+    monkeypatch.setattr(sl, "MAX_WAITING_OPS", 10)
+    space_id, _ = await _offer(house, items=("Tent",))
+    for n in range(3):
+        await sl.on_envelope(house.friend, _env(house.them, house.us, space_id, [
+            sp.Op("add", 10 + n * 10 + k, secrets.token_bytes(16), f"Item {n}-{k}") for k in range(8)]))
+    async with sl._db() as s:
+        waiting = (await s.execute(text(
+            "SELECT count(*) FROM friend_houses_space_ops WHERE space_id = :s AND state = 'waiting'"),
+            {"s": space_id})).scalar_one()
+    assert waiting == 10
+
+
+async def test_fh15_removed_items_dont_freeze_a_list(house) -> None:
+    # The PoC: 600 removes for random ids filled the cap with tombstones,
+    # and every later change was acked but never merged.
+    space_id, _ = await _offer(house, items=("Tent",))
+    made = await sl.accept(space_id.hex())
+    clock = 10
+    for _ in range(4):
+        await sl.on_envelope(house.friend, _env(house.them, house.us, space_id, [
+            sp.Op("remove", clock + k, secrets.token_bytes(16)) for k in range(sp.MAX_OPS_PER_BATCH)]))
+        clock += sp.MAX_OPS_PER_BATCH
+    await sl.on_envelope(house.friend, _env(house.them, house.us, space_id,
+                                            [sp.Op("add", clock, secrets.token_bytes(16), "Lantern")]))
+    assert ("Lantern", False) in await _items(made["list_id"])

@@ -97,6 +97,12 @@ async def _space(s, space_id: bytes) -> dict[str, Any] | None:
     return out
 
 
+
+MAX_OFFERS_PER_FRIEND = 5     # lists a friend has offered that wait for an admin (R6 FH-4)
+MAX_WAITING_OPS = 2_000       # changes an offered list may hold before it's accepted
+MAX_ITEMS_KEPT = 5_000        # items a shared list remembers, removed ones included
+OPS_KEPT = 2_000              # applied changes from a friend kept for spotting repeats
+
 async def _items(s, space_id: bytes) -> tuple[dict[bytes, sp.Item], dict[bytes, int | None]]:
     rows = await s.execute(text(
         "SELECT uid, local_item_id, text, done, removed, text_at, text_by, done_at, done_by, "
@@ -285,6 +291,16 @@ async def on_envelope(friend: Any, env: fe.Envelope) -> bool:
             share = next((op for op in batch.ops if op.op == "share"), None)
             if share is None:
                 return True  # changes to something never shared with us
+            if not sp.first_clock_allowed(share.lamport):
+                log.info("Friend Houses: a shared list offered with a runaway clock was dropped")
+                return True
+            offers = (await s.execute(text(
+                "SELECT count(*) FROM friend_houses_spaces WHERE house_key = :h AND state = 'invited'"),
+                {"h": friend.house_key})).scalar_one()
+            if offers >= MAX_OFFERS_PER_FRIEND:
+                # Decline some first: one friend can't fill the page (R6 FH-4).
+                log.info("Friend Houses: %s offered more lists than can wait; dropped", friend.local_name)
+                return True
             title = await _safe_text(share.value, phrases) or "A shared list"
             await s.execute(text(
                 "INSERT INTO friend_houses_spaces (id, kind, house_key, friend_id, state, origin, "
@@ -301,7 +317,16 @@ async def on_envelope(friend: Any, env: fe.Envelope) -> bool:
             return True
         items, local = await _items(s, space["id"])
         clock, state = space["clock"], space["state"]
+        waiting = 0
+        if state == "invited":
+            waiting = (await s.execute(text(
+                "SELECT count(*) FROM friend_houses_space_ops WHERE space_id = :s AND state = 'waiting'"),
+                {"s": space["id"]})).scalar_one()
         for op in batch.ops:
+            if state == "invited" and waiting >= MAX_WAITING_OPS:
+                break  # an offer can't grow without bound before anyone accepts (R6 FH-4)
+            if op.item_uid != sp.NO_ITEM and op.item_uid not in items and len(items) >= MAX_ITEMS_KEPT:
+                continue  # removed items count here too, so a list can't grow for ever
             if not sp.clock_allowed(clock, op.lamport):
                 log.info("Friend Houses: a shared-list change with a runaway clock was skipped")
                 continue
@@ -322,10 +347,14 @@ async def on_envelope(friend: Any, env: fe.Envelope) -> bool:
                 {"s": space["id"], "a": friend.house_key, "o": op.op_id, "l": op.lamport, "op": op.op,
                  "u": None if op.item_uid == sp.NO_ITEM else op.item_uid, "v": value,
                  "st": "applied" if state == "active" else "waiting"})
+            waiting += state == "invited"
             clock = sp.next_clock(clock, op.lamport)
             if op.op == "leave":
                 state = "left"
-            elif state == "active" and len(items) < core_lists.MAX_ITEMS_PER_LIST + 100:
+            elif state == "active" and (
+                    op.item_uid in items or _visible(items) < core_lists.MAX_ITEMS_PER_LIST + 100):
+                # Only items still on the list count: removed ones used to,
+                # so 600 removes froze a list for good (R6 FH-15).
                 sp.merge(items, clean, friend.house_key)
         if state == "left":
             await _set_space(s, space["id"], state="left", local_list_id=None, clock=clock)
@@ -335,7 +364,22 @@ async def on_envelope(friend: Any, env: fe.Envelope) -> bool:
         if state == "active":
             space["clock"] = clock
             await _reflect(s, space, items, local)
+            await _prune_ops(s, space["id"])
     return True
+
+
+def _visible(items: dict[bytes, sp.Item]) -> int:
+    return sum(1 for i in items.values() if not i.removed)
+
+
+async def _prune_ops(s, space_id: bytes) -> None:
+    """Keep the newest :data:`OPS_KEPT` applied changes from a friend (for
+    spotting a batch sent twice); older ones are already in the items."""
+    await s.execute(text(
+        "DELETE FROM friend_houses_space_ops WHERE space_id = :s AND direction = 'in' "
+        "AND state = 'applied' AND lamport < (SELECT lamport FROM friend_houses_space_ops "
+        "WHERE space_id = :s AND direction = 'in' AND state = 'applied' "
+        "ORDER BY lamport DESC OFFSET :k LIMIT 1)"), {"s": space_id, "k": OPS_KEPT})
 
 
 async def accept(space_hex: str, *, name: str | None = None) -> dict[str, Any]:
@@ -396,28 +440,42 @@ async def sync_local() -> int:
         spaces = (await s.execute(text(
             "SELECT id FROM friend_houses_spaces WHERE state = 'active'"))).all()
         for (raw_id,) in spaces:
-            space = await _space(s, bytes(raw_id))
-            if space is None:
+            # Each list on its own: one that fails (whatever a friend sent)
+            # never stops the others from syncing (audit R6 FH-5).
+            try:
+                async with s.begin_nested():
+                    q, h = await _sync_one(s, bytes(raw_id), keys)
+            except Exception:  # noqa: BLE001
+                log.exception("Friend Houses: syncing one shared list failed; the others go on")
                 continue
-            if space["friend_id"] is None or space["local_list_id"] is None:
-                # The friend was removed, or the list was deleted here: stop.
-                if space["friend_id"] is not None:
-                    await _queue(s, space, [sp.Op("leave", space["clock"])], keys)
-                    houses.add(space["house_key"])
-                await _set_space(s, space["id"], state="left", local_list_id=None)
-                continue
-            updated = await _list_updated_at(s, space["local_list_id"])
-            if updated is None or (space["synced_at"] and updated <= space["synced_at"]):
-                continue
-            ops = await _diff(s, space, keys)
-            if ops:
-                await _queue(s, space, ops, keys)
-                queued += len(ops)
-                houses.add(space["house_key"])
-            await _set_space(s, space["id"], synced_at=updated, clock=space["clock"])
+            queued += q
+            houses |= h
     for house in houses:
         _service().spawn(_flush(house), "friend-houses-flush")
     return queued
+
+
+async def _sync_one(s, space_id: bytes, keys: fid.HouseKeys) -> tuple[int, set[bytes]]:
+    """One shared list: what changed here since the last sync, queued."""
+    space = await _space(s, space_id)
+    if space is None:
+        return 0, set()
+    if space["friend_id"] is None or space["local_list_id"] is None:
+        # The friend was removed, or the list was deleted here: stop.
+        houses = set()
+        if space["friend_id"] is not None:
+            await _queue(s, space, [sp.Op("leave", space["clock"])], keys)
+            houses.add(space["house_key"])
+        await _set_space(s, space["id"], state="left", local_list_id=None)
+        return 0, houses
+    updated = await _list_updated_at(s, space["local_list_id"])
+    if updated is None or (space["synced_at"] and updated <= space["synced_at"]):
+        return 0, set()
+    ops = await _diff(s, space, keys)
+    if ops:
+        await _queue(s, space, ops, keys)
+    await _set_space(s, space["id"], synced_at=updated, clock=space["clock"])
+    return len(ops), ({space["house_key"]} if ops else set())
 
 
 async def _diff(s, space: dict[str, Any], keys: fid.HouseKeys) -> list[sp.Op]:
@@ -508,7 +566,7 @@ async def overview() -> list[dict[str, Any]]:
             " AND o.direction = 'out' AND o.state = 'queued') "
             "FROM friend_houses_spaces sp LEFT JOIN lists l ON l.id = sp.local_list_id "
             "LEFT JOIN friend_houses_friends f ON f.id = sp.friend_id "
-            "WHERE sp.state <> 'left' ORDER BY sp.created_at"))
+            "WHERE sp.state <> 'left' ORDER BY sp.created_at LIMIT 200"))
         return [{"id": bytes(r[0]).hex(), "state": r[1], "origin": r[2], "title": r[3],
                  "list_id": r[4], "list_name": r[5], "friend": r[6], "friend_id": r[7],
                  "created_at": r[8].isoformat(), "waiting_to_send": int(r[9])} for r in rows]
