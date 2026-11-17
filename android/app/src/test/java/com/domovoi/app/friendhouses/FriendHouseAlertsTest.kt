@@ -163,6 +163,58 @@ class FriendHouseAlertsTest {
         assertEquals("A message from a friend house", FhNotify.noteFor("sender", smiths, "\u0007", null, 1, 1)!!.title)
     }
 
+    @Test fun zeroWidthFormatAndSeparatorCharactersGoToo() {
+        val sneaky = "a\u200Bb\u200Cc\u200Dd\u2060e\u2061f\u2064g\uFEFFh\u00ADi\u2028j\u2029k" +
+            String(Character.toChars(0xE0041)) + String(Character.toChars(0xE007F)) + "l"
+        assertEquals("abcdefghijkl", FhNotify.cleanText(sneaky))
+        // Line breaks stay; every format (Cf) or separator character is gone.
+        val kept = FhNotify.cleanText("one\ntwo\u202Ethree\u2066")
+        assertEquals("one\ntwothree", kept)
+        for (c in listOf(0x200B, 0x200C, 0x200D, 0x2060, 0x2064, 0xFEFF, 0x2028, 0x2029, 0xE0001, 0xE0020, 0x202A, 0x061C)) {
+            assertTrue(Integer.toHexString(c), FhNotify.isUnsafe(c))
+        }
+        assertTrue(!FhNotify.isUnsafe('a'.code) && !FhNotify.isUnsafe(0x1F600))
+        // The same for a name in a notification's title.
+        val n = FhNotify.noteFor("sender", smiths, "The\u200B Smi\uFEFFths\u2028", null, 1, 1)!!
+        assertEquals("A message from The Smiths", n.title)
+        val r = FhNotify.noteFor("read", smiths, "\u2060The Patels", "hi\u200D there", 1, 1)!!
+        assertEquals("The Patels", r.title)
+        assertEquals("hi there", r.text)
+    }
+
+    @Test fun aRoomPostsNothingAndAsksNothing() = runBlocking {
+        looked()
+        status(1); inbox(Triple(smiths, 1, 10)); friends("read")
+        messages(smiths, Triple(10, "unread", "x"))
+        val room = FriendHouseAlerts(
+            FriendHousesApi(ApiClient(baseUrlProvider = { url }, deviceTokenProvider = { "household-token-1234" })),
+            store, sink, serverUrl = { url }, serverKey = { "k" }, roomMode = { true },
+        )
+        assertEquals(FhTick.ROOM_MODE, room.backgroundTick(onLan = true))
+        assertTrue(asked.isEmpty())
+        assertTrue(sink.posts.isEmpty())
+    }
+
+    @Test fun enteringRoomModeTakesBackOnlyOurNotifications() {
+        assertEquals(
+            listOf("friend_house:k:$smiths", "friend_house:z:$patels"),
+            FriendHouseNotifier.ours(listOf("timer_fire:k", null, "friend_house:k:$smiths", "help_delivery:k", "friend_house:z:$patels", "friend_house:k:$smiths")),
+        )
+        assertTrue(FriendHouseNotifier.tag("k", smiths).startsWith(FriendHouseNotifier.TAG_PREFIX))
+        // Wired: begin() takes them back, the notifier and the gate stand
+        // down in a room, and leaving starts the gate again.
+        val repo = File(System.getProperty("domovoi.repo.dir") ?: error("domovoi.repo.dir is not set"))
+        fun src(rel: String) = File(repo, "android/app/src/main/java/com/domovoi/app/$rel").readText()
+        val begin = src("roommode/RoomSetupActivity.kt").substringAfter("private fun begin(").substringBefore("startActivity(")
+        assertTrue("begin() withdraws them", "friendHouses.pauseForRoomMode()" in begin)
+        val leave = src("roommode/RoomModeActivity.kt").substringAfter("private fun leave(").substringBefore("startActivity(")
+        assertTrue("leave() starts the gate again", "friendHouses.start()" in leave)
+        val fh = src("friendhouses/FriendHouses.kt")
+        assertTrue("post() refuses in a room", fh.substringAfter("override fun post(").substringBefore("val public").contains("HouseholdLock.roomModeActive"))
+        assertTrue("the tick stands down in a room", "roomMode = { HouseholdLock.roomModeActive }" in fh)
+        assertTrue("the gate asks nothing in a room", fh.substringAfter("private suspend fun read()").substringBefore("fun refresh()").contains("HouseholdLock.roomModeActive"))
+    }
+
     @Test fun theCutNeverSplitsACharacter() {
         val emoji = "😀"
         val cut = FhNotify.cut(emoji.repeat(250))

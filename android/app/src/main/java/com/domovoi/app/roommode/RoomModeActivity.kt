@@ -240,6 +240,7 @@ class RoomModeActivity : ComponentActivity() {
             c.containerAlerts.start()
             c.helpAlerts.start()
             c.batteryAlerts.start()
+            c.friendHouses.start()
         }
         startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK))
         finishAndRemoveTask()

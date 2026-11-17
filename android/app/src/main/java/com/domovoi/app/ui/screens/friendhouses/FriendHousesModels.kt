@@ -67,6 +67,8 @@ object FhWords {
         f.online == null -> null
         f.online -> ONLINE
         f.lastSeenAt.isNullOrBlank() -> NOT_REACHED
+        // A time that can't be shown says nothing rather than something wrong.
+        fhIso(f.lastSeenAt) == null -> null
         else -> "Last seen ${relTime(f.lastSeenAt)}"
     }
 
@@ -92,13 +94,32 @@ fun fhOutState(m: FhMessage): Pair<Tone, String>? {
 /** More than this apart, an incoming message also shows the sender's time. */
 const val FH_CLOCK_SKEW_SEC = 5 * 60L
 
+/** The latest time this screen will format: 9999-12-31T23:59:59Z. Every
+ *  time on the wire is checked against 0..this before it reaches an
+ *  Instant, arithmetic or a formatter: `sent_at` is the OTHER house's,
+ *  signed by it and stored unchecked, and a value like 2^62 would throw
+ *  in the formatter on every open of that conversation. */
+const val FH_MAX_EPOCH_SEC = 253_402_300_799L
+
+/** [sec] when it is a time this screen can show (0..[FH_MAX_EPOCH_SEC]), else null. */
+fun fhEpochSec(sec: Long?): Long? = sec?.takeIf { it in 0..FH_MAX_EPOCH_SEC }
+
+/** An ISO time from the server when it parses to a time this screen can
+ *  show, else null ([fhEpochSec]). */
+fun fhIso(iso: String?): String? = iso?.takeIf { fhEpochSec(parseInstant(it)?.epochSecond) != null }
+
+/** "4m ago" for a server time, or "—" for one that is missing, unreadable
+ *  or out of range: never a throw. */
+fun fhRelTime(iso: String?): String = fhIso(iso)?.let { relTime(it) } ?: "—"
+
 /** The sender's own clock, when it disagrees with this house's by more
- *  than five minutes: "sent <time> (their clock)"; else null. */
+ *  than five minutes: "sent <time> (their clock)"; else null, and null for
+ *  a `sent_at` outside 0..[FH_MAX_EPOCH_SEC]. */
 fun fhTheirClock(m: FhMessage, zone: ZoneId = ZoneId.systemDefault()): String? {
     if (!m.incoming) return null
-    val here = parseInstant(m.createdAt) ?: return null
-    val theirs = m.sentAt ?: return null
-    if (abs(theirs - here.epochSecond) <= FH_CLOCK_SKEW_SEC) return null
+    val here = fhEpochSec(parseInstant(m.createdAt)?.epochSecond) ?: return null
+    val theirs = fhEpochSec(m.sentAt) ?: return null
+    if (abs(theirs - here) <= FH_CLOCK_SKEW_SEC) return null
     val at = java.time.Instant.ofEpochSecond(theirs)
     return "sent ${DateTimeFormatter.ofPattern("MMM d, h:mm a").withZone(zone).format(at)} (their clock)"
 }

@@ -50,15 +50,24 @@ data class FhNote(
 )
 
 object FhNotify {
-    /** Bidi embeddings, overrides and isolates, and the marks: the server
-     *  strips them already; a notification never carries one either. */
-    private fun isBidi(c: Int): Boolean =
-        c == 0x200E || c == 0x200F || c == 0x061C || c in 0x202A..0x202E || c in 0x2066..0x2069
+    /**
+     * What a notification never carries: control characters (C0, DEL, C1),
+     * every format character (Unicode Cf: the bidi marks, embeddings,
+     * overrides and isolates, zero-width spaces and joiners U+200B-200D,
+     * U+2060-2064, the BOM U+FEFF, the tag characters U+E0001-E007F, the
+     * soft hyphen), and the line and paragraph separators U+2028/2029.
+     * The server strips the bidi and control ones already.
+     */
+    internal fun isUnsafe(c: Int): Boolean {
+        val type = Character.getType(c)
+        return type == Character.CONTROL.toInt() || type == Character.FORMAT.toInt() ||
+            type == Character.LINE_SEPARATOR.toInt() || type == Character.PARAGRAPH_SEPARATOR.toInt() ||
+            c < 0x20 || c in 0x7F..0x9F || c in 0x200B..0x200F || c in 0x202A..0x202E ||
+            c in 0x2060..0x206F || c == 0xFEFF || c in 0xE0000..0xE007F || c == 0x061C
+    }
 
-    private fun isControl(c: Int): Boolean = c < 0x20 || c in 0x7F..0x9F || isBidi(c)
-
-    /** Message text for a notification: control characters out, line
-     *  breaks kept (a tab or a carriage return becomes a space). */
+    /** Message text for a notification: control and format characters out,
+     *  line breaks kept (a tab or a carriage return becomes a space). */
     fun cleanText(raw: String): String {
         val out = StringBuilder(raw.length)
         var i = 0
@@ -67,7 +76,7 @@ object FhNotify {
             when {
                 c == '\n'.code -> out.append('\n')
                 c == '\t'.code || c == '\r'.code -> out.append(' ')
-                isControl(c) -> Unit
+                isUnsafe(c) -> Unit
                 else -> out.appendCodePoint(c)
             }
             i += Character.charCount(c)
@@ -142,6 +151,9 @@ enum class FhTick {
     /** No answer. */
     UNREACHABLE,
 
+    /** The phone is a room: no household request, no notification. */
+    ROOM_MODE,
+
     NOTIFICATIONS_OFF,
     OFF_LAN,
     NO_SERVER,
@@ -156,6 +168,8 @@ class FriendHouseAlerts(
     private val serverKey: (String) -> String,
     /** Every status answer, so the in-app gate and badge learn it too. */
     private val onStatus: (server: String, FhAvailability) -> Unit = { _, _ -> },
+    /** The phone is a room (roommode/): nothing asked, nothing posted. */
+    private val roomMode: () -> Boolean = { false },
     private val budgetMs: Long = SYNC_BUDGET_MS,
     /** Never handed a name, a title or a message. */
     private val log: (String) -> Unit = {},
@@ -165,6 +179,7 @@ class FriendHouseAlerts(
         val result = try {
             val server = serverUrl()
             when {
+                roomMode() -> FhTick.ROOM_MODE
                 server.isBlank() -> FhTick.NO_SERVER
                 !sink.canPost() -> FhTick.NOTIFICATIONS_OFF
                 !onLan -> FhTick.OFF_LAN
