@@ -32,6 +32,7 @@ import contextlib
 import json
 import logging
 import math
+import os
 import re
 import shutil
 import subprocess
@@ -131,12 +132,15 @@ Hold = Callable[[Proc], Awaitable[None]]
 
 
 async def _run(argv: list[str], *, timeout: float, hold: Hold | None = None,
-               stdout: bool = False) -> tuple[int, bytes, bytes]:
+               stdout: bool = False, env: dict[str, str] | None = None) -> tuple[int, bytes, bytes]:
     """Run ``argv`` at low priority; (returncode, stdout, stderr). Raises
     FileNotFoundError when the program isn't installed, TimeoutError past
-    ``timeout`` (the process is killed)."""
+    ``timeout`` (the process is killed). ``env``: extra environment
+    variables for the program. The scan reader runs tesseract through it
+    too (:func:`run_low`)."""
     proc = await asyncio.create_subprocess_exec(
         *_argv(argv),
+        env={**os.environ, **env} if env else None,
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE if stdout else asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.PIPE,
@@ -159,6 +163,10 @@ async def _run(argv: list[str], *, timeout: float, hold: Hold | None = None,
             watcher.cancel()
         wrapped.resume()
     return proc.returncode or 0, out or b"", err or b""
+
+
+#: The public name for other background jobs (the scan reader's tesseract).
+run_low = _run
 
 
 async def _watch(proc: Proc, hold: Hold, done: "asyncio.Future[Any]") -> None:

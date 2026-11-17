@@ -612,6 +612,7 @@
     "files",
     "documents",
     "printers",
+    "scan-reader",
     "calendar",
     "lists",
     "news"
@@ -2954,7 +2955,7 @@
        "text": "An old .doc or .rtf file: save it as .docx or PDF, then attach it again."
       },
       {
-       "text": "\"pictures of text (scanned)\": some pages are scans, and Domovoi can't read those yet. The answer names the pages it skipped. A PDF that is all scan is refused (\"pictures of text (a scan)\"). Save the document from its own program as a PDF with text, or type the part you need."
+       "text": "\"pictures of text (scanned)\": some pages are scans, and Domovoi can't read those yet. The answer names the pages it skipped. A PDF that is all scan is refused (\"pictures of text (a scan)\"). Save the document from its own program as a PDF with text, or type the part you need. Scans from your own scanner are different: Domovoi reads them itself (see [What does this scan say?](node:scan-reader)), and then you can ask about them like any document."
       },
       {
        "text": "A file that isn't what its name says, or is built to overwhelm a reader, is refused, with a sentence saying why."
@@ -3582,7 +3583,7 @@
        "text": "**A draft from Chat:** **print** on the draft, or type \"print it\". You see the preview first."
       },
       {
-       "text": "**Scan** sits at the top of Documents when a scanner is set up. Scans are saved as one PDF in **Documents → Scans**, named by date."
+       "text": "**Scan** sits at the top of Documents when a scanner is set up. Scans are saved as one PDF in **Documents → Scans**, named by date. Domovoi then reads them: see [What does this scan say?](node:scan-reader)."
       },
       {
        "text": "Renaming or removing a printer needs the admin password {admin}."
@@ -3653,6 +3654,103 @@
       },
       {
        "text": "Each job is limited to 100 pages and 20 copies, and the house to 500 sheets a day; an admin can change the limits. The list of recent jobs is kept 90 days, and an admin can clear it."
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "scan-reader",
+   "topic": "chat-files-calendar",
+   "title": "What does this scan say?",
+   "subtitle": "a short summary of a scanned letter",
+   "keywords": [
+    "scan",
+    "scanned letter",
+    "what does it say",
+    "read my mail",
+    "ocr",
+    "letter",
+    "handwriting",
+    "might say",
+    "read the scan"
+   ],
+   "blocks": [
+    {
+     "type": "p",
+     "text": "Scan a letter, and Domovoi reads it for you on your home server: a short plain summary of what it says, and the whole text if you want it."
+    },
+    {
+     "type": "label",
+     "role": "how",
+     "text": "How to"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "After a scan, press **What does it say?** on the Scan sheet. While Domovoi is still reading, the button says how far it has got (\"reading page 2 of 3\"); press it and the answer appears when it's ready. Older scans have the same button in [Settings → Household → Printers & scanners](route:settings/printers), under **recent jobs**.",
+       "only": "dashboard"
+      },
+      {
+       "text": "**By voice:** \"scan this letter\". When it's saved, Domovoi asks \"Want me to tell you what it says?\". Say yes for the short summary, then yes again to hear all of it."
+      },
+      {
+       "text": "**Show the full text** shows every page's words."
+      },
+      {
+       "text": "Once a scan is read, [Ask about a document](node:ask-document) works on it, and \"read me\" reads it aloud, like any document."
+      },
+      {
+       "text": "Domovoi reads the printed words itself (OCR). A page it can't read well, such as handwriting or a photo, goes to the picture model, and Domovoi says what the page \"might say\": a guess, not the page's words. Check names, dates and amounts against the paper."
+      },
+      {
+       "text": "Dates and amounts in the summary are the letter's own sentences, quoted."
+      },
+      {
+       "text": "Everything happens on your server; nothing about the letter leaves the house."
+      },
+      {
+       "text": "A question asked in a room goes first: reading pauses from the wake word until the answer has been spoken."
+      }
+     ]
+    },
+    {
+     "type": "label",
+     "role": "say",
+     "text": "Try saying"
+    },
+    {
+     "type": "say",
+     "phrases": [
+      {
+       "text": "scan this letter",
+       "handler": "printing",
+       "path": "fast"
+      }
+     ]
+    },
+    {
+     "type": "label",
+     "role": "wrong",
+     "text": "If something's wrong"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "**No button:** the server can't read scans yet. Domovoi installs the reader (Tesseract) with its next update or Restart."
+      },
+      {
+       "text": "**\"couldn't read this page\":** the page was too faint, handwritten, or a photo, and the picture model wasn't asked: AI features are off, or there's no picture model. Rescan it in better light, or read the paper."
+      },
+      {
+       "text": "**AI features off:** Domovoi still reads printed pages, but there's no summary: you get the start of the text, and the full text."
+      },
+      {
+       "text": "English only for now."
       }
      ]
     }

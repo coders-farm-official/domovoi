@@ -787,7 +787,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     #   podcast_feed_poller → calendar_feed_refresher → audiobook_indexer →
     #   room_book_positions →
     #   command_capture_pruner → guests_seen_pruner → printer_status → print_jobs →
-    #   print_history → voice_history_pruner → container_guard → chat_video →
+    #   print_history → voice_history_pruner → container_guard → chat_video → scan_reader →
     #   listenbrainz_fetch →
     #   library_alias_fetch → lyrics_scan → lyrics_fetch →
     #   library_tag_backfill → library_year_fetch → library_cover_art.
@@ -872,6 +872,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from domovoi.workers.chat_video import ChatVideoWorker
 
     WORKERS.add_worker(ChatVideoWorker(), owner="core")
+    # Reading scans (V065): Tesseract OCR first, the vision model for a page
+    # OCR can't read, one read at a time, holding off for voice the same way
+    # (domovoi/scan_reader/runner.py). Registered as the scan reader the
+    # "scan this" flow and the Scan sheet use; whether a scan can be read
+    # is asked per scan (tesseract may arrive with an update after start).
+    from domovoi.printing import scans as _scans
+    from domovoi.scan_reader import answer_for_voice as _scan_answer
+    from domovoi.workers.scan_reader import ScanReaderWorker
+
+    WORKERS.add_worker(ScanReaderWorker(), owner="core")
+    _scans.register_reader(_scan_answer)
     # Up next P7 (V056): similar artists and song popularity from
     # ListenBrainz, each behind its own switch, the internet answer and the
     # probe; the ONLY code that asks ListenBrainz (the picker reads the
@@ -1113,6 +1124,11 @@ app.include_router(plugins_admin_router)
 from domovoi.printing.routes import router as printing_router  # noqa: E402
 
 app.include_router(printing_router)
+
+# Reading scans (domovoi/scan_reader/routes.py): "What does it say?".
+from domovoi.scan_reader.routes import router as scan_reader_router  # noqa: E402
+
+app.include_router(scan_reader_router)
 
 # Groups: named sets of rooms and the shared queues (domovoi/music_groups.py,
 # domovoi/music_groups_routes.py).

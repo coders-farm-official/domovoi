@@ -244,7 +244,8 @@ def test_declared_confirmation_kinds_cover_known_flows() -> None:
         "voice": {"core.voice_download"},
         "printing": {
             "core.print_confirm", "core.print_pick", "core.print_printer", "core.printer_add",
-            "core.printer_pick", "core.scan_ready", "core.scan_more", "core.scan_read", "core.print_test",
+            "core.printer_pick", "core.scan_ready", "core.scan_more", "core.scan_read", "core.scan_read_all",
+                "core.print_test",
         },
         "help_desk": {"core.help_send", "core.help_who"},
         "lists": {"core.lists_create", "core.lists_clear", "core.lists_delete"},
