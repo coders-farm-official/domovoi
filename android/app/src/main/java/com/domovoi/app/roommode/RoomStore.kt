@@ -61,6 +61,12 @@ class RoomStore(context: Context) : RoomModels.ModelBook {
 
     val wakeThreshold: Float get() = prefs.getFloat(K_THRESHOLD, DEFAULT_THRESHOLD)
 
+    /** Every word the room was told to listen for, main word ([wakeWord])
+     *  first (1.4.0, [WakeWords]): the kept list when it starts with the
+     *  main word, else the main word alone. */
+    val wakeWords: List<WakeWords.Word>
+        get() = keptWords(wakeWord, prefs.getString(K_WAKE_WORDS, null))
+
     val muted: Boolean get() = prefs.getBoolean(K_MUTED, false)
 
     /**
@@ -73,7 +79,7 @@ class RoomStore(context: Context) : RoomModels.ModelBook {
         val same = enrolment?.let { it.coreUrl == e.coreUrl && it.roomId == e.roomId && it.fingerprint == e.fingerprint } == true
         if (!same || pairingToken() == null) {
             if (!vault.write(mapOf(TOKEN_KEY to newToken()))) return false
-            prefs.edit().putString(K_CODE, newApprovalCode()).remove(K_SERIALS).remove(K_WAKE).remove(K_THRESHOLD)
+            prefs.edit().putString(K_CODE, newApprovalCode()).remove(K_SERIALS).remove(K_WAKE).remove(K_WAKE_WORDS).remove(K_THRESHOLD)
                 .remove(K_APPROVED).commit()
         }
         prefs.edit()
@@ -127,10 +133,15 @@ class RoomStore(context: Context) : RoomModels.ModelBook {
      * ([wakeThreshold], reported as `wake.threshold`): the Pi writes it into
      * its `[wake] threshold` setting the same way. Pushed without one (or
      * with an unusable one) the threshold stays as it is, as on a Pi.
+     *
+     * [words] (1.4.0): the words the room now runs, [slug] first
+     * ([WakeWords.plan], already cut to this phone's limit); one word keeps
+     * no list (an older core's push drops any extras kept before).
      */
-    fun setWakeWord(slug: String, threshold: Double?) {
+    fun setWakeWord(slug: String, threshold: Double?, words: List<WakeWords.Word> = listOf(WakeWords.Word(slug))) {
         prefs.edit().putString(K_WAKE, slug).apply {
             thresholdValue(threshold)?.let { putFloat(K_THRESHOLD, it) }
+            if (words.size > 1 && words[0].slug == slug) putString(K_WAKE_WORDS, WakeWords.encode(words)) else remove(K_WAKE_WORDS)
         }.apply()
     }
 
@@ -185,6 +196,7 @@ class RoomStore(context: Context) : RoomModels.ModelBook {
         private const val K_CODE = "approval_code"
         private const val K_WAKE = "wake_word"
         private const val K_THRESHOLD = "wake_threshold"
+        private const val K_WAKE_WORDS = "wake_words"
         private const val K_MUTED = "muted"
         private const val K_SERIALS = "manifest_serials"
         private const val K_APPROVED = "approved_once"
@@ -203,6 +215,14 @@ class RoomStore(context: Context) : RoomModels.ModelBook {
          *  sensitivity range, the Pi's `_wake_threshold_value`), else null. */
         fun thresholdValue(raw: Double?): Float? =
             raw?.takeIf { it in 0.0..1.0 }?.toFloat()
+
+        /** The kept word list ([WakeWords.encode]) for the main word
+         *  [main]: used when it starts with [main], else [main] alone (a
+         *  list left from before a later push changed the main word). */
+        fun keptWords(main: String, kept: String?): List<WakeWords.Word> {
+            val words = WakeWords.decode(kept)
+            return if (words != null && words[0].slug == main) words else listOf(WakeWords.Word(main))
+        }
 
         /** Whether room mode is on, without building a store (MainActivity). */
         fun isActive(context: Context): Boolean =

@@ -168,4 +168,35 @@ class RoomModelsTest {
         assertFalse("a changed file is not loaded", m.trainedModelIntact("hey_house.onnx"))
         assertNull("nothing loads without its base models", m.local("hey_house"))
     }
+
+    @Test
+    fun anExtraWordTheServerLacksOrServesWrongNeverFailsTheMainWord() {
+        val book = Book()
+        val main = "main word body".toByteArray()
+        val good = "porch cat body".toByteArray()
+        trainedList = mapOf(
+            "hey_house.onnx" to RoomModels.sha256(main),
+            "porch_cat.onnx" to RoomModels.sha256(good),
+            "bad_cat.onnx" to RoomModels.sha256("what the list says".toByteArray()),
+        )
+        bodies["/v1/wake-models/hey_house.onnx"] = main
+        bodies["/v1/wake-models/porch_cat.onnx"] = good
+        bodies["/v1/wake-models/bad_cat.onnx"] = "something else".toByteArray()
+        val dir = tmp.newFolder()
+        val m = models(dir, book)
+        // gone_cat is not on the server at all.
+        val r = m.sync(RoomNetwork.BASE, core, fingerprint, listOf("hey_house", "gone_cat", "bad_cat", "porch_cat"))
+        // Not Failed: only the base models (not on this test server) are missing.
+        assertTrue(r.toString(), r is RoomModels.Outcome.Missing)
+        assertTrue(m.trainedModelIntact("hey_house.onnx"))
+        assertTrue(m.trainedModelIntact("porch_cat.onnx"))
+        assertFalse(File(dir, "bad_cat.onnx").exists())
+        assertNull(book.trained["bad_cat.onnx"])
+        assertFalse(File(dir, "gone_cat.onnx").exists())
+        // The main word missing is still the room's problem (a fresh book:
+        // this test server signs every list with the same serial).
+        trainedList = mapOf("porch_cat.onnx" to RoomModels.sha256(good))
+        val gone = models(dir, Book()).sync(RoomNetwork.BASE, core, fingerprint, listOf("hey_house", "porch_cat"))
+        assertTrue(gone.toString(), gone is RoomModels.Outcome.Missing && "hey_house.onnx" in gone.names)
+    }
 }
