@@ -26,6 +26,10 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, AsyncIterator, Protocol
 
+# Module level, not lazy: the web process (which streams the typed chat
+# through chat_stream) refuses a NEW domovoi.* import after boot
+# (web/backend/plugin_host.py), and this module is preloaded there.
+from domovoi import llm_activity
 from domovoi.config import normalize_think_setting, settings
 from domovoi.log_privacy import said
 
@@ -324,7 +328,6 @@ async def chat_stream(
     if keep_alive is not None:
         body["keep_alive"] = keep_alive
     timeout = httpx.Timeout(connect=connect_timeout, read=None, write=30.0, pool=connect_timeout)
-    from domovoi import llm_activity
 
     # A generation in flight for as long as this stream is open
     # (domovoi/llm_activity.py: on a Mac, speech is heard on the processor
@@ -1169,8 +1172,6 @@ class RealOllamaClient:
         # can't pin a user-facing voice turn open indefinitely. `read` is the
         # max time between bytes, so a long-but-progressing generation is
         # fine; a truly hung server raises and the turn degrades gracefully.
-        from domovoi import llm_activity
-
         self._client = AsyncClient(
             host=url,
             timeout=httpx.Timeout(
@@ -1803,8 +1804,6 @@ class RealOllamaClient:
 
             import httpx
             from ollama import AsyncClient
-
-            from domovoi import llm_activity
 
             twin = copy.copy(self)
             twin._client = AsyncClient(

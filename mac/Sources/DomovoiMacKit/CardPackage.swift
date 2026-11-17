@@ -93,7 +93,12 @@ public struct CardPackage {
         return f.string(from: date)
     }
 
-    public static func mib(_ bytes: Int64) -> String { "\((bytes + 1024 * 1024 - 1) / (1024 * 1024)) MB" }
+    public static func mib(_ bytes: Int64) -> String {
+        // In steps: Xcode 16's type checker gives up on the one-liner.
+        let unit: Int64 = 1024 * 1024
+        let whole: Int64 = (bytes + unit - 1) / unit
+        return "\(whole) MB"
+    }
 }
 
 /// Where the unpacked card files are read from (the tests answer with a
