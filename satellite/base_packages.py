@@ -50,6 +50,21 @@ root-runs-updatable-code item docs/SECURITY_PRIVACY.md documents. The
 owner accepted that path for the boot step; this widens what it does by
 this one action.
 
+Found on the Mac test sitting's Pi (2026-11-16, S2-12): stage 2 never
+got online (the Wi-Fi was down through the first boots), so stage 1's
+half-installed mpg123, libportaudio2 and libjack-jackd2-0 were still
+unpacked with their libraries missing when this step took over. Asking apt
+for one of them by name then fails while ANY package on the system has
+unmet dependencies ("E: Unmet dependencies. Try 'apt --fix-broken
+install'"), so each name failed on account of the others, every boot. Stage
+2 has always run the repair for exactly this, ``apt-get -f install -y
+--no-remove``, on fresh lists only; this step skipped it. So once ``apt-get
+update`` has fetched every list (``--error-on=any``, as stage 2 asks), the
+same repair runs here first, removals still forbidden: it fetches the
+missing libraries and finishes what is unpacked, or stops. A run that still
+fails says why: its ``detail`` carries apt's own words, which the room's log
+and its card show.
+
 Two limits keep a run from doing harm on its own:
 
 * **Internet access turned off.** A card prepared while the server's
@@ -323,10 +338,24 @@ def repair(
                        left(CONFIGURE_TIMEOUT_SEC))
         if rc != 0:
             doc["errors"].append(f"dpkg --configure -a: rc={rc}: {out[-200:]}")
+    fresh = False
     if not offline and left(UPDATE_TIMEOUT_SEC) > 0:
-        rc, out = _run(run, ["apt-get", *_APT_OPTS, "update", "-qq"], left(UPDATE_TIMEOUT_SEC))
+        # --error-on=any: a list that could not be fetched is a failure,
+        # not the "W: Failed to fetch" + exit 0 a plain update gives.
+        rc, out = _run(run, ["apt-get", *_APT_OPTS, "update", "-qq", "--error-on=any"],
+                       left(UPDATE_TIMEOUT_SEC))
         if rc != 0:
             doc["errors"].append(f"apt-get update: rc={rc}: {out[-200:]}")
+        fresh = rc == 0
+    # Stage 1's dependency-free dpkg leaves packages unpacked with their
+    # libraries missing, and while any package is in that state apt refuses
+    # every install by name. Stage 2's repair, on fresh lists only and with
+    # removals forbidden: apt fetches what they need, or stops.
+    if fresh and any(missing_one(b, run) for b in gone) and left(INSTALL_TIMEOUT_SEC) > 0:
+        rc, out = _run(run, ["apt-get", *_APT_OPTS, "-f", "install", "-y", "--no-remove"],
+                       left(INSTALL_TIMEOUT_SEC))
+        if rc != 0:
+            doc["errors"].append(f"apt-get -f install: rc={rc}: {out[-200:]}")
     for base in gone:
         if not missing_one(base, run):
             continue          # the configure step finished it
@@ -363,6 +392,7 @@ def repair(
                          "do not hold everything these need")
     else:
         doc["state"] = "failed"
+        doc["detail"] = failure_reason(doc["errors"])
     write_report(doc, report_path)
     if doc["still_missing"]:
         log.warning("base packages: still missing after the install: %s (%s)",
@@ -370,6 +400,41 @@ def repair(
     else:
         log.info("base packages: installed %s", ", ".join(doc["installed"]))
     return doc
+
+
+#: apt's words for the usual reasons, most telling first, and what each
+#: means in plain words.
+_REASONS: tuple[tuple[str, str], ...] = (
+    ("Temporary failure resolving", "the room could not look up the package server's name"),
+    ("Could not resolve", "the room could not look up the package server's name"),
+    ("is not valid yet", "the room's clock is behind, so the package lists look not valid yet"),
+    ("Release file", "the package lists could not be checked"),
+    ("Unmet dependencies", "the packages need others that could not be installed"),
+    ("No space left on device", "the card is full"),
+    ("Unable to fetch", "some packages could not be downloaded"),
+    ("Failed to fetch", "some packages could not be downloaded"),
+    ("Unable to locate package", "the package server does not have one of them"),
+    ("Could not get lock", "another install was running"),
+    ("timed out", "the install ran out of time"),
+)
+
+
+def failure_reason(errors: list[str]) -> str:
+    # One line for a failed run: the plain reason when apt's words match
+    # one, then apt's own last line, so the room's log and card say why
+    # (S2-13: a failed run used to carry no reason at all).
+    text = "\n".join(str(e) for e in errors or [])
+    if not text.strip():
+        return "apt gave no reason"
+    plain = next((why for needle, why in _REASONS if needle in text), None)
+    last = ""
+    for e in reversed(errors):
+        lines = [ln.strip() for ln in str(e).splitlines() if ln.strip()]
+        err = [ln for ln in lines if ln.startswith("E:")]
+        if err or lines:
+            last = (err or lines)[-1]
+            break
+    return (f"{plain} ({last})" if plain else last)[:240]
 
 
 def missing_one(base: str, run: Runner) -> list[str]:
@@ -391,17 +456,22 @@ def reboot_note(present_missing: list[str], report: dict[str, Any] | None,
     if not present_missing or offline:
         return None
     names = ", ".join(present_missing)
-    last = ""
     if isinstance(report, dict) and report.get("boot_id") == boot_id:
         state = report.get("state")
+        if state == "failed":
+            # A reboot runs the same install again: say why it failed, not
+            # that a reboot fixes it (S2-12: that promise proved false).
+            why = str(report.get("detail") or "see the room's log")
+            return (f"system packages missing ({names}): the room couldn't install them: "
+                    f"{why}")[:200]
         if state == "no_network":
-            last = "; this boot's try found no network"
-        elif state == "failed":
-            last = "; this boot's install failed (see the log)"
-        elif state == "deferred":
-            last = "; setup has not finished yet"
-    return (f"system packages missing ({names}): reboot this room device with the network "
-            f"up and it installs them{last}")[:200]
+            return (f"system packages missing ({names}): the room had no network when it "
+                    "started; restart it with the network up to install them")[:200]
+        if state == "deferred":
+            return (f"system packages missing ({names}): setup has not finished yet; it "
+                    "installs them once the room is online")[:200]
+    return (f"system packages missing ({names}): restart this room with the network up to "
+            "install them")[:200]
 
 
 def main(argv: list[str] | None = None) -> int:
