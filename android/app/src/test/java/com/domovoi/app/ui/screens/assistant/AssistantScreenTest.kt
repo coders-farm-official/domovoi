@@ -130,8 +130,8 @@ class AssistantScreenTest {
         // Inside Chat: a new chat's header and its place picker, so someone
         // who only wanted to chat can move to the home server instead.
         assertTrue(shown.toString(), "new chat" in shown && "picker" in shown)
-        // A preview (owner decision 2, 2026-10-16), said where it is chosen.
-        assertTrue(shown.toString(), "preview" in shown && com.domovoi.app.ui.components.PREVIEW_MEANS in shown)
+        // No longer a preview (owner decision 2026-11-17): no label on the setup card.
+        assertTrue(shown.toString(), "preview" !in shown)
         assertEquals(listOf("download"), calls)
     }
 

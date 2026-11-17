@@ -612,8 +612,7 @@ one credential the app has. The rules, all unit-tested under
 
 ## On-device assistant
 
-Phone chats: **Domovoi on this phone**. **A preview**: the
-setup card says so beside the download (`PreviewLabel`, `ui/components/Kit.kt`).
+Phone chats: **Domovoi on this phone**.
 
 Domovoi can answer **on the phone itself**, with no server and, once its
 model is downloaded, no internet (a lookup is the one exception, and it
@@ -1252,8 +1251,6 @@ leaves the home network). What the phone does, exactly:
 
 ## Room mode
 
-**A preview**, labelled on Settings → Rooms' "Use this device as a room"
-card and at the top of the explainer.
 
 A spare phone or tablet as a room satellite (the person's guide:
 [docs/SPARE_DEVICE_SATELLITES.md](../docs/SPARE_DEVICE_SATELLITES.md#phones-and-tablets-room-mode)).
