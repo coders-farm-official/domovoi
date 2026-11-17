@@ -89,7 +89,11 @@ final class MusicModelTests: XCTestCase {
                     try Task.checkCancellation()
                     if opened.current.contains(ms) { return }
                     let through = budget.mutate { left -> Bool in
-                        guard let have = left[ms], have > 0 else { return false }
+                        // And again under the budget's lock: this closure runs
+                        // off the main actor, so the check above is not atomic
+                        // with the take. `RoomsModelTests.Waits` has the story
+                        // (its poll flake, 2026-11-17).
+                        guard !Task.isCancelled, let have = left[ms], have > 0 else { return false }
                         left[ms] = have - 1
                         return true
                     }

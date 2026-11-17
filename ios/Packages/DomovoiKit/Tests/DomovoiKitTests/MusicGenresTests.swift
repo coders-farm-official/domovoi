@@ -292,7 +292,19 @@ final class MusicGenresTests: XCTestCase {
                 for _ in 0..<settleYieldLimit {
                     try Task.checkCancellation()
                     let through = budget.mutate { left -> Bool in
-                        guard let have = left[ms], have > 0 else { return false }
+                        // **And again under the budget's lock.** This closure
+                        // runs on the cooperative pool, not the main actor, so
+                        // the check above is not atomic with the take below:
+                        // a waiter that passed it, then lost its thread while
+                        // the test cancelled it and called `allow`, took that
+                        // allowance on waking — and the fresh wait it was
+                        // meant for never ended. That was
+                        // `RoomsModelTests.testThePollRunsOnlyWhileAHistoryTabIsOnScreenAndInFront`'s
+                        // flake (CI, three reds on 2026-11-17: "the resumed
+                        // poll's read never settled"). A test cancels *before*
+                        // it allows, and this lock orders the two, so a
+                        // cancelled waiter now always sees it here.
+                        guard !Task.isCancelled, let have = left[ms], have > 0 else { return false }
                         left[ms] = have - 1
                         return true
                     }
