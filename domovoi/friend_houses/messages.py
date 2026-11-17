@@ -223,11 +223,25 @@ async def flush_all() -> None:
             "UNION SELECT sp.house_key FROM friend_houses_space_ops o "
             "JOIN friend_houses_spaces sp ON sp.id = o.space_id "
             "WHERE o.direction = 'out' AND o.state = 'queued'"))]
-    for house in houses:
-        try:
-            await flush(house)
-        except Exception:  # noqa: BLE001 — one friend never blocks the others
-            log.exception("Friend Houses: delivering to a friend failed")
+    # Friends at once (a few at a time), each with a deadline: one that
+    # never acks and keeps the session alive can't hold up the rest (audit
+    # R6 FH-15).
+    gate = asyncio.Semaphore(FLUSH_AT_ONCE)
+
+    async def one(house: bytes) -> None:
+        async with gate:
+            try:
+                await asyncio.wait_for(flush(house), FLUSH_DEADLINE_SEC)
+            except asyncio.TimeoutError:
+                log.info("Friend Houses: delivering to a friend took too long; next round")
+            except Exception:  # noqa: BLE001 — one friend never blocks the others
+                log.exception("Friend Houses: delivering to a friend failed")
+
+    await asyncio.gather(*(one(h) for h in houses))
+
+
+FLUSH_AT_ONCE = 4
+FLUSH_DEADLINE_SEC = 300.0
 
 
 async def say_im_back() -> None:

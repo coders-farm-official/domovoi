@@ -574,8 +574,9 @@ async def _persist_turn(
     await SessionRepository(session).record_exchange(
         session_id,
         intent.transcript,
-        response.text,
+        response.history_text if response.history_text is not None else response.text,
         settings.session_recent_turns_cap,
+        last_response=response.text,
     )
     # A turn that started music in its own room: that music is for the
     # person who spoke (None, the household, when nobody was recognised).
