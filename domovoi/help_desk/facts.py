@@ -19,7 +19,7 @@ from typing import Any, Iterable
 
 INTERNET_WORDS = {
     "always": "yes (Domovoi may use the internet)",
-    "sometimes": "sometimes (each use is asked about)",
+    "sometimes": "sometimes (small lookups when the internet is up; no automatic podcast downloads)",
     "never": "no (Domovoi never uses the internet)",
     "": "not answered yet (it behaves as it always has: online when it can be)",
 }
