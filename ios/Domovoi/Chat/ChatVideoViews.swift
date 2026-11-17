@@ -66,49 +66,104 @@ struct ChatVideoStagedChip: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Image(systemName: "film")
-                    .font(.caption)
-                    .foregroundStyle(Color.fgMuted)
-                    .accessibilityHidden(true)
-                Text(staged.name)
-                    .font(.footnote)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer(minLength: 0)
-                if let remove {
-                    Button(action: remove) {
-                        Image(systemName: "xmark")
-                            .font(.caption)
-                            .frame(minWidth: 44, minHeight: 44)
-                            .contentShape(.rect)
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Color.fgMuted)
-                    .accessibilityLabel(ChatVideoStrings.remove(staged.name))
-                }
-            }
-            switch staged {
-            case .sending(_, let percent):
-                Text(ChatVideoStrings.sending(percent: percent))
-                    .font(.caption.monospaced())
-                    .foregroundStyle(Color.fgMuted)
-                    .accessibilityAddTraits(.updatesFrequently)
-                ProgressView(value: Double(max(0, min(100, percent ?? 0))), total: 100)
-                    .tint(Color.brandInk)
-                    .accessibilityHidden(true)
-            case .ready(let upload):
-                Text(ChatVideoStrings.stagedSummary(upload))
-                    .font(.caption.monospaced())
-                    .foregroundStyle(Color.fgMuted)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            nameRow
+            detail
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .frame(maxWidth: 480, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 10).fill(Color.fgMuted.opacity(0.08)))
         .accessibilityElement(children: .contain)
+    }
+
+    private var nameRow: some View {
+        HStack(spacing: 6) {
+            ChatVideoFilmIcon()
+            ChatVideoName(name: staged.name)
+            Spacer(minLength: 0)
+            removeButton
+        }
+    }
+
+    @ViewBuilder
+    private var removeButton: some View {
+        if let remove {
+            Button(action: remove) {
+                Image(systemName: "xmark")
+                    .font(.caption)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.fgMuted)
+            .accessibilityLabel(ChatVideoStrings.remove(staged.name))
+        }
+    }
+
+    @ViewBuilder
+    private var detail: some View {
+        switch staged {
+        case .sending(_, let percent):
+            sending(percent)
+        case .ready(let upload):
+            ChatVideoMono(words: ChatVideoStrings.stagedSummary(upload))
+        }
+    }
+
+    private func sending(_ percent: Int?) -> some View {
+        let clamped: Double = Double(max(0, min(100, percent ?? 0)))
+        return VStack(alignment: .leading, spacing: 4) {
+            ChatVideoMono(words: ChatVideoStrings.sending(percent: percent))
+                .accessibilityAddTraits(.updatesFrequently)
+            ProgressView(value: clamped, total: 100)
+                .tint(Color.brandInk)
+                .accessibilityHidden(true)
+        }
+    }
+}
+
+/// While a Photos clip comes across from the picker's process.
+struct ChatVideoReadingLine: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            ProgressView()
+            Text(ChatVideoStrings.readingVideo)
+                .font(.caption)
+                .foregroundStyle(Color.fgMuted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+/// The film glyph at the head of a chip; decoration, so VoiceOver skips it.
+struct ChatVideoFilmIcon: View {
+    var body: some View {
+        Image(systemName: "film")
+            .font(.caption)
+            .foregroundStyle(Color.fgMuted)
+            .accessibilityHidden(true)
+    }
+}
+
+/// A clip's name, on one line, cut in the middle so the ending shows.
+struct ChatVideoName: View {
+    let name: String
+    var body: some View {
+        Text(name)
+            .font(.footnote)
+            .lineLimit(1)
+            .truncationMode(.middle)
+    }
+}
+
+/// A chip's figures, in the monospaced face.
+struct ChatVideoMono: View {
+    let words: String
+    var body: some View {
+        Text(words)
+            .font(.caption.monospaced())
+            .foregroundStyle(Color.fgMuted)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -125,78 +180,113 @@ struct ChatVideoJobChip: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Image(systemName: "film")
-                    .font(.caption)
-                    .foregroundStyle(Color.fgMuted)
-                    .accessibilityHidden(true)
-                Text(job.name)
-                    .font(.footnote)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Text(ChatVideoRules.clock(job.durationS))
-                    .font(.caption.monospaced())
-                    .foregroundStyle(Color.fgMuted)
-            }
-            Text(line)
-                .font(.caption)
-                .fixedSize(horizontal: false, vertical: true)
-                .multilineTextAlignment(.leading)
-                // So VoiceOver hears the progress change rather than having
-                // to go looking for it (Android's `liveRegion`).
-                .accessibilityAddTraits(.updatesFrequently)
-            if let share = ChatVideoRules.progress(job) {
-                ProgressView(value: share)
-                    .tint(Color.brandInk)
-                    .accessibilityLabel(ChatVideoStrings.watched(percent: Int((share * 100).rounded(.down))))
-            }
-            if ChatVideoRules.stopOffered(job) {
-                let busy = video.stopping.contains(job.id)
-                Button {
-                    video.stop(job)
-                } label: {
-                    Text(busy ? ChatVideoStrings.stopping : ChatVideoStrings.stop)
-                        .font(.subheadline)
-                        .frame(minHeight: 44)
-                        .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(Color.errInk)
-                .disabled(busy)
-                .accessibilityHint(ChatVideoStrings.stopHint)
-            }
-            if ChatVideoRules.keptOffered(job) {
-                let open = video.keptOpen.contains(job.id)
-                Button {
-                    video.toggleKept(job)
-                } label: {
-                    HStack(spacing: 4) {
-                        Text(ChatVideoStrings.whatWasKept)
-                        Image(systemName: open ? "chevron.up" : "chevron.down")
-                            .font(.caption)
-                            .accessibilityHidden(true)
-                    }
-                    .font(.subheadline)
-                    .frame(minHeight: 44)
-                    .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(Color.brandInk)
-                .accessibilityValue(open ? "open" : "closed")
-                if open { ChatVideoKeptView(kept: video.kept[job.id]) }
-            }
-            if job.state == "failed", let error = job.error, !error.isEmpty {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(Color.errInk)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            header
+            lineText
+            bar
+            stopButton
+            kept
+            failure
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .frame(maxWidth: 480, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 10).fill(Color.fgMuted.opacity(0.08)))
         .accessibilityElement(children: .contain)
+    }
+
+    private var header: some View {
+        HStack(spacing: 6) {
+            ChatVideoFilmIcon()
+            ChatVideoName(name: job.name)
+            ChatVideoMono(words: ChatVideoRules.clock(job.durationS))
+        }
+    }
+
+    private var lineText: some View {
+        Text(line)
+            .font(.caption)
+            .fixedSize(horizontal: false, vertical: true)
+            .multilineTextAlignment(.leading)
+            // So VoiceOver hears the progress change rather than having to
+            // go looking for it (Android's `liveRegion`).
+            .accessibilityAddTraits(.updatesFrequently)
+    }
+
+    @ViewBuilder
+    private var bar: some View {
+        if let share = ChatVideoRules.progress(job) {
+            ProgressView(value: share)
+                .tint(Color.brandInk)
+                .accessibilityLabel(ChatVideoStrings.watched(percent: Int((share * 100).rounded(.down))))
+        }
+    }
+
+    @ViewBuilder
+    private var stopButton: some View {
+        if ChatVideoRules.stopOffered(job) {
+            ChatVideoStopButton(busy: video.stopping.contains(job.id)) { video.stop(job) }
+        }
+    }
+
+    @ViewBuilder
+    private var kept: some View {
+        if ChatVideoRules.keptOffered(job) {
+            let open: Bool = video.keptOpen.contains(job.id)
+            ChatVideoKeptToggle(open: open) { video.toggleKept(job) }
+            if open { ChatVideoKeptView(kept: video.kept[job.id]) }
+        }
+    }
+
+    @ViewBuilder
+    private var failure: some View {
+        if job.state == "failed", let error = job.error, !error.isEmpty {
+            Text(error)
+                .font(.caption)
+                .foregroundStyle(Color.errInk)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+/// "stop", or "stopping…" while it is asked.
+struct ChatVideoStopButton: View {
+    let busy: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(busy ? ChatVideoStrings.stopping : ChatVideoStrings.stop)
+                .font(.subheadline)
+                .frame(minHeight: 44)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(Color.errInk)
+        .disabled(busy)
+        .accessibilityHint(ChatVideoStrings.stopHint)
+    }
+}
+
+/// "what was kept", with a chevron saying which way it goes.
+struct ChatVideoKeptToggle: View {
+    let open: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Text(ChatVideoStrings.whatWasKept)
+                Image(systemName: open ? "chevron.up" : "chevron.down")
+                    .font(.caption)
+                    .accessibilityHidden(true)
+            }
+            .font(.subheadline)
+            .frame(minHeight: 44)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(Color.brandInk)
+        .accessibilityValue(open ? "open" : "closed")
     }
 }
 
@@ -210,37 +300,66 @@ struct ChatVideoKeptView: View {
         VStack(alignment: .leading, spacing: 4) {
             switch kept {
             case .loaded(let results)?:
-                if results.transcript.isEmpty {
-                    note(ChatVideoStrings.noSpeech)
-                } else {
-                    head(ChatVideoStrings.whatWasSaid)
-                    ForEach(Array(results.transcript.enumerated()), id: \.offset) { _, piece in
-                        timed(piece.startS, piece.text)
-                    }
-                }
-                if !results.frames.isEmpty {
-                    head(ChatVideoStrings.whatThePicturesMightShow)
-                    ForEach(Array(results.frames.enumerated()), id: \.offset) { _, frame in
-                        timed(frame.atS, ChatVideoStrings.mightShow(frame.mightShow))
-                    }
-                    note(ChatVideoStrings.guesses)
-                }
-                note(ChatVideoStrings.videoDeleted)
+                ChatVideoKeptResults(results: results)
             case .failed?:
-                note(ChatVideoStrings.couldNotLoadKept)
+                ChatVideoNote(words: ChatVideoStrings.couldNotLoadKept)
             case .loading?, nil:
-                note(ChatVideoStrings.loading)
+                ChatVideoNote(words: ChatVideoStrings.loading)
+            }
+        }
+    }
+}
+
+/// What was said, what the pictures might show, and the two notes.
+struct ChatVideoKeptResults: View {
+
+    let results: ChatVideoResults
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            said
+            pictures
+            ChatVideoNote(words: ChatVideoStrings.videoDeleted)
+        }
+    }
+
+    @ViewBuilder
+    private var said: some View {
+        if results.transcript.isEmpty {
+            ChatVideoNote(words: ChatVideoStrings.noSpeech)
+        } else {
+            ChatVideoHead(words: ChatVideoStrings.whatWasSaid)
+            ForEach(Array(results.transcript.enumerated()), id: \.offset) { (pair: (offset: Int, element: ChatVideoSpoken)) in
+                ChatVideoTimedLine(at: pair.element.startS, words: pair.element.text)
             }
         }
     }
 
-    private func head(_ words: String) -> some View {
+    @ViewBuilder
+    private var pictures: some View {
+        if !results.frames.isEmpty {
+            ChatVideoHead(words: ChatVideoStrings.whatThePicturesMightShow)
+            ForEach(Array(results.frames.enumerated()), id: \.offset) { (pair: (offset: Int, element: ChatVideoFrame)) in
+                ChatVideoTimedLine(at: pair.element.atS, words: ChatVideoStrings.mightShow(pair.element.mightShow))
+            }
+            ChatVideoNote(words: ChatVideoStrings.guesses)
+        }
+    }
+}
+
+struct ChatVideoHead: View {
+    let words: String
+    var body: some View {
         Text(words)
             .font(.caption.weight(.semibold))
             .accessibilityAddTraits(.isHeader)
     }
+}
 
-    private func timed(_ at: Double, _ words: String) -> some View {
+struct ChatVideoTimedLine: View {
+    let at: Double
+    let words: String
+    var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(ChatVideoRules.clock(at))
                 .font(.caption.monospaced())
@@ -252,8 +371,11 @@ struct ChatVideoKeptView: View {
         }
         .accessibilityElement(children: .combine)
     }
+}
 
-    private func note(_ words: String) -> some View {
+struct ChatVideoNote: View {
+    let words: String
+    var body: some View {
         Text(words)
             .font(.caption)
             .foregroundStyle(Color.fgMuted)
@@ -271,9 +393,9 @@ struct ChatVideoRowChips: View {
     let newestUnsent: Bool
 
     var body: some View {
-        let jobs = video.jobs(under: message.id)
+        let jobs: [ChatVideoJob] = video.jobs(under: message.id)
         if !jobs.isEmpty {
-            ForEach(jobs) { job in
+            ForEach(jobs) { (job: ChatVideoJob) in
                 ChatVideoJobChip(job: job, video: video)
             }
         } else if newestUnsent, message.id == nil, let sent = video.justSent {

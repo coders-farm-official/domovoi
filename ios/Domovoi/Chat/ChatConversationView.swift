@@ -85,7 +85,26 @@ struct ChatConversationView: View {
         }
     }
 
+    /// **In stages, each a separate expression**: the stack, the models it
+    /// builds, what it watches, the toasts it forwards, then the sheet.
+    /// CI run 44013765992 found the one long chain this used to be — with
+    /// the video's model, its refresh and its toast added — past what the
+    /// type checker would solve in reasonable time
+    /// (`ChatConversationView.swift:88`). Each stage below is checked on its
+    /// own, with a concrete input type, and adds nothing but its modifiers.
     var body: some View {
+        toasts(watchers(stack))
+            // **One `.sheet` over four cases**, which is ``ChatSheet``'s shape and
+            // not a preference: several `.sheet` modifiers on one view do not
+            // reliably coexist.
+            .sheet(item: $sheet) { (which: ChatMoreSheet) in
+                if let more { sheetBody(which, more) }
+            }
+    }
+
+    /// The title row, the transcript, the job cards and the composer.
+    @ViewBuilder
+    private var stack: some View {
         VStack(spacing: 0) {
             // **The way out is always pinned.** At an accessibility size the
             // name, the place and the internet switch go with the scroll
@@ -112,111 +131,120 @@ struct ChatConversationView: View {
                 composer
             }
         }
-        .task {
-            if more == nil {
-                more = ChatMoreModel(
-                    in: model.container,
-                    deviceID: model.deviceID,
-                    // The re-read after a card answer or a spoken turn, which
-                    // is what `ChatScreen.kt:917` does: the kept rows arrive
-                    // in the transcript rather than being invented from the
-                    // stream.
-                    reopen: { [weak chat] in
-                        guard let chat, let id = chat.openThread else { return }
-                        chat.open(thread: id, title: chat.openTitle)
-                    }
-                )
-            }
-            if draft == nil {
-                draft = ChatMoreDraftModel(in: model.container, deviceID: model.deviceID)
-            }
-            if video == nil {
-                let measure: @Sendable (URL) async -> ChatVideoMeasure
-                if let fake = ChatVideoFake.active {
-                    measure = ChatVideoFake.measure(fake)
-                } else {
-                    measure = { await ChatVideoMeasure.of($0) }
+    }
+
+    /// Build the screen's own models once, then point them at the thread.
+    private func prepareModels() {
+        if more == nil {
+            more = ChatMoreModel(
+                in: model.container,
+                deviceID: model.deviceID,
+                // The re-read after a card answer or a spoken turn, which
+                // is what `ChatScreen.kt:917` does: the kept rows arrive
+                // in the transcript rather than being invented from the
+                // stream.
+                reopen: { [weak chat] in
+                    guard let chat, let id = chat.openThread else { return }
+                    chat.open(thread: id, title: chat.openTitle)
                 }
-                video = ChatVideoModel(
-                    in: model.container,
-                    measure: measure,
-                    // A job that ended has written its summary into the
-                    // thread: read it again, in place (Android reloads the
-                    // thread when the job ends too).
-                    onEnded: { [weak chat] in chat?.reloadOpenThread() }
-                )
-            }
-            openExtras()
+            )
         }
-        // A thread opened from this screen (a new chat's first send makes
-        // one) or from the list.
-        .onChange(of: chat.openThread) { _, _ in openExtras() }
-        // A reopen, a pagination or a `chat.changed` moved the transcript, so
-        // the extras -- which are a **second read of the same route** -- have
-        // to follow it. ``ChatMoreDetail`` says at length why there are two.
-        .onChange(of: chat.transcript.messages.count) { _, _ in
-            more?.refresh()
-            video?.refresh()
+        if draft == nil {
+            draft = ChatMoreDraftModel(in: model.container, deviceID: model.deviceID)
         }
-        // **And the end of a stream, which the count cannot see.** The count
-        // changes exactly once per send, at `ChatTranscript.beginSend`, which
-        // appends the user row and the pending reply *before* the POST goes
-        // out: `apply("done")` then mutates `messages[index]` in place and
-        // `ChatModel.endStream()` only refreshes the lists. So the only
-        // re-read a send used to cause saw the thread as it was *before* the
-        // question was stored, and nothing a reply carries -- a mid-answer
-        // `lookup_permission` card (minted on the stream, `chat.py:1862`, and
-        // only ever read back from `stats.lookup_card`), a draft card, source
-        // chips, document notes, a long-document job the send started -- was
-        // ever fetched until the thread was closed and reopened.
-        //
-        // `sending` goes false on the far edge of every send, including one
-        // that failed and still wrote a row, which is why it and not
-        // `messages.last?.id` is the thing watched.
-        .onChange(of: chat.sending) { _, now in
-            if !now {
+        if video == nil {
+            video = makeVideoModel()
+        }
+        openExtras()
+    }
+
+    /// The video's model, with the UI tests' measure when their clip is in
+    /// use (``ChatVideoFake``, DEBUG only).
+    private func makeVideoModel() -> ChatVideoModel {
+        let measure: @Sendable (URL) async -> ChatVideoMeasure
+        if let fake = ChatVideoFake.active {
+            measure = ChatVideoFake.measure(fake)
+        } else {
+            measure = { (url: URL) async -> ChatVideoMeasure in await ChatVideoMeasure.of(url) }
+        }
+        // A job that ended has written its summary into the thread: read it
+        // again, in place (Android reloads the thread when the job ends too).
+        let ended: @MainActor () -> Void = { [weak chat] in chat?.reloadOpenThread() }
+        return ChatVideoModel(in: model.container, measure: measure, onEnded: ended)
+    }
+
+    /// What the screen follows: the models' first build, the thread, the
+    /// transcript, the end of a stream, the lists and the house.
+    private func watchers(_ content: some View) -> some View {
+        content
+            .task { prepareModels() }
+            // A thread opened from this screen (a new chat's first send makes
+            // one) or from the list.
+            .onChange(of: chat.openThread) { (_: Int64?, _: Int64?) in openExtras() }
+            // A reopen, a pagination or a `chat.changed` moved the transcript, so
+            // the extras -- which are a **second read of the same route** -- have
+            // to follow it. ``ChatMoreDetail`` says at length why there are two.
+            .onChange(of: chat.transcript.messages.count) { (_: Int, _: Int) in
                 more?.refresh()
-                // A video's job exists from the moment its send answered.
                 video?.refresh()
             }
-        }
-        // Either list landing can be the first sight of this thread's own
-        // internet flag (``seedInternet()``).
-        .onChange(of: chat.threads.data?.threads.count) { _, _ in seedInternet() }
-        .onChange(of: chat.archivedThreads.data?.threads.count) { _, _ in seedInternet() }
-        .onChange(of: model.inputs.serverURL) { _, _ in
-            more?.serverChanged()
-            draft?.serverChanged()
-            video?.serverChanged()
-        }
-        // **The toast is the shell's**, as ``ChatView`` does it: a toast about
-        // a stop that failed must outlive this screen.
-        //
-        // `said` is a `String??`: the model is optional until `.task` has
-        // built it and its toast is optional too, so one `??  nil` flattens
-        // the pair before it is unwrapped. Two levels of optional read as one
-        // in a `guard let`, which would have handed `showToast` an optional.
-        .onChange(of: more?.toast) { _, said in
-            guard let text = said ?? nil else { return }
-            model.showToast(text)
-            more?.setToast(nil)
-        }
-        .onChange(of: draft?.toast) { _, said in
-            guard let text = said ?? nil else { return }
-            model.showToast(text)
-            draft?.setToast(nil)
-        }
-        .onChange(of: video?.toast) { _, said in
-            guard let text = said ?? nil else { return }
-            model.showToast(text)
-            video?.setToast(nil)
-        }
-        // **One `.sheet` over four cases**, which is ``ChatSheet``'s shape and
-        // not a preference: several `.sheet` modifiers on one view do not
-        // reliably coexist.
-        .sheet(item: $sheet) { which in
-            if let more { sheetBody(which, more) }
-        }
+            // **And the end of a stream, which the count cannot see.** The count
+            // changes exactly once per send, at `ChatTranscript.beginSend`, which
+            // appends the user row and the pending reply *before* the POST goes
+            // out: `apply("done")` then mutates `messages[index]` in place and
+            // `ChatModel.endStream()` only refreshes the lists. So the only
+            // re-read a send used to cause saw the thread as it was *before* the
+            // question was stored, and nothing a reply carries -- a mid-answer
+            // `lookup_permission` card (minted on the stream, `chat.py:1862`, and
+            // only ever read back from `stats.lookup_card`), a draft card, source
+            // chips, document notes, a long-document job the send started -- was
+            // ever fetched until the thread was closed and reopened.
+            //
+            // `sending` goes false on the far edge of every send, including one
+            // that failed and still wrote a row, which is why it and not
+            // `messages.last?.id` is the thing watched.
+            .onChange(of: chat.sending) { (_: Bool, now: Bool) in
+                if !now {
+                    more?.refresh()
+                    // A video's job exists from the moment its send answered.
+                    video?.refresh()
+                }
+            }
+            // Either list landing can be the first sight of this thread's own
+            // internet flag (``seedInternet()``).
+            .onChange(of: chat.threads.data?.threads.count) { (_: Int?, _: Int?) in seedInternet() }
+            .onChange(of: chat.archivedThreads.data?.threads.count) { (_: Int?, _: Int?) in seedInternet() }
+            .onChange(of: model.inputs.serverURL) {
+                more?.serverChanged()
+                draft?.serverChanged()
+                video?.serverChanged()
+            }
+    }
+
+    /// **The toast is the shell's**, as ``ChatView`` does it: a toast about
+    /// a stop that failed must outlive this screen.
+    ///
+    /// `said` is a `String??`: the model is optional until `.task` has
+    /// built it and its toast is optional too, so one `??  nil` flattens
+    /// the pair before it is unwrapped. Two levels of optional read as one
+    /// in a `guard let`, which would have handed `showToast` an optional.
+    private func toasts(_ content: some View) -> some View {
+        content
+            .onChange(of: more?.toast) { (_: String??, said: String??) in
+                guard let text = said ?? nil else { return }
+                model.showToast(text)
+                more?.setToast(nil)
+            }
+            .onChange(of: draft?.toast) { (_: String??, said: String??) in
+                guard let text = said ?? nil else { return }
+                model.showToast(text)
+                draft?.setToast(nil)
+            }
+            .onChange(of: video?.toast) { (_: String??, said: String??) in
+                guard let text = said ?? nil else { return }
+                model.showToast(text)
+                video?.setToast(nil)
+            }
     }
 
     /// Point ``ChatMoreModel`` at the thread this screen has open.
@@ -645,7 +673,7 @@ struct ChatConversationView: View {
                                 isLastRow: index == messages.count - 1,
                                 actions: rowActions,
                                 video: video,
-                                newestUnsent: message.ordinal == newestUnsentOrdinal
+                                newestUnsent: isNewestUnsent(message)
                             )
                             .id(message.ordinal)
                         }
@@ -813,8 +841,12 @@ struct ChatConversationView: View {
     /// The person's newest row that has no id yet -- the one a clip just
     /// sent is drawn under until the re-read brings its job
     /// (``ChatVideoModel/justSent``).
-    private var newestUnsentOrdinal: Int? {
-        chat.transcript.messages.last { $0.role == "user" && $0.id == nil }?.ordinal
+    private func isNewestUnsent(_ message: ChatLiveMessage) -> Bool {
+        guard message.role == "user", message.id == nil else { return false }
+        let newest: ChatLiveMessage? = chat.transcript.messages.last { (row: ChatLiveMessage) -> Bool in
+            row.role == "user" && row.id == nil
+        }
+        return newest?.ordinal == message.ordinal
     }
 
     /// The transcript's accessibility identifier — see ``transcript``.
@@ -956,189 +988,217 @@ struct ChatConversationView: View {
     private var composer: some View {
         if chat.composerOffered {
             Divider()
-            if let video, let staged = video.staged {
-                ChatVideoStagedChip(staged: staged) { video.removeStaged() }
-                    .padding(.horizontal, 12)
-                    .padding(.top, 8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            if readingVideo {
-                HStack(spacing: 8) {
-                    ProgressView()
-                    Text(ChatVideoStrings.readingVideo)
-                        .font(.caption)
-                        .foregroundStyle(Color.fgMuted)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+            videoStrip
+            videoPickers(composerRow)
+        }
+    }
+
+    /// Above the box: the clip on the composer, and the wait while a Photos
+    /// clip comes across. Its own property so ``composer`` stays a few short
+    /// expressions (CI run 44013765992: the type checker gave up on one long
+    /// one).
+    @ViewBuilder
+    private var videoStrip: some View {
+        if let video, let staged = video.staged {
+            ChatVideoStagedChip(staged: staged, remove: { video.removeStaged() })
                 .padding(.horizontal, 12)
                 .padding(.top, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        if readingVideo {
+            ChatVideoReadingLine()
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// The paperclip, only where the house can watch a video.
+    @ViewBuilder
+    private var paperclip: some View {
+        if videoOffered {
+            ChatVideoAttachMenu(
+                enabled: video?.staged == nil && !readingVideo,
+                photos: { pickVideo(fromPhotos: true) },
+                files: { pickVideo(fromPhotos: false) }
+            )
+        }
+    }
+
+    /// The paperclip, the box, and the mic or the send.
+    private var composerRow: some View {
+        HStack(spacing: 8) {
+            paperclip
+            composerField
+            micOrSend
+        }
+        .padding(12)
+    }
+
+    private var composerField: some View {
+        // **No `submitLabel(.send)` and no `onSubmit`.** A
+        // vertical-axis field is a multi-line one, and its Return key
+        // puts in a newline rather than submitting, so `onSubmit`
+        // never fires. Labelling that key `send` made a control that
+        // said one thing and did another: a Simulator run on
+        // 2026-11-02 watched it swallow a whole message, and the only
+        // reason it was caught is that a case reached for the key by
+        // its word and got the keyboard's instead of this view's
+        // button. The key now says `return` and puts in a newline,
+        // which is what it does; the button beside it is what sends.
+        TextField(
+            ChatStrings.composerHint,
+            text: $typed,
+            // Owner answer 65's vertical leg. Train I005 measured one vertical-axis
+            // field (Music's, at AX5: 1.70:1 with both `UITextField` placeholder
+            // setters swizzled), and the swizzle did not reach it, so the hint is
+            // passed as a prompt here too; whether the swizzle would reach this
+            // particular field is unmeasured.
+            prompt: ShellHintPrompt.text(ChatStrings.composerHint),
+            axis: .vertical
+        )
+            .textFieldStyle(.roundedBorder)
+            .lineLimit(1...5)
+            .accessibilityLabel(ChatStrings.composerHint)
+    }
+
+    @ViewBuilder
+    private var micOrSend: some View {
+        // **The mic or the send button, never both** -- Android's one
+        // rule here (`ChatScreen.kt:1157`, `:1165`), and
+        // ``ChatMoreVoiceRules/micOffered(typed:)`` is the gate.
+        //
+        // And only with a thread: `startVoice` makes one first on
+        // Android (`:466`), `POST /threads/{id}/voice` needs an id,
+        // and a thread is ``ChatModel``'s to create. So a brand-new
+        // chat keeps the send button until its first message has made
+        // the thread -- rather than a mic that would 404.
+        // A clip on the composer takes the mic's place: the clip is
+        // the message, and it goes with the send.
+        if let more, chat.openThread != nil, video?.staged == nil, more.micOffered(typed: typed) {
+            Button {
+                sheet = .talk
+            } label: {
+                Image(systemName: "mic")
+                    .font(.body)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(.rect)
             }
-            HStack(spacing: 8) {
-                if videoOffered {
-                    ChatVideoAttachMenu(
-                        enabled: video?.staged == nil && !readingVideo,
-                        photos: { pickVideo(fromPhotos: true) },
-                        files: { pickVideo(fromPhotos: false) }
-                    )
-                }
-                // **No `submitLabel(.send)` and no `onSubmit`.** A
-                // vertical-axis field is a multi-line one, and its Return key
-                // puts in a newline rather than submitting, so `onSubmit`
-                // never fires. Labelling that key `send` made a control that
-                // said one thing and did another: a Simulator run on
-                // 2026-11-02 watched it swallow a whole message, and the only
-                // reason it was caught is that a case reached for the key by
-                // its word and got the keyboard's instead of this view's
-                // button. The key now says `return` and puts in a newline,
-                // which is what it does; the button beside it is what sends.
-                TextField(
-                    ChatStrings.composerHint,
-                    text: $typed,
-                    // Owner answer 65's vertical leg. Train I005 measured one vertical-axis
-                    // field (Music's, at AX5: 1.70:1 with both `UITextField` placeholder
-                    // setters swizzled), and the swizzle did not reach it, so the hint is
-                    // passed as a prompt here too; whether the swizzle would reach this
-                    // particular field is unmeasured.
-                    prompt: ShellHintPrompt.text(ChatStrings.composerHint),
-                    axis: .vertical
-                )
-                    .textFieldStyle(.roundedBorder)
-                    .lineLimit(1...5)
-                    .accessibilityLabel(ChatStrings.composerHint)
-                // **The mic or the send button, never both** -- Android's one
-                // rule here (`ChatScreen.kt:1157`, `:1165`), and
-                // ``ChatMoreVoiceRules/micOffered(typed:)`` is the gate.
-                //
-                // And only with a thread: `startVoice` makes one first on
-                // Android (`:466`), `POST /threads/{id}/voice` needs an id,
-                // and a thread is ``ChatModel``'s to create. So a brand-new
-                // chat keeps the send button until its first message has made
-                // the thread -- rather than a mic that would 404.
-                // A clip on the composer takes the mic's place: the clip is
-                // the message, and it goes with the send.
-                if let more, chat.openThread != nil, video?.staged == nil, more.micOffered(typed: typed) {
-                    Button {
-                        sheet = .talk
-                    } label: {
-                        Image(systemName: "mic")
-                            .font(.body)
-                            .frame(minWidth: 44, minHeight: 44)
-                            .contentShape(.rect)
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Color.brandInk)
-                    .accessibilityLabel(ChatMoreStrings.talk)
-                    .disabled(!chat.canSend)
-                } else if ChatVideoRules.sendOffered(typed: typed, videoReady: video?.staged != nil) {
-                    // **Something is typed** — ``ChatRules/sendOffered(typed:)``,
-                    // which is the send's own question and deliberately not the
-                    // mic's read backwards. That rule's doc comment has the
-                    // argument: ``ChatMoreModel/micOffered(typed:)`` carries a
-                    // device-id gate as well, and `!micOffered` would have made
-                    // that gate a gate on the send too. Android's pair is
-                    // `ChatScreen.kt:1157` and `:1165`, and the two are still
-                    // never both drawn: with a blank box and a thread the first
-                    // branch takes it, and with words in the box this one does.
-                    //
-                    // **Drawn and disabled while a reply is being written** —
-                    // the owner's answer 70 (2026-11-04): "greyed-out send while a
-                    // reply is written, as Android", under his standing rule 1,
-                    // that a small detail follows Android. Android draws this
-                    // same spot's button `enabled = canSend` with a faint tint
-                    // (`ChatScreen.kt:1166-1171`), and inside this composer
-                    // `chat.canSend` is exactly `!chat.sending`:
-                    // ``ChatModel/canSend`` is `composerOffered && !sending`
-                    // and ``ChatModel/composerOffered`` is this whole
-                    // composer's own precondition. So the `.disabled` below
-                    // means *a reply is being written* and nothing else. The
-                    // field stays live, the typed words stay in it, and the
-                    // button re-enables itself when the reply lands. This
-                    // replaces the empty spot that used to be drawn here, the
-                    // one departure from Android this batch asked him about.
-                    //
-                    // ``ChatModel/send(_:)`` still queues nothing — its guard
-                    // is `!content.isEmpty, canSend, conversationOpen`
-                    // (`ChatModel.swift:607`) — so this is not a button that
-                    // will fire later; it is Android's greyed-out one, which is
-                    // what the answer chose, and `.disabled` is what keeps it
-                    // out of VoiceOver's reach: it reads the word and says
-                    // *dimmed*, and it is not hittable.
-                    //
-                    // **The label's colour is named, not inherited** (D8,
-                    // the owner's answer 8: "same send-key fix on the house
-                    // chat's composer"). `.borderedProminent` draws a WHITE
-                    // label on the accent, and white on ``Color/brand`` is
-                    // **2.05:1** — the arithmetic is in the token's own doc
-                    // comment, which says to use ``Color/brandFg`` for text
-                    // drawn on the amber. Measured 8.49:1 light, 9.87:1 dark.
-                    // ``AssistantPhoneConversationView/composer`` is where
-                    // this was fixed first and is the model it is copied from.
-                    //
-                    // **Both looks are ``BrandFillButtonStyle``'s**, one
-                    // unconditional style (unit mx-ink, 2026-11-05): the
-                    // same ``Color/brandFg`` on ``Color/brand`` while it can
-                    // send, and ``Color/fgMuted`` on the composer's own
-                    // surface, no fill, while it cannot. It replaced
-                    // `ChatSendSkin`, whose disabled half was `.bordered` +
-                    // `.tint(Color.brandInk)` with an explicit brandInk label,
-                    // and whose `if`/`else` made the button a different view
-                    // on each side of the flip. A *disabled* `.bordered` does
-                    // not draw the tint wash: it draws a translucent grey
-                    // fill. Train I005 has those pixels (Rooms' disabled
-                    // `queued`, rooms-23-played-no-fulfiller, sampled at 3x):
-                    // rgb(222,222,224) over a card of rgb(241,241,242), which
-                    // is `secondarySystemFill` (rgba(120,120,128,0.16))
-                    // exactly, with SwiftUI's grey label rgb(186,186,189) on
-                    // it at **1.44:1**. This composer is white, and the same
-                    // fill over white is #E9E9EB. The old send set brandInk on
-                    // its label; if that survived the disabled state the pair
-                    // here was brandInk on #E9E9EB, **4.67:1** (arithmetic,
-                    // not a measurement of the send itself), which is OVER
-                    // 4.5. So the measured defect is the grey-label branch
-                    // only; the other branch was a grey chip that read as a
-                    // different control from the amber one, not a contrast
-                    // failure. The UI case reads both the label's contrast and
-                    // whether any fill is behind it, so either branch fails it.
-                    Button {
-                        send()
-                    } label: {
-                        Text(ChatStrings.send)
-                    }
-                    .buttonStyle(BrandFillButtonStyle())
-                    // And while a clip is still going up: the message waits
-                    // for its token (the dashboard and Android do the same).
-                    .disabled(!chat.canSend || video?.uploading == true)
-                }
-                // **Nothing at all with a blank box and no mic to put there**
-                // (D8). That is the brand-new chat: Android's spot holds the
-                // mic whenever the draft is blank (`AssistantChat.kt:379-390`,
-                // `ChatScreen.kt:1157`) and never a greyed send, and here the
-                // mic needs a thread (`POST /threads/{id}/voice` wants an id),
-                // so with neither there is nothing this spot can honestly
-                // offer. A send that sends nothing — ``ChatModel/send(_:)``
-                // refuses a blank message — is the control
-                // [[no-misleading-controls]] is about, and the dimmed
-                // `.borderedProminent` that stood here is also what Apple's
-                // audit failed on contrast in train S005: grey glyphs on a
-                // grey fill. (That is the shape ``BrandFillButtonStyle``
-                // avoids for the reply-in-progress state above.)
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.brandInk)
+            .accessibilityLabel(ChatMoreStrings.talk)
+            .disabled(!chat.canSend)
+        } else if ChatVideoRules.sendOffered(typed: typed, videoReady: video?.staged != nil) {
+            // **Something is typed** — ``ChatRules/sendOffered(typed:)``,
+            // which is the send's own question and deliberately not the
+            // mic's read backwards. That rule's doc comment has the
+            // argument: ``ChatMoreModel/micOffered(typed:)`` carries a
+            // device-id gate as well, and `!micOffered` would have made
+            // that gate a gate on the send too. Android's pair is
+            // `ChatScreen.kt:1157` and `:1165`, and the two are still
+            // never both drawn: with a blank box and a thread the first
+            // branch takes it, and with words in the box this one does.
+            //
+            // **Drawn and disabled while a reply is being written** —
+            // the owner's answer 70 (2026-11-04): "greyed-out send while a
+            // reply is written, as Android", under his standing rule 1,
+            // that a small detail follows Android. Android draws this
+            // same spot's button `enabled = canSend` with a faint tint
+            // (`ChatScreen.kt:1166-1171`), and inside this composer
+            // `chat.canSend` is exactly `!chat.sending`:
+            // ``ChatModel/canSend`` is `composerOffered && !sending`
+            // and ``ChatModel/composerOffered`` is this whole
+            // composer's own precondition. So the `.disabled` below
+            // means *a reply is being written* and nothing else. The
+            // field stays live, the typed words stay in it, and the
+            // button re-enables itself when the reply lands. This
+            // replaces the empty spot that used to be drawn here, the
+            // one departure from Android this batch asked him about.
+            //
+            // ``ChatModel/send(_:)`` still queues nothing — its guard
+            // is `!content.isEmpty, canSend, conversationOpen`
+            // (`ChatModel.swift:607`) — so this is not a button that
+            // will fire later; it is Android's greyed-out one, which is
+            // what the answer chose, and `.disabled` is what keeps it
+            // out of VoiceOver's reach: it reads the word and says
+            // *dimmed*, and it is not hittable.
+            //
+            // **The label's colour is named, not inherited** (D8,
+            // the owner's answer 8: "same send-key fix on the house
+            // chat's composer"). `.borderedProminent` draws a WHITE
+            // label on the accent, and white on ``Color/brand`` is
+            // **2.05:1** — the arithmetic is in the token's own doc
+            // comment, which says to use ``Color/brandFg`` for text
+            // drawn on the amber. Measured 8.49:1 light, 9.87:1 dark.
+            // ``AssistantPhoneConversationView/composer`` is where
+            // this was fixed first and is the model it is copied from.
+            //
+            // **Both looks are ``BrandFillButtonStyle``'s**, one
+            // unconditional style (unit mx-ink, 2026-11-05): the
+            // same ``Color/brandFg`` on ``Color/brand`` while it can
+            // send, and ``Color/fgMuted`` on the composer's own
+            // surface, no fill, while it cannot. It replaced
+            // `ChatSendSkin`, whose disabled half was `.bordered` +
+            // `.tint(Color.brandInk)` with an explicit brandInk label,
+            // and whose `if`/`else` made the button a different view
+            // on each side of the flip. A *disabled* `.bordered` does
+            // not draw the tint wash: it draws a translucent grey
+            // fill. Train I005 has those pixels (Rooms' disabled
+            // `queued`, rooms-23-played-no-fulfiller, sampled at 3x):
+            // rgb(222,222,224) over a card of rgb(241,241,242), which
+            // is `secondarySystemFill` (rgba(120,120,128,0.16))
+            // exactly, with SwiftUI's grey label rgb(186,186,189) on
+            // it at **1.44:1**. This composer is white, and the same
+            // fill over white is #E9E9EB. The old send set brandInk on
+            // its label; if that survived the disabled state the pair
+            // here was brandInk on #E9E9EB, **4.67:1** (arithmetic,
+            // not a measurement of the send itself), which is OVER
+            // 4.5. So the measured defect is the grey-label branch
+            // only; the other branch was a grey chip that read as a
+            // different control from the amber one, not a contrast
+            // failure. The UI case reads both the label's contrast and
+            // whether any fill is behind it, so either branch fails it.
+            Button {
+                send()
+            } label: {
+                Text(ChatStrings.send)
             }
-            .padding(12)
+            .buttonStyle(BrandFillButtonStyle())
+            // And while a clip is still going up: the message waits
+            // for its token (the dashboard and Android do the same).
+            .disabled(!chat.canSend || video?.uploading == true)
+        }
+        // **Nothing at all with a blank box and no mic to put there**
+        // (D8). That is the brand-new chat: Android's spot holds the
+        // mic whenever the draft is blank (`AssistantChat.kt:379-390`,
+        // `ChatScreen.kt:1157`) and never a greyed send, and here the
+        // mic needs a thread (`POST /threads/{id}/voice` wants an id),
+        // so with neither there is nothing this spot can honestly
+        // offer. A send that sends nothing — ``ChatModel/send(_:)``
+        // refuses a blank message — is the control
+        // [[no-misleading-controls]] is about, and the dimmed
+        // `.borderedProminent` that stood here is also what Apple's
+        // audit failed on contrast in train S005: grey glyphs on a
+        // grey fill. (That is the shape ``BrandFillButtonStyle``
+        // avoids for the reply-in-progress state above.)
+    }
+
+    /// The two doors' system sheets, and what a Photos pick does.
+    private func videoPickers(_ content: some View) -> some View {
+        content
             .photosPicker(isPresented: $pickingPhoto, selection: $photoItem, matching: .videos)
             .fileImporter(
                 isPresented: $importingVideo,
                 allowedContentTypes: ChatVideoFiles.types,
                 allowsMultipleSelection: false
-            ) { result in
+            ) { (result: Result<[URL], any Error>) in
                 guard case .success(let urls) = result, let url = urls.first else { return }
                 attachVideo(ChatVideoFiles.file(at: url))
             }
-            .onChange(of: photoItem) { _, item in
+            .onChange(of: photoItem) { (_: PhotosPickerItem?, item: PhotosPickerItem?) in
                 guard let item else { return }
                 Task { await readPhoto(item) }
             }
-        }
     }
 
     private func send() {
@@ -1240,11 +1300,7 @@ struct ChatBubbleView: View {
                 ChatMoreRowBottom(
                     message: message, more: more, isLastRow: isLastRow, actions: actions
                 )
-                // Under the person's own message, as the job's `message_id`
-                // says (Android and the dashboard draw it there too).
-                if mine, let video {
-                    ChatVideoRowChips(message: message, video: video, newestUnsent: newestUnsent)
-                }
+                videoChips
             }
             .padding(10)
             .background(
@@ -1254,6 +1310,16 @@ struct ChatBubbleView: View {
             if !mine { Spacer(minLength: 32) }
         }
         .frame(maxWidth: .infinity, alignment: mine ? .trailing : .leading)
+    }
+
+    /// Under the person's own message, as the job's `message_id` says
+    /// (Android and the dashboard draw it there too). A property of its own
+    /// so ``body`` stays the expression it was.
+    @ViewBuilder
+    private var videoChips: some View {
+        if mine, let video {
+            ChatVideoRowChips(message: message, video: video, newestUnsent: newestUnsent)
+        }
     }
 
     @ViewBuilder
