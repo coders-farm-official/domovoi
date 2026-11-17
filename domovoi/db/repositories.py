@@ -1236,6 +1236,58 @@ class VoiceProfilesRepository:
             for r in result.all()
         ]
 
+    async def replace_embedding(
+        self, sample_id: int, person_id: int, embedding: bytes, sample_seconds: float | None,
+    ) -> bool:
+        """Put a new embedding in one of ``person_id``'s samples (the
+        introduction's, as it hears more of the voice: handlers/
+        voice_profile.py). False when the sample is gone (the person was
+        forgotten since)."""
+        result = await self.s.execute(
+            text(
+                """
+                UPDATE voice_profiles
+                   SET embedding = :embedding, sample_seconds = :secs
+                 WHERE id = :id AND person_id = :pid
+                """
+            ),
+            {"id": int(sample_id), "pid": int(person_id), "embedding": embedding,
+             "secs": sample_seconds},
+        )
+        return bool(result.rowcount)
+
+    async def room_samples(
+        self, person_id: int, room_id: str, model: str,
+    ) -> list[tuple[int, float | None]]:
+        """``(id, sample_seconds)`` of ``person_id``'s SATELLITE samples
+        from ``room_id``, oldest first."""
+        rows = await self.s.execute(
+            text(
+                """
+                SELECT id, sample_seconds FROM voice_profiles
+                 WHERE person_id = :pid AND room_id = :room AND model = :model
+                   AND source = 'satellite'
+                 ORDER BY id
+                """
+            ),
+            {"pid": int(person_id), "room": room_id, "model": model},
+        )
+        return [(int(r[0]), None if r[1] is None else float(r[1])) for r in rows.all()]
+
+    async def room_sample_count(self, person_id: int, room_id: str, model: str) -> int:
+        """How many SATELLITE samples ``person_id`` has from ``room_id``."""
+        row = await self.s.execute(
+            text(
+                """
+                SELECT COUNT(*) FROM voice_profiles
+                 WHERE person_id = :pid AND room_id = :room AND model = :model
+                   AND source = 'satellite'
+                """
+            ),
+            {"pid": int(person_id), "room": room_id, "model": model},
+        )
+        return int(row.scalar_one())
+
     async def delete_samples(self, person_id: int, ids: list[int]) -> int:
         """Delete these samples of ``person_id`` (and, by V029's cascade,
         anything learned from them). Returns how many rows the statement

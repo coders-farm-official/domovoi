@@ -66,6 +66,9 @@ own phones.
    prints the `.aab` path (`android\app\build\outputs\bundle\release-signed\domovoi-<versionName>-<versionCode>.aab`,
    where `<versionCode>` is the bundle's own, base\*10),
    its SHA-256 and the certificate's SHA-256. Bash: `bash android/scripts/play-bundle.sh`.
+   Upload that file. Gradle's unsigned `bundle\release\app-release.aab`
+   is what Play refuses ("All uploaded bundles must be signed"); the
+   script removes it once the signed copy passes its checks.
 
 ## 1. Create the app
 

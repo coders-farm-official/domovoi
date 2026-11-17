@@ -409,6 +409,42 @@ public func groupChipText(_ room: HomeRoom) -> String? {
     return withText.isEmpty ? nil : withText
 }
 
+// MARK: - a room's stop
+
+/// A stop button's name (`HomeStopTitle`, `home.jsx` ~:699; `NPCard`,
+/// `music.jsx` ~:227). Since 2026-11-15 a stop in a room of a group stops
+/// **every room of it**, as pause pauses them, so the button says so:
+/// "stop Upstairs: office, garage", or "stop the group: office, garage" for
+/// rooms joined one by one (an empty name is no name, the web's
+/// `g.name || 'the group'`). A room alone — or a group down to one room —
+/// keeps `plain` ("stop kitchen" on Home, "stop" on Music).
+///
+/// The web has no "stop just this room" button: "leave the group" in the
+/// share menu is that stop, and the stop request stays the bare one (the
+/// server's default scope is the group).
+public func groupStopLabel(_ group: NowPlayingGroup?, plain: String) -> String {
+    guard let group, group.rooms.count >= 2 else { return plain }
+    let name = group.name.flatMap { $0.isEmpty ? nil : $0 } ?? GroupStrings.theGroup
+    return "\(GroupStrings.stopPrefix)\(name): \(group.rooms.joined(separator: ", "))"
+}
+
+/// "Stop and close" while casting to a room of a group: it stops the whole
+/// group too, so the web's stop words follow it — "Stop and close · stop
+/// the group: office, garage". The web's own "×" has no group words (it
+/// never changed); this app's rule that a control says what it does does.
+public func stopAndCloseLabel(_ group: NowPlayingGroup?) -> String {
+    let stop = groupStopLabel(group, plain: "")
+    return stop.isEmpty ? MusicMoreStrings.stopAndClose : MusicMoreStrings.stopAndClose + HomeRoomStrings.middot + stop
+}
+
+/// The group the player's stop reaches: the cast room's, from a reading of
+/// **that** room — a reading of a room the cast has left says nothing about
+/// this one. Nil while the phone plays itself: its stop is its own.
+public func castStopGroup(target: MusicPlayTarget, remote: MusicRemoteNowPlaying?) -> NowPlayingGroup? {
+    guard let room = target.roomID, let remote, remote.roomID == room else { return nil }
+    return remote.group
+}
+
 // MARK: - a room's queue
 
 /// The line over a queue a room shares (`music.jsx` ~:1796): "Upstairs ·
@@ -453,6 +489,9 @@ public enum GroupStrings {
     public static func joinHint(_ room: String) -> String { "hear what plays in \(room)" }
     public static let leaveTheGroup = "leave the group"
     public static let leaveHint = "this room stops, the others play on"
+    /// A grouped room's stop button (``groupStopLabel(_:plain:)``).
+    public static let stopPrefix = "stop "
+    public static let theGroup = "the group"
     public static let withPrefix = "with "
     public static let done = "done"
     public static func leftTheGroup(_ room: String) -> String { "\(room) left the group" }

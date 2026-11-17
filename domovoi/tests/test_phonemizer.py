@@ -381,3 +381,45 @@ def test_ids_with_no_sound_are_known():
     assert not speaks_anything(phoneme_ids(". , !"))
     assert not speaks_anything(phoneme_ids(""))
     assert m["^"] and m["$"] and m["_"]
+
+
+@pytest.mark.parametrize(
+    ("text", "said"),
+    [
+        ("2020s", "twenty twenties"),
+        ("the 1990s", "the nineteen nineties"),
+        ("1900s", "nineteen hundreds"),
+        ("2000s", "two thousands"),
+        ("2010s", "twenty tens"),
+        ("80s", "eighties"),
+        ("'80s", "eighties"),
+        ("60s", "sixties"),
+        ("1980's", "nineteen eighties"),
+        ("the 90's", "the nineties"),
+        ("in the 2020s.", "in the twenty twenties ."),
+        ("'the 2020s'", "'the twenty twenties '"),
+    ],
+)
+def test_decades_read_as_plural_numbers(text, said):
+    from domovoi.phonemizer.normalize import prenormalize
+
+    assert " ".join(prenormalize(text).split()) == said
+
+
+@pytest.mark.parametrize(
+    ("text", "said"),
+    [
+        ("2020", "twenty twenty"),
+        ("1990", "nineteen ninety"),
+        ("2005s", "two thousand five s"),
+        ("3s left", "three s left"),
+        ("5 s", "five s"),
+        ("30 minutes", "thirty minutes"),
+        ("5ms", "five milliseconds"),
+        ("1.20s", "one point two zero s"),
+    ],
+)
+def test_decade_rule_leaves_other_numbers_alone(text, said):
+    from domovoi.phonemizer.normalize import prenormalize
+
+    assert " ".join(prenormalize(text).split()) == said

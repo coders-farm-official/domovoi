@@ -274,7 +274,9 @@ struct MusicRoomCard: View {
         control("forward.end", MusicTransportAction.skip.label) {
             music.control(.skip, in: room.roomID)
         }
-        control("stop.fill", MusicTransportAction.stop.label) {
+        // In a group the stop stops every room of it, and says so
+        // (`music.jsx` NPCard, ``groupStopLabel(_:plain:)``).
+        control("stop.fill", groupStopLabel(room.group, plain: MusicTransportAction.stop.label)) {
             music.control(.stop, in: room.roomID)
         }
     }

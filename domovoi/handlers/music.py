@@ -1489,30 +1489,51 @@ class MusicHandler(MusicRoomsMixin, MusicQueueMixin, MusicChoiceMixin, Handler):
         #      MUSIC_DIR). Bulletproof — the basename is exactly what
         #      MPD sees in its file URI, so this always matches as
         #      long as MPD's DB has the file. Last-resort fallback.
+        # Up to three picks, not one: a room's player can lag the library
+        # (a file its database hasn't indexed yet), and one miss shouldn't
+        # fail "play something" (owner's 1.3.0 device check, basement).
         try:
             song: dict[str, Any] | None = None
-            if row.title and row.artist:
-                song = await mpd.prepare_search({"title": row.title, "artist": row.artist})
-            elif row.title:
-                song = await mpd.prepare_search({"title": row.title})
-            if song is None:
-                substrings = [s for s in (row.title, row.artist) if s]
-                if substrings:
-                    song = await mpd.prepare_filename(*substrings)
-            if song is None and row.file_path:
-                # Final fallback: basename of the host path. MPD inside
-                # Docker sees the same file at `/music/<basename>`, so
-                # substring-matching the basename against MPD's URIs
-                # always works as long as the file is indexed.
-                from pathlib import PurePath
-                basename = PurePath(row.file_path).name
-                if basename:
-                    log.info(
-                        "play_random: tag + parsed-substring missed for "
-                        "%r by %r; falling back to basename %r",
-                        row.title, row.artist, basename,
-                    )
-                    song = await mpd.prepare_filename(basename)
+            tried = [row.id]
+            for attempt in range(3):
+                if attempt:
+                    nxt = (
+                        await session.execute(
+                            text(
+                                "SELECT id, title, artist, file_path FROM library_tracks "
+                                "WHERE NOT (id = ANY(:tried)) ORDER BY RANDOM() LIMIT 1"
+                            ),
+                            {"tried": tried},
+                        )
+                    ).first()
+                    if nxt is None:
+                        break
+                    row = nxt
+                    tried.append(row.id)
+                if row.title and row.artist:
+                    song = await mpd.prepare_search({"title": row.title, "artist": row.artist})
+                elif row.title:
+                    song = await mpd.prepare_search({"title": row.title})
+                if song is None:
+                    substrings = [s for s in (row.title, row.artist) if s]
+                    if substrings:
+                        song = await mpd.prepare_filename(*substrings)
+                if song is None and row.file_path:
+                    # Final fallback: basename of the host path. MPD inside
+                    # Docker sees the same file at `/music/<basename>`, so
+                    # substring-matching the basename against MPD's URIs
+                    # always works as long as the file is indexed.
+                    from pathlib import PurePath
+                    basename = PurePath(row.file_path).name
+                    if basename:
+                        log.info(
+                            "play_random: tag + parsed-substring missed for "
+                            "%r by %r; falling back to basename %r",
+                            row.title, row.artist, basename,
+                        )
+                        song = await mpd.prepare_filename(basename)
+                if song:
+                    break
         except Exception as e:
             log.warning("MPD random play failed: %s", e)
             return self._unreachable(ctx)

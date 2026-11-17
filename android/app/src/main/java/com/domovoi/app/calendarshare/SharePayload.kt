@@ -25,9 +25,11 @@ data class PhoneCalendar(
     val id: Long,
     /** CALENDAR_DISPLAY_NAME. */
     val name: String,
-    /** ACCOUNT_NAME: the Google, Microsoft or Samsung account it belongs
-     *  to. For this phone's own screen only: never sent. */
-    val accountName: String? = null,
+    /** ACCOUNT_TYPE: which kind of account it belongs to ("com.google",
+     *  "LOCAL", ...), for the picker's "Google account" line
+     *  ([CalendarSource]). Never sent. ACCOUNT_NAME (the person's address)
+     *  is not read at all. */
+    val accountType: String? = null,
     /** CALENDAR_COLOR, an ARGB int. */
     val color: Int? = null,
 )

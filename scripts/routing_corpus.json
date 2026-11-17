@@ -1791,6 +1791,34 @@
       "handler": null,
       "tags": ["action", "upnext"],
       "note": "2026-11-14 Up next P6 (plan section 7): bait: 'it' names no song, so no queue fast path takes it; the model answered it as Q&A (qwen3:8b, 2026-11-14), never a play of 'it up'"
+    },
+    {
+      "utterance": "who am i right now",
+      "handler": "voice_profile",
+      "path": "fast",
+      "tags": ["action", "voice_profile"],
+      "note": "2026-11-16 live 1.3.0 check: went to Q&A (an internet offer); a trailing qualifier keeps it voice_profile"
+    },
+    {
+      "utterance": "who am i, domo boy",
+      "handler": "voice_profile",
+      "path": "fast",
+      "tags": ["action", "voice_profile"],
+      "note": "2026-11-16 live 1.3.0 check: Whisper's 'Domovoi' as a trailing address; the too-short reply suggests 'who am I, Domovoi?'"
+    },
+    {
+      "utterance": "what is my name",
+      "handler": "voice_profile",
+      "path": "fast",
+      "tags": ["action", "voice_profile"],
+      "note": "2026-11-16 live 1.3.0 check: Q&A said 'I don't know that'"
+    },
+    {
+      "utterance": "where am i right now",
+      "handler": "voice_profile",
+      "path": "fast",
+      "tags": ["action", "voice_profile"],
+      "note": "2026-11-16 live 1.3.0 check: names the room the turn came from, never Q&A"
     }
   ]
 }

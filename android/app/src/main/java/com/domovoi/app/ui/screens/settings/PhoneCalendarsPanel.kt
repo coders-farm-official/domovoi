@@ -44,10 +44,12 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
 import com.domovoi.app.calendarshare.CalendarShare
+import com.domovoi.app.calendarshare.CalendarSource
 import com.domovoi.app.calendarshare.PhoneCalendar
 import com.domovoi.app.calendarshare.PhoneCalendarReader
 import com.domovoi.app.calendarshare.ShareEntry
 import com.domovoi.app.calendarshare.ShareRules
+import com.domovoi.app.calendarshare.SharePayload
 import com.domovoi.app.data.ServerCredentials
 import com.domovoi.app.net.LocalSharedScreen
 import com.domovoi.app.ui.components.relTime
@@ -99,10 +101,20 @@ internal fun shareStatusLine(e: ShareEntry?, nowIso: (Long) -> String = { Instan
     return withNotice("last sent ${relTime(nowIso(sent))}$left")
 }
 
-/** "Work · alex@example.com": the account is shown on this phone only,
- *  never sent. */
-internal fun phoneCalendarLabel(c: PhoneCalendar): Pair<String, String?> =
-    c.name to c.accountName?.takeIf { it.isNotBlank() && it != c.name }
+/** A calendar's name and, under it, where it comes from: "Work" over
+ *  "Google account · 12 events". The name is the one the house is sent (an
+ *  address shows as "Main calendar"); the account's address is never read.
+ *  [events] is how many it has in the window sent, null when not known. */
+internal fun phoneCalendarLabel(c: PhoneCalendar, events: Int? = null): Pair<String, String> {
+    val source = CalendarSource.of(c.accountType).label
+    val count = when (events) {
+        null -> null
+        0 -> "no events"
+        1 -> "1 event"
+        else -> "$events events"
+    }
+    return SharePayload.calendarName(c.name) to listOfNotNull(source, count).joinToString(" · ")
+}
 
 /**
  * Settings → Household → Phone calendars: "Share this phone's calendars
@@ -126,10 +138,22 @@ internal fun PhoneCalendarsPanel() {
     val reader = remember { PhoneCalendarReader(context.applicationContext) }
     var denied by remember { mutableStateOf(false) }
     var calendars by remember { mutableStateOf<List<PhoneCalendar>?>(null) }
+    var counts by remember { mutableStateOf<Map<Long, Int>?>(null) }
     var reload by remember { mutableStateOf(0) }
 
     LaunchedEffect(entry?.enabled, reload) {
-        calendars = if (entry?.enabled == true) withContext(Dispatchers.IO) { reader.calendars() } else null
+        if (entry?.enabled == true) {
+            // Google and Samsung accounts first, this phone only last.
+            calendars = withContext(Dispatchers.IO) { reader.calendars()?.let(CalendarSource::sorted) }
+            // How many events each has in the window sent: a nicety, so a
+            // failure shows no counts rather than an error.
+            counts = withContext(Dispatchers.IO) {
+                runCatching { reader.counts(SharePayload.window(System.currentTimeMillis())) }.getOrNull()
+            }
+        } else {
+            calendars = null
+            counts = null
+        }
     }
     // Back from the phone's settings: the permission may be there now.
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
@@ -224,8 +248,9 @@ internal fun PhoneCalendarsPanel() {
                         )
                         else -> Column {
                             val ticked = entry.calendarIds.toSet()
-                            list.forEach { c -> CalendarRow(c, c.id in ticked) { want ->
-                                store.update(server) { ShareRules.toggle(it, c.id, want, c.name) }
+                            val known = counts
+                            list.forEach { c -> CalendarRow(c, c.id in ticked, known?.let { it[c.id] ?: 0 }) { want ->
+                                store.update(server) { ShareRules.toggle(it, c.id, want, SharePayload.calendarName(c.name)) }
                                 CalendarShare.sendSoon(context)
                             } }
                         }
@@ -237,8 +262,8 @@ internal fun PhoneCalendarsPanel() {
 }
 
 @Composable
-private fun CalendarRow(c: PhoneCalendar, checked: Boolean, onChange: (Boolean) -> Unit) {
-    val (name, account) = phoneCalendarLabel(c)
+private fun CalendarRow(c: PhoneCalendar, checked: Boolean, events: Int?, onChange: (Boolean) -> Unit) {
+    val (name, source) = phoneCalendarLabel(c, events)
     Row(
         Modifier.fillMaxWidth().heightIn(min = 44.dp).toggleable(value = checked, role = Role.Checkbox, onValueChange = onChange),
         verticalAlignment = Alignment.CenterVertically,
@@ -252,10 +277,8 @@ private fun CalendarRow(c: PhoneCalendar, checked: Boolean, onChange: (Boolean) 
         Column(Modifier.weight(1f)) {
             Text(name, style = MaterialTheme.typography.bodyMedium, color = Domovoi.colors.fg,
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
-            account?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
+            Text(source, style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }

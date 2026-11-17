@@ -445,6 +445,16 @@ public func inCallChip(_ room: HomeRoom) -> String? {
 /// `pause kitchen`, `resume kitchen`, `stop kitchen`.
 public func transportLabel(_ verb: String, room: String) -> String { "\(verb) \(room)" }
 
+/// A room row's transport button, with the group it reaches: `stop` in a
+/// room of a group stops every room of it (2026-11-15), so it reads "stop
+/// Upstairs: office, garage" (`HomeStopTitle`, ``groupStopLabel(_:plain:)``).
+/// Pause and resume, and every button of a room alone, keep
+/// ``transportLabel(_:room:)``.
+public func transportLabel(_ verb: String, room: HomeRoom) -> String {
+    let plain = transportLabel(verb, room: room.roomID)
+    return verb == "stop" ? groupStopLabel(room.nowPlaying?.group, plain: plain) : plain
+}
+
 // MARK: - the row, spoken
 
 /// One chip under a room, in the order Android draws them

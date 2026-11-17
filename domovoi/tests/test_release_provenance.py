@@ -83,7 +83,28 @@ def test_the_attest_job_has_the_least_it_needs():
     # up (the app's build, on a server-only release) was skipped.
     cond = job["if"]
     assert "!cancelled()" in cond and "needs.release.result == 'success'" in cond
-    assert job["env"]["SUMS_B64"] == "${{ needs.release.outputs.sums }}"
+    assert "github.ref == 'refs/heads/main'" in cond
+    # attest_published: plan skipped on purpose, nothing else runs.
+    assert "inputs.attest_published && needs.plan.result == 'skipped'" in cond
+    (down,) = [s for s in job["steps"] if str(s.get("uses", "")).startswith("actions/download-artifact@")]
+    assert down["with"] == {"name": "release-sums", "path": "${{ runner.temp }}/attest"}
+    assert down["if"] == "${{ !inputs.attest_published }}"
+
+
+def test_attest_published_runs_the_provenance_alone():
+    """The box on Run workflow skips plan, and every job that needs it."""
+    inp = DOC[True]["workflow_dispatch"]["inputs"]["attest_published"] if True in DOC else         DOC["on"]["workflow_dispatch"]["inputs"]["attest_published"]
+    assert inp["type"] == "boolean" and inp["default"] is False
+    assert JOBS["plan"]["if"] == "${{ !inputs.attest_published }}"
+    for name in ("build-app", "sbom", "release"):
+        needs = JOBS[name]["needs"]
+        assert "plan" in (needs if isinstance(needs, list) else [needs]), name
+        assert "always()" not in str(JOBS[name].get("if", "")), name
+    assert "needs.plan.result == 'success'" in JOBS["release"]["if"]
+    (step,) = [s for s in JOBS["attest"]["steps"] if s.get("if") == "${{ inputs.attest_published }}"]
+    assert "gh release download \"$TAG\"" in step["run"] and "--pattern SHA256SUMS" in step["run"]
+    assert "env" in step and set(step["env"]) == {"GH_TOKEN"}
+    assert JOBS["attest"]["env"]["TAG"] == "${{ inputs.attest_published && inputs.tag || needs.plan.outputs.tag }}"
 
 
 def test_no_other_job_can_mint_an_oidc_token_or_write_attestations():
@@ -97,18 +118,32 @@ def test_no_other_job_can_mint_an_oidc_token_or_write_attestations():
 
 
 def test_the_signing_job_hands_on_the_sha256sums_it_published():
+    # An artifact, never a job output: GitHub drops an output that holds a
+    # secret's value (1.3.0's provenance was lost that way).
     job = JOBS["release"]
-    assert job["outputs"]["sums"] == "${{ steps.published.outputs.sums }}"
+    assert "outputs" not in job
     (step,) = [s for s in job["steps"] if s.get("id") == "published"]
-    assert "env" not in step, "the step that hands SHA256SUMS on sees no secret"
-    assert 'windows/build/release/$TAG/SHA256SUMS' in step["run"] and "base64 -w0" in step["run"]
+    assert "env" not in step, "the step that checks SHA256SUMS sees no secret"
+    assert 'windows/build/release/$TAG/SHA256SUMS' in step["run"]
+    (up,) = [s for s in job["steps"] if str(s.get("uses", "")).startswith("actions/upload-artifact@")]
+    assert up["with"]["name"] == "release-sums" and "env" not in up
+    assert up["with"]["path"] == "windows/build/release/${{ env.TAG }}/SHA256SUMS"
     names = [s.get("name") or s.get("uses") for s in job["steps"]]
     finish = next(i for i, n in enumerate(names) if str(n).startswith("Finish the release"))
-    assert finish < names.index(step["name"]), "after finish-release published"
+    assert finish < job["steps"].index(up), "after finish-release published"
+
+
+def test_the_key_alias_is_a_variable_not_a_secret():
+    """A secret alias is masked in every output, and `domovoi` is in every file name."""
+    assert "secrets.ANDROID_KEY_ALIAS" not in TEXT
+    (step,) = [s for s in JOBS["release"]["steps"] if str(s.get("name", "")).startswith("Sign and publish the app")]
+    assert step["env"]["ANDROID_KEY_ALIAS"] == "${{ vars.ANDROID_KEY_ALIAS }}"
+    assert '"$env:ANDROID_KEY_ALIAS".Trim()' in step["run"]
 
 
 def _attest_check() -> str:
-    run = JOBS["attest"]["steps"][0]["run"]
+    (step,) = [s for s in JOBS["attest"]["steps"] if s.get("name") == "The subjects, held to the release on GitHub"]
+    run = step["run"]
     return run.split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
 
 

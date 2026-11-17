@@ -272,9 +272,33 @@ rule (2026-10-15): for an X who exists, and who the voice was not matched
 as, the satellite asks "I already know someone called X. Is that you?",
 and a "yes" as the very next turn (within 60 s) adds that clip to X's
 **satellite** samples for that room; a "no" enrols a new person called X
-from that clip, and Settings → Household → People flags the pair. Next
-to the learning from a run of confident matches, this is the one way a
-satellite sample is added to someone who already exists, and it rests on
+from that clip, and Settings → Household → People flags the pair.
+
+**An introduction is still one sample, a few clips long** (2026-11-16). At
+a satellite, "my name is …" goes on to "How do you spell that?" and, until
+about eight seconds of speech were heard, "count from one to ten" and one
+more sentence. What is kept is the same as before: one voice fingerprint
+per introduction, never a recording. The fingerprints of the answers
+(each clip's, made and dropped as every turn's is) are carried in the
+session's pending question until the introduction ends, and the saved
+sample's fingerprint is replaced by all the clips' combined. An answer in
+a voice recognized as somebody else, too short, under music, or unlike
+the clips before it (cosine to their mean under
+`VOICE_PROFILE_INTRO_CLIP_MIN_SIMILARITY`, 0.45) adds nothing.
+
+**"By the way, was that you, X?"** (2026-11-16). A room that scores a
+voice just under the match threshold for one person, clearly ahead of
+everyone else, and has no sample of them, asks once after its answer (at
+most once a day per person and room; never from a phone). Only a "yes" as
+the very next turn in that room, within 30 seconds, adds that turn's clip
+to X's satellite samples for the room (marked as claimed, V029, like
+every sample a yes adds; at most three per person per room); anything else
+adds nothing. Nothing is learned from a borderline match without that
+yes.
+
+Next to the learning from a run of confident matches, these answers are
+the only ways a satellite sample is added to someone who already exists,
+and they rest on
 what the speaker says: a voice is not a password, and anyone in a room can
 claim a name — as anyone could already enrol a second X before. What it
 changes is that the clip joins X's voice (so the speaker may then be

@@ -9,6 +9,8 @@ import com.domovoi.app.net.ApiException
 import com.domovoi.app.net.ApiState
 import com.domovoi.app.net.decode
 import com.domovoi.app.net.rememberApi
+import com.domovoi.app.player.PlayTarget
+import com.domovoi.app.player.RemoteNowPlaying
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
@@ -174,6 +176,34 @@ internal fun queueGroupLine(room: String, g: NowPlayingGroup?): String? {
     val name = g.name?.takeIf { it.isNotEmpty() }?.let { "$it · " }.orEmpty()
     val n = others.size
     return "${name}shared with $n other room${if (n == 1) "" else "s"} (${others.joinToString(", ")})"
+}
+
+/**
+ * A room's stop button's name (home.jsx HomeStopTitle, music.jsx NPCard):
+ * in a group of two rooms or more a stop stops every room of it, as pause
+ * pauses them (owner, 2026-11-15), so it says so — "stop Upstairs: garage,
+ * office", "stop the group: garage, office" for rooms joined one by one.
+ * Anywhere else it is [plain] ("stop garage" on Home, "stop" on Music).
+ * "leave the group" is the stop for this room alone; there is no other.
+ */
+internal fun groupStopLabel(g: NowPlayingGroup?, plain: String): String {
+    if (g == null || g.rooms.size < 2) return plain
+    return "stop ${g.name?.takeIf { it.isNotEmpty() } ?: "the group"}: ${g.rooms.joinToString(", ")}"
+}
+
+/** The mini player's close while casting to a room of a group: it stops
+ *  the whole group too, so it names it after the web's "Stop and close". */
+internal fun stopAndCloseLabel(g: NowPlayingGroup?): String {
+    val stop = groupStopLabel(g, "")
+    return if (stop.isEmpty()) "Stop and close" else "Stop and close · $stop"
+}
+
+/** The group the phone's stop reaches: the cast room's, from a reading of
+ *  that very room (a reading of a room the cast left says nothing). Null
+ *  while the phone plays itself: its stop is its own. */
+internal fun castStopGroup(target: PlayTarget, remote: RemoteNowPlaying?): NowPlayingGroup? {
+    val room = (target as? PlayTarget.Room)?.roomId ?: return null
+    return remote?.takeIf { it.roomId == room }?.group
 }
 
 internal const val GROUP_LEAVE_VERB = "leave the group"

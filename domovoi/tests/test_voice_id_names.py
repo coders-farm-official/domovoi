@@ -160,27 +160,31 @@ def test_sound_alike_names(heard: str, known: str, alike: bool) -> None:
 
 # ─── The introduction at a satellite ──────────────────────────────────────
 
-JORDAN_ASKED = "Nice to meet you, Jordan. That's J, O, R, D, A, N. Did I get that right?"
+#: A satellite's introduction asks for the spelling (2026-11-16): the
+#: answer settles the name and is more of the voice.
+JORDAN_ASKED = voice_profile._SPELL_TEXT
 JORDYN_AGAIN = "Got it, Jordyn: J, O, R, D, Y, N. Is that right?"
 
 
 @requires_db
-async def test_yes_but_spelled_is_a_correction_then_the_yes_saves_the_spelling(room) -> None:
+async def test_yes_but_spelled_is_taken_as_spelled_then_the_voice_is_collected(room) -> None:
     asked = await room.say("My name is Jordan.", STRANGER)
     assert _reply(asked) == JORDAN_ASKED
     assert asked["expect_followup"] is True
     pending = await room.pending()
-    assert pending["kind"] == "core.self_intro" and pending["stage"] == "confirm"
+    assert pending["kind"] == "core.self_intro" and pending["stage"] == "spell"
     assert pending["expires_at"] > 0
 
+    # "How do you spell that?" — their spelling is the name, not read back.
     again = await room.say("Yes, but it's spelled J-O-R-D-Y-N.", STRANGER, trigger="followup")
-    assert _reply(again) == JORDYN_AGAIN
-    assert await _people() == []
-
-    done = await room.say("Yes.", STRANGER, trigger="followup")
-    assert _reply(done) == "Got it, Jordyn."
+    assert _reply(again) == voice_profile._COUNT_TEXT
     people = await _people()
     assert [n for _pid, n in people] == ["Jordyn"]
+    assert await _samples(people[0][0]) == [("satellite", ROOM)]
+    assert (await room.pending())["stage"] == "count"
+
+    done = await room.say("Never mind.", STRANGER, trigger="followup")
+    assert _reply(done) == "Okay, I'll stop there. I'll still know your voice, Jordyn."
     assert await _samples(people[0][0]) == [("satellite", ROOM)]
     assert await room.pending() is None
 
@@ -194,7 +198,7 @@ async def test_a_no_asks_for_the_name_and_a_spelling_answers_it(room) -> None:
     again = await room.say("P. R. I. Y. A.", STRANGER, trigger="followup")
     assert _reply(again) == "Got it, Priya: P, R, I, Y, A. Is that right?"
     done = await room.say("Yeah.", STRANGER, trigger="followup")
-    assert _reply(done) == "Got it, Priya."
+    assert _reply(done) == voice_profile._COUNT_TEXT
     assert [n for _pid, n in await _people()] == ["Priya"]
 
 
@@ -261,7 +265,8 @@ async def test_the_answer_is_still_taken_after_a_restart_forgot_the_choice(room)
     await room.say("My name is Jordan.", STRANGER)
     clear_choice_parked()
     again = await room.say("Yes, but it's spelled J-O-R-D-Y-N.", STRANGER, trigger="followup")
-    assert _reply(again) == JORDYN_AGAIN
+    assert _reply(again) == voice_profile._COUNT_TEXT
+    assert [n for _pid, n in await _people()] == ["Jordyn"]
 
 
 # ─── Sound-alikes ─────────────────────────────────────────────────────────
@@ -276,7 +281,8 @@ async def test_a_sound_alike_asks_did_you_mean_and_yes_adds_to_that_person(room)
     assert _reply(asked) == SOUND_ALIKE_ASKED
     assert (await room.pending())["kind"] == "core.name_sound_alike"
     done = await room.say("Yes.", STRANGER, trigger="followup")
-    assert _reply(done) == "Done — I'll know your voice in this room now, Jordan."
+    # Saved, then more of the voice (two seconds so far).
+    assert _reply(done) == voice_profile._COUNT_TEXT
     assert await _people() == [(jordan, "Jordan")]
     assert await _samples(jordan) == [("satellite", "office"), ("satellite", ROOM)]
     async with SessionLocal() as s:
@@ -291,9 +297,9 @@ async def test_a_no_to_the_sound_alike_reads_the_new_name_back(room) -> None:
     jordan = await _person("Jordan", (PRIYA_OFFICE, "office"))
     await room.say("My name is Jordyn.", STRANGER)
     asked = await room.say("No.", STRANGER, trigger="followup")
-    assert _reply(asked) == "Nice to meet you, Jordyn. That's J, O, R, D, Y, N. Did I get that right?"
+    assert _reply(asked) == voice_profile._SPELL_TEXT
     done = await room.say("Yes.", STRANGER, trigger="followup")
-    assert _reply(done) == "Got it, Jordyn."
+    assert _reply(done) == voice_profile._COUNT_TEXT
     assert [n for _pid, n in await _people()] == ["Jordan", "Jordyn"]
     assert await _samples(jordan) == [("satellite", "office")]
 

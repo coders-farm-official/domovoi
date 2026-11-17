@@ -149,6 +149,9 @@ class FoldCheckVoiceTest {
         until("the card") { !c.ui().replying && c.ui().conversation.messages.lastOrNull()?.card?.state == CardState.OPEN }
         val id = c.ui().conversation.id
         val index = c.ui().conversation.messages.lastIndex
+        // The screen shows the card a moment before the conversation is on
+        // disk (CI run 43808098892: IndexOutOfBounds at it[index]).
+        until("the disk has the card") { (conversations.load(id)?.messages?.size ?: 0) > index }
         val disk = conversations.load(id)!!
         conversations.save(disk.copy(messages = disk.messages.toMutableList().also {
             it[index] = it[index].copy(card = it[index].card!!.copy(state = CardState.DONE))

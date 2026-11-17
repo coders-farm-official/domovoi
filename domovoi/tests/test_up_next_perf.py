@@ -17,6 +17,7 @@ Needs the database (``requires_db``). Timings print with ``-s``.
 
 from __future__ import annotations
 
+import os
 import statistics
 import time
 
@@ -34,6 +35,11 @@ from domovoi.tests.up_next_fixtures import NOW
 pytestmark = [requires_db, pytest.mark.slow]
 
 REFILL_BUDGET_MS = 150.0
+# GitHub's shared runners are slower and noisier than a house's server
+# (2026-11-16: a 158.6 ms median, max 244.9, on a run that changed nothing
+# here). There the budget is doubled: still catches a refill that got
+# several times slower, without failing main on a busy neighbour.
+BUDGET_MS = REFILL_BUDGET_MS * (2 if os.environ.get("GITHUB_ACTIONS") == "true" else 1)
 
 _GENRES = ("rock pop soul jazz folk blues country metal punk reggae hip_hop r&b electronic house "
            "techno ambient classical opera gospel funk disco latin indie alternative_rock grunge "
@@ -132,4 +138,4 @@ async def test_refill_is_fast(big_db, n):
     print(f"\nup next refill at {n} tracks: library median {t['library_median']:.1f} ms, "
           f"max {t['library_max']:.1f} ms, first {t['first']:.1f} ms; "
           f"list (artist) median {t['list_median']:.1f} ms; library generated in {gen:.1f} s")
-    assert t["library_median"] < REFILL_BUDGET_MS, t
+    assert t["library_median"] < BUDGET_MS, t

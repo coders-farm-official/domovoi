@@ -35,6 +35,8 @@ import com.domovoi.app.player.PlayTarget
 import com.domovoi.app.ui.components.CoverImage
 import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.Tone
+import com.domovoi.app.ui.screens.music.castStopGroup
+import com.domovoi.app.ui.screens.music.stopAndCloseLabel
 import com.domovoi.app.ui.theme.Domovoi
 import kotlinx.coroutines.launch
 
@@ -133,7 +135,7 @@ fun MiniPlayer(onOpenPlayer: () -> Unit) {
                         if (!app.player.stopAndClose()) toast(STOP_AND_CLOSE_REFUSED)
                     }
                 }) {
-                    Icon(Icons.Filled.Close, contentDescription = "Stop and close", tint = Domovoi.colors.fgSubtle, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Filled.Close, contentDescription = stopAndCloseLabel(castStopGroup(target, remote)), tint = Domovoi.colors.fgSubtle, modifier = Modifier.size(16.dp))
                 }
             }
         }

@@ -188,3 +188,76 @@ async def drain() -> None:
     """Wait for every delivery started so far (tests)."""
     while _DELIVERIES:
         await asyncio.gather(*list(_DELIVERIES), return_exceptions=True)
+
+
+#: How long one room's player may take to say what it is doing at boot.
+RESTORE_PROBE_TIMEOUT_SEC = 2.0
+#: Stub mode skips the startup restore: the stub players are one module-wide
+#: map that tests fill, and a playing one left behind by an earlier test would
+#: give a later test's room music it never asked for. A test of the startup
+#: path turns it on.
+RESTORE_AT_STARTUP_IN_STUBS = False
+
+
+async def restore_resume_intents(app: Any) -> dict[str, str]:
+    """After a core restart: which rooms are still meant to be playing.
+
+    ``resumable_music`` (the stream a room's satellite plays, sent again
+    after every turn that wasn't about music, because the wake word stops
+    the satellite's player to free the microphone) is kept in memory. A
+    core restart doesn't stop the music: the rooms' players run on, and so
+    does each satellite's player against its stream. Started empty, the
+    first voice turn after a restart ("turn it up") left the room silent,
+    a shared queue's member rooms included, while the dashboard still
+    showed them playing (1.3.0 device check).
+
+    So at startup, after the shared queues are read back
+    (``music_groups.load``): every room whose player (its own, or its
+    shared queue's host's) is playing gets that stream back as its resume
+    intent. Only ``play``: a paused player may have been paused by a
+    person (domovoi/music_pause.py, which the restart forgot too), and a
+    resume intent would let the next turn's handshake start it again.
+    Nothing is sent to any satellite here, and an entry set since startup
+    is left alone. Best-effort: a player that doesn't answer in time is
+    left out. Returns what was restored."""
+    from domovoi import music_groups
+    from domovoi.clients.mpd import iter_mpd_clients, mpd_stream_url_for, own_mpd_client
+
+    state = getattr(app, "state", None)
+    resumable: dict[str, str] | None = getattr(state, "resumable_music", None)
+    if resumable is None:
+        return {}
+    rooms: set[str] = {room for room, _ in iter_mpd_clients() if room}
+    for sh in music_groups.shares():
+        rooms.update(sh.rooms)
+    players = sorted({music_groups.host_of(r) or r for r in rooms})
+
+    async def _probe(player: str) -> str | None:
+        try:
+            return await asyncio.wait_for(
+                own_mpd_client(player).state(), RESTORE_PROBE_TIMEOUT_SEC,
+            )
+        except Exception as e:  # noqa: BLE001 — not answering: left out
+            log.debug("room music: player of room=%s not answering at startup: %s", player, e)
+            return None
+
+    states = await asyncio.gather(*(_probe(p) for p in players))
+    playing = {p for p, st in zip(players, states) if st == "play"}
+    restored: dict[str, str] = {}
+    for room in sorted(rooms):
+        if room in resumable or (music_groups.host_of(room) or room) not in playing:
+            continue
+        try:
+            url = mpd_stream_url_for(room)
+        except Exception as e:  # noqa: BLE001
+            log.debug("room music: no stream for room=%s at startup: %s", room, e)
+            url = None
+        if url:
+            resumable[room] = url
+            restored[room] = url
+    if restored:
+        log.info(
+            "room music: still playing after the restart: %s",
+            ", ".join(f"{r} ({music_groups.host_of(r) or r}'s player)" for r in sorted(restored)),
+        )
+    return restored

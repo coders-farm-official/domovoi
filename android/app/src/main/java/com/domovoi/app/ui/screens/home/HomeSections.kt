@@ -87,6 +87,7 @@ import com.domovoi.app.ui.shell.SidebarCounts
 import com.domovoi.app.ui.screens.music.MusicGroup
 import com.domovoi.app.ui.screens.music.RoomQueueButton
 import com.domovoi.app.ui.screens.music.groupChipText
+import com.domovoi.app.ui.screens.music.groupStopLabel
 import com.domovoi.app.ui.theme.Domovoi
 import kotlinx.coroutines.delay
 import java.time.ZoneId
@@ -814,14 +815,17 @@ private fun HomeRoomRow(
                 Row(Modifier.padding(end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                     // The room's queue, one tap from the room (batch 2 §2).
                     RoomQueueButton(r.room_id, onQueue)
+                    // In a group a stop stops every room of it, so it says so
+                    // (home.jsx HomeStopTitle); "leave the group" stops this one.
+                    val stopLabel = groupStopLabel(np?.group, "stop ${r.room_id}")
                     when {
                         playing -> {
                             TransportButton(Icons.Filled.Pause, "pause ${r.room_id}", canAct) { onAct(r.room_id, "pause") }
-                            TransportButton(Icons.Filled.Stop, "stop ${r.room_id}", canAct) { onAct(r.room_id, "stop") }
+                            TransportButton(Icons.Filled.Stop, stopLabel, canAct) { onAct(r.room_id, "stop") }
                         }
                         paused -> {
                             TransportButton(Icons.Filled.PlayArrow, "resume ${r.room_id}", canAct) { onAct(r.room_id, "resume") }
-                            TransportButton(Icons.Filled.Stop, "stop ${r.room_id}", canAct) { onAct(r.room_id, "stop") }
+                            TransportButton(Icons.Filled.Stop, stopLabel, canAct) { onAct(r.room_id, "stop") }
                         }
                     }
                     if (groupChoices.isNotEmpty()) GroupMenu(r.room_id, groupChoices, canAct, onGroup)

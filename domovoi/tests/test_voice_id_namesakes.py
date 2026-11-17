@@ -68,6 +68,9 @@ PRIYA_HERE = np.full(16_000, 2222, dtype=np.int16).tobytes()
 STRANGER = np.full(16_000, 3333, dtype=np.int16).tobytes()
 
 ROOM_QUESTION = "I already know someone called Priya. Is that you?"
+#: What a satellite's introduction asks once the voice is saved, while it
+#: has heard less than eight seconds of it (2026-11-16).
+COUNT_TEXT = "Last bit: count from one to ten for me, at your normal voice."
 SORT_IT_OUT = "An admin can rename or remove one of them in Settings, under People."
 
 
@@ -83,7 +86,9 @@ async def _vec(pcm: bytes) -> bytes:
 
 
 async def _person(name: str, *samples: tuple[bytes, str]) -> int:
-    """A person with a satellite sample per ``(pcm, room)``."""
+    """A person with a satellite sample per ``(pcm, room)``, each a good
+    one (5 s of speech): a room with only short samples of a recognized
+    voice goes on to learn it there (test_voice_intro_longer.py)."""
     async with SessionLocal() as s:
         pid = int((await s.execute(
             text("INSERT INTO people (name) VALUES (:n) RETURNING id"), {"n": name},
@@ -92,7 +97,7 @@ async def _person(name: str, *samples: tuple[bytes, str]) -> int:
         for pcm, room in samples:
             await repo.add(
                 person_id=pid, embedding=await _vec(pcm),
-                model=repo.EMBEDDING_MODEL_TAG, room_id=room, sample_seconds=1.0,
+                model=repo.EMBEDDING_MODEL_TAG, room_id=room, sample_seconds=5.0,
             )
         await s.commit()
     return pid
@@ -225,10 +230,12 @@ async def test_my_name_at_a_satellite_for_someone_known_asks_then_adds_a_room_sa
     # The answer comes in the follow-up; the QUESTION's clip is the one
     # saved, whoever says the yes.
     done = await room.say("Yes.", STRANGER, trigger="followup")
-    assert _reply(done) == "Done — I'll know your voice in this room now, Priya."
+    # Saved at once; then the introduction asks for more of the voice
+    # (2026-11-16), and a command instead of counting ends it.
+    assert _reply(done) == COUNT_TEXT
     assert await _people() == [(priya, "Priya")]
     assert await _samples(priya) == [("satellite", "office"), ("satellite", ROOM)]
-    assert await room.pending() is None
+    assert (await room.pending())["stage"] == "count"
 
     # The stub's two clips of one person are unrelated vectors (a real
     # voice's are not), so his centroid scores ~0.71 against either: take
@@ -257,15 +264,25 @@ async def test_no_enrols_a_new_namesake_from_the_same_clip(room) -> None:
     priya = await _person("Priya", (PRIYA_OFFICE, "office"))
     asked = await room.say("My name is Priya.", STRANGER)
     assert _reply(asked) == ROOM_QUESTION
-    # The QUESTION's clip is the new person's, whoever says the no.
+    # The QUESTION's clip is the new person's, whoever says the no — and a
+    # no in a voice unlike it isn't mixed in (2026-11-16: an answer that
+    # sounds like the introduction is more of the voice).
     no = await room.say("No.", PRIYA_HERE, trigger="followup")
-    assert _reply(no) == NEW_NAMESAKE
+    assert _reply(no) == f"{NEW_NAMESAKE} {COUNT_TEXT}"
     people = await _people()
     assert [n for _, n in people] == ["Priya", "Priya"]
     newcomer = people[1][0]
     assert await _samples(priya) == [("satellite", "office")]
     assert await _samples(newcomer) == [("satellite", ROOM)]
-    assert await room.pending() is None
+    async with SessionLocal() as s:
+        blob = (await s.execute(
+            text("SELECT embedding FROM voice_profiles WHERE person_id = :p"), {"p": newcomer},
+        )).scalar_one()
+    np.testing.assert_allclose(
+        np.frombuffer(bytes(blob), dtype=np.float32),
+        np.frombuffer(await _vec(STRANGER), dtype=np.float32), atol=1e-6,
+    )
+    assert (await room.pending())["stage"] == "count"
 
     # The first Priya, unknown to this room's mic: never guessed.
     again = await room.say("My name is Priya.", PRIYA_HERE)
@@ -275,7 +292,12 @@ async def test_no_enrols_a_new_namesake_from_the_same_clip(room) -> None:
     other_mic = np.full(16_000, 4444, dtype=np.int16).tobytes()
     assert _reply(await room.say("My name is Priya.", other_mic)) == _more_than_one("Priya")
     # The newcomer as this room hears them: named by voice, not a guess.
-    assert _reply(await room.say("My name is Priya.", STRANGER)) == "I already know you, Priya."
+    # (Its one sample is the one-second introduction's, so the room goes on
+    # to learn it better: still no third Priya.)
+    assert _reply(await room.say("My name is Priya.", STRANGER)) == (
+        "I already know you, Priya. Let me learn your voice better here: count "
+        "from one to ten for me, at your normal voice."
+    )
     assert len(await _people()) == 2
     assert await _samples(priya) == [("satellite", "office")]
     assert await _samples(newcomer) == [("satellite", ROOM)]
@@ -288,7 +310,7 @@ async def test_a_no_after_the_other_was_forgotten_just_enrols(room) -> None:
         await s.execute(text("DELETE FROM people WHERE id = :p"), {"p": priya})
         await s.commit()
     no = await room.say("No.", STRANGER, trigger="followup")
-    assert _reply(no) == "Got it, Priya."
+    assert _reply(no) == f"Got it, Priya. {COUNT_TEXT}"
     people = await _people()
     assert [n for _, n in people] == ["Priya"]
     assert await _samples(people[0][0]) == [("satellite", ROOM)]
@@ -431,10 +453,10 @@ async def test_the_room_question_takes_no_answer_from_a_chat_mic(db_session) -> 
 
 async def test_a_name_taken_between_the_question_and_the_yes_gets_the_sample_not_a_twin(room) -> None:
     asked = await room.say("My name is Ana.", PRIYA_HERE)
-    assert _reply(asked) == "Nice to meet you, Ana. That's A, N, A. Did I get that right?"
+    assert _reply(asked) == "Nice to meet you! How do you spell that?"
     ana = await _person("Ana", (PRIYA_OFFICE, "office"))   # enrolled elsewhere meanwhile
     done = await room.say("Yes.", PRIYA_HERE, trigger="followup")
-    assert _reply(done) == "Done — I'll know your voice in this room now, Ana."
+    assert _reply(done) == COUNT_TEXT
     assert await _people() == [(ana, "Ana")]
     assert await _samples(ana) == [("satellite", "office"), ("satellite", ROOM)]
 

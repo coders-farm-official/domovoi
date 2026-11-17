@@ -610,12 +610,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # music_action so playback can auto-resume after non-music turns
     # like "what time is it" — wake-word capture kills the Pi's mpg123
     # to free the mic, so without a resume frame the music stays dead.
-    # In-memory by design: server restart wipes it, which lines
-    # up with the user's mental model since restart kills music too.
+    # In memory, but a core restart does NOT kill the music: the rooms'
+    # players and the satellites' players run on. So the rooms whose
+    # player (or shared queue's host's player) is still playing get their
+    # stream back below, or the first turn after a restart leaves them
+    # silent (room_music.restore_resume_intents).
     app.state.resumable_music = {}
     # Rooms whose music a person paused (domovoi/music_pause.py): the
     # music_ready handshake leaves their MPD paused.
     app.state.music_paused_by_person = set()
+    try:
+        from domovoi import room_music
+
+        if not settings.use_stubs or room_music.RESTORE_AT_STARTUP_IN_STUBS:
+            await room_music.restore_resume_intents(app)
+    except Exception as e:  # noqa: BLE001 — best-effort; the next play sets it
+        log.warning("room music: couldn't restore what was playing: %s", e)
 
     # room_id → {"url": str, "task": asyncio.Task} for the music_ready
     # handshake. Populated when the streaming layer sends `music_start`

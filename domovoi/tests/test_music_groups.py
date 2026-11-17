@@ -482,8 +482,10 @@ async def test_join_the_garage(house) -> None:
     await drain()
     assert resp.text == "Playing the music from the garage here too."
     assert music_groups.host_of("dining_room") == "garage"
+    # Already in: the stream is sent again, never refused (a way out of a
+    # silent satellite; test_music_resume_after_restart.py).
     resp = await _say("play the garage's music in here", ctx, FakeDB())
-    assert resp.text == "This room is already playing that."
+    assert resp.text == "Playing the music from the garage here."
 
 
 async def test_join_a_quiet_room(house) -> None:

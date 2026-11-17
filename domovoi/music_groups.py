@@ -504,6 +504,21 @@ def _point(app: Any, room_id: str, url: str | None) -> None:
     run_later(_start(), name=f"group-join-{room_id}")
 
 
+def resync(app: Any, room_id: str) -> str | None:
+    """Send ``room_id``'s satellite the stream it should be hearing again —
+    its shared queue's host's, or its own: "join the kitchen" said in a room
+    that is already in the kitchen's shared queue. The way out of a
+    satellite that went silent while the server still counts it in
+    (2026-11-16: a member silent after a core restart). Like a join, a
+    person's pause of the group holds. Returns the stream, or None when
+    there is none."""
+    url = _url_for(host_of(room_id) or room_id)
+    if url:
+        log.info("groups: room=%s is sent its stream again", room_id)
+        _point(app, room_id, url)
+    return url
+
+
 def _silence(app: Any, room_id: str) -> None:
     """Stop ``room_id``'s satellite (it was playing a host's stream that it
     no longer hears)."""
@@ -920,6 +935,7 @@ __all__ = [
     "keep_only",
     "leave",
     "load",
+    "resync",
     "share",
     "share_of",
     "shares",
