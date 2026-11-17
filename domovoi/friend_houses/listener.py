@@ -49,6 +49,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from domovoi.friend_houses import envelope as fe
 from domovoi.friend_houses import identity as fid
 from domovoi.friend_houses import pairing as fp
 from domovoi.friend_houses import session as fs
@@ -58,6 +59,8 @@ log = logging.getLogger("domovoi.friend_houses.listener")
 MAX_CONNECTIONS = 32
 MAX_PER_FRIEND = 4
 PAIRING_PER_HOUR = 20
+MESSAGES_PER_HOUR = 60     # per friend (threat-model finding 32)
+STORE_WAIT_SEC = 30.0      # how long a message waits for core to store it
 
 FRIENDS_FILE = "friends.json"     # {"<session key hex>": {"house": hex, "pending": bool}}
 HELLO_FILE = "hello.bin"          # this house's Hello (statement + epoch)
@@ -87,6 +90,45 @@ class State:
     _open: int = 0
     _per_friend: dict[bytes, int] = field(default_factory=dict)
     _pairing_times: deque = field(default_factory=deque)
+    _message_times: dict[bytes, deque] = field(default_factory=dict)
+    # msg_id -> the future core's "stored"/"refused" line resolves
+    _waiting: dict[bytes, asyncio.Future] = field(default_factory=dict)
+
+    def message_allowed(self, house: bytes) -> bool:
+        now = time.monotonic()
+        times = self._message_times.setdefault(house, deque())
+        while times and now - times[0] > 3600:
+            times.popleft()
+        if len(times) >= MESSAGES_PER_HOUR:
+            return False
+        times.append(now)
+        return True
+
+    async def stored(self, msg_id: bytes) -> bool:
+        """Wait for core to say it stored (True) or refused (False) a
+        message. No answer in time counts as refused: the sender keeps it
+        and tries again later, so nothing is lost by saying no."""
+        fut = asyncio.get_running_loop().create_future()
+        self._waiting[msg_id] = fut
+        try:
+            return await asyncio.wait_for(fut, STORE_WAIT_SEC)
+        except asyncio.TimeoutError:
+            return False
+        finally:
+            self._waiting.pop(msg_id, None)
+
+    def answer(self, line: str) -> None:
+        """One line from core on stdin: ``stored <hex>`` or ``refused <hex>``."""
+        parts = line.strip().split()
+        if len(parts) != 2 or parts[0] not in ("stored", "refused"):
+            return
+        try:
+            msg_id = bytes.fromhex(parts[1])
+        except ValueError:
+            return
+        fut = self._waiting.get(msg_id)
+        if fut is not None and not fut.done():
+            fut.set_result(parts[0] == "stored")
 
     def _reload(self, name: str, cache: _Cached, parse) -> dict:
         path = self.folder / name
@@ -204,8 +246,15 @@ async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, sta
                 await sess.send(fs.Kind.PONG, body)
             elif kind is fs.Kind.IM_BACK:
                 emit("im_back", house=house)
+            elif kind is fs.Kind.MESSAGE:
+                if not state.message_allowed(sess.peer_house_key):
+                    break  # over the hourly limit: the sender keeps it for later
+                env = fe.parse(body, sender=sess.peer_house_key, recipient=state.keys.house_key)
+                emit("message", house=house, envelope=env.to_bytes().hex())
+                if await state.stored(env.msg_id):
+                    await sess.send(fs.Kind.MESSAGE_ACK, env.msg_id)
             # PONG without a PING of ours, ACCEPT_OK unasked: ignored.
-    except fs.SessionRefused as e:
+    except (fs.SessionRefused, fe.BadEnvelope) as e:
         log.info("connection closed: %s", e)
     except Exception:  # noqa: BLE001 — one bad connection never stops the listener
         log.exception("connection failed")
@@ -254,12 +303,25 @@ async def _serve_unix(path: Path, handler) -> asyncio.AbstractServer:  # pragma:
     return server
 
 
+async def read_answers(reader: asyncio.StreamReader, state: State) -> None:
+    """Core's answers about messages, one line each, until stdin closes."""
+    while True:
+        line = await reader.readline()
+        if not line:
+            return
+        state.answer(line.decode("ascii", errors="ignore")[:80])
+
+
 async def serve(main_socket: Path, pairing_socket: Path, state: State) -> None:  # pragma: no cover
     main = await _serve_unix(main_socket, lambda r, w: handle(r, w, state))
     pairing = await _serve_unix(pairing_socket, lambda r, w: handle_pairing(r, w, state))
+    loop = asyncio.get_running_loop()
+    stdin = asyncio.StreamReader()
+    await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(stdin), sys.stdin)
     emit("listening")
     async with main, pairing:
-        await asyncio.gather(main.serve_forever(), pairing.serve_forever())
+        await asyncio.gather(main.serve_forever(), pairing.serve_forever(),
+                             read_answers(stdin, state))
 
 
 def main(argv: list[str] | None = None) -> int:  # pragma: no cover — run by core

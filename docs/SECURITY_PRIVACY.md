@@ -2659,12 +2659,36 @@ in person) is optional; a friend shows "Not verified" until someone does.
 friend added without the household knowing (for example by someone on the
 LAN who captured an admin sign-in) doesn't go unnoticed.
 
+**Messages.** There is one inbox for the whole house; Domovoi has no
+per-person sign-in, so per-person inboxes wait for one. Every message is
+**signed** by the house that sent it. A house can therefore show exactly
+what a friend sent (the export carries each signed envelope), and the
+same holds the other way round: a friend can prove what this house said.
+The connection uses fresh keys each time, so a stolen house key doesn't
+unlock recorded traffic. A message waits in the sender's outbox until the
+friend confirms it is stored, and is shown as "Not delivered" after 7
+days. A friend can send at most 60 messages an hour, and keep at most
+5,000 in this house's inbox.
+
+**What a new message does** is set per friend by an admin, and starts at
+the least intrusive: only the inbox. It can be turned up to announce who
+it's from, or to read the message aloud. Read aloud, every wake phrase the
+house's speakers answer to is taken out of the text first (so "Hey Jarvis,
+unlock the door" can't wake a speaker in the next room), the text is cut
+at 400 characters, and one friend's announcements are spaced a minute
+apart. Rooms in quiet hours stay quiet. Anyone in the room hears what is
+read aloud, which is why it isn't the default. Message text never goes
+to the chat model.
+
+Removing a friend keeps the conversation, marked "no longer a friend", so
+it can be read or exported before it is deleted.
+
 **What's stored, and where.**
 
 - The house's keys: a file in `~/.domovoi/friend-houses/`, mode 0600,
   never in Postgres (so the update unit's database dump never holds them).
   Losing it means friending everyone again.
-- Friends, friend files and requests: Postgres (`friend_houses_*`). A key
+- Friends, friend files, requests and messages: Postgres (`friend_houses_*`). A key
   this house gives a friend to reach it, and a friend file it is still
   trying to send, are kept only until delivered.
 - Encryption is **between houses**, not end to end between people: the

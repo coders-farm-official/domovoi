@@ -3818,7 +3818,10 @@ async def admin_friend_houses_status() -> dict[str, Any]:
     from domovoi.friend_houses import service as friend_houses_service
 
     out = friend_houses_service.status()
+    from domovoi.friend_houses import messages
+
     out["house_name"] = await friending.house_name()
+    out["unread"] = await messages.unread_total()
     out["invite_days"] = await friending.invite_days_default()
     out["limits"] = {"min_days": friending.MIN_DAYS, "max_days": friending.MAX_DAYS,
                      "max_open_files": friending.MAX_OPEN_INVITES}
@@ -3965,6 +3968,90 @@ async def admin_friend_houses_unfriend(friend_id: str) -> dict[str, Any]:
     if not await friending.unfriend(friend_id):
         raise HTTPException(status_code=404, detail="No such friend house.")
     return {"removed": True}
+
+
+class _FhMessageBody(BaseModel):
+    friend_id: str
+    text: str
+
+
+class _FhAlertBody(BaseModel):
+    alert: str
+
+
+def _fh_house(house: str) -> bytes:
+    try:
+        raw = bytes.fromhex(house)
+    except ValueError:
+        raw = b""
+    if len(raw) != 32:
+        raise HTTPException(status_code=404, detail="No such conversation.")
+    return raw
+
+
+@app.get("/v1/admin/friend-houses/conversations", dependencies=_FH_READ)
+async def admin_friend_houses_conversations() -> dict[str, Any]:
+    """The house inbox: every friend (or former friend) with messages, its
+    unread count and how many of ours weren't delivered."""
+    from domovoi.friend_houses import messages
+
+    return {"conversations": await messages.conversations(),
+            "unread": await messages.unread_total()}
+
+
+@app.get("/v1/admin/friend-houses/conversations/{house}", dependencies=_FH_READ)
+async def admin_friend_houses_conversation(house: str, before: int | None = None,
+                                           limit: int = 50) -> dict[str, Any]:
+    from domovoi.friend_houses import messages
+
+    return {"messages": await messages.conversation(_fh_house(house), before=before, limit=limit)}
+
+
+@app.post("/v1/admin/friend-houses/conversations/{house}/read", dependencies=_FH_WRITE)
+async def admin_friend_houses_mark_read(house: str) -> dict[str, Any]:
+    from domovoi.friend_houses import messages
+
+    return {"marked": await messages.mark_read(_fh_house(house))}
+
+
+@app.get("/v1/admin/friend-houses/conversations/{house}/export", dependencies=_FH_READ)
+async def admin_friend_houses_export(house: str) -> dict[str, Any]:
+    """Every message with one house, each with its signed envelope (proof of
+    what was said; checkable against the sender's public house key)."""
+    from domovoi.friend_houses import messages
+
+    return await messages.export(_fh_house(house))
+
+
+@app.delete("/v1/admin/friend-houses/conversations/{house}", dependencies=_FH_WRITE)
+async def admin_friend_houses_delete_conversation(house: str) -> dict[str, Any]:
+    from domovoi.friend_houses import messages
+
+    return {"deleted": await messages.delete_conversation(_fh_house(house))}
+
+
+@app.post("/v1/admin/friend-houses/messages", dependencies=_FH_WRITE)
+async def admin_friend_houses_send(body: _FhMessageBody) -> dict[str, Any]:
+    from domovoi.friend_houses import messages
+
+    try:
+        return await messages.send(body.friend_id, body.text)
+    except messages.MessageError as e:
+        raise _fh_error(e) from e
+
+
+@app.put("/v1/admin/friend-houses/friends/{friend_id}/alert", dependencies=_FH_WRITE)
+async def admin_friend_houses_alert(friend_id: str, body: _FhAlertBody) -> dict[str, Any]:
+    """What a new message from this friend does: ``inbox`` (the default),
+    ``sender`` (the rooms hear who it's from) or ``read`` (and the message)."""
+    from domovoi.friend_houses import messages
+
+    try:
+        if not await messages.set_alert(friend_id, body.alert):
+            raise HTTPException(status_code=404, detail="No such friend house.")
+    except messages.MessageError as e:
+        raise _fh_error(e) from e
+    return {"alert": body.alert}
 
 
 @app.get(
