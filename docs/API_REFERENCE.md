@@ -1106,6 +1106,27 @@ label says what it shares with the song the session started from, else
 | `POST /api/music/up-next/sessions/{id}/move` | **Device** | `{target: {kind: "room", room_id} \| {kind: "device", device_id}}` | Casting (P4): the session carries on on another player — to a room after the cast (`play-tracks` can do both in one call: `up_next_session_id`; the room's own session ends, the core finds the picks in its queue by their files), or back to this device when playback comes home (only to the device asking: `403` otherwise). A device's session moves only at that device's request. `409` for an ended session. `Session`. |
 | `GET /api/music/up-next/room/{room_id}` | **Device read or guest (core decides)** | — | The room's active `Session`, or `null`. Read like the room's queue: open to the household, and to a guest while the room plays; a guest's leaves `person` out. |
 
+**Queue history (1.3.1)** (`web/backend/api/up_next_history.py`; the
+dashboard's Settings → Household → Queue history, `#settings/queue-history`,
+one session at `#settings/queue-history/<session id>`). Looking back at
+what Up next picked and why, in every room, browser and phone. **Read-only**
+(nothing here writes, ends or deletes a session or a pick) and **admin
+only** (`require_admin_read`: a Bearer, or the dashboard cookie, so a
+download link works from a tab; the household device token is `401`).
+It reads only what is kept: an ended session and its picks are deleted 30
+days after it ended (`ENDED_KEEP_DAYS`, unchanged; the answer says when as
+`kept_until`, null while the session runs). Each pick that played or was
+skipped is joined with the listening history: the session's `auto` listens
+of the same song, paired in order (the first such pick with the first such
+listen); `listen` is null for a removed or unreached pick, and for every
+pick while the household keeps no listening history.
+
+| Method & path | Auth | Request | Response / purpose |
+|---|---|---|---|
+| `GET /api/music/up-next/history` | **Admin read** | `room?` (one room's only), `limit` / `cursor` / `offset` (the paging contract: default 50, max 200) | `{sessions, kept_days, total, limit, has_more, next_cursor, offset?}`, newest first. Each session: `{id, target: {kind: room, room_id, name} \| {kind: device, device_id, name}, mode, mode_words, person: {id, name} \| null, started_at, last_active_at, ended_at, kept_until, seed: {track_id, title, artist, list: {kind, name} \| null}, picks, played, skipped, removed}`. |
+| `GET /api/music/up-next/history/{id}` | **Admin read** | `limit` / `cursor` / `offset` over the picks | `{session, summary, picks, total, limit, has_more, next_cursor, offset?}`. `picks` in the order they were made: `{seq, batch_no, track_id, title, artist, album, year, duration_sec, reason_code, reason (the code in plain words: "same era"), reason_label (the chip the queue showed: "60s"), why, seed: {track_id, title, artist} \| null (the song it followed), status (played\|skipped\|removed\|queued), status_words ("not reached" for queued), listen: {played_sec, duration_sec, outcome, started_at} \| null}`. `summary` covers the whole session on every page: `{picks, played, skipped, removed, not_reached, listened_sec, distinct_artists, closest_repeat: {songs, artist, from_seq, to_seq} \| null (the two closest picks of one artist, that many songs apart; 1 = back to back), reasons: [{code, words, count}], decades: [{decade ("1990s" or "unknown"), count}]}`. `404` for an unknown or deleted session. |
+| `GET /api/music/up-next/history/{id}/download` | **Admin read** | `format=csv\|json` (default csv) | The whole session as a file (`Content-Disposition: attachment`, `up-next-<where>-<date>.<ext>`). CSV: one row per pick, columns `seq, title, artist, album, year, reason_code, reason, reason_label, why, seed_title, seed_artist, status, played_sec, duration_sec, outcome, listened_at`; a cell that starts like a spreadsheet formula gets a leading `'`. JSON: `{session, summary, picks}`, the shapes above. `404` / `422` (another format). |
+
 **How picks are weighed (1.3.0).** Inside each bucket a song's weight is
 favourite × personal affinity × **freshness** × **popularity** × the
 session's early-skip demotions. Freshness leans a little toward songs not
