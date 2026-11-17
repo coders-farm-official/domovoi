@@ -97,7 +97,7 @@ Then open that address, [claim the admin account](#2-claim-the-admin-account) an
 To read the script first, run it without questions, or install by hand: [Running the server on Linux](docs/LINUX_HOST.md#install).
 Fedora, Arch and other systems are not supported yet ([which systems, and why](docs/LINUX_HOST.md#which-distro));
 to ask for yours, [open an issue](https://github.com/coders-farm-official/domovoi/issues).
-On Windows 11, use [the Windows installer](docs/WINDOWS_HOST.md) (preview).
+On Windows 11, use [the Windows installer](docs/WINDOWS_HOST.md).
 
 ---
 
@@ -348,7 +348,7 @@ Three ways in:
   ([Release channels](docs/LINUX_HOST.md#release-channels)). Details:
   [One command](docs/LINUX_HOST.md#one-command), or
   [run the install script yourself](docs/LINUX_HOST.md#or-run-the-install-script-yourself).
-- **Windows 11, the installer (preview).** `DomovoiSetup.exe` runs that
+- **Windows 11, the installer.** `DomovoiSetup.exe` runs that
   same script inside a private WSL2 distro. It is unsigned; download it from
   the [latest release](https://github.com/coders-farm-official/domovoi/releases/latest),
   or build it with `windows\build.ps1`
@@ -446,7 +446,7 @@ six-digit approval code, and you type that code into **Settings → Household �
   Hardware list, the two mic boards, and the by-hand route (installing the
   satellite client and pointing it at `ws://<server>:6370` yourself) are in
   the [Satellite hardware guide](docs/SATELLITE_HARDWARE.md).
-- **A spare Linux or Windows laptop or PC** (preview). **Settings → Household → Rooms → add
+- **A spare Linux or Windows laptop or PC**. **Settings → Household → Rooms → add
   a spare device**: type the room's name, press **make the code**, and run
   the one-line command it shows on that computer (an older Linux, or
   Fedora, openSUSE or Arch, gets the satellite's own Python). The computer
@@ -455,7 +455,7 @@ six-digit approval code, and you type that code into **Settings → Household �
   [Windows](docs/SPARE_DEVICE_SATELLITES.md#windows-laptops-and-pcs)). On
   Windows the card can also hand you a Setup to double-click instead of
   the command (not code-signed yet).
-- **An old phone or tablet** (Android 8.0 or later; preview). The same **add a spare
+- **An old phone or tablet** (Android 8.0 or later). The same **add a spare
   device** card shows a QR code: scan it with the phone's camera, and your
   server's page installs the Domovoi Android app (press **Download the app
   to this server** on the card once first) and opens it as that room. A
@@ -511,7 +511,7 @@ A Pi that still can't find it: edit `domovoi_url` in its
 from the server automatically.
 
 **The Windows installer** can't yet keep the data through an uninstall and
-reinstall onto it; that is not in the preview
+reinstall onto it; that is not in it yet
 ([Not in this build](docs/WINDOWS_HOST.md#not-in-this-build)).
 
 ---
@@ -571,7 +571,7 @@ Deep dive: [Architecture](docs/ARCHITECTURE.md) ·
 
 ## What each interface can do
 
-| | Voice satellites (Pi; spare computer, preview) | Phone room mode (preview) | Web dashboard | Android app |
+| | Voice satellites (Pi; spare computer) | Phone room mode | Web dashboard | Android app |
 |---|---|---|---|---|
 | Hands-free voice, wake word | ✅ the whole point | ✅ | — | — |
 | Barge-in (interrupt Domovoi mid-sentence) | ✅ off until you turn it on | — | — | — |
@@ -586,7 +586,7 @@ Deep dive: [Architecture](docs/ARCHITECTURE.md) ·
 | Read a document aloud; take a letter | voice: "read me the lease", "take a letter to the landlord" | — | — | — |
 | Explain a photographed letter | — | — | ✅ in chat | ✅ in chat (on the phone, or via the home server) |
 | Print and scan with network printers | voice: "print my cover letter", "scan this to Documents" | — | ✅ Settings, Files, Documents | ✅ Settings, Files (on the home server's files) |
-| A chat that answers with no server | — | — | — | ✅ preview: 64-bit phones with 8 GB or more |
+| A chat that answers with no server | — | — | — | ✅ 64-bit phones with 8 GB or more |
 | Save music, podcasts & audiobooks to your device | — | — | ✅ browser download | ✅ music & podcasts via DownloadManager; audiobooks into the app, played offline |
 | Calendar, documents, people & voice profiles | voice where it makes sense | voice where it makes sense | ✅ | ✅ |
 | Household lists (to-do, shopping, your own) | voice: "add milk to the shopping list" | voice | ✅ Lists page | ✅ Lists screen (Tools): add, cross off, reorder, rename; updates live |
@@ -638,7 +638,7 @@ The differences are deliberate:
   From a satellite's page it can also **drop into that room** — your phone
   joins the room's live two-way audio bridge directly, so you can talk to
   whoever's there from anywhere on the network. Its **Chat** lists the
-  home server's chats and the phone's own (a preview, answered on the phone
+  home server's chats and the phone's own (answered on the phone
   itself with no server), each marked with where it runs.
 
 ---
@@ -696,7 +696,7 @@ Want to write one? Start at the
 | [Satellite hardware](docs/SATELLITE_HARDWARE.md) | Parts list and step-by-step Pi satellite build |
 | [Pi provisioning checklist](satellite/PROVISIONING.md) | Every command and gotcha for building a Pi satellite by hand |
 | [Video satellites](satellite/VIDEO_SATELLITE.md) | A satellite with a screen: the now-playing kiosk build on a Radxa Zero 3W |
-| [Satellites on spare devices](docs/SPARE_DEVICE_SATELLITES.md) | A Linux or Windows laptop or PC, an old phone or tablet in room mode, or an old computer from a USB stick, as a room (previews): the command, QR code or stick, the approval, what each can and can't do |
+| [Satellites on spare devices](docs/SPARE_DEVICE_SATELLITES.md) | A Linux or Windows laptop or PC, an old phone or tablet in room mode, or an old computer from a USB stick, as a room (the USB stick is a preview): the command, QR code or stick, the approval, what each can and can't do |
 | [Wake-word training](scripts/wake_word/README.md) | Training your own wake word from the dashboard: what it needs, what a training does to the server, the licence of what it makes |
 | [Hardware validation](docs/HARDWARE_VALIDATION.md) | For contributors: the checks to run on real devices for room setup and video satellites |
 | [Android compatibility](docs/ANDROID_COMPATIBILITY.md) | Which phones and Android versions the app runs on, which APK to install, what each version gets |
@@ -704,7 +704,7 @@ Want to write one? Start at the
 | [Android app privacy policy](docs/PRIVACY_POLICY.md) | What the app keeps on the phone, what it sends and to whom (nothing reaches Coders Farm unless you email it) |
 | [Running without an NVIDIA GPU](docs/CPU_HOST.md) | CPU-host settings, model sizing, what gets slower and what doesn't |
 | [Running the server on Linux](docs/LINUX_HOST.md) | Linux install (one script or by hand), what differs from the Windows-first docs, systemd units, updates from the dashboard |
-| [The Windows installer (preview)](docs/WINDOWS_HOST.md) | `DomovoiSetup.exe`: the Linux server in a private WSL2 distro, every change it makes on the PC and how uninstall undoes it |
+| [The Windows installer](docs/WINDOWS_HOST.md) | `DomovoiSetup.exe`: the Linux server in a private WSL2 distro, every change it makes on the PC and how uninstall undoes it |
 | [UML diagrams](docs/uml/) | Sequence and component diagrams |
 | [Roadmap](docs/ROADMAP.md) | What's being worked on now, next and later, without dates |
 | [Release notes](docs/RELEASE_NOTES.md) | What changed, newest first, and what an operator has to do after an update |

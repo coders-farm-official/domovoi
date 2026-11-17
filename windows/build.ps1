@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Builds the Windows installer (a preview).
+Builds the Windows installer.
 
 .DESCRIPTION
 1. DomovoiHost.exe, DomovoiSetupHelper.exe and DomovoiTray.exe (the

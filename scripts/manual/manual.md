@@ -163,7 +163,7 @@ server.
 One computer that stays on. Either:
 
 - **Linux** (Ubuntu 26.04: one script installs everything), or
-- **a Windows 11 PC** with the Windows installer *(Preview)*, which puts
+- **a Windows 11 PC** with the Windows installer, which puts
   the same Linux server inside Windows, out of sight.
 
 On a Windows PC:
@@ -1630,7 +1630,7 @@ chats only ("home server chats show when you're home").
 
 [More detail](docs/FAQ.md#can-i-send-pictures-in-chat)
 
-### Domovoi on this phone *(Preview)*
+### Domovoi on this phone
 
 A chat **on this phone** runs on the phone itself: type or talk, in
 airplane mode too. It needs a 64-bit phone with 8 GB of memory or more.
@@ -1890,7 +1890,7 @@ About the price of a smart speaker. [Parts list](docs/SATELLITE_HARDWARE.md)
 **If something's wrong:** **show setup details** on the card lists the
 setup network and its page. [More detail](README.md#3-add-your-first-satellite)
 
-### A spare laptop or PC *(Preview)*
+### A spare laptop or PC
 
 A Windows 10 or 11, or Linux, laptop or PC can be a room. Use one that
 stays plugged in, with sleep turned off, and not the computer that runs
@@ -1928,7 +1928,7 @@ A tray icon on Windows shows when the microphone is live, and mutes it.
 
 [More detail](docs/SPARE_DEVICE_SATELLITES.md#windows-laptops-and-pcs)
 
-### An old phone or tablet as a room *(Preview)*
+### An old phone or tablet as a room
 
 An Android 8 or newer phone on its charger becomes a room ("room mode").
 It hears the wake word, answers, plays the room's music, and takes

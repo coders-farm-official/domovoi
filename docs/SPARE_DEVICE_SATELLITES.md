@@ -8,9 +8,9 @@ with (a PC, a laptop, an Intel Mac) from a **USB stick** your server makes
 Domovoi server as a Pi, joins through the same approval code, and becomes a
 room like any other: wake word, answers, music, intercom, timers.
 
-**Spare devices as rooms are a preview**, labelled so on the dashboard's
-**add a spare device** card and in the app: they work, but have been tried
-on fewer devices than a Pi, and may still change.
+Laptops, PCs and phones work as rooms like a Pi. The one exception is the
+**USB stick for old computers**, which is still a preview (see its section
+below).
 
 This page is for people setting one up. How it works underneath:
 [uml/satellite-protocol.md](uml/satellite-protocol.md) ("Enrolling a spare
@@ -960,8 +960,7 @@ on top of it, the same headless install a Linux mini PC gets.
 photos) is gone for good. It asks first, on the computer itself, naming the
 disk, and nothing is touched until you type ERASE.
 
-**The USB stick is a preview**, like every spare device as a room (above),
-labelled so on the card's **old computer (usb stick)** column: so far it
+**The USB stick is a preview**, labelled so on the card's **old computer (usb stick)** column: so far it
 has been tried in virtual machines (BIOS, UEFI, Secure Boot), not yet on
 real computers.
 

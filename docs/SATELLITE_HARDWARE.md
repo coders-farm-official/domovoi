@@ -68,8 +68,7 @@ You don't have to buy anything to try a room. A spare **Linux laptop or
 mini PC**, a **Windows laptop or PC**, an old **phone or tablet** (room mode
 in the Android app) or an old computer booted from a **USB stick** your
 server makes can be a room, with the same approval code and the same
-features as a Pi. They are a preview: tried on fewer devices than a
-Pi. In the dashboard: **Settings → Household → Rooms → add a spare
+features as a Pi. (The USB stick is still a preview.) In the dashboard: **Settings → Household → Rooms → add a spare
 device**. A Windows PC gets a Setup to double-click. It is not code-signed
 yet, so Windows SmartScreen stops it once ("Windows protected your PC"):
 press **More info**, then **Run anyway**. Everything about these devices,

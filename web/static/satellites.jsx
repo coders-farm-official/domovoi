@@ -3708,7 +3708,7 @@ const SpareUsbStick = ({ res, body, fire }) => {
         An old 64-bit PC or laptop, or an Intel Mac from 2012 to 2017, becomes this room: the stick
         installs a fresh system on it (Debian) and the room software, with no terminal and no password. It
         <b> erases that computer’s disk</b>, and asks first, on the computer itself, naming the disk.
-        Like the other spare devices, the stick is a preview: so far it has been tried in virtual
+        The stick is a preview: so far it has been tried in virtual
         machines; real computers are next.
       </div>
       <ul className="spare-stick-needs" style={{ ...note, margin: 0, paddingLeft: 18 }}>
@@ -3858,7 +3858,6 @@ const SpareDeviceCard = ({ fire }) => {
                        display: 'flex', alignItems: 'center', gap: 10, color: 'var(--fg)' }}>
         <Icon name="laptop" size={16}/>
         <span style={{ fontSize: 14, fontWeight: 600 }}>add a spare device</span>
-        <PreviewTag/>
         <span style={{ flex: 1 }}/>
         <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
           a laptop or PC (Linux, Windows, or an old one from a USB stick), or a phone
@@ -3870,8 +3869,7 @@ const SpareDeviceCard = ({ fire }) => {
           <div style={{ fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
             Name the room the device will be. It joins like a Pi: it waits above for its
             approval code, and nothing in this command or code is a password. Spare computers
-            (old ones from a USB stick too) and phones as rooms are a preview: they work, but
-            have been tried on fewer devices than a Pi.
+            and phones work as rooms the same way. (The USB stick is a preview: see its column below.)
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
             <input value={room} onChange={e => setRoom(e.target.value)} maxLength={64}

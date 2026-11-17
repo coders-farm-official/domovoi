@@ -1,4 +1,4 @@
-# Running the Domovoi server on Windows with the installer (preview)
+# Running the Domovoi server on Windows with the installer
 
 `DomovoiSetup.exe` puts the whole Linux server from
 [LINUX_HOST.md](LINUX_HOST.md) on a Windows 11 PC: the same systemd units,
@@ -10,7 +10,7 @@ Domovoi's icon in the notification area. After setup the dashboard at
 Domovoi is running, and prepares satellite cards
 ([The tray icon](#the-tray-icon)).
 
-**This is a preview.** Its programs are not code-signed yet, so Windows
+**Its programs are not code-signed yet, so Windows
 asks before it runs them ([Unsigned](#unsigned)), and a few things the
 finished installer will do are not in it yet, such as keeping your data
 through an uninstall ([Not in this build](#not-in-this-build)). It

@@ -43,7 +43,7 @@ Planned, not started or only begun.
   release builds are reproducible, so F-Droid can check them and publish
   the signed file as it is ([how](../android/README.md#reproducible-builds)).
   The listing itself is not in F-Droid's catalog yet.
-- **The Windows installer out of preview,** code-signed, so one download
+- **The Windows installer code-signed**, so one download
   turns the household gaming PC into a Domovoi server.
 
 ## Later
@@ -53,9 +53,8 @@ Wanted, not yet scheduled.
 - **Guided resumes and letters.** The step-by-step flows that ask
   questions to build a resume or letter are built but held back; plain
   "write a cover letter" in Chat already works.
-- **The previews out of preview:** the phone's own chat, satellites on
-  spare devices, and the USB stick for old computers, once they have been
-  tried on more real devices ([hardware validation](HARDWARE_VALIDATION.md)).
+- **The USB stick tried on more real computers,** to take it out of
+  preview (so far it has been tried in virtual machines) ([hardware validation](HARDWARE_VALIDATION.md)).
 - **Old smart speakers as rooms.** Some early Echo models can be unlocked
   and reflashed with open firmware; "Add a room" could walk you through
   turning one into a Domovoi satellite.

@@ -243,7 +243,7 @@ namespace Domovoi.Windows.Helper
         }
 
         // Smart App Control (Windows 11) blocks programs that have no
-        // signature and no reputation. This preview is unsigned (code
+        // signature and no reputation. This build is unsigned (code
         // signing is on hold, PLAN 10), so with it on, Windows blocks
         // DomovoiSetupHelper.exe and DomovoiHost.exe, and Setup itself. The
         // state is VerifiedAndReputablePolicyState: 0 off, 1 on, 2 evaluation
@@ -272,7 +272,7 @@ namespace Domovoi.Windows.Helper
             string s = SmartAppControlState();
             o.Kv("smart_app_control", s);
             if (s == "on")
-                o.Kv("fatal", "Smart App Control is on. It blocks programs without a signature, and this preview of Domovoi is unsigned: Windows would block Setup's helper now and the Domovoi service at every start. " + SmartAppControlHelp);
+                o.Kv("fatal", "Smart App Control is on. It blocks programs without a signature, and this version of Domovoi is not code-signed yet: Windows would block Setup's helper now and the Domovoi service at every start. " + SmartAppControlHelp);
             else if (s == "evaluation")
                 o.Kv("warn", "Smart App Control is in evaluation mode. If Windows turns it on later, it blocks Domovoi's unsigned service, and Domovoi stops starting. " + SmartAppControlHelp);
         }

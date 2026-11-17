@@ -130,7 +130,7 @@ admin, in **Settings → Household → Rooms**:
    can't see SD cards, **download overlay zip** and unzip it onto the
    card). The Pi starts its own setup Wi-Fi (`Domovoi-Setup-<id>`): join it
    from a phone, pick your home Wi-Fi and name the room.
-   **A spare laptop or PC, or an old phone** (preview): **add a spare
+   **A spare laptop or PC, or an old phone**: **add a spare
    device** — see [Can an old laptop or phone be a room?](#can-an-old-laptop-or-phone-be-a-room).
 2. The device says or shows a six-digit code: type it under **waiting for
    approval** and press **approve**.
@@ -524,7 +524,7 @@ Restore on a new machine: install Domovoi, start Postgres, restore the dump (`do
 
 **Either. Pick by what the box is.** There are three ways in, and the README's [First install](../README.md#first-install) has all of them.
 
-**Windows 11, the installer (preview).** One download, `DomovoiSetup.exe`, sets up the same server as a Linux box, inside a private Linux (WSL2) that Windows runs for it. It is the easy way onto the household PC, which for many homes already has the best GPU in the house. It is unsigned for now (Windows asks first), and it has no backup tool or keep-data uninstall yet. Setup and what it changes: [WINDOWS_HOST.md](WINDOWS_HOST.md).
+**Windows 11, the installer.** One download, `DomovoiSetup.exe`, sets up the same server as a Linux box, inside a private Linux (WSL2) that Windows runs for it. It is the easy way onto the household PC, which for many homes already has the best GPU in the house. It is unsigned for now (Windows asks first), and it has no backup tool or keep-data uninstall yet. Setup and what it changes: [WINDOWS_HOST.md](WINDOWS_HOST.md).
 
 **Linux** is the better host for a dedicated always-on machine. A headless install leaves several GB more RAM for models, speech recognition can use an NVIDIA GPU, wake-word training runs on the box's own Docker Engine (turned on from the dashboard, the GPU runtime set up by the install), and autostart is a systemd unit. On Ubuntu 26.04, Debian 13, Linux Mint 22 or Pop!_OS 24.04, one command installs it all. Setup: [LINUX_HOST.md](LINUX_HOST.md).
 

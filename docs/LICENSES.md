@@ -104,12 +104,12 @@ Any other model you pull by name has its own licence: its page in the
 
 | What | What it's for | Publisher, and where it comes from | Licence | Downloaded |
 |---|---|---|---|---|
-| Gemma 4 E2B-it (LiteRT-LM) | The on-device assistant (preview), 64-bit phones only | Google, from [`litert-community/gemma-4-E2B-it-litert-lm`](https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm) on Hugging Face | [Apache-2.0](https://huggingface.co/google/gemma-4-E2B-it) | When you set the assistant up (about 2.6 GB) |
+| Gemma 4 E2B-it (LiteRT-LM) | The on-device assistant, 64-bit phones only | Google, from [`litert-community/gemma-4-E2B-it-litert-lm`](https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm) on Hugging Face | [Apache-2.0](https://huggingface.co/google/gemma-4-E2B-it) | When you set the assistant up (about 2.6 GB) |
 | Moonshine `tiny-en` | Speech to text for the assistant | Moonshine AI, converted by sherpa-onnx, on Hugging Face | [MIT](https://github.com/moonshine-ai/moonshine/blob/main/LICENSE) | With the assistant |
 | Moonshine `base-en` | The benchmark only (developer options) | The same | MIT | Only when the benchmark runs it |
 | Silero VAD | Hears where speech starts and stops | Silero, from `csukuangfj/vad` on Hugging Face | [MIT](https://github.com/snakers4/silero-vad) | With the assistant |
 | Piper voices Kristin, Norman and Linda | The assistant's voice | As on the server | Public domain | One at a time, from Settings, Voice |
-| The wake-word models (room mode, preview) | A phone as a room | **Your own server**, not the internet: the openWakeWord files and Domovoi's published wake word above | As above (`hey_jarvis` and `domovoi_v1`: CC BY-NC-SA 4.0). That's why the app doesn't bundle them | When room mode starts, and when the server gives the phone its word |
+| The wake-word models (room mode) | A phone as a room | **Your own server**, not the internet: the openWakeWord files and Domovoi's published wake word above | As above (`hey_jarvis` and `domovoi_v1`: CC BY-NC-SA 4.0). That's why the app doesn't bundle them | When room mode starts, and when the server gives the phone its word |
 
 The app's own parts and libraries, with their licence texts, are in the
 app under Settings → About & updates → Open-source licences.

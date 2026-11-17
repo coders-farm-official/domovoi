@@ -12,7 +12,7 @@ Android emulator; see [What was tested](#what-was-tested) for exactly how.
   every phone from about 2017 on), 32-bit ARM (`armeabi-v7a`, older and
   budget phones, Android Go), and the x86 / x86_64 used by emulators and a
   few Chromebooks and tablets.
-- **The on-device assistant (a preview) needs a 64-bit phone** running
+- **The on-device assistant needs a 64-bit phone** running
   the 64-bit app. Its engine, LiteRT-LM, is published for 64-bit processors only.
   Everything else is the same on every ABI.
 
@@ -63,7 +63,7 @@ version from 8.0.
 | Music from the server on the phone, media notification | works | works | works | works | works | works |
 | Video feed (server and phone): pause on leaving, screen kept on | works | works | works | works | works | works |
 | Chat (text) | works | works | works | works | works | works |
-| Chat "on this phone" (the on-device assistant, a preview; needs the 64-bit app and a phone sold with 8 GB of memory or more) | works | works | works | works | works | **hidden** |
+| Chat "on this phone" (the on-device assistant; needs the 64-bit app and a phone sold with 8 GB of memory or more) | works | works | works | works | works | **hidden** |
 | A PDF attached to a phone chat (its text is read on the phone) | not read: Chat says so and offers to ask the home server | as 8 | as 8 | only with Google's PDF update (the PDF module at extension level 13); otherwise as 8 | works on 15 and later; on 13 and 14 only with the PDF update | no phone chats |
 | Drafts in a phone chat (a PDF or Word file the app writes itself, shared through Android's share sheet) | works | works | works | works | works | no phone chats |
 | Chat photos: HEIC / AVIF converted to JPEG before sending | degraded: JPEG, PNG, GIF, WebP and BMP only; a HEIC photo gets "this phone can't convert HEIC photos" | works; AVIF as 8 | as 9 | works | works | as the Android version |

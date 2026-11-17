@@ -907,7 +907,7 @@
        "text": "**Linux** (Ubuntu 26.04: one script installs everything), or"
       },
       {
-       "text": "**a Windows 11 PC** with the Windows installer {preview}, which puts the same Linux server inside Windows, out of sight."
+       "text": "**a Windows 11 PC** with the Windows installer, which puts the same Linux server inside Windows, out of sight."
       }
      ]
     },
@@ -4164,7 +4164,6 @@
     "on this phone",
     "set up"
    ],
-   "preview": true,
    "blocks": [
     {
      "type": "p",
@@ -4671,7 +4670,6 @@
     "spare device",
     "old laptop"
    ],
-   "preview": true,
    "blocks": [
     {
      "type": "p",
@@ -4746,7 +4744,6 @@
     "domovoi room",
     "qr code"
    ],
-   "preview": true,
    "blocks": [
     {
      "type": "p",

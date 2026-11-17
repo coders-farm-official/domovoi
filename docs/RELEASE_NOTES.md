@@ -4,6 +4,12 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.4.0 (unreleased) — Fewer "preview" labels
+
+- **What changed.** Chat on the phone itself, the Windows installer and spare
+  laptops, PCs and phones as rooms are no longer labelled previews. The USB
+  stick for old computers still is: it has not been tried on real computers yet.
+
 ## 1.4.0 (unreleased) — Queue history: what Up next picked, and why
 
 - **What changed.** **Settings → Household → Queue history** (an admin
