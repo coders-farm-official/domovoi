@@ -349,10 +349,14 @@ app = FastAPI(
 # actually meets, outermost in:
 #
 #   SecurityHeaders → CORS → process-wide body cap → Host → upload budgets
-#   → X-Requested-With → the router
+#   → X-Requested-With → admin activity stamp → the router
 #
 # Every one of those refuses before a route is chosen, and the header
 # middleware is outermost so its headers are stamped on their refusals too.
+
+# CORE-42. The very innermost: an admin write restarts the idle hour only
+# once the route answered 2xx, never on a refusal (422, 404, 409...).
+app.add_middleware(admin_auth.AdminActivityMiddleware)
 
 # WEB-6. A write under /api/ without X-Requested-With is refused in front
 # of the router, so no endpoint runs and nothing reads the body.

@@ -562,6 +562,79 @@ def is_admin_activity(conn: Any) -> bool:
     return str(scope.get("method") or "").upper() not in _SAFE_METHODS
 
 
+# CORE-42 (round 6). The gate runs BEFORE the body is validated and before
+# the handler, so stamping there let a write the server refused (a 422 on
+# a body of ``{}``, a 404, a 409) restart the hour: a script holding a
+# stolen Bearer could keep it alive to the 90-day cap without changing
+# anything. Now the gate only NOTES the session (a read-only check) and
+# :class:`AdminActivityMiddleware` stamps it once the response is known to
+# be a success (2xx). A refused write changes nothing, so it is not an
+# admin action. An app without the middleware never stamps: its sessions
+# idle out on the hour, which is the safe way to be wrong.
+_ACTIVITY_SCOPE_KEY = "domovoi.admin_activity"
+
+
+def _note_admin_activity(conn: Any, token: str) -> None:
+    """Remember that this request passed an admin write gate with
+    ``token``; :class:`AdminActivityMiddleware` stamps it on a 2xx."""
+    scope = getattr(conn, "scope", None)
+    pending = scope.get(_ACTIVITY_SCOPE_KEY) if isinstance(scope, dict) else None
+    if isinstance(pending, set):
+        pending.add(token)
+
+
+async def stamp_admin_activity(token: str) -> bool:
+    """Restart the idle hour of the live session ``token`` names: the
+    stamp an admin action earns. One statement, checked against the same
+    live rule, so a session that ended meanwhile is not brought back."""
+    async with session_scope() as s:
+        row = (
+            await s.execute(
+                text(
+                    "UPDATE admin_sessions SET last_used_at = now(), "
+                    f"expires_at = {_DEADLINE_FROM_NOW_SQL} "
+                    f"WHERE token_hash = :h AND {_SESSION_LIVE_SQL} RETURNING 1"
+                ),
+                {"h": _sha256(token), **_clock_params()},
+            )
+        ).first()
+    return row is not None
+
+
+class AdminActivityMiddleware:
+    """Pure ASGI: give each HTTP request a place for the admin write gates
+    to note their session, and stamp it only when the response status is
+    2xx (CORE-42). Install it INNERMOST on every app that mounts an admin
+    write gate (the core and the web process), so the status it sees is
+    the router's own answer."""
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        pending: set[str] = set()
+        scope[_ACTIVITY_SCOPE_KEY] = pending
+        status: list[int] = []
+
+        async def _send(message: dict) -> None:
+            if message.get("type") == "http.response.start":
+                status.append(int(message.get("status") or 0))
+            await send(message)
+
+        try:
+            await self.app(scope, receive, _send)
+        finally:
+            if pending and status and 200 <= status[0] < 300:
+                for token in pending:
+                    try:
+                        await stamp_admin_activity(token)
+                    except Exception as e:  # the answer is already sent
+                        log.warning("admin activity stamp failed: %s", e)
+
+
 async def prune_dead_sessions(session: AsyncSession) -> int:
     """Delete sessions that have been over (idle, expired or past the cap)
     for :data:`SESSION_PRUNE_AFTER_DAYS`. Run at each sign-in, so the table
@@ -1451,11 +1524,12 @@ async def check_admin_request(
 
     ``activity=True`` is for the admin WRITE gates only: when the request
     is also a write (:func:`is_admin_activity`), a live Bearer's idle hour
-    restarts. Every other caller — reads, probes, the device tier, sockets
+    restarts once the response is a success (2xx, CORE-42:
+    :class:`AdminActivityMiddleware`). Every other caller — reads, probes, the device tier, sockets
     — leaves the default, and the check moves nothing.
 
-    * ``ok`` — live Bearer session (its idle hour restarted when this was
-      an admin action).
+    * ``ok`` — live Bearer session (its idle hour restarts when this is
+      an admin action that succeeds).
     * ``pre-setup`` — no admin credential exists yet; the caller decides
       whether its surface keeps the open LAN-trust grace or fails
       closed (plugin management does, design §7.1).
@@ -1469,8 +1543,11 @@ async def check_admin_request(
             return "pre-setup"
         token = bearer_token(request)
         if token is not None:
-            acted = activity and is_admin_activity(request)
-            if await validate_token(s, token, activity=acted):
+            if await validate_token(s, token):
+                # An admin write earns its stamp only once it succeeded
+                # (CORE-42): noted here, stamped by AdminActivityMiddleware.
+                if activity and is_admin_activity(request):
+                    _note_admin_activity(request, token)
                 return "ok"
             # An invalid Bearer with a valid cookie alongside still
             # classifies as invalid — the caller sent broken credentials.

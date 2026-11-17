@@ -1665,9 +1665,13 @@ as they do for anyone not signed in.
 
 **What counts as an admin action, and why it is decided by the server.**
 Only a request that *changes something* (`POST`, `PUT`, `PATCH`,
-`DELETE`) and passes an admin *write* gate with the session's Bearer:
-the admin and security tiers on both processes, plugin management, a
-plugin's admin routes, and the session and password routes. Nothing else
+`DELETE`), passes an admin *write* gate with the session's Bearer, and
+is answered with a success (2xx): the admin and security tiers on both
+processes, plugin management, a plugin's admin routes, and the session
+and password routes. A write the server refuses (a body that fails
+validation, a 404, a 409, a wrong old password) changed nothing and does
+not count: the gate only notes the session, and the stamp is made after
+the route has answered (CORE-42, round 6). Nothing else
 moves the clock: no `GET` (status probes, health, the version check,
 admin reads), no WebSocket, no page load with the cookie, no reload
 taking its sign-in back (`POST /api/auth/resume`), and not the device

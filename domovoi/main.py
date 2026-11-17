@@ -1127,6 +1127,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="Voice Domovoi", lifespan=lifespan)
 
+# CORE-42. Innermost: an admin write restarts the idle hour only once the
+# route answered 2xx; a refused write (422, 404, 409...) changes nothing.
+app.add_middleware(admin_auth_mod.AdminActivityMiddleware)
 # CORE-8. The core has no browser UI of its own, which is exactly why it
 # was reachable: a page anywhere on the internet could point a name it
 # owns at this box (DNS rebinding) and then read /v1/admin/snapshot,
