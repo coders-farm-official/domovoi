@@ -158,8 +158,34 @@ def test_the_pattern_and_psk_must_agree() -> None:
     with pytest.raises(ValueError):
         Handshake("IK", initiator=False, prologue=b"", static=s, psk=b"\x00" * 32)
     with pytest.raises(ValueError):
-        Handshake("IKpsk2", initiator=False, prologue=b"", static=s)
+        Handshake("IKpsk2", initiator=True, prologue=b"", static=s,
+                  remote_static=public_bytes(s))
     with pytest.raises(ValueError):
         Handshake("XX", initiator=False, prologue=b"", static=s)
     with pytest.raises(ValueError):
         Handshake("IK", initiator=True, prologue=b"", static=s)
+
+
+def test_the_responder_can_learn_its_psk_from_the_first_message() -> None:
+    si, sr = X25519PrivateKey.generate(), X25519PrivateKey.generate()
+    psk = b"" * 32
+    init = Handshake("IKpsk2", initiator=True, prologue=b"p", static=si,
+                     remote_static=public_bytes(sr), psk=psk)
+    resp = Handshake("IKpsk2", initiator=False, prologue=b"p", static=sr)
+    assert resp.read_message(init.write_message(b"invite 42")) == b"invite 42"
+    with pytest.raises(NoiseError):
+        Handshake("IKpsk2", initiator=False, prologue=b"p", static=sr).write_message()
+    resp.provide_psk(psk)
+    assert init.read_message(resp.write_message(b"ok")) == b"ok"
+    with pytest.raises(ValueError):
+        resp.provide_psk(psk)
+
+
+def test_a_responder_that_never_got_its_psk_cant_finish() -> None:
+    si, sr = X25519PrivateKey.generate(), X25519PrivateKey.generate()
+    init = Handshake("IKpsk2", initiator=True, prologue=b"p", static=si,
+                     remote_static=public_bytes(sr), psk=b"" * 32)
+    resp = Handshake("IKpsk2", initiator=False, prologue=b"p", static=sr)
+    resp.read_message(init.write_message())
+    with pytest.raises(NoiseError):
+        resp.write_message()

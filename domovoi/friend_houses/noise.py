@@ -186,6 +186,11 @@ class Handshake:
 
     ``ephemeral`` exists for the test vectors only; real handshakes generate
     a fresh one.
+
+    An ``IKpsk2`` responder may start without the psk and call
+    :meth:`provide_psk` after reading the first message: the pairing
+    listener learns which invite is being used (so which secret) only from
+    that message, and the psk is first needed when it writes the second.
     """
 
     def __init__(
@@ -201,14 +206,16 @@ class Handshake:
     ) -> None:
         if pattern not in _PATTERNS:
             raise ValueError(f"unsupported pattern {pattern!r}")
-        if ("psk" in pattern) != (psk is not None):
-            raise ValueError("a psk is required by IKpsk2 and refused by IK")
+        if "psk" not in pattern and psk is not None:
+            raise ValueError("IK takes no psk")
+        if "psk" in pattern and psk is None and initiator:
+            raise ValueError("an IKpsk2 initiator needs the psk")
         if psk is not None and len(psk) != PSKLEN:
             raise ValueError("psk must be 32 bytes")
         if initiator and (remote_static is None or len(remote_static) != DHLEN):
             raise ValueError("the initiator must know the responder's static key")
         self._messages = _PATTERNS[pattern]
-        self._has_psk = psk is not None
+        self._has_psk = "psk" in pattern
         self._psk = psk
         self.initiator = initiator
         self._s = static
@@ -222,6 +229,14 @@ class Handshake:
         # Pre-message pattern for IK:  <- s
         responder_static = remote_static if initiator else public_bytes(static)
         self._ss.mix_hash(responder_static)
+
+    def provide_psk(self, psk: bytes) -> None:
+        """The responder's psk, once the first message said which one."""
+        if not self._has_psk or self._psk is not None or self.initiator or self.complete:
+            raise ValueError("no psk is waiting to be provided")
+        if len(psk) != PSKLEN:
+            raise ValueError("psk must be 32 bytes")
+        self._psk = psk
 
     # -- state ---------------------------------------------------------------
 
@@ -285,7 +300,8 @@ class Handshake:
             elif token == "s":
                 out += self._ss.encrypt_and_hash(public_bytes(self._s))
             elif token == "psk":
-                assert self._psk is not None
+                if self._psk is None:
+                    raise NoiseError("no psk provided")
                 self._ss.mix_key_and_hash(self._psk)
             else:
                 self._ss.mix_key(self._token_dh(token))
@@ -318,7 +334,8 @@ class Handshake:
                 self._rs = self._ss.decrypt_and_hash(bytes(view[pos:pos + size]))
                 pos += size
             elif token == "psk":
-                assert self._psk is not None
+                if self._psk is None:
+                    raise NoiseError("no psk provided")
                 self._ss.mix_key_and_hash(self._psk)
             else:
                 self._ss.mix_key(self._token_dh(token))

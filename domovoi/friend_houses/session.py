@@ -62,6 +62,10 @@ class Kind(enum.IntEnum):
     PING = 0x10
     PONG = 0x11
     IM_BACK = 0x30  # "I'm online again": flush your outbox to me now
+    # Friending (F2): the inviting house accepted. Body: the private half of
+    # the Tor client key it authorized, so the asker can reach its onion.
+    ACCEPT = 0x40
+    ACCEPT_OK = 0x41
     BYE = 0x7F
 
 
@@ -70,6 +74,8 @@ _BODY_SIZES: dict[Kind, int | tuple[int, int]] = {
     Kind.PING: 8,
     Kind.PONG: 8,
     Kind.IM_BACK: 0,
+    Kind.ACCEPT: 32,
+    Kind.ACCEPT_OK: 0,
     Kind.BYE: 0,
 }
 
