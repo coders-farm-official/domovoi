@@ -42,7 +42,12 @@ import SwiftUI
 /// Intelligence off, the model not ready, or iOS 18 to 25 — there is one place
 /// again and nothing is drawn: no chip, no picker, no second list.
 ///
-/// **The paperclip.** Pictures and documents a row already has are drawn
+/// **The paperclip offers a video, and only a video** (1.4.0): the send
+/// body carries `videos` (``ChatPath/sendBody(content:deviceID:videoToken:)``),
+/// and ``ChatVideoAttachMenu`` is drawn only when the house said
+/// `video.available`. What follows is why it offers nothing else.
+///
+/// Pictures and documents a row already has are drawn
 /// (``ChatMoreRowTop``), and neither can be **sent**: ``ChatModel/send(_:)``
 /// takes a `String` and ``ChatPath/sendBody(content:deviceID:)`` writes
 /// `{content, device_id}` — there is no `images` and no `documents` key, and
