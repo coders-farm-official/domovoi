@@ -123,6 +123,11 @@ ROUTES: dict[str, tuple[str, str, dict | None]] = {
     "accept-list": ("POST", f"/api/friend-houses/shared-lists/{SPACE}/accept", {"name": "Groceries (Smiths)"}),
     "decline-list": ("POST", f"/api/friend-houses/shared-lists/{SPACE}/decline", None),
     "stop-sharing": ("DELETE", f"/api/friend-houses/shared-lists/{SPACE}", None),
+    # Blocking (admin only)
+    "block": ("POST", "/api/friend-houses/friends/fr0123abcd/block",
+              {"keep_messages": False, "new_address": True}),
+    "blocked": ("GET", "/api/friend-houses/blocked", None),
+    "unblock": ("DELETE", f"/api/friend-houses/blocked/{HOUSE}", None),
 }
 _IDS = sorted(ROUTES)
 
@@ -265,7 +270,7 @@ async def test_an_admin_bearer_reaches_the_cores_route(name, monkeypatch, forwar
     assert f_method == method
     assert f_path.split("?")[0] == path.replace("/api/friend-houses", "/v1/admin/friend-houses")
     if method in ("PUT", "PATCH") or name in ("make", "preview", "ask", "accept", "send",
-                                                   "share-list", "accept-list"):
+                                                   "share-list", "accept-list", "block"):
         assert f_body == body
 
 
@@ -453,3 +458,65 @@ async def test_sharing_a_list_checks_the_list_and_the_friend(monkeypatch, forwar
         assert r.status_code == 400 and "Groceries" not in r.text
         assert (await c.post(f"/api/friend-houses/shared-lists/{SPACE}/accept", json={})).status_code == 200
     assert forwarded == [("POST", f"/v1/admin/friend-houses/shared-lists/{SPACE}/accept", {})]
+
+
+# ─── presence and blocking ───────────────────────────────────────────────
+
+
+def test_presence_says_only_whether_the_house_is_online() -> None:
+    src = _code(_page())
+    presence = re.search(r"const FhPresence = .*?\n\};", src, re.S).group(0)
+    assert "<Pill tone=\"ok\">Online</Pill>" in presence
+    assert "`Last seen ${ago}`" in presence and "'Not reached yet'" in presence
+    assert "<FhPresence friend={friend}/>" in src
+
+
+def test_the_page_says_what_blocking_does() -> None:
+    src = _page()
+    for words in ("Block ${name}? They’re removed and can’t ask to be friends again unless you unblock them.",
+                  "Keep our messages with them", "Save a copy first",
+                  "Move this house to a new private address (recommended): the blocked house can’t even reach the door.",
+                  "Your other friends are told the new address automatically; messages may take a few minutes to get",
+                  "Blocked houses",
+                  "Unblock ${name}? They aren’t friends again; they can ask with a new friend file.",
+                  "You blocked this house. Unblock it first if you want to be friends again.",
+                  "They won’t be able to reach this house any more. (Block also stops them asking again.)"):
+        assert words in src, words
+    code = _code(src)
+    # Both choices default to ticked; the block is sent as a body, by id.
+    assert "const [keep, setKeep] = React.useState(true);" in code
+    assert "const [move, setMove] = React.useState(true);" in code
+    assert ("apiPost(`${FH_API}/friends/${encodeURIComponent(friend.id)}/block`,\n"
+            "                              { keep_messages: keep, new_address: move })") in code
+    # A blocked preview hides Send request, like the other refusals.
+    assert "preview.already_asked || preview.blocked);" in code
+    # The blocked list: plain text, hidden when empty, addressed by house key.
+    card = re.search(r"const FhBlockedCard = .*?\n\};", code, re.S).group(0)
+    assert "if (!list.length) return null;" in card
+    assert "apiDelete(`${FH_API}/blocked/${house.house}`)" in code
+    for banned in ("dangerouslySetInnerHTML", "innerHTML"):
+        assert banned not in code
+
+
+@pytest.mark.asyncio
+async def test_blocking_checks_the_friend_and_the_body(monkeypatch, forwarded) -> None:
+    install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN})
+    async with _client(bearer(ADMIN_TOKEN)) as c:
+        assert (await c.post("/api/friend-houses/friends/bad.id/block", json={})).status_code == 404
+        for body in ({"keep_messages": "no"}, {"new_address": 0}, {"keep_messages": None}, [True]):
+            r = await c.post("/api/friend-houses/friends/fr0123abcd/block", json=body)
+            assert r.status_code == 400, (body, r.text)
+        # Leaving both out keeps the defaults: keep the messages, move.
+        assert (await c.post("/api/friend-houses/friends/fr0123abcd/block", json={})).status_code == 200
+    assert forwarded == [("POST", "/v1/admin/friend-houses/friends/fr0123abcd/block",
+                          {"keep_messages": True, "new_address": True})]
+
+
+@pytest.mark.asyncio
+async def test_an_unblock_needs_a_house_key(monkeypatch, forwarded) -> None:
+    install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN})
+    async with _client(bearer(ADMIN_TOKEN)) as c:
+        for bad in ("ab" * 31, "AB" * 32, "zz" * 32, "ab" * 33, "fr0123abcd"):
+            r = await c.delete(f"/api/friend-houses/blocked/{bad}")
+            assert r.status_code == 404, (bad, r.status_code)
+    assert forwarded == []

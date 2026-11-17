@@ -17731,6 +17731,108 @@
         }
       }
     },
+    "/api/friend-houses/friends/{friend_id}/block": {
+      "post": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Block",
+        "description": "Block a friend house: removed, refused from now on, and (by default)\nthis house moves to a new private address its other friends are told.",
+        "operationId": "friend_houses_block_api_friend_houses_friends__friend_id__block_post",
+        "parameters": [
+          {
+            "name": "friend_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Friend Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/blocked": {
+      "get": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Blocked",
+        "description": "The houses this house blocked.",
+        "operationId": "friend_houses_blocked_api_friend_houses_blocked_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/blocked/{house}": {
+      "delete": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Unblock",
+        "description": "Unblock a house. It isn't a friend again; it can ask with a new file.",
+        "operationId": "friend_houses_unblock_api_friend_houses_blocked__house__delete",
+        "parameters": [
+          {
+            "name": "house",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "House"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/podcasts/subscriptions": {
       "get": {
         "tags": [

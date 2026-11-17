@@ -2692,6 +2692,31 @@ to the chat model.
 Removing a friend keeps the conversation, marked "no longer a friend", so
 it can be read or exported before it is deleted.
 
+**Blocking** is removing, plus three things. The house's key is kept on a
+blocked list, and anything signed by it is refused: it can't ask to be a
+friend again with a new file, and this house won't send it a request. By
+default this house also **moves to a new address** (a fresh onion key) and
+tells its remaining friends the new one, each in a signed statement on its
+next connection; a friend that was offline is told when it is next reached.
+So the blocked house no longer knows where this one is, even if it kept a
+copy of a reach key. Blocking can delete the conversation too; by default
+it is kept. Unblocking only lifts the refusal: the house is not a friend
+again until it asks with a new friend file and an admin accepts.
+
+**Presence.** Friends show as "Online" when this house has heard from them
+in the last 15 minutes (a message, a list change, or a check it makes every
+10 minutes on friends it hasn't heard from), and otherwise "Last seen" with
+a time. It says only that the other house is running and reachable, never
+who is home. The check is the same kind of call a message makes, so a
+friend learns no more than it already could by sending one.
+
+**By voice.** "Any messages?" says how many are new and from which friend
+houses, never the text. "Read my messages" reads them aloud (five at a
+time, wake phrases taken out as above), only when asked. "Message the
+Smiths …" (or "tell the Smiths …" when AI features are on) reads the
+message back and sends it only on "yes", within two minutes. Neither a
+friend's message nor a friend's name goes to the chat model.
+
 **Shared lists.** An admin can share a household list with a friend house.
 Each house keeps its own copy in its own Lists, and the two exchange
 signed changes (items added, edited, ticked off, removed; not the list's
