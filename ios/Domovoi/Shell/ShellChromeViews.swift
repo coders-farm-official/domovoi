@@ -280,6 +280,12 @@ struct PhoneBarView: View {
                 VStack(spacing: 2) {
                     Image(systemName: route.systemImage)
                         .font(.body)
+                        // Friend houses' unread messages (``ShellModel/badge(for:)``).
+                        .overlay(alignment: .topTrailing) {
+                            if let count = model.badge(for: route) {
+                                RouteCountBadge(count: count).offset(x: 12, y: -6)
+                            }
+                        }
                     // No `.lineLimit`. `music` at an accessibility type size
                     // does not fit 98 points, and the horizontal scroll above
                     // is what makes room for it; a limit here would cut the
@@ -320,6 +326,7 @@ struct PhoneBarView: View {
             // limit — if a contrast finding ever returns here, that is where
             // it will say so.
             .accessibilityLabel(route.label)
+            .routeCountValue(model.badge(for: route))
             .accessibilityAddTraits(selected ? [.isButton, .isSelected] : [.isButton])
         }
     }

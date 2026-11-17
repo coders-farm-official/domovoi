@@ -306,6 +306,8 @@ public final class ShellModel {
             read: { asked in await UnclaimedServerModel.read(using: client, server: asked) },
             activeServer: { [container] in container.store.serverURL }
         )
+        // Friend Houses: the gate, inert until the app starts it.
+        self.friendHouses = FriendHousesGate(container: container)
         // Every stored property is set, so `self` may be captured from here
         // on. Both sinks are connected after the fact rather than passed into
         // the initialisers above, because both have to reach back into this
@@ -332,6 +334,9 @@ public final class ShellModel {
         }
         // Unclaimed server: "still not set up" is a toast like any other.
         unclaimed.say = { [weak self] text in self?.showToast(text) }
+        // Friend Houses: a verdict that changed re-checks the open route and
+        // takes a notification tap that was waiting for it.
+        friendHouses.onChange = { [weak self] in self?.friendHousesChanged() }
         owners.changed = { [weak self] in
             Task { @MainActor in self?.ownersChanged() }
         }
@@ -421,12 +426,23 @@ public final class ShellModel {
     /// "Unclaimed server", so the shell's own code is unchanged around them.
     public let unclaimed: UnclaimedServerModel
 
+    /// Friend Houses' availability gate and unread badge
+    /// (``FriendHousesGate``, Android 394473e2). Inert until
+    /// ``startFriendHouses(notifications:)``, which the app calls; a shell a
+    /// test builds never reads it. Every trigger below is one line marked
+    /// "Friend Houses".
+    public let friendHouses: FriendHousesGate
+
     // MARK: - what is drawn
 
     /// The visibility inputs, as the one value every route rule takes.
     public var visibility: RouteVisibility {
         RouteVisibility(
-            capabilities: capabilities,
+            // Friend Houses rides on the manifest: shown only while
+            // `GET /api/friend-houses` says it is on, on THIS server
+            // (``FhGateState/shownFor(_:)``), as Android's shell sets
+            // `caps.copy(friendHouses = …)`.
+            capabilities: capabilities.withFriendHouses(friendHouses.shownFor(inputs.serverURL) != nil),
             sharedScreen: DeviceRegistry.isSharedScreen(answer: sharedScreenAnswer, paired: isPaired),
             phoneCanChat: phoneCanChat
         )
@@ -990,6 +1006,9 @@ public final class ShellModel {
                 // `CoverArt.appForegrounded`).
                 MusicCoverRenewal.shared.appReturned()
                 PlayerArtwork.forgetMisses()
+                // Friend Houses: coming back to the app re-reads the status
+                // (`MainActivity.onResume` → `friendHouses.onAppResumed()`).
+                friendHouses.refresh()
             }
         case .inactive, .background:
             // `.inactive` is a step on the way out and also a transient state
@@ -1004,6 +1023,9 @@ public final class ShellModel {
             }
         }
         updateReachability()
+        // Friend Houses: the badge is read every minute while the app is on
+        // screen, and not at all while it is not.
+        friendHouses.setForeground(phase == .active)
         // The countdown is cancelled with the scene phase, like the
         // reachability loop and for the same reason: a `Task` nobody cancels
         // keeps a timer alive across a suspension, and a card that is not on
@@ -1073,6 +1095,10 @@ public final class ShellModel {
         if unclaimed.serverIs(inputs.serverURL) {
             unclaimed.ask(.serverPicked, unreachable: unreachable)
         }
+        // Friend Houses: a server or token change reads the status again (a
+        // no-op when neither changed — this runs once a second under the
+        // token-trouble countdown).
+        friendHouses.inputsMayHaveChanged()
     }
 
     /// Whether the token-trouble card's countdown is actually being written.
@@ -1177,8 +1203,11 @@ public final class ShellModel {
     ///     capability fetcher instead of here would lose that trigger (map
     ///     §12.2).
     public func socketConnectionChanged(_ up: Bool) {
+        let wasUp = connected
         socketChanged(connected: up, sendRegister: registerSender)
         guard up else { return }
+        // Friend Houses: the live connection came back.
+        if !wasUp { friendHouses.refresh() }
         Task { @MainActor [weak self] in
             await self?.refreshCapabilities()
         }
@@ -1649,6 +1678,7 @@ public final class ShellModel {
         // closures reaching back into this object.
         container.socketRelay.disconnect()
         driver.stop()
+        friendHouses.stop()
         waitTick?.cancel()
         waitTick = nil
         toastTask?.cancel()
@@ -1665,6 +1695,38 @@ public final class ShellModel {
             container.removeServerSelectionSink(selectionSink)
             self.selectionSink = nil
         }
+    }
+
+    // MARK: - Friend Houses (Android 394473e2)
+
+    /// Start Friend Houses' gate: read now, and on every trigger from here
+    /// on. The app's one call, once the household side is built; `notifications`
+    /// is the system centre, which a package test cannot build, so a shell
+    /// without it runs the gate with no notifications.
+    public func startFriendHouses(notifications: (any AlertsNotificationCentre)? = nil) {
+        let alerts = notifications.map { centre in
+            FriendHouseAlerts(
+                api: friendHouses.api,
+                store: FhSeenBook(),
+                sink: FhNotificationSink(centre: centre)
+            )
+        }
+        friendHouses.start(alerts: alerts)
+        friendHouses.setForeground(phase == .active)
+    }
+
+    /// The gate's verdict changed: a route that lost it goes home, and a
+    /// notification tap waiting for it is taken.
+    func friendHousesChanged() {
+        _ = navigation.capabilitiesChanged(visibility)
+        takePendingRoute()
+    }
+
+    /// A launcher's count for `route`, or nil for none: Friend houses' unread
+    /// messages while it is shown (Android's `SidebarCounts.friendHouses`).
+    public func badge(for route: Route) -> Int? {
+        guard route == .friendHouses else { return nil }
+        return friendHouses.badge(inputs.serverURL)
     }
 
     // MARK: - the plumbing
@@ -1802,6 +1864,19 @@ public final class ShellModel {
         }
         switch screen {
         case .workspace:
+            // Friend Houses: a message's tap opens Friend houses only once
+            // this server's verdict says it is on; a verdict that says hidden
+            // drops the request, and none yet (a cold start from the
+            // notification) leaves it waiting for the first read
+            // (`AppShell.kt`'s `FRIEND_HOUSES_ROUTE` branch).
+            if asked == FriendHousesGate.route {
+                if friendHouses.shownFor(inputs.serverURL) != nil {
+                    if navigation.takeRouteFromOutside(asked) { _ = container.takePendingRoute() }
+                } else if friendHouses.state.answered(inputs.serverURL) {
+                    _ = container.takePendingRoute()
+                }
+                return
+            }
             if navigation.takeRouteFromOutside(asked) {
                 _ = container.takePendingRoute()
             }

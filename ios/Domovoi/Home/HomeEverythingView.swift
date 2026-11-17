@@ -29,6 +29,12 @@ struct HomeEverythingView: View {
     /// can do about a grid they do not like.
     let onEditTheBar: () -> Void
 
+    /// A tile's count, or nil: Friend houses' unread messages
+    /// (``ShellModel/badge(for:)``) — the one count this app has a source
+    /// for. The note on ``tile(_:)`` still holds for People, Calendar and
+    /// Stations.
+    var badge: (Route) -> Int? = { _ in nil }
+
     @Environment(\.dynamicTypeSize) private var typeSize
 
     /// Three per row (`HomeSections.kt:1035`), and **one per row at the
@@ -171,6 +177,9 @@ struct HomeEverythingView: View {
             // not to be the audit's objection**: dropping it for padding left
             // the finding count at six with the tiles 77 to 80 points tall.
             .frame(maxWidth: .infinity, minHeight: 72)
+            .overlay(alignment: .topTrailing) {
+                if let count = badge(route) { RouteCountBadge(count: count).padding(6) }
+            }
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
@@ -196,6 +205,7 @@ struct HomeEverythingView: View {
         // falsified. A comment explaining why something works is a claim to
         // check, not evidence.
         .accessibilityLabel(route.label)
+        .routeCountValue(badge(route))
         .accessibilityAddTraits(.isButton)
     }
 }

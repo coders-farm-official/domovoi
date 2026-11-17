@@ -68,6 +68,10 @@ public enum AlertsTapTarget: Equatable, Sendable {
     /// Chat, with no thread: the payload named Chat but carried no usable
     /// thread.
     case chat
+
+    /// A message from a friend house: Friend houses, once the server says it
+    /// is on (``ShellModel``'s pending-route rule).
+    case friendHouses
 }
 
 /// What a tap carries, as a target. `nil` for a notification that is not one
@@ -81,6 +85,7 @@ public func alertsTapTarget(_ userInfo: [AnyHashable: Any]) -> AlertsTapTarget? 
     switch route {
     case "home": return .home
     case "containers": return .containers
+    case FriendHousesGate.route: return .friendHouses
     case "chat":
         // The thread travels as digits: a `userInfo` has been through a plist,
         // and `Int64` is not one of the types that survives it unchanged.
@@ -401,6 +406,7 @@ public final class AlertsCenter: Sendable {
         case .home: return container.requestRoute("home")
         case .containers: return container.requestRoute("containers")
         case .chat: return container.requestRoute("chat")
+        case .friendHouses: return container.requestRoute(FriendHousesGate.route)
         case let .chatThread(serverKey, thread, title):
             // The thread is offered first: `requestChatThread` refuses a
             // thread minted by another house, and in that case Chat is still
