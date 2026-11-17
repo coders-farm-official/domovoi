@@ -194,7 +194,11 @@ data class PrintPreview(
 )
 
 @Serializable
-data class PrintJobsResponse(val jobs: List<PrintJob> = emptyList())
+data class PrintJobsResponse(
+    val jobs: List<PrintJob> = emptyList(),
+    /** The household's scans in the same log, newest first, each with its reading (1.4.0). */
+    val scans: List<ScanJob> = emptyList(),
+)
 
 @Serializable
 data class ScanJob(
@@ -211,7 +215,14 @@ data class ScanJob(
     val path: String? = null,
     val incomplete: Boolean = false,
     val error: String? = null,
+    /** The scan reader's newest reading of the saved scan; null when it was
+     *  never read (an old scan, or a server that can't read scans). */
+    val read: ScanRead? = null,
+    /** True once the reading is done and found words. */
     val readable: Boolean = false,
+    /** The job log's rows ([PrintJobsResponse.scans]) say who scanned and when. */
+    val who: String = "",
+    @SerialName("created_at") val createdAt: String? = null,
 ) {
     /** The scanner is still working: the sheet polls until it isn't. */
     val busy: Boolean get() = state == "scanning" || state == "saving"
@@ -387,9 +398,6 @@ internal fun scanEndMessage(scan: ScanJob): String = when (scan.state) {
     "canceled" -> "Scan canceled; nothing was saved."
     else -> scan.state
 }
-
-/** "What does it say?" is offered only when the server can read the scan. */
-internal fun offersWhatDoesItSay(scan: ScanJob): Boolean = scan.readable && scan.state == "done"
 
 /** A supply bar's level, 0..1, or null when the printer gave none (or "unknown", -1..-3 in IPP). */
 internal fun supplyFraction(s: PrinterSupply): Float? =

@@ -216,11 +216,11 @@ class PrintModelsTest {
         assertNull(scanResolution(null))
     }
 
-    @Test fun whatDoesItSayOnlyWhenReadable() {
+    @Test fun whatDoesItSayOnlyWhenReadOrBeingRead() {
+        // The full gate is ScanReadTest's; here: a saved scan never read has none.
         val done = ScanJob(id = "x", state = "done", name = "Scan 2026-10-21 15.40.pdf", path = "Scans/Scan 2026-10-21 15.40.pdf")
-        assertFalse(offersWhatDoesItSay(done))
-        assertTrue(offersWhatDoesItSay(done.copy(readable = true)))
-        assertFalse(offersWhatDoesItSay(done.copy(readable = true, state = "waiting")))
+        assertFalse(whatDoesItSayShown(done))
+        assertTrue(whatDoesItSayShown(done.copy(readable = true)))
         assertEquals("Saved to Documents as Scan 2026-10-21 15.40.pdf", scanEndMessage(done))
         assertEquals("Scan canceled; nothing was saved.", scanEndMessage(done.copy(state = "canceled")))
         assertEquals("The feeder is jammed.", scanEndMessage(done.copy(state = "failed", error = "The feeder is jammed.")))
