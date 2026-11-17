@@ -1092,6 +1092,13 @@ class Settings(BaseSettings):
     # trains nothing; a wake word queued for training sits in 'training'
     # until this is on.
     wake_word_trainer_enabled: bool = False
+    # Friend Houses ("serverless messaging and friend system between
+    # households", domovoi/friend_houses/): OFF by default. While off,
+    # nothing runs and nothing connects: no keys, no Tor image, no daemon.
+    # On, the core runs a Tor daemon in its own container whenever there's
+    # a friend to reach (domovoi/friend_houses/service.py); the internet
+    # answer "never" stops it.
+    friend_houses_enabled: bool = False
     # Trainer outer-loop cadence (seconds). Training itself is a long shell-
     # out, so polling the queue head infrequently is fine.
     wake_word_trainer_loop_sec: float = 30.0
