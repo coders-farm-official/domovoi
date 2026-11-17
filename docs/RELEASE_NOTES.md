@@ -30,8 +30,10 @@ a way that would otherwise get reported as a bug.
   cursor, the same as Insert photo. Text copied together with a picture
   pastes as before. (Pasting a picture already worked; this is
   housekeeping, and the Download is the real fix.)
-- **What to know.** The phone apps' own Files lists still save a formatted
-  document as `.html`; the zip is fixed on the server for them.
+- **What to know.** The Android and iPhone apps' Files lists save such a
+  document as a Word file too, once they are updated; an older app still
+  saves the `.html` page (a zip made by the server has the `.docx` either
+  way).
 
 ## 1.4.0 (unreleased) — the room display: a phone in room mode shows the room
 
