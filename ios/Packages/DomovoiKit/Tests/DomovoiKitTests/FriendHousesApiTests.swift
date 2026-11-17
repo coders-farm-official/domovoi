@@ -527,6 +527,79 @@ final class FriendHousesApiTests: XCTestCase {
         }
     }
 
+    // MARK: - "This week" (server R6 FH-8, Android 3d99f404)
+
+    private func status(changes: String) throws -> FhStatus {
+        try XCTUnwrap(FhGate.decide(code: 200, body: Data(#"{"status":"on","changes":\#(changes)}"#.utf8)).status)
+    }
+
+    func testThisWeekIsNewestFirstAtMostFiveInAndroidsWords() throws {
+        let now = try XCTUnwrap(isoMs("2026-11-17T19:12:10+00:00"))
+        let s = try status(changes: """
+            [{"kind":"friend","friend":"The Okafors","list":null,"at":"2026-11-15T19:12:10+00:00"},
+             {"kind":"shared_list","friend":"The Smiths","list":"Camping **trip**","at":"2026-11-17T17:12:10+00:00"},
+             {"kind":"friend","friend":"","at":"2026-11-14T19:12:10+00:00"},
+             {"kind":"shared_list","friend":null,"list":null,"at":"2026-11-13T19:12:10+00:00"},
+             {"kind":"friend","friend":"Fifth","at":"2026-11-12T19:12:10+00:00"},
+             {"kind":"friend","friend":"Sixth","at":"2026-11-11T19:12:10+00:00"}]
+            """)
+        XCTAssertEqual(
+            [
+                "\u{201C}Camping **trip**\u{201D} was shared with The Smiths \u{00B7} 2h ago",
+                "The Okafors became a friend house \u{00B7} 2d ago",
+                "A house became a friend house \u{00B7} 3d ago",
+                "\u{201C}A list\u{201D} was shared with a friend house \u{00B7} 4d ago",
+                "Fifth became a friend house \u{00B7} 5d ago",
+            ],
+            fhChangeLines(s.changes, nowMs: now),
+            "newest first, five at most, names exactly as sent, fallbacks for null or blank ones"
+        )
+        XCTAssertEqual("This week", FhWords.thisWeek)
+        XCTAssertEqual(
+            "Not you? Only an admin can remove or block the house and change the admin password, on the dashboard.",
+            FhWords.notYou
+        )
+    }
+
+    func testThisWeekSkipsUnknownKindsAndBadRowsAndHidesWhenEmpty() throws {
+        let now = try XCTUnwrap(isoMs("2026-11-17T19:12:10+00:00"))
+        // Absent, null or not a list: no section, and the status still reads.
+        let absent = try XCTUnwrap(FhGate.decide(code: 200, body: Data(#"{"status":"on","unread":2}"#.utf8)).status)
+        XCTAssertNil(absent.changes)
+        XCTAssertEqual(2, absent.unread)
+        XCTAssertNil(fhChangeLines(absent.changes, nowMs: now))
+        XCTAssertNil(try status(changes: "null").changes)
+        XCTAssertNil(try status(changes: #"{"kind":"friend"}"#).changes)
+        // Empty, or only kinds this build doesn't know: no section.
+        XCTAssertNil(fhChangeLines(try status(changes: "[]").changes, nowMs: now))
+        XCTAssertNil(fhChangeLines(try status(changes: #"[{"kind":"block","friend":"X"}]"#).changes, nowMs: now))
+        // A malformed row costs only itself, never the status read.
+        let mixed = try status(changes: #"[7, "x", null, {"kind":"friend","friend":"Kept"}, {"kind":5}, {"friend":"no kind"}]"#)
+        XCTAssertEqual(["Kept became a friend house"], fhChangeLines(mixed.changes, nowMs: now))
+    }
+
+    /// `at` is bounded like `sent_at`: out of range, unreadable or missing
+    /// drops the " · <time>" part; the change still shows, after the timed
+    /// ones, in the server's order.
+    func testThisWeekTimesOutOfRangeShowNoTime() throws {
+        let now = try XCTUnwrap(isoMs("2026-11-17T19:12:10+00:00"))
+        let s = try status(changes: """
+            [{"kind":"friend","friend":"Past","at":"1969-12-31T23:59:59+00:00"},
+             {"kind":"friend","friend":"Far","at":"+999999999-12-31T23:59:59Z"},
+             {"kind":"friend","friend":"Junk","at":"tomorrow"},
+             {"kind":"friend","friend":"Number","at":12},
+             {"kind":"friend","friend":"Fine","at":"2026-11-17T19:10:10+00:00"}]
+            """)
+        XCTAssertEqual(
+            [
+                "Fine became a friend house \u{00B7} 2m ago",
+                "Past became a friend house", "Far became a friend house",
+                "Junk became a friend house", "Number became a friend house",
+            ],
+            fhChangeLines(s.changes, nowMs: now)
+        )
+    }
+
     func testAlertLevelsAreWords() {
         XCTAssertEqual("New messages: only in the inbox", FhWords.alert("inbox"))
         XCTAssertEqual("New messages: the rooms say who it's from", FhWords.alert("sender"))

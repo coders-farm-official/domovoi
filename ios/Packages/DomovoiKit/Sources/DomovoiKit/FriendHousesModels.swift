@@ -74,6 +74,11 @@ public enum FhWords {
     public static let notReachedYet = "Not reached yet"
     public static func lastSeen(_ relative: String) -> String { "Last seen \(relative)" }
 
+    /// "This week" (server R6 FH-8), Android 3d99f404 word for word.
+    public static let thisWeek = "This week"
+    public static let notYou =
+        "Not you? Only an admin can remove or block the house and change the admin password, on the dashboard."
+
     public static func unread(_ n: Int) -> String { "\(n) unread" }
     public static func notDelivered(_ n: Int) -> String { "\(n) not delivered" }
     public static func waiting(_ n: Int) -> String { "\(n) \(n == 1 ? "change" : "changes") waiting to send" }
@@ -171,6 +176,47 @@ public func fhPresence(_ friend: FhFriend, nowMs: Int64) -> String? {
     // (Android 22b3b9c8).
     guard fhIso(seen) != nil else { return nil }
     return FhWords.lastSeen(fhRelTime(seen, nowMs: nowMs))
+}
+
+/// At most this many of the week's changes are listed.
+public let fhChangesShown = 5
+
+/// One of the week's changes in the dashboard's words, with its time when
+/// it can be shown: "The Smiths became a friend house · 2d ago",
+/// "“Groceries” was shared with The Patels · 5h ago" (Android
+/// `FhWords.change`). Nil for a kind this build doesn't know. A null or
+/// blank name is "A house" / "A list" / "a friend house"; a missing time, or
+/// one outside 0...9999-12-31, drops the " · <time>" part.
+public func fhChangeLine(_ change: FhChange, nowMs: Int64) -> String? {
+    func named(_ value: String?, _ fallback: String) -> String {
+        guard let value, !fhBlank(value) else { return fallback }
+        return value
+    }
+    let what: String
+    switch change.kind {
+    case "friend":
+        what = "\(named(change.friend, "A house")) became a friend house"
+    case "shared_list":
+        what = "\u{201C}\(named(change.list, "A list"))\u{201D} was shared with "
+            + named(change.friend, "a friend house")
+    default:
+        return nil
+    }
+    guard fhIso(change.at) != nil else { return what }
+    return "\(what) \u{00B7} \(fhRelTime(change.at, nowMs: nowMs))"
+}
+
+/// The "This week" lines: newest first (a change with no time to show
+/// after those with one, the server's order among equals), at most
+/// ``fhChangesShown``; nil — no section — when there is nothing to say
+/// (absent, not a list, empty, or only kinds this build doesn't know).
+public func fhChangeLines(_ changes: [FhChange]?, nowMs: Int64) -> [String]? {
+    guard let changes else { return nil }
+    let ordered = changes.enumerated()
+        .map { (index: $0.offset, at: fhIsoSeconds($0.element.at) ?? -1, change: $0.element) }
+        .sorted { $0.at != $1.at ? $0.at > $1.at : $0.index < $1.index }
+    let lines = ordered.compactMap { fhChangeLine($0.change, nowMs: nowMs) }.prefix(fhChangesShown)
+    return lines.isEmpty ? nil : Array(lines)
 }
 
 /// An outgoing message's state in plain words, with its tone.

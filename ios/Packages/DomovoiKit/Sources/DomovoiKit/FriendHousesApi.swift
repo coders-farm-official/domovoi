@@ -62,16 +62,27 @@ public struct FhStatus: Equatable, Sendable, Decodable {
     public let houseName: String?
     /// Unread messages in the house inbox.
     public let unread: Int
+    /// The week's trust changes — new friends and lists shared with one
+    /// (server R6 FH-8) — or nil when the server sends none (one from before
+    /// it). A row that is not one is dropped, not the whole list.
+    public let changes: [FhChange]?
 
-    public init(status: String = "", detail: String? = nil, houseName: String? = nil, unread: Int = 0) {
+    public init(
+        status: String = "",
+        detail: String? = nil,
+        houseName: String? = nil,
+        unread: Int = 0,
+        changes: [FhChange]? = nil
+    ) {
         self.status = status
         self.detail = detail
         self.houseName = houseName
         self.unread = unread
+        self.changes = changes
     }
 
     enum CodingKeys: String, CodingKey {
-        case status, detail, unread
+        case status, detail, unread, changes
         case houseName = "house_name"
     }
 
@@ -81,6 +92,45 @@ public struct FhStatus: Equatable, Sendable, Decodable {
         detail = c.fhOptional(String.self, .detail)
         houseName = c.fhOptional(String.self, .houseName)
         unread = c.fhOptional(Int.self, .unread) ?? 0
+        changes = c.fhOptional([FhMaybe<FhChange>].self, .changes).map { $0.compactMap(\.value) }
+    }
+}
+
+/// One of the week's trust changes (`friending.recent_changes`):
+/// `{kind, friend, list, at}`, kind `friend` or `shared_list`. Names and
+/// titles are this house's own words for the other house, still shown as
+/// plain text only.
+public struct FhChange: Equatable, Sendable, Decodable {
+    public let kind: String
+    public let friend: String?
+    public let list: String?
+    /// ISO time, this house's clock.
+    public let at: String?
+
+    public init(kind: String, friend: String? = nil, list: String? = nil, at: String? = nil) {
+        self.kind = kind
+        self.friend = friend
+        self.list = list
+        self.at = at
+    }
+
+    enum CodingKeys: String, CodingKey { case kind, friend, list, at }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        kind = c.fhOptional(String.self, .kind) ?? ""
+        friend = c.fhOptional(String.self, .friend)
+        list = c.fhOptional(String.self, .list)
+        at = c.fhOptional(String.self, .at)
+    }
+}
+
+/// A row that decodes or is nil, so one bad row costs only itself.
+struct FhMaybe<T: Decodable>: Decodable {
+    let value: T?
+
+    init(from decoder: any Decoder) throws {
+        value = try? T(from: decoder)
     }
 }
 

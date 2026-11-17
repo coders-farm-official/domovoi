@@ -41,6 +41,11 @@ extension StubHouseUITests {
         static let online = "Online"
         static let notReachedYet = "Not reached yet"
         static let lastSeen = "Last seen "
+        static let thisWeek = "This week"
+        static let okaforsBecame = "The Okafors became a friend house \u{00B7} "
+        static let shoppingShared = "\u{201C}Shopping\u{201D} was shared with The Smiths \u{00B7} "
+        static let notYou =
+            "Not you? Only an admin can remove or block the house and change the admin password, on the dashboard."
         static let invited = "The Patels shared a list: Camping trip. An admin can accept it in the dashboard."
         static let listsAdmin = "Only an admin can share a list, accept one or stop sharing, on the dashboard."
         static let refused = "That house isn't a friend any more."
@@ -59,6 +64,8 @@ extension StubHouseUITests {
         /// the next run does not stop on the next one.
         static let inboxMeasured = [
             "fh.title", "fh.description",
+            // "This week" (server R6 FH-8), in the header on every tab.
+            "fh.changes.title", "fh.change", "fh.changes.note",
             "fh.tab.messages", "fh.tab.friends", "fh.tab.shared",
             // The inbox row: the name, "no longer a friend" and the unread
             // and not-delivered pills are this one button's words.
@@ -79,6 +86,7 @@ extension StubHouseUITests {
         /// line under each friend.
         static let friendsMeasured = [
             "fh.title", "fh.description",
+            "fh.changes.title", "fh.change", "fh.changes.note",
             "fh.tab.messages", "fh.tab.friends", "fh.tab.shared",
             "fh.friend.name", "fh.friend.verified", "fh.friend.presence", "fh.friend.alert",
             "fh.friend.message", "fh.friends.note",
@@ -241,6 +249,36 @@ extension StubHouseUITests {
         XCTAssertTrue(joneses.exists, "the Joneses are not in the inbox")
         XCTAssertLessThan(smiths.frame.minY, joneses.frame.minY, "the inbox is not newest first")
         evidence(app, "fh-02-inbox")
+    }
+
+    /// "This week": the stub's two changes, newest first, each with its time,
+    /// and the note; a house that sends no changes draws no section.
+    @MainActor
+    func testFriendHouses_ThisWeekSaysWhatChanged() throws {
+        let (app, landed) = openFriendHouses()
+        defer { friendHouses(nil) }
+        XCTAssertTrue(landed, "Friend houses did not open")
+        XCTAssertTrue(friendHousesSays(app, FriendHousesUnderTest.thisWeek))
+        XCTAssertTrue(friendHousesSays(app, FriendHousesUnderTest.notYou))
+        let rows = app.staticTexts.matching(identifier: "fh.change")
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 20))
+        XCTAssertEqual(2, rows.count)
+        let first = rows.element(boundBy: 0).label
+        let second = rows.element(boundBy: 1).label
+        evidence(app, "fh-14-this-week")
+        XCTAssertTrue(first.hasPrefix(FriendHousesUnderTest.shoppingShared), "not newest first: \(first)")
+        XCTAssertTrue(second.hasPrefix(FriendHousesUnderTest.okaforsBecame), second)
+        app.terminate()
+        control("friendhouses", #"{"changes": null}"#, port: 6601, what: "no changes field")
+        let again = launch()
+        let tile = again.buttons[FriendHousesUnderTest.tile]
+        guard tile.waitForExistence(timeout: 40), navReach(again, tile) else { return XCTFail("no tile") }
+        tile.tap()
+        XCTAssertTrue(again.staticTexts["fh.description"].waitForExistence(timeout: 30))
+        XCTAssertFalse(
+            again.staticTexts.matching(identifier: "fh.changes.title").firstMatch.waitForExistence(timeout: 5),
+            "a This week section with nothing in it"
+        )
     }
 
     /// Stopped: the server's own sentence under the header; the inbox still
