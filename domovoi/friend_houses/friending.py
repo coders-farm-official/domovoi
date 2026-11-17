@@ -247,6 +247,12 @@ async def send_request(text: str, *, local_name: str, by: str | None = None) -> 
             raise FriendingError("You're already friends with that house.")
         if await store.request_by_house(s, "out", f.house_key):
             raise FriendingError("You've already asked that house. Wait for them to accept.")
+        if await store.session_key_taken(s, f.session_key):
+            # A file naming a key a friend (or another request) already
+            # uses would take that friend's place in the listener's list
+            # and lock it out (audit R6 FH-11). No honest file does that.
+            raise FriendingError("That friend file clashes with a friend house you already have. "
+                                 "Ask for a new one.")
         await store.insert_request(
             s, id=request_id, direction="out", state="unsent", house_key=f.house_key,
             session_key=f.session_key, their_name=f.name, local_name=name,
@@ -340,6 +346,16 @@ async def accept(request_id: str, *, local_name: str, by: str | None = None) -> 
         statement = fid.AddressStatement.parse(row["statement"])
         if statement is None:
             raise FriendingError("That request is damaged; ask them to send a new one.")
+        already = await store.friend_by_house(s, statement.house_key) is not None
+        if already:
+            # Both houses imported each other's files and theirs accepted
+            # first: already friends (this used to be a 500, R6 FH-11).
+            await store.delete_request(s, request_id)
+    if already:
+        raise FriendingError("You're already friends with that house.")
+    async with _db() as s:
+        # Our own request to the same house is done with (R6 FH-11).
+        await store.delete_requests_for(s, statement.house_key, "out")
         await store.insert_friend(
             s, id=friend_id, house_key=statement.house_key, session_key=statement.session_key,
             onion_key=statement.onion_key, statement=statement.to_bytes(),
@@ -351,6 +367,19 @@ async def accept(request_id: str, *, local_name: str, by: str | None = None) -> 
     await _service().reconcile_within(60.0)
     _service().schedule_deliveries()
     return {"friend_id": friend_id, "name": name}
+
+
+async def withdraw(request_id: str) -> bool:
+    """Take back a request this house sent (a file imported by mistake,
+    say): its author loses the way in it gave them (audit R6 FH-11)."""
+    async with _db() as s:
+        row = await store.request(s, request_id)
+        if row is None or row["direction"] != "out" or row["state"] not in ("unsent", "sent"):
+            return False
+        done = await store.delete_request(s, request_id)
+    if done:
+        await _service().reconcile()  # withdraw their reach key from Tor
+    return done
 
 
 async def decline(request_id: str) -> bool:
@@ -422,7 +451,7 @@ async def on_accepted(event: dict[str, Any]) -> None:
             onion_key=statement.onion_key, statement=statement.to_bytes(),
             statement_at=statement.issued_at, reach_public=row["reach_public"],
             reach_private=gift, local_name=name, code=row["code"], added_by="accepted")
-        await store.delete_request(s, row["id"])
+        await store.delete_requests_for(s, statement.house_key)  # both directions (R6 FH-11)
     await _new_friend(name)
     await _service().reconcile()
 
@@ -477,7 +506,11 @@ async def unfriend(friend_id: str) -> bool:
     """Remove a friend. The listener refuses it from the next connection;
     Tor's key is withdrawn at the next (batched) reload."""
     async with _db() as s:
+        row = await store.friend(s, friend_id)
         done = await store.delete_friend(s, friend_id)
+        if done and row is not None:
+            # An accept still waiting to be delivered goes too (R6 FH-11).
+            await store.delete_requests_for(s, row.house_key)
     if done:
         log.warning("Friend Houses: a friend house was removed")
         await _service().reconcile()

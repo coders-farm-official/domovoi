@@ -105,6 +105,7 @@ ROUTES: dict[str, tuple[str, str, dict | None]] = {
     "requests": ("GET", "/api/friend-houses/requests", None),
     "accept": ("POST", "/api/friend-houses/requests/rq0123abcd/accept", {"name": "Smiths"}),
     "decline": ("POST", "/api/friend-houses/requests/rq0123abcd/decline", None),
+    "withdraw": ("DELETE", "/api/friend-houses/requests/rq0123abcd", None),
     "friends": ("GET", "/api/friend-houses/friends", None),
     "verified": ("POST", "/api/friend-houses/friends/fr0123abcd/verified", None),
     "rename": ("PATCH", "/api/friend-houses/friends/fr0123abcd", {"name": "Smiths"}),

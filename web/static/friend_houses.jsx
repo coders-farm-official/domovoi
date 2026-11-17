@@ -19,6 +19,7 @@
  *   POST   /api/friend-houses/requests              · send a request
  *   GET    /api/friend-houses/requests              · in and out
  *   POST   /api/friend-houses/requests/{id}/accept|decline
+ *   DELETE /api/friend-houses/requests/{id}            (take back one this house sent)
  *   GET    /api/friend-houses/friends
  *   POST   /api/friend-houses/friends/{id}/verified
  *   PATCH  /api/friend-houses/friends/{id}          · rename
@@ -557,11 +558,30 @@ const FhIncoming = ({ req, fire, onChanged }) => {
   );
 };
 
-const FhOutgoing = ({ req }) => (
+const FhOutgoing = ({ req, fire, onChanged }) => {
+  const [busy, setBusy] = React.useState(false);
+  const [confirm, setConfirm] = React.useState(false);
+  const withdraw = async () => {
+    setBusy(true);
+    try {
+      await apiDelete(`${FH_API}/requests/${encodeURIComponent(req.id)}`);
+      fire('request taken back', { tone: 'ok' });
+      setConfirm(false);
+      onChanged();
+    } catch (e) { fhFail(fire, e); } finally { setBusy(false); }
+  };
+  return (
   <div style={fhItem}>
-    <div style={{ fontSize: 13 }}>
-      Asked <strong>{String(req.name || req.their_name || '')}</strong>… waiting for them to accept
+    <div style={{ ...fhRow, justifyContent: 'space-between' }}>
+      <div style={{ fontSize: 13 }}>
+        Asked <strong>{String(req.name || req.their_name || '')}</strong>… waiting for them to accept
+      </div>
+      <Button icon="x" disabled={busy} onClick={() => setConfirm(true)}>Take back</Button>
     </div>
+    <DeleteConfirmDialog open={confirm} title="Take back this request?" icon="x" confirmLabel="Take back" busy={busy}
+                         onCancel={() => setConfirm(false)} onConfirm={withdraw}>
+      <div>{`${String(req.name || req.their_name || 'That house')} can’t accept it any more, and loses the way in it gave them. You can ask again with a new friend file.`}</div>
+    </DeleteConfirmDialog>
     {req.code && (
       <div style={fhRow}>
         <FhCode code={req.code}/>
@@ -575,7 +595,8 @@ const FhOutgoing = ({ req }) => (
     )}
     {req.expires_at && <div style={fhMuted}>the request ends {fhDay(req.expires_at)}</div>}
   </div>
-);
+  );
+};
 
 const FhRequestsCard = ({ requests, fire, onChanged }) => {
   const all = (requests && requests.requests) || [];
@@ -586,7 +607,7 @@ const FhRequestsCard = ({ requests, fire, onChanged }) => {
       <div style={{ padding: '0 16px 4px' }}>
         {!incoming.length && !outgoing.length && <div style={{ ...fhMuted, padding: '12px 0' }}>no requests</div>}
         {incoming.map((r) => <FhIncoming key={r.id} req={r} fire={fire} onChanged={onChanged}/>)}
-        {outgoing.map((r) => <FhOutgoing key={r.id} req={r}/>)}
+        {outgoing.map((r) => <FhOutgoing key={r.id} req={r} fire={fire} onChanged={onChanged}/>)}
       </div>
     </Card>
   );

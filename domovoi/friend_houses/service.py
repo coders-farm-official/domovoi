@@ -155,9 +155,26 @@ async def reconcile() -> None:
     async with _LOCK:
         try:
             await _reconcile()
-        except Exception as e:  # noqa: BLE001 — reported on the status, retried on the next change
+        except Exception as e:  # noqa: BLE001 — reported on the status, and retried
             _STATE["status"], _STATE["detail"] = "error", str(e)[:300]
             log.exception("Friend Houses: reconcile failed")
+            _retry_reconcile_later()
+
+
+RECONCILE_RETRY_SEC = 120.0
+
+
+def _retry_reconcile_later() -> None:
+    """A failed reconcile (a Docker error, say) is tried again by itself,
+    so Tor never keeps an old friend list in force (audit R6 FH-10)."""
+    handle = _STATE.get("retry_handle")
+    if handle is not None and not handle.cancelled():
+        handle.cancel()
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    _STATE["retry_handle"] = loop.call_later(RECONCILE_RETRY_SEC, schedule_reconcile)
 
 
 @dataclass(frozen=True)
@@ -244,9 +261,12 @@ async def _reconcile() -> None:
         _STATE["was_on"] = False
         if action == "reload":
             action = "restart"
+    # The listener's lists first: a removed friend is refused from its next
+    # connection however long Tor takes, or if Tor fails (audit R6 FH-10).
+    _write_friend_list(peers)
+    _write_invites(invites)
     folder.write_torrc(w)
     _sync_key_files(folder, peers)
-    _write_invites(invites)
 
     if firewall_state() == "missing":
         log.warning("Friend Houses: starting its Tor container without the firewall rules "
@@ -354,14 +374,24 @@ async def current_epoch() -> bytes:
     return epoch
 
 
-async def _write_listener_files(keys: fid.HouseKeys, onion: bytes | None, peers: list[_Peer]) -> None:
-    """The friend list (friends, and houses this one asked: those may only
-    deliver an accept) and this house's hello, for the listener."""
+def _write_friend_list(peers: list[_Peer]) -> Path:
+    """The listener's friend list. Friends are written over houses this
+    one only asked, so an asked house can never take a friend's entry
+    (audit R6 FH-11)."""
     folder = _listener_folder()
     folder.mkdir(parents=True, exist_ok=True)
     tc._chmod(folder, 0o700)
-    tc._write_private(folder / fl.FRIENDS_FILE, json.dumps(
-        {p.session_key.hex(): {"house": p.house_key.hex(), "pending": p.pending} for p in peers}))
+    doc: dict[str, dict] = {}
+    for p in sorted(peers, key=lambda p: not p.pending):  # pending first, friends last
+        doc[p.session_key.hex()] = {"house": p.house_key.hex(), "pending": p.pending}
+    tc._write_private(folder / fl.FRIENDS_FILE, json.dumps(doc))
+    return folder
+
+
+async def _write_listener_files(keys: fid.HouseKeys, onion: bytes | None, peers: list[_Peer]) -> None:
+    """The friend list (friends, and houses this one asked: those may only
+    deliver an accept) and this house's hello, for the listener."""
+    folder = _write_friend_list(peers)
     path = folder / fl.HELLO_FILE
     if onion is None:
         path.unlink(missing_ok=True)

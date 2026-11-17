@@ -222,6 +222,15 @@ async def friend_houses_decline(request_id: str, request: Request):
     )
 
 
+@router.delete("/requests/{request_id}", dependencies=WRITE)
+async def friend_houses_withdraw(request_id: str, request: Request):
+    """Take back a request this house sent (audit R6 FH-11)."""
+    rid = _id(request_id, "request")
+    return bridge_response(
+        *await delete_admin(f"{CORE}/requests/{rid}", headers=auth_forward_headers(request))
+    )
+
+
 # ─── friends ─────────────────────────────────────────────────────────────
 
 

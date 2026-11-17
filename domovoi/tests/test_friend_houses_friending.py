@@ -316,3 +316,59 @@ async def test_unfriending_removes_the_friend(house, monkeypatch) -> None:
     result = await fr.accept((await fr.list_requests())[0]["id"], local_name="Patels")
     assert await fr.unfriend(result["friend_id"])
     assert await fr.list_friends() == []
+
+
+# ─── audit R6 FH-11: friending state holes ───────────────────────────────
+
+
+async def _a_friend(keys: fid.HouseKeys, fid_: str = "fv") -> None:
+    from domovoi.friend_houses import store
+
+    async with fr._db() as s:
+        await store.insert_friend(
+            s, id=fid_, house_key=keys.house_key, session_key=keys.session_key, onion_key=ONION,
+            statement=keys.address_statement(ONION, 100).to_bytes(), statement_at=100,
+            reach_public=b"\x01" * 32, reach_private=b"\x02" * 32, local_name="V", code="1234",
+            added_by="t")
+
+
+def _file_of(keys: fid.HouseKeys, name="X") -> str:
+    return ff.make(keys, pairing_onion=PAIRING, invite_id=b"\x44" * 16,
+                   expires_day=int(time.time() // 86400) + 5, name=name).to_text()
+
+
+async def test_fh11_a_file_naming_a_friends_session_key_is_refused(house) -> None:
+    # The PoC: X's file carries friend V's public session key; importing it
+    # replaced V's entry in the listener's list and locked V out.
+    fid.create(fid.keys_path())
+    v = _other(house.tmp, "v")
+    await _a_friend(v)
+    x = _other(house.tmp, "x")
+    x_with_vs_key = fid.HouseKeys(house_seed=x.house_seed, session_private=v.session_private)
+    with pytest.raises(fr.FriendingError, match="clashes"):
+        await fr.send_request(_file_of(x_with_vs_key), local_name="X")
+    assert await fr.list_requests() == []
+
+
+async def test_fh11_a_request_this_house_sent_can_be_taken_back(house) -> None:
+    fid.create(fid.keys_path())
+    x = _other(house.tmp, "x")
+    made = await fr.send_request(_file_of(x), local_name="X")
+    house.calls.clear()
+    assert await fr.withdraw(made["id"])
+    assert await fr.list_requests() == [] and "reconcile" in house.calls
+    assert not await fr.withdraw(made["id"])
+
+
+async def test_fh11_removing_a_friend_clears_its_requests(house) -> None:
+    from domovoi.friend_houses import store
+
+    fid.create(fid.keys_path())
+    v = _other(house.tmp, "v")
+    await _a_friend(v)
+    async with fr._db() as s:
+        await store.insert_request(
+            s, id="rleft", direction="in", state="accepted", house_key=v.house_key,
+            session_key=v.session_key, their_name="V", local_name="V", days=5)
+    assert await fr.unfriend("fv")
+    assert await fr.list_requests() == []

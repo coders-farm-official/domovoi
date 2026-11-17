@@ -4059,6 +4059,16 @@ async def admin_friend_houses_decline(request_id: str) -> dict[str, Any]:
     return {"declined": True}
 
 
+@app.delete("/v1/admin/friend-houses/requests/{request_id}", dependencies=_FH_WRITE)
+async def admin_friend_houses_withdraw(request_id: str) -> dict[str, Any]:
+    """Take back a request this house sent, before the other house accepts."""
+    from domovoi.friend_houses import friending
+
+    if not await friending.withdraw(request_id):
+        raise HTTPException(status_code=404, detail="That request can't be taken back any more.")
+    return {"withdrawn": True}
+
+
 @app.get("/v1/admin/friend-houses/friends", dependencies=_FH_HOUSEHOLD)
 async def admin_friend_houses_friends() -> dict[str, Any]:
     from domovoi.friend_houses import friending

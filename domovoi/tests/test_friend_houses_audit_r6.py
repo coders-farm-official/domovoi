@@ -287,3 +287,52 @@ async def test_fh3_core_handles_a_bounded_number_of_events_at_once(monkeypatch) 
     assert len(started) == svc.EVENT_TASKS_MAX
     gate.set()
     await asyncio.gather(*list(svc._PENDING))
+
+
+# ─── FH-10 / FH-11 in core: the listener's list comes first, friends win ──
+
+from domovoi.tests.test_friend_houses_service import _friend, house  # noqa: E402,F401  (fixture)
+
+linux_only = pytest.mark.skipif(sys.platform == "win32", reason="Friend Houses runs on Linux")
+
+
+def _listed(house_) -> dict:
+    return json.loads((svc._listener_folder() / fl.FRIENDS_FILE).read_text(encoding="utf-8"))
+
+
+@linux_only
+async def test_fh10_a_removed_friend_is_off_the_list_even_if_tor_fails(house, monkeypatch) -> None:
+    house.enable()
+    house.friends.extend([_friend(1), _friend(5)])
+    await svc.reconcile()
+    assert len(_listed(house)) == 2
+    retries: list[float] = []
+    monkeypatch.setattr(svc, "_retry_reconcile_later", lambda: retries.append(1))
+
+    async def broken():
+        raise RuntimeError("docker: no answer")
+
+    monkeypatch.setattr(svc.rt, "reload", broken)
+    del house.friends[0]  # removed
+    await svc.reconcile()
+    assert svc.status()["status"] == "error"
+    assert list(_listed(house)) == [_friend(5).session_key.hex()]  # written before Tor
+    assert retries == [1]  # and tried again by itself
+
+
+@linux_only
+async def test_fh11_an_asked_house_cant_take_a_friends_entry(house, monkeypatch) -> None:
+    house.enable()
+    friend = _friend(1)
+    house.friends.append(friend)
+    real_inputs = svc._inputs
+
+    async def with_a_clash():
+        peers, invites = await real_inputs()
+        clash = svc._Peer("rq1", b"\x07" * 32, None, None, friend.session_key, b"\x08" * 32, True)
+        return [clash, *peers], invites  # the asked house first, as the old order put it last
+
+    monkeypatch.setattr(svc, "_inputs", with_a_clash)
+    await svc.reconcile()
+    entry = _listed(house)[friend.session_key.hex()]
+    assert entry == {"house": friend.house_key.hex(), "pending": False}
