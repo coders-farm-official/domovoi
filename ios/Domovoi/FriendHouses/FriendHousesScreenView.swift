@@ -126,7 +126,9 @@ struct FhHeader: View {
             if let status, let line = fhStatusLine(status) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     ToneDot(tone: status.status == "starting" ? .idle : .warn)
+                    // The only text in its row, with the room the row has.
                     FhPlainText(text: line, font: .footnote, colour: Color.fgMuted)
+                        .layoutPriority(1)
                 }
                 .padding(.top, 4)
                 .accessibilityElement(children: .combine)
@@ -166,12 +168,15 @@ struct FhTabChip: View {
 
     var body: some View {
         Button(action: onTap) {
-            HStack(spacing: 6) {
-                FhPlainText(text: tab.label, font: .subheadline, colour: selected ? Color.primary : Color.fgMuted)
-                if unread > 0 {
-                    FhPlainText(text: "\(unread)", font: .caption.monospacedDigit(), colour: Color.fgMuted)
-                }
-            }
+            // One text, not the label and its count side by side: two texts
+            // in one row is the shape the audit reads as type that cannot
+            // grow (``FhMessageMeta``). The chips scroll sideways, so the one
+            // text always has the width it asks for.
+            FhPlainText(
+                text: unread > 0 ? "\(tab.label) \(unread)" : tab.label,
+                font: .subheadline,
+                colour: selected ? Color.primary : Color.fgMuted
+            )
             .padding(.horizontal, 14)
             .frame(minHeight: 44)
             .background(

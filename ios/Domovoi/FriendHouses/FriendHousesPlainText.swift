@@ -35,6 +35,45 @@ struct FhPlainText: View {
     }
 }
 
+/// Two pieces side by side, or one above the other at an accessibility type
+/// size — ``PeopleDenylistCard``'s rule, and the reason this exists: Apple's
+/// audit reads text squeezed into an `HStack` beside more text or a pill as
+/// type that cannot grow (`Dynamic Type font sizes are partially
+/// unsupported`; trains S002 on People, I067 here on `fh.message.state`),
+/// and the rows that swap to a column have no such finding.
+struct FhRowOrColumn<Leading: View, Trailing: View>: View {
+
+    let alignment: HorizontalAlignment
+    let leading: Leading
+    let trailing: Trailing
+
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    init(
+        alignment: HorizontalAlignment = .leading,
+        @ViewBuilder leading: () -> Leading,
+        @ViewBuilder trailing: () -> Trailing
+    ) {
+        self.alignment = alignment
+        self.leading = leading()
+        self.trailing = trailing()
+    }
+
+    var body: some View {
+        if typeSize.isAccessibilitySize {
+            VStack(alignment: alignment, spacing: 4) {
+                leading
+                trailing
+            }
+        } else {
+            HStack(alignment: .center, spacing: 8) {
+                leading
+                trailing
+            }
+        }
+    }
+}
+
 /// A muted line of the app's own words (the admin-only sentences, notes).
 struct FhMutedLine: View {
 
@@ -54,7 +93,9 @@ struct FhProblemLine: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             ToneDot(tone: .warn)
+            // The only text in its row, with the room the row has.
             FhPlainText(text: text, font: .footnote)
+                .layoutPriority(1)
         }
         .accessibilityElement(children: .combine)
     }
