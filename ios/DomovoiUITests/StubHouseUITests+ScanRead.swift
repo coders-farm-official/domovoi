@@ -20,6 +20,43 @@ extension StubHouseUITests {
 
     // MARK: - getting there
 
+    /// Set the printing fixture's scan-reader switch, and **check the answer
+    /// came from the scan-reader fixture**.
+    ///
+    /// Train I064 failed three of these cases with the app right and the
+    /// patched fixture right: a backup of the old module,
+    /// `fixtures/printing.pre-scanread.py`, sat beside it, the house loads
+    /// every `fixtures/*.py` not starting with `_` in name order, and the
+    /// backup sorts first — so it claimed `/api/scan/` and
+    /// `/api/_test/printing`, answered 200 to every switch it did not know,
+    /// and served `read: null` and `scans: []`. ``control(_:_:port:what:)``
+    /// only checks the 200, so the cases waited 30 s for a button no server
+    /// would draw. The patched control echoes `read` and `scan_log`; an
+    /// answer without them is the old module, and the case says so at once.
+    @MainActor
+    func scanReadArm(_ key: String, _ value: String, what: String) {
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:6601/api/_test/printing")!)
+        request.httpMethod = "POST"
+        request.setValue(Self.token, forHTTPHeaderField: "X-Device-Token")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = Data("{\"\(key)\": \"\(value)\"}".utf8)
+        let answered = expectation(description: "the stub set \(what)")
+        let said = ScanReadStubAnswer()
+        URLSession.shared.dataTask(with: request) { data, response, _ in
+            said.code = (response as? HTTPURLResponse)?.statusCode ?? -1
+            said.body = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            answered.fulfill()
+        }.resume()
+        wait(for: [answered], timeout: 15)
+        XCTAssertEqual(200, said.code, "the stub did not set \(what)")
+        XCTAssertEqual(
+            said.body?[key] as? String, value,
+            "the printing control that answered is not the scan-reader fixture: a copy of the old "
+                + "printing.py is loaded beside it (fixtures/*.py, name order — move backups out of "
+                + "fixtures/ or name them _something.py), so \(what) was never set"
+        )
+    }
+
     /// Scan one page on the glass and press Done; true once the sheet says
     /// where the scan went.
     @MainActor
@@ -67,7 +104,7 @@ extension StubHouseUITests {
     @MainActor
     func testScanRead_SavedScanOffersWhatDoesItSayAndShowsTheSummaryThenTheText() throws {
         guard let app = printingOpenDocuments() else { return }
-        control("printing", "{\"read\": \"done\"}", port: 6601, what: "the next scan to be read")
+        scanReadArm("read", "done", what: "the next scan to be read")
         guard scanReadScanToDone(app) else { return }
 
         let button = app.buttons["What does it say?"].firstMatch
@@ -107,7 +144,7 @@ extension StubHouseUITests {
     @MainActor
     func testScanRead_TheButtonCarriesTheReadingsProgress() throws {
         guard let app = printingOpenDocuments() else { return }
-        control("printing", "{\"read\": \"reading\"}", port: 6601, what: "the next scan's reading to be held")
+        scanReadArm("read", "reading", what: "the next scan's reading to be held")
         guard scanReadScanToDone(app) else { return }
 
         XCTAssertTrue(
@@ -130,7 +167,9 @@ extension StubHouseUITests {
     @MainActor
     func testScanRead_NoButtonWhenTheScanCantBeReadOrTheReadingFailed() throws {
         guard let app = printingOpenDocuments() else { return }
-        // The seed: `read: null`.
+        // The seed: `read: null`. Armed explicitly, so the case also proves
+        // the scan-reader fixture is the one answering.
+        scanReadArm("read", "none", what: "the next scan to be unreadable")
         guard scanReadScanToDone(app) else { return }
         // Long enough for the sheet's poll to have landed had it wanted one.
         Thread.sleep(forTimeInterval: 3)
@@ -139,7 +178,7 @@ extension StubHouseUITests {
         app.terminate()
 
         guard let second = printingOpenDocuments() else { return }
-        control("printing", "{\"read\": \"failed\"}", port: 6601, what: "the next scan's reading to fail")
+        scanReadArm("read", "failed", what: "the next scan's reading to fail")
         guard scanReadScanToDone(second) else { return }
         Thread.sleep(forTimeInterval: 3)
         evidence(second, "scanread-07-failed")
@@ -154,7 +193,7 @@ extension StubHouseUITests {
     @MainActor
     func testScanRead_RecentJobsOfferWhatDoesItSayOnAReadScan() throws {
         guard let app = printingOpenPanel() else { return }
-        control("printing", "{\"scan_log\": \"seeded\"}", port: 6601, what: "printer 1's scans in its job log")
+        scanReadArm("scan_log", "seeded", what: "printer 1's scans in its job log")
         let open = app.buttons["recent jobs"].firstMatch
         XCTAssertTrue(printingScrollToHittable(app, open), "no recent-jobs link on a printer card")
         open.tap()
@@ -182,4 +221,12 @@ extension StubHouseUITests {
         )
         evidence(app, "scanread-09-from-recent-jobs")
     }
+}
+
+/// The control's answer, filled on URLSession's queue and read after the
+/// wait. `@unchecked Sendable` with the reason: written once before
+/// `fulfill()` and read only after `wait(for:)` returns, which orders the two.
+private final class ScanReadStubAnswer: @unchecked Sendable {
+    var code = -1
+    var body: [String: Any]?
 }
