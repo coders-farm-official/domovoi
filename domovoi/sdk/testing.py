@@ -32,6 +32,12 @@ class RecordingPlayback:
     """Records play/stop calls; returns fully-populated Responses."""
 
     calls: list[dict[str, Any]] = field(default_factory=list)
+    #: Rooms ``ensure_room`` knows (SDK 1.10). None: every room is known.
+    known_rooms: set[str] | None = None
+
+    async def ensure_room(self, room_id: str) -> bool:
+        self.calls.append({"action": "ensure_room", "room_id": room_id})
+        return bool(room_id) and (self.known_rooms is None or room_id in self.known_rooms)
 
     async def play_url(self, room_id: str, stream_url: str, **kwargs: Any) -> Response:
         self.calls.append(

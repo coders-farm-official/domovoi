@@ -195,7 +195,10 @@ class Handler(ABC):
     # subset of ``confirmation_kinds`` (checked in test_registry). For a
     # parked choice the router hands EVERY next reply to
     # ``handle_choice_reply`` first (domovoi.confirmations.CHOICE_PARKED
-    # keeps that free for sessions without one). Core handlers only.
+    # keeps that free for sessions without one). Plugin handlers may declare
+    # them too since SDK 1.10 (contract-checked: a subset of their
+    # confirmation_kinds, with handle_choice_reply overridden; read the
+    # reply with domovoi.sdk.choices.parse_choice_reply).
     choice_kinds: tuple[str, ...] = ()
     # Plugin handlers get their slug stamped by the plugin loader (C3);
     # None marks a core handler (used by the registry tie-break).

@@ -181,7 +181,7 @@ A graphics card is optional everywhere. [More detail](docs/WINDOWS_HOST.md#which
   player and Chat. Chat holds your chats on the home server and chats
   that run on the phone itself, with no server.
 - The dashboard's sidebar: **Chat**, then **Media** (Music, Podcasts,
-  Audiobooks, Videos, and pages plugins add there, like Stations) and
+  Audiobooks, Videos, and pages your plugins add) and
   **Tools** (News, Calendar, Lists, Files), each opening in place, then
   **Plugins**. On a phone, Home's "everything" grid has the same groups.
 - That menu is the same in every browser, and an admin can change it in
@@ -693,12 +693,18 @@ where you stopped. [Videos](#videos)
 ### Radio *(plugin)*
 
 Shown when the radio plugin is installed. Find stations on the
-**Stations** page and star the ones you like. Domovoi plays favorites by
-name.
+**Stations** page and star the ones you like. Ask for a station by name and
+Domovoi looks in your favorites first, then the other stations you've
+played, then, if the internet is allowed, online, and offers what it finds
+there. If it isn't sure it heard the name right, it asks "Did you mean …?":
+answer yes, no, or the name. To hear a station in a room from the page,
+pick the room next to it, or send it to a room from the player.
 
 **Try saying**
 
-- "stream the jazz station" (a station you starred)
+- "stream the jazz station"
+- "tune to lofi 24/7"
+- "add this to my favorites" (while a station plays)
 - "stop the radio"
 
 [More detail](plugins/radio/README.md)

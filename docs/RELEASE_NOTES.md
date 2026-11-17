@@ -14,6 +14,24 @@ a way that would otherwise get reported as a bug.
 - **What to know.** A plugin that asks for SDK 1.9 won't install on an older
   server: update Domovoi first.
 
+## 1.4.0 (unreleased) — Radio: stations by how they're said, search past favorites, play in a room
+
+- **Radio finds stations by how they are said (Radio plugin 1.5.0).**
+  "lo-fi 24 slash 7" plays a favorite called "Lofi 24/7"; a near miss is
+  asked about ("Did you mean Lofi 24/7?"). Past the favorites it looks at
+  the other saved stations, then (internet allowed) the station directory,
+  and offers its best one or two. "Add this to my favorites" stars the
+  station playing. A station can be played in a room from the Stations page
+  and cast there from the player, by
+  `POST /api/plugins/radio/stations/{id}/play-in-room` `{"room_id"}`
+  (docs/API_REFERENCE.md §4.2); the phone apps can use it too.
+- **Plugin SDK 1.10.0:** `domovoi.sdk.spoken_names`, `domovoi.sdk.choices`,
+  `choice_kinds` / `handle_choice_reply` on plugin handlers,
+  `sdk.playback.ensure_room`, and `room_play_template` on
+  `[[web.player_sources]]` (docs/PLUGIN_DEVELOPMENT.md). The bundled Radio
+  plugin now needs `domovoi_api >=1.10`, so it loads only on a server with
+  this release.
+
 ## 1.4.0 (unreleased) — A new room asks every Domovoi server, and joins the one you approve it on (V062)
 
 - **What changed.** A room device set up through the Wi-Fi portal with the

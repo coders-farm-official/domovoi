@@ -707,6 +707,14 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
             response = await handler.handle_choice_reply(kind, pending, transcript, ctx, session)
         except MPDNotProvisioned:
             response = _no_speakers_yet(session_id, ctx)
+        except Exception:
+            # A plugin's reader (SDK 1.10) that fails costs its question, not
+            # the turn: the reply is routed as an ordinary one. A core
+            # handler's failure is a bug and still raises.
+            if getattr(handler, "plugin_slug", None) is None:
+                raise
+            log.exception("choice reply for %s (%s) failed; routing on", handler.name, kind)
+            return None
         if response is None:
             return None
         response.matched_handler = response.matched_handler or handler.name

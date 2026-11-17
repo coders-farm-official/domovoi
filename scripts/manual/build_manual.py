@@ -323,6 +323,8 @@ PHRASES: dict[str, tuple] = {
     "read me the headlines": ("news", "fast", {}),
     "any news about the city council": ("news", "fast", {}),
     "stream the jazz station": ("radio", "fast", {"plugin": "radio"}),
+    "tune to lofi 24/7": ("radio", "fast", {"plugin": "radio"}),
+    "add this to my favorites": ("radio", "fast", {"plugin": "radio"}),
     "stop the radio": ("radio", "fast", {"plugin": "radio"}),
     "what's on my calendar today": ("calendar", "fast", {}),
     "what's next on my calendar": ("calendar", "fast", {}),

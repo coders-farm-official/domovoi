@@ -102,18 +102,31 @@ async def test_stream_by_name_single_hit_plays(stub_sdk, db_session) -> None:
 
 
 async def test_stream_by_name_no_hit(stub_sdk, db_session) -> None:
+    # Nothing saved, and the station directory finds nothing either (the
+    # stub directory answers only names it can build; this one is empty).
+    from domovoi_plugin_radio.clients import radio_browser
+
+    class _Empty:
+        async def search(self, **kw):
+            return []
+
+    radio_browser._set_radio_browser_client_for_tests(_Empty())
     h = RadioHandler(stub_sdk)
     m = _STREAM_RE.match("stream nothing")
     resp = await h._stream_from_match(m, _ctx(), db_session)
-    assert "don't have a favorited station" in resp.text
+    assert resp.text == "I couldn't find a station called nothing."
     assert stub_sdk.playback.calls == []
 
 
-async def test_stream_by_name_unfavorited_is_invisible(stub_sdk, db_session) -> None:
+async def test_stream_by_name_finds_a_saved_station_that_is_not_a_favorite(
+    stub_sdk, db_session
+) -> None:
+    # 1.3.1: voice looks past the favorites to every station in the table
+    # (played before, FCC-imported) before it searches the directory.
     await _insert_station(db_session, name="KEXP", favorited=False)
     h = RadioHandler(stub_sdk)
     resp = await h._stream_from_match(_STREAM_RE.match("stream kexp"), _ctx(), db_session)
-    assert "don't have a favorited station" in resp.text
+    assert resp.text == "Streaming KEXP."
 
 
 async def test_multi_candidate_parks_namespaced_confirmation(
@@ -123,7 +136,7 @@ async def test_multi_candidate_parks_namespaced_confirmation(
     await _insert_station(db_session, name="KEXP Tacoma")
     h = RadioHandler(stub_sdk)
     resp = await h._stream_from_match(_STREAM_RE.match("stream kexp"), _ctx(), db_session)
-    assert "2 matches" in resp.text
+    assert resp.text == "KEXP Seattle or KEXP Tacoma?"
     assert resp.expect_followup is True
     (conf,) = stub_sdk.sessions.confirmations
     assert conf["kind"] == "radio.station_choice"
@@ -327,7 +340,7 @@ async def test_fallback_offline_fm_only_name_resolution(
     resp = await h.fallback_offline(
         Intent(transcript="stream kexp"), _ctx(), db_session
     )
-    assert "don't have a favorited station" in resp.text
+    assert resp.text == "I don't have an FM station called kexp."
     resp = await h.fallback_offline(
         Intent(transcript="stream wkar"), _ctx(), db_session
     )

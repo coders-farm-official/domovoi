@@ -373,6 +373,8 @@ def test_bundled_radio_lists_its_device_tier_routes() -> None:
         ("web", "DELETE", "/stations/{station_id}"),
         ("web", "POST", "/stations/{station_id}/resolve-simulcast"),
         ("core", "POST", "/stations/{station_id}/resolve-simulcast"),
+        ("web", "POST", "/stations/{station_id}/play-in-room"),
+        ("core", "POST", "/stations/{station_id}/play-in-room"),
     }
 
 

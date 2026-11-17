@@ -285,12 +285,21 @@
       window.DomovoiPlayerSources = window.DomovoiPlayerSources || {};
       // Seed the browser player's source registry (player.jsx reads it
       // to resolve queue-item kinds → stream URLs; unknown kinds are
-      // hidden with a console warn, never a crash).
+      // hidden with a console warn, never a crash). `room_play_template`
+      // (SDK 1.10) is where a cast sends one of the kind's items to a room;
+      // only one of the plugin's own routes is kept.
       (manifest.plugins || []).forEach((p) => {
         (p.player_sources || []).forEach((src) => {
+          const own = `/api/plugins/${p.slug}/`;
+          const roomPlay = typeof src.room_play_template === 'string'
+            && src.room_play_template.startsWith(own)
+            && src.room_play_template.includes('{id}')
+            && !src.room_play_template.includes('..')
+            ? src.room_play_template : null;
           window.DomovoiPlayerSources[src.kind] = {
             plugin: p.slug,
             stream_url_template: src.stream_url_template,
+            room_play_template: roomPlay,
           };
         });
       });

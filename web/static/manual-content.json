@@ -960,7 +960,7 @@
        "text": "The **app** brings the everyday pages to your phone, with its own music player and Chat. Chat holds your chats on the home server and chats that run on the phone itself, with no server."
       },
       {
-       "text": "The dashboard's sidebar: **Chat**, then **Media** (Music, Podcasts, Audiobooks, Videos, and pages plugins add there, like Stations) and **Tools** (News, Calendar, Lists, Files), each opening in place, then **Plugins**. On a phone, Home's \"everything\" grid has the same groups."
+       "text": "The dashboard's sidebar: **Chat**, then **Media** (Music, Podcasts, Audiobooks, Videos, and pages your plugins add) and **Tools** (News, Calendar, Lists, Files), each opening in place, then **Plugins**. On a phone, Home's \"everything\" grid has the same groups."
       },
       {
        "text": "That menu is the same in every browser, and an admin can change it in [Settings → System → App layout](route:settings/app-layout) → **Menu**: rename the groups, add or delete one, move any page into a group or to the top, and put things in another order. **Reset to default** brings the usual menu back. Nothing needs changing there; the phone app keeps its own layout."
@@ -2156,7 +2156,7 @@
    "blocks": [
     {
      "type": "p",
-     "text": "Shown when the radio plugin is installed. Find stations on the **Stations** page and star the ones you like. Domovoi plays favorites by name."
+     "text": "Shown when the radio plugin is installed. Find stations on the **Stations** page and star the ones you like. Ask for a station by name and Domovoi looks in your favorites first, then the other stations you've played, then, if the internet is allowed, online, and offers what it finds there. If it isn't sure it heard the name right, it asks \"Did you mean …?\": answer yes, no, or the name. To hear a station in a room from the page, pick the room next to it, or send it to a room from the player."
     },
     {
      "type": "label",
@@ -2170,8 +2170,20 @@
        "text": "stream the jazz station",
        "handler": "radio",
        "path": "fast",
+       "plugin": "radio"
+      },
+      {
+       "text": "tune to lofi 24/7",
+       "handler": "radio",
+       "path": "fast",
+       "plugin": "radio"
+      },
+      {
+       "text": "add this to my favorites",
+       "handler": "radio",
+       "path": "fast",
        "plugin": "radio",
-       "note": "a station you starred"
+       "note": "while a station plays"
       },
       {
        "text": "stop the radio",
