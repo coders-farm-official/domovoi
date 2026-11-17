@@ -37,6 +37,7 @@ import json
 import logging
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -59,6 +60,8 @@ _STATE: dict[str, Any] = {
     "status": "off",        # off | starting | on | stopped | unavailable | error
     "detail": None,
     "onion": None,
+    "pairing": None,
+    "hello": None,
 }
 _LISTENER: dict[str, Any] = {"proc": None, "task": None, "stopping": False}
 
@@ -95,6 +98,7 @@ def status() -> dict[str, Any]:
         "detail": _STATE["detail"],
         "fingerprint": keys.fingerprint if keys else None,
         "onion_ready": _STATE["onion"] is not None,
+        "pairing_ready": _STATE.get("pairing") is not None,
         "listener_running": _LISTENER["proc"] is not None and _LISTENER["proc"].returncode is None,
     }
 
@@ -111,6 +115,20 @@ def schedule_reconcile() -> None:
     task.add_done_callback(_PENDING.discard)
 
 
+async def reconcile_within(timeout: float = 60.0) -> bool:
+    """Reconcile, but give the caller (an admin's request) back control
+    after ``timeout`` seconds while it carries on in the background (the
+    first start builds the Tor image). True when it finished in time."""
+    task = asyncio.get_running_loop().create_task(reconcile(), name="friend-houses-reconcile")
+    _PENDING.add(task)
+    task.add_done_callback(_PENDING.discard)
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout)
+        return True
+    except asyncio.TimeoutError:
+        return False
+
+
 async def reconcile() -> None:
     async with _LOCK:
         try:
@@ -120,12 +138,39 @@ async def reconcile() -> None:
             log.exception("Friend Houses: reconcile failed")
 
 
+@dataclass(frozen=True)
+class _Peer:
+    """One entry in Tor's key folders: a friend, or a house this one asked."""
+
+    id: str
+    reach_public: bytes
+    reach_private: bytes | None
+    onion_key: bytes | None
+    session_key: bytes
+    house_key: bytes
+    pending: bool
+
+
+async def _inputs() -> tuple[list[_Peer], dict[str, float]]:
+    """The friends, the houses this one asked, and the open friend files."""
+    from domovoi.db.session import session_scope
+    from domovoi.friend_houses import store
+
+    async with session_scope() as s:
+        friends = await store.active_friends(s)
+        asked = await store.requests(s, direction="out", states=("unsent", "sent"))
+        invites = await store.open_invites(s)
+    peers = [_Peer(f.id, f.reach_public, f.reach_private, f.onion_key, f.session_key,
+                   f.house_key, False) for f in friends]
+    peers += [_Peer(r["id"], r["reach_public"], None, None, r["session_key"], r["house_key"], True)
+              for r in asked if r["reach_public"] is not None]
+    return peers, {i["id"]: i["expires_at"].timestamp() for i in invites}
+
+
 async def _reconcile() -> None:
     from domovoi import egress
     from domovoi.config import settings
     from domovoi.container_guard import holds
-    from domovoi.db.session import session_scope
-    from domovoi.friend_houses import store
     from domovoi.friend_houses import tor_runtime as rt
 
     enabled = bool(getattr(settings, "friend_houses_enabled", False))
@@ -134,16 +179,18 @@ async def _reconcile() -> None:
                       detail="Friend Houses runs on the server's Linux side" if enabled else None)
         return
     policy = egress.policy()
-    friends: list[store.FriendRow] = []
+    peers: list[_Peer] = []
+    invites: dict[str, float] = {}
     if enabled:
-        async with session_scope() as s:
-            friends = await store.active_friends(s)
-    w = tc.wanted(enabled=enabled, internet_policy=policy, friends=len(friends), open_invites=0)
+        peers, invites = await _inputs()
+    w = tc.wanted(enabled=enabled, internet_policy=policy, friends=len(peers),
+                  open_invites=len(invites))
     before = _STATE["applied"]
     action = tc.plan_change(before, w)
 
     if not w.run:
         await _stop_listener()
+        _stop_retries()
         # At boot (nothing applied yet) a container left running from before
         # is stopped too, but only on a house that ever set Friend Houses
         # up: an untouched house never even asks Docker.
@@ -151,16 +198,21 @@ async def _reconcile() -> None:
                                 and await rt.state() == "running"):
             with holds.holding(GUARD_HOLD, "Friend Houses is stopping", settle_sec=60):
                 await rt.stop()
-        _STATE.update(applied=w, onion=None,
+        if _folder().root.exists():
+            _folder().forget_onion("hs-pairing")  # the next friend file gets a new address
+        _STATE.update(applied=w, onion=None, pairing=None,
                       status="off" if not enabled else "stopped",
-                      detail=None if not enabled else _why_stopped(policy, len(friends)))
+                      detail=None if not enabled else _why_stopped(policy, len(peers)))
         return
 
     keys = fid.load() or fid.create()
     folder = _folder()
     folder.ensure()
+    if before is not None and before.pairing_onion and not w.pairing_onion:
+        folder.forget_onion("hs-pairing")
     folder.write_torrc(w)
-    _sync_key_files(folder, friends)
+    _sync_key_files(folder, peers)
+    _write_invites(invites)
 
     _STATE.update(status="starting", detail=None)
     with holds.holding(GUARD_HOLD, "Friend Houses is starting its connection", settle_sec=120):
@@ -172,20 +224,16 @@ async def _reconcile() -> None:
             wait = RELOAD_MIN_INTERVAL_SEC - (time.monotonic() - _STATE["last_reload"])
             if wait > 0:
                 await asyncio.sleep(wait)  # batch: later changes ride this reload
-                folder.write_torrc(w)
-                _sync_key_files(folder, friends)
             await rt.reload()
             _STATE["last_reload"] = time.monotonic()
     _STATE["applied"] = w
 
-    if w.main_onion:
-        onion = await _wait_for_onion(folder)
-        _STATE["onion"] = onion
-        await _write_listener_files(keys, onion, friends)
-        await _ensure_listener(folder)
-    else:
-        _STATE["onion"] = None
-        await _stop_listener()
+    onion = await _wait_for_onion(folder, "hs-main") if w.main_onion else None
+    _STATE["onion"] = onion
+    _STATE["pairing"] = await _wait_for_onion(folder, "hs-pairing") if w.pairing_onion else None
+    await _write_listener_files(keys, onion, peers)
+    await _ensure_listener(folder)
+    _start_retries()
     _STATE.update(status="on", detail=None)
 
 
@@ -193,26 +241,36 @@ def _why_stopped(policy: str, friends: int) -> str:
     if policy == "never":
         return "The internet answer is \"never\", so the private connection is stopped."
     if friends == 0:
-        return "No friends yet, so nothing needs to run."
+        return "No friends or friend files yet, so nothing needs to run."
     return "Stopped."
 
 
-def _sync_key_files(folder: tc.TorFolder, friends: list) -> None:
+def _sync_key_files(folder: tc.TorFolder, peers: list[_Peer]) -> None:
     """Make Tor's key folders say exactly what the friend list says."""
-    wanted_ids = {f.id for f in friends}
+    wanted_ids = {p.id for p in peers}
+    held_ids = {p.id for p in peers if p.reach_private is not None and p.onion_key is not None}
     for stale in folder.authorized() - wanted_ids:
         folder.deauthorize(stale)
+    for stale in folder.held() - held_ids:
         folder.drop_key_for(stale)
-    for f in friends:
-        folder.authorize(f.id, f.reach_public)
-        if f.reach_private is not None:
-            folder.hold_key_for(f.id, f.onion_key, f.reach_private)
+    for p in peers:
+        folder.authorize(p.id, p.reach_public)
+        if p.id in held_ids:
+            assert p.reach_private is not None and p.onion_key is not None
+            folder.hold_key_for(p.id, p.onion_key, p.reach_private)
 
 
-async def _wait_for_onion(folder: tc.TorFolder) -> bytes:
+def _write_invites(invites: dict[str, float]) -> None:
+    folder = _listener_folder()
+    folder.mkdir(parents=True, exist_ok=True)
+    tc._chmod(folder, 0o700)
+    tc._write_private(folder / fl.INVITES_FILE, json.dumps(invites))
+
+
+async def _wait_for_onion(folder: tc.TorFolder, service: str = "hs-main") -> bytes:
     deadline = time.monotonic() + ONION_WAIT_SEC
     while time.monotonic() < deadline:
-        onion = folder.onion_key()
+        onion = folder.onion_key(service)
         if onion is not None:
             return onion
         await asyncio.sleep(1.0)
@@ -241,18 +299,39 @@ async def current_epoch() -> bytes:
     return epoch
 
 
-async def _write_listener_files(keys: fid.HouseKeys, onion: bytes, friends: list) -> None:
+async def _write_listener_files(keys: fid.HouseKeys, onion: bytes | None, peers: list[_Peer]) -> None:
+    """The friend list (friends, and houses this one asked: those may only
+    deliver an accept) and this house's hello, for the listener."""
     folder = _listener_folder()
     folder.mkdir(parents=True, exist_ok=True)
     tc._chmod(folder, 0o700)
-    hello = fs.Hello(keys.address_statement(onion, int(time.time())), await current_epoch())
-    tc._write_private(folder / fl.FRIENDS_FILE,
-                      json.dumps({f.session_key.hex(): f.house_key.hex() for f in friends}))
+    tc._write_private(folder / fl.FRIENDS_FILE, json.dumps(
+        {p.session_key.hex(): {"house": p.house_key.hex(), "pending": p.pending} for p in peers}))
     path = folder / fl.HELLO_FILE
+    if onion is None:
+        path.unlink(missing_ok=True)
+        _STATE["hello"] = None
+        return
+    hello = fs.Hello(keys.address_statement(onion, int(time.time())), await current_epoch())
+    _STATE["hello"] = hello
     tmp = path.with_name(".hello.tmp")
     tmp.write_bytes(hello.to_bytes())
     tc._chmod(tmp, 0o600)
     tmp.replace(path)
+
+
+async def my_hello() -> fs.Hello | None:
+    """This house's hello for outgoing connections (the same one its
+    listener answers with), or None while it has no onion."""
+    return _STATE.get("hello")
+
+
+def pairing_onion() -> bytes | None:
+    return _STATE.get("pairing")
+
+
+def socks_path() -> Path:
+    return _folder().socks_path
 
 
 # ─── the listener process ─────────────────────────────────────────────────
@@ -275,6 +354,7 @@ async def _run_listener(folder: tc.TorFolder) -> None:
             sys.executable, "-I", "-m", "domovoi.friend_houses.listener",
             "--keys", str(fid.keys_path()), "--folder", str(_listener_folder()),
             "--socket", str(folder.main_socket),
+            "--pairing-socket", str(folder.pairing_socket),
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
         _LISTENER["proc"] = proc
@@ -306,12 +386,71 @@ async def _read_log(proc: asyncio.subprocess.Process) -> None:
 
 
 def handle_event(event: dict) -> None:
-    """What the listener reported. F1 only logs; messages (F3) and the
-    outbox flush on "I'm back" hook in here."""
+    """What the listener reported. Friend requests and accepts go to
+    :mod:`domovoi.friend_houses.friending`, which checks them again before
+    acting; messages (F3) and the outbox flush on "I'm back" hook in here."""
     kind = event.get("event")
     if kind in ("listening", "connected", "im_back"):
         house = str(event.get("house", ""))[:16]
         log.info("Friend Houses: %s%s", kind, f" ({house}…)" if house else "")
+    elif kind in ("request", "accepted"):
+        from domovoi.friend_houses import friending
+
+        _spawn(friending.on_event(event), "friend-houses-event")
+
+
+def _spawn(coro, name: str) -> None:
+    task = asyncio.get_running_loop().create_task(coro, name=name)
+    _PENDING.add(task)
+    task.add_done_callback(_PENDING.discard)
+
+
+# ─── retries: unsent requests and accepts ─────────────────────────────────
+
+RETRY_EVERY_SEC = 300.0
+_RETRY: dict[str, Any] = {"task": None}
+
+
+def schedule_deliveries() -> None:
+    """Try pending requests and accepts now (after a reconcile), in the
+    background."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    from domovoi.friend_houses import friending
+
+    _spawn(_after_reconcile(friending.deliver_pending), "friend-houses-deliver")
+
+
+async def _after_reconcile(fn) -> None:
+    async with _LOCK:  # wait for a reconcile in flight: the onion must exist
+        pass
+    try:
+        await fn()
+    except Exception:  # noqa: BLE001 — retried on the next pass
+        log.exception("Friend Houses: delivering pending requests failed")
+
+
+async def _retry_loop() -> None:
+    from domovoi.friend_houses import friending
+
+    while True:
+        await asyncio.sleep(RETRY_EVERY_SEC)
+        await _after_reconcile(friending.deliver_pending)
+
+
+def _start_retries() -> None:
+    task = _RETRY["task"]
+    if task is None or task.done():
+        _RETRY["task"] = asyncio.get_running_loop().create_task(_retry_loop(), name="friend-houses-retry")
+
+
+def _stop_retries() -> None:
+    task = _RETRY["task"]
+    if task is not None and not task.done():
+        task.cancel()
+    _RETRY["task"] = None
 
 
 async def _stop_listener() -> None:
@@ -335,4 +474,5 @@ async def _stop_listener() -> None:
 async def shutdown() -> None:
     """Core teardown: stop the listener. The Tor container keeps running so
     a core restart doesn't take the house offline; boot reconciles it."""
+    _stop_retries()
     await _stop_listener()

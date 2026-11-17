@@ -72,11 +72,15 @@ def house(tmp_path, monkeypatch):
     async def fake_scope():
         yield None
 
-    async def fake_friends(_s):
-        return list(friends)
+    invites: dict[str, float] = {}
 
-    async def fake_onion(_folder):
-        return bytes(range(32))
+    async def fake_inputs():
+        peers = [svc._Peer(f.id, f.reach_public, f.reach_private, f.onion_key, f.session_key,
+                           f.house_key, False) for f in friends]
+        return peers, dict(invites)
+
+    async def fake_onion(_folder, service="hs-main"):
+        return bytes(range(32)) if service == "hs-main" else bytes([1]) * 32
 
     async def fake_epoch():
         return b"\x05" * 8
@@ -88,7 +92,8 @@ def house(tmp_path, monkeypatch):
         listener["running"] = False
 
     monkeypatch.setattr("domovoi.db.session.session_scope", fake_scope)
-    monkeypatch.setattr(store, "active_friends", fake_friends)
+    monkeypatch.setattr(svc, "_inputs", fake_inputs)
+    monkeypatch.setattr(svc, "_start_retries", lambda: None)
     monkeypatch.setattr(svc, "_wait_for_onion", fake_onion)
     monkeypatch.setattr(svc, "current_epoch", fake_epoch)
     monkeypatch.setattr(svc, "_ensure_listener", fake_ensure)
@@ -105,6 +110,7 @@ def house(tmp_path, monkeypatch):
 
     h = House()
     h.docker, h.friends, h.listener, h.policy, h.root = docker, friends, listener, policy, tmp_path
+    h.invites = invites
     h.enable = lambda on=True: monkeypatch.setattr(settings, "friend_houses_enabled", on, raising=False)
     return h
 
@@ -193,6 +199,7 @@ async def test_friend_changes_reload_and_rewrite_the_key_files(house) -> None:
     assert sorted(p.name for p in auth.iterdir()) == ["f2.auth"]
     listed = json.loads((house.root / "friend-houses" / "listener" / "friends.json").read_text())
     assert list(listed) == [bytes([3]).hex() * 32]  # only friend 2's session key
+    assert listed[bytes([3]).hex() * 32] == {"house": bytes([2]).hex() * 32, "pending": False}
 
 
 @linux_only
@@ -254,3 +261,31 @@ def test_the_guard_expects_tor_running_only_when_wanted() -> None:
     assert on.state == RUNNING and on.required
     assert off.state == STOPPED and not off.required
     assert on.pin == "id"  # only the image the core built
+
+
+@linux_only
+async def test_an_open_friend_file_runs_only_the_pairing_onion(house) -> None:
+    house.enable()
+    house.invites["ab" * 16] = 4_000_000_000.0
+    await svc.reconcile()
+    assert house.docker.calls == ["start"]
+    torrc = (house.root / "friend-houses" / "tor" / "data" / "torrc").read_text()
+    assert "hs-pairing" in torrc and "hs-main" not in torrc
+    listed = json.loads((house.root / "friend-houses" / "listener" / "invites.json").read_text())
+    assert listed == {"ab" * 16: 4_000_000_000.0}
+    assert svc.pairing_onion() == bytes([1]) * 32
+    assert await svc.my_hello() is None  # no onion of its own yet
+    assert house.listener["running"]
+
+
+@linux_only
+async def test_the_pairing_address_is_forgotten_when_the_last_file_goes(house) -> None:
+    house.enable()
+    house.invites["ab" * 16] = 4_000_000_000.0
+    await svc.reconcile()
+    pairing = house.root / "friend-houses" / "tor" / "data" / "hs-pairing"
+    (pairing / "hostname").write_text("x")
+    house.invites.clear()
+    await svc.reconcile()
+    assert house.docker.calls == ["start", "stop"]
+    assert not (pairing / "hostname").exists()  # the next file gets a new address

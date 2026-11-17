@@ -77,6 +77,31 @@ async def socks_connect(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
         raise Unreachable("the Tor daemon answered an unknown address type")
 
 
+async def open_stream(socks_path: Path, *, onion: str,
+                      timeout: float = CONNECT_TIMEOUT_SEC) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+    """A raw stream to ``onion:80`` through the local Tor daemon (the
+    pairing exchange runs its own handshake on it)."""
+    if sys.platform == "win32":  # pragma: no cover — the daemon runs on Linux
+        raise Unreachable("Friend Houses runs on the Linux side of the server")
+
+    async def _dial() -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+        try:
+            reader, writer = await asyncio.open_unix_connection(str(socks_path))
+        except OSError as exc:
+            raise Unreachable("the Tor daemon isn't running") from exc
+        try:
+            await socks_connect(reader, writer, onion)
+        except BaseException:
+            writer.close()
+            raise
+        return reader, writer
+
+    try:
+        return await asyncio.wait_for(_dial(), timeout)
+    except asyncio.TimeoutError as exc:
+        raise Unreachable("timed out reaching the other house") from exc
+
+
 async def open_session(
     socks_path: Path,
     *,
