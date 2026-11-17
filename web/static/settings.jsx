@@ -5666,7 +5666,7 @@ const CapturesPanel = () => {
 const SETTINGS_GROUPS = [
   // "Rooms & devices" until 2026-11-09: its old address still opens it.
   { id: 'household', label: 'Household', icon: 'house', aliases: ['rooms-and-devices'],
-    sections: ['rooms', 'people', 'phones-and-browsers', 'calendars', 'media-folders', 'music-mix', 'printers'] },
+    sections: ['rooms', 'people', 'phones-and-browsers', 'calendars', 'media-folders', 'music-mix', 'queue-history', 'printers'] },
   { id: 'voice', label: 'Voice', icon: 'audio-lines', sections: ['wake-words', 'voices', 'greetings'] },
   { id: 'chat-and-ai', label: 'Chat & AI', icon: 'sparkles', sections: ['models', 'search', 'chat'] },
   { id: 'privacy', label: 'Privacy', icon: 'shield', sections: ['internet', 'voice-history', 'listening-history'] },
@@ -5701,6 +5701,11 @@ const SETTINGS_SECTIONS = [
   { id: 'music-mix', label: 'Music mix', optional: true, aliases: ['mix', 'up-next'],
     sub: 'How Up next picks the songs that follow: discovery or favorites, close or wandering, autoplay, repeats, similar artists.',
     words: 'music mix up next autoplay shuffle discovery favorites favourites wander similar artists popularity listenbrainz repeats radio station' },
+  // queue_history.jsx registers it (1.3.1): what Up next picked, and why
+  // (admin; read-only).
+  { id: 'queue-history', label: 'Queue history', optional: true,
+    sub: 'What Up next picked in each room and on each phone, why, and how each song went — admins only.',
+    words: 'queue history up next picks picked played skipped why reason session sessions download csv json autoplay' },
   { id: 'printers', label: 'Printers & scanners', optional: true,
     sub: 'Printers and scanners on your network.',
     words: 'printer printers print printing scanner scanners scan scanning ink toner paper' },

@@ -3750,6 +3750,279 @@
         }
       }
     },
+    "/api/music/up-next/history": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "List Sessions",
+        "description": "Every Up next session still kept, newest first: where it played,\nwhen, whose mix, the song it started from and how many picks it made.\nPaged (default 50, max 200).",
+        "operationId": "list_sessions_api_music_up_next_history_get",
+        "parameters": [
+          {
+            "name": "room",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only this room's sessions.",
+              "title": "Room"
+            },
+            "description": "Only this room's sessions."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 200,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Page size (default 50, max 200). Sending any of limit / cursor / offset asks for the paged answer.",
+              "title": "Limit"
+            },
+            "description": "Page size (default 50, max 200). Sending any of limit / cursor / offset asks for the paged answer."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 2048
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque position from the previous page's next_cursor. Keyset-based: rows added or removed between pages are neither repeated nor skipped.",
+              "title": "Cursor"
+            },
+            "description": "Opaque position from the previous page's next_cursor. Keyset-based: rows added or removed between pages are neither repeated nor skipped."
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Row offset (stable only while the list doesn't change; prefer cursor).",
+              "title": "Offset"
+            },
+            "description": "Row offset (stable only while the list doesn't change; prefer cursor)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Sessions Api Music Up Next History Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/up-next/history/{session_id}": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Session Detail",
+        "description": "One session, the summary of all its picks, and one page of its picks\nin the order they were made (``seq``), each with its reason, the song\nit followed and, when it played, how long and how it ended.",
+        "operationId": "session_detail_api_music_up_next_history__session_id__get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 200,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Page size (default 50, max 200). Sending any of limit / cursor / offset asks for the paged answer.",
+              "title": "Limit"
+            },
+            "description": "Page size (default 50, max 200). Sending any of limit / cursor / offset asks for the paged answer."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 2048
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque position from the previous page's next_cursor. Keyset-based: rows added or removed between pages are neither repeated nor skipped.",
+              "title": "Cursor"
+            },
+            "description": "Opaque position from the previous page's next_cursor. Keyset-based: rows added or removed between pages are neither repeated nor skipped."
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Row offset (stable only while the list doesn't change; prefer cursor).",
+              "title": "Offset"
+            },
+            "description": "Row offset (stable only while the list doesn't change; prefer cursor)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Session Detail Api Music Up Next History  Session Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/up-next/history/{session_id}/download": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Download Session",
+        "description": "Every pick of one session as a file: CSV (one row per pick) or JSON\n(``{session, summary, picks}``, the same shapes as the reads above).",
+        "operationId": "download_session_api_music_up_next_history__session_id__download_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "csv",
+                "json"
+              ],
+              "type": "string",
+              "description": "csv or json",
+              "default": "csv",
+              "title": "Format"
+            },
+            "description": "csv or json"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/music/mix": {
       "get": {
         "tags": [

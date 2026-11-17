@@ -615,6 +615,14 @@ browser, and in a room.
   person's listening is kept apart once their phone or browser says
   **this is me**; clearing it, or not keeping it at all, is under
   [What's kept, and forgetting](#node:kept).
+- *(admin)* **Look back at what Up next picked:**
+  [Settings → Household → Queue history](#settings/queue-history) lists
+  every Up next still kept, in each room, browser and phone. Open one to
+  see its songs in order: why each was picked, the song it followed, and
+  whether it played or was skipped (and for how long). A summary on top
+  counts the picks, the artists and how close two songs by one artist
+  came, the reasons and the decades; **download CSV** or **download JSON**
+  saves the whole session. A finished one is kept 30 days.
 - **Up next by voice.** In a room, the commands below act on that room's
   queue; most also take the room's name after them ("what's next in the
   kitchen"). "Next" and "play the next song" still skip. A command that
@@ -2038,6 +2046,7 @@ Everything stays on your server, or on your phone.
 | Command recordings (off unless an admin turns them on for a room) | 14 days |
 | Play history | 90 days |
 | The songs each room, phone and browser played, and who for | 1 year, or what **Keep listening history** says |
+| The songs Up next picked, and why (Queue history) | 30 days after that Up next ends |
 | The list of recent print jobs | 90 days (an admin can clear it) |
 | News stories | 90 days (saved ones always) |
 | The server's own log | no words, only how many |
