@@ -6,15 +6,19 @@ household-read (``require_device_read``) like the Documents folder the
 scans live in; asking for a read is device tier.
 
 * ``GET /v1/scan/reads?path=`` — the newest read of a scan in
-  Documents/Scans (``read`` null when it was never read) and whether this
-  server can read scans (``can_read``).
+  Documents/Scans (``read`` null when it was never read, or when the file
+  was replaced since: a read shows only for the bytes it read) and whether
+  this server can read scans (``can_read``).
 * ``POST /v1/scan/reads`` ``{"path"}`` — read a scan (an older one, or one
   whose read failed): the read already under way or done for those bytes
   when there is one.
 * ``GET /v1/scan/reads/{id}`` — its state and progress.
 * ``GET /v1/scan/reads/{id}/summary`` — "What does it say?": the short
   summary (made once, by the chat model, then kept; with AI features off
-  the start of the text instead).
+  the start of the text instead). Made voice first and one at a time in
+  the house, once however many ask at the same moment, and a failed one
+  isn't tried again on every ask (:func:`says.summary`, DOC-11).
+* ``POST /v1/scan/reads/{id}/cancel`` — stop a read (device tier).
 * ``GET /v1/scan/reads/{id}/text`` — the full text, page by page.
 """
 
@@ -58,7 +62,8 @@ async def _read_or_404(read_id: str) -> dict[str, Any]:
 @router.get("/v1/scan/reads", dependencies=READ)
 async def read_for_path(path: str = Query(..., min_length=1, max_length=1000)) -> dict[str, Any]:
     rel = scan_path(path)
-    return {"read": await store.read_json_for(await store.latest_for_path(rel)), "can_read": runner.can_read()}
+    latest = await store.current_or_none(await store.latest_for_path(rel))
+    return {"read": await store.read_json_for(latest), "can_read": runner.can_read()}
 
 
 class ReadBody(BaseModel):
@@ -94,8 +99,17 @@ async def read_summary(read_id: str) -> dict[str, Any]:
     row = await _read_or_404(read_id)
     if row["state"] != "done":
         raise HTTPException(status_code=409, detail="Domovoi is still reading this scan.")
-    out = await says.summary(row)
+    out = await says.summary(row, gate=True)
     return {"read": await store.read_json_for(row), **out}
+
+
+@router.post("/v1/scan/reads/{read_id}/cancel", dependencies=DEVICE)
+async def cancel_read(read_id: str) -> dict[str, Any]:
+    """Stop reading: a queued read ends now, a running one within about a
+    second. The pages read so far stay with the read."""
+    await _read_or_404(read_id)
+    await runner.cancel(read_id)
+    return await store.read_json_for(await _read_or_404(read_id))  # type: ignore[return-value]
 
 
 @router.get("/v1/scan/reads/{read_id}/text", dependencies=READ)

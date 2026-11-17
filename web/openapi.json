@@ -16832,6 +16832,47 @@
         }
       }
     },
+    "/api/scan/reads/{read_id}/cancel": {
+      "post": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "Scan Read Cancel",
+        "description": "Stop reading a scan: a waiting read ends now, one under way within\nabout a second. The pages read so far stay with it.",
+        "operationId": "scan_read_cancel_api_scan_reads__read_id__cancel_post",
+        "parameters": [
+          {
+            "name": "read_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Read Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/scan/reads/{read_id}/text": {
       "get": {
         "tags": [

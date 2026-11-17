@@ -31,6 +31,11 @@ TimeoutStartSec=15min
 WatchdogSec=90
 TimeoutStopSec=30
 KillMode=control-group
+# A helper the kernel ends for want of memory (ffmpeg or tesseract reading
+# somebody's video or scan, each also under its own memory cap:
+# domovoi/chat_video/media.py) ends alone and the core keeps running;
+# systemd's default for a service would stop the whole unit.
+OOMPolicy=continue
 # Sandboxing (docs/LINUX_HOST.md, "Sandboxing the units"). Writable: the
 # checkout and its venv (pulls, plugin installs, .env), the service user's
 # home (~/.domovoi, the model caches, the default media folders) and the

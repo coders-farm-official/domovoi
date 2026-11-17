@@ -13,6 +13,7 @@
 //     html     — run through the sanitiser alone (a direct probe)
 //     chat     — run through chat_markdown.js, the chat reply renderer
 //                (its own marked instance, then the sanitiser)
+//     plain    — the same with `{ links: false }` (a scan's summary)
 // Output: { "<name>": { raw, sanitized } }
 'use strict';
 const fs = require('fs');
@@ -48,6 +49,11 @@ const result = {};
 for (const [name, sc] of Object.entries(cases)) {
   if (sc.chat !== undefined) {
     const out = sandbox.window.chatMarkdownHtml(sc.chat);
+    result[name] = { raw: out, sanitized: out };
+    continue;
+  }
+  if (sc.plain !== undefined) {
+    const out = sandbox.window.chatMarkdownHtml(sc.plain, { links: false });
     result[name] = { raw: out, sanitized: out };
     continue;
   }

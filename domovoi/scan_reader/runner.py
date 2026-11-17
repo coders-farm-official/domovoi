@@ -27,6 +27,14 @@ from the next page (``attempts`` counts the starts; past
 that stops the server). The page pictures live in a work folder that is
 deleted when the read ends.
 
+**The text is bound to the bytes it was read from** (security audit round
+6, DOC-12): the scan is found inside Documents with no link anywhere on its
+path (:func:`resolve`), copied into the read's own work folder, and hashed
+and drawn from that copy, so a file replaced mid-read can't lend its pages
+to the other's hash. **A read can be stopped** (``POST
+/v1/scan/reads/{id}/cancel``), and ends after :data:`MAX_READ_SEC` of
+running however many pages it has (DOC-11).
+
 :func:`read_now` is the same page step without the wait, for the person
 who asked by voice and is waiting for the answer (OCR only: a page that
 needs the picture model is left for the background read).
@@ -36,12 +44,15 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import datetime as dt
 import logging
+import os
 import shutil
+import sys
 import tempfile
 import time
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Awaitable, Callable, Protocol
 
 from sqlalchemy import text
@@ -56,6 +67,11 @@ log = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 3
 IDLE_POLL_SEC = 2.0
+#: The longest a read may run, counted from its first start (a 500-page
+#: scan read by OCR takes about an hour on a small server).
+MAX_READ_SEC = 4 * 3600
+#: The largest scan file a read copies and reads.
+MAX_SCAN_BYTES = 1024 ** 3
 #: The longest a picture-model transcription may run, tokens.
 VISION_TOKENS = 1200
 
@@ -63,12 +79,17 @@ CODE_MISSING = "scan_missing"
 CODE_NO_READER = "scan_no_reader"
 CODE_INTERRUPTED = "scan_read_interrupted"
 CODE_FAILED = "scan_read_failed"
+CODE_TOO_LONG = "scan_read_too_long"
+CODE_TOO_LARGE = "scan_too_large"
 FAILURE_TEXT = {
     CODE_MISSING: "The scan isn't in Documents any more.",
     CODE_NO_READER: ("This server can't read scans yet: tesseract-ocr isn't installed, and the picture model "
                      "isn't available."),
     CODE_INTERRUPTED: "Reading this scan stopped the server more than once, so Domovoi gave up on it.",
     CODE_FAILED: "Something went wrong reading this scan.",
+    CODE_TOO_LONG: "Reading this scan took more than 4 hours, so Domovoi stopped. A scan with fewer pages reads "
+                   "more quickly.",
+    CODE_TOO_LARGE: "This scan is larger than 1 GB, more than Domovoi reads.",
 }
 
 
@@ -147,18 +168,47 @@ def documents_root() -> Path:
     return Path(settings.documents_dir).expanduser()
 
 
+def _is_link(p: Path) -> bool:
+    isjunction = getattr(os.path, "isjunction", None)
+    return p.is_symlink() or bool(isjunction and isjunction(p))
+
+
 def resolve(rel: str) -> Path | None:
-    """The scan's file inside Documents (no escaping it, no links), or None."""
+    """The scan's file inside Documents, or None: no escaping it, and no
+    link on any part of the path below Documents (a link in Scans would
+    otherwise read a PDF from another folder, past the request's checks)."""
     root = documents_root()
+    rel_path = PurePosixPath(str(rel or "").replace("\\", "/"))
+    parts = rel_path.parts
+    if (not parts or rel_path.is_absolute()
+            or any(x in ("", ".", "..") or (sys.platform == "win32" and ":" in x) for x in parts)):
+        return None
     try:
-        real_root = root.resolve()
-        p = (root / rel).resolve()
-        p.relative_to(real_root)
+        p = root.resolve()
+        for part in parts:
+            p = p / part
+            if _is_link(p):
+                return None
+        p.resolve().relative_to(root.resolve())
     except (OSError, ValueError):
         return None
     if not p.is_file() or p.suffix.lower() != ".pdf":
         return None
     return p
+
+
+def _snapshot(path: Path, work: Path) -> Path:
+    """``path`` copied into the read's work folder (never through a link);
+    the copy is what is hashed and drawn."""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    dest = work / "source.pdf"
+    fd = os.open(str(path), flags)
+    with os.fdopen(fd, "rb") as src:
+        if os.fstat(src.fileno()).st_size > MAX_SCAN_BYTES:
+            raise ReadFailed(CODE_TOO_LARGE)
+        with dest.open("wb") as out:
+            shutil.copyfileobj(src, out, 1024 * 1024)
+    return dest
 
 
 async def queue_scan(rel: str, *, scan_id: str | None = None) -> str | None:
@@ -185,12 +235,35 @@ class Job:
     languages: list[str]
     attempts: int
     waiting: bool = False
+    started_at: dt.datetime | None = None
 
     @classmethod
     def from_row(cls, r: Any) -> "Job":
         return cls(id=r["id"], path=r["path"], sha256=r["sha256"], pages=int(r["pages"] or 0),
                    languages=[x for x in str(r["languages"] or "eng").split("+") if x] or ["eng"],
-                   attempts=int(r["attempts"] or 0))
+                   attempts=int(r["attempts"] or 0), started_at=r.get("started_at"))
+
+    def overdue(self) -> bool:
+        """Running past :data:`MAX_READ_SEC` since its first start."""
+        if self.started_at is None:
+            return False
+        started = self.started_at if self.started_at.tzinfo else self.started_at.replace(tzinfo=dt.timezone.utc)
+        return (dt.datetime.now(dt.timezone.utc) - started).total_seconds() > MAX_READ_SEC
+
+
+async def cancel(read_id: str) -> bool:
+    """Stop a read (the person's Stop): a queued one ends now, a running one
+    at its next check (within about a second, a helper program ended at
+    once). False when it had already ended."""
+    if not store.valid_id(read_id):
+        return False
+    async with session_scope() as s:
+        row = (await s.execute(text(
+            "UPDATE scan_reads SET state = 'cancelled', waiting_for_voice = false, finished_at = now(), "
+            "updated_at = now() WHERE id = :id AND state IN ('queued', 'running') RETURNING id"),
+            {"id": read_id})).first()
+        await s.execute(text("SELECT pg_notify('scan_read_changed', :id)"), {"id": read_id})
+    return row is not None
 
 
 async def _update(job_id: str, **cols: Any) -> None:
@@ -308,6 +381,8 @@ class Runner(VoiceFirst):
             if job.attempts > MAX_ATTEMPTS:
                 raise ReadFailed(CODE_INTERRUPTED)
             await self._read(job, work, gate=True)
+            if await self._stop_requested(job):
+                raise _Cancelled()
             await self._end(job, "done")
         except _Cancelled:
             await self._end(job, "cancelled")
@@ -335,13 +410,19 @@ class Runner(VoiceFirst):
 
     # ── the pages ───────────────────────────────────────────────────────
     async def _read(self, job: Job, work: Path, *, gate: bool, deadline: float | None = None) -> None:
-        path = resolve(job.path)
-        if path is None:
+        found = resolve(job.path)
+        if found is None:
             raise ReadFailed(CODE_MISSING)
         if ocr.find() is None and not vision_allowed():
             raise ReadFailed(CODE_NO_READER)
         if gate:
+            if job.overdue():
+                raise ReadFailed(CODE_TOO_LONG)
             await self.wait_for_quiet(job)
+        try:
+            path = await asyncio.to_thread(_snapshot, found, work)
+        except OSError:
+            raise ReadFailed(CODE_MISSING) from None
         sha = await asyncio.to_thread(store.sha256_of, path)
         if job.sha256 and sha != job.sha256:
             # The file changed since the read was queued: read what is there now.
@@ -364,9 +445,9 @@ class Runner(VoiceFirst):
             if deadline is not None and time.monotonic() > deadline:
                 return
             if gate:
-                await self.wait_for_quiet(job)
-                if await self._stop_requested(job):
-                    raise _Cancelled()
+                if job.overdue():
+                    raise ReadFailed(CODE_TOO_LONG)
+                await self.wait_for_quiet(job)     # stop is looked at here too
             saved = await self._page(job, path, n, work, gate=gate)
             if saved:
                 done.add(n)
@@ -381,7 +462,7 @@ class Runner(VoiceFirst):
             await save_page(job.id, n, "none", "", None, 0)
             return True
         try:
-            got: ocr.PageOcr | None = await self.ocr_fn(png, hold=self.hold_while_voice if gate else None,
+            got: ocr.PageOcr | None = await self.ocr_fn(png, hold=self.pass_hold(job) if gate else None,
                                                          langs=job.languages)
         except ocr.OcrMissing:
             got = None
@@ -423,7 +504,14 @@ async def read_now(read_id: str, *, budget_sec: float = 20.0, runner: Runner | N
     job = Job.from_row(row)
     work = work_dir(job.id, inline=True)
     try:
-        await r._read(job, work, gate=False, deadline=time.monotonic() + budget_sec)
+        # The budget holds inside a page too: a page still being drawn or
+        # read when it runs out is stopped (its helper ended) and left for
+        # the background read.
+        try:
+            await asyncio.wait_for(r._read(job, work, gate=False, deadline=time.monotonic() + budget_sec),
+                                   timeout=budget_sec + 1.0)
+        except asyncio.TimeoutError:
+            pass
         left = set(range(1, job.pages + 1)) - await saved_pages(job.id)
         if job.pages and not left:
             await _update(job.id, state="done", waiting_for_voice=False)

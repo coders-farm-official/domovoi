@@ -771,3 +771,65 @@ def test_the_documents_writing_follows_the_phones_text_size_setting():
     sheet_kind = kinds.split("    Sheet(", 1)[1].split("    );", 1)[0]
     assert "followsTextSize = true," in document_kind
     assert "followsTextSize = false," in sheet_kind
+
+
+# ═══ Word download names and characters (security audit round 6, DOC-14) ═══
+
+def test_a_document_named_in_another_alphabet_downloads_as_word(docs_dir):
+    # Before: 'filename="Письмо бабушке.docx"' couldn't be sent as a header (500).
+    (docs_dir / "Письмо бабушке.html").write_text(richdoc.document_file("<p>Привет</p>", "x"), encoding="utf-8")
+    (docs_dir / "手紙.md").write_text("# こんにちは", encoding="utf-8")
+    (docs_dir / "Таблица.csv").write_text("a,b\n1,2\n", encoding="utf-8")
+    with _client() as c:
+        r = c.get("/api/documents/export/doc/Письмо бабушке.html", params={"fmt": "docx"})
+        md = c.get("/api/documents/export/doc/手紙.md", params={"fmt": "docx"})
+        sheet = c.get("/api/documents/export/sheet/Таблица.csv", params={"fmt": "xlsx"})
+    assert r.status_code == 200, r.text
+    cd = r.headers["content-disposition"]
+    assert cd.startswith('attachment; filename="') and cd.isascii()
+    assert "filename*=UTF-8''%D0%9F%D0%B8%D1%81%D1%8C%D0%BC%D0%BE%20" in cd and cd.endswith(".docx")
+    assert md.status_code == 200 and "filename*=UTF-8''%E6%89%8B%E7%B4%99.docx" in md.headers["content-disposition"]
+    assert sheet.status_code == 200 and sheet.headers["content-disposition"].endswith(".xlsx")
+
+
+def test_a_quote_in_a_name_adds_no_header_parameter():
+    from web.backend.api.documents import _download_headers
+
+    cd = _download_headers('a"; filename="evil.exe', ".docx")["Content-Disposition"]
+    # Before: 'attachment; filename="a"; filename="evil.exe.docx"', two names.
+    # Now exactly two parameters, the quoted ASCII name and the encoded one.
+    params = cd.split("; ")
+    assert params[0] == "attachment" and len(params) == 3, cd
+    assert params[1] == 'filename="a _ filename_ evil.exe.docx"'
+    assert params[2] == "filename*=UTF-8''a%20%3B%20filename%3D%20evil.exe.docx"
+    crlf = _download_headers("a\r\nSet-Cookie: x=1", ".docx")["Content-Disposition"]
+    assert "\r" not in crlf and "\n" not in crlf and len(crlf.split("; ")) == 3
+
+
+@pytest.mark.skipif(__import__("sys").platform == "win32", reason="a quote can't be in a Windows file name")
+def test_a_document_whose_name_holds_a_quote_downloads_with_one_name(docs_dir):
+    (docs_dir / 'a"; filename="evil.exe.md').write_text("# hi", encoding="utf-8")
+    with _client() as c:
+        r = c.get('/api/documents/export/doc/a"; filename="evil.exe.md', params={"fmt": "docx"})
+    assert r.status_code == 200
+    cd = r.headers["content-disposition"]
+    assert len(cd.split("; ")) == 3 and cd.endswith(".docx")
+
+
+def test_a_control_character_in_a_page_no_longer_fails_the_word_export(docs_dir):
+    # Before: python-docx refused the string and the export failed (422/500).
+    (docs_dir / "p.html").write_text(
+        richdoc.document_file("<p>bill\x01 due &#1;&#x0b;today</p>", "p"), encoding="utf-8")
+    (docs_dir / "n.md").write_text("# Notes\x0b\n\nline\x1f one", encoding="utf-8")
+    with _client() as c:
+        r = c.get("/api/documents/export/doc/p.html", params={"fmt": "docx"})
+        md = c.get("/api/documents/export/doc/n.md", params={"fmt": "docx"})
+        conv = c.post("/api/documents/convert/docx", json={"html": "<p>x\x02y</p>", "title": "T\x03"})
+    from docx import Document
+
+    assert r.status_code == 200, r.text
+    assert [p.text for p in Document(io.BytesIO(r.content)).paragraphs] == ["bill due today"]
+    assert md.status_code == 200, md.text
+    assert "Notes" in [p.text for p in Document(io.BytesIO(md.content)).paragraphs]
+    assert conv.status_code == 200, conv.text
+    assert html_to_docx("<p>ok\x00</p>", "t\x1f")[:2] == b"PK"

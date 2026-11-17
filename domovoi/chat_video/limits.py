@@ -27,6 +27,16 @@ The numbers, and why:
   already under way when someone says the wake word ends within about a
   second, while they are still talking, and no piece ever asks the model
   for timestamps (the cause of the 2026-11 endless-decode incident).
+* **8K at most** (7680 x 4320 pixels, no side over 8192). The biggest
+  video a phone records; a frame larger than that is no phone's, and a
+  huge frame size costs the server gigabytes of memory to decode (security
+  audit round 6, DOC-8).
+* **The 3 minutes are enforced on every pass, not only at the upload.** A
+  file's duration is what its header says, and a header can lie (a WebM
+  that says one minute and holds two hours). So every ffmpeg pass reads at
+  most :func:`pass_seconds` of the video, the sound is cut off at the size
+  that many seconds make, and the scene list and the speech pieces have
+  ceilings of their own (DOC-7).
 """
 
 from __future__ import annotations
@@ -52,6 +62,23 @@ MIN_FRAMES = 3
 FILL_EVERY_SEC = 30.0
 #: The longest piece of speech sent to the speech model at once.
 SPEECH_PIECE_SEC = 9.0
+#: The largest picture chat takes: 8K (7680 x 4320, either way up), no side
+#: over 8192 pixels.
+MAX_PIXELS = 7680 * 4320
+MAX_SIDE = 8192
+#: The most staged and queued video a server holds at once (every file in
+#: :data:`VIDEOS_DIR`, sent or not), and the most staged ones no message
+#: has taken yet. A household attaches one video at a time; past these an
+#: upload is refused until the ones waiting have been watched or swept.
+MAX_STORED_BYTES = 3 * MAX_BYTES
+MAX_UNSENT = 6
+#: How far past the accepted duration a pass may read (seconds): a
+#: container's rounding, and an audio track a little longer than the
+#: picture.
+PASS_SLACK_SEC = 2.0
+#: Ceilings on what pass 0 keeps (each far above what 3 minutes can hold).
+MAX_SCENE_ROWS = 2000
+MAX_SPEECH_PIECES = 240
 #: How many times a job may be started (a restart in the middle counts);
 #: past this it fails cleanly rather than loop on a video that stops the
 #: server.
@@ -76,6 +103,10 @@ TOO_LONG = "Videos up to 3 minutes can be attached."
 TOO_LARGE = "Videos up to 2 GB can be attached. Send a shorter clip, or record it at a lower quality."
 UNSUPPORTED = ("Chat takes MP4, MOV and WebM videos (H.264 or HEVC, the way phones record them). "
                "Share the video from your phone as MP4 and try again.")
+TOO_BIG_PICTURE = ("Chat takes videos up to 8K, the size phones record. Share the video from your phone at a "
+                   "lower resolution and try again.")
+STORE_FULL = ("Too many videos are waiting on the home server. Try again once the ones before have been "
+              "watched.")
 UNREADABLE = "Domovoi couldn't read that video. It may be damaged, or still being saved on the phone."
 NO_ROOM = "The home server is short of disk space for that video. Free some space and try again."
 NO_TOOLS = "This home server can't read videos: it needs ffmpeg, which isn't installed."
@@ -124,6 +155,25 @@ def clock(seconds: float | int | None) -> str:
     h, rem = divmod(s, 3600)
     m, sec = divmod(rem, 60)
     return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
+
+
+def pass_seconds(duration: float | None) -> float:
+    """How many seconds of the video a pass may read: the duration the
+    upload accepted (never past the 3-minute limit), plus
+    :data:`PASS_SLACK_SEC`."""
+    try:
+        d = float(duration or 0.0)
+    except (TypeError, ValueError):
+        d = 0.0
+    if not d > 0 or d != d:
+        d = MAX_DURATION_SEC
+    return min(d, MAX_DURATION_SEC + DURATION_SLACK_SEC) + PASS_SLACK_SEC
+
+
+def pcm_max_bytes(duration: float | None) -> int:
+    """The most bytes the sound pass may write: :func:`pass_seconds` of 16
+    kHz mono 16-bit PCM, and one more second for a packet's overshoot."""
+    return int((pass_seconds(duration) + 1.0) * 16000 * 2)
 
 
 def too_long_text(duration: float) -> str:

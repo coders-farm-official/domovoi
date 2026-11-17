@@ -7,9 +7,11 @@ reader in either process (:func:`text_by_sha`, through
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
+import os
 import uuid
 from pathlib import Path
 from typing import Any
@@ -36,6 +38,49 @@ def sha256_of(path: Path) -> str:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+#: The hashes of files as they are now, by (path, size, times, inode): a
+#: lookup that shows a read's text hashes the file again only when it
+#: changed.
+_SHA_CACHE: dict[tuple, str] = {}
+_SHA_CACHE_MAX = 512
+
+
+def current_sha(path: Path) -> str:
+    st = os.stat(path)
+    key = (str(path), st.st_size, st.st_mtime_ns, getattr(st, "st_ctime_ns", 0), st.st_ino)
+    got = _SHA_CACHE.get(key)
+    if got is None:
+        got = sha256_of(path)
+        if len(_SHA_CACHE) >= _SHA_CACHE_MAX:
+            _SHA_CACHE.clear()
+        _SHA_CACHE[key] = got
+    return got
+
+
+async def matches_file(row: dict[str, Any] | None) -> bool:
+    """A finished read still belongs to the scan at its path: the file is
+    there, through no link, and its bytes hash to the ones read (security
+    audit round 6, DOC-12). A read of a file replaced since then is not
+    shown for it. A read not finished yet is left to the runner, which
+    hashes what it reads."""
+    if row is None or row.get("state") != "done":
+        return True
+    from domovoi.scan_reader.runner import resolve
+
+    path = resolve(str(row.get("path") or ""))
+    if path is None:
+        return False
+    try:
+        return await asyncio.to_thread(current_sha, path) == row.get("sha256")
+    except OSError:
+        return False
+
+
+async def current_or_none(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    """``row``, or None when it is a finished read of bytes no longer there."""
+    return row if await matches_file(row) else None
 
 
 def valid_id(read_id: str) -> bool:

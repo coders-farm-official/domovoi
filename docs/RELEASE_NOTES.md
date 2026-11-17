@@ -49,6 +49,57 @@ a way that would otherwise get reported as a bug.
   #<n>.txt` in the temporary folder of the account that ran it (`%TEMP%`);
   the message names it. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md#on-the-windows-installer).
 
+## 1.4.0 (unreleased) — Security fixes: videos in chat, reading scans, Word downloads
+
+Fixes from the round 6 security audit (DOC-7 to DOC-14, FE-11). Nothing to
+do; a few limits are new.
+
+- **Videos in chat: the 3-minute limit holds whatever the file says**
+  (DOC-7). The length was the file header's claim, and every pass then
+  decoded the whole file: a small WebM saying "one minute" and holding two
+  hours could take gigabytes of memory. Each ffmpeg pass now reads at most
+  the accepted length (plus two seconds), the sound is cut off at that
+  size, and the scene list and speech pieces have ceilings.
+- **Videos in chat: no picture over 8K, and the helpers are capped**
+  (DOC-8). A video with a picture larger than 8K (7680 x 4320 either way
+  up, no side over 8192, in any of its picture streams) is refused as a
+  format chat doesn't take. ffprobe, ffmpeg and the scan reader's
+  tesseract run with a memory cap (2 GiB, or a third of the server's
+  memory, never under 1 GiB) on one decoding thread. Linux: the core's
+  unit gets `OOMPolicy=continue` (from the next update), so a helper the
+  kernel ends doesn't stop the core.
+- **Videos in chat: Stop works at every step** (DOC-9), in a quiet house
+  too, and ends an ffmpeg pass that is running.
+- **Videos in chat: the file name is data too** (DOC-10). A model sees a
+  video's name only inside the marked block, cut to letters, digits,
+  spaces and `. - _ ( ) '` (the chat's replies name it the same way). A
+  question in a chat with watched videos no longer offers lookups to the
+  model; a typed "look up …" still works.
+- **Videos in chat: staged uploads are bounded** (DOC-13). Free space is
+  checked again as an upload streams (chunked ones included), the folder
+  holds at most 6 GiB of videos and 6 staged and not sent (`507
+  video_no_room`, with its own sentence), and an unsent video goes after
+  an hour on a ten-minute timer, not only when the next upload comes.
+- **Reading scans: the summary waits for voice; a read can be stopped**
+  (DOC-11). "What does it say?" is made voice first, one at a time in the
+  house, once per read however many ask, and a failed one isn't retried
+  for five minutes. New: **Stop reading** on the dashboard's sheet (`POST
+  /api/scan/reads/{id}/cancel`, device tier); a read still running 4 hours
+  after it started ends (`scan_read_too_long`), and a scan file over 1 GB
+  isn't read (`scan_too_large`). The answer by voice keeps its 20-second
+  budget inside a page too. The phone apps don't have the Stop button yet.
+- **Reading scans: the text belongs to the bytes** (DOC-12). A read copies
+  the scan and reads that copy; a scan replaced after its read shows as not
+  read, never with the old file's text; a link anywhere on the path inside
+  Documents is refused.
+- **Scan summaries show no links** (FE-11): link text in a letter is shown
+  as words on the dashboard.
+- **Word downloads** (DOC-14): a document named in another alphabet
+  (Cyrillic, Japanese …) downloads instead of failing, a quote in a name
+  can no longer add a second file name to the download, and a control
+  character in a page is left out instead of failing the export. The same
+  for spreadsheet downloads.
+
 ## 1.4.0 (unreleased) — Queue history: what Up next picked, and why
 
 - **What changed.** **Settings → Household → Queue history** (an admin

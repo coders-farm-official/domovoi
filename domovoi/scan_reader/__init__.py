@@ -38,7 +38,7 @@ async def answer_for_voice(rel: str, context: dict | None = None, *, budget_sec:
     It is the reader :func:`domovoi.printing.scans.register_reader` holds."""
     from domovoi.scan_reader import runner, says, store
 
-    read = await store.latest_for_path(rel)
+    read = await store.current_or_none(await store.latest_for_path(rel))
     if read is None or read["state"] in ("failed", "cancelled"):
         read_id = await runner.queue_scan(rel)
         if read_id is None:
