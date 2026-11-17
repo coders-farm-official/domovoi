@@ -711,8 +711,8 @@ only** (no APKs). Either is made by the release workflow, behind the
 owner's approval, or, as the fallback, by the same scripts on the owner's
 PC. Release from a `main` whose CI run is green ("CI", above); pushing a
 tag starts no workflow. The `android/release.json` commit the app path
-makes carries `[skip ci]`: it changes only that file, on a commit CI has
-already tested.
+makes is an ordinary commit and starts CI like any other (it changes only
+that file, so the run is quick).
 
 ### With GitHub Actions (the usual way)
 

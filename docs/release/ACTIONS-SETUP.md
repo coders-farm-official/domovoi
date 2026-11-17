@@ -103,7 +103,7 @@ pushes. Fix the secret and run the workflow again.
 - **Pushes by the workflow.** It pushes with the run's own `GITHUB_TOKEN`
   (the `github-actions[bot]` account): the tag `v<version>`, `stable`
   (fast-forward only, never forced) and, when the Android app changed, the
-  `android: release <v> [skip ci]` commit on `main` with its tag. Today
+  `android: release <v>` commit on `main` with its tag. Today
   nothing stops that: `main` and `stable` have no branch protection, and
   the ruleset *Main* (no deletion, no force-push, pull requests required
   on the default branch) is **disabled**. Enabling it as it is would

@@ -212,7 +212,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File android\scripts\release.ps1
 ```
 It builds the arm64-v8a and armeabi-v7a APKs, signs them with **the same
 key**, checks them as a Domovoi server will, commits and pushes
-`android/release.json` (`[skip ci]`), and publishes the GitHub release
+`android/release.json`, and publishes the GitHub release
 `v<Domovoi's version>` (pyproject.toml's, not the app's `versionName`)
 with `gh`, tagged at that commit (a full release, release
 candidates included; `-Prerelease` makes it a pre-release);

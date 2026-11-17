@@ -215,7 +215,7 @@ APKs, so servers keep fetching them from there ([docs/CONTRIBUTING.md,
    unchanged, which is what F-Droid does with its own build), and the
    server's own check (`python -m domovoi.android_app check`). Then it
    writes `android/release.json` (with each APK's own `version_code`),
-   commits it (`android: release <v> [skip ci]`) and pushes it, and
+   commits it (`android: release <v>`) and pushes it, and
    publishes the GitHub release `v<Domovoi's version>` (from
    `pyproject.toml`, e.g. `v1.3.0` or `v1.0.0-rc3`; not the app's
    `versionName`) on `coders-farm-official/domovoi` with `gh`, **tagged at
