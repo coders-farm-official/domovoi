@@ -8,28 +8,23 @@ import java.nio.FloatBuffer
 import java.nio.LongBuffer
 
 /**
- * openWakeWord's three networks on ONNX Runtime — the same runtime the
+ * openWakeWord's shared front end on ONNX Runtime — the same runtime the
  * phone's voice already ships for all four ABIs (armeabi-v7a included), so
  * room mode adds no native library and loads none of the assistant's.
- * One thread each: a room listens all day, on old phones.
+ * One thread each: a room listens all day, on old phones. Loaded once per
+ * room, whatever the number of words ([OrtWakeClassifier] per word).
  */
-class OrtWakeNets(
-    melspectrogram: File,
-    embedding: File,
-    wakeModel: File,
-) : WakeNets {
+class OrtWakeFrontEnd(melspectrogram: File, embedding: File) : WakeFrontEnd {
     private val env = OrtEnvironment.getEnvironment()
     private val mel = open(env, melspectrogram)
-    private val emb = open(env, embedding)
-    private val wakeSession = open(env, wakeModel)
+    private val emb = try {
+        open(env, embedding)
+    } catch (e: Exception) {
+        runCatching { mel.close() }
+        throw e
+    }
     private val melInput = mel.inputNames.first()
     private val embInput = emb.inputNames.first()
-    private val wakeInput = wakeSession.inputNames.first()
-
-    override val wakeInputFrames: Int = run {
-        val info = wakeSession.inputInfo.getValue(wakeInput).info as ai.onnxruntime.TensorInfo
-        info.shape.getOrNull(1)?.toInt()?.takeIf { it > 0 } ?: 16
-    }
 
     override fun melspectrogram(samples: FloatArray): Array<FloatArray> {
         OnnxTensor.createTensor(env, FloatBuffer.wrap(samples), longArrayOf(1, samples.size.toLong())).use { input ->
@@ -57,23 +52,9 @@ class OrtWakeNets(
         }
     }
 
-    override fun wake(features: Array<FloatArray>): Float {
-        val rows = features.size
-        val dim = features[0].size
-        val flat = FloatArray(rows * dim)
-        for (r in 0 until rows) System.arraycopy(features[r], 0, flat, r * dim, dim)
-        OnnxTensor.createTensor(env, FloatBuffer.wrap(flat), longArrayOf(1, rows.toLong(), dim.toLong())).use { input ->
-            wakeSession.run(mapOf(wakeInput to input)).use { result ->
-                val buf = (result[0] as OnnxTensor).floatBuffer
-                return if (buf.remaining() > 0) buf.get(0) else 0f
-            }
-        }
-    }
-
     override fun close() {
         runCatching { mel.close() }
         runCatching { emb.close() }
-        runCatching { wakeSession.close() }
     }
 
     companion object {
@@ -86,6 +67,36 @@ class OrtWakeNets(
     }
 }
 
+/** One wake word's classifier on ONNX Runtime, over [OrtWakeFrontEnd]'s
+ *  embeddings. */
+class OrtWakeClassifier(model: File) : WakeClassifier {
+    private val env = OrtEnvironment.getEnvironment()
+    private val session = OrtWakeFrontEnd.open(env, model)
+    private val input = session.inputNames.first()
+
+    override val inputFrames: Int = run {
+        val info = session.inputInfo.getValue(input).info as ai.onnxruntime.TensorInfo
+        info.shape.getOrNull(1)?.toInt()?.takeIf { it > 0 } ?: 16
+    }
+
+    override fun score(features: Array<FloatArray>): Float {
+        val rows = features.size
+        val dim = features[0].size
+        val flat = FloatArray(rows * dim)
+        for (r in 0 until rows) System.arraycopy(features[r], 0, flat, r * dim, dim)
+        OnnxTensor.createTensor(env, FloatBuffer.wrap(flat), longArrayOf(1, rows.toLong(), dim.toLong())).use { t ->
+            session.run(mapOf(input to t)).use { result ->
+                val buf = (result[0] as OnnxTensor).floatBuffer
+                return if (buf.remaining() > 0) buf.get(0) else 0f
+            }
+        }
+    }
+
+    override fun close() {
+        runCatching { session.close() }
+    }
+}
+
 /**
  * Silero VAD v4 (MIT; `silero_vad.onnx`, the copy openWakeWord ships and
  * the core pins) on ONNX Runtime: speech probability of one 30 ms frame,
@@ -95,7 +106,7 @@ class OrtWakeNets(
  */
 class SileroVad(model: File) : AutoCloseable {
     private val env = OrtEnvironment.getEnvironment()
-    private val session = OrtWakeNets.open(env, model)
+    private val session = OrtWakeFrontEnd.open(env, model)
     private var h = FloatArray(STATE)
     private var c = FloatArray(STATE)
 

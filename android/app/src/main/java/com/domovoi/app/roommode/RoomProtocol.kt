@@ -56,6 +56,12 @@ object RoomProtocol {
         add(RoomDisplayFeed.ABILITY)
     }
 
+    /**
+     * [wakeWords]: every word the room is listening for right now, main
+     * word ([wakeWord]) first (1.4.0, [WakeWords]); [wakeWordsMax]: how
+     * many this phone can run at once ([WakeWords.limitFor]). The core never
+     * pushes more words than that; without the key it pushes one.
+     */
     fun hello(
         roomId: String,
         wakeWord: String,
@@ -63,10 +69,14 @@ object RoomProtocol {
         approvalCode: String?,
         echoCanceller: Boolean,
         micEnabled: Boolean = true,
+        wakeWords: List<String>? = null,
+        wakeWordsMax: Int? = null,
     ): JsonObject = buildJsonObject {
         put("type", "hello")
         put("room_id", roomId)
         put("wake_word", wakeWord)
+        helloWords(wakeWords)?.let { words -> put("wake_words", JsonArray(words.map(::JsonPrimitive))) }
+        wakeWordsMax?.let { put("wake_words_max", it.coerceIn(1, WakeWords.MAX_WORDS)) }
         put("pairing_token", pairingToken)
         put("approval_code", approvalCode)
         put("sat_type", "voice")
@@ -75,12 +85,36 @@ object RoomProtocol {
         put("supports", JsonArray(supports(echoCanceller).map(::JsonPrimitive)))
     }
 
+    /** The hello's `wake_words`: [words] cleaned (slugs, no repeats, at
+     *  most [WakeWords.MAX_WORDS]), in their order; null when there is
+     *  nothing to say. Never padded with the hello's `wake_word`: a room
+     *  whose new main word has not loaded yet says what it still runs
+     *  (domovoi/wake_default.py `room_word` then ignores the list). */
+    internal fun helloWords(words: List<String>?): List<String>? {
+        if (words == null) return null
+        val out = ArrayList<String>()
+        for (w in words) {
+            if (RoomModels.isSlug(w) && w !in out) out += w
+            if (out.size >= WakeWords.MAX_WORDS) break
+        }
+        return out.takeIf { it.isNotEmpty() }
+    }
+
     // ── what the phone sends ────────────────────────────────────────────
 
     /** [wakeScore]: the wake's peak score ([WakeGate.lastPeak]), sent as
      *  `wake_score` (three decimals, as the Pi does) on a wake-word capture
-     *  only; the core keeps it on the turn's history row (V044). */
-    fun utteranceStart(trigger: String, utt: Int, backlogMs: Int, wakeMs: Int?, wakeScore: Float? = null): JsonObject = buildJsonObject {
+     *  only; the core keeps it on the turn's history row (V044).
+     *  [wakeWord]: which of the room's words fired ([WakeGates.lastSlug],
+     *  1.4.0), on a wake-word capture only, never a follow-up. */
+    fun utteranceStart(
+        trigger: String,
+        utt: Int,
+        backlogMs: Int,
+        wakeMs: Int?,
+        wakeScore: Float? = null,
+        wakeWord: String? = null,
+    ): JsonObject = buildJsonObject {
         put("type", "utterance_start")
         put("trigger", trigger)
         put("utt", utt)
@@ -89,6 +123,7 @@ object RoomProtocol {
         if (trigger == "wake_word" && wakeScore != null && wakeScore.isFinite()) {
             put("wake_score", Math.round(wakeScore.toDouble().coerceIn(0.0, 1.0) * 1000) / 1000.0)
         }
+        if (trigger == "wake_word" && RoomModels.isSlug(wakeWord)) put("wake_word", wakeWord)
     }
 
     /**
@@ -185,7 +220,15 @@ object RoomProtocol {
          *  2026-10-17 on, also sent when the room's voice changes); without
          *  it the room keeps the voice it had. */
         data class SoundsChanged(val roomVoice: String? = null, val saysVoice: Boolean = false) : ServerFrame()
-        data class SetWakeWord(val slug: String?, val threshold: Double?) : ServerFrame()
+        /** [words] (1.4.0): the room's whole list, [slug] first, each with
+         *  its own threshold when it has one ([WakeWords.parse]); null when
+         *  the frame had none (an older core, a one-word room): run [slug]
+         *  alone ([WakeWords.plan]). */
+        data class SetWakeWord(
+            val slug: String?,
+            val threshold: Double?,
+            val words: List<WakeWords.Word>? = null,
+        ) : ServerFrame()
         data object WakeModelsChanged : ServerFrame()
         /** [awaitReady]: finish the reply still playing, then open the call
          *  and say `dropin_ready` ([DropinAfterReply]). */
@@ -229,7 +272,11 @@ object RoomProtocol {
             "music_stop" -> ServerFrame.MusicStop
             "end_capture" -> ServerFrame.EndCapture(i("utt"))
             "sounds_changed" -> ServerFrame.SoundsChanged(s("room_voice")?.takeIf { it.isNotBlank() }, "room_voice" in o)
-            "set_wake_word" -> ServerFrame.SetWakeWord(s("slug"), (o["threshold"] as? JsonPrimitive)?.doubleOrNull)
+            "set_wake_word" -> ServerFrame.SetWakeWord(
+                s("slug"),
+                (o["threshold"] as? JsonPrimitive)?.doubleOrNull,
+                WakeWords.parse(o["words"]),
+            )
             "wake_models_changed" -> ServerFrame.WakeModelsChanged
             "dropin_start" -> ServerFrame.DropinStart(
                 s("peer_room"), s("peer_label"), i("audio_sample_rate") ?: SAMPLE_RATE, b("full_duplex"), b("await_ready"),

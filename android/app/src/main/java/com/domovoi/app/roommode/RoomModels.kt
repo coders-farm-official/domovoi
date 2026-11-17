@@ -1,5 +1,6 @@
 package com.domovoi.app.roommode
 
+import android.util.Log
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -19,6 +20,9 @@ import java.security.MessageDigest
  *   OWW_MODEL_FILES; RoomModelsTest checks the two agree).
  * - a wake word the dashboard trained and pushed (`set_wake_word`) comes
  *   from `/v1/wake-models`, signed, checked against the list's digest.
+ * - a room with several words (1.4.0, [WakeWords]) takes each the same
+ *   way; an extra word the server lacks, or whose file does not check out,
+ *   is left out, never the main word ([Outcome.Ready.skipped]).
  *
  * Nothing is bundled in the APK: the pretrained wake-word models are not
  * under a licence the app may ship. Files live in the app's private
@@ -40,8 +44,11 @@ class RoomModels(private val dir: File, private val book: ModelBook) {
     }
 
     sealed class Outcome {
-        /** Every file the room needs is here and checked. */
-        data class Ready(val files: Files) : Outcome()
+        /** Every file the main word needs is here and checked; [files]
+         *  lists the words that can load (main word first). [skipped]:
+         *  extra words whose model the server does not have, or did not
+         *  check out (the room listens without them). */
+        data class Ready(val files: Files, val skipped: List<String> = emptyList()) : Outcome()
 
         /** The server does not have [names] (its satellite media cache was
          *  never filled, or the pushed model is gone). */
@@ -51,17 +58,45 @@ class RoomModels(private val dir: File, private val book: ModelBook) {
         data class Failed(val reason: String) : Outcome()
     }
 
-    data class Files(val melspectrogram: File, val embedding: File, val vad: File, val wake: File, val wakeKey: String)
+    /** One wake word's model file. */
+    data class WakeFile(val slug: String, val file: File)
 
-    /** What the room loads for [wakeWord], if it is all here and intact. */
-    fun local(wakeWord: String): Files? {
+    /** What the room loads: the shared front end, the voice detector, and
+     *  one model per wake word ([words], main word first, never empty). */
+    data class Files(val melspectrogram: File, val embedding: File, val vad: File, val words: List<WakeFile>) {
+        init {
+            require(words.isNotEmpty()) { "a room loads at least its main word" }
+        }
+
+        /** The main word's model and slug. */
+        val wake: File get() = words[0].file
+        val wakeKey: String get() = words[0].slug
+        val slugs: List<String> get() = words.map { it.slug }
+    }
+
+    /** What the room loads for [wakeWord] alone, if it is all here and intact. */
+    fun local(wakeWord: String): Files? = local(listOf(wakeWord))
+
+    /**
+     * What the room loads for [wakeWords] (main word first), if the base
+     * models and the main word's are all here and intact; an extra word
+     * whose model is not here (or no longer hashes right) is left out.
+     */
+    fun local(wakeWords: List<String>): Files? {
+        val main = wakeWords.firstOrNull() ?: return null
         val base = BASE.map { File(dir, it) }
         if (!base.all { verifiedBase(it) }) return null
-        val wakeFile = File(dir, wakeFileName(wakeWord))
-        val stock = stockFile(wakeWord)
-        val wakeOk = if (stock != null) verifiedBase(wakeFile) else trainedModelIntact(wakeFile.name)
-        if (!wakeOk) return null
-        return Files(base[0], base[1], base[2], wakeFile, wakeWord)
+        val words = ArrayList<WakeFile>()
+        for (w in wakeWords.distinct()) {
+            val wakeFile = File(dir, wakeFileName(w))
+            val ok = if (stockFile(w) != null) verifiedBase(wakeFile) else trainedModelIntact(wakeFile.name)
+            if (!ok) {
+                if (w == main) return null
+                continue
+            }
+            words += WakeFile(w, wakeFile)
+        }
+        return Files(base[0], base[1], base[2], words)
     }
 
     /** A trained model is loaded only when it still hashes to what its
@@ -72,41 +107,97 @@ class RoomModels(private val dir: File, private val book: ModelBook) {
         return file.isFile && sha256(file) == want
     }
 
+    /** [sync] for [wakeWord] alone. */
+    fun sync(http: OkHttpClient, coreUrl: String, fingerprint: String, wakeWord: String): Outcome =
+        sync(http, coreUrl, fingerprint, listOf(wakeWord))
+
     /**
-     * Fetch what is missing or changed for [wakeWord] from the core at
-     * [coreUrl] (pinned [fingerprint]) over [http]. Blocking.
+     * Fetch what is missing or changed for [wakeWords] (main word first)
+     * from the core at [coreUrl] (pinned [fingerprint]) over [http].
+     * Blocking. The main word is what it always was: missing or refused, the
+     * room says so. An extra word the server does not have, or whose file
+     * does not check out, is only left out ([Outcome.Ready.skipped]).
      */
-    fun sync(http: OkHttpClient, coreUrl: String, fingerprint: String, wakeWord: String): Outcome {
+    fun sync(http: OkHttpClient, coreUrl: String, fingerprint: String, wakeWords: List<String>): Outcome {
+        val words = wakeWords.distinct()
+        val main = words.firstOrNull() ?: return Outcome.Failed("no wake word")
         dir.mkdirs()
         return try {
             val baseList = signedList(http, "$coreUrl/v1/wake-base/manifest.sig", RoomIdentity.WAKE_BASE_CHANNEL, fingerprint)
-            val wanted = BASE + listOfNotNull(stockFile(wakeWord))
+            val mainStock = stockFile(main)
+            val wanted = BASE + listOfNotNull(mainStock)
             val missing = wanted.filter { it !in baseList }
-            for (name in wanted - missing.toSet()) {
-                val pin = PINS.getValue(name)
-                if (baseList.getValue(name) != pin.first) throw IOException("the server lists $name with a digest the app does not pin")
-                val target = File(dir, name)
-                if (verifiedBase(target)) continue
-                download(http, "$coreUrl/v1/wake-base/$name", target, pin.first, pin.second)
-            }
-            if (stockFile(wakeWord) == null) {
-                val name = wakeFileName(wakeWord)
-                val list = signedList(http, "$coreUrl/v1/wake-models/manifest.sig", RoomIdentity.WAKE_MODELS_CHANNEL, fingerprint)
-                val sha = list[name]
-                if (sha == null) {
-                    return Outcome.Missing(missing + name)
+            for (name in wanted - missing.toSet()) takeBase(http, coreUrl, baseList, name)
+            // Extra stock words: from the same list, each on its own.
+            for (w in words.drop(1)) {
+                val name = stockFile(w) ?: continue
+                if (name in wanted || name !in baseList) continue
+                try {
+                    takeBase(http, coreUrl, baseList, name)
+                } catch (e: IOException) {
+                    Log.w(TAG, "extra wake word $w: ${e.message}")
                 }
-                val target = File(dir, name)
-                if (!(target.isFile && sha256(target) == sha)) download(http, "$coreUrl/v1/wake-models/$name", target, sha, null)
-                book.setTrainedSha(name, sha)
+            }
+            val trained = words.filter { stockFile(it) == null }
+            if (trained.isNotEmpty()) {
+                val url = "$coreUrl/v1/wake-models/manifest.sig"
+                val list = if (mainStock == null) {
+                    signedList(http, url, RoomIdentity.WAKE_MODELS_CHANNEL, fingerprint)
+                } else {
+                    // Only extra words need it: a list the room can't get
+                    // leaves them out, never the main word.
+                    try {
+                        signedList(http, url, RoomIdentity.WAKE_MODELS_CHANNEL, fingerprint)
+                    } catch (e: IOException) {
+                        Log.w(TAG, "extra wake words: ${e.message}")
+                        emptyMap()
+                    } catch (e: RoomIdentity.IdentityException) {
+                        Log.w(TAG, "extra wake words: ${e.message}")
+                        emptyMap()
+                    }
+                }
+                for (w in trained) {
+                    val name = wakeFileName(w)
+                    val sha = list[name]
+                    if (sha == null) {
+                        if (w == main) return Outcome.Missing(missing + name)
+                        continue
+                    }
+                    if (w == main) {
+                        takeTrained(http, coreUrl, name, sha)
+                    } else {
+                        try {
+                            takeTrained(http, coreUrl, name, sha)
+                        } catch (e: IOException) {
+                            Log.w(TAG, "extra wake word $w: ${e.message}")
+                        }
+                    }
+                }
             }
             if (missing.isNotEmpty()) return Outcome.Missing(missing)
-            local(wakeWord)?.let { Outcome.Ready(it) } ?: Outcome.Failed("the models did not check out after the download")
+            val files = local(words) ?: return Outcome.Failed("the models did not check out after the download")
+            Outcome.Ready(files, words.filter { it !in files.slugs })
         } catch (e: RoomIdentity.IdentityException) {
             Outcome.Failed(e.message ?: "a signed list was refused")
         } catch (e: IOException) {
             Outcome.Failed(e.message ?: e.javaClass.simpleName)
         }
+    }
+
+    /** A base or stock file the signed list names, against the app's pin. */
+    private fun takeBase(http: OkHttpClient, coreUrl: String, baseList: Map<String, String>, name: String) {
+        val pin = PINS.getValue(name)
+        if (baseList.getValue(name) != pin.first) throw IOException("the server lists $name with a digest the app does not pin")
+        val target = File(dir, name)
+        if (verifiedBase(target)) return
+        download(http, "$coreUrl/v1/wake-base/$name", target, pin.first, pin.second)
+    }
+
+    /** A trained model, against its signed list's digest. */
+    private fun takeTrained(http: OkHttpClient, coreUrl: String, name: String, sha: String) {
+        val target = File(dir, name)
+        if (!(target.isFile && sha256(target) == sha)) download(http, "$coreUrl/v1/wake-models/$name", target, sha, null)
+        book.setTrainedSha(name, sha)
     }
 
     private fun signedList(http: OkHttpClient, url: String, channel: String, fingerprint: String): Map<String, String> {
@@ -135,6 +226,8 @@ class RoomModels(private val dir: File, private val book: ModelBook) {
     }
 
     companion object {
+        private const val TAG = "RoomModels"
+
         /** The three networks every room runs. */
         val BASE = listOf("melspectrogram.onnx", "embedding_model.onnx", "silero_vad.onnx")
 

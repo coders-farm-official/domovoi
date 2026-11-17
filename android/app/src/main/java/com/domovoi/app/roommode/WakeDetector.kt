@@ -3,22 +3,32 @@ package com.domovoi.app.roommode
 import java.util.Random
 
 /**
- * The three networks of openWakeWord's pipeline, each run on its own: the
- * melspectrogram model, Google's speech-embedding model and a wake-word
- * model. [OrtWakeNets] runs them on ONNX Runtime; the tests use fakes.
+ * openWakeWord's shared audio front end: the melspectrogram model and
+ * Google's speech-embedding model. Every wake word in a room runs on its
+ * output ([WakeDetector]); [OrtWakeFrontEnd] runs it on ONNX Runtime, the
+ * tests use fakes.
  */
-interface WakeNets : AutoCloseable {
+interface WakeFrontEnd : AutoCloseable {
     /** Raw melspectrogram of [samples] (int16 values as floats): frames x 32. */
     fun melspectrogram(samples: FloatArray): Array<FloatArray>
 
     /** One 96-value embedding of a 76 x 32 window of transformed mel frames. */
     fun embedding(window: Array<FloatArray>): FloatArray
 
-    /** How many embeddings the wake model reads (16 for the stock models). */
-    val wakeInputFrames: Int
+    override fun close() {}
+}
 
-    /** The wake word's score, 0..1, for the last [wakeInputFrames] embeddings. */
-    fun wake(features: Array<FloatArray>): Float
+/**
+ * One wake word's model: a small classifier over the front end's
+ * embeddings ([OrtWakeClassifier]; ~1 MB, a few hundredths of a
+ * millisecond a chunk).
+ */
+interface WakeClassifier : AutoCloseable {
+    /** How many embeddings it reads (16 for the stock models). */
+    val inputFrames: Int
+
+    /** The word's score, 0..1, for the last [inputFrames] embeddings. */
+    fun score(features: Array<FloatArray>): Float
 
     override fun close() {}
 }
@@ -26,29 +36,43 @@ interface WakeNets : AutoCloseable {
 /**
  * openWakeWord's streaming detector (its `AudioFeatures` and
  * `Model.predict`, openWakeWord 0.6.0, Apache-2.0), rebuilt in Kotlin so a
- * phone hears the same wake word a Pi hears with the same models:
+ * phone hears the same wake words a Pi hears with the same models:
  *
  * - audio goes in as 80 ms chunks (1280 samples at 16 kHz);
  * - each chunk's melspectrogram is taken over the chunk and the 480
  *   samples before it, transformed `x / 10 + 2` (what makes the ONNX model
  *   match Google's), and kept (at most 970 frames, ~10 s);
  * - one embedding per chunk, of the last 76 mel frames, kept (at most 120);
- * - the wake model scores the last 16 embeddings;
+ * - each word's classifier scores the last 16 embeddings;
  * - the first five scores after a reset are 0, as openWakeWord's are.
  *
+ * **Several words, one front end** (1.4.0, [WakeWords]): the melspectrogram
+ * and the embedding are computed ONCE per chunk, whatever the number of
+ * [classifiers]; each word adds only its classifier's run over the same
+ * embedding history, as openWakeWord's `Model` does with several models.
+ *
  * After a reset the embedding history is seeded with the embeddings of four
- * seconds of low noise, as openWakeWord seeds it; computed once per model
+ * seconds of low noise, as openWakeWord seeds it; computed once per load
  * ([noiseFeatures]) and reused on every reset, as the Pi does
  * (`_prime_wake_reset`), so a reset costs nothing.
  *
  * Not thread-safe: one listening thread feeds it.
  */
 class WakeDetector(
-    private val nets: WakeNets,
+    private val frontEnd: WakeFrontEnd,
+    /** One per word, main word first: [accept]'s scores are in this order. */
+    private val classifiers: List<WakeClassifier>,
     /** The seed history after a reset; [noiseFeatures] by default. */
     seed: List<FloatArray>? = null,
 ) : AutoCloseable {
-    private val noise: List<FloatArray> = seed ?: noiseFeatures(nets)
+    init {
+        require(classifiers.isNotEmpty()) { "a wake detector needs at least one word" }
+    }
+
+    /** How many words it scores. */
+    val words: Int get() = classifiers.size
+
+    private val noise: List<FloatArray> = seed ?: noiseFeatures(frontEnd)
     private val raw = ShortArray(CHUNK + CONTEXT)
     private var rawFill = 0
     private val mel = ArrayDeque<FloatArray>()
@@ -73,11 +97,12 @@ class WakeDetector(
 
     /**
      * Feed [count] samples of [samples] (any length; a Pi feeds 30 ms
-     * frames). Returns the highest score of the chunks this completed, or
-     * null when no 80 ms chunk completed.
+     * frames). Returns each word's highest score of the chunks this
+     * completed (one per classifier, in order), or null when no 80 ms
+     * chunk completed.
      */
-    fun accept(samples: ShortArray, count: Int = samples.size): Float? {
-        var best: Float? = null
+    fun accept(samples: ShortArray, count: Int = samples.size): FloatArray? {
+        var best: FloatArray? = null
         var at = 0
         while (at < count) {
             val take = minOf(CHUNK - pendingFill, count - at)
@@ -85,42 +110,47 @@ class WakeDetector(
             pendingFill += take
             at += take
             if (pendingFill == CHUNK) {
-                val score = chunk(pending)
+                val scores = chunk(pending)
                 pendingFill = 0
-                best = if (best == null) score else maxOf(best, score)
+                val b = best
+                if (b == null) best = scores else for (i in b.indices) b[i] = maxOf(b[i], scores[i])
             }
         }
         return best
     }
 
-    /** One 80 ms chunk: its score. */
-    private fun chunk(samples: ShortArray): Float {
+    /** One 80 ms chunk: every word's score. */
+    private fun chunk(samples: ShortArray): FloatArray {
         // The raw history: the 480 samples before this chunk, then the chunk.
         val keep = minOf(rawFill, CONTEXT)
         System.arraycopy(raw, rawFill - keep, raw, 0, keep)
         System.arraycopy(samples, 0, raw, keep, CHUNK)
         rawFill = keep + CHUNK
         val input = FloatArray(rawFill) { raw[it].toFloat() }
-        for (frame in nets.melspectrogram(input)) {
+        // The shared front end: once per chunk, for every word.
+        for (frame in frontEnd.melspectrogram(input)) {
             mel.addLast(FloatArray(MEL_BINS) { frame[it] / 10f + 2f })
         }
         while (mel.size > MEL_MAX) mel.removeFirst()
         if (mel.size >= WINDOW) {
             val window = Array(WINDOW) { mel[mel.size - WINDOW + it] }
-            features.addLast(nets.embedding(window))
+            features.addLast(frontEnd.embedding(window))
             while (features.size > FEATURES_MAX) features.removeFirst()
         }
-        val n = nets.wakeInputFrames
-        val score = if (features.size >= n) {
-            nets.wake(Array(n) { features[features.size - n + it] })
-        } else {
-            0f
-        }
         predictions += 1
-        return if (predictions <= WARMUP) 0f else score
+        val silent = predictions <= WARMUP
+        return FloatArray(classifiers.size) { i ->
+            val c = classifiers[i]
+            val n = c.inputFrames
+            val score = if (features.size >= n) c.score(Array(n) { features[features.size - n + it] }) else 0f
+            if (silent) 0f else score
+        }
     }
 
-    override fun close() = nets.close()
+    override fun close() {
+        classifiers.forEach { runCatching { it.close() } }
+        runCatching { frontEnd.close() }
+    }
 
     companion object {
         const val CHUNK = 1280
@@ -136,7 +166,7 @@ class WakeDetector(
         /** openWakeWord's `_get_embeddings` over 4 s of noise in
          *  [-1000, 1000): every 8th 76-frame window's embedding. [noise]
          *  null: seeded noise (fixed seed, so every load is alike). */
-        fun noiseFeatures(nets: WakeNets, noise: ShortArray? = null): List<FloatArray> {
+        fun noiseFeatures(nets: WakeFrontEnd, noise: ShortArray? = null): List<FloatArray> {
             val audio = noise ?: Random(0x0D0E).let { r ->
                 ShortArray(16_000 * NOISE_SECONDS) { (r.nextInt(2000) - 1000).toShort() }
             }

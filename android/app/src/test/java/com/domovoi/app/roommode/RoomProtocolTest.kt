@@ -40,8 +40,13 @@ class RoomProtocolTest {
             pairingToken = want["pairing_token"]!!.jsonPrimitive.content,
             approvalCode = want["approval_code"]!!.jsonPrimitive.content,
             echoCanceller = true,
+            // 1.4.0: what it loaded, and how many it can run (a 64-bit phone with memory to spare).
+            wakeWords = want["wake_words"]!!.jsonArray.map { it.jsonPrimitive.content },
+            wakeWordsMax = WakeWords.limitFor(is64Bit = true, totalRamBytes = 6L shl 30),
         )
         assertEquals(want, ours)
+        assertEquals(listOf("hey_jarvis"), want["wake_words"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertEquals(5, want["wake_words_max"]!!.jsonPrimitive.content.toInt())
         assertEquals(RoomProtocol.BOARD, device["expect"]!!.jsonObject["board"]!!.jsonPrimitive.content)
     }
 
