@@ -2556,12 +2556,28 @@ for how to declare them.
   by hand rather than stacked as a decorator). So is a route the gate cannot
   cover: a plain Starlette `Route` (`router.add_route`), `Mount` or `Host`
   on a plugin router would mount without the gate dependency, so it fails
-  the load. Plugin websocket routes are not supported yet: the gate is
-  HTTP-only, so a `@router.websocket` route (or a Starlette
-  `WebSocketRoute`) fails the load in both processes with "plugin
-  websocket routes are not supported yet". GETs are open unless the
-  plugin adds its own `Depends(admin_required)` or marks the GET
-  `@device_endpoint`.
+  the load. GETs are open unless the plugin adds its own
+  `Depends(admin_required)` or marks the GET `@device_endpoint`.
+* **Plugin websockets (SDK 1.11): core only, device tier only.** A
+  `@router.websocket` route marked `@device_endpoint` is served at
+  `WS /v1/plugins/<slug>/...`. The gate runs on the upgrade and refuses it
+  before it is accepted (handshake `403`; ASGI close `1008`) when the
+  plugin is disabled, the `Host` is not a LAN name of this server, a
+  browser's `Origin` is not a LAN page, or the caller presents neither the
+  household token (`X-Device-Token`, or `?token=` from a browser) nor an
+  admin Bearer — the HTTP device tier's rule exactly: pre-setup grace,
+  cookie alone refused, the same wrong-token backoff. Full (32 sockets per
+  plugin, 8 per device) or the credential check could not run: `1013`.
+  While open: the credential is checked again every 30 s and the socket
+  closed `1008` once it no longer passes (household token changed, admin
+  session signed out or idle for an hour, setup finished); the socket
+  never counts as admin activity; a message over the request-body cap
+  (`MAX_REQUEST_BYTES`) closes it `1009`, more than 50 messages a second
+  (bursts of 100) `1008`; disabling, re-enabling or upgrading the plugin
+  closes it `1001`. An unmarked or `@open_endpoint` socket, a Starlette
+  `WebSocketRoute`, and any socket on the plugin's web router fail the
+  load with "plugin websocket routes must be @device_endpoint routes on
+  the core router (core.py)".
 * Pre-setup grace applies: until the admin credential exists, the gate
   allows everything (LAN-trust, matching the core's daily-use surfaces).
 * Reserved path: the core itself serves `GET /v1/plugins/{slug}/status`

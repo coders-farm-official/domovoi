@@ -29,8 +29,26 @@ dependencies:
   :func:`mount_plugin_routers` itself), and so is a route FastAPI would
   mount WITHOUT the gate dependency — a plain Starlette ``Route`` /
   ``Mount`` / ``Host`` (``webkit.ungated_routes``) — and any websocket
-  route: the gate is HTTP-only, so plugin websocket routes are not
-  supported yet (``webkit.websocket_routes``).
+  route that is not a ``@device_endpoint`` FastAPI websocket route
+  (``webkit.refused_websocket_routes``).
+* **Websockets (SDK 1.11)** — a plugin websocket route is DEVICE TIER
+  only, and the same per-slug gate runs on its upgrade (it takes an
+  ``HTTPConnection``, so FastAPI calls it for both scopes). Everything it
+  checks is checked before the socket is accepted, so a refused upgrade
+  never reaches the plugin's function: the plugin is enabled and this is
+  its live mount; ``Host`` names this box on the LAN and a browser's
+  ``Origin`` is a LAN page (``transport_guard``, what the HTTP routes and
+  the core's own sockets enforce); the household token (``X-Device-Token``
+  or ``?token=``) or an admin Bearer, with the pre-setup LAN grace and the
+  wrong-token backoff (``admin_auth.check_device_websocket``: the HTTP
+  device tier's rule, the dashboard cookie alone refused); and room under
+  the per-plugin and per-source socket caps. While it is open the socket
+  is held to the same rule: the credential that opened it is read again
+  every :data:`WS_RECHECK_SEC` (a rotated token, an admin session that
+  idled out or signed out, or the end of the pre-setup grace closes it;
+  the socket itself never counts as admin activity), every message is
+  held to the request-body cap and :data:`WS_MESSAGES_PER_SEC`, and
+  disabling or re-mounting the slug closes it (``1001``).
 
 The v1 auth model (scope amendment) is the lightweight one: the admin
 gate checks a Bearer token against ``admin_sessions`` (sha256-stored,
@@ -43,13 +61,17 @@ posture — so a fresh clone works before the setup flow runs.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import threading
+import time
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, WebSocketException
 from sqlalchemy import text
+from starlette.requests import HTTPConnection
 
+from domovoi import admin_auth
 from domovoi.admin_auth import check_admin_request
 from domovoi.db.session import session_scope
 from domovoi.webkit import (  # noqa: F401 — re-exported for plugin authors
@@ -64,6 +86,7 @@ from domovoi.webkit import (  # noqa: F401 — re-exported for plugin authors
     is_device_endpoint,
     is_open_endpoint,
     open_endpoint,
+    refused_websocket_routes,
     tier_conflicts,
     ungated_routes,
     websocket_routes,
@@ -90,6 +113,8 @@ _MOUNT_LOCK = threading.Lock()
 
 def set_plugin_enabled(slug: str, enabled: bool) -> None:
     _plugin_enabled[slug] = enabled
+    if not enabled:
+        close_plugin_sockets(slug, reason=f"plugin {slug!r} disabled")
 
 
 def plugin_enabled(slug: str) -> bool:
@@ -114,7 +139,7 @@ async def has_admin_auth() -> bool:
         return False
 
 
-async def _admin_ok(request: Request) -> bool:
+async def _admin_ok(request: HTTPConnection) -> bool:
     """True when the request may perform admin-tier actions. Allows all
     while no admin password has been set up (pre-setup LAN-trust —
     module docstring); afterwards requires a live Bearer session
@@ -127,22 +152,284 @@ def _make_gate(slug: str, mount: list[Any] | None = None):
     of the mount that includes the route: once the slug is mounted again
     (a later enable, on this app or another) the route 404s like a
     disabled one, whatever the flag says."""
-    def _refuse_if_gone() -> None:
-        if not _plugin_enabled.get(slug, False) or (
+    def _gone() -> bool:
+        return not _plugin_enabled.get(slug, False) or (
             mount is not None and _mounted.get(slug) is not mount
-        ):
+        )
+
+    def _refuse_if_gone() -> None:
+        if _gone():
             raise HTTPException(status_code=404, detail=f"plugin {slug!r} disabled")
 
-    async def _gate(request: Request) -> None:
+    # A generator, so that on a websocket the code after ``yield`` runs
+    # when the plugin's function returns: that is where the socket leaves
+    # the slug's ledger. On HTTP nothing follows the yield.
+    async def _gate(conn: HTTPConnection):
+        if conn.scope.get("type") == "websocket":
+            sock = await _admit_websocket(slug, conn, _gone)
+            try:
+                yield
+            finally:
+                _release_socket(sock)
+            return
         _refuse_if_gone()
         # Default-DENY for mutations: the admin tier unless the route
         # function carries a tier marker (shared body with the web gate).
-        await enforce_route_tier(request)
+        await enforce_route_tier(conn)  # type: ignore[arg-type] — an http scope is a Request
         # The tier check can await the DB. A disable (or disable and
         # re-enable) that ran meanwhile tore this route's SDK down, so
         # look again before the endpoint runs against it.
         _refuse_if_gone()
+        yield
     return _gate
+
+
+# ─── Plugin websockets (SDK 1.11) ─────────────────────────────────────────
+
+#: Sockets one plugin may hold open at once, and sockets one source (an
+#: address, ``admin_auth.request_source``) may hold open to one plugin.
+#: The core serves at most ``MAX_CONCURRENT_CONNECTIONS`` (128) connections
+#: in all, the rooms' own sockets among them, so no plugin may take more
+#: than a quarter, and no single device most of a plugin's share.
+WS_MAX_PER_PLUGIN = 32
+WS_MAX_PER_SOURCE = 8
+#: How often an open socket's credential is read again
+#: (``admin_auth.device_websocket_still_admitted``): the longest a socket
+#: outlives a rotated token, a signed-out or idled-out admin session, or
+#: the end of the pre-setup grace.
+WS_RECHECK_SEC = 30.0
+#: Consecutive rechecks the database may fail to answer before the socket
+#: is closed (1011): a blip is not a revoked credential, a long outage is
+#: a credential nobody can vouch for any more.
+WS_RECHECK_MAX_FAILURES = 3
+#: The message rate one socket may keep up (a token bucket: the burst,
+#: refilled at the rate). Over it the socket is closed 1008. Each message
+#: is also held to the request-body cap (:func:`ws_max_message_bytes`).
+WS_MESSAGES_PER_SEC = 50.0
+WS_MESSAGE_BURST = 100
+
+# Close codes (RFC 6455 §7.4.1).
+WS_POLICY = 1008        # refused / credential gone / too many messages
+WS_TOO_BIG = 1009
+WS_GOING_AWAY = 1001    # the plugin was disabled or mounted again
+WS_INTERNAL = 1011      # the credential could not be checked for too long
+WS_TRY_AGAIN = 1013     # full, or the credential check could not run
+
+
+def ws_max_message_bytes() -> int:
+    """The largest message a plugin socket may carry: what one request
+    body may (``MAX_REQUEST_BYTES``, 1 MiB by default). Over it the socket
+    is closed 1009. uvicorn's own ``ws_max_size`` (16 MiB) still bounds
+    what is buffered before this sees it."""
+    from domovoi.transport_guard import default_body_limit
+
+    return default_body_limit()
+
+
+class _PluginSocket:
+    """One open plugin websocket the gate admitted: what it needs to be
+    rechecked, limited, counted and closed."""
+
+    __slots__ = (
+        "ws", "slug", "source", "admitted", "loop", "watcher",
+        "tokens", "stamp", "closing",
+    )
+
+    def __init__(self, ws: Any, slug: str, source: str, admitted: str) -> None:
+        self.ws = ws
+        self.slug = slug
+        self.source = source
+        self.admitted = admitted
+        self.loop = asyncio.get_running_loop()
+        self.watcher: asyncio.Task | None = None
+        self.tokens = float(WS_MESSAGE_BURST)
+        self.stamp = time.monotonic()
+        self.closing = False
+
+    def take(self) -> bool:
+        """One message off the token bucket; False when the peer is
+        sending faster than :data:`WS_MESSAGES_PER_SEC` beyond the burst."""
+        now = time.monotonic()
+        self.tokens = min(
+            float(WS_MESSAGE_BURST), self.tokens + (now - self.stamp) * WS_MESSAGES_PER_SEC
+        )
+        self.stamp = now
+        if self.tokens < 1.0:
+            return False
+        self.tokens -= 1.0
+        return True
+
+
+# slug → the sockets its gate admitted that are still open. An entry leaves
+# when the plugin's function returns (the gate's ``finally``).
+_open_sockets: dict[str, set[_PluginSocket]] = {}
+# Close tasks in flight: the event loop keeps only weak references to tasks.
+_closing_tasks: set[asyncio.Future] = set()
+
+
+def open_socket_count(slug: str | None = None) -> int:
+    """How many plugin sockets are open (for ``slug``, or in all)."""
+    if slug is not None:
+        return len(_open_sockets.get(slug) or ())
+    return sum(len(v) for v in _open_sockets.values())
+
+
+async def _shut(sock: _PluginSocket, code: int, reason: str) -> None:
+    """Close ``sock`` once. Never raises: the peer may be gone already."""
+    if sock.closing:
+        return
+    sock.closing = True
+    try:
+        await sock.ws.close(code=code, reason=reason)
+    except Exception:  # noqa: BLE001 — already closed / peer gone
+        pass
+
+
+def close_plugin_sockets(slug: str, *, reason: str, code: int = WS_GOING_AWAY) -> int:
+    """Close every socket ``slug``'s routes hold open (``1001`` by
+    default). The gate judges an upgrade, so without this a socket opened
+    before a disable — or before the slug was mounted again — would keep
+    talking to a load that has been torn down. Safe from any thread: each
+    close runs on its socket's own event loop. Returns how many."""
+    socks = list(_open_sockets.get(slug) or ())
+    for sock in socks:
+        def _schedule(sock: _PluginSocket = sock) -> None:
+            task = sock.loop.create_task(_shut(sock, code, reason))
+            _closing_tasks.add(task)
+            task.add_done_callback(_closing_tasks.discard)
+
+        try:
+            sock.loop.call_soon_threadsafe(_schedule)
+        except RuntimeError:  # its loop is closed: nothing is served there
+            pass
+    return len(socks)
+
+
+def _refuse_ws(code: int, reason: str) -> WebSocketException:
+    # The reason travels to the client: it never quotes a credential.
+    return WebSocketException(code=code, reason=reason)
+
+
+async def _admit_websocket(slug: str, ws: Any, gone: Any) -> _PluginSocket:
+    """The websocket form of the per-slug gate. Raises
+    :class:`WebSocketException` — the upgrade is refused before it is
+    accepted, so the plugin's function never runs (uvicorn answers the
+    handshake ``403``; a test client reads the close code) — or returns
+    the socket, entered in the slug's ledger, with its limits and its
+    recheck running."""
+    from domovoi.transport_guard import host_allowed, origin_allowed
+
+    if gone():
+        raise _refuse_ws(WS_POLICY, f"plugin {slug!r} disabled")
+    # Only @device_endpoint sockets are mounted (refused_websocket_routes);
+    # look again, so a route that slipped past is still not served.
+    if endpoint_tier(ws.scope.get("endpoint")) != "device":
+        raise _refuse_ws(WS_POLICY, "not a device-tier socket")
+    # LanHostMiddleware lets websocket scopes through; the HTTP routes'
+    # Host rule (DNS rebinding, CORE-8) applies to a plugin socket too.
+    if not host_allowed(ws.headers.get("host")):
+        raise _refuse_ws(WS_POLICY, "Host is not a name this server answers to")
+    # A browser page may open a socket to any host (the same-origin policy
+    # does not cover upgrades): a page off the LAN is turned away the way
+    # the core's own sockets turn it away. No Origin = not a browser.
+    if not origin_allowed(ws.headers.get("origin")):
+        raise _refuse_ws(WS_POLICY, "cross-origin socket refused")
+    try:
+        admitted = await admin_auth.check_device_websocket(ws)
+    except admin_auth.AuthCheckUnavailable:
+        raise _refuse_ws(
+            WS_TRY_AGAIN, "the server could not check credentials just now"
+        ) from None
+    if admitted == "throttled":
+        raise _refuse_ws(
+            WS_POLICY, "too many wrong household tokens from here; wait and try again"
+        )
+    if admitted not in ("ok", "admin", "pre-setup"):
+        raise _refuse_ws(WS_POLICY, "household device token or admin session required")
+    # The check awaited the database: a disable or remount meanwhile tore
+    # this route's SDK down.
+    if gone():
+        raise _refuse_ws(WS_POLICY, f"plugin {slug!r} disabled")
+    source = admin_auth.request_source(ws)
+    held = _open_sockets.get(slug) or set()
+    if len(held) >= WS_MAX_PER_PLUGIN:
+        raise _refuse_ws(WS_TRY_AGAIN, "this plugin has too many open sockets")
+    if sum(1 for s in held if s.source == source) >= WS_MAX_PER_SOURCE:
+        raise _refuse_ws(WS_TRY_AGAIN, "too many open sockets from this device")
+    sock = _PluginSocket(ws, slug, source, admitted)
+    _limit_messages(sock)
+    _open_sockets.setdefault(slug, set()).add(sock)
+    sock.watcher = sock.loop.create_task(_watch(sock, gone))
+    return sock
+
+
+def _release_socket(sock: _PluginSocket) -> None:
+    held = _open_sockets.get(sock.slug)
+    if held is not None:
+        held.discard(sock)
+        if not held:
+            _open_sockets.pop(sock.slug, None)
+    if sock.watcher is not None and not sock.watcher.done():
+        sock.watcher.cancel()
+
+
+def _limit_messages(sock: _PluginSocket) -> None:
+    """Hold every message the plugin reads to the size cap and the rate.
+    Wraps the connection's own ``receive``, so it applies whichever of
+    ``receive_text`` / ``_bytes`` / ``_json`` / ``iter_*`` the plugin
+    uses. An offending message is never handed over: the socket is closed
+    and the plugin reads a disconnect carrying the close code."""
+    ws = sock.ws
+    inner = ws._receive
+
+    async def receive() -> dict:
+        message = await inner()
+        if message.get("type") != "websocket.receive" or sock.closing:
+            return message
+        text_ = message.get("text")
+        size = len(message.get("bytes") or b"") + (
+            len(text_.encode("utf-8")) if text_ else 0
+        )
+        if size > ws_max_message_bytes():
+            await _shut(sock, WS_TOO_BIG, "message too big")
+            return {"type": "websocket.disconnect", "code": WS_TOO_BIG}
+        if not sock.take():
+            await _shut(sock, WS_POLICY, "too many messages")
+            return {"type": "websocket.disconnect", "code": WS_POLICY}
+        return message
+
+    ws._receive = receive
+
+
+async def _watch(sock: _PluginSocket, gone: Any) -> None:
+    """Re-read the credential that opened ``sock`` every
+    :data:`WS_RECHECK_SEC` while it is open, and close it once that
+    credential would no longer open it (module docstring)."""
+    failures = 0
+    while not sock.closing:
+        await asyncio.sleep(WS_RECHECK_SEC)
+        if sock.closing:
+            return
+        if gone():
+            await _shut(sock, WS_GOING_AWAY, f"plugin {sock.slug!r} disabled")
+            return
+        try:
+            still = await admin_auth.device_websocket_still_admitted(sock.ws, sock.admitted)
+        except Exception as e:  # noqa: BLE001 — a DB blip: judged below
+            failures += 1
+            log.warning(
+                "plugin %s socket: credential recheck failed (%d/%d): %s",
+                sock.slug, failures, WS_RECHECK_MAX_FAILURES, type(e).__name__,
+            )
+            if failures >= WS_RECHECK_MAX_FAILURES:
+                await _shut(sock, WS_INTERNAL, "credentials could not be checked")
+                return
+            continue
+        failures = 0
+        if not still:
+            log.info("plugin %s socket closed: its credential no longer opens it", sock.slug)
+            await _shut(sock, WS_POLICY, "household device token or admin session required")
+            return
 
 
 def _unmount(app: FastAPI, slug: str) -> None:
@@ -153,6 +440,7 @@ def _unmount(app: FastAPI, slug: str) -> None:
         r for r in app.router.routes if getattr(r, _SLUG_ATTR, None) != slug
     ]
     _mounted.pop(slug, None)
+    close_plugin_sockets(slug, reason=f"plugin {slug!r} unmounted")
     app.openapi_schema = None
 
 
@@ -166,11 +454,10 @@ def _refuse(slug: str, routers: list[Any]) -> None:
             f"plugin {slug!r}: route(s) carry both @open_endpoint and "
             f"@device_endpoint: {'; '.join(conflicts)}"
         )
-    sockets = websocket_routes(routers)
+    sockets = refused_websocket_routes(routers)
     if sockets:
-        # The gate's dependency takes a Request; on a websocket FastAPI
-        # cannot call it and the handshake dies with a TypeError. Say why
-        # at mount instead.
+        # Only a @device_endpoint FastAPI websocket route takes the gate's
+        # websocket form; say why at mount instead of serving it.
         raise TypeError(
             f"plugin {slug!r}: {WEBSOCKET_UNSUPPORTED}: {'; '.join(sockets)}"
         )
@@ -251,6 +538,9 @@ def mount_plugin_routers(app: FastAPI, slug: str, routers: Any) -> None:
         # else the end — where a first mount lands.
         at = old[0] if old else len(kept)
         table[:] = kept[:at] + added + kept[at:]
+        # Sockets the previous mount let through talk to its torn-down SDK
+        # (their gate would refuse them now): close them rather than wait.
+        close_plugin_sockets(slug, reason=f"plugin {slug!r} reloaded")
         _mounted[slug] = routers
         set_plugin_enabled(slug, True)
         # Routes changed after startup: the cached OpenAPI doc is stale.

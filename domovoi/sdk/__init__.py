@@ -47,7 +47,14 @@ from __future__ import annotations
 #         playback.ensure_room(room_id) (is this a room of the house; wake its
 #         music player), and [[web.player_sources]] room_play_template (the
 #         browser player hands a plugin's item to a room).
-API_VERSION = "1.10.0"
+# 1.11.0: plugin websockets: a @device_endpoint @router.websocket route on
+#         the core router is served (the per-slug gate's websocket form:
+#         enabled, LAN Host and Origin, household token or admin Bearer at
+#         the upgrade, rechecked while open; per-plugin and per-device
+#         socket caps, message size and rate limits; open sockets closed
+#         on disable or reload). Any other plugin websocket is still
+#         refused at load, and the web process serves none.
+API_VERSION = "1.11.0"
 
 from domovoi.capabilities import (  # noqa: E402,F401
     CAPABILITIES,

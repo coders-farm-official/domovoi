@@ -65,8 +65,21 @@ from typing import Any
 #: left alone.
 _NAME = r"[A-Za-z0-9_\-]*(?:token|secret|password|passwd|api[_\-]?key)|sig|signature|setup_code"
 
+#: A value may not start with a ``%`` that is not a URL escape: that is a
+#: format placeholder (``token=%s``), handled by :data:`_PLACEHOLDER_RE`.
+_VALUE_START = r"(?!%(?![0-9A-Fa-f]{2}))"
+#: In a QUERY STRING (after ``?`` or ``&``) a value runs to the next ``&``,
+#: ``#``, quote or space, whatever it holds: a household token may be any
+#: printable ASCII, and a browser leaves ``'()!*~`` unescaped and turns the
+#: rest into ``%XX`` (a token starting with ``#`` is sent as ``%23…``), so
+#: the general rule's stops below would leave part of it in the line.
+_QUERY_PARAM_RE = re.compile(
+    r"(?P<lead>[?&])(?P<name>" + _NAME + r")=(?P<value>" + _VALUE_START + r"[^&\s\"#]+)",
+    re.IGNORECASE,
+)
 _PARAM_RE = re.compile(
-    r"(?P<lead>(?:^|[?&;\s,(\"'\[{]))(?P<name>" + _NAME + r")=(?P<value>(?!%)[^&\s\"'#,;)\]}]+)",
+    r"(?P<lead>(?:^|[?&;\s,(\"'\[{]))(?P<name>" + _NAME + r")=(?P<value>"
+    + _VALUE_START + r"[^&\s\"'#,;)\]}]+)",
     re.IGNORECASE,
 )
 #: A format string that puts an argument right after a credential's name
@@ -108,7 +121,8 @@ def scrub(text: str) -> str:
     docstring). Unchanged text is returned as the same object."""
     if not text or not _may_hold(text):
         return text
-    out = _PARAM_RE.sub(lambda m: f"{m.group('lead')}{m.group('name')}={MASK}", text)
+    out = _QUERY_PARAM_RE.sub(lambda m: f"{m.group('lead')}{m.group('name')}={MASK}", text)
+    out = _PARAM_RE.sub(lambda m: f"{m.group('lead')}{m.group('name')}={MASK}", out)
     if _words_hidden():
         out = _WORDS_RE.sub(lambda m: f"{m.group('lead')}{WORDS_MASK}", out)
         out = _TITLE_PATH_RE.sub(lambda m: f"{m.group('lead')}{WORDS_MASK}", out)
