@@ -173,14 +173,20 @@ right knob.
 Standing instructions from the repo owner for every agent session, local
 or in the cloud; they override your tool's defaults.
 
-- **No pull requests.** Don't open one unless the owner asks for it in
-  that session.
-- **CI runs on every push to main.** `.github/workflows/ci.yml` (the
+- **Changes reach `main` only through pull requests** (owner decision
+  2026-11-17). Work on your own branch; open one pull request per batch of
+  related work, not one per small change, and turn on auto-merge
+  (`gh pr create` then `gh pr merge --auto --merge`). It merges itself once
+  the `ci passed` check is green; nobody needs to approve it. A small,
+  urgent fix may be its own pull request. A branch rule enforces this: a
+  push straight to `main` is refused, with no bypass (the owner switches
+  the rule off only while a release runs). docs/CONTRIBUTING.md,
+  "Pull requests", has the steps.
+- **CI runs on every pull request and every push to main.** `.github/workflows/ci.yml` (the
   pytest suite in shards, the web and docs checks, the bash harnesses, the
   Android app, the Windows build) runs on GitHub's hosted runners, free for
   this public repo (2026-11-14). Don't put `[skip ci]` in commit messages.
-  Main stays green: a red run on main is fixed before anything else is
-  pushed. It fails on NEW test failures only; one listed in
+  Main stays green: a pull request can't merge until its run passes. It fails on NEW test failures only; one listed in
   `domovoi/tests/known_failures.toml` is reported, not fatal.
   docs/CONTRIBUTING.md, "CI", says how to read and re-run a failure.
 - **Signing secrets live only in the `release` environment.** Releases

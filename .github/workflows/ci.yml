@@ -1,5 +1,8 @@
-# Continuous integration: every push to main, and by hand from the Actions
-# tab (workflow_dispatch, which runs every job whatever changed). The repo is
+# Continuous integration: every pull request into main, every push to main,
+# and by hand from the Actions tab (workflow_dispatch, which runs every job
+# whatever changed). main takes changes only through pull requests, and a
+# pull request merges only once the `ci passed` job below is green (owner
+# decision 2026-11-17; docs/CONTRIBUTING.md, "Pull requests"). The repo is
 # public, so GitHub's standard hosted runners cost nothing (owner decision
 # 2026-11-14). docs/CONTRIBUTING.md, "CI", says what runs and how to read a
 # red run.
@@ -35,7 +38,10 @@
 #            (scripts/release/sbom.py, the app's through Gradle), made the
 #            way release.yml makes them, so a release never finds them
 #            broken. An artifact (`domovoi-sboms`), never published.
-# A new job slots into `jobs:` beside these.
+#   ci-ok    after all of the above: one result for the branch rule to
+#            require ("ci passed"). Green when every job passed or was
+#            skipped because nothing it checks changed.
+# A new job slots into `jobs:` beside these, and into ci-ok's `needs`.
 #
 # No secrets anywhere, and none may be added: release signing and publishing
 # stay on the owner's PC with the owner's keys. Every action is pinned by
@@ -46,6 +52,8 @@ name: ci
 
 on:
   push:
+    branches: [main]
+  pull_request:
     branches: [main]
   workflow_dispatch:
 
@@ -88,11 +96,12 @@ jobs:
       - id: filter
         env:
           EVENT: ${{ github.event_name }}
-          BEFORE: ${{ github.event.before }}
+          # A pull request compares its base with the merge GitHub tests.
+          BEFORE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
           AFTER: ${{ github.sha }}
         run: |
           all() { for k in code harness android android_apk windows ios; do echo "$k=true"; done >>"$GITHUB_OUTPUT"; echo "running every job: $1"; }
-          if [ "$EVENT" != push ]; then all "started by $EVENT"; exit 0; fi
+          if [ "$EVENT" != push ] && [ "$EVENT" != pull_request ]; then all "started by $EVENT"; exit 0; fi
           case "$BEFORE" in ''|0000000000000000000000000000000000000000) all "no previous commit to compare with"; exit 0 ;; esac
           if ! git fetch -q --no-tags --depth=1 origin "$BEFORE" 2>/dev/null; then
             all "the previous commit $BEFORE is not fetchable (force push?)"; exit 0
@@ -761,3 +770,26 @@ jobs:
           path: ${{ runner.temp }}/sboms/
           if-no-files-found: error
           retention-days: 14
+
+  # The one check the branch rule on main requires. Every other job is listed
+  # in `needs`; skipped is fine (nothing it checks changed), anything else
+  # fails this job and so the pull request.
+  ci-ok:
+    name: ci passed
+    if: always()
+    needs: [changes, docs, ruff, python, web, harness, android, android-repro-build, android-repro-compare, android-release-rehearsal, windows, ios, sbom]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every job passed or was skipped
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | python3 -c '
+          import json, sys
+          bad = {k: v["result"] for k, v in json.load(sys.stdin).items() if v["result"] not in ("success", "skipped")}
+          if bad:
+              print("not passed:", ", ".join(f"{k}={v}" for k, v in sorted(bad.items())))
+              sys.exit(1)
+          print("every job passed or was skipped")
+          '
