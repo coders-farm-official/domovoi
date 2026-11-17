@@ -807,8 +807,8 @@ jobs:
         run: |
           set -euo pipefail
           props=gradle/wrapper/gradle-wrapper.properties
-          grep -qF gradle-8.14.3-bin.zip "$props"             || { echo "::error::the wrapper moved off Gradle 8.14.3: update its pinned SHA-256 here and in release.yml"; exit 1; }
-          grep -qF distributionSha256Sum "$props"             || echo 'distributionSha256Sum=bd71102213493060956ec229d946beee57158dbd89d0e62b91bca0fa2c5f3531' >>"$props"
+          grep -qF gradle-8.14.6-bin.zip "$props"             || { echo "::error::the wrapper moved off Gradle 8.14.6: update its pinned SHA-256 here and in release.yml"; exit 1; }
+          grep -qF distributionSha256Sum "$props"             || echo 'distributionSha256Sum=7988ed071b2a07900e2ec715fca15c6ab72bce6db433af301fa7fa7e9407bd24' >>"$props"
           export JAVA_HOME="$JAVA_HOME_17_X64"
           chmod +x gradlew
           ./gradlew --no-daemon --no-configuration-cache --init-script ../scripts/release/sbom-android.init.gradle             -Pdomovoi.sbomDeps="$RUNNER_TEMP/gradle-deps.json" :app:domovoiSbomDeps
