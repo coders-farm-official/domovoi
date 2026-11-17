@@ -294,6 +294,7 @@ async def test_an_admin_bearer_reaches_the_cores_route(name, monkeypatch, forwar
     async with _client(bearer(ADMIN_TOKEN)) as c:
         r = await _send(c, name)
     assert r.status_code == 200, r.text
+    assert r.headers.get("cache-control") == "no-store"  # R6 FE-11: friend files, messages
     assert len(forwarded) == 1
     f_method, f_path, f_body = forwarded[0]
     assert f_method == method

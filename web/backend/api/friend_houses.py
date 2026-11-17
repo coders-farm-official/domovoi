@@ -23,7 +23,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi.routing import APIRoute
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field, ValidationError
 
@@ -39,7 +40,23 @@ from web.backend.domovoi_client import (
     put_admin,
 )
 
-router = APIRouter(prefix="/api/friend-houses", tags=["friend-houses"])
+class _NoStoreRoute(APIRoute):
+    """Every Friend Houses answer carries ``Cache-Control: no-store``: a
+    friend file is a bearer secret, and messages are private (audit R6
+    FE-11). Set on the final response, whatever the route returned."""
+
+    def get_route_handler(self):
+        handler = super().get_route_handler()
+
+        async def no_store(request: Request) -> Response:
+            response = await handler(request)
+            response.headers["Cache-Control"] = "no-store"
+            return response
+
+        return no_store
+
+
+router = APIRouter(prefix="/api/friend-houses", tags=["friend-houses"], route_class=_NoStoreRoute)
 READ = [Depends(require_admin_security_read)]
 WRITE = [Depends(require_requested_with), Depends(require_admin_security)]
 # What every household phone may do with existing friends (owner decision
