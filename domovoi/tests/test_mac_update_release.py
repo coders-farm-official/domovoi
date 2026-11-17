@@ -52,11 +52,11 @@ def _record_snippet() -> str:
     return m.group(1)
 
 
-def _build_record(tmp_path: Path, pkg: Path, *, tag: str = TAG, commit: str = COMMIT) -> Path:
+def _build_record(tmp_path: Path, pkg: Path, *, tag: str = TAG, commit: str = COMMIT, ref: str | None = None) -> Path:
     import hashlib
 
     out = tmp_path / "DomovoiSetup-mac.build.json"
-    env = {**os.environ, "TAG": tag, "COMMIT": commit, "VERSION": tag[1:],
+    env = {**os.environ, "TAG": tag, "COMMIT": commit, "REF": ref or commit, "VERSION": tag[1:],
            "SHA": hashlib.sha256(pkg.read_bytes()).hexdigest(), "SIZE": str(pkg.stat().st_size)}
     subprocess.run([sys.executable, "-I", "-c", _record_snippet(), str(out)], env=env, check=True)
     return out
@@ -80,6 +80,24 @@ def test_build_shs_record_is_what_finish_release_checks(fr, tmp_path, pkg):
     pkg.write_bytes(pkg.read_bytes() + b"x")
     with pytest.raises(fr.Refused, match="another package"):
         fr.check_mac_build_record(rec, pkg, tag=TAG, tag_commit=COMMIT)
+
+
+def test_a_package_built_under_an_app_releases_tag_must_install_the_tag(fr, tmp_path, pkg):
+    """The release workflow builds the package from the dispatched commit,
+    while it waits for approval; an app release's tag is that commit plus
+    android/release.json. finish-release takes such a package only when it
+    installs the tag itself (build.sh --ref <tag>)."""
+    parent, tag_commit = "1" * 40, "2" * 40
+    rec = _build_record(pkg.parent, pkg, commit=parent, ref=TAG)
+    assert json.loads(rec.read_text(encoding="utf-8"))["ref"] == TAG
+    fr.check_mac_build_record(rec, pkg, tag=TAG, tag_commit=tag_commit, built_on=parent)
+    with pytest.raises(fr.Refused, match="built from"):
+        fr.check_mac_build_record(rec, pkg, tag=TAG, tag_commit=tag_commit)        # a server-only tag: no parent
+    with pytest.raises(fr.Refused, match="built from"):
+        fr.check_mac_build_record(rec, pkg, tag=TAG, tag_commit=tag_commit, built_on="3" * 40)
+    rec = _build_record(pkg.parent, pkg, commit=parent)                            # installs the parent
+    with pytest.raises(fr.Refused, match=f"build it with --ref {TAG}"):
+        fr.check_mac_build_record(rec, pkg, tag=TAG, tag_commit=tag_commit, built_on=parent)
 
 
 def test_build_sh_names_the_record_finish_release_looks_for(fr):

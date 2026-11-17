@@ -4,6 +4,25 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.4.0 (unreleased) — A Mac can be the server
+
+- **What changed.** Each release now carries `DomovoiSetup-mac.pkg`, the
+  Mac server's installer, for Macs with Apple silicon and macOS 26 or
+  later. It runs the Linux server in a small virtual machine, and the
+  household's Ollama and speech recognition natively on the Mac's
+  graphics chip. The release workflow builds it on a GitHub macOS runner
+  from the release's files (`build-mac`, no secrets) and its signing job
+  signs it for the Mac side's updates (`finish_release.py --mac-pkg`).
+- **What to know.** It is signed ad hoc, not with an Apple Developer ID,
+  and not notarized: the first time, macOS won't open it until you click
+  **Open Anyway** in System Settings → Privacy & Security. The Mac install
+  writes `WHISPER_REMOTE_SHARES_GPU=true`: while the core has a request
+  open to Ollama, a new voice turn is heard by the VM's own Whisper instead
+  of the Mac's speech service, chosen once per turn. Health's speech row
+  says which engine heard the last request, and `/v1/stats/latency`'s
+  `whisper.engine_reason` says why (`gpu_shared_llm_busy`). Every other
+  install leaves the setting false and is unchanged.
+
 ## 1.4.0 (unreleased) — Fewer "preview" labels
 
 - **What changed.** Chat on the phone itself, the Windows installer and spare

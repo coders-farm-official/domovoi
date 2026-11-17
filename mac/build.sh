@@ -1,6 +1,8 @@
 #!/bin/bash
-# build.sh: builds DomovoiSetup-mac.pkg (mac-installer PLAN 4.11, 6 item 9).
-# Runs on a Mac as an ordinary user (pkgbuild and productbuild need no root).
+# build.sh: builds DomovoiSetup-mac.pkg, the Mac server's installer. Runs on
+# a Mac as an ordinary user (pkgbuild and productbuild need no root): the
+# release workflow's build-mac job (.github/workflows/release.yml) on a
+# macOS runner, or a developer's Mac.
 #
 #   mac/build.sh --out DIR [options]
 #
@@ -17,11 +19,12 @@
 #                        against installer/pins.conf and bundled
 #   --version V          the Mac side's version (default: the tag's, else the one in Layout.swift)
 #   --provision-arg ARG  passed to provision.sh as is (repeatable)
-#   --no-stt             leave the speech service out (PHASE8A-STT.md): no
+#   --no-stt             leave the speech service out: no
 #                        whisper-server, and the packaged pins.conf without its
 #                        lines, so the install recognises speech in the VM
 #   --cmake PATH         the cmake that builds whisper-server (default: one on
-#                        PATH, else the pinned CMake below, downloaded)
+#                        PATH, else the pinned CMake below, downloaded);
+#                        --cmake pinned: always the pinned one (a release build)
 #
 # whisper-server: cloned from the whisper.cpp tag pins.conf names into the
 # staging folder (the commit checked), built there, and the clone removed with
@@ -29,7 +32,10 @@
 # a script named after a media provider, which the repository may not carry.
 #   --tag vX.Y.Z         a release build: the commit must be the tag's, the version
 #                        is the tag's, and DomovoiSetup-mac.build.json (what
-#                        finish-release --mac-pkg checks) is written beside the package
+#                        finish-release --mac-pkg checks) is written beside the
+#                        package. The programs must not hold a path of the
+#                        machine that built them (checked; a development build
+#                        only warns)
 #   --release-key FILE   the release key's public half the Mac side's updates trust
 #                        (default: windows/installer/release-signing.pub). A
 #                        throwaway key, for the update train only, needs
@@ -37,9 +43,14 @@
 #   --release-repo O/N   where the Mac side's updates come from (default: the
 #                        project's own; the update train: a throwaway fork)
 #
-# Unsigned: every binary carries an ad-hoc signature (Apple Silicon needs
-# one); Developer ID signing and notarization are the owner's, in their own
-# account (PLAN 4.11, owner answer Q4/Q5), and not in this script yet.
+# Signed ad hoc only: every binary carries an ad-hoc signature (Apple silicon
+# needs one), and the package is not signed by an Apple Developer ID nor
+# notarized, so Gatekeeper asks once (the release page says how to open it).
+#
+# No build paths in what ships: the Swift programs are compiled with their
+# source paths mapped to "domovoi/" and stripped of debug symbols (strip -S),
+# whisper-server likewise (-ffile-prefix-map), so nothing names the folder or
+# the account that built them; "check the programs" below holds that.
 set -euo pipefail
 MAC=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$MAC/.." && pwd)
@@ -61,7 +72,7 @@ while [ $# -gt 0 ]; do
     --tag) TAG=$2; shift 2 ;;
     --release-key) RELEASE_KEY=$2; shift 2 ;;
     --release-repo) RELEASE_REPO=$2; shift 2 ;;
-    -h|--help) sed -n '2,45p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,/^set -euo/p' "$0" | sed '$d'; exit 0 ;;
     *) echo "build.sh: unknown option $1" >&2; exit 2 ;;
   esac
 done
@@ -73,6 +84,7 @@ die() { echo "build.sh: $*" >&2; exit 1; }
 if [ -z "$COMMIT" ]; then COMMIT=$(git -C "$REPO" rev-parse HEAD 2>/dev/null) || die "--commit SHA (not a checkout)"; fi
 echo "$COMMIT" | grep -Eq '^[0-9a-f]{40}$' || die "--commit must be a full SHA-1"
 [ -n "$REF" ] || REF=$COMMIT
+if [ "$CMAKE" = pinned ]; then CMAKE="" CMAKE_PINNED=1; else CMAKE_PINNED=0; fi
 if [ -n "$TAG" ]; then
   echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]{1,40})?$' || die "--tag takes a release tag, vX.Y.Z"
   TAG_COMMIT=$(git -C "$REPO" rev-parse --verify --quiet "refs/tags/$TAG^{commit}" 2>/dev/null) || die "no tag $TAG in this checkout"
@@ -81,7 +93,7 @@ if [ -n "$TAG" ]; then
   VERSION=${TAG#v}
 fi
 [ -n "$VERSION" ] || VERSION=$(sed -n 's/.*macSideVersion = "\(.*\)".*/\1/p' "$MAC/Sources/DomovoiMacKit/Layout.swift")
-# The release key the installed Mac side trusts for its updates (PLAN 4.12).
+# The release key the installed Mac side trusts for its updates.
 PROJECT_KEY=$REPO/windows/installer/release-signing.pub
 [ -n "$RELEASE_KEY" ] || RELEASE_KEY=$PROJECT_KEY
 [ -f "$RELEASE_KEY" ] || die "no release key at $RELEASE_KEY (--release-key)"
@@ -123,8 +135,16 @@ cleanup() {
 trap cleanup EXIT
 
 echo "== swift build (release)"
-(cd "$MAC" && swift build -c release --product DomovoiHelper && swift build -c release --product domovoi-uninstall && swift build -c release --product Domovoi)
-BIN=$(cd "$MAC" && swift build -c release --show-bin-path)
+# The repository's own path becomes domovoi/ in whatever the compiler keeps
+# (debug info, #file and friends): see the top.
+SWIFT_MAP=(-Xswiftc -file-prefix-map -Xswiftc "$REPO=domovoi")
+(cd "$MAC" && for prod in DomovoiHelper domovoi-uninstall Domovoi; do
+  swift build -c release "${SWIFT_MAP[@]}" --product "$prod" || exit 1
+done)
+BIN=$(cd "$MAC" && swift build -c release "${SWIFT_MAP[@]}" --show-bin-path)
+# Each program as it ships: no debug symbols (they name the object files'
+# paths), then signed (strip would break a signature made before it).
+ship() { cp "$1" "$2"; strip -S "$2"; }
 
 P=$W/payload
 APP=$P/Applications/Domovoi.app
@@ -132,11 +152,11 @@ AS="$P/Library/Application Support/Domovoi"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$AS/bin" "$AS/share/seed"
 
 echo "== Domovoi.app"
-cp "$BIN/Domovoi" "$APP/Contents/MacOS/Domovoi"
+ship "$BIN/Domovoi" "$APP/Contents/MacOS/Domovoi"
 sed -e "s/@VERSION@/$VERSION/g" -e "s/@PKG_VERSION@/$PKG_VERSION/g" "$MAC/installer/Info.plist" >"$APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
-# The app's icon (Setup's header, the Dock, notifications; Train 1 finding
-# 2): the project's mascot, docs/assets/domovoi-icon.png (1024 x 1024), cut
+# The app's icon (Setup's header, the Dock, notifications): the project's
+# mascot, docs/assets/domovoi-icon.png (1024 x 1024), cut
 # to the sizes an .icns holds with sips and iconutil (both part of macOS).
 # Nothing new is drawn and no generated file is committed.
 ICONSRC=$REPO/docs/assets/domovoi-icon.png
@@ -153,14 +173,15 @@ rm -rf "$ISET"
 codesign --force --sign - --identifier com.domovoi.mac.setup "$APP"
 
 echo "== helper, uninstall"
-cp "$BIN/DomovoiHelper" "$BIN/domovoi-uninstall" "$AS/bin/"
+ship "$BIN/DomovoiHelper" "$AS/bin/DomovoiHelper"
+ship "$BIN/domovoi-uninstall" "$AS/bin/domovoi-uninstall"
 codesign --force --sign - --identifier com.domovoi.mac.helper "$AS/bin/DomovoiHelper"
 codesign --force --sign - --identifier com.domovoi.mac.uninstall "$AS/bin/domovoi-uninstall"
 
 WSHA=""
 if [ "$NO_STT" = 0 ]; then
   echo "== whisper-server (whisper.cpp v$WCPP_VERSION)"
-  if [ -z "$CMAKE" ]; then CMAKE=$(command -v cmake || true); fi
+  if [ -z "$CMAKE" ] && [ "$CMAKE_PINNED" = 0 ]; then CMAKE=$(command -v cmake || true); fi
   if [ -z "$CMAKE" ]; then
     curl -fL --proto =https --retry 3 -sS -o "$W/cmake.tar.gz" "$CMAKE_PIN_URL"
     [ "$(shasum -a 256 "$W/cmake.tar.gz" | cut -d' ' -f1)" = "$CMAKE_PIN_SHA" ] || die "the CMake tarball is not the pinned one"
@@ -169,7 +190,11 @@ if [ "$NO_STT" = 0 ]; then
   fi
   git clone --quiet --depth 1 --branch "v$WCPP_VERSION" https://github.com/ggml-org/whisper.cpp.git "$W/whisper.cpp"
   [ "$(git -C "$W/whisper.cpp" rev-parse HEAD)" = "$WCPP_COMMIT" ] || die "whisper.cpp v$WCPP_VERSION is not commit $WCPP_COMMIT"
+  # The clone's path becomes whisper.cpp/ in the program (assert messages
+  # name their source file): see the top.
+  PMAP="-ffile-prefix-map=$W/whisper.cpp=whisper.cpp -ffile-prefix-map=$W/whisper-build=whisper-build"
   "$CMAKE" -S "$W/whisper.cpp" -B "$W/whisper-build" -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+    -DCMAKE_C_FLAGS="$PMAP" -DCMAKE_CXX_FLAGS="$PMAP" -DCMAKE_OBJC_FLAGS="$PMAP" \
     -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON -DWHISPER_SDL2=OFF -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON >/dev/null
   "$CMAKE" --build "$W/whisper-build" --target whisper-server -j 4 >/dev/null
   WBIN=$W/whisper-build/bin/whisper-server
@@ -177,10 +202,27 @@ if [ "$NO_STT" = 0 ]; then
   # One static program: nothing but the system's own libraries.
   bad=$(otool -L "$WBIN" | awk 'NR>1{print $1}' | grep -Ev '^(/System/Library/|/usr/lib/)' || true)
   [ -z "$bad" ] || die "whisper-server links outside the system: $bad"
-  cp "$WBIN" "$AS/bin/whisper-server"
+  ship "$WBIN" "$AS/bin/whisper-server"
   codesign --force --sign - --identifier com.domovoi.mac.stt "$AS/bin/whisper-server"
   WSHA=$(shasum -a 256 "$AS/bin/whisper-server" | cut -d' ' -f1)
   rm -rf "$W/whisper.cpp" "$W/whisper-build"
+fi
+
+echo "== check the programs"
+# No path of the machine that built them: the account's home (which holds
+# a CI runner's work folder), the checkout, the output folder. A release
+# build stops on one; a development build says which and goes on.
+leaks=""
+for f in "$APP/Contents/MacOS/Domovoi" "$AS/bin/"*; do
+  for d in "$HOME" "$REPO" "$OUT"; do
+    [ -n "$d" ] && [ "$d" != / ] || continue
+    n=$(strings -a "$f" | grep -cF "$d" || true)
+    [ "$n" = 0 ] || leaks="$leaks $(basename "$f"):$nx$d"
+  done
+done
+if [ -n "$leaks" ]; then
+  [ -z "$TAG" ] || die "the programs hold build paths:$leaks"
+  echo "note: the programs hold build paths:$leaks (a release build stops here)"
 fi
 
 echo "== share"
@@ -242,7 +284,7 @@ done
 [ "$i" -ge 1 ] || die "pkgbuild found no app bundle in the payload"
 # One install script, postinstall, which never opens the app itself (opening
 # Domovoi.app during the install made Installer's last touch of the bundle
-# wait on App Management, P3-1): it starts a one-shot job in the signed-in
+# wait on App Management): it starts a one-shot job in the signed-in
 # person's GUI session that opens Setup once Installer has quit
 # (installer/scripts/postinstall, share/installer/open-setup.sh). The
 # conclusion page still says to open Domovoi from Applications.
@@ -282,10 +324,13 @@ printf '%s  %s\n' "$SHA" DomovoiSetup-mac.pkg >"$OUT/SHA256SUMS"
 rm -f "$OUT/DomovoiSetup-mac.build.json"
 if [ -n "$TAG" ]; then
   SIZE=$(stat -f %z "$OUT/DomovoiSetup-mac.pkg")
-  TAG=$TAG COMMIT=$COMMIT VERSION=$VERSION SHA=$SHA SIZE=$SIZE /usr/bin/python3 - "$OUT/DomovoiSetup-mac.build.json" <<'PY'
+  TAG=$TAG COMMIT=$COMMIT REF=$REF VERSION=$VERSION SHA=$SHA SIZE=$SIZE /usr/bin/python3 - "$OUT/DomovoiSetup-mac.build.json" <<'PY'
 import json, os, sys
+# ref: what the package's provision.sh checks out (the tag itself when the
+# package is built from the commit under an app release's tag).
 doc = {"kind": "domovoi-mac-setup-build", "schema": 1, "tag": os.environ["TAG"], "commit": os.environ["COMMIT"],
-       "version": os.environ["VERSION"], "file": "DomovoiSetup-mac.pkg", "size": int(os.environ["SIZE"]), "sha256": os.environ["SHA"]}
+       "ref": os.environ["REF"], "version": os.environ["VERSION"], "file": "DomovoiSetup-mac.pkg",
+       "size": int(os.environ["SIZE"]), "sha256": os.environ["SHA"]}
 open(sys.argv[1], "w").write(json.dumps(doc, indent=2, sort_keys=True) + "\n")
 PY
 fi
