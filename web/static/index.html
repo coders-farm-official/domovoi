@@ -291,15 +291,23 @@
       // to resolve queue-item kinds → stream URLs; unknown kinds are
       // hidden with a console warn, never a crash). `room_play_template`
       // (SDK 1.10) is where a cast sends one of the kind's items to a room;
-      // only one of the plugin's own routes is kept.
+      // only one of the plugin's own routes is kept: plain path characters
+      // (no %, #, ? or backslash) that the browser resolves to exactly what
+      // is written, under the plugin's prefix (PLG-13: %2e%2e is a dot
+      // segment too, and a literal '..' was the only thing refused).
+      const roomPlayOk = (tpl, own) => {
+        if (typeof tpl !== 'string' || !tpl.startsWith(own) || !tpl.includes('{id}')) return false;
+        if (/[%#?\\]/.test(tpl)) return false;
+        const probe = tpl.split('{id}').join('x');
+        try {
+          const u = new URL(probe, window.location.origin);
+          return u.origin === window.location.origin && u.pathname === probe && u.pathname.startsWith(own);
+        } catch { return false; }
+      };
       (manifest.plugins || []).forEach((p) => {
         (p.player_sources || []).forEach((src) => {
           const own = `/api/plugins/${p.slug}/`;
-          const roomPlay = typeof src.room_play_template === 'string'
-            && src.room_play_template.startsWith(own)
-            && src.room_play_template.includes('{id}')
-            && !src.room_play_template.includes('..')
-            ? src.room_play_template : null;
+          const roomPlay = roomPlayOk(src.room_play_template, own) ? src.room_play_template : null;
           window.DomovoiPlayerSources[src.kind] = {
             plugin: p.slug,
             stream_url_template: src.stream_url_template,

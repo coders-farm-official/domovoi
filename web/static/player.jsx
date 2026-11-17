@@ -659,7 +659,16 @@ const _castRoomPlayPath = (item) => {
   if (!item || item.kind === 'library' || item.itemId == null) return null;
   const src = (window.DomovoiPlayerSources || {})[item.kind];
   const tpl = src && src.room_play_template;
-  return tpl ? tpl.replace('{id}', encodeURIComponent(item.itemId)) : null;
+  if (!tpl) return null;
+  const path = tpl.replace('{id}', encodeURIComponent(item.itemId));
+  // PLG-13: the filled-in path must be what the browser will POST to,
+  // under the plugin's own prefix (an id of ".." is a dot segment too).
+  try {
+    const u = new URL(path, window.location.origin);
+    const own = `/api/plugins/${src.plugin}/`;
+    if (u.origin !== window.location.origin || u.pathname !== path || !u.pathname.startsWith(own)) return null;
+  } catch { return null; }
+  return path;
 };
 const _castRefused = () => {
   const e = new Error('nothing from here on can play in a room — podcasts, audiobooks and files outside the library play in this browser only');

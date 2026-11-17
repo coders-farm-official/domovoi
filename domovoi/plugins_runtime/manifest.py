@@ -901,6 +901,9 @@ def _parse_containers(raw: Any, warnings: tuple[str, ...]) -> tuple[ContainerDec
     return tuple(out)
 
 
+_ROOM_PLAY_CHARS = re.compile(r"/[A-Za-z0-9_.~{}/-]*")
+
+
 def _room_play_template(source: dict, slug: str) -> str | None:
     """``[[web.player_sources]].room_play_template`` (SDK 1.10): one of the
     plugin's OWN dashboard routes with an ``{id}`` in it. The browser
@@ -910,7 +913,18 @@ def _room_play_template(source: dict, slug: str) -> str | None:
     if val is None:
         return None
     prefix = f"/api/plugins/{slug}/"
-    if not val.startswith(prefix) or "{id}" not in val or ".." in val or "?" in val:
+    # PLG-13 (round 6): a literal ".." was the only thing refused, and a
+    # browser treats %2e%2e as a dot segment too, so
+    # /api/plugins/<slug>/%2e%2e/%2e%2e/auth/logout#{id} named any dashboard
+    # route. Now only plain path characters (no %, #, ?, backslash), and
+    # no "." or ".." segment at all: what the browser resolves is what is
+    # written here, and it stays under the plugin's own prefix.
+    segments = val[len(prefix):].split("/") if val.startswith(prefix) else []
+    if (
+        not val.startswith(prefix) or "{id}" not in val
+        or not _ROOM_PLAY_CHARS.fullmatch(val)
+        or any(seg in (".", "..") for seg in segments)
+    ):
         raise ManifestError(
             f"web.player_sources.room_play_template must be one of the "
             f"plugin's own routes ({prefix}...) containing {{id}}"

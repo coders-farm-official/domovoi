@@ -651,7 +651,10 @@ room_play_template = "/api/plugins/radio/stations/{id}/play-in-room"   # SDK 1.1
   room from the player, it POSTs `{"room_id": "<room>"}` to this route
   (`{id}` is the item's `itemId`) instead of refusing it as "not in the
   library". It must be one of your own `/api/plugins/<slug>/` routes with
-  `{id}` in it (the manifest is refused otherwise); make it
+  `{id}` in it, written in plain path characters (letters, digits,
+  `_ . ~ -` and `/`: no `%`, `#`, `?` or backslash, and no `.` or `..`
+  segment), or the manifest is refused; the dashboard checks it again
+  before it POSTs (PLG-13). Make it
   `@device_endpoint` and play with `sdk.playback.ensure_room`, `play_url`
   and `dispatch` on the core side (§4.5). The radio plugin's
   `/stations/{id}/play-in-room` is the example.
