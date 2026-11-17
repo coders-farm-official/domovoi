@@ -514,6 +514,7 @@ namespace Domovoi.Windows.Helper
             o.Kv("ai", st.Ai == null ? "" : (st.Ai.Value ? "yes" : "no"));
             o.Kv("phone_app", st.PhoneApp == null ? "" : (st.PhoneApp.Value ? "yes" : "no"));
             o.Kv("lan_name", st.LanName ?? "");
+            o.Kv("checkout_kept", st.CheckoutKept == null ? "" : (st.CheckoutKept.Value ? "yes" : "no"));
             o.Kv("generation", Inv.S(st.Generation));
             o.Kv("attempt", Inv.S(st.Attempt));
             if (st.Bytes != null) o.Kv("bytes", Inv.S(st.Bytes.Value));

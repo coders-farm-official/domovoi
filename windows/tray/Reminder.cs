@@ -67,8 +67,16 @@ namespace Domovoi.Windows.Tray
         // the Linux part is updating.
         public static string Waiting(UpdateState s, bool stepRunning, bool pendingRun)
         {
+            return Waiting(s, stepRunning, pendingRun, null);
+        }
+
+        // installed: this tray's own version; a request for a release it
+        // already is waits for nobody (UpdateAction.AlreadyCurrent answers it).
+        public static string Waiting(UpdateState s, bool stepRunning, bool pendingRun, string installed)
+        {
             if (s == null || s.RequestId == null || stepRunning || pendingRun) return null;
             if (!s.StepNeeded || s.LinuxBusy || s.RequestClaimed || s.RequestOnThisPc) return null;
+            if (WindowsStep.AlreadyCurrent(s, installed)) return null;
             return s.RequestId;
         }
 
