@@ -792,6 +792,13 @@ they never share a conversation or data.
   them). Phone chats work with no server at all and in airplane mode.
 - **The model download** is shown inside Chat the first time a phone chat
   is started without the model; home-server chat works without it.
+- **A video** (`ui/screens/chat/ChatVideo.kt`): a home-server chat's
+  paperclip offers "a video (up to 3 minutes)" only when the server says
+  it can watch one (`GET /api/chat/models` → `video.available`: AI on and
+  ffmpeg there); a phone chat never does. The length and size are checked
+  on the phone first, in the server's words; the file streams up as the
+  request body with a bar and a remove that stops it, and the message
+  carries the job's chip (the server's line, stop, then "what was kept").
 - **The home server's AI off** (its capability manifest says
   `features.ai: false`): Chat offers no home-server chats, and keeps the
   phone's. A 32-bit install has no phone place; with neither, Chat is on
