@@ -471,7 +471,9 @@ two-way sync, no sign-in with Google, Microsoft, Apple or Samsung):
 * **From a phone.** A person can switch on "Share this phone's calendars
   with the house" in the Android app (off by default; it asks
   `READ_CALENDAR` then), or in the iPhone app, which asks for calendar
-  access then, and pick calendars. The phone sends each event's
+  access then, and pick calendars. So the person can choose, the
+  Android picker shows each visible calendar's event count, read on the
+  phone and never sent. The phone sends each event's
   title, time, place and the calendar's name and colour (never
   descriptions or guests) for 30 days back to 180 ahead, to its own
   household server only, over the house's network with the household
@@ -4666,7 +4668,12 @@ itself, so it never says "mic off" while one is open. A drop-in (the
 microphone streamed to another room) is accepted only on a phone with an
 echo canceller and only when the core says the call is full duplex. The
 room screen shows over the lock screen so anyone in the room can see its
-state and mute it; leaving room mode takes the device credential (on a
+state and mute it. **Its controls work over the lock screen too, and do
+exactly what saying it in that room does:** anyone in the room can pause,
+resume or skip what plays (for a group, the whole group, as the server
+applies a group's pause or skip to the group when it is said), change
+this room's volume, and stop a timer or alarm ringing there; nothing
+else. Leaving room mode takes the device credential (on a
 phone with no screen lock, a confirmation that says so). **The screen
 stays on only while the phone is locked and on its charger**
 (`RoomLockRules.keepScreenOn`, the one place the room screen sets
