@@ -21,6 +21,11 @@
 # The eSCL case runs domovoi/tests/printing_fakes.FakeScanner (ours, stdlib)
 # and needs no printer.
 #
+# Loopback is refused by the product's LAN check (domovoi/printing/
+# lan_target.py) whatever OUTBOUND_ALLOW_HOSTS says. This harness doesn't
+# need a way past it: printing_harness.py drives the IPP and eSCL clients
+# directly, below that check, and never adds a printer through the core.
+#
 # Usage: bash scripts/linux/tests/test-printing.sh [--case NAME|GLOB]... [--list]
 # (scripts/dev/run-linux-harness.sh printing runs it in its container:
 # scripts/dev/printing-harness.Dockerfile, which has ippeveprinter.)

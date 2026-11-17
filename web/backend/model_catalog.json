@@ -40,7 +40,7 @@
       "params": "8B",
       "quant": "Q4_K_M",
       "est_vram_gb": 6.0,
-      "desc": "Larger general Q&A model — noticeably better answers, still comfortable on a single 4070 Ti Super."
+      "desc": "Larger question-answering model: noticeably better answers, and still fits a mid-range graphics card."
     },
     {
       "name": "qwen2.5:7b",
@@ -132,7 +132,7 @@
       "quant": "Q4_K_M",
       "license": "Apache-2.0",
       "est_vram_gb": 6.0,
-      "desc": "The GPU pick: strong open vision-language model for a box with an NVIDIA GPU. Minutes per picture on a CPU alone."
+      "desc": "The pick for a server with a strong graphics card: reads pictures well. Minutes per picture on a processor alone."
     },
     {
       "name": "gemma3:12b",
@@ -176,7 +176,7 @@
       "params": "244M",
       "compute": "auto",
       "est_vram_gb": 2.0,
-      "accuracy": "moderate — good general-purpose choice on modest GPUs",
+      "accuracy": "moderate — a good all-round choice",
       "desc": "The value pick when large-v3 is overkill."
     },
     {
@@ -203,8 +203,8 @@
       "params": "1550M",
       "compute": "auto",
       "est_vram_gb": 10.0,
-      "accuracy": "highest — the current default",
-      "desc": "Best transcription quality. The Domovoi server's default STT model."
+      "accuracy": "highest — needs a strong graphics card",
+      "desc": "Best transcription quality, for a server with a strong graphics card."
     },
     {
       "name": "large-v3",
@@ -213,7 +213,7 @@
       "compute": "int8",
       "est_vram_gb": 5.0,
       "accuracy": "highest — quantized, minimal quality loss",
-      "desc": "large-v3 at int8: roughly half the VRAM, near-identical accuracy. Selecting it sets whisper_compute_type=int8."
+      "desc": "large-v3 at int8: about half the memory, nearly the same accuracy."
     },
     {
       "name": "distil-large-v3",

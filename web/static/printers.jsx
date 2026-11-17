@@ -1050,6 +1050,10 @@ const PrintingAddByAddress = ({ rooms, onAdded, onCancel }) => {
           </PrintingField>
         )}
       </div>
+      <PrintingMuted style={{ fontSize: 12 }}>
+        The address is on the printer's own screen or settings page. Only printers on your Wi-Fi or plugged
+        into your router work: a printer on a USB cable can't be added.
+      </PrintingMuted>
       <div style={{ display: 'flex', gap: 8 }}>
         <Button variant="primary" icon="plus" disabled={busy || !address.trim()} onClick={save}>{busy ? 'Adding…' : 'Add'}</Button>
         <Button icon="x" disabled={busy} onClick={onCancel}>Cancel</Button>
@@ -1246,8 +1250,8 @@ const PrintersPanel = () => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginTop: 16 }}>
       <PrintingMuted style={{ fontSize: 12 }}>
-        Domovoi works with network printers and scanners: AirPrint, IPP Everywhere and Mopria, which most
-        network printers from the last decade speak. USB printers aren't supported.
+        Domovoi works with Wi-Fi and network printers (AirPrint, IPP Everywhere or Mopria), and their
+        scanners. USB printers aren't supported.
       </PrintingMuted>
 
       {justAdded && justAdded.can_print && (

@@ -26,6 +26,11 @@
 const HEALTH_DISK_WARN = 90;
 const HEALTH_DISK_ERR = 95;
 const HEALTH_POLL_MS = 60 * 1000;
+// The server rows (the core answering, the database, speech recognition)
+// come from /api/health, one cheap ping the core answers from memory: read
+// it more often than the rest, so a fall-back or a recovery shows on its
+// own instead of after a reload (sitting 2, S2-17).
+const HEALTH_SERVER_POLL_MS = 10 * 1000;
 
 // The parts of the page, in order, and what each is called.
 const HEALTH_PARTS = [
@@ -836,12 +841,20 @@ const HealthPanel = ({ marks = [] }) => {
     return pe.subscribe(force);
   }, []);
   React.useEffect(() => {
+    const hidden = () => { try { return document.hidden; } catch { return false; } };
     const t = setInterval(() => {
-      try { if (document.hidden) return; } catch { /* no document */ }
-      health.refresh(); cfg.refresh();
+      if (hidden()) return;
+      cfg.refresh();
       if (admin) { approvals.refresh(); version.refresh(); }
     }, HEALTH_POLL_MS);
-    return () => clearInterval(t);
+    const fast = setInterval(() => { if (!hidden()) health.refresh(); }, HEALTH_SERVER_POLL_MS);
+    // Back on the page (another tab, a phone waking): read the server rows now.
+    const onShow = () => { if (!hidden()) health.refresh(); };
+    try { document.addEventListener('visibilitychange', onShow); } catch { /* no document */ }
+    return () => {
+      clearInterval(t); clearInterval(fast);
+      try { document.removeEventListener('visibilitychange', onShow); } catch { /* no document */ }
+    };
   }, [admin]);
 
   const checks = healthChecks({

@@ -197,6 +197,35 @@ def test_scan_pdf_embeds_the_scanner_jpegs_byte_for_byte():
     assert b"ASCII85" not in pdf
 
 
+def test_scan_pdf_pages_hold_the_scanner_jpegs_unchanged_read_back_by_pdfium():
+    """P0-D, end to end: each page's image is one /DCTDecode stream (no
+    ASCII85 or Flate on top) whose raw bytes ARE the scanner's JPEG, read
+    back by pypdfium2; and the ReportLab setting is put back afterwards."""
+    import pypdfium2 as pdfium
+    from PIL import Image
+    from reportlab import rl_config
+
+    from domovoi.printing import templates
+    from domovoi.tests.printing_fakes import scan_page_jpeg
+
+    before = rl_config.useA85
+    a = scan_page_jpeg()
+    buf = io.BytesIO()
+    Image.new("L", (850, 1100), 235).save(buf, "JPEG", quality=80)   # a grey, portrait page
+    b = buf.getvalue()
+    pdf = templates.scans_pdf([a, b], page_size=(612, 792), title="Scan")
+    assert rl_config.useA85 == before
+    doc = pdfium.PdfDocument(pdf)
+    try:
+        assert len(doc) == 2
+        for page, jpeg in zip(doc, (a, b)):
+            [img] = [o for o in page.get_objects() if isinstance(o, pdfium.PdfImage)]
+            assert img.get_filters() == ["DCTDecode"]
+            assert bytes(img.get_data(decode_simple=False)) == jpeg
+    finally:
+        doc.close()
+
+
 # ─── Resource limits in the drawing worker (review round 1) ──────────────
 
 

@@ -41,6 +41,15 @@ from domovoi.router import _COLD_START_TEXT, _LLM_UNREACHABLE_TEXT, _ready_for, 
 TOOLS = [{"name": "music", "description": "play music", "parameters": {}}]
 
 
+@pytest.fixture(autouse=True)
+def _no_notice_grace(monkeypatch):
+    """The notice's grace for a model that comes up at once (S2-16) is
+    pinned in test_cold_notice_grace.py; here the notice comes at once."""
+    import domovoi.router as router_mod
+
+    monkeypatch.setattr(router_mod, "COLD_NOTICE_GRACE_SEC", 0.0)
+
+
 class _Chat:
     """ollama.AsyncClient.chat stand-in: records kwargs, answers QA calls
     with ``answer`` (or raises it) and routing calls with no tool call."""

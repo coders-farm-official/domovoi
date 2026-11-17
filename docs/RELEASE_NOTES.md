@@ -23,6 +23,78 @@ a way that would otherwise get reported as a bug.
   older server, simply doesn't show it. Protocol: docs/uml/satellite-protocol.md,
   "The room display".
 
+## 1.4.0 (unreleased) — Fixes from the Mac test sitting: rooms, the dashboard, deleted songs
+
+- **A deleted song stops being played.** Taking a song out of the library
+  while it plays (Music, or the duplicates clean-up) now moves every room
+  playing it on to the next song in its queue, or stops the room when
+  nothing comes after it; every queued copy of it goes too. The dashboard's
+  own player does the same and says what happened. Playing a song whose
+  row or file is gone says so in plain words ("That song isn't in the
+  library any more.") instead of an internal error.
+- **An offline room no longer looks like it's playing.** Settings → Rooms
+  showed an offline room's song with its progress bar still counting (its
+  player on the server plays on to nobody). It now says the room is offline
+  and its music isn't reaching it.
+- **Health updates on its own.** The server rows (speech recognition, the
+  database, the core) are read every ten seconds and when you come back to
+  the page, so a switch to the backup speech model shows without a reload.
+- **The waking-up line is in the room's history, and said less.** "Just a
+  moment, I'm waking up my language model." is now listed in the room's
+  history before the answer it came with, and is only said when the model
+  is still not ready after a second and a half (the warm-up after a restart
+  is often moments from done).
+- **A room device that can't install its system packages says why.** The
+  boot step that installs missing packages (mpg123, libportaudio2, ...) now
+  finishes half-installed ones the way setup does (`apt-get -f install
+  --no-remove`, on fresh package lists only), and a failed run records the
+  reason in plain words, which the room's log and its card show. The card
+  no longer promises that a reboot installs them. Rooms get this with their
+  next code upgrade from Settings → Rooms.
+- **Wi-Fi recovery fits the room's network.** A room whose Wi-Fi dropped
+  used `wpa_cli` even where NetworkManager runs the network, which can't
+  work there, so only the watchdog's restart brought it back. The recovery
+  now uses NetworkManager when it answers, `wpa_cli` only where a
+  wpa_supplicant with its own control socket exists, the radio reset when
+  NetworkManager doesn't answer (only on a link that is down), and nothing
+  on any other network stack (the room's self-check restart then).
+- **Plainer Models page.** The page's wording is for households, not
+  developers, and true on every kind of server; the wake-word summary only
+  mentions training where this server can train.
+
+## 1.4.0 (unreleased) — Printers: loopback and the server itself are refused, even through OUTBOUND_ALLOW_HOSTS
+
+- **What changed.** An admin could add a "printer" on this server's own
+  loopback (a local CUPS or ipp-usb queue) by listing its exact
+  `host:port` in `OUTBOUND_ALLOW_HOSTS` and typing the full address. That
+  is closed (network printers only, owner rule): printing and scanning
+  refuse 127.0.0.0/8, `::1`, `0.0.0.0` and every address the server holds,
+  whatever the setting says. The setting still lets an admin add a printer
+  on another private subnet by its exact `host:port`.
+- **What to know.** A printer saved that way before now shows "isn't on the
+  home network any more" and won't print; remove it (admin). Nothing else
+  changes: discovery, the sweep and addresses typed by household devices
+  never used the setting.
+
+## 1.4.0 (unreleased) — Printers: "network printers only" said where you add one
+
+- **What changed.** Domovoi has only ever printed to Wi-Fi and network
+  printers (AirPrint, IPP Everywhere or Mopria); USB printers, printers that
+  need a maker's driver, the Windows print spooler and a Linux box's own
+  CUPS queues are not supported, on any host. That is now said where people
+  add a printer, not only in the manual: under **Add by address** in
+  **Settings → Household → Printers & scanners**, in the answer when a typed
+  address isn't a printer ("Nothing at that address answered like a printer
+  or a scanner. Domovoi works with Wi-Fi and network printers…"), and in
+  the spoken answer when "set up the printer" finds none.
+- **What to know.** Looking for printers asks both ways at once, as it
+  already did: from UDP 5353 (answers come back to the group, which the
+  Windows install's WSL already lets in) and from an ordinary port. Nothing
+  changed in what it sends. `domovoi/printing/mdns.py` can now be run on
+  its own (`python3 mdns.py --iface <this machine's LAN address> --mode
+  group|legacy|both`) to see which way a network answers; it only asks,
+  never announces.
+
 ## 1.4.0 (unreleased) — Plugin SDK 1.9: speech in a room's voice
 
 - **What changed.** Plugins can turn text into speech without playing it
