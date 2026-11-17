@@ -4,6 +4,20 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.4.0 (unreleased) — Printers: loopback and the server itself are refused, even through OUTBOUND_ALLOW_HOSTS
+
+- **What changed.** An admin could add a "printer" on this server's own
+  loopback (a local CUPS or ipp-usb queue) by listing its exact
+  `host:port` in `OUTBOUND_ALLOW_HOSTS` and typing the full address. That
+  is closed (network printers only, owner rule): printing and scanning
+  refuse 127.0.0.0/8, `::1`, `0.0.0.0` and every address the server holds,
+  whatever the setting says. The setting still lets an admin add a printer
+  on another private subnet by its exact `host:port`.
+- **What to know.** A printer saved that way before now shows "isn't on the
+  home network any more" and won't print; remove it (admin). Nothing else
+  changes: discovery, the sweep and addresses typed by household devices
+  never used the setting.
+
 ## 1.4.0 (unreleased) — Printers: "network printers only" said where you add one
 
 - **What changed.** Domovoi has only ever printed to Wi-Fi and network

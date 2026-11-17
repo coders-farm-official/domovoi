@@ -2576,15 +2576,29 @@ parts:
   answer with a `printer-uuid`) or a scanner (eSCL capabilities XML), so
   "add a printer" can't be used to probe a router's admin page and keep a
   record of it;
+- **loopback (127.0.0.0/8, `::1` and its IPv4-mapped spellings, `0.0.0.0`)
+  and the server's own addresses are refused before anything else, on
+  every check and every later connection, whatever any setting says**
+  (owner, 2026-11-16: network printers only, so no local CUPS or ipp-usb
+  queue, ever). A row saved earlier that points there stops working;
 - the one escape hatch is the existing operator setting
   `OUTBOUND_ALLOW_HOSTS`, and only for an address an **admin typed**: an
-  entry naming an exact `host:port` lets that address be added (the row
-  remembers it was let in that way). Anything announced by mDNS, found by
-  the sweep or typed by a household device is held to the home-network
-  rules whatever the setting says, so loopback stays refused for them
-  (owner rule, 2026-10-21). The functional-test harness uses it to reach a
-  test printer on loopback. An entry without a port doesn't count, and
+  entry naming an exact `host:port` lets that address be added even though
+  it isn't on the home subnet (a printer on another private subnet, say;
+  the row remembers it was let in that way). It can't reach loopback or
+  the server itself (above). Anything announced by mDNS, found by the sweep
+  or typed by a household device is held to the home-network rules
+  whatever the setting says. An entry without a port doesn't count, and
   the setting ships empty;
+- the test suite's fake printers on 127.0.0.x get in through
+  `lan_target.ALLOW_LOOPBACK_UNDER_STUBS`, a module constant (not a
+  setting: no `.env` line or Settings page reaches it) that is honoured
+  only while `USE_STUBS` is on, which a real install never runs with.
+  It's the same shape as the repo's other test-only switches
+  (`room_music.RESTORE_AT_STARTUP_IN_STUBS`,
+  `wake_default.ALLOW_DOWNLOAD_UNDER_STUBS`). The Linux printing harness
+  drives the IPP and eSCL clients directly and doesn't go through the
+  check at all;
 - a saved printer seen at a new address (a new DHCP lease) moves only
   after the new address proves it is the same printer: it answers with the
   same `printer-uuid` (or eSCL UUID), over the same scheme, with the pinned

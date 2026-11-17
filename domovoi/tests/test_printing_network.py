@@ -287,16 +287,75 @@ def test_ports_are_limited_unless_an_admin_typed_the_url(home):
 
 
 def test_the_operator_allowlist_needs_an_exact_port_and_an_admin(home, monkeypatch):
-    monkeypatch.setattr(net_safety, "allow_entries", lambda: (("127.0.0.1", 8631), ("127.0.0.1", None)))
-    t = lan_target.vet("ipp", "127.0.0.1", 8631, "/ipp/print", allow_any_port=True, operator_ok=True)
-    assert t.address == "127.0.0.1" and lan_target.needs_operator(t)
+    """The hatch still works for what it is for: a printer an admin typed on
+    another private subnet (not loopback: see the next test)."""
+    monkeypatch.setattr(net_safety, "allow_entries", lambda: (("10.9.9.9", 8631), ("10.9.9.9", None)))
+    t = lan_target.vet("ipp", "10.9.9.9", 8631, "/ipp/print", allow_any_port=True, operator_ok=True)
+    assert t.address == "10.9.9.9" and lan_target.needs_operator(t)
     with pytest.raises(lan_target.NotOnLan):
-        lan_target.vet("ipp", "127.0.0.1", 631, "/ipp/print", operator_ok=True)
+        lan_target.vet("ipp", "10.9.9.9", 631, "/ipp/print", operator_ok=True)   # no port, no entry
     # Without an admin (a household device, discovery, the sweep): refused.
     with pytest.raises(lan_target.NotOnLan):
-        lan_target.vet("ipp", "127.0.0.1", 8631, "/ipp/print")
+        lan_target.vet("ipp", "10.9.9.9", 8631, "/ipp/print")
     with pytest.raises(lan_target.NotOnLan):
-        lan_target.check_address("127.0.0.1", 8631)
+        lan_target.check_address("10.9.9.9", 8631)
+
+
+@pytest.mark.parametrize("host,port", [
+    ("127.0.0.1", 631), ("127.1", 631), ("0x7f000001", 631), ("127.0.0.2", 60000), ("::1", 631),
+    ("::ffff:127.0.0.1", 631), ("0.0.0.0", 631), ("localhost", 631), ("192.168.1.20", 631),
+])
+def test_an_allowlisted_loopback_or_own_address_is_still_refused(home, monkeypatch, host, port):
+    """Owner, 2026-11-16 (Q20 closed): no local CUPS or ipp-usb queue, ever.
+    Loopback and the server's own addresses are refused even for an admin's
+    typed full URL whose exact host:port OUTBOUND_ALLOW_HOSTS lists."""
+    canon = net_safety._canonical_host
+    monkeypatch.setattr(net_safety, "allow_entries", lambda: ((canon(host), port), ("127.0.0.1", 631)))
+    monkeypatch.setattr(lan_target, "resolve_name", lambda h: ["127.0.0.1"] if h == "localhost" else [])
+    with pytest.raises(lan_target.NotOnLan):
+        lan_target.vet("ipp", host, port, "/ipp/print", allow_any_port=True, operator_ok=True)
+    with pytest.raises(lan_target.NotOnLan):
+        lan_target.vet("http", host, port, "/eSCL", allow_any_port=True, operator_ok=True)
+
+
+def test_allowlisted_127_0_0_1_631_is_refused_with_a_plain_reason(home, monkeypatch):
+    monkeypatch.setattr(net_safety, "allow_entries", lambda: (("127.0.0.1", 631),))
+    with pytest.raises(lan_target.NotOnLan, match="not USB or local ones"):
+        lan_target.check_address("127.0.0.1", 631, host="127.0.0.1", operator_ok=True)
+    t = lan_target.parse_typed("ipp://127.0.0.1:631/ipp/print")
+    with pytest.raises(lan_target.NotOnLan):
+        lan_target.vet(t.scheme, t.host, t.port, t.path, allow_any_port=True, operator_ok=True)
+
+
+def test_a_saved_loopback_row_stops_working(home, monkeypatch):
+    """A row an admin saved through the allowlist before the rule can't be
+    dialled any more: every connection checks the stored address again."""
+    from domovoi.printing import devices
+
+    monkeypatch.setattr(net_safety, "allow_entries", lambda: (("127.0.0.1", 631), ("127.0.0.1", 80)))
+    row = {"name": "local queue", "ipp_address": "127.0.0.1", "ipp_port": 631, "ipp_path": "/ipp/print",
+           "escl_address": "127.0.0.1", "escl_port": 80, "operator_allowed": True}
+    with pytest.raises(devices.DeviceError, match="isn't on the home network any more"):
+        devices.ipp_printer(row)
+    with pytest.raises(devices.DeviceError, match="isn't on the home network any more"):
+        devices.escl_client(row)
+
+
+def test_the_loopback_test_switch_needs_use_stubs(home, monkeypatch):
+    """ALLOW_LOOPBACK_UNDER_STUBS is a module constant (no .env, no Settings)
+    and does nothing unless USE_STUBS is on, as a real install never is."""
+    from domovoi.config import settings
+
+    monkeypatch.setattr(net_safety, "allow_entries", lambda: (("127.0.0.1", 631),))
+    monkeypatch.setattr(lan_target, "ALLOW_LOOPBACK_UNDER_STUBS", True)
+    monkeypatch.setattr(settings, "use_stubs", False)
+    with pytest.raises(lan_target.NotOnLan, match="not USB or local ones"):
+        lan_target.check_address("127.0.0.1", 631, operator_ok=True)
+    monkeypatch.setattr(settings, "use_stubs", True)
+    lan_target.check_address("127.0.0.1", 631, operator_ok=True)      # the test fakes' way in
+    assert not hasattr(settings, "allow_loopback_under_stubs")
+    with pytest.raises(lan_target.NotOnLan):                          # never the server's own address
+        lan_target.check_address("192.168.1.20", 631, operator_ok=True)
 
 
 def _announce(addr: str, port: int, path: bytes = b"rp=feed") -> mdns.BrowseResult:
