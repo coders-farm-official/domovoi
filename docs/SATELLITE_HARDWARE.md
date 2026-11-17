@@ -450,6 +450,35 @@ documented destination**, and you train it in-product:
    value in use; change it there afterwards as usual. A newly trained word
    starts at 0.7, the rooms' own default.
 
+### More than one wake word in a room
+
+A room can wake on up to five words (1.4.0). Most rooms need one; to add
+another, open the room's **Settings** on the dashboard (the room drawer,
+"wake word"), with the room online and an admin signed in: **Add another
+wake word**, put the words in order, **Save**. The room restarts to load
+them. The first is the room's main word (the one in `~/.domovoi/wake`);
+the whole list, each word with its own threshold, is kept in
+`~/.domovoi/wake_words.json`. A word without a threshold of its own (Hey
+Jarvis, Domovoi) uses the room's Wake sensitivity.
+
+**Each extra word makes accidental wake-ups a little more likely:** every
+word listens on its own, at its own threshold, so a TV saying something
+close to any of them can wake the room. The patience and the cooldown
+(above) apply to every word.
+
+**How many a device runs.** openWakeWord turns the audio into features once
+and runs each word as a small classifier on them, so an extra word costs
+little: measured on a desktop (openWakeWord 0.6.0, one thread), the shared
+part took 1.79 ms per 80 ms of audio and each word 0.012-0.026 ms, with
+about 1 MB of memory per word. A **Pi Zero 2 W runs at most 3** anyway:
+it is the weakest board, its wake loop is the first thing to fall behind
+when it runs hot or swaps, and it has 512 MB. A Pi 3, 4 or 5 and a spare
+PC run 5. The satellite says its number to the server, which never sends
+more, and it loads no more than that whatever it is sent. Satellite
+software from before 1.4.0 runs one word: it is given the main word only.
+The log names the word that fired (`wake word 'porch_cat' detected …`),
+and so does the room's history on the dashboard.
+
 **Model sync is automatic and verified.** Satellites mirror the server's
 wake-model set over HTTP (`/v1/wake-models/manifest` +
 `/v1/wake-models/<file>`) into `~/.domovoi/wake_models/` on the Pi,

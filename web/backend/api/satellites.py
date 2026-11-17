@@ -969,6 +969,7 @@ async def list_conversations(
     async with session_scope() as s:
         with_status = await _has_turn_status(s)
         with_score = with_status and await _has_wake_score(s)
+        with_word = with_status and await _has_wake_word(s)
         with_voice = (
             await voice_match.caller_sees_scores(request) and await voice_match.has_columns(s)
         )
@@ -976,7 +977,7 @@ async def list_conversations(
             ", turn_status, no_answer_reason, audio_ms, "
             "(at < NOW() - make_interval(secs => :stale))"
             if with_status else ""
-        ) + (", wake_score" if with_score else "") + (
+        ) + (", wake_score" if with_score else "") + (", wake_word" if with_word else "") + (
             voice_match.SELECT_TAIL if with_voice else ""
         )
         rows = await s.execute(
@@ -995,9 +996,13 @@ async def list_conversations(
              **({"stale": PENDING_STALE_SEC} if with_status else {})},
         )
         out: list[ConversationTurn] = []
-        for r in rows.all():
+        rows = rows.all()
+        names = (await wake_default.word_names(s)
+                 if with_word and any(r[13 + int(with_score)] for r in rows) else {})
+        for r in rows:
             status, reason, audio_ms = "answered", None, None
             score = r[13] if with_score else None
+            fired = r[13 + int(with_score)] if with_word else None
             heard_as = (
                 voice_match.from_row(r[-voice_match.SELECT_TAIL_WIDTH:]) if with_voice else None
             )
@@ -1022,6 +1027,9 @@ async def list_conversations(
                 no_answer_reason=reason,
                 audio_ms=int(audio_ms) if audio_ms is not None else None,
                 wake_score=round(float(score), 3) if score is not None else None,
+                wake_word=fired[:64] if isinstance(fired, str) and fired else None,
+                wake_word_name=(wake_default.word_name(fired, names)
+                                if isinstance(fired, str) and fired else None),
                 voice_match=heard_as,
             ))
         return out
@@ -1039,6 +1047,21 @@ _HAS_TURN_STATUS: bool | None = None
 
 # Whether conversation_log has V044's wake_score; probed once, likewise.
 _HAS_WAKE_SCORE: bool | None = None
+
+
+# Whether conversation_log has V063's wake_word; probed once, likewise.
+_HAS_WAKE_WORD: bool | None = None
+
+
+async def _has_wake_word(s: Any) -> bool:
+    global _HAS_WAKE_WORD
+    if _HAS_WAKE_WORD is None:
+        row = (await s.execute(text(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = 'conversation_log' AND column_name = 'wake_word'"
+        ))).first()
+        _HAS_WAKE_WORD = row is not None
+    return _HAS_WAKE_WORD
 
 
 async def _has_wake_score(s: Any) -> bool:
@@ -2195,12 +2218,15 @@ def _reported_wake_word(sample: tuple[Any, Any] | None, hello_word: str | None,
 
 
 def _wakes_on(room_id: str, hello_word: str | None, connected_at: Any,
-              facts: dict[str, Any] | None) -> RoomWakeWord:
+              facts: dict[str, Any] | None, *, hello_words: Any = None,
+              hello_max: Any = None) -> RoomWakeWord:
     facts = facts or {}
     reported = _reported_wake_word((facts.get("samples") or {}).get(room_id), hello_word,
                                    connected_at)
     return RoomWakeWord(**wake_default.room_word(
-        reported, (facts.get("states") or {}).get(room_id), facts.get("names")))
+        reported, (facts.get("states") or {}).get(room_id), facts.get("names"),
+        reported_list=wake_default.reported_words(hello_words),
+        declared_max=wake_default.device_max(hello_max)))
 
 
 def _latest(*times: Any) -> Any:
@@ -2420,7 +2446,10 @@ async def _satellite_for(
         settings_ignored=ignored,
         wake_word=wake_word,
         wake_phrase=(wake_phrases or {}).get(wake_word) if wake_word else None,
-        wakes_on=_wakes_on(room_id, wake_word, room["last_connected_at"], wake_facts),
+        wakes_on=_wakes_on(
+            room_id, wake_word, room["last_connected_at"], wake_facts,
+            hello_words=(snapshot.get("satellite_wake_words") or {}).get(room_id),
+            hello_max=(snapshot.get("satellite_wake_max") or {}).get(room_id)),
         battery=_battery_for(room_id, board, online, batteries),
     )
 

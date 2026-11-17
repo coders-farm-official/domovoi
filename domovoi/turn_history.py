@@ -105,9 +105,10 @@ async def has_status_columns(s: AsyncSession) -> bool:
 
 def _forget_probe() -> None:
     """Probe again on next use (tests that drop and re-add the columns)."""
-    global _HAS_STATUS, _HAS_WAKE_SCORE, _HAS_VOICE_MATCH
+    global _HAS_STATUS, _HAS_WAKE_SCORE, _HAS_VOICE_MATCH, _HAS_WAKE_WORD
     _HAS_STATUS = None
     _HAS_WAKE_SCORE = None
+    _HAS_WAKE_WORD = None
     _HAS_VOICE_MATCH = None
 
 
@@ -162,6 +163,44 @@ async def has_wake_score_column(s: AsyncSession) -> bool:
         ).first()
         _HAS_WAKE_SCORE = row is not None
     return _HAS_WAKE_SCORE
+
+
+# Whether conversation_log has V063's wake_word (which of the room's words
+# woke the turn); probed once, likewise.
+_HAS_WAKE_WORD: bool | None = None
+
+
+async def has_wake_word_column(s: AsyncSession) -> bool:
+    global _HAS_WAKE_WORD
+    if _HAS_WAKE_WORD is None:
+        row = (
+            await s.execute(
+                text(
+                    """
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'conversation_log'
+                      AND column_name = 'wake_word'
+                    """
+                )
+            )
+        ).first()
+        _HAS_WAKE_WORD = row is not None
+    return _HAS_WAKE_WORD
+
+
+async def _wake_cols(s: AsyncSession, wake_score: float | None,
+                     wake_word: str | None) -> tuple[str, str, dict]:
+    """The wake's score (V044) and word (V063) as extra INSERT columns,
+    values and parameters, each only when there is one and its column is
+    there."""
+    cols, vals, params = "", "", {}
+    if wake_score is not None and await has_wake_score_column(s):
+        cols, vals = cols + ", wake_score", vals + ", :wake_score"
+        params["wake_score"] = wake_score
+    if wake_word and await has_wake_word_column(s):
+        cols, vals = cols + ", wake_word", vals + ", :wake_word"
+        params["wake_word"] = wake_word[:64]
+    return cols, vals, params
 
 
 class HistoryEntry:
@@ -227,6 +266,7 @@ async def _open_row(
     audio_ms: int | None,
     at: datetime,
     wake_score: float | None = None,
+    wake_word: str | None = None,
 ) -> int | None:
     from domovoi.db.session import session_scope
 
@@ -234,10 +274,9 @@ async def _open_row(
         async with session_scope() as s:
             if not await has_status_columns(s):
                 return None
-            # The wake's score (V044) when there is one and the column is there.
-            score_col, score_val = "", ""
-            if wake_score is not None and await has_wake_score_column(s):
-                score_col, score_val = ", wake_score", ", :wake_score"
+            # The wake's score (V044) and word (V063) when there are ones
+            # and their columns are there.
+            score_col, score_val, wake_params = await _wake_cols(s, wake_score, wake_word)
             row = (
                 await s.execute(
                     text(
@@ -258,7 +297,7 @@ async def _open_row(
                         "trigger": trigger,
                         "audio_ms": audio_ms,
                         "at": at,
-                        **({"wake_score": wake_score} if score_col else {}),
+                        **wake_params,
                     },
                 )
             ).first()
@@ -428,6 +467,7 @@ async def record_unheard(
     reason: str,
     at: datetime,
     wake_score: float | None = None,
+    wake_word: str | None = None,
 ) -> None:
     """A request speech recognition never made out: a row of its own, no
     text, with when it was made and how long the recording was."""
@@ -437,9 +477,7 @@ async def record_unheard(
         async with session_scope() as s:
             if not await has_status_columns(s):
                 return
-            score_col, score_val = "", ""
-            if wake_score is not None and await has_wake_score_column(s):
-                score_col, score_val = ", wake_score", ", :wake_score"
+            score_col, score_val, wake_params = await _wake_cols(s, wake_score, wake_word)
             await s.execute(
                 text(
                     f"""
@@ -458,7 +496,7 @@ async def record_unheard(
                     "reason": reason,
                     "audio_ms": audio_ms,
                     "at": at,
-                    **({"wake_score": wake_score} if score_col else {}),
+                    **wake_params,
                 },
             )
 

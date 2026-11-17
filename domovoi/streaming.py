@@ -78,8 +78,21 @@ Client → Server
                            "android_room") names the hardware kind; kept in
                            `satellites.board` on approval and on every hello
                            that carries it. Neither bumps PROTOCOL_VERSION.
+                           `wake_words` (optional list, 1.4.0) names every
+                           word the device listens for, main word first;
+                           `wake_words_max` (optional int) how many it can
+                           run at once (Pi Zero 2 W 3, else 5;
+                           satellite/wake_words.py). The server never sends
+                           more words than that, and a device without the
+                           key is sent its main word only
+                           (domovoi/wake_default.py). Kept in
+                           `room_wake_words.device_max` (V063).
   text  utterance_start    {"type":"utterance_start","trigger":"wake_word"|"barge_in"|"push_to_talk"|"followup"|"wake_clip",
-                            "utt":N,"backlog_ms":N,"wake_ms":N,"wake_score":F}
+                            "utt":N,"backlog_ms":N,"wake_ms":N,"wake_score":F,"wake_word":...}
+                           — `wake_word` (optional, 1.4.0, after a wake word
+                           only): which of the room's words fired, kept on
+                           the turn's history row (conversation_log.wake_word,
+                           V063) and in the core's log.
                            — `wake_score` (optional, 0..1, after a wake word
                            only): the wake's peak openWakeWord score
                            (satellite/wake_gate.py), kept on the turn's
@@ -321,6 +334,11 @@ Server → Client
                            it. `slug` is the model file stem AND the Pi's new
                            effective wake word AND the openWakeWord
                            prediction-dict key — they must all agree.
+                           `words` (optional, 1.4.0): the room's whole list,
+                           [{"slug","threshold"}], `slug` first, at most the
+                           hello's `wake_words_max`; sent only to a device
+                           whose hello gave `wake_words_max`. Without it the
+                           device runs `slug` alone.
   text  wake_models_changed {"type":"wake_models_changed"} — Feature 5. The
                            served wake models changed; the Pi re-syncs its
                            ~/.domovoi/wake_models cache from /v1/wake-models.
@@ -537,7 +555,7 @@ from domovoi.turn_timings import (
     whisper_block,
 )
 from domovoi.log_privacy import said
-from domovoi import overheard, turn_history, turn_watchdog
+from domovoi import overheard, turn_history, turn_watchdog, wake_default
 from domovoi.turn_watchdog import (
     STAGE_IDENTIFY,
     STAGE_REPLY,
@@ -1735,6 +1753,12 @@ class StreamSession:
         # the final clip can never route a training clip through STT/route().
         self._utterance_trigger: str | None = None
         self._wake_score: float | None = None
+        # Which of the room's words opened the latest capture (V063).
+        self._wake_fired: str | None = None
+        # The hello's `wake_words` / `wake_words_max` (1.4.0); None until
+        # a hello said them.
+        self.wake_words_reported: list[str] | None = None
+        self.wake_max: int | None = None
         # Whether a drop-in call was live at ANY point of the in-flight
         # utterance: set at utterance_start when already in a call, and by
         # _begin_dropin when one starts mid-capture. Read at utterance_end so
@@ -2630,7 +2654,7 @@ class StreamSession:
                 hold_ms=hold_ms,
                 capture_meta=capture_meta,
                 capture_clock=clock,
-                wake_score=self._wake_score,
+                wake_score=self._wake_score, wake_word=self._wake_fired,
             )
         )
 
@@ -3246,6 +3270,21 @@ class StreamSession:
             # trained word. Rooms that already existed are never touched
             # (domovoi/wake_default.py). In its own task: a download never
             # holds up the hello.
+            # Several words per room (1.4.0, domovoi/wake_default.py): the
+            # words the device listens for and how many it can run. A
+            # device that doesn't say runs one, and is sent one.
+            self.wake_words_reported = wake_default.reported_words(ctrl.get("wake_words"))
+            self.wake_max = wake_default.device_max(ctrl.get("wake_words_max"))
+            state = self.ws.app.state
+            if not isinstance(getattr(state, "satellite_wake_words", None), dict):
+                state.satellite_wake_words = {}
+            if not isinstance(getattr(state, "satellite_wake_max", None), dict):
+                state.satellite_wake_max = {}
+            if self.wake_words_reported is not None:
+                state.satellite_wake_words[self.room_id] = self.wake_words_reported
+            else:
+                state.satellite_wake_words.pop(self.room_id, None)
+            state.satellite_wake_max[self.room_id] = self.wake_max
             self._apply_wake_default(wake)
             # An upgrade the core asked this room for is over: the code
             # version it came back on says how it went
@@ -3336,6 +3375,13 @@ class StreamSession:
             # The wake word's peak score (satellite/wake_gate.py), kept with
             # the turn's history row (V044). An older satellite sends none.
             self._wake_score = overheard.wake_score(ctrl.get("wake_score"))
+            # Which of the room's words fired (V063), likewise; logged so
+            # the core's journal says what woke the room.
+            self._wake_fired = (wake_default.clean_slug(ctrl.get("wake_word"))
+                                if ctrl.get("trigger") == "wake_word" else None)
+            if self._wake_fired:
+                log.info("stream %s: woken by %r%s", self.room_id, self._wake_fired,
+                         f" (score {self._wake_score:.2f})" if self._wake_score is not None else "")
             self._utterance_in_call = self.dropin_peer is not None
             self._utt_id = ctrl.get("utt")
             self._reset_utterance_tracking(self._utterance_trigger)
@@ -3422,7 +3468,7 @@ class StreamSession:
                     endpoint_silence_ms=endpoint_silence_ms,
                     capture_meta=capture_meta,
                     capture_clock=clock,
-                    wake_score=self._wake_score,
+                    wake_score=self._wake_score, wake_word=self._wake_fired,
                 )
             )
             return
@@ -4348,14 +4394,13 @@ class StreamSession:
     def _apply_wake_default(self, reported: str | None) -> None:
         """Hand this hello to :func:`domovoi.wake_default.on_hello` in a
         task of its own, held until done."""
-        from domovoi import wake_default
-
         async def push(slug: str, threshold: float | None) -> None:
             await self.request_set_wake_word(slug=slug, threshold=threshold)
 
         task = asyncio.create_task(
             wake_default.on_hello(self.room_id, reported,
-                                  self.abilities.allows("wake_models"), push),
+                                  self.abilities.allows("wake_models"), push,
+                                  wake_max=getattr(self, "wake_max", None), record_max=True),
             name=f"wake-default:{self.room_id}")
         _TIMING_WRITES.add(task)
         task.add_done_callback(_TIMING_WRITES.discard)
@@ -4404,6 +4449,7 @@ class StreamSession:
         audio_ms: int,
         turn_at: datetime,
         wake_score: float | None = None,
+        wake_word: str | None = None,
     ) -> None:
         """A stage of this turn ran past its limit (domovoi/turn_watchdog.py):
         one line naming the room and the stage, the stall noted for
@@ -4424,7 +4470,7 @@ class StreamSession:
                 self._track_history_write(turn_history.record_unheard(
                     room_id=self.room_id, session_id=self.session_id, trigger=trigger,
                     audio_ms=audio_ms, reason=turn_history.TIMED_OUT, at=turn_at,
-                    wake_score=wake_score,
+                    wake_score=wake_score, wake_word=wake_word,
                 ))
         else:
             self._close_history_later(history, turn_history.TIMED_OUT)
@@ -4483,6 +4529,7 @@ class StreamSession:
         audio_ms: int,
         turn_at: datetime,
         wake_score: float | None,
+        wake_word: str | None = None,
     ) -> None:
         """A long capture that is background talk: no answer, no routing (so
         no action and no intents_log row, like a blank capture), the history
@@ -4499,7 +4546,7 @@ class StreamSession:
         entry = turn_history.start_entry(
             room_id=self.room_id, session_id=self.session_id,
             user_text=transcript, trigger=trigger,
-            audio_ms=audio_ms, at=turn_at, wake_score=wake_score,
+            audio_ms=audio_ms, at=turn_at, wake_score=wake_score, wake_word=wake_word,
         )
         self._close_history_later(entry, turn_history.OVERHEARD)
         await self._safe_send_text({
@@ -4564,6 +4611,7 @@ class StreamSession:
         audio_ms: int,
         turn_at: datetime,
         wake_score: float | None = None,
+        wake_word: str | None = None,
     ) -> None:
         """The turn raised: error + response_end, the history entry closed
         ("no answer — something went wrong"; a request that never got a
@@ -4588,7 +4636,7 @@ class StreamSession:
                 self._track_history_write(turn_history.record_unheard(
                     room_id=self.room_id, session_id=self.session_id, trigger=trigger,
                     audio_ms=audio_ms, reason=turn_history.ERROR, at=turn_at,
-                    wake_score=wake_score,
+                    wake_score=wake_score, wake_word=wake_word,
                 ))
         else:
             self._close_history_later(history, turn_history.ERROR)
@@ -4624,6 +4672,7 @@ class StreamSession:
         capture_meta: dict[str, Any] | None = None,
         capture_clock: _CaptureClock | None = None,
         wake_score: float | None = None,
+        wake_word: str | None = None,
     ) -> None:
         interrupted = False
         response = None
@@ -4692,7 +4741,7 @@ class StreamSession:
                             room_id=self.room_id, session_id=self.session_id,
                             trigger=trigger, audio_ms=audio_ms,
                             reason=turn_history.SPEECH_OFF, at=turn_at,
-                            wake_score=wake_score,
+                            wake_score=wake_score, wake_word=wake_word,
                         ))
                     return
                 transcript = await self._clean_transcript(
@@ -4728,7 +4777,7 @@ class StreamSession:
                 if verdict.action == overheard.IGNORE:
                     await self._ignore_overheard(
                         transcript, verdict=verdict, trigger=trigger,
-                        audio_ms=audio_ms, turn_at=turn_at, wake_score=wake_score,
+                        audio_ms=audio_ms, turn_at=turn_at, wake_score=wake_score, wake_word=wake_word,
                     )
                     return
                 if verdict.text != transcript:
@@ -4748,7 +4797,7 @@ class StreamSession:
                 history = turn_history.start_entry(
                     room_id=self.room_id, session_id=self.session_id,
                     user_text=transcript, trigger=trigger,
-                    audio_ms=audio_ms, at=turn_at, wake_score=wake_score,
+                    audio_ms=audio_ms, at=turn_at, wake_score=wake_score, wake_word=wake_word,
                 )
                 await self._safe_send_text({"type": "transcript", "text": transcript})
 
@@ -4970,13 +5019,13 @@ class StreamSession:
                 await self._end_stalled_turn(
                     e.stage, e.limit_s, trigger=trigger, timings=timings,
                     response=response, history=history,
-                    audio_ms=audio_ms, turn_at=turn_at, wake_score=wake_score,
+                    audio_ms=audio_ms, turn_at=turn_at, wake_score=wake_score, wake_word=wake_word,
                 )
             elif reply_guard.expired():
                 await self._end_stalled_turn(
                     stage, time.perf_counter() - turn_t0, trigger=trigger,
                     timings=timings, response=response,
-                    history=history, audio_ms=audio_ms, turn_at=turn_at, wake_score=wake_score,
+                    history=history, audio_ms=audio_ms, turn_at=turn_at, wake_score=wake_score, wake_word=wake_word,
                 )
             else:
                 # A TimeoutError of somebody else's (a client's own limit):
@@ -4984,14 +5033,14 @@ class StreamSession:
                 await self._fail_turn(
                     e, timings=timings, trigger=trigger, response=response,
                     history=history,
-                    stage=stage, audio_ms=audio_ms, turn_at=turn_at, wake_score=wake_score,
+                    stage=stage, audio_ms=audio_ms, turn_at=turn_at, wake_score=wake_score, wake_word=wake_word,
                 )
             return
         except Exception as e:
             await self._fail_turn(
                 e, timings=timings, trigger=trigger, response=response,
                 history=history,
-                stage=stage, audio_ms=audio_ms, turn_at=turn_at, wake_score=wake_score,
+                stage=stage, audio_ms=audio_ms, turn_at=turn_at, wake_score=wake_score, wake_word=wake_word,
             )
             return
         finally:
@@ -7040,7 +7089,8 @@ class StreamSession:
             return
         await self.ws.send_text(json.dumps({"type": "stop_wake_recording"}))
 
-    async def request_set_wake_word(self, *, slug: str, threshold: float | None = None) -> None:
+    async def request_set_wake_word(self, *, slug: str, threshold: float | None = None,
+                                    words: list[dict[str, Any]] | None = None) -> None:
         """Push a trained wake model to this satellite: the Pi writes ``slug``
         to its wake sidecar, syncs the model from /v1/wake-models, and
         self-restarts to load it. ``slug`` is the load-bearing identifier —
@@ -7049,12 +7099,23 @@ class StreamSession:
         registry's per-word detection threshold, which the satellite writes into
         its ``[wake] threshold`` (the room's Wake sensitivity setting; None →
         the setting stays as it is).
+        ``words`` (1.4.0): the room's whole list, ``[{"slug", "threshold"}]``
+        with ``slug`` first. Sent as ``words`` only to a device whose hello
+        said how many it can run (``wake_words_max``), and never more than
+        that; any other device gets ``slug`` alone, as before.
         Raw send so a dead socket propagates to the admin caller.
         :class:`NotDeclared` for a device that didn't declare "wake_models"."""
         self._require("wake_models", "set_wake_word")
         frame: dict[str, Any] = {"type": "set_wake_word", "slug": slug}
         if threshold is not None:
             frame["threshold"] = threshold
+        declared = getattr(self, "wake_max", None)
+        if words and declared is not None and words[0].get("slug") == slug:
+            frame["words"] = [
+                {"slug": w["slug"], **({"threshold": w["threshold"]}
+                                       if w.get("threshold") is not None else {})}
+                for w in wake_default.words_for_device(words, declared)
+            ]
         await self.ws.send_text(json.dumps(frame))
 
     async def notify_wake_models_changed(self) -> None:

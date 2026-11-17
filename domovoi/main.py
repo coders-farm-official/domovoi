@@ -741,6 +741,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # the user manual's "say ...". Kept across a disconnect: a room's last
     # known word (streaming.py).
     app.state.satellite_wake_word = {}
+    # Several words per room (1.4.0): the words each satellite's hello said
+    # it listens for, and how many it can run (None: it didn't say, so one).
+    # Kept across a disconnect, like the word above.
+    app.state.satellite_wake_words = {}
+    app.state.satellite_wake_max = {}
     # The satellite upgrades this core asked for and how each ended
     # (domovoi/satellite_upgrades.py): room → record, from the request until
     # the satellite says hello again, then kept a while. NOT cleared on
@@ -2677,6 +2682,11 @@ async def admin_snapshot() -> dict[str, Any]:
         # Per-room wake word (the slug each satellite named in its hello,
         # last known), so the manual names the words the rooms answer to.
         "satellite_wake_word": dict(getattr(app.state, "satellite_wake_word", None) or {}),
+        # Several words per room (1.4.0): each room's words as its hello
+        # named them (main word first), and how many its device can run
+        # (null: it didn't say, so it runs one).
+        "satellite_wake_words": dict(getattr(app.state, "satellite_wake_words", None) or {}),
+        "satellite_wake_max": dict(getattr(app.state, "satellite_wake_max", None) or {}),
         # Per-room satellite upgrades under way or just finished
         # (domovoi/satellite_upgrades.py: running | done | rolled_back |
         # no_news), so every dashboard and the app lock a room's Upgrade
@@ -3978,6 +3988,11 @@ async def admin_wake_push(body: _AdminWakePushBody) -> dict[str, Any]:
             detail=f"wake word {body.wake_word_id} is not trained (status={row['status']!r})",
         )
 
+    # The word becomes the room's main word; extra words an admin added
+    # stay after it (1.4.0, domovoi/wake_default.py).
+    from domovoi import wake_default
+
+    slugs, words = await _room_words_with_main(body.room_id, row["slug"])
     try:
         # set_wake_word already triggers a model sync + restart on the Pi;
         # sending wake_models_changed too would just race a second concurrent
@@ -3985,7 +4000,7 @@ async def admin_wake_push(body: _AdminWakePushBody) -> dict[str, Any]:
         # the satellite writes it into its [wake] threshold, the room's Wake
         # sensitivity setting, so its Settings tab shows the value in use.
         await target.request_set_wake_word(
-            slug=row["slug"], threshold=row.get("threshold")
+            slug=row["slug"], threshold=row.get("threshold"), words=words
         )
     except Exception as e:
         log.warning("admin wake push to room=%s failed: %s", body.room_id, e)
@@ -3993,10 +4008,8 @@ async def admin_wake_push(body: _AdminWakePushBody) -> dict[str, Any]:
             status_code=502, detail=f"couldn't reach the room device: {e}"
         ) from e
     # The room's own choice now: the household default never applies to it.
-    from domovoi import wake_default
-
     async with session_scope() as s:
-        await wake_default.mark_chosen(s, body.room_id, row["slug"])
+        await wake_default.mark_chosen(s, body.room_id, row["slug"], slugs)
     return {
         "pushed": True,
         "room_id": body.room_id,
@@ -4018,6 +4031,79 @@ class _AdminWakeUseBody(BaseModel):
 
 def _wake_room_words() -> dict[str, str]:
     return dict(getattr(app.state, "satellite_wake_word", None) or {})
+
+
+async def _room_words_with_main(room_id: str, slug: str) -> tuple[list[str], list[dict] | None]:
+    """A room's words after ``slug`` is pushed the old way (one word): it
+    becomes the main word, the extras stay. ``(slugs, words)``: ``words``
+    is the push's list with thresholds, None when the room has one word
+    (or an extra can't be given now: then only the main word goes)."""
+    from domovoi import wake_default
+
+    async with session_scope() as s:
+        row = await wake_default.room_state(s, room_id)
+        slugs = wake_default.with_main_word((row or {}).get("slugs"), slug)
+        if len(slugs) == 1:
+            return slugs, None
+        try:
+            return slugs, await wake_default.word_payload(s, slugs)
+        except ValueError as e:
+            log.info("wake push to %s: only the main word goes (%s)", room_id, e)
+            return [slug], None
+
+
+class _AdminWakeRoomBody(BaseModel):
+    room_id: str
+    slugs: list[str]
+
+
+@app.put("/v1/admin/wake/room", dependencies=[Depends(require_admin_mutation)])
+async def admin_wake_room(body: _AdminWakeRoomBody) -> dict[str, Any]:
+    """Set a connected room's wake words (1.4.0): 1 to 5, main word first,
+    each a built-in, published or trained word that is here. The room's
+    device is sent no more than it said it can run: 409 when the list is
+    longer (the dashboard doesn't offer it). The device keeps the list,
+    syncs the models and restarts to load them. The room's own choice from
+    then on. 404 when the room isn't connected; 409 when a word can't be
+    given; 502 on a send failure."""
+    from domovoi import wake_default
+
+    try:
+        slugs = wake_default.check_word_list(body.slugs)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    target = app.state.active_sessions.get(body.room_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail=f"room {body.room_id!r} not connected")
+    _require_declared(target, "wake_models", "a wake-word model")
+    declared = getattr(target, "wake_max", None)
+    limit = wake_default.device_limit(declared)
+    if len(slugs) > limit:
+        raise HTTPException(status_code=409, detail=(
+            f"{body.room_id}'s device can run {limit} wake word{'s' if limit != 1 else ''}"
+            + ("" if declared else ": its software is older than several words per room, "
+               "and upgrading it lets it run more")))
+    for slug in slugs:
+        if slug in wake_default.PUBLISHED and not wake_default.published_ready(slug):
+            await wake_default.ensure_published(slug, force=True)
+    try:
+        async with session_scope() as s:
+            words = await wake_default.word_payload(s, slugs)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    try:
+        await target.request_set_wake_word(
+            slug=slugs[0], threshold=words[0]["threshold"],
+            words=words if len(words) > 1 else None)
+    except Exception as e:
+        log.warning("admin wake room words to room=%s failed: %s", body.room_id, e)
+        raise HTTPException(
+            status_code=502, detail=f"couldn't reach the room device: {e}"
+        ) from e
+    async with session_scope() as s:
+        await wake_default.mark_chosen(s, body.room_id, slugs[0], slugs)
+    log.info("wake words: room %s now wakes on %s", body.room_id, ", ".join(slugs))
+    return {"pushed": True, "room_id": body.room_id, "slugs": slugs, "limit": limit}
 
 
 @app.get("/v1/admin/wake/default", dependencies=[Depends(require_admin_read)])
@@ -4089,15 +4175,16 @@ async def admin_wake_use(body: _AdminWakeUseBody) -> dict[str, Any]:
         word["available"] = ok
     if not word["available"]:
         raise HTTPException(status_code=409, detail=f"{word['name']}: {word['reason']}")
+    slugs, words = await _room_words_with_main(body.room_id, slug)
     try:
-        await target.request_set_wake_word(slug=slug, threshold=None)
+        await target.request_set_wake_word(slug=slug, threshold=None, words=words)
     except Exception as e:
         log.warning("admin wake use to room=%s failed: %s", body.room_id, e)
         raise HTTPException(
             status_code=502, detail=f"couldn't reach the room device: {e}"
         ) from e
     async with session_scope() as s:
-        await wake_default.mark_chosen(s, body.room_id, slug)
+        await wake_default.mark_chosen(s, body.room_id, slug, slugs)
     return {"pushed": True, "room_id": body.room_id, "slug": slug}
 
 

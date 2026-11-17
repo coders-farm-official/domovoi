@@ -152,6 +152,146 @@ const SatWakeWord = ({ s }) => {
   );
 };
 
+/* A room's wake words (1.4.0, V063; domovoi/wake_default.py). Most rooms
+ * have one, and that is all this shows until an admin, with the room
+ * online, opens "Add another wake word": up to 5, main word first, as many
+ * as the room's device can run (`wakes_on.limit`; a Pi Zero 2 W runs 3,
+ * older room software 1). No add button where none can be added: the
+ * reason shows instead. Reorder and remove are staged; Save sends the list
+ * (PUT /api/wake-words/room) and the room restarts to load it. */
+const WAKE_EXTRA_NOTE = 'Each extra word makes accidental wake-ups a little more likely.';
+const wakeAddBlocked = (w, count, offered) => {
+  if (count >= w.max_words) return `A room can have up to ${w.max_words} wake words.`;
+  if (count >= w.limit) {
+    return w.device_max
+      ? `This room’s device can run ${w.limit} wake word${w.limit === 1 ? '' : 's'}.`
+      : 'This room’s software runs one wake word. Upgrading it lets it run more.';
+  }
+  if (offered === 0) return 'No other wake words are on this server yet.';
+  return null;
+};
+const RoomWakeWords = ({ s, fire, refresh }) => {
+  const admin = useAdminSignedIn();
+  const w = (s && s.wakes_on) || null;
+  const listed = (w && Array.isArray(w.words)) ? w.words : [];
+  const editable = !!(admin && w && s.status === 'online' && satCan(s, 'wake_models')
+                      && w.source !== 'unknown' && listed.length > 0);
+  const { data: st } = useApiObject(editable ? '/api/wake-words/default' : null,
+    { quiet: true, refetchOnAuth: true });
+  const [draft, setDraft] = React.useState(null);
+  const [adding, setAdding] = React.useState(false);
+  const [pick, setPick] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  if (!w || !w.text) return null;
+  if (!editable) return <SatWakeWord s={s}/>;
+
+  const saved = listed.map(x => x.slug);
+  const words = draft || saved;
+  const names = {};
+  for (const o of (st && st.options) || []) names[o.slug] = o.name;
+  for (const x of listed) names[x.slug] = names[x.slug] || x.name;
+  const nameOf = (slug) => names[slug] || slug;
+  const notRunning = new Set(listed.filter(x => !x.running).map(x => x.slug));
+  const offered = ((st && st.options) || []).filter(o => o.available && !words.includes(o.slug));
+  const blocked = st ? wakeAddBlocked(w, words.length, offered.length) : null;
+  const changed = words.join('|') !== saved.join('|');
+  const tooMany = words.length > w.limit;
+
+  const move = (i, by) => {
+    const next = words.slice();
+    const [x] = next.splice(i, 1);
+    next.splice(i + by, 0, x);
+    setDraft(next);
+  };
+  const remove = (i) => setDraft(words.filter((_, j) => j !== i));
+  const add = () => {
+    if (!pick) return;
+    setDraft([...words, pick]);
+    setPick(''); setAdding(false);
+  };
+  const save = async () => {
+    setBusy(true);
+    try {
+      await apiPut('/api/wake-words/room', { room_id: s.room_id, slugs: words });
+      fire(words.length === 1
+        ? `${s.room_id} now wakes on “${nameOf(words[0])}”: it restarts to load it`
+        : `${s.room_id} now wakes on ${words.map(x => `“${nameOf(x)}”`).join(', ')}: it restarts to load them`);
+      setDraft(null);
+      if (refresh) refresh();
+    } catch (e) {
+      reportMutationFailure(fire, 'change the wake words', e);
+    } finally { setBusy(false); }
+  };
+  const small = { fontSize: 11.5, color: 'var(--fg-muted)', lineHeight: 1.5 };
+  const iconBtn = { padding: '0 6px', height: 24, minWidth: 0 };
+  return (
+    <div className="room-wake-words" style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
+      {words.length === 1 && !adding ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <SatWakeWord s={s}/>
+        </div>
+      ) : (
+        <ol style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {words.map((slug, i) => (
+            <li key={slug} className="room-wake-word" style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+              <span className="mono" style={{ color: 'var(--fg)' }}>“{nameOf(slug)}”</span>
+              {i === 0 && words.length > 1 && <span style={small}>main word</span>}
+              {(notRunning.has(slug) && !draft) && (
+                <Pill tone="warn">not loaded on this device</Pill>
+              )}
+              {i >= w.limit && <Pill tone="warn">more than this device can run</Pill>}
+              <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 2 }}>
+                {i > 0 && (
+                  <Button variant="ghost" style={iconBtn} disabled={busy} onClick={() => move(i, -1)}
+                          aria-label={`move “${nameOf(slug)}” up`} title="move up">↑</Button>
+                )}
+                {i < words.length - 1 && (
+                  <Button variant="ghost" style={iconBtn} disabled={busy} onClick={() => move(i, 1)}
+                          aria-label={`move “${nameOf(slug)}” down`} title="move down">↓</Button>
+                )}
+                {words.length > 1 && (
+                  <Button variant="ghost" style={iconBtn} disabled={busy} onClick={() => remove(i)}
+                          aria-label={`remove “${nameOf(slug)}”`} title="remove">✕</Button>
+                )}
+              </span>
+            </li>
+          ))}
+        </ol>
+      )}
+      {adding ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <select aria-label="wake word to add" value={pick} disabled={busy}
+                  onChange={e => setPick(e.target.value)}
+                  style={{ flex: 1, minWidth: 0, maxWidth: 240, font: 'inherit', fontSize: 12, height: 28, padding: '0 6px',
+                           borderRadius: 'var(--r-sm)', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--fg)' }}>
+            <option value="">choose a word…</option>
+            {offered.map(o => (
+              <option key={o.slug} value={o.slug}>{o.name}{o.phrase ? ` (“${o.phrase}”)` : ''}</option>
+            ))}
+          </select>
+          <Button variant="secondary" disabled={!pick || busy} onClick={add}>Add</Button>
+          <Button variant="ghost" disabled={busy} onClick={() => { setAdding(false); setPick(''); }}>Cancel</Button>
+        </div>
+      ) : blocked ? (
+        <div className="room-wake-add-blocked" style={small}>{blocked}</div>
+      ) : st && (
+        <div>
+          <Button variant="ghost" icon="plus" disabled={busy} onClick={() => setAdding(true)}
+                  title="optional: most rooms need only one">Add another wake word</Button>
+        </div>
+      )}
+      {(words.length > 1 || adding) && <div className="room-wake-note" style={small}>{WAKE_EXTRA_NOTE}</div>}
+      {changed && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <Button variant="primary" disabled={busy || tooMany} onClick={save}>{busy ? 'Saving…' : 'Save'}</Button>
+          <Button variant="ghost" disabled={busy} onClick={() => setDraft(null)}>Cancel</Button>
+          <span style={small}>the room restarts to load {words.length === 1 ? 'it' : 'them'}</span>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const SatCard = ({ s, onOpen, tick, coreDown = false }) => {
   const online = s.status === 'online' && !coreDown;
   const np = s.now_playing;
@@ -377,7 +517,9 @@ const useSatPendingRefresh = (items, refresh) => {
   }, [pending, refresh]);
 };
 
-const SatConversationTurn = ({ c }) => {
+/* More than one wake word woke this room in its history (V063). */
+const severalWakeWords = (convos) => new Set((convos || []).map(c => c && c.wake_word).filter(Boolean)).size > 1;
+const SatConversationTurn = ({ c, showWake = false }) => {
   const long = (c.assistant_text || '').length > 140;
   const [more, setMore] = React.useState(false);
   const txt = c.assistant_text || '';
@@ -392,6 +534,13 @@ const SatConversationTurn = ({ c }) => {
           <Pill tone={TRIGGER_PILL[c.utterance_trigger].tone}>
             {TRIGGER_PILL[c.utterance_trigger].label}
           </Pill>
+        )}
+        {showWake && c.wake_word && (
+          /* Which of the room's words woke it (V063). Shown once the room's
+           * history has turns from more than one word: it names the word
+           * behind a false wake. */
+          <span className="mono turn-wake-word" title="the wake word that woke the room"
+                style={{ fontSize: 11, color: 'var(--fg-faint)' }}>“{c.wake_word_name || c.wake_word}”</span>
         )}
         <span className="mono" style={{ fontSize: 10, color: 'var(--fg-faint)', marginLeft: 'auto' }}>#{c.id}</span>
       </div>
@@ -1469,8 +1618,8 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
         )}
         {s.wakes_on && s.wakes_on.text && (
           <>
-            <div className="label">wake word</div>
-            <SatWakeWord s={s}/>
+            <div className="label">{(s.wakes_on.words || []).length > 1 ? 'wake words' : 'wake word'}</div>
+            <RoomWakeWords s={s} fire={fire} refresh={refresh}/>
           </>
         )}
         <div className="label">voice</div>
@@ -1644,6 +1793,7 @@ const RoomConversationsBody = ({ room }) => {
   const { items: all, loading, error, reread } = useApiList(`/api/satellites/${room}/conversations?limit=300`);
   useSatPendingRefresh(all, reread);
   const filtered = all.filter(c => !q || ((c.user_text || '') + ' ' + (c.assistant_text || '')).toLowerCase().includes(q.toLowerCase()));
+  const several = severalWakeWords(all);
   if (loading && all.length === 0)
     return <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading conversations…</div>;
   if (error && error.deviceTokenRequired && all.length === 0)
@@ -1666,7 +1816,7 @@ const RoomConversationsBody = ({ room }) => {
       </div>
       {filtered.length === 0
         ? <Empty glyph="sleeping" title="nothing said in this room" sub={q ? `q = “${q}”` : 'the room has been quiet'}/>
-        : <div>{filtered.map(c => <SatConversationTurn key={c.id} c={c}/>)}</div>}
+        : <div>{filtered.map(c => <SatConversationTurn key={c.id} c={c} showWake={several}/>)}</div>}
     </>
   );
 };

@@ -559,8 +559,10 @@ def test_a_greeting_turn_reports_the_clip_and_that_it_came_first(monkeypatch):
     clock = ("sat_ms", "backlog_ms", "wake_ms")
     for msg in (start, pause, end):
         assert all(type(msg.pop(k, 0)) is int for k in clock)
-    # The wake's peak score (satellite/wake_gate.py): the fake model's 1.0.
-    assert start == {"type": "utterance_start", "trigger": "wake_word", "utt": 1, "wake_score": 1.0}
+    # The wake's peak score (satellite/wake_gate.py): the fake model's 1.0;
+    # and which of the room's words fired (1.4.0).
+    assert start == {"type": "utterance_start", "trigger": "wake_word", "utt": 1, "wake_score": 1.0,
+                     "wake_word": "hey_jarvis"}
     fields = {"greeting_played": True, "greeting_clip": CLIP, "ack_before_capture": True}
     assert {k: pause[k] for k in fields} == fields
     assert pause["type"] == "speech_pause" and pause["last_voiced_frame"] == 9

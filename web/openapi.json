@@ -12876,6 +12876,46 @@
         }
       }
     },
+    "/api/wake-words/room": {
+      "put": {
+        "tags": [
+          "wake-words"
+        ],
+        "summary": "Wake Room Words",
+        "description": "Set a connected room's wake words, main word first (1.4.0): 409 with\nthe reason when its device can't run that many or a word can't be\ngiven; the room restarts to load them.",
+        "operationId": "wake_room_words_api_wake_words_room_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WakeRoomBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/wake-words/{wake_word_id}/push": {
       "post": {
         "tags": [
@@ -23589,6 +23629,28 @@
             ],
             "title": "Wake Score"
           },
+          "wake_word": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wake Word"
+          },
+          "wake_word_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wake Word Name"
+          },
           "voice_match": {
             "anyOf": [
               {
@@ -30310,6 +30372,34 @@
           "text": {
             "type": "string",
             "title": "Text"
+          },
+          "words": {
+            "items": {
+              "$ref": "#/components/schemas/RoomWakeWordItem"
+            },
+            "type": "array",
+            "title": "Words"
+          },
+          "device_max": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Max"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit",
+            "default": 1
+          },
+          "max_words": {
+            "type": "integer",
+            "title": "Max Words",
+            "default": 5
           }
         },
         "type": "object",
@@ -30318,6 +30408,30 @@
         ],
         "title": "RoomWakeWord",
         "description": "Which wake word a room answers to (domovoi/wake_default.py\n``room_word``). ``source``: ``device`` \u2014 the model the room device\nreported loading (its health sample, else its hello); ``assigned`` /\n``chosen`` \u2014 no report, the household default the server gave it / the\nword an admin pushed; ``pending`` \u2014 it is waiting for this word's model;\n``unknown`` \u2014 nothing says (a room older than the household default, on\nsoftware that doesn't report its word): ``name`` is null and ``text``\nsays so. ``pending_*``: the word a room that reports its own is still\nwaiting to be given. ``text``: the line the dashboard shows after\n\"Wakes on:\"."
+      },
+      "RoomWakeWordItem": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "running": {
+            "type": "boolean",
+            "title": "Running",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "name"
+        ],
+        "title": "RoomWakeWordItem",
+        "description": "One of a room's wake words (V063). ``running``: the room's device is\nlistening for it (false: the server gave it, but the device runs fewer\nwords or hasn't loaded it yet)."
       },
       "SampleSources": {
         "properties": {
@@ -33190,6 +33304,31 @@
           "slug"
         ],
         "title": "WakeDefaultBody"
+      },
+      "WakeRoomBody": {
+        "properties": {
+          "room_id": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Room Id"
+          },
+          "slugs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 5,
+            "minItems": 1,
+            "title": "Slugs"
+          }
+        },
+        "type": "object",
+        "required": [
+          "room_id",
+          "slugs"
+        ],
+        "title": "WakeRoomBody"
       },
       "WakeUseBody": {
         "properties": {
