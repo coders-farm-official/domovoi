@@ -730,10 +730,16 @@ const VoicesPanel = () => {
  * how the owner signed out, signed in, reloaded, and never saw Advanced.
  *
  * Since 2026-10-14 a reload inside the reload window (default an hour
- * after the password was entered in this browser) takes the live sign-in
+ * after the last admin change in this browser) takes the live sign-in
  * back by itself (auth.js resume), so the card says "signed in" and when a
  * reload stops keeping it ("until 14:32" — once, no countdown). Only past
  * the window is a reloaded tab "view only" (adminReloadState, components.jsx).
+ *
+ * Since 2026-11-16 the sign-in itself signs out after an hour with no
+ * admin change (the idle timeout): the card says so in its subtitle, says
+ * when ("at 14:32 unless you change something as admin before then"), and
+ * once it has happened says "Signed out after 1 hour without admin
+ * activity" beside the "sign in" button.
  *
  * On an unclaimed box, arriving here (the tab, or its address
  * #settings/advanced) opens the first-run welcome (2026-11-04; the admin
@@ -796,7 +802,7 @@ const AdminSection = ({ setupAsked = false }) => {
   try { signOutError = Auth.signOutError || null; } catch { /* older Auth */ }
   return (
     <Card title="Admin"
-          sub="Gates settings edits, plugin management, room upgrades, and deleting files. Saving a document, everyday playback and browsing never need it.">
+          sub={`Gates settings edits, plugin management, room upgrades, and deleting files. Saving a document, everyday playback and browsing never need it. Signs out after ${reload.idleWords} idle.`}>
       <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center',
                     gap: 12, flexWrap: 'wrap' }}>
         {st === null
@@ -831,6 +837,16 @@ const AdminSection = ({ setupAsked = false }) => {
             <button type="button" className="home-link" onClick={signOut}>try again</button>
           </span>
         )}
+        {live && reload.idleUntil && (
+          // When the sign-in idles out, unless someone acts as admin before
+          // then: said once, in its own row — no countdown. auth.js signs
+          // the tab out itself when it passes.
+          <span className="admin-idle-until"
+                style={{ fontSize: 12, color: 'var(--fg-muted)', flexBasis: '100%', order: 1 }}>
+            Signs out at {reload.idleUntil} unless you change something as
+            admin before then.
+          </span>
+        )}
         {live && reload.until && (
           // When a reload stops keeping the sign-in: said once, in its own
           // row, gone when it passes (useAdminReloadState) — no countdown.
@@ -840,6 +856,14 @@ const AdminSection = ({ setupAsked = false }) => {
             browser, keeps you signed in until {reload.until}.
           </span>
         )}
+        {!live && !viewOnly && !needsSetup && reload.signedOut && (
+          // This tab's sign-in ended on its own: why the card says
+          // "signed out" when nobody pressed "sign out".
+          <span className="admin-signed-out-why"
+                style={{ fontSize: 12, color: 'var(--fg-muted)', flexBasis: '100%', order: 1 }}>
+            {reload.signedOut}.
+          </span>
+        )}
         {viewOnly && (
           // Its own row UNDER the pill and both buttons (order: 1): inline, the
           // long sentence pushed "sign out" onto a line of its own, away
@@ -847,7 +871,7 @@ const AdminSection = ({ setupAsked = false }) => {
           <span className="admin-view-only"
                 style={{ fontSize: 12, color: 'var(--fg-muted)', flexBasis: '100%', order: 1 }}>
             {reload.windowWords
-              ? `A page reload more than ${reload.windowWords} after you signed in keeps this browser signed in for viewing, but forgets`
+              ? `A page reload more than ${reload.windowWords} after your last admin change keeps this browser signed in for viewing, but forgets`
               : 'A page reload keeps this browser signed in for viewing, but forgets'}
             {' '}the admin sign-in this tab needs to change settings or see
             Advanced. Sign in again to get it back.
@@ -2039,7 +2063,7 @@ const ConfigPanel = ({ setupAsked = false, mark = null, startFolded = false }) =
                   </div>
                   <div style={{ marginTop: 4 }}>
                     {reloadWords
-                      ? `A page reload more than ${reloadWords} after you signed in keeps you signed in for viewing, but forgets the admin sign-in that Advanced and saving changes here need — sign in again to get it back.`
+                      ? `A page reload more than ${reloadWords} after your last admin change keeps you signed in for viewing, but forgets the admin sign-in that Advanced and saving changes here need — sign in again to get it back.`
                       : 'A page reload keeps you signed in for viewing, but forgets the admin sign-in that Advanced and saving changes here need — sign in again after a reload.'}
                   </div>
                   <div style={{ marginTop: 8 }}>

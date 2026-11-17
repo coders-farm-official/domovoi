@@ -109,10 +109,12 @@ shows a section that can't do anything yet.
   `Authorization: Bearer`; the SameSite=Strict cookie (a secret of its
   own, never the token) lets GET page loads render authenticated state,
   and for `ADMIN_RELOAD_WINDOW_MIN`
-  (default 60) minutes after the password sign-in lets the same page
-  take its own Bearer back after a reload (`POST /api/auth/resume`,
-  same origin only). The dashboard pops its login modal automatically
-  on any 401/403 it can't answer that way.
+  (default 60) minutes after the session's last admin action lets the
+  same page take its own Bearer back after a reload
+  (`POST /api/auth/resume`, same origin only). A session signs out after
+  1 hour idle (no admin change; polls never count): the page drops to
+  signed out and says so. The dashboard pops its login modal
+  automatically on any 401/403 it can't answer that way.
 * **Zero-build frontend.** Babel-standalone compiles JSX in the
   browser; all vendor assets are local (`static/vendor/`). Top-level
   scope is shared across `<script type="text/babel">` tags — reach

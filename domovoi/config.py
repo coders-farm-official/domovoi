@@ -64,11 +64,19 @@ HOME_PROBLEMS_VISIBILITY_ALIASES = {
 # something in .env meant to change it, and the likely change is quieter.
 HOME_PROBLEMS_VISIBILITY_UNKNOWN = "summary"
 
+# The admin idle timeout (2026-11-16): an admin session ends this many
+# minutes after its last admin ACTION — a change made as admin. Pages that
+# poll, sockets and reloads never count (domovoi/admin_auth.py,
+# is_admin_activity). A constant, not a setting: the dashboard says it in
+# words ("signs out after 1 hour idle").
+ADMIN_IDLE_TIMEOUT_MIN = 60
+
 # `admin_reload_window_min`: the default (the owner's 60 minutes) and the
 # cap, which domovoi/admin_auth.py also applies to the value the web reads
-# off the core's snapshot.
+# off the core's snapshot. The cap is the idle timeout: a reload can't keep
+# a session the idle rule has already ended.
 ADMIN_RELOAD_WINDOW_DEFAULT_MIN = 60
-ADMIN_RELOAD_WINDOW_MAX_MIN = 1440
+ADMIN_RELOAD_WINDOW_MAX_MIN = ADMIN_IDLE_TIMEOUT_MIN
 
 # `voice_history_keep` (owner, 2026-10-17): how long what people say to
 # Domovoi is kept. The values are days, or "forever"; second = default.
@@ -599,17 +607,19 @@ class Settings(BaseSettings):
     # (Security).
     guest_queue_editing: bool = True
 
-    # How long, in minutes after the admin password was entered in a
-    # browser, a reload of the dashboard (or a new tab in that browser)
-    # stays signed in as the admin — owner decision 2026-10-14. Counted
-    # from the sign-in itself, not from the last use. Within it the page
-    # takes its sign-in back from the HttpOnly session cookie that browser
-    # holds (POST /api/auth/resume) with no password prompt; after it, a
-    # reload is view only and "sign in again" asks for the password, as it
-    # always did. 0 = every reload is view only (the behaviour before this
-    # setting). 0..1440 (a day); anything else in .env reads as 0, closed,
-    # and the log says so. Read by the web process, live, through the
-    # core's snapshot. Editable in Settings -> Advanced (Security).
+    # How long, in minutes after the admin's last change in a browser, a
+    # reload of the dashboard (or a new tab in that browser) stays signed
+    # in as the admin — owner decision 2026-10-14, counted from the last
+    # admin action since the idle timeout (2026-11-16; it used to count
+    # from the sign-in). Within it the page takes its sign-in back from the
+    # HttpOnly session cookie that browser holds (POST /api/auth/resume)
+    # with no password prompt; after it, a reload is view only and "sign
+    # in again" asks for the password. 0 = every reload is view only (the
+    # behaviour before this setting). 0..ADMIN_IDLE_TIMEOUT_MIN (the
+    # session itself ends then); anything else in .env reads as 0, closed,
+    # or as the cap, and the log says so. Read by the web process, live,
+    # through the core's snapshot. Editable in Settings -> Advanced
+    # (Security).
     admin_reload_window_min: int = ADMIN_RELOAD_WINDOW_DEFAULT_MIN
 
     @field_validator("admin_reload_window_min", mode="before")

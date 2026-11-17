@@ -1,22 +1,24 @@
 """A reloaded dashboard tab stays signed in for the reload window
-(owner decision 2026-10-14).
+(owner decision 2026-10-14; counted from the last admin action since the
+idle timeout, 2026-11-16).
 
 "If someone logs in with admin, from that device, that exact session, they
 should be good for within 60 mins of signing in. Refreshing should not lose
 admin on the same machine, same session."
 
-The shape: ``admin_sessions.signed_in_at`` (V028) records when a session
-last proved the password, and ``POST /api/auth/resume`` hands the HttpOnly
-cookie's own token back to the page that holds it while
-``now - signed_in_at < ADMIN_RELOAD_WINDOW_MIN`` — same origin and
-``X-Requested-With`` only. These pin:
+The shape: ``admin_sessions.last_used_at`` records the session's last admin
+action (a sign-in counts), and ``POST /api/auth/resume`` hands the HttpOnly
+cookie's own token back to the page that holds it while the session is live
+and ``now - last action < ADMIN_RELOAD_WINDOW_MIN`` (never more than the
+idle hour) — same origin and ``X-Requested-With`` only. These pin:
 
 * inside the window the resume answers the SAME session's token (nothing is
   minted) and that token does everything a Bearer does, the security tier
   included; outside it, or with the window at 0, it is refused and the
-  cookie keeps rendering (view only, as before);
-* the window is ABSOLUTE: using the session never moves it, only the
-  password does (a password change restarts the caller's own);
+  cookie keeps rendering while the session lives (view only, as before);
+  past the idle hour the session is over and the cookie renders nothing;
+* reads, page loads and resumes never move the window; an admin action
+  does (a password change too);
 * sign-out, a revoked session, a password change from another session, an
   expired session and a session from before V028 never resume;
 * only this browser's cookie resumes, and only its own session: another
@@ -25,7 +27,7 @@ cookie's own token back to the page that holds it while
   ``null``, ``Sec-Fetch-Site`` other than same-origin, neither header) or
   no cookie is refused, and a refusal touches nothing;
 * ``GET /api/auth/status`` says how long is left, read-only;
-* the setting: default 60, 0..1440, a bad ``.env`` value reads as 0, the
+* the setting: default 60, 0..60 (the idle hour), a bad ``.env`` value reads as 0, the
   web reads the live value from the core's snapshot (clamped), and the
   core's snapshot carries it;
 * the migration: nullable columns with NO default, so the sessions that
@@ -142,12 +144,14 @@ async def row(who):
         ).first()
 
 
-async def signed_in_ago(who, minutes: float) -> None:
-    """Fake the clock: the sign-in happened `minutes` ago."""
+async def acted_ago(who, minutes: float) -> None:
+    """Fake the clock: the session's last admin action (here, its sign-in)
+    happened `minutes` ago."""
     async with engine.begin() as conn:
         await conn.execute(
             text(
-                "UPDATE admin_sessions SET signed_in_at = now() - make_interval(secs => :s) "
+                "UPDATE admin_sessions SET signed_in_at = now() - make_interval(secs => :s), "
+                "last_used_at = now() - make_interval(secs => :s) "
                 "WHERE token_hash = :h"
             ),
             {"s": minutes * 60, "h": admin_auth.token_sha256(_token_of(who))},
@@ -198,10 +202,11 @@ async def test_a_reload_inside_the_window_gets_the_same_session_back(_db, window
     assert 3590 <= body["resume_in_sec"] <= 3600
     assert body["reload_window_min"] == 60
     assert r.headers["cache-control"] == "no-store"
-    # A use like any other: it slides the expiry, never the sign-in time.
+    # Not an admin action: a page that reloads itself on a timer must not
+    # keep the session alive, so nothing about it moved.
     after = await row(token)
     assert after.signed_in_at == before.signed_in_at
-    assert after.last_used_at is not None
+    assert (after.last_used_at, after.expires_at) == (before.last_used_at, before.expires_at)
 
 
 @requires_db
@@ -249,15 +254,15 @@ async def test_security_tier_routes_work_after_a_resume(_db, window) -> None:
     assert r.status_code == 403
 
 
-# ═══ The window is absolute ════════════════════════════════════════════════
+# ═══ The window counts from the last admin action ═════════════════════════
 
 
 @requires_db
-async def test_past_the_window_a_reload_is_view_only_again(_db, window) -> None:
+async def test_past_the_idle_hour_a_reload_signs_in_again(_db, window) -> None:
     async with web_client() as c:
         await claim_admin(c)
     token = await login()
-    await signed_in_ago(token, 61)
+    await acted_ago(token, 61)
     before = await row(token)
 
     r = await resume(token)
@@ -266,29 +271,59 @@ async def test_past_the_window_a_reload_is_view_only_again(_db, window) -> None:
     # Refused: nothing about the session moved.
     after = await row(token)
     assert (after.last_used_at, after.expires_at) == (before.last_used_at, before.expires_at)
-    # The cookie still renders (view only, today's behaviour), and says so.
-    st = await status(token)
-    assert st["authenticated"] is True
-    assert st["resume_in_sec"] is None and st["resume_until"] is None
+    # The session is over, so the cookie renders nothing either, and the
+    # status read clears it.
+    async with browser(token) as c:
+        r = await c.get("/api/auth/status")
+    st = r.json()
+    assert st["authenticated"] is False
+    assert st["resume_in_sec"] is None and st["idle_in_sec"] is None
+    assert COOKIE in (r.headers.get("set-cookie") or "")      # the deletion
 
 
 @requires_db
-async def test_using_the_session_never_moves_the_window(_db, window) -> None:
+async def test_past_a_shorter_window_a_reload_is_view_only(_db, window) -> None:
+    """A reload window shorter than the hour: past it (but inside the idle
+    hour) the cookie still renders, view only, exactly as before."""
+    async with web_client() as c:
+        await claim_admin(c)
+    window(15)
+    token = await login()
+    await acted_ago(token, 20)
+    assert (await resume(token)).status_code == 401
+    st = await status(token)
+    assert st["authenticated"] is True
+    assert st["resume_in_sec"] is None and st["resume_until"] is None
+    assert 2330 <= st["idle_in_sec"] <= 2400                   # the session lives on
+
+
+@requires_db
+async def test_reads_and_resumes_never_move_the_window_an_admin_action_does(_db, window) -> None:
     async with web_client() as c:
         await claim_admin(c)
     token = await login()
-    await signed_in_ago(token, 59)
-    # Busy all along: Bearer and cookie reads, a resume.
+    await acted_ago(token, 59)
+    # Busy all along, but only reading: Bearer and cookie reads, a resume.
     async with web_client() as c:
         for _ in range(3):
             assert (await c.get("/api/auth/sessions", headers=bearer(token.token))).status_code == 200
+    assert (await status(token))["authenticated"] is True
     r = await resume(token)
     assert r.status_code == 200, r.text
     assert 50 <= r.json()["resume_in_sec"] <= 60
-    # A minute later by the sign-in's clock, the window is shut however
-    # recently the session was used.
-    await signed_in_ago(token, 60.5)
+    # A minute later the window is shut however much was read.
+    await acted_ago(token, 60.5)
     assert (await resume(token)).status_code == 401
+
+    # Again, but this time the admin changes something: the window restarts.
+    other = await login("second")
+    await acted_ago(other, 59)
+    async with web_client() as c:
+        r = await c.post("/api/auth/device-token/rotate", headers=bearer(other.token))
+    assert r.status_code == 200, r.text
+    r = await resume(other)
+    assert r.status_code == 200, r.text
+    assert 3590 <= r.json()["resume_in_sec"] <= 3600
 
 
 @requires_db
@@ -296,7 +331,7 @@ async def test_a_password_change_restarts_the_callers_own_window(_db, window) ->
     async with web_client() as c:
         await claim_admin(c)
     token = await login()
-    await signed_in_ago(token, 50)
+    await acted_ago(token, 50)
     async with web_client() as c:
         r = await c.post(
             "/api/auth/password",
@@ -525,15 +560,17 @@ async def test_a_cookie_whose_wrapped_token_does_not_match_never_resumes(_db, wi
 
 
 @requires_db
-async def test_a_sign_in_stamped_in_the_future_does_not_resume(_db, window) -> None:
-    """The database clock stepped back after the sign-in: the stamp is in
-    the future, and it must not stretch the window by the step."""
+async def test_an_action_stamped_in_the_future_does_not_resume(_db, window) -> None:
+    """The database clock stepped back after the last action: the stamp is
+    in the future, and it must not stretch the window (or the idle hour) by
+    the step. Past the slack the session is not trusted at all."""
     async with web_client() as c:
         await claim_admin(c)
     s = await login()
-    await signed_in_ago(s, -300)            # five hours ahead of now()
+    await acted_ago(s, -300)            # five hours ahead of now()
     assert (await resume(s)).status_code == 401
-    assert (await status(s))["resume_in_sec"] is None
+    st = await status(s)
+    assert st["resume_in_sec"] is None and st["authenticated"] is False
 
 
 @requires_db
@@ -543,11 +580,11 @@ async def test_the_window_never_outlives_the_90_day_cap(_db, window) -> None:
     s = await login()
     cap = admin_auth.SESSION_MAX_AGE_DAYS
     async with engine.begin() as conn:
-        # Created just under the cap ago, signed in again a minute ago.
+        # Created just under the cap ago, last acted a minute ago.
         await conn.execute(
             text("UPDATE admin_sessions SET created_at = now() - make_interval(days => :d) "
-                 "+ interval '10 minutes', signed_in_at = now() - interval '1 minute' "
-                 "WHERE token_hash = :h"),
+                 "+ interval '10 minutes', signed_in_at = now() - interval '1 minute', "
+                 "last_used_at = now() - interval '1 minute' WHERE token_hash = :h"),
             {"d": cap, "h": admin_auth.token_sha256(s.token)},
         )
     r = await resume(s)
@@ -570,7 +607,7 @@ async def test_another_devices_fresh_sign_in_lends_this_browser_nothing(_db, win
     async with web_client() as c:
         await claim_admin(c)
     laptop = await login("laptop")
-    await signed_in_ago(laptop, 120)
+    await acted_ago(laptop, 120)
     phone = await login("phone")          # a sign-in a minute ago, elsewhere
 
     assert (await resume(laptop)).status_code == 401
@@ -730,7 +767,7 @@ async def test_the_window_is_read_live_and_shrinking_it_applies_at_once(_db, win
     async with web_client() as c:
         await claim_admin(c)
     token = await login()
-    await signed_in_ago(token, 10)
+    await acted_ago(token, 10)
     assert (await resume(token)).status_code == 200
     window(5)                                    # an admin saves 5 minutes
     assert (await resume(token)).status_code == 401
@@ -747,11 +784,14 @@ async def test_the_window_is_read_live_and_shrinking_it_applies_at_once(_db, win
         ({"admin_reload_window_min": 0}, 0),
         ({"admin_reload_window_min": 99999}, ADMIN_RELOAD_WINDOW_MAX_MIN),
         ({"admin_reload_window_min": -3}, 0),
-        # Not a live value, and none seen yet since this process started: 0.
-        ({"admin_reload_window_min": True}, 0),
-        ({"admin_reload_window_min": "45"}, 0),
-        ({}, 0),                                           # an older core
-        (None, 0),                                         # the core is down
+        # Not a live value, and none seen yet since this process started:
+        # this process's own copy, read from the .env a Settings save
+        # writes (it used to be 0, which lost the sign-in on the reload
+        # right after a server update restarted this process).
+        ({"admin_reload_window_min": True}, 30),
+        ({"admin_reload_window_min": "45"}, 30),
+        ({}, 30),                                          # an older core
+        (None, 30),                                        # the core is down
     ],
 )
 def test_the_web_reads_the_window_from_the_cores_snapshot(monkeypatch, snapshot, read) -> None:

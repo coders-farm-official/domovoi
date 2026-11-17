@@ -19,8 +19,22 @@
  * requestLogin). The token goes back into memory ONLY, never into web
  * storage. The window counts from the sign-in, not from use.
  *
+ * THE IDLE TIMEOUT (2026-11-16). The server ends a session an hour
+ * (`idle_timeout_min`) after its last ADMIN ACTION — a change made as
+ * admin. Polls, page loads and resumes never count, so a tab left open
+ * overnight is no longer admin in the morning. Every auth answer says how
+ * long is left (`idle_in_sec`); this tab counts that down on its own clock
+ * and, when it runs out, asks the server once (GET /api/auth/status with
+ * the Bearer): still live — another tab of this browser acted — and it
+ * counts again; over, and the tab drops the token, says "Signed out after
+ * 1 hour without admin activity" (signedOutNotice), and renders as signed
+ * out. A request refused 401 for the Bearer asks the same question first
+ * (data.js), so a read that lands after the hour drops the tab quietly
+ * instead of popping the password prompt over the page. The reload window
+ * counts from the last action too.
+ *
  * Past the window a reloaded tab is VIEW-ONLY: `status.authenticated` (the
- * cookie) with no token. It renders; every change asks for the password
+ * cookie) with no token, while the session itself lives. It renders; every change asks for the password
  * again, and the settings it reads come back with secrets masked and
  * without the advanced section (CORE-6). The Settings Admin card says so
  * and offers "sign in again", and the reads whose answer depends on the
@@ -74,6 +88,20 @@ const Auth = (() => {
   let resumeEndsAt = null;
   let windowMin = null;
   let resuming = null;       // the one POST /api/auth/resume in flight
+  // The idle timeout. `idleMin`: its length as the server last said it
+  // (null = an older server). `idleEndsAt`: when THIS tab's token signs
+  // out with no further admin action, on this browser's clock (Date.now()
+  // + the server's `idle_in_sec`); a lower bound — an action in another
+  // tab only ever moves it later, which the check finds out. `idleTimer`:
+  // the one check scheduled for then. `signedOutReason`: why the token
+  // went ('idle' | 'ended'), until a sign-in, a resume or a dismissal.
+  let idleMin = null;
+  let idleEndsAt = null;
+  let idleTimer = null;
+  let idleCheck = null;       // the one Bearer status read in flight
+  let idleCheckedAt = 0;      // when one last found the session live
+  let writeNoteTimer = null;  // noteAdminWrite's debounce
+  let signedOutReason = null;
   // The server refused a resume on this page (the window closed early, the
   // session ended, or this origin is not the page's own — a proxy in
   // front, say). Not asked again until a sign-in or a fresh page load:
@@ -318,11 +346,105 @@ const Auth = (() => {
 
   // ── The reload window ───────────────────────────────────────────
   // What a status / login / setup / resume answer says about it.
-  const noteWindow = (data) => {
+  // `forToken`: the answer is about the session this tab's token names (a
+  // sign-in, a resume, a status read made WITH the Bearer), so its idle
+  // count is this tab's. A plain status read (the cookie) is about the
+  // cookie's session, which is this tab's only while it holds no token.
+  const noteWindow = (data, forToken) => {
     if (!data || typeof data !== 'object') return;
     if (typeof data.reload_window_min === 'number') windowMin = data.reload_window_min;
     const sec = data.resume_in_sec;
     resumeEndsAt = (typeof sec === 'number' && sec > 0) ? Date.now() + sec * 1000 : null;
+    if (typeof data.idle_timeout_min === 'number' && data.idle_timeout_min > 0) {
+      idleMin = data.idle_timeout_min;
+    }
+    if (forToken || !token) {
+      const idle = data.idle_in_sec;
+      idleEndsAt = (typeof idle === 'number' && idle > 0) ? Date.now() + idle * 1000 : null;
+    }
+    scheduleIdle();
+  };
+
+  // ── The idle timeout (2026-11-16) ───────────────────────────────
+  // One check, when this tab's count runs out (a second late, so the
+  // server's own hour has passed too). No token, or no count from the
+  // server (an older one): nothing is scheduled, and the tab behaves as
+  // it did before.
+  const scheduleIdle = () => {
+    if (idleTimer) { try { clearTimeout(idleTimer); } catch {} idleTimer = null; }
+    if (!token || idleEndsAt === null) return;
+    const wait = Math.max(0, idleEndsAt - Date.now()) + 1000;
+    try {
+      idleTimer = setTimeout(() => { idleTimer = null; checkIdle(); }, wait);
+      // (Node's timers keep a test harness alive; a browser's are numbers.)
+      if (idleTimer && typeof idleTimer.unref === 'function') idleTimer.unref();
+    } catch { idleTimer = null; }
+  };
+
+  // The tab's sign-in is over on the server: drop it, say why, and read
+  // the status again — the cookie may name another live sign-in of this
+  // browser (another tab signed in since), which resumes as usual.
+  const endSignIn = (reason) => {
+    token = null;
+    signedOutReason = reason || 'ended';
+    idleEndsAt = null;
+    resumeEndsAt = null;
+    scheduleIdle();
+    if (status) status = Object.assign({}, status, { authenticated: false });
+    credentialVersion += 1;
+    notify();
+    try { Promise.resolve(Auth.refreshStatus()).catch(() => {}); } catch { /* the next read */ }
+  };
+
+  // Is this tab's sign-in still live? Asked with the Bearer: when its count
+  // runs out, when a request carrying it came back 401 (data.js), and a
+  // moment after an admin change (noteAdminWrite). Resolves true when the
+  // token was dropped (the server said the session is over), false
+  // otherwise — still live (the count is renewed), a token that is no
+  // longer this tab's, or no answer (tried again in a minute). Never
+  // throws; one read at a time.
+  const checkIdle = (sent) => {
+    const held = token;
+    if (!held || (sent && sent !== held)) return Promise.resolve(false);
+    if (idleCheck) return idleCheck;
+    idleCheck = (async () => {
+      let data = null;
+      try {
+        const r = await fetch(`${base()}/api/auth/status`, {
+          credentials: 'include', cache: 'no-store',
+          headers: { Authorization: `Bearer ${held}` },
+        });
+        if (r.ok) data = await r.json();
+      } catch { /* no answer */ }
+      idleCheck = null;
+      if (token !== held) return false;             // signed out or in meanwhile
+      if (!data || typeof data !== 'object' || data.setup_complete === false) {
+        // No answer (a restart, say): ask again in a minute.
+        if (idleEndsAt !== null && idleEndsAt <= Date.now()) {
+          idleEndsAt = Date.now() + 60 * 1000;
+          scheduleIdle();
+        }
+        return false;
+      }
+      if (data.authenticated) {
+        idleCheckedAt = Date.now();
+        noteWindow(data, true);
+        notify();
+        return false;
+      }
+      endSignIn(data.ended === 'idle' ? 'idle' : 'ended');
+      return true;
+    })();
+    return idleCheck;
+  };
+
+  // The idle timeout's length in words for the notices: "1 hour", "90
+  // minutes", "2 hours". The server always says it; an older one does not,
+  // and then the hour is assumed.
+  const idleWords = () => {
+    const m = (typeof idleMin === 'number' && idleMin > 0) ? idleMin : 60;
+    if (m % 60 === 0) return m === 60 ? '1 hour' : `${m / 60} hours`;
+    return m === 1 ? '1 minute' : `${m} minutes`;
   };
   const resumeOpen = () => resumeEndsAt !== null && resumeEndsAt > Date.now();
   // A reloaded tab whose browser can take its sign-in back: no token in
@@ -363,8 +485,9 @@ const Auth = (() => {
       }
       token = data.token;
       signOutError = null;
+      signedOutReason = null;
       status = Object.assign({}, status, { setup_complete: true, authenticated: true });
-      noteWindow(data);
+      noteWindow(data, true);
       credentialVersion += 1;
       // The sign-in paired this browser; a browser whose storage was
       // cleared since gets the household token the same way (autoPair).
@@ -438,7 +561,8 @@ const Auth = (() => {
     // starts now). An older server says nothing, and nothing is assumed.
     resumeRefused = false;
     signOutError = null;
-    noteWindow(data);
+    signedOutReason = null;
+    noteWindow(data, true);
     credentialVersion += 1;
     const opening = modalSeq;
     if (modalOpen && !pairModalOpen) {
@@ -473,6 +597,54 @@ const Auth = (() => {
     // The window's length in words ("an hour"), null when it is off.
     reloadWindowWords: () => windowWords(),
     resume: () => resume(),
+
+    // ── The idle timeout (2026-11-16) ───────────────────────────────
+    // When this tab's sign-in signs out with no further admin action
+    // (Date.now() milliseconds), while it is signed in; null otherwise.
+    idleEndsAt: () => ((token || mayResume()) && idleEndsAt !== null && idleEndsAt > Date.now()
+      ? idleEndsAt : null),
+    // The timeout in words: "1 hour".
+    idleWords: () => idleWords(),
+    // "Signed out after 1 hour without admin activity" (or that the
+    // sign-in ended some other way) once this tab's sign-in was dropped,
+    // until a sign-in, a resume or dismissSignedOutNotice(); null otherwise.
+    signedOutNotice: () => {
+      if (token || !signedOutReason) return null;
+      return signedOutReason === 'idle'
+        ? `Signed out after ${idleWords()} without admin activity`
+        : 'Signed out: this admin sign-in has ended';
+    },
+    get signedOutReason() { return token ? null : signedOutReason; },
+    dismissSignedOutNotice() {
+      if (!signedOutReason) return;
+      signedOutReason = null;
+      notify();
+    },
+    // Is the sign-in this tab holds still live? (data.js: a 401 for the
+    // Bearer `sent`.) Resolves true when it was over and has been dropped.
+    // A check that found it live less than 10 s ago is not repeated: a
+    // route that refuses for some other reason must not cost a status
+    // read per refusal.
+    checkIdle(sent) {
+      if (!token || (sent && sent !== token)) return Promise.resolve(false);
+      if (!idleCheck && Date.now() - idleCheckedAt < 10 * 1000) return Promise.resolve(false);
+      return checkIdle(sent);
+    },
+    // A change made with this tab's Bearer went through (data.js): the
+    // server restarted the session's hour if it was an admin action, so
+    // read the new count a moment later (once per burst of changes).
+    noteAdminWrite(sent) {
+      if (!token || (sent && sent !== token)) return;
+      if (writeNoteTimer) return;
+      try {
+        writeNoteTimer = setTimeout(() => {
+          writeNoteTimer = null;
+          idleCheckedAt = 0;
+          checkIdle();
+        }, 1500);
+        if (writeNoteTimer && typeof writeNoteTimer.unref === 'function') writeNoteTimer.unref();
+      } catch { writeNoteTimer = null; }
+    },
     // The shell waits on this before it renders (index.html): the first
     // status read and the resume it may lead to. Never rejects.
     ready() {
@@ -824,10 +996,13 @@ const Auth = (() => {
       }
       signOutError = null;
       token = null;
+      signedOutReason = null;
       if (status) status.authenticated = false;
       // The session is gone server-side and its cookie with it: nothing
-      // left to resume.
+      // left to resume, and no hour left to count.
       resumeEndsAt = null;
+      idleEndsAt = null;
+      scheduleIdle();
       credentialVersion += 1;
       // The device token stays: it is the household's, not the admin's.
       notify();

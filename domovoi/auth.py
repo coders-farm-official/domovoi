@@ -14,7 +14,8 @@ uninstall / upgrade) are gated through :func:`require_admin`:
   admin password exists. Local development uses the ``domovoi plugin
   dev`` CLI (design §3.8), which never crosses HTTP.
 
-Token validation (sha256 lookup + 30-day sliding expiry) lives in
+Token validation (sha256 lookup, the 1-hour idle timeout and the
+90-day cap) lives in
 :mod:`domovoi.admin_auth`, shared with the web process — both validate
 against the same ``admin_sessions`` table. The same fail-closed posture
 now covers the rest of the security tier (config write, service restart,
@@ -35,9 +36,10 @@ async def require_admin(request: Request) -> None:
 
     501 while auth is unconfigured (no ``admin_auth`` row), 403 on a
     cookie-only mutation attempt, 401 on a missing/invalid/expired
-    Bearer token.
+    Bearer token. A request that passes is an admin action and restarts
+    the session's idle hour (:func:`domovoi.admin_auth.is_admin_activity`).
     """
-    result = await check_admin_request(request)
+    result = await check_admin_request(request, activity=True)
     if result == "ok":
         return
     if result == "pre-setup":

@@ -73,6 +73,9 @@ class FakeState:
         self.admin = admin
         self.sessions = sessions or set()
         self.device_token = device_token
+        # The tokens whose check counted as an admin action, in order
+        # (validate_token(..., activity=True): the idle timeout's clock).
+        self.acted: list[str] = []
 
 
 def install_fake_db(
@@ -94,8 +97,11 @@ def install_fake_db(
     async def has_admin_auth(_s):
         return state.admin
 
-    async def validate_token(_s, token):
-        return token in state.sessions
+    async def validate_token(_s, token, *, activity=False):
+        live = token in state.sessions
+        if live and activity:
+            state.acted.append(token)
+        return live
 
     # The browser cookie is its own secret since V028; in this fake a
     # session's string doubles as its cookie, so a test that hands the

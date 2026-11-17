@@ -110,7 +110,7 @@ def test_the_expected_surface_is_what_got_gated() -> None:
 
 
 def _classify(monkeypatch, result: str) -> None:
-    async def _fake(request, session=None):
+    async def _fake(request, session=None, *, activity=False):
         return result
 
     monkeypatch.setattr(admin_auth, "check_admin_request", _fake)

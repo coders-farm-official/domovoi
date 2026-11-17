@@ -4,6 +4,29 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.3.1 (unreleased) — admin signs out after 1 hour idle
+
+A dashboard tab left open overnight was still admin in the morning. Now an
+admin sign-in **signs out after 1 hour idle**: an hour with no change made
+as admin (`ADMIN_IDLE_TIMEOUT_MIN`, a constant). Pages that refresh
+themselves, status reads, sockets and reloads never count. The tab drops to
+signed out and says "Signed out after 1 hour without admin activity".
+
+* A reload, or the "Domovoi has been updated, reload" notice, keeps admin
+  while the sign-in is inside its hour: the reload window now counts from
+  the last admin change, not from the sign-in.
+* **Stay signed in after a reload** (`ADMIN_RELOAD_WINDOW_MIN`) now goes
+  0–60 minutes; a saved value above 60 reads as 60.
+* The 30-day sliding expiry is gone (the hour always ended a session
+  first); the 90-day cap stays.
+* After the update, a tab that was open stays admin for at most an hour
+  unless someone changes something in it.
+* Clients: `GET /api/auth/status`, login, setup and resume answers gain
+  `idle_timeout_min`, `idle_until` and `idle_in_sec`; the status read also
+  gains `ended`. Nothing was removed. The phone apps don't keep admin
+  sessions and need no change. Details: docs/SECURITY_PRIVACY.md, "Signing
+  out after an hour idle".
+
 ## 2026-11-16 — 1.3.0
 
 Version 1.3.0: the server, the Windows Setup (1.3.0, with the Windows
