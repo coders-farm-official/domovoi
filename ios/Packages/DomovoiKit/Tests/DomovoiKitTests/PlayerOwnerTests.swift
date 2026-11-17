@@ -615,8 +615,17 @@ final class PlayerOwnerTests: XCTestCase {
 
     // MARK: - 6. the manifest belongs to the server it came from
 
-    /// What `/api/capabilities` answers in the cases below; every other path
-    /// answers `{}`. Nil is a failed fetch (a 500).
+    /// What `/api/capabilities` answers in the cases below. Nil is a failed
+    /// fetch (a 500).
+    ///
+    /// **`/api/health` answers the identity proof**, and has to: the rig pins
+    /// house A's identity and holds a token for it, so every scoped read to
+    /// house A is held until `/api/health?challenge=…` proves the server
+    /// (``DomovoiClient/prepareIdentity(for:wsUpgrade:)``). The first version
+    /// answered it `{}`, every house-A manifest fetch was held and came back
+    /// nil, and two of these cases failed against correct code; the third
+    /// passed only because its last fetch went to an address with no token,
+    /// which is sent bare.
     private let manifest = Shared<String?>(nil)
 
     private static let ourRadio = #"""
@@ -630,7 +639,14 @@ final class PlayerOwnerTests: XCTestCase {
     private func serveManifest() {
         let manifest = self.manifest
         StubURLProtocol.dispatch { request in
-            guard request.url?.path == "/api/capabilities" else { return .json("{}") }
+            guard let parts = request.url.flatMap({
+                URLComponents(url: $0, resolvingAgainstBaseURL: false)
+            }) else { return .json("{}") }
+            if parts.path == "/api/health" {
+                let challenge = (parts.queryItems ?? []).first { $0.name == "challenge" }?.value
+                return .json((try? TestIdentity.real.healthBody(challenge: challenge)) ?? "{}")
+            }
+            guard parts.path == "/api/capabilities" else { return .json("{}") }
             guard let body = manifest.current else { return .json("{}", status: 500) }
             return .json(body)
         }
@@ -667,6 +683,7 @@ final class PlayerOwnerTests: XCTestCase {
         let rig = Rig(serverURL: houseA)
         manifest.set(Self.ourRadio)
         await rig.model.refreshCapabilities()
+        XCTAssertTrue(rig.model.capabilities.has(capStations), "house A's manifest never landed")
         guard let player = rig.model.player else { return XCTFail("no player") }
         player.play([PlayerSeed.station])
 
@@ -684,6 +701,7 @@ final class PlayerOwnerTests: XCTestCase {
         let rig = Rig(serverURL: houseA)
         manifest.set(Self.ourRadio)
         await rig.model.refreshCapabilities()
+        XCTAssertTrue(rig.model.capabilities.has(capStations), "house A's manifest never landed")
         guard let player = rig.model.player else { return XCTFail("no player") }
         player.play([PlayerSeed.station, PlayerSeed.transmission])
 
