@@ -146,6 +146,17 @@ a.nav-item, a.nav-item:hover { text-decoration: none; }
 }
 .who .name { font-size: 12px; color: var(--fg); font-weight: 500; }
 .who .host { font-family: var(--ff-mono); font-size: 10px; color: var(--fg-faint); }
+/* The address to share (components.jsx ShareAddressButton): click copies it.
+   In the sidebar it reads as the text line it replaced. */
+.share-address .ic { flex: none; }
+.who .share-address {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 100%;
+  background: none; border: 0; padding: 0; margin: 0; cursor: pointer; text-align: left;
+}
+.who .share-address .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.who .share-address .ic { display: none; }
+.who .share-address:hover, .who .share-address:focus-visible { color: var(--fg-muted); }
+.who .share-address:hover .ic, .who .share-address:focus-visible .ic { display: inline-flex; }
 
 /* Topbar -------------------------------------------------------- */
 .topbar {

@@ -912,9 +912,23 @@ Domovoi does; it bounds what a process gone wrong can reach directly:
   modules, logs and hostname off limits; no set-uid files, no realtime
   scheduling, no new namespaces, native system calls only, and sockets
   limited to local, IPv4, IPv6 and netlink. They run with
-  `NoNewPrivileges=yes` and no capabilities at all; `domovoi-db`, which
-  only drives the `docker` CLI, gives up devices, the clock and
-  writable-executable memory too.
+  `NoNewPrivileges=yes`. `domovoi-db` holds no capabilities at all, and,
+  since it only drives the `docker` CLI, gives up devices, the clock and
+  writable-executable memory too. `domovoi-web` holds exactly one,
+  `CAP_NET_BIND_SERVICE` (`AmbientCapabilities=` and
+  `CapabilityBoundingSet=` both name it and nothing else), so it can
+  listen on port 80 for the **short address**: `http://domovoi.local`
+  without `:6369`, a redirect to the dashboard and nothing more
+  ([SECURITY_PRIVACY.md, "The short address"](SECURITY_PRIVACY.md#the-short-address-port-80-a-redirect-and-nothing-else)).
+  The process clears its ambient set at start, so nothing it runs inherits
+  the capability. An install from before 1.4.0 gets it from its next
+  update, as the drop-in
+  `/etc/systemd/system/domovoi-web.service.d/50-domovoi-short-address.conf`.
+  A unit you wrote yourself needs those two lines to use port 80; without
+  them the dashboard runs on 6369 as before and Settings says the short
+  address is off. Something else on port 80 (a Pi-hole, nginx) keeps it:
+  Domovoi tries port 80 only when it is free, and an admin can switch the
+  short address off in Settings → System → Advanced.
 
 What is deliberately left out, and why:
 

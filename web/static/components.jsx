@@ -2698,9 +2698,92 @@ const Sidebar = ({ route, setRoute, counts, manifest, badges: given }) => {
   );
 };
 
+/* The address to share (share_address.js picks it): domovoi.local when the
+ * short address and the network name both work, else domovoi.local:6369,
+ * else the IP with :6369. One read of /api/lan-name and /api/short-address
+ * for the whole page (the topbar and the sidebar both show it), again every
+ * minute and when this browser pairs or signs in. Display only: it never
+ * changes which address the page talks to. null until known, and for a
+ * browser that may read neither: the header then shows ServerStore's label. */
+const ShareAddressStore = (() => {
+  let value = null;
+  let loading = null;
+  let timer = null;
+  const subs = new Set();
+  const here = () => {
+    try {
+      const base = ServerStore.current();
+      return { hostname: new URL(base || window.location.href).hostname };
+    } catch { return { hostname: window.location.hostname }; }
+  };
+  const load = () => {
+    if (loading) return loading;
+    loading = Promise.all([
+      apiGet('/api/lan-name', { quiet: true }).catch(() => null),
+      apiGet('/api/short-address', { quiet: true }).catch(() => null),
+    ]).then(([lan, short]) => {
+      let next = null;
+      try { next = window.ShareAddress ? window.ShareAddress.pick(lan, short, here()) : null; } catch { next = null; }
+      const changed = JSON.stringify(next) !== JSON.stringify(value);
+      value = next;
+      if (changed) subs.forEach((fn) => { try { fn(); } catch { /* one bad subscriber */ } });
+    }).finally(() => { loading = null; });
+    return loading;
+  };
+  return {
+    get: () => value,
+    refresh: load,
+    subscribe(fn) {
+      subs.add(fn);
+      if (subs.size === 1) {
+        load();
+        timer = setInterval(load, 60000);
+      }
+      return () => {
+        subs.delete(fn);
+        if (subs.size === 0 && timer) { clearInterval(timer); timer = null; }
+      };
+    },
+  };
+})();
+
+const useShareAddress = () => {
+  const [, force] = React.useReducer((n) => n + 1, 0);
+  React.useEffect(() => ShareAddressStore.subscribe(force), []);
+  // Pairing or signing in may make the reads possible.
+  React.useEffect(() => {
+    try { return Auth.subscribe(() => ShareAddressStore.refresh()); } catch { return undefined; }
+  }, []);
+  return ShareAddressStore.get();
+};
+
+// The address, click to copy ("copied" for a moment). `fallback` is shown
+// (and copied) while no shareable address is known.
+const ShareAddressButton = ({ className, fallback, style }) => {
+  const addr = useShareAddress();
+  const [copied, setCopied] = React.useState(false);
+  const text = addr ? addr.text : fallback;
+  const copyText = addr ? addr.url : fallback;
+  const onClick = async (e) => {
+    e.stopPropagation();
+    const ok = await copyToClipboard(copyText);
+    setCopied(ok ? 'copied' : 'couldn’t copy');
+    setTimeout(() => setCopied(false), 1500);
+  };
+  return (
+    <button type="button" className={`share-address ${className || ''}`} onClick={onClick} style={style}
+            title={`${copyText} · click to copy this address to share`}
+            aria-label={`copy the address ${text}`}>
+      <Icon name={copied === 'copied' ? 'check' : 'copy'} size={12} className="ic"/>
+      <span className="mono" aria-live="polite">{copied || text}</span>
+    </button>
+  );
+};
+
 // Who you are and which server you're pointed at.
 //
-//   * host — ServerStore.currentLabel(), the same origin the Topbar shows.
+//   * host — the address to share (ShareAddressButton), the same one the
+//     Topbar shows; ServerStore.currentLabel() until it is known.
 //   * name — Domovoi has no per-user login, only an admin gate. So report
 //     the auth state honestly rather than inventing a person: the sidebar
 //     doubles as the answer to "why is that page asking me to sign in?".
@@ -2723,7 +2806,7 @@ const SidebarFooter = () => {
         <Avatar name={signedIn || viewOnly ? 'Admin' : 'Guest'}/>
         <div>
           <div className="name">{signedIn ? 'Admin' : (viewOnly ? 'Admin (view only)' : 'Not signed in')}</div>
-          <div className="host" title={host}>{host}</div>
+          <ShareAddressButton className="host" fallback={host}/>
         </div>
       </div>
     </div>
@@ -2966,10 +3049,13 @@ const Topbar = ({ route, setRoute, theme, setTheme }) => {
       {/* No search box here: there is no command palette yet, and a
           tab-focusable "search anything ⌘K" that did nothing advertised
           one (F-007). Add the control back together with the feature. */}
+      {/* Where this Domovoi is, to share (click copies it), and beside it
+          the switch to another Domovoi. */}
+      <ShareAddressButton className="theme-toggle" fallback={ServerStore.currentLabel()}
+                          style={{ fontSize: 12 }}/>
       <button className="theme-toggle" onClick={() => setShowServers(true)}
-              title="switch domovoi">
+              title="switch domovoi" aria-label="switch domovoi">
         <Icon name="server" size={14} className="ic"/>
-        <span style={{ fontSize: 12 }} className="mono">{ServerStore.currentLabel()}</span>
       </button>
       {/* Help (help.jsx): Domovoi's own help desk, about this page. */}
       <button className="theme-toggle" title="help: ask about this page" aria-label="help"

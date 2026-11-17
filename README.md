@@ -408,9 +408,12 @@ python -m web.backend.main           # web dashboard on :6369
 
 ### 2. Claim the admin account
 
-Open the dashboard at `http://<server>:6369`. While nobody has claimed it,
-every page opens a welcome that asks for the **setup code** and a new admin
-password.
+Open the dashboard at `http://domovoi.local` (the server's name on your
+network; the server answers on port 80 too and sends the browser on to the
+dashboard). Where that doesn't open, use `http://domovoi.local:6369`, or
+the server's address, `http://<server>:6369`, which always works. While
+nobody has claimed it, every page opens a welcome that asks for the
+**setup code** and a new admin password.
 
 - **The setup code** is 8 words, in `~/.domovoi/setup-code.txt` on the
   server (in the home of the account the core runs as). The core also

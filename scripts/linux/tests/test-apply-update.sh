@@ -108,6 +108,12 @@ if [ "${1-}" = show ]; then
   case "$*" in *"-p Restart "*) cat "$SHIM_STATE/show-restart" 2>/dev/null || echo on-failure ;; esac
   # Its RestartSec= (show-restartusec), else systemd's default.
   case "$*" in *"-p RestartUSec "*) cat "$SHIM_STATE/show-restartusec" 2>/dev/null || echo 100ms ;; esac
+  # The dashboard unit (reconcile_short_address): loaded, and with the
+  # shipped unit's CAP_NET_BIND_SERVICE unless show-ambient / show-bounding
+  # / show-loadstate say otherwise.
+  case "$*" in *"-p LoadState "*) cat "$SHIM_STATE/show-loadstate" 2>/dev/null || echo loaded ;; esac
+  case "$*" in *"-p AmbientCapabilities "*) cat "$SHIM_STATE/show-ambient" 2>/dev/null || echo cap_net_bind_service ;; esac
+  case "$*" in *"-p CapabilityBoundingSet "*) cat "$SHIM_STATE/show-bounding" 2>/dev/null || echo cap_net_bind_service ;; esac
   exit 0
 fi
 # Every unit is enabled unless disabled-<unit> says otherwise; enable
@@ -861,6 +867,7 @@ run_update() {
     DOMOVOI_USER=tester \
     DOMOVOI_CORE_STATE_DIR="$CORE_STATE" \
     DOMOVOI_CORE_DROPIN_DIR="$CASE/dropins" \
+    DOMOVOI_WEB_DROPIN_DIR="$CASE/web-dropins" \
     DOMOVOI_JOURNALD_DROPIN_DIR="$CASE/journald" \
     DOMOVOI_UPDATE_HEALTH_TIMEOUT=1 \
     DOMOVOI_UPDATE_HEALTH_INTERVAL=0.2 \
@@ -1525,6 +1532,88 @@ case_core_restart_overridden_drop_in_is_a_warn() {
   run_update
   check "status ok" eq "$(field status)" '"ok"'
   check "a warn step" step_is core-restart warn
+  check "that names the override" grep -qF "overrides it" "$RESULT"
+  check "no rewrite, no reload" not_called "systemctl daemon-reload"
+  end_case
+}
+
+# 1.4.0, the short address: the dashboard listens on port 80 too, which
+# needs CAP_NET_BIND_SERVICE. A web unit from before it has no capability
+# at all (CapabilityBoundingSet= empty), so the update unit adds that one,
+# in a drop-in, before the services start (reconcile_short_address).
+case_short_address_drop_in_for_an_old_web_unit() {
+  new_case short_address_drop_in_for_an_old_web_unit
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  : >"$STATE/show-ambient"
+  : >"$STATE/show-bounding"
+  run_update
+  local f=$CASE/web-dropins/50-domovoi-short-address.conf
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "the drop-in is there" test -f "$f"
+  check "a [Service] section" grep -qx '\[Service\]' "$f"
+  check "the capability, ambient" grep -qx 'AmbientCapabilities=CAP_NET_BIND_SERVICE' "$f"
+  check "and the bounding set holds just that one" grep -qx 'CapabilityBoundingSet=CAP_NET_BIND_SERVICE' "$f"
+  check "nothing else is granted" eq "$(grep -c '^[A-Za-z]*Capabilit' "$f")" 2
+  check "no other capability named" bash -c '! grep -v "^#" "$1" | grep -i "cap_" | grep -vi "cap_net_bind_service"' _ "$f"
+  check "systemd reads it" called "systemctl daemon-reload"
+  check "before the services start" before "systemctl daemon-reload" "systemctl start domovoi-core.service"
+  check "an ok step" step_is short-address ok
+  check "after the signature check, before the restart" eq "$(step_names)" "signature short-address stop-services start-services health searxng"
+  end_case
+}
+
+case_short_address_drop_in_on_a_full_update() {
+  new_case short_address_drop_in_on_a_full_update
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  commit_all "B: app" >/dev/null
+  : >"$STATE/show-ambient"
+  : >"$STATE/show-bounding"
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "mode update" eq "$(field mode)" '"update"'
+  check "written" grep -qx 'AmbientCapabilities=CAP_NET_BIND_SERVICE' "$CASE/web-dropins/50-domovoi-short-address.conf"
+  check "before the backup" before "systemctl daemon-reload" "pg_dump"
+  check "an ok step" step_is short-address ok
+  end_case
+}
+
+# The shipped unit (or a drop-in already read) has it: nothing to do.
+case_short_address_left_alone_when_the_unit_has_it() {
+  new_case short_address_left_alone_when_the_unit_has_it
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  echo "cap_chown cap_net_bind_service cap_kill" >"$STATE/show-bounding"
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "no drop-in" test ! -e "$CASE/web-dropins/50-domovoi-short-address.conf"
+  check "no reload" not_called "systemctl daemon-reload"
+  check "no step" eq "$(step_names)" "signature stop-services start-services health searxng"
+  end_case
+}
+
+# No dashboard unit loaded (a hand-run dashboard): nothing to change.
+case_short_address_left_alone_without_a_web_unit() {
+  new_case short_address_left_alone_without_a_web_unit
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  echo not-found >"$STATE/show-loadstate"
+  : >"$STATE/show-ambient"
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "no drop-in" test ! -e "$CASE/web-dropins/50-domovoi-short-address.conf"
+  check "no step" eq "$(step_names)" "signature stop-services start-services health searxng"
+  end_case
+}
+
+case_short_address_overridden_drop_in_is_a_warn() {
+  new_case short_address_overridden_drop_in_is_a_warn
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  mkdir -p "$CASE/web-dropins"
+  printf '[Service]\nAmbientCapabilities=CAP_NET_BIND_SERVICE\n' >"$CASE/web-dropins/50-domovoi-short-address.conf"
+  : >"$STATE/show-ambient"
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "a warn step" step_is short-address warn
   check "that names the override" grep -qF "overrides it" "$RESULT"
   check "no rewrite, no reload" not_called "systemctl daemon-reload"
   end_case
@@ -5466,6 +5555,11 @@ CASES=(
   case_core_restart_keeps_a_households_restart_sec
   case_core_restart_left_alone_when_the_unit_restarts
   case_core_restart_overridden_drop_in_is_a_warn
+  case_short_address_drop_in_for_an_old_web_unit
+  case_short_address_drop_in_on_a_full_update
+  case_short_address_left_alone_when_the_unit_has_it
+  case_short_address_left_alone_without_a_web_unit
+  case_short_address_overridden_drop_in_is_a_warn
   case_starts_do_not_wait_for_the_cores_ready
   case_journal_made_persistent_once
   case_docker_media_order_written_once

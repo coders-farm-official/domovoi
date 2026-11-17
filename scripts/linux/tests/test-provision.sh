@@ -1548,6 +1548,11 @@ case_full_run_wsl() {
   check "db unit in the checkout's domovoi/" has_line "$ROOT/etc/systemd/system/domovoi-db.service" "WorkingDirectory=$CHECKOUT/domovoi"
   check "units otherwise as shipped" eq "$(sed "s#$CHECKOUT#/opt/domovoi#g" "$ROOT/etc/systemd/system/domovoi-web.service")" \
     "$(cat "$REAL_REPO/scripts/linux/units/domovoi-web.service")"
+  # The short address (port 80): the dashboard's unit alone gets the one
+  # low-port capability, its bounding set cut down to it.
+  check "web unit may bind port 80" has_line "$ROOT/etc/systemd/system/domovoi-web.service" "AmbientCapabilities=CAP_NET_BIND_SERVICE"
+  check "and nothing more" has_line "$ROOT/etc/systemd/system/domovoi-web.service" "CapabilityBoundingSet=CAP_NET_BIND_SERVICE"
+  check "core unit doesn't" bash -c '! grep -q CAP_NET_BIND_SERVICE "$1"' _ "$ROOT/etc/systemd/system/domovoi-core.service"
   check "restart grant" has_line "$ROOT/etc/sudoers.d/domovoi-restart" \
     "domovoi ALL=(root) NOPASSWD: /usr/bin/systemctl --no-block restart domovoi-core.service domovoi-web.service"
   check "grant checked by visudo first" called "visudo -cf"

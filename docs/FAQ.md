@@ -113,6 +113,12 @@ Running with no internet at all, for good? Answer **No, keep everything in the h
 
 Yes. After setup (which downloads the software and models), answer **No, keep everything in the house** — at the end of the first-run setup, in Settings → Privacy → Internet, or `INTERNET_ACCESS=never` in `domovoi/.env`. The server then makes no connection outside your network: the internet check stops, and every feed, search, voice, download and plugin request is refused with "internet access is turned off for this box (Settings → Privacy → Internet)". Music, timers, intercom, voice, the dashboard and the app keep working. What it can't switch off is outside the server: the satellites' own operating system keeps its clock with public time servers, and your browsers and phones are your browsers and phones. [INTERNET.md](INTERNET.md#internet-in-the-house-but-domovoi-shouldnt-use-it) has the details.
 
+## What address do I type to open Domovoi?
+
+`domovoi.local`, in any browser on your home network: no `http://`, no port. That is the server's name on your network (Settings → System → Advanced → Network name; `domovoi2.local` if another device already had the name), and Domovoi answers on port 80 with a hand-over to the dashboard's real address, `domovoi.local:6369`. This **short address** is on by default when nothing else on the server uses port 80. When something does (a Pi-hole, a web server, IIS on the Windows PC), Domovoi leaves port 80 to it and Settings says "Short address off: something else on this computer uses port 80."; then type `domovoi.local:6369`. Where the name doesn't work at all (some older phones, or a network that blocks it), the server's IP address with `:6369` always works, for example `192.168.1.20:6369`.
+
+The dashboard's header shows the easiest of these that works on your network; click it to copy it and send it to someone. An admin can turn the short address off under **Settings → System → Advanced → Short address** (to free port 80 for something else). Links, rooms and the phone apps keep using `:6369` either way, so turning it off breaks nothing.
+
 ## How do I add rooms?
 
 A room *is* a satellite, and every room is added from the dashboard, as

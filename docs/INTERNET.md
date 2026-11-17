@@ -805,7 +805,10 @@ traffic.
 
 **What you should still see under No,** all of it inside your network:
 the satellites and the phones talking to the server (ports 6369, 6370 and
-the rooms' music streams, 8050 and up), Ollama on the same box (11434),
+the rooms' music streams, 8050 and up), browsers on port 80 when someone
+types the short address `domovoi.local` (the dashboard answers there only
+to send them on to 6369, and that sends nothing out of the house), Ollama
+on the same box (11434),
 multicast name lookups (mDNS, `224.0.0.251` port 5353) so `domovoi.local`
 works, and DNS questions to your router. What the operating system does
 for itself is not Domovoi: its clock (NTP) and its own update checks (on a

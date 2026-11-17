@@ -45,9 +45,11 @@ network.
 - **Talk to a room.** Say {wake}, then what you want: "set a timer for 10
   minutes." Your household can also train a word of its own: see [Wake
   word and greeting](#node:wake-word).
-- **The dashboard.** Open it in any browser on your Wi-Fi, at the address
-  whoever set up Domovoi gave you (it ends in `:6369`). You can manage
-  music, files, chat, people and settings there.
+- **The dashboard.** Open it in any browser on your Wi-Fi: type
+  `domovoi.local`. If that doesn't open, use the address whoever set up
+  Domovoi gave you (it ends in `:6369`). The top of the dashboard shows
+  the easiest address to give someone else: click it to copy it. You can
+  manage music, files, chat, people and settings there.
 - **The Domovoi app** on Android phones. It has the everyday pages, a
   music player and Chat. With no server in reach it still plays the
   phone's own music, and a chat on the phone can run on the phone itself.
