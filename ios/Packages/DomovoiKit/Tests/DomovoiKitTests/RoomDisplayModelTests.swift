@@ -432,7 +432,9 @@ final class RoomDisplayModelTests: XCTestCase {
         for path in bad {
             XCTAssertFalse(RoomDisplayFeed.isArtPath(path), path)
         }
-        XCTAssertTrue(RoomDisplayFeed.isArtPath("/v1/music/cover/12?v=3"))
+        // Only the core's own cover route, with no query (security audit
+        // round 6, IOS-4; RoomReadLimitTests has the whole table).
+        XCTAssertFalse(RoomDisplayFeed.isArtPath("/v1/music/cover/12?v=3"))
         let f = display(#"{"type":"room_display","now_playing":{"state":"play","title":"x","art":"http://elsewhere/a.jpg"}}"#)
         XCTAssertNil(try XCTUnwrap(f.nowPlaying).art)
     }
