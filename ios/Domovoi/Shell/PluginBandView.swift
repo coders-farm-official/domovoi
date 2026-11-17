@@ -179,8 +179,22 @@ struct PluginBandView<Content: View>: View {
     }
 
     /// The collapsed row's visible half: the route's glyph and "Uses the …
-    /// plugin", wrapping rather than truncating, like every other line in the
-    /// band.
+    /// plugin", on **one line, truncated at the tail** — Android's frame
+    /// draws the same line with `maxLines = 1, overflow = Ellipsis`
+    /// (`PluginFrame.kt`).
+    ///
+    /// It wrapped, like the rest of the band, while the line was the bare
+    /// name. "Uses the Image Generation plugin" at AX5 wrapped to a row 310
+    /// of 852 points tall (train I056,
+    /// `testShell_ThePluginBandIsOneRowAtTheLargestTypeSize`, ceiling 200) —
+    /// more than the 256-point expanded band the collapse exists to replace.
+    /// Nothing is lost by the cut: the row's own accessibility label is the
+    /// whole sentence with the publisher
+    /// (``PluginBandStrings/collapsedLabel(name:publisher:)``), and the
+    /// expanded band, below the accessibility sizes, draws both lines in
+    /// full. Truncation and not `minimumScaleFactor`, which this app rejects:
+    /// shrinking the text at the sizes a person picked to read it is the
+    /// wrong way round.
     private func nameRow(_ band: PluginBand) -> some View {
         HStack(spacing: 8) {
             Image(systemName: icon)
@@ -189,7 +203,8 @@ struct PluginBandView<Content: View>: View {
                 .accessibilityHidden(true)
             Text(band.usesLine)
                 .font(.subheadline.weight(.semibold))
-                .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(1)
+                .truncationMode(.tail)
         }
     }
 
