@@ -43,6 +43,11 @@ struct ChatConversationView: View {
     @State private var photoItem: PhotosPickerItem?
     @State private var importingVideo = false
     @State private var readingVideo = false
+    /// The house's printers, read once per conversation for one question:
+    /// does a draft offer Print (``printingOffersDraftPrint(printers:)``)?
+    /// Android's `draftPrinters` (`ChatScreen.kt:497`). Built in `.task` for
+    /// ``more``'s reason.
+    @State private var printers: PrintingFilesOffer?
 
     /// The ordinal of the bubble that was at the top of the window when
     /// "show earlier" was tapped, waiting for the page above it to be drawn
@@ -155,6 +160,10 @@ struct ChatConversationView: View {
         if video == nil {
             video = makeVideoModel()
         }
+        if printers == nil {
+            printers = PrintingFilesOffer(in: model.container)
+        }
+        printers?.refresh()
         openExtras()
     }
 
@@ -173,11 +182,13 @@ struct ChatConversationView: View {
         return ChatVideoModel(in: model.container, measure: measure, onEnded: ended)
     }
 
-    /// What the screen follows: the models' first build, the thread, the
-    /// transcript, the end of a stream, the lists and the house.
+    /// What the screen follows: the models' first build (and the printers'
+    /// read, stopped when the screen goes), the thread, the transcript, the
+    /// end of a stream, the lists and the house.
     private func watchers(_ content: some View) -> some View {
         content
             .task { prepareModels() }
+            .onDisappear { printers?.stop() }
             // A thread opened from this screen (a new chat's first send makes
             // one) or from the list.
             .onChange(of: chat.openThread) { (_: Int64?, _: Int64?) in openExtras() }
@@ -297,10 +308,24 @@ struct ChatConversationView: View {
             ChatMoreReportSheetView(report: report) { sheet = nil }
         case .draft:
             if let draft {
-                ChatMoreDraftCanvasView(model: draft) {
-                    draft.close()
-                    sheet = nil
-                }
+                ChatMoreDraftCanvasView(
+                    model: draft,
+                    close: {
+                        draft.close()
+                        sheet = nil
+                    },
+                    printing: draftPrinting
+                )
+            }
+        case .printDraft(let asked):
+            if let house = draftPrinting {
+                PrintSheetView(
+                    target: ChatMoreDraftRules.printTarget(draftID: asked.draftID, version: asked.version),
+                    name: printingDraftName(title: asked.title, version: asked.version),
+                    printers: house.printers,
+                    model: house.shell,
+                    onClose: { sheet = nil }
+                )
             }
         case .talk:
             ChatMoreTalkView(chat: chat, more: more) { sheet = nil }
@@ -321,8 +346,20 @@ struct ChatConversationView: View {
                 guard let report = more?.report(for: id, appVersion: ChatMoreAppVersion.short)
                 else { return }
                 sheet = .report(report)
+            },
+            print: draftPrinting == nil ? nil : { ref in
+                sheet = .printDraft(
+                    ChatMoreDraftPrintVersion(draftID: ref.id, version: ref.version, title: ref.title)
+                )
             }
         )
+    }
+
+    /// The printers and the shell, **only when the house has a printer** —
+    /// nil draws no Print on any card or in the canvas.
+    private var draftPrinting: ChatMoreDraftPrinting? {
+        guard let printers, printers.offersDraftPrint, let house = printers.data else { return nil }
+        return ChatMoreDraftPrinting(printers: house, shell: model)
     }
 
     // MARK: - the title row

@@ -436,6 +436,29 @@ public enum ChatMoreDraftRules {
         let name = trimmed.isEmpty ? ChatMoreStrings.exportFallbackTitle : trimmed
         return "\(name) v\(version).\(format)"
     }
+
+    /// How a draft card offers Print (`DraftUi.kt:252-262`).
+    public enum CardPrint: Equatable, Sendable {
+        /// The reply asked to print (`action == "print"`): `Print`, first,
+        /// as the card's main button.
+        case primary
+        /// A card that wrote a version: `print`, after `open`.
+        case secondary
+    }
+
+    /// Whether, and how, a card offers Print: never without a printer in the
+    /// house (``printingOffersDraftPrint(printers:)``), the main button on a
+    /// card whose reply asked to print, the last one on any other.
+    public static func cardPrint(action: String, canPrint: Bool) -> CardPrint? {
+        guard canPrint else { return nil }
+        return action == "print" ? .primary : .secondary
+    }
+
+    /// The Print sheet's target for a draft's version (Android's
+    /// `PrintTarget.ChatDraft(id, version)`).
+    public static func printTarget(draftID: Int64, version: Int) -> PrintingTarget {
+        .chatDraft(draftID: draftID, version: version)
+    }
 }
 
 /// A draft's markdown as the lines a reader sees.

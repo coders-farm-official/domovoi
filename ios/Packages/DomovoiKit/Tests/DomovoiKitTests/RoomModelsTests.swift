@@ -107,6 +107,31 @@ final class RoomModelsTests: XCTestCase {
         XCTAssertNil(m.local("hey_house"), "nothing loads without its base models")
     }
 
+    /// Several words (1.4.0): an extra word the server does not list, or
+    /// serves wrong, is skipped; only the main word can fail the sync.
+    func testAnExtraWordTheServerLacksOrServesWrongIsSkippedNeverTheMainWord() throws {
+        let book = InMemoryRoomStore()
+        let house = Data("hey house model".utf8)
+        let cat = Data("porch cat model".utf8)
+        let served = RoomLock(Served(trainedList: ["hey_house.onnx": RoomModels.sha256(house), "porch_cat.onnx": RoomModels.sha256(cat)],
+                                     bodies: ["/v1/wake-models/hey_house.onnx": house, "/v1/wake-models/porch_cat.onnx": Data("wrong".utf8)]))
+        let dir = RoomTestKit.tempDir()
+        let m = RoomModels(directory: dir, book: book)
+        let r = m.sync(http: http(served), coreURL: base, fingerprint: core.fingerprint, wakeWords: ["hey_house", "porch_cat", "ghost_word"])
+        // The base models are not on this server: that is all the room lacks.
+        XCTAssertEqual(.missing(["melspectrogram.onnx", "embedding_model.onnx", "silero_vad.onnx"]), r)
+        XCTAssertTrue(m.trainedModelIntact("hey_house.onnx"))
+        XCTAssertFalse(m.trainedModelIntact("porch_cat.onnx"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent("porch_cat.onnx").path))
+        XCTAssertNil(book.trainedSHA("ghost_word.onnx"))
+        // The main word served wrong fails the sync, as one word always did.
+        let bad = m.sync(http: http(served), coreURL: base, fingerprint: core.fingerprint, wakeWords: ["porch_cat", "hey_house"])
+        guard case .failed = bad else { return XCTFail("\(bad)") }
+        // And the main word missing is what the room lacks.
+        let gone = m.sync(http: http(served), coreURL: base, fingerprint: core.fingerprint, wakeWords: ["ghost_word", "hey_house"])
+        XCTAssertEqual(.missing(["melspectrogram.onnx", "embedding_model.onnx", "silero_vad.onnx", "ghost_word.onnx"]), gone)
+    }
+
     func testThePinsAreTheCoresPins() throws {
         let text = try String(contentsOf: RoomTestKit.repo.appendingPathComponent("domovoi/satellite_media/fetchers.py"), encoding: .utf8)
         let rule = try NSRegularExpression(pattern: #""([a-z0-9_.]+\.onnx)": \("([0-9a-f]{64})", (\d+)\)"#)

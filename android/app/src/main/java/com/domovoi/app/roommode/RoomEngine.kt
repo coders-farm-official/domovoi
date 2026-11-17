@@ -197,6 +197,22 @@ class RoomEngine(private val context: Context, private val store: RoomStore) : R
     @Volatile private var loadedWake: String? = null
     @Volatile private var wakeWord = store.wakeWord
     @Volatile private var wakeThreshold = store.wakeThreshold
+    /** How many wake words this phone runs at once (the hello's
+     *  `wake_words_max`, by device class: [RoomDevice.wakeWordsMax]). */
+    private val wakeWordsMax: Int = RoomDevice.wakeWordsMax(context)
+    /** Every word the room was told to listen for, main word first, cut to
+     *  [wakeWordsMax] ([WakeWords]). */
+    @Volatile private var wakeWords: List<WakeWords.Word> = store.wakeWords.take(wakeWordsMax)
+    /** The words the listening thread has loaded (main word first) and the
+     *  files they came from; null until a load. */
+    @Volatile private var loadedWords: List<String>? = null
+    @Volatile private var loadedFiles: RoomModels.Files? = null
+    /** What this session's hello said the room listens for: when a load
+     *  ends up with other words, the room reconnects to say so. */
+    @Volatile private var helloWords: List<String>? = null
+    /** The room closed its own session to send a new hello (a changed word
+     *  list): the screen says "connecting", not "dropped". */
+    @Volatile private var rehello = false
     /** The last turn went wrong (ignored as background talk, cut off at the
      *  length cap, an error, no reply, no server): the next wake waits out
      *  the cooldown ([WakeGate]). Set from either thread, taken once by the
@@ -249,7 +265,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) : R
         connectJob = scope.launch {
             // What is already here listens at once, before the server answers
             // (re-hashed off the main thread).
-            models.local(wakeWord)?.let { if (wantModels == null) wantModels = it }
+            models.local(wakeSlugs())?.let { if (wantModels == null) wantModels = it }
             connectLoop(enrol)
         }
         healthJob = scope.launch { healthLoop() }
@@ -330,8 +346,14 @@ class RoomEngine(private val context: Context, private val store: RoomStore) : R
                 "ready" -> {
                     backoff = 1_000L
                     closed?.await()
-                    update { it.copy(link = Link.Offline("the connection to the server dropped")) }
-                    delay(backoff)
+                    if (rehello) {
+                        // Our own close, to say the new word list: at once.
+                        rehello = false
+                        update { it.copy(link = Link.Connecting) }
+                    } else {
+                        update { it.copy(link = Link.Offline("the connection to the server dropped")) }
+                        delay(backoff)
+                    }
                 }
                 "awaiting_approval", "pairing_rejected", "approval_conflict", "approval_throttled" -> {
                     // Parked or refused: ask again later (RoomSessionRules),
@@ -377,7 +399,12 @@ class RoomEngine(private val context: Context, private val store: RoomStore) : R
         val end = CompletableDeferred<Unit>()
         outcome = result
         closed = end
-        val hello = RoomProtocol.hello(enrol.roomId, wakeWord, token, store.approvalCode, echoCanceller)
+        val words = reportedWords()
+        helloWords = words
+        val hello = RoomProtocol.hello(
+            enrol.roomId, wakeWord, token, store.approvalCode, echoCanceller,
+            wakeWords = words, wakeWordsMax = wakeWordsMax,
+        )
         val request = RoomNetwork.streamRequest(RoomProtocol.streamUrl(enrol.coreUrl, enrol.roomId))
         val socket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
@@ -435,7 +462,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) : R
                 if (f.saysVoice) roomVoice = f.roomVoice
                 background { syncSounds() }
             }
-            is RoomProtocol.ServerFrame.SetWakeWord -> background { switchWakeWord(f.slug, f.threshold) }
+            is RoomProtocol.ServerFrame.SetWakeWord -> background { switchWakeWord(f.slug, f.threshold, f.words) }
             is RoomProtocol.ServerFrame.WakeModelsChanged -> background { refreshModels() }
             is RoomProtocol.ServerFrame.DropinStart -> onDropinStart(f)
             is RoomProtocol.ServerFrame.DropinEnd -> onDropinEnd()
@@ -661,9 +688,10 @@ class RoomEngine(private val context: Context, private val store: RoomStore) : R
     // ── models and sounds ───────────────────────────────────────────────
 
     private fun syncModels(client: OkHttpClient, enrol: Enrolment) {
-        when (val r = models.sync(client, enrol.coreUrl, enrol.fingerprint, wakeWord)) {
+        when (val r = models.sync(client, enrol.coreUrl, enrol.fingerprint, wakeSlugs())) {
             is RoomModels.Outcome.Ready -> {
-                if (wantModels?.wake != r.files.wake || !_status.value.wakeReady) wantModels = r.files
+                if (r.skipped.isNotEmpty()) Log.w(TAG, "wake words not on the server (not listening for them): ${r.skipped}")
+                if (wantModels?.words != r.files.words || !_status.value.wakeReady) wantModels = r.files
                 update { it.copy(wakeProblem = null) }
             }
             is RoomModels.Outcome.Missing -> {
@@ -710,17 +738,49 @@ class RoomEngine(private val context: Context, private val store: RoomStore) : R
         syncModels(client, enrol)
     }
 
-    private fun switchWakeWord(slug: String?, threshold: Double?) {
+    /**
+     * A `set_wake_word`: [slug] is the main word, [threshold] the room's
+     * threshold, [words] (1.4.0) the whole list, cut to what this phone
+     * runs ([WakeWords.plan]; without it, [slug] alone and any extras are
+     * dropped). The models are fetched; once the listening thread has
+     * loaded them the room reconnects with a hello naming what loaded
+     * ([maybeRehello]).
+     */
+    private fun switchWakeWord(slug: String?, threshold: Double?, words: List<WakeWords.Word>?) {
         if (!RoomModels.isSlug(slug)) {
             Log.w(TAG, "set_wake_word: refused slug $slug")
             return
         }
-        store.setWakeWord(slug!!, threshold)
+        val plan = WakeWords.plan(slug!!, words, wakeWordsMax)
+        if (words != null && words.size > plan.size) {
+            Log.i(TAG, "set_wake_word: this phone runs $wakeWordsMax word(s); not loading ${words.drop(plan.size).map { it.slug }}")
+        }
+        store.setWakeWord(slug, threshold, plan)
         wakeWord = slug
         wakeThreshold = store.wakeThreshold
+        wakeWords = plan
         // The pushed threshold is the room's one threshold now: say so.
         sendConfigStatus()
         refreshModels()
+    }
+
+    /** The slugs the room was told to listen for, main word first. */
+    private fun wakeSlugs(): List<String> = wakeWords.map { it.slug }.ifEmpty { listOf(wakeWord) }
+
+    /**
+     * The hello's `wake_words`: what the listening thread has loaded; when
+     * newer models are waiting to load, those (it takes them on its next
+     * frame, and reconnects if a word then fails to load); before any
+     * model, the main word alone.
+     */
+    private fun reportedWords(): List<String> {
+        val want = wantModels
+        val loaded = loadedWords
+        return when {
+            want != null && want !== loadedFiles -> want.slugs
+            loaded != null -> loaded
+            else -> listOf(wakeWord)
+        }
     }
 
     private fun syncSounds() {
@@ -733,11 +793,68 @@ class RoomEngine(private val context: Context, private val store: RoomStore) : R
 
     // ── the listening thread ────────────────────────────────────────────
 
-    private class Ears(val files: RoomModels.Files, val wake: WakeDetector, val vad: SileroVad) {
+    /** What the listening thread runs: one wake detector (one front end,
+     *  a classifier per word in [slugs], main word first) and the voice
+     *  detector. */
+    private class Ears(val files: RoomModels.Files, val slugs: List<String>, val wake: WakeDetector, val vad: SileroVad) {
         fun close() {
             runCatching { wake.close() }
             runCatching { vad.close() }
         }
+    }
+
+    /**
+     * Loads [want]: the front end once, then each word's classifier. The
+     * main word failing fails the load (as it always did); an extra word
+     * whose model will not load is left out (logged), and the hello then
+     * says so ([maybeRehello]).
+     */
+    private fun loadEars(want: RoomModels.Files): Ears {
+        val front = OrtWakeFrontEnd(want.melspectrogram, want.embedding)
+        val slugs = ArrayList<String>()
+        val classifiers = ArrayList<WakeClassifier>()
+        try {
+            for ((i, w) in want.words.withIndex()) {
+                val c = try {
+                    OrtWakeClassifier(w.file)
+                } catch (e: Exception) {
+                    if (i == 0) throw e
+                    Log.w(TAG, "could not load the wake word ${w.slug}: ${e.message}")
+                    continue
+                }
+                slugs += w.slug
+                classifiers += c
+            }
+            val vad = SileroVad(want.vad)
+            val detector = try {
+                WakeDetector(front, classifiers)
+            } catch (e: Exception) {
+                vad.close()
+                throw e
+            }
+            return Ears(want, slugs, detector, vad)
+        } catch (e: Exception) {
+            classifiers.forEach { runCatching { it.close() } }
+            runCatching { front.close() }
+            throw e
+        }
+    }
+
+    /**
+     * After a load whose words are not what this session's hello said (a
+     * pushed list, a word that would not load): close the session, so the
+     * next hello names what is running. Only while the room is idle — never
+     * in a turn or a call.
+     */
+    private fun maybeRehello() {
+        if (!ready || inCall || speaker.active || phase != Phase.LISTENING) return
+        val loaded = loadedWords ?: return
+        val said = helloWords ?: return
+        if (loaded == said) return
+        Log.i(TAG, "wake words now $loaded (the hello said $said): reconnecting to say so")
+        helloWords = null
+        rehello = true
+        runCatching { ws?.close(1000, "wake words changed") }
     }
 
     @Volatile private var captureMark = 0
@@ -753,13 +870,16 @@ class RoomEngine(private val context: Context, private val store: RoomStore) : R
                 val want = wantModels
                 if (want != null && want !== ears?.files) {
                     ears?.close()
-                    ears = runCatching {
-                        val nets = OrtWakeNets(want.melspectrogram, want.embedding, want.wake)
-                        Ears(want, WakeDetector(nets), SileroVad(want.vad))
-                    }.onFailure { Log.w(TAG, "could not load the wake word: ${it.message}") }.getOrNull()
+                    ears = runCatching { loadEars(want) }
+                        .onFailure { Log.w(TAG, "could not load the wake word: ${it.message}") }.getOrNull()
                     loadedWake = ears?.files?.wakeKey
+                    loadedFiles = want
+                    loadedWords = ears?.slugs
+                    gates = null
+                    ears?.let { if (it.slugs.size > 1) Log.i(TAG, "listening for wake words ${it.slugs}") }
                     update { it.copy(wakeReady = ears != null) }
                 }
+                maybeRehello()
                 if (muted) {
                     if (mic.openAs != null) mic.close()
                     update { it.copy(micLive = false, micBlocked = false) }
@@ -824,15 +944,18 @@ class RoomEngine(private val context: Context, private val store: RoomStore) : R
         maybeStartMusic()
     }
 
-    // The listening thread's own: the wake gate (rebuilt when the threshold
-    // changes) and the peak score of the wake that opened the next turn.
-    private var gate: WakeGate? = null
+    // The listening thread's own: the wake gates, one per loaded word
+    // (rebuilt when the words or a threshold change), and the peak score and
+    // word of the wake that opened the next turn.
+    private var gates: WakeGates? = null
     private var wakePeak: Float? = null
+    private var wakeFired: String? = null
 
-    private fun wakeGate(): WakeGate {
-        val g = gate
-        if (g != null && g.threshold == wakeThreshold) return g
-        return WakeGate(wakeThreshold).also { gate = it }
+    private fun wakeGates(e: Ears): WakeGates {
+        val thresholds = WakeWords.thresholds(e.slugs, wakeWords, wakeThreshold)
+        val g = gates
+        if (g != null && g.slugs == e.slugs && g.thresholds == thresholds) return g
+        return WakeGates(e.slugs, thresholds).also { gates = it }
     }
 
     /** One frame while listening for the wake word: true on a wake. */
@@ -843,7 +966,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) : R
             if (phase != Phase.SPEAKING) setPhase(Phase.SPEAKING)
             return false
         }
-        val g = wakeGate()
+        val g = wakeGates(e)
         if (phase == Phase.SPEAKING) {
             setPhase(Phase.LISTENING)
             e.wake.reset()
@@ -856,14 +979,13 @@ class RoomEngine(private val context: Context, private val store: RoomStore) : R
             g.quietFor(SystemClock.elapsedRealtime())
         }
         maybeStartMusic()
-        val score = e.wake.accept(frame, n) ?: return false
-        if (g.feed(score, SystemClock.elapsedRealtime())) {
-            wakePeak = g.lastPeak
-            Log.i(TAG, "wake word (peak score %.3f over %d chunk(s); threshold %.2f, %d in a row needed)"
-                .format(g.lastPeak ?: score, g.lastRun, g.threshold, g.patience))
-            return true
-        }
-        return false
+        val scores = e.wake.accept(frame, n) ?: return false
+        val fired = g.feed(scores, SystemClock.elapsedRealtime()) ?: return false
+        wakePeak = g.lastPeak
+        wakeFired = g.slugs[fired]
+        Log.i(TAG, "wake word %s (peak score %.3f over %d chunk(s); threshold %.2f, %d in a row needed)"
+            .format(g.slugs[fired], g.lastPeak ?: scores[fired], g.lastRun, g.thresholds[fired], g.patience))
+        return true
     }
 
     /** A whole turn from the wake: acknowledge, capture, reply, follow-ups. */
@@ -871,16 +993,26 @@ class RoomEngine(private val context: Context, private val store: RoomStore) : R
         val wokeAt = SystemClock.elapsedRealtime()
         // Taken once: a wake's score is about the capture right after it.
         val wakeScore = wakePeak
+        val woken = wakeFired
         wakePeak = null
+        wakeFired = null
         try {
-            turnAfterWake(mic, frame, e, firstTrigger, wokeAt, wakeScore)
+            turnAfterWake(mic, frame, e, firstTrigger, wokeAt, wakeScore, woken)
         } finally {
-            // Whatever run the gate was in is over with the turn.
-            gate?.reset()
+            // Whatever run the gates were in is over with the turn.
+            gates?.reset()
         }
     }
 
-    private fun turnAfterWake(mic: RoomMic, frame: ShortArray, e: Ears, firstTrigger: String, wokeAt: Long, wakeScore: Float?) {
+    private fun turnAfterWake(
+        mic: RoomMic,
+        frame: ShortArray,
+        e: Ears,
+        firstTrigger: String,
+        wokeAt: Long,
+        wakeScore: Float?,
+        woken: String?,
+    ) {
         pendingMusic = null
         val musicWas = music.playing
         music.stop()
@@ -917,7 +1049,12 @@ class RoomEngine(private val context: Context, private val store: RoomStore) : R
         var wakeMs: Int? = (SystemClock.elapsedRealtime() - wokeAt).toInt()
         var first = true
         while (running && !muted) {
-            val outcome = capture(mic, frame, e, trigger, if (first) ack else emptyMap(), wakeMs, preSpeech, if (first) wakeScore else null)
+            // The wake's score and word go with the capture right after it
+            // only, never a follow-up.
+            val outcome = capture(
+                mic, frame, e, trigger, if (first) ack else emptyMap(), wakeMs, preSpeech,
+                if (first) wakeScore else null, if (first) woken else null,
+            )
             first = false
             wakeMs = null
             if (outcome != CaptureOutcome.SENT) break
@@ -963,6 +1100,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) : R
         wakeMs: Int?,
         preSpeech: Int?,
         wakeScore: Float? = null,
+        wakeWord: String? = null,
     ): CaptureOutcome {
         val utt = ++uttSeq
         val hints = "speech_pause" in features
@@ -979,7 +1117,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) : R
             captureUtt = null
             return CaptureOutcome.CANCELLED
         }
-        if (!send(RoomProtocol.utteranceStart(trigger, utt, 0, wakeMs, wakeScore))) {
+        if (!send(RoomProtocol.utteranceStart(trigger, utt, 0, wakeMs, wakeScore, wakeWord))) {
             captureUtt = null
             return CaptureOutcome.DROPPED
         }
@@ -1064,23 +1202,28 @@ class RoomEngine(private val context: Context, private val store: RoomStore) : R
         return false
     }
 
-    /** One frame of a drop-in: relayed as it is. The wake word's score when
-     *  it was heard ("hey jarvis, hang up"), else null. One chunk over the
-     *  threshold is enough here, as on a Pi: the wake gate's patience and
-     *  cooldown are the main wake loop's only. */
-    private fun callFrame(frame: ShortArray, n: Int, e: Ears?): Float? {
+    /** A wake word heard during a drop-in: which word, and its score. */
+    private data class Heard(val slug: String, val score: Float)
+
+    /** One frame of a drop-in: relayed as it is. The wake word heard
+     *  ("hey jarvis, hang up"; any of the room's words), else null. One
+     *  chunk over the word's threshold is enough here, as on a Pi: the wake
+     *  gate's patience and cooldown are the main wake loop's only. */
+    private fun callFrame(frame: ShortArray, n: Int, e: Ears?): Heard? {
         if (phase != Phase.CALL) setPhase(Phase.CALL)
         update { if (!it.micLive) it.copy(micLive = true) else it }
         sendAudio(frame, n)
         if (e == null) return null
-        val score = e.wake.accept(frame, n) ?: return null
-        return score.takeIf { it > wakeThreshold }
+        val scores = e.wake.accept(frame, n) ?: return null
+        val g = wakeGates(e)
+        val i = g.hit(scores) ?: return null
+        return Heard(g.slugs[i], scores[i])
     }
 
     /** A command in the middle of a call: framed as a turn, so the core
      *  transcribes it instead of relaying it; the call goes on after. */
-    private fun callCommand(mic: RoomMic, frame: ShortArray, e: Ears, wakeScore: Float) {
-        val outcome = capture(mic, frame, e, "wake_word", CaptureMachine.ackFields(null, false), 0, null, wakeScore)
+    private fun callCommand(mic: RoomMic, frame: ShortArray, e: Ears, heard: Heard) {
+        val outcome = capture(mic, frame, e, "wake_word", CaptureMachine.ackFields(null, false), 0, null, heard.score, heard.slug)
         if (outcome == CaptureOutcome.SENT) awaitReply(mic, frame)
         e.wake.reset()
         if (inCall) setPhase(Phase.CALL) else setPhase(Phase.LISTENING)

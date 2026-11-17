@@ -86,9 +86,23 @@ public final class RoomEngine: RoomEngineControl, @unchecked Sendable {
         /// health frame's `wake_word` (nil until one loads, or after a load
         /// failed). `RoomEngine.kt` `loadedWake`.
         var loadedWake: String?
+        /// Every word the loaded ears run, main word first (1.4.0); nil
+        /// until one loads, or after a load failed.
+        var loadedWakeWords: [String]?
+        /// The `wantModels` generation the listening thread last took (loaded
+        /// or failed); a newer one is waiting to load.
+        var loadedGen = 0
         var modelsGen = 0
         var wakeWord = RoomWakeSettings.defaultWakeWord
         var wakeThreshold = RoomWakeSettings.defaultThreshold
+        /// The room's other words, as pushed (at most the phone's limit
+        /// less one).
+        var wakeExtras: [RoomWakeWord] = []
+        /// What this session's hello said the room listens for.
+        var helloWords: [String]?
+        /// The session is being closed to say a new hello (the words that
+        /// loaded changed): the connect loop dials again at once.
+        var rehello = false
         /// The last turn went wrong: the next wake waits out the cooldown.
         var quietNextWake = false
 
@@ -155,6 +169,7 @@ public final class RoomEngine: RoomEngineControl, @unchecked Sendable {
             $0.muted = muted
             $0.wakeWord = parts.store.wakeWord
             $0.wakeThreshold = parts.store.wakeThreshold
+            $0.wakeExtras = Self.capped(parts.store.wakeExtras, max: parts.wakeWordsMax)
         }
         parts.speaker.bind(onIdle: { [weak self] in self?.onSpeakerIdle() })
         parts.music.bind(
@@ -282,6 +297,7 @@ public final class RoomEngine: RoomEngineControl, @unchecked Sendable {
             s.muted = store.muted
             s.wakeWord = store.wakeWord
             s.wakeThreshold = store.wakeThreshold
+            s.wakeExtras = Self.capped(store.wakeExtras, max: parts.wakeWordsMax)
             s.lastCPUAt = parts.clock() - parts.device.processUptimeSeconds() * 1000
             s.lastCPU = 0
             return s.run
@@ -307,8 +323,8 @@ public final class RoomEngine: RoomEngineControl, @unchecked Sendable {
         let connect = Thread { [self] in
             // What is already here listens at once, before the server answers
             // (re-hashed off the main thread).
-            let word = shared.withLock { $0.wakeWord }
-            if let files = models.local(word) {
+            let words = configuredWakeWords()
+            if let files = models.local(words) {
                 shared.withLock { s in
                     if s.wantModels == nil {
                         s.modelsGen += 1
@@ -420,6 +436,27 @@ public final class RoomEngine: RoomEngineControl, @unchecked Sendable {
     public func retryNow() {
         shared.withLock { $0.checkNow += 1 }
         poke()
+    }
+
+    /// The words the room is set to run, main word first, at most this
+    /// phone's limit (what a model sync fetches and the ears load).
+    func configuredWakeWords() -> [String] {
+        let max = parts.wakeWordsMax
+        return shared.withLock { s in
+            RoomWakeWords.configured(main: s.wakeWord, extras: s.wakeExtras, max: max)
+        }
+    }
+
+    /// What the hello says the room listens for
+    /// (``RoomWakeWords/reported(main:pending:loaded:)``). Under the lock.
+    static func reportedWords(_ s: Shared) -> [String] {
+        let pending = s.wantModels.flatMap { $0.gen != s.loadedGen ? $0.files.wakeKeys : nil }
+        return RoomWakeWords.reported(main: s.wakeWord, pending: pending, loaded: s.loadedWakeWords)
+    }
+
+    /// `extras` as this phone keeps them: at most its limit less one.
+    static func capped(_ extras: [RoomWakeWord], max: Int) -> [RoomWakeWord] {
+        Array(extras.prefix(Swift.max(0, Swift.min(max, RoomWakeWords.maxPerRoom) - 1)))
     }
 
     /// Hands the listening thread these models, as a verified sync would
@@ -567,6 +604,9 @@ public struct RoomEngineParts: Sendable {
     /// The phone can cancel its own echo (an iPhone always can): it takes
     /// drop-ins, and says `full_duplex` and `dropin_ready`.
     public var echoCanceller: Bool
+    /// How many wake words this phone runs at once (its hello's
+    /// `wake_words_max`, 1.4.0): ``RoomWakeWords/deviceMax(physicalMemory:)``.
+    public var wakeWordsMax: Int
     /// Monotonic milliseconds.
     public var clock: @Sendable () -> Int64
     /// Wall seconds (the health frame's `ts`).
@@ -590,6 +630,7 @@ public struct RoomEngineParts: Sendable {
         gain: RoomGain = RoomGain(),
         audio: any RoomAudioSessionHooks = RoomNoAudioSession(),
         echoCanceller: Bool,
+        wakeWordsMax: Int = RoomWakeWords.deviceMax(),
         clock: @escaping @Sendable () -> Int64 = RoomClock.monotonicMS,
         wall: @escaping @Sendable () -> Double = RoomClock.wallSeconds,
         healthIntervalMS: Int64 = RoomEngine.healthIntervalMS
@@ -610,6 +651,7 @@ public struct RoomEngineParts: Sendable {
         self.gain = gain
         self.audio = audio
         self.echoCanceller = echoCanceller
+        self.wakeWordsMax = min(max(wakeWordsMax, 1), RoomWakeWords.maxPerRoom)
         self.clock = clock
         self.wall = wall
         self.healthIntervalMS = healthIntervalMS

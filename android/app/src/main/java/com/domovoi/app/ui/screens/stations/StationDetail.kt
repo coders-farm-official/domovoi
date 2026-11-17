@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -17,6 +18,7 @@ import androidx.compose.material.icons.filled.CellTower
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Radio
+import androidx.compose.material.icons.filled.Speaker
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -54,10 +56,17 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
-/** Detail pane for a selected favorite — web StationDetail analog. */
+/** Detail pane for a selected favorite — web StationDetail analog.
+ *  [onPlayInRoom] is "play in a room" (StationRoomPlay.kt), null where it
+ *  isn't offered. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun StationDetailCard(s: Station, refresh: () -> Unit, modifier: Modifier = Modifier) {
+fun StationDetailCard(
+    s: Station,
+    refresh: () -> Unit,
+    modifier: Modifier = Modifier,
+    onPlayInRoom: ((Station) -> Unit)? = null,
+) {
     DomovoiCard(modifier, padding = 0) {
         Column(Modifier.fillMaxWidth().padding(16.dp)) {
             Row(
@@ -93,6 +102,13 @@ fun StationDetailCard(s: Station, refresh: () -> Unit, modifier: Modifier = Modi
                 color = Domovoi.colors.fgMuted,
                 modifier = Modifier.padding(top = 4.dp),
             )
+            if (onPlayInRoom != null) {
+                OutlinedButton(onClick = { onPlayInRoom(s) }, modifier = Modifier.padding(top = 10.dp)) {
+                    Icon(Icons.Filled.Speaker, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("play in a room")
+                }
+            }
         }
         HorizontalDivider(color = Domovoi.colors.borderSoft)
 

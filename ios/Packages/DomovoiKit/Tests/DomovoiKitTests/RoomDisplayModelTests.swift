@@ -706,6 +706,23 @@ final class RoomDisplayKioskTests: XCTestCase {
         for _ in 0..<5 { await Task.yield() }
     }
 
+    /// Yields until `done` (the model has taken what the fake engine sent:
+    /// its status and display watchers run as their own tasks, so a fixed
+    /// number of yields can miss them on a busy runner), at most
+    /// ``settleYieldLimit`` times. The style of ChatModelTests'.
+    private func settleUntil(
+        _ done: @MainActor () -> Bool,
+        _ what: String = "the kiosk",
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        for _ in 0..<settleYieldLimit {
+            if done() { return }
+            await Task.yield()
+        }
+        XCTFail("\(what) never settled in \(settleYieldLimit) yields", file: file, line: line)
+    }
+
     // Android's last two room cases: the big button and the status line stay.
 
     func testTheBigButtonIsWhatTheRoomNeeds() async throws {
@@ -715,12 +732,12 @@ final class RoomDisplayKioskTests: XCTestCase {
         m.enteredForeground()
         let e = try r.engine()
         e.send(RoomStatus(link: .ready, wakeReady: true))
-        await settle()
+        await settleUntil({ m.action == .mute }, "the ready status")
         XCTAssertEqual(.mute, m.action)
         var muted = RoomStatus(link: .ready, wakeReady: true)
         muted.muted = true
         e.send(muted)
-        await settle()
+        await settleUntil({ m.action == .unmute }, "the muted status")
         XCTAssertEqual(.unmute, m.action)
 
         let locked = DisplayKioskRig()
@@ -738,11 +755,11 @@ final class RoomDisplayKioskTests: XCTestCase {
         let e = try r.engine()
         let waiting = RoomStatus(link: .awaitingApproval(code: "481516", removed: false))
         e.send(waiting)
-        await settle()
+        await settleUntil({ m.approvalCode != nil }, "the parked status")
         XCTAssertEqual("481516", m.approvalCode)
         XCTAssertEqual(RoomStatusText.detail(waiting, running: true, wakeWord: "hey_jarvis"), m.detail)
         e.send(RoomStatus(link: .ready, wakeReady: true))
-        await settle()
+        await settleUntil({ m.approvalCode == nil }, "the ready status")
         XCTAssertEqual("Say “Hey Jarvis”", m.detail)
     }
 
@@ -754,7 +771,7 @@ final class RoomDisplayKioskTests: XCTestCase {
         XCTAssertNil(m.feed)
         let f = RoomFeed(nowPlaying: nil, timers: [RoomFeedTimer(id: 1, kind: .timer, label: "pasta", remainingMS: 60_000, totalMS: nil)], ringing: nil)
         e.show(f)
-        await settle()
+        await settleUntil({ m.feed != nil }, "the feed")
         XCTAssertEqual(f, m.feed)
         XCTAssertEqual(40, m.volume)
         m.enteredBackground()
@@ -798,18 +815,18 @@ final class RoomDisplayKioskTests: XCTestCase {
         m.enteredForeground()
         let e = try r.engine()
         e.send(RoomStatus(link: .ready, wakeReady: true))
-        await settle()
+        await settleUntil({ m.detail == "Say “Hey Jarvis”" }, "the ready status")
         h.clock += 61
         m.tick()
         XCTAssertTrue(m.dimmed)
         e.show(RoomFeed(nowPlaying: nil, timers: [], ringing: RoomFeedRinging(fireID: 7, kind: .alarm, label: nil)))
-        await settle()
+        await settleUntil({ m.feed?.ringing != nil }, "the ringing feed")
         XCTAssertFalse(m.dimmed, "something going off puts the person's level back")
         h.clock += 600
         m.tick()
         XCTAssertFalse(m.dimmed, "never dims while it rings")
         e.show(RoomFeed(nowPlaying: nil, timers: [], ringing: nil))
-        await settle()
+        await settleUntil({ m.feed != nil && m.feed?.ringing == nil }, "the feed with nothing ringing")
         h.clock += 61
         m.tick()
         XCTAssertTrue(m.dimmed, "stopped: the idle rule again")

@@ -1,11 +1,13 @@
 package com.domovoi.app.roommode
 
+import android.app.ActivityManager
 import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.net.wifi.WifiManager
 import android.os.BatteryManager
+import android.os.Build
 import com.domovoi.app.DomovoiApplication
 import java.io.File
 
@@ -103,6 +105,21 @@ object RoomDevice {
     /** The phone has a PIN, pattern, password (or biometrics over one). */
     fun deviceSecure(context: Context): Boolean =
         context.getSystemService(KeyguardManager::class.java)?.isDeviceSecure ?: false
+
+    /**
+     * How many wake words this phone runs at once (the hello's
+     * `wake_words_max`, [WakeWords.limitFor]): fewer on a 32-bit phone (no
+     * 64-bit ABI, or this app running 32-bit) or one with ~2 GB of memory
+     * or less (or that Android calls low-RAM).
+     */
+    fun wakeWordsMax(context: Context): Int {
+        val am = context.getSystemService(ActivityManager::class.java)
+        val total = runCatching {
+            ActivityManager.MemoryInfo().also { am?.getMemoryInfo(it) }.totalMem
+        }.getOrNull()?.takeIf { it > 0 }
+        val is64 = Build.SUPPORTED_64_BIT_ABIS.isNotEmpty() && android.os.Process.is64Bit()
+        return WakeWords.limitFor(is64, total, am?.isLowRamDevice == true)
+    }
 
     /** VmRSS of this process, in kB. */
     fun rssKb(): Long? = status("VmRSS:")?.split(Regex("\\s+"))?.firstOrNull()?.toLongOrNull()

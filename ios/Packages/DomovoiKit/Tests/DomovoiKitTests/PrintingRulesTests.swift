@@ -422,7 +422,13 @@ final class PrintingRulesTests: XCTestCase {
         )
         XCTAssertEqual(
             PrintingStrings.networkOnlyLine,
-            "Works with network printers (AirPrint, IPP Everywhere, Mopria). USB printers aren't supported."
+            "Domovoi works with Wi-Fi and network printers (AirPrint, IPP Everywhere or Mopria), and their "
+                + "scanners. USB printers aren't supported."
+        )
+        XCTAssertEqual(
+            PrintingStrings.addByAddressHint,
+            "The address is on the printer's own screen or settings page. Only printers on your Wi-Fi or "
+                + "plugged into your router work: a printer on a USB cable can't be added."
         )
     }
 

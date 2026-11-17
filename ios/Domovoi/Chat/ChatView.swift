@@ -58,15 +58,17 @@ import SwiftUI
 /// picture that came from the dashboard or from Android
 /// (``ChatModel/visionRefusal``).
 ///
-/// **The Revise box on a draft card, "send to home", print, and letters.**
+/// **The Revise box on a draft card, "send to home", and letters.**
 /// The first sends `revise_draft` on a message, which is the same missing
-/// send-body key; print needs `GET /api/printers` and Android itself draws no
-/// print without a printer (`ChatScreen.kt:1013`), so leaving it out is
-/// Android's own behaviour rather than a divergence; "send to home" posts to
+/// send-body key; "send to home" posts to
 /// the Documents item's route and a saved draft is already in the house; and
 /// `/letters/read` hands back a transcript that Android's **phone** model then
 /// explains (`PhoneLetters.kt`) — this app has one place and no phone model,
 /// so there is nowhere for that transcript to become an answer.
+///
+/// **Print on a draft is here** (2026-11-17): the card and the canvas open the
+/// house's Print sheet when `GET /api/printers` says there is a printer
+/// (``printingOffersDraftPrint(printers:)``), as Android's do.
 ///
 /// **Chat export.** `PhoneChatExport.kt:24` zips the **phone's own** chats and
 /// puts nothing of the house in the file. There are no phone chats here, so
