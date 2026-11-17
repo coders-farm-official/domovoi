@@ -103,7 +103,16 @@ struct FhThreadView: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
+                // **A `VStack`, not a `LazyVStack`.** Train I066's audit
+                // failed the first bubble with `Dynamic Type font sizes are
+                // partially unsupported` although its font is `.body`: the
+                // finding this app has paid for twice before is text inside a
+                // lazy container's cell (``HomeEverythingView``'s and
+                // ``NewsTopicsView``'s notes, each measured: the same `Text`
+                // out of the lazy container audits clean). A conversation is
+                // a page of 50, and more only by "Load earlier", so the
+                // laziness earns nothing here either.
+                VStack(alignment: .leading, spacing: 10) {
                     if model.thread.more {
                         FhLoadEarlier(model: model)
                     }
@@ -157,7 +166,9 @@ struct FhMessageBubble: View {
 
     var body: some View {
         VStack(alignment: outgoing ? .trailing : .leading, spacing: 3) {
-            FhPlainText(text: message.body ?? "")
+            // `.body`, a Dynamic Type style, said here rather than left to the
+            // default so the bubble's text style is on the page.
+            FhPlainText(text: message.body ?? "", font: .body)
                 .padding(.horizontal, 11)
                 .padding(.vertical, 8)
                 .background(
