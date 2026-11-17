@@ -116,7 +116,7 @@ _LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
 HOST_REPORT = "/var/lib/domovoi-mac/short_address.json"
 HOST_REPORT_MAX_BYTES = 1024
 HOST_STATES = ("on", "taken", "unchecked")
-_HOLDER = re.compile(r"^[A-Za-z0-9._ -]{1,32}$")
+_HOLDER = re.compile(r"^[A-Za-z0-9._ -]{1,32}\Z")
 
 
 def _root_only(st: os.stat_result) -> bool:

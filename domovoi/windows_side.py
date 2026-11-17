@@ -147,7 +147,7 @@ _AT_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\Z"
 _ID_RE = re.compile(r"^[0-9a-f]{16}\Z")
 # A Windows path the tray names for a log: a drive, then no control or
 # reserved characters.
-_LOG_RE = re.compile(r'^[A-Za-z]:\[^<>"|?*\x00-\x1f]{1,250}\Z')
+_LOG_RE = re.compile(r'^[A-Za-z]:\\[^<>"|?*\x00-\x1f]{1,250}\Z')
 # A log the Mac helper names: in Domovoi's own root-only folders.
 _MAC_LOG_RE = re.compile(r'^/Library/(?:Logs|Application Support)/Domovoi/[^\x00-\x1f]{1,200}\Z')
 
