@@ -257,6 +257,35 @@ async def test_the_household_token_reaches_only_the_household_routes(name, monke
         assert forwarded == []
 
 
+@pytest.mark.asyncio
+async def test_the_open_conversations_own_mark_read_is_no_admin_activity(monkeypatch, forwarded) -> None:
+    # Audit R6 WEB-24: the open conversation marks itself read from its
+    # 10-second poll when a friend's message arrives. With the admin
+    # Bearer on an admin write gate, each one restarted the idle hour, so
+    # a chatty friend house could keep an admin signed in for 90 days. The
+    # route is on the device tier, whose admin fallback is read-only.
+    state = install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN})
+    async with _client(bearer(ADMIN_TOKEN)) as c:
+        r = await _send(c, "mark-read")
+        assert r.status_code == 200, r.text
+        assert state.acted == []
+        r = await _send(c, "rename")  # a person's admin action still counts
+        assert r.status_code == 200 and state.acted == [ADMIN_TOKEN]
+
+
+def test_the_page_sends_no_admin_write_by_itself() -> None:
+    # The page's own timers may only reach GETs or household routes: the
+    # one write it sends unasked is mark-read, which is on the device tier.
+    src = (STATIC / "friend_houses.jsx").read_text(encoding="utf-8")
+    body = src[src.index("const markRead"):]
+    body = body[:body.index("};") + 2]
+    assert "apiPost(`${FH_API}/conversations/${house}/read`" in body
+    assert ("POST", "/api/friend-houses/conversations/{house}/read") in HOUSEHOLD_ROUTES
+    for line in src.splitlines():
+        if "useFhEvery(" in line and "=>" in line:
+            assert not any(w in line for w in ("apiPost", "apiPut", "apiPatch", "apiDel")), line
+
+
 @pytest.mark.parametrize("name", _IDS)
 @pytest.mark.asyncio
 async def test_an_admin_bearer_reaches_the_cores_route(name, monkeypatch, forwarded) -> None:
