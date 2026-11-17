@@ -725,7 +725,7 @@ async def status(s, room_words: dict[str, str]) -> dict[str, Any]:
     else:
         note = (f"New rooms can't wake yet: {current['reason']}, and the \"Hey Jarvis\" model "
                 "they would wake on meanwhile isn't on this server either. "
-                + ("Turn internet access on (Settings → Internet) so the server can download "
+                + ("Turn internet access on (Settings → Privacy → Internet) so the server can download "
                    "them." if egress.internet_turned_off() else
                    "Refresh the satellite caches when the internet works "
                    "(Settings → Rooms → prepare satellite media)."))

@@ -161,7 +161,7 @@ def refusal(pin: dict[str, Any]) -> dict[str, str] | None:
     cached = iso_present(pin)
     if not cached and egress.internet_turned_off():
         return {"reason": "internet_off", "message": (
-            f"Internet access is off for this server (Settings → Internet), so it can't download "
+            f"Internet access is off for this server (Settings → Privacy → Internet), so it can't download "
             f"Debian {pin['version']} ({_gb(pin['size'])}), which every stick starts from. "
             "Turn internet access on, at least while the stick is prepared.")}
     free, need = free_bytes(builds_root()), need_bytes(pin, cached)

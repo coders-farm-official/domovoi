@@ -172,7 +172,7 @@ def test_a_bootstrapped_env_carries_the_examples_strict_pairing() -> None:
 def test_the_example_documents_the_internet_answer() -> None:
     text = ENV_EXAMPLE.read_text(encoding="utf-8")
     assert "# INTERNET_ACCESS=" in text
-    for word in ("always", "sometimes", "never", "Settings → Internet", "docs/INTERNET.md"):
+    for word in ("always", "sometimes", "never", "Settings → Privacy → Internet", "docs/INTERNET.md"):
         assert word in text, word
     assert "INTERNET_ACCESS" not in _example_values(), "the example must leave the answer unset"
 

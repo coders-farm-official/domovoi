@@ -47,6 +47,7 @@ from web.backend.api import audiobooks as audiobooks_api
 from web.backend.api import documents as documents_api
 from web.backend.api import files as files_api
 from web.backend.api import fonts as fonts_api
+from web.backend.api import friend_houses as friend_houses_api
 from web.backend.api import printers as printers_api
 from web.backend.api import files_security
 from web.backend.api import greetings as greetings_api
@@ -71,6 +72,7 @@ from web.backend.api import podcasts as podcasts_api
 # /api/plugins/radio via the plugin host — no static import.
 from web.backend.api import plugins as plugins_api
 from web.backend.api import satellite_media as satellite_media_api
+from web.backend.api import short_address as short_address_api
 from web.backend.api import satellites as satellites_api
 from web.backend.api import stats as stats_api
 from web.backend.api import up_next as up_next_api
@@ -88,6 +90,7 @@ from web.backend.static_cache import (
     current_bundle,
 )
 from web.backend import plugin_host
+from web.backend import short_address
 from web.backend import realtime as realtime_mod
 from web.backend.middleware import (
     BodyLimitMiddleware as UploadBodyLimitMiddleware,
@@ -295,6 +298,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await poll_loop.start()
     await listen_task.start()
 
+    # The short address (web/backend/short_address.py): port 80 hands a
+    # browser over to this port, when port 80 is free and the admin's
+    # switch is on. Not under stubs: the suite never binds port 80.
+    if not settings.use_stubs:
+        await short_address.SERVICE.start(host=_HOST, target_port=_PORT)
+
     # NOTE (stage C6): the Office-Suite stale-lock sweeper
     # (domovoi/workers/document_lock_sweeper.py) moved onto the core
     # process's declarative worker registry (design §4.5) with the rest
@@ -306,6 +315,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        await short_address.SERVICE.stop()
         await chat_doc_jobs.shutdown()
         await chat_api.stop_unsent_sweeper()
         # Co-editing rooms: last edits to Postgres, a version kept, sockets
@@ -430,7 +440,7 @@ app.include_router(library_tools_api.router)
 # clearing a person's and deleting all. Literal paths, its own module.
 app.include_router(music_listens_api.router)
 app.include_router(up_next_api.router)
-# Queue history (1.3.1): /api/music/up-next/history — admin reads of
+# Queue history (1.4.0): /api/music/up-next/history — admin reads of
 # what Up next picked and why; read-only, its own literal prefix.
 app.include_router(up_next_history_api.router)
 app.include_router(music_mix_api.router)
@@ -465,6 +475,7 @@ app.include_router(satellites_api.timers_router)
 app.include_router(calendar_api.router)
 app.include_router(lists_api.router)
 app.include_router(config_api.router)
+app.include_router(short_address_api.router)
 app.include_router(playlists_api.router)
 app.include_router(greetings_api.router)
 app.include_router(voices_api.router)
@@ -482,6 +493,8 @@ app.include_router(files_api.blocks_router)
 app.include_router(fonts_api.router)
 # Printers, printing and scanning: proxies to the core's /v1/printers, /v1/print, /v1/scan.
 app.include_router(printers_api.router)
+# Friend Houses: proxies to the core's /v1/admin/friend-houses (security tier at both hops).
+app.include_router(friend_houses_api.router)
 app.include_router(podcasts_api.router)
 app.include_router(audiobooks_api.router)
 app.include_router(videos_api.router)
@@ -816,6 +829,10 @@ else:
 def main() -> None:
     import uvicorn
 
+    # Before any thread starts: the unit's CAP_NET_BIND_SERVICE (for the
+    # short address on port 80) stays with this process and out of every
+    # program it runs (web/backend/short_address.py).
+    short_address.keep_bind_capability_from_children()
     uvicorn.run(
         "web.backend.main:app",
         host=_HOST,

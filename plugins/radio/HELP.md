@@ -23,8 +23,9 @@ play in the browser; tell a room to tune it by voice.
 
 Say "stream KEXP", "play lofi radio" or "play the station Lofi 24/7" in
 any room. Domovoi looks in your favorites first, then the other stations
-you have played, then (if the internet is allowed) the station directory,
-and offers what it finds there. If it isn't sure it heard the name right,
+it has saved (ones you've played, and FM stations you imported), then (if the internet is allowed) the station directory,
+and offers what it finds there. It goes by how a name sounds: "lo-fi 24
+slash 7" finds "Lofi 24/7". If it isn't sure it heard the name right,
 it asks "Did you mean …?": answer yes, no, or the name. While a station
 plays, "add this to my favorites" stars it. "Stop the radio" stops it.
 
@@ -41,7 +42,7 @@ loads the FM stations for your state.
 
 ## Why does a station not play?
 
-- With the internet set to No (Settings → Internet), internet stations
+- With the internet set to No (Settings → Privacy → Internet), internet stations
   can't play; FM still can.
 - Voice offers stations from the internet directory only when the
   internet is allowed; with it set to No, star the station first.
@@ -56,7 +57,7 @@ For your favorite stations, Radio notes the songs that are playing: from
 the station's own titles, and from short clips it identifies against your
 own music library first, then an online song-identification service (Shazam).
 That means a short clip of a favorite station can leave your home. Set
-the internet to No (Settings → Internet) and nothing is sent; to keep the
+the internet to No (Settings → Privacy → Internet) and nothing is sent; to keep the
 internet on but stop the clips, set `RADIO_SAMPLER_ENABLED=false` in
 `~/.domovoi/plugins/radio.env` and restart the server. Radio only
 records what it heard; it never downloads anything.

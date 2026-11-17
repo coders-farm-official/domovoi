@@ -101,9 +101,41 @@ namespace Domovoi.Windows.Helper
                     }
                 }
             }
-            var owners = PortCheck.Owners(PortScan.Listeners(), installing ? null : ExcludedRanges());
+            var listeners = PortScan.Listeners();
+            var owners = PortCheck.Owners(listeners, installing ? null : ExcludedRanges());
             o.Kv("ports_taken", owners.Count > 0 ? "1" : "0");
             foreach (var w in owners) o.Kv("port_owner", w.Kind + "|" + w.Title + "|" + w.Advice);
+            ShortAddress(o, listeners);
+        }
+
+        // The short address's port 80 (Ports.cs, ShortAddressCheck): for the
+        // log only, never a pop-up. Taken, the dashboard leaves it alone and
+        // says so in Settings.
+        static void ShortAddress(Output o, List<Listener> listeners)
+        {
+            o.Kv("short_address", ShortAddressCheck.State(listeners));
+            var reserved = ShortAddressCheck.ParseUrlAcl(UrlAcl());
+            if (reserved.Count > 0) o.Kv("short_address_urlacl", string.Join(" ", reserved.ToArray()));
+        }
+
+        // `netsh http show urlacl`: a read. Never `add` or `delete` here.
+        static string UrlAcl()
+        {
+            try
+            {
+                var psi = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "netsh.exe"), "http show urlacl");
+                psi.UseShellExecute = false;
+                psi.CreateNoWindow = true;
+                psi.RedirectStandardOutput = true;
+                using (var p = Process.Start(psi))
+                {
+                    string text = p.StandardOutput.ReadToEnd();
+                    p.WaitForExit(15000);
+                    return text;
+                }
+            }
+            catch (System.ComponentModel.Win32Exception) { return ""; }
+            catch (InvalidOperationException) { return ""; }
         }
 
         // -- an uninstall Windows finishes at the next restart -----------

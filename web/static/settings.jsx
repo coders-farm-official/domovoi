@@ -1140,7 +1140,7 @@ const WindowsSideNotes = ({ win, channel, busy, onRetry, requesting, onCancel, c
 const VersionSection = () => {
   const { data: cfg } = useApiObject('/api/config');
   // Checking and pulling talk to the git remote: greyed under "No"
-  // (Settings → Internet). Restarting stays — it never leaves the box.
+  // (Settings → Privacy → Internet). Restarting stays — it never leaves the box.
   const internetOff = internetOffIn(cfg);
   const { data: core, error: coreError, refresh: refreshCore } = useApiObject('/api/config/version');
   // The web answered for the core: it could not reach it (bridge_response's
@@ -1363,8 +1363,8 @@ const VersionSection = () => {
 
   const pull = async () => {
     if (!window.confirm(
-      'Pull the latest domovoi code (git pull --ff-only)?\n\n' +
-      'This updates the files on the Domovoi host but does not load them — ' +
+      'Update Domovoi?\n\n' +
+      'This puts the newest version on the Domovoi server but does not start it yet — ' +
       'this panel will then offer the restart that does. Rooms can be ' +
       'upgraded individually afterwards.'
     )) return;
@@ -1772,7 +1772,7 @@ const configLoadMessage = (error) => {
  * help and "test the key". The test asks AcoustID once — about the key
  * typed in the box, else the saved one — and only when the household's
  * internet answer lets song recognition go out: under No there is no
- * button, just a line pointing at Settings → Internet (no dead controls).
+ * button, just a line pointing at Settings → Privacy → Internet (no dead controls).
  * #settings/advanced/acoustid-key (ACOUSTID_KEY_ROUTE) lands here:
  * `marked` lights the block up for a moment.
  *
@@ -1832,7 +1832,7 @@ const AcoustidKeyField = ({ f, value, onChange, internetOff, marked }) => {
       {internetOff ? (
         <div className="config-acoustid-off" style={{ fontSize: 12, color: 'var(--fg-muted)', padding: '0 0 10px' }}>
           Song recognition is off: this box doesn’t use the internet. Change that in{' '}
-          <a href="#settings/internet">Settings → Internet</a>.
+          <a href="#settings/internet">Settings → Privacy → Internet</a>.
         </div>
       ) : canTest && (
         <div className="config-acoustid-test"
@@ -2027,7 +2027,7 @@ const ConfigPanel = ({ setupAsked = false, mark = null, startFolded = false }) =
              || internetField.value || 'not answered'}</span>
       <span style={{ color: 'var(--fg-muted)' }}> · change it in </span>
       <a href="#settings/internet" className="home-link">
-        Settings → Internet
+        Settings → Privacy → Internet
       </a>
     </div>
   );
@@ -2040,6 +2040,7 @@ const ConfigPanel = ({ setupAsked = false, mark = null, startFolded = false }) =
     {/* The server's name on the home network: under Admin, above the
      * configuration (owner, 2026-11-12; it was in About & updates). */}
     <div data-settings-mark="network-name"><NetworkNameCard/></div>
+    <div data-settings-mark="short-address"><ShortAddressCard/></div>
     <Card title="Domovoi configuration"
           sub="Live-editable settings. Some changes apply instantly; those marked “restart” need a Domovoi server restart."
           action={folded && (
@@ -4175,6 +4176,80 @@ const NetworkNameCard = () => {
   );
 };
 
+/* The short address (GET/PUT /api/short-address, web/backend/short_address.py):
+ * port 80 hands browsers over to the dashboard, so "domovoi.local" opens
+ * without ":6369". On by default when nothing else on this computer uses
+ * port 80; off quietly when something does, said here. An admin switches
+ * it off or on (on tries port 80 again). Hidden where it can't exist (a
+ * development box that isn't a Linux server). */
+const SHORT_ADDRESS_STATE = {
+  on: { tone: 'ok', word: 'on' },
+  off: { tone: 'idle', word: 'off' },
+  taken: { tone: 'warn', word: 'off: port 80 in use' },
+  no_permission: { tone: 'warn', word: 'off: not allowed' },
+  failed: { tone: 'err', word: 'off: failed' },
+};
+const ShortAddressCard = () => {
+  const admin = useAdminSignedIn();
+  const { data, error, refresh } = useApiObject('/api/short-address', { quiet: true });
+  const lan = useApiObject('/api/lan-name', { quiet: true }).data;
+  const [fire, node] = useToast();
+  const [saving, setSaving] = React.useState(false);
+  if (error && !data) return null;     // an older server, or not paired
+  if (!data || !SHORT_ADDRESS_STATE[data.state]) return null;
+  const st = SHORT_ADDRESS_STATE[data.state];
+  const name = lan && lan.claimed && ['announced', 'held', 'taken', 'checking'].includes(lan.state)
+    ? (lan.fqdn || `${lan.claimed}.local`) : null;
+  const put = async (enabled) => {
+    setSaving(true);
+    try {
+      const d = await apiFetch('/api/short-address', { method: 'PUT', body: JSON.stringify({ enabled }) });
+      if (d && d.message) fire(d.message);
+      refresh();
+      try { ShareAddressStore.refresh(); } catch { /* the header catches up within a minute */ }
+    } catch (e) {
+      fire(`short address: ${apiErrorText(e)}`);
+    } finally { setSaving(false); }
+  };
+  const retry = data.enabled && ['taken', 'no_permission', 'failed'].includes(data.state);
+  return (
+    <Card title="Short address"
+          sub={`Lets browsers open this server without :${data.dashboard_port}. Links, rooms and the apps keep using :${data.dashboard_port}.`}>
+      <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 8, fontSize: 13 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <span style={{ color: 'var(--fg-muted)', minWidth: 96 }}>short address</span>
+          {data.state === 'on' && name
+            ? <a className="mono" href={`http://${name}`} style={{ color: 'var(--brand-ink)' }}>{name}</a>
+            : null}
+          <Pill tone={st.tone}>{st.word}</Pill>
+          {admin && retry && (
+            <Button icon="refresh-cw" disabled={saving} onClick={() => put(true)}>check again</Button>
+          )}
+        </div>
+        {data.state !== 'on' && data.state !== 'off' && (
+          <div style={{ color: 'var(--fg-muted)', paddingLeft: 108 }}>{data.message}</div>
+        )}
+        {data.state === 'on' && !name && (
+          <div style={{ color: 'var(--fg-muted)', paddingLeft: 108 }}>
+            No network name is announced: type this server’s address, without :{data.dashboard_port}.
+          </div>
+        )}
+        {admin && (
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, color: 'var(--fg-muted)', paddingLeft: 108 }}>
+            <input type="checkbox" checked={!!data.enabled} disabled={saving}
+                   onChange={(e) => put(e.target.checked)}/>
+            answer on port 80 and send browsers on to :{data.dashboard_port}
+          </label>
+        )}
+        <div style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
+          port 80 only redirects: it serves nothing else, and only for this server’s own name or address
+        </div>
+      </div>
+      {node}
+    </Card>
+  );
+};
+
 /* About & updates (Settings → System): what Domovoi is, then the version
  * it runs and its updates (VersionSection, Configuration's until
  * 2026-10-21). The version answers a paired device or an admin; anyone
@@ -5815,7 +5890,7 @@ const CapturesPanel = () => {
 const SETTINGS_GROUPS = [
   // "Rooms & devices" until 2026-11-09: its old address still opens it.
   { id: 'household', label: 'Household', icon: 'house', aliases: ['rooms-and-devices'],
-    sections: ['rooms', 'people', 'phones-and-browsers', 'calendars', 'media-folders', 'music-mix', 'queue-history', 'printers'] },
+    sections: ['rooms', 'people', 'phones-and-browsers', 'calendars', 'media-folders', 'music-mix', 'queue-history', 'printers', 'friend-houses'] },
   { id: 'voice', label: 'Voice', icon: 'audio-lines', sections: ['wake-words', 'voices', 'greetings'] },
   { id: 'chat-and-ai', label: 'Chat & AI', icon: 'sparkles', sections: ['models', 'search', 'chat'] },
   { id: 'privacy', label: 'Privacy', icon: 'shield', sections: ['internet', 'voice-history', 'listening-history'] },
@@ -5850,7 +5925,7 @@ const SETTINGS_SECTIONS = [
   { id: 'music-mix', label: 'Music mix', optional: true, aliases: ['mix', 'up-next'],
     sub: 'How Up next picks the songs that follow: discovery or favorites, close or wandering, autoplay, repeats, similar artists.',
     words: 'music mix up next autoplay shuffle discovery favorites favourites wander similar artists popularity listenbrainz repeats radio station' },
-  // queue_history.jsx registers it (1.3.1): what Up next picked, and why
+  // queue_history.jsx registers it (1.4.0): what Up next picked, and why
   // (admin; read-only).
   { id: 'queue-history', label: 'Queue history', optional: true,
     sub: 'What Up next picked in each room and on each phone, why, and how each song went — admins only.',
@@ -5858,6 +5933,11 @@ const SETTINGS_SECTIONS = [
   { id: 'printers', label: 'Printers & scanners', optional: true,
     sub: 'Printers and scanners on your network.',
     words: 'printer printers print printing scanner scanners scan scanning ink toner paper' },
+  // friend_houses.jsx registers it (F2): friend files, requests, friends
+  // (admin; off by default).
+  { id: 'friend-houses', label: 'Friend Houses', optional: true,
+    sub: 'Serverless messaging and friend system between households.',
+    words: 'friend friends house houses household households friending friend file invite request requests tor fingerprint code verify' },
   { id: 'app-layout', label: 'App layout', aliases: ['phone-bar', 'phonebar'],
     sub: 'The menu every browser on this Domovoi shows (admin), and this browser’s phone bar.',
     words: 'phone bar tabs bottom bar layout menu navigation sidebar group groups media tools rename reorder' },
@@ -5914,6 +5994,7 @@ const SETTINGS_SEARCH_ITEMS = [
   { label: 'Files access', section: 'phones-and-browsers', mark: 'files-access', words: 'files documents' },
   { label: 'Your own music mix', section: 'people', mark: 'music-mix', words: 'music mix person own discovery favorites wander' },
   { label: 'Network name', section: 'advanced', mark: 'network-name', words: 'network name local domovoi.local mdns hostname address' },
+  { label: 'Short address', section: 'advanced', mark: 'short-address', words: 'short address port 80 6369 domovoi.local without port redirect url link' },
   { label: 'Updates', section: 'about', mark: 'updates', words: 'update check pull restart version channel' },
   { label: 'User manual', section: 'about', mark: 'manual', words: 'manual help guide' },
   { label: 'Admin account', section: 'advanced', mark: 'admin', words: 'admin password sign in sign out claim setup' },

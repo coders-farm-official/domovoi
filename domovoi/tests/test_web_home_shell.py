@@ -471,10 +471,15 @@ def test_the_strip_reads_home_music_videos_chat(driven) -> None:
 def test_a_sidebar_handed_the_badges_polls_nothing_itself(driven) -> None:
     # (the household's AI switch rides on the capabilities manifest and the
     # household's menu on /api/nav-layout: the sidebar asks the shared stores
-    # for them once, which is not a badge poll)
-    assert driven["sidebar_polls_alone"]["gets"] == ["/api/plugins/radio/badge", "/api/capabilities", "/api/nav-layout"]
+    # for them once, which is not a badge poll; so is the footer's address to
+    # share, one shared read of the network name and the short address for
+    # the whole page: components.jsx ShareAddressStore)
+    share = ["/api/lan-name", "/api/short-address"]
+    alone = driven["sidebar_polls_alone"]["gets"]
+    assert [g for g in alone if g not in share] == ["/api/plugins/radio/badge", "/api/capabilities", "/api/nav-layout"]
+    assert sorted(g for g in alone if g in share) == share
     given = driven["sidebar_given_badges"]
-    assert given["gets"] == ["/api/capabilities", "/api/nav-layout"]
+    assert [g for g in given["gets"] if g not in share] == ["/api/capabilities", "/api/nav-layout"]
     assert "4" in given["text"]
 
 

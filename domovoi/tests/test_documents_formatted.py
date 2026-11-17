@@ -390,6 +390,43 @@ def test_a_formatted_document_exports_to_word_from_disk(docs_dir):
     assert [p.text for p in Document(io.BytesIO(r.content)).paragraphs] == ["Two"]
 
 
+def test_the_zip_holds_formatted_documents_as_word_and_the_rest_as_they_are(docs_dir):
+    import zipfile
+
+    from docx import Document
+
+    (docs_dir / "p.html").write_text(richdoc.document_file("<h2>Two</h2>", "p"), encoding="utf-8")
+    (docs_dir / "n.md").write_text("# notes", encoding="utf-8")
+    (docs_dir / "sub").mkdir()
+    (docs_dir / "sub" / "p.html").write_text(richdoc.document_file("<p>Other</p>", "p"), encoding="utf-8")
+    with _client() as c:
+        r = c.post("/api/documents/download-zip",
+                   json={"rel_paths": ["p.html", "n.md", "sub/p.html"]})
+    assert r.status_code == 200
+    z = zipfile.ZipFile(io.BytesIO(r.content))
+    assert sorted(z.namelist()) == ["n.md", "p (2).docx", "p.docx"]
+    assert z.read("n.md") == b"# notes"
+    assert [p.text for p in Document(io.BytesIO(z.read("p.docx"))).paragraphs] == ["Two"]
+    assert [p.text for p in Document(io.BytesIO(z.read("p (2).docx"))).paragraphs] == ["Other"]
+
+
+def test_the_zip_keeps_a_formatted_document_it_cannot_convert(docs_dir, monkeypatch):
+    import zipfile
+
+    from web.backend.api import documents as docs_api
+
+    (docs_dir / "p.html").write_text(richdoc.document_file("<p>x</p>", "p"), encoding="utf-8")
+
+    async def boom(markup, title):
+        raise docs_api.HTTPException(status_code=422, detail="no")
+
+    monkeypatch.setattr(docs_api, "_word_copy", boom)
+    with _client() as c:
+        r = c.post("/api/documents/download-zip", json={"rel_paths": ["p.html"]})
+    assert r.status_code == 200
+    assert zipfile.ZipFile(io.BytesIO(r.content)).namelist() == ["p.html"]
+
+
 def test_the_raw_file_is_still_never_rendered_on_the_dashboards_origin(docs_dir):
     (docs_dir / "p.html").write_text(richdoc.document_file("<p>x</p>", "p"), encoding="utf-8")
     with _client() as c:

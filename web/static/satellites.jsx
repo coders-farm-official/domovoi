@@ -3204,7 +3204,7 @@ const SpareWindowsSetupOffer = ({ st, running, fetching, onGet }) => {
     return (
       <div className="spare-windows-setup-offer" style={note}>
         {st.internet_off
-          ? 'Internet access is off (Settings → Internet), so this server can’t get the double-click Setup; the command above does the same.'
+          ? 'Internet access is off (Settings → Privacy → Internet), so this server can’t get the double-click Setup; the command above does the same.'
           : 'A double-click Setup will be offered here once a Domovoi release carries it; until then, the command above does the same.'}
       </div>
     );
@@ -3480,7 +3480,7 @@ const AppOnServer = ({ app: initial, onReady, onChange }) => {
           </div>
         </div>
       ) : app.internet_off ? (
-        <div className="spare-app-offline">Internet access is turned off for this box (Settings → Internet), so
+        <div className="spare-app-offline">Internet access is turned off for this box (Settings → Privacy → Internet), so
           this server can’t download Domovoi {want}. Upload its APKs ({missing}) from the release on GitHub
           instead: download them on a computer that has internet, then choose them here.</div>
       ) : app.ready ? null : (

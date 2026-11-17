@@ -1028,7 +1028,7 @@ All config is env-driven via `.env` (see `.env.example`):
 | `POSTGRES_PASSWORD` | *(random, written on first bootstrap)* | Read by `docker-compose.yml` (not by the core) when Postgres initialises its volume and on every Flyway run; must match the password inside `DATABASE_URL`. Written by `python -m domovoi.env_bootstrap`, which `dev.sh`/`dev.ps1` run first and which never touches an existing `.env`. Absent → compose falls back to `domovoi`. Rotation: docs/LINUX_HOST.md |
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama server |
 | `SEARXNG_URL` | `http://localhost:6888` | SearxNG (DoubleCheckHandler) |
-| `INTERNET_ACCESS` | *(unset)* | `always` \| `sometimes` \| `never`: whether this box uses the internet, which sets the defaults of the online extras (docs/INTERNET.md). Unset = the behaviour before the setting existed. Settings → Internet in the dashboard |
+| `INTERNET_ACCESS` | *(unset)* | `always` \| `sometimes` \| `never`: whether this box uses the internet, which sets the defaults of the online extras (docs/INTERNET.md). Unset = the behaviour before the setting existed. Settings → Privacy → Internet in the dashboard |
 | `AI_FEATURES` | `true` | Whether Domovoi may use its chat models at all (AI chat and questions). `false`: voice commands still run on their fixed phrases, speech recognition and the voices stay, a question gets a fixed "set up for home commands" answer and Chat is hidden. Settings → Models |
 | `CONNECTIVITY_PROBE_TARGET` | `1.1.1.1:443` | `host:port` probed every 30 s (not dialed at all under `INTERNET_ACCESS=never`). Keep it on an internet address |
 | `CONNECTIVITY_PROBE_INTERVAL_SEC` | `30` | Poll interval |

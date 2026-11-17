@@ -194,7 +194,7 @@ def test_a_linux_only_server_without_the_unattended_restart_keeps_two_steps(driv
     o = driven["linux_only"]
     assert o["before"]["windows"] is None and "Windows side" not in o["before"]["text"]
     assert "domovoi" in o["before"]["text"] and "Linux side" not in o["before"]["text"]
-    assert len(o["confirms"]) == 1 and o["confirms"][0].startswith("Pull the latest domovoi code")
+    assert len(o["confirms"]) == 1 and o["confirms"][0].startswith("Update Domovoi?")
     posts = [c for c in o["calls"] if c.startswith("POST")]
     assert posts == ["POST /api/config/version/check", "POST /api/config/version/pull"], "the pull alone"
     assert "pulled — now 0a1b2c3. Restart to apply." in o["after"]["text"]

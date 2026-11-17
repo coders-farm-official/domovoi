@@ -10,14 +10,15 @@ Domovoi's icon in the notification area. After setup the dashboard at
 Domovoi is running, and prepares satellite cards
 ([The tray icon](#the-tray-icon)).
 
-**This is a preview.** It ships with Domovoi 1.0, but the promise the finished product will make (a PC that comes back by itself after every restart, signed programs, your data kept through an uninstall) isn't kept yet. It is not code-signed (see [Unsigned](#unsigned)),
-it installs a pinned commit and then follows a release channel (see
-[Updates and the release channel](#updates-and-the-release-channel)), and
-some of the finished product is not in it yet (see
-[Not in this build](#not-in-this-build)). The native
-Windows install in the
-[README](../README.md) and [SETUP_RUNBOOK.md](SETUP_RUNBOOK.md) is a
-different thing and is unchanged.
+**This is a preview.** Its programs are not code-signed yet, so Windows
+asks before it runs them ([Unsigned](#unsigned)), and a few things the
+finished installer will do are not in it yet, such as keeping your data
+through an uninstall ([Not in this build](#not-in-this-build)). It
+installs a release and then follows a release channel
+([Updates and the release channel](#updates-and-the-release-channel)).
+Installing the server by hand on Windows, as in the
+[README](../README.md) and [SETUP_RUNBOOK.md](SETUP_RUNBOOK.md), is a
+separate way to run it.
 
 Read alongside: [Running the server on Linux](LINUX_HOST.md) (what runs
 inside the distro) · [Internet or not](INTERNET.md) (the question Setup
@@ -25,12 +26,10 @@ asks) · [Security & privacy](SECURITY_PRIVACY.md)
 
 **A Windows laptop as a room** (a satellite, not the server) is a different
 thing: [Satellites on spare devices → Windows](SPARE_DEVICE_SATELLITES.md#windows-laptops-and-pcs).
-Its installer refuses to run on the PC where this server is installed;
-using the server PC as a room is planned for the server's tray icon (it
-doesn't do that yet). This Setup carries that room installer
-(`DomovoiSatelliteSetup.exe`) and, each time Domovoi starts, the service
-copies it into the server's own cache inside the distro, so **Settings >
-Household > Rooms > add a spare device** hands it to the
+Its installer refuses to run on the PC where this server is installed:
+the server PC can't be a room yet. This Setup carries that room installer
+(`DomovoiSatelliteSetup.exe`) and hands it to the server at every start,
+so **Settings > Household > Rooms > add a spare device** offers it to the
 house's other PCs with no internet needed.
 
 ---
@@ -40,7 +39,7 @@ house's other PCs with no internet needed.
 | | Supported | Notes |
 |---|---|---|
 | Windows | 11 22H2 or later (build 22621+), Home or Pro, x64 | Not Windows 10, not Arm64: mirrored networking and the Hyper-V firewall need 22H2. |
-| Memory | 16 GB or more | Below 24 GB the distro is capped at 10 GB and gets the smaller models. From about 32 GB it gets the standard models (as on a Linux box with that much memory), and can train wake words ([Training wake words](#training-wake-words)). Above 24 GB the cap is half the PC's memory, between 24 and 32 GB, and never more than the PC's memory minus 8 GB (since 2026-11-10; before, the memory minus 8 GB up to 64 GB). You can change it, and cap the processor cores too: [How much of this PC Domovoi may use](#how-much-of-this-pc-domovoi-may-use). File cache inside counts as used to Windows; Domovoi hands what is over a few GB back every 2 minutes. Settings → System → Health → **memory** shows what uses it ([TROUBLESHOOTING.md](TROUBLESHOOTING.md#the-servers-memory-looks-full)). |
+| Memory | 16 GB or more | Below 24 GB Domovoi gets 10 GB and the smaller AI models. From about 32 GB it gets the standard models and can train wake words ([Training wake words](#training-wake-words)). How much it gets, and how to change it: [How much of this PC Domovoi may use](#how-much-of-this-pc-domovoi-may-use). Settings → System → Health → **memory** shows what uses it ([TROUBLESHOOTING.md](TROUBLESHOOTING.md#the-servers-memory-looks-full)). |
 | Processor | Firmware virtualization on (Intel VT-x / AMD-V) | AVX2 is checked and only warned about. |
 | Disk | 40 GB free on the system drive | An SSD is strongly recommended; Setup warns on a spinning disk. Wake-word training, if you turn it on, takes about 32 GB more. |
 | GPU | Optional | Ollama uses an NVIDIA GPU that WSL passes through; without one it runs on the CPU. Wake-word training uses it too, through the NVIDIA Container Toolkit Setup adds to the distro. Whisper always runs on the CPU. |
@@ -85,6 +84,11 @@ signature, before it runs it.
    Domovoi needs (6369, 6370, 6432, 6650-6699, 8050-8099, 8096, 7676, 9467,
    11434). A taken port gets one pop-up per program holding ports (Docker
    Desktop, Ollama, or the program's name), with **Retry** and **Cancel**.
+   Port 80 (the short address, see [The network name](#the-network-name))
+   is checked too, for Setup's log only: IIS or another program on it is
+   no clash, Setup goes on and the short address stays off. Setup also
+   reads `netsh http show urlacl` for reservations on port 80 (it never
+   adds or deletes one).
    If an earlier Domovoi left its account's profile folder behind
    (`C:\Users\domovoi-svc` with no account), Setup stops and gives the
    one line that removes it (after a restart, from an administrator
@@ -108,23 +112,10 @@ signature, before it runs it.
    sizes on the pages after this one follow the answer.
    **Run again on an install** (a repair or an upgrade), the page starts at
    the answer the home has now, never at a Yes that would download the
-   models into a home that turned AI off: the household's own
-   `AI_FEATURES` (what **Settings > Chat & AI > Models** saved in `domovoi/.env`),
-   which `DomovoiHost` reads for Setup while Domovoi is running, else the
-   answer Setup recorded last time. A Yes that comes from that record
-   alone and is left as it is (a `DomovoiHost` from an older Setup can't
-   read the file) is passed as neither option, so `provision.sh` keeps
-   what `domovoi/.env` says; any other answer is passed as `--ai-models`
-   or `--no-ai-models`, so a later Setup's Yes is heard over an earlier
-   No. The last page and Setup's install record say what `provision.sh`
-   reported (`"ai"` in its final line), not what was clicked.
-   `DomovoiSetup.exe /ai=no` (or `/ai=yes`) starts the page there, over
-   the saved answer (the answer also rides along when Setup carries on
-   after a restart). The page appears only when the pinned
-   `provision.sh` takes the answer (`ProvisionAiChoice` in `pins.iss`,
-   which `windows\build.ps1 -Pin` sets from the script): a build pinned
-   to one from before the question asks nothing, installs the AI models
-   as before, and refuses `/ai=no` at once, before it changes anything.
+   models into a home that turned AI off. The last page says what was
+   actually installed. `DomovoiSetup.exe /ai=no` (or `/ai=yes`) starts the
+   page at that answer, over the saved one (how Setup reads the home's
+   answer: [Building it](#building-it)).
 3. **Lists every change it will make** (the table below) before it makes
    any.
 4. **Asks whether this PC will have internet after setup** (Yes, always /
@@ -141,18 +132,10 @@ signature, before it runs it.
    its AppData isn't), anything holding one of those, and links (junctions)
    are refused, because Domovoi's account and its Linux system can write
    there.
-6. **Downloads** Ubuntu 26.04.1's official WSL image, and `provision.sh`
-   from the pinned commit (GitHub's raw file at `DomovoiCommit`; a release
-   build pins its release tag's commit), each checked against a pinned
-   SHA-256 (`windows/installer/pins.iss`). A build whose `provision.sh` is
-   ahead of the pinned commit (`ProvisionBundled` in `pins.iss`) carries
-   the script inside `DomovoiSetup.exe` instead; it is checked against its
-   pin the same way, it still installs the pinned commit's code, and every
-   file it reads from that checkout must exist at the pinned commit (the
-   installer's tests check both). The commit, its `provision.sh` pin, the
-   channel, the dashboard's tab addresses and the AI question move together:
-   `windows\build.ps1 -Pin` sets all of them from one commit
-   ([Building it](#building-it)).
+6. **Downloads** Ubuntu 26.04.1's official WSL image, and Domovoi's
+   install script, `provision.sh`, from the release's commit, each checked
+   against a pinned SHA-256 (`windows/installer/pins.iss`; see
+   [Building it](#building-it)).
 7. **Turns on Virtual Machine Platform** and installs WSL 2.7.14 only if
    they are missing. If Windows needs a restart, Setup asks, and starts
    again by itself after you sign in.
@@ -176,10 +159,7 @@ signature, before it runs it.
    Domovoi, the service stops it there (`provision.sh --stop-before
    start`) and waits while a port Domovoi needs is taken, and Setup shows
    the same pop-up per program as its first check; once the port is free
-   Domovoi starts by itself. (That needs a pinned `provision.sh` with
-   `--stop-before`, as the current pin's has; with an older one the start
-   fails instead, and Setup then shows the same pop-ups and carries on by
-   itself after **Retry**.)
+   Domovoi starts by itself.
    Domovoi's own Linux services never show up in Windows' port table, so
    only Windows programs are ever named.
 
@@ -196,42 +176,27 @@ signature, before it runs it.
 9. **Shows your setup code** once, with a **Copy** button, **Open
    Domovoi**, and the steps to the admin account in the dashboard's own
    words. The code works for 24 hours (a restart of the service writes a
-   fresh one). **Open Domovoi** copies the code too, then opens
-   `http://localhost:6369/?installed=<commit>-<build time>#settings/configuration/setup`:
-   Settings > System > Advanced (the address still says `configuration`,
-   that section's old name; it still lands there), where the
-   **first-run admin setup** opens by itself on a box nobody has claimed yet (if it doesn't, **set up admin**
-   in the Admin box opens it). Paste the code into **setup code**, choose
-   an admin password of at least 10 characters, type it again in
-   **confirm password**, and click **set password**. A build whose pinned
-   dashboard has the first-run welcome (`DashboardWelcome` in `pins.iss`,
-   set by `-Pin` from the commit) says instead that the same address
-   greets you with **Welcome to Domovoi!**, which holds those three
-   fields, and that **You're all set!** then shows the household token
-   (not the admin password): copy it, and click **Keep this one** or
-   **Want an easier one?**. A build whose pinned
-   commit predates the dashboard's tab addresses opens `#settings` instead
-   (`DashboardTabRoutes` in `pins.iss`), and its steps say to click the
-   Configuration tab first. The `?installed=` part is there because a
-   browser that ran an earlier Domovoi on this PC may still have that
-   dashboard's service worker, and the old ones answered from their cache
-   first, by exact address, so an address no earlier build opened always
-   reaches today's dashboard (whose worker then takes over at once). The
-   page also says where the AI models run, from what Setup found: the
-   chat and voice-command models on the NVIDIA cards it lists (or on the
-   processor when there is none), speech recognition always on the
-   processor; with AI chat and questions left out (as `provision.sh`
-   reported it), it says so and where to
-   turn them on (**Settings > Chat & AI > Models**). `provision.sh` also
-   puts the phone app (the Android app, about 100 MB) on the server for
-   phones that have no internet; when it couldn't download it (no
-   internet then), the install still finishes and the page says "The
-   phone app couldn't be downloaded: this server needs the internet once,
-   at some point, to put it here (or upload it in Settings)" (its final
-   progress line's `phone_app`, which only a pinned `provision.sh` with
-   the `phone-app` step reports). Domovoi's icon appears beside the clock for the account that
-   ran Setup, and starts at every account's sign-in from then on
-   ([The tray icon](#the-tray-icon)).
+   fresh one). **Open Domovoi** copies the code too and opens the
+   dashboard, which greets you with **Welcome to Domovoi!**, its
+   first-run admin setup (if it doesn't, **set up admin** in Settings →
+   System → Advanced → Admin opens it): paste the code into **setup
+   code**, choose an admin password of at least 10 characters, type it
+   again in **confirm password**, and click **set password**. **You're all set!** then shows the household token (not
+   the admin password): copy it, and click **Keep this one** or **Want an
+   easier one?**. (The address it opens,
+   `http://localhost:6369/?installed=<commit>-<build time>#settings/configuration/setup`,
+   gets past an older dashboard a browser on this PC may have cached.)
+
+   The page also says where the AI models run: the chat and voice-command
+   models on the NVIDIA cards Setup found (or on the processor when there
+   is none), speech recognition always on the processor; with AI chat and
+   questions left out, it says so and where to turn them on. Setup also
+   puts the Android app (about 100 MB) on the server for phones that have
+   no internet; if it couldn't download it (no internet then), the install
+   still finishes and the page says the server needs the internet once to
+   fetch it, or that you can upload it in Settings. Domovoi's icon appears
+   beside the clock for the account that ran Setup, and starts at every
+   account's sign-in from then on ([The tray icon](#the-tray-icon)).
 
 ## Every change on the PC, and how uninstall undoes it
 
@@ -244,7 +209,7 @@ signature, before it runs it.
 | Its profile, made by Windows when the service first signs in: `C:\Users\domovoi-svc`, or `C:\Users\domovoi-svc.<PC name>` if a folder of that name is already there (the service writes its `.wslconfig` into whichever it is, and the uninstaller finds it by the account's SID); it holds the account's `.wslconfig` (mirrored networking, `instanceIdleTimeout=-1`, memory cap, swap in `C:\ProgramData\Domovoi\wsl`) and its WSL registration. | Deleted. Right after unregistering the distro the service ends that account's own WSL session (`wsl --shutdown` run as `domovoi-svc`, see below), then the uninstaller waits up to two minutes for Windows to let go of the profile. This comes after the account is deleted; if Windows still holds the profile then, a one-time startup task, **`DomovoiRemoveProfile`** (runs as SYSTEM), deletes it at the next restart and then deletes itself. It touches only that profile, only once its account is gone, and if it can't tell (or the profile is in use) it waits for the next boot. |
 | Service **`DomovoiHost`** (Automatic, runs as `.\domovoi-svc`, depends on no other service: it waits for WSL itself, see *Windows updated WSL* under [When something goes wrong](#when-something-goes-wrong); restarted by Windows after any failure, after 10 s, 30 s, then every 60 s), binary `C:\Program Files\Domovoi\DomovoiHost.exe`. | Stopped (it stops Domovoi's units in the distro first), then deleted. |
 | WSL distro **`domovoi`** of `domovoi-svc` (Ubuntu 26.04.1 plus everything `provision.sh` installs), disk in `C:\ProgramData\Domovoi\distro`. Once imported, the service never deletes or re-imports over that disk, even if WSL stops listing it. Your own distros and `.wslconfig` are not touched. | Unregistered by the service, as its owner, first. Until that has worked (or the disk is gone), nothing else that could strand it is touched: not the service, the account, its profile or rights, nor ProgramData. If it fails, the uninstaller stops, says why, and stays installed for another try. A disk WSL no longer lists is deleted or kept aside, see [Uninstalling](#uninstalling). |
-| Hyper-V firewall rules for WSL's VM creator (`{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}`), inbound TCP from your subnet only: `Domovoi-Dashboard-6369`, `Domovoi-Core-6370`, `Domovoi-MPD-8050-8099`, `Domovoi-Jellyfin-8096`, `Domovoi-RomM-7676`, `Domovoi-Kiwix-9467`. They apply to **every WSL VM on the PC**, your own WSL distros and Docker Desktop's included: anything of yours that listens on those ports in a mirrored-mode distro becomes reachable from your home network too. None if the PC has no private (RFC 1918) address. | Every `Domovoi-` rule for WSL's VM creator is removed (and listing them again must work, or the uninstaller says so). |
+| Hyper-V firewall rules for WSL's VM creator (`{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}`), inbound TCP from your subnet only: `Domovoi-ShortAddress-80` (the short address, below), `Domovoi-Dashboard-6369`, `Domovoi-Core-6370`, `Domovoi-MPD-8050-8099`, `Domovoi-Jellyfin-8096`, `Domovoi-RomM-7676`, `Domovoi-Kiwix-9467`. They apply to **every WSL VM on the PC**, your own WSL distros and Docker Desktop's included: anything of yours that listens on those ports in a mirrored-mode distro becomes reachable from your home network too. None if the PC has no private (RFC 1918) address. | Every `Domovoi-` rule for WSL's VM creator is removed (and listing them again must work, or the uninstaller says so). |
 | Windows Defender Firewall rule **`Domovoi-mDNS-5353`**: inbound UDP 5353 for `C:\Program Files\Domovoi\DomovoiHost.exe` only, from the local subnet, on **Private and Domain** networks (not Public), so other devices on your home network find this PC as `domovoi.local` ([The network name](#the-network-name)). Not added when the PC has no private address. | Removed with the Hyper-V rules (`Remove-NetFirewallRule -Name 'Domovoi-mDNS-5353'`); DomovoiHost's goodbye went out when the service stopped. |
 | `C:\ProgramData\Domovoi` (`distro`, `wsl`, `backups`, `logs`, `state`, `host`): SYSTEM and Administrators only, with `domovoi-svc` allowed where it needs it. Household accounts can't open it. Setup only uses this folder if it made it. | Made administrators-only again, then deleted, only if Setup made it (files still in use are deleted at the next restart). |
 | The media folder and its `Music`, `Pictures`, `Videos`, `Documents`, `Audiobooks`, `Podcasts`: made if missing; `domovoi-svc` may read and write them (an inherited rule); a root folder Setup makes also lets every user of the PC (Users) read and write. An existing folder keeps all its own rules. | Setup's rule for `domovoi-svc` comes off. A folder Setup made is removed **only if it is empty**. No file in a media folder is ever deleted. |
@@ -346,6 +311,7 @@ asked for from another device waits, a single click finishes it.
 |---|---|
 | **Open Domovoi** | `http://localhost:6369`. |
 | **Open on this network** | The dashboard at this PC's address on your home network (the address of the adapter that leads to the router; with several, one entry each). |
+| **Open as domovoi.local** | The dashboard by this PC's [network name](#the-network-name), when DomovoiHost holds one. |
 | **Copy address** | That address, to paste into a message. |
 | **Show a code for your phone** | That address as a QR code: point the phone's camera at it. |
 | **User manual** | The dashboard's manual (`#manual`). |
@@ -394,30 +360,21 @@ By hand instead, the zip's `README.txt` has the steps.
 
 ### On an install from before the icon
 
-An install made by a Setup without the icon (1.0.0-rc1, rc2) gets it in
-one of three ways:
+An install made by a 1.0.0-rc1 or rc2 Setup has no icon. Either:
 
-- **Run `DomovoiTray.exe` on its own** (keeps everything): download it
-  from the release page (its line is in `SHA256SUMS`) and run it. It
-  starts for your account at once, copies itself to
-  `%LOCALAPPDATA%\Programs\Domovoi` (a folder only your account can
-  change, so nobody else on the PC can swap the program your sign-in
-  starts) and starts from there at each sign-in (value `DomovoiTray`
-  under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`; **Start
-  with Windows** turns it off). Each account that wants the icon runs it
-  once. Once a Setup with the icon is installed, its copy takes over and
-  the per-account start and copy are removed.
-- **Run the newer Setup over the install** (a repair): Setup stops
-  Domovoi, replaces its programs (the icon included), and runs the newer
-  `provision.sh` over the existing distro. The database, settings and
-  Domovoi's code stay as they are (an existing checkout is never moved;
-  the dashboard's updates move it). This is the same repair run as "Setup
-  stopped partway" below, with a newer `provision.sh` than the one that
-  installed the distro.
-- **Uninstall, then install the newer Setup**: this build has no
-  keep-data uninstall, so it deletes the database, history, voice
-  profiles and the server's identity, and satellites must be paired
-  again.
+- **Run the newer Setup over the install** (a repair: the database,
+  settings and Domovoi's code stay as they are), or
+- **Run `DomovoiTray.exe` on its own**, from the release page (its line
+  is in `SHA256SUMS`). It copies itself to
+  `%LOCALAPPDATA%\Programs\Domovoi`, a folder only your account can
+  change, and starts from there at each of your sign-ins (value
+  `DomovoiTray` under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`;
+  **Start with Windows** turns it off). Each account that wants the icon
+  runs it once. A later Setup with the icon takes over and removes these
+  copies.
+
+Uninstalling and installing again also works, but deletes Domovoi's data
+(there is no keep-data uninstall yet).
 
 ### For developers
 
@@ -450,8 +407,15 @@ needs no multicast) still work.
 ## The network name
 
 DomovoiHost answers to **`domovoi.local`** on your home network, so a
-browser on another computer opens `http://domovoi.local:6369` instead of
-an address. Domovoi's Linux system can't do it itself (its distro isn't the
+browser on another computer opens `http://domovoi.local` (the short
+address) or `http://domovoi.local:6369` instead of an address. The short
+address works because the dashboard inside the distro also listens on
+port 80, which mirrored networking makes this PC's port 80, and sends
+every browser on to 6369; Setup's firewall rule `Domovoi-ShortAddress-80`
+lets your home subnet reach it. When IIS or another Windows program
+already uses port 80, the dashboard leaves it to that program and Settings
+says "Short address off: something else on this computer uses port 80.";
+`domovoi.local:6369` keeps working. Domovoi's Linux system can't do it itself (its distro isn't the
 one on the network), so DomovoiHost does, from the moment the service
 starts, also while Domovoi restarts or updates: our own small mDNS
 responder (`windows/common/MdnsResponder.cs`, the same rules and packets as
@@ -512,11 +476,8 @@ PC needs for it:
   `nvidia` runtime in Docker's configuration, and a Docker restart
   (Postgres and the rooms' players stop for a moment and come back by
   themselves). It never installs a Linux NVIDIA driver: the driver is
-  Windows'. A **new install** gets it during Setup (`provision.sh`'s
-  `gpu-runtime` step, since the installer pinned to `4d6b414`); an
-  **existing install** from an earlier Setup gets it at its first update
-  from the dashboard (**Update Domovoi**). After that every **Restart Domovoi** checks it is
-  still in place. A try that failed is not repeated at every Restart: the
+  Windows'. Setup adds it (`provision.sh`'s `gpu-runtime` step), and
+  every **Restart Domovoi** checks it is still in place. A try that failed is not repeated at every Restart: the
   next one is a day later, or at the next Restart after you press **Turn
   on wake-word training** or **Check the GPU and trainer again**. With the
   internet answer **No**, the update downloads nothing, so the toolkit
@@ -551,12 +512,10 @@ and **Push to** a room when it is ready. "Hello Domo", "Hey Domovoi" and
 "Domovoi" are three wake words, three models; a satellite listens for one
 at a time.
 
-On a PC with an NVIDIA card and an install from an earlier Setup, update
-first: until the toolkit is there the
-card says Docker can't use the card yet, and offers only the processor.
-With the toolkit in place after the update, **Check the GPU and trainer
-again** (or **Try again**) finds the GPU. Once training is set up for the
-GPU, a **Train** while Docker can't reach it (the toolkit lost, the card
+Until the toolkit is in place the card says Docker can't use the
+graphics card yet and offers only the processor; **Check the GPU and
+trainer again** (or **Try again**) looks again. Once training is set up
+for the GPU, a **Train** while Docker can't reach it (the toolkit lost, the card
 gone) fails saying so instead of running for over an hour on the
 processor. Without an NVIDIA card, training
 runs on the processor: about 75 minutes a word on 8 cores, and voice
@@ -589,15 +548,14 @@ new size. The dashboard's other
 **Restart Domovoi** restarts the services inside the VM and doesn't apply
 it.
 
-**Why 32 GB at most by default (2026-11-10).** Domovoi's programs use
-between 5 and 10 GB, the AI models up to 9 GB more, and wake-word training 24 GB
-while it runs. Before, the installer gave a big PC its memory minus 8 GB,
-up to 64 GB: on a 128 GB PC the VM held 51 GB of file cache next to 5 GB
-of programs, and Windows compressed and paged around it (WSL hands cache
-back only once the VM idles, which a house assistant rarely does). Domovoi
-now trims that cache itself ([LINUX_HOST.md, The file-cache
-trim](LINUX_HOST.md#the-file-cache-trim)), and the default share is
-smaller. A household that wants more raises it on the card.
+**Why 32 GB at most by default.** Domovoi's programs use between 5 and
+10 GB, the AI models up to 9 GB more, and wake-word training 24 GB while
+it runs. A bigger share mostly fills with file cache, which Windows counts
+as used (WSL hands cache back only once the VM idles, which a house
+assistant rarely does). Domovoi trims that cache itself, handing back what
+is over a few GB every 2 minutes ([LINUX_HOST.md, The file-cache
+trim](LINUX_HOST.md#the-file-cache-trim)). A household that wants more
+raises it on the card.
 
 **How it reaches the PC.** The dashboard can't write a Windows file, and
 nothing inside the distro can either. The core writes the admin's choice
@@ -609,13 +567,11 @@ whole numbers or automatic, inside this PC's bounds) and writes
 shows. [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#the-file-cache-trim-and-the-windows-ceiling)
 says why this is safe.
 
-**Which build.** The card, the request channel and the new default come
-with **DomovoiHost from a Windows Setup built on 2026-11-10 or later**: run
-the newest `DomovoiSetup.exe` to repair an older install (the tray's
-**Update Domovoi** does when a release carries it). A repair also writes
-the new default share into `.wslconfig`, unless you set your own on the
-card. Until then the card isn't shown. The file-cache trim needs no new
-Setup: it comes with the next Domovoi update.
+**Which build.** The card comes with the Windows side of 1.1.0 and
+later. An older install gets it when its Windows side updates
+([Update Domovoi: both halves](#update-domovoi-both-halves)); that also
+writes the current default share into `.wslconfig`, unless you set your
+own. Until then the card isn't shown.
 
 **A Linux server** has no such ceiling in Domovoi: its programs share the
 machine with nothing Domovoi manages, and the card isn't shown there.
@@ -635,13 +591,12 @@ folders** shows the Windows folders instead (`domovoi/media_folders.py`,
   DomovoiHost tells the Linux side the folders every 30 s
   (`/var/lib/domovoi-windows/media.json`, written as root; the core believes
   it only while root alone owns it and its folder, like `limits.json`). With
-  a DomovoiHost from before this (an install not yet updated by a newer
-  Setup), the page reads the same folders from the distro's `/etc/fstab`
-  and offers neither of the two actions below.
-- **Podcasts on an install from before them.** The first Windows installs
-  had no `Podcasts` folder: downloaded episodes stayed inside Domovoi's
+  a Windows side older than 1.2.0, the page reads the same folders from
+  the distro's `/etc/fstab` and offers neither of the two actions below.
+- **Podcasts on an install from before 1.2.0.** Those installs had no
+  `Podcasts` folder: downloaded episodes stayed inside Domovoi's
   Linux system (`~/.domovoi/podcasts`, growing its virtual disk, which
-  never shrinks). The Setup or update that brings this version makes
+  never shrinks). The Setup or update that brings 1.2.0 or later makes
   `Podcasts` beside the other folders (in the media folder Setup knows, or
   in the one chosen from the dashboard; no other folder moves), and
   `provision.sh` moves the episodes before Domovoi uses it: it copies them
@@ -734,9 +689,9 @@ folders** shows the Windows folders instead (`domovoi/media_folders.py`,
   there or that its service user can't read. The rooms' music players are
   made again on the new music folder at the next restart.
 
-These are changes to DomovoiHost and the tray: they reach a PC with a
-Setup built from this code (the tray's **Update Domovoi**, or running the
-newer `DomovoiSetup.exe`), not with the dashboard's update alone.
+All of this needs the Windows side of 1.2.0 or later: an update of the
+Linux side alone doesn't bring it
+([Update Domovoi: both halves](#update-domovoi-both-halves)).
 
 ## The trust boundary on a shared PC
 
@@ -748,9 +703,8 @@ Ollama on 11434, and each room's MPD control port from 6650 (neither
 needs a password), and the core trusts requests from `127.0.0.1` more than
 requests from the network (the login throttle).
 
-Until that is closed (planned before a Windows release: the core stops
-trusting loopback on a WSL host, and Ollama and MPD move to an address
-Windows can't reach), treat **every account on this PC as inside your
+Until that is closed (planned: the core stops trusting loopback on a WSL
+host, and Ollama and MPD move to an address Windows can't reach), treat **every account on this PC as inside your
 household's trust boundary**. Don't install this build on a PC that
 people outside the household sign in to.
 
@@ -813,47 +767,27 @@ you share them.
   covers a start that fails for another reason (at boot, or after a restart
   for new limits): DomovoiHost keeps trying, on the same backoff, and the
   icon says *Domovoi didn't start; trying again…* (a first install that
-  fails still waits for Setup, which shows why). On 2026-11-10 at 00:25 the update to WSL 3.0.5.0 left
-  Domovoi down until someone noticed: until then DomovoiHost depended on
-  WSLService, so Windows stopped it along with WSL and never started it
-  again. Since the Windows Setup built that day it depends on no other
-  service, and Windows restarts it after any failure (10 s, 30 s, then
-  every minute, an exit with an error code included). An older install
-  gets this when you run the newer Setup over it (a repair). Until then,
-  after a WSL update: **Restart Domovoi** in the icon's menu, or
-  `Restart-Service DomovoiHost` from an administrator PowerShell.
-- **Pull says `index.lock`: File exists** (Settings > System > About & updates, on a
-  build from before the fix below): an earlier update was cut off (a
-  Windows restart or shutdown in the middle of one, say) and git left its
-  lock behind. Nobody has a shell in the distro, so run a newer Setup over
-  the install (a repair, as above). Its `provision.sh` removes a lock no
-  git holds any more and puts back any files the cut-off update had
-  already rewritten, then you **Pull** and **Restart** as usual. If the
-  repair stops, answer **No** when it offers to remove what it changed.
-  "Yes" uninstalls, and the uninstall deletes the database. Newer
-  installs clean up on their own at the next Pull: the Version card says
-  "an earlier update was interrupted; Domovoi cleaned up and is trying
-  again" ([LINUX_HOST.md, An interrupted update](LINUX_HOST.md#an-interrupted-update)).
-- **Pull says "pull failed: error: unable to unlink old
-  'domovoi/searxng/settings.yml': Permission denied"** (often after "an
-  earlier update was interrupted; Domovoi cleaned up and is trying
-  again"), on a build from before 2026-10-22: the search helper's
-  container had taken over its settings folder in Domovoi's code, so the
-  update couldn't replace a file there. The pull stopped partway, after it
-  had already written much of the update into Domovoi's code, and that
-  build can't fix it from the dashboard. Until it is repaired, don't press
-  **Restart Domovoi**, and don't restart Windows if you can avoid it:
-  Domovoi would start from that half-written code, and could apply the
-  newer version's database changes without the update's backup. Run a
-  newer Setup over the install (a repair, as above). Its `provision.sh`
-  gives the folder back to Domovoi's account, puts back the files the
-  stopped pull had written, and starts the search helper with its folder
-  read-only. Then **Pull** and **Restart** as usual, in that order. Newer
-  builds mount the folder read-only, give it back at every restart, and
-  put back what a stopped pull wrote at once. The Version card then says
-  "the search helper's settings folder isn't writable; Restart Domovoi
-  (or run Setup again on Windows) fixes it"
-  ([LINUX_HOST.md, The search helper's folder](LINUX_HOST.md#the-search-helpers-folder)).
+  fails still waits for Setup, which shows why). A Windows side older
+  than 1.1.0 doesn't come back by itself after a WSL update: update its
+  Windows side, and meanwhile use **Restart Domovoi** in the icon's menu,
+  or `Restart-Service DomovoiHost` from an administrator PowerShell.
+- **An update stuck on a release-candidate install** (before 1.0.0):
+  **Pull** says `index.lock: File exists` (an earlier update was cut off
+  and git left its lock behind), or `unable to unlink old
+  'domovoi/searxng/settings.yml': Permission denied` (the search helper's
+  container had taken over its settings folder). Those builds can't fix
+  either from the dashboard. In the second case the pull stopped after
+  writing part of the update, so until it is repaired don't press
+  **Restart Domovoi** or restart Windows if you can avoid it: Domovoi would
+  start from half-written code. Run a newer Setup over the install (a
+  repair, as above): its `provision.sh` removes the stale lock, gives the
+  folder back, and puts back the files the stopped pull had written. Then
+  **Pull** and **Restart** as usual, in that order. If the repair stops,
+  answer **No** when it offers to remove what it changed: "Yes"
+  uninstalls, and the uninstall deletes the database. From 1.0.0 on,
+  Domovoi cleans both up by itself and the Version card says so
+  ([LINUX_HOST.md, An interrupted update](LINUX_HOST.md#an-interrupted-update),
+  [The search helper's folder](LINUX_HOST.md#the-search-helpers-folder)).
 - **The uninstaller stopped:** read its message and the log it names. The
   most likely cause is WSL itself (being updated, or not answering): wait,
   or restart Windows, then uninstall again. If it says the service is
@@ -886,11 +820,8 @@ you share them.
   server ([LINUX_HOST.md, The loop watchdog](LINUX_HOST.md#the-loop-watchdog)):
   `provision.sh` installs the `Type=notify` core unit with `WatchdogSec=`,
   and keeps the distro's journal on disk, so the record of a freeze
-  survives a restart of the PC. A distro installed before 2026-10-15 gets
-  the journal setting, and `Restart=on-failure` if its core unit had no
-  restart policy at all, from the
-  next update run (Settings > System > About & updates, **Restart Domovoi**); the
-  `Type=notify` unit itself comes with the next run of Setup. By hand, from
+  survives a restart of the PC (a 1.0.0-rc1 install gets the
+  `Type=notify` unit at its next run of Setup). By hand, from
   an administrator PowerShell, `Restart-Service DomovoiHost` stops
   Domovoi's Linux system and starts it again, core included (the distro
   is the hidden account's, so your own `wsl` doesn't list it).
@@ -926,12 +857,9 @@ handed to `provision.sh` as `--track-branch`; the channels are described in
 - **`main`**, on a build pinned to a commit that is not a release: every
   change, as it lands.
 
-The repository has a `stable` branch only from the first release (v1.0.0)
-on. A release candidate's Setup that asks for stable before then follows
-`main`, and its log says so; the Version card says when the
-first release is out, and an admin switches to stable there. Nothing
-switches by itself. An install from before the channels follows `main`, as
-it always did, until someone switches it.
+An install made by a release candidate's Setup follows `main` until an
+admin switches it to `stable` on the Version card; nothing switches by
+itself.
 
 Before it reports success, DomovoiHost checks that the commit the first
 install checked out is one Setup pinned (`provision.sh` also refuses a
@@ -995,9 +923,8 @@ install, which keeps your data. **Update Domovoi** does both:
 #### A request from another device
 
 Windows shows a tray notification for a few seconds and then files it
-away, and not at all while nobody is at the PC or Do not disturb is on
-(on 2026-11-14 a press from a phone got one notification nobody saw, and
-the update looked failed). So while a request from another device waits
+away, and not at all while nobody is at the PC or Do not disturb is on,
+so a single notification is easy to miss. So while a request from another device waits
 (nobody has claimed it, it still has something to do, and nothing is
 updating), the tray (1.2.1 and later):
 
@@ -1025,9 +952,10 @@ commit, and the Windows side's version and the commit it was built from,
 which DomovoiHost writes into the distro as root
 (`/var/lib/domovoi-windows/side.json`): before and after every start of
 Domovoi, whether that start worked or not, and again whenever what it last
-wrote isn't its own version, as soon as the distro is up. (Until 1.3.1 it
-wrote it only after a start that worked, so a Setup whose Linux part failed
-left the card, and the tray, on the old version.) The card reads that file
+wrote isn't its own version, as soon as the distro is up. (A Windows side
+from 1.3.0 or earlier writes it only after a start that worked, so a
+Setup whose Linux part failed leaves the card, and the tray, on the old
+version.) The card reads that file
 only; the version the tray icon reports on its own isn't believed there,
 since any program on the PC could send it. When that file still names an
 older Windows side than the tray icon itself is, the tray sees through it:
@@ -1135,10 +1063,8 @@ signature there once signed updates are switched on, and the update runs
 from that copy, never from the checkout the service user (`domovoi`, the
 core, the dashboard, the plugins) can write ([LINUX_HOST.md, The update
 verifier](LINUX_HOST.md#the-update-verifier)). `provision.sh` reads the
-checkout the same way on every run, a repair by Setup included. A distro
-installed before 2026-10-16 moves over by itself at its next **Restart
-Domovoi** after pulling this change; until Setup is rebuilt on a commit
-that has it, a fresh install's first update does the same.
+checkout the same way on every run, a repair by Setup included. (A
+1.0.0-rc1 install moves over by itself at its first update.)
 
 ## Building it
 
@@ -1159,8 +1085,28 @@ unless `-Channel main`; `stable` needs a commit a `v*` tag names),
 `ProvisionBundled` off, `DashboardTabRoutes`, `DashboardWelcome` (on
 when that commit's dashboard has the first-run welcome), and `ProvisionAiChoice`
 (on when that `provision.sh` takes `--ai-models` / `--no-ai-models`: only
-then does Setup ask "Include AI chat and questions?"). Commit the changed
-`pins.iss` after the tag: the tag is the commit households run.
+then does Setup ask "Include AI chat and questions?"; a build without it
+installs the AI models and refuses `/ai=no` before it changes anything).
+A release's Setup is pinned this way at release time:
+`scripts/release/finish-release` runs `build.ps1 -Pin <tag>` in a clean
+worktree of the tag and refuses any change there but `pins.iss`. The
+`pins.iss` committed on `main` is only for builds made from `main` by hand.
+
+Such a build can carry a `provision.sh` newer than the pinned commit's
+(`ProvisionBundled`): it is checked against its pin the same way, it
+still installs the pinned commit's code, and every file it reads from
+that checkout must exist at the pinned commit (the installer's tests check
+both). A release never bundles one.
+
+**The AI answer on a repair.** Setup starts the AI page at the
+household's own `AI_FEATURES` (what **Settings > Chat & AI > Models**
+saved in `domovoi/.env`), which DomovoiHost reads for Setup while Domovoi
+runs, else at the answer Setup recorded last time. A Yes that comes from
+that record alone and is left as it is goes to `provision.sh` as neither
+option, so it keeps what `domovoi/.env` says; any other answer goes as
+`--ai-models` or `--no-ai-models`. The last page and the install record
+show what `provision.sh` reported (`"ai"` in its final line), not what was
+clicked.
 
 The exes are C# for .NET Framework 4.8.1, built with the compiler that
 ships in Windows 11 (`%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe`);
@@ -1171,7 +1117,7 @@ the installer needs [Inno Setup 6](https://jrsoftware.org/isinfo.php)
 | Path | What |
 |---|---|
 | `windows/installer/DomovoiSetup.iss` | The wizard (Inno Setup Pascal script); the UI only. |
-| `windows/installer/DomovoiSatelliteSetup.iss`, `satellite-setup.ps1` | The Windows *satellite* Setup (2026-10-21): a per-user wizard in front of `satellite/scripts/install-windows.ps1` for a spare PC that becomes a room; its worker trades the dashboard's setup code for the enrolment payload, held to the server's identity key ([SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md#windows-laptops-and-pcs)). Built first: `DomovoiSetup.exe` carries it, and DomovoiHost places it in the core's cache at every start (`windows/common/SatelliteSetup.cs`), so this server hands it out offline. Tested by `domovoi/tests/test_windows_satellite_setup.py`. |
+| `windows/installer/DomovoiSatelliteSetup.iss`, `satellite-setup.ps1` | The Windows *satellite* Setup: a per-user wizard in front of `satellite/scripts/install-windows.ps1` for a spare PC that becomes a room; its worker trades the dashboard's setup code for the enrolment payload, held to the server's identity key ([SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md#windows-laptops-and-pcs)). Built first: `DomovoiSetup.exe` carries it, and DomovoiHost places it in the core's cache at every start (`windows/common/SatelliteSetup.cs`), so this server hands it out offline. Tested by `domovoi/tests/test_windows_satellite_setup.py`. |
 | `windows/installer/pins.iss` | The commit and every pinned download (URL and SHA-256). |
 | `windows/installer/art/` | Domovoi's icon (16-256 px) and the wizard's pictures at every size Inno Setup uses, made from `docs/assets/domovoi-icon.png` by `make_art.py` (Pillow 13.0.0 from `requirements.txt` in a private venv; `--check` compares them pixel for pixel). Don't edit them by hand: change the source or the script and run it again. |
 | `windows/helper/` | `DomovoiSetupHelper.exe`: every change to the PC, one verb per call, run elevated from `C:\Program Files\Domovoi`. |

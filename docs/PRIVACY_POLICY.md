@@ -1,6 +1,7 @@
 # Domovoi for Android and iPhone: privacy policy
 
-Effective 21 October 2026; the iPhone and iPad app added 14 November 2026. Published by Coders Farm, the makers of Domovoi
+Effective 17 November 2026 (first published 21 October 2026; the iPhone and
+iPad app added 14 November 2026). Published by Coders Farm, the makers of Domovoi
 (github.com/coders-farm-official/domovoi). Questions: **info@codersfarm.org**.
 
 Domovoi is a home computer system that runs on your own hardware: your
@@ -260,23 +261,6 @@ calendars in its dashboard. Either way the server deletes a phone's
 calendars by itself after 7 days without an update from that phone, and
 when its household token is replaced.
 
-**Videos you attach to a home-server chat** (from the dashboard; 1.4.0). The
-server watches the video once to answer questions about it: it keeps a
-transcript of what was said and short descriptions of a few frames (shown
-as what each frame "might show", a guess), on your server only, with that
-chat, and deletes the video and every frame it took from it as soon as it
-has finished (or the job is stopped). Deleting the chat deletes the
-transcript and descriptions. Nothing of the video goes to Coders Farm or
-anywhere else.
-
-**Scans** (1.4.0). A page you scan with Domovoi is saved in your server's
-Documents, as before, and the server then reads its words so it can tell
-you what the letter says: printed text is read by a program on your
-server (OCR), and a page it can't read well by your server's own picture
-model. The words are kept on your server only, with the scan's record, so
-you can ask about the letter later. Nothing of the scan or its words goes
-to Coders Farm or anywhere else.
-
 Your server is run by you or your household, on your own hardware; what it
 keeps is described in its own documentation
 (`docs/SECURITY_PRIVACY.md` in the Domovoi repository). Coders Farm has no
@@ -287,6 +271,28 @@ addresses on your home network (private addresses such as 192.168.x.x,
 and local names). Every address on the internet must use HTTPS. The same
 rule holds for your own search address: http:// only for an address on
 your home network, https:// for anything else.
+
+## What your Domovoi server does with videos and scans
+
+This part is about your Domovoi server and its dashboard, not the phone
+app.
+
+When you attach a video to a home-server chat in the dashboard (new in
+1.4.0), the server watches the video once to answer questions about it: it
+keeps a transcript of what was said and short descriptions of a few frames (shown
+as what each frame "might show", a guess), on your server only, with that
+chat, and deletes the video and every frame it took from it as soon as it
+has finished (or the job is stopped). Deleting the chat deletes the
+transcript and descriptions. Nothing of the video goes to Coders Farm or
+anywhere else.
+
+Scans (1.4.0). A page you scan with Domovoi is saved in your server's
+Documents, as before, and the server then reads its words so it can tell
+you what the letter says: printed text is read by a program on your
+server (OCR), and a page it can't read well by your server's own picture
+model. The words are kept on your server only, with the scan's record, so
+you can ask about the letter later. Nothing of the scan or its words goes
+to Coders Farm or anywhere else.
 
 ## What goes to the internet
 

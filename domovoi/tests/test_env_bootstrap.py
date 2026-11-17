@@ -213,7 +213,7 @@ def test_internet_flag_writes_the_answer_into_a_fresh_env(fresh, monkeypatch, ca
     assert env_bootstrap.main(["--internet", given]) == 0
     text = env_path.read_text(encoding="utf-8")
     assert _kv(text)["INTERNET_ACCESS"] == stored
-    assert "Settings → Internet" in text
+    assert "Settings → Privacy → Internet" in text
     assert "written by `python -m domovoi.env_bootstrap --internet`" in text
     assert f"INTERNET_ACCESS={stored}" in capsys.readouterr().out
     # the rest of the bootstrap is unchanged
@@ -229,7 +229,7 @@ def test_internet_flag_never_touches_an_existing_env(fresh, monkeypatch, capsys)
     assert env_bootstrap.main(["--internet", "never"]) == 0
     assert env_path.read_bytes() == b"BOT_NAME=Kept\r\n"
     out = capsys.readouterr().out
-    assert "exists; left untouched (change the internet answer in Settings → Internet)" in out
+    assert "exists; left untouched (change the internet answer in Settings → Privacy → Internet)" in out
 
 
 def test_internet_flag_refuses_a_value_that_is_not_an_answer(fresh, monkeypatch, capsys) -> None:

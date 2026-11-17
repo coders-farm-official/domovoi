@@ -4,8 +4,8 @@
   ``InternetTurnedOff`` AND an ``httpx.ConnectError``.
 * SearXNG start/stop runs one at a time and reads the answer under the
   lock: Yes-then-No during a slow first start ends stopped. Its state is
-  reported to Settings → Internet, and "start it again" exists.
-* Settings → Internet lists plugins that may reach the internet on their
+  reported to Settings → Privacy → Internet, and "start it again" exists.
+* Settings → Privacy → Internet lists plugins that may reach the internet on their
   own and, under never, warns about a language model outside the house.
 * One podcast's dead host no longer starves every other download.
 * "I checked online" is not said when every search engine failed, and the
@@ -167,7 +167,7 @@ async def test_start_it_again_schedules_the_reconcile(monkeypatch) -> None:
     assert out["scheduled"] is False                       # unanswered: left alone
 
 
-# ─── Settings → Internet: plugins and warnings ───────────────────────────
+# ─── Settings → Privacy → Internet: plugins and warnings ───────────────────────────
 
 
 def test_network_plugins_are_listed_and_the_bundled_one_marked(monkeypatch, tmp_path) -> None:

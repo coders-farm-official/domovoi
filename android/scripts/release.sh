@@ -8,7 +8,7 @@
 # signature copies onto the unsigned build unchanged (apksigcopier compare,
 # what F-Droid does) and check them the way a Domovoi server will, write
 # android/release.json, commit it ("android: release
-# <v> [skip ci]") and push it to the branch's upstream, then publish the
+# <v>") and push it to the branch's upstream, then publish the
 # GitHub release v<Domovoi's version> (pyproject.toml's, NOT the app's
 # versionName: owner decision 2026-11-14) on coders-farm-official/domovoi
 # with gh, tagged at THAT commit (so the tag holds the manifest naming its
@@ -600,7 +600,7 @@ fi
 if [ "$publish" = 0 ]; then
   kind="the Latest release"; [ "$is_prerelease" = 1 ] && kind="a pre-release"
   say "not published (--no-publish). Signed APKs, SHA256SUMS and the manifest it would commit: $signed/"
-  say "A real run commits that manifest (android: release $version_name [skip ci]), pushes it, and publishes $tag at that commit as $kind."
+  say "A real run commits that manifest (android: release $version_name), pushes it, and publishes $tag at that commit as $kind."
   exit 0
 fi
 
@@ -616,7 +616,7 @@ tree="$(GIT_INDEX_FILE="$index" git read-tree "$commit" \
   && GIT_INDEX_FILE="$index" git update-index --add --cacheinfo "100644,$blob,android/release.json" \
   && GIT_INDEX_FILE="$index" git write-tree)" || { rm -f "$index"; die "making the release commit failed"; }
 rm -f "$index"
-release_commit="$(git commit-tree "$tree" -p "$commit" -m "android: release $version_name [skip ci]")" \
+release_commit="$(git commit-tree "$tree" -p "$commit" -m "android: release $version_name")" \
   || die "git commit-tree failed"
 if ! git update-ref -m "release: android/release.json for $version_name" HEAD "$release_commit" "$commit"; then
   die "HEAD moved while the release was being made (it is $(git rev-parse --short=12 HEAD) now; the APKs are built from ${commit:0:12}): nothing was committed or pushed. Look at that commit, then release again from a clean checkout of the branch's tip"
@@ -624,5 +624,5 @@ fi
 # The working tree and the index follow HEAD for that one file.
 cp "$staged" android/release.json
 git reset --quiet -- android/release.json
-say "committed android/release.json as ${release_commit:0:12} (android: release $version_name [skip ci]) on ${commit:0:12}: the tag goes there"
+say "committed android/release.json as ${release_commit:0:12} (android: release $version_name) on ${commit:0:12}: the tag goes there"
 publish_release "$release_commit" "$commit" 0

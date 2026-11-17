@@ -68,6 +68,7 @@ from domovoi.container_guard.expected import (
     compose_is_ours,
     failing_resolvers,
     mpd_expectations,
+    tor_expectation,
     plugin_expectations,
 )
 from domovoi.container_guard.model import FAILURE, ONESHOT, RUNNING, TAMPER, Finding
@@ -75,6 +76,8 @@ from domovoi.container_guard.model import FAILURE, ONESHOT, RUNNING, TAMPER, Fin
 log = logging.getLogger(__name__)
 
 MPD_BASELINE_KEY = "mpd_image_id"
+# The Friend Houses Tor image the core built (note_tor_image).
+TOR_BASELINE_KEY = "friend_houses_tor_image_id"
 # The baseline before the current one, kept when a rebuild Domovoi vouched
 # for (or an admin's clear) moved it: rooms still on Domovoi's previous
 # build wait to be recreated, they aren't tampering.
@@ -891,6 +894,20 @@ async def gather_expected(guard: ContainerGuard, cfg: GuardConfig, *, with_db: b
             image_id_previous=exp.mpd_image_previous,
         )
     )
+    # Friend Houses' Tor daemon: always expected, running or stopped, so a
+    # container under its name is never "unknown" and never runs another
+    # image (domovoi/friend_houses/service.py decides which).
+    from domovoi.friend_houses import service as fh_service
+
+    async with guard.session_factory() as s:
+        tor_baseline = await store.get_baseline(s, TOR_BASELINE_KEY)
+    exp.add([
+        tor_expectation(
+            running=fh_service.tor_wanted(),
+            image_id=(tor_baseline or {}).get("value") or None,
+            hold=holds.held(fh_service.GUARD_HOLD),
+        )
+    ])
     plugin_rows = await reg.list_plugins()
     expected, names, unwatched = await plugin_expectations(
         plugin_rows, dict(LOADER.loaded),
@@ -1020,6 +1037,16 @@ def _mpd_prefix_setting() -> str | None:
     from domovoi.config import settings
 
     return settings.mpd_container_prefix or None
+
+
+async def note_tor_image(image_id: str) -> None:
+    """Record the Friend Houses Tor image the core just built as the one its
+    container may run (domovoi/friend_houses/tor_runtime.py). Only the core
+    builds it, so every build moves the baseline; any other image under the
+    container is reported (rule T1)."""
+    guard = get_guard()
+    async with guard.session_factory() as s:
+        await store.set_baseline(s, TOR_BASELINE_KEY, image_id, "core-build")
 
 
 async def note_mpd_image(image_id: str | None, *, built: bool) -> str:

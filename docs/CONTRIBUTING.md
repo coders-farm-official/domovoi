@@ -13,13 +13,6 @@ Related reading: [Architecture](ARCHITECTURE.md) ·
 Domovoi is MIT-licensed ([LICENSE](../LICENSE)); contributions are accepted
 under the same license.
 
-A new **Android dependency** needs its licence decided by hand: check it at
-the project's source, then add (or confirm) its rule in
-`android/app/src/main/java/com/domovoi/app/ui/screens/settings/OpenSourceLicences.kt`.
-The unit tests read the build's own list of libraries and fail until every
-one has a permissive rule its POM agrees with; the app's licences screen is
-made from the same list.
-
 ---
 
 ## Development setup
@@ -57,7 +50,7 @@ helper-container secrets that `docker-compose.yml` refuses to run without);
 an existing `.env` is never touched:
 
 ```powershell
-pip install -e ".[dev,real-clients,voice-profile]"
+pip install -e ".[dev,real-clients]"
 pip install --no-deps -r requirements-no-deps.in   # faster-whisper (see below)
 python -m domovoi.env_bootstrap           # creates domovoi/.env on a fresh checkout
 python -m domovoi.env_bootstrap --repair  # adds the two secrets to an older .env
@@ -84,7 +77,8 @@ pip install --no-deps -e .
 ```
 
 `requirements-linux-py314.lock` is what a Linux server installs: core,
-`real-clients` and `voice-profile` (no torch since 1.3.0), for CPython
+`real-clients` and `voice-profile` (an empty extra since 1.3.0, kept for older
+install commands and the lock; no torch), for CPython
 3.14 on x86_64 ([LINUX_HOST.md, Install](LINUX_HOST.md#install); the
 update unit's re-sync uses it on a box that opts in with
 `DOMOVOI_USE_LOCK=1`). Regenerate it with
@@ -219,7 +213,15 @@ pytest -n 4                              # 4 worker processes (pytest-xdist, in 
 * **One run per lane at a time** still holds, serial or parallel: copying
   needs the lane to have no other connections, and two runs on one set of
   copies truncate each other's tables. Different lanes
-  (`TEST_DATABASE_URL=…/domovoi8_test`) run side by side.
+  (`TEST_DATABASE_URL=…/domovoi8_test`) run side by side. A new lane is an
+  empty database whose name ends in `_test`, migrated like the test
+  database (from `domovoi/`; the password as in the URL above):
+
+  ```bash
+  docker compose exec postgres createdb -U domovoi domovoi8_test
+  docker compose run --rm flyway-test -url=jdbc:postgresql://postgres:5432/domovoi8_test \
+    -user=domovoi -password=<password> -connectRetries=20 migrate
+  ```
 * **Mind Postgres' connections.** A test that starts the core app opens
   about 18 connections at once while the lifespan brings its workers up,
   so each worker can burst to ~20, and N workers can line their bursts up.
@@ -331,11 +333,16 @@ Markdown (and pictures under `docs/`) alone runs the docs gates only.
 | Job | Runner | What it runs |
 |---|---|---|
 | docs gates | ubuntu | `build_manual.py --check` and the file-only gate tests (privacy, licences, version copies, mermaid, the manual, the workflow pins); every push |
+| ruff (lint) | ubuntu | `ruff check` ([Linting](#linting)) |
 | pytest 1/6 … 6/6 | ubuntu | the whole suite (all three test trees), split by `scripts/dev/ci_shard.py` into six shards of whole files, each `pytest -n 4` on its own migrated Postgres |
 | web | ubuntu | `node scripts/dev/jsxcheck.js` (every `.jsx` compiles with the vendored Babel; no two dashboard scripts share a top-level name), then `web/openapi.json` and `web/static/manual-content.json` regenerated and diffed against the commit |
 | bash harnesses | ubuntu | `scripts/dev/run-linux-harness.sh all`, when `scripts/linux/` changed (a real install on each Linux system is its own workflow: [The fresh-install test](#the-fresh-install-test)) |
 | android | ubuntu | `./gradlew testDebugUnitTest assembleDebug`; uploads the debug APK (`domovoi-debug-apk`, 14 days) |
+| android repro build a/b, android repro compare | ubuntu | the release APKs built twice in deliberately different environments, unsigned, and compared byte for byte (reproducible builds) |
+| android release rehearsal | windows | the release's signing steps on leg a's APKs with a throwaway key: no environment, no secrets, nothing published |
 | windows | windows | `windows/build.ps1 -SkipInstaller` (the exes and the C# tests), then the installers when the image has Inno Setup 6 |
+| ios | macOS | the `DomovoiKit` package tests, and the app with its UI-test target compiled for the Simulator, unsigned (the UI test runs stay on a Mac with the stub house: [ios/README.md](../ios/README.md)) |
+| sbom | ubuntu | the server's, the web's and the app's SBOMs, made as the release makes them |
 
 Reading a red run: open it from the README's CI badge or the Actions tab
 and pick the red job. For a pytest shard, the end of its log has the
@@ -492,6 +499,13 @@ Replaced so far:
 
 `domovoi/tests/test_dependency_licences.py` fails if a replaced package
 comes back as an import in shipped code, a requirement or a lock pin.
+
+A new **Android dependency** needs its licence decided by hand: check it at
+the project's source, then add (or confirm) its rule in
+`android/app/src/main/java/com/domovoi/app/ui/screens/settings/OpenSourceLicences.kt`.
+The unit tests read the build's own list of libraries and fail until every
+one has a permissive rule its POM agrees with; the app's licences screen is
+made from the same list.
 
 Printing and scanning (`domovoi/printing/`, 2026-10-21) is Domovoi's own
 IPP, PWG Raster/URF, mDNS and eSCL code, plus two permissive libraries,
@@ -680,7 +694,7 @@ has its PEP 440 spelling (`1.0.0rc3`).
 `domovoi/tests/test_version_copies.py` holds every copy to `pyproject.toml`.
 Keep to fewer than ten release candidates (`rc10` sorts before `rc2`).
 
-**The Android app has its own version** (owner decision 2026-11-14):
+**The Android app has its own version**:
 `versionName` and `versionCode` (its `YYMMDDNN` counter, which only goes
 up) in `android/app/build.gradle.kts`, raised only when the app changes,
 and never ahead of the release it ships with. That `versionCode` is the
@@ -694,7 +708,8 @@ reproducible, and F-Droid can publish them as they are
 with a release that changes it, under that release's tag; a release that
 doesn't change it ships no APKs and leaves `android/release.json` as it
 is, still naming the earlier release that holds them, so servers keep
-fetching the app from there. (The iPhone app is separate again.)
+fetching the app from there. The iPhone app has its own version again and
+ships on the App Store ([ios/README.md](../ios/README.md)).
 
 The README's version badges read `pyproject.toml` and `android/release.json`
 on `stable`, so they follow each release by themselves. Its **tests** badge
@@ -705,8 +720,8 @@ is a fixed number: in the release commit, set it to the sum of
 
 Two branches: `main` carries every change; **`stable`** points at the
 latest release and only ever fast-forwards to one. Release candidates
-(`rcN`) are full GitHub releases (the suffix says what they are; owner
-decision 2026-10-15), tagged on `main`, and never move `stable`; only a
+(`rcN`) are full GitHub releases (the suffix says what they are), tagged
+on `main`, and never move `stable`; only a
 version without a suffix does. A published tag never moves
 and is never deleted, and `stable` is never rewound or force-pushed: a bad
 release gets a warning in its notes and a patch release.
@@ -717,8 +732,8 @@ only** (no APKs). Either is made by the release workflow, behind the
 owner's approval, or, as the fallback, by the same scripts on the owner's
 PC. Release from a `main` whose CI run is green ("CI", above); pushing a
 tag starts no workflow. The `android/release.json` commit the app path
-makes carries `[skip ci]`: it changes only that file, on a commit CI has
-already tested.
+makes is an ordinary commit and starts CI like any other (it changes only
+that file, so the run is quick).
 
 ### With GitHub Actions (the usual way)
 
@@ -740,6 +755,12 @@ setup is [docs/release/ACTIONS-SETUP.md](release/ACTIONS-SETUP.md).
    commit raises `pyproject.toml`'s version and leaves
    `android/release.json` alone, and that GitHub has no tag
    `v<version>` yet.
+   Refresh the public status pages in the same commit: the README's
+   "Status and roadmap" (**This release**, **Coming in**, **Previews**)
+   and `docs/ROADMAP.md` (move what shipped out of **Now**, **Next** and
+   **Later**, and name the next work). The docs gates fail on a stale
+   version in either (`domovoi/tests/test_version_copies.py`); whether the
+   wording is still true is for the person releasing to read.
 2. Wait for CI to go green on that commit.
 3. **Actions → release → Run workflow**, branch `main` (leave *tag* empty:
    it is `v` + `pyproject.toml`'s version).
@@ -819,6 +840,7 @@ workflow runs the same scripts. In order:
    below; the page is kept under 20 KB). When the app changed, its `versionName` and `versionCode`
    too; when it didn't, `android/` stays as it is (`android/release.json`
    above all).
+   Include the README and roadmap refresh from step 1 of the workflow path.
 2. **Only when the app changed: `android/scripts/release.ps1`** (or `.sh`)
    from a clean, pushed checkout of `main`, **with Docker Desktop running**:
    builds the APKs in the pinned Linux image (`android/build-env`; it

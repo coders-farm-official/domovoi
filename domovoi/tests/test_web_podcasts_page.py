@@ -118,11 +118,11 @@ DRAWER_OPEN = r"""
 # have them yet; where components.jsx declares them, its own (which read
 # GET /api/config from the table) take precedence.
 NEVER_SETUP = BASE_SETUP + r"""
-globalThis.NEEDS_INTERNET_TEXT = 'needs internet · Settings → Internet';
-globalThis.INTERNET_OFF_MESSAGE = 'internet access is turned off for this box (Settings → Internet)';
+globalThis.NEEDS_INTERNET_TEXT = 'needs internet · Settings → Privacy → Internet';
+globalThis.INTERNET_OFF_MESSAGE = 'internet access is turned off for this box (Settings → Privacy → Internet)';
 globalThis.useInternetPolicy = () => ({ access: 'never', off: true, unanswered: false, loaded: true, refresh() {} });
 globalThis.isInternetOffError = (e) => !!(e && e.status === 409);
-globalThis.NeedsInternetNote = () => React.createElement('span', null, 'needs internet · Settings → Internet');
+globalThis.NeedsInternetNote = () => React.createElement('span', null, 'needs internet · Settings → Privacy → Internet');
 """
 
 IMG_SRCS = "h.findAll({ type: 'img' }).map((el) => el.props.src)"
@@ -239,7 +239,7 @@ def test_without_the_internet_helpers_nothing_is_greyed(driven) -> None:
 def test_under_never_the_online_controls_are_greyed(driven) -> None:
     r = driven["never"]
     assert r["poll"]["props"]["disabled"] is True
-    assert r["poll"]["props"]["title"] == "needs internet · Settings → Internet"
+    assert r["poll"]["props"]["title"] == "needs internet · Settings → Privacy → Internet"
     assert r["note"] is True
     assert r["urlField"] is True                     # the dialog opens on "by RSS URL"
     assert r["search"]["props"]["disabled"] is True

@@ -1,9 +1,9 @@
 """Online controls are greyed, not hidden, when the server is answered
-``never`` (Settings → Internet) — builder 4's pages.
+``never`` (Settings → Privacy → Internet) — builder 4's pages.
 
 Each page reads the answer once from ``GET /api/config`` (its
 ``internet_access``) and greys what would reach the internet, with the
-``needs internet · Settings → Internet`` title:
+``needs internet · Settings → Privacy → Internet`` title:
 
 * Models: Install (catalog cards and pull-by-name);
 * Plugins: install from GitHub (a zip install stays);
@@ -34,14 +34,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 HARNESS = Path(__file__).with_name("jsx_interact_harness.js")
 COMPONENTS = "web/static/components.jsx"
 STATIONS = "plugins/radio/web/static/stations.jsx"
-NEEDS = "needs internet · Settings → Internet"
+NEEDS = "needs internet · Settings → Privacy → Internet"
 
 # The shared strings and the note component live in components.jsx. A
 # fallback is set as a plain global first, which a `const` of the same name
 # in components.jsx shadows, so the scenarios run with or without it.
 SETUP = r"""
-globalThis.NEEDS_INTERNET_TEXT = 'needs internet · Settings → Internet';
-globalThis.INTERNET_OFF_MESSAGE = 'internet access is turned off for this box (Settings → Internet)';
+globalThis.NEEDS_INTERNET_TEXT = 'needs internet · Settings → Privacy → Internet';
+globalThis.INTERNET_OFF_MESSAGE = 'internet access is turned off for this box (Settings → Privacy → Internet)';
 globalThis.NeedsInternetNote = () => null;
 globalThis.isInternetOffError = () => false;
 globalThis.relTime = () => 'just now';

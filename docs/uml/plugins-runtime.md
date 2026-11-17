@@ -31,6 +31,7 @@ classDiagram
         +execute_from_tool(args, ctx, session) Response
         +fallback_offline(intent, ctx, session) Response
         +handle_confirmation(kind, data, affirmative, ctx, session) Response
+        +handle_choice_reply(kind, data, transcript, ctx, session) Response or None
         +offers_tool(transcript) bool
     }
     class FastPath {
@@ -70,6 +71,10 @@ Contract notes, all enforced by tests or install-time contract checks:
 * `confirmation_kinds` are namespaced (`core.<kind>` / `<slug>.<kind>`); the
   mediated pending API (`domovoi/confirmations.py`) refuses to park a kind
   the handler doesn't declare, and the router re-checks at dispatch.
+* `choice_kinds` (SDK 1.10) are the parked questions whose reply may be
+  free text ("the second one", a bare name); the router hands that reply to
+  `handle_choice_reply` before the yes/no pre-empt, and `None` lets the
+  turn route normally.
 * `chat_exposed` opts a handler's tool into conversational chat mode via the
   Letta proxy-tool bridge (requires a usable `tool_schema` +
   `execute_from_tool`).

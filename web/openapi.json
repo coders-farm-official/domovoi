@@ -10415,7 +10415,7 @@
           "config"
         ],
         "summary": "Patch Editable Config",
-        "description": "Apply config changes through the Domovoi server (validate \u2192 persist to\n.env \u2192 live-apply where the tier allows). Returns\n``{applied, restart_required, rejected, normalized, followed}``. The web\nprocess never mutates its own settings copy \u2014 every write fans out to\n:6370. ``follow_internet`` (Settings \u2192 Internet's \"follow the answer\nagain\") rides along only when it names something.",
+        "description": "Apply config changes through the Domovoi server (validate \u2192 persist to\n.env \u2192 live-apply where the tier allows). Returns\n``{applied, restart_required, rejected, normalized, followed}``. The web\nprocess never mutates its own settings copy \u2014 every write fans out to\n:6370. ``follow_internet`` (Settings \u2192 Privacy \u2192 Internet's \"follow the answer\nagain\") rides along only when it names something.",
         "operationId": "patch_editable_config_api_config_editable_patch",
         "requestBody": {
           "required": true,
@@ -10593,7 +10593,7 @@
           "config"
         ],
         "summary": "Get Internet",
-        "description": "Settings \u2192 Internet: the household's internet answer, the three\nchoices, connectivity, and every setting whose default follows the\nanswer. Read-only proxy of the core's ``GET /v1/admin/internet`` (the\ncore owns the live settings). Changing the answer is a PATCH of\n``/api/config/editable`` with ``{changes: {internet_access}}``.",
+        "description": "Settings \u2192 Privacy \u2192 Internet: the household's internet answer, the three\nchoices, connectivity, and every setting whose default follows the\nanswer. Read-only proxy of the core's ``GET /v1/admin/internet`` (the\ncore owns the live settings). Changing the answer is a PATCH of\n``/api/config/editable`` with ``{changes: {internet_access}}``.",
         "operationId": "get_internet_api_config_internet_get",
         "responses": {
           "200": {
@@ -10613,7 +10613,7 @@
           "config"
         ],
         "summary": "Start Search Helper",
-        "description": "Settings \u2192 Internet's \"start it again\": the core runs the search\nhelper's start/stop for the current answer in the background and\nreturns its state (proxy of ``POST /v1/admin/internet/search-helper``).",
+        "description": "Settings \u2192 Privacy \u2192 Internet's \"start it again\": the core runs the search\nhelper's start/stop for the current answer in the background and\nreturns its state (proxy of ``POST /v1/admin/internet/search-helper``).",
         "operationId": "start_search_helper_api_config_internet_search_helper_post",
         "responses": {
           "200": {
@@ -10976,6 +10976,72 @@
             "content": {
               "application/json": {
                 "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/short-address": {
+      "get": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Get Short Address",
+        "description": "``{enabled, state, port, dashboard_port, message}``. ``state``:\n``on`` (port 80 sends browsers to the dashboard), ``off`` (switched\noff), ``taken`` (something else on this computer uses port 80),\n``no_permission`` (the dashboard may not use a low port: an install\nwhose service unit predates the feature), ``failed`` or\n``unsupported`` (not a Linux server). ``message`` is the line\nSettings shows.",
+        "operationId": "get_short_address_api_short_address_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Short Address Api Short Address Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Put Short Address",
+        "description": "Turn the short address off or on (admin). Saved in\n``~/.domovoi/short_address.json``; applies at once. The answer is the\nread above, after the change.",
+        "operationId": "put_short_address_api_short_address_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShortAddressRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Put Short Address Api Short Address Put"
+                }
               }
             }
           },
@@ -16782,6 +16848,703 @@
             "schema": {
               "type": "string",
               "title": "Read Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses": {
+      "get": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Status",
+        "description": "Whether the private connection runs (and why not), this house's\nfingerprint and name, the default friend-file length and the limits.",
+        "operationId": "friend_houses_status_api_friend_houses_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/settings": {
+      "put": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Settings",
+        "operationId": "friend_houses_settings_api_friend_houses_settings_put",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/invites": {
+      "get": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Invites",
+        "operationId": "friend_houses_invites_api_friend_houses_invites_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Make Invite",
+        "description": "Make a friend file. ``file`` is null while the private connection\nis still being set up; the page reads ``/invites/{id}`` until it is\nthere. The first start builds an image, so this may take a while.",
+        "operationId": "friend_houses_make_invite_api_friend_houses_invites_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/invites/{invite_id}": {
+      "get": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Invite",
+        "operationId": "friend_houses_invite_api_friend_houses_invites__invite_id__get",
+        "parameters": [
+          {
+            "name": "invite_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Invite Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Cancel Invite",
+        "operationId": "friend_houses_cancel_invite_api_friend_houses_invites__invite_id__delete",
+        "parameters": [
+          {
+            "name": "invite_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Invite Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/preview": {
+      "post": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Preview",
+        "description": "What a friend file says. Nothing is sent to the other house.",
+        "operationId": "friend_houses_preview_api_friend_houses_preview_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/requests": {
+      "get": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Requests",
+        "operationId": "friend_houses_requests_api_friend_houses_requests_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Send Request",
+        "operationId": "friend_houses_send_request_api_friend_houses_requests_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/requests/{request_id}/accept": {
+      "post": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Accept",
+        "operationId": "friend_houses_accept_api_friend_houses_requests__request_id__accept_post",
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/requests/{request_id}/decline": {
+      "post": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Decline",
+        "operationId": "friend_houses_decline_api_friend_houses_requests__request_id__decline_post",
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/friends": {
+      "get": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Friends",
+        "operationId": "friend_houses_friends_api_friend_houses_friends_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/friends/{friend_id}/verified": {
+      "post": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Verified",
+        "operationId": "friend_houses_verified_api_friend_houses_friends__friend_id__verified_post",
+        "parameters": [
+          {
+            "name": "friend_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Friend Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/friends/{friend_id}": {
+      "patch": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Rename",
+        "operationId": "friend_houses_rename_api_friend_houses_friends__friend_id__patch",
+        "parameters": [
+          {
+            "name": "friend_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Friend Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Unfriend",
+        "operationId": "friend_houses_unfriend_api_friend_houses_friends__friend_id__delete",
+        "parameters": [
+          {
+            "name": "friend_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Friend Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/conversations": {
+      "get": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Conversations",
+        "description": "The house inbox: every friend (or former friend) with messages.",
+        "operationId": "friend_houses_conversations_api_friend_houses_conversations_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/conversations/{house}": {
+      "get": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Conversation",
+        "description": "One house's messages, oldest first; ``before`` for earlier ones.",
+        "operationId": "friend_houses_conversation_api_friend_houses_conversations__house__get",
+        "parameters": [
+          {
+            "name": "house",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "House"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Delete Conversation",
+        "operationId": "friend_houses_delete_conversation_api_friend_houses_conversations__house__delete",
+        "parameters": [
+          {
+            "name": "house",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "House"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/conversations/{house}/read": {
+      "post": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Mark Read",
+        "operationId": "friend_houses_mark_read_api_friend_houses_conversations__house__read_post",
+        "parameters": [
+          {
+            "name": "house",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "House"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/conversations/{house}/export": {
+      "get": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Export",
+        "description": "Every message with one house, each with its signed envelope.",
+        "operationId": "friend_houses_export_api_friend_houses_conversations__house__export_get",
+        "parameters": [
+          {
+            "name": "house",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "House"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/messages": {
+      "post": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Send",
+        "description": "Queue a message to a friend (1\u20132000 characters).",
+        "operationId": "friend_houses_send_api_friend_houses_messages_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/friends/{friend_id}/alert": {
+      "put": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Alert",
+        "description": "What a new message from this friend does in the rooms.",
+        "operationId": "friend_houses_alert_api_friend_houses_friends__friend_id__alert_put",
+        "parameters": [
+          {
+            "name": "friend_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Friend Id"
             }
           }
         ],
@@ -32235,6 +32998,19 @@
           "rows"
         ],
         "title": "SheetWriteRequest"
+      },
+      "ShortAddressRequest": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "enabled"
+        ],
+        "title": "ShortAddressRequest"
       },
       "SpareDeviceEnrolRequest": {
         "properties": {

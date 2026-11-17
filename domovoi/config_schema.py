@@ -24,7 +24,7 @@ Tiers — how a saved change takes effect:
 Internet: a field marked ``needs_internet`` (or a choice listed in
 ``needs_internet_choices``) is greyed in the dashboard with "needs
 internet" when the household's internet answer is ``never``
-(INTERNET_ACCESS, Settings → Internet) — greyed, never hidden, so a
+(INTERNET_ACCESS, Settings → Privacy → Internet) — greyed, never hidden, so a
 household can find it and change its mind. The answer itself is the
 ``internet_access`` row (its own group, "Internet", which the
 Configuration tab shows as a single line pointing at Settings →
@@ -224,7 +224,7 @@ WHISPER_COMPUTE_TYPE_CHOICES = (
 
 # Order here is the display order within each group.
 EDITABLE_FIELDS: list[FieldSpec] = [
-    # ─── Internet (its own tab: Settings → Internet) ───────────────────
+    # ─── Internet (its own tab: Settings → Privacy → Internet) ───────────────────
     FieldSpec(
         "internet_access", "Will this box use the internet?", "Internet",
         "Yes, always: the online extras are on (web answers, finding "
@@ -897,6 +897,17 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "on here without that, every training fails with \"image not "
         "found\". Off: no new training starts (one already running "
         "finishes). Applies immediately.",
+        "bool", section="advanced", tier="reapply", needs_internet=True,
+    ),
+    # Friend Houses (domovoi/friend_houses/service.py): reapplied at once,
+    # which starts or stops the private connection.
+    FieldSpec(
+        "friend_houses_enabled", "Friend Houses", "Friend Houses",
+        "Serverless messaging and friend system between households. Off: "
+        "nothing runs and nothing connects. On: this house can be friended "
+        "by other Domovoi houses and reached only by them, through the Tor "
+        "network (a private connection; no Coders Farm server is involved). "
+        "Where using Tor is restricted, leave it off. Applies immediately.",
         "bool", section="advanced", tier="reapply", needs_internet=True,
     ),
     FieldSpec(

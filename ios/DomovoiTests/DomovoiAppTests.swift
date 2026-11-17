@@ -41,8 +41,9 @@ final class DomovoiAppTests: XCTestCase {
         }
         XCTAssertNil(ats["NSAllowsArbitraryLoads"], "the app never asks for plain http to anywhere")
 
-        // Apple's speech recognition is not used (owner answer Q12: our own
-        // Moonshine), so its prompt must never appear.
+        // Apple's speech recognition is not used (the phone sends audio to the
+        // Domovoi server, which does the speech-to-text), so its prompt must
+        // never appear.
         XCTAssertNil(info["NSSpeechRecognitionUsageDescription"])
 
         // Phone calendars (1.3.0): full read access, asked only when the

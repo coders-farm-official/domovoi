@@ -434,7 +434,7 @@ def test_the_row_says_when_the_chat_needs_a_restart(driven) -> None:
 
 def test_install_on_the_row_is_greyed_with_the_internet_off(driven) -> None:
     install = _install(driven["internet_off"]["vision"])
-    assert install["disabled"] and install["title"] == "needs internet · Settings → Internet"
+    assert install["disabled"] and install["title"] == "needs internet · Settings → Privacy → Internet"
 
 
 def test_a_whisper_model_not_on_disk_says_so(driven) -> None:

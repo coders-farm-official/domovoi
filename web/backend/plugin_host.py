@@ -511,10 +511,10 @@ class PluginHost:
                     "route(s) carry both @open_endpoint and @device_endpoint: "
                     + "; ".join(conflicts)
                 )
-            # A websocket route cannot take this gate: its dependency takes
-            # a Request, so the handshake would die with a TypeError at
-            # connect. Refused up front, with the reason, until the gate
-            # has a websocket form.
+            # The dashboard process serves no plugin websocket: this gate
+            # is HTTP-only (its dependency takes a Request). A plugin page
+            # opens the CORE's socket instead, a @device_endpoint route on
+            # the core router, where the gate has a websocket form.
             sockets = websocket_routes(ctx.routers)
             if sockets:
                 raise RuntimeError(

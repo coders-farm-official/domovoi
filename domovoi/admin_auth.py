@@ -1742,6 +1742,34 @@ async def websocket_device_ok(ws: Any) -> bool:
         return False   # a socket has no status to carry the 503 into
 
 
+async def device_websocket_still_admitted(ws: Any, admitted: DeviceCheckResult) -> bool:
+    """Would the credential that opened ``ws`` on the device tier still
+    open it now? For a socket that stays open (a plugin websocket): an HTTP
+    caller is judged on every request, a socket only at its upgrade, so the
+    upgrade's answer is re-read while it lives.
+
+    ``admitted`` is what :func:`check_device_websocket` answered then:
+
+    * ``ok`` — the household token it presented is still the household's
+      (a rotation, including the one setup does, ends it);
+    * ``admin`` — its Bearer is still a live session: inside the idle hour
+      and the 90-day cap, not signed out. Read only (``activity`` stays
+      off), so a socket never keeps an admin session alive;
+    * ``pre-setup`` — still no admin: the LAN grace ends at setup.
+
+    Pure reads: nothing is charged to the wrong-token backoff (the socket
+    presents nothing new) and no clock moves. A database that does not
+    answer raises, for the caller to judge."""
+    async with session_scope() as s:
+        if admitted == "ok":
+            return await validate_device_token(s, device_token_from_websocket(ws))
+        if admitted == "admin":
+            return await has_admin_auth(s) and await validate_token(s, bearer_token(ws))
+        if admitted == "pre-setup":
+            return not await has_admin_auth(s)
+    return False
+
+
 async def check_live_mic_websocket(
     ws: Any,
 ) -> Literal["ok", "setup_required", "unauthorized"]:

@@ -275,6 +275,15 @@ def _register_core_reapply_hooks() -> None:
             _W.start_worker("core", "wake_word_trainer")
 
     reapply.on_reapply("wake_word_trainer_enabled", _start_wake_trainer)
+    # Friend Houses (domovoi/friend_houses/service.py): turning it on or off,
+    # and the internet answer, start or stop its Tor daemon ("never" stops
+    # the container, not just the calls).
+    from domovoi.friend_houses import service as friend_houses_service
+
+    reapply.on_reapply("friend_houses_enabled", friend_houses_service.schedule_reconcile)
+    reapply.on_reapply(
+        "internet_access", friend_houses_service.schedule_reconcile, key="friend_houses"
+    )
     # Saving the internet answer starts the local search helper (SearXNG)
     # for always / sometimes and stops it for never, in the background
     # (domovoi/searxng_service.py). At boot only the stop under never runs
@@ -595,6 +604,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         from domovoi import wake_trainer_setup
 
         wake_trainer_setup.on_internet_answer()
+        # Friend Houses (off by default): start its Tor daemon and listener
+        # when it's on and wanted, or stop a daemon left running when it
+        # isn't (domovoi/friend_houses/service.py). Background, and quiet
+        # on a house that never turned it on.
+        from domovoi.friend_houses import service as _friend_houses
+
+        _friend_houses.schedule_reconcile()
     # Groups (domovoi/music_groups.py): the named groups, and the shared
     # queues that were playing before the restart (best-effort).
     from domovoi import music_groups
@@ -1066,6 +1082,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         signal_shutdown("lifespan teardown")  # no-op after a signal
         from domovoi.wake_preview import shutdown as wake_preview_shutdown
         from domovoi.wake_trainer_setup import shutdown as wake_trainer_setup_shutdown
+        from domovoi.friend_houses.service import shutdown as friend_houses_shutdown
 
         teardown_started = asyncio.get_running_loop().time()
         await lifecycle.run_teardown(
@@ -1086,6 +1103,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 ("wake-word training setup", wake_trainer_setup_shutdown, 3.0),
                 # "Hear the training voices": its container stops too.
                 ("wake-word voice preview", wake_preview_shutdown, 3.0),
+                # Friend Houses' listener process (its Tor container stays up
+                # so a restart doesn't take the house offline).
+                ("Friend Houses listener", friend_houses_shutdown, 12.0),
                 # Announcements still in flight stop here; their rows stay
                 # pending/sending and the next boot resumes them.
                 ("timer delivery", app.state.timer_delivery.shutdown, 2.0),
@@ -3752,6 +3772,286 @@ class _AdminWakeScoreBody(BaseModel):
 class _AdminChatToolBody(BaseModel):
     tool: str
     args: dict[str, Any] = Field(default_factory=dict)
+
+
+# ─── Friend Houses (domovoi/friend_houses/) ───────────────────────────────
+# "Serverless messaging and friend system between households". Every route
+# is admin security tier, GETs included: friend files are bearer secrets,
+# and who this house's friends are is the household's business
+# (threat-model finding 10). FriendingError / BadFriendFile messages are
+# written for the person at the dashboard.
+
+_FH_READ = [Depends(require_admin_security_read)]
+_FH_WRITE = [Depends(require_admin_security)]
+
+
+def _fh_error(e: Exception) -> HTTPException:
+    return HTTPException(status_code=400, detail=str(e))
+
+
+class _FhSettingsBody(BaseModel):
+    house_name: str | None = None
+    invite_days: int | None = None
+
+
+class _FhInviteBody(BaseModel):
+    days: int | None = None
+    label: str | None = None
+
+
+class _FhFileBody(BaseModel):
+    # Plain str: a validation error must never echo a friend file back.
+    file: str
+    name: str | None = None
+
+
+class _FhNameBody(BaseModel):
+    name: str
+
+
+@app.get("/v1/admin/friend-houses", dependencies=_FH_READ)
+async def admin_friend_houses_status() -> dict[str, Any]:
+    """Friend Houses at a glance: whether its private connection runs, why
+    not, this house's public fingerprint and name, the default friend-file
+    length and the limits. No keys, no addresses."""
+    from domovoi.friend_houses import friending
+    from domovoi.friend_houses import service as friend_houses_service
+
+    out = friend_houses_service.status()
+    from domovoi.friend_houses import messages
+
+    out["house_name"] = await friending.house_name()
+    out["unread"] = await messages.unread_total()
+    out["invite_days"] = await friending.invite_days_default()
+    out["limits"] = {"min_days": friending.MIN_DAYS, "max_days": friending.MAX_DAYS,
+                     "max_open_files": friending.MAX_OPEN_INVITES}
+    return out
+
+
+@app.put("/v1/admin/friend-houses/settings", dependencies=_FH_WRITE)
+async def admin_friend_houses_settings(body: _FhSettingsBody) -> dict[str, Any]:
+    from domovoi.friend_houses import friending
+
+    try:
+        if body.house_name is not None:
+            await friending.set_house_name(body.house_name)
+        if body.invite_days is not None:
+            await friending.set_invite_days_default(body.invite_days)
+    except friending.FriendingError as e:
+        raise _fh_error(e) from e
+    return {"house_name": await friending.house_name(),
+            "invite_days": await friending.invite_days_default()}
+
+
+@app.get("/v1/admin/friend-houses/invites", dependencies=_FH_READ)
+async def admin_friend_houses_invites() -> dict[str, Any]:
+    from domovoi.friend_houses import friending
+
+    return {"invites": await friending.list_invites()}
+
+
+@app.post("/v1/admin/friend-houses/invites", dependencies=_FH_WRITE)
+async def admin_friend_houses_make_invite(body: _FhInviteBody) -> dict[str, Any]:
+    """Make a friend file. ``file`` is null while the pairing address is
+    still being set up (the first time, the Tor image is built): fetch it
+    again from ``GET .../invites/{id}``."""
+    from domovoi.friend_houses import friending
+
+    try:
+        return await friending.make_invite(days=body.days, label=body.label, created_by="admin")
+    except friending.FriendingError as e:
+        raise _fh_error(e) from e
+
+
+@app.get("/v1/admin/friend-houses/invites/{invite_id}", dependencies=_FH_READ)
+async def admin_friend_houses_invite(invite_id: str) -> dict[str, Any]:
+    from domovoi.friend_houses import friending
+
+    try:
+        return await friending.invite_with_file(invite_id)
+    except friending.FriendingError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@app.delete("/v1/admin/friend-houses/invites/{invite_id}", dependencies=_FH_WRITE)
+async def admin_friend_houses_cancel_invite(invite_id: str) -> dict[str, Any]:
+    from domovoi.friend_houses import friending
+
+    if not await friending.cancel_invite(invite_id):
+        raise HTTPException(status_code=404,
+                            detail="That friend file is already used, cancelled or expired.")
+    return {"cancelled": True}
+
+
+@app.post("/v1/admin/friend-houses/preview", dependencies=_FH_WRITE)
+async def admin_friend_houses_preview(body: _FhFileBody) -> dict[str, Any]:
+    """What a friend file says. Nothing is sent (POST, so the file never
+    sits in a URL or an access log)."""
+    from domovoi.friend_houses import friend_file, friending
+
+    try:
+        return await friending.preview(body.file)
+    except (friending.FriendingError, friend_file.BadFriendFile) as e:
+        raise _fh_error(e) from e
+
+
+@app.post("/v1/admin/friend-houses/requests", dependencies=_FH_WRITE)
+async def admin_friend_houses_send_request(body: _FhFileBody) -> dict[str, Any]:
+    from domovoi.friend_houses import friend_file, friending
+
+    try:
+        return await friending.send_request(body.file, local_name=body.name or "", by="admin")
+    except (friending.FriendingError, friend_file.BadFriendFile) as e:
+        raise _fh_error(e) from e
+
+
+@app.get("/v1/admin/friend-houses/requests", dependencies=_FH_READ)
+async def admin_friend_houses_requests() -> dict[str, Any]:
+    from domovoi.friend_houses import friending
+
+    return {"requests": await friending.list_requests()}
+
+
+@app.post("/v1/admin/friend-houses/requests/{request_id}/accept", dependencies=_FH_WRITE)
+async def admin_friend_houses_accept(request_id: str, body: _FhNameBody) -> dict[str, Any]:
+    from domovoi.friend_houses import friending
+
+    try:
+        return await friending.accept(request_id, local_name=body.name, by="admin")
+    except friending.FriendingError as e:
+        raise _fh_error(e) from e
+
+
+@app.post("/v1/admin/friend-houses/requests/{request_id}/decline", dependencies=_FH_WRITE)
+async def admin_friend_houses_decline(request_id: str) -> dict[str, Any]:
+    from domovoi.friend_houses import friending
+
+    if not await friending.decline(request_id):
+        raise HTTPException(status_code=404, detail="That request isn't waiting any more.")
+    return {"declined": True}
+
+
+@app.get("/v1/admin/friend-houses/friends", dependencies=_FH_READ)
+async def admin_friend_houses_friends() -> dict[str, Any]:
+    from domovoi.friend_houses import friending
+
+    return {"friends": await friending.list_friends()}
+
+
+@app.post("/v1/admin/friend-houses/friends/{friend_id}/verified", dependencies=_FH_WRITE)
+async def admin_friend_houses_verified(friend_id: str) -> dict[str, Any]:
+    """Someone compared the 4-digit codes and they matched."""
+    from domovoi.friend_houses import friending
+
+    if not await friending.mark_verified(friend_id):
+        raise HTTPException(status_code=404, detail="No such friend house.")
+    return {"verified": True}
+
+
+@app.patch("/v1/admin/friend-houses/friends/{friend_id}", dependencies=_FH_WRITE)
+async def admin_friend_houses_rename(friend_id: str, body: _FhNameBody) -> dict[str, Any]:
+    from domovoi.friend_houses import friending
+
+    try:
+        renamed = await friending.rename(friend_id, body.name)
+    except friending.FriendingError as e:
+        raise _fh_error(e) from e
+    if not renamed:
+        raise HTTPException(status_code=404, detail="No such friend house.")
+    return {"renamed": True}
+
+
+@app.delete("/v1/admin/friend-houses/friends/{friend_id}", dependencies=_FH_WRITE)
+async def admin_friend_houses_unfriend(friend_id: str) -> dict[str, Any]:
+    from domovoi.friend_houses import friending
+
+    if not await friending.unfriend(friend_id):
+        raise HTTPException(status_code=404, detail="No such friend house.")
+    return {"removed": True}
+
+
+class _FhMessageBody(BaseModel):
+    friend_id: str
+    text: str
+
+
+class _FhAlertBody(BaseModel):
+    alert: str
+
+
+def _fh_house(house: str) -> bytes:
+    try:
+        raw = bytes.fromhex(house)
+    except ValueError:
+        raw = b""
+    if len(raw) != 32:
+        raise HTTPException(status_code=404, detail="No such conversation.")
+    return raw
+
+
+@app.get("/v1/admin/friend-houses/conversations", dependencies=_FH_READ)
+async def admin_friend_houses_conversations() -> dict[str, Any]:
+    """The house inbox: every friend (or former friend) with messages, its
+    unread count and how many of ours weren't delivered."""
+    from domovoi.friend_houses import messages
+
+    return {"conversations": await messages.conversations(),
+            "unread": await messages.unread_total()}
+
+
+@app.get("/v1/admin/friend-houses/conversations/{house}", dependencies=_FH_READ)
+async def admin_friend_houses_conversation(house: str, before: int | None = None,
+                                           limit: int = 50) -> dict[str, Any]:
+    from domovoi.friend_houses import messages
+
+    return {"messages": await messages.conversation(_fh_house(house), before=before, limit=limit)}
+
+
+@app.post("/v1/admin/friend-houses/conversations/{house}/read", dependencies=_FH_WRITE)
+async def admin_friend_houses_mark_read(house: str) -> dict[str, Any]:
+    from domovoi.friend_houses import messages
+
+    return {"marked": await messages.mark_read(_fh_house(house))}
+
+
+@app.get("/v1/admin/friend-houses/conversations/{house}/export", dependencies=_FH_READ)
+async def admin_friend_houses_export(house: str) -> dict[str, Any]:
+    """Every message with one house, each with its signed envelope (proof of
+    what was said; checkable against the sender's public house key)."""
+    from domovoi.friend_houses import messages
+
+    return await messages.export(_fh_house(house))
+
+
+@app.delete("/v1/admin/friend-houses/conversations/{house}", dependencies=_FH_WRITE)
+async def admin_friend_houses_delete_conversation(house: str) -> dict[str, Any]:
+    from domovoi.friend_houses import messages
+
+    return {"deleted": await messages.delete_conversation(_fh_house(house))}
+
+
+@app.post("/v1/admin/friend-houses/messages", dependencies=_FH_WRITE)
+async def admin_friend_houses_send(body: _FhMessageBody) -> dict[str, Any]:
+    from domovoi.friend_houses import messages
+
+    try:
+        return await messages.send(body.friend_id, body.text)
+    except messages.MessageError as e:
+        raise _fh_error(e) from e
+
+
+@app.put("/v1/admin/friend-houses/friends/{friend_id}/alert", dependencies=_FH_WRITE)
+async def admin_friend_houses_alert(friend_id: str, body: _FhAlertBody) -> dict[str, Any]:
+    """What a new message from this friend does: ``inbox`` (the default),
+    ``sender`` (the rooms hear who it's from) or ``read`` (and the message)."""
+    from domovoi.friend_houses import messages
+
+    try:
+        if not await messages.set_alert(friend_id, body.alert):
+            raise HTTPException(status_code=404, detail="No such friend house.")
+    except messages.MessageError as e:
+        raise _fh_error(e) from e
+    return {"alert": body.alert}
 
 
 @app.get(
@@ -7211,7 +7511,7 @@ class _AdminConfigUpdateBody(BaseModel):
     plugin: str | None = None
     # Settings whose default follows the internet answer and that someone
     # pinned by hand: "follow the answer again" comments their .env line
-    # out (never deletes it) and re-derives them (Settings → Internet).
+    # out (never deletes it) and re-derives them (Settings → Privacy → Internet).
     follow_internet: list[str] = Field(default_factory=list, max_length=16)
 
 
@@ -7505,7 +7805,7 @@ async def admin_voice_history_delete_all() -> dict[str, Any]:
     return {"job": job}
 
 
-# ─── Settings → Internet ──────────────────────────────────────────────────
+# ─── Settings → Privacy → Internet ──────────────────────────────────────────────────
 
 
 @app.get(
@@ -7517,7 +7817,7 @@ async def admin_voice_history_delete_all() -> dict[str, Any]:
 )
 async def admin_internet() -> dict[str, Any]:
     """The household's internet answer and what follows from it — the
-    document behind Settings → Internet: the answer and where it is set
+    document behind Settings → Privacy → Internet: the answer and where it is set
     (locked when the process environment pins it), the three choices in
     the installer's words, the privacy note, connectivity (reason
     ``turned_off`` under ``never``), and every setting whose default
@@ -7535,7 +7835,7 @@ async def admin_internet() -> dict[str, Any]:
     dependencies=[Depends(require_admin_mutation)],
 )
 async def admin_internet_search_helper() -> dict[str, Any]:
-    """Settings → Internet's "start it again": run the search helper's
+    """Settings → Privacy → Internet's "start it again": run the search helper's
     start/stop for the CURRENT answer in the background — the same thing
     saving the answer does (``domovoi/searxng_service.py``). For a first
     start that failed or timed out, or a helper somebody stopped by hand.

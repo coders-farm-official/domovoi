@@ -32,7 +32,7 @@ HARNESS = Path(__file__).with_name("jsx_interact_harness.js")
 FILES = ["web/static/components.jsx", "web/static/satellite_media.jsx"]
 
 SETUP = r"""
-globalThis.NEEDS_INTERNET_TEXT = 'needs internet · Settings → Internet';
+globalThis.NEEDS_INTERNET_TEXT = 'needs internet · Settings → Privacy → Internet';
 globalThis.NeedsInternetNote = () => null;
 globalThis.relTime = () => 'just now';
 """

@@ -92,7 +92,7 @@ lives). Docker commands run from `domovoi/` (where the compose file lives).
 ./domovoi/scripts/dev.ps1            # PowerShell
 
 # Manual equivalent
-pip install -e ".[dev,real-clients,voice-profile]"
+pip install -e ".[dev,real-clients]"
 pip install -e ".[cuda]"                  # only on an NVIDIA host
 pip install --no-deps -r requirements-no-deps.in   # faster-whisper: without its
                                           # declared deps (PyAV; the file says why)
@@ -181,11 +181,13 @@ or in the cloud; they override your tool's defaults.
   push straight to `main` is refused, with no bypass (the owner switches
   the rule off only while a release runs). docs/CONTRIBUTING.md,
   "Pull requests", has the steps.
-- **CI runs on every pull request and every push to main.** `.github/workflows/ci.yml` (the
-  pytest suite in shards, the web and docs checks, the bash harnesses, the
-  Android app, the Windows build) runs on GitHub's hosted runners, free for
+- **CI runs on every pull request and every push to main.**
+  `.github/workflows/ci.yml` (the pytest suite in shards, ruff, the web and
+  docs checks, the bash harnesses, the Android app, the iPhone app's build,
+  the Windows build) runs on GitHub's hosted runners, free for
   this public repo (2026-11-14). Don't put `[skip ci]` in commit messages.
-  Main stays green: a pull request can't merge until its run passes. It fails on NEW test failures only; one listed in
+  Main stays green: a pull request can't merge until its run passes.
+  It fails on NEW test failures only; one listed in
   `domovoi/tests/known_failures.toml` is reported, not fatal.
   docs/CONTRIBUTING.md, "CI", says how to read and re-run a failure.
 - **Signing secrets live only in the `release` environment.** Releases
@@ -212,7 +214,7 @@ or in the cloud; they override your tool's defaults.
   mv cmdline-tools/{bin,lib,NOTICE.txt,source.properties} cmdline-tools/latest/
   export ANDROID_HOME=/opt/android-sdk
   yes | cmdline-tools/latest/bin/sdkmanager --licenses >/dev/null
-  cmdline-tools/latest/bin/sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+  cmdline-tools/latest/bin/sdkmanager "platforms;android-36" "build-tools;35.0.0" "platform-tools"
   cd <repo>/android && gradle --no-daemon testDebugUnitTest assembleDebug
   # -> android/app/build/outputs/apk/debug/app-debug.apk
   ```

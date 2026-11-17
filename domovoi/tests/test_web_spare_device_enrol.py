@@ -579,7 +579,7 @@ async def test_the_qr_is_a_join_link_the_app_parses_like_the_payload(core):
                                  APP_READY], ids=["missing", "failed_before", "ready"])
 async def test_making_a_code_never_downloads_the_app(core, monkeypatch, policy, app):
     """Owner decision 2026-10-15: the server downloads the app only when an
-    admin presses the button, whatever Settings -> Internet says."""
+    admin presses the button, whatever Settings -> Privacy -> Internet says."""
     from domovoi import egress
 
     core["/v1/admin/android-app"] = (200, app)
@@ -848,7 +848,7 @@ def test_a_failed_download_stays_on_the_card_with_the_button(phone):
 
 def test_with_internet_off_only_the_upload_is_offered_and_it_lands(phone):
     r = phone["offline"]
-    assert "Internet access is turned off for this box (Settings → Internet)" in r["text"]
+    assert "Internet access is turned off for this box (Settings → Privacy → Internet)" in r["text"]
     assert "domovoi-9.9.9-arm64-v8a.apk" in r["text"]
     assert not any("Download the app" in b for b in r["buttons"]) and any("upload an APK" in b for b in r["buttons"])
     assert any(c.get("method") == "UPLOAD" and c.get("path") == "/api/satellites/android-app/upload" for c in r["calls"])

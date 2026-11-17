@@ -804,7 +804,7 @@ const ModelsPanel = () => {
   // gone before it could be read on a phone).
   const [fire, node, dismissToast] = useToast();
   // Installing a model pulls it from the Ollama registry: greyed while the
-  // box is set to stay off the internet (Settings → Internet).
+  // box is set to stay off the internet (Settings → Privacy → Internet).
   // The internet answer, read once for the page (the GET /api/config the
   // dashboard's shell reads too) and handed down as a prop; one read per
   // page, never one per row.

@@ -56,7 +56,7 @@ const browserPlayable = (st) => {
   return !['localhost', '127.0.0.1', '://0.0.0.0'].some((h) => url.includes(h));
 };
 
-/* INTERNET_ACCESS=never (Settings → Internet): the server refuses an
+/* INTERNET_ACCESS=never (Settings → Privacy → Internet): the server refuses an
  * internet stream with a 409, so the page greys those up front. A stream
  * on the house network (a LAN Icecast, an SDR box) is not the internet and
  * stays playable — the same "local" the server's egress check uses: a

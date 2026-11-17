@@ -333,7 +333,7 @@ const AdminSignedOutNotice = () => {
   );
 };
 
-/* ---- the internet answer (INTERNET_ACCESS, Settings → Internet) ----
+/* ---- the internet answer (INTERNET_ACCESS, Settings → Privacy → Internet) ----
  * The household says once whether this box has internet: '' (not
  * answered yet — today's behaviour), 'always', 'sometimes' or 'never'.
  * Under 'never' the server refuses everything that would reach the
@@ -348,8 +348,8 @@ const AdminSignedOutNotice = () => {
  * useInternetPolicy() is ONE shared read of /api/config for the whole
  * page (a module-level cache plus subscribers, re-read every 60 s and on
  * INTERNET_CHANGED_EVENT) — never one fetch per component. */
-const INTERNET_OFF_MESSAGE = 'internet access is turned off for this box (Settings → Internet)';
-const NEEDS_INTERNET_TEXT = 'needs internet · Settings → Internet';
+const INTERNET_OFF_MESSAGE = 'internet access is turned off for this box (Settings → Privacy → Internet)';
+const NEEDS_INTERNET_TEXT = 'needs internet · Settings → Privacy → Internet';
 const INTERNET_CHANGED_EVENT = 'domovoi:internet-changed';   // window CustomEvent, detail {access}
 const INTERNET_ANSWERS = ['always', 'sometimes', 'never'];
 const INTERNET_POLICY_REFRESH_MS = 60 * 1000;
@@ -418,7 +418,7 @@ const useInternetPolicy = () => {
   };
 };
 
-/* Tell every page the answer changed (Settings → Internet, the first-run
+/* Tell every page the answer changed (Settings → Privacy → Internet, the first-run
  * step): the shared read takes the new value at once and re-reads. */
 const announceInternetChange = (access) => {
   InternetPolicyStore.set(access);
@@ -561,7 +561,7 @@ const openSettingsTab = (tab) => {
   try { window.location.hash = `settings/${tab}`; } catch { /* no location */ }
 };
 
-/* "needs internet · Settings → Internet", the link opening that tab. */
+/* "needs internet · Settings → Privacy → Internet", the link opening that tab. */
 const NeedsInternetNote = ({ compact = false }) => (
   <span className={`needs-internet${compact ? ' compact' : ''}`} title={INTERNET_OFF_MESSAGE}
         style={{ display: 'inline-flex', alignItems: 'center', gap: 4,
@@ -569,7 +569,7 @@ const NeedsInternetNote = ({ compact = false }) => (
     <Icon name="wifi-off" size={compact ? 12 : 13}/>
     <span>needs internet · </span>
     <a href="#settings/internet" className="needs-internet-link">
-      Settings → Internet
+      Settings → Privacy → Internet
     </a>
   </span>
 );
@@ -2698,9 +2698,92 @@ const Sidebar = ({ route, setRoute, counts, manifest, badges: given }) => {
   );
 };
 
+/* The address to share (share_address.js picks it): domovoi.local when the
+ * short address and the network name both work, else domovoi.local:6369,
+ * else the IP with :6369. One read of /api/lan-name and /api/short-address
+ * for the whole page (the topbar and the sidebar both show it), again every
+ * minute and when this browser pairs or signs in. Display only: it never
+ * changes which address the page talks to. null until known, and for a
+ * browser that may read neither: the header then shows ServerStore's label. */
+const ShareAddressStore = (() => {
+  let value = null;
+  let loading = null;
+  let timer = null;
+  const subs = new Set();
+  const here = () => {
+    try {
+      const base = ServerStore.current();
+      return { hostname: new URL(base || window.location.href).hostname };
+    } catch { return { hostname: window.location.hostname }; }
+  };
+  const load = () => {
+    if (loading) return loading;
+    loading = Promise.all([
+      apiGet('/api/lan-name', { quiet: true }).catch(() => null),
+      apiGet('/api/short-address', { quiet: true }).catch(() => null),
+    ]).then(([lan, short]) => {
+      let next = null;
+      try { next = window.ShareAddress ? window.ShareAddress.pick(lan, short, here()) : null; } catch { next = null; }
+      const changed = JSON.stringify(next) !== JSON.stringify(value);
+      value = next;
+      if (changed) subs.forEach((fn) => { try { fn(); } catch { /* one bad subscriber */ } });
+    }).finally(() => { loading = null; });
+    return loading;
+  };
+  return {
+    get: () => value,
+    refresh: load,
+    subscribe(fn) {
+      subs.add(fn);
+      if (subs.size === 1) {
+        load();
+        timer = setInterval(load, 60000);
+      }
+      return () => {
+        subs.delete(fn);
+        if (subs.size === 0 && timer) { clearInterval(timer); timer = null; }
+      };
+    },
+  };
+})();
+
+const useShareAddress = () => {
+  const [, force] = React.useReducer((n) => n + 1, 0);
+  React.useEffect(() => ShareAddressStore.subscribe(force), []);
+  // Pairing or signing in may make the reads possible.
+  React.useEffect(() => {
+    try { return Auth.subscribe(() => ShareAddressStore.refresh()); } catch { return undefined; }
+  }, []);
+  return ShareAddressStore.get();
+};
+
+// The address, click to copy ("copied" for a moment). `fallback` is shown
+// (and copied) while no shareable address is known.
+const ShareAddressButton = ({ className, fallback, style }) => {
+  const addr = useShareAddress();
+  const [copied, setCopied] = React.useState(false);
+  const text = addr ? addr.text : fallback;
+  const copyText = addr ? addr.url : fallback;
+  const onClick = async (e) => {
+    e.stopPropagation();
+    const ok = await copyToClipboard(copyText);
+    setCopied(ok ? 'copied' : 'couldn’t copy');
+    setTimeout(() => setCopied(false), 1500);
+  };
+  return (
+    <button type="button" className={`share-address ${className || ''}`} onClick={onClick} style={style}
+            title={`${copyText} · click to copy this address to share`}
+            aria-label={`copy the address ${text}`}>
+      <Icon name={copied === 'copied' ? 'check' : 'copy'} size={12} className="ic"/>
+      <span className="mono" aria-live="polite">{copied || text}</span>
+    </button>
+  );
+};
+
 // Who you are and which server you're pointed at.
 //
-//   * host — ServerStore.currentLabel(), the same origin the Topbar shows.
+//   * host — the address to share (ShareAddressButton), the same one the
+//     Topbar shows; ServerStore.currentLabel() until it is known.
 //   * name — Domovoi has no per-user login, only an admin gate. So report
 //     the auth state honestly rather than inventing a person: the sidebar
 //     doubles as the answer to "why is that page asking me to sign in?".
@@ -2723,7 +2806,7 @@ const SidebarFooter = () => {
         <Avatar name={signedIn || viewOnly ? 'Admin' : 'Guest'}/>
         <div>
           <div className="name">{signedIn ? 'Admin' : (viewOnly ? 'Admin (view only)' : 'Not signed in')}</div>
-          <div className="host" title={host}>{host}</div>
+          <ShareAddressButton className="host" fallback={host}/>
         </div>
       </div>
     </div>
@@ -2911,7 +2994,7 @@ const ConfigField = ({ f, value, onChange, internetOff = false }) => {
           ? <Pill tone={f.is_set ? 'ok' : 'idle'}>{f.is_set ? 'set' : 'not set'}</Pill>
           : f.masked && <Pill>hidden</Pill>}
         {f.follows_internet && (
-          <span className="config-follows-internet" title="its default follows the answer in Settings → Internet; saving a value here pins it"
+          <span className="config-follows-internet" title="its default follows the answer in Settings → Privacy → Internet; saving a value here pins it"
                 style={{ fontSize: 11, color: 'var(--fg-muted)' }}>follows the internet answer</span>
         )}
         {greyed && <NeedsInternetNote compact/>}
@@ -2966,10 +3049,13 @@ const Topbar = ({ route, setRoute, theme, setTheme }) => {
       {/* No search box here: there is no command palette yet, and a
           tab-focusable "search anything ⌘K" that did nothing advertised
           one (F-007). Add the control back together with the feature. */}
+      {/* Where this Domovoi is, to share (click copies it), and beside it
+          the switch to another Domovoi. */}
+      <ShareAddressButton className="theme-toggle" fallback={ServerStore.currentLabel()}
+                          style={{ fontSize: 12 }}/>
       <button className="theme-toggle" onClick={() => setShowServers(true)}
-              title="switch domovoi">
+              title="switch domovoi" aria-label="switch domovoi">
         <Icon name="server" size={14} className="ic"/>
-        <span style={{ fontSize: 12 }} className="mono">{ServerStore.currentLabel()}</span>
       </button>
       {/* Help (help.jsx): Domovoi's own help desk, about this page. */}
       <button className="theme-toggle" title="help: ask about this page" aria-label="help"
@@ -3598,7 +3684,7 @@ const PairModal = ({ onClose }) => {
  * Exactly one modal is ever on screen. */
 /* ---- First-run: "Will this Domovoi have internet?" -----------------
  * The third step of first-run setup, after the admin password: the same
- * three answers as Settings → Internet, plus "Decide later" (which leaves
+ * three answers as Settings → Privacy → Internet, plus "Decide later" (which leaves
  * the Home row asking). Offered only when /api/config says nobody has
  * answered — the Windows installer and `env_bootstrap --internet` answer
  * before the dashboard ever opens. The save is the same PATCH Settings →
@@ -3659,7 +3745,7 @@ const InternetFirstRunStep = ({ onClose }) => {
           <div className="hint">
             Domovoi understands everything you say right here on this box either way.
             The internet only adds extras — web answers, podcast downloads, finding
-            artists by the names people say. Change it any time in Settings → Internet.
+            artists by the names people say. Change it any time in Settings → Privacy → Internet.
           </div>
           {INTERNET_FIRST_RUN_CHOICES.map((c) => (
             <label key={c.value} className={`internet-choice${choice === c.value ? ' on' : ''}`} data-choice={c.value}

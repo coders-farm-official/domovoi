@@ -13,8 +13,8 @@ import kotlinx.serialization.json.put
 /**
  * What the room display shows beyond the room's own status: this room's
  * music, its timers and alarms, and a timer going off right now. All of it
- * comes from the server, over the room's own socket (PROPOSED protocol, not
- * on any core yet; see [RoomDisplayFeed]). Until a core sends it, [feed] is
+ * comes from the server, over the room's own socket (the room display
+ * protocol, on a core since 1.4.0; see [RoomDisplayFeed]). Until a core sends it, [feed] is
  * null and the display hides those sections: nothing is guessed, nothing is
  * a placeholder.
  *

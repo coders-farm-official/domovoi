@@ -14,7 +14,9 @@ Pure file checks: no systemd, no DB, never skips.
   mount-namespace part. It also hides no devices (GPU, SDR) and keeps
   W+X memory (the speech stack's JIT). The web, which never runs sudo,
   and the database unit, which only drives the docker CLI, keep the whole
-  set and drop privileges outright.
+  set. The database unit drops every capability; the web keeps exactly
+  one, ``CAP_NET_BIND_SERVICE``, for the short address on port 80
+  (web/backend/short_address.py), in its bounding set too.
 * LINUX_HOST.md installs the shipped files instead of listing its own
   copies, and says next to the ``usermod -aG docker`` step that the group
   is root-equivalent.
@@ -144,7 +146,7 @@ def test_python_units_see_the_checkout_media_and_only_their_own_home(name: str) 
                 assert p.startswith("-"), f"{name}: {p} would fail the unit where it is missing"
     assert _one(svc, "ProtectHome") == "tmpfs"
     assert _paths(svc, "BindPaths") == {"/home/domovoi"}
-    # The speech stack (numba, torch, onnxruntime) JIT-compiles; devices
+    # The speech stack (it once had numba and torch; onnxruntime now) JIT-compiles; devices
     # (GPU, SDR, the card the dashboard reads a label from) stay visible.
     for key in ("MemoryDenyWriteExecute", "PrivateDevices", "ProtectClock", "DevicePolicy", "DeviceAllow"):
         assert key not in svc, f"{name}: {key}= would break the hardware paths"
@@ -204,11 +206,24 @@ def test_linux_host_says_why_the_core_unit_is_looser() -> None:
     assert re.search(r"impl(y|ies|ied)", section)
 
 
-def test_web_drops_every_privilege() -> None:
+def test_web_drops_every_privilege_but_the_low_port() -> None:
+    """The short address (port 80) is the one privilege the dashboard
+    holds: CAP_NET_BIND_SERVICE as its only ambient capability, and the
+    bounding set cut down to that same one, so no setuid helper or file
+    capability can add anything (NoNewPrivileges stays on as well)."""
     svc = _service("domovoi-web")
     assert _one(svc, "NoNewPrivileges") == "yes"
-    assert _one(svc, "CapabilityBoundingSet") == ""
+    assert svc["CapabilityBoundingSet"] == ["CAP_NET_BIND_SERVICE"]
+    assert svc["AmbientCapabilities"] == ["CAP_NET_BIND_SERVICE"]
     assert _one(svc, "ExecStart") == "/opt/domovoi/.venv/bin/python -m web.backend.main"
+
+
+def test_only_the_web_unit_gets_the_low_port() -> None:
+    """The capability is for the dashboard's unit alone."""
+    for name in ("domovoi-db", "domovoi-core"):
+        text = (UNITS / f"{name}.service").read_text(encoding="utf-8")
+        assert "CAP_NET_BIND_SERVICE" not in text, name
+    assert _service("domovoi-db")["CapabilityBoundingSet"] == [""]
 
 
 def test_db_unit_is_locked_down_around_the_docker_cli() -> None:

@@ -48,7 +48,7 @@ body:
     id: internet
     attributes:
       label: Internet answer
-      description: Settings → Internet.
+      description: Settings → Privacy → Internet.
       options:
         - "Yes, always"
         - Sometimes

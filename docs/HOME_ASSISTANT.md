@@ -14,7 +14,7 @@ conflict, and Home Assistant can make Domovoi speak.
   on a shared machine is Ollama on 11434: share one instance or keep them on
   separate hosts.
 - **No discovery overlap.** Domovoi answers mDNS only for its own name on
-  the home network (`domovoi.local` by default; Settings → Advanced →
+  the home network (`domovoi.local` by default; Settings → System → Advanced →
   Network name) and registers no services, so Home Assistant won't discover it and it won't
   appear in Home Assistant's device list.
 - **One voice system per microphone.** A Domovoi satellite owns its mic
@@ -34,7 +34,7 @@ resumes after the announcement.
 
 The endpoint is on Domovoi's device tier (see
 [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#the-tiers)), so it needs the
-household device token. An admin can read it on the dashboard (Settings → Phones & browsers) or in
+household token. An admin can read it on the dashboard (Settings → Household → Phones & browsers → Household token) or in
 `~/.domovoi/device-token.txt` on the server (on a Windows install the file is
 inside Domovoi's private distro, so use the dashboard). Keep it in Home
 Assistant's `secrets.yaml` as `domovoi_device_token`. If you rotate it in Domovoi,

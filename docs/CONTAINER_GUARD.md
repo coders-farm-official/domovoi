@@ -7,7 +7,7 @@ of the core that knows which of those containers should be running, checks
 them every 30 seconds, and says so loudly when one fails or when something
 about them looks tampered with.
 
-Two kinds of problem, two responses (the owner's choice, 2026-10-11):
+Two kinds of problem, two responses:
 
 * **A failure** — a container is missing, stopped, keeps restarting or is
   unhealthy, runs an older image of its own repository than the one
@@ -221,6 +221,27 @@ host's administrator, whom the guard never claims to stop
 then on the tag and every room's container are compared to it on every
 check, so a swap while the core runs is still tampering. A room being
 started, warmed or retired is held (below).
+
+### Friend Houses' Tor daemon
+
+`domovoi-tor` runs C tor for Friend Houses ("serverless messaging and
+friend system between households"; `domovoi/friend_houses/`). The core
+builds its image itself from `domovoi/Dockerfile.tor` (a digest-pinned
+Debian base and Debian's `tor` package) and runs it by image ID, so the
+guard pins it to **the exact image ID the core built**, recorded in
+`container_guard_baselines` under `friend_houses_tor_image_id` at each
+build (`engine.note_tor_image`). Only the core builds it, so any other
+image under that name is T1.
+
+It is expected **running** only while Friend Houses wants it: an admin
+turned Friend Houses on, the internet answer isn't No, and the house has
+a friend or an open friend file (`friend_houses.service.tor_wanted`).
+Otherwise it is expected **stopped**: no failure if it is gone or
+stopped, but if it runs it must still run the core's image. While the
+core starts, restarts or reloads it, it is held (`core:friend-houses`).
+The core rebuilds the image when `Dockerfile.tor` changes and when it is
+30 days old, so Debian's tor security fixes get in; each rebuild moves the
+baseline.
 
 ### Plugins
 

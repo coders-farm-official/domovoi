@@ -229,8 +229,8 @@ def _update_findings(st: State, *, admin: bool) -> list[Finding]:
         return []
     if not admin:
         return [Finding("update", "warn",
-                        "the last update didn't finish · an admin can read why in Settings → Configuration",
-                        "#settings/configuration", scope="open")]
+                        "the last update didn't finish · an admin can read why in Settings → System → About & updates",
+                        "#settings/about", scope="open")]
     failed_steps = [s.get("name") for s in last.get("steps") or []
                     if isinstance(s, dict) and s.get("status") in ("failed", "error")]
     details: list[str] = []
@@ -246,7 +246,7 @@ def _update_findings(st: State, *, admin: bool) -> list[Finding]:
             "rollback_failed": "the last update failed, and so did putting the old version back",
             "rolled_back": "the last update was rolled back: the old version is running"}[status]
     return [Finding("update", "err" if status != "rolled_back" else "warn", text,
-                    "#settings/configuration", scope="admin", details=tuple(details))]
+                    "#settings/about", scope="admin", details=tuple(details))]
 
 
 def _plugin_findings(st: State) -> list[Finding]:

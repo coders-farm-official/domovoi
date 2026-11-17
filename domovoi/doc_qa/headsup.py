@@ -24,8 +24,9 @@ The kinds, in the order they are checked (one card per request):
   whole document, when it is longer than one reply sees.
 * ``long`` — a summary read in parts that will take a long while here
   (the measured estimate), or that the home server would read faster.
-* ``blurry``, ``handwriting`` — a picture (:func:`blur_variance`; the
-  handwriting step needs the vision model and is not built yet).
+* ``blurry``, ``handwriting`` — a picture (:func:`blur_variance` for blur;
+  handwriting fires when the caller's classifying step (``letter.py``'s
+  printed-or-handwritten question) says the writing is handwritten).
 
 **It doesn't nag** (:func:`decide`): a kind shows once per chat; "don't
 warn me about this again" (per kind) and the master switch (Settings →

@@ -41,13 +41,19 @@ const sandbox = {
     body: { appendChild() {} }, head: { appendChild() {} },
   },
 };
+sandbox.DOMParser = class { parseFromString(t) { return { body: { innerHTML: 'BODY' } }; } };
 sandbox.window = { open: (url) => { out.opened.push(url); return null; } };
 vm.createContext(sandbox);
 vm.runInContext(code + `
 ;openDocInNewTab('My Doc.pdf');
 downloadDoc('notes.md');
+downloadDocAsWord('Notes/potential tor notes.html');
+downloadDoc('Notes/potential tor notes.html');
+window.__more = { bodyOurs: docBodyOf('<html><body><p>chrome</p>' + DOC_BODY_START + '<p>Hi</p>' + DOC_BODY_END + '</body></html>'),
+                  stem: docStem('a/b.c.html'), keys: DOC_DOWNLOADS.map((d) => d.key) };
 window.__urls = { raw: docRawUrl('a b.txt'), text: docTextUrl('a b.txt') };`, sandbox, { filename: 'files.jsx' });
 out.urls = sandbox.window.__urls;
+out.more = sandbox.window.__more;
 process.stdout.write(JSON.stringify(out));
 """
 
@@ -69,9 +75,16 @@ def test_open_raw_and_download_go_to_the_selected_server() -> None:
     assert out["opened"] == [
         f"{base}/api/documents/raw/My%20Doc.pdf?device_token=TOKEN-OF-{base}"
     ]
-    assert out["clicked"] == [
-        f"{base}/api/documents/raw/notes.md?device_token=TOKEN-OF-{base}"
-    ]
+    assert out["clicked"][0] == f"{base}/api/documents/raw/notes.md?device_token=TOKEN-OF-{base}"
+    # A formatted document's Download is Word, from the same server; the raw
+    # page is only the explicit "Web page" pick.
+    assert out["clicked"][1] == (
+        f"{base}/api/documents/export/doc/Notes%2Fpotential%20tor%20notes.html"
+        f"?fmt=docx&device_token=TOKEN-OF-{base}"
+    )
+    assert out["clicked"][2].startswith(f"{base}/api/documents/raw/Notes%2Fpotential")
+    assert out["more"] == {"bodyOurs": "<p>Hi</p>", "stem": "b.c",
+                           "keys": ["word", "pdf", "html"]}
     # The token rides only to the server it belongs to.
     for url in out["opened"] + out["clicked"]:
         assert url.startswith(base + "/")

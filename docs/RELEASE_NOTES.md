@@ -4,6 +4,88 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.4.0 (unreleased) — Queue history: what Up next picked, and why
+
+- **What changed.** **Settings → Household → Queue history** (an admin
+  only, on the dashboard) lists every Up next session, newest first, with
+  the songs it picked in order and the reason for each, and downloads a
+  session's picks as a CSV or JSON file. It only reads: nothing there ends
+  or deletes a session.
+- **What to know.** An ended session and its picks are deleted after a
+  while (the page says when for each). Under "Keep listening history:
+  Don't keep" the page still shows the picks but not how long each played.
+
+## 1.4.0 (unreleased) — Documents: Download gives a Word file
+
+- **What changed.** In Files, Documents, **Download** on a document made in
+  Domovoi's editor now offers **Word (.docx)** (the default), **PDF** (the
+  editor's print or save-as-PDF) and **Web page (.html)**. Before, it saved
+  the stored `.html` page, which looked like a broken download. Selecting
+  several files and choosing **Download as zip** now puts such documents in
+  the zip as `.docx` too. Markdown, text, spreadsheets, PDFs and pictures
+  download as before.
+- **Document editor: paste a picture.** Pasting and dropping in the
+  editor are tidied: a picture pasted from the clipboard (a screenshot,
+  "Copy image") or a picture file dropped onto the page goes in at the
+  cursor, the same as Insert photo. Text copied together with a picture
+  pastes as before. (Pasting a picture already worked; this is
+  housekeeping, and the Download is the real fix.)
+- **What to know.** The Android and iPhone apps' Files lists save such a
+  document as a Word file too, once they are updated; an older app still
+  saves the `.html` page (a zip made by the server has the `.docx` either
+  way).
+
+## 1.4.0 (unreleased) — Plugin SDK 1.11: plugins can hold a live connection with phones and browsers
+
+- **What changed.** A plugin can now keep a live, two-way connection (a
+  websocket) open with the household's phones and browsers, for things
+  like a game or a remote control. It is served by the core
+  (`WS /v1/plugins/<slug>/...`) and only for routes the plugin marks
+  `@device_endpoint`: the connection needs the household token
+  (`X-Device-Token`, or `?token=` from a browser) or an admin sign-in, a
+  browser page must be on the home network, and a refused connection never
+  reaches the plugin. An open connection is checked again every 30 seconds
+  and closed once its token is changed, its admin sign-in ends, or setup
+  finishes; it never keeps an admin signed in. A plugin may hold 32
+  connections, one device 8; messages are capped in size and rate.
+  Disabling, re-enabling or upgrading the plugin closes its connections.
+  The install trust screen lists each one among the device-tier routes.
+- **What to know.** A plugin that uses it asks for SDK 1.11
+  (`domovoi_api >=1.11`) and won't install on an older server: update
+  Domovoi first. No bundled plugin uses it. Any other plugin websocket is
+  still refused at load, now with "plugin websocket routes must be
+  @device_endpoint routes on the core router (core.py)". The server's log
+  blanks the whole `?token=` value of every connection, whatever
+  characters a chosen household token holds (before, a token starting with
+  certain punctuation could reach the log in part).
+
+## 1.4.0 (unreleased) — the short address: open domovoi.local without :6369
+
+- **What changed.** Typing `domovoi.local` (or the server's address) in a
+  browser now opens the dashboard: the dashboard also listens on port 80
+  and sends every request on to the same host on 6369, path and query
+  kept. It only redirects, only for the server's own names and address,
+  and only GET and HEAD (docs/SECURITY_PRIVACY.md, "The short address").
+  The dashboard stays on 6369 and the core on 6370: links, rooms, the apps
+  and bookmarks are unchanged. The header now shows the easiest address to
+  share (`domovoi.local`, else `domovoi.local:6369`, else the IP with
+  `:6369`); click it to copy it. That changes nothing about which address
+  the page itself talks to.
+- **What to know.** On by default only when nothing else on the server
+  uses port 80; when something does (a Pi-hole, a web server, IIS on the
+  Windows PC), Domovoi leaves it alone and Settings → System → Advanced →
+  Short address says "Short address off: something else on this computer
+  uses port 80." An admin can switch it off there to free port 80.
+  Linux: the dashboard's unit gets `CAP_NET_BIND_SERVICE`, that one
+  capability only; an existing install gets it from its next update
+  (the drop-in `domovoi-web.service.d/50-domovoi-short-address.conf`), and
+  until then Settings says the short address is off. A unit you manage
+  yourself needs `AmbientCapabilities=CAP_NET_BIND_SERVICE` and the same in
+  `CapabilityBoundingSet=` (docs/LINUX_HOST.md). Windows install: Setup
+  (and the next Windows update) adds a seventh Hyper-V firewall rule,
+  `Domovoi-ShortAddress-80`, for your home subnet only. New API:
+  `GET`/`PUT /api/short-address`.
+
 ## 1.4.0 (unreleased) — the room display: a phone in room mode shows the room
 
 - **What changed.** A phone or tablet in room mode can show what its room
@@ -32,7 +114,7 @@ a way that would otherwise get reported as a bug.
   own player does the same and says what happened. Playing a song whose
   row or file is gone says so in plain words ("That song isn't in the
   library any more.") instead of an internal error.
-- **An offline room no longer looks like it's playing.** Settings → Rooms
+- **An offline room no longer looks like it's playing.** Settings → Household → Rooms
   showed an offline room's song with its progress bar still counting (its
   player on the server plays on to nobody). It now says the room is offline
   and its music isn't reaching it.
@@ -50,7 +132,7 @@ a way that would otherwise get reported as a bug.
   --no-remove`, on fresh package lists only), and a failed run records the
   reason in plain words, which the room's log and its card show. The card
   no longer promises that a reboot installs them. Rooms get this with their
-  next code upgrade from Settings → Rooms.
+  next code upgrade from Settings → Household → Rooms.
 - **Wi-Fi recovery fits the room's network.** A room whose Wi-Fi dropped
   used `wpa_cli` even where NetworkManager runs the network, which can't
   work there, so only the watchdog's restart brought it back. The recovery
@@ -157,7 +239,7 @@ a way that would otherwise get reported as a bug.
   codes behind the other's back. Once one server approves it, the device
   withdraws its request from the others. Details and the threat model:
   [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#asking-every-house-an-approval-the-device-can-check-140).
-- **What you see.** Typing the code on **Settings → Rooms** now says "Code
+- **What you see.** Typing the code on **Settings → Household → Rooms** now says "Code
   sent" for such a device, and the room appears within about ten seconds,
   when the device next checks in — not at the click. A code the device did
   not accept says so on its card; type it again.
@@ -229,21 +311,23 @@ signed out and says "Signed out after 1 hour without admin activity".
 
 ### Up to five wake words per room
 
-* **A room can wake on more than one word.** In a room's **Settings**
-  (the room drawer, "wake word"), an admin with the room online can **Add
-  another wake word**, reorder the words and remove them, then **Save**:
+* **A room can wake on more than one word.** In a room's
+  drawer, on the **Overview** tab ("wake word"), an admin with the room
+  online can **Add another wake word**, reorder the words and remove them,
+  then **Save**:
   the room restarts to load them. Up to 5 per room, main word first. Most
   homes need only one, and nothing changes for a room nobody edits. The
   page says it plainly: each extra word makes accidental wake-ups a little
   more likely (every word fires on its own, at its own threshold).
 * **As many as the device can run.** A satellite now says in its hello how
   many words it runs at once (`wake_words_max`): a **Pi Zero 2 W runs 3**,
-  a bigger Pi or a spare PC 5. The server never sends more, and the
-  dashboard offers no "add" past that and says why instead. Satellite
-  software from before 1.4.0, and the phone apps until they learn it, run
-  one word: they are sent the main word only, in the frame they already
-  understand, and keep working. Upgrade a room (Settings → Rooms →
-  Upgrade) to give it more.
+  a bigger Pi or a spare PC 5, and a phone in room mode says its own number (the
+  Android app: 5, or 3 on a 32-bit or small-memory phone). The server
+  never sends more, and the dashboard offers no "add" past that and says
+  why instead. Satellite software from before 1.4.0 runs one word: it is
+  sent the main word only, in the frame it already understands, and keeps
+  working. Upgrade a room (Settings → Household → Rooms → the room's
+  **Overview** tab → Upgrade) to give it more.
 * **Which word woke the room** is kept with each turn
   (`conversation_log.wake_word`) and in the core's log ("woken by …"); a
   room's history names the word once more than one word has woken it,
@@ -290,7 +374,7 @@ signed out and says "Signed out after 1 hour without admin activity".
 ### Videos in chat (dashboard)
 
 - **What changed.** A home-server chat takes one short video a message
-  (MP4, MOV or WebM, up to 3 minutes and 2 GB) from the dashboard's
+  (MP4, MOV or WebM, up to 3 minutes and 2 GiB) from the dashboard's
   paperclip. The server watches it in the background ("Watching your
   video… about 4 minutes left", with stop) while you keep chatting, then
   writes a short summary into the chat and answers questions about it from
@@ -5067,7 +5151,8 @@ are unchanged.
   `/v1/satellite-windows/files/…`; otherwise a laptop downloads the same
   pinned files itself.
 * **Never on the PC that runs the server**: the installer refuses there.
-  "Use this PC as a room" will come with the server's own tray.
+  The PC that runs the server can't be a room yet: nothing in its tray
+  does that.
 * **A tray icon** (filled red while audio leaves for the server, mute, the
   approval code, Allow / Not now for "ask me" with every change listed),
   power questions (plugged-in sleep and lid, each default No, undone on

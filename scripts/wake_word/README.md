@@ -1,8 +1,11 @@
 # Custom wake words ("Hey Domovoi")
 
-A satellite wakes on one openWakeWord model. The shipped default is
-`hey_jarvis`. A household can train its own ("Hello Domo", "Hey Domovoi")
-on the Domovoi server, from the dashboard, with no shell. This page covers
+A room wakes on openWakeWord models: one main word, and since 1.4.0 up to
+five per room (a Pi Zero 2 W runs three). A new install's rooms are given
+**Domovoi** (`domovoi_v1`, [section 5](#5-licence-sharing-a-model-trained-here));
+rooms from an older install keep `hey_jarvis`, which is also every room's
+word until its server gives it one. A household can train its own
+("Hello Domo", "Hey Domovoi") on the Domovoi server, from the dashboard, with no shell. This page covers
 turning training on, training a word, the settings, what a training does to
 the server while it runs, and the licence of what it makes. How the trainer
 image is built and run: [DOCKER_TRAINER.md](DOCKER_TRAINER.md).
@@ -132,8 +135,9 @@ On a Linux server or the Windows install, an update that changes
    model and the reason on its row.
 
 Three wake words ("Hello Domo", "Hey Domovoi", "Domovoi") are three
-models. A satellite runs one at a time: each room wakes on the one pushed
-to it. The recipe trains the parts of a phrase as near misses, so a "Hey
+models. Pushing one makes it a room's main word; an admin can add more on
+the room's own Settings tab (up to five, or three on a Pi Zero 2 W), and
+each extra word makes an accidental wake-up a little more likely. The recipe trains the parts of a phrase as near misses, so a "Hey
 Domovoi" model is meant not to wake on "Domovoi" alone; train "Domovoi" as
 its own word for that.
 

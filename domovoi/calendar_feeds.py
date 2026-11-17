@@ -120,7 +120,7 @@ USER_AGENT = "Domovoi-calendar/1.0"
 # the dashboard says it. Plain words, never exception text (which can hold
 # the address).
 ERROR_WORDS: dict[str, str] = {
-    "internet_off": "Internet access is turned off for this server (Settings → Internet), "
+    "internet_off": "Internet access is turned off for this server (Settings → Privacy → Internet), "
                     "so this calendar can't refresh. Showing the last copy.",
     "unreachable": "Couldn't reach the calendar's server. Will try again.",
     "timeout": "The calendar's server took too long to answer. Will try again.",
