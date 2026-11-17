@@ -102,7 +102,7 @@ MAX_CLIP_BYTES = MAX_CLIP_SEC * BYTES_PER_SEC
 #: Anything shorter is a tap, not speech: not transcribed, nothing written.
 MIN_CLIP_SEC = 0.3
 #: The devices tier's id shape (web/backend/api/devices.py _DEVICE_ID_RE).
-PHONE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{2,63}$")
+PHONE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{2,63}\Z")
 #: chat_threads.id is a BIGINT: anything past it is no thread at all.
 MAX_THREAD_ID = 2**63 - 1
 MAX_PLAYER_CHARS = 2048

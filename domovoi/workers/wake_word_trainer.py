@@ -95,7 +95,7 @@ def phrase_is_speakable(phrase: str | None) -> bool:
     ``wake_word_train_command``, which the README suggests writing as a
     ``docker run …`` / ``wsl …`` wrapper.
     """
-    return bool(_PHRASE_RE.match(phrase or ""))
+    return bool(_PHRASE_RE.fullmatch(phrase or ""))
 
 
 def build_train_argv(cmd_template: str, **values: str) -> list[str]:
@@ -444,7 +444,7 @@ def count_wavs(clips_dir: Path) -> int:
         return 0
 
 
-_TOKEN_RE = re.compile(r"^[a-z0-9'.-]+$")
+_TOKEN_RE = re.compile(r"^[a-z0-9'.-]+\Z")
 
 
 def phrase_pronunciations(phrase: str) -> str:

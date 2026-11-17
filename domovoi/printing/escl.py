@@ -43,7 +43,7 @@ SCAN = "http://schemas.hp.com/imaging/escl/2011/05/03"
 MAX_XML = 256 * 1024
 MAX_PAGE = 60 * 1024 * 1024
 BUSY_RETRIES = 30
-_JOB_PATH = re.compile(r"^/[A-Za-z0-9._~/-]{1,200}$")
+_JOB_PATH = re.compile(r"^/[A-Za-z0-9._~/-]{1,200}\Z")
 
 
 class EsclError(Exception):

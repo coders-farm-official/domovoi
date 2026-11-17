@@ -480,7 +480,7 @@ def _shown(creds: dict[str, Any]) -> dict[str, Any]:
 
 
 # What a Domovoi setup network is called (overlay.generate_ap_credentials).
-_SETUP_SSID = re.compile(r"^Domovoi-Setup-[0-9A-F]{4}$")
+_SETUP_SSID = re.compile(r"^Domovoi-Setup-[0-9A-F]{4}\Z")
 
 _CANT_RECOVER_DETAIL = (
     "Your Domovoi server can't recover this card's password. Prepare the "

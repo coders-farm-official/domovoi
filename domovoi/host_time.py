@@ -38,7 +38,7 @@ from typing import Any
 
 # IANA names: "Region/City", "Etc/GMT+5", "UTC". Nothing else is handed
 # to a device to pass to timedatectl.
-_ZONE_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+){0,2}$")
+_ZONE_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+){0,2}\Z")
 
 _ETC_TIMEZONE = Path("/etc/timezone")
 _ETC_LOCALTIME = Path("/etc/localtime")

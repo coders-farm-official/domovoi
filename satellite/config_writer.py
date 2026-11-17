@@ -17,12 +17,12 @@ from __future__ import annotations
 
 import re
 
-_SECTION_RE = re.compile(r"^\s*\[([^\]]+)\]\s*$")
+_SECTION_RE = re.compile(r"^\s*\[([^\]]+)\]\s*\Z")
 #: A key this module edits: ``section.key``, lower-case ASCII, nothing
 #: around it. Anything else is refused: a key with a space in it matched
 #: the line of a different key (``"satellite.server_fingerprint "`` rewrote
 #: the pin), which is how a set_config frame re-pinned a satellite.
-_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,40}\.[a-z][a-z0-9_]{0,40}$")
+_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,40}\.[a-z][a-z0-9_]{0,40}\Z")
 
 
 def _key_line_re(key: str) -> re.Pattern[str]:

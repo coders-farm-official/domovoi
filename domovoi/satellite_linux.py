@@ -49,8 +49,8 @@ LOCK_REL = "locks/linux-python.txt"
 UPSTREAM = "https://github.com/astral-sh/python-build-standalone/releases/download/"
 MACHINES = ("x86_64", "aarch64")
 _FILE_RE = re.compile(
-    r"^cpython-(3\.[0-9]{1,2}\.[0-9]{1,3})\+([0-9]{8})-(x86_64|aarch64)-unknown-linux-gnu-install_only_stripped\.tar\.gz$")
-_SHA_RE = re.compile(r"^[0-9a-f]{64}$")
+    r"^cpython-(3\.[0-9]{1,2}\.[0-9]{1,3})\+([0-9]{8})-(x86_64|aarch64)-unknown-linux-gnu-install_only_stripped\.tar\.gz\Z")
+_SHA_RE = re.compile(r"^[0-9a-f]{64}\Z")
 MAX_FILE_BYTES = 128 * 1024 * 1024
 
 

@@ -1237,7 +1237,7 @@ def _stamped_after(stamp: Any, recorded_at: Any) -> bool:
 PROVISION_MPD_RECORD = "/var/lib/domovoi-provision/mpd-image.json"
 UPDATE_MPD_RECORD = "/var/lib/domovoi-update/mpd-image.json"
 _RECORD_MAX_BYTES = 4096
-_IMAGE_ID_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+_IMAGE_ID_RE = re.compile(r"^sha256:[0-9a-f]{64}\Z")
 
 
 def _root_only(st: os.stat_result) -> bool:

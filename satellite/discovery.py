@@ -58,7 +58,7 @@ DEFAULT_NAMES: tuple[str, ...] = ("domovoi.local",)
 SERVER_NAMES_PATH = Path("~/.domovoi").expanduser() / "server-names.json"
 #: At most this many advertised names are kept.
 MAX_NAMES = 4
-_NAME_RE = re.compile(r"^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$")
+_NAME_RE = re.compile(r"^(?=.{1,253}\Z)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\Z")
 # A name lookup that has not answered by then is a name that will not
 # (nss-mdns gives up on its own after a few seconds anyway).
 _NAME_TIMEOUT_SEC = 3.0

@@ -49,7 +49,7 @@ SOCKS_NAME = "socks"
 MAIN_SOCKET = "main.sock"
 PAIRING_SOCKET = "pairing.sock"
 
-_FRIEND_ID = re.compile(r"^[a-z0-9]{1,32}$")
+_FRIEND_ID = re.compile(r"^[a-z0-9]{1,32}\Z")
 
 
 @dataclass(frozen=True)

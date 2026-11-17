@@ -1373,8 +1373,11 @@ one answer.
   `Host` (or none, or two) is a `400` whose text names this server's own
   address. The request target must be `/path?query` in printable ASCII; an
   absolute URL, `*` or a control character is a `400`, so nothing can
-  point the `Location` elsewhere or split the header. A `Host` with a port
-  other than 80 is refused too.
+  point the `Location` elsewhere or split the header (including a newline
+  at the very end, which a pattern ending in `$` used to let through:
+  every validator now ends in `\Z` or uses `fullmatch`, CORE-46, round 6,
+  and `domovoi/tests/test_regex_anchors.py` keeps it so). A `Host` with a
+  port other than 80 is refused too.
 * **GET and HEAD only.** Every other method is a `405` with
   `Allow: GET, HEAD`; nothing is ever forwarded to the dashboard, so a
   form posted to port 80 goes nowhere.

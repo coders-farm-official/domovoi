@@ -81,7 +81,7 @@ SETUP_TRANSPORTS = ("usb", "portal")
 # compliance problem rather than a misconfiguration. Format-validated only —
 # maintaining a country list here would rot, and the kernel rejects codes it
 # doesn't know.
-_COUNTRY_RE = re.compile(r"^[A-Z]{2}$")
+_COUNTRY_RE = re.compile(r"^[A-Z]{2}\Z")
 
 
 def validate_wifi_country(code: str) -> str:

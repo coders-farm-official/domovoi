@@ -113,9 +113,9 @@ def espeak_ipa(word: str) -> str:
 _ARPA_VOWELS = "AA AE AH AO AW AY EH ER EY IH IY OW OY UH UW".split()
 _ARPA_CONSONANTS = "B CH D DH F G HH JH K L M N NG P R S SH T TH V W Y Z ZH".split()
 _PHONE = re.compile(
-    r"^(?:(?:" + "|".join(_ARPA_VOWELS) + r")[0-2]|" + "|".join(_ARPA_CONSONANTS) + r")$"
+    r"^(?:(?:" + "|".join(_ARPA_VOWELS) + r")[0-2]|" + "|".join(_ARPA_CONSONANTS) + r")\Z"
 )
-_WORD = re.compile(r"^[a-z0-9'.-]+$")
+_WORD = re.compile(r"^[a-z0-9'.-]+\Z")
 
 
 def parse_pronunciations(text: str) -> dict[str, str]:

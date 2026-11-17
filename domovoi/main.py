@@ -4522,8 +4522,10 @@ async def _room_words_with_main(room_id: str, slug: str) -> tuple[list[str], lis
 
 
 class _AdminWakeRoomBody(BaseModel):
-    room_id: str
-    slugs: list[str]
+    room_id: str = Field(..., max_length=64)
+    # CORE-47: bounded here, before anything walks the list (the dashboard's
+    # own body says the same, wake_words.py). wake_default.MAX_ROOM_WORDS.
+    slugs: list[str] = Field(..., min_length=1, max_length=5)
 
 
 @app.put("/v1/admin/wake/room", dependencies=[Depends(require_admin_mutation)])
@@ -5602,7 +5604,7 @@ async def admin_reset_satellite_pairing(room_id: str) -> dict[str, Any]:
 
 # Room ids are used as WS paths, MPD container-name components, and config
 # values — keep them boring. Mirrored client-side by the AdoptModal.
-_ROOM_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+_ROOM_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}\Z")
 
 
 class _PreseedPairingBody(BaseModel):

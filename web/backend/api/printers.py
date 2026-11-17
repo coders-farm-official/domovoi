@@ -103,7 +103,7 @@ async def _caller(request: Request) -> tuple[str | None, str, str]:
     return ident, name, source_label(platform, ua)
 
 
-_SCAN_ID = re.compile(r"^[0-9a-f]{32}$")
+_SCAN_ID = re.compile(r"^[0-9a-f]{32}\Z")
 
 
 def _scan_id(scan_id: str) -> str:

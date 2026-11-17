@@ -539,7 +539,7 @@ async def bundle() -> dict[str, str | None]:
 # verbatim and nothing with a newline in it is ever signed. The Android app
 # sends 32 hex characters.
 HEALTH_CHALLENGE_MAX_LEN = 128
-_HEALTH_CHALLENGE_RE = re.compile(rf"^[A-Za-z0-9._~-]{{1,{HEALTH_CHALLENGE_MAX_LEN}}}$")
+_HEALTH_CHALLENGE_RE = re.compile(rf"^[A-Za-z0-9._~-]{{1,{HEALTH_CHALLENGE_MAX_LEN}}}\Z")
 
 
 def health_challenge_ok(challenge: str) -> bool:

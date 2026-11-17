@@ -46,7 +46,7 @@ TEXT = 4.5      # WCAG AA, normal text: brand_ink, brand_fg
 UI = 3.0        # WCAG 1.4.11, UI parts: the brand fill; a disabled button
 DISABLED_OPACITY = 0.65   # .btn:disabled in web/static/styles.css
 
-HEX_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
+HEX_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})\Z")
 
 # The theme surfaces, as web/static/colors_and_type.css writes them
 # (oklch L C H). domovoi/tests/test_plugin_accent.py holds the two in step.

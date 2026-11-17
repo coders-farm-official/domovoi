@@ -49,10 +49,10 @@ RESERVED_CONTAINER_NAMES = frozenset({
 })
 RESERVED_CONTAINER_PREFIXES = ("domovoi-mpd-",)
 # A Docker container name.
-CONTAINER_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$")
+CONTAINER_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}\Z")
 
 DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
-_REF_DIGEST_RE = re.compile(r"@(sha256:[0-9a-f]{64})$")
+_REF_DIGEST_RE = re.compile(r"@(sha256:[0-9a-f]{64})\Z")
 
 
 def is_host_root(source: str, system_drive: str | None = None) -> bool:

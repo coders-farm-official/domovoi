@@ -706,7 +706,7 @@ def _wifi_mode(value: Any) -> str | None:
     return value.strip().lower()[:16] or None
 
 
-_HOST_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+_HOST_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
 
 
 def advertised_server_names() -> list[str]:
@@ -803,7 +803,7 @@ MUSIC_HOLD_MAX_SEC = 600.0
 # replies), a barge-in, or anything else.
 EARLY_COMMIT_TRIGGERS = frozenset({"wake_word", "followup"})
 
-_WAKE_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+_WAKE_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
 
 
 def _clean_wake_slug(raw: object) -> str | None:

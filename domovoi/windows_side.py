@@ -96,16 +96,16 @@ OUTCOMES = (
 #: every 30 s).
 TRAY_FRESH_SEC = 120
 
-_VERSION_RE = re.compile(r"^v?([0-9]{1,9})\.([0-9]{1,9})\.([0-9]{1,9})(?:-([0-9A-Za-z.]{1,40}))?(?:\+[0-9A-Za-z.]*)?$")
-_TAG_RE = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.]{1,40})?$")
-_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+_VERSION_RE = re.compile(r"^v?([0-9]{1,9})\.([0-9]{1,9})\.([0-9]{1,9})(?:-([0-9A-Za-z.]{1,40}))?(?:\+[0-9A-Za-z.]*)?\Z")
+_TAG_RE = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.]{1,40})?\Z")
+_COMMIT_RE = re.compile(r"^[0-9a-f]{40}\Z")
 # provision.sh's step ids (windows/common/Provision.cs ProvisionLine.StepId).
-_STEP_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
-_AT_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
-_ID_RE = re.compile(r"^[0-9a-f]{16}$")
+_STEP_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}\Z")
+_AT_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\Z")
+_ID_RE = re.compile(r"^[0-9a-f]{16}\Z")
 # A Windows path the tray names for a log: a drive, then no control or
 # reserved characters.
-_LOG_RE = re.compile(r'^[A-Za-z]:\\[^<>"|?*\x00-\x1f]{1,250}$')
+_LOG_RE = re.compile(r'^[A-Za-z]:\\[^<>"|?*\x00-\x1f]{1,250}\Z')
 
 # Seconds since the epoch; module attributes so the tests can move them.
 _now = time.time
@@ -120,7 +120,7 @@ def valid_version(v: object) -> bool:
 
 
 def _ident(a: str, b: str) -> int:
-    ma, mb = re.match(r"^([A-Za-z]*)([0-9]*)$", a), re.match(r"^([A-Za-z]*)([0-9]*)$", b)
+    ma, mb = re.match(r"^([A-Za-z]*)([0-9]*)\Z", a), re.match(r"^([A-Za-z]*)([0-9]*)\Z", b)
     if ma and mb:
         if ma.group(1) != mb.group(1):
             return -1 if ma.group(1) < mb.group(1) else 1
@@ -258,7 +258,7 @@ def target_release(running_sha: str, channel: str | None) -> dict | None:
     from domovoi import git_version
 
     sha = (running_sha or "").removesuffix("-dirty")
-    if not re.match(r"^[0-9a-f]{7,64}$", sha):
+    if not re.match(r"^[0-9a-f]{7,64}\Z", sha):
         return None
     key = (sha, "stable" if channel == "stable" else None)
     cached = _TARGET_CACHE.get(key)
@@ -559,7 +559,7 @@ def record_core_boot(sha: str) -> None:
     """The commit the core runs (git_version.boot_sha), for the tray's
     Linux part, which runs in another process: its pull records it as the
     rollback baseline, as the dashboard's pull does. Best effort."""
-    if not re.match(r"^[0-9a-f]{7,64}(-dirty)?$", sha or ""):
+    if not re.match(r"^[0-9a-f]{7,64}(-dirty)?\Z", sha or ""):
         return
     try:
         _write_json("core-boot.json", {"sha": sha, "pid": os.getpid(), "at": _iso(_now())})
@@ -570,7 +570,7 @@ def record_core_boot(sha: str) -> None:
 def core_boot_sha() -> str | None:
     doc = _read_json("core-boot.json")
     sha = doc.get("sha") if isinstance(doc, dict) else None
-    return sha if isinstance(sha, str) and re.match(r"^[0-9a-f]{7,64}(-dirty)?$", sha) else None
+    return sha if isinstance(sha, str) and re.match(r"^[0-9a-f]{7,64}(-dirty)?\Z", sha) else None
 
 
 # ─── the state, for the card and for the tray ───────────────────────────

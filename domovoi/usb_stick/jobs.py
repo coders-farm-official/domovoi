@@ -65,7 +65,7 @@ MAX_BUILDS = 3
 #: Room for the image's copy beyond Debian's own size (our ~1 MB, the
 #: files tar while it is made) and for the rest of the server.
 MARGIN_BYTES = 256 * 1024 * 1024
-_ID_RE = re.compile(r"^[A-Za-z0-9_-]{32}$")
+_ID_RE = re.compile(r"^[A-Za-z0-9_-]{32}\Z")
 BUILD_JSON = "build.json"
 FILES_PATH = "/v1/usb-stick/"
 OS_LIST = "os-list.json"

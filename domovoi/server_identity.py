@@ -95,8 +95,8 @@ ADDR_MAX_LEN = 300
 # exactly the relay the binding exists to stop. Neither field may contain
 # whitespace or anything outside a URL-safe alphabet. Genuine satellites
 # send hex nonces and ``host:port``; anything else is refused unsigned.
-_CHALLENGE_RE = re.compile(rf"^[A-Za-z0-9._~-]{{1,{CHALLENGE_MAX_LEN}}}$")
-_ADDR_RE = re.compile(rf"^[A-Za-z0-9.:\[\]_~%-]{{1,{ADDR_MAX_LEN}}}$")
+_CHALLENGE_RE = re.compile(rf"^[A-Za-z0-9._~-]{{1,{CHALLENGE_MAX_LEN}}}\Z")
+_ADDR_RE = re.compile(rf"^[A-Za-z0-9.:\[\]_~%-]{{1,{ADDR_MAX_LEN}}}\Z")
 
 # Where the per-channel manifest serials live: beside the key, so a test
 # that points the key at a tmp dir gets its serials there too.

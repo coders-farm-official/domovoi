@@ -43,13 +43,13 @@ from domovoi.plugins_runtime.lockfile import (
 # The core SDK semver the `domovoi_api` range is checked against.
 from domovoi.sdk import API_VERSION
 
-SLUG_RE = re.compile(r"^[a-z][a-z0-9_]{1,31}$")
-SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
-MIGRATION_FILE_RE = re.compile(r"^V(\d{3})__[A-Za-z0-9_]+\.sql$")
-_PINNED_REQ_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\[\],-]*==[A-Za-z0-9.!+*]+$")
+SLUG_RE = re.compile(r"^[a-z][a-z0-9_]{1,31}\Z")
+SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+\Z")
+MIGRATION_FILE_RE = re.compile(r"^V(\d{3})__[A-Za-z0-9_]+\.sql\Z")
+_PINNED_REQ_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\[\],-]*==[A-Za-z0-9.!+*]+\Z")
 # Debian package-name charset (policy §5.6.1: lowercase alnum, +, -, .).
-_APT_PKG_RE = re.compile(r"^[a-z0-9][a-z0-9+.-]+$")
-_SPECIFIER_RE = re.compile(r"^(>=|<=|==|!=|>|<|~=)\s*(\d+(?:\.\d+)*)$")
+_APT_PKG_RE = re.compile(r"^[a-z0-9][a-z0-9+.-]+\Z")
+_SPECIFIER_RE = re.compile(r"^(>=|<=|==|!=|>|<|~=)\s*(\d+(?:\.\d+)*)\Z")
 
 # Reserved slugs: core identities, the ``public`` schema, and the path
 # segments the plugin HTTP surfaces already own — ``/v1/plugins/install``,
@@ -77,14 +77,14 @@ CORE_WEB_ROUTES = frozenset(
     }
 )
 # A page route becomes the URL hash (#<route>): lowercase slug charset only.
-WEB_ROUTE_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+WEB_ROUTE_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}\Z")
 
 WORKER_KINDS = frozenset({"poll", "longrun", "startup"})
 REQUIRES_NETWORK_VALUES = frozenset({"no", "degraded", "yes"})
 
 # [[media_libraries]] (design §7.1): per-plugin id + the fixed base vocabulary
 # the web-side resolver maps to an absolute path.
-MEDIA_LIBRARY_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+MEDIA_LIBRARY_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}\Z")
 MEDIA_LIBRARY_BASES = frozenset(
     {"install_dir", "data_dir", "music_dir", "absolute", "config"}
 )
@@ -821,9 +821,9 @@ def parse_manifest(toml_text: str) -> PluginManifest:
 
 
 # [[containers]] (SDK 1.5): id charset, and the image reference shape.
-CONTAINER_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+CONTAINER_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}\Z")
 _IMAGE_REF_RE = re.compile(
-    r"^[a-z0-9][A-Za-z0-9._/:-]{0,254}(@sha256:[0-9a-f]{64})?$"
+    r"^[a-z0-9][A-Za-z0-9._/:-]{0,254}(@sha256:[0-9a-f]{64})?\Z"
 )
 
 

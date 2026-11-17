@@ -62,6 +62,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import math
 import re
 import threading
 import time
@@ -356,7 +357,7 @@ MAX_ROOM_WORDS = 5
 #: What the dashboard says where words are added.
 FALSE_WAKE_NOTE = "Each extra word makes accidental wake-ups a little more likely."
 
-_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
 
 
 def clean_slug(raw: object) -> str | None:
@@ -373,7 +374,9 @@ def device_max(raw: object) -> int | None:
     when it didn't say or said something unusable: then it runs one."""
     if isinstance(raw, bool) or not isinstance(raw, (int, float)):
         return None
-    if isinstance(raw, float) and (raw != raw or raw != int(raw)):
+    # CORE-47: json takes Infinity and NaN; int(inf) raised OverflowError
+    # after pairing had passed, ending the room's own session.
+    if isinstance(raw, float) and (not math.isfinite(raw) or raw != int(raw)):
         return None
     n = int(raw)
     if n < 1:
@@ -405,6 +408,11 @@ def check_word_list(raw: object) -> list[str]:
     1 to MAX_ROOM_WORDS slugs, no repeats."""
     if not isinstance(raw, list) or not raw:
         raise ValueError("a room needs at least one wake word")
+    # CORE-47: the length first. Each slug is checked against the list so
+    # far, so a long list cost its square on the event loop before this
+    # said "at most 5".
+    if len(raw) > MAX_ROOM_WORDS:
+        raise ValueError(f"a room can have at most {MAX_ROOM_WORDS} wake words")
     out: list[str] = []
     for item in raw:
         slug = clean_slug(item)
@@ -559,7 +567,7 @@ async def _on_hello(room_id: str, reported: str | None, can_push: bool, push: Pu
 #: the model it loaded.
 UNKNOWN_WORD_TEXT = "unknown until this room updates"
 
-_STOCK_VERSION_RE = re.compile(r"^(?P<base>[a-z_]+)_v\d+(?:\.\d+)+$")
+_STOCK_VERSION_RE = re.compile(r"^(?P<base>[a-z_]+)_v\d+(?:\.\d+)+\Z")
 
 
 def word_name(slug: str, names: dict[str, str] | None = None) -> str:

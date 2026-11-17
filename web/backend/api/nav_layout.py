@@ -74,7 +74,7 @@ MAX_GROUP_ITEMS = 40
 MAX_TOP = 60
 LABEL_MAX = 24
 FIXED_ROUTES = frozenset({"home"})   # the brand row: never placed
-GROUP_ID_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
+GROUP_ID_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}\Z")
 GROUP_TOKEN = "group:"
 
 LIMITS = {

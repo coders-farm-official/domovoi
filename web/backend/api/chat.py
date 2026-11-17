@@ -167,7 +167,7 @@ _REPLY_RESERVE_TOKENS = 1024
 CUT_OFF_NOTE = "\n\n*Stopped here: this reply reached the chat's length limit.*"
 _EXIF_ORIENTATION = 0x0112
 
-_TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")
+_TOKEN_RE = re.compile(r"^[0-9a-f]{32}\Z")
 
 
 async def _notify_chat(s: Any, what: str) -> None:

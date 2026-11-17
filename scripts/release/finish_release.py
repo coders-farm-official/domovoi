@@ -210,7 +210,7 @@ TAG_RE = re.compile(r"v([0-9]+\.[0-9]+\.[0-9]+)(-[0-9A-Za-z.]+)?", re.ASCII)
 #: origin's URLs that are the GitHub repository (or DOMOVOI_RELEASE_ORIGIN_URL, for the tests).
 ORIGIN_RE = re.compile(r"(?:https://github\.com/|ssh://git@github\.com/|git@github\.com:)"
                        r"coders-farm-official/domovoi(?:\.git)?/?", re.ASCII | re.IGNORECASE)
-SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+SHA_RE = re.compile(r"^[0-9a-f]{40}\Z")
 PINS = "windows/installer/pins.iss"
 STABLE_STAYS = "only a release without a suffix, not marked a pre-release, moves it"
 
