@@ -1,0 +1,19 @@
+# Friend Houses' firewall: keeps the Tor container's network (domovoi-fh,
+# 172.31.254.0/24 on bridge domovoi-fh0) off the house's own ports and the
+# home network, so it can reach the internet only (scripts/linux/fh-firewall.sh;
+# docs/LINUX_HOST.md, "Friend Houses' firewall"). Installed and enabled by
+# provision.sh and the update unit. It starts with Docker and again whenever
+# Docker restarts, because Docker rebuilds its own chains then.
+[Unit]
+Description=Domovoi Friend Houses firewall (the Tor container reaches the internet only)
+After=docker.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/lib/domovoi-fh-firewall/fh-firewall.sh apply
+ExecStop=/usr/local/lib/domovoi-fh-firewall/fh-firewall.sh remove
+
+[Install]
+WantedBy=docker.service
