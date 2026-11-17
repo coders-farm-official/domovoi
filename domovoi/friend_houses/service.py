@@ -211,8 +211,11 @@ async def _reconcile() -> None:
     action = tc.plan_change(before, w)
 
     if not w.run:
-        await _stop_listener()
-        _stop_retries()
+        _stop_retries()  # first: nothing below may keep the house on Tor (R6 FH-2)
+        try:
+            await _stop_listener()
+        except Exception:
+            log.exception("Friend Houses: stopping the listener failed; stopping Tor anyway")
         # At boot (nothing applied yet) a container left running from before
         # is stopped too, but only on a house that ever set Friend Houses
         # up: an untouched house never even asks Docker.
@@ -389,6 +392,11 @@ def socks_path() -> Path:
 # ─── the listener process ─────────────────────────────────────────────────
 
 
+# The longest line the listener can print: an event with a 63 KiB envelope
+# in hex, plus room. asyncio's default (64 KiB) let one large message end
+# every event after it (audit R6 FH-2).
+EVENT_LINE_MAX = 1024 * 1024
+
 async def _ensure_listener(folder: tc.TorFolder) -> None:
     proc = _LISTENER["proc"]
     if proc is not None and proc.returncode is None:
@@ -399,17 +407,28 @@ async def _ensure_listener(folder: tc.TorFolder) -> None:
     )
 
 
+def _listener_command(folder: tc.TorFolder) -> list[str]:
+    return [sys.executable, "-I", "-m", "domovoi.friend_houses.listener",
+            "--keys", str(fid.keys_path()), "--folder", str(_listener_folder()),
+            "--socket", str(folder.main_socket),
+            "--pairing-socket", str(folder.pairing_socket)]
+
+
 async def _run_listener(folder: tc.TorFolder) -> None:
     backoff = 1.0
     while not _LISTENER["stopping"]:
-        proc = await asyncio.create_subprocess_exec(
-            sys.executable, "-I", "-m", "domovoi.friend_houses.listener",
-            "--keys", str(fid.keys_path()), "--folder", str(_listener_folder()),
-            "--socket", str(folder.main_socket),
-            "--pairing-socket", str(folder.pairing_socket),
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *_listener_command(folder),
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                limit=EVENT_LINE_MAX,  # an envelope is up to 63 KiB, so ~126 KiB of hex
+            )
+        except OSError:
+            log.exception("Friend Houses: the listener couldn't start")
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 60.0)
+            continue
         _LISTENER["proc"] = proc
         started = time.monotonic()
         await asyncio.gather(_read_events(proc), _read_log(proc))
@@ -423,19 +442,34 @@ async def _run_listener(folder: tc.TorFolder) -> None:
 
 
 async def _read_events(proc: asyncio.subprocess.Process) -> None:
+    """Every event the listener prints. Should the pipe fail (a line over
+    the limit, say), the listener is stopped so the loop above starts a new
+    one, instead of a live process whose events nobody reads (R6 FH-2)."""
     assert proc.stdout is not None
-    async for raw in proc.stdout:
-        try:
-            event = json.loads(raw)
-        except ValueError:
-            continue
-        handle_event(event)
+    try:
+        async for raw in proc.stdout:
+            try:
+                event = json.loads(raw)
+            except ValueError:
+                continue
+            try:
+                handle_event(event)
+            except Exception:
+                log.exception("Friend Houses: an event from the listener failed")
+    except (ValueError, asyncio.LimitOverrunError, ConnectionError) as e:
+        log.warning("Friend Houses: the listener's events stopped (%s); restarting it", e)
+        if proc.returncode is None:
+            proc.kill()
 
 
 async def _read_log(proc: asyncio.subprocess.Process) -> None:
     assert proc.stderr is not None
-    async for raw in proc.stderr:
-        log.info("Friend Houses listener: %s", raw.decode(errors="replace").rstrip()[:300])
+    try:
+        async for raw in proc.stderr:
+            log.info("Friend Houses listener: %s", raw.decode(errors="replace").rstrip()[:300])
+    except (ValueError, asyncio.LimitOverrunError, ConnectionError):
+        if proc.returncode is None:
+            proc.kill()
 
 
 def handle_event(event: dict) -> None:
@@ -599,6 +633,8 @@ async def _stop_listener() -> None:
             await asyncio.wait_for(task, 15)
         except (asyncio.TimeoutError, asyncio.CancelledError):
             task.cancel()
+        except Exception:  # its error must never stop "off" from working (R6 FH-2)
+            log.exception("Friend Houses: the listener task had failed")
     _LISTENER.update(proc=None, task=None)
 
 
