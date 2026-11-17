@@ -77,7 +77,8 @@ pip install --no-deps -e .
 ```
 
 `requirements-linux-py314.lock` is what a Linux server installs: core,
-`real-clients` and `voice-profile` (no torch since 1.3.0), for CPython
+`real-clients` and `voice-profile` (an empty extra since 1.3.0, kept for older
+install commands and the lock; no torch), for CPython
 3.14 on x86_64 ([LINUX_HOST.md, Install](LINUX_HOST.md#install); the
 update unit's re-sync uses it on a box that opts in with
 `DOMOVOI_USE_LOCK=1`). Regenerate it with
