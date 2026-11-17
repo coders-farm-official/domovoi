@@ -100,3 +100,50 @@ def test_the_windows_setup_says_the_same_version() -> None:
     assert _one(asm, r'^\[assembly: AssemblyInformationalVersion\("([^"]+)"\)\]$') == semver
     assert _one(asm, r'^\[assembly: AssemblyVersion\("([^"]+)"\)\]$') == numeric
     assert _one(asm, r'^\[assembly: AssemblyFileVersion\("([^"]+)"\)\]$') == numeric
+
+
+# --- The public status pages say the same thing as the release -------------
+# README "Status and roadmap" and docs/ROADMAP.md are prose, so they drift
+# unless a release forces a look. The release commit raises pyproject.toml's
+# version and dates the release notes' "(unreleased)" heading; these checks
+# fail on exactly those two events, and only on version numbers, never on
+# wording, so ordinary edits to either page are never blocked.
+
+_RELEASED_HEADING = re.compile(
+    r"^## \d{4}-\d\d-\d\d — (\d+\.\d+\.\d+(?:-rc\d+)?)(?::|$)", re.MULTILINE)
+_VERSION_IN_PROSE = re.compile(r"\b\d+\.\d+\.\d+(?:-rc\d+)?\b")
+
+
+def _released_versions() -> set[str]:
+    notes = (REPO / "docs/RELEASE_NOTES.md").read_text(encoding="utf-8")
+    return set(_RELEASED_HEADING.findall(notes))
+
+
+def _section(text: str, start: str, end_pattern: str) -> str:
+    assert start in text, f"missing {start!r}"
+    rest = text.split(start, 1)[1]
+    return re.split(end_pattern, rest, maxsplit=1)[0]
+
+
+def test_the_readme_this_release_names_the_version_in_pyproject() -> None:
+    """At a release, raise the README's "This release" with the version."""
+    readme = (REPO / "README.md").read_text(encoding="utf-8")
+    named = re.findall(r"^\*\*This release: Domovoi v(\S+)\*\*$", readme, flags=re.MULTILINE)
+    assert named == [_semver(_pyproject_version())], (
+        "README's 'This release' must name pyproject's version: rewrite it "
+        "(and 'Coming in ...') in the release commit, docs/CONTRIBUTING.md 'Releasing'")
+
+
+def test_the_status_pages_do_not_call_a_released_version_upcoming() -> None:
+    """README's 'Coming in' and ROADMAP's 'Now' name no version already
+    released (a dated heading in the release notes); once 1.4.0 is released,
+    both must move on to the next work."""
+    released = _released_versions()
+    readme = (REPO / "README.md").read_text(encoding="utf-8")
+    coming = _section(readme, "**Coming in", r"\n\*\*")
+    now = _section((REPO / "docs/ROADMAP.md").read_text(encoding="utf-8"), "## Now", r"\n## ")
+    for name, text in (("README 'Coming in'", coming), ("ROADMAP 'Now'", now)):
+        stale = sorted(set(_VERSION_IN_PROSE.findall(text)) & released)
+        assert not stale, (
+            f"{name} names {stale}, already released: move what shipped out "
+            "of it and name the next release (docs/CONTRIBUTING.md 'Releasing')")
