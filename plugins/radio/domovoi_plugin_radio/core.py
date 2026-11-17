@@ -26,10 +26,11 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-from domovoi.sdk import PluginSDK, device_endpoint, egress
+from domovoi.sdk import Context, PluginSDK, device_endpoint, egress
 
 from domovoi_plugin_radio import SCHEMA
 from domovoi_plugin_radio.clients.rtl_sdr import SdrTuner
@@ -213,7 +214,18 @@ def _make_matcher(sdk: PluginSDK):
 # library sweeps. The simulcast resolver is ``@device_endpoint``: the
 # Stations page fires it right after an FM favorite, which is a household
 # action, and the web hop forwards the caller's household token here.
-# GETs are open reads.
+# The room play (``/stations/{id}/play-in-room``) is on the device tier
+# too. GETs are open reads.
+
+
+class RoomPlayBody(BaseModel):
+    """``POST /v1/plugins/radio/stations/{id}/play-in-room`` (and the
+    dashboard's ``/api/plugins/radio/...`` twin)."""
+
+    room_id: str = Field(..., min_length=1, max_length=64)
+
+
+_ROOM_PLAY_COLUMNS = "id, name, source, stream_url, frequency_mhz, call_sign"
 
 
 def _build_core_router(sdk: PluginSDK) -> APIRouter:
@@ -240,6 +252,74 @@ def _build_core_router(sdk: PluginSDK) -> APIRouter:
             raise egress.http_exception("radio station directory")
         result = await simulcast.resolve_simulcast_for_station(sdk, station_id)
         return result.to_dict()
+
+    @router.post("/stations/{station_id}/play-in-room")
+    @device_endpoint
+    async def play_in_room(station_id: int, body: RoomPlayBody):
+        """Play a saved station in a room of the house (the Stations page's
+        room picker, the browser player's cast, the phone apps). Device
+        tier: listening is a household action. The same play a voice
+        request makes (``RadioHandler._stream_station_row``: the egress
+        and outbound-URL checks, the FM tuner, ``playback.play_url``),
+        then ``playback.dispatch`` tells the room's satellite, because no
+        voice turn carries the reply there.
+
+        404 for an unknown station or a room the house doesn't have (a
+        name in a URL never creates a room); 409 when the station can't
+        play now (internet set to No, no FM tuner, no stream address);
+        502 when the room's music player refused it."""
+        room = body.room_id.strip()
+        if not room:
+            raise HTTPException(status_code=422, detail="room_id is empty")
+        async with sdk.db.session_scope() as s:
+            row = (
+                await s.execute(
+                    text(
+                        f"SELECT {_ROOM_PLAY_COLUMNS} FROM {SCHEMA}.radio_stations "
+                        "WHERE id = :id"
+                    ),
+                    {"id": station_id},
+                )
+            ).first()
+            if row is None:
+                raise HTTPException(
+                    status_code=404, detail=f"station {station_id} not found"
+                )
+            try:
+                known = await sdk.playback.ensure_room(room)
+            except Exception as e:  # noqa: BLE001 — fail closed, say why
+                log.warning("radio: room lookup for %s failed: %s", room, e)
+                raise HTTPException(
+                    status_code=503, detail="could not check that room right now"
+                ) from e
+            if not known:
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        f"there is no room named {room!r} — a room appears once "
+                        "its device has connected"
+                    ),
+                )
+            station = {
+                "id": int(row[0]), "name": row[1], "source": row[2],
+                "stream_url": row[3],
+                "frequency_mhz": float(row[4]) if row[4] is not None else None,
+                "call_sign": row[5],
+            }
+            handler = RadioHandler(sdk)
+            resp = await handler._stream_station_row(
+                station, Context(room_id=room, online=True, answerable=False), s
+            )
+        if resp.music_action != "start":
+            status = (resp.data or {}).get("status")
+            raise HTTPException(
+                status_code=502 if status == "player_refused" else 409,
+                detail=resp.text,
+            )
+        await sdk.playback.dispatch(resp, room)
+        return {"ok": True, "room_id": room,
+                "station": {"id": station["id"], "name": station["name"]},
+                "text": resp.text}
 
     # NOTE: named /state, not /status — the core app already serves the
     # generic GET /v1/plugins/{slug}/status (worker/hook/handler health,

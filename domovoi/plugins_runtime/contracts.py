@@ -6,7 +6,8 @@ Checks:
 1. Handler contract: ``name == tool_schema["name"]``; band in a
    plugin-usable range; unanchored greedy catch-all ⇒ band ≥ 900;
    ``requires_network != "no"`` ⇒ ``fallback_offline`` overridden;
-   ``confirmation_kinds`` all ``<slug>.``-prefixed; ``display`` present;
+   ``confirmation_kinds`` all ``<slug>.``-prefixed; ``choice_kinds`` a
+   subset of them, with ``handle_choice_reply`` overridden; ``display`` present;
    ``offline_ok`` only set on degraded handlers' paths.
 2. **Utterance-corpus collision test**: the core-owned corpus merged with
    every currently-enabled plugin's manifest-declared ``corpus`` phrases,
@@ -226,6 +227,22 @@ def check_handlers(
                 report.errors.append(
                     f"handler {name!r}: confirmation kind {kind!r} must be "
                     f"namespaced {prefix}<kind>"
+                )
+        choice = tuple(getattr(h, "choice_kinds", ()) or ())
+        if choice:
+            # SDK 1.10: a plugin's free-text question. Every reply to it
+            # reaches handle_choice_reply first, so it must be one of the
+            # handler's own (namespaced) kinds and have a reader.
+            stray = [k for k in choice if k not in getattr(h, "confirmation_kinds", ())]
+            if stray:
+                report.errors.append(
+                    f"handler {name!r}: choice_kinds {stray!r} are not in its "
+                    f"confirmation_kinds"
+                )
+            if type(h).handle_choice_reply is Handler.handle_choice_reply:
+                report.errors.append(
+                    f"handler {name!r}: declares choice_kinds but does not "
+                    f"override handle_choice_reply"
                 )
         rn = getattr(h, "requires_network", "no")
         if rn != "no" and type(h).fallback_offline is Handler.fallback_offline:

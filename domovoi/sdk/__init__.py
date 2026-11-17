@@ -40,7 +40,14 @@ from __future__ import annotations
 # 1.9.0: added speech.render(text, room_id=None): text to a WAV in the
 #        room's voice (no room: the server's voice), nothing played; and
 #        core_config.ollama_url / ollama_model (the house Q&A model).
-API_VERSION = "1.9.0"
+# 1.10.0: added spoken_names (the core's spoken-name folding and matching:
+#         fold, spoken_forms, phonetic_key, sounds_like, ...), choices
+#         (parse_choice_reply, the reader of a reply to "did you mean X?"),
+#         Handler.choice_kinds / handle_choice_reply for plugin handlers,
+#         playback.ensure_room(room_id) (is this a room of the house; wake its
+#         music player), and [[web.player_sources]] room_play_template (the
+#         browser player hands a plugin's item to a room).
+API_VERSION = "1.10.0"
 
 from domovoi.capabilities import (  # noqa: E402,F401
     CAPABILITIES,
@@ -93,8 +100,30 @@ from domovoi.plugins_runtime.workers import (  # noqa: E402,F401
     Worker,
 )
 
+# Bound on first use (PEP 562 module __getattr__), so ``from domovoi.sdk
+# import spoken_names`` works without the SDK importing the name matcher or
+# the choice reader (and the router behind it) itself.
+_LAZY_MODULES = {
+    "spoken_names": "domovoi.handlers.shared.spoken_names",
+    "choices": "domovoi.sdk.choices",
+}
+
+
+def __getattr__(name: str):
+    target = _LAZY_MODULES.get(name)
+    if target is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    import importlib
+
+    module = importlib.import_module(target)
+    globals()[name] = module
+    return module
+
+
 __all__ = [
     "API_VERSION",
+    "choices",
+    "spoken_names",
     "FieldSpec",
     "LongRunWorker",
     "Worker",

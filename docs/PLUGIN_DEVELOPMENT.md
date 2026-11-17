@@ -41,6 +41,15 @@ extend every plane of the system:
 | **Events** | subscribe to the `core.*` event catalog; emit your own under `plugin.<slug>.*` | core process |
 | **Sounds & assets** | canned TTS clips rendered in the household's voice and mirrored to satellites; static web assets served from `web/static/` | core + web |
 
+**What a plugin does not get: phone-app screens.** A plugin adds dashboard
+pages, voice handlers, workers, routes, and the rest of the table above. It
+adds nothing to the Android or iPhone app: the apps run no plugin code and
+render no plugin pages. The Stations and Images screens in the apps are the
+apps' own native screens, written by Coders Farm for its own plugins (Radio
+and image generation) and shown only when the server has that plugin; they
+call the plugin's HTTP routes like any client. A third-party plugin is used
+from a phone through the dashboard in the phone's browser, and by voice.
+
 Two hard boundaries shape everything:
 
 * **Core and web are separate processes.** `core.py` registers into the voice
@@ -375,7 +384,7 @@ runs in `domovoi plugin dev`, `pack`, and the install pipeline.
 | `publisher` | Shown on the install preview. Bundled radio declares `"Coders Farm"`. |
 | `license` | SPDX-style string. |
 | `description` | One or two sentences — shown on the install preview. |
-| `domovoi_api` | A comma-separated specifier set evaluated against the core SDK version (currently `1.9.0`). Supported operators: `>=`, `<=`, `==`, `!=`, `>`, `<`, `~=`. An unsatisfiable range fails the parse with a "targets a different Domovoi release" message. Recommended: `">=1.0,<2.0"`. |
+| `domovoi_api` | A comma-separated specifier set evaluated against the core SDK version (currently `1.10.0`). Supported operators: `>=`, `<=`, `==`, `!=`, `>`, `<`, `~=`. An unsatisfiable range fails the parse with a "targets a different Domovoi release" message. Recommended: `">=1.0,<2.0"`. |
 | `homepage` | Optional URL. |
 | `help` | Optional (SDK 1.8): a short Markdown help file inside the plugin, e.g. `"HELP.md"`. Domovoi's help desk indexes it with the manual (see [your plugin's help file](#your-plugins-help-file-sdk-18)). Optional for third-party plugins; **required for Coders Farm's own**. |
 | `accent` | Optional. Your dashboard page's colour, `"#rrggbb"` (or `"#rgb"`): its primary buttons, links, selection washes and the frame the dashboard draws around it. Checked for contrast at load; see [the frame and your accent](#the-frame-and-your-accent). Without it the page gets the neutral plugin slate. |
@@ -583,6 +592,7 @@ badge = { endpoint = "/api/plugins/radio/badge", key = "favorites" }
 [[web.player_sources]]
 kind = "radio"
 stream_url_template = "/api/plugins/radio/stations/{id}/stream"
+room_play_template = "/api/plugins/radio/stations/{id}/play-in-room"   # SDK 1.10, optional
 ```
 
 * `scripts` — zero-build JSX files, Babel-compiled by the dashboard shell and
@@ -621,8 +631,8 @@ stream_url_template = "/api/plugins/radio/stations/{id}/stream"
   load (`web.pages.nav_group must be one of 'media', 'tools'`). A group
   showing a single page shows it as a plain row, and Home's "everything"
   grid on a phone uses the same groups. A household may later rearrange
-  the sidebar itself; your `nav_group` is where the page starts. The
-  Android app has no plugin pages and ignores the key.
+  the sidebar itself;   sidebar itself; your `nav_group` is where the page starts. The
+  phone apps show no plugin pages (§1) and ignore the key.
 * `nav_icon` — the page's icon in the sidebar, the phone bar and Home's
   grid: a file under `web/static/` (a path outside it, `..` or a URL is
   ignored, with a warning in the load log). Draw it like the dashboard's
@@ -639,7 +649,15 @@ stream_url_template = "/api/plugins/radio/stations/{id}/stream"
   beside a `nav_icon`, follows the same rules, and if it fails to load the
   dashboard falls back to `nav_icon`. Most plugins don't need it.
 * `[[web.player_sources]]` — teaches the browser player how to stream your
-  `kind` of media (the template is a dashboard-relative URL).
+  `kind` of media (the template is a dashboard-relative URL). Optional
+  `room_play_template` (SDK 1.10): when someone casts one of your items to a
+  room from the player, it POSTs `{"room_id": "<room>"}` to this route
+  (`{id}` is the item's `itemId`) instead of refusing it as "not in the
+  library". It must be one of your own `/api/plugins/<slug>/` routes with
+  `{id}` in it (the manifest is refused otherwise); make it
+  `@device_endpoint` and play with `sdk.playback.ensure_room`, `play_url`
+  and `dispatch` on the core side (§4.5). The radio plugin's
+  `/stations/{id}/play-in-room` is the example.
 
 #### The frame and your accent
 
@@ -871,10 +889,15 @@ on the Plugins page says "containers not watched". A core older than SDK
 
 ### `[android]`
 
-`capabilities = ["stations"]` — free-form strings the Android app gates
-features on. See [API Reference](API_REFERENCE.md). The app reads the
-manifest only after the user has trusted the server in its picker, so a
-capability-gated screen never appears for a server nobody confirmed.
+`capabilities = ["stations"]` — free-form strings the phone apps read to
+know which of **their own** built-in screens the server can feed. It does not
+add a screen, and an app shows nothing for a string it doesn't already know:
+the Stations screen exists in the apps because Coders Farm wrote it for the
+Radio plugin, and it appears when a server's Radio plugin declares
+`"stations"`. A third-party plugin has no reason to set the key (see
+"What a plugin does not get" in §1). The apps read the manifest only after
+the user has trusted the server in their picker, so a capability-gated
+screen never appears for a server nobody confirmed.
 
 ### `[assets]`
 
@@ -908,7 +931,7 @@ from domovoi.sdk import (
 
 `PluginSDK` instances are **injected** — your `register(ctx)` receives a
 `PluginContext` whose `ctx.sdk` is your facade. You never construct one.
-`domovoi.sdk.API_VERSION` (currently `"1.9.0"` — 1.3 added
+`domovoi.sdk.API_VERSION` (currently `"1.10.0"` — 1.3 added
 `device_endpoint`; 1.4 added `egress`, the internet-access gate, and
 `connectivity.policy` / `.reason` / `.internet_allowed`, and made
 `sdk.http` refuse non-local requests when the answer is `never`; 1.5 added
@@ -918,7 +941,10 @@ the `[[containers]]` table and `ctx.add_container` /
 request to this box's Ollama while the household's AI features are off,
 §4.14; 1.8 added lookup sources, `ctx.add_lookup_source`, §4.19, and the
 manifest's optional `help` file; 1.9 added `sdk.speech.render`, §4.17, and
-`core_config.ollama_url` / `ollama_model`) is
+`core_config.ollama_url` / `ollama_model`; 1.10 added `spoken_names` and
+`choices`, §4.20, `choice_kinds` for plugin handlers, §4.2,
+`playback.ensure_room`, §4.5, and the player source's
+`room_play_template`, §3) is
 the semver your `domovoi_api` range is checked against. Ask for `">=1.4"`
 if you use the 1.4 names; for 1.5's, either ask for `">=1.5"` or call
 `ctx.add_container` only `if hasattr(ctx, "add_container")` so an older
@@ -989,6 +1015,19 @@ class Handler(ABC):
   `confirmation_kinds = ("<slug>.<kind>",)` and call
   `sdk.sessions.request_confirmation(...)`; the router resumes you via
   `handle_confirmation` with a kind guaranteed to be one you declared.
+* **Choices** (SDK 1.10): a question whose answer may be free text ("Did you
+  mean Lofi 24/7?" answered "no, the jazz one", "Lofi 24/7 or Lofi Hip
+  Hop?" answered "the second one"). List the kind in `choice_kinds` as
+  well as `confirmation_kinds` and override
+  `handle_choice_reply(kind, data, transcript, ctx, session)`: the router
+  hands it the WHOLE next reply (yes and no included) before anything else
+  runs. Read the reply with `domovoi.sdk.choices.parse_choice_reply` (§4.20)
+  and return `None` for a reply that isn't about your question, so it is
+  routed as a new turn. Park a question only when `ctx.answerable` is True
+  (the dashboard's play box can't answer one), and put an expiry in the
+  data. The load refuses a `choice_kinds` entry missing from
+  `confirmation_kinds` or a handler that declares them without the
+  reader; a reader that raises costs its question, not the turn.
 * `Handler.name` lands in `intents_log` — treat it as a stable identifier and
   never rename it cosmetically.
 * **Tool-offer gate**: `offers_tool(transcript)` decides whether your
@@ -1140,6 +1179,14 @@ MPD, so a later connect joins a live stream) or `music_stop`, the way the
 dashboard's own room controls do, and does nothing for a refused play.
 Never dispatch a Response your handler returns from a voice turn: the
 streaming layer already delivers that one.
+
+**A room someone named** (SDK 1.10): before playing in a room a request
+named (a page's room picker, a phone), `await
+sdk.playback.ensure_room(room_id)`. False means the house has no such room:
+answer 404 and play nothing (a name in a URL never creates a room). True
+also wakes the room's music player if it was down. A failed lookup raises
+(answer 503). `domovoi.sdk.testing`'s recording playback takes
+`known_rooms={...}` for tests.
 
 ```python
 @router.post("/play")
@@ -1770,6 +1817,38 @@ def register(ctx):
   person allows it. A local source must never leave the box (Kiwix
   answers only while its server is on this network).
 
+### 4.20 Spoken names and replies — `spoken_names`, `choices` (SDK 1.10)
+
+Speech-to-text writes what it hears: "lo-fi 24 slash 7" for a station called
+"Lofi 24/7", "3 doors down" for "Three Doors Down". Compare a spoken name
+with a stored one through the core's own rules, never with `LIKE`:
+
+```python
+from domovoi.sdk import spoken_names as sn   # loaded on first use
+
+sn.spoken_forms("Lofi 24/7")      # ("lofi twenty four seven",)
+sn.same_name("3 Doors Down", "Three Doors Down")   # True
+sn.sounds_like("dead mouse", "deadmau5")            # True
+sn.phonetic_key("lofi")           # Double Metaphone of each word
+```
+
+They fold case, punctuation, accents and lookalike letters, read numbers as
+words both ways round, and give a sounds-alike key (`fold`, `compact` and
+`speakable` are there too); `rapidfuzz`, a core dependency, scores what is
+close. Pick a play bar and an ask bar and ask "did you mean …?" between
+them rather than playing a guess: the radio plugin's `station_match.py` is
+a worked example (play at 0.90, ask from 0.75, and the words each side has
+that the other lacks are scored on their own, so a shared "twenty four
+seven" can't carry "chill 24/7" to "Lofi 24/7").
+
+`domovoi.sdk.choices.parse_choice_reply(transcript, n)` reads the reply to a
+question that offered `n` things, the way the core's music question does:
+`action` is `"pick"` (yes, "the second one", "either": `index`),
+`"decline"` (no, "never mind"), `"name"` (a name: `name`, with `negated`,
+`explicit`, and `otherwise` for what it means if it names nothing), or
+`"pass"` (not an answer: return None from `handle_choice_reply`). See §4.2,
+"Choices".
+
 ## 5. Worked example — the bundled radio plugin
 
 [`plugins/radio/`](../plugins/radio/) is the reference plugin, published by
@@ -1887,8 +1966,14 @@ falling through to the music handler. Per-path offline behavior:
 `stop` and `play <freq> fm` are `offline_ok=True` (SDR + MPD are local);
 `stream` and `tune` are `offline_ok=False`, so offline they auto-fallback to
 `fallback_offline()`, which tries FM-via-SDR — the half of the feature that
-genuinely works without internet. Multi-candidate "stream X" parks a
-mediated confirmation with the namespaced kind `radio.station_choice`.
+genuinely works without internet. Station names are matched by how they
+are said (`station_match.py`, on the SDK's `spoken_names`): "lo-fi 24 slash
+7" plays "Lofi 24/7", "low 5 24-7" is asked about. A near match, two close
+ones, or the internet directory's best one or two (searched only when the
+household allows the internet and nothing saved fits) are offered through
+the namespaced choice `radio.station_choice`, read with `sdk.choices`.
+"Add this to my favorites" stars the station playing in the room, and is
+left to the rest of the router when no station plays.
 
 Playback goes through `sdk.playback.play_url(..., source="radio")`, online
 and FM alike — station name stamped as title, now-playing stamped, history
@@ -1952,8 +2037,8 @@ with cursor pagination, the sidebar badge (which the page reuses as its
 favorites-pagination total, so there's no second count query), and a browser
 stream proxy (so the dashboard player dodges CORS/mixed-content — with
 honest 409s for FM stations the browser can't reach). Live-core actions
-(FCC import, simulcast resolve) are **proxied to the plugin's own core
-endpoints** through the context's `CoreClient`, forwarding the caller's
+(FCC import, simulcast resolve, playing a station in a room) are **proxied
+to the plugin's own core endpoints** through the context's `CoreClient`, forwarding the caller's
 request so the core's gate sees the same credential — the web process
 never imports core code. The router shows all three tiers' choices:
 playing, favoriting, editing and forgetting stations and the simulcast

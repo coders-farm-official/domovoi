@@ -27,8 +27,8 @@ allowed (nothing is fetched), and so does FM.
 
 Router mounts at ``/api/plugins/radio`` behind the host's default-deny
 gate (design §5.1). Listening to the radio is a household action, not an
-admin one, so the everyday mutations are ``@device_endpoint`` — play,
-favorite (``POST /stations``), edit / unfavorite (``PATCH``), forget
+admin one, so the everyday mutations are ``@device_endpoint`` — play
+(here, or in a room through the core), favorite (``POST /stations``), edit / unfavorite (``PATCH``), forget
 (``DELETE``) and the simulcast lookup take the household token any paired
 browser or phone already sends (or an admin Bearer), the same tier the
 core puts podcast subscribe / unsubscribe and news feeds on. The FCC bulk
@@ -151,6 +151,15 @@ class RadioStationPlay(BaseModel):
     country_code: str | None = None
     language: str | None = None
     tags: list[str] = Field(default_factory=list)
+
+
+class RadioRoomPlay(BaseModel):
+    """"Play this station in that room" — ``POST
+    /stations/{id}/play-in-room``. The room is one of the house's (the
+    dashboard lists them from ``/api/music/now-playing``); the core answers
+    404 for any other."""
+
+    room_id: str = Field(..., min_length=1, max_length=64)
 
 
 class RadioStationPatch(BaseModel):
@@ -470,6 +479,51 @@ def build_router(ctx: Any) -> APIRouter:
         if result is None:
             raise HTTPException(status_code=500, detail="lost row after play")
         return _row_to_station(result)
+
+    # ── Play in a room (the room picker, the player's cast) ──────────
+
+    @router.post("/stations/{station_id}/play-in-room")
+    @device_endpoint
+    async def play_in_room(
+        station_id: int, payload: RadioRoomPlay, request: Request
+    ) -> dict[str, Any]:
+        """Play a saved station in one of the house's rooms. Device tier,
+        like play. Proxied to the plugin's core route (the room's music
+        player and satellite live in the core process) with the caller's
+        credentials forwarded; the core answers 404 for a room the house
+        doesn't have, 409 for a station that can't play now and 502 when
+        the room's player refused. 404 here for an unknown station and 409
+        under ``INTERNET_ACCESS=never`` for an internet one, before the
+        core is asked. A play that started is stamped on Recent, as a
+        play in the browser is."""
+        async with session_scope() as s:
+            found = await s.execute(
+                text("SELECT source, stream_url FROM radio_stations WHERE id = :id"),
+                {"id": station_id},
+            )
+            row = found.first()
+        if row is None:
+            raise HTTPException(
+                status_code=404, detail=f"station {station_id} not found"
+            )
+        if row[0] == "online" and row[1]:
+            _refuse_internet_stream(str(row[1]))
+        result = await ctx.core.post_admin(
+            f"stations/{station_id}/play-in-room",
+            json={"room_id": payload.room_id.strip()},
+            request=request,
+        )
+        async with session_scope() as s:
+            await s.execute(
+                text(
+                    "UPDATE radio_stations SET last_played_at = NOW() "
+                    "WHERE id = :id"
+                ),
+                {"id": station_id},
+            )
+            await _trim_recents(s)
+            await _notify_stations(s, "played")
+        return result if isinstance(result, dict) else {"ok": True}
 
     @router.get("/stations/{station_id}", response_model=RadioStation)
     async def get_station(station_id: int) -> RadioStation:

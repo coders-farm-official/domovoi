@@ -807,6 +807,10 @@ RADIO_ROUTE_TIERS: dict[tuple[str, str, str], str] = {
     ("web", "DELETE", "/stations/{station_id}"): "device",
     ("web", "POST", "/stations/{station_id}/resolve-simulcast"): "device",
     ("core", "POST", "/stations/{station_id}/resolve-simulcast"): "device",
+    # Playing a station in a room (1.4.0): the same household action as
+    # the dashboard's other room plays.
+    ("web", "POST", "/stations/{station_id}/play-in-room"): "device",
+    ("core", "POST", "/stations/{station_id}/play-in-room"): "device",
     # A long server-side job, like the core's library sweeps.
     ("web", "POST", "/fcc-import"): "admin",
     ("core", "POST", "/fcc-import"): "admin",
