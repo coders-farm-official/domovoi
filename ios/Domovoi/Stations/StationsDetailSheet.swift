@@ -39,6 +39,7 @@ struct StationsDetailSheet: View {
                     identity
                     if let track = row.nowPlaying { callout(track) }
                     playHere
+                    StationsRoomPlayButton(stations: stations, row: row)
                     Divider()
                     fields
                     Divider()
@@ -561,5 +562,50 @@ struct StationsDetectionRow: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// `play in a room` — Android's button in a favourite's controls and its
+/// detail card (`StationDetail.kt`, `StationRoomPlay.kt`, Radio 1.5.0).
+///
+/// Drawn **only** when ``StationsModel/offersRoomPlay(_:)`` says so: our Radio
+/// at 1.5.0 or later, a paired phone that is not in room mode, a route this
+/// server has not answered missing, a saved station, and at least one room
+/// now-playing reported. Otherwise nothing is drawn at all
+/// ([[no-misleading-controls]]).
+///
+/// The tap opens the room picker: Android's dialog, as a confirmation dialog
+/// — the title, the station's name, one `play in <room>` per room (Music's
+/// own words, ``MusicStrings/playIn(room:)``) and `cancel`. The dialog hangs
+/// off this button, not off the sheet: the sheet already carries `forget`'s
+/// alert, and two presentations on one view do not reliably coexist.
+struct StationsRoomPlayButton: View {
+
+    let stations: StationsModel
+    let row: StationsRow
+
+    var body: some View {
+        if stations.offersRoomPlay(row) {
+            HomeLink(StationsStrings.playInARoom) { stations.pickRoom(for: row) }
+                .disabled(stations.isBusy(row))
+                .accessibilityValue(row.name)
+                .confirmationDialog(
+                    StationsStrings.playInARoom,
+                    isPresented: Binding(
+                        get: { stations.roomPick?.id == row.id },
+                        set: { shown in if !shown { stations.closeRoomPick() } }
+                    ),
+                    titleVisibility: .visible
+                ) {
+                    ForEach(stations.roomChoices, id: \.self) { room in
+                        Button(StationsStrings.playIn(room: room)) {
+                            stations.playInRoom(row, room: room)
+                        }
+                    }
+                    Button(StationsStrings.cancel, role: .cancel) { stations.closeRoomPick() }
+                } message: {
+                    Text(row.name)
+                }
+        }
     }
 }

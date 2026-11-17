@@ -94,7 +94,21 @@ public enum StationsPath {
     /// phone cannot reach itself.
     public static func stream(_ id: Int) -> String { "\(root)/stations/\(id)/stream" }
 
+    /// `POST /stations/{id}/play-in-room` (Radio 1.5.0): play a **saved**
+    /// station in one of the house's rooms (``StationsRoomPlay``).
+    public static func playInRoom(_ id: Int) -> String { "\(root)/stations/\(id)/play-in-room" }
+
+    /// The room list the play-in-room route checks against: the rooms
+    /// now-playing reports (docs/API_REFERENCE.md §4.2).
+    public static let rooms = "/api/music/now-playing"
+
     // MARK: - bodies
+
+    /// `{"room_id": "kitchen"}` — the room id exactly as now-playing named
+    /// it; the route trims and bounds it (1-64 characters).
+    public static func playInRoomBody(_ room: String) -> Data {
+        json([("room_id", .string(room))])
+    }
 
     /// `POST /play` — `{station_id}` for a saved row, else the directory-hit
     /// shape (`web.py:141`'s `RadioStationPlay`, `StationPlay.kt:63`).

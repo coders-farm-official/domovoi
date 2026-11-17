@@ -5,6 +5,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -26,6 +28,7 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Radio
+import androidx.compose.material.icons.filled.Speaker
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.Button
@@ -39,6 +42,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -56,6 +60,8 @@ import androidx.compose.ui.unit.dp
 import androidx.window.core.layout.WindowWidthSizeClass
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
+import com.domovoi.app.net.HouseholdLock
+import com.domovoi.app.net.LocalCapabilities
 import com.domovoi.app.net.decode
 import com.domovoi.app.net.rememberApi
 import com.domovoi.app.ui.components.ConfirmDialog
@@ -67,6 +73,8 @@ import com.domovoi.app.ui.components.PageHeader
 import com.domovoi.app.ui.components.StatusDot
 import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.components.relTime
+import com.domovoi.app.ui.screens.music.NowPlayingRoom
+import com.domovoi.app.ui.screens.music.castRooms
 import com.domovoi.app.ui.theme.Domovoi
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonPrimitive
@@ -128,6 +136,22 @@ fun StationsScreen() {
     }
 
     val playStation = rememberStationPlayer { recentState.refresh() }
+
+    // "Play in a room" (Radio 1.5.0): the household's rooms, read only where
+    // the action can be offered at all (StationRoomPlay.kt says when).
+    val caps = LocalCapabilities.current
+    val server by app.prefs.serverUrl.collectAsState()
+    val token by app.prefs.deviceToken.collectAsState()
+    val paired = !token.isNullOrBlank() && !HouseholdLock.roomModeActive
+    val roomPlayPossible = paired && radioPlaysInRoom(caps) && !RoomPlayRoute.missingOn(server)
+    val roomsState = rememberApi(roomPlayPossible, eventTypes = setOf("music.now_playing.changed")) {
+        if (!roomPlayPossible) emptyList()
+        else castRooms(it.api.get("/api/music/now-playing").decode<List<NowPlayingRoom>>())
+    }
+    val rooms = roomsState.data.orEmpty()
+    val canRoomPlay = offersRoomPlay(caps, paired, RoomPlayRoute.missingOn(server), rooms)
+    var roomPick by remember { mutableStateOf<Station?>(null) }
+    val onPlayInRoom: ((Station) -> Unit)? = if (canRoomPlay) ({ roomPick = it }) else null
 
     val compact = currentWindowAdaptiveInfo()
         .windowSizeClass.windowWidthSizeClass == WindowWidthSizeClass.COMPACT
@@ -228,6 +252,7 @@ fun StationsScreen() {
                     selectedId = selectedId,
                     onSelect = { selectedId = it },
                     onPlay = playStation,
+                    onPlayInRoom = onPlayInRoom,
                     onForget = { forget(it) },
                 )
             }
@@ -237,7 +262,7 @@ fun StationsScreen() {
                     recentCard(Modifier.fillMaxWidth())
                     favoritesCard(Modifier.fillMaxWidth())
                     if (selected != null) {
-                        StationDetailCard(selected, favState.refresh, Modifier.fillMaxWidth())
+                        StationDetailCard(selected, favState.refresh, Modifier.fillMaxWidth(), onPlayInRoom)
                     }
                 }
             } else {
@@ -251,7 +276,7 @@ fun StationsScreen() {
                     }
                     Box(Modifier.weight(0.58f)) {
                         if (selected != null) {
-                            StationDetailCard(selected, favState.refresh, Modifier.fillMaxWidth())
+                            StationDetailCard(selected, favState.refresh, Modifier.fillMaxWidth(), onPlayInRoom)
                         } else {
                             DomovoiCard(Modifier.fillMaxWidth()) {
                                 EmptyState(
@@ -263,6 +288,17 @@ fun StationsScreen() {
                     }
                 }
             }
+        }
+    }
+
+    roomPick?.let { st ->
+        if (canRoomPlay) {
+            RoomPlayDialog(
+                station = st,
+                rooms = rooms,
+                onDismiss = { roomPick = null },
+                onPlayed = { recentState.refresh() },
+            )
         }
     }
 }
@@ -407,6 +443,7 @@ private fun FavoritesCard(
     selectedId: Long?,
     onSelect: (Long) -> Unit,
     onPlay: (Station) -> Unit,
+    onPlayInRoom: ((Station) -> Unit)?,
     onForget: (Station) -> Unit,
 ) {
     DomovoiCard(modifier, padding = 0) {
@@ -451,6 +488,7 @@ private fun FavoritesCard(
                         active = selectedId == s.id,
                         onSelect = { onSelect(s.id) },
                         onPlay = onPlay,
+                        onPlayInRoom = onPlayInRoom,
                         onForget = { onForget(s) },
                         refresh = refresh,
                     )
@@ -485,12 +523,14 @@ private fun FavoritesCard(
 
 /* ---- Favorite row + inline controls -------------------------------------------- */
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun FavoriteRow(
     s: Station,
     active: Boolean,
     onSelect: () -> Unit,
     onPlay: (Station) -> Unit,
+    onPlayInRoom: ((Station) -> Unit)?,
     onForget: () -> Unit,
     refresh: () -> Unit,
 ) {
@@ -580,10 +620,11 @@ private fun FavoriteRow(
         }
 
         if (active) {
-            Row(
+            // Wraps: with "play in a room" the row is wider than a phone.
+            FlowRow(
                 Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, bottom = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 if (editing) {
                     OutlinedTextField(
@@ -605,12 +646,18 @@ private fun FavoriteRow(
                         Spacer(Modifier.width(4.dp))
                         Text("play here")
                     }
+                    if (onPlayInRoom != null) {
+                        OutlinedButton(onClick = { onPlayInRoom(s) }) {
+                            Icon(Icons.Filled.Speaker, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("play in a room")
+                        }
+                    }
                     OutlinedButton(onClick = { editing = true }) {
                         Icon(Icons.Filled.Edit, contentDescription = null, modifier = Modifier.size(14.dp))
                         Spacer(Modifier.width(4.dp))
                         Text("interval")
                     }
-                    Spacer(Modifier.weight(1f))
                     OutlinedButton(onClick = { confirmForget = true }) {
                         Icon(
                             Icons.Filled.DeleteOutline, contentDescription = null,

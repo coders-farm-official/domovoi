@@ -140,6 +140,28 @@ public final class StationsModel {
 
     public private(set) var toast: String?
 
+    // MARK: - playing in a room (Radio 1.5.0)
+
+    /// What the shell knows that "play in a room" is gated on
+    /// (``use(roomGate:)``). Closed until the view hands one in.
+    public private(set) var roomGate: StationsRoomPlayGate = .closed
+
+    /// The house's rooms, from now-playing. **Nil until the control first
+    /// becomes possible**: a screen that will never offer it asks nothing
+    /// about rooms (Android reads them only while `roomPlayPossible`).
+    public private(set) var rooms: ApiRead<[NowPlayingRoom]>?
+
+    /// The station whose room picker is up, or nil.
+    public private(set) var roomPick: StationsRow?
+
+    /// The servers whose route answered missing, shared through the shell
+    /// so the hide outlives this screen's model.
+    private let roomPlayBackstop: StationsRoomPlayBackstop
+
+    /// Whether the screen is on, so a gate that opens while it is shown reads
+    /// the rooms, and one that opens while it is not waits for ``start()``.
+    private var running = false
+
     private var debounce: Task<Void, Never>?
     private var eventSink: Int?
 
@@ -162,6 +184,7 @@ public final class StationsModel {
     public init(
         in container: AppContainer,
         playback: any StationsPlayback,
+        roomPlayBackstop: StationsRoomPlayBackstop = StationsRoomPlayBackstop(),
         wait: @Sendable @escaping (Int64) async throws -> Void = {
             try await Task.sleep(for: .milliseconds($0))
         },
@@ -169,6 +192,7 @@ public final class StationsModel {
     ) {
         self.container = container
         self.playback = playback
+        self.roomPlayBackstop = roomPlayBackstop
         self.wait = wait
         self.clock = clock
 
@@ -804,6 +828,108 @@ public final class StationsModel {
         }
     }
 
+    // MARK: - playing in a room (Radio 1.5.0, ``StationsRoomPlay``)
+
+    /// The rooms are worth reading: paired, not room mode, our Radio at
+    /// 1.5.0 or later, and the route not already answered missing here.
+    public var roomPlayPossible: Bool {
+        StationsRoomPlay.possible(
+            capabilities: roomGate.capabilities,
+            paired: roomGate.paired,
+            roomMode: roomGate.roomMode,
+            routeMissing: roomPlayBackstop.missingOn(roomGate.server)
+        )
+    }
+
+    /// The rooms the picker offers: the ones now-playing reported, and none
+    /// while the control is not possible.
+    public var roomChoices: [String] {
+        guard roomPlayPossible else { return [] }
+        return MusicPage.castRooms(rooms?.data ?? [])
+    }
+
+    /// Whether "play in a room" is drawn for `station`: the gate, at least
+    /// one room, and a **saved** station — the route takes a row id, and a
+    /// directory hit has none.
+    public func offersRoomPlay(_ station: StationsRow) -> Bool {
+        station.isSaved && StationsRoomPlay.offered(
+            capabilities: roomGate.capabilities,
+            paired: roomGate.paired,
+            roomMode: roomGate.roomMode,
+            routeMissing: roomPlayBackstop.missingOn(roomGate.server),
+            rooms: roomChoices
+        )
+    }
+
+    /// The shell's view of the gate, on every appearance and every manifest
+    /// change. Reads the rooms the first time the control becomes possible
+    /// while the screen is on.
+    public func use(roomGate next: StationsRoomPlayGate) {
+        let was = roomPlayPossible
+        roomGate = next
+        if roomPlayPossible, running, !was || rooms?.data == nil {
+            readRooms()
+        }
+        if !roomPlayPossible { roomPick = nil }
+    }
+
+    private func readRooms() {
+        if rooms == nil {
+            let client = container.client
+            rooms = ApiRead(in: container, eventTypes: MusicModel.nowPlayingEvents) {
+                try await client.get(StationsPath.rooms, as: [NowPlayingRoom].self)
+            }
+        }
+        rooms?.refresh()
+    }
+
+    /// Open the room picker for `station` — drawn only where
+    /// ``offersRoomPlay(_:)`` said so, and refused here otherwise.
+    public func pickRoom(for station: StationsRow) {
+        guard offersRoomPlay(station) else { return }
+        roomPick = station
+    }
+
+    public func closeRoomPick() { roomPick = nil }
+
+    /// `POST /stations/{id}/play-in-room {"room_id"}`, **to the server the
+    /// tap was on** (Android's `onlyTo = server`): the gate's server is
+    /// captured before the await, and an answer that lands after the app
+    /// moved house says nothing and marks nothing.
+    ///
+    /// The server's own `text` is the toast; a refusal is
+    /// ``StationsRoomPlay/failureLine(_:)``, and a missing route also hides
+    /// the control for that server until the app restarts.
+    public func playInRoom(_ station: StationsRow, room: String) {
+        roomPick = nil
+        guard offersRoomPlay(station), roomChoices.contains(room) else { return }
+        let key = station.rowKey
+        guard !busyKeys.contains(key) else { return }
+        busyKeys.insert(key)
+        let epoch = houseEpoch
+        let server = roomGate.server
+        let client = container.client
+        let backstop = roomPlayBackstop
+        Task { @MainActor [weak self] in
+            defer { self?.busyKeys.remove(key) }
+            do throws(DomovoiError) {
+                let answer = try await client.post(
+                    StationsPath.playInRoom(station.id),
+                    body: StationsPath.playInRoomBody(room),
+                    as: StationsRoomPlayAnswer.self
+                )
+                guard let self, self.stillHome(epoch) else { return }
+                self.toast = StationsRoomPlay.successLine(answer, station: station.name, room: room)
+                // The route stamps the station into Recent, as `/play` does.
+                self.recent.refresh()
+            } catch let trouble {
+                guard let self, self.stillHome(epoch) else { return }
+                if StationsRoomPlay.isMissingRoute(trouble) { backstop.markMissing(server) }
+                self.toast = StationsRoomPlay.failureLine(trouble)
+            }
+        }
+    }
+
     /// Everything a write can have changed: the favourites, their count and
     /// the Recent strip.
     private func refreshLists() {
@@ -833,6 +959,8 @@ public final class StationsModel {
         if !favorites.state.loaded { favorites.reset() }
         results.resume()
         detail?.start()
+        running = true
+        if roomPlayPossible { readRooms() }
     }
 
     /// The screen is gone. "A route holds nothing" (`Pagination.swift`).
@@ -848,6 +976,9 @@ public final class StationsModel {
         favorites.stop()
         results.stop()
         detail?.stop()
+        rooms?.stop()
+        running = false
+        roomPick = nil
     }
 
     /// A push arrived. Each read filters by `type` itself, exactly as the web
@@ -857,6 +988,7 @@ public final class StationsModel {
         badge.received(event)
         favorites.received(event)
         detail?.received(event)
+        if roomPlayPossible { rooms?.received(event) }
     }
 
     /// The app moved house. Everything this screen holds is the old house's —
@@ -885,5 +1017,11 @@ public final class StationsModel {
         recent.serverChanged()
         badge.serverChanged()
         favorites.serverChanged()
+        // The rooms are the old house's too. The view hands the new house's
+        // gate in next (``use(roomGate:)``), which reads them again.
+        roomPick = nil
+        roomGate = .closed
+        rooms?.stop()
+        rooms = nil
     }
 }

@@ -331,8 +331,8 @@ final class PrintingModelsTests: XCTestCase {
     }
 
     /// A chat draft's target: its own routes, no `library_id`, and a
-    /// `version`. No view in this item opens it — it is here so the draft
-    /// panel's item changes nothing in this file.
+    /// `version`. Chat's draft card and canvas open it
+    /// (`ChatDraftPrintTests` covers the gate and the sheet).
     func testAChatDraftTargetUsesItsOwnRoutesAndSendsAVersion() throws {
         let target = PrintingTarget.chatDraft(draftID: 12, version: 3)
         XCTAssertEqual(target.previewPath, "/api/chat/drafts/12/print/preview")

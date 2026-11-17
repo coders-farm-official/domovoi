@@ -71,8 +71,8 @@ struct FileSheetView: View {
             // drawn in the first place.
             if let printers = printing?.data, let library = files.selectedID {
                 PrintSheetView(
-                    entry: entry,
-                    libraryID: library,
+                    target: .file(libraryID: library, path: entry.rel),
+                    name: entry.displayTitle,
                     printers: printers,
                     model: model,
                     onClose: closePrinting

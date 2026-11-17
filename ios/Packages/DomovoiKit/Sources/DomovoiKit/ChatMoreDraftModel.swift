@@ -11,13 +11,13 @@ import Observation
 ///
 /// ### What is not here, and why there is no control for it
 ///
-/// * **Print.** Android draws no print at all without
-///   `GET /api/printers` saying the house has a printer (`canPrint`,
-///   `ChatScreen.kt:1013`; the canvas's `onPrint` is nil without one,
-///   `:970`). That read belongs to the Printing item, so drawing nothing is
-///   **Android's own behaviour on a house with no printer**, not a
-///   divergence — and an AirPrint sheet on the exported PDF is not a
-///   substitute, because Android's print comes out of the printer at home.
+/// * **Print is not this model's.** It is the house's Print sheet
+///   (``PrintingJobModel`` over ``PrintingTarget/chatDraft(draftID:version:)``),
+///   opened from the card and from the canvas only when `GET /api/printers`
+///   says the house has a printer (``printingOffersDraftPrint(printers:)``,
+///   Android's `canPrint`, `ChatScreen.kt:970,1014`). An AirPrint sheet on the
+///   exported PDF is not a substitute: the print comes out of the printer at
+///   home, as Android's does.
 /// * **The Revise box** (`DraftUi.kt:263`), which sends `revise_draft` on a
 ///   message — a send-body key this item cannot write. Hand editing reaches
 ///   the same place through a route of its own, so the feature is not lost,
