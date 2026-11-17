@@ -90,6 +90,27 @@ def tor_wanted() -> bool:
     return bool(applied is not None and applied.run)
 
 
+# Written by the installer's domovoi-fh-firewall.service after it applied
+# its rules (scripts/linux/fh-firewall.sh): the Tor container's network can
+# reach the internet only, not this box's own ports or the home network
+# (threat-model finding 22). The core can't read the firewall itself (that
+# needs root), so this root-owned file is how it knows.
+FIREWALL_STATE = Path("/run/domovoi-fh-firewall/applied")
+
+
+def firewall_state() -> str:
+    """``in_place``, ``missing`` (a Linux server without the rules: an install
+    from before them, or DOMOVOI_MANAGE_FH_FIREWALL=0), or ``unknown`` (not
+    a Linux server)."""
+    if sys.platform == "win32":
+        return "unknown"
+    try:
+        text = FIREWALL_STATE.read_text(encoding="ascii")
+    except OSError:
+        return "missing"
+    return "in_place" if "subnet=172.31.254.0/24" in text and "bridge=domovoi-fh0" in text else "missing"
+
+
 def status() -> dict[str, Any]:
     """For the admin status route: plain facts, no secrets."""
     keys = fid.load() if sys.platform != "win32" else None
@@ -100,6 +121,7 @@ def status() -> dict[str, Any]:
         "onion_ready": _STATE["onion"] is not None,
         "pairing_ready": _STATE.get("pairing") is not None,
         "listener_running": _LISTENER["proc"] is not None and _LISTENER["proc"].returncode is None,
+        "firewall": firewall_state(),
     }
 
 
@@ -214,6 +236,9 @@ async def _reconcile() -> None:
     _sync_key_files(folder, peers)
     _write_invites(invites)
 
+    if firewall_state() == "missing":
+        log.warning("Friend Houses: starting its Tor container without the firewall rules "
+                    "(%s is missing): update Domovoi or run the installer again", FIREWALL_STATE)
     _STATE.update(status="starting", detail=None)
     with holds.holding(GUARD_HOLD, "Friend Houses is starting its connection", settle_sec=120):
         if action == "start":

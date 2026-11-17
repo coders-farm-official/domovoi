@@ -2629,6 +2629,10 @@ unix sockets in a folder it shares with the core: no control port and no
 TCP port, so nothing else on the box or the LAN can use it as a proxy.
 The internet answer "never" **stops the container**, not just Domovoi's
 calls.
+The installer also fences the container's network off with firewall rules,
+so it can reach the internet but not this server's own ports or the rest of
+the home network (docs/LINUX_HOST.md, "Friend Houses' firewall"). The
+Friend Houses page warns while those rules are missing.
 
 **Who can connect.** Tor's client authorization decides who can find the
 house; it doesn't prove who is calling, and a removed friend can keep

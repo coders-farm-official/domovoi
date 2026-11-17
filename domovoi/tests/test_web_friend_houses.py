@@ -323,3 +323,13 @@ async def test_a_message_is_checked_before_it_is_forwarded(monkeypatch, forwarde
         assert (await c.post("/api/friend-houses/messages",
                              json={"friend_id": "fr0123abcd", "text": "x" * 2000})).status_code == 200
     assert forwarded == [("POST", "/v1/admin/friend-houses/messages", {"friend_id": "fr0123abcd", "text": "x" * 2000})]
+
+
+def test_the_page_warns_when_the_installer_firewall_is_missing() -> None:
+    # Threat-model finding 22: without the installer's rules the Tor
+    # container could reach the rest of the home network, so the page says
+    # so plainly, both before and after Friend Houses is turned on.
+    page = _page()
+    assert "status.firewall === 'missing'" in page
+    assert "Update Domovoi (or run its installer again) before using Friend Houses." in page
+    assert page.count("<FhFirewallNote status={status}/>") == 2
