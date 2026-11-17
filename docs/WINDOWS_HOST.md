@@ -85,6 +85,11 @@ signature, before it runs it.
    Domovoi needs (6369, 6370, 6432, 6650-6699, 8050-8099, 8096, 7676, 9467,
    11434). A taken port gets one pop-up per program holding ports (Docker
    Desktop, Ollama, or the program's name), with **Retry** and **Cancel**.
+   Port 80 (the short address, see [The network name](#the-network-name))
+   is checked too, for Setup's log only: IIS or another program on it is
+   no clash, Setup goes on and the short address stays off. Setup also
+   reads `netsh http show urlacl` for reservations on port 80 (it never
+   adds or deletes one).
    If an earlier Domovoi left its account's profile folder behind
    (`C:\Users\domovoi-svc` with no account), Setup stops and gives the
    one line that removes it (after a restart, from an administrator
@@ -244,7 +249,7 @@ signature, before it runs it.
 | Its profile, made by Windows when the service first signs in: `C:\Users\domovoi-svc`, or `C:\Users\domovoi-svc.<PC name>` if a folder of that name is already there (the service writes its `.wslconfig` into whichever it is, and the uninstaller finds it by the account's SID); it holds the account's `.wslconfig` (mirrored networking, `instanceIdleTimeout=-1`, memory cap, swap in `C:\ProgramData\Domovoi\wsl`) and its WSL registration. | Deleted. Right after unregistering the distro the service ends that account's own WSL session (`wsl --shutdown` run as `domovoi-svc`, see below), then the uninstaller waits up to two minutes for Windows to let go of the profile. This comes after the account is deleted; if Windows still holds the profile then, a one-time startup task, **`DomovoiRemoveProfile`** (runs as SYSTEM), deletes it at the next restart and then deletes itself. It touches only that profile, only once its account is gone, and if it can't tell (or the profile is in use) it waits for the next boot. |
 | Service **`DomovoiHost`** (Automatic, runs as `.\domovoi-svc`, depends on no other service: it waits for WSL itself, see *Windows updated WSL* under [When something goes wrong](#when-something-goes-wrong); restarted by Windows after any failure, after 10 s, 30 s, then every 60 s), binary `C:\Program Files\Domovoi\DomovoiHost.exe`. | Stopped (it stops Domovoi's units in the distro first), then deleted. |
 | WSL distro **`domovoi`** of `domovoi-svc` (Ubuntu 26.04.1 plus everything `provision.sh` installs), disk in `C:\ProgramData\Domovoi\distro`. Once imported, the service never deletes or re-imports over that disk, even if WSL stops listing it. Your own distros and `.wslconfig` are not touched. | Unregistered by the service, as its owner, first. Until that has worked (or the disk is gone), nothing else that could strand it is touched: not the service, the account, its profile or rights, nor ProgramData. If it fails, the uninstaller stops, says why, and stays installed for another try. A disk WSL no longer lists is deleted or kept aside, see [Uninstalling](#uninstalling). |
-| Hyper-V firewall rules for WSL's VM creator (`{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}`), inbound TCP from your subnet only: `Domovoi-Dashboard-6369`, `Domovoi-Core-6370`, `Domovoi-MPD-8050-8099`, `Domovoi-Jellyfin-8096`, `Domovoi-RomM-7676`, `Domovoi-Kiwix-9467`. They apply to **every WSL VM on the PC**, your own WSL distros and Docker Desktop's included: anything of yours that listens on those ports in a mirrored-mode distro becomes reachable from your home network too. None if the PC has no private (RFC 1918) address. | Every `Domovoi-` rule for WSL's VM creator is removed (and listing them again must work, or the uninstaller says so). |
+| Hyper-V firewall rules for WSL's VM creator (`{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}`), inbound TCP from your subnet only: `Domovoi-ShortAddress-80` (the short address, below), `Domovoi-Dashboard-6369`, `Domovoi-Core-6370`, `Domovoi-MPD-8050-8099`, `Domovoi-Jellyfin-8096`, `Domovoi-RomM-7676`, `Domovoi-Kiwix-9467`. They apply to **every WSL VM on the PC**, your own WSL distros and Docker Desktop's included: anything of yours that listens on those ports in a mirrored-mode distro becomes reachable from your home network too. None if the PC has no private (RFC 1918) address. | Every `Domovoi-` rule for WSL's VM creator is removed (and listing them again must work, or the uninstaller says so). |
 | Windows Defender Firewall rule **`Domovoi-mDNS-5353`**: inbound UDP 5353 for `C:\Program Files\Domovoi\DomovoiHost.exe` only, from the local subnet, on **Private and Domain** networks (not Public), so other devices on your home network find this PC as `domovoi.local` ([The network name](#the-network-name)). Not added when the PC has no private address. | Removed with the Hyper-V rules (`Remove-NetFirewallRule -Name 'Domovoi-mDNS-5353'`); DomovoiHost's goodbye went out when the service stopped. |
 | `C:\ProgramData\Domovoi` (`distro`, `wsl`, `backups`, `logs`, `state`, `host`): SYSTEM and Administrators only, with `domovoi-svc` allowed where it needs it. Household accounts can't open it. Setup only uses this folder if it made it. | Made administrators-only again, then deleted, only if Setup made it (files still in use are deleted at the next restart). |
 | The media folder and its `Music`, `Pictures`, `Videos`, `Documents`, `Audiobooks`, `Podcasts`: made if missing; `domovoi-svc` may read and write them (an inherited rule); a root folder Setup makes also lets every user of the PC (Users) read and write. An existing folder keeps all its own rules. | Setup's rule for `domovoi-svc` comes off. A folder Setup made is removed **only if it is empty**. No file in a media folder is ever deleted. |
@@ -450,8 +455,15 @@ needs no multicast) still work.
 ## The network name
 
 DomovoiHost answers to **`domovoi.local`** on your home network, so a
-browser on another computer opens `http://domovoi.local:6369` instead of
-an address. Domovoi's Linux system can't do it itself (its distro isn't the
+browser on another computer opens `http://domovoi.local` (the short
+address) or `http://domovoi.local:6369` instead of an address. The short
+address works because the dashboard inside the distro also listens on
+port 80, which mirrored networking makes this PC's port 80, and sends
+every browser on to 6369; Setup's firewall rule `Domovoi-ShortAddress-80`
+lets your home subnet reach it. When IIS or another Windows program
+already uses port 80, the dashboard leaves it to that program and Settings
+says "Short address off: something else on this computer uses port 80.";
+`domovoi.local:6369` keeps working. Domovoi's Linux system can't do it itself (its distro isn't the
 one on the network), so DomovoiHost does, from the moment the service
 starts, also while Domovoi restarts or updates: our own small mDNS
 responder (`windows/common/MdnsResponder.cs`, the same rules and packets as

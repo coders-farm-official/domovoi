@@ -458,8 +458,11 @@ On first boot the core service writes an 8-word **setup code** to
 `~/.domovoi/setup-code.txt` on the server (in the home of the user it runs
 as) and prints it to its console when it runs in a terminal. Run as a
 service, it never prints the code, so it stays out of the journal: read
-the file. Open the dashboard at
-`http://<server>:6369`: while nobody has claimed it, every page opens a
+the file. Open the dashboard at `http://domovoi.local` (the server's name
+on your network; a Linux server answers on port 80 too and sends the
+browser on to the dashboard). Where that doesn't open, use
+`http://domovoi.local:6369`, or the server's address,
+`http://<server>:6369`, which always works. While nobody has claimed it, every page opens a
 welcome that asks for the setup code and an admin password (**Not now**
 puts it away for that browser; Home's **claim it** brings it back). The
 same form is under **Settings → System → Advanced → Admin → "set up

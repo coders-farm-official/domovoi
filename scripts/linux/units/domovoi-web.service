@@ -17,15 +17,20 @@ Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30
 # Sandboxing (docs/LINUX_HOST.md, "Sandboxing the units"): the full set,
-# NoNewPrivileges and no capabilities included, since the dashboard
-# process never runs sudo (the Restart button goes through the core, whose
-# unit is looser for exactly that reason). Restarting a core that doesn't
-# answer needs no privilege either: the dashboard signals the core's main
-# process, which runs as the same user, and the core unit's Restart=
-# starts it again (web/backend/core_restart.py).
+# NoNewPrivileges included, since the dashboard process never runs sudo
+# (the Restart button goes through the core, whose unit is looser for
+# exactly that reason). Restarting a core that doesn't answer needs no
+# privilege either: the dashboard signals the core's main process, which
+# runs as the same user, and the core unit's Restart= starts it again
+# (web/backend/core_restart.py).
 NoNewPrivileges=yes
-CapabilityBoundingSet=
-AmbientCapabilities=
+# One capability and nothing else: CAP_NET_BIND_SERVICE, to listen on port
+# 80 for the short address (web/backend/short_address.py: http://domovoi.local
+# without :6369; it only redirects to this port). The bounding set holds
+# that one, so nothing in this unit can ever gain another, and the process
+# clears its ambient set at start, so the programs it runs don't inherit it.
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
 UMask=0027
 PrivateTmp=yes
 ProtectSystem=strict

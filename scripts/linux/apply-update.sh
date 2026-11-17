@@ -165,6 +165,18 @@
 # daemon-reload. A policy the household chose (on-abnormal, say) is left
 # as it is, with a warn step saying what it misses. Never fatal.
 #
+# Then the dashboard's low port (reconcile_short_address): the short
+# address (web/backend/short_address.py) listens on port 80 and hands
+# browsers over to 6369, which needs CAP_NET_BIND_SERVICE. The shipped
+# domovoi-web.service grants it (that capability alone, bounding set
+# included); a unit installed before 1.4.0 has none, so it gets the drop-in
+# domovoi-web.service.d/50-domovoi-short-address.conf that adds exactly
+# that one, and systemctl daemon-reload, before the services start again.
+# A unit that already has it is left alone; one where our drop-in is
+# there but systemd still says no (a later drop-in of the household's
+# overrides it) gets a warn step. Never fatal: without it the dashboard
+# still runs on 6369 and Settings says the short address is off.
+#
 # Then the journal (reconcile_journal): kept on disk, so what the core
 # logs about why it stopped survives a power cycle (on 2026-10-14 a box
 # whose journal lived in RAM lost the record of a frozen core). The
@@ -327,6 +339,10 @@ DB_UNIT=domovoi-db.service
 # a scratch directory).
 CORE_DROPIN_DIR=${DOMOVOI_CORE_DROPIN_DIR:-/etc/systemd/system/$CORE_UNIT.d}
 CORE_RESTART_DROPIN=$CORE_DROPIN_DIR/50-domovoi-restart.conf
+# Where reconcile_short_address writes its drop-in (the harness points it
+# at a scratch directory).
+WEB_DROPIN_DIR=${DOMOVOI_WEB_DROPIN_DIR:-/etc/systemd/system/$WEB_UNIT.d}
+WEB_SHORT_ADDRESS_DROPIN=$WEB_DROPIN_DIR/50-domovoi-short-address.conf
 # The journal on disk (reconcile_journal); the harness points the drop-in
 # directory at a scratch one.
 MANAGE_JOURNAL=${DOMOVOI_MANAGE_JOURNAL:-1}
@@ -2815,6 +2831,55 @@ reconcile_core_restart() {
   return 0
 }
 
+# The drop-in reconcile_short_address writes.
+short_address_dropin() {
+  cat <<'EOF2'
+# Written by scripts/linux/apply-update.sh (domovoi-update.service). The
+# dashboard's short address (web/backend/short_address.py) listens on port
+# 80 and only redirects browsers to the dashboard on 6369; a port below
+# 1024 needs CAP_NET_BIND_SERVICE. This adds that one capability and no
+# other (the bounding set too), as the shipped domovoi-web.service does.
+# To keep the dashboard off port 80, switch the short address off in
+# Settings instead of deleting this file.
+[Service]
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+EOF2
+}
+
+# "cap_a cap_b" (systemctl show's spelling) holds cap_net_bind_service?
+has_net_bind() { case " $1 " in *" cap_net_bind_service "*) return 0 ;; esac; return 1; }
+
+# See the header: CAP_NET_BIND_SERVICE for a dashboard unit without it, and
+# only that. Records a step only when it wrote the drop-in (ok), or when
+# the dashboard still can't bind port 80 after it (warn).
+reconcile_short_address() {
+  local t0 load ambient bounding
+  command -v systemctl >/dev/null 2>&1 || return 0
+  load=$(systemctl show -p LoadState --value "$WEB_UNIT" 2>/dev/null || true)
+  if [ "$load" != loaded ]; then
+    log "systemd has no $WEB_UNIT loaded (${load:-no answer}): its low port left as it is"
+    return 0
+  fi
+  ambient=$(systemctl show -p AmbientCapabilities --value "$WEB_UNIT" 2>/dev/null || true)
+  bounding=$(systemctl show -p CapabilityBoundingSet --value "$WEB_UNIT" 2>/dev/null || true)
+  if has_net_bind "$ambient" && has_net_bind "$bounding"; then return 0; fi
+  t0=$(now_ms)
+  log "step short-address: $WEB_UNIT can't bind port 80 (AmbientCapabilities=${ambient:-none})"
+  if [ -f "$WEB_SHORT_ADDRESS_DROPIN" ]; then
+    add_step short-address warn "$t0" "$WEB_UNIT lacks CAP_NET_BIND_SERVICE although $WEB_SHORT_ADDRESS_DROPIN adds it (a drop-in after it, or the unit itself, overrides it), so the short address on port 80 stays off; the dashboard is on 6369 as always"
+    return 0
+  fi
+  if mkdir -p "$WEB_DROPIN_DIR" && write_atomic "$WEB_SHORT_ADDRESS_DROPIN" "$(short_address_dropin)"$'\n' \
+      && systemctl daemon-reload; then
+    add_step short-address ok "$t0" "$WEB_SHORT_ADDRESS_DROPIN lets the dashboard listen on port 80 for the short address (CAP_NET_BIND_SERVICE, nothing else)"
+  else
+    add_step short-address warn "$t0" "$WEB_SHORT_ADDRESS_DROPIN could not be written, so the short address on port 80 stays off; the dashboard is on 6369 as always"
+    log "step short-address failed; not fatal, the run goes on"
+  fi
+  return 0
+}
+
 # >>> docker-media-order block >>>
 # The same text in scripts/linux/provision.sh and scripts/linux/apply-update.sh,
 # character for character (domovoi/tests/test_docker_media_order.py holds the
@@ -3494,6 +3559,7 @@ main() {
   if ! check_signature; then exit 1; fi
   reconcile_update_unit
   reconcile_core_restart
+  reconcile_short_address
   reconcile_journal
   reconcile_cache_trim
   reconcile_docker_media_order

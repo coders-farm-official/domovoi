@@ -620,6 +620,10 @@ static partial class Tests
     // This PC's own `netsh int ipv4 show excludedportrange protocol=tcp`, 2026-10-11.
     const string NetshSample = "\r\nProtocol tcp Port Exclusion Ranges\r\n\r\nStart Port    End Port      \r\n----------    --------      \r\n      5357        5357      \r\n     27339       27339      \r\n     50000       50059     *\r\n     61445       61544      \r\n\r\n* - Administered port exclusions.\r\n\r\n";
 
+    // `netsh http show urlacl` in Windows 11's shape: the Windows default
+    // reservation, two more on port 80, and two on other ports.
+    const string UrlAclSample = "\r\nURL Reservations: \r\n----------------- \r\n\r\n    Reserved URL            : http://+:80/Temporary_Listen_Addresses/ \r\n        User: \\Everyone\r\n            Listen: Yes\r\n            Delegate: No\r\n            SDDL: D:(A;;GX;;;WD) \r\n\r\n    Reserved URL            : https://+:5358/ \r\n        User: BUILTIN\\Users\r\n\r\n    Reserved URL            : http://+:80/MyApp/ \r\n        User: NT AUTHORITY\\NETWORK SERVICE\r\n\r\n    Reserved URL            : http://*:80/ \r\n        User: BUILTIN\\Users\r\n\r\n    Reserved URL            : http://+:8080/ \r\n\r\n";
+
     static void PortOwners()
     {
         Run("ports: excluded ranges from netsh", delegate
@@ -673,6 +677,28 @@ static partial class Tests
         {
             foreach (int p in new[] { 6369, 6370, 6432, 7676, 8050, 8099, 8096, 9467, 11434, 6650 }) True(DomovoiPorts.Needed(p), "needed " + p);
             foreach (int p in new[] { 8000, 8001, 8765, 5432, 8100, 11435 }) True(!DomovoiPorts.Needed(p), "not needed " + p);
+            True(!DomovoiPorts.Needed(80), "the short address's port 80 is optional, never needed");
+            True(DomovoiPorts.SpecFor(80) != null && DomovoiPorts.SpecFor(80).Optional && DomovoiPorts.SpecFor(80).Lan, "but listed, with a LAN rule");
+        });
+        Run("ports: IIS on port 80 is no clash (the short address just stays off)", delegate
+        {
+            var o = PortCheck.Owners(new[] { new Listener(80, 4, "System") }, new[] { new PortRange(50, 100) });
+            Eq(0, o.Count, "no pop-up for port 80, held or reserved");
+        });
+        Run("short address: who holds port 80", delegate
+        {
+            Eq("free", ShortAddressCheck.State(new[] { new Listener(6369, 1, "x"), new Listener(8080, 2, "nginx") }), "free");
+            Eq("taken|nginx", ShortAddressCheck.State(new[] { new Listener(80, 7, "nginx") }), "a program");
+            True(ShortAddressCheck.State(new[] { new Listener(80, 4, "System") }).StartsWith("taken|Windows (the System process", StringComparison.Ordinal), "IIS / HTTP.sys");
+            Eq("taken|PID 99", ShortAddressCheck.State(new[] { new Listener(80, 99, null) }), "gone");
+        });
+        Run("short address: URL reservations on port 80 from netsh", delegate
+        {
+            var r = ShortAddressCheck.ParseUrlAcl(UrlAclSample);
+            SeqEq(new[] { "http://+:80/MyApp/", "http://*:80/" }, r, "port 80 only, the Windows default left out");
+            Eq(0, ShortAddressCheck.ParseUrlAcl("").Count, "empty");
+            Eq(0, ShortAddressCheck.ParseUrlAcl(null).Count, "null");
+            Eq(1, ShortAddressCheck.ParseUrlAcl("    Reservierte URL     : http://+:80/x/\r\n").Count, "localized label");
         });
     }
 
@@ -1025,8 +1051,8 @@ static partial class Tests
         Run("firewall: rules for the LAN ports, scoped to the subnet", delegate
         {
             var rules = Firewall.Plan("192.168.1.0/24");
-            SeqEq(new[] { "Domovoi-Dashboard-6369", "Domovoi-Core-6370", "Domovoi-MPD-8050-8099", "Domovoi-Jellyfin-8096", "Domovoi-RomM-7676", "Domovoi-Kiwix-9467" }, rules.Select(r => r.Name), "names");
-            SeqEq(new[] { "6369", "6370", "8050-8099", "8096", "7676", "9467" }, rules.Select(r => r.LocalPorts), "ports");
+            SeqEq(new[] { "Domovoi-ShortAddress-80", "Domovoi-Dashboard-6369", "Domovoi-Core-6370", "Domovoi-MPD-8050-8099", "Domovoi-Jellyfin-8096", "Domovoi-RomM-7676", "Domovoi-Kiwix-9467" }, rules.Select(r => r.Name), "names");
+            SeqEq(new[] { "80", "6369", "6370", "8050-8099", "8096", "7676", "9467" }, rules.Select(r => r.LocalPorts), "ports");
             True(rules.All(r => r.RemoteAddress == "192.168.1.0/24"), "subnet");
             True(!rules.Any(r => r.LocalPorts == "6432" || r.LocalPorts == "11434"), "no loopback-only port opened");
         });
@@ -1040,7 +1066,7 @@ static partial class Tests
         Run("firewall: the add and remove scripts", delegate
         {
             string add = Firewall.AddScript(Firewall.Plan("10.0.0.0/16"));
-            Eq(6, add.Split('\n').Count(l => l.StartsWith("New-NetFirewallHyperVRule ")), "six New- lines");
+            Eq(7, add.Split('\n').Count(l => l.StartsWith("New-NetFirewallHyperVRule ")), "seven New- lines");
             True(add.Contains("-VMCreatorId '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}'"), "WSL's creator id");
             True(add.Contains("-Direction Inbound") && add.Contains("-Action Allow") && add.Contains("-RemoteAddresses '10.0.0.0/16'"), "inbound allow from the subnet");
             True(add.Contains("Remove-NetFirewallHyperVRule -Name $r.Name"), "removes old Domovoi rules first");

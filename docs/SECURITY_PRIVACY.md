@@ -1317,7 +1317,8 @@ settles (see *Server identity*).
 
 Only three kinds of port face the LAN from Domovoi's own stack: the core
 (`6370`), the dashboard (`6369`) and each room's MPD **stream** port
-(`8050`, `8051`, …) that the satellites fetch audio from. (A plugin that
+(`8050`, `8051`, …) that the satellites fetch audio from, plus the
+dashboard's **short address** on port `80` described next. (A plugin that
 runs a server in a container, such as Jellyfin, RomM or Kiwix, publishes
 that server's own port too. Looking for printers binds UDP 5353 for a few
 seconds and answers no one; the network name above keeps UDP 5353 open and
@@ -1331,6 +1332,58 @@ room's player directly; it has to go through the core or the dashboard
 and whatever tier those apply. A per-room MPD container created before the
 loopback bind existed is recreated on the core's next start (its data
 volume is kept; that room's playback stops once).
+
+### The short address (port 80): a redirect and nothing else
+
+So a person can type `domovoi.local` without `:6369`, the dashboard
+process also listens on port `80` (1.4.0, `web/backend/short_address.py`)
+and answers every request with a `302` to the **same host** on `6369`,
+path and query kept. It is a few lines of asyncio, not a second web app:
+it reads one request head (8 KB at most, 5 seconds at most, 64
+connections at once), never a body, never reads or logs a cookie (the
+dashboard cookie is sent to every port of the host, this one included, and
+is ignored), serves no file and no API, and closes every connection after
+one answer.
+
+* **Never an open redirect.** The redirect keeps the host the browser
+  asked for, and only when that host is this server's own: the address the
+  connection arrived on, its host name, its network name (with and without
+  `.local`, and the one the core holds now, `domovoi2.local` say), an exact
+  name in `TRUSTED_HOSTS`, or `localhost` from the server itself. Any other
+  `Host` (or none, or two) is a `400` whose text names this server's own
+  address. The request target must be `/path?query` in printable ASCII; an
+  absolute URL, `*` or a control character is a `400`, so nothing can
+  point the `Location` elsewhere or split the header. A `Host` with a port
+  other than 80 is refused too.
+* **GET and HEAD only.** Every other method is a `405` with
+  `Allow: GET, HEAD`; nothing is ever forwarded to the dashboard, so a
+  form posted to port 80 goes nowhere.
+* **Temporary, uncached.** `302` with `Cache-Control: no-store`, so a
+  browser never remembers it: when port 80 later belongs to something else
+  of the household's, nothing is stuck pointing at Domovoi.
+* **Only when port 80 is free.** The bind at start is the probe. If
+  anything else holds the port (a Pi-hole, a web server, IIS or another
+  HTTP.sys program on the Windows install's PC), Domovoi leaves it alone
+  and Settings says "Short address off: something else on this computer
+  uses port 80." An admin switches it off or on in Settings → System →
+  Advanced → Short address (`PUT /api/short-address`, admin tier; kept in
+  `~/.domovoi/short_address.json`). Off frees the port at once.
+* **One capability, for the dashboard alone.** Binding a port below 1024
+  needs `CAP_NET_BIND_SERVICE`. The dashboard's unit
+  (`scripts/linux/units/domovoi-web.service`) grants that one capability,
+  its bounding set cut down to the same one, with `NoNewPrivileges=yes`
+  and the rest of its sandbox unchanged; an install from before 1.4.0 gets
+  it from its next update as the drop-in
+  `domovoi-web.service.d/50-domovoi-short-address.conf`
+  (`scripts/linux/apply-update.sh`). The process clears its ambient set at
+  start, so the programs it runs (ffmpeg, the office converters, a
+  plugin's helper) don't inherit it. The core and database units hold no
+  capability at all. On the Windows install, Setup adds the Hyper-V
+  firewall rule `Domovoi-ShortAddress-80` (your home subnet only, removed
+  on uninstall like the others), and only reads what holds port 80 and
+  `netsh http show urlacl` for its log: it never changes a URL reservation.
+* **No new egress.** It sends nothing anywhere; it answers browsers on
+  your network.
 
 ### Uploads and dependencies
 

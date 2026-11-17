@@ -10992,6 +10992,72 @@
         }
       }
     },
+    "/api/short-address": {
+      "get": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Get Short Address",
+        "description": "``{enabled, state, port, dashboard_port, message}``. ``state``:\n``on`` (port 80 sends browsers to the dashboard), ``off`` (switched\noff), ``taken`` (something else on this computer uses port 80),\n``no_permission`` (the dashboard may not use a low port: an install\nwhose service unit predates the feature), ``failed`` or\n``unsupported`` (not a Linux server). ``message`` is the line\nSettings shows.",
+        "operationId": "get_short_address_api_short_address_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Short Address Api Short Address Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Put Short Address",
+        "description": "Turn the short address off or on (admin). Saved in\n``~/.domovoi/short_address.json``; applies at once. The answer is the\nread above, after the change.",
+        "operationId": "put_short_address_api_short_address_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShortAddressRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Put Short Address Api Short Address Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/playlists": {
       "get": {
         "tags": [
@@ -32235,6 +32301,19 @@
           "rows"
         ],
         "title": "SheetWriteRequest"
+      },
+      "ShortAddressRequest": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "enabled"
+        ],
+        "title": "ShortAddressRequest"
       },
       "SpareDeviceEnrolRequest": {
         "properties": {

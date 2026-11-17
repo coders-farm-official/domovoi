@@ -4,6 +4,33 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.4.0 (unreleased) — the short address: open domovoi.local without :6369
+
+- **What changed.** Typing `domovoi.local` (or the server's address) in a
+  browser now opens the dashboard: the dashboard also listens on port 80
+  and sends every request on to the same host on 6369, path and query
+  kept. It only redirects, only for the server's own names and address,
+  and only GET and HEAD (docs/SECURITY_PRIVACY.md, "The short address").
+  The dashboard stays on 6369 and the core on 6370: links, rooms, the apps
+  and bookmarks are unchanged. The header now shows the easiest address to
+  share (`domovoi.local`, else `domovoi.local:6369`, else the IP with
+  `:6369`); click it to copy it. That changes nothing about which address
+  the page itself talks to.
+- **What to know.** On by default only when nothing else on the server
+  uses port 80; when something does (a Pi-hole, a web server, IIS on the
+  Windows PC), Domovoi leaves it alone and Settings → System → Advanced →
+  Short address says "Short address off: something else on this computer
+  uses port 80." An admin can switch it off there to free port 80.
+  Linux: the dashboard's unit gets `CAP_NET_BIND_SERVICE`, that one
+  capability only; an existing install gets it from its next update
+  (the drop-in `domovoi-web.service.d/50-domovoi-short-address.conf`), and
+  until then Settings says the short address is off. A unit you manage
+  yourself needs `AmbientCapabilities=CAP_NET_BIND_SERVICE` and the same in
+  `CapabilityBoundingSet=` (docs/LINUX_HOST.md). Windows install: Setup
+  (and the next Windows update) adds a seventh Hyper-V firewall rule,
+  `Domovoi-ShortAddress-80`, for your home subnet only. New API:
+  `GET`/`PUT /api/short-address`.
+
 ## 1.4.0 (unreleased) — the room display: a phone in room mode shows the room
 
 - **What changed.** A phone or tablet in room mode can show what its room
