@@ -2243,6 +2243,12 @@ a.home-att-row:hover { background: var(--brand-soft); }
 .chat-doc-job-line { flex: 1; min-width: 0; font-size: 11px; color: var(--fg-muted); }
 .chat-doc-job-bar { height: 4px; border-radius: 999px; background: var(--border); overflow: hidden; }
 .chat-doc-job-bar > span { display: block; height: 100%; background: var(--brand); transition: width .4s ease; }
+/* Videos in chat (chat_videos.jsx): the attachment's progress, and what was kept. */
+.chat-video-chip { gap: 6px; min-width: min(300px, 100%); }
+.chat-video-kept { display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow-y: auto; padding-top: 4px; border-top: 1px solid var(--border); }
+.chat-video-kept-head { font-size: 11px; font-weight: 600; color: var(--fg-muted); margin-bottom: 2px; }
+.chat-video-kept-line { display: grid; grid-template-columns: 3.2em 1fr; gap: 6px; font-size: 12px; line-height: 1.45; }
+.chat-video-kept-line > .mono { color: var(--fg-faint); }
 .chat-doc-carry { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 /* The honest heads-up (chat_documents.jsx HeadsUpCard, D3): the card that
    is the reply until an option is picked, and Settings → Chat. */

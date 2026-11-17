@@ -778,7 +778,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     #   podcast_feed_poller → calendar_feed_refresher → audiobook_indexer →
     #   room_book_positions →
     #   command_capture_pruner → guests_seen_pruner → printer_status → print_jobs →
-    #   print_history → voice_history_pruner → container_guard →
+    #   print_history → voice_history_pruner → container_guard → chat_video →
     #   listenbrainz_fetch →
     #   library_alias_fetch → lyrics_scan → lyrics_fetch →
     #   library_tag_backfill → library_year_fetch → library_cover_art.
@@ -858,6 +858,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from domovoi.workers.container_guard import ContainerGuardWorker
 
     WORKERS.add_worker(ContainerGuardWorker(), owner="core")
+    # Videos attached in chat (V064): watched one at a time, holding off
+    # while any voice turn is under way (domovoi/chat_video/runner.py).
+    from domovoi.workers.chat_video import ChatVideoWorker
+
+    WORKERS.add_worker(ChatVideoWorker(), owner="core")
     # Up next P7 (V056): similar artists and song popularity from
     # ListenBrainz, each behind its own switch, the internet answer and the
     # probe; the ONLY code that asks ListenBrainz (the picker reads the

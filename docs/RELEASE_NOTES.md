@@ -14,6 +14,30 @@ a way that would otherwise get reported as a bug.
 - **What to know.** A plugin that asks for SDK 1.9 won't install on an older
   server: update Domovoi first.
 
+### Videos in chat (dashboard)
+
+- **What changed.** A home-server chat takes one short video a message
+  (MP4, MOV or WebM, up to 3 minutes and 2 GB) from the dashboard's
+  paperclip. The server watches it in the background ("Watching your
+  video… about 4 minutes left", with stop) while you keep chatting, then
+  writes a short summary into the chat and answers questions about it from
+  a transcript and descriptions of a few frames (always worded as what a
+  frame "might show"). The video and every frame grab are deleted as soon
+  as it has been watched; only the text stays, with the chat. It uses the
+  chat's vision model and the server's speech-to-text: no new model or
+  setting. Hidden when AI features are off. Not proactive: nothing is
+  watched unless someone attaches it in a chat.
+- **What to know.** One video is watched at a time in the house, at the
+  lowest priority. Voice comes first: watching pauses from a room's wake
+  word until the reply has been spoken, and a frame being described is
+  dropped and asked again after the turn. It needs ffmpeg on the server
+  (the dashboard offers no video without it). Migration **V064** adds
+  `chat_video_jobs`, `chat_video_segments`, `chat_video_frames`. On a
+  CPU-only server expect a few minutes per 3-minute clip, most of it the
+  frame descriptions (measured on a development PC at the lowest priority, with other work running, for a 3-minute 1080p clip: the scene scan 0.6 s, the sound 0.3 s, each frame grab 0.15 s, and the speech model (small.en on the CPU) about 1.7 s per second of speech; a frame description with qwen3-vl:2b on a CPU is expected to take 10-30 s, not measured there); the estimate starts from a fixed guess and learns this
+  server's speed from each finished video. The phone apps can use the
+  same routes (docs/API_REFERENCE.md, "Videos"); they don't offer it yet.
+
 ## 2026-11-16 — 1.3.0
 
 Version 1.3.0: the server, the Windows Setup (1.3.0, with the Windows

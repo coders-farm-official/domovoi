@@ -251,6 +251,15 @@ calendars in its dashboard. Either way the server deletes a phone's
 calendars by itself after 7 days without an update from that phone, and
 when its household token is replaced.
 
+**Videos you attach to a home-server chat** (from the dashboard; 1.4.0). The
+server watches the video once to answer questions about it: it keeps a
+transcript of what was said and short descriptions of a few frames (shown
+as what each frame "might show", a guess), on your server only, with that
+chat, and deletes the video and every frame it took from it as soon as it
+has finished (or the job is stopped). Deleting the chat deletes the
+transcript and descriptions. Nothing of the video goes to Coders Farm or
+anywhere else.
+
 Your server is run by you or your household, on your own hardware; what it
 keeps is described in its own documentation
 (`docs/SECURITY_PRIVACY.md` in the Domovoi repository). Coders Farm has no
