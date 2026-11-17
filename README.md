@@ -69,9 +69,8 @@ chat that can read pictures and documents. Everything else is a plugin away —
 installed from the dashboard as a zip upload or a GitHub URL.
 
 > **Status: released and maintained.** 1.0.0 shipped in October 2026 and
-> the current release is **1.3.0**. Four newer pieces (chat on the phone
-> with no server, the Windows installer, rooms on spare devices, and the
-> USB stick for old PCs) are still previews: see
+> the current release is **1.3.0**. The USB stick for old PCs has been
+> tested in virtual machines only: see
 > [Status and roadmap](#status-and-roadmap). Ask questions in
 > [Discussions](https://github.com/coders-farm-official/domovoi/discussions).
 
@@ -163,27 +162,19 @@ changed when is in the [release notes](docs/RELEASE_NOTES.md).
 - **Licences in the open:** no GPL or LGPL libraries in the server's Python
   code, and every model and voice it downloads is listed with its licence
   in [docs/LICENSES.md](docs/LICENSES.md).
-
-**Previews**
-
-Four things work today but have been tried on fewer devices than the rest,
-so each says *preview* where you choose it and may still change. Each line
-links to the page that covers it.
-
-- **Chat on your phone, no server needed.** The Android app can run chat on
-  the phone itself, even in airplane mode. Preview because it needs a
-  64-bit phone with 8 GB of memory or more and a large download
+- **Chat on your phone, no server needed:** the Android app can run chat on
+  the phone itself, even in airplane mode. It needs a 64-bit phone with 8 GB
+  of memory or more and a large download
   ([Android compatibility](docs/ANDROID_COMPATIBILITY.md)).
-- **A Windows installer.** `DomovoiSetup.exe` turns a Windows 11 PC into a
-  Domovoi server. Preview because it is not code-signed yet, so Windows
-  asks before it runs ([Windows installer](docs/WINDOWS_HOST.md)).
-- **Satellites on spare devices.** A spare laptop or PC, or an old phone or
-  tablet in the app's room mode, can be a room instead of a Raspberry Pi.
-  Preview because it has been tried on few real devices
+- **A Windows installer:** `DomovoiSetup.exe` turns a Windows 11 PC into a
+  Domovoi server. It is not code-signed yet, so Windows asks before it runs
+  ([Windows installer](docs/WINDOWS_HOST.md)).
+- **Satellites on spare devices:** a spare laptop or PC, or an old phone or
+  tablet in the app's room mode, can be a room instead of a Raspberry Pi
   ([spare-device satellites](docs/SPARE_DEVICE_SATELLITES.md)).
-- **A USB stick that turns an old PC into a room.** The dashboard prepares
-  the stick and the old PC installs from it. Preview because it has been
-  tested in virtual machines only, not yet on real computers
+- **A USB stick that turns an old PC into a room:** the dashboard prepares
+  the stick and the old PC installs from it. It has been tested in virtual
+  machines; real computers are next
   ([old computers](docs/SPARE_DEVICE_SATELLITES.md#old-computers-usb-stick)).
 
 **This release: Domovoi v1.3.0**
@@ -215,11 +206,9 @@ played in a room; a new room that asks every Domovoi server and joins the
 one you approve it on; admins signed out after an hour idle; and fixes from
 a round of home testing.
 
-**Later**
-
-The whole plan, grouped Now / Next / Later, is in the
-[roadmap](docs/ROADMAP.md): an iPhone app, the Android app on F-Droid, the
-Windows installer out of preview, and a few wishes beyond those.
+What's planned is in the [roadmap](docs/ROADMAP.md), grouped Now / Next /
+Later: an iPhone app, the Android app on F-Droid, the Windows installer
+code-signed, and a few wishes beyond those.
 
 **How it's built.** Domovoi is written with AI coding agents and held to the
 same bar Coders Farm teaches: automated tests, review, and a written
