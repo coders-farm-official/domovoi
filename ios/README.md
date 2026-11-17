@@ -1,7 +1,8 @@
 # Domovoi for iPhone and iPad
 
 Native Swift and SwiftUI, next to `android/`, under the same rules: permissive
-licences only, `[skip ci]` on every commit, and no GitHub Actions. The full
+licences only, and CI on every push (`.github/workflows/ci.yml`'s `ios` job builds
+the app and runs the package tests). The full
 plan, the research and the decisions are in
 `design-notes/IOS-APP-PLAN-2026-10-20.md`.
 
