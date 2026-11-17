@@ -10,9 +10,9 @@ refused before anything is forwarded: the security tier at both hops,
 reads included (a friend file is a bearer secret, and who this house's
 friends are is the household's business).
 
-A friend file only ever travels in a POST body (preview, send a request)
-or a response body (a file just made): never in a URL, a query string or
-a log line. A bad body is refused with a fixed sentence, never with
+A friend file or a message only ever travels in a POST body (preview,
+send a request, send a message) or a response body (a file just made, a
+conversation): never in a URL, a query string or a log line. A bad body is refused with a fixed sentence, never with
 FastAPI's validation echo of what was sent.
 """
 
@@ -21,7 +21,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ValidationError
 
@@ -228,4 +228,106 @@ async def friend_houses_unfriend(friend_id: str, request: Request):
     fid = _id(friend_id, "friend house")
     return bridge_response(
         *await delete_admin(f"{CORE}/friends/{fid}", timeout=60.0, headers=auth_forward_headers(request))
+    )
+
+
+# ─── messages (F3) ───────────────────────────────────────────────────────
+# A message body only ever travels in a POST body (send) or a response
+# body (a conversation, an export): never in a URL or a log line. A
+# conversation is addressed by the other house's public house key (64 hex).
+
+_HOUSE = re.compile(r"^[0-9a-f]{64}$")
+ALERTS = ("inbox", "sender", "read")
+MAX_MESSAGE_CHARS = 2000
+
+
+def _house(value: str) -> str:
+    if not _HOUSE.match(value or ""):
+        raise HTTPException(status_code=404, detail="No such conversation.")
+    return value
+
+
+class MessageBody(BaseModel):
+    friend_id: str
+    text: str
+
+
+class AlertBody(BaseModel):
+    alert: str
+
+
+@router.get("/conversations", dependencies=READ)
+async def friend_houses_conversations(request: Request):
+    """The house inbox: every friend (or former friend) with messages."""
+    return bridge_response(
+        *await get_admin(f"{CORE}/conversations", headers=auth_forward_headers(request))
+    )
+
+
+@router.get("/conversations/{house}", dependencies=READ)
+async def friend_houses_conversation(
+    house: str,
+    request: Request,
+    before: int | None = Query(None, ge=1),
+    limit: int = Query(50, ge=1, le=200),
+):
+    """One house's messages, oldest first; ``before`` for earlier ones."""
+    h = _house(house)
+    q = f"?limit={limit}" + (f"&before={before}" if before is not None else "")
+    return bridge_response(
+        *await get_admin(f"{CORE}/conversations/{h}{q}", headers=auth_forward_headers(request))
+    )
+
+
+@router.post("/conversations/{house}/read", dependencies=WRITE)
+async def friend_houses_mark_read(house: str, request: Request):
+    h = _house(house)
+    return bridge_response(
+        *await post_admin(f"{CORE}/conversations/{h}/read", {}, headers=auth_forward_headers(request))
+    )
+
+
+@router.get("/conversations/{house}/export", dependencies=READ)
+async def friend_houses_export(house: str, request: Request):
+    """Every message with one house, each with its signed envelope."""
+    h = _house(house)
+    return bridge_response(
+        *await get_admin(f"{CORE}/conversations/{h}/export", timeout=60.0,
+                         headers=auth_forward_headers(request))
+    )
+
+
+@router.delete("/conversations/{house}", dependencies=WRITE)
+async def friend_houses_delete_conversation(house: str, request: Request):
+    h = _house(house)
+    return bridge_response(
+        *await delete_admin(f"{CORE}/conversations/{h}", headers=auth_forward_headers(request))
+    )
+
+
+@router.post("/messages", dependencies=WRITE)
+async def friend_houses_send(request: Request):
+    """Queue a message to a friend (1–2000 characters)."""
+    body = await _body(request, MessageBody)
+    _id(body.get("friend_id", ""), "friend house")
+    text = body.get("text") or ""
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="Write something to send.")
+    if len(text) > MAX_MESSAGE_CHARS:
+        raise HTTPException(status_code=400,
+                            detail=f"A message can be at most {MAX_MESSAGE_CHARS} characters.")
+    return bridge_response(
+        *await post_admin(f"{CORE}/messages", body, timeout=30.0, headers=auth_forward_headers(request))
+    )
+
+
+@router.put("/friends/{friend_id}/alert", dependencies=WRITE)
+async def friend_houses_alert(friend_id: str, request: Request):
+    """What a new message from this friend does in the rooms."""
+    fid = _id(friend_id, "friend house")
+    body = await _body(request, AlertBody)
+    if body.get("alert") not in ALERTS:
+        raise HTTPException(status_code=400, detail="Choose one of the three choices.")
+    return bridge_response(
+        *await put_admin(f"{CORE}/friends/{fid}/alert", body, headers=auth_forward_headers(request))
     )

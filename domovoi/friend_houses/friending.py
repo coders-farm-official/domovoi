@@ -430,6 +430,7 @@ async def list_friends() -> list[dict[str, Any]]:
     async with _db() as s:
         rows = await store.active_friends(s)
     return [{"id": f.id, "name": f.local_name, "fingerprint": fid.fingerprint(f.house_key),
+             "house": f.house_key.hex(), "alert": f.alert,
              "code": f.code, "verified": f.verified_at is not None,
              "added_at": f.added_at.isoformat() if f.added_at else None} for f in rows]
 

@@ -1,10 +1,11 @@
-/* Settings → Household → Friend Houses (F2: friending).
+/* Settings → Household → Friend Houses (F2: friending; F3: messages).
  *
  * Serverless messaging and friend system between households. This
  * section turns it on or off (the friend_houses_enabled setting, off by
  * default), names this house, makes and shares friend files, adds a
  * friend from theirs, answers requests and keeps the friends list.
- * Messaging itself comes later: nothing here sends or shows a message.
+ * F3 adds the Messages card (conversations, compose, save a copy, delete)
+ * and each friend's alert choice (what a new message does in the rooms).
  *
  * Data (admin, security tier at both hops; web/backend/api/friend_houses.py
  * proxies to the core's /v1/admin/friend-houses):
@@ -22,15 +23,23 @@
  *   POST   /api/friend-houses/friends/{id}/verified
  *   PATCH  /api/friend-houses/friends/{id}          · rename
  *   DELETE /api/friend-houses/friends/{id}          · remove
+ *   PUT    /api/friend-houses/friends/{id}/alert    · inbox | sender | read
+ *   GET    /api/friend-houses/conversations         · the inbox, unread total
+ *   GET    /api/friend-houses/conversations/{house}?before=&limit=  · oldest first
+ *   POST   /api/friend-houses/conversations/{house}/read
+ *   GET    /api/friend-houses/conversations/{house}/export  · saved as a file
+ *   DELETE /api/friend-houses/conversations/{house}
+ *   POST   /api/friend-houses/messages              · {friend_id, text}
  * Turning it on or off is the same PATCH /api/config/editable every other
  * switch uses.
  *
  * SECURITY (threat-model finding 1): every string that came from another
- * house (their name, a label, a fingerprint, an error, a detail) is
+ * house (their name, a message, a label, a fingerprint, an error, a detail) is
  * rendered as plain text through React's escaping. Nothing in this file
  * renders HTML or markdown, links text, or previews a link. A friend file
  * is a bearer secret: it lives only in this component's memory and in a
- * POST body, never in an address, browser storage or the console.
+ * POST body, never in an address, browser storage or the console; so is
+ * a message's text.
  *
  * Globals this file adds (one shared scope): FriendHousesPanel and the
  * Fh* / fh* / FH_* helpers. No object rest (`{ a, ...rest }`): see
@@ -563,9 +572,84 @@ const FhRequestsCard = ({ requests, fire, onChanged }) => {
   );
 };
 
+/* ---- messages: shared bits ----------------------------------------- */
+
+// What a new message from a friend does, least intrusive first (owner
+// decision: the least intrusive is the default).
+const FH_ALERTS = [
+  { id: 'inbox', label: 'Only in the inbox' },
+  { id: 'sender', label: 'Say who it’s from in the rooms' },
+  { id: 'read', label: 'Read new messages aloud in the rooms',
+    note: 'Wake words are taken out, and long messages are cut short.' },
+];
+const FH_MESSAGE_MAX = 2000;
+const FH_CONVERSATION_POLL_MS = 10000;
+const FH_PAGE = 50;
+const FH_CLOCK_SKEW_MS = 5 * 60 * 1000;
+
+const fhWhen = (ms) => {
+  if (!Number.isFinite(ms)) return '—';
+  try {
+    return new Date(ms).toLocaleString(undefined,
+      { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  } catch { return '—'; }
+};
+const fhIsoMs = (iso) => { const t = Date.parse(iso || ''); return Number.isFinite(t) ? t : NaN; };
+// A file name of safe characters only.
+const fhSafe = (s) => String(s || '').replace(/[^A-Za-z0-9 ._-]/g, '').replace(/\s+/g, ' ').trim().slice(0, 60);
+const fhExportName = (name) => {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `Friend Houses - ${fhSafe(name) || 'friend'} - ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}.json`;
+};
+const fhSaveJson = (data, filename) => {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
+// A conversation is addressed by the other house's public key (64 hex),
+// never by anything a message says.
+const fhHouseOk = (h) => /^[0-9a-f]{64}$/.test(String(h || ''));
+
 /* ---- friends -------------------------------------------------------- */
 
-const FhFriend = ({ friend, fire, onChanged }) => {
+const FhAlertChoice = ({ friend, fire, onChanged }) => {
+  const [busy, setBusy] = React.useState(false);
+  const current = FH_ALERTS.some((a) => a.id === friend.alert) ? friend.alert : 'inbox';
+  const choose = async (alert) => {
+    if (alert === current) return;
+    setBusy(true);
+    try {
+      await apiPut(`${FH_API}/friends/${encodeURIComponent(friend.id)}/alert`, { alert });
+      fire('saved', { tone: 'ok' });
+      onChanged();
+    } catch (e) { fhFail(fire, e); } finally { setBusy(false); }
+  };
+  return (
+    <fieldset style={{ border: 0, padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <legend style={{ ...fhMuted, padding: 0, marginBottom: 2 }}>when a message comes from them</legend>
+      {FH_ALERTS.map((a) => (
+        <label key={a.id} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 13, lineHeight: 1.4 }}>
+          <input type="radio" name={`fh-alert-${friend.id}`} value={a.id} checked={current === a.id}
+                 disabled={busy} onChange={() => choose(a.id)}/>
+          <span>
+            {a.label}
+            {a.note && <span style={{ display: 'block', ...fhMuted }}>{a.note}</span>}
+          </span>
+        </label>
+      ))}
+      <span style={fhMuted}>Every choice keeps to each room’s quiet hours.</span>
+    </fieldset>
+  );
+};
+
+const FhFriend = ({ friend, fire, onChanged, onMessage }) => {
   const [editing, setEditing] = React.useState(false);
   const [name, setName] = React.useState(String(friend.name || ''));
   const [busy, setBusy] = React.useState(false);
@@ -602,6 +686,9 @@ const FhFriend = ({ friend, fire, onChanged }) => {
             <strong style={{ fontSize: 14, overflowWrap: 'anywhere' }}>{String(friend.name || '')}</strong>
             {!friend.verified && <Pill tone="warn">not verified</Pill>}
             <IconButton name="pencil" title="rename" aria-label="rename" onClick={() => setEditing(true)}/>
+            {fhHouseOk(friend.house) && (
+              <Button icon="message-square" onClick={() => onMessage(friend.house)}>Message</Button>
+            )}
           </>
         )}
       </div>
@@ -612,6 +699,7 @@ const FhFriend = ({ friend, fire, onChanged }) => {
           <Button icon="check" disabled={busy} onClick={verified}>We compared the codes</Button>
         </div>
       )}
+      <FhAlertChoice friend={friend} fire={fire} onChanged={onChanged}/>
       <div style={fhRow}>
         <span style={fhMuted}>fingerprint</span>
         <FhFingerprint value={friend.fingerprint} fire={fire}/>
@@ -628,13 +716,212 @@ const FhFriend = ({ friend, fire, onChanged }) => {
   );
 };
 
-const FhFriendsCard = ({ friends, fire, onChanged }) => {
+const FhFriendsCard = ({ friends, fire, onChanged, onMessage }) => {
   const list = (friends && friends.friends) || [];
   return (
     <Card title="Friends" sub="Houses this house is friends with.">
       <div style={{ padding: '0 16px 4px' }}>
         {!list.length && <div style={{ ...fhMuted, padding: '12px 0' }}>no friends yet</div>}
-        {list.map((f) => <FhFriend key={f.id} friend={f} fire={fire} onChanged={onChanged}/>)}
+        {list.map((f) => <FhFriend key={f.id} friend={f} fire={fire} onChanged={onChanged} onMessage={onMessage}/>)}
+      </div>
+    </Card>
+  );
+};
+
+/* ---- messages ------------------------------------------------------- */
+/* A message body is another house's words: plain text through React's
+ * escaping, line breaks kept by white-space: pre-wrap. Nothing in it is
+ * linked, fetched or previewed. */
+
+// An outgoing message's state, in plain words.
+const fhOutState = (m) => {
+  if (m.state === 'sent') return { tone: 'ok', text: 'Delivered' };
+  if (m.state === 'failed') return { tone: 'err', text: m.last_error ? `Not delivered: ${String(m.last_error)}` : 'Not delivered' };
+  if (m.last_error) return { tone: 'warn', text: `Still trying: ${String(m.last_error)}` };
+  return { tone: 'idle', text: 'Waiting to send' };
+};
+
+const FhMessage = ({ m }) => {
+  const out = m.direction === 'out';
+  const here = fhIsoMs(m.created_at);
+  const theirs = Number(m.sent_at) * 1000;
+  const skewed = !out && Number.isFinite(theirs) && Number.isFinite(here) && Math.abs(theirs - here) > FH_CLOCK_SKEW_MS;
+  const st = out ? fhOutState(m) : null;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: out ? 'flex-end' : 'flex-start', gap: 3 }}>
+      <div className="fh-message-body"
+           style={{ maxWidth: 'min(520px, 92%)', padding: '8px 11px', borderRadius: 'var(--r-md)', fontSize: 13,
+                    lineHeight: 1.45, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere',
+                    background: out ? 'var(--sunken)' : 'var(--card)', border: '1px solid var(--border)',
+                    color: 'var(--fg)' }}>
+        {String(m.body == null ? '' : m.body)}
+      </div>
+      <div style={{ ...fhMuted, fontSize: 11, display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+        <span>{fhWhen(here)}</span>
+        {skewed && <span>· sent {fhWhen(theirs)} (their clock)</span>}
+        {st && <span style={{ display: 'inline-flex', gap: 5, alignItems: 'center' }}>· <StatusDot tone={st.tone}/>{st.text}</span>}
+      </div>
+    </div>
+  );
+};
+
+const FhConversation = ({ conv, fire, onChanged, onClose }) => {
+  const house = conv.house;
+  const [msgs, setMsgs] = React.useState([]);     // oldest first, by id
+  const [more, setMore] = React.useState(false);  // earlier ones to load
+  const [loaded, setLoaded] = React.useState(false);
+  const [error, setError] = React.useState(null);
+  const [text, setText] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const [confirm, setConfirm] = React.useState(false);
+  const changed = React.useRef(onChanged);
+  changed.current = onChanged;
+
+  const merge = (rows) => setMsgs((cur) => {
+    const byId = new Map(cur.map((m) => [m.id, m]));
+    rows.forEach((m) => byId.set(m.id, m));
+    return Array.from(byId.values()).sort((a, b) => a.id - b.id);
+  });
+  const markRead = async () => {
+    try { await apiPost(`${FH_API}/conversations/${house}/read`, {}); changed.current(); } catch { /* the next poll tries again */ }
+  };
+  const latest = async (first) => {
+    try {
+      const r = await apiGet(`${FH_API}/conversations/${house}?limit=${FH_PAGE}`, { quiet: true });
+      const rows = (r && r.messages) || [];
+      merge(rows);
+      if (first) setMore(rows.length >= FH_PAGE);
+      setError(null);
+      setLoaded(true);
+      if (!first && rows.some((m) => m.direction === 'in' && m.state === 'unread')) markRead();
+    } catch (e) { setError(e); setLoaded(true); }
+  };
+  // Opening it reads it, and marks it read.
+  React.useEffect(() => {
+    latest(true);
+    markRead();
+  }, [house]);
+  useFhEvery(FH_CONVERSATION_POLL_MS, () => latest(false), true);
+
+  const earlier = async () => {
+    if (!msgs.length) return;
+    try {
+      const r = await apiGet(`${FH_API}/conversations/${house}?limit=${FH_PAGE}&before=${Number(msgs[0].id)}`, { quiet: true });
+      const rows = (r && r.messages) || [];
+      merge(rows);
+      setMore(rows.length >= FH_PAGE);
+    } catch (e) { fhFail(fire, e); }
+  };
+  const send = async () => {
+    const body = text;
+    if (!body.trim() || body.length > FH_MESSAGE_MAX || !conv.friend_id) return;
+    setBusy(true);
+    try {
+      await apiPost(`${FH_API}/messages`, { friend_id: conv.friend_id, text: body });
+      setText('');
+      await latest(false);
+      changed.current();
+    } catch (e) { fhFail(fire, e); } finally { setBusy(false); }
+  };
+  const save = async () => {
+    try {
+      const data = await apiGet(`${FH_API}/conversations/${house}/export`);
+      fhSaveJson(data, fhExportName(conv.name));
+    } catch (e) { fhFail(fire, e); }
+  };
+  const remove = async () => {
+    setBusy(true);
+    try {
+      await apiDelete(`${FH_API}/conversations/${house}`);
+      fire('messages deleted', { tone: 'ok' });
+      setConfirm(false);
+      changed.current();
+      onClose();
+    } catch (e) { fhFail(fire, e); } finally { setBusy(false); }
+  };
+
+  const name = String(conv.name || 'this house');
+  const former = !conv.friend_id;
+  const over = text.length > FH_MESSAGE_MAX;
+  return (
+    <div style={{ ...fhStack, paddingTop: 4 }}>
+      <div style={fhRow}>
+        <IconButton name="chevron-left" title="all conversations" aria-label="all conversations" onClick={onClose}/>
+        <strong style={{ fontSize: 14, overflowWrap: 'anywhere', flex: '1 1 auto' }}>
+          {name}{former ? ' (no longer a friend)' : ''}
+        </strong>
+        {msgs.length > 0 && <Button icon="download" onClick={save}>Save a copy (with proof of what was sent)</Button>}
+        {msgs.length > 0 && <Button icon="trash-2" disabled={busy} onClick={() => setConfirm(true)}>Delete</Button>}
+      </div>
+      {more && <div><Button variant="ghost" onClick={earlier}>Load earlier</Button></div>}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }} aria-live="polite">
+        {!loaded && <div style={fhMuted}>loading…</div>}
+        {loaded && error && !msgs.length && <div style={fhMuted}>{`couldn’t load: ${fhErr(error)}`}</div>}
+        {loaded && !error && !msgs.length && <div style={fhMuted}>no messages yet</div>}
+        {msgs.map((m) => <FhMessage key={m.id} m={m}/>)}
+      </div>
+      {!former && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <textarea className="cal-inp" rows={3} value={text} disabled={busy} maxLength={FH_MESSAGE_MAX}
+                    aria-label={`message to ${name}`} placeholder={`Message ${name}…`} autoComplete="off"
+                    style={{ width: '100%', boxSizing: 'border-box' }}
+                    onChange={(e) => setText(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) send(); }}/>
+          <div style={fhRow}>
+            <span style={{ ...fhMuted, color: over ? 'var(--warn-ink)' : 'var(--fg-muted)', flex: '1 1 auto' }}>
+              {`${text.length} / ${FH_MESSAGE_MAX}`}
+            </span>
+            <Button variant="primary" icon="send" disabled={busy || !text.trim() || over} onClick={send}>
+              {busy ? 'Sending…' : 'Send'}
+            </Button>
+          </div>
+        </div>
+      )}
+      <DeleteConfirmDialog open={confirm} title="Delete these messages?" busy={busy}
+                           onCancel={() => setConfirm(false)} onConfirm={remove}>
+        <div>{`Delete every message with ${name}? This can’t be undone. Save a copy first if you might need it.`}</div>
+      </DeleteConfirmDialog>
+    </div>
+  );
+};
+
+const FhInboxCard = ({ conversations, friends, open, setOpen, fire, onChanged }) => {
+  const list = (conversations && conversations.conversations) || [];
+  const friendList = (friends && friends.friends) || [];
+  // The open conversation: from the inbox, else a friend with no messages yet.
+  let conv = null;
+  if (open) {
+    conv = list.find((c) => c.house === open) || null;
+    if (!conv) {
+      const f = friendList.find((x) => x.house === open);
+      if (f) conv = { house: f.house, name: f.name, friend_id: f.id, unread: 0, not_delivered: 0 };
+    }
+  }
+  return (
+    <Card title="Messages" sub="Messages with your friend houses. New ones arrive here.">
+      <div style={{ padding: '4px 16px 12px' }}>
+        {conv ? (
+          <FhConversation key={conv.house} conv={conv} fire={fire} onChanged={onChanged} onClose={() => setOpen(null)}/>
+        ) : (
+          <>
+            {!list.length && <div style={{ ...fhMuted, padding: '8px 0' }}>no messages yet · press Message on a friend to write one</div>}
+            {list.filter((c) => fhHouseOk(c.house)).map((c) => (
+              <button key={c.house} type="button" className="fh-conversation-row"
+                      onClick={() => setOpen(c.house)}
+                      style={{ display: 'flex', gap: 10, alignItems: 'center', width: '100%', textAlign: 'left',
+                               padding: '10px 0', background: 'none', border: 0,
+                               borderTop: '1px solid var(--border-soft)', color: 'var(--fg)', font: 'inherit',
+                               fontSize: 13, cursor: 'pointer' }}>
+                <span style={{ flex: '1 1 auto', minWidth: 0, overflowWrap: 'anywhere', fontWeight: c.unread ? 600 : 400 }}>
+                  {String(c.name || '')}{c.friend_id ? '' : ' (no longer a friend)'}
+                </span>
+                {c.not_delivered > 0 && <Pill tone="err">{`${c.not_delivered} not delivered`}</Pill>}
+                {c.unread > 0 && <Pill tone="live">{`${c.unread} unread`}</Pill>}
+                <Icon name="chevron-right" size={14}/>
+              </button>
+            ))}
+          </>
+        )}
       </div>
     </Card>
   );
@@ -652,6 +939,8 @@ const FriendHousesPanel = () => {
   const cfg = useApiObject(live ? '/api/config/editable' : null, opts);
   const { data: pub } = useApiObject('/api/config', { quiet: true });
   const [switching, setSwitching] = React.useState(false);
+  const [open, setOpen] = React.useState(null);   // the open conversation's house key
+  const inboxRef = React.useRef(null);
 
   const field = ((cfg.data && cfg.data.fields) || []).find((f) => f.name === 'friend_houses_enabled');
   const status = st.data;
@@ -665,8 +954,20 @@ const FriendHousesPanel = () => {
   const inv = useApiObject(live && enabled ? `${FH_API}/invites` : null, opts);
   const req = useApiObject(live && enabled ? `${FH_API}/requests` : null, opts);
   const fr = useApiObject(live && enabled ? `${FH_API}/friends` : null, opts);
-  const refreshAll = () => { st.refresh(); inv.refresh(); req.refresh(); fr.refresh(); };
+  const convs = useApiObject(live && enabled ? `${FH_API}/conversations` : null, opts);
+  const refreshAll = () => { st.refresh(); inv.refresh(); req.refresh(); fr.refresh(); convs.refresh(); };
   useFhEvery(FH_POLL_MS, refreshAll, live);
+
+  const toInbox = () => {
+    setTimeout(() => {
+      try { if (inboxRef.current) inboxRef.current.scrollIntoView({ block: 'start', behavior: 'smooth' }); } catch { /* gone */ }
+    }, 0);
+  };
+  const openConversation = (house) => {
+    if (!fhHouseOk(house)) return;
+    setOpen(house);
+    toInbox();
+  };
 
   const turn = async (on) => {
     setSwitching(true);
@@ -680,9 +981,18 @@ const FriendHousesPanel = () => {
     } catch (e) { fhFail(fire, e); } finally { setSwitching(false); }
   };
 
+  // The unread total: the inbox's own count, else the status's.
+  const unreadRaw = convs.data && convs.data.unread != null ? convs.data.unread : (status && status.unread);
+  const unread = Number(unreadRaw) || 0;
   const head = (
-    <div style={{ fontSize: 13, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
-      {FH_DESCRIPTION}. Messaging between friends comes in a later update.
+    <div style={{ ...fhRow, fontSize: 13, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
+      <span style={{ flex: '1 1 auto' }}>{FH_DESCRIPTION}.</span>
+      {unread > 0 && (
+        <button type="button" className="home-link" aria-label={`${unread} unread messages`}
+                onClick={() => { setOpen(null); toInbox(); }}>
+          <Pill tone="live">{`${unread} unread`}</Pill>
+        </button>
+      )}
     </div>
   );
 
@@ -732,10 +1042,15 @@ const FriendHousesPanel = () => {
       {toastNode}
       {head}
       <FhHouseCard status={status} fire={fire} onSaved={st.refresh} busy={switching} onTurnOff={() => turn(false)}/>
+      <div ref={inboxRef}>
+        <FhInboxCard conversations={convs.data} friends={fr.data} open={open} setOpen={setOpen} fire={fire}
+                     onChanged={() => { convs.refresh(); st.refresh(); }}/>
+      </div>
       {workable && <FhInvitesCard status={status} invites={inv.data} fire={fire} onChanged={() => { inv.refresh(); st.refresh(); }}/>}
       {workable && <FhAddCard fire={fire} onSent={() => { req.refresh(); st.refresh(); }}/>}
       <FhRequestsCard requests={req.data} fire={fire} onChanged={() => { req.refresh(); fr.refresh(); st.refresh(); }}/>
-      <FhFriendsCard friends={fr.data} fire={fire} onChanged={() => { fr.refresh(); st.refresh(); }}/>
+      <FhFriendsCard friends={fr.data} fire={fire} onChanged={() => { fr.refresh(); st.refresh(); }}
+                     onMessage={openConversation}/>
     </div>
   );
 };

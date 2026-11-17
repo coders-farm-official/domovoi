@@ -1,4 +1,4 @@
-"""Friend Houses on the dashboard (F2: friending): Settings → Household →
+"""Friend Houses on the dashboard (F2: friending; F3: messages): Settings → Household →
 Friend Houses (web/static/friend_houses.jsx) and its proxy to the core
 (web/backend/api/friend_houses.py).
 
@@ -33,6 +33,8 @@ STATIC = REPO_ROOT / "web" / "static"
 ADMIN_TOKEN = "admin-session-token"
 XRW = {"X-Requested-With": "XMLHttpRequest"}
 SECRET_FILE = "DOMOVOI-FRIEND-FILE v1 not-a-real-one-0123456789abcdef"
+HOUSE = "ab" * 32
+MESSAGE = "Dinner on Sunday?\nBring the cat."
 
 
 def _page() -> str:
@@ -106,6 +108,14 @@ ROUTES: dict[str, tuple[str, str, dict | None]] = {
     "verified": ("POST", "/api/friend-houses/friends/fr0123abcd/verified", None),
     "rename": ("PATCH", "/api/friend-houses/friends/fr0123abcd", {"name": "Smiths"}),
     "unfriend": ("DELETE", "/api/friend-houses/friends/fr0123abcd", None),
+    # F3: messages
+    "alert": ("PUT", "/api/friend-houses/friends/fr0123abcd/alert", {"alert": "sender"}),
+    "conversations": ("GET", "/api/friend-houses/conversations", None),
+    "conversation": ("GET", f"/api/friend-houses/conversations/{HOUSE}", None),
+    "mark-read": ("POST", f"/api/friend-houses/conversations/{HOUSE}/read", None),
+    "export": ("GET", f"/api/friend-houses/conversations/{HOUSE}/export", None),
+    "delete-conversation": ("DELETE", f"/api/friend-houses/conversations/{HOUSE}", None),
+    "send": ("POST", "/api/friend-houses/messages", {"friend_id": "fr0123abcd", "text": MESSAGE}),
 }
 _IDS = sorted(ROUTES)
 
@@ -196,8 +206,8 @@ async def test_an_admin_bearer_reaches_the_cores_route(name, monkeypatch, forwar
     assert len(forwarded) == 1
     f_method, f_path, f_body = forwarded[0]
     assert f_method == method
-    assert f_path == path.replace("/api/friend-houses", "/v1/admin/friend-houses")
-    if method in ("PUT", "PATCH") or name in ("make", "preview", "ask", "accept"):
+    assert f_path.split("?")[0] == path.replace("/api/friend-houses", "/v1/admin/friend-houses")
+    if method in ("PUT", "PATCH") or name in ("make", "preview", "ask", "accept", "send"):
         assert f_body == body
 
 
@@ -223,3 +233,93 @@ async def test_a_bad_body_is_refused_without_echoing_the_file(monkeypatch, forwa
         assert r.status_code == 400
         assert "x" * 100 not in r.text
     assert forwarded == []
+
+
+# ─── F3: messages ────────────────────────────────────────────────────────
+
+
+def test_message_text_never_goes_in_an_address() -> None:
+    src = _code(_page())
+    # Sent only as a POST body, to the one route that takes it.
+    assert "apiPost(`${FH_API}/messages`, { friend_id: conv.friend_id, text: body })" in src
+    # No URL the page builds carries a message's text or body: every
+    # template that names the API interpolates only ids, the house key and
+    # numbers.
+    for url in re.findall(r"`\$\{FH_API\}[^`]*`", src):
+        for part in re.findall(r"\$\{([^}]*)\}", url):
+            assert not re.search(r"\b(text|body|m\.body|last_error|name)\b", part), (url, part)
+    # Conversations are addressed by the house key, checked as 64 hex.
+    assert "const fhHouseOk = (h) => /^[0-9a-f]{64}$/.test(String(h || ''));" in src
+
+
+def test_message_bodies_are_plain_text_with_their_line_breaks() -> None:
+    src = _code(_page())
+    body = re.search(r"const FhMessage = .*?\n\};", src, re.S).group(0)
+    assert "whiteSpace: 'pre-wrap'" in body
+    assert "{String(m.body == null ? '' : m.body)}" in body
+    for banned in ("dangerouslySetInnerHTML", "innerHTML", "href=", "<a ", "fetch(", "new URL", "<img"):
+        assert banned not in body, banned
+
+
+def test_the_page_says_the_message_states_and_choices_plainly() -> None:
+    src = _page()
+    for words in ("Waiting to send", "Still trying: ", "Delivered", "Not delivered",
+                  "(their clock)", "(no longer a friend)", "Load earlier",
+                  "Save a copy (with proof of what was sent)",
+                  "Delete every message with ${name}? This can’t be undone. Save a copy first if you might need it.",
+                  "Only in the inbox", "Say who it’s from in the rooms",
+                  "Read new messages aloud in the rooms",
+                  "Wake words are taken out, and long messages are cut short.",
+                  "quiet hours"):
+        assert words in src, words
+    # Least intrusive first, and the default when the server says nothing.
+    order = [src.index(f"id: '{a}'") for a in ("inbox", "sender", "read")]
+    assert order == sorted(order)
+    assert "? friend.alert : 'inbox'" in src
+    # The export is saved through a Blob, with a safe file name.
+    assert "new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })" in src
+    assert "`Friend Houses - ${fhSafe(name) || 'friend'} - " in src
+
+
+@pytest.mark.asyncio
+async def test_a_house_key_that_isnt_one_never_reaches_the_core(monkeypatch, forwarded) -> None:
+    install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN})
+    async with _client(bearer(ADMIN_TOKEN)) as c:
+        for bad in ("ab" * 31, "AB" * 32, "zz" * 32, "ab" * 33, "..%2F" + "ab" * 30):
+            # 404 (not a house key), or 405 when a slash in it lands on another route.
+            for method, path in (("GET", f"/api/friend-houses/conversations/{bad}"),
+                                 ("POST", f"/api/friend-houses/conversations/{bad}/read"),
+                                 ("GET", f"/api/friend-houses/conversations/{bad}/export"),
+                                 ("DELETE", f"/api/friend-houses/conversations/{bad}")):
+                assert (await c.request(method, path)).status_code in (404, 405), (method, bad)
+    assert forwarded == []
+
+
+@pytest.mark.asyncio
+async def test_load_earlier_passes_before_and_limit_as_numbers(monkeypatch, forwarded) -> None:
+    install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN})
+    async with _client(bearer(ADMIN_TOKEN)) as c:
+        r = await c.get(f"/api/friend-houses/conversations/{HOUSE}?before=120&limit=50")
+        assert r.status_code == 200
+        assert (await c.get(f"/api/friend-houses/conversations/{HOUSE}?before=x")).status_code == 422
+        assert (await c.get(f"/api/friend-houses/conversations/{HOUSE}?limit=500")).status_code == 422
+    assert forwarded == [("GET", f"/v1/admin/friend-houses/conversations/{HOUSE}?limit=50&before=120", None)]
+
+
+@pytest.mark.asyncio
+async def test_a_message_is_checked_before_it_is_forwarded(monkeypatch, forwarded) -> None:
+    install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN})
+    async with _client(bearer(ADMIN_TOKEN)) as c:
+        for body in ({"friend_id": "fr0123abcd", "text": "   "},
+                     {"friend_id": "fr0123abcd", "text": "x" * 2001},
+                     {"friend_id": "bad.id", "text": "hi"},
+                     {"friend_id": "fr0123abcd", "text": [MESSAGE]},
+                     {"text": MESSAGE}):
+            r = await c.post("/api/friend-houses/messages", json=body)
+            assert r.status_code in (400, 404), (body, r.text)
+            assert MESSAGE not in r.text and "Bring the cat" not in r.text
+        r = await c.put("/api/friend-houses/friends/fr0123abcd/alert", json={"alert": "shout"})
+        assert r.status_code == 400
+        assert (await c.post("/api/friend-houses/messages",
+                             json={"friend_id": "fr0123abcd", "text": "x" * 2000})).status_code == 200
+    assert forwarded == [("POST", "/v1/admin/friend-houses/messages", {"friend_id": "fr0123abcd", "text": "x" * 2000})]

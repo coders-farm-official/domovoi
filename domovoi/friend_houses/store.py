@@ -32,15 +32,16 @@ class FriendRow:
     code: str | None = None
     verified_at: datetime | None = None
     added_at: datetime | None = None
+    alert: str = "inbox"
 
 
 _FRIEND_COLS = ("id, house_key, session_key, onion_key, reach_public, reach_private, "
-                "local_name, state, code, verified_at, added_at")
+                "local_name, state, code, verified_at, added_at, alert")
 
 
 def _friend(r: Any) -> FriendRow:
     return FriendRow(str(r[0]), bytes(r[1]), bytes(r[2]), bytes(r[3]), bytes(r[4]), _b(r[5]),
-                     str(r[6]), str(r[7]), r[8], r[9], r[10])
+                     str(r[6]), str(r[7]), r[8], r[9], r[10], str(r[11]))
 
 
 async def active_friends(s: AsyncSession) -> list[FriendRow]:
