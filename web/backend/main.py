@@ -349,10 +349,14 @@ app = FastAPI(
 # actually meets, outermost in:
 #
 #   SecurityHeaders → CORS → process-wide body cap → Host → upload budgets
-#   → X-Requested-With → the router
+#   → X-Requested-With → admin activity stamp → the router
 #
 # Every one of those refuses before a route is chosen, and the header
 # middleware is outermost so its headers are stamped on their refusals too.
+
+# CORE-42. The very innermost: an admin write restarts the idle hour only
+# once the route answered 2xx, never on a refusal (422, 404, 409...).
+app.add_middleware(admin_auth.AdminActivityMiddleware)
 
 # WEB-6. A write under /api/ without X-Requested-With is refused in front
 # of the router, so no endpoint runs and nothing reads the body.
@@ -535,7 +539,7 @@ async def bundle() -> dict[str, str | None]:
 # verbatim and nothing with a newline in it is ever signed. The Android app
 # sends 32 hex characters.
 HEALTH_CHALLENGE_MAX_LEN = 128
-_HEALTH_CHALLENGE_RE = re.compile(rf"^[A-Za-z0-9._~-]{{1,{HEALTH_CHALLENGE_MAX_LEN}}}$")
+_HEALTH_CHALLENGE_RE = re.compile(rf"^[A-Za-z0-9._~-]{{1,{HEALTH_CHALLENGE_MAX_LEN}}}\Z")
 
 
 def health_challenge_ok(challenge: str) -> bool:

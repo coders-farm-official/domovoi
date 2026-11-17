@@ -479,8 +479,8 @@ async def _nested_mount_sources(name: str) -> dict[str, str]:
 #: How Docker Desktop names a Windows drive's folder on the host side of a
 #: bind mount (``docker inspect`` .Source): /run/desktop/mnt/host/c/...,
 #: older releases /host_mnt/c/....
-_DESKTOP_SOURCE = re.compile(r"^/(?:run/desktop/mnt/host|host_mnt)/([A-Za-z])(/.*)?$")
-_DRIVE_PATH = re.compile(r"^[A-Za-z]:(/.*)?$")
+_DESKTOP_SOURCE = re.compile(r"^/(?:run/desktop/mnt/host|host_mnt)/([A-Za-z])(/.*)?\Z")
+_DRIVE_PATH = re.compile(r"^[A-Za-z]:(/.*)?\Z")
 
 
 def _mount_key(path: str) -> str | None:

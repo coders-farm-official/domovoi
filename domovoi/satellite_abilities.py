@@ -133,8 +133,8 @@ PI_ACTION_ABILITY: dict[str, str] = {
     "restart": "restart",
 }
 
-_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
-_BOARD_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,39}\Z")
+_BOARD_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
 #: A `supports` list longer than this is cut (a hello is one small frame).
 MAX_SUPPORTS = 64
 

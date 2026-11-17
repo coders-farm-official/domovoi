@@ -75,7 +75,7 @@ _VALIGN_TO_UNIVER = {"top": 1, "center": 2, "bottom": 3, "justify": 2, "distribu
 _VALIGN_FROM_UNIVER = {1: "top", 2: "center", 3: "bottom"}
 T_STRING, T_NUMBER, T_BOOLEAN, T_FORCE_STRING = 1, 2, 3, 4
 
-_COLOR_RE = re.compile(r"^#?([0-9a-fA-F]{6}|[0-9a-fA-F]{3})$")
+_COLOR_RE = re.compile(r"^#?([0-9a-fA-F]{6}|[0-9a-fA-F]{3})\Z")
 _RGB_RE = re.compile(r"^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)")
 
 

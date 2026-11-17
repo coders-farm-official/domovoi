@@ -99,12 +99,12 @@ STYLE_PROPS: dict[str, frozenset[str]] = {
 _COLOUR = re.compile(
     r"^(#[0-9a-f]{3,8}"
     r"|rgba?\(\s*\d{1,3}%?\s*,\s*\d{1,3}%?\s*,\s*\d{1,3}%?\s*(,\s*(0|1|0?\.\d+|\d{1,3}%)\s*)?\)"
-    r"|[a-z]{3,24})$",
+    r"|[a-z]{3,24})\Z",
     re.I,
 )
-_FONT_FAMILY = re.compile(r"^[A-Za-z0-9 ,'\"_-]{1,200}$")
-_FONT_SIZE = re.compile(r"^\d{1,3}(\.\d{1,2})?(px|pt|em|rem|%)$", re.I)
-_LENGTH = re.compile(r"^\d{1,5}(\.\d{1,3})?(px|%)$", re.I)
+_FONT_FAMILY = re.compile(r"^[A-Za-z0-9 ,'\"_-]{1,200}\Z")
+_FONT_SIZE = re.compile(r"^\d{1,3}(\.\d{1,2})?(px|pt|em|rem|%)\Z", re.I)
+_LENGTH = re.compile(r"^\d{1,5}(\.\d{1,3})?(px|%)\Z", re.I)
 _ALIGN = frozenset({"left", "center", "right", "justify", "start", "end"})
 _CSS_WORDS_REFUSED = re.compile(r"(url|expression|image|var|attr|calc|env|import)\s*\(|\\|/\*|[<>@{}]", re.I)
 
@@ -119,15 +119,15 @@ _VALUE_CHECK = {
 }
 
 _DATA_IMAGE = re.compile(
-    r"^data:image/(png|jpeg|jpg|gif|webp|avif|bmp);base64,[a-z0-9+/=\s]+$", re.I
+    r"^data:image/(png|jpeg|jpg|gif|webp|avif|bmp);base64,[a-z0-9+/=\s]+\Z", re.I
 )
 _SAFE_SCHEME = re.compile(r"^(https?|mailto|tel):", re.I)
 _HAS_SCHEME = re.compile(r"^[a-z][a-z0-9+.-]*:", re.I)
 _URL_JUNK = re.compile(r"[\x00-\x20\x7f-\xa0]")
 
-_DIGITS = re.compile(r"^\d{1,5}$")
-_COLWIDTH = re.compile(r"^\d{1,5}(,\d{1,5}){0,50}$")
-_LANGUAGE_CLASS = re.compile(r"^language-[A-Za-z0-9_+-]{1,40}$")
+_DIGITS = re.compile(r"^\d{1,5}\Z")
+_COLWIDTH = re.compile(r"^\d{1,5}(,\d{1,5}){0,50}\Z")
+_LANGUAGE_CLASS = re.compile(r"^language-[A-Za-z0-9_+-]{1,40}\Z")
 
 #: Deeper than this, start tags are dropped (their text stays). Nothing
 #: the editor makes comes close; a hostile file nests to blow the stack

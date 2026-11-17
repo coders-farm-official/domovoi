@@ -80,7 +80,7 @@ POWER_SETTINGS = {
     "hibernate": ("SUB_SLEEP", "HIBERNATEIDLE", None),     # goes with "standby"
     "lid": ("SUB_BUTTONS", "LIDACTION", "Keep running with the lid closed while plugged in?"),
 }
-_GUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+_GUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\Z")
 _HEX_RE = re.compile(r"0x([0-9a-fA-F]{1,8})")
 
 

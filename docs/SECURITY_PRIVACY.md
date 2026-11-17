@@ -242,7 +242,14 @@ fresh box, and again after `--reset-admin` — the upgrade is closed `1008`
 with `code: setup_required` whatever it presents, and the HTTP way of
 opening a call (`POST /v1/admin/dropin/start`) answers `501` with the
 security tier. Nothing needed to finish setting a box up listens to a
-room (CORE-14).
+room (CORE-14). While a call is open, the credential that opened it is
+read again every 30 seconds, as a plugin socket's is: once the household
+token has been rotated (a lost phone), or the admin session behind a
+Bearer has been signed out, idled out or revoked, the call ends and the
+socket is closed `1008`; if the database can't answer three checks in a
+row it is closed `1011` (CORE-44, round 6). Before that only the upgrade
+was checked, and an open call kept carrying the room's microphone until
+it was hung up or fell silent.
 
 **The chat mic.** A push-to-talk turn from the app's chat screen
 (`POST /v1/phone/voice`, reached through the dashboard's
@@ -826,7 +833,18 @@ core starts. The training container runs on Docker's default network, so it
 could reach the internet while it trains; nothing in it needs to once the
 data is cached. What the household recorded only goes into it read-only and
 into the cache volume ([Data at rest](#data-at-rest)); nothing uploads it.
-A trained model leaves the server only when an admin presses **Download**
+Rooms take a trained model from the wake-model channel
+(`GET /v1/wake-models/{file}`), and since round 6 (CORE-43) a model
+trained here is served there only to the address a room that passed
+pairing connects from (its live socket, or one seen in the last 30 days:
+a phone checks its models before it reconnects), to a household device
+(`X-Device-Token`) or to an admin; any other host gets `403`. None of the
+room kinds sends a credential on that fetch, so the room's address is
+what ties a download to a room. The list (names and digests) stays open,
+and so do the published words, which anyone can download from where they
+are published. The channel is plain HTTP, so a host that can already read
+a room's traffic on the LAN can read a download too. Otherwise a trained
+model leaves the server only when an admin presses **Download**
 (`GET /v1/admin/wake/export/{wake_word_id}`): a zip of the `.onnx`,
 `SHA256SUMS`, `MODEL_CARD.md` and `LICENSE-NOTICE.md`, with no
 recordings, clip names, rooms or paths. Sharing it is allowed under
@@ -841,8 +859,9 @@ copy of the published "Domovoi" word, trained the same way plus its own
 recordings (`domovoi/wake_tuning.py`). It is an ordinary trained word under
 a reserved name (`domovoi_v1_tuned`, which no other word may take), so
 everything above holds for it: the clips stay under `wake_clips/`, the model
-under `wake_models/`, served only to this server's own rooms over the signed
-wake-model channel, and nothing uploads either. It is never one of the
+under `wake_models/`, served only to this server's own rooms, household
+devices and an admin over the signed wake-model channel (above: by the
+room's address, CORE-43), and nothing uploads either. It is never one of the
 published words: "use a published word" and the default-word download
 refuse it. Its **Download** is the same admin-only zip as any trained word's,
 and its model card says it includes the household's recordings and is
@@ -1356,8 +1375,11 @@ one answer.
   `Host` (or none, or two) is a `400` whose text names this server's own
   address. The request target must be `/path?query` in printable ASCII; an
   absolute URL, `*` or a control character is a `400`, so nothing can
-  point the `Location` elsewhere or split the header. A `Host` with a port
-  other than 80 is refused too.
+  point the `Location` elsewhere or split the header (including a newline
+  at the very end, which a pattern ending in `$` used to let through:
+  every validator now ends in `\Z` or uses `fullmatch`, CORE-46, round 6,
+  and `domovoi/tests/test_regex_anchors.py` keeps it so). A `Host` with a
+  port other than 80 is refused too.
 * **GET and HEAD only.** Every other method is a `405` with
   `Allow: GET, HEAD`; nothing is ever forwarded to the dashboard, so a
   form posted to port 80 goes nowhere.
@@ -1383,7 +1405,17 @@ one answer.
   plugin's helper) don't inherit it. The core and database units hold no
   capability at all. On the Windows install, Setup adds the Hyper-V
   firewall rule `Domovoi-ShortAddress-80` (your home subnet only, removed
-  on uninstall like the others), and only reads what holds port 80 and
+  on uninstall like the others) only while the short address can use it:
+  its switch on (as DomovoiHost last read it from the distro, every 30
+  seconds, as the service user, into `host-state.json`) and no Windows
+  program on port 80. Otherwise Setup and every update leave it out and
+  remove an earlier one (WIN-10, round 6). The rule matches every WSL VM,
+  so while it is there a household distro of your own in mirrored mode
+  listening on port 80 is reachable from your subnet too. DomovoiHost is
+  not an administrator and can't change the firewall, so switching the
+  short address off takes the rule away at the next update, not at once
+  (`Remove-NetFirewallHyperVRule -Name Domovoi-ShortAddress-80`, as an
+  administrator, does it now). Setup only reads what holds port 80 and
   `netsh http show urlacl` for its log: it never changes a URL reservation.
 * **No new egress.** It sends nothing anywhere; it answers browsers on
   your network.
@@ -1502,6 +1534,62 @@ object or a graft. Said plainly:
   path, and the reason the update unit's own root steps were never the
   only way in; it is why the service user must not be a login anyone
   shares.
+
+### The release pipeline: what GitHub's settings bound, and what they don't
+
+What a release is checked against is decided partly in this repository and
+partly in GitHub's settings, which no file here can change. As of round 6
+(OPS-21, OPS-22, 2026-11-17):
+
+- **Provenance comes only from a release run.** The release workflow's
+  `attest` job attests the files its own signing job listed in
+  `SHA256SUMS`, in a run the owner approved through the `release`
+  environment. The `attest_published` box, which ran `attest` alone with no
+  approval and attested whatever `SHA256SUMS` a published release held, is
+  gone (OPS-21).
+- **The verify command is the strict one.** Every release page and
+  [SECURITY.md](../SECURITY.md#verifying-a-release) print
+  `gh attestation verify <file> -R coders-farm-official/domovoi --signer-workflow coders-farm-official/domovoi/.github/workflows/release.yml --source-ref refs/heads/main`.
+  Without the last two options any workflow in the repository can make an
+  attestation that passes, including one pushed on a branch by anyone with
+  write access (OPS-22). Release pages published before this change
+  (1.3.0 and earlier) still print the short form.
+- **Known limit: a pull request decides its own required check.** `main`
+  takes changes only through pull requests, and the one required check,
+  `ci passed`, is a job in `.github/workflows/ci.yml` as the pull request
+  itself has it. A pull request that edits `ci.yml` (or the release
+  workflow, or `scripts/release/`) can make that check pass, and no review
+  is required, so it merges on its own say-so. A change to the signing
+  job's code then runs with the signing secrets at the next release the
+  owner approves; the approval is the one gate in between, and it shows the
+  run, not the diff since the last one.
+- **Known limit: nobody has to review anything.** There is no
+  `CODEOWNERS` and no required approval; auto-merge is the normal path
+  (owner decision 2026-11-17).
+- **Known limit: `stable` has no rule of its own.** The one-line Linux
+  install fetches `stable` and runs it as root. The release run moves it
+  (fast-forward only, never forced), and nothing on GitHub refuses a force
+  push or a deletion there.
+
+**Options for the owner** (none changed by this repository; each is a
+GitHub setting):
+
+1. A `CODEOWNERS` file naming the owner for `.github/`, `scripts/release/`,
+   `android/scripts/` and `windows/installer/`, with "Require review from
+   Code Owners" on the `main` rule. Every other change keeps merging by
+   itself; these wait for one approval. The cheapest real fix for the first
+   two limits.
+2. Keep the "no force push" and "no deletion" rules on `main` and `stable`
+   switched on always, including while a release runs (only the
+   pull-request rule needs switching off for the release's own push). The
+   release never force-pushes or deletes, so these never get in its way.
+3. Make the required check come from `main`, not the pull request: a
+   ruleset "required workflow" (an organization feature, once the
+   repository moves to Coders Farm) runs `ci.yml` as `main` has it.
+4. Before approving a release run, compare `release.yml` and
+   `scripts/release/` with the last release's tag
+   (`git diff v<last>..main -- .github scripts/release`); the approval
+   screen doesn't show it.
 
 ## What the admin password actually gates
 
@@ -1667,9 +1755,13 @@ as they do for anyone not signed in.
 
 **What counts as an admin action, and why it is decided by the server.**
 Only a request that *changes something* (`POST`, `PUT`, `PATCH`,
-`DELETE`) and passes an admin *write* gate with the session's Bearer:
-the admin and security tiers on both processes, plugin management, a
-plugin's admin routes, and the session and password routes. Nothing else
+`DELETE`), passes an admin *write* gate with the session's Bearer, and
+is answered with a success (2xx): the admin and security tiers on both
+processes, plugin management, a plugin's admin routes, and the session
+and password routes. A write the server refuses (a body that fails
+validation, a 404, a 409, a wrong old password) changed nothing and does
+not count: the gate only notes the session, and the stamp is made after
+the route has answered (CORE-42, round 6). Nothing else
 moves the clock: no `GET` (status probes, health, the version check,
 admin reads), no WebSocket, no page load with the cookie, no reload
 taking its sign-in back (`POST /api/auth/resume`), and not the device
@@ -3106,7 +3198,14 @@ parts:
   and the server's own addresses are refused before anything else, on
   every check and every later connection, whatever any setting says**
   (owner, 2026-11-16: network printers only, so no local CUPS or ipp-usb
-  queue, ever). A row saved earlier that points there stops working;
+  queue, ever). A row saved earlier that points there stops working.
+  **Every IPv6 address that isn't an IPv4-mapped one is refused the same
+  way** (CORE-45, round 6): the list of the server's own addresses holds
+  IPv4 only, so `fd00::20` or `fe80::20` (the server itself), `::127.0.0.1`
+  and `64:ff9b::7f00:1` used to pass an admin's allowlisted entry; printers
+  are reached by IPv4. If the server's network interfaces can't be read,
+  nothing is dialled and the sweep doesn't run, rather than trusting a
+  short list;
 - the one escape hatch is the existing operator setting
   `OUTBOUND_ALLOW_HOSTS`, and only for an address an **admin typed**: an
   entry naming an exact `host:port` lets that address be added even though
@@ -3240,7 +3339,7 @@ watch the server's traffic under **No**.
 | **Satellite approval** — a portal-onboarded satellite waits for a human before it is paired | Every first connection from a device presenting a setup code | Type the satellite's six-digit code into the approval card. The dashboard never shows you the code — it is on the device, which is what ties the request on screen to the unit in the room. The server compares it and allows five attempts per room per five minutes. A device that brings a code must bring six digits (or the four that satellites set up before 2026-09-22 were given and still say), or nothing is parked (a request no code could ever approve would only take the name away from the real device). The first device to park holds that room name for three minutes, or until someone approves or rejects it; a different device asking for the same name inside that window is refused as a conflict (`approval_conflict`), and after it the newcomer's request **replaces** the parked one — its token and its own code together, so the code the operator hears from the device in the room is still the only one that approves anything. Being first with an unapprovable request therefore delays onboarding by minutes; it no longer blocks it until someone presses Reject (CORE-22). This is what replaces trust-on-first-use for that path; `SATELLITE_PAIRING_STRICT` still governs tokenless connects. A device set up with the server address left blank never sends its code at all: it checks the approval itself ([Asking every house](#asking-every-house-an-approval-the-device-can-check-140)). |
 | **Version check / pull** — `git fetch`/`pull` against the GitHub repo | Only when an admin clicks check/update in the dashboard | Don't click it. Nothing runs automatically. Under `never` both buttons are greyed and the core answers with the turned-off reason without running git. The follow-up **restart** is admin-gated and can only work if you granted the sudoers line in [LINUX_HOST.md](LINUX_HOST.md). A plain restart bounces systemd units and reaches no network. With the update unit installed it also re-syncs Python dependencies from PyPI (and the PyTorch CPU index) when the pull changed them, and rebuilds the MPD image (Debian's package mirrors) when that changed; it rebuilds the wake-word trainer image when that changed (on a box that built one) and, on an NVIDIA box, installs the NVIDIA Container Toolkit while it is missing (rows below). |
 | **Media acquisition** — provider plugins fetching from external sources; add-by-URL fetches the URL you gave | When you ask for something the library doesn't have, or add by URL | Don't install provider plugins / uninstall them; add-by-URL is governed by the outbound-fetch tier above. |
-| **Radio streams** — fetched by the room's music player (MPD container) or the dashboard's relay | While you're listening to an internet station (bundled radio plugin, or a plugin that plays a URL through `sdk.playback`). MPD also resumes whatever it had queued after its container restarts | Don't play internet radio; FM/SDR paths in the same plugin are local RF. Under `never` no internet URL is handed to MPD, a room playing one is stopped and internet entries are removed from every queue (at the switch and at every core start), and an open relay is cut off. |
+| **Radio streams** — fetched by the room's music player (MPD container) or the dashboard's relay | While you're listening to an internet station (bundled radio plugin, or a plugin that plays a URL through `sdk.playback`). MPD also resumes whatever it had queued after its container restarts | Don't play internet radio; FM/SDR paths in the same plugin are local RF. Under `never` no internet URL is handed to MPD, a room playing one is stopped and internet entries are removed from every queue (at the switch and at every core start), and an open relay is cut off. Before the radio plugin hands a station to the player it follows the stream's redirects itself, every hop through the outbound-URL check, and hands over the URL that answered: a station listed in the public directory whose stream redirects into the house is refused, not played (PLG-12, round 6). The player still looks that name up itself, so a name that changes its answer between the two lookups is not covered; the player's container is not fenced off the house network. |
 | **Radio detectors and lookups** — ICY "now playing" polls of favorited internet stations, short clips of them to Shazam, station-directory searches (radio-browser.info), an FM favorite's call sign to find its simulcast, the FCC import | While favorited internet stations exist (detectors), and when you search, favorite FM or import | `RADIO_SAMPLER_ENABLED=false` / `RADIO_ICY_POLLER_ENABLED=false` in `~/.domovoi/plugins/radio.env`. Offline the sampler samples only house-network streams, against your own library. |
 | **Video-satellite kiosk browser** — Chromium's own background traffic | Never: the kiosk is launched with `--disable-background-networking`, `--disable-component-update`, `--no-pings` and `--disable-domain-reliability` | Nothing to do. The page itself talks only to the Domovoi server. |
 | **Wake-word base models** — one-time openWakeWord model download (GitHub release assets) | Refreshing the satellite media cache on the server; on the Pi only for a card prepared with offline off | One-time. Every file is checked against pinned SHA-256 digests on the server and again on the Pi; a mismatch is deleted, never loaded. Under `never` the server refuses the refresh. |

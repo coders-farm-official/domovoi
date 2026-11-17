@@ -372,7 +372,7 @@ def extra_negative_phrases(raw: str | None, phrase: str = "") -> list[str]:
 
     global _EXTRA_PHRASE_RE
     if _EXTRA_PHRASE_RE is None:
-        _EXTRA_PHRASE_RE = re.compile(r"^[a-z0-9][a-z0-9 ,.'-]{0,79}$")
+        _EXTRA_PHRASE_RE = re.compile(r"^[a-z0-9][a-z0-9 ,.'-]{0,79}\Z")
     out: list[str] = []
     own = " ".join((phrase or "").lower().split())
     for part in re.split(r"[;\n]", raw or ""):

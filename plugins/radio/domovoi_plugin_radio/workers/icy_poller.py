@@ -82,7 +82,7 @@ _NON_SONG_DENYLIST = frozenset({
 # A StreamTitle that looks like a URL or filename — usually a station
 # leaking its automation playlist path.
 _URL_OR_FILE_RE = re.compile(
-    r"^\s*(?:https?://|file://|/|[A-Za-z]:\\|.+\.(?:mp3|m4a|wav|ogg|flac|aac)\s*$)",
+    r"^\s*(?:https?://|file://|/|[A-Za-z]:\\|.+\.(?:mp3|m4a|wav|ogg|flac|aac)\s*\Z)",
     re.IGNORECASE,
 )
 

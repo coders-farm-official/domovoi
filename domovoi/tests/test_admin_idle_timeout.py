@@ -277,6 +277,54 @@ async def test_an_admin_write_restarts_the_hour(_db, where) -> None:
 
 
 @requires_db
+async def test_a_refused_write_is_not_an_admin_action(_db) -> None:
+    """CORE-42 (round 6): the gate used to stamp before the body was
+    validated, so ``PUT /v1/admin/wake/room`` with ``{}`` (a 422 that
+    changes nothing) every 59 minutes kept a stolen Bearer alive to the
+    90-day cap. Refusals of every kind, on both processes, now move
+    nothing; the same Bearer's successful write still does."""
+    async with web_client() as c:
+        await claim_admin(c)
+    token, _ = await login()
+    await acted_ago(token, 50)
+    before = await clock(token)
+
+    async with core_client() as core:
+        # The card's proof of concept: a body that fails validation.
+        r = await core.put("/v1/admin/wake/room", json={}, headers=bearer(token))
+        assert r.status_code == 422, r.text
+        # A 404 from the handler (no such room connected).
+        r = await core.put("/v1/admin/wake/room", json={"room_id": "nowhere", "slugs": ["hey_jarvis"]},
+                           headers=bearer(token))
+        assert r.status_code in (404, 409), r.text
+    async with web_client() as c:
+        # The web process: a revoke of a session that doesn't exist (404).
+        r = await c.delete("/api/auth/sessions/" + "0" * 64, headers=bearer(token))
+        assert r.status_code == 404, r.text
+        # A password change with the wrong old password (401 from the handler).
+        r = await c.post("/api/auth/password",
+                         json={"old_password": "not-the-password", "new_password": "a-brand-new-password"},
+                         headers=bearer(token))
+        assert r.status_code == 401, r.text
+    after = await clock(token)
+    assert (after.last_used_at, after.expires_at) == (before.last_used_at, before.expires_at)
+
+    # Ten more minutes and the hour is up: the refusals bought nothing.
+    await acted_ago(token, 61)
+    assert await core_read(token) == 401
+
+
+def test_both_apps_stamp_admin_actions_only_after_the_route_answered() -> None:
+    """CORE-42: the stamp lives in AdminActivityMiddleware, innermost, on
+    both processes. Without it a write would never restart the hour."""
+    from domovoi.main import app as core_app_
+
+    for app in (core_app_, web_app):
+        classes = [m.cls for m in app.user_middleware]
+        assert classes[-1] is admin_auth.AdminActivityMiddleware, classes
+
+
+@requires_db
 async def test_a_password_change_is_an_admin_action(_db) -> None:
     async with web_client() as c:
         await claim_admin(c)

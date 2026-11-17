@@ -89,27 +89,36 @@ def test_the_attest_job_has_the_least_it_needs():
     cond = job["if"]
     assert "!cancelled()" in cond and "needs.release.result == 'success'" in cond
     assert "github.ref == 'refs/heads/main'" in cond
-    # attest_published: plan skipped on purpose, nothing else runs.
-    assert "inputs.attest_published && needs.plan.result == 'skipped'" in cond
+    assert "needs.plan.result == 'success'" in cond
     (down,) = [s for s in job["steps"] if str(s.get("uses", "")).startswith("actions/download-artifact@")]
     assert down["with"] == {"name": "release-sums", "path": "${{ runner.temp }}/attest"}
-    assert down["if"] == "${{ !inputs.attest_published }}"
+    assert "if" not in down
 
 
-def test_attest_published_runs_the_provenance_alone():
-    """The box on Run workflow skips plan, and every job that needs it."""
-    inp = DOC[True]["workflow_dispatch"]["inputs"]["attest_published"] if True in DOC else         DOC["on"]["workflow_dispatch"]["inputs"]["attest_published"]
-    assert inp["type"] == "boolean" and inp["default"] is False
-    assert JOBS["plan"]["if"] == "${{ !inputs.attest_published }}"
+def test_there_is_no_provenance_only_run():
+    """OPS-21 (round 6): attest_published ran attest alone, with no
+    approval (plan, build and signing skipped, so the release environment
+    never asked), and attested whatever SHA256SUMS the published release
+    held: upload changed bytes and a matching SHA256SUMS with --clobber,
+    dispatch, and the result was a genuine attestation for them. 1.3.0's
+    backfill is done; the input is gone, and attest runs only after a
+    release run's own signing job, from the SHA256SUMS that job made."""
+    on = DOC[True] if True in DOC else DOC["on"]
+    assert set(on["workflow_dispatch"]["inputs"]) == {"tag"}
+    assert "attest_published" not in TEXT.replace("# There is no provenance-only run (OPS-21, round 6): attest_published", "")
+    assert "if" not in JOBS["plan"]
+    assert JOBS["attest"]["env"]["TAG"] == "${{ needs.plan.outputs.tag }}"
+    # Nothing in attest takes SHA256SUMS from the release itself.
+    attest = _job_text("attest")
+    assert "--pattern SHA256SUMS" not in attest
     for name in ("build-app", "sbom", "release"):
         needs = JOBS[name]["needs"]
         assert "plan" in (needs if isinstance(needs, list) else [needs]), name
         assert "always()" not in str(JOBS[name].get("if", "")), name
     assert "needs.plan.result == 'success'" in JOBS["release"]["if"]
-    (step,) = [s for s in JOBS["attest"]["steps"] if s.get("if") == "${{ inputs.attest_published }}"]
-    assert "gh release download \"$TAG\"" in step["run"] and "--pattern SHA256SUMS" in step["run"]
-    assert "env" in step and set(step["env"]) == {"GH_TOKEN"}
-    assert JOBS["attest"]["env"]["TAG"] == "${{ inputs.attest_published && inputs.tag || needs.plan.outputs.tag }}"
+    # The signing job, the one behind the release environment's approval,
+    # is the only source of the subjects.
+    assert JOBS["release"]["environment"] == "release"
 
 
 def test_no_other_job_can_mint_an_oidc_token_or_write_attestations():
@@ -342,4 +351,7 @@ def test_ci_makes_the_sboms_the_same_way():
 def test_security_md_says_how_to_verify_a_release():
     text = (REPO / "SECURITY.md").read_text(encoding="utf-8")
     assert "## Verifying a release" in text
-    assert "gh attestation verify <file> -R coders-farm-official/domovoi" in text
+    # OPS-22: the command people copy is the strict one.
+    assert ("gh attestation verify <file> -R coders-farm-official/domovoi "
+            "--signer-workflow coders-farm-official/domovoi/.github/workflows/release.yml "
+            "--source-ref refs/heads/main") in text

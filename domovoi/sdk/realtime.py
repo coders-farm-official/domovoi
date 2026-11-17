@@ -21,7 +21,7 @@ import re
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-_SUFFIX_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_SUFFIX_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}\Z")
 
 
 class RealtimeAPI:

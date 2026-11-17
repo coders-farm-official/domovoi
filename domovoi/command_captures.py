@@ -100,11 +100,11 @@ SIDECAR_VERSION = 1
 # <UTC yyyymmddThhmmss><ms>Z-<8 hex>: sorts chronologically as a string,
 # carries its own time (retention needs no file read), and never contains
 # a path separator or a dot.
-_ID_RE = re.compile(r"^(\d{8}T\d{6})(\d{3})Z-[0-9a-f]{8}$")
+_ID_RE = re.compile(r"^(\d{8}T\d{6})(\d{3})Z-[0-9a-f]{8}\Z")
 
 # A room id that is already a boring directory name is used as-is; anything
 # else gets a hashed name that starts with "_", which no as-is name can.
-_ROOM_DIR_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+_ROOM_DIR_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}\Z")
 _WINDOWS_RESERVED = frozenset(
     {"con", "prn", "aux", "nul"}
     | {f"com{i}" for i in range(1, 10)}
@@ -112,7 +112,7 @@ _WINDOWS_RESERVED = frozenset(
 )
 
 # What the satellite may report about how its capture ended.
-_END_REASON_RE = re.compile(r"^[a-z_]{1,40}$")
+_END_REASON_RE = re.compile(r"^[a-z_]{1,40}\Z")
 _CAPTURE_STAT_KEYS = (
     "frames",
     "voiced_frames",

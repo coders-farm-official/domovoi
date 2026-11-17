@@ -37,7 +37,7 @@ import math
 import re
 from typing import Any
 
-KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,40}\.[a-z][a-z0-9_]{0,40}$")
+KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,40}\.[a-z][a-z0-9_]{0,40}\Z")
 MAX_STRING = 120
 #: More changes than this in one frame is refused rather than shortened:
 #: the person must be able to read all of them before allowing them.

@@ -104,9 +104,9 @@ MAX_CONNECTIONS = 64
 TARGET_MAX = 4096
 NAMES_REFRESH_SEC = 60.0
 
-_TOKEN = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
-_TARGET = re.compile(r"^/[\x21-\x7e]*$")
-_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+_TOKEN = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+\Z")
+_TARGET = re.compile(r"^/[\x21-\x7e]*\Z")
+_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
 
 
 #: The Mac helper's word on the Mac's own port 80 (mac/Sources/DomovoiMacKit/

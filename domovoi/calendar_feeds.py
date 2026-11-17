@@ -112,7 +112,7 @@ PHONE_EXPIRE_AFTER = timedelta(days=7)
 CALENDAR_KEY_HEADER = "X-Domovoi-Calendar-Key"
 
 DEFAULT_COLOR = "#5b7a99"
-_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}\Z")
 
 USER_AGENT = "Domovoi-calendar/1.0"
 

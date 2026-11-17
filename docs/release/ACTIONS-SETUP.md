@@ -103,16 +103,18 @@ pushes. Fix the secret and run the workflow again.
 - **Pushes by the workflow.** It pushes with the run's own `GITHUB_TOKEN`
   (the `github-actions[bot]` account): the tag `v<version>`, `stable`
   (fast-forward only, never forced) and, when the Android app changed, the
-  `android: release <v>` commit on `main` with its tag. Today
-  nothing stops that: `main` and `stable` have no branch protection, and
-  the ruleset *Main* (no deletion, no force-push, pull requests required
-  on the default branch) is **disabled**. Enabling it as it is would
-  refuse the app path's push to `main` (a pull request is required); that
-  push comes before anything is published, so a run would stop cleanly,
-  but app releases would then need the local scripts. The deletion and
-  force-push rules alone are harmless: the workflow never does either. A
-  tag ruleset or a rule on `stable`, if you add one, must let
-  `github-actions[bot]` create tags and fast-forward `stable`.
+  `android: release <v>` commit on `main` with its tag. Since 2026-11-17
+  `main` takes changes only through pull requests (the rule *Main through
+  pull requests*, no bypass), so the owner switches that rule off while a
+  release run pushes and on again afterwards
+  ([CONTRIBUTING.md, "Releasing", step 0](../CONTRIBUTING.md)). `stable`
+  has no rule of its own. The deletion and force-push rules are harmless to
+  a release (the workflow never does either), so keep them on for `main`
+  and `stable` at all times, separately from the pull-request rule. A tag
+  ruleset or a rule on `stable`, if you add one, must let
+  `github-actions[bot]` create tags and fast-forward `stable`. What these
+  settings do and don't bound, and the options:
+  [SECURITY_PRIVACY.md, "The release pipeline"](../SECURITY_PRIVACY.md#the-release-pipeline-what-githubs-settings-bound-and-what-they-dont).
 - A push made with `GITHUB_TOKEN` starts no workflow, so the release commit
   can't trigger CI or another release.
 

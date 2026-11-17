@@ -277,7 +277,7 @@ RETIRED_PIPER_VOICES: frozenset[str] = frozenset({
 # LANG_REGION-SPEAKER-QUALITY, the catalogue's naming ("en_US-lessac-medium",
 # "en_GB-northern_english_male-medium", "zh_CN-huayan-x_low").
 PIPER_MODEL_REF_RE = re.compile(
-    r"^(?P<lang>[a-z]{2,3})_[A-Z]{2}-[A-Za-z0-9_]{1,64}-(?:x_low|low|medium|high)$"
+    r"^(?P<lang>[a-z]{2,3})_[A-Z]{2}-[A-Za-z0-9_]{1,64}-(?:x_low|low|medium|high)\Z"
 )
 # The largest published voice is ~120 MB; anything far past that is not one.
 PIPER_ONNX_MAX_BYTES = 256 * 1024 * 1024

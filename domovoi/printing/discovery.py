@@ -170,7 +170,10 @@ def sweep_hosts() -> list[str]:
     if not ip:
         return []
     net = ipaddress.IPv4Network("%s/24" % ip, strict=False)
-    own = lan_target.own_addresses()
+    try:
+        own = lan_target.own_addresses()
+    except lan_target.OwnAddressesUnknown:
+        return []   # can't tell which hosts are this server: no sweep (CORE-45)
     return [str(h) for h in net.hosts() if str(h) not in own]
 
 

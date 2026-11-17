@@ -707,7 +707,7 @@ def _wifi_mode(value: Any) -> str | None:
     return value.strip().lower()[:16] or None
 
 
-_HOST_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+_HOST_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
 
 
 def advertised_server_names() -> list[str]:
@@ -804,7 +804,7 @@ MUSIC_HOLD_MAX_SEC = 600.0
 # replies), a barge-in, or anything else.
 EARLY_COMMIT_TRIGGERS = frozenset({"wake_word", "followup"})
 
-_WAKE_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+_WAKE_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
 
 
 def _clean_wake_slug(raw: object) -> str | None:
@@ -1915,6 +1915,10 @@ class StreamSession:
         # when `ready` is sent.
         self._connected_at = time.monotonic()
         self.ws.app.state.active_sessions[self.room_id] = self
+        # CORE-43: the address of a room that passed pairing may fetch the
+        # household's own wake models (domovoi/wake_model_access.py).
+        from domovoi import wake_model_access
+        wake_model_access.remember_room_peer(self.ws)
         if existing is not None and existing is not self:
             log.info(
                 "ws %s connected (replacing prior session — likely a reconnect)",

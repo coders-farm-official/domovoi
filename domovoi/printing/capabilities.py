@@ -27,7 +27,7 @@ from typing import Any
 
 from domovoi.printing import ipp
 
-_HEX = re.compile(r"^#[0-9A-Fa-f]{6}$")
+_HEX = re.compile(r"^#[0-9A-Fa-f]{6}\Z")
 
 # ─── Plain words (plan part 8, "Errors in plain words") ───────────────────
 

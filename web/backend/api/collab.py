@@ -170,7 +170,7 @@ def _offered_token(ws: WebSocket) -> tuple[Optional[str], Optional[str]]:
 
 def _web_port(ws: WebSocket) -> int:
     host = ws.headers.get("host") or ""
-    m = re.search(r":(\d+)$", host)
+    m = re.search(r":(\d+)\Z", host)
     if m:
         return int(m.group(1))
     return int(os.environ.get("WEB_PORT", "6369"))

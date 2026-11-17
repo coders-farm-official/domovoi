@@ -65,7 +65,7 @@ TRAINING_DIRNAME = ".training"
 TRAINED_MARKER = ".trained.json"
 # Where a clip came from, kept in its sidecar across a recompute.
 ORIGIN_KEYS = ("room", "take_started_at", "recorded_at")
-_CLIP_NUM_RE = re.compile(r"^clip_(\d+)\.wav$")
+_CLIP_NUM_RE = re.compile(r"^clip_(\d+)\.wav\Z")
 
 # int16 full scale. A sample within ~1% of it counts as clipped.
 _FULL_SCALE = 32768.0

@@ -562,6 +562,79 @@ def is_admin_activity(conn: Any) -> bool:
     return str(scope.get("method") or "").upper() not in _SAFE_METHODS
 
 
+# CORE-42 (round 6). The gate runs BEFORE the body is validated and before
+# the handler, so stamping there let a write the server refused (a 422 on
+# a body of ``{}``, a 404, a 409) restart the hour: a script holding a
+# stolen Bearer could keep it alive to the 90-day cap without changing
+# anything. Now the gate only NOTES the session (a read-only check) and
+# :class:`AdminActivityMiddleware` stamps it once the response is known to
+# be a success (2xx). A refused write changes nothing, so it is not an
+# admin action. An app without the middleware never stamps: its sessions
+# idle out on the hour, which is the safe way to be wrong.
+_ACTIVITY_SCOPE_KEY = "domovoi.admin_activity"
+
+
+def _note_admin_activity(conn: Any, token: str) -> None:
+    """Remember that this request passed an admin write gate with
+    ``token``; :class:`AdminActivityMiddleware` stamps it on a 2xx."""
+    scope = getattr(conn, "scope", None)
+    pending = scope.get(_ACTIVITY_SCOPE_KEY) if isinstance(scope, dict) else None
+    if isinstance(pending, set):
+        pending.add(token)
+
+
+async def stamp_admin_activity(token: str) -> bool:
+    """Restart the idle hour of the live session ``token`` names: the
+    stamp an admin action earns. One statement, checked against the same
+    live rule, so a session that ended meanwhile is not brought back."""
+    async with session_scope() as s:
+        row = (
+            await s.execute(
+                text(
+                    "UPDATE admin_sessions SET last_used_at = now(), "
+                    f"expires_at = {_DEADLINE_FROM_NOW_SQL} "
+                    f"WHERE token_hash = :h AND {_SESSION_LIVE_SQL} RETURNING 1"
+                ),
+                {"h": _sha256(token), **_clock_params()},
+            )
+        ).first()
+    return row is not None
+
+
+class AdminActivityMiddleware:
+    """Pure ASGI: give each HTTP request a place for the admin write gates
+    to note their session, and stamp it only when the response status is
+    2xx (CORE-42). Install it INNERMOST on every app that mounts an admin
+    write gate (the core and the web process), so the status it sees is
+    the router's own answer."""
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        pending: set[str] = set()
+        scope[_ACTIVITY_SCOPE_KEY] = pending
+        status: list[int] = []
+
+        async def _send(message: dict) -> None:
+            if message.get("type") == "http.response.start":
+                status.append(int(message.get("status") or 0))
+            await send(message)
+
+        try:
+            await self.app(scope, receive, _send)
+        finally:
+            if pending and status and 200 <= status[0] < 300:
+                for token in pending:
+                    try:
+                        await stamp_admin_activity(token)
+                    except Exception as e:  # the answer is already sent
+                        log.warning("admin activity stamp failed: %s", e)
+
+
 async def prune_dead_sessions(session: AsyncSession) -> int:
     """Delete sessions that have been over (idle, expired or past the cap)
     for :data:`SESSION_PRUNE_AFTER_DAYS`. Run at each sign-in, so the table
@@ -1451,11 +1524,12 @@ async def check_admin_request(
 
     ``activity=True`` is for the admin WRITE gates only: when the request
     is also a write (:func:`is_admin_activity`), a live Bearer's idle hour
-    restarts. Every other caller — reads, probes, the device tier, sockets
+    restarts once the response is a success (2xx, CORE-42:
+    :class:`AdminActivityMiddleware`). Every other caller — reads, probes, the device tier, sockets
     — leaves the default, and the check moves nothing.
 
-    * ``ok`` — live Bearer session (its idle hour restarted when this was
-      an admin action).
+    * ``ok`` — live Bearer session (its idle hour restarts when this is
+      an admin action that succeeds).
     * ``pre-setup`` — no admin credential exists yet; the caller decides
       whether its surface keeps the open LAN-trust grace or fails
       closed (plugin management does, design §7.1).
@@ -1469,8 +1543,11 @@ async def check_admin_request(
             return "pre-setup"
         token = bearer_token(request)
         if token is not None:
-            acted = activity and is_admin_activity(request)
-            if await validate_token(s, token, activity=acted):
+            if await validate_token(s, token):
+                # An admin write earns its stamp only once it succeeded
+                # (CORE-42): noted here, stamped by AdminActivityMiddleware.
+                if activity and is_admin_activity(request):
+                    _note_admin_activity(request, token)
                 return "ok"
             # An invalid Bearer with a valid cookie alongside still
             # classifies as invalid — the caller sent broken credentials.
@@ -1787,14 +1864,93 @@ async def check_live_mic_websocket(
 
     ``setup_required`` before setup, ``unauthorized`` for anything short of
     the device tier after it, ``ok`` otherwise."""
+    verdict = await live_mic_websocket_admission(ws)
+    return "ok" if verdict in ("ok", "admin") else verdict
+
+
+async def live_mic_websocket_admission(
+    ws: Any,
+) -> Literal["ok", "admin", "setup_required", "unauthorized"]:
+    """:func:`check_live_mic_websocket`, saying WHICH credential let the
+    socket in (``ok``: the household token; ``admin``: a Bearer), so the
+    open socket can be re-checked against it (:func:`run_while_admitted`)."""
     try:
         if await check_admin_request(ws) == "pre-setup":
             return "setup_required"
-        if await check_device_websocket(ws) in ("ok", "admin"):
-            return "ok"
+        admitted = await check_device_websocket(ws)
+        if admitted in ("ok", "admin"):
+            return admitted
     except AuthCheckUnavailable:
         pass   # fail closed; a socket has no status to carry the 503 into
     return "unauthorized"
+
+
+#: CORE-44 (round 6). How often an open live-microphone socket (the phone
+#: drop-in) has the credential that opened it read again: the longest the
+#: call outlives a rotated household token, a sign-out or an idled-out
+#: admin session. The plugin sockets' cadence (plugin_http.WS_RECHECK_SEC).
+LIVE_MIC_RECHECK_SEC = 30.0
+#: Consecutive rechecks the database may fail before the call is ended.
+LIVE_MIC_RECHECK_MAX_FAILURES = 3
+
+
+async def run_while_admitted(
+    ws: Any, admitted: DeviceCheckResult, work: Any, *, what: str = "socket"
+) -> None:
+    """Run ``work`` (the socket's session coroutine) while re-reading the
+    credential that opened ``ws`` every :data:`LIVE_MIC_RECHECK_SEC`
+    (:func:`device_websocket_still_admitted`). Once it would no longer open
+    the socket, the socket is closed 1008 and the session cancelled (its own
+    teardown ends the call); after :data:`LIVE_MIC_RECHECK_MAX_FAILURES`
+    checks the database could not answer, closed 1011 the same way.
+
+    Before CORE-44 only plugin sockets were re-checked: a drop-in opened
+    with a household token kept carrying the room's microphone after the
+    token was rotated (a lost phone) or the admin signed out, until the
+    call itself ended."""
+    import asyncio
+
+    task = asyncio.ensure_future(work)
+    ended: list[int] = []
+
+    async def _end(code: int, reason: str) -> None:
+        ended.append(code)
+        try:
+            await ws.close(code=code, reason=reason)
+        except Exception:  # noqa: BLE001 — already closed
+            pass
+        task.cancel()
+
+    async def _watch() -> None:
+        failures = 0
+        while not task.done():
+            await asyncio.sleep(LIVE_MIC_RECHECK_SEC)
+            if task.done():
+                return
+            try:
+                still = await device_websocket_still_admitted(ws, admitted)
+            except Exception as e:  # noqa: BLE001 — a DB blip: judged below
+                failures += 1
+                log.warning("%s: credential recheck failed (%d/%d): %s", what, failures,
+                            LIVE_MIC_RECHECK_MAX_FAILURES, type(e).__name__)
+                if failures >= LIVE_MIC_RECHECK_MAX_FAILURES:
+                    await _end(1011, "credentials could not be checked")
+                    return
+                continue
+            failures = 0
+            if not still:
+                log.info("%s closed: its credential no longer opens it", what)
+                await _end(1008, "household device token or admin session required")
+                return
+
+    watcher = asyncio.ensure_future(_watch())
+    try:
+        await task
+    except asyncio.CancelledError:
+        if not ended:
+            raise   # cancelled from outside, not by the recheck
+    finally:
+        watcher.cancel()
 
 
 async def require_device(request: Request) -> None:

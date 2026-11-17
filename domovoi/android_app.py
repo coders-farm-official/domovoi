@@ -120,10 +120,10 @@ MAX_APK_BYTES = 200 * 1024 * 1024
 FILES_PATH = "/v1/android-app/files/"
 CACHE_BUCKET = "android_app"
 
-_VERSION_RE = re.compile(r"^[0-9]{1,4}(\.[0-9]{1,4}){1,3}(-[0-9A-Za-z.]{1,20})?$")
-_SHA_RE = re.compile(r"^[0-9a-f]{64}$")
-_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
-_DATE_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+_VERSION_RE = re.compile(r"^[0-9]{1,4}(\.[0-9]{1,4}){1,3}(-[0-9A-Za-z.]{1,20})?\Z")
+_SHA_RE = re.compile(r"^[0-9a-f]{64}\Z")
+_COMMIT_RE = re.compile(r"^[0-9a-f]{40}\Z")
+_DATE_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}\Z")
 
 
 class ManifestError(ValueError):
@@ -153,7 +153,7 @@ def tag_for(version: str) -> str:
 
 
 #: A Domovoi release tag, whole: what a manifest's ``tag`` may be.
-TAG_RE = re.compile(r"^v[0-9]{1,4}(\.[0-9]{1,4}){1,3}(-[0-9A-Za-z.]{1,20})?$")
+TAG_RE = re.compile(r"^v[0-9]{1,4}(\.[0-9]{1,4}){1,3}(-[0-9A-Za-z.]{1,20})?\Z")
 
 
 def semver(pep440: str) -> str | None:
@@ -428,7 +428,7 @@ def _complete(manifest: dict[str, Any]) -> bool:
     return bool(cur) and all(a["ready"] for a in cur)
 
 
-_OLD_FILE_RE = re.compile(r"^domovoi-(?P<version>.+)-(?P<abi>arm64-v8a|armeabi-v7a)\.apk$")
+_OLD_FILE_RE = re.compile(r"^domovoi-(?P<version>.+)-(?P<abi>arm64-v8a|armeabi-v7a)\.apk\Z")
 
 
 def _fallback(manifest: dict[str, Any]) -> dict[str, Any] | None:

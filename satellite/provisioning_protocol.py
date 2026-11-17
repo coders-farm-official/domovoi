@@ -98,7 +98,7 @@ _LAN_NETWORKS = (
     ipaddress.ip_network("172.16.0.0/12"),
     ipaddress.ip_network("192.168.0.0/16"),
 )
-_HOSTNAME_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+_HOSTNAME_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
 SERVER_URL_HELP = (
     "The server address must start with ws:// and point at your own "
     "network, e.g. ws://192.168.1.20:6370 or ws://domovoi.local:6370."

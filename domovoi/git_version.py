@@ -352,9 +352,9 @@ CHANNELS = ("stable", "main")
 _TAG_MATCH = "v[0-9]*"
 # `git describe` past a tag: v<release>-<commits since>-g<sha>. The
 # release itself may hold hyphens (1.0.0-rc1), hence the lazy match.
-_DESCRIBE_RE = re.compile(r"^v(?P<release>.+?)-(?P<n>[0-9]+)-g(?P<sha>[0-9a-f]{4,64})$")
+_DESCRIBE_RE = re.compile(r"^v(?P<release>.+?)-(?P<n>[0-9]+)-g(?P<sha>[0-9a-f]{4,64})\Z")
 _LABEL_MAX_CHARS = 80
-_BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
+_BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}\Z")
 
 
 def _pyproject_version() -> str | None:
@@ -887,8 +887,8 @@ def _clean_signature(value: object) -> dict | None:
 # ahead of it.
 
 PREV_SHA_FILE = "prev_sha"
-_FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
-_SHORT_SHA_RE = re.compile(r"^[0-9a-f]{4,64}$")
+_FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?\Z")
+_SHORT_SHA_RE = re.compile(r"^[0-9a-f]{4,64}\Z")
 
 
 def _full_sha(rev: str) -> str | None:

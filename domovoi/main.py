@@ -1134,6 +1134,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="Voice Domovoi", lifespan=lifespan)
 
+# CORE-42. Innermost: an admin write restarts the idle hour only once the
+# route answered 2xx; a refused write (422, 404, 409...) changes nothing.
+app.add_middleware(admin_auth_mod.AdminActivityMiddleware)
 # CORE-8. The core has no browser UI of its own, which is exactly why it
 # was reachable: a page anywhere on the internet could point a name it
 # owns at this box (DNS rebinding) and then read /v1/admin/snapshot,
@@ -2649,20 +2652,32 @@ async def wake_models_manifest_signed() -> dict[str, Any]:
 
 
 @app.get("/v1/wake-models/{path:path}")
-async def wake_models_file(path: str) -> FileResponse:
+async def wake_models_file(path: str, request: Request) -> FileResponse:
     """Serve one wake-model file (.onnx / .onnx.json). Guarded against
     path-traversal and locked to the allowlisted extensions. The
     extension/existence check runs before the traversal check, mirroring
-    sounds_file / satellite_code_file."""
+    sounds_file / satellite_code_file. A model trained here (shaped by the
+    household's recordings) goes only to a room's address, a household
+    device or an admin: 403 otherwise (CORE-43,
+    :mod:`domovoi.wake_model_access`)."""
+    from domovoi import wake_model_access
+
     root = Path(settings.wake_models_dir).resolve()
     target = (root / path).resolve()
     if target.suffix not in _WAKE_MODEL_EXT_ALLOW or not target.is_file():
         raise HTTPException(status_code=404, detail="not found")
     try:
-        target.relative_to(root)
+        rel = target.relative_to(root).as_posix()
     except ValueError:
         raise HTTPException(status_code=404, detail="not found")
-    return FileResponse(target, media_type="application/octet-stream")
+    if not await wake_model_access.may_download(request, rel):
+        raise HTTPException(
+            status_code=403,
+            detail="this wake model was trained on this household's voices: "
+                   "only its rooms, household devices and an admin may download it",
+        )
+    return FileResponse(target, media_type="application/octet-stream",
+                        headers={"Cache-Control": "no-store"})
 
 
 # A fifth file channel, for spare-device satellites (an Android phone in room
@@ -4687,8 +4702,10 @@ async def _room_words_with_main(room_id: str, slug: str) -> tuple[list[str], lis
 
 
 class _AdminWakeRoomBody(BaseModel):
-    room_id: str
-    slugs: list[str]
+    room_id: str = Field(..., max_length=64)
+    # CORE-47: bounded here, before anything walks the list (the dashboard's
+    # own body says the same, wake_words.py). wake_default.MAX_ROOM_WORDS.
+    slugs: list[str] = Field(..., min_length=1, max_length=5)
 
 
 @app.put("/v1/admin/wake/room", dependencies=[Depends(require_admin_mutation)])
@@ -5767,7 +5784,7 @@ async def admin_reset_satellite_pairing(room_id: str) -> dict[str, Any]:
 
 # Room ids are used as WS paths, MPD container-name components, and config
 # values — keep them boring. Mirrored client-side by the AdoptModal.
-_ROOM_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+_ROOM_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}\Z")
 
 
 class _PreseedPairingBody(BaseModel):
@@ -8989,7 +9006,8 @@ async def phone_dropin(ws: WebSocket, room_id: str) -> None:
 
     No pre-setup grace (CORE-14): before an admin exists the upgrade is
     closed 1008 with ``code: setup_required`` whatever it presents — the
-    WebSocket form of the security tier's 501.
+    WebSocket form of the security tier's 501. While the call is open the
+    credential is read again every 30 s, as a plugin socket's is (CORE-44).
     """
     from domovoi.phone_dropin import PhoneDropinSession
 
@@ -8999,7 +9017,7 @@ async def phone_dropin(ws: WebSocket, room_id: str) -> None:
             f"/v1/dropin/{room_id} from Origin {ws.headers.get('origin')!r}",
         )
         return
-    verdict = await admin_auth_mod.check_live_mic_websocket(ws)
+    verdict = await admin_auth_mod.live_mic_websocket_admission(ws)
     if verdict == "setup_required":
         await _refuse_ws(
             ws, "setup_required",
@@ -9007,7 +9025,7 @@ async def phone_dropin(ws: WebSocket, room_id: str) -> None:
             "live microphone is not part of the pre-setup grace",
         )
         return
-    if verdict != "ok":
+    if verdict not in ("ok", "admin"):
         await _refuse_ws(
             ws, "unauthorized",
             f"/v1/dropin/{room_id} needs {admin_auth_mod.DEVICE_TOKEN_HEADER} "
@@ -9021,7 +9039,10 @@ async def phone_dropin(ws: WebSocket, room_id: str) -> None:
     if not phone_id.startswith("phone-"):
         phone_id = f"phone-{phone_id}"
     session = PhoneDropinSession(ws, phone_id=phone_id, target_room=room_id)
-    await session.run()
+    # CORE-44: the credential that opened the call is read again every 30 s;
+    # a rotated token, a sign-out or an idled-out session ends it (1008).
+    await admin_auth_mod.run_while_admitted(
+        ws, verdict, session.run(), what=f"drop-in {phone_id}->{room_id}")
 
 
 def _reset_admin_cli() -> None:

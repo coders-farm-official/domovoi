@@ -1038,7 +1038,7 @@ _PENDING: set = set()
 
 # ── turn off and free the space ──────────────────────────────────────────
 
-_SIZE_RE = re.compile(r"^\s*([0-9.]+)\s*([kKMGT]?B)\s*$")
+_SIZE_RE = re.compile(r"^\s*([0-9.]+)\s*([kKMGT]?B)\s*\Z")
 
 
 def _parse_size(text: str) -> int | None:

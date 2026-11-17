@@ -61,7 +61,7 @@ _PATCH_ALLOWED = ("name", "description", "cover_color", "cover_emoji")
 # cover_color is rendered into a CSS style on the client; constrain it to a
 # color-ish charset (hex / oklch(...) / rgb(...)) with no ';' or ':' so it
 # can't break out of the style attribute.
-_COLOR_RE = re.compile(r"^[#A-Za-z0-9().,%/ -]{0,64}$")
+_COLOR_RE = re.compile(r"^[#A-Za-z0-9().,%/ -]{0,64}\Z")
 
 
 def _playlist_from_row(r: Any, *, track_count: int, imported: bool = False) -> Playlist:

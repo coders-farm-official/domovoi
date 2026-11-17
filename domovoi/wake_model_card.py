@@ -50,7 +50,7 @@ MODEL_LICENCE = "CC BY-NC-SA 4.0"
 MODEL_LICENCE_URL = "https://creativecommons.org/licenses/by-nc-sa/4.0/"
 NOT_RECORDED = "not recorded"
 
-_SLUG_RE = re.compile(r"^[a-z0-9_]{1,80}$")
+_SLUG_RE = re.compile(r"^[a-z0-9_]{1,80}\Z")
 
 
 # ── where things are ─────────────────────────────────────────────────────

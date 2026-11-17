@@ -240,7 +240,7 @@ TAG_RE = re.compile(r"v([0-9]+\.[0-9]+\.[0-9]+)(-[0-9A-Za-z.]+)?", re.ASCII)
 #: origin's URLs that are the GitHub repository (or DOMOVOI_RELEASE_ORIGIN_URL, for the tests).
 ORIGIN_RE = re.compile(r"(?:https://github\.com/|ssh://git@github\.com/|git@github\.com:)"
                        r"coders-farm-official/domovoi(?:\.git)?/?", re.ASCII | re.IGNORECASE)
-SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+SHA_RE = re.compile(r"^[0-9a-f]{40}\Z")
 PINS = "windows/installer/pins.iss"
 STABLE_STAYS = "only a release without a suffix, not marked a pre-release, moves it"
 
@@ -665,8 +665,13 @@ def body(rel: Release) -> str:
              "Check a download: `sha256sum -c SHA256SUMS --ignore-missing` (Linux, macOS, Git Bash), "
              "or `Get-FileHash -Algorithm SHA256 <file>` (PowerShell) against the line in `SHA256SUMS`."]
     if rel.provenance:
-        check += ["", f"Check that a file was built by Domovoi's release workflow: "
-                      f"`gh attestation verify <file> -R {REPO_SLUG}` "
+        # OPS-22 (round 6): the strict form only. Without --signer-workflow and
+        # --source-ref an attestation from ANY workflow in the repository
+        # passes, which a branch pushed by anyone with write access can make.
+        check += ["", f"Check that a file was built by Domovoi's release workflow on main: "
+                      f"`gh attestation verify <file> -R {REPO_SLUG} "
+                      f"--signer-workflow {REPO_SLUG}/.github/workflows/release.yml "
+                      f"--source-ref refs/heads/main` "
                       f"([SECURITY.md, Verifying a release]({REPO_URL}/blob/{rel.tag}/SECURITY.md#verifying-a-release))."]
     where = ["<details>", "<summary>Where these files come from</summary>", "", *facts, "", "</details>"]
     parts = [*([lead, ""] if lead else []), *download(rel), "", _with_more_detail(rel.notes, more_detail(rel)), "",

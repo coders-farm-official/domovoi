@@ -40,8 +40,8 @@ COUNT = 4
 # The wrapper's own limit (a cold container start, the model load and four
 # clips take well under a minute on four CPU cores; a busy box gets more).
 TIMEOUT_SEC = 300
-_JOB_RE = re.compile(r"^[0-9a-f]{12}$")
-_CLIP_RE = re.compile(r"^preview_[1-8]\.wav$")
+_JOB_RE = re.compile(r"^[0-9a-f]{12}\Z")
+_CLIP_RE = re.compile(r"^preview_[1-8]\.wav\Z")
 
 _LOCK = threading.Lock()
 _STATE: dict[str, Any] = {}

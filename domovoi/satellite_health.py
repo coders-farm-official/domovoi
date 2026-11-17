@@ -93,7 +93,7 @@ def _bool(v: Any) -> bool | None:
     return v if isinstance(v, bool) else None
 
 
-_WAKE_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+_WAKE_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
 
 
 def wake_slug(v: Any) -> str | None:

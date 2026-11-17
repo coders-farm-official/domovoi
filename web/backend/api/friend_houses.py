@@ -70,7 +70,7 @@ CORE = "/v1/admin/friend-houses"
 # The core's ids: an invite is 32 hex, a request or friend a short prefix
 # plus hex. Anything else is not one of ours and never reaches the core's
 # URL.
-_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}\Z")
 
 # A friend file is a few hundred bytes; this is a ceiling, not a format.
 MAX_FILE_CHARS = 16_000
@@ -269,7 +269,7 @@ async def friend_houses_unfriend(friend_id: str, request: Request):
 # body (a conversation, an export): never in a URL or a log line. A
 # conversation is addressed by the other house's public house key (64 hex).
 
-_HOUSE = re.compile(r"^[0-9a-f]{64}$")
+_HOUSE = re.compile(r"^[0-9a-f]{64}\Z")
 ALERTS = ("inbox", "sender", "read")
 MAX_MESSAGE_CHARS = 2000
 
@@ -370,7 +370,7 @@ async def friend_houses_alert(friend_id: str, request: Request):
 # A shared list is addressed by its 32-hex id; a title or a name only ever
 # travels in a body.
 
-_SPACE = re.compile(r"^[0-9a-f]{32}$")
+_SPACE = re.compile(r"^[0-9a-f]{32}\Z")
 
 
 def _space(value: str) -> str:

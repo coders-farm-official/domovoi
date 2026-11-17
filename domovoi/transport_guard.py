@@ -146,7 +146,8 @@ def lan_origin_regex(port: int | None = None) -> str:
     alternatives = [a.replace(r"(:\d+)?", suffix) for a in _LAN_ORIGIN_ALTERNATIVES]
     for name in configured_hosts():
         alternatives.append(re.escape(name.lstrip("*.")) + suffix)
-    return r"^https?://(" + r"|".join(alternatives) + r")$"
+    # \Z, not $: $ also matches before a final newline (CORE-46).
+    return r"^https?://(" + r"|".join(alternatives) + r")\Z"
 
 
 def origin_allowed(origin: str | None) -> bool:

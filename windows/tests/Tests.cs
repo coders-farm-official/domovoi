@@ -1056,6 +1056,37 @@ static partial class Tests
             True(rules.All(r => r.RemoteAddress == "192.168.1.0/24"), "subnet");
             True(!rules.Any(r => r.LocalPorts == "6432" || r.LocalPorts == "11434"), "no loopback-only port opened");
         });
+        Run("firewall: port 80 follows the short address (WIN-10)", delegate
+        {
+            // The card: the rule was planned whatever the switch said, and it
+            // applies to every WSL VM. Switched off, or port 80 held by a
+            // Windows program, the plan has no port-80 rule, and the add
+            // script (which removes every Domovoi rule first) drops an old one.
+            var off = Firewall.Plan("192.168.1.0/24", false);
+            True(!off.Any(r => r.LocalPorts == "80" || r.Name == "Domovoi-ShortAddress-80"), "no port-80 rule");
+            Eq(6, off.Count, "the other six stay");
+            string add = Firewall.AddScript(off);
+            True(add.Contains("Remove-NetFirewallHyperVRule -Name $r.Name") && !add.Contains("Domovoi-ShortAddress-80"), "an old one is removed, none added");
+            True(!ShortAddressSwitch.RuleWanted(false, "free"), "switched off");
+            True(!ShortAddressSwitch.RuleWanted(true, "taken|nginx"), "port 80 held on Windows");
+            True(!ShortAddressSwitch.RuleWanted(null, "taken|Windows (the System process: IIS or another HTTP.sys program)"), "IIS");
+            True(ShortAddressSwitch.RuleWanted(true, "free"), "on and free");
+            True(ShortAddressSwitch.RuleWanted(null, "free"), "a first install: on by default");
+            True(ShortAddressSwitch.RuleWanted(null, null), "port 80 couldn't be checked: as before");
+        });
+        Run("short address: the switch as DomovoiHost reads it (WIN-10)", delegate
+        {
+            Eq(false, ShortAddressSwitch.Parse(0, "{\"enabled\": false}"), "off");
+            Eq(true, ShortAddressSwitch.Parse(0, "{\"enabled\": true}"), "on");
+            Eq(true, ShortAddressSwitch.Parse(1, ""), "no file: on");
+            Eq(true, ShortAddressSwitch.Parse(0, "not json"), "unreadable: on, as the dashboard reads it");
+            Eq(true, ShortAddressSwitch.Parse(0, "{\"enabled\": \"no\"}"), "not a boolean: on");
+            Eq(true, ShortAddressSwitch.Parse(0, "{\"enabled\": false}" + new string(' ', ShortAddressSwitch.MaxBytes)), "over the cap: on");
+            True(ShortAddressSwitch.Parse(124, "") == null, "the read failed: keep what was known");
+            var args = ShortAddressSwitch.ReadArgs("domovoi");
+            True(args.Contains("-u") && args.Contains("domovoi") && args.Contains("/usr/bin/head") && args.Contains("/usr/bin/timeout"), "as the service user, bounded");
+            Eq("/home/domovoi/.domovoi/short_address.json", args[args.Length - 1], "the dashboard's own file");
+        });
         Run("firewall: never a public or malformed scope", delegate
         {
             Throws<ArgumentException>(delegate { Firewall.Plan("8.8.8.0/24"); }, "public");

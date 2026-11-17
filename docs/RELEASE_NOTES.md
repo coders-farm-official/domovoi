@@ -100,6 +100,52 @@ do; a few limits are new.
   character in a page is left out instead of failing the export. The same
   for spreadsheet downloads.
 
+## 1.4.0 (unreleased) — Security fixes from audit round 6: core, plugins, Windows, releases
+
+- **Admin sign-out after an hour: only a change that worked counts.** A
+  write the server refused (a form that didn't validate, something not
+  found) used to restart the admin's idle hour; now only a successful one
+  does (CORE-42).
+- **Wake models trained here stay in the house.** A word trained on the
+  household's recordings (including "Domovoi (tuned to this home)") is
+  downloaded only by this server's rooms, household devices and an admin;
+  any other device on the network gets `403`. Rooms need nothing new: they
+  are recognised by the address they connect from. The published words are
+  open as before (CORE-43).
+- **A drop-in call ends when its credential does.** The phone drop-in
+  checks its household token or admin sign-in again every 30 seconds:
+  rotating the token, or signing the admin out, ends a call within that
+  (CORE-44).
+- **Printers: IPv4 only.** A printer address must be IPv4 (or an
+  IPv4-mapped IPv6 address), even through `OUTBOUND_ALLOW_HOSTS`: the
+  server's own IPv6 addresses got through before. If the server can't list
+  its own network addresses, nothing is printed to and the network sweep
+  doesn't run (CORE-45).
+- **A trailing newline is refused everywhere.** Ids, names, addresses and
+  the port-80 redirect's path no longer accept a value that ends in a
+  newline (CORE-46).
+- **A room's wake words: at most 5, checked first.** A longer list is
+  refused before it is looked at, and a room device's hello that says it
+  can run "Infinity" words no longer ends its own session (CORE-47).
+- **Radio follows a station's redirects itself (Radio plugin 1.5.0).**
+  The room's music player is handed the address that actually answers;
+  a station whose stream redirects into the house is refused, and one that
+  can't be reached says so (PLG-12).
+- **Plugins: `room_play_template` in plain path characters.** A template
+  with `%`, `#`, `?`, a backslash or a `.`/`..` segment is refused at
+  install, and the dashboard checks it again before it casts (PLG-13).
+- **Windows: the port-80 firewall rule follows the short address.** Setup
+  and every update add `Domovoi-ShortAddress-80` only while the short
+  address is switched on and no Windows program holds port 80, and remove
+  it otherwise. Switching it off in Settings takes the rule away at the
+  next update; to remove it now, as an administrator in PowerShell:
+  `Remove-NetFirewallHyperVRule -Name Domovoi-ShortAddress-80` (WIN-10).
+- **Releases: one way to check a file.** The release page and SECURITY.md
+  give the full `gh attestation verify ... --signer-workflow
+  .../release.yml --source-ref refs/heads/main` command; the short form
+  accepted any workflow in the repository. The release workflow's
+  provenance-only run (`attest_published`) is gone (OPS-21, OPS-22).
+
 ## 1.4.0 (unreleased) — Queue history: what Up next picked, and why
 
 - **What changed.** **Settings → Household → Queue history** (an admin
