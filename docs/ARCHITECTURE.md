@@ -405,7 +405,12 @@ Core's own workers live in `domovoi/workers/`:
   (`handlers/shared/room_playlist.py` loads the first 50 songs at once and
   the rest in the background, then arms a `continue` session with the
   playlist as its source). The queue is a copy: nothing that edits a room's
-  queue writes the playlist it came from.
+  queue writes the playlist it came from. The same read notices a player
+  that restarted (MPD's `uptime` went down): MPD restores a state file up
+  to two minutes old, so a daemon that died as a song ended comes back
+  playing that song from its middle. `domovoi/player_restarts.py` puts it
+  back (the next song from its top, or the same song where it was) and
+  logs `music player for room=… restarted`.
 * **The container guard** (`container_guard`, `domovoi/container_guard/`):
   every 30 s it compares the Docker containers the core expects — the
   compose stack, each room's music player, every plugin's declared
