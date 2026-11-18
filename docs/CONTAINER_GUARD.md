@@ -243,6 +243,18 @@ The core rebuilds the image when `Dockerfile.tor` changes and when it is
 30 days old, so Debian's tor security fixes get in; each rebuild moves the
 baseline.
 
+`domovoi-fh-listener` is Friend Houses' inbound listener: the code that
+reads what other houses send, walled off in a container with no network
+(docs/SECURITY_PRIVACY.md). The core builds its image itself from
+`domovoi/Dockerfile.fh-listener` and a copy of the listener's modules,
+and the guard pins it the same way, under
+`friend_houses_listener_image_id` (`engine.note_listener_image`). The core
+starts and stops the listener with itself and starts it again when it
+stops, so the guard expects it **stopped**: no failure when it is gone,
+but whenever it runs it must run the core's image. The image is rebuilt
+when the listener's code or its Dockerfile changes (an update of
+Domovoi) and when it is 30 days old.
+
 ### Plugins
 
 Every **loaded** plugin's declared containers (`[[containers]]` in its

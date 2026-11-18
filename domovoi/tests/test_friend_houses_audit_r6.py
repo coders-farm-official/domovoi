@@ -36,6 +36,11 @@ def listener(monkeypatch, tmp_path):
     monkeypatch.setitem(svc._LISTENER, "task", None)
     monkeypatch.setitem(svc._LISTENER, "stopping", False)
     monkeypatch.setattr(svc, "handle_event", lambda e: got.append(e))
+
+    async def no_docker():  # the real one builds the listener's image (FH-12)
+        svc._LISTENER["image"] = "sha256:test"
+
+    monkeypatch.setattr(svc, "_prepare_listener", no_docker)
     return got, tc.TorFolder(tmp_path / "fh")
 
 
@@ -381,11 +386,14 @@ def test_fh7_ordinary_text_is_left_alone() -> None:
 
 
 def test_fh12_the_listener_gets_no_database_address_or_tokens(monkeypatch) -> None:
+    # The docker CLI that starts the listener's container sees only what
+    # finds Docker; the container itself gets no variables at all
+    # (test_friend_houses_listener_container.py replays that inside it).
     monkeypatch.setenv("DATABASE_URL", "postgresql://domovoi:secret@db/domovoi")
     monkeypatch.setenv("DOMOVOI_ADMIN_TOKEN", "x")
     env = svc._listener_env()
     assert "DATABASE_URL" not in env and "DOMOVOI_ADMIN_TOKEN" not in env
-    assert set(env) <= {"PATH", "LANG", "LC_ALL", "TZ", "SYSTEMROOT"}
+    assert set(env) <= set(svc._DOCKER_ENV)
 
 
 def test_fh12_the_socks_port_reaches_onions_only() -> None:

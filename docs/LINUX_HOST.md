@@ -1417,7 +1417,9 @@ of its own: `domovoi-fh`, subnet `172.31.254.0/24`, bridge interface
 a network. A container on an ordinary Docker bridge, though, can open
 connections to the host's own services (the dashboard, the core, Postgres,
 Ollama) and to the rest of the home network. A Tor daemon that someone
-broke into would then be inside the house.
+broke into would then be inside the house. (Friend Houses' other
+container, `domovoi-fh-listener`, which reads what other houses send, has
+no network at all and needs no firewall.)
 
 So the installer fences that one network off. `domovoi-fh-firewall.service`
 runs, as root, `/usr/local/lib/domovoi-fh-firewall/fh-firewall.sh`, a

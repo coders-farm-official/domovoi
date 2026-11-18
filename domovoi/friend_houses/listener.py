@@ -8,11 +8,15 @@ code: a defect here could spread from house to house along friendships
 (threat-model finding 2). So the code that reads those bytes doesn't run in
 the core process:
 
-* it runs as ``python -I -m domovoi.friend_houses.listener``, started and
-  watched by core (:mod:`domovoi.friend_houses.service`);
-* it has **no database access and no network**: it reads this house's keys
-  and three small files core writes (the current friend list, its own
-  hello, the open friend files), and it answers on unix sockets only;
+* it runs in a container of its own (:mod:`domovoi.friend_houses.listener_runtime`):
+  no network at all, a read-only root, no capabilities, and only this
+  house's keys and three small files core writes (the current friend list,
+  its own hello, the open friend files) mounted read-only, plus the folder
+  its unix sockets live in (audit R6 FH-12). Core starts and watches it
+  (:mod:`domovoi.friend_houses.service`) and talks to it over stdin and
+  stdout; when stdin closes (core went away) it stops;
+* it has **no database access and no network**: it answers on unix
+  sockets only;
 * it refuses in the cheapest order: size, then the Noise handshake, then
   "is this a current friend (or an open invite)?", then a fixed-schema
   parse;
@@ -358,8 +362,12 @@ async def serve(main_socket: Path, pairing_socket: Path, state: State) -> None: 
     await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(stdin), sys.stdin)
     emit("listening")
     async with main, pairing:
-        await asyncio.gather(main.serve_forever(), pairing.serve_forever(),
-                             read_answers(stdin, state))
+        # Serve until core goes away: its pipe closing is the signal to
+        # stop, so a listener never outlives the core that started it.
+        await main.start_serving()
+        await pairing.start_serving()
+        await read_answers(stdin, state)
+        log.info("core closed the pipe; stopping")
 
 
 def main(argv: list[str] | None = None) -> int:  # pragma: no cover — run by core

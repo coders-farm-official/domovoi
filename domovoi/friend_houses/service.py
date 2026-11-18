@@ -18,12 +18,13 @@ setting, the internet answer, the friend list, and once at boot. It:
 3. starts, stops, restarts or reloads the container
    (:mod:`domovoi.friend_houses.tor_runtime`), reloads at most once a
    minute (spike S1: each one briefly interrupts the onion);
-4. keeps the inbound listener running as its own process while the house's
-   onion exists (:mod:`domovoi.friend_houses.listener`), and writes the
-   files it reads: the current friend list and this house's hello.
+4. keeps the inbound listener running in its own container while the
+   house's onion exists (:mod:`domovoi.friend_houses.listener`, run by
+   :mod:`domovoi.friend_houses.listener_runtime`), and writes the files it
+   reads: the current friend list and this house's hello.
 
 The container guard asks :func:`tor_wanted` what to expect of the
-``domovoi-tor`` container.
+``domovoi-tor`` container, and pins the listener's image.
 
 Windows: the server runs Friend Houses on its Linux side (the WSL distro);
 a core started natively on Windows (a developer's box) reports it as
@@ -63,7 +64,7 @@ _STATE: dict[str, Any] = {
     "pairing": None,
     "hello": None,
 }
-_LISTENER: dict[str, Any] = {"proc": None, "task": None, "stopping": False}
+_LISTENER: dict[str, Any] = {"proc": None, "task": None, "stopping": False, "image": None}
 
 
 def _root() -> Path:
@@ -139,7 +140,9 @@ def status() -> dict[str, Any]:
     keys = fid.load() if sys.platform != "win32" else None
     return {
         "status": _STATE["status"],
-        "detail": _STATE["detail"],
+        # While on, a listener that can't be set up is said here: the page
+        # shows ``detail`` (friends can't reach the house meanwhile).
+        "detail": _STATE["detail"] or (_LISTENER.get("problem") if _STATE["status"] == "on" else None),
         "fingerprint": keys.fingerprint if keys else None,
         "onion_ready": _STATE["onion"] is not None,
         "pairing_ready": _STATE.get("pairing") is not None,
@@ -468,28 +471,63 @@ async def _ensure_listener(folder: tc.TorFolder) -> None:
     )
 
 
+# What the docker CLI that runs the listener may see of core's environment:
+# enough to find Docker, nothing else (no database address, no tokens).
+# The listener itself gets none of it: ``docker run`` passes no variables.
+_DOCKER_ENV = ("PATH", "LANG", "LC_ALL", "TZ", "HOME", "XDG_RUNTIME_DIR",
+               "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG", "SYSTEMROOT")
+
+
 def _listener_env() -> dict[str, str]:
-    """The listener's whole environment: no database address, no tokens,
-    nothing from core's own environment beyond what Python needs (audit
-    R6 FH-12). It still runs as core's user; SECURITY_PRIVACY.md says so."""
+    """The environment of the ``docker run`` that starts the listener's
+    container (audit R6 FH-12)."""
     import os
 
-    keep = ("PATH", "LANG", "LC_ALL", "TZ", "SYSTEMROOT")  # SYSTEMROOT: Python on Windows needs it
-    env = {k: os.environ[k] for k in keep if k in os.environ}
+    env = {k: os.environ[k] for k in _DOCKER_ENV if k in os.environ}
     env.setdefault("LANG", "C.UTF-8")
     return env
 
 
 def _listener_command(folder: tc.TorFolder) -> list[str]:
-    return [sys.executable, "-I", "-m", "domovoi.friend_houses.listener",
-            "--keys", str(fid.keys_path()), "--folder", str(_listener_folder()),
-            "--socket", str(folder.main_socket),
-            "--pairing-socket", str(folder.pairing_socket)]
+    """``docker run -i --rm ...``: the listener in its own container, no
+    network, read-only (:mod:`domovoi.friend_houses.listener_runtime`)."""
+    import os
+
+    from domovoi.friend_houses import listener_runtime as lrt
+
+    uid, gid = (os.getuid(), os.getgid()) if hasattr(os, "getuid") else (10001, 10001)
+    return ["docker", *lrt.run_args(image_id=_LISTENER["image"], keys=fid.keys_path(),
+                                    files=_listener_folder(), sockets=folder.listen,
+                                    uid=uid, gid=gid)]
+
+
+LISTENER_PROBLEM = ("Friends can't reach this house right now: its Friend Houses listener "
+                    "couldn't be set up. Domovoi keeps trying; this often clears once the "
+                    "internet is back.")
+
+
+async def _prepare_listener() -> None:
+    """Build the listener's image when needed and clear out any container
+    left behind. Raises DockerFailed or OSError."""
+    from domovoi.friend_houses import listener_runtime as lrt
+
+    _LISTENER["image"] = await lrt.prepare()
 
 
 async def _run_listener(folder: tc.TorFolder) -> None:
+    from domovoi.friend_houses.tor_runtime import DockerFailed
+
     backoff = 1.0
     while not _LISTENER["stopping"]:
+        try:
+            await _prepare_listener()
+        except (DockerFailed, OSError) as e:
+            log.warning("Friend Houses: the listener's container couldn't be set up: %s", e)
+            _LISTENER["problem"] = LISTENER_PROBLEM
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 300.0)
+            continue
+        _LISTENER["problem"] = None
         try:
             proc = await asyncio.create_subprocess_exec(
                 *_listener_command(folder),
@@ -716,11 +754,12 @@ async def _stop_listener() -> None:
     _LISTENER["stopping"] = True
     proc = _LISTENER["proc"]
     if proc is not None and proc.returncode is None:
-        proc.terminate()
+        proc.terminate()  # the docker CLI passes it on to the container
         try:
             await asyncio.wait_for(proc.wait(), 10)
         except asyncio.TimeoutError:
             proc.kill()
+            await _remove_listener_container()
     task = _LISTENER["task"]
     if task is not None:
         try:
@@ -729,7 +768,18 @@ async def _stop_listener() -> None:
             task.cancel()
         except Exception:  # its error must never stop "off" from working (R6 FH-2)
             log.exception("Friend Houses: the listener task had failed")
-    _LISTENER.update(proc=None, task=None)
+    _LISTENER.update(proc=None, task=None, problem=None)
+
+
+async def _remove_listener_container() -> None:
+    """Best effort: a docker CLI killed hard can leave its container
+    running (the next start removes it too)."""
+    from domovoi.friend_houses import listener_runtime as lrt
+
+    try:
+        await lrt.remove()
+    except Exception as e:  # noqa: BLE001 — "off" must keep working
+        log.warning("Friend Houses: the listener's container wasn't removed: %s", e)
 
 
 async def shutdown() -> None:
