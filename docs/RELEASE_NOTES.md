@@ -4,6 +4,26 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.4.0 (unreleased) — The news is read story by story, and you can ask about one
+
+- **What changed.** "What's the news" used to run its headlines together
+  in one long sentence. Now each headline is a sentence of its own,
+  numbered ("First, … Second, …"), with a longer pause between stories,
+  and "Locally.", "Nationally." and "Around the world." are said on their
+  own. Your topics and "any news about …" are read the same way, each
+  story with its source. Afterwards Domovoi listens for a moment: "tell me
+  more about the second one", "the last one", "number three", "the one
+  about the bridge" or "more on that" says that story's summary and where
+  it's from. This works for ten minutes after the news was read. "Favorite
+  that" saves the story you just asked about.
+- **What to know.** When a feed gives only a line or two, Domovoi offers
+  to read the full article online and sums it up in a few sentences. It
+  asks first unless **Always allow internet** (Settings → Chat & AI →
+  Search) is on. With the internet off or unreachable, it says what it has
+  and that it can't read the article right now; with the AI features off,
+  it says what the feed gave. Any reply with a blank line in it (a
+  paragraph break) now gets the same longer pause from the voice. No
+  migration.
 ## 1.4.0 (unreleased) — Music no longer jumps back when a room's player restarts
 
 - **What changed.** A room's music player (its MPD container) that stops

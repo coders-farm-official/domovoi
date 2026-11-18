@@ -1538,7 +1538,9 @@ dashboard and in the app, and a change shows everywhere at once.
 ### News
 
 A spoken briefing from the feeds your household picks, plus each person's
-own topics.
+own topics. The stories are numbered and read with a pause between them.
+Right after, ask about one of them: "tell me more about the second one",
+"the last one", or "the one about the bridge".
 
 **How to:** [News](#news) → **add topic**, or add a feed.
 
