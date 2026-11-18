@@ -2284,6 +2284,11 @@ rebuild_mpd() {
   names=$(docker ps -a --format '{{.Names}}') || return 1
   for n in $names; do
     if [[ $n == "$MPD_PREFIX"* ]]; then
+      # Stopped first, so the room's player saves where it is (its queue,
+      # song and position) to the data volume; a bare rm -f kills it, and
+      # it would come back from a state file up to 2 minutes old.
+      echo "stopping $n so it saves its place"
+      docker stop -t 15 "$n" >/dev/null 2>&1 || echo "couldn't stop $n cleanly; removing it anyway"
       echo "removing $n (recreated by the core with the new image; data volume kept)"
       docker rm -f "$n" || return 1
     fi

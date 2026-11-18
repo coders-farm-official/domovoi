@@ -357,6 +357,8 @@ case "${1-}" in
     echo "Error: No such object: ${!#}" >&2; exit 1
     ;;
   stop)
+    # A room's player (rebuild_mpd stops it before removing it).
+    case "${!#}" in domovoi-mpd-*) exit 0 ;; esac
     echo false >"$SHIM_STATE/searxng-running"
     exit 0
     ;;
@@ -1109,6 +1111,7 @@ case_mpd_changed() {
   check "with an iidfile" called "docker build --iidfile "
   check "removes room kitchen" called "docker rm -f domovoi-mpd-kitchen"
   check "removes room office" called "docker rm -f domovoi-mpd-office"
+  check "stops a room first so it saves its place" before "docker stop -t 15 domovoi-mpd-kitchen" "docker rm -f domovoi-mpd-kitchen"
   check "leaves postgres alone" not_called "docker rm -f domovoi-postgres"
   check "rebuild while core is stopped" before "systemctl stop" "docker build"
   check "rebuild before core starts" before "docker build" "systemctl start domovoi-core.service"

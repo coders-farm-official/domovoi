@@ -26,7 +26,9 @@ a way that would otherwise get reported as a bug.
   migration. On a Linux or Windows install the update itself removes the
   room players when this file changes and the core makes them again at its
   start, as before; the rebuild above covers every other way a house is
-  updated.
+  updated. The update now stops each room's player first (up to 15 seconds),
+  so it saves where it was and the music comes back at that spot, not at
+  one up to two minutes old.
 
 ## 1.4.0 (unreleased) — The news is read story by story, and you can ask about one
 
