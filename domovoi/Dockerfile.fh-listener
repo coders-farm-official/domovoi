@@ -1,0 +1,36 @@
+# The inbound listener for Friend Houses ("serverless messaging and friend
+# system between households"): the process that reads whatever other houses
+# send through Tor. The core builds this image itself, the first time the
+# listener starts, and the container guard trusts exactly the image ID it
+# built; nothing is pulled from a third-party image.
+#
+# The build context is made by the core (domovoi/friend_houses/
+# listener_runtime.py): this file plus app/, a copy of the few modules the
+# listener runs (the Noise handshake, the session and pairing protocols,
+# the envelope parser) and nothing else of Domovoi. Python and cryptography
+# come from Debian, so their security fixes arrive as Debian publishes
+# them: the core rebuilds the image when this file or those modules change
+# and when the image is older than 30 days. Same pinned base as
+# Dockerfile.tor (debian:trixie-slim as of 2026-11-17, multi-arch index).
+#
+# The container is the wall the listener needs (audit R6 FH-12): no
+# network at all, a read-only root, no capabilities, no new privileges,
+# and only three things from the host (the house keys and the listener's
+# files, both read-only, and the folder its two sockets live in).
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
+
+RUN apt-get update \
+    && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends python3 python3-cryptography \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY app/ /opt/fh-listener/
+RUN dest="$(python3 -c 'import site; print(site.getsitepackages()[0])')" \
+    && mkdir -p "$dest" \
+    && cp -r /opt/fh-listener/domovoi "$dest/" \
+    && rm -rf /opt/fh-listener \
+    && python3 -m compileall -q "$dest/domovoi"
+
+LABEL org.domovoi.role="friend-houses-listener"
+
+ENTRYPOINT ["python3", "-I", "-B", "-m", "domovoi.friend_houses.listener"]

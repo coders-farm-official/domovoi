@@ -2780,11 +2780,27 @@ reaching the onion for minutes. So every connection also runs a Noise
 handshake bound to both houses' keys, and the house checks the caller
 against its **current** friend list before reading anything else, and
 again on every frame, so a friend removed or blocked mid-connection is cut
-off at its next one. The inbound side runs as its own process that reads
-only fixed-size, fixed-format frames and starts with a scrubbed
-environment (no database address, no tokens). It is not a sandbox: it
-runs as the core's own user, so a bug in it could read what that user
-can. Tor's SOCKS port reaches onion addresses only.
+off at its next one. Tor's SOCKS port reaches onion addresses only.
+
+**The listener is walled off.** The code that reads what other houses
+send (the inbound listener, which reads only fixed-size, fixed-format
+frames) runs in a container of its own, `domovoi-fh-listener`, built by
+the core like the Tor image (`domovoi/Dockerfile.fh-listener`: the same
+pinned Debian base, Debian's Python and cryptography, and only the
+listener's own modules). The container has **no network at all**, a
+read-only root, no capabilities, no new privileges, no variables from the
+core's environment and no logs kept by Docker. It sees three things: the
+house keys and the listener's files (the friend list, this house's hello,
+the open friend files), both read-only, and the folder its two sockets
+live in, which holds nothing else (Tor's SOCKS socket is elsewhere). So a
+defect in the listener can't read the database, the settings or the
+house's files, can't change who is a friend, and can't reach the network:
+the most it can do is say something false to the core over its pipe, and
+the core checks every event again before acting on it. The container ends
+with the core, and the guard pins its image (docs/CONTAINER_GUARD.md).
+What a defect there could still read is the house keys, which the
+listener needs to answer the handshake; and it shares the kernel with the
+rest of the server, like any container.
 
 **Limits that keep one house from swamping this one.** A friend can send
 at most 60 messages an hour; connects, "I'm back" and accepts are capped

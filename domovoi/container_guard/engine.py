@@ -69,6 +69,7 @@ from domovoi.container_guard.expected import (
     failing_resolvers,
     mpd_expectations,
     tor_expectation,
+    listener_expectation,
     plugin_expectations,
 )
 from domovoi.container_guard.model import FAILURE, ONESHOT, RUNNING, TAMPER, Finding
@@ -78,6 +79,8 @@ log = logging.getLogger(__name__)
 MPD_BASELINE_KEY = "mpd_image_id"
 # The Friend Houses Tor image the core built (note_tor_image).
 TOR_BASELINE_KEY = "friend_houses_tor_image_id"
+# ...and the image of its inbound listener (note_listener_image).
+LISTENER_BASELINE_KEY = "friend_houses_listener_image_id"
 # The baseline before the current one, kept when a rebuild Domovoi vouched
 # for (or an admin's clear) moved it: rooms still on Domovoi's previous
 # build wait to be recreated, they aren't tampering.
@@ -901,12 +904,17 @@ async def gather_expected(guard: ContainerGuard, cfg: GuardConfig, *, with_db: b
 
     async with guard.session_factory() as s:
         tor_baseline = await store.get_baseline(s, TOR_BASELINE_KEY)
+        listener_baseline = await store.get_baseline(s, LISTENER_BASELINE_KEY)
     exp.add([
         tor_expectation(
             running=fh_service.tor_wanted(),
             image_id=(tor_baseline or {}).get("value") or None,
             hold=holds.held(fh_service.GUARD_HOLD),
-        )
+        ),
+        listener_expectation(
+            image_id=(listener_baseline or {}).get("value") or None,
+            hold=holds.held(fh_service.GUARD_HOLD),
+        ),
     ])
     plugin_rows = await reg.list_plugins()
     expected, names, unwatched = await plugin_expectations(
@@ -1047,6 +1055,14 @@ async def note_tor_image(image_id: str) -> None:
     guard = get_guard()
     async with guard.session_factory() as s:
         await store.set_baseline(s, TOR_BASELINE_KEY, image_id, "core-build")
+
+
+async def note_listener_image(image_id: str) -> None:
+    """Record the Friend Houses listener image the core just built
+    (domovoi/friend_houses/listener_runtime.py), like :func:`note_tor_image`."""
+    guard = get_guard()
+    async with guard.session_factory() as s:
+        await store.set_baseline(s, LISTENER_BASELINE_KEY, image_id, "core-build")
 
 
 async def note_mpd_image(image_id: str | None, *, built: bool) -> str:
