@@ -1186,6 +1186,30 @@ def _split_sentences(text: str) -> list[str]:
     return [p for p in _SENTENCE_SPLIT.split(text) if p]
 
 
+def _spoken_parts(text: str) -> tuple[list[str], set[int]]:
+    """``text``'s sentences as :func:`_split_sentences` cuts them, paragraph
+    by paragraph, and the indexes of the sentences that end a paragraph
+    (not the last): after those the speech leaves a longer silence
+    (``tts.PARAGRAPH_SILENCE_SEC``), so a list read out loud, such as the
+    news headlines, is heard item by item."""
+    from domovoi.clients.tts import split_paragraphs
+
+    sentences: list[str] = []
+    ends: set[int] = set()
+    for paragraph in split_paragraphs(text):
+        if sentences:
+            ends.add(len(sentences) - 1)
+        sentences.extend(_split_sentences(paragraph))
+    return sentences, ends
+
+
+def _paragraph_silence(sample_rate: int) -> bytes:
+    """The gap between two paragraphs of a spoken reply, as int16 PCM."""
+    from domovoi.clients.tts import PARAGRAPH_SILENCE_SEC
+
+    return bytes(2 * int(PARAGRAPH_SILENCE_SEC * sample_rate))
+
+
 def _wav_to_pcm(wav_bytes: bytes) -> tuple[bytes, int]:
     """Strip WAV header → (raw int16 PCM, sample_rate). Empty WAV → (b"", 16000)."""
     if not wav_bytes:
@@ -5674,7 +5698,9 @@ class StreamSession:
         next sentence while the one before it is sent."""
         tts_t0 = time.perf_counter()
         tts = get_tts_client()
-        sentences = _split_sentences(response.text) or [response.text or ""]
+        sentences, paragraph_ends = _spoken_parts(response.text)
+        if not sentences:
+            sentences, paragraph_ends = [response.text or ""], set()
 
         # Resolve which voice to synthesize this turn in. A per-response
         # override (VoiceHandler sampling / switching) wins; otherwise
@@ -5750,6 +5776,10 @@ class StreamSession:
                 self._note_audio_sent(len(chunk), sr)
                 # First call only: tts_first_ms + total_ms.
                 timings.first_audio(tts_t0)
+            if 0 in paragraph_ends:
+                for chunk in _iter_chunks(_paragraph_silence(sr)):
+                    await self.ws.send_bytes(chunk)
+                    self._note_audio_sent(len(chunk), sr)
 
             for i, _ in enumerate(sentences[1:], start=1):
                 assert next_task is not None
@@ -5770,6 +5800,8 @@ class StreamSession:
                         i, pcm_sr, sr,
                     )
                     pcm = _resample_pcm(pcm, pcm_sr, sr)
+                if i in paragraph_ends:
+                    pcm += _paragraph_silence(sr)
                 for chunk in _iter_chunks(pcm):
                     await self.ws.send_bytes(chunk)
                     self._note_audio_sent(len(chunk), sr)

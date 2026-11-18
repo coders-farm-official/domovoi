@@ -506,6 +506,34 @@ async def fetch_subject_live(
     ]
 
 
+async def get_item(session: AsyncSession, item_id: int) -> dict[str, Any] | None:
+    """One item by id (id/title/summary/source/url/published_at), or None
+    when it is gone (retention cleared it). "Tell me more about the second
+    one" reads the story this way."""
+    row = (
+        await session.execute(
+            text(
+                """
+                SELECT id, title, summary, source, url, published_at
+                  FROM news_items
+                 WHERE id = :id
+                """
+            ),
+            {"id": item_id},
+        )
+    ).first()
+    if row is None:
+        return None
+    return {
+        "id": int(row[0]),
+        "title": row[1],
+        "summary": row[2],
+        "source": row[3],
+        "url": row[4],
+        "published_at": row[5],
+    }
+
+
 async def favorite_item(session: AsyncSession, item_id: int, favorited: bool = True) -> bool:
     """Toggle an item's favorited flag (favorited items are retention-exempt).
     Returns True when a row was updated."""

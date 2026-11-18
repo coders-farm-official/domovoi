@@ -69,6 +69,7 @@ _BLOCKQUOTE_RE = re.compile(r"(?m)^[ \t]*>[ \t]?")
 _LIST_BULLET_RE = re.compile(r"(?m)^[ \t]*[-+•‣⁃][ \t]+")
 
 _WS_RE = re.compile(r"\s+")
+_PARAGRAPH_RE = re.compile(r"\n[ \t]*\n\s*")
 
 
 def sanitize_for_speech(text: str) -> str:
@@ -105,6 +106,9 @@ def sanitize_for_speech(text: str) -> str:
     s = _BULLET_GLYPHS_RE.sub("", s)
 
     # Collapse the whitespace the removals leave behind (incl. newlines →
-    # a single space, which the engines render as a natural pause).
-    s = _WS_RE.sub(" ", s).strip()
-    return s
+    # a single space, which the engines render as a natural pause). A blank
+    # line stays one: it is a paragraph break, which the Piper voices say as
+    # a longer silence (tts.PARAGRAPH_SILENCE_SEC; the news read-outs put
+    # each story in a paragraph of its own).
+    paragraphs = (_WS_RE.sub(" ", p).strip() for p in _PARAGRAPH_RE.split(s))
+    return "\n\n".join(p for p in paragraphs if p)

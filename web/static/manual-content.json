@@ -3948,7 +3948,7 @@
    "blocks": [
     {
      "type": "p",
-     "text": "A spoken briefing from the feeds your household picks, plus each person's own topics."
+     "text": "A spoken briefing from the feeds your household picks, plus each person's own topics. The stories are numbered and read with a pause between them. Right after, ask about one of them: \"tell me more about the second one\", \"the last one\", or \"the one about the bridge\"."
     },
     {
      "type": "label",
