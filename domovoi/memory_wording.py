@@ -79,7 +79,7 @@ def _plain_verb(word: str) -> str:
             return plain
     if lower.endswith("ies") and len(lower) > 4:
         return word[:-3] + "y"
-    if re.search(r"(?:ss|ch|sh|x|z|o)es$", lower):
+    if re.search(r"(?:ss|ch|sh|x|z|o)es\Z", lower):
         return word[:-2]
     if lower.endswith("s") and not lower.endswith("ss"):
         return word[:-1]
