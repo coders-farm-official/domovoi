@@ -73,6 +73,7 @@ import com.domovoi.app.LocalToast
 import com.domovoi.app.alerts.CHAT_ROUTE
 import com.domovoi.app.alerts.CONTAINERS_ROUTE
 import com.domovoi.app.alerts.IncidentAlerts
+import com.domovoi.app.friendhouses.FRIEND_HOUSES_ROUTE
 import com.domovoi.app.data.ServerCredentials
 import com.domovoi.app.net.IdentityGate
 import com.domovoi.app.net.IdentityVerdict
@@ -373,12 +374,35 @@ private fun ShellContent(
     // A screen asked for from outside the UI: a timer or reminder alert's
     // tap lands on Home, where the timers and their "done" lines are; a
     // container incident's on the Containers screen.
+    // Capability manifest — fetched at connect, refreshed when the WS
+    // comes (back) up. Absence of the endpoint ⇒ EMPTY ⇒ gated screens
+    // stay hidden (design §8). Only the ACTIVE server's own manifest
+    // counts (manifestFor): after a server switch it is EMPTY until the new
+    // one's loads, never the previous server's. Friend Houses rides on it:
+    // shown only while GET /api/friend-houses says it is on, on THIS server
+    // (friendhouses/FriendHouses.kt FhGateState.shownFor).
+    val activeServer by app.prefs.serverUrl.collectAsState()
+    val capsState = rememberCapabilities()
+    val fhGate by app.friendHouses.state.collectAsState()
+    val fhStatus = fhGate.shownFor(activeServer)
+    val caps = manifestFor(capsState.data, activeServer).copy(friendHouses = fhStatus != null)
+
     val pendingRoute by app.pendingRoute.collectAsState()
-    LaunchedEffect(pendingRoute) {
+    LaunchedEffect(pendingRoute, fhStatus != null, fhGate.server) {
         val target = when (pendingRoute) {
             "home" -> Route.Home
             CHAT_ROUTE -> Route.Chat
             CONTAINERS_ROUTE -> Route.Containers
+            FRIEND_HOUSES_ROUTE -> when {
+                fhStatus != null -> Route.FriendHouses
+                // This server's verdict is in and it is hidden: nothing to open.
+                fhGate.server == ServerCredentials.normalize(activeServer) -> {
+                    app.pendingRoute.value = null
+                    null
+                }
+                // A cold start from the notification: wait for the first read.
+                else -> null
+            }
             else -> null
         }
         if (target != null) {
@@ -386,15 +410,6 @@ private fun ShellContent(
             app.pendingRoute.value = null
         }
     }
-
-    // Capability manifest — fetched at connect, refreshed when the WS
-    // comes (back) up. Absence of the endpoint ⇒ EMPTY ⇒ gated screens
-    // stay hidden (design §8). Only the ACTIVE server's own manifest
-    // counts (manifestFor): after a server switch it is EMPTY until the new
-    // one's loads, never the previous server's.
-    val activeServer by app.prefs.serverUrl.collectAsState()
-    val capsState = rememberCapabilities()
-    val caps = manifestFor(capsState.data, activeServer)
     val connected by app.bus.connected.collectAsState()
     LaunchedEffect(connected) { if (connected) capsState.refresh() }
     // A station in the phone's queue belongs to our Radio plugin: once the
@@ -450,6 +465,16 @@ private fun ShellContent(
             }
         }
     }
+    // Friend Houses has no push: while the app is on screen its status (and
+    // the unread badge) is read again every minute.
+    LaunchedEffect(lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                delay(FRIEND_HOUSES_POLL_MS)
+                app.friendHouses.refresh()
+            }
+        }
+    }
     val sharedAnswers by app.prefs.sharedScreens.collectAsState()
     val shared = isSharedScreen(ServerCredentials.sharedAnswerFor(sharedAnswers, shellServerUrl), paired)
     // If the active route lost its capability (plugin uninstalled,
@@ -469,7 +494,7 @@ private fun ShellContent(
         LocalSettingsTabRequest provides settingsRequest,
         LocalSourceChoices provides sourceChoices,
     ) {
-        val counts = rememberSidebarCounts()
+        val counts = rememberSidebarCounts().copy(friendHouses = fhStatus?.unread?.takeIf { it > 0 })
         val widthClass = currentWindowAdaptiveInfo().windowSizeClass.windowWidthSizeClass
 
         when (widthClass) {
@@ -479,6 +504,9 @@ private fun ShellContent(
         }
     }
 }
+
+/** How often the Friend Houses badge is read while the app is on screen. */
+private const val FRIEND_HOUSES_POLL_MS = 60 * 1000L
 
 /** Shared-screen re-ask cadence while the app is on screen... */
 private const val REASK_EVERY_MS = 2 * 60 * 1000L

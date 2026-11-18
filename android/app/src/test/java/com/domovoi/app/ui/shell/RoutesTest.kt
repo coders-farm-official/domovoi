@@ -255,7 +255,7 @@ class RoutesTest {
         assertEquals("lists", NavKeys[Route.Lists])
         assertEquals(Route.Lists, routeForNavKey("lists"))
         assertEquals("tools", DefaultNav.groupOf[Route.Lists])
-        assertEquals(listOf(Route.News, Route.Calendar, Route.Lists, Route.Files), WorkspaceRoutes.takeLast(4))
+        assertEquals(listOf(Route.News, Route.Calendar, Route.Lists, Route.FriendHouses, Route.Files), WorkspaceRoutes.takeLast(5))
         assertEquals(
             listOf(Route.News, Route.Calendar, Route.Lists, Route.Files),
             group(navTree(visible(Capabilities.EMPTY, false)), "tools")!!.routes,

@@ -9,6 +9,7 @@ import androidx.compose.material.icons.filled.CellTower
 import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.HolidayVillage
 import androidx.compose.material.icons.filled.PermMedia
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Image
@@ -72,6 +73,14 @@ enum class Route(val label: String, val icon: ImageVector) {
      *  #lists: household data like Calendar, so a server screen only (no
      *  local tab, [localTabs]). */
     Lists("Lists", Icons.Filled.Checklist),
+
+    /** Friend Houses, "Serverless messaging and friend system between
+     *  households": the house inbox, the friends and the shared lists
+     *  (ui/screens/friendhouses/). Household data like Lists, so a server
+     *  screen only. Off by default on the server: on no launcher, and not
+     *  rendered, unless `GET /api/friend-houses` says it is on there
+     *  ([Capabilities.friendHouses], friendhouses/FriendHousesApi.kt FhGate). */
+    FriendHouses("Friend houses", Icons.Filled.HolidayVillage),
     Stations("Stations", Icons.Filled.Radio),
     Files("Files", Icons.Filled.Folder),
     Settings("Settings", Icons.Filled.Settings),
@@ -114,10 +123,12 @@ fun chatAvailable(caps: Capabilities, phoneCanChat: Boolean = onDeviceAssistant(
     caps.aiEnabled || phoneCanChat
 
 /** True when the server's capability manifest allows this route; Chat
- *  needs one place that can start a chat ([chatAvailable]). */
+ *  needs one place that can start a chat ([chatAvailable]); Friend houses
+ *  needs the server to say it is on ([Capabilities.friendHouses]). */
 fun Route.visibleWith(caps: Capabilities): Boolean =
     (requiredCapability()?.let { caps.has(it) } ?: true) &&
-        (this != Route.Chat || chatAvailable(caps))
+        (this != Route.Chat || chatAvailable(caps)) &&
+        (this != Route.FriendHouses || caps.friendHouses)
 
 /**
  * Pages a shared screen (an admin marks the device in the dashboard's
@@ -168,7 +179,7 @@ fun settingsTabFor(route: Route): String? = SettingsTabRoutes[route]
 val WorkspaceRoutes = listOf(
     Route.Chat,
     Route.Music, Route.Podcasts, Route.Audiobooks, Route.Videos, Route.Stations, Route.Images,
-    Route.News, Route.Calendar, Route.Lists, Route.Files,
+    Route.News, Route.Calendar, Route.Lists, Route.FriendHouses, Route.Files,
 )
 
 /**
@@ -189,6 +200,7 @@ val NavKeys: Map<Route, String> = mapOf(
     Route.News to "news",
     Route.Calendar to "calendar",
     Route.Lists to "lists",
+    Route.FriendHouses to "friend-houses",
     Route.Files to "files",
     Route.Home to "home",
     Route.People to "people",
@@ -226,6 +238,9 @@ val DefaultNav = NavDefaults(
         Route.News to "tools",
         Route.Calendar to "tools",
         Route.Lists to "tools",
+        // Beside Lists: household communication, one inbox for the house,
+        // and its shared lists open in Lists (see FriendHouses above).
+        Route.FriendHouses to "tools",
         Route.Files to "tools",
     ),
 )

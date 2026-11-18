@@ -14,11 +14,15 @@ data class SidebarCounts(
     val people: Int? = null,
     val calendar: Int? = null,
     val stations: Int? = null,
+    /** Unread messages in the house inbox (Friend houses' badge); null
+     *  while it is hidden or there are none. */
+    val friendHouses: Int? = null,
 ) {
     fun forRoute(r: Route): Int? = when (r) {
         Route.People -> people
         Route.Calendar -> calendar
         Route.Stations -> stations
+        Route.FriendHouses -> friendHouses
         else -> null
     }
 }

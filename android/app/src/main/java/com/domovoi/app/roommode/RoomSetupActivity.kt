@@ -145,6 +145,8 @@ class RoomSetupActivity : ComponentActivity() {
         runCatching { container.player.detachForRoomMode() }
         runCatching { container.bus.stop() }
         runCatching { container.alerts.pauseForRoomMode() }
+        // Friend Houses' notifications may carry another house's message.
+        runCatching { container.friendHouses.pauseForRoomMode() }
         DeviceDownloads.networkChanged(this)
         startActivity(Intent(this, RoomModeActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         // The household app's task leaves Recents (and its last screenshot

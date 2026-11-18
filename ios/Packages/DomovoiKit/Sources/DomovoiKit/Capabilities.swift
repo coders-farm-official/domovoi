@@ -51,6 +51,14 @@ public struct Capabilities: Equatable, Sendable, Decodable {
     public let handlerDisplay: [HandlerDisplay]
     public let features: [String: Bool]
 
+    /// **Not part of the manifest**: whether Friend Houses shows on this
+    /// server, from `GET /api/friend-houses` (``FriendHousesGate``). The
+    /// shell sets it on the visibility it builds (``withFriendHouses(_:)``),
+    /// so every launcher and the route check read one gate. False until that
+    /// read says "on", and never read from the manifest's JSON — Android's
+    /// `@Transient val friendHouses`.
+    public let friendHouses: Bool
+
     /// Gated screens hidden, neutral tones — what a failed fetch means.
     public static let empty = Capabilities()
 
@@ -59,13 +67,27 @@ public struct Capabilities: Equatable, Sendable, Decodable {
         serverVersion: String? = nil,
         plugins: [CapabilityPlugin] = [],
         handlerDisplay: [HandlerDisplay] = [],
-        features: [String: Bool] = [:]
+        features: [String: Bool] = [:],
+        friendHouses: Bool = false
     ) {
         self.domovoiAPI = domovoiAPI
         self.serverVersion = serverVersion
         self.plugins = plugins
         self.handlerDisplay = handlerDisplay
         self.features = features
+        self.friendHouses = friendHouses
+    }
+
+    /// This manifest with Friend Houses' gate set.
+    public func withFriendHouses(_ on: Bool) -> Capabilities {
+        Capabilities(
+            domovoiAPI: domovoiAPI,
+            serverVersion: serverVersion,
+            plugins: plugins,
+            handlerDisplay: handlerDisplay,
+            features: features,
+            friendHouses: on
+        )
     }
 
     enum CodingKeys: String, CodingKey {
@@ -87,6 +109,8 @@ public struct Capabilities: Equatable, Sendable, Decodable {
         plugins = try c.decodeIfPresent([CapabilityPlugin].self, forKey: .plugins) ?? []
         handlerDisplay = try c.decodeIfPresent([HandlerDisplay].self, forKey: .handlerDisplay) ?? []
         features = try c.decodeIfPresent([String: Bool].self, forKey: .features) ?? [:]
+        // The gate's, never the manifest's (no coding key at all).
+        friendHouses = false
     }
 
     /// True when **our** plugin for `capability` is installed and declares it

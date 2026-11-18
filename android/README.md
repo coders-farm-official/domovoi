@@ -1249,6 +1249,54 @@ leaves the home network). What the phone does, exactly:
   while it ran), posted the fire it had missed and armed the new timer;
   in forced Doze the exact tick did the same (see above).
 
+## Friend houses
+
+"Serverless messaging and friend system between households": the
+server's Friend Houses (off by default; an admin turns it on in the
+dashboard). The phone gets what a household phone may do with friends
+the house already has: read the house inbox (one for the whole house),
+send a message, mark a conversation read, and see the friends and the
+shared lists (`ui/screens/friendhouses/`, `friendhouses/`).
+
+- **Where:** Tools, beside Lists (household data, like Lists and
+  Calendar; its shared lists open in Lists), with the inbox's unread
+  count as its badge.
+- **Shown only when the server says it is on:** `GET /api/friend-houses`
+  answers 2xx with `status` on, starting, stopped or error (stopped and
+  error show the server's sentence; the inbox still reads and a send
+  queues). Off, unavailable, 401, 403 (a server before the device-tier
+  change), 404 (a server before Friend Houses) and 501 hide it on every
+  launcher; a 401 or 403 on this read never raises the pairing screen.
+  Read at start, on a server or token change, on reconnect, on coming
+  back to the app, every minute while it is on screen and at every
+  background tick (`FhGate`, `FriendHouses`).
+- **Admin-only things are words, never controls** ("Only an admin can …,
+  on the dashboard"): friending, codes, alert levels, removing, blocking
+  and the blocked list, sharing, export and delete. A 403 from any call shows that sentence; a 400 or
+  404 shows the server's `detail` as written.
+- **Notifications** follow each friend's alert level, set on the
+  dashboard: `inbox` is the badge only, `sender` posts "A message from
+  <name>", `read` the name and the text (cut to about 200 characters,
+  control characters taken out). They come from the background sync's
+  tick above (`FriendHouseAlerts`, Wi-Fi or Ethernet only, on its own
+  "Friend houses" channel); the first look at a server is a baseline,
+  not a notification. No push, nothing hosted.
+- **This week:** the status's `changes` (new friend houses, our lists
+  shared with one), newest first, at most five, in the dashboard's words
+  ("The Smiths became a friend house · 2d ago"), with "Not you? Only an
+  admin can …". Unknown kinds are skipped; an older server sends none.
+- **Presence:** under each friend, "Online" (their house heard from in
+  the last 15 minutes), else "Last seen <2m ago…>", else "Not reached
+  yet": the house running, never who is home. A server without it shows
+  nothing.
+- **Hostile text:** every name, body, title and `last_error` comes from
+  another house. Shown as a plain-String `Text` only (`FhPlain`): no
+  links, markup, previews or fetches; line breaks kept. Never logged, and
+  never in a URL: a path carries only the 64-hex house key (checked
+  first) and numbers. The phone keeps only house keys and numbers
+  (`friend_houses` preferences: the last unread count and message id
+  seen per conversation).
+
 ## Room mode
 
 

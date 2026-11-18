@@ -57,6 +57,37 @@ and the core-signed identity answers.
   restart a microphone from the background.
 - **No increased-memory-limit entitlement**, and no entitlements file at all.
 
+## Friend houses
+
+"Serverless messaging and friend system between households", as Android
+has it (`android/README.md`, "Friend houses"): the house inbox, a
+conversation and its composer, the friends and the shared lists, in Tools
+beside Lists with the inbox's unread count as its badge
+(`Domovoi/FriendHouses/`, `FriendHouses*.swift` in DomovoiKit).
+
+- **Shown only when the server says it is on:** `GET /api/friend-houses`
+  answers 2xx with `status` on, starting, stopped or error. Off,
+  unavailable, a garbled answer, 401, 403, 404 and 501 hide it on every
+  launcher; no answer, a 429 or a 5xx keep the last verdict; this read never
+  raises the pairing screen. Read at start, on a server or token change, on
+  reconnect, on coming back to the app and every minute while it is open
+  (`FriendHousesGate`).
+- **Admin-only things are words, never controls.** A 403 from any call says
+  "Only an admin can do that, on the dashboard."; a 400 or 404 shows the
+  server's `detail` as written.
+- **Notifications** follow each friend's alert level (`inbox`: the badge
+  only; `sender`: "A message from <name>"; `read`: the name and the text,
+  cut to about 200 characters, control characters out). **Only while the app
+  is open:** the iPhone app has no background check (its one background mode
+  is `audio`, and there is no push and nothing hosted), so the check runs at
+  each of the gate's reads, and the Friends tab says so. The first look at a
+  server is a baseline, not a notification.
+- **Hostile text:** every name, body, title and `last_error` comes from
+  another house and is drawn with `Text(verbatim:)` only (no Markdown, no
+  links, no previews, line breaks kept), never logged, and never in a URL: a
+  path carries only the checked 64-hex house key and numbers.
+  `FriendHousesPlainTextTests` holds the folder to it.
+
 ## Building and testing
 
 The maintainers' Mac only builds and tests; the code is written and committed

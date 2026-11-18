@@ -73,7 +73,9 @@ final class HouseholdRoot {
         // through the container's client, and `DomovoiApplication.onCreate`
         // starts them beside the socket in the same order
         // (`TimerAlerts.kt:97`).
-        alerts = AlertsAppWiring(container: container)
+        // A tap that asked for a screen while the app is open is taken at
+        // once (``AlertsAppWiring/init(container:onTap:)``).
+        alerts = AlertsAppWiring(container: container, onTap: { [weak model] in model?.refresh() })
         // After the container is started: its first act (on an app that is
         // sharing) is a call through the container's client. Builds no
         // EventKit store and asks for no permission by itself.
@@ -82,6 +84,15 @@ final class HouseholdRoot {
             container: container,
             phoneName: DeviceRegistry.suggestedDeviceName(model: deviceModel)
         )
+        // Friend Houses (Android 394473e2): the gate reads now and on every
+        // trigger from here on; its notifications go through the same system
+        // centre as the alerts', after the alerts set its delegate. While
+        // the app is open only: the iPhone has no background check
+        // (``FriendHouseAlerts``).
+        model.startFriendHouses(notifications: AlertsSystemNotificationCentre())
+        // Its category's hidden-previews placeholder: a locked phone with
+        // previews hidden shows "A message from a friend house", no words.
+        Task { await FhNotificationSink.registerCategory() }
     }
 
     /// The household side goes quiet as the phone becomes a room
@@ -97,6 +108,9 @@ final class HouseholdRoot {
     /// does (its container is the process's, and `leave` restarts it).
     func quietForRoomMode() {
         alerts.centre.pause()
+        // Friend Houses stops and takes back its notifications: at the
+        // `read` level they carry another house's words.
+        model.pauseFriendHousesForRoomMode()
         container.socket.stop()
         if model.playerIsBuilt, let player = model.player, player.target.roomID == nil {
             player.stop()
@@ -109,6 +123,7 @@ final class HouseholdRoot {
     func resumeAfterRoomMode() {
         container.socket.start()
         alerts.centre.resume()
+        model.resumeFriendHousesAfterRoomMode()
     }
 }
 

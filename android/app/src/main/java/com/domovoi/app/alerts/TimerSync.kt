@@ -429,7 +429,9 @@ class AndroidSyncAlarm(context: Context) : SyncAlarm {
  *
  * The same wake-up reads the container guard's incidents beside the timers
  * (IncidentAlerts.onBackgroundTick, its own Wi-Fi, notifications and
- * freshness checks), side by side so both fit Doze's 10 s network window.
+ * freshness checks), and Friend Houses' new messages
+ * (FriendHouses.onBackgroundTick, the same checks), side by side so all fit
+ * Doze's 10 s network window.
  * The chain itself stays the timers': this only rides on it.
  */
 class TimerSyncReceiver : BroadcastReceiver() {
@@ -449,6 +451,9 @@ class TimerSyncReceiver : BroadcastReceiver() {
                     }
                     // A phone room's low battery (RoomBatteryAlerts); never throws.
                     launch { app.container.batteryAlerts.onBackgroundTick() }
+                    // New messages from friend houses, by each friend's alert
+                    // level (friendhouses/FriendHouseAlerts.kt); never throws.
+                    launch { app.container.friendHouses.onBackgroundTick() }
                     val result = app.container.alerts.sync.onTick()
                     Log.i(TAG, "background sync: ${result.name.lowercase()}")
                 }

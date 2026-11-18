@@ -370,7 +370,8 @@ struct HomeView: View {
             HomeEverythingView(
                 tiles: model.everything,
                 onOpen: { model.navigate($0) },
-                onEditTheBar: { model.openSettingsTab("app-layout") }
+                onEditTheBar: { model.openSettingsTab("app-layout") },
+                badge: { model.badge(for: $0) }
             )
         }
     }
