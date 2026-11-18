@@ -4,6 +4,30 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.4.0 (unreleased) — Each room's music player is rebuilt once, while it is quiet
+
+- **What changed.** The stream each room's music player sends to its
+  speakers no longer carries song titles. The music player in Domovoi's
+  image (MPD 0.23.12) has a bug that can crash it at a song change when a
+  speaker connects to the stream at that moment, and the speakers
+  reconnect after every voice request. Without titles in the stream that
+  code never runs. Nothing lost: speakers never read titles from the
+  stream, and the dashboard, the apps and "what's playing" ask the player
+  directly. This is the likely cause of a player dying between songs; the
+  earlier fix puts the music back when it does.
+- **What to know.** A room's player keeps the settings it was made with,
+  so after the update each room's player is made again, once. At the
+  core's start each room that isn't playing is rebuilt there and then, one
+  at a time; a room that is playing is left alone and rebuilt about a
+  minute after its music stops or is paused. The room keeps its queue, the
+  song it was on and where in it, its playlists and its library. The core log has one line per room:
+  `music player for room=… made again with the new mpd.conf`, or `… is made
+  again once it stops playing`. The container guard doesn't report it. No
+  migration. On a Linux or Windows install the update itself removes the
+  room players when this file changes and the core makes them again at its
+  start, as before; the rebuild above covers every other way a house is
+  updated.
+
 ## 1.4.0 (unreleased) — The news is read story by story, and you can ask about one
 
 - **What changed.** "What's the news" used to run its headlines together
