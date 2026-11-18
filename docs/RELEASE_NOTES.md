@@ -4,6 +4,17 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.4.0 (unreleased) — "Should I remember that?" is said to you
+
+- **What changed.** When Domovoi notices a fact worth keeping and asks
+  before saving it, the question now talks to you: "By the way, your pets
+  are Biscuit and Pepper. Should I remember that?" Before, it read out the
+  fact as the AI wrote it ("…are their pets"), which sounded like Domovoi
+  talking about someone else. New facts are saved in your own words, the
+  way a fact you ask it to remember is.
+- **What to know.** Facts saved before this keep their old wording. You can
+  edit them on the People page.
+
 ## 1.4.0 (unreleased) — A Mac can be the server
 
 - **What changed.** Each release now carries `DomovoiSetup-mac.pkg`, the

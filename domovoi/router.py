@@ -615,10 +615,13 @@ async def _maybe_offer_pending_memory(
             return None
         memory_id, body, _topic = row
         await repo.mark_offered(memory_id)
-        # Conversational lead-in — keeps the offer from sounding
-        # like a system prompt. Body is the LLM's extracted phrasing
-        # so we trust it as-is rather than re-templating.
-        offer_text = f"By the way — {body}. Should I remember that?"
+        # Said to the person the fact is about: "my"/"their"/"the user"
+        # become "your" (domovoi/memory_wording.py). Word for word, a
+        # fact like "Biscuit and Pepper are their pets" sounded like
+        # Domovoi talking about someone else.
+        from domovoi.memory_wording import offer_text as _word_offer
+
+        offer_text = _word_offer(body)
         return offer_text, memory_id
     except Exception as e:
         log.warning("memory surfacing failed: %s", e)
