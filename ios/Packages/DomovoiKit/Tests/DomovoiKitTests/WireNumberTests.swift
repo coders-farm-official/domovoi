@@ -253,7 +253,7 @@ final class WireNumberTests: XCTestCase {
                 elapsedSec: d, readAtMs: Int64.min, nowMs: Int64.max, playing: true, durationSec: d, nudgeMs: Int64.max
             )
             _ = PlayerLyricsMath.localPositionMs(
-                tickSec: d, tickAtMs: Int64.min, nowMs: Int64.max, playing: true, speed: d, durationSec: d
+                tickSec: d, tickAtMs: Int64.min, nowMs: Int64.max, playing: true, speed: Float(d), durationSec: d
             )
             _ = PlayerServerPositions.saveBody(deviceID: "p", personID: nil, positionSec: d, speed: 1)
             _ = PodcastPath.savePositionBody(deviceID: "p", positionSec: d)
