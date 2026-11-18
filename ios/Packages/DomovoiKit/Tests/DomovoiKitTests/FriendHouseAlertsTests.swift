@@ -397,8 +397,10 @@ final class FriendHouseAlertsTests: XCTestCase {
             afterSeconds: 60
         ))
         await sink.withdrawAll()
-        XCTAssertEqual(["timer_fire:k:1"], await centre.deliveredIdentifiers())
-        XCTAssertEqual([], await centre.pendingIdentifiers())
+        let delivered = await centre.deliveredIdentifiers()
+        let pending = await centre.pendingIdentifiers()
+        XCTAssertEqual(["timer_fire:k:1"], delivered)
+        XCTAssertEqual([], pending)
         XCTAssertEqual(["friend_house:k:\(smiths)"], centre.log.current.removedDelivered)
         XCTAssertEqual([fhNoteIdentifier(serverKey: "z", house: patels)], centre.log.current.removedPending)
     }
