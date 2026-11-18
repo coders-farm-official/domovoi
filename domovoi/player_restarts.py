@@ -104,7 +104,8 @@ class RestartWatch:
         gap = now - prev.at
         log.warning(
             "music player for room=%s restarted (up %.0f s; it had been up %.0f s at "
-            "the last look %.0f s ago): it came back %s at %s:%s, the room was %s at %s:%s",
+            "the last look %.0f s ago): it came back %s, queue entry %s at %s; the room "
+            "was %s, entry %s at %s",
             room_id, cur.uptime, prev.uptime, gap, cur.state, cur.pos,
             _clock_str(cur.elapsed), prev.state, prev.pos, _clock_str(prev.elapsed),
         )
