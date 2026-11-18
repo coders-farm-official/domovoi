@@ -364,8 +364,9 @@ conservative about what counts and loud about what does
 * **Docker coming back.** For 2 minutes after Docker answers again its
   containers are left to come back up by themselves.
 * **Work in progress** (`domovoi/container_guard/holds.py`): a room's music
-  player while it is started, warmed or removed, and a minute after; a
-  plugin while it is installed, upgraded, enabled, disabled or uninstalled,
+  player while it is started, warmed, made again with a changed `mpd.conf`
+  (the same name and image, a new container ID) or removed, and a minute
+  after; a plugin while it is installed, upgraded, enabled, disabled or uninstalled,
   and 5 minutes after (its own watchdog recreates its containers then),
   and while its upgrade waits for a restart; a plugin's container while
   the plugin says it is recreating it (believed for 30 minutes, longer
