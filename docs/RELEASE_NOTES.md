@@ -4,6 +4,21 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.4.0 (unreleased) — Music no longer jumps back when a room's player restarts
+
+- **What changed.** A room's music player (its MPD container) that stops
+  unexpectedly comes back from a saved state that is up to two minutes old:
+  MPD saves it two minutes after a song starts and not again until the next
+  song. One that died as a song ended came back playing that same song from
+  about 2:00. In a group every room heard it, and the dashboard showed it
+  there too. Now the core notices the restart on its next look at the
+  player, within about 5 seconds, and puts the music back: the next song
+  from its start when the old one had ended, otherwise the same song where
+  it had got to. A paused room is left as it came back.
+- **What to know.** Nothing to do. The core log says when it happens:
+  `music player for room=… restarted`, then what it did. It does not stop
+  the player from dying, and the log line helps find out why it died.
+
 ## 1.4.0 (unreleased) — Friend Houses: the listener runs walled off in its own container
 
 - **What changed.** The part of Friend Houses that answers other houses
