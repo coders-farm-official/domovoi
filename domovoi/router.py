@@ -622,6 +622,8 @@ async def _maybe_offer_pending_memory(
         from domovoi.memory_wording import offer_text as _word_offer
 
         offer_text = _word_offer(body)
+        if not offer_text:
+            return None
         return offer_text, memory_id
     except Exception as e:
         log.warning("memory surfacing failed: %s", e)

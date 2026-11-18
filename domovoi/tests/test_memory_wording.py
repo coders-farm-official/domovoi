@@ -33,6 +33,17 @@ from domovoi.memory_wording import offer_text, to_second_person
         ("Prefers tea over coffee", "you prefer tea over coffee"),
         # Someone named stays named.
         ("Sarah watches hockey on Sundays", "Sarah watches hockey on Sundays"),
+        # Curly apostrophes, as models often write them.
+        ("I’m training for a marathon", "you're training for a marathon"),
+        ("The user’s daughter is Priya", "your daughter is Priya"),
+        # "us" alone still means the speaker.
+        ("Max lives with us", "Max lives with you"),
+        # "the user" as the object: the next word isn't a verb to change.
+        ("Sarah texts the user sometimes", "Sarah texts you sometimes"),
+        ("Sarah visits the user weekends", "Sarah visits you weekends"),
+        ("The user and their wife live in Ohio", "you and your wife live in Ohio"),
+        # A lower-case "i" isn't the speaker.
+        ("i.e. I like jazz", "i.e. you like jazz"),
     ],
 )
 def test_fact_is_said_to_the_person(body: str, said: str) -> None:
@@ -48,7 +59,12 @@ def test_offer_reads_as_one_question() -> None:
     )
 
 
-@pytest.mark.parametrize("body", ["their pets", "the user likes jazz", "My dog"])
+@pytest.mark.parametrize("body", ["", "  ", " . "])
+def test_no_fact_no_offer(body: str) -> None:
+    assert offer_text(body) == ""
+
+
+@pytest.mark.parametrize("body", ["their pets","the user likes jazz", "My dog"])
 def test_offer_never_talks_about_the_person(body: str) -> None:
     said = offer_text(body).lower()
     for word in (" their ", "the user", " my "):

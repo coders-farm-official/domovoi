@@ -23,7 +23,8 @@ import re
 
 # The speaker's own words, in their own voice. Applied before anything
 # else, so "I'm" never reaches the bare "I" rule.
-_FIRST_PERSON: tuple[tuple[str, str], ...] = (
+# "I" is matched case-sensitively, so a lower-case "i" ("i.e.") stays.
+_I_FORMS: tuple[tuple[str, str], ...] = (
     (r"\bI am\b", "you are"),
     (r"\bI'm\b", "you're"),
     (r"\bI was\b", "you were"),
@@ -31,6 +32,9 @@ _FIRST_PERSON: tuple[tuple[str, str], ...] = (
     (r"\bI'd\b", "you'd"),
     (r"\bI'll\b", "you'll"),
     (r"\bI\b", "you"),
+)
+
+_FIRST_PERSON: tuple[tuple[str, str], ...] = (
     (r"\bmyself\b", "yourself"),
     (r"\bmy\b", "your"),
     (r"\bmine\b", "yours"),
@@ -86,8 +90,15 @@ def _plain_verb(word: str) -> str:
     return word
 
 
+def _looks_like_verb(word: str) -> bool:
+    lower = word.lower()
+    return lower in _BARE_VERB_STARTS or (
+        lower.endswith("s") and not lower.endswith("ss")
+    )
+
+
 def _has_first_person(text: str) -> bool:
-    if re.search(r"\bI\b", text):
+    if re.search(r"\bI\b", text) or re.search(_US[0], text):
         return True
     return re.search(
         r"\b(?:my|me|mine|myself|we|our|ours)\b", text, flags=re.IGNORECASE
@@ -106,11 +117,15 @@ def to_second_person(body: str) -> str:
     function wrote ("you", "your"), so it can follow "By the way, ".
     A name or any other word the fact started with keeps its case.
     """
-    text = " ".join((body or "").split()).rstrip(" .!?;,")
+    # Models write curly apostrophes too ("I’m", "the user’s").
+    text = (body or "").replace("’", "'").replace("‘", "'")
+    text = " ".join(text.split()).rstrip(" .!?;,")
     if not text:
         return ""
 
     if _has_first_person(text):
+        for pattern, repl in _I_FORMS:
+            text = re.sub(pattern, repl, text)
         for pattern, repl in _FIRST_PERSON:
             text = re.sub(pattern, repl, text, flags=re.IGNORECASE)
         text = re.sub(_US[0], _US[1], text)
@@ -118,10 +133,15 @@ def to_second_person(body: str) -> str:
 
     # "The user's" / "the speaker's" → "your".
     text = re.sub(rf"\b{_USER_NOUN}'s\b", "your", text, flags=re.IGNORECASE)
-    # "the user is" / "the user likes" → "you are" / "you like".
+    # "the user is" / "the user likes" → "you are" / "you like", only
+    # where "the user" is the subject (the start, or after "and", "but"
+    # or "that") and the next word reads as a verb. In "Sarah texts the
+    # user sometimes", "sometimes" stays.
     text = re.sub(
-        rf"\b{_USER_NOUN}\s+([A-Za-z']+)",
-        lambda m: "you " + _plain_verb(m.group(1)),
+        rf"(^|\b(?:and|but|that) ){_USER_NOUN}\s+([A-Za-z']+)",
+        lambda m: m.group(1) + "you " + (
+            _plain_verb(m.group(2)) if _looks_like_verb(m.group(2)) else m.group(2)
+        ),
         text,
         flags=re.IGNORECASE,
     )
@@ -150,8 +170,13 @@ def to_second_person(body: str) -> str:
 
 
 def offer_text(body: str) -> str:
-    """The question Domovoi adds to an answer to confirm a fact it noticed."""
+    """The question Domovoi adds to an answer to confirm a fact it noticed.
+
+    Empty when there is no fact to offer.
+    """
     fact = to_second_person(body)
+    if not fact:
+        return ""
     if fact[:1].isupper() and fact.split(" ", 1)[0] in {
         "You", "Your", "You're", "You've", "You'd", "You'll", "Yours", "Yourself",
     }:
