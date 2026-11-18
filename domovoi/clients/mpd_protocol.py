@@ -234,6 +234,9 @@ class MPDConnection:
     async def currentsong(self) -> dict[str, Any]:
         return parse_object(await self.command("currentsong"))
 
+    async def stats(self) -> dict[str, Any]:
+        return parse_object(await self.command("stats"))
+
     async def search(self, *args: Any) -> list[dict[str, Any]]:
         return parse_objects(await self.command("search", *args), ("file",))
 

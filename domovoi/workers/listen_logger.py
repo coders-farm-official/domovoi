@@ -50,6 +50,7 @@ from domovoi import music_listens
 from domovoi.clients.mpd import iter_mpd_clients
 from domovoi.config import settings
 from domovoi.db.session import session_scope
+from domovoi.player_restarts import RestartWatch
 from domovoi.workers.base import Worker
 
 log = logging.getLogger(__name__)
@@ -129,6 +130,9 @@ class ListenLogger(Worker):
         # music is must have been said after that.
         self._last_stop: dict[str, datetime] = {}
         self._forgotten: set[str] = set()
+        # Each room's player as it was at the last look: one that restarted
+        # and came back on an old place is put back (domovoi/player_restarts.py).
+        self._restarts = RestartWatch(clock=clock)
 
     async def tick(self) -> int:
         """One look at every room. Returns the listens written."""
@@ -141,6 +145,7 @@ class ListenLogger(Worker):
                 # shared queue (domovoi/music_groups.py): the host's player
                 # is the one looked at, once, and its listens are the
                 # host's. Up next's target for this room is the host's.
+                self._restarts.forget(room_id)
                 continue
             try:
                 written += await self._look(room_id, client)
@@ -165,6 +170,8 @@ class ListenLogger(Worker):
             return 0
         try:
             snap = await snap_fn()
+            if await self._restarts.look(room_id, client, snap):
+                snap = await snap_fn()  # where it plays now that it was moved
         except Exception as e:  # noqa: BLE001 — unreachable: look again next tick
             log.debug("listen logger: probe of %s failed: %s", room_id, e)
             return 0

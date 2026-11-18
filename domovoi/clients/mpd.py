@@ -158,6 +158,10 @@ class MPDStubClient:
         # Bumped by every call that REPLACES the queue (Up next ends a room's
         # session whose queue something else replaced; up_next/rooms.py).
         self.queue_generation = 0
+        # How long "the daemon" has run, as MPD's ``stats`` says; None: not
+        # reported. A test that lowers it plays a restart
+        # (domovoi/player_restarts.py).
+        self.uptime: float | None = None
 
     def _assign_ids(self, songs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
@@ -462,6 +466,7 @@ class MPDStubClient:
             "duration": (song or {}).get("duration"),
             "pos": pos,
             "playlistlength": len(self._queue),
+            "uptime": self.uptime,
         }
 
 
@@ -1224,15 +1229,23 @@ class RealMPDClient:
             return None
 
     async def playback_snapshot(self) -> dict[str, Any]:
-        """``{state, songid, file, elapsed, duration}`` from one connection:
-        MPD's ``status`` and ``currentsong``. ``songid`` / ``file`` are
-        None when no song is current; ``state`` is play, pause or stop.
-        Read every few seconds by the listen logger, so one round trip
-        rather than the three ``state`` + ``current_song`` +
-        ``elapsed_sec`` would take."""
+        """``{state, songid, file, elapsed, duration, pos, playlistlength,
+        uptime}`` from one connection: MPD's ``status``, ``currentsong`` and
+        ``stats``. ``songid`` / ``file`` are None when no song is current;
+        ``state`` is play, pause or stop; ``uptime`` is how long the daemon
+        has run (a smaller one than the last look's means it restarted,
+        domovoi/player_restarts.py). Read every few seconds by the listen
+        logger, so one round trip rather than the three ``state`` +
+        ``current_song`` + ``elapsed_sec`` would take."""
         async with self._connect() as c:
             status = await c.status()
             song = await c.currentsong() if status.get("songid") is not None else {}
+            try:
+                stats = await c.stats()
+            except Exception as e:  # noqa: BLE001 — the snapshot stands without it
+                if not _is_ack(e):
+                    raise
+                stats = {}
 
         def _num(raw: Any) -> float | None:
             try:
@@ -1252,6 +1265,7 @@ class RealMPDClient:
             "duration": _num(status.get("duration")) or _num((song or {}).get("duration")),
             "pos": int(pos) if pos is not None else None,
             "playlistlength": int(length) if length is not None else None,
+            "uptime": _num(stats.get("uptime")),
         }
 
 
