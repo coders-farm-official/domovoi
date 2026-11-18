@@ -77,6 +77,9 @@ public final class RoomKioskModel: ObservableObject {
     @Published public private(set) var drift = RoomDrift.zero
     @Published public private(set) var guidedAccessOn = false
     @Published public private(set) var guidedTipDismissed: Bool
+    /// The phone holds a household token: someone's own phone, not a spare
+    /// used only as a room. Read at the start and at every return.
+    @Published public private(set) var householdPhone: Bool
     /// The server's latest `room_display` while an engine runs that has one
     /// (``RoomDisplaySource``); nil otherwise.
     @Published public private(set) var feed: RoomFeed? = nil
@@ -130,6 +133,7 @@ public final class RoomKioskModel: ObservableObject {
         self.onLeave = onLeave
         label = store.enrolment?.roomLabel ?? "room"
         guidedTipDismissed = store.guidedAccessTipDismissed
+        householdPhone = lock.holdsHouseholdToken
         let t = now()
         lastActivity = t
         lastDrift = t
@@ -178,7 +182,15 @@ public final class RoomKioskModel: ObservableObject {
         return .resume
     }
 
-    public var showsGuidedAccessTip: Bool { !guidedAccessOn && !guidedTipDismissed }
+    public var showsGuidedAccessTip: Bool {
+        RoomGuidedAccessTip.shows(guidedAccessOn: guidedAccessOn, householdPhone: householdPhone, dismissed: guidedTipDismissed)
+    }
+
+    /// Whether the tip offers "hide this tip".
+    public var guidedAccessTipDismissible: Bool { RoomGuidedAccessTip.dismissible(householdPhone: householdPhone) }
+
+    /// The tip's words.
+    public var guidedAccessLine: String { RoomGuidedAccessTip.line(householdPhone: householdPhone) }
 
     // MARK: - the scene (ROOMMODE-MAP §3.1)
 
@@ -214,6 +226,7 @@ public final class RoomKioskModel: ObservableObject {
     /// and `RoomService.onStartCommand`).
     public func checkLockAndStart() {
         let holds = lock.holdsHouseholdToken
+        if householdPhone != holds { householdPhone = holds }
         let secure = lock.deviceSecure
         let lockOK = RoomLockRules.mayRun(holdsHouseholdToken: holds, deviceSecure: secure)
         if needsLock != !lockOK { needsLock = !lockOK }
@@ -478,8 +491,33 @@ public final class RoomKioskModel: ObservableObject {
         if guidedAccessOn != on { guidedAccessOn = on }
     }
 
+    /// Hides the tip for good, on a room-only phone. On a household phone
+    /// it cannot be hidden (``RoomGuidedAccessTip``), so this does nothing.
     public func dismissGuidedAccessTip() {
+        guard guidedAccessTipDismissible else { return }
         store.dismissGuidedAccessTip()
         guidedTipDismissed = true
+    }
+}
+
+/// Whether the room screen shows the Guided Access line, and how (§3.5;
+/// security audit round 6, IOS-2).
+///
+/// An iPhone room never locks: a locked iPhone stops the app's microphone,
+/// so the screen stays on and unlocked, and anyone in the room can swipe up
+/// to the phone's other apps (the Domovoi household app stays sealed). On a
+/// phone used only as a room that is a tip the person may hide. On a phone
+/// that holds a household token, someone's own phone, the line stays while
+/// Guided Access is off and cannot be hidden.
+public enum RoomGuidedAccessTip {
+    public static func shows(guidedAccessOn: Bool, householdPhone: Bool, dismissed: Bool) -> Bool {
+        guard !guidedAccessOn else { return false }
+        return householdPhone || !dismissed
+    }
+
+    public static func dismissible(householdPhone: Bool) -> Bool { !householdPhone }
+
+    public static func line(householdPhone: Bool) -> String {
+        householdPhone ? RoomModeStrings.guidedAccessLineHousehold : RoomModeStrings.guidedAccessLine
     }
 }

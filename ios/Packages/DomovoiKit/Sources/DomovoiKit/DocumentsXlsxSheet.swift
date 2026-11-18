@@ -567,7 +567,7 @@ enum DocumentsXlsxSheet {
         if !group(2).isEmpty {
             let row = group(3) == "$"
                 ? group(4)
-                : "\(max((Int(group(4)) ?? 1) + dRow, 1))"
+                : "\(max(WireNumber.add(Int(group(4)) ?? 1, dRow), 1))"
             return group(1) + column(group(1), group(2)) + group(3) + row
         }
         if !group(6).isEmpty {
@@ -575,7 +575,7 @@ enum DocumentsXlsxSheet {
         }
         if !group(10).isEmpty {
             func shiftRow(_ absolute: String, _ digits: String) -> String {
-                absolute == "$" ? digits : "\(max((Int(digits) ?? 1) + dRow, 1))"
+                absolute == "$" ? digits : "\(max(WireNumber.add(Int(digits) ?? 1, dRow), 1))"
             }
             return group(9) + shiftRow(group(9), group(10)) + ":"
                 + group(11) + shiftRow(group(11), group(12))
@@ -642,7 +642,9 @@ enum DocumentsXlsxSheet {
                 at = max(tag.end, at + 1)
                 continue
             }
-            let row = tag.attr("r").flatMap { Int($0) }.map { $0 - 1 } ?? (lastRow + 1)
+            // Saturating: a file's `r="-9223372036854775808"` minus one
+            // traps (security audit round 6, IOS-1).
+            let row = tag.attr("r").flatMap { Int($0) }.map { WireNumber.sub($0, 1) } ?? WireNumber.add(lastRow, 1)
             lastRow = row
             if row >= DocumentsSheetLimits.maxRows { break }
             let rowEnd = try DocumentsMiniXml.elementEnd(xml, tag)

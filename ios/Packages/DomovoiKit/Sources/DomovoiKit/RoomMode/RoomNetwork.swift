@@ -89,7 +89,8 @@ public protocol RoomWifiWatching: AnyObject, Sendable {
 /// one core it proved, and a 3xx from it is an error, never a hop to another
 /// host with the room's pairing key in the hello. Pings every 15 s, so a
 /// half-open socket fails within ~30 s.
-public final class RoomNetwork: NSObject, RoomHTTP, RoomSocketTransport, URLSessionWebSocketDelegate, @unchecked Sendable {
+public final class RoomNetwork: NSObject, RoomHTTP, RoomSocketTransport, URLSessionWebSocketDelegate, URLSessionDataDelegate,
+    @unchecked Sendable {
 
     /// Seconds to connect before a request is given up (OkHttp's 6 s).
     public static let connectTimeout: TimeInterval = 6
@@ -112,6 +113,7 @@ public final class RoomNetwork: NSObject, RoomHTTP, RoomSocketTransport, URLSess
     }
 
     private let links = RoomLock<[Int: RoomSocketLink]>([:])
+    private let fetches = RoomLock<[Int: RoomFetch]>([:])
     private let sessionHolder = RoomLock<URLSession?>(nil)
     private let delegateQueue: OperationQueue = {
         let q = OperationQueue()
@@ -153,39 +155,42 @@ public final class RoomNetwork: NSObject, RoomHTTP, RoomSocketTransport, URLSess
 
     // MARK: - RoomHTTP
 
+    /// The body is counted as it arrives and the read is cancelled the
+    /// moment it passes `limit` (or a `Content-Length` already says it will),
+    /// so a server that sends without end costs the room `limit` bytes of
+    /// memory, not everything it sends (security audit round 6, IOS-4: the
+    /// check used to come after the whole body was buffered).
     public func get(_ url: String, limit: Int) throws -> Data {
         guard let u = URL(string: url) else { throw RoomNetworkFailure("\(url) is not an address") }
         try Self.checkCleartext(u)
         var request = URLRequest(url: u)
         request.httpMethod = "GET"
         request.timeoutInterval = Self.readTimeout
-        let done = DispatchSemaphore(value: 0)
-        let answer = RoomLock<(Data?, URLResponse?, Error?)>((nil, nil, nil))
-        let task = session.dataTask(with: request) { data, response, error in
-            answer.withLock { $0 = (data, response, error) }
-            done.signal()
-        }
+        let fetch = RoomFetch(limit: limit)
+        let task = session.dataTask(with: request)
+        fetches.withLock { $0[task.taskIdentifier] = fetch }
+        defer { _ = fetches.withLock { $0.removeValue(forKey: task.taskIdentifier) } }
         task.resume()
         // The request's own timeout ends it; this is the backstop for a body
         // that keeps trickling in.
-        if done.wait(timeout: .now() + 300) == .timedOut {
+        if fetch.finished.wait(timeout: .now() + 300) == .timedOut {
             task.cancel()
             throw RoomNetworkFailure("\(Self.withoutQuery(url)) took too long")
         }
-        let (data, response, error) = answer.withLock { $0 }
+        let outcome = fetch.state.withLock { $0 }
         let short = Self.withoutQuery(url)
-        if let http = response as? HTTPURLResponse {
+        if outcome.tooLarge { throw RoomNetworkFailure("\(short) is too large") }
+        if let http = outcome.response as? HTTPURLResponse {
             guard http.statusCode == 200 else {
                 throw RoomNetworkFailure("\(http.statusCode) from \(short)", status: http.statusCode)
             }
-        } else if let error {
+            if let error = outcome.error { throw RoomNetworkFailure((error as NSError).localizedDescription) }
+        } else if let error = outcome.error {
             throw RoomNetworkFailure((error as NSError).localizedDescription)
         } else {
             throw RoomNetworkFailure("no answer from \(short)")
         }
-        guard let data else { throw RoomNetworkFailure("no body from \(short)") }
-        if data.count > limit { throw RoomNetworkFailure("\(short) is too large") }
-        return data
+        return outcome.body
     }
 
     static func withoutQuery(_ url: String) -> String {
@@ -241,8 +246,91 @@ public final class RoomNetwork: NSObject, RoomHTTP, RoomSocketTransport, URLSess
     }
 
     public func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let fetch = fetches.withLock({ $0[task.taskIdentifier] }) {
+            fetch.complete(response: task.response, error: error)
+            return
+        }
         let link = links.withLock { $0[task.taskIdentifier] }
         link?.didComplete()
+    }
+
+    // MARK: - a read, as it arrives (``get(_:limit:)``)
+
+    public func urlSession(
+        _ session: URLSession,
+        dataTask: URLSessionDataTask,
+        didReceive response: URLResponse,
+        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
+    ) {
+        guard let fetch = fetches.withLock({ $0[dataTask.taskIdentifier] }) else {
+            completionHandler(.allow)
+            return
+        }
+        completionHandler(fetch.received(response) ? .allow : .cancel)
+    }
+
+    public func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        guard let fetch = fetches.withLock({ $0[dataTask.taskIdentifier] }) else { return }
+        if !fetch.append(data) { dataTask.cancel() }
+    }
+}
+
+/// One ``RoomNetwork/get(_:limit:)`` in flight: the body so far, counted
+/// against the limit as each piece arrives.
+///
+/// `@unchecked Sendable`: the mutable state is behind ``state`` (a
+/// ``RoomLock``), `limit` and `finished` are `let`, and a semaphore is
+/// thread-safe.
+final class RoomFetch: @unchecked Sendable {
+    struct State {
+        var body = Data()
+        var tooLarge = false
+        var response: URLResponse?
+        var error: Error?
+    }
+
+    let limit: Int
+    let state = RoomLock(State())
+    let finished = DispatchSemaphore(value: 0)
+
+    init(limit: Int) {
+        self.limit = limit
+    }
+
+    /// The response's head: false when its `Content-Length` is already past
+    /// the limit, and the read stops before a byte of the body.
+    func received(_ response: URLResponse) -> Bool {
+        state.withLock { s in
+            s.response = response
+            if response.expectedContentLength > Int64(limit) {
+                s.tooLarge = true
+                return false
+            }
+            return true
+        }
+    }
+
+    /// A piece of the body: false once the whole would pass the limit, and
+    /// what was kept is dropped.
+    func append(_ data: Data) -> Bool {
+        state.withLock { s in
+            guard !s.tooLarge else { return false }
+            guard data.count <= limit - s.body.count else {
+                s.tooLarge = true
+                s.body = Data()
+                return false
+            }
+            s.body.append(data)
+            return true
+        }
+    }
+
+    func complete(response: URLResponse?, error: Error?) {
+        state.withLock { s in
+            if s.response == nil { s.response = response }
+            s.error = error
+        }
+        finished.signal()
     }
 }
 

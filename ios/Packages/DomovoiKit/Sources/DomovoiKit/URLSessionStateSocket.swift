@@ -50,6 +50,10 @@ public final class URLSessionStateSocketTransport: StateSocketTransport {
 
     public func open(_ request: URLRequest, reporting events: StateSocketEvents) -> any StateSocketLink {
         let task = session.webSocketTask(with: request)
+        // The upgrade carries the household token: it lands where it was
+        // aimed or it fails, never on the host a 3xx names
+        // (``SocketRedirectRefusal``; security audit round 6, IOS-3).
+        task.delegate = SocketRedirectRefusal.shared
         // Chosen rather than inherited — see ``stateSocketMaximumFrameBytes``.
         // The platform's own default is this same 1 MiB today; setting it
         // means a platform that changes its default does not change this app,
@@ -304,5 +308,37 @@ public final class URLSessionStateSocketTransport: StateSocketTransport {
                 return true
             }
         }
+    }
+}
+
+/// The per-task delegate on every WebSocket upgrade this app opens with
+/// the household token (the state socket and the drop-in call): it refuses
+/// **every** redirect, so the upgrade lands where it was aimed or fails.
+///
+/// What ``RedirectDelegate``'s note on sockets asks for: a
+/// `URLSessionWebSocketTask` is redirected like any other task, and the
+/// follow-up the platform proposes has already copied this request's headers,
+/// `X-Device-Token` among them, onto the new URL (`PlatformFactsTests`, facts
+/// 2 and 4). The client's session has no delegate of its own, so without this
+/// the platform followed a `302` from the upgrade by itself and handed the
+/// token to the host it named (security audit round 6, IOS-3).
+/// ``RedirectPolicy`` already never follows a socket redirect; this is that
+/// rule on the task.
+///
+/// `@unchecked Sendable` for the reason ``RedirectDelegate`` gives: a
+/// `URLSession` delegate has to be an `NSObject`. This one has no stored
+/// state at all, so one instance serves every task.
+final class SocketRedirectRefusal: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+
+    static let shared = SocketRedirectRefusal()
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
     }
 }

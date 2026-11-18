@@ -43,9 +43,11 @@ and the core-signed identity answers.
   `NSAllowsLocalNetworking` plus exceptions for `.home.arpa`, `.lan`,
   `.internal` and `.home`, and the app enforces its own `CleartextPolicy` on
   top, because `NSAllowsLocalNetworking` admits public IP addresses too.
-- **Chat on the phone uses Apple's on-device model** (Foundation Models, iOS
-  26 with Apple Intelligence on). Where it isn't available the phone is simply
-  not offered as a place to chat; chats with the home server work everywhere.
+- **Chat is answered by the home server only.** The phone does not offer
+  itself as a place to chat in this version, and Apple's on-device model is
+  not used (owner answer Q11, 2026-11-14: `AppleAssistantEngine` is compiled
+  but unreachable in a shipping build; `AssistantEngineHost`). The phone's own
+  chat comes back with a model file of our own.
 - **No speech-recognition permission.** Apple's speech recognition is not
   used, so that prompt never appears (`DomovoiAppTests` checks the key is
   absent).

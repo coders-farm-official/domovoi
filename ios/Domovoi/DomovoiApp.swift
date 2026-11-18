@@ -167,6 +167,9 @@ struct DomovoiApp: App {
         // through the setter when it is created, so a field already on screen
         // would keep the grey.
         Self.drawHintsInTheMutedInk()
+        // Clips a killed or crashed app left in the chat-video spool go, off
+        // the main thread (security audit round 6, IOS-5).
+        DispatchQueue.global(qos: .utility).async { ChatVideoSpool.sweep() }
         // The household graph — **one vault, handed to both**; the device id
         // and the two things only UIKit can answer, read once on the main
         // actor (``DeviceSelf``); the socket subscribed **before** it is

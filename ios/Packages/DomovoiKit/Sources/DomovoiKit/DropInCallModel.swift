@@ -678,6 +678,9 @@ public final class URLSessionDropInTransport: DropInSocketTransport {
 
     public func open(_ request: URLRequest, reporting events: DropInSocketEvents) -> any DropInSocket {
         let task = session.webSocketTask(with: request)
+        // Refuses every redirect, as the state socket does
+        // (``SocketRedirectRefusal``; security audit round 6, IOS-3).
+        task.delegate = SocketRedirectRefusal.shared
         let link = Link(task: task, events: events)
         task.resume()
         link.run()

@@ -13,44 +13,36 @@ final class PhoneCalendarSourceTests: XCTestCase {
 
     // MARK: - the mapping, one case each
 
-    func testCalDAVTitledICloudIsICloud() {
-        XCTAssertEqual(PhoneCalendarSource.of(.calDAV, sourceTitle: "iCloud"), .iCloud)
-        XCTAssertEqual(PhoneCalendarSource.of(.calDAV, sourceTitle: " icloud "), .iCloud)
-        XCTAssertEqual(PhoneCalendarSource.of(.calDAV, sourceTitle: "iCloud").label, "iCloud")
-    }
-
-    func testAnyOtherCalDAVIsOtherAccount() {
-        XCTAssertEqual(PhoneCalendarSource.of(.calDAV, sourceTitle: "alex@gmail.com"), .otherAccount)
-        XCTAssertEqual(PhoneCalendarSource.of(.calDAV, sourceTitle: "Gmail"), .otherAccount)
-        XCTAssertEqual(PhoneCalendarSource.of(.calDAV, sourceTitle: nil), .otherAccount)
-        XCTAssertEqual(PhoneCalendarSource.of(.calDAV, sourceTitle: ""), .otherAccount)
-        XCTAssertEqual(PhoneCalendarSource.of(.calDAV, sourceTitle: "Gmail").label, "Other account")
+    /// Security audit round 6, IOS-5: every CalDAV source is "Other
+    /// account", iCloud included; nothing is "iCloud" because of a title,
+    /// which any account's server can choose (Android's rule: the type only).
+    func testEveryCalDAVIsOtherAccountWhateverItIsCalled() {
+        XCTAssertEqual(PhoneCalendarSource.of(.calDAV), .otherAccount)
+        XCTAssertEqual(PhoneCalendarSource.of(.calDAV).label, "Other account")
+        for source in [PhoneCalendarSource.exchange, .otherAccount, .subscribed, .birthdays, .onThisPhone] {
+            XCTAssertNotEqual("iCloud", source.label)
+        }
     }
 
     func testLocalIsOnThisIPhone() {
-        XCTAssertEqual(PhoneCalendarSource.of(.local, sourceTitle: "Default").label, "On this iPhone")
-        // The title only ever tells iCloud apart: a local source named
-        // "iCloud" is still on this phone.
-        XCTAssertEqual(PhoneCalendarSource.of(.local, sourceTitle: "iCloud"), .onThisPhone)
+        XCTAssertEqual(PhoneCalendarSource.of(.local).label, "On this iPhone")
     }
 
     func testExchangeIsMicrosoftOutlook() {
-        XCTAssertEqual(PhoneCalendarSource.of(.exchange, sourceTitle: "alex@work.example").label,
-                       "Microsoft / Outlook")
+        XCTAssertEqual(PhoneCalendarSource.of(.exchange).label, "Microsoft / Outlook")
     }
 
     func testSubscribedIsSubscribed() {
-        XCTAssertEqual(PhoneCalendarSource.of(.subscribed, sourceTitle: "Subscribed Calendars").label, "Subscribed")
+        XCTAssertEqual(PhoneCalendarSource.of(.subscribed).label, "Subscribed")
     }
 
     func testBirthdaysIsBirthdays() {
-        XCTAssertEqual(PhoneCalendarSource.of(.birthdays, sourceTitle: "Other").label, "Birthdays")
+        XCTAssertEqual(PhoneCalendarSource.of(.birthdays).label, "Birthdays")
     }
 
     func testUnknownAndMobileMeAreOtherAccount() {
-        XCTAssertEqual(PhoneCalendarSource.of(.unknown, sourceTitle: nil).label, "Other account")
-        XCTAssertEqual(PhoneCalendarSource.of(.unknown, sourceTitle: "iCloud"), .otherAccount)
-        XCTAssertEqual(PhoneCalendarSource.of(.mobileMe, sourceTitle: "me.com"), .otherAccount)
+        XCTAssertEqual(PhoneCalendarSource.of(.unknown).label, "Other account")
+        XCTAssertEqual(PhoneCalendarSource.of(.mobileMe), .otherAccount)
     }
 
     // MARK: - what the row shows
@@ -76,9 +68,9 @@ final class PhoneCalendarSourceTests: XCTestCase {
             )
             return CalendarSharePayload.encode(built.body)
         }
-        XCTAssertEqual(body(.iCloud), body(.onThisPhone))
-        let text = String(decoding: body(.iCloud), as: UTF8.self)
-        XCTAssertFalse(text.contains("iCloud"))
+        XCTAssertEqual(body(.otherAccount), body(.onThisPhone))
+        let text = String(decoding: body(.otherAccount), as: UTF8.self)
+        XCTAssertFalse(text.contains("Other account"))
     }
 
     // MARK: - the order
@@ -89,7 +81,7 @@ final class PhoneCalendarSourceTests: XCTestCase {
             cal("birthdays", .birthdays),
             cal("gmail", .otherAccount),
             cal("local-2", .onThisPhone),
-            cal("icloud", .iCloud),
+            cal("icloud", .otherAccount),
             cal("subscribed", .subscribed),
             cal("outlook", .exchange),
         ]

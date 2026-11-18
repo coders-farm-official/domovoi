@@ -752,7 +752,7 @@ public enum PodcastPath {
         if let personID, let number = Int64(personID) {
             out += #","person_id":\#(number)"#
         }
-        out += #","position_sec":\#(Int(max(0, positionSec).rounded()))"#
+        out += #","position_sec":\#(max(0, WireNumber.int(positionSec.rounded()) ?? 0))"#
         if let speed, speed > 0 { out += #","speed":\#(speed)"# }
         out += "}"
         return Data(out.utf8)

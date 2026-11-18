@@ -174,13 +174,13 @@ public enum RoomDisplayModel {
         // feed is cleared when the session ends, and this holds the line for
         // the moment between.
         let feed = linked ? i.feed : nil
-        let since = feed.map { max(0, i.elapsedMS - $0.receivedAt) } ?? 0
+        let since = feed.map { max(0, WireNumber.sub(i.elapsedMS, $0.receivedAt)) } ?? 0
         let all = feed?.timers ?? []
         let timers = all.filter { $0.kind == .timer }
-            .map { ($0, max(0, $0.remainingMS - since)) }
+            .map { ($0, max(0, WireNumber.sub($0.remainingMS, since))) }
             .sorted { ($0.1, $0.0.id) < ($1.1, $1.0.id) }
         let alarm = all.filter { $0.kind == .alarm }
-            .map { ($0, max(0, $0.remainingMS - since)) }
+            .map { ($0, max(0, WireNumber.sub($0.remainingMS, since))) }
             .min { ($0.1, $0.0.id) < ($1.1, $1.0.id) }
         let ringing: Ringing? = (feed?.ringing).map { r in
             let title = Self.title(r.kind, r.label)
@@ -266,8 +266,11 @@ public enum RoomDisplayModel {
 
     /// `4:05`, `1:02:03`: whole seconds, rounded up, so a timer shows 0:00
     /// only when it is done.
+    ///
+    /// Any `Int64` is safe here: the round-up saturates rather than trapping
+    /// on `Int64.max` (security audit round 6, IOS-1).
     public static func countdown(_ ms: Int64) -> String {
-        let s = (max(0, ms) + 999) / 1000
+        let s = wholeSeconds(ms)
         let h = Int(s / 3600)
         let m = Int(s % 3600 / 60)
         let sec = Int(s % 60)
@@ -277,7 +280,7 @@ public enum RoomDisplayModel {
 
     /// "4 minutes 5 seconds" for a screen reader.
     public static func spokenDuration(_ ms: Int64) -> String {
-        let s = (max(0, ms) + 999) / 1000
+        let s = wholeSeconds(ms)
         let h = s / 3600
         let m = s % 3600 / 60
         let sec = s % 60
@@ -287,6 +290,11 @@ public enum RoomDisplayModel {
         if m > 0 { parts.append(part(m, "minute")) }
         if sec > 0 || (h == 0 && m == 0) { parts.append(part(sec, "second")) }
         return parts.joined(separator: " ")
+    }
+
+    /// Whole seconds in `ms`, rounded up, never below zero.
+    static func wholeSeconds(_ ms: Int64) -> Int64 {
+        WireNumber.add(max(0, ms), 999) / 1000
     }
 
     public static func clockTime(_ t: Date, timeZone: TimeZone, locale: Locale, use24h: Bool) -> String {

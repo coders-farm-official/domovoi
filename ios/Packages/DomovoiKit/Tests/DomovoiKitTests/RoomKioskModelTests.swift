@@ -448,6 +448,59 @@ final class RoomKioskModelTests: XCTestCase {
         XCTAssertTrue(h.store.guidedAccessTipDismissed, "remembered for the next launch")
     }
 
+    /// Security audit round 6, IOS-2: an iPhone room stays unlocked, so on
+    /// someone's own phone (it holds a household token) the line stays while
+    /// Guided Access is off, and cannot be hidden.
+    func testOnAHouseholdPhoneTheGuidedAccessLineStaysWhileItIsOff() {
+        let h = KioskHarness()
+        let m = h.model(lock: FixedRoomLockFacts(holdsHouseholdToken: true, deviceSecure: true))
+        XCTAssertTrue(m.householdPhone)
+        XCTAssertTrue(m.showsGuidedAccessTip, "token + Guided Access off: shown")
+        XCTAssertFalse(m.guidedAccessTipDismissible, "no hide on a household phone")
+        XCTAssertEqual(RoomModeStrings.guidedAccessLineHousehold, m.guidedAccessLine)
+        m.dismissGuidedAccessTip()
+        XCTAssertTrue(m.showsGuidedAccessTip, "hiding it does nothing")
+        XCTAssertFalse(h.store.guidedAccessTipDismissed)
+        m.guidedAccessChanged(true)
+        XCTAssertFalse(m.showsGuidedAccessTip, "Guided Access on: hidden")
+        m.guidedAccessChanged(false)
+        XCTAssertTrue(m.showsGuidedAccessTip, "back the moment it is off")
+    }
+
+    /// A tip hidden on a spare that later took a household token is shown
+    /// again: the token, read at every start, wins.
+    func testAHiddenTipComesBackOnceThePhoneHoldsAHouseholdToken() {
+        let h = KioskHarness()
+        h.store.dismissGuidedAccessTip()
+        let m = h.model(lock: FixedRoomLockFacts(holdsHouseholdToken: true, deviceSecure: true))
+        XCTAssertTrue(m.showsGuidedAccessTip)
+    }
+
+    /// A phone used only as a room keeps the tip it had: dismissible, in its
+    /// own words.
+    func testOnASpareOnlyRoomTheTipIsTheDismissibleOne() {
+        let h = KioskHarness()
+        let m = h.model(lock: FixedRoomLockFacts(holdsHouseholdToken: false))
+        XCTAssertFalse(m.householdPhone)
+        XCTAssertTrue(m.showsGuidedAccessTip)
+        XCTAssertTrue(m.guidedAccessTipDismissible)
+        XCTAssertEqual(RoomModeStrings.guidedAccessLine, m.guidedAccessLine)
+        m.dismissGuidedAccessTip()
+        XCTAssertFalse(m.showsGuidedAccessTip)
+    }
+
+    func testTheGuidedAccessRuleTable() {
+        for dismissed in [false, true] {
+            XCTAssertTrue(RoomGuidedAccessTip.shows(guidedAccessOn: false, householdPhone: true, dismissed: dismissed))
+            XCTAssertFalse(RoomGuidedAccessTip.shows(guidedAccessOn: true, householdPhone: true, dismissed: dismissed))
+            XCTAssertFalse(RoomGuidedAccessTip.shows(guidedAccessOn: true, householdPhone: false, dismissed: dismissed))
+        }
+        XCTAssertTrue(RoomGuidedAccessTip.shows(guidedAccessOn: false, householdPhone: false, dismissed: false))
+        XCTAssertFalse(RoomGuidedAccessTip.shows(guidedAccessOn: false, householdPhone: false, dismissed: true))
+        XCTAssertFalse(RoomGuidedAccessTip.dismissible(householdPhone: true))
+        XCTAssertTrue(RoomGuidedAccessTip.dismissible(householdPhone: false))
+    }
+
     // MARK: - the notice's rules
 
     func testTheNoticePostsOnlyForARunningRoom() {

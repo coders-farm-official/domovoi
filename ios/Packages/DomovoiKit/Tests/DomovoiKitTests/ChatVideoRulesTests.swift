@@ -401,6 +401,29 @@ final class ChatVideoRulesTests: XCTestCase {
         XCTAssertEqual("/api/chat/video-jobs/aa", ChatPath.videoJob("aa"))
         XCTAssertEqual("/api/chat/video-jobs/aa/results", ChatPath.videoJobResults("aa"))
         XCTAssertEqual("/api/chat/video-jobs/aa/cancel", ChatPath.videoJobCancel("aa"))
+        XCTAssertEqual(
+            "/api/chat/video-jobs/0123456789abcdef0123456789abcdef",
+            ChatPath.videoJob("0123456789abcdef0123456789abcdef"), "the server's uuid4().hex"
+        )
+    }
+
+    /// Security audit round 6, IOS-5: a job id from the server's answer is
+    /// shape-checked before it is put in a path, and anything else is never
+    /// sent.
+    func testAJobIdThatIsNotOneIsNeverPutInAPath() {
+        let bad = [
+            "", "../../admin/restart", "1/2", "1?x=y", "1#x", "a b", "AA", "0x1f", "-1", "1.5",
+            "%2e%2e", "１２", String(repeating: "a", count: 65), "aa\n",
+        ]
+        for id in bad {
+            XCTAssertFalse(ChatPath.isVideoJobID(id), id)
+            XCTAssertNil(ChatPath.videoJob(id), id)
+            XCTAssertNil(ChatPath.videoJobResults(id), id)
+            XCTAssertNil(ChatPath.videoJobCancel(id), id)
+        }
+        for id in ["0", "42", "deadbeef", String(repeating: "f", count: 64)] {
+            XCTAssertTrue(ChatPath.isVideoJobID(id), id)
+        }
     }
 
     func testTheComposerSendsAReadyVideoWithABlankBox() {
@@ -433,6 +456,30 @@ final class ChatVideoRulesTests: XCTestCase {
         )
         XCTAssertTrue(FileManager.default.fileExists(atPath: source.path), "never the picker's own file")
         file.release()   // a second call is harmless
+    }
+
+    /// Security audit round 6, IOS-5: what a killed app left in the spool
+    /// is swept at launch once it is an hour old; a fresh slot stays.
+    func testTheLaunchSweepDeletesLeftoverCopiesAnHourOld() throws {
+        let fm = FileManager.default
+        let base = fm.temporaryDirectory
+            .appendingPathComponent("chat-video-sweep-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: base, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: base) }
+
+        let old = try ChatVideoSpool.makeSlot(in: base)
+        try Data("an old clip".utf8).write(to: old.appendingPathComponent("IMG_0001.MOV"))
+        try fm.setAttributes([.modificationDate: Date().addingTimeInterval(-2 * 3600)], ofItemAtPath: old.path)
+        let fresh = try ChatVideoSpool.makeSlot(in: base)
+        try Data("a clip in use".utf8).write(to: fresh.appendingPathComponent("IMG_0002.MOV"))
+
+        XCTAssertEqual(1, ChatVideoSpool.sweep(in: base))
+        XCTAssertFalse(fm.fileExists(atPath: old.path), "the leftover went")
+        XCTAssertTrue(fm.fileExists(atPath: fresh.path), "a slot in use stays")
+        XCTAssertEqual(1, ChatVideoSpool.sweep(in: base, now: Date().addingTimeInterval(2 * 3600)))
+        XCTAssertEqual(0, ChatVideoSpool.sweep(in: base), "nothing left")
+        let empty = fm.temporaryDirectory.appendingPathComponent("no-spool-\(UUID().uuidString)")
+        XCTAssertEqual(0, ChatVideoSpool.sweep(in: empty), "no spool at all is nothing to do")
     }
 
     func testAFilesReleaseRunsOnce() {

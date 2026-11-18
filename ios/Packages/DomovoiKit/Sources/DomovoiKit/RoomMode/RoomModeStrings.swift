@@ -44,11 +44,7 @@ public enum RoomModeStrings {
          "Keep it on its charger and turn on the phone's battery-protection setting if it has one. "
             + "Keep Optimized Battery Charging on (on iPhone 15 and later, the 80% Limit). Keep it off soft "
             + "surfaces and out of the sun. The screen dims; that is expected. Never use a phone whose battery has swollen."),
-        ("iPhone's rules",
-         "The room listens only while Domovoi is open on this screen. The screen stays on and dims itself; "
-            + "the orange dot shows the microphone is on. A phone call, Siri or another app stops the room until "
-            + "you come back to Domovoi. If you leave Domovoi or the phone restarts, open Domovoi again and the "
-            + "room starts again. Guided Access keeps the phone in Domovoi."),
+        ("iPhone's rules", iPhoneRules),
         ("What stops working",
          "The normal Domovoi app is locked while this is a room: no files, browsing or chats, on the home server or on this phone. Phone calls and "
             + "other apps that use the microphone pause the room."),
@@ -58,6 +54,28 @@ public enum RoomModeStrings {
             + "A phone used only as a room may have none: then Exit asks for a confirmation instead, which anyone can "
             + "give. Removing the room on the dashboard disconnects it until it is approved again."),
     ]
+
+    /// Point 4 (security audit round 6, IOS-2: it says the phone stays
+    /// unlocked, and what to do about it). Its own constant so the explainer's
+    /// literal stays small enough to type-check quickly.
+    public static let iPhoneRules: String =
+        "The room listens only while Domovoi is open on this screen: iOS stops the microphone of a locked phone, "
+            + "so the screen stays on and dims itself, and the orange dot shows the microphone is on. "
+            + staysUnlocked + " " + guidedAccessAdvice + " A phone call, Siri or another app stops the room until "
+            + "you come back to Domovoi. If you leave Domovoi or the phone restarts, open Domovoi again and the "
+            + "room starts again."
+
+    /// **iOS-only** (security audit round 6, IOS-2): an iPhone room never
+    /// locks, because a locked iPhone stops the room's microphone, so
+    /// the setup says plainly what that means for whoever is in the room.
+    public static let staysUnlocked =
+        "While it is a room this phone stays unlocked: anyone in the room can swipe up to its other apps. "
+            + "The Domovoi household app stays sealed."
+
+    /// **iOS-only** (IOS-2): what to do about ``staysUnlocked``.
+    public static let guidedAccessAdvice =
+        "Turn on Guided Access to keep the phone in Domovoi (Settings → Accessibility → Guided Access, then "
+            + "triple-click the side button on the room screen), or use a spare iPhone with nothing personal on it."
 
     public static let readToTheEnd = "Read to the end to continue."
     public static let notNow = "Not now"
@@ -70,10 +88,14 @@ public enum RoomModeStrings {
     /// there is no button to the setting — iOS has no link to Face ID &
     /// Passcode, and a button that opens somewhere else would not do what it
     /// says — so the sentence says where it is.
+    ///
+    /// Security audit round 6, IOS-2: it also says the phone itself stays
+    /// unlocked, and what to do about that.
     public static let setALockBody =
         "This phone is also paired with your household. While it is a room, the normal app is locked and "
             + "leaving room mode takes the phone's unlock, so the household app stays out of reach of whoever is "
-            + "in the room. Set a passcode in Settings → Face ID & Passcode, then come back here."
+            + "in the room. The phone itself stays unlocked, though: anyone in the room can swipe up to its other "
+            + "apps. " + guidedAccessAdvice + " Set a passcode in Settings → Face ID & Passcode, then come back here."
 
     // MARK: - the microphone (`RoomSetupActivity.kt:274-312`)
 
@@ -188,11 +210,17 @@ public enum RoomModeStrings {
     // MARK: - Guided Access (iOS-only, ROOMMODE-MAP §3.5)
 
     public static let guidedAccessLine = "Keep this phone in Domovoi: turn on Guided Access"
+    /// The line on a phone that holds a household token (someone's own
+    /// phone, not a spare used only as a room): shown while Guided Access is
+    /// off, and it cannot be hidden (security audit round 6, IOS-2).
+    public static let guidedAccessLineHousehold =
+        "This phone stays unlocked while it is a room: anyone here can swipe up to your other apps. "
+            + "Turn on Guided Access"
     public static let guidedAccessDismiss = "hide this tip"
     public static let guidedAccessTitle = "Keep this phone in Domovoi"
     public static let guidedAccessIntro =
-        "Guided Access keeps this phone in Domovoi, so nobody in the room can lock it or leave the room by accident. "
-            + "You set it up once:"
+        "A room phone stays unlocked. Guided Access keeps it in Domovoi, so nobody in the room can swipe up to its "
+            + "other apps, lock it, or leave the room by accident. You set it up once:"
     public static let guidedAccessSteps: [String] = [
         "Open Settings → Accessibility → Guided Access, turn it on, and set a Guided Access passcode.",
         "Come back to Domovoi, to this room screen.",

@@ -88,7 +88,9 @@ public enum ChatVideoRules {
         guard uploadName != nil else { return ChatVideoStrings.unsupported }
         let limitMb = offer?.maxMb ?? maxMb
         let limitSeconds = Double(offer?.maxSeconds ?? maxSeconds)
-        if let bytes, bytes > Int64(limitMb) * 1024 * 1024 {
+        // Saturating: `max_mb` is the server's number, and `Int64(max_mb) *
+        // 2^20` traps past 8 TiB (security audit round 6, IOS-1).
+        if let bytes, bytes > WireNumber.mul(Int64(limitMb), 1024 * 1024) {
             return ChatVideoStrings.tooLarge
         }
         if let seconds, seconds.isFinite, seconds > limitSeconds + slackSeconds {
@@ -155,8 +157,10 @@ public enum ChatVideoRules {
     public static func progress(_ job: ChatVideoJob) -> Double? {
         guard job.state == "running" else { return nil }
         let p = job.progress
-        let units = max(p.pieces + p.frames + 1, 1)
-        let done = max(p.piecesDone + p.framesDone, 0)
+        // Every counter is the server's: saturating sums, so `Int.max` pieces
+        // is a bar at 0, not a crash (security audit round 6, IOS-1).
+        let units = max(WireNumber.add(WireNumber.add(p.pieces, p.frames), 1), 1)
+        let done = max(WireNumber.add(p.piecesDone, p.framesDone), 0)
         return min(0.95, Double(done) / Double(units))
     }
 
@@ -195,7 +199,10 @@ public enum ChatVideoRules {
     /// second, on the one boundary where schoolbook rounding would disagree.
     public static func clock(_ seconds: Double?) -> String {
         let value = seconds ?? 0
-        let whole = value.isFinite ? max(0, Int(value.rounded(.toNearestOrEven))) : 0
+        // `Int(1e30)` traps; a length from the wire is held to 0...48 h
+        // first (security audit round 6, IOS-1).
+        let held = WireNumber.finite(value, in: 0...WireNumber.maxMediaSeconds) ?? 0
+        let whole = WireNumber.int(held.rounded(.toNearestOrEven)) ?? 0
         let hours = whole / 3600
         let minutes = (whole % 3600) / 60
         let rest = whole % 60
@@ -209,7 +216,7 @@ public enum ChatVideoRules {
         if mb >= 1024 {
             return String(format: "%.1f GB", mb / 1024)
         }
-        return "\(max(1, Int(mb.rounded(.toNearestOrAwayFromZero)))) MB"
+        return "\(max(1, WireNumber.int(mb.rounded(.toNearestOrAwayFromZero)) ?? 1)) MB"
     }
 
     /// The upload's `Content-Type`: the video's own, by its extension. The

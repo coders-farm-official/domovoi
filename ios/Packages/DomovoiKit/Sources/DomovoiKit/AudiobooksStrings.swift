@@ -138,7 +138,7 @@ public enum AudiobooksStrings {
         guard let positionSec, positionSec > 5 else { return nil }
         var out = "your place: " + fmtDur(positionSec)
         if let durationSec, durationSec > 0 {
-            let percent = min(100, max(0, Int((positionSec / durationSec) * 100)))
+            let percent = WireNumber.int((positionSec / durationSec) * 100, in: 0...100) ?? 0
             out += " of " + fmtDur(durationSec) + " · \(percent)%"
         }
         return out

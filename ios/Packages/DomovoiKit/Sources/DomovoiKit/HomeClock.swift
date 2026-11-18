@@ -74,11 +74,11 @@ public func dayStartMs(ms: Int64, timeZone: TimeZone, plusDays: Int = 0) -> Int6
     // `plusDays` is added as a **calendar day**, not as 86 400 s: across a
     // daylight-saving change a week is not seven times twenty-four hours, and
     // `toLocalDate().plusDays(n).atStartOfDay(zone)` is what the Kotlin does.
-    guard plusDays != 0 else { return Int64((midnight.timeIntervalSince1970 * 1000).rounded()) }
+    guard plusDays != 0 else { return WireNumber.epochMs(midnight) }
     guard let shifted = calendar.date(byAdding: .day, value: plusDays, to: midnight) else {
-        return Int64((midnight.timeIntervalSince1970 * 1000).rounded())
+        return WireNumber.epochMs(midnight)
     }
-    return Int64((calendar.startOfDay(for: shifted).timeIntervalSince1970 * 1000).rounded())
+    return WireNumber.epochMs(calendar.startOfDay(for: shifted))
 }
 
 /// `serverOffsetMs` (`HomeModels.kt:300`): the server's clock minus this

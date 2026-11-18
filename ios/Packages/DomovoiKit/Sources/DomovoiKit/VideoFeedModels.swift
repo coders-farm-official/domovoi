@@ -128,7 +128,7 @@ public enum FeedRules {
         resumeUsed: Bool
     ) -> Int64 {
         guard page == startIndex, !resumeUsed, resumeSec > resumeFloorSec else { return 0 }
-        return resumeSec * 1000
+        return WireNumber.mul(resumeSec, 1000)
     }
 
     /// The current page after dropping `removed` from a queue whose current
@@ -298,10 +298,10 @@ public extension FeedVideo {
             )
         )
         if let bits = facts?.bitsPerSecond, bits > 0 {
-            out.append(VideoMetaRow(label: VideoStrings.metaBitrate, value: "\(Int(bits / 1000)) kbps"))
+            out.append(VideoMetaRow(label: VideoStrings.metaBitrate, value: "\(WireNumber.int(bits / 1000) ?? 0) kbps"))
         }
         if let rate = facts?.frameRate, rate > 0 {
-            out.append(VideoMetaRow(label: VideoStrings.metaFrameRate, value: "\(Int(rate.rounded())) fps"))
+            out.append(VideoMetaRow(label: VideoStrings.metaFrameRate, value: "\(WireNumber.int(rate.rounded()) ?? 0) fps"))
         }
         if let codec = facts?.codec, !codec.isEmpty {
             out.append(VideoMetaRow(label: VideoStrings.metaCodec, value: codec))

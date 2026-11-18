@@ -64,9 +64,9 @@ public enum MusicLyricsMath {
         durationSec: Double?,
         nudgeMs: Int64
     ) -> Int64 {
-        let base = elapsedSec.isFinite ? Int64((elapsedSec * 1000).rounded()) : 0
-        let run = playing ? max(0, nowMs - readAtMs) : 0
-        return clampToTrack(base + run - nudgeMs, durationSec: durationSec)
+        let base = WireNumber.int64((elapsedSec * 1000).rounded()) ?? 0
+        let run = playing ? max(0, WireNumber.sub(nowMs, readAtMs)) : 0
+        return clampToTrack(WireNumber.sub(WireNumber.add(base, run), nudgeMs), durationSec: durationSec)
     }
 
     /// This phone's own playback between the engine's 500 ms position ticks:
@@ -83,10 +83,10 @@ public enum MusicLyricsMath {
         speed: Double,
         durationSec: Double?
     ) -> Int64 {
-        let base = tickSec.isFinite ? Int64((tickSec * 1000).rounded()) : 0
+        let base = WireNumber.int64((tickSec * 1000).rounded()) ?? 0
         let rate = (speed.isFinite && speed > 0) ? speed : 1
-        let run = playing ? Int64((Double(max(0, nowMs - tickAtMs)) * rate).rounded()) : 0
-        return clampToTrack(base + run, durationSec: durationSec)
+        let run = playing ? WireNumber.int64((Double(max(0, WireNumber.sub(nowMs, tickAtMs))) * rate).rounded()) ?? 0 : 0
+        return clampToTrack(WireNumber.add(base, run), durationSec: durationSec)
     }
 
     /// The position to show after `previousMs` when the clock now says
@@ -113,7 +113,7 @@ public enum MusicLyricsMath {
     static func clampToTrack(_ ms: Int64, durationSec: Double?) -> Int64 {
         let atLeastZero = max(0, ms)
         guard let durationSec, durationSec.isFinite, durationSec > 0 else { return atLeastZero }
-        return min(atLeastZero, Int64((durationSec * 1000).rounded()))
+        return min(atLeastZero, WireNumber.int64((durationSec * 1000).rounded()) ?? atLeastZero)
     }
 }
 

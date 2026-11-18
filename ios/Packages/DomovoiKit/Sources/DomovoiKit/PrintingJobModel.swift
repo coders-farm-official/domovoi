@@ -190,7 +190,7 @@ public final class PrintingJobModel {
     /// it is (`PrintSheet.kt:263-270`).
     public var jobFraction: Double? {
         guard let job, !job.finished, job.state == "printing", job.pagesDone > 0 else { return nil }
-        let total = max(1, job.pages * max(1, job.copies))
+        let total = max(1, WireNumber.mul(job.pages, max(1, job.copies)))
         return min(1, max(0, Double(job.pagesDone) / Double(total)))
     }
 

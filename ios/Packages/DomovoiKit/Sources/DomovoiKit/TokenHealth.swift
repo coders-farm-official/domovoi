@@ -243,9 +243,9 @@ public final class TokenHealth: Sendable {
         let value = (header ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let ms: Int64
         if let seconds = Int64(value) {
-            ms = seconds * 1000
+            ms = WireNumber.mul(seconds, 1000)
         } else if let date = rfc1123.date(from: value) {
-            ms = Int64(date.timeIntervalSince1970 * 1000) - now()
+            ms = WireNumber.sub(WireNumber.epochMs(date), now())
         } else {
             ms = defaultWaitMs
         }

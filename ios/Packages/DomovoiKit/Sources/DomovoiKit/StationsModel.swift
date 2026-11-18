@@ -913,11 +913,17 @@ public final class StationsModel {
         Task { @MainActor [weak self] in
             defer { self?.busyKeys.remove(key) }
             do throws(DomovoiError) {
-                let answer = try await client.post(
-                    StationsPath.playInRoom(station.id),
+                // Held to the gate's server with `onlyTo`, as the comment
+                // above says: if the active server is another one by now,
+                // nothing is sent (security audit round 6, IOS-5; it used to
+                // be a plain `post`, which goes to whichever server is active).
+                let data = try await client.raw(
+                    method: "POST",
+                    path: StationsPath.playInRoom(station.id),
                     body: StationsPath.playInRoomBody(room),
-                    as: StationsRoomPlayAnswer.self
+                    onlyTo: server
                 )
+                let answer = try DomovoiClient.decode(data, as: StationsRoomPlayAnswer.self)
                 guard let self, self.stillHome(epoch) else { return }
                 self.toast = StationsRoomPlay.successLine(answer, station: station.name, room: room)
                 // The route stamps the station into Recent, as `/play` does.

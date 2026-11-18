@@ -125,6 +125,26 @@ final class RoomRulesTests: XCTestCase {
         XCTAssertTrue(RoomModeStrings.explainer.allSatisfy { !$0.title.contains("assistant") && !$0.body.contains("assistant") })
     }
 
+    /// Security audit round 6, IOS-2: the setup says plainly that a room
+    /// phone stays unlocked, that the household app stays sealed, and what
+    /// to do (Guided Access, or a spare with nothing personal on it).
+    func testTheSetupSaysTheRoomPhoneStaysUnlocked() throws {
+        let rules = try XCTUnwrap(RoomModeStrings.explainer.first { $0.title == "iPhone's rules" })
+        XCTAssertTrue(rules.body.contains(RoomModeStrings.staysUnlocked))
+        XCTAssertTrue(rules.body.contains(RoomModeStrings.guidedAccessAdvice))
+        for words in ["stays unlocked", "swipe up to its other apps", "household app stays sealed"] {
+            XCTAssertTrue(RoomModeStrings.staysUnlocked.contains(words), words)
+        }
+        for words in ["Guided Access", "Settings → Accessibility → Guided Access", "spare iPhone with nothing personal"] {
+            XCTAssertTrue(RoomModeStrings.guidedAccessAdvice.contains(words), words)
+        }
+        XCTAssertTrue(RoomModeStrings.setALockBody.contains("stays unlocked"))
+        XCTAssertTrue(RoomModeStrings.setALockBody.contains(RoomModeStrings.guidedAccessAdvice))
+        XCTAssertTrue(RoomModeStrings.guidedAccessLineHousehold.contains("stays unlocked"))
+        XCTAssertTrue(RoomModeStrings.guidedAccessLineHousehold.contains("Guided Access"))
+        XCTAssertTrue(RoomModeStrings.guidedAccessIntro.contains("stays unlocked"))
+    }
+
     /// Six points; the iPhone's rules in place of Android's (§11), and
     /// nothing Android-only left in them.
     func testTheExplainerIsTheIPhones() {

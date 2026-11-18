@@ -240,8 +240,8 @@ public enum RoomDisplayFeed {
             album: text(o, "album"),
             source: RoomMediaSource.of(str(o, "source")),
             art: str(o, "art").flatMap { isArtPath($0) ? $0 : nil },
-            durationSec: num(o, "duration_sec").flatMap { $0 > 0 ? $0 : nil },
-            elapsedSec: num(o, "elapsed_sec").flatMap { $0 >= 0 ? $0 : nil },
+            durationSec: num(o, "duration_sec").flatMap { $0 > 0 ? min($0, WireNumber.maxMediaSeconds) : nil },
+            elapsedSec: num(o, "elapsed_sec").flatMap { $0 >= 0 ? min($0, WireNumber.maxMediaSeconds) : nil },
             controls: controls
         )
     }
@@ -254,8 +254,11 @@ public enum RoomDisplayFeed {
             id: id,
             kind: timerKind,
             label: text(o, "label"),
-            remainingMS: max(0, remaining),
-            totalMS: long(o, "total_ms").flatMap { $0 > 0 ? $0 : nil }
+            // Held to 0...a year as it is read: the display counts these down
+            // every second, and a number past that is a server's mistake that
+            // must not reach the arithmetic (security audit round 6, IOS-1).
+            remainingMS: WireNumber.clamp(remaining, to: 0...WireNumber.maxCountdownMs),
+            totalMS: long(o, "total_ms").flatMap { $0 > 0 ? min($0, WireNumber.maxCountdownMs) : nil }
         )
     }
 
@@ -276,15 +279,17 @@ public enum RoomDisplayFeed {
         return now >= was
     }
 
-    /// Only a plain path on the room's own server: the room never follows a
-    /// link to another host, and nothing climbs out of `/v1/`.
+    /// The one artwork path the core sends, `/v1/music/cover/{track_id}`
+    /// (`domovoi/room_display.py`), and nothing else: exactly
+    /// `^/v1/music/cover/[0-9]{1,10}$`, ASCII digits only. The room never
+    /// follows a link to another host, and no other route on its server is
+    /// fetched for a picture (security audit round 6, IOS-4: it used to take
+    /// any `/v1/` path).
     public static func isArtPath(_ p: String) -> Bool {
-        guard p.hasPrefix("/v1/"), p.utf16.count <= 300 else { return false }
-        if p.contains("..") || p.contains("\\") { return false }
-        if p.contains("/" + "/") { return false }
-        return !p.unicodeScalars.contains { s in
-            s.properties.isWhitespace || s.value < 0x20 || s.value == 0x7F
-        }
+        let prefix = "/v1/music/cover/"
+        guard p.hasPrefix(prefix) else { return false }
+        let id = p.utf8.dropFirst(prefix.utf8.count)
+        return (1...10).contains(id.count) && id.allSatisfy { $0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9") }
     }
 
     /// The `room_control` frame for `c`. It names the action, never the room:

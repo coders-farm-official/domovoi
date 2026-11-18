@@ -1118,9 +1118,10 @@ final class RedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Senda
     /// that is answered with a `302` this delegate method IS called. So iOS
     /// can refuse a socket redirect, and `isWebSocketUpgrade` does — the
     /// socket lands where it was aimed or it fails, with nothing sent to the
-    /// host the `Location` named. (For completeness: I1-D has to put one of
-    /// these on the socket task it creates — `task.delegate` — or the
-    /// platform will follow that redirect on its own.)
+    /// host the `Location` named. The socket transports put
+    /// ``SocketRedirectRefusal`` on every upgrade they open (`task.delegate`),
+    /// which refuses every redirect, or the platform would follow one on its
+    /// own (security audit round 6, IOS-3).
     ///
     /// **What the platform hands us is a trap.** `newRequest` is a *proposed*
     /// request that has already copied this request's headers onto the new
