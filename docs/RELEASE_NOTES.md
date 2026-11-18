@@ -4,6 +4,22 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.4.0 (unreleased) — Friend Houses: the listener runs walled off in its own container
+
+- **What changed.** The part of Friend Houses that answers other houses
+  (the inbound listener) runs in its own container, `domovoi-fh-listener`,
+  instead of as a process under the core's user. It has no network, a
+  read-only root, no Linux capabilities, no environment and memory, process
+  and CPU limits. It sees only its keys and the friend list, both read-only.
+  The core builds the image itself and rebuilds it when the listener code
+  changes or the image is 30 days old. The container guard expects it, and
+  plugins can't use the name.
+- **What to know.** Nothing to do. A house that already has Friend Houses on
+  gets the new Tor settings (the listener's socket moves to
+  `tor/run/listen/`) at the next check. If the image can't be built, the
+  Friend Houses status says friends can't reach the house, and the core
+  keeps trying. No migration.
+
 ## 1.4.0 (unreleased) — "Should I remember that?" is said to you
 
 - **What changed.** When Domovoi notices a fact worth keeping and asks
