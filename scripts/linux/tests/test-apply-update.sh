@@ -1783,7 +1783,9 @@ case_fh_firewall_installed_once() {
   check "executable by root, not writable by others" eq "$(stat -c %a "$lib")" 755
   check "its folder 0755" eq "$(stat -c %a "$(dirname "$lib")")" 755
   check "the unit" cmp -s "$units/domovoi-fh-firewall.service" "$HERE/../units/domovoi-fh-firewall.service"
-  check "the unit runs the root-owned copy" grep -qx 'ExecStart=/usr/local/lib/domovoi-fh-firewall/fh-firewall.sh apply' "$units/domovoi-fh-firewall.service"
+  check "the unit applies the rules with the root-owned copy" grep -qx 'ExecStartPre=/usr/local/lib/domovoi-fh-firewall/fh-firewall.sh apply' "$units/domovoi-fh-firewall.service"
+  check "and watches them with it" grep -qx 'ExecStart=/usr/local/lib/domovoi-fh-firewall/fh-firewall.sh watch' "$units/domovoi-fh-firewall.service"
+  check "it goes in before Docker" grep -qx 'Before=docker.service' "$units/domovoi-fh-firewall.service"
   check "it follows Docker" grep -qx 'PartOf=docker.service' "$units/domovoi-fh-firewall.service"
   check "daemon-reload" called "systemctl daemon-reload"
   check "enabled and started" called "systemctl enable --now domovoi-fh-firewall.service"
