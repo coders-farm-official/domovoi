@@ -295,7 +295,7 @@ def _parse_ref(ref: str) -> tuple[str, Any]:
     m = re.fullmatch(rf"(?:the\s+)?{_THING}\s+(?:about|on)\s+(.+)", r)
     if m:
         return "words", (m.group(1), True)
-    m = re.fullmatch(rf"(?:the\s+)?(.+?)\s+(?:story|article|headline)", r)
+    m = re.fullmatch(r"(?:the\s+)?(.+?)\s+(?:story|article|headline)", r)
     if m:
         return "words", (m.group(1), True)
     return "words", (r, False)

@@ -844,7 +844,11 @@ async def test_doc7_the_job_hears_only_the_minute_the_header_promised(clips, no_
     # Before: pieces ran to 400 s (45 of them). Now the tone stops at the
     # accepted minute and its slack.
     assert pieces and max(b for _a, b in pieces) <= limits.pass_seconds(60) + 1
-    assert brains.count("stt") == len(pieces) <= 8
+    # A steady tone has no pause to cut at, so each piece ends anywhere
+    # from 2/3 of SPEECH_PIECE_SEC to all of it (decoder noise picks):
+    # 7 to 11 pieces for the minute, never the 45 the whole file made.
+    most = -(-limits.pass_seconds(60) // (limits.SPEECH_PIECE_SEC * 2 / 3))
+    assert brains.count("stt") == len(pieces) <= most < 45
     assert max(s[0] for s in row["plan"]["scenes"] or [[0]]) <= limits.pass_seconds(60)
 
 

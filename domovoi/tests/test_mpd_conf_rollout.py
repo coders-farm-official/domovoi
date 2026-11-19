@@ -332,7 +332,7 @@ async def test_a_held_room_waits(monkeypatch, tmp_path) -> None:
 
 
 async def test_the_sweeper_makes_one_room_again_per_tick(monkeypatch, tmp_path) -> None:
-    docker = FakeDocker(monkeypatch, tmp_path, label="old", playing=False)
+    FakeDocker(monkeypatch, tmp_path, label="old", playing=False)
     done: list[str] = []
 
     async def fake_ensure(**kw):
