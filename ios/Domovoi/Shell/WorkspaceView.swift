@@ -92,13 +92,18 @@ struct WorkspaceView: View {
             // a bar laid out in the stack cannot produce a third.
             VStack(spacing: 0) {
                 stack
+                // In the stack, for the bar's reason above (2026-11-20).
+                MiniPlayerDock(model: model)
                 if AuditStrip.active != .phoneBar { PhoneBarView(model: model) }
             }
         case .sidebar:
             NavigationSplitView {
                 SidebarList(model: model)
             } detail: {
-                stack
+                VStack(spacing: 0) {
+                    stack
+                    MiniPlayerDock(model: model)
+                }
             }
         }
     }

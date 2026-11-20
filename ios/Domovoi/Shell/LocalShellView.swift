@@ -35,6 +35,10 @@ struct LocalShellView: View {
 
     @Environment(\.dynamicTypeSize) private var typeSize
 
+    /// This phone's own settings, open in place of the shell
+    /// (``LocalSettingsView`` says why in place and not as a sheet).
+    @State private var settingsOpen = false
+
     /// Answer 29's rule, from ``ShellHeaderFold`` — the same one
     /// ``WorkspaceView`` reads, so the two shells cannot fold at different
     /// sizes. This shell has no `AuditStrip` variant, so the header is always
@@ -55,6 +59,14 @@ struct LocalShellView: View {
     }
 
     var body: some View {
+        if settingsOpen {
+            LocalSettingsView(model: model, onBack: { settingsOpen = false })
+        } else {
+            shell
+        }
+    }
+
+    private var shell: some View {
         VStack(spacing: 0) {
             if headerFold.drawsBarAboveTheStack {
                 ShellTopBar(
@@ -63,12 +75,10 @@ struct LocalShellView: View {
                     pill: model.chrome.pill,
                     onPill: { model.openConnection() }
                 ) {
-                    // No gear here (2026-11-19). It was an `Image` that looked
-                    // like a control and opened nothing — this app has no
-                    // screen of the phone's own settings yet
-                    // (`LocalSettingsScreen.kt` on Android) — and the owner's
-                    // rule is to hide a control that can't do what it says.
-                    EmptyView()
+                    // This phone's own settings (2026-11-20): the problem
+                    // reports, privacy, the licences and the version, none of
+                    // which needs a server (`LocalSettingsScreen.kt`).
+                    LocalSettingsButton { settingsOpen = true }
                 }
             }
             if let banner = model.chrome.banner {
@@ -113,7 +123,11 @@ struct LocalShellView: View {
     /// title UIKit was given. ``ShellScrollAwayChrome/body(content:)`` says
     /// what that costs on the other side and how it is undone there.
     @ViewBuilder private func tab(_ route: Route) -> some View {
+        // The docked mini player above the tab bar: inset into each tab, the
+        // standard shape for a bar over a `TabView`'s content — a view below
+        // the `TabView` would sit under its tab bar instead.
         let screen = LocalPhoneScreen(model: model, route: route)
+            .safeAreaInset(edge: .bottom, spacing: 0) { MiniPlayerDock(model: model) }
         if headerFold.putsTheHeaderInsideTheStack {
             NavigationStack {
                 screen
@@ -129,6 +143,14 @@ struct LocalShellView: View {
                         pill: model.chrome.pill,
                         onPill: { model.openConnection() }
                     )
+                    // The gear rides in the navigation bar while the top bar
+                    // is folded into it, or the phone's own settings would be
+                    // out of reach at the largest text sizes.
+                    .toolbar {
+                        ToolbarItem(placement: .topBarLeading) {
+                            LocalSettingsButton { settingsOpen = true }
+                        }
+                    }
             }
         } else {
             screen
