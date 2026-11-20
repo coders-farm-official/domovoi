@@ -66,8 +66,10 @@
 #      ("lock not applied: <why>", shown on the Version card). After a
 #      re-sync, packages a release stopped using are uninstalled
 #      (drop_retired_packages: piper-tts and piper-phonemize, GPL;
-#      edge-tts, LGPL), since pip never removes what nothing requires any
-#      more.
+#      edge-tts, LGPL; torch; the 2026-10-15 licence clean-up's mutagen,
+#      python-mpd2, lameenc, librosa and PyAV), since pip never removes
+#      what nothing requires any more. An update that doesn't re-sync
+#      still runs it once when that list grew since it last ran.
 #   5. Rebuild the MPD image the way mpd_provisioner.py does if
 #      Dockerfile.mpd or mpd.conf changed, record the image it built in
 #      DOMOVOI_UPDATE_DIR/mpd-image.json (root's, 0644: the core's
@@ -2198,10 +2200,28 @@ prune_python() {
 # piper-phonemize, its older espeak-ng wrapper; edge-tts (LGPL-3.0), the
 # Microsoft Edge online voices, dropped on 2026-10-12; torch (~550 MB of
 # CPU wheels) and resemblyzer, which voice ID ran on until 1.3.0 replaced
-# them with an ONNX model (domovoi/clients/speaker_encoder.py). A step is recorded
-# only when something was removed; a failure is a `warn` and the update
-# stands (nothing imports them any more).
-RETIRED_PACKAGES=(piper-tts piper-phonemize edge-tts torch resemblyzer)
+# them with an ONNX model (domovoi/clients/speaker_encoder.py); and what
+# the 2026-10-15 licence clean-up dropped (domovoi/tests/
+# test_dependency_licences.py): mutagen (GPL-2.0), python-mpd2 (LGPL-3.0),
+# lameenc (LGPL, LAME inside), librosa and what only it brought (soxr,
+# soundfile, numba with llvmlite, lazy-loader, pooch, scikit-learn with
+# joblib and threadpoolctl), and av (PyAV, FFmpeg's LGPL libraries:
+# faster-whisper is installed --no-deps, requirements-no-deps.in). Small
+# general-purpose libraries librosa also brought (decorator, msgpack,
+# platformdirs) stay: a plugin installs into this same venv and may need
+# them. domovoi/tests/test_retired_packages.py keeps this list out of
+# every lock. A step is recorded only when something was removed; a
+# failure is a `warn` and the update stands (nothing imports them any more).
+RETIRED_PACKAGES=(piper-tts piper-phonemize edge-tts torch resemblyzer
+  mutagen python-mpd2 lameenc librosa soxr soundfile numba llvmlite
+  lazy-loader pooch scikit-learn joblib threadpoolctl av)
+# The list the last clean uninstall ran with. An update whose dependencies
+# did not change still runs drop_retired_packages once when the list grew
+# since then, so a house that re-synced long ago loses the new names too.
+RETIRED_RECORD=$UPDATE_DIR/retired-packages
+retired_list_changed() {
+  [ "$(cat "$RETIRED_RECORD" 2>/dev/null)" != "${RETIRED_PACKAGES[*]}" ]
+}
 drop_retired_packages() {
   local t0 out rc=0 gone
   t0=$(now_ms)
@@ -2215,6 +2235,7 @@ drop_retired_packages() {
     log "could not uninstall ${RETIRED_PACKAGES[*]} (exit $rc); not fatal, nothing uses them"
     return 0
   fi
+  printf '%s\n' "${RETIRED_PACKAGES[*]}" >"$RETIRED_RECORD" 2>/dev/null || true
   gone=$(printf '%s\n' "$out" | sed -n 's/^[[:space:]]*Successfully uninstalled \([^[:space:]]*\).*$/\1/p' | tr '\n' ' ')
   gone=${gone% }
   [ -n "$gone" ] || return 0
@@ -3440,6 +3461,8 @@ full_update() {
   if [ -z "$failed" ] && [ "$DEPS_CHANGED" = 1 ]; then
     run_step sync-deps sync_deps || failed=sync-deps
     if [ -z "$failed" ]; then drop_retired_packages; fi
+  elif [ -z "$failed" ] && retired_list_changed && venv_writable >/dev/null; then
+    drop_retired_packages
   fi
   if [ -z "$failed" ] && [ "$MPD_CHANGED" = 1 ]; then
     run_step rebuild-mpd rebuild_mpd || failed=rebuild-mpd

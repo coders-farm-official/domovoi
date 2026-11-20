@@ -2,7 +2,9 @@
 # Rebuilds the app's speech-recognition library, libsherpa-onnx-jni.so, from
 # source inside a pinned Docker container, with sherpa-onnx's text to speech
 # compiled out (espeak-ng is GPL-3.0; the app speaks with Android's own
-# TextToSpeech instead). See README.md beside this file.
+# TextToSpeech instead). The container runs build-in-container.sh, which
+# runs build-native.sh, the same build F-Droid runs without Docker. See
+# README.md beside this file.
 #
 #   bash android/native/sherpa-onnx/build.sh             build, compare with SHA256SUMS
 #   bash android/native/sherpa-onnx/build.sh --install   ...and copy the result in

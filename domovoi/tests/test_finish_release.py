@@ -45,8 +45,10 @@ def _load():
 fr = _load()
 
 FAKE_GH = textwrap.dedent('''\
-    """A stand-in for gh release view/upload/edit, kept in the JSON file $FAKE_GH_STATE."""
-    import hashlib, json, os, subprocess, sys
+    """A stand-in for gh release view/create/upload/edit/download and gh api
+    .../releases/latest, kept in the JSON file $FAKE_GH_STATE (each
+    release's files under state["blobs"]/<tag>/)."""
+    import hashlib, json, os, shutil, subprocess, sys
     path = os.environ["FAKE_GH_STATE"]
     state = json.load(open(path, encoding="utf-8"))
     args = sys.argv[1:]
@@ -57,8 +59,17 @@ FAKE_GH = textwrap.dedent('''\
         json.dump(state, open(path, "w", encoding="utf-8"), indent=1)
     def opt(name):
         return args[args.index(name) + 1] if name in args else None
+    if args[:1] == ["api"]:
+        save()
+        if args[1].endswith("/releases/latest"):
+            if not state.get("latest"):
+                print("Not Found", file=sys.stderr); sys.exit(1)
+            print(state["latest"]); sys.exit(0)
+        print("unknown api", file=sys.stderr); sys.exit(2)
     tag = args[2] if len(args) > 2 else None
     rel = state["releases"].get(tag)
+    def blob(t, name):
+        return os.path.join(state["blobs"], t, name)
     if args[:2] == ["release", "view"]:
         save()
         if rel is None:
@@ -74,6 +85,8 @@ FAKE_GH = textwrap.dedent('''\
         rel = state["releases"][tag] = {"tagName": tag, "name": opt("--title"), "isDraft": False,
                                         "isPrerelease": "--prerelease" in args, "url": "https://example.invalid/n",
                                         "assets": [], "body": open(opt("--notes-file"), encoding="utf-8").read()}
+        if "--latest" in args or state.get("create_marks_latest"):
+            state["latest"] = tag
         args = ["release", "upload", tag] + args[3:args.index("--repo")] + ["--clobber"]
     if rel is None:
         save(); print("release not found", file=sys.stderr); sys.exit(1)
@@ -94,6 +107,14 @@ FAKE_GH = textwrap.dedent('''\
                 asset["digest"] = "sha256:" + hashlib.sha256(data).hexdigest()
             rel["assets"].append(asset)
             state["files"][name] = hashlib.sha256(data).hexdigest()
+            os.makedirs(os.path.dirname(blob(tag, name)), exist_ok=True)
+            shutil.copyfile(f, blob(tag, name))
+        save(); sys.exit(0)
+    if args[:2] == ["release", "download"]:
+        name, out = opt("--pattern"), opt("--output")
+        if not any(a["name"] == name for a in rel["assets"]) or not os.path.isfile(blob(tag, name)):
+            save(); print(f"no asset {name}", file=sys.stderr); sys.exit(1)
+        shutil.copyfile(blob(tag, name), out)
         save(); sys.exit(0)
     if args[:2] == ["release", "edit"]:
         rel["name"] = opt("--title")
@@ -102,7 +123,7 @@ FAKE_GH = textwrap.dedent('''\
             rel["isPrerelease"] = True
         if "--latest" in args:
             rel["isPrerelease"] = False
-            rel["latest"] = True
+            state["latest"] = tag
         save(); sys.exit(0)
     save(); print("unknown command", file=sys.stderr); sys.exit(2)
 ''')
@@ -211,6 +232,7 @@ class World:
             _write(w, f"docs/release/{self.tag}.md", hand_notes)
         if release_key is not None:
             _write(w, "windows/installer/release-signing.pub", release_key)
+        _write(w, f"android/play/WHATS-NEW-v{version}.txt", f"Domovoi {version}\n\n- Something new\n")
         _git(w, "add", "-A"); _git(w, "commit", "--quiet", "-m", "release: Domovoi")
         self.build = _git(w, "rev-parse", "HEAD")
         # The release commit: android/release.json naming its own APKs, on the build commit, tagged.
@@ -236,6 +258,9 @@ class World:
         _write(w, "windows/installer/pins.iss", _pins(self.tag_commit, hashlib.sha256(PROVISION).hexdigest()))
         _git(w, "commit", "--quiet", "-am", "windows: Setup installs it")
         self.head = _git(w, "rev-parse", "HEAD")
+        # release.ps1's app tag: lightweight, on the commit the APKs were built from.
+        self.app_tag = f"app-{version}"
+        _git(w, "tag", self.app_tag, self.build)
         _git(w, "push", "--quiet", "origin", "main", "--tags")
         if stable:
             _git(w, "push", "--quiet", "origin", f"{stable}^{{commit}}:refs/heads/stable")
@@ -250,7 +275,11 @@ class World:
         assets.append({"name": "SHA256SUMS", "size": len(sums), "url": "https://example.invalid/SHA256SUMS",
                        "digest": "sha256:" + hashlib.sha256(sums).hexdigest()})
         self.state_file = tmp_path / "gh-state.json"
-        self.state = {"origin": str(self.origin), "calls": [], "files": {},
+        self.blobs = tmp_path / "gh-blobs"
+        for name, data in self.apk_bytes.items():
+            _write(self.blobs / self.tag, name, data)
+        _write(self.blobs / self.tag, "SHA256SUMS", sums)
+        self.state = {"origin": str(self.origin), "calls": [], "files": {}, "blobs": str(self.blobs),
                       "releases": {self.tag: {"tagName": self.tag, "name": f"Domovoi {self.tag}", "isDraft": False,
                                               "isPrerelease": github_prerelease, "url": "https://example.invalid/r",
                                               "assets": assets}}}
@@ -270,7 +299,23 @@ class World:
         return self.state
 
     def tools(self, cls=None):
-        return (cls or fr.Tools)(self.work, self.gh, self.said.append)
+        return (cls or self.Served)(self.work, self.gh, self.said.append)
+
+    @property
+    def Served(self):
+        """Tools whose downloads come from the fake GitHub's files, by
+        release and name (the URL F-Droid uses)."""
+        blobs = self.blobs
+
+        class Served(fr.Tools):
+            fetched: list[str] = []
+
+            def download_sha256(self, url):
+                tag, name = url.rsplit("/", 2)[1:]
+                Served.fetched.append(f"{tag}/{name}")
+                return hashlib.sha256((blobs / tag / name).read_bytes()).hexdigest()
+
+        return Served
 
     def run(self, *extra: str, cls=None) -> int:
         return fr.run(["--setup", str(self.setup), *extra], tools=self.tools(cls), repo=self.work)
@@ -677,7 +722,7 @@ def test_stable_goes_to_the_commit_checked_even_if_the_tag_moves_here(tmp_path, 
     unreviewed = _git(w.work, "rev-parse", "HEAD")
     _git(w.work, "push", "--quiet", "origin", "main")
 
-    class Racy(fr.Tools):
+    class Racy(w.Served):
         def git(self, *args, check=True):
             if args[:1] == ("push",):
                 _git(w.work, "tag", "-f", w.tag, unreviewed)
@@ -691,7 +736,7 @@ def test_stable_goes_to_the_commit_checked_even_if_the_tag_moves_here(tmp_path, 
 def test_stable_stays_if_the_tag_on_github_moves_before_the_push(tmp_path, monkeypatch):
     w = World(tmp_path, monkeypatch, version="1.0.0", stable="v1.0.0-rc1")
 
-    class Moved(fr.Tools):
+    class Moved(w.Served):
         def gh(self, *args, check=True):
             if args[:2] == ("release", "edit"):
                 subprocess.run(["git", "--git-dir", str(w.origin), "update-ref", f"refs/tags/{w.tag}", w.rc1], check=True)
@@ -775,7 +820,8 @@ def test_without_github_digests_each_file_is_downloaded_and_checked(tmp_path, mo
             return files.get(name) or known[name]
 
     assert w.run(cls=Downloads) == 0
-    assert sorted(fetched) == sorted([*w.apk_bytes, "DomovoiSetup.exe", "SHA256SUMS"])
+    # The release's files, then the app release's APKs, each downloaded back.
+    assert sorted(fetched) == sorted([*w.apk_bytes, *w.apk_bytes, "DomovoiSetup.exe", "SHA256SUMS"])
 
     class Tampered(Downloads):
         def download_sha256(self, url):
@@ -1192,7 +1238,7 @@ def test_the_signature_files_are_known_to_the_release_check():
 # ─── a release that doesn't change the app (path b) ──────────────────────
 
 def _server_only(w: World, version: str = "1.0.1", *, gradle: str | None = None, manifest: str | None = None,
-                 push: bool = True) -> str:
+                 push: bool = True, whats_new: bool = True) -> str:
     """On top of World's app release (v1.0.0, its APKs on GitHub): the
     server-only release commit, pyproject at ``version``, the app and
     android/release.json as v1.0.0 left them. Pushed to main unless not."""
@@ -1201,6 +1247,12 @@ def _server_only(w: World, version: str = "1.0.1", *, gradle: str | None = None,
            gradle if gradle is not None else '        versionCode = 26101602\n        versionName = "1.0.0"\n')
     if manifest is not None:
         _write(w.work, "android/release.json", manifest)
+    if whats_new and gradle is not None:
+        # An app change brings its "What's new" (the app release's notes).
+        app = re.search(r'versionName = "([^"]+)"', gradle)
+        if app:
+            _write(w.work, f"android/play/WHATS-NEW-v{app.group(1)}.txt", f"Domovoi {app.group(1)}\n")
+            _git(w.work, "add", "-A")
     _git(w.work, "commit", "--quiet", "-am", f"Release {version}")
     head = _git(w.work, "rev-parse", "HEAD")
     if push:
@@ -1875,3 +1927,230 @@ def test_the_mac_files_are_known_to_the_release_check():
 def test_the_powershell_wrapper_passes_the_mac_package():
     ps1 = (REPO / "scripts" / "release" / "finish-release.ps1").read_text(encoding="ascii")
     assert "'--mac-pkg'" in ps1 and "'--mac-build-record'" in ps1 and "[string]$MacPkg" in ps1
+
+
+# ─── the app tag's own release, app-<versionName> (for F-Droid) ─────────
+
+def _app_calls(w: World, verb: str) -> list[list[str]]:
+    return [c for c in w.calls(verb) if c[2] == w.app_tag]
+
+
+@requires_git
+def test_an_app_release_also_publishes_the_app_tag_s_release_never_latest(tmp_path, monkeypatch):
+    """Path a (the release carries the APKs): after the release's own files,
+    the release of the app tag release.ps1 pushed, at that tag, with the
+    same APKs under the same names, never Latest and never a pre-release;
+    the server release stays Latest."""
+    w = World(tmp_path, monkeypatch, version="1.0.0")
+    assert w.run() == 0
+    (create,) = _app_calls(w, "create")
+    assert "--verify-tag" in create and "--latest=false" in create
+    assert "--latest" not in create and "--prerelease" not in create
+    assert "--clobber" not in create and "--target" not in create
+    assert create[create.index("--title") + 1] == "Domovoi for Android 1.0.0"
+    names = [Path(a).name for a in create[3:create.index("--repo")]]
+    assert sorted(names) == sorted(e["file"] for e in w.apks)
+    state = w.load()
+    app = state["releases"][w.app_tag]
+    assert app["isPrerelease"] is False and app["isDraft"] is False
+    assert sorted(a["name"] for a in app["assets"]) == sorted(e["file"] for e in w.apks)
+    for e in w.apks:  # byte for byte the files android/release.json pins, as on the server release
+        assert (w.blobs / w.app_tag / e["file"]).read_bytes() == w.apk_bytes[e["file"]]
+        assert (w.blobs / w.app_tag / e["file"]).read_bytes() == (w.blobs / w.tag / e["file"]).read_bytes()
+    assert state["latest"] == w.tag
+    assert app["body"] == ("Domovoi 1.0.0\n\n- Something new\n\nPart of [Domovoi 1.0.0]"
+                           "(https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0).\n")
+    # After the server release's own files, before stable moves.
+    order = [(c["args"][:3], c["stable"]) for c in state["calls"] if c["args"][:2] != ["release", "view"]]
+    assert order.index((["release", "edit", w.tag], "")) < order.index((["release", "create", w.app_tag], ""))
+    assert w.stable() == w.tag_commit
+    # The app tag is where release.ps1 put it: nothing moved it.
+    assert _git(w.work, "ls-remote", str(w.origin), f"refs/tags/{w.app_tag}").split()[0] == w.build
+    assert any(f"{w.app_tag} holds" in s and "still Latest" in s for s in w.said)
+
+
+@requires_git
+def test_a_server_only_release_makes_no_app_release(tmp_path, monkeypatch):
+    """The app unchanged (the plan's sign_app false, path b): no app release."""
+    w = World(tmp_path, monkeypatch, version="1.0.0")
+    assert w.run() == 0
+    _server_only(w)
+    before = len(w.calls("create"))
+    assert w.run() == 0
+    assert [c[2] for c in w.calls("create")[before:]] == ["v1.0.1"]
+    assert sorted(w.load()["releases"]) == ["app-1.0.0", "v1.0.0", "v1.0.1"]
+
+
+@requires_git
+def test_the_finish_path_creates_the_app_release_when_missing_and_a_rerun_changes_nothing(tmp_path, monkeypatch):
+    w = World(tmp_path, monkeypatch, version="1.0.0")
+    assert w.app_tag not in w.state["releases"]
+    assert w.run() == 0
+    assert w.app_tag in w.load()["releases"]
+    # Finished already: a second run leaves the app release alone.
+    assert w.run() == 0
+    assert len(_app_calls(w, "create")) == 1 and _app_calls(w, "upload") == []
+    assert any(f"{w.app_tag} already has both APKs" in s for s in w.said)
+    # One APK gone from it: only that one goes up, never with --clobber.
+    gone = w.apks[0]["file"]
+    w.load()
+    w.state["releases"][w.app_tag]["assets"] = [a for a in w.state["releases"][w.app_tag]["assets"]
+                                                if a["name"] != gone]
+    w.save()
+    assert w.run() == 0
+    (upload,) = _app_calls(w, "upload")
+    assert [Path(a).name for a in upload[3:upload.index("--repo")]] == [gone]
+    assert "--clobber" not in upload
+    assert len(_app_calls(w, "create")) == 1
+    assert sorted(a["name"] for a in w.load()["releases"][w.app_tag]["assets"]) == sorted(e["file"] for e in w.apks)
+
+
+@pytest.mark.parametrize("change", [{"digest": "sha256:" + "0" * 64}, {"size": 1}])
+@requires_git
+def test_a_different_file_on_the_app_release_is_never_replaced(tmp_path, monkeypatch, change):
+    w = World(tmp_path, monkeypatch, version="1.0.0")
+    e = w.apks[0]
+    asset = {"name": e["file"], "url": "https://example.invalid/" + e["file"], "size": e["size"],
+             "digest": "sha256:" + e["sha256"]}
+    asset.update(change)
+    w.state["releases"][w.app_tag] = {"tagName": w.app_tag, "name": "Domovoi for Android 1.0.0", "isDraft": False,
+                                      "isPrerelease": False, "url": "https://example.invalid/a", "assets": [asset]}
+    w.save()
+    with pytest.raises(fr.Refused, match="not replacing it"):
+        w.run()
+    # Refused before anything changed on GitHub.
+    assert w.calls("upload") == [] and w.calls("edit") == [] and w.stable() == ""
+
+
+@pytest.mark.parametrize("change, why", [
+    ({"isPrerelease": True}, "marked a pre-release"),
+    ({"isDraft": True}, "is a draft"),
+    ({"assets": [{"name": "notes.txt", "size": 1, "url": "https://example.invalid/notes.txt"}]}, "not the app's APKs"),
+])
+@requires_git
+def test_an_app_release_that_is_not_one_is_refused_before_anything_changes(tmp_path, monkeypatch, change, why):
+    w = World(tmp_path, monkeypatch, version="1.0.0")
+    w.state["releases"][w.app_tag] = {"tagName": w.app_tag, "name": "x", "isDraft": False, "isPrerelease": False,
+                                      "url": "https://example.invalid/a", "assets": [], **change}
+    w.save()
+    with pytest.raises(fr.Refused, match=why):
+        w.run()
+    assert w.calls("upload") == [] and w.calls("edit") == []
+
+
+@requires_git
+def test_the_app_release_s_files_are_checked_against_the_manifest_both_ways(tmp_path, monkeypatch):
+    """What goes up is checked against android/release.json first (taken
+    from the server release), and each file is downloaded back from the app
+    release by the URL F-Droid uses and checked again."""
+    w = World(tmp_path, monkeypatch, version="1.0.0")
+    _write(w.blobs / w.tag, w.apks[0]["file"], b"not the signed APK")
+    with pytest.raises(fr.Refused, match=f"{w.apks[0]['file']} downloaded from {w.tag} is not the file"):
+        w.run()
+    assert _app_calls(w, "create") == []
+
+    (tmp_path / "b").mkdir()
+    w2 = World(tmp_path / "b", monkeypatch, version="1.0.0")
+    fetched = []
+    blobs = w2.blobs
+
+    class Tampered(fr.Tools):
+        def download_sha256(self, url):
+            fetched.append(url)
+            tag, name = url.rsplit("/", 2)[1:]
+            if tag.startswith("app-") and name.endswith("armeabi-v7a.apk"):
+                return "0" * 64
+            return hashlib.sha256((blobs / tag / name).read_bytes()).hexdigest()
+
+    with pytest.raises(fr.Refused, match=r"armeabi-v7a\.apk on app-1\.0\.0 is not the file android/release\.json "
+                                         r"pins \(downloaded"):
+        w2.run(cls=Tampered)
+    base = "https://github.com/coders-farm-official/domovoi/releases/download/app-1.0.0/"
+    assert base + "domovoi-1.0.0-arm64-v8a.apk" in fetched
+    assert w2.stable() == ""
+
+
+@requires_git
+def test_the_server_release_must_still_be_latest_after_the_app_release(tmp_path, monkeypatch):
+    w = World(tmp_path, monkeypatch, version="1.0.0")
+    w.state["create_marks_latest"] = True   # a gh that ignored --latest=false
+    w.save()
+    with pytest.raises(fr.Refused, match="the Latest release on GitHub is app-1.0.0, not v1.0.0"):
+        w.run()
+    assert w.stable() == ""
+
+
+@requires_git
+def test_a_pre_release_s_app_release_is_still_a_full_one_and_latest_is_left_alone(tmp_path, monkeypatch):
+    w = World(tmp_path, monkeypatch, version="1.0.0", github_prerelease=True)
+    assert w.run() == 0
+    (create,) = _app_calls(w, "create")
+    assert "--latest=false" in create and "--prerelease" not in create
+    assert w.load()["releases"][w.app_tag]["isPrerelease"] is False
+    assert "latest" not in w.state
+
+
+@pytest.mark.parametrize("where", ["missing", "elsewhere"])
+@requires_git
+def test_the_app_tag_must_be_release_ps1_s_and_is_never_made_here(tmp_path, monkeypatch, where):
+    w = World(tmp_path, monkeypatch, version="1.0.0")
+    if where == "missing":
+        _git(w.work, "push", "--quiet", "origin", f":refs/tags/{w.app_tag}")
+    else:
+        # Moved on GitHub (and fetched here: a tag that differs here and on
+        # GitHub stops the fetch anyway).
+        _git(w.work, "push", "--quiet", "--force", "origin", f"{w.tag_commit}:refs/tags/{w.app_tag}")
+        _git(w.work, "tag", "-d", w.app_tag)
+    with pytest.raises(fr.Refused, match=f"the app tag {w.app_tag} (here|on GitHub) is"):
+        w.run()
+    assert w.calls("upload") == [] and w.calls("create") == []
+    on_origin = subprocess.run(["git", "--git-dir", str(w.origin), "rev-parse", "--verify", "--quiet",
+                                f"refs/tags/{w.app_tag}"], capture_output=True, text=True).stdout.strip()
+    assert on_origin == ("" if where == "missing" else w.tag_commit)
+
+
+@requires_git
+def test_an_app_release_without_its_whats_new_is_refused_and_the_plan_says_so_first(tmp_path, monkeypatch):
+    w = World(tmp_path, monkeypatch, version="1.0.0")
+    # The release commit made without the file: android/release.json on a build commit lacking it.
+    _git(w.work, "checkout", "--quiet", "--detach", w.build)
+    _git(w.work, "rm", "--quiet", "android/play/WHATS-NEW-v1.0.0.txt")
+    _git(w.work, "commit", "--quiet", "-m", "no notes")
+    build = _git(w.work, "rev-parse", "HEAD")
+    _write(w.work, "android/release.json", _manifest(w.version, w.apks, build))
+    _git(w.work, "commit", "--quiet", "-am", "android: release")
+    _git(w.work, "tag", "-f", w.tag)
+    _git(w.work, "tag", "-f", w.app_tag, build)
+    _git(w.work, "push", "--quiet", "--force", "origin", f"refs/tags/{w.tag}", f"refs/tags/{w.app_tag}")
+    with pytest.raises(fr.Refused, match="has no android/play/WHATS-NEW-v1.0.0.txt"):
+        w.run("--no-publish")
+    (tmp_path / "p").mkdir()
+    w2 = World(tmp_path / "p", monkeypatch, version="1.0.0")
+    _server_only(w2, gradle=APP_1_0_1, whats_new=False)
+    with pytest.raises(fr.Refused, match="HEAD has no android/play/WHATS-NEW-v1.0.1.txt"):
+        _plan(w2)
+
+
+@requires_git
+def test_a_dry_run_says_what_the_app_release_would_be_and_makes_none(tmp_path, monkeypatch, capsys):
+    w = World(tmp_path, monkeypatch, version="1.0.0")
+    assert w.run("--no-publish") == 0
+    assert _app_calls(w, "create") == [] and _app_calls(w, "upload") == []
+    out = capsys.readouterr().out
+    assert f"gh release create {w.app_tag}" in out and "--verify-tag" in out and "--latest=false" in out
+    assert (w.stage / "APP-NOTES.md").read_text(encoding="utf-8").endswith(
+        "Part of [Domovoi 1.0.0](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0).\n")
+
+
+def test_the_app_tag_and_its_notes_file_are_the_manifest_s_version_name():
+    assert fr.app_tag_of({"version_name": "1.4.0"}) == "app-1.4.0"
+    assert fr.whats_new_path("1.4.0") == "android/play/WHATS-NEW-v1.4.0.txt"
+    for bad in (None, "", "1.4.0 beta", "../x", "-1"):
+        with pytest.raises(fr.Refused, match="no usable versionName"):
+            fr.app_tag_of({"version_name": bad})
+    # The real manifest: its app release has its WHATS-NEW file, and its
+    # APK names are the ones the app release takes over.
+    rel = json.loads((REPO / "android" / "release.json").read_text(encoding="utf-8"))["release"]
+    assert (REPO / fr.whats_new_path(rel["version_name"])).is_file()
+    assert sorted(e["file"] for e in rel["apks"]) == sorted(
+        f"domovoi-{rel['version_name']}-{abi}.apk" for abi in ("arm64-v8a", "armeabi-v7a"))

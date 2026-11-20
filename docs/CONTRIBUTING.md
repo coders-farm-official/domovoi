@@ -478,17 +478,16 @@ merge it if CI is green.
 
 **OSV-Scanner** (`.github/workflows/osv.yml`) is what watches those lock
 files, which Dependabot can't read: it checks `requirements.lock`, the two
-Linux py314 locks, the satellite's `satellite/locks/pc-*.txt` and the three
+Linux py314 locks, the satellite's `satellite/locks/pc-*.txt`, the three
 build-tool requirement files (installer art, g2p training, wake-word
-trainer) against the OSV database on every push to `main`, on pull requests
-that touch them, by hand, and **daily**, so a new advisory turns the job red
-the same day. It fails on any known vulnerability. The fix is a bump of the
-lock (a regenerated lock, a new hash-pinned requirement). The Android
-Gradle metadata and the wake trainer's `requirements.lock` and
-`torch-cpu.lock` are listed in the job summary but don't fail it (the
-metadata includes build-tool jars, and the trainer's locks also pin the
-base image's own packages, which the image never installs on its default
-base). The scanner is a release binary
+trainer) and the wake trainer image's `requirements.lock` and
+`torch-cpu.lock` against the OSV database on every push to `main`, on pull
+requests that touch them, by hand, and **daily**, so a new advisory turns
+the job red the same day. It fails on any known vulnerability. The fix is a
+bump of the lock (a regenerated lock, a new hash-pinned requirement; for
+the trainer, scripts/wake_word/DOCKER_TRAINER.md says how its locks were
+made). The Android Gradle metadata is listed in the job summary but
+doesn't fail it (it includes build-tool jars). The scanner is a release binary
 pinned by version and SHA-256 in the workflow; bump both together, to a
 release at least 14 days old, with the checksum from the release's own
 `SHA256SUMS`.
@@ -846,6 +845,8 @@ setup is [docs/release/ACTIONS-SETUP.md](release/ACTIONS-SETUP.md).
    (loaded into an `ssh-agent` for that one step: no key file, no prompt),
    publishes the files, checks them and moves `stable` (step 3 below). The
    job's summary links the release.
+   When the release carries the app, finish-release also publishes the
+   GitHub release of the app tag `app-<versionName>` for F-Droid (step 3).
 7. **build-mac** (macOS, read-only, no secrets, while the run waits for
    approval) builds `DomovoiSetup-mac.pkg` with `mac/build.sh --tag`: the
    same Xcode as CI's `mac` job, CMake, Lima and whisper.cpp at their
@@ -956,7 +957,13 @@ workflow runs the same scripts. In order:
    refused), and that that release on GitHub holds its APKs. Either way,
    for a version without a suffix, that `stable` can fast-forward; nothing
    on GitHub changes until all of that passes. A tag it made and didn't
-   push (a dry run, or a run that stopped first) is deleted again. Then it builds `DomovoiSetup.exe`
+   push (a dry run, or a run that stopped first) is deleted again. With the
+   app changed it also publishes, after the release's own files, the GitHub
+   release of the app tag `app-<versionName>` (release.ps1's; never made or
+   moved here) for F-Droid: "Domovoi for Android <versionName>", the same
+   two APKs under the same names, notes from
+   `android/play/WHATS-NEW-v<versionName>.txt`, never Latest; a second run
+   uploads only what it lacks and stops on a file that differs. Then it builds `DomovoiSetup.exe`
    from the tag's own files: a clean worktree of the tag, where
    `windows\build.ps1 -Pin <tag>` moves the Setup's pins to the tag's
    commit and builds, and anything but `pins.iss` changed, or a bundled

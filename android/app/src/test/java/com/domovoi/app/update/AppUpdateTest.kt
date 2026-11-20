@@ -166,14 +166,24 @@ class AppUpdateTest {
 
     @Test fun aPlayInstallNeverHearsOfIt() {
         val state = AppUpdate.decide(install(installer = "com.android.vending"), offer())
-        assertEquals(UpdateState.PlayStore, state)
+        assertEquals(UpdateState.StoreManaged("Google Play"), state)
         assertFalse(AppUpdate.shows(state, null))
         assertEquals("Installed from Google Play, which keeps it up to date.", AppUpdate.aboutText(state))
     }
 
+    @Test fun anFDroidInstallIsLeftToFDroid() {
+        for (who in listOf("org.fdroid.fdroid", "org.fdroid.fdroid.privileged", "org.fdroid.basic", "com.looker.droidify", "com.machiav3lli.fdroid")) {
+            val state = AppUpdate.decide(install(installer = who), offer())
+            assertEquals(who, UpdateState.StoreManaged("F-Droid"), state)
+            assertTrue(who, AppUpdate.isStoreManaged(who))
+            assertFalse(who, AppUpdate.shows(state, null))
+            assertEquals("Installed from F-Droid, which keeps it up to date.", AppUpdate.aboutText(state))
+        }
+    }
+
     @Test fun anyOtherInstallerOrNoneStillDoes() {
         for (who in listOf(null, "com.google.android.packageinstaller", "com.android.packageinstaller", "com.android.shell")) {
-            assertFalse(who, AppUpdate.isPlayInstall(who))
+            assertFalse(who, AppUpdate.isStoreManaged(who))
             assertTrue(who, AppUpdate.decide(install(installer = who), offer()) is UpdateState.Available)
         }
     }

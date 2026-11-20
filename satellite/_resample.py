@@ -2,7 +2,8 @@
 
 Why this exists: the XVF3800 USB array only accepts audio at its fixed
 native rate over USB, but the Domovoi server streams TTS at whatever rate
-its engine produced (Edge ≈ 24 kHz, Piper ≈ 22.05 kHz, system varies).
+its engine produced (Piper voices are mostly 22.05 kHz; the system voice
+varies).
 The playback thread therefore has to resample each incoming PCM chunk to
 the device rate on the fly.
 

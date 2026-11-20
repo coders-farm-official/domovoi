@@ -889,6 +889,16 @@ run_update() {
 # A top-level field of the result, as raw JSON ("ok", true, null, 3 ...).
 field() { sed -n "s/^  \"$1\": \(.*\)$/\1/p" "$RESULT" | sed 's/,$//'; }
 
+# The retired-packages list as the script has it, recorded in UPD as a
+# clean uninstall would: a case about something else then sees no pip
+# uninstall from an update whose dependencies didn't change.
+record_retired_list() {
+  local RETIRED_PACKAGES
+  eval "$(sed -n '/^RETIRED_PACKAGES=(/,/)/p' "$SCRIPT")"
+  mkdir -p "$UPD" && printf '%s
+' "${RETIRED_PACKAGES[*]}" >"$UPD/retired-packages"
+}
+
 called() { grep -qF -- "$1" "$STATE/calls.log"; }
 not_said() { ! grep -qF -- "$1" "$CASE/output.log"; }
 not_called() { ! grep -qF -- "$1" "$STATE/calls.log"; }
@@ -1099,6 +1109,7 @@ case_deps_changed_as_root() {
 
 case_mpd_changed() {
   new_case mpd_changed
+  record_retired_list
   mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
   printf 'FROM debian:trixie-slim\n' >"$REPO/domovoi/Dockerfile.mpd"
   commit_all "B: mpd" >/dev/null
@@ -1360,6 +1371,51 @@ case_retired_packages_include_torch() {
   check "asks pip for torch and resemblyzer too" called "uninstall -y piper-tts piper-phonemize edge-tts torch resemblyzer"
   check "after the re-sync" before "install -e" "uninstall -y piper-tts"
   check "the step names both" grep -qF '"detail": "uninstalled torch-2.14.1+cpu Resemblyzer-0.1.4 (no longer used)"' "$RESULT"
+  end_case
+}
+
+# The 2026-10-15 licence clean-up (mutagen, python-mpd2, lameenc, librosa
+# and what only it brought, PyAV) joined the list in 1.4.1. A house that
+# re-synced long ago gets them uninstalled by an update that changes no
+# dependency, once: the list it ran with is recorded, and the next update
+# with the same list leaves pip alone.
+case_retired_packages_new_names_without_a_resync() {
+  new_case retired_packages_new_names_without_a_resync
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  commit_all "B: code only" >/dev/null
+  printf 'Found existing installation: mutagen 1.47.0\nUninstalling mutagen-1.47.0:\n  Successfully uninstalled mutagen-1.47.0\nFound existing installation: av 15.1.0\nUninstalling av-15.1.0:\n  Successfully uninstalled av-15.1.0\n' \
+    >"$STATE/pip-uninstall-output"
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "no re-sync" not_called "pip --disable-pip-version-check --no-input install"
+  check "asks pip for the clean-up's packages" called "uninstall -y piper-tts piper-phonemize edge-tts torch resemblyzer mutagen python-mpd2 lameenc librosa soxr soundfile numba llvmlite lazy-loader pooch scikit-learn joblib threadpoolctl av"
+  check "with core and web stopped" before "systemctl stop domovoi-web.service" "uninstall -y piper-tts"
+  check "before they start again" before "uninstall -y piper-tts" "systemctl start domovoi-core.service"
+  check "the step names them" grep -qF '"detail": "uninstalled mutagen-1.47.0 av-15.1.0 (no longer used)"' "$RESULT"
+  check "the list is recorded" grep -qF 'mutagen python-mpd2' "$UPD/retired-packages"
+  printf 'print("c")\n' >"$REPO/domovoi/app.py"
+  commit_all "C: code only" >/dev/null
+  : >"$STATE/calls.log"
+  run_update
+  check "next update ok" eq "$(field status)" '"ok"'
+  check "pip left alone the second time" not_called "uninstall -y"
+  check "no step the second time" eq "$(grep -c 'drop-retired-packages' "$RESULT")" 0
+  end_case
+}
+
+# A failed uninstall is not recorded, so the next update tries again.
+case_retired_packages_failure_not_recorded() {
+  new_case retired_packages_failure_not_recorded
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  commit_all "B: code only" >/dev/null
+  printf 'ERROR: permission denied\n' >"$STATE/pip-uninstall-output"
+  : >"$STATE/pip-uninstall-fails"
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "a warn step" grep -qF '"name": "drop-retired-packages", "status": "warn"' "$RESULT"
+  check "nothing recorded" test ! -e "$UPD/retired-packages"
   end_case
 }
 
@@ -3199,6 +3255,7 @@ case_never_refuses_a_dependency_update() {
 # box whose answer is "never" still takes it, and no venv re-sync runs.
 case_version_bump_alone_is_not_a_dependency_change() {
   new_case version_bump_alone_is_not_a_dependency_change
+  record_retired_list
   mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
   echo never >"$STATE/internet-policy"
   printf '[project]\nname = "domovoi"\nversion = "1.0.0rc2"\n' >"$REPO/pyproject.toml"
@@ -4416,6 +4473,7 @@ case_gpu_runtime_docker_restart_on_a_plain_restart_restarts_the_database() {
 # step with its own summary: the update stands, nothing rolls back.
 case_gpu_runtime_failure_is_a_warning() {
   new_case gpu_runtime_failure_is_a_warning
+  record_retired_list
   mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
   printf 'print("b")\n' >"$REPO/domovoi/app.py"
   local sha_b; sha_b=$(commit_all "B: code")
@@ -5665,6 +5723,8 @@ CASES=(
   case_retired_packages_uninstalled
   case_retired_packages_include_edge_tts
   case_retired_packages_include_torch
+  case_retired_packages_new_names_without_a_resync
+  case_retired_packages_failure_not_recorded
   case_retired_packages_absent_leave_no_step
   case_retired_packages_failure_is_a_warning
   case_retired_packages_kept_through_a_rollback
