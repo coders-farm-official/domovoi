@@ -291,6 +291,14 @@ public enum ShellStrings {
 
     /// `LocalSettingsScreen` — the gear with no server.
     public static let localSettingsSub = "This phone's voice and its problem reports. Server settings appear once a Domovoi is connected."
+    /// What this app's own screen says (2026-11-20). An iPhone has no voice
+    /// of its own to set — no on-device assistant — so the first sentence
+    /// names what is there; the second is Android's, word for word.
+    public static let localSettingsSubPhone = "This phone's problem reports, privacy and licences. Server settings appear once a Domovoi is connected."
+    /// The local shell's gear (`LocalSettingsButton`'s `contentDescription`).
+    public static let localSettingsButton = "settings"
+    /// `AboutThisAppCard`: the version line, with no server.
+    public static let aboutThisApp = "About this app"
     public static let back = "back"
 
     // MARK: - §7.9 the phone bar (ui/screens/settings/PhoneBarPanel.kt)

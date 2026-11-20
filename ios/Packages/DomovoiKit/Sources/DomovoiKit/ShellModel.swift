@@ -1502,6 +1502,10 @@ public final class ShellModel {
         guard let made = buildPlayer(container, deviceID) else { return nil }
         playerBuilds += 1
         heldPlayer = made
+        // Told on the next turn, never here: this getter runs inside view
+        // bodies, and a tracked write during one is SwiftUI's "Modifying
+        // state during view update" (``playerReady``).
+        Task { @MainActor [weak self] in self?.playerReady = true }
         // The scope is settled **before** anything can be queued, so the
         // first item is stamped with the house it came from.
         made.serverChanged(to: playerScope)
@@ -1581,6 +1585,14 @@ public final class ShellModel {
     /// without the asking being what starts a player. Reading ``player``
     /// builds one; reading this never does.
     public var playerIsBuilt: Bool { heldPlayer != nil }
+
+    /// ``playerIsBuilt``, **tracked**: what the docked mini player watches
+    /// (2026-11-20), so the bar appears once something has built the player
+    /// and the bar itself never is what builds it — a player built at launch
+    /// activates a `.playback` session and stops whatever the person was
+    /// already listening to. Set a turn after the build, for the reason at
+    /// the write.
+    public private(set) var playerReady = false
 
     /// How many players this shell has built. One, for the life of a shell —
     /// `PlayerOwnerTests` is the thing that says so.
