@@ -18,9 +18,12 @@ for, and only when that host is this server's own: the address the
 connection arrived on (the socket's local address), or one of this
 server's names (its host name, its network name with and without
 ``.local``, the name the core holds now, an exact name the operator put
-in ``TRUSTED_HOSTS``). Anything else is a 400 whose
-text names the server's own address. Only GET and HEAD are redirected;
-every other method is a 405. The request target must be origin-form
+in ``TRUSTED_HOSTS``), or the LAN address the host side of a VM install
+wrote in ``lan.json`` (:func:`domovoi.lan_address.host_lan_ipv4`: root's
+file, so only this server's own side can name it). Anything else is a 400
+whose text names the server's own address: lan.json's on a VM install,
+never the VM's private one, which no other device can reach. Only GET
+and HEAD are redirected; every other method is a 405. The request target must be origin-form
 (``/path?query``, printable ASCII), so the Location header can't be
 split or pointed elsewhere.
 
@@ -65,6 +68,7 @@ from typing import Any, Callable
 
 # At module top on purpose: the web import guard refuses a NEW domovoi.*
 # import once startup is done (web/backend/plugin_host.py).
+from domovoi import lan_address, windows_side
 from domovoi.config import settings as core_settings
 from domovoi.transport_guard import configured_hosts
 
@@ -305,6 +309,9 @@ def _reply(status: str, headers: list[tuple[str, str]], body: str, head_only: bo
 
 
 def _own_url(local_ip: str | None, target_port: int) -> str:
+    """The address the refusal suggests. ``local_ip`` is None when the
+    caller knows of no address the household can reach (a VM install
+    whose host side hasn't written lan.json): then no address at all."""
     ip = _ip(local_ip) if local_ip else None
     if ip is None:
         return f"this server's address with :{target_port}"
@@ -312,10 +319,17 @@ def _own_url(local_ip: str | None, target_port: int) -> str:
     return f"http://{host}:{target_port}/"
 
 
+_LOCAL = object()
+
+
 def answer(head: bytes, *, local_ip: str | None, names: frozenset[str] | set[str],
-           target_port: int, listen_port: int = DEFAULT_PORT) -> tuple[bytes, int]:
+           target_port: int, listen_port: int = DEFAULT_PORT,
+           suggest_ip: Any = _LOCAL) -> tuple[bytes, int]:
     """The whole reply to one request head (everything up to the blank
-    line). Returns ``(bytes, status)``."""
+    line). Returns ``(bytes, status)``. ``suggest_ip`` is the address a
+    refusal names; by default the connection's own (``local_ip``), which
+    on a VM install is the VM's private one, so the listener passes
+    lan.json's there, or None for no address (:meth:`ShortAddress.suggested_ip`)."""
     try:
         text = head.decode("ascii")
     except UnicodeDecodeError:
@@ -348,7 +362,8 @@ def answer(head: bytes, *, local_ip: str | None, names: frozenset[str] | set[str
     ):
         body = (
             "That name isn't this Domovoi server's. Open "
-            + _own_url(local_ip, target_port) + " instead.\n"
+            + _own_url(local_ip if suggest_ip is _LOCAL else suggest_ip, target_port)
+            + " instead.\n"
         )
         return _reply("400 Bad Request", [], body, head_only), 400
     host = parsed[0]
@@ -387,6 +402,10 @@ class ShortAddress:
         self._names_task: asyncio.Task | None = None
         self._lan_labels: list[str | None] = []
         self._lan_addresses: list[str] = []
+        # lan.json's address (a VM install's host LAN address) and whether
+        # this install runs inside a Mac host's VM; read with the names.
+        self._host_lan_ip: str | None = None
+        self._in_vm = False
         self._active = 0
         self._lock = asyncio.Lock()
         self.fetch_lan_name: Callable[[], Any] | None = None
@@ -516,7 +535,22 @@ class ShortAddress:
         # status): on a Mac install the LAN reaches the Mac's address,
         # redirected into the VM, so the connection's own address isn't it.
         ips = {str(ip) for ip in map(_ip, self._lan_addresses) if ip is not None}
+        # lan.json: the address the Mac's own port 80 is redirected from,
+        # written as root by the host side (only this server's own side can
+        # name an address here, so DNS rebinding stays refused).
+        self._host_lan_ip = _host_lan_ip()
+        self._in_vm = _in_vm()
+        if self._host_lan_ip:
+            ips.add(self._host_lan_ip)
         return server_names(labels, [hostname, *trusted]) | ips
+
+    def suggested_ip(self, local_ip: str | None) -> str | None:
+        """The address a refusal names: lan.json's when the host side
+        wrote one; else the connection's own, except inside a Mac host's
+        VM, where that is the VM's private address (no address then)."""
+        if self._host_lan_ip:
+            return self._host_lan_ip
+        return None if self._in_vm else local_ip
 
     async def _refresh_names(self) -> None:
         fetch = self.fetch_lan_name
@@ -557,6 +591,7 @@ class ShortAddress:
                 reply, _status = answer(
                     head, local_ip=local_ip, names=self._names,
                     target_port=self.target_port, listen_port=self.port,
+                    suggest_ip=self.suggested_ip(local_ip),
                 )
             if reply is not None:
                 writer.write(reply)
@@ -567,6 +602,23 @@ class ShortAddress:
             with contextlib.suppress(Exception):
                 writer.close()
                 await asyncio.wait_for(writer.wait_closed(), 2.0)
+
+
+def _host_lan_ip() -> str | None:
+    """lan.json's address (None: no file, or not believed). Never raises."""
+    try:
+        return lan_address.host_lan_ipv4()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _in_vm() -> bool:
+    """True when a Mac host's helper runs this install (its VM)."""
+    try:
+        side = windows_side.read_host_side()
+    except Exception:  # noqa: BLE001
+        return False
+    return bool(side) and side.get("kind") == "mac"
 
 
 SERVICE = ShortAddress()

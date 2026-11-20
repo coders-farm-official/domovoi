@@ -4151,7 +4151,10 @@ const SatellitesPage = ({ embedded = false } = {}) => {
                        ? "build the card's files below, write them with the menu-bar icon's Prepare an SD card..., then set the room up from a phone"
                        : onMac
                        ? "build the card's files below, copy them onto the card in Finder (the zip's README.txt has the steps), then set the room up from a phone"
-                       : "plug a room device into this machine's USB port to adopt it — or set one up by hand"}/></Card>
+                       : "plug a room device into this machine's USB port to adopt it — or set one up by hand"}
+                     action={<Button icon="disc-3" onClick={() => window.openPrepareMediaCard()}>
+                       prepare a room's SD card
+                     </Button>}/></Card>
       ) : labels.length === 0 ? (
         grid(sats)
       ) : (
