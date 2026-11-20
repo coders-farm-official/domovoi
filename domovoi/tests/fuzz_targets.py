@@ -389,9 +389,9 @@ def drafts(data: bytes) -> None:
     assert blocks.xml_safe(blocks.xml_safe(text)) == blocks.xml_safe(text)
     if len(text) <= 4000:
         assert blocks.strip_links(text) == _LINK.sub(r"\1", text)
-    # The diff only on short input: its cost on two unrelated drafts grows
-    # with their product (the xfail in test_fuzz_parsers.py), and a fuzzer
-    # would find that one known slowness over and over.
+    # The diff only on short input: its cost is bounded (WORK_BUDGET), but
+    # the bound is tens of milliseconds, and a fuzzer spends its time better
+    # on many small inputs (test_fuzz_parsers.py checks the caps).
     if len(text) > DIFF_MAX_CHARS:
         return
     half = len(text) // 2

@@ -367,6 +367,11 @@ DIFFS = [
     (PERSONAL, PERSONAL),
     ("", "# New\n\nA first line."),
     ("One two three four five six seven eight nine ten.", "One two three four five six seven eight nine eleven."),
+    # Either side of the diff's work budget (WORK_BUDGET): 386 unrelated
+    # words are still compared word by word; at 387 the changed stretch is
+    # shown as removed then added, the heading and sign-off kept.
+    *(("# Notes\n\n" + " ".join(f"old{i}" for i in range(w)) + "\n\nThanks, Sam",
+       "# Notes\n\n" + " ".join(f"new{i}" for i in range(w)) + "\n\nThanks, Sam") for w in (386, 387)),
 ]
 
 CLEANS = [
