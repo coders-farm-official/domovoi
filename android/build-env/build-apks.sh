@@ -39,13 +39,41 @@ echo "java: $(command -v java) ($JAVA_HOME)"
 echo "TZ=${TZ:-} LANG=${LANG:-} LC_ALL=${LC_ALL:-} umask $(umask) cpus $(nproc)"
 echo "source: $src at $(git -C "$src" rev-parse HEAD 2>/dev/null || echo '(no git)')"
 
+# Every run starts from an empty Gradle home, so it downloads every library
+# again, and Maven Central sometimes fails a few of those requests: Gradle
+# then says "Could not find" for libraries Central does hold, and the build
+# stops (CI's repro builds, three runs in a row, 2026-11-19/20). A run that
+# failed on downloads is tried again, up to three times, asking for every
+# file afresh. Each file is still checked against
+# android/gradle/verification-metadata.xml.
+gradle_run() {
+  local try log status refresh=()
+  for try in 1 2 3; do
+    log=$(mktemp)
+    status=0
+    bash ./gradlew --no-daemon --no-build-cache --no-configuration-cache --console=plain --warning-mode=summary \
+      "${refresh[@]}" "$@" 2>&1 | tee "$log" || status=$?
+    if [ "$status" -eq 0 ]; then
+      rm -f "$log"
+      return 0
+    fi
+    if [ "$try" -eq 3 ] || ! grep -qE "Could not (resolve|find|GET|HEAD|download)|Received status code|Read timed out|Connection reset" "$log"; then
+      rm -f "$log"
+      return "$status"
+    fi
+    rm -f "$log"
+    echo "== downloads failed (try $try of 3); trying again in $((try * 30)) s"
+    sleep $((try * 30))
+    refresh=(--refresh-dependencies)
+  done
+}
+
 cd "$src/android"
 first=""
 for abi in "$@"; do
   case "$abi" in *,*) echo "build-apks: one ABI per run, not $abi" >&2; exit 2 ;; esac
   echo "== :app:assembleRelease, ABI $abi"
-  bash ./gradlew --no-daemon --no-build-cache --no-configuration-cache --console=plain --warning-mode=summary \
-    clean :app:assembleRelease -Pdomovoi.apkPerAbi "-Pdomovoi.abis=$abi"
+  gradle_run clean :app:assembleRelease -Pdomovoi.apkPerAbi "-Pdomovoi.abis=$abi"
   cp "app/build/outputs/apk/release/app-$abi-release-unsigned.apk" "$out/"
   cp app/build/outputs/mapping/release/mapping.txt "$out/mapping-$abi.txt"
   [ -n "$first" ] || first="$abi"
