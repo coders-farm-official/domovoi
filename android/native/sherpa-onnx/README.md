@@ -122,10 +122,8 @@ separately), run from the build's `subdir: android/app`:
       - openfst@f702a6317d600ac953fdbb4978674c3a28b6115c
       - simple_sentencepiece@62dd423df1d51da5ea06f1c3a046fc04f01b4f39
     sudo:
-      - echo "deb https://deb.debian.org/debian bookworm-backports main" > /etc/apt/sources.list.d/backports.list
       - apt-get update
-      - apt-get install -y -t bookworm-backports cmake
-      - apt-get install -y ninja-build
+      - apt-get install -y cmake ninja-build
       - install -d -m 1777 /work
     rm:
       - android/native/sherpa-onnx/jniLibs
@@ -155,8 +153,10 @@ Three things decide whether F-Droid's libraries match the committed ones:
   (ThinLTO) only when CMake's `check_ipo_supported` passes. CMake 3.25
   (Debian bookworm's own 3.25.1) runs that check with `-fuse-ld=gold`, which
   NDK r29 does not have, so LTO goes off and the library comes out about
-  200 KB larger. The script stops when that happens. bookworm-backports has
-  3.31.6, as above; trixie's own is 3.31.6 too.
+  200 KB larger. The script stops when that happens. F-Droid's build server
+  is Debian trixie (checked 2026-11-20), whose own CMake is 3.31.6, so the
+  plain `apt-get install cmake` above is enough; on bookworm, take 3.31.6
+  from bookworm-backports.
 - **The NDK's path.** The unstripped link holds the NDK's header paths in
   its debug info, and the linker's build ID is a hash of that file, so it
   survives stripping. The script maps the NDK to `/opt/android-ndk-r29`
@@ -183,3 +183,11 @@ container's record and is not rewritten), and the srclib checkouts were
 left unmodified. With bookworm's own CMake 3.25.1 the script stopped as
 described above. Each dependency's release tarball, as pinned by
 SHA-256 in sherpa-onnx's CMake, held exactly the files of its git commit.
+
+The whole app was then built with `fdroid build` itself (fdroidserver from
+git, in F-Droid's own `fdroidserver:buildserver` image, Debian trixie, the
+`sudo:` steps above run as root and the build as the unprivileged user),
+for both 261120011 (armeabi-v7a) and 261120012 (arm64-v8a). Each unsigned
+APK was identical, file and every zip entry, to the one
+`android/build-env/build.sh` makes for the same commit, so F-Droid can
+verify and publish the developer-signed APK.
