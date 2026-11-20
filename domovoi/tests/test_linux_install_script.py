@@ -143,8 +143,17 @@ def test_docs_lead_with_the_one_liner():
     assert install.index(ONE_LINER) < install.index("scripts/linux/provision.sh --dry-run")
     assert "curl -fsSL -o install.sh" in install
     readme = README.read_text(encoding="utf-8")
-    assert "## Install on Linux" in readme
     assert ONE_LINER in readme
+    # Owner 2026-11-20: one Install section, the Linux command beside
+    # straight downloads of the Windows and Mac installers from the latest
+    # release (asset names without a version, so the links never go stale).
+    install = readme[readme.index("\n## Install\n"):]
+    install = install[: install.index("\n## ", 1)]
+    assert ONE_LINER in install
+    latest = "https://github.com/coders-farm-official/domovoi/releases/latest/download/"
+    assert latest + "DomovoiSetup.exe" in install
+    assert latest + "DomovoiSetup-mac.pkg" in install
+    assert "Open Anyway" in install
 
 
 # ─── Running it ──────────────────────────────────────────────────────────

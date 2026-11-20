@@ -112,10 +112,10 @@ The full picture, with ports and containers, is in
 > dashboard is the house spirit itself, minding your home from inside your
 > network — never someone else's cloud.
 
-## Install on Linux
+## Install
 
-On an x86_64 computer running Ubuntu 26.04, Debian 13, or Linux Mint 22 / Pop!_OS 24.04
-(other Ubuntu versions may work, and it says so), open a terminal and run:
+**Linux** (an x86_64 computer running Ubuntu 26.04, Debian 13, or Linux Mint 22 / Pop!_OS 24.04;
+other Ubuntu versions may work, and it says so). Open a terminal and run:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/coders-farm-official/domovoi/stable/scripts/linux/install.sh | sudo bash
@@ -123,19 +123,25 @@ curl -fsSL https://raw.githubusercontent.com/coders-farm-official/domovoi/stable
 
 It asks whether the server will have internet after setup, its time zone, and whether to include AI chat,
 checks that it downloaded a signed release, installs everything, and ends with the address to open from your phone.
-Then open that address, [claim the admin account](#2-claim-the-admin-account) and
-[add your first room](#3-add-your-first-satellite).
 To read the script first, run it without questions, or install by hand: [Running the server on Linux](docs/LINUX_HOST.md#install).
 Fedora, Arch and other systems are not supported yet ([which systems, and why](docs/LINUX_HOST.md#which-distro));
 to ask for yours, [open an issue](https://github.com/coders-farm-official/domovoi/issues).
-On Windows 11, use [the Windows installer](docs/WINDOWS_HOST.md). On a Mac with Apple silicon and
-macOS 26 or later, use the Mac installer, `DomovoiSetup-mac.pkg`, from the [latest release](https://github.com/coders-farm-official/domovoi/releases/latest).
+
+**Windows 11:** download [DomovoiSetup.exe](https://github.com/coders-farm-official/domovoi/releases/latest/download/DomovoiSetup.exe)
+and run it ([more about the Windows installer](docs/WINDOWS_HOST.md)).
+
+**Mac** (Apple silicon, macOS 26 or later): download [DomovoiSetup-mac.pkg](https://github.com/coders-farm-official/domovoi/releases/latest/download/DomovoiSetup-mac.pkg)
+and open it. The first time, macOS stops it: go to System Settings › Privacy & Security and choose **Open Anyway**.
+
+Every file, with its checksums and notes, is on the [latest release](https://github.com/coders-farm-official/domovoi/releases/latest).
+Then open the address it gives you, [claim the admin account](#2-claim-the-admin-account) and
+[add your first room](#3-add-your-first-satellite).
 
 ---
 
 ## Table of contents
 
-- [Install on Linux](#install-on-linux)
+- [Install](#install)
 - [Status and roadmap](#status-and-roadmap)
 - [Who it's for](#who-its-for)
 - [First install](#first-install)
@@ -376,7 +382,7 @@ the first start (it writes the answer into the fresh `domovoi/.env`).
 
 Four ways in:
 
-- **Linux (Ubuntu 26.04, Debian 13, Mint 22, Pop!_OS 24.04), one command:** [Install on Linux](#install-on-linux)
+- **Linux (Ubuntu 26.04, Debian 13, Mint 22, Pop!_OS 24.04), one command:** [Install](#install)
   above. It installs the latest release, its services and the models in
   one run, and the server then follows the `stable` channel, releases only
   ([Release channels](docs/LINUX_HOST.md#release-channels)). Details:
