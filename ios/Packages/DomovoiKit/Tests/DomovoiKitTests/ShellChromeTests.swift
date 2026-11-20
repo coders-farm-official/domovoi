@@ -252,7 +252,7 @@ final class ShellChromeTests: XCTestCase {
             let drawn = chrome(row)
             leaves.insert("\(drawn.screen)")
             switch drawn.screen {
-            case .pairing, .tokenTroubleCard:
+            case .pairing, .tokenTroubleCard, .connecting:
                 XCTAssertNil(drawn.pill)
             case .localMedia, .workspace:
                 XCTAssertNotNil(drawn.pill)
