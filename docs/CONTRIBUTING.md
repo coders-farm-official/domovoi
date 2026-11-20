@@ -499,6 +499,13 @@ package held back on purpose), is accepted in `osv-scanner.toml`: one
 most about two months out, and a `reason` that says what the advisory needs
 and why we don't meet it. When the date passes the job fails again, so every
 acceptance gets looked at again. Never accept something a bump would fix.
+OpenSSF Scorecard's Vulnerabilities check runs OSV-Scanner over the whole
+repo without `--config`, and then the scanner reads only the
+`osv-scanner.toml` in each lock file's own folder: an acceptance for a lock
+outside the root (the editor bundles' `scripts/vendor/editors/package-lock.json`)
+goes in an `osv-scanner.toml` beside it, under the same rules. The Android
+build tools' own libraries are lifted past their advisories by the security
+floors in `android/settings.gradle.kts`.
 To run it yourself, download the same release binary and run
 `osv-scanner scan source --config osv-scanner.toml --no-resolve -L
 requirements.txt:requirements.lock` (one `-L` per file, as the workflow
