@@ -303,7 +303,8 @@ final class ListenForgetTests: XCTestCase {
             container: container,
             listeners: PlayerListenerStore(place: SavedStateBox()),
             owners: book,
-            listenOutbox: outbox
+            listenOutbox: outbox,
+            serverAnsweredAtStart: true
         )
         for house in [houseA, houseB] {
             book.rememberDeviceOwner(DeviceOwner(id: 3, name: "Alex"), claimKey: "key-for-\(house.suffix(2))-AAAAAAAA", for: house)
@@ -570,7 +571,8 @@ final class ListenClearGuardTests: XCTestCase {
             container: container,
             deviceSelf: { DeviceSelf(deviceID: "ios-1a2b", name: "iPhone", userAgent: "ua") },
             listeners: PlayerListenerStore(place: SavedStateBox()),
-            owners: book
+            owners: book,
+            serverAnsweredAtStart: true
         )
         return (model, store, book)
     }

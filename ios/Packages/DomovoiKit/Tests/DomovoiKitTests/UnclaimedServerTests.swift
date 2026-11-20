@@ -666,7 +666,8 @@ final class UnclaimedServerTests: XCTestCase {
             probe: { true },
             clock: { 0 },
             wait: { _ in try await Task.sleep(for: .seconds(3600)) },
-            tick: { _ in try await Task.sleep(for: .seconds(3600)) }
+            tick: { _ in try await Task.sleep(for: .seconds(3600)) },
+            serverAnsweredAtStart: true
         )
         return (shell, store)
     }

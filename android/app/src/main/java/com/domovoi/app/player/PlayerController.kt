@@ -229,6 +229,33 @@ class PlayerController(
     }
 
     /**
+     * The saved server went out of reach (the phone left the house): stop
+     * casting to its room on this phone. The room is at home and nothing
+     * here can reach it, so nothing is sent to it; it plays on there. Without
+     * this the mini player kept saying "casting to <room>", and its play,
+     * pause, next and stop all went to a server that could not answer, with
+     * nothing to say so (a dead end the away-layout audit found, 2026-11-19).
+     * The phone's queue stays: songs from home play again once the phone is
+     * back in reach, and the phone's own songs play now.
+     */
+    fun serverOutOfReach() {
+        if (_target.value !is PlayTarget.Room) return
+        playHereGen.incrementAndGet()
+        remotePollJob?.cancel()
+        remotePollJob = null
+        _remote.value = null
+        _target.value = PlayTarget.Local
+    }
+
+    /**
+     * Something in the queue could not be played (most often a song from
+     * home, with the phone away from it): one line for a toast. The shell
+     * shows it; the engine stops on that song as it always did.
+     */
+    private val _playFailures = kotlinx.coroutines.flow.MutableSharedFlow<PlayFailure>(extraBufferCapacity = 4)
+    val playFailures: kotlinx.coroutines.flow.SharedFlow<PlayFailure> = _playFailures
+
+    /**
      * The server stopped running our Radio plugin (removed, disabled, or
      * another server's manifest without it; the shell calls this once a
      * manifest has answered, AppShell): its stations leave the queue, the
@@ -288,6 +315,10 @@ class PlayerController(
             }
             override fun onPlaybackParametersChanged(params: androidx.media3.common.PlaybackParameters) {
                 _speed.value = params.speed
+            }
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                val item = current
+                _playFailures.tryEmit(PlayFailure(item?.title, item != null && ServerSwitch.fromServer(item)))
             }
         })
         // Casting: the room logs its own listens; the phone's song stops here.

@@ -1,5 +1,7 @@
 package com.domovoi.app.ui.screens.audiobooks
 
+import com.domovoi.app.ui.shell.LocalServerChoice
+import com.domovoi.app.ui.shell.enabled
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -204,7 +206,11 @@ private fun SavedBookPage(book: SavedBook, saved: SavedBooksView, onBack: () -> 
                 Column(Modifier.padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (item != null) Button(onClick = { play() }) { Text(if ((place ?: 0.0) > 5) "resume" else "play") }
-                        when (state) {
+                        // A save can only carry on from the server: away from
+                        // it the badge already says "waiting for <server>",
+                        // and a button here could do nothing it says.
+                        val serverUsable = LocalServerChoice.current.enabled
+                        if (serverUsable) when (state) {
                             is SaveState.Stopped -> OutlinedButton(onClick = { BookDownloads.start(context.applicationContext, book.key, now = true) }) {
                                 Text("resume save", color = Domovoi.colors.fg)
                             }

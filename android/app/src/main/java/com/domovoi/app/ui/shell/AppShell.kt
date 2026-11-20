@@ -27,10 +27,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material3.Badge
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -55,6 +57,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
@@ -63,6 +66,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -94,11 +100,13 @@ import com.domovoi.app.ui.screens.local.SourceChoices
 import com.domovoi.app.ui.screens.settings.LocalSettingsButton
 import com.domovoi.app.ui.screens.settings.LocalSettingsScreen
 import com.domovoi.app.ui.screens.settings.PairingScreen
+import com.domovoi.app.player.playFailureText
 import com.domovoi.app.ui.shell.player.DockedPlayer
 import com.domovoi.app.ui.theme.Domovoi
 import com.domovoi.app.ui.theme.ThemeMode
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @Composable
 fun AppShell() {
@@ -130,15 +138,40 @@ fun AppShell() {
     // returns; a probe that straddles the trip is dropped with its coroutine.
     val reach = remember(serverUrl) { Reachability() }
     var unreachable by remember(serverUrl) { mutableStateOf(false) }
+    // Until the server has answered once (opening the app, or a switch of
+    // server), the workspace is not shown: a plain Connecting screen, then
+    // the phone's own media with a "Looking for" line (shellMode). After
+    // that, a stretch on screen that goes LOOKING_AFTER_MS unanswered covers
+    // the workspace's spinning pages until an answer or the grace's verdict
+    // (coversWorkspace). Neither is reset by a trip to the background: only
+    // an answer clears "looking".
+    var answeredOnce by remember(serverUrl) { mutableStateOf(false) }
+    var looking by remember(serverUrl) { mutableStateOf(false) }
     val shellLifecycle = LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(serverUrl, connected, shellLifecycle) {
         if (serverUrl.isBlank() || connected) {
             reach.connected()
             unreachable = false
+            looking = false
+            if (connected) answeredOnce = true
             return@LaunchedEffect
         }
         shellLifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
-            askWhileOnScreen(reach, probe = { app.api.answers() }, clock = SystemClock::elapsedRealtime) { now ->
+            var answeredThisStretch = false
+            launch {
+                delay(LOOKING_AFTER_MS)
+                if (!answeredThisStretch) looking = true
+            }
+            askWhileOnScreen(
+                reach,
+                probe = { app.api.answers() },
+                clock = SystemClock::elapsedRealtime,
+                onAnswer = {
+                    answeredThisStretch = true
+                    answeredOnce = true
+                    looking = false
+                },
+            ) { now ->
                 if (now != unreachable) {
                     Log.i(
                         "AppShell",
@@ -242,7 +275,17 @@ fun AppShell() {
         notOurs = notOurs,
         coreDown = coreDown,
         pairingRequired = pairingRequired || trouble is TokenTrouble.NotRecognised,
+        looking = looking,
     )
+    // Out of reach: a cast to one of its rooms is let go on this phone
+    // (PlayerController.serverOutOfReach), so the mini player stops saying
+    // "casting" with controls that could reach nothing.
+    LaunchedEffect(unreachable) { if (unreachable) app.player.serverOutOfReach() }
+    // A song that won't play says so (most often one from home, away).
+    val homeOutOfReach by rememberUpdatedState(unreachable || looking)
+    LaunchedEffect(app.player) {
+        app.player.playFailures.collect { toast(playFailureText(it, homeOutOfReach)) }
+    }
     // Forgetting the active server (Settings, or the server list) leaves
     // the app with none and asks for the list: open the connection dialog.
     // It is owned here, above both shells, so it survives the shell swap
@@ -262,8 +305,13 @@ fun AppShell() {
     ) {
         if (showConnection) ConnectionDialog(onDismiss = { showConnection = false })
         Box(Modifier.fillMaxSize().background(Domovoi.colors.canvas)) {
-            when (shellMode(serverUrl, unreachable, pairingRequired, preferLocal, identityChanged, trouble != null)) {
+            val mode = shellMode(
+                serverUrl, unreachable, pairingRequired, preferLocal, identityChanged, trouble != null,
+                answeredOnce = answeredOnce, looking = looking,
+            )
+            when (mode) {
                 ShellMode.Local -> OfflineShell(choice, activeVerdict)
+                ShellMode.Connecting -> ConnectingScreen(choice.title())
                 // Kept in a saveable slot so a trip through local media
                 // (server out of reach) returns to the same screen.
                 ShellMode.Workspace -> workspaceState.SaveableStateProvider(serverUrl) {
@@ -273,6 +321,7 @@ fun AppShell() {
                     })
                 }
             }
+            if (coversWorkspace(mode, answeredOnce, looking, unreachable)) LookingCover(choice.title())
             // Toasts overlay. This Column is a SIBLING of the shells, so the
             // shells' own consumption of WindowInsets.ime cannot reach it —
             // without imePadding() here a "saved" or "save failed" message
@@ -675,15 +724,34 @@ private fun OfflineShell(choice: ServerChoice, verdict: IdentityVerdict?) {
         }
     }
     val tabs = remember(shared, savedBooks) { localTabs(shared = shared, savedBooks = savedBooks) }
-    var tab by rememberSaveable { mutableStateOf(0) }
-    LaunchedEffect(tabs) { if (tab >= tabs.size) tab = 0 }
+    // The tab is kept by route, not by place in the bar: the bar is one
+    // shorter for a moment after the app is rebuilt (the saved-book check is
+    // still out), and a kept index was reset to Music by that, or showed a
+    // different tab until the check came back (away-layout audit, 2026-11-19).
+    var tabName by rememberSaveable { mutableStateOf(Route.Music.name) }
+    val tab = tabs.indexOfFirst { it.name == tabName }.coerceAtLeast(0)
     // "Ask about this document" in Files: to the Chat tab, which opens it.
+    // A notification tapped while away asks for a screen of the workspace
+    // (Home's timers, a container incident, Friend houses): with no
+    // workspace here it is let go rather than kept, which used to jump the
+    // app there whenever home came back, maybe hours later. Not while the
+    // server is still being looked for at launch: it may answer in a moment
+    // and the workspace take the tap as asked.
     val askedRoute by app.pendingRoute.collectAsState()
-    LaunchedEffect(askedRoute, tabs) {
-        if (askedRoute == CHAT_ROUTE) {
-            val at = tabs.indexOf(Route.Chat)
-            if (at >= 0) tab = at
-            app.pendingRoute.value = null
+    LaunchedEffect(askedRoute, tabs, choice) {
+        when (askedRoute) {
+            CHAT_ROUTE -> {
+                if (Route.Chat in tabs) {
+                    tabName = Route.Chat.name
+                } else {
+                    // No Chat here: a help thread from the server has nowhere
+                    // to open, and must not pop up on some later visit.
+                    app.pendingChatThread.value = null
+                }
+                app.pendingRoute.value = null
+            }
+            "home", CONTAINERS_ROUTE, FRIEND_HOUSES_ROUTE ->
+                if (choice !is ServerChoice.Looking) app.pendingRoute.value = null
         }
     }
     // This phone's own settings (voice, problem reports, the app's version
@@ -723,6 +791,7 @@ private fun OfflineShell(choice: ServerChoice, verdict: IdentityVerdict?) {
     // and the token is held until it can — not an impostor, never a reason to
     // forget the server. The banner says which.
     val outOfReach = when (choice) {
+        is ServerChoice.Looking -> choice.label
         is ServerChoice.Unreachable -> choice.label
         is ServerChoice.NotOurs -> choice.label
         is ServerChoice.CoreDown -> choice.label
@@ -747,9 +816,14 @@ private fun OfflineShell(choice: ServerChoice, verdict: IdentityVerdict?) {
                 ) {
                     DomovoiGlyph(20)
                     Text(
-                        "  domovoi / local media",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Domovoi.colors.fgMuted,
+                        "  " + choice.localTitle(),
+                        style = MaterialTheme.typography.titleSmall,
+                        color = Domovoi.colors.fg,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .weight(1f, fill = false)
+                            .semantics { heading() },
                     )
                     Box(Modifier.weight(1f))
                     Row(
@@ -790,24 +864,44 @@ private fun OfflineShell(choice: ServerChoice, verdict: IdentityVerdict?) {
             }
             if (outOfReach != null) {
                 val unreachableServer = outOfReach
-                Surface(color = Domovoi.colors.canvas) {
+                // A tinted card, not a grey footnote: this layout has no Home,
+                // and this is the line that says why.
+                Surface(
+                    color = Domovoi.colors.brandSoft,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 8.dp),
+                ) {
                   Column {
-                    Text(
-                        when (choice) {
-                            is ServerChoice.NotOurs ->
-                                identityChangedText(unreachableServer, canTrustAgain = changed != null)
-                            is ServerChoice.CoreDown ->
-                                "$unreachableServer is up but its core is not answering (starting, " +
-                                    "updating, or busy), so nothing was sent to it yet. Showing media on " +
-                                    "this phone; the workspace comes back when the core does."
-                            else ->
-                                "Can't reach $unreachableServer. Showing media on this phone; " +
-                                    "the workspace comes back when the server does."
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Domovoi.colors.fgMuted,
-                        modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
-                    )
+                    Row(
+                        Modifier.padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        if (choice is ServerChoice.Looking) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = Domovoi.colors.brand,
+                            )
+                        } else {
+                            Icon(
+                                Icons.Filled.CloudOff,
+                                contentDescription = null,
+                                tint = Domovoi.colors.brand,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                        Text(
+                            when (choice) {
+                                is ServerChoice.NotOurs ->
+                                    identityChangedText(unreachableServer, canTrustAgain = changed != null)
+                                else -> choice.awayLine().orEmpty()
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Domovoi.colors.fg,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
                     if (choice is ServerChoice.NotOurs && changed != null) {
                         TextButton(
                             onClick = { askTrustAgain = true },
@@ -826,7 +920,7 @@ private fun OfflineShell(choice: ServerChoice, verdict: IdentityVerdict?) {
                     tabs.forEachIndexed { i, r ->
                         NavigationBarItem(
                             selected = tab == i,
-                            onClick = { tab = i },
+                            onClick = { tabName = r.name },
                             icon = { Icon(r.icon, contentDescription = r.label) },
                             label = { Text(r.label.lowercase(), style = MaterialTheme.typography.labelMedium) },
                             colors = NavigationBarItemDefaults.colors(
@@ -859,6 +953,65 @@ private fun OfflineShell(choice: ServerChoice, verdict: IdentityVerdict?) {
                 Route.Audiobooks -> com.domovoi.app.ui.screens.audiobooks.SavedBooksScreen(offline = true)
                 else -> com.domovoi.app.ui.screens.local.LocalMusicScreen()
             }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Before the saved server first answers (ShellMode.Connecting): the cat and
+// one line, for the moment it takes at home. No workspace behind it, so
+// nothing asks the server for pages it may never answer.
+// ---------------------------------------------------------------------------
+@Composable
+private fun ConnectingScreen(serverName: String) {
+    Column(
+        Modifier.fillMaxSize().background(Domovoi.colors.canvas).padding(24.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        DomovoiGlyph(48)
+        Box(Modifier.size(16.dp))
+        Text(
+            connectingLine(serverName),
+            style = MaterialTheme.typography.bodyLarge,
+            color = Domovoi.colors.fgMuted,
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The server answered earlier but has gone quiet on screen (coversWorkspace):
+// a card over the workspace instead of pages that can only spin. The
+// workspace stays composed underneath (a screen waiting on the system picker
+// still gets its answer); an answer lifts the card, the grace's verdict
+// swaps in the phone's own media.
+// ---------------------------------------------------------------------------
+@Composable
+private fun LookingCover(serverName: String) {
+    // A Surface takes the touches, so nothing underneath can be tapped.
+    Surface(color = Domovoi.colors.canvas, modifier = Modifier.fillMaxSize()) {
+        Column(
+            Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.statusBars).padding(24.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 3.dp, color = Domovoi.colors.brand)
+            Box(Modifier.size(16.dp))
+            Text(
+                lookingCoverTitle(serverName),
+                style = MaterialTheme.typography.titleMedium,
+                color = Domovoi.colors.fg,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.semantics { heading() },
+            )
+            Box(Modifier.size(8.dp))
+            Text(
+                LOOKING_COVER_LINE,
+                style = MaterialTheme.typography.bodyMedium,
+                color = Domovoi.colors.fgMuted,
+                textAlign = TextAlign.Center,
+            )
         }
     }
 }

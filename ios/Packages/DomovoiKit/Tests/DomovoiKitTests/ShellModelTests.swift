@@ -50,6 +50,9 @@ final class ShellModelTests: XCTestCase {
         ///     advances the fake clock by this much instead of sleeping, so a
         ///     wait that is minutes long runs out in a handful of yields and
         ///     nothing waits on real time.
+        ///   - answered: start as if the server had already answered, so the
+        ///     workspace is drawn at once (every test written before the
+        ///     Connecting screen, 2026-11-19); off to watch the start-up path.
         init(
             serverURL: String,
             token: String? = nil,
@@ -58,7 +61,8 @@ final class ShellModelTests: XCTestCase {
             answers: Bool = true,
             costMs: Int64 = 300,
             sharesClock: Bool = false,
-            tickAdvancesMs: Int64 = 0
+            tickAdvancesMs: Int64 = 0,
+            answered: Bool = true
         ) {
             let store = InMemoryShellStore(serverURL: serverURL, preferLocal: preferLocal, token: token)
             self.store = store
@@ -104,7 +108,9 @@ final class ShellModelTests: XCTestCase {
                     }
                     clock.advance(tickAdvancesMs)
                     _ = ms
-                }
+                },
+                lookingWait: { _ in try await Task.sleep(for: .seconds(3600)) },
+                serverAnsweredAtStart: answered
             )
         }
 
@@ -459,16 +465,17 @@ final class ShellModelTests: XCTestCase {
     }
 
     /// In the local shell only `"chat"` is acted on, and only when there is a
-    /// Chat tab to select. **Anything else waits**: a timer alert tapped
-    /// while the server is out of reach lands on Home when the workspace
-    /// comes back, rather than being thrown away.
-    func testTheLocalShellTakesChatAndLeavesTheRestPending() {
+    /// Chat tab to select. **Anything else is let go** (2026-11-19): it used
+    /// to wait, and a timer alert tapped away from home then jumped the app
+    /// to Home whenever the workspace came back, maybe hours later — the
+    /// away-layout audit's stale jump. Android lets it go the same way.
+    func testTheLocalShellTakesChatAndLetsTheRestGo() {
         let rig = Rig(serverURL: server, token: "household-abc", preferLocal: true, phoneCanChat: true)
         rig.model.sharedScreenAnswered(false)
 
         XCTAssertTrue(rig.container.requestRoute("home"))
         rig.model.refresh()
-        XCTAssertEqual("home", rig.container.pendingRoute, "the local shell has no Home to go to")
+        XCTAssertNil(rig.container.pendingRoute, "the local shell has no Home to go to, so it is not kept for later")
 
         XCTAssertTrue(rig.container.requestRoute("chat"))
         rig.model.refresh()
@@ -477,14 +484,15 @@ final class ShellModelTests: XCTestCase {
         rig.model.stop()
     }
 
-    /// A phone with no Chat tab — a shared screen — leaves even `"chat"`
-    /// pending rather than selecting a tab that is not there.
-    func testASharedScreenLeavesChatPendingRatherThanSelectingNothing() {
+    /// A phone with no Chat tab — a shared screen — selects no tab that is
+    /// not there, and lets `"chat"` go rather than keeping it to fire later
+    /// (2026-11-19, as Android's `OfflineShell` does).
+    func testASharedScreenLetsChatGoRatherThanSelectingNothing() {
         let rig = Rig(serverURL: server, token: "household-abc", preferLocal: true, phoneCanChat: true)
         rig.model.sharedScreenAnswered(true)
         XCTAssertTrue(rig.container.requestRoute("chat"))
         rig.model.refresh()
-        XCTAssertEqual("chat", rig.container.pendingRoute)
+        XCTAssertNil(rig.container.pendingRoute)
         XCTAssertEqual(.music, rig.model.localRoute)
         rig.model.stop()
     }

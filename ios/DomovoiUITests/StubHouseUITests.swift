@@ -641,12 +641,12 @@ final class StubHouseUITests: XCTestCase {
     /// never sent a request — and it took a request log and five files of
     /// reading to find that out.
     ///
-    /// `localBanner(for:canTrustAgain:)`'s `.unreachable` wording, which
-    /// appears only in that fallback.
+    /// ``ServerChoice/awayLine``'s `.unreachable` wording, which appears
+    /// only in that fallback.
     @MainActor
     func fellBackToLocalMedia(in app: XCUIApplication) -> Bool {
         app.descendants(matching: .staticText)
-            .matching(NSPredicate(format: "label CONTAINS %@", "Can't reach"))
+            .matching(NSPredicate(format: "label CONTAINS %@", "You're away from home"))
             .firstMatch
             .exists
     }

@@ -58,6 +58,24 @@ public final class ShellModel {
     /// The reachability verdict, published by the loop.
     public private(set) var unreachable = false
 
+    /// The server that has answered at least once since the app opened (the
+    /// live socket, or any HTTP answer). Until the active server has, the
+    /// workspace is not shown (``ShellScreen/connecting``, then the phone's
+    /// own media with a "Looking for" line), as `AppShell.kt` does since
+    /// 2026-11-19. Kept as the server rather than a flag, so a switch of
+    /// server starts over without anything having to reset it.
+    public private(set) var answeredServer: String?
+
+    /// The server a stretch of asking has gone ``lookingAfterMs`` without an
+    /// answer from; cleared by an answer, never by a trip to the background.
+    public private(set) var lookingServer: String?
+
+    /// The active server has answered since the app opened.
+    public var answeredOnce: Bool { answeredServer == inputs.serverURL }
+
+    /// The active server is being looked for.
+    public var looking: Bool { lookingServer == inputs.serverURL }
+
     /// The **active** server's capability manifest. ``Capabilities/empty``
     /// until a fetch for that server lands, which hides both gated screens —
     /// the rule a failed fetch has to follow.
@@ -251,6 +269,12 @@ public final class ShellModel {
     ///     hands ``UpNextAutoplayStore/shared``), the player gets the phone's
     ///     own Up next (``PhoneUpNext``); left out (a test's shell), it has
     ///     none and plays exactly as before.
+    ///   - lookingWait: the ``lookingAfterMs`` timer of each stretch of
+    ///     asking (``ReachabilityDriver``). A test replaces it.
+    ///   - serverAnsweredAtStart: start as if the saved server had already
+    ///     answered (``answeredServer``), so the workspace is drawn at once
+    ///     rather than the Connecting screen. For a test's or a preview's
+    ///     shell; the app leaves it false.
     public init(
         container: AppContainer,
         phoneCanChat: Bool = false,
@@ -263,7 +287,9 @@ public final class ShellModel {
         probe: (@Sendable () async -> Bool)? = nil,
         clock: @Sendable @escaping () -> Int64 = TokenHealth.monotonicMs,
         wait: @Sendable @escaping (Int64) async throws -> Void = { try await Task.sleep(for: .milliseconds($0)) },
-        tick: @Sendable @escaping (Int64) async throws -> Void = { try await Task.sleep(for: .milliseconds($0)) }
+        tick: @Sendable @escaping (Int64) async throws -> Void = { try await Task.sleep(for: .milliseconds($0)) },
+        lookingWait: @Sendable @escaping (Int64) async throws -> Void = { try await Task.sleep(for: .milliseconds($0)) },
+        serverAnsweredAtStart: Bool = false
     ) {
         self.container = container
         self.phoneCanChat = phoneCanChat
@@ -286,16 +312,24 @@ public final class ShellModel {
         )
         self.buildPlayer = player ?? ShellModel.systemPlayer
         self.upNextAutoplay = upNextAutoplay
-        self.inputs = container.shellInputs()
+        let startInputs = container.shellInputs()
+        self.inputs = startInputs
+        if serverAnsweredAtStart, !ServerCredentials.isBlank(startInputs.serverURL) {
+            self.answeredServer = startInputs.serverURL
+        }
         self.clock = clock
         self.tick = tick
         let client = container.client
         let relay = VerdictRelay()
         self.verdicts = relay
+        let eventRelay = ReachEventRelay()
+        self.reachEvents = eventRelay
         self.driver = ReachabilityDriver(
             probe: probe ?? { await client.answers() },
             clock: clock,
             wait: wait,
+            lookingWait: lookingWait,
+            events: { event in eventRelay.send(event) },
             publish: { verdict in relay.send(verdict) }
         )
         // Unclaimed server (UnclaimedServer.swift): each status read is sent
@@ -315,6 +349,9 @@ public final class ShellModel {
         // resolved the same way.
         relay.connect { [weak self] verdict in
             Task { @MainActor in self?.verdictArrived(verdict) }
+        }
+        eventRelay.connect { [weak self] event in
+            Task { @MainActor in self?.reachEventArrived(event) }
         }
         self.networkSink = container.onNetworkChange { [weak self] in
             Task { @MainActor in self?.networkChanged() }
@@ -413,6 +450,24 @@ public final class ShellModel {
 
     let verdicts: VerdictRelay
 
+    /// The driver's answers and "looking" marks, relayed the same way as
+    /// ``VerdictRelay`` and for the same reason (the driver is built before
+    /// `self` may be captured).
+    final class ReachEventRelay: Sendable {
+        private let sink = Mutex<(@Sendable (ReachEvent) -> Void)?>(nil)
+
+        func connect(_ sink: @Sendable @escaping (ReachEvent) -> Void) {
+            self.sink.withLock { $0 = sink }
+        }
+
+        func send(_ event: ReachEvent) {
+            let sink = self.sink.withLock { $0 }
+            sink?(event)
+        }
+    }
+
+    let reachEvents: ReachEventRelay
+
     /// Whether the active server has been claimed (`UnclaimedServer.swift`,
     /// Android's `AppShell.kt:165-197`). Asked when a server is picked
     /// (``refresh()``), when the socket comes or goes
@@ -468,8 +523,23 @@ public final class ShellModel {
             preferLocal: inputs.preferLocal,
             identityChanged: inputs.identityChanged,
             trouble: inputs.trouble,
-            pairingDismissed: pairingDismissed
+            pairingDismissed: pairingDismissed,
+            answeredOnce: answeredOnce,
+            looking: looking
         )
+    }
+
+    /// Whether the workspace is covered by the "Looking for <name>…" card
+    /// (``coversWorkspace(mode:answeredOnce:looking:unreachable:)``).
+    public var coversWorkspace: Bool {
+        switch screen {
+        case .workspace, .pairing, .tokenTroubleCard:
+            return DomovoiKit.coversWorkspace(
+                mode: .workspace, answeredOnce: answeredOnce, looking: looking, unreachable: unreachable
+            )
+        case .connecting, .localMedia:
+            return false
+        }
     }
 
     /// The name in the pill. The friendly name a person gave a server lives
@@ -482,7 +552,7 @@ public final class ShellModel {
 
     /// The connection dialog's server side.
     public var serverChoice: ServerChoice {
-        container.serverChoice(inputs, label: serverLabel, unreachable: unreachable)
+        container.serverChoice(inputs, label: serverLabel, unreachable: unreachable, looking: looking)
     }
 
     /// Whether a yes could be offered for this identity — a mismatch that
@@ -1117,6 +1187,10 @@ public final class ShellModel {
     /// cadence slot burnt for nothing.
     public func socketChanged(connected: Bool, sendRegister: (@MainActor () -> Void)? = nil) {
         self.connected = connected
+        if connected, !ServerCredentials.isBlank(inputs.serverURL) {
+            answeredServer = inputs.serverURL
+            lookingServer = nil
+        }
         updateReachability()
         // Unclaimed server: the socket coming or going is one of Android's
         // keys, and this is also the launch read — `watchSocket()` reports
@@ -1824,6 +1898,25 @@ public final class ShellModel {
     /// probe while the socket is down (``askWhileOnScreen``), so without
     /// `was` an unpaired phone beside an answering server would send a
     /// status read every probe, for ever.
+    /// An answer, or a stretch gone ``lookingAfterMs`` without one, for the
+    /// server it was asked of. One for a server that is no longer the active
+    /// one is dropped: it is no evidence about this one.
+    func reachEventArrived(_ event: ReachEvent) {
+        let wasScreen = screen
+        switch event {
+        case .answered(let server):
+            guard server == inputs.serverURL else { return }
+            answeredServer = server
+            lookingServer = nil
+        case .looking(let server):
+            guard server == inputs.serverURL else { return }
+            lookingServer = server
+        }
+        // A request that waited on the Connecting screen (a notification
+        // tapped at launch) is taken by whichever shell is up now.
+        if screen != wasScreen { takePendingRoute() }
+    }
+
     func verdictArrived(_ verdict: Bool) {
         let was = unreachable
         unreachable = verdict
@@ -1895,12 +1988,27 @@ public final class ShellModel {
                 _ = container.takePendingRoute()
             }
         case .localMedia:
-            guard asked == "chat", let at = localShellTabs.firstIndex(of: .chat) else { return }
-            _ = container.takePendingRoute()
-            localTab = at
-        case .pairing, .tokenTroubleCard:
-            // Neither screen can navigate anywhere; the request waits for a
-            // shell that can.
+            if asked == "chat" {
+                if let at = localShellTabs.firstIndex(of: .chat) {
+                    localTab = at
+                } else {
+                    // No Chat here: a help thread from the server has nowhere
+                    // to open, and must not pop up on some later visit.
+                    _ = container.takePendingChatThread()
+                }
+                _ = container.takePendingRoute()
+                return
+            }
+            // A notification tapped while away asks for a screen of the
+            // workspace (Home's timers, a container incident, Friend houses):
+            // with no workspace here it is let go rather than kept, which
+            // used to jump the app there whenever home came back, maybe hours
+            // later (`AppShell.kt`, 2026-11-19). Not while the server is
+            // still being looked for at launch: it may answer in a moment.
+            if !looking { _ = container.takePendingRoute() }
+        case .pairing, .tokenTroubleCard, .connecting:
+            // None of these screens can navigate anywhere; the request waits
+            // for a shell that can.
             return
         }
     }

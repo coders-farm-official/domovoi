@@ -116,4 +116,92 @@ class ShellModeTest {
     @Test fun coreDownDefaultsToFalseForEveryOlderCaller() {
         assertTrue(choice().enabled)
     }
+
+    // ---- opening the app: no home pages before the server answers ----------
+
+    @Test fun beforeTheFirstAnswerItIsTheConnectingScreenNotTheWorkspace() {
+        // Away from home the workspace's pages could only spin; the owner got
+        // lost in them for the whole grace period (2026-11-19).
+        assertEquals(
+            ShellMode.Connecting,
+            shellMode(url, unreachable = false, pairingRequired = false, answeredOnce = false, looking = false),
+        )
+    }
+
+    @Test fun stillUnansweredAfterTheShortWaitItIsThePhonesOwnMedia() {
+        assertEquals(
+            ShellMode.Local,
+            shellMode(url, unreachable = false, pairingRequired = false, answeredOnce = false, looking = true),
+        )
+    }
+
+    @Test fun theFirstAnswerBringsTheWorkspace() {
+        assertEquals(
+            ShellMode.Workspace,
+            shellMode(url, unreachable = false, pairingRequired = false, answeredOnce = true, looking = false),
+        )
+    }
+
+    @Test fun theOldRulesStillComeFirstBeforeTheFirstAnswer() {
+        // No server, the phone chosen, a changed identity: the phone's media,
+        // never the Connecting screen. A pairing refusal or a token card is
+        // itself an answer: the workspace shows it.
+        assertEquals(ShellMode.Local, shellMode("", unreachable = false, pairingRequired = false, answeredOnce = false))
+        assertEquals(ShellMode.Local, shellMode(url, false, false, preferLocal = true, answeredOnce = false))
+        assertEquals(ShellMode.Local, shellMode(url, false, false, identityChanged = true, answeredOnce = false))
+        assertEquals(ShellMode.Workspace, shellMode(url, false, pairingRequired = true, answeredOnce = false))
+        assertEquals(ShellMode.Workspace, shellMode(url, false, false, tokenTrouble = true, answeredOnce = false))
+        assertEquals(ShellMode.Local, shellMode(url, unreachable = true, pairingRequired = false, answeredOnce = false))
+    }
+
+    @Test fun afterAnAnswerLookingCoversTheWorkspaceUntilTheGraceSays() {
+        val ws = ShellMode.Workspace
+        assertTrue(coversWorkspace(ws, answeredOnce = true, looking = true, unreachable = false))
+        assertFalse(coversWorkspace(ws, answeredOnce = true, looking = false, unreachable = false))
+        assertFalse(coversWorkspace(ShellMode.Local, answeredOnce = true, looking = true, unreachable = true))
+        // Before the first answer there is no workspace to cover.
+        assertFalse(coversWorkspace(ShellMode.Local, answeredOnce = false, looking = true, unreachable = false))
+        assertFalse(coversWorkspace(ShellMode.Connecting, answeredOnce = false, looking = false, unreachable = false))
+    }
+
+    @Test fun lookingIsItsOwnChoiceAndCannotBePicked() {
+        val c = serverChoice(url, "Hearth", unreachable = false, notOurs = false, pairingRequired = false, looking = true)
+        assertEquals(ServerChoice.Looking("Hearth"), c)
+        assertFalse(c.enabled)
+        assertEquals("looking for it…", c.reason())
+        assertEquals("Hearth", c.title())
+        // The grace's verdict and the identity verdicts outrank it.
+        assertEquals(
+            ServerChoice.Unreachable("Hearth"),
+            serverChoice(url, "Hearth", unreachable = true, notOurs = false, pairingRequired = false, looking = true),
+        )
+        assertEquals(
+            ServerChoice.NotOurs("Hearth"),
+            serverChoice(url, "Hearth", unreachable = false, notOurs = true, pairingRequired = false, looking = true),
+        )
+    }
+
+    // ---- the phone's-own-media layout says where it is ---------------------
+
+    @Test fun theLocalLayoutsTitleSaysAwayFromHome() {
+        assertEquals("Away from home", ServerChoice.Unreachable("Hearth").localTitle())
+        assertEquals("Looking for home…", ServerChoice.Looking("Hearth").localTitle())
+        assertEquals("On this phone", ServerChoice.NoServer.localTitle())
+        // "This phone" chosen with the server right there is not "away".
+        assertEquals("On this phone", ServerChoice.Available("Hearth").localTitle())
+        assertEquals("On this phone", ServerChoice.CoreDown("Hearth").localTitle())
+    }
+
+    @Test fun theAwayLineNamesTheHouseAndSaysTheHomePagesComeBack() {
+        val away = ServerChoice.Unreachable("Hearth").awayLine()!!
+        assertTrue(away, away.startsWith("You're away from home, or Hearth is off."))
+        assertTrue(away, away.contains("come back by themselves when the phone reaches Hearth again"))
+        assertTrue(ServerChoice.Looking("Hearth").awayLine()!!.startsWith("Looking for Hearth."))
+        assertTrue(ServerChoice.CoreDown("Hearth").awayLine()!!.startsWith("Hearth is up but its core"))
+        // Nothing to explain when the server is fine or there is none; the
+        // changed-identity words live in IdentityChanged.kt.
+        assertEquals(null, ServerChoice.Available("Hearth").awayLine())
+        assertEquals(null, ServerChoice.NoServer.awayLine())
+        assertEquals(null, ServerChoice.NotOurs("Hearth").awayLine())
+    }
 }

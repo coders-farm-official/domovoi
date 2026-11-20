@@ -492,7 +492,11 @@ final class ShellStringsTests: XCTestCase {
 
     func testTheChromeSaysWhatAndroidSays() {
         for s in [
-            ShellStrings.localTopbar,
+            ShellStrings.awayTitle,
+            ShellStrings.lookingTitle,
+            ShellStrings.onThisPhoneTitle,
+            ShellStrings.localTitleSpacing,
+            ShellStrings.lookingCoverLine,
             ShellStrings.connectPill,
             ShellStrings.switchServer,
             ShellStrings.statusAvailable,
@@ -517,7 +521,7 @@ final class ShellStringsTests: XCTestCase {
     /// easiest thing in this file to lose to a tidy-up.
     func testTheStringsWithTwoLeadingSpacesKeepThem() {
         for s in [
-            ShellStrings.localTopbar,
+            ShellStrings.localTitleSpacing,
             ShellStrings.statusAvailable,
             ShellStrings.statusOffline,
             ShellStrings.statusLive,
@@ -597,6 +601,7 @@ final class ShellStringsTests: XCTestCase {
     func testEveryServerChoiceReasonAndTitleIsTheKotlins() {
         for choice: ServerChoice in [
             .noServer,
+            .looking(label: "x"),
             .unreachable(label: "x"),
             .notOurs(label: "x"),
             .coreDown(label: "x"),
@@ -616,8 +621,16 @@ final class ShellStringsTests: XCTestCase {
     // MARK: - §7.4 the local shell's banners
 
     func testTheBannersSayWhatAndroidSays() {
+        assertKotlinSaysAround(localBanner(for: .looking(label: sentinel), canTrustAgain: false)!)
         assertKotlinSaysAround(localBanner(for: .unreachable(label: sentinel), canTrustAgain: false)!)
         assertKotlinSaysAround(localBanner(for: .coreDown(label: sentinel), canTrustAgain: false)!)
+    }
+
+    /// The Connecting screen and the cover over the workspace (2026-11-19).
+    func testTheStartUpLinesSayWhatAndroidSays() {
+        assertKotlinSaysAround(connectingLine(sentinel))
+        assertKotlinSaysAround(lookingCoverTitle(sentinel))
+        assertKotlinSaysWhole(ShellStrings.lookingCoverLine)
     }
 
     // MARK: - §7.5 identity changed

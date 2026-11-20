@@ -146,6 +146,28 @@ class ReachabilityTest {
         assertTrue(rig.reach.unreachable)
     }
 
+    @Test fun everyAnswerIsReportedBeforeItsVerdict() {
+        // AppShell's "answered once" and "looking" ride on this.
+        val reach = Reachability(graceMs = 10_000)
+        val seen = mutableListOf<String>()
+        var t = 0L
+        var n = 0
+        var left = 3
+        runBlocking {
+            val job = launch(start = CoroutineStart.UNDISPATCHED) {
+                askWhileOnScreen(
+                    reach,
+                    probe = { t += 300; (n++) != 1 },
+                    clock = { t },
+                    wait = { ms -> if (--left <= 0) awaitCancellation() else t += ms },
+                    onAnswer = { seen += "answer" },
+                ) { seen += "verdict" }
+            }
+            job.cancelAndJoin()
+        }
+        assertEquals(listOf("answer", "verdict", "verdict", "answer", "verdict"), seen)
+    }
+
     @Test fun anAnswerBringsTheWorkspaceBack() {
         val rig = Rig()
         rig.onScreen(6, answers = { it >= 5 })

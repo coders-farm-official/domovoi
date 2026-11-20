@@ -106,8 +106,8 @@ final class ShellChromeTests: XCTestCase {
         XCTAssertFalse(drawn.serverCard.isEnabled)
         XCTAssertEqual("can't reach it right now", drawn.serverCard.reason)
         let banner = drawn.banner ?? ""
-        XCTAssertTrue(banner.hasPrefix("Can't reach \(label)."), banner)
-        XCTAssertTrue(banner.contains("the workspace comes back when the server does"), banner)
+        XCTAssertTrue(banner.hasPrefix("You're away from home, or \(label) is off."), banner)
+        XCTAssertTrue(banner.contains("come back by themselves when the phone reaches \(label) again"), banner)
         XCTAssertFalse(drawn.offersTrustAgain)
     }
 
@@ -159,7 +159,7 @@ final class ShellChromeTests: XCTestCase {
         XCTAssertEqual("up, but its core isn't answering yet", drawn.serverCard.reason)
         let banner = drawn.banner ?? ""
         XCTAssertTrue(banner.contains("is up but its core is not answering"), banner)
-        XCTAssertFalse(banner.contains("Can't reach"), banner)
+        XCTAssertFalse(banner.contains("away from home"), banner)
         XCTAssertFalse(drawn.offersTrustAgain)
     }
 
@@ -252,7 +252,7 @@ final class ShellChromeTests: XCTestCase {
             let drawn = chrome(row)
             leaves.insert("\(drawn.screen)")
             switch drawn.screen {
-            case .pairing, .tokenTroubleCard:
+            case .pairing, .tokenTroubleCard, .connecting:
                 XCTAssertNil(drawn.pill)
             case .localMedia, .workspace:
                 XCTAssertNotNil(drawn.pill)

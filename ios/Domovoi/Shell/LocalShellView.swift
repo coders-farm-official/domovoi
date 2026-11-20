@@ -46,38 +46,47 @@ struct LocalShellView: View {
         )
     }
 
+    /// No server saved, or "this phone" chosen: the room-mode way in.
+    private var showsRoomModeEntry: Bool {
+        switch model.screen {
+        case .localMedia(.noServer), .localMedia(.choseThisPhone): return true
+        default: return false
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             if headerFold.drawsBarAboveTheStack {
                 ShellTopBar(
-                    leading: ShellStrings.localTopbar,
+                    leading: ShellStrings.localTitleSpacing + model.serverChoice.localTitle,
+                    leadingProminent: true,
                     pill: model.chrome.pill,
                     onPill: { model.openConnection() }
                 ) {
-                    // This phone's own settings — voice, problem reports, the
-                    // app's version — which need no server. The screen itself
-                    // is a later batch's (`LocalSettingsScreen.kt`).
-                    //
-                    // It goes with the bar at the accessibility sizes, and
-                    // nothing is lost by that: it is an `Image` with a label,
-                    // not a control — there is no screen for it to open yet.
-                    Image(systemName: "gearshape")
-                        .font(.footnote)
-                        .foregroundStyle(Color.fgMuted)
-                        .accessibilityLabel(ShellStrings.settingsTitle)
+                    // No gear here (2026-11-19). It was an `Image` that looked
+                    // like a control and opened nothing — this app has no
+                    // screen of the phone's own settings yet
+                    // (`LocalSettingsScreen.kt` on Android) — and the owner's
+                    // rule is to hide a control that can't do what it says.
+                    EmptyView()
                 }
             }
             if let banner = model.chrome.banner {
                 ShellBanner(
                     text: banner,
                     offersTrustAgain: model.chrome.offersTrustAgain,
-                    onTrustAgain: { model.askTrustAgain() }
+                    onTrustAgain: { model.askTrustAgain() },
+                    busy: model.serverChoice.isLooking
                 )
             }
             // A phone with no household server is the spare phone room
             // mode is for (ROOMMODE-MAP D11): Android's own "Domovoi Room"
             // launcher icon is the way in there; an iPhone has one icon.
-            RoomModeEntryLine()
+            // Not while a saved house is only out of reach: starting a room
+            // quiets the household side, which is not what a phone away from
+            // home for the afternoon is asking for (away-layout audit,
+            // 2026-11-19).
+            if showsRoomModeEntry { RoomModeEntryLine() }
             TabView(selection: $model.localSelection) {
                 ForEach(model.localShellTabs, id: \.self) { route in
                     tab(route)
@@ -108,14 +117,15 @@ struct LocalShellView: View {
         if headerFold.putsTheHeaderInsideTheStack {
             NavigationStack {
                 screen
-                    // **The title, not the breadcrumb.** At AX5 a large title
+                    // **A short title, not the bar's.** At AX5 a large title
                     // is one line and UIKit truncates it: train I003's
-                    // picture of this shell reads `domovoi / local media` at
+                    // picture of this shell read `domovoi / local media` at
                     // the full 360 points with Apple's audit calling it
-                    // clipped. ``ShellStrings/localMediaTitle`` carries the
-                    // measurement and the reason.
+                    // clipped. ``ShellStrings/awayCrumb`` carries the
+                    // measurement and the reason; the banner below says the
+                    // whole sentence.
                     .shellScrollAwayChrome(
-                        crumb: ShellStrings.localMediaTitle,
+                        crumb: model.serverChoice.localCrumb,
                         pill: model.chrome.pill,
                         onPill: { model.openConnection() }
                     )

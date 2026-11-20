@@ -150,7 +150,7 @@ public func unclaimedAsks(serverURL: String, unreachable: Bool, setupComplete: B
 public func unclaimedReplaces(_ screen: ShellScreen, blocks: Bool) -> Bool {
     guard blocks else { return false }
     switch screen {
-    case .localMedia:
+    case .localMedia, .connecting:
         return false
     case .workspace, .pairing, .tokenTroubleCard:
         return true
