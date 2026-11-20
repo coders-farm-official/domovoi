@@ -84,6 +84,12 @@ def test_setup_code_typed_on_a_phone_still_verifies(tmp_path, monkeypatch) -> No
         "_".join(words),
         "--".join(words),
         words[0].capitalize() + " " + "-".join(words[1:]) + " ",
+        # Owner rule 2026-11-20: spaces and dashes mixed, and some gaps
+        # (one to all but one) typed with no separator at all.
+        words[0] + words[1] + " " + "-".join(words[2:]),
+        "".join(words[:-1]) + "-" + words[-1],
+        words[0] + " " + "".join(words[1:4]) + "-" + "".join(words[4:]),
+        " - ".join(words[:2]) + "".join(words[2:]),
     ):
         assert admin_auth.verify_setup_code(typed) is True
 
@@ -102,7 +108,9 @@ def test_wrong_setup_codes_are_still_refused(tmp_path, monkeypatch) -> None:
         other,
         "-".join(words[:-1]),                 # a word short
         code + "-" + words[0],                # a word too many
-        "".join(words),                       # the words run together
+        "".join(words),                       # every gap missing: refused
+        "  " + "".join(words).upper() + " ",  # ...however it is padded
+        "".join(words[:-1]) + "-" + words[-1] + "s",  # a gap, a wrong last word
         "-".join(reversed(words)) if words != list(reversed(words)) else other,
         code[:-1] + ("a" if code[-1] != "a" else "b"),
     ):

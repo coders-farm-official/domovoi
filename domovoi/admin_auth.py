@@ -356,7 +356,21 @@ def verify_setup_code(candidate: str) -> bool:
         _sha256(canonical),
         _sha256(stored_canonical) if stored_canonical is not None else _NO_CANONICAL_FORM,
     )
-    matched = bool(exact_ok | canonical_ok)
+    # Owner rule (2026-11-20): the words may run together at some gaps,
+    # but not at all of them. At least one space, dash or underscore
+    # must be typed; spaces and dashes may be mixed. So the letters are
+    # compared with every separator removed, and only when the typed code
+    # holds a separator. That is no easier to guess: the words, and so
+    # the letters, are the same eight.
+    typed = (candidate or "").strip()
+    has_gap = re.search(r"\w[\s_-]+\w", typed) is not None
+    joined = re.sub(r"[\s_-]+", "", typed).lower()
+    stored_joined = re.sub(r"-", "", stored_canonical) if stored_canonical is not None else None
+    joined_ok = secrets.compare_digest(
+        _sha256(joined if has_gap else ""),
+        _sha256(stored_joined) if stored_joined is not None else _NO_CANONICAL_FORM,
+    )
+    matched = bool(exact_ok | canonical_ok | joined_ok)
     if setup_code_expired():
         log.info("setup code presented after its %.0f h window", SETUP_CODE_TTL_SEC / 3600)
         return False
