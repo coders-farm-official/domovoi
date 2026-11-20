@@ -35,8 +35,9 @@ LOCK=requirements-linux-py314.lock
 NODEPS_LOCK=requirements-linux-py314-no-deps.lock
 # docker.io/library/python:3.14-slim, the image index digest of 2026-10-07.
 IMAGE=${DOMOVOI_LOCK_IMAGE:-python:3.14-slim@sha256:f85c5697265c178cc6887276c55fe16cf3d14ca35c3df6a5eab3b360534a55d2}
-# pip-tools 7.6.0 imports pip internals that pip 26.2 removed: pin the pair.
-PIP_TOOLS="pip==26.1 pip-tools==7.6.0"
+# pip and pip-tools (7.6.0 imports pip internals that pip 26.2 removed: the
+# pair is pinned), hash-locked in compile-linux-lock-tools.txt.
+TOOLS=scripts/linux/compile-linux-lock-tools.txt
 EXTRAS=(real-clients voice-profile)
 SPLIT='#### compile-linux-lock: no-deps lock follows ####'
 
@@ -68,11 +69,11 @@ docker run --rm \
   ${seed_mount[@]+"${seed_mount[@]}"} \
   -e CUSTOM_COMPILE_COMMAND="bash scripts/linux/compile-linux-lock.sh" \
   -e PIP_DISABLE_PIP_VERSION_CHECK=1 \
-  -e PIP_TOOLS="$PIP_TOOLS" \
+  -e TOOLS="$TOOLS" \
   -e SPLIT="$SPLIT" \
   "$IMAGE" sh -euc '
     lock=$1; nodeps=$2; shift 2
-    pip install -q --root-user-action=ignore $PIP_TOOLS >&2
+    pip install -q --root-user-action=ignore --require-hashes -r "/src/$TOOLS" >&2
     mkdir /work && cd /work
     cp /src/pyproject.toml /src/requirements-linux-py314.in /src/requirements-no-deps.in .
     # Start from the seed, else the committed pins, so a plain run moves

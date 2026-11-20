@@ -5566,9 +5566,12 @@ do_finish() {
 # docker) inherits the lock, and a run killed even with SIGKILL frees it
 # within a second, whatever of its children outlive it. on_exit
 # (release_lock) frees it at once on every other way out.
+# "/dev/null" stays quoted: OpenSSF Scorecard counts a curl's 2>/dev/null
+# as a downloaded file, so a bare `exec ... /dev/null` read to it as
+# running that download (Pinned-Dependencies, downloadThenRun).
 take_lock() {
   local ok=$TMP_DIR/lock-held rc i
-  flock -n -E 75 -o "$LOCK_FILE" sh -c ': >"$1"; exec tail --pid="$2" -f /dev/null' lock-holder "$ok" "$$" \
+  flock -n -E 75 -o "$LOCK_FILE" sh -c ': >"$1"; exec tail --pid="$2" -f "/dev/null"' lock-holder "$ok" "$$" \
     </dev/null >/dev/null 2>&1 &
   LOCK_PID=$!
   for i in $(seq 1 400); do

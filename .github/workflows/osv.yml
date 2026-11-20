@@ -13,7 +13,9 @@
 # wake-word trainer). Not blocking, printed in the job summary: the Android
 # app's Gradle verification metadata (it also lists build-tool jars such as
 # lint's, and there are no Gradle lock files to tell them apart) and the wake
-# trainer image's constraints.txt (the image's full pin set, not hash-locked).
+# trainer image's requirements.lock and torch-cpu.lock (hash-locked, but they
+# also pin the base image's own packages at the base's versions, which the
+# image never installs on its default base).
 # satellite/requirements*.txt are loose ranges, not pins: their locks above
 # are what gets scanned.
 #
@@ -86,9 +88,9 @@ jobs:
         run: |
           ./osv-scanner scan source --config osv-scanner.toml --no-resolve \
             -L verification-metadata.xml:android/gradle/verification-metadata.xml \
-            -L requirements.txt:scripts/wake_word/docker/constraints.txt \
+            -L requirements.txt:scripts/wake_word/docker/requirements.lock \n            -L requirements.txt:scripts/wake_word/docker/torch-cpu.lock \
             --format markdown --output-file informational.md || true
           {
-            echo "### Not blocking: Android Gradle metadata and the wake trainer's constraints.txt"
+            echo "### Not blocking: Android Gradle metadata and the wake trainer's locks"
             cat informational.md 2>/dev/null || echo "(no report)"
           } >> "$GITHUB_STEP_SUMMARY"

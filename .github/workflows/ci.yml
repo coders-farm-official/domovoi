@@ -194,6 +194,23 @@ jobs:
       - name: Lint (any finding fails the job)
         run: ruff check --no-fix .
 
+  # android/gradle/wrapper/gradle-wrapper.jar checked against Gradle's
+  # published wrapper checksums, on every push: the one binary in the repo
+  # that runs at build time. setup-gradle (the android job) validates it
+  # too, but only when the app changed; this step is also what OpenSSF
+  # Scorecard's Binary-Artifacts check looks for to accept the jar.
+  gradle-wrapper:
+    name: gradle wrapper
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: gradle/actions/wrapper-validation@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+
   python:
     name: pytest ${{ matrix.shard }}/6
     needs: changes
@@ -826,7 +843,7 @@ jobs:
   ci-ok:
     name: ci passed
     if: always()
-    needs: [changes, docs, ruff, python, web, harness, android, android-repro-build, android-repro-compare, android-release-rehearsal, windows, ios, mac, sbom]
+    needs: [changes, docs, ruff, gradle-wrapper, python, web, harness, android, android-repro-build, android-repro-compare, android-release-rehearsal, windows, ios, mac, sbom]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
