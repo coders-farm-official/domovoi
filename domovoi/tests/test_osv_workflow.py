@@ -87,7 +87,8 @@ def test_the_blocking_scan_names_every_lock_and_fails_on_a_finding():
 def test_what_the_scan_names_exists():
     for f in BLOCKING:
         assert list(REPO.glob(f)), f
-    for f in ("android/gradle/verification-metadata.xml", "scripts/wake_word/docker/constraints.txt"):
+    for f in ("android/gradle/verification-metadata.xml", "scripts/wake_word/docker/requirements.lock",
+              "scripts/wake_word/docker/torch-cpu.lock"):
         assert (REPO / f).is_file(), f
 
 
@@ -95,7 +96,9 @@ def test_the_android_and_constraints_report_does_not_fail_the_job():
     info = next(s for s in _steps() if s.get("name", "").startswith("Report"))
     assert info["continue-on-error"] is True
     assert "verification-metadata.xml:android/gradle/verification-metadata.xml" in info["run"]
-    assert "constraints.txt" in info["run"] and "GITHUB_STEP_SUMMARY" in info["run"]
+    assert "requirements.txt:scripts/wake_word/docker/requirements.lock" in info["run"]
+    assert "requirements.txt:scripts/wake_word/docker/torch-cpu.lock" in info["run"]
+    assert "GITHUB_STEP_SUMMARY" in info["run"]
 
 
 def test_every_accepted_vulnerability_has_a_reason_and_a_near_expiry():

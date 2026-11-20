@@ -334,6 +334,7 @@ Markdown (and pictures under `docs/`) alone runs the docs gates only.
 |---|---|---|
 | docs gates | ubuntu | `build_manual.py --check` and the file-only gate tests (privacy, licences, version copies, mermaid, the manual, the workflow pins); every push |
 | ruff (lint) | ubuntu | `ruff check` ([Linting](#linting)) |
+| gradle wrapper | ubuntu | `gradle/actions/wrapper-validation`: `android/gradle/wrapper/gradle-wrapper.jar` against Gradle's published checksums; every push |
 | pytest 1/6 … 6/6 | ubuntu | the whole suite (all three test trees), split by `scripts/dev/ci_shard.py` into six shards of whole files, each `pytest -n 4` on its own migrated Postgres |
 | web | ubuntu | `node scripts/dev/jsxcheck.js` (every `.jsx` compiles with the vendored Babel; no two dashboard scripts share a top-level name), then `web/openapi.json` and `web/static/manual-content.json` regenerated and diffed against the commit |
 | bash harnesses | ubuntu | `scripts/dev/run-linux-harness.sh all`, when `scripts/linux/` changed (a real install on each Linux system is its own workflow: [The fresh-install test](#the-fresh-install-test)) |
@@ -432,9 +433,11 @@ trainer) against the OSV database on every push to `main`, on pull requests
 that touch them, by hand, and **daily**, so a new advisory turns the job red
 the same day. It fails on any known vulnerability. The fix is a bump of the
 lock (a regenerated lock, a new hash-pinned requirement). The Android
-Gradle metadata and the wake trainer's `constraints.txt` are listed in the
-job summary but don't fail it (they include build-tool jars, and the
-trainer's pin set is not hash-locked yet). The scanner is a release binary
+Gradle metadata and the wake trainer's `requirements.lock` and
+`torch-cpu.lock` are listed in the job summary but don't fail it (the
+metadata includes build-tool jars, and the trainer's locks also pin the
+base image's own packages, which the image never installs on its default
+base). The scanner is a release binary
 pinned by version and SHA-256 in the workflow; bump both together, to a
 release at least 14 days old, with the checksum from the release's own
 `SHA256SUMS`.

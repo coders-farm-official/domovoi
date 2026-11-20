@@ -36,14 +36,13 @@ ARG TORCH_INDEX=""
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_CONSTRAINT=/opt/constraints.txt \
     OWW_CACHE=/data/cache
 
-# Every package the pip installs below bring in, at the version the
-# 2026-10-13 spike image resolved (its `pip freeze`, less what the base image
-# ships): PIP_CONSTRAINT holds every pip install in this file to it, so a
-# rebuild months from now installs the same set.
-COPY constraints.txt /opt/constraints.txt
+# Every package the pip installs below bring in, pinned by version AND
+# hash: requirements.lock (and torch-cpu.lock for a base without torch),
+# installed with --require-hashes, so a rebuild months from now installs the
+# same files, and a file that changed on the index stops the build.
+COPY requirements.lock torch-cpu.lock /opt/
 
 # System deps:
 #   espeak-ng + libespeak-ng1  -> espeak-phonemizer (piper-sample-generator)
@@ -60,9 +59,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rm -rf /var/lib/apt/lists/*
 
 # Optionally install torch for non-torch bases (CPU/arm path). No-op for the
-# pytorch/pytorch base where torch is already present.
+# pytorch/pytorch base where torch is already present. torch-cpu.lock holds
+# the CPU index's 2.4.1 wheels for CPython 3.11 (x86_64 and aarch64).
 RUN if [ -n "$TORCH_INDEX" ]; then \
-        pip install --index-url "$TORCH_INDEX" torch torchaudio ; \
+        pip install --require-hashes --index-url "$TORCH_INDEX" -r /opt/torch-cpu.lock ; \
     fi
 
 WORKDIR /opt
@@ -116,17 +116,17 @@ RUN sed -i 's/if args\.convert_to_tflite:/if args.convert_to_tflite is True:/' \
         /opt/openWakeWord/openwakeword/train.py && \
     grep -q "if args.convert_to_tflite is True:" /opt/openWakeWord/openwakeword/train.py
 
+# ── The Python packages: requirements.lock, then openWakeWord itself ────────
 # piper-sample-generator deps (audiomentations, espeak-phonemizer, numpy,
-# webrtcvad). We DELIBERATELY do not let it reinstall torch on the CUDA base.
-# Unpinned names here; constraints.txt (PIP_CONSTRAINT) fixes their versions.
-RUN pip install --no-cache-dir \
-        audiomentations espeak-phonemizer numpy webrtcvad soundfile && \
-    pip install --no-cache-dir -e /opt/openWakeWord && \
-    pip install --no-cache-dir "huggingface_hub>=0.23" onnx onnxruntime pyyaml tqdm scipy scikit-learn
-
-# ── FULL openWakeWord *training* dependency set ──────────────────────────────
-# `pip install -e .` above only pulls openWakeWord's *inference* deps. The
-# trainer (openwakeword/train.py + openwakeword/data.py) imports a much larger
+# webrtcvad, soundfile); openWakeWord's inference deps (onnxruntime,
+# ai-edge-litert, speexdsp-ns, tqdm, scipy, scikit-learn, requests);
+# huggingface_hub, onnx, pyyaml; and the FULL training set below. The lock
+# holds every one of them with its dependencies, so openWakeWord installs
+# with --no-deps. torch is never listed: we DELIBERATELY do not reinstall it
+# on the CUDA base (the base's own satisfies what needs it).
+#
+# The FULL openWakeWord *training* dependency set: `pip install -e .` alone
+# would pull only openWakeWord's *inference* deps. The trainer (openwakeword/train.py + openwakeword/data.py) imports a much larger
 # stack that the upstream notebook pins at 2022-era versions which DO NOT
 # install on py3.11 / torch 2.4. The versions below are the modern ones that
 # resolve cleanly on this base (verified import of openwakeword.{train,data,
@@ -147,24 +147,17 @@ RUN pip install --no-cache-dir \
 # librosa/numba happy too. NO tensorflow / onnx_tf: train.py only needs them for
 # the OPTIONAL --convert_to_tflite path, which we never invoke (we want .onnx
 # only), so we skip that whole fragile 2022-pinned subtree entirely.
-RUN pip install --no-cache-dir \
-        "torchinfo==1.8.0" \
-        "torchmetrics==1.9.0" \
-        "pronouncing==0.3.0" \
-        "mutagen==1.48.1" \
-        "speechbrain==1.1.0" \
-        "torch-audiomentations==0.12.0" \
-        "acoustics==0.2.6" \
-        "scipy<1.15"
+RUN pip install --no-cache-dir --require-hashes -r /opt/requirements.lock && \
+    pip install --no-cache-dir --no-deps -e /opt/openWakeWord
 
-# Brotli 1.2: the base image's conda Brotli is 1.1.0, but httpx2 (what
+# Brotli 1.2 (in requirements.lock): the base image's conda Brotli is 1.1.0, but httpx2 (what
 # huggingface_hub downloads through) passes `output_buffer_limit` to
 # Decompressor.process(), which 1.1.0 refuses ("process() takes no keyword
 # arguments"). Any brotli-encoded response then crashes the download: the
 # one-time feature download failed this way on a household install and in a
 # reproduction after the server dropped the connection mid-file (2026-11-09).
 # The check below fails the BUILD if the pair ever disagrees again. MIT.
-RUN pip install --no-cache-dir "Brotli==1.2.0" &&     python -c "import brotli; from httpx2._decoders import BrotliDecoder as D; d = D(); s = b'x' * 100000; assert b''.join(d.decode(brotli.compress(s))) == s; print('brotli', brotli.__version__, 'decodes through httpx2')"
+RUN python -c "import brotli; from httpx2._decoders import BrotliDecoder as D; d = D(); s = b'x' * 100000; assert b''.join(d.decode(brotli.compress(s))) == s; print('brotli', brotli.__version__, 'decodes through httpx2')"
 
 # Bake openWakeWord's FEATURE models (melspectrogram.onnx + embedding_model.onnx,
 # plus the bundled wake models) into resources/models/ at BUILD time. AudioFeatures

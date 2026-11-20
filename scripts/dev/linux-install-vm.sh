@@ -298,7 +298,7 @@ if [ "$OWN_PYTHON" = 1 ]; then
   check "onto U1's build" vm "grep -q '^home = /usr/local/lib/domovoi-python/$NEXT_PYTHON_BUILD/' /opt/domovoi/.venv/pyvenv.cfg"
   check "the old build kept" vm 'test -x /usr/local/lib/domovoi-python/20261026/cpython-3.14.10-linux-x86_64-gnu/bin/python3.14'
 else
-  check "no python step (the system's python3)" bash -c '! grep -q "\"name\": \"python\"" "$1"' _ "$LOGS/result-${U1:0:12}.json"
+  check "no python step: the system python3" bash -c '! grep -q "\"name\": \"python\"" "$1"' _ "$LOGS/result-${U1:0:12}.json"
 fi
 check "sometimes: apt's daily timer back" vm '[ "$(systemctl is-enabled apt-daily-upgrade.timer 2>/dev/null)" != masked ]'
 

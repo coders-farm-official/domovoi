@@ -796,7 +796,7 @@ fetches:
 |---|---|---|
 | Base image `pytorch/pytorch:2.4.1-cuda12.4-cudnn9-runtime` | Docker Hub | By digest (`sha256:0a3b9fed…`, the full value in the Dockerfile). |
 | openWakeWord and piper-sample-generator (the `dscripka` repositories) | GitHub, `git clone` | Checked out at pinned commits (`368c037`, `f1988a4`). |
-| Every Python package the pip installs bring in | PyPI | Versions held by `constraints.txt` (`PIP_CONSTRAINT`); versions, not hashes. |
+| Every Python package the pip installs bring in | PyPI | Version and SHA-256: `requirements.lock`, installed with `pip install --require-hashes`. |
 | `en-us-libritts-high.pt` (the synthetic voice); `melspectrogram.onnx` and `embedding_model.onnx` (the feature models every trained word depends on) | GitHub release assets | SHA-256. openWakeWord's own download brings its other bundled models along with the two feature models; those are not checked, and training doesn't use them. |
 | `espeak-ng`, `ffmpeg`, `build-essential`, `git`, `wget` and their dependencies | The base image's Ubuntu archive | Not pinned: apt's signature check against the archive only. |
 

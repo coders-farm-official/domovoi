@@ -23,7 +23,7 @@ def _entrypoint():
 
 
 def test_the_image_does_not_install_datasets():
-    for name in ("Dockerfile", "constraints.txt", "requirements.txt"):
+    for name in ("Dockerfile", "requirements.lock", "torch-cpu.lock", "requirements.txt"):
         lines = (DOCKER_DIR / name).read_text(encoding="utf-8").splitlines()
         code = [ln.split("#")[0] for ln in lines if not ln.lstrip().startswith("#")]
         assert not any(re.search(r"\bdatasets\b", ln) for ln in code), name
