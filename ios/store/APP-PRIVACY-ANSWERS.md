@@ -43,8 +43,12 @@ request in real time. Nothing here does:
   it meets Apple's "optional disclosure" criteria anyway: not used for
   tracking or advertising, infrequent, optional, and sent only when the
   person chooses to, with their name and address shown as theirs.
-- **No analytics, advertising, tracking or crash-reporting SDK**, and no
-  third-party package at all today (`ios/licences/README.md`).
+- **No analytics, advertising, tracking or crash-reporting SDK.** One
+  third-party package is linked: **ONNX Runtime** (Microsoft's
+  `onnxruntime-swift-package-manager`, MIT, pinned exactly), which runs room
+  mode's wake-word and voice-detection models on the phone. It collects
+  nothing and sends nothing; the models it runs come from the household's own
+  server, checked against a list that server signed (`ios/licences/README.md`).
 - `ios/Domovoi/PrivacyInfo.xcprivacy` says the same: tracking false, no
   tracking domains, no collected data types.
 
@@ -88,8 +92,9 @@ What was checked (2026-11-14, grep of `ios/Domovoi` and `ios/Packages`):
   no OpenSSL, libsodium or any crypto package. (The one "AES" in the code is
   a comment about Android.)
 
-Re-check if a package is added: an ONNX Runtime or LiteRT-LM build brings no
-encryption of its own, but read its notes.
+ONNX Runtime 1.24.2, the one linked package, brings no encryption of its own
+(it runs models; it opens no connection). Re-check if another package is
+added: a LiteRT-LM build, say, and read its notes.
 
 ## Age rating (App Store Connect → App Information → Age Rating)
 

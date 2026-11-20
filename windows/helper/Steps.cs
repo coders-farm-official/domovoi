@@ -336,7 +336,21 @@ namespace Domovoi.Windows.Helper
                 }
                 subnet = lan.Subnet;
             }
-            List<FirewallRule> rules = Firewall.Plan(subnet);
+            // WIN-10: port 80 only while the short address can use it: its
+            // switch as DomovoiHost last read it (host-state.json; unknown on
+            // a first install, when it is on by default) and no Windows
+            // program holding the port.
+            bool? switchOn = null;
+            try { switchOn = Json.Bool(new HostStateStore(Path.Combine(Paths.HostOut, "host-state.json")).Read(), ShortAddressSwitch.HostStateKey); }
+            catch (Exception e) { o.LogOnly("firewall: can't read the short address's switch: " + e.Message); }
+            string port80 = null;
+            try { port80 = ShortAddressCheck.State(PortScan.Listeners()); }
+            catch (Exception e) { o.LogOnly("firewall: can't check port 80: " + e.Message); }
+            bool shortAddress = ShortAddressSwitch.RuleWanted(switchOn, port80);
+            if (!shortAddress)
+                o.LogOnly("firewall: no port-80 rule (the short address is "
+                    + (switchOn == false ? "switched off" : "blocked: port 80 is " + port80) + ")");
+            List<FirewallRule> rules = Firewall.Plan(subnet, shortAddress);
             l.FirewallSubnet = subnet;
             foreach (var r in rules) if (!l.FirewallRules.Contains(r.Name)) l.FirewallRules.Add(r.Name);
             if (!l.FirewallRules.Contains(Firewall.MdnsRuleName)) l.FirewallRules.Add(Firewall.MdnsRuleName);

@@ -32,7 +32,7 @@ public enum ChatMoreJobRules {
     /// stopped job is one too many — a "carry on (4 parts left)" on a job
     /// with three left is the bug this function exists to pin.
     public static func left(_ job: ChatMoreJob) -> Int {
-        max(0, job.parts - job.read)
+        max(0, WireNumber.sub(job.parts, job.read))
     }
 
     /// The bar under a job's line: **`read` of `parts`**

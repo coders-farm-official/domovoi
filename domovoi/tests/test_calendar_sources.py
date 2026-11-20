@@ -29,6 +29,12 @@ from domovoi.tests.auth_testkit import HEADER, bearer, install_fake_db, web_app
 from domovoi.tests.conftest import requires_db
 from domovoi.tests.test_route_auth_matrix import GET_ROUTES, ROUTES, _dependency_calls
 
+# Phone event times, a few days after the run: the events list shows
+# only from a day back, so a fixed date stops these tests once it passes
+# (1_795_000_000_000, 2026-11-18, did).
+_DAY = (datetime.now(timezone.utc) + timedelta(days=3)).replace(hour=0, minute=0, second=0, microsecond=0)
+_T = int(_DAY.timestamp() * 1000) + 9 * 3_600_000
+
 BROWSER = {"X-Requested-With": "XMLHttpRequest"}
 ADMIN_TOKEN = "admin-session-token"
 DEVICE_TOKEN = "d3v1ce-t0ken"
@@ -327,9 +333,9 @@ def _pev(uid, title, start_ms, end_ms=None, all_day=False):
 @requires_db
 @pytest.mark.asyncio
 async def test_a_phone_snapshot_replaces_unpicks_and_never_touches_another_phone(house) -> None:
-    t = 1_795_000_000_000
-    # 2026-11-17T00:00:00Z: an all-day instance, as CalendarContract keeps it.
-    day = int(datetime(2026, 11, 17, tzinfo=timezone.utc).timestamp() * 1000)
+    t = _T
+    # Midnight UTC: an all-day instance, as CalendarContract keeps it.
+    day = int(_DAY.timestamp() * 1000)
     r = await _call("PUT", "/api/calendar/phones/android-aaaa", _snapshot(
         _pcal("1", "Work", _pev("10:1", "Standup", t, t + 900_000)),
         _pcal("2", "Family", _pev("20:1", "", day, day + 86_400_000, all_day=True)),
@@ -346,7 +352,7 @@ async def test_a_phone_snapshot_replaces_unpicks_and_never_touches_another_phone
 
     events = (await _call("GET", "/api/calendar/events", headers=DEVICE)).json()
     fam = next(e for e in events if e["calendar_name"] == "Family")
-    assert fam["title"] == "(no title)" and fam["all_day"] and fam["starts_at"].startswith("2026-11-17T00:00:00")
+    assert fam["title"] == "(no title)" and fam["all_day"] and fam["starts_at"].startswith(_DAY.strftime("%Y-%m-%dT00:00:00"))
     assert fam["owner_name"] == "Pixel 8" and fam["read_only"] and fam["calendar_kind"] == "phone"
     r = await _call("PATCH", f"/api/calendar/events/{fam['id']}", {"title": "x"}, headers=DEVICE)
     assert r.status_code == 409 and "on that phone" in r.json()["detail"]
@@ -383,7 +389,7 @@ async def test_a_phone_snapshot_replaces_unpicks_and_never_touches_another_phone
 @requires_db
 @pytest.mark.asyncio
 async def test_one_phone_cannot_write_or_delete_another_phones_calendars(house) -> None:
-    t = 1_795_000_000_000
+    t = _T
     from web.backend.api import calendar as cal_api
 
     r = await _call("PUT", "/api/calendar/phones/android-aaaa",
@@ -423,7 +429,7 @@ async def test_one_phone_cannot_write_or_delete_another_phones_calendars(house) 
 @requires_db
 @pytest.mark.asyncio
 async def test_an_admin_removes_a_phone_calendar_left_behind(house) -> None:
-    t = 1_795_000_000_000
+    t = _T
     await _call("PUT", "/api/calendar/phones/android-aaaa", _snapshot(
         _pcal("1", "Work", _pev("1", "Standup", t)), _pcal("2", "Family", _pev("2", "Dinner", t))),
         headers=DEVICE)
@@ -440,7 +446,7 @@ async def test_an_admin_removes_a_phone_calendar_left_behind(house) -> None:
 async def test_a_silent_phone_goes_stale_after_a_day_and_leaves_after_a_week(house, monkeypatch) -> None:
     from domovoi.workers.calendar_feed_refresher import CalendarFeedRefresher
 
-    t = 1_795_000_000_000
+    t = _T
     clock = {"now": datetime.now(timezone.utc)}
     monkeypatch.setattr(calendar_feeds, "_now", lambda: clock["now"])
     await _call("PUT", "/api/calendar/phones/android-aaaa",
@@ -468,7 +474,7 @@ async def test_a_silent_phone_goes_stale_after_a_day_and_leaves_after_a_week(hou
 async def test_an_upload_made_before_sharing_was_turned_off_is_refused(house) -> None:
     from web.backend.api import calendar as cal_api
 
-    t = 1_795_000_000_000
+    t = _T
     body = {**_snapshot(_pcal("1", "Work", _pev("1", "Standup", t))), "generation": 100}
     r = await _call("PUT", "/api/calendar/phones/android-aaaa", body, headers=DEVICE)
     phone = {**DEVICE, calendar_feeds.CALENDAR_KEY_HEADER: r.json()["calendar_key"]}
@@ -500,7 +506,7 @@ async def test_an_upload_made_before_sharing_was_turned_off_is_refused(house) ->
 @requires_db
 @pytest.mark.asyncio
 async def test_replacing_the_device_token_removes_every_phones_calendars(house) -> None:
-    t = 1_795_000_000_000
+    t = _T
     await _call("PUT", "/api/calendar/phones/android-aaaa",
                 _snapshot(_pcal("1", "Work", _pev("1", "Standup", t))), headers=DEVICE)
     from web.backend.db import session_scope
@@ -541,7 +547,7 @@ async def test_events_default_to_a_day_back_and_sixty_ahead(house) -> None:
 @requires_db
 @pytest.mark.asyncio
 async def test_one_event_from_two_phones_is_listed_once(house) -> None:
-    t = 1_795_000_000_000
+    t = _T
     ev = {**_pev("7:1", "Grandma's birthday", t), "ical_uid": "abc123@google.com"}
     other = {**_pev("99:1", "Grandma's birthday", t), "ical_uid": "abc123@google.com"}
     await _call("PUT", "/api/calendar/phones/android-aaaa", _snapshot(_pcal("1", "Family", ev)), headers=DEVICE)
@@ -559,7 +565,7 @@ async def test_one_event_from_two_phones_is_listed_once(house) -> None:
 @requires_db
 @pytest.mark.asyncio
 async def test_a_private_event_is_busy_with_no_title_or_place(house) -> None:
-    t = 1_795_000_000_000
+    t = _T
     ev = {**_pev("1", "Therapy", t, t + 3_600_000), "location": "Dr. Smith", "busy": True}
     await _call("PUT", "/api/calendar/phones/android-aaaa", _snapshot(_pcal("1", "Work", ev)), headers=DEVICE)
     e = (await _call("GET", "/api/calendar/events", headers=DEVICE)).json()[0]

@@ -94,12 +94,12 @@ ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 CODE_LEN = 12
 #: What the identity key signs for the Setup (:func:`setup_message`).
 SETUP_CONTEXT = b"domovoi-satellite-setup-v1"
-_CHALLENGE_RE = re.compile(r"^[0-9a-f]{32}$")
+_CHALLENGE_RE = re.compile(r"^[0-9a-f]{32}\Z")
 _LOOKALIKES = str.maketrans({"O": "0", "I": "1", "L": "1"})
-_SHA_RE = re.compile(r"^[0-9a-f]{64}$")
+_SHA_RE = re.compile(r"^[0-9a-f]{64}\Z")
 #: A host the file name may carry: an IPv4 address or a DNS name (no IPv6,
 #: whose colons a Windows file name can't hold).
-_NAME_HOST_RE = re.compile(r"^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$")
+_NAME_HOST_RE = re.compile(r"^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?\Z")
 
 
 class SetupCodeError(ValueError):

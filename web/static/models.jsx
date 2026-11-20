@@ -99,16 +99,29 @@ const GpuCard = ({ g }) => {
   );
 };
 
-const HardwarePanel = ({ data, loading }) => {
+/* On a Mac (the installer's Linux VM, host kind "mac") the readout is the
+ * VM's, not the Mac's: the AI models and speech run on the Mac's graphics
+ * chip, outside it (mac-installer Train 1 finding 13: "no graphics card"
+ * and "4 threads, 6 GB" read as this Mac's hardware). Every other host is
+ * unchanged. */
+const HardwarePanel = ({ data, loading, onMac = false }) => {
   const gpus = (data && data.gpus) || [];
   const cpu = data && data.cpu;
   const ram = data && data.ram;
   const disk = data && data.disk;
+  const sys = onMac ? 'Linux system ' : '';
   return (
-    <Card title="Hardware" sub="What this server has free right now. Whether a model fits, below, is measured against it.">
+    <Card title="Hardware" sub={onMac
+      ? "Domovoi's Linux system on this Mac: its share of the processor and memory. The AI models and speech recognition run on the Mac's graphics chip, outside it."
+      : 'What this server has free right now. Whether a model fits, below, is measured against it.'}>
       <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
         {loading && !data ? (
           <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>reading hardware…</div>
+        ) : gpus.length === 0 && onMac ? (
+          <div className="hw-mac-note" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+            The models run on this Mac's graphics chip, which shares the Mac's own memory, so the
+            sizes below are only sizes: they aren't measured against this Mac.
+          </div>
         ) : gpus.length === 0 ? (
           <div style={{ fontSize: 12, color: 'var(--fg-faint)' }}>
             Domovoi can't read a graphics card's memory on this server, so the models below show their size instead of whether they fit.
@@ -123,7 +136,7 @@ const HardwarePanel = ({ data, loading }) => {
           {cpu && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--fg-muted)' }}>
-                <span>CPU{cpu.logical_cores ? ` · ${cpu.logical_cores} threads` : ''}</span>
+                <span>{sys}CPU{cpu.logical_cores ? ` · ${cpu.logical_cores} threads` : ''}</span>
                 <span className="mono">{cpu.percent}%</span>
               </div>
               {_bar(cpu.percent, cpu.percent > 85 ? 'warn' : 'brand')}
@@ -132,7 +145,7 @@ const HardwarePanel = ({ data, loading }) => {
           {ram && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--fg-muted)' }}>
-                <span>RAM</span>
+                <span>{sys}RAM</span>
                 <span className="mono">{(ram.used_mb / 1024).toFixed(1)} / {(ram.total_mb / 1024).toFixed(0)} GB</span>
               </div>
               {_bar(ram.percent, ram.percent > 90 ? 'err' : ram.percent > 75 ? 'warn' : 'brand')}
@@ -192,6 +205,41 @@ const SttStatusBanner = ({ stt }) => {
         </details>
       )}
     </div>
+  );
+};
+
+/* ---- speech on the Mac's graphics chip -------------------------- */
+/* On a Mac whose install set up the speech service (mac-installer
+ * PHASE8A-STT.md): which one hears the turns, and the household's switch.
+ * Shown only there: the `engine` block exists only when the core has a
+ * speech service, and the host is a Mac (no misleading control anywhere
+ * else). Off = this Mac's processor, as on Windows. */
+const SttEngineCard = ({ stt, onSet, hostKind }) => {
+  const [busy, setBusy] = React.useState(false);
+  const e = stt && stt.engine;
+  if (!e || e.configured !== 'host' || hostKind !== 'mac') return null;
+  const useHost = e.use_host !== false;
+  let line;
+  if (e.host_state === 'refused') line = 'The speech service address was refused, so this Mac’s processor hears every turn.';
+  else if (!useHost) line = 'Off: this Mac’s processor hears every turn (a little slower).';
+  else if (e.active === 'host') line = 'On: turns are heard on this Mac’s graphics chip.'
+    + (e.shares_gpu && e.local_standby
+      ? ' While the language model is answering, a request is heard on the processor instead, so it doesn’t wait.' : '')
+    + (e.local_standby ? '' : ' The processor’s backup didn’t load, so there is no fallback.');
+  else line = 'On, but the speech service isn’t answering: this Mac’s processor hears the turns until it does.';
+  const run = async (v) => { setBusy(true); try { await onSet(v); } finally { setBusy(false); } };
+  return (
+    <Card title="Speech recognition on the graphics chip"
+          sub={line}
+          action={e.host_state === 'refused' ? null : useHost
+            ? <Button icon="power" disabled={busy} onClick={() => run(false)}>turn off</Button>
+            : <Button variant="primary" icon="power" disabled={busy} onClick={() => run(true)}>turn on</Button>}>
+      {e.last_error && e.active !== 'host' && useHost && (
+        <div style={{ padding: '10px 14px', fontSize: 12, color: 'var(--fg-muted)' }}>
+          Last error: <span className="mono">{e.last_error}</span>
+        </div>
+      )}
+    </Card>
   );
 };
 
@@ -306,8 +354,15 @@ const _ollamaKey = (name) => {
  * starts), so an install begun here or on a catalog card shows its progress
  * on the row. */
 const ActiveRow = ({ r, installed, whisperNames, hw, catalogByName, onSwitch, onInstall,
-                     job, internetOff, sttLoaded }) => {
+                     job, internetOff, sttLoaded, macSttService = false }) => {
   const isStt = r.role === 'stt';
+  // On a Mac with the speech service, this row is the processor's backup
+  // (the service on the graphics chip has its own model), and its
+  // "restart to apply" shows only while a saved model differs from the one
+  // loaded, not on a fresh install where nothing is waiting.
+  const macBackup = isStt && macSttService;
+  const restartPill = r.tier === 'restart'
+    && (!macBackup || (!!sttLoaded && sttLoaded !== r.model));
   const current = r.model || '';
   const [pick, setPick] = React.useState(current);
   React.useEffect(() => { setPick(current); }, [current]);
@@ -376,7 +431,9 @@ const ActiveRow = ({ r, installed, whisperNames, hw, catalogByName, onSwitch, on
                   borderBottom: '1px solid var(--border-soft)', flexWrap: 'wrap' }}>
       <div style={{ minWidth: 130 }}>
         <div style={{ fontSize: 13, fontWeight: 600 }}>{ROLE_LABEL[r.role]}</div>
-        <div style={{ fontSize: 11, color: 'var(--fg-muted)' }}>{ROLE_SUB[r.role]}</div>
+        <div style={{ fontSize: 11, color: 'var(--fg-muted)' }}>{macBackup
+          ? "the processor's backup · the graphics chip's speech service has its own model"
+          : ROLE_SUB[r.role]}</div>
       </div>
       <div style={{ flex: 1, minWidth: 160, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         {r.model
@@ -396,7 +453,7 @@ const ActiveRow = ({ r, installed, whisperNames, hw, catalogByName, onSwitch, on
             <Pill tone="warn">restart for chat</Pill>
           </span>
         )}
-        {r.tier === 'restart' && <Pill tone="warn">restart to apply</Pill>}
+        {restartPill && <Pill tone="warn">restart to apply</Pill>}
         {missing && (
           <Button variant="primary" icon="download" disabled={blocked}
                   title={blocked ? NEEDS_INTERNET_TEXT : `download ${r.model} to this server`}
@@ -817,6 +874,12 @@ const ModelsPanel = () => {
   const aiOn = !aiData || aiData.enabled !== false;
   const { data: hwData, loading: hwLoading, refresh: refreshHw } =
     useApiObject('/api/models/hardware');
+  // The host kind, from the hardware read itself (no extra request).
+  const hostKind = (hwData && hwData.host_kind) || null;
+  // A Mac whose speech service hears the turns: the Speech-to-text row's
+  // model is the processor's backup (Train 1 finding 14).
+  const sttEng = hwData && hwData.stt && hwData.stt.engine;
+  const macSttService = hostKind === 'mac' && !!sttEng && sttEng.configured === 'host';
   const { data: catalog } = useApiObject('/api/models/catalog');
   const { data: installedData, refresh: refreshInstalled } =
     useApiObject('/api/models/installed', { eventTypes: ['model_jobs.changed'] });
@@ -863,6 +926,11 @@ const ModelsPanel = () => {
   // AI off: only speech-to-text is a role this page still manages.
   const shownRole = (r) => aiOn || r.role === 'stt';
   const ollamaReachable = installedData ? installedData.ollama_reachable : true;
+  // The configured Ollama against the oldest Domovoi runs on (GET
+  // /api/models/installed `ollama_version`): said only when it is known to
+  // be older, which happens with an Ollama the household brings itself.
+  const ollamaVersion = installedData && installedData.ollama_version;
+  const ollamaTooOld = !!(ollamaVersion && ollamaVersion.ok === false);
   const installedNames = new Set(installed.map((m) => m.name));
   const roles = (activeData && activeData.roles) || [];
   const catOllama = (catalog && catalog.ollama) || [];
@@ -1041,6 +1109,15 @@ const ModelsPanel = () => {
     body: <div>The model files are removed from this machine. It can be pulled again from the catalog later.</div>,
   });
 
+  // Speech on the Mac's graphics chip (POST /api/models/stt-engine): saved
+  // to the core's .env and applied at once.
+  const setSttEngine = (useHost) => guard(async () => {
+    const res = await apiPost('/api/models/stt-engine', { use_host: useHost });
+    refreshHw();
+    return res;
+  }, useHost ? 'speech is heard on the graphics chip' : 'speech is heard on the processor',
+  { verb: useHost ? 'Turn graphics-chip speech on' : 'Turn graphics-chip speech off', key: 'stt-engine' });
+
   // The switch: saved through the core's config path; turning it on can
   // start the downloads in the same press (POST /api/models/ai). The
   // shell's nav reads features.ai again, so Chat comes and goes at once.
@@ -1080,7 +1157,8 @@ const ModelsPanel = () => {
     <React.Fragment>
       <AiFeaturesCard ai={aiData} internetOff={internetOff} onSet={setAi}/>
       <SttStatusBanner stt={hwData && hwData.stt}/>
-      <HardwarePanel data={hw} loading={hwLoading}/>
+      <SttEngineCard stt={hwData && hwData.stt} onSet={setSttEngine} hostKind={hostKind}/>
+      <HardwarePanel data={hw} loading={hwLoading} onMac={hostKind === 'mac'}/>
 
       {restartAsk && (
         <RestartAfterSave key={restartAsk.n} fire={fire}
@@ -1097,7 +1175,7 @@ const ModelsPanel = () => {
               <ActiveRow key={r.role} r={r} installed={installed} whisperNames={whisperNames}
                          hw={hw} catalogByName={catalogByName} onSwitch={switchModel}
                          onInstall={install} job={r.role === 'stt' ? null : jobFor(r.model)}
-                         internetOff={internetOff}
+                         internetOff={internetOff} macSttService={macSttService}
                          sttLoaded={hwData && hwData.stt && hwData.stt.loaded ? hwData.stt.loaded.model : null}/>
             ))}
       </Card>
@@ -1111,6 +1189,14 @@ const ModelsPanel = () => {
       {aiOn && (
       <Card title={`Installed (${installed.length})`}
             sub="AI models on this server. 'loaded' means it is in memory now, so it answers quickest.">
+        {ollamaTooOld && (
+          <div className="models-ollama-too-old" role="alert"
+               style={{ padding: '10px 16px', fontSize: 13, color: 'var(--warn-ink, var(--warn))' }}>
+            {`The Ollama Domovoi uses is version ${ollamaVersion.version}, and Domovoi needs ${ollamaVersion.min} or newer. `
+              + 'Some models (the one that reads pictures in chat among them) won’t load until it is updated: '
+              + 'update that Ollama, then reload this page.'}
+          </div>
+        )}
         {!ollamaReachable ? (
           <Empty title="AI service not answering" sub="Domovoi's AI service isn't answering, so the installed models can't be listed."/>
         ) : installed.length === 0 ? (

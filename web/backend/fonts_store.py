@@ -69,8 +69,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 BUNDLED_DIR = REPO_ROOT / "web" / "static" / "fonts"
 MANIFEST_PATH = BUNDLED_DIR / "manifest.json"
 
-_SLUG_RE = re.compile(r"^[a-z0-9]{1,64}$")
-_FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-\[\],]{0,127}$")
+_SLUG_RE = re.compile(r"^[a-z0-9]{1,64}\Z")
+_FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-\[\],]{0,127}\Z")
 
 
 # ─── METADATA.pb ─────────────────────────────────────────────────────────

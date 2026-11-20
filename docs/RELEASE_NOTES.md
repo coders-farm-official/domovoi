@@ -4,6 +4,236 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.4.0 (unreleased) — Each room's music player is rebuilt once, while it is quiet
+
+- **What changed.** The stream each room's music player sends to its
+  speakers no longer carries song titles. The music player in Domovoi's
+  image (MPD 0.23.12) has a bug that can crash it at a song change when a
+  speaker connects to the stream at that moment, and the speakers
+  reconnect after every voice request. Without titles in the stream that
+  code never runs. Nothing lost: speakers never read titles from the
+  stream, and the dashboard, the apps and "what's playing" ask the player
+  directly. This is the likely cause of a player dying between songs; the
+  earlier fix puts the music back when it does.
+- **What to know.** A room's player keeps the settings it was made with,
+  so after the update each room's player is made again, once. At the
+  core's start each room that isn't playing is rebuilt there and then, one
+  at a time; a room that is playing is left alone and rebuilt about a
+  minute after its music stops or is paused. The room keeps its queue, the
+  song it was on and where in it, its playlists and its library. The core log has one line per room:
+  `music player for room=… made again with the new mpd.conf`, or `… is made
+  again once it stops playing`. The container guard doesn't report it. No
+  migration. On a Linux or Windows install the update itself removes the
+  room players when this file changes and the core makes them again at its
+  start, as before; the rebuild above covers every other way a house is
+  updated. The update now stops each room's player first (up to 15 seconds),
+  so it saves where it was and the music comes back at that spot, not at
+  one up to two minutes old.
+
+## 1.4.0 (unreleased) — The news is read story by story, and you can ask about one
+
+- **What changed.** "What's the news" used to run its headlines together
+  in one long sentence. Now each headline is a sentence of its own,
+  numbered ("First, … Second, …"), with a longer pause between stories,
+  and "Locally.", "Nationally." and "Around the world." are said on their
+  own. Your topics and "any news about …" are read the same way, each
+  story with its source. Afterwards Domovoi listens for a moment: "tell me
+  more about the second one", "the last one", "number three", "the one
+  about the bridge" or "more on that" says that story's summary and where
+  it's from. This works for ten minutes after the news was read. "Favorite
+  that" saves the story you just asked about.
+- **What to know.** When a feed gives only a line or two, Domovoi offers
+  to read the full article online and sums it up in a few sentences. It
+  asks first unless **Always allow internet** (Settings → Chat & AI →
+  Search) is on. With the internet off or unreachable, it says what it has
+  and that it can't read the article right now; with the AI features off,
+  it says what the feed gave. Any reply with a blank line in it (a
+  paragraph break) now gets the same longer pause from the voice. No
+  migration.
+## 1.4.0 (unreleased) — Music no longer jumps back when a room's player restarts
+
+- **What changed.** A room's music player (its MPD container) that stops
+  unexpectedly comes back from a saved state that is up to two minutes old:
+  MPD saves it two minutes after a song starts and not again until the next
+  song. One that died as a song ended came back playing that same song from
+  about 2:00. In a group every room heard it, and the dashboard showed it
+  there too. Now the core notices the restart on its next look at the
+  player, within about 5 seconds, and puts the music back: the next song
+  from its start when the old one had ended, otherwise the same song where
+  it had got to. A paused room is left as it came back.
+- **What to know.** Nothing to do. The core log says when it happens:
+  `music player for room=… restarted`, then what it did. It does not stop
+  the player from dying, and the log line helps find out why it died.
+
+## 1.4.0 (unreleased) — Friend Houses: the listener runs walled off in its own container
+
+- **What changed.** The part of Friend Houses that answers other houses
+  (the inbound listener) runs in its own container, `domovoi-fh-listener`,
+  instead of as a process under the core's user. It has no network, a
+  read-only root, no Linux capabilities, no environment and memory, process
+  and CPU limits. It sees only its keys and the friend list, both read-only.
+  The core builds the image itself and rebuilds it when the listener code
+  changes or the image is 30 days old. The container guard expects it, and
+  plugins can't use the name.
+- **What to know.** Nothing to do. A house that already has Friend Houses on
+  gets the new Tor settings (the listener's socket moves to
+  `tor/run/listen/`) at the next check. If the image can't be built, the
+  Friend Houses status says friends can't reach the house, and the core
+  keeps trying. No migration.
+
+## 1.4.0 (unreleased) — "Should I remember that?" is said to you
+
+- **What changed.** When Domovoi notices a fact worth keeping and asks
+  before saving it, the question now talks to you: "By the way, your pets
+  are Biscuit and Pepper. Should I remember that?" Before, it read out the
+  fact as the AI wrote it ("…are their pets"), which sounded like Domovoi
+  talking about someone else. New facts are saved in your own words, the
+  way a fact you ask it to remember is.
+- **What to know.** Facts saved before this keep their old wording. You can
+  edit them on the People page.
+
+## 1.4.0 (unreleased) — A Mac can be the server
+
+- **What changed.** Each release now carries `DomovoiSetup-mac.pkg`, the
+  Mac server's installer, for Macs with Apple silicon and macOS 26 or
+  later. It runs the Linux server in a small virtual machine, and the
+  household's Ollama and speech recognition natively on the Mac's
+  graphics chip. The release workflow builds it on a GitHub macOS runner
+  from the release's files (`build-mac`, no secrets) and its signing job
+  signs it for the Mac side's updates (`finish_release.py --mac-pkg`).
+- **What to know.** It is signed ad hoc, not with an Apple Developer ID,
+  and not notarized: the first time, macOS won't open it until you click
+  **Open Anyway** in System Settings → Privacy & Security. The Mac install
+  writes `WHISPER_REMOTE_SHARES_GPU=true`: while the core has a request
+  open to Ollama, a new voice turn is heard by the VM's own Whisper instead
+  of the Mac's speech service, chosen once per turn. Health's speech row
+  says which engine heard the last request, and `/v1/stats/latency`'s
+  `whisper.engine_reason` says why (`gpu_shared_llm_busy`). Every other
+  install leaves the setting false and is unchanged.
+
+## 1.4.0 (unreleased) — Fewer "preview" labels
+
+- **What changed.** Chat on the phone itself, the Windows installer and spare
+  laptops, PCs and phones as rooms are no longer labelled previews. The USB
+  stick for old computers still is: it has not been tried on real computers yet.
+
+## 1.4.0 (unreleased) — Windows Setup: no dead end when it can't copy itself before a restart
+
+- **What changed.** When Windows has to restart to finish turning on WSL,
+  Setup copies itself to `C:\Program Files\Domovoi\resume` to start again
+  afterwards. When Windows refused that copy (usually an antivirus: this
+  preview isn't code-signed), Setup ended with *Runtime error ... Setup
+  could not copy itself ...* and no reason. Now it says what happened with
+  Windows' own error, what to do (check the antivirus's quarantine, close
+  any other Domovoi Setup window), where its log is, and offers **Try
+  again**; **Stop Setup** says to restart Windows and run Setup again. A
+  copy already there that is the same Setup (same size and SHA-256) is used
+  as it is; one still open from an earlier try is retried for a few
+  seconds, then passed by for `DomovoiSetup-2.exe` in the same folder. The
+  restart entry still only ever runs a copy in that administrators-only
+  folder, never the one in Downloads, and Setup now sets that folder's
+  access itself (SYSTEM and Administrators full, everyone else read).
+- **What to know.** Setup now always keeps its own log, `Setup Log <date>
+  #<n>.txt` in the temporary folder of the account that ran it (`%TEMP%`);
+  the message names it. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md#on-the-windows-installer).
+
+## 1.4.0 (unreleased) — Security fixes: videos in chat, reading scans, Word downloads
+
+Fixes from the round 6 security audit (DOC-7 to DOC-14, FE-11). Nothing to
+do; a few limits are new.
+
+- **Videos in chat: the 3-minute limit holds whatever the file says**
+  (DOC-7). The length was the file header's claim, and every pass then
+  decoded the whole file: a small WebM saying "one minute" and holding two
+  hours could take gigabytes of memory. Each ffmpeg pass now reads at most
+  the accepted length (plus two seconds), the sound is cut off at that
+  size, and the scene list and speech pieces have ceilings.
+- **Videos in chat: no picture over 8K, and the helpers are capped**
+  (DOC-8). A video with a picture larger than 8K (7680 x 4320 either way
+  up, no side over 8192, in any of its picture streams) is refused as a
+  format chat doesn't take. ffprobe, ffmpeg and the scan reader's
+  tesseract run with a memory cap (2 GiB, or a third of the server's
+  memory, never under 1 GiB) on one decoding thread. Linux: the core's
+  unit gets `OOMPolicy=continue` (from the next update), so a helper the
+  kernel ends doesn't stop the core.
+- **Videos in chat: Stop works at every step** (DOC-9), in a quiet house
+  too, and ends an ffmpeg pass that is running.
+- **Videos in chat: the file name is data too** (DOC-10). A model sees a
+  video's name only inside the marked block, cut to letters, digits,
+  spaces and `. - _ ( ) '` (the chat's replies name it the same way). A
+  question in a chat with watched videos no longer offers lookups to the
+  model; a typed "look up …" still works.
+- **Videos in chat: staged uploads are bounded** (DOC-13). Free space is
+  checked again as an upload streams (chunked ones included), the folder
+  holds at most 6 GiB of videos and 6 staged and not sent (`507
+  video_no_room`, with its own sentence), and an unsent video goes after
+  an hour on a ten-minute timer, not only when the next upload comes.
+- **Reading scans: the summary waits for voice; a read can be stopped**
+  (DOC-11). "What does it say?" is made voice first, one at a time in the
+  house, once per read however many ask, and a failed one isn't retried
+  for five minutes. New: **Stop reading** on the dashboard's sheet (`POST
+  /api/scan/reads/{id}/cancel`, device tier); a read still running 4 hours
+  after it started ends (`scan_read_too_long`), and a scan file over 1 GB
+  isn't read (`scan_too_large`). The answer by voice keeps its 20-second
+  budget inside a page too. The phone apps don't have the Stop button yet.
+- **Reading scans: the text belongs to the bytes** (DOC-12). A read copies
+  the scan and reads that copy; a scan replaced after its read shows as not
+  read, never with the old file's text; a link anywhere on the path inside
+  Documents is refused.
+- **Scan summaries show no links** (FE-11): link text in a letter is shown
+  as words on the dashboard.
+- **Word downloads** (DOC-14): a document named in another alphabet
+  (Cyrillic, Japanese …) downloads instead of failing, a quote in a name
+  can no longer add a second file name to the download, and a control
+  character in a page is left out instead of failing the export. The same
+  for spreadsheet downloads.
+
+## 1.4.0 (unreleased) — Security fixes from audit round 6: core, plugins, Windows, releases
+
+- **Admin sign-out after an hour: only a change that worked counts.** A
+  write the server refused (a form that didn't validate, something not
+  found) used to restart the admin's idle hour; now only a successful one
+  does (CORE-42).
+- **Wake models trained here stay in the house.** A word trained on the
+  household's recordings (including "Domovoi (tuned to this home)") is
+  downloaded only by this server's rooms, household devices and an admin;
+  any other device on the network gets `403`. Rooms need nothing new: they
+  are recognised by the address they connect from. The published words are
+  open as before (CORE-43).
+- **A drop-in call ends when its credential does.** The phone drop-in
+  checks its household token or admin sign-in again every 30 seconds:
+  rotating the token, or signing the admin out, ends a call within that
+  (CORE-44).
+- **Printers: IPv4 only.** A printer address must be IPv4 (or an
+  IPv4-mapped IPv6 address), even through `OUTBOUND_ALLOW_HOSTS`: the
+  server's own IPv6 addresses got through before. If the server can't list
+  its own network addresses, nothing is printed to and the network sweep
+  doesn't run (CORE-45).
+- **A trailing newline is refused everywhere.** Ids, names, addresses and
+  the port-80 redirect's path no longer accept a value that ends in a
+  newline (CORE-46).
+- **A room's wake words: at most 5, checked first.** A longer list is
+  refused before it is looked at, and a room device's hello that says it
+  can run "Infinity" words no longer ends its own session (CORE-47).
+- **Radio follows a station's redirects itself (Radio plugin 1.5.0).**
+  The room's music player is handed the address that actually answers;
+  a station whose stream redirects into the house is refused, and one that
+  can't be reached says so (PLG-12).
+- **Plugins: `room_play_template` in plain path characters.** A template
+  with `%`, `#`, `?`, a backslash or a `.`/`..` segment is refused at
+  install, and the dashboard checks it again before it casts (PLG-13).
+- **Windows: the port-80 firewall rule follows the short address.** Setup
+  and every update add `Domovoi-ShortAddress-80` only while the short
+  address is switched on and no Windows program holds port 80, and remove
+  it otherwise. Switching it off in Settings takes the rule away at the
+  next update; to remove it now, as an administrator in PowerShell:
+  `Remove-NetFirewallHyperVRule -Name Domovoi-ShortAddress-80` (WIN-10).
+- **Releases: one way to check a file.** The release page and SECURITY.md
+  give the full `gh attestation verify ... --signer-workflow
+  .../release.yml --source-ref refs/heads/main` command; the short form
+  accepted any workflow in the repository. The release workflow's
+  provenance-only run (`attest_published`) is gone (OPS-21, OPS-22).
+
 ## 1.4.0 (unreleased) — Queue history: what Up next picked, and why
 
 - **What changed.** **Settings → Household → Queue history** (an admin

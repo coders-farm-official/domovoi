@@ -461,7 +461,10 @@ async def request_windows_step(request: Request, body: WindowsStepRequest | None
     notification instead. Proxy of the core's ``POST
     /v1/admin/windows/request`` → ``{ok, request, joined, tray}`` (a press
     while a request waits joins it); ``after_linux``: this press updated the
-    Linux side first. 409 with the reason when there is no step to take."""
+    Linux side first. 409 with the reason when there is no step to take.
+    On a Mac install it is the Mac step, for the Domovoi app on the Mac (a
+    browser on the Mac arrives here over Lima's loopback forward, so "on
+    this PC" reads as "on this Mac" by the same rule)."""
     return bridge_response(
         *await post_admin(
             "/v1/admin/windows/request",

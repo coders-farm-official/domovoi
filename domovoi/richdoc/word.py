@@ -514,12 +514,38 @@ def _raw_text(node: object) -> str:
     return "".join(_raw_text(c) for c in n.children)
 
 
+#: Characters XML 1.0 doesn't allow (python-docx refuses a string with one).
+_XML_ILLEGAL = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff\ud800-\udfff]")
+
+
+def xml_safe(text: str) -> str:
+    """``text`` without the characters a Word file can't hold (a control
+    character from a pasted page, ``&#1;``): left out, never a failed export
+    (security audit round 6, DOC-14)."""
+    return _XML_ILLEGAL.sub("", text or "")
+
+
+def _xml_clean(root: _Node) -> _Node:
+    """Every text and attribute of the tree through :func:`xml_safe` (after
+    the parser has turned character references into characters)."""
+    stack = [root]
+    while stack:
+        n = stack.pop()
+        n.attrs = {k: xml_safe(v) if isinstance(v, str) else v for k, v in n.attrs.items()}
+        for i, c in enumerate(n.children):
+            if isinstance(c, str):
+                n.children[i] = xml_safe(c)
+            else:
+                stack.append(c)  # type: ignore[arg-type]
+    return root
+
+
 def html_to_docx(body_html: str, title: str = "") -> bytes:
     """The sanitised editor content ``body_html`` as .docx bytes."""
     w = _Writer()
     if title:
-        w.doc.core_properties.title = title[:200]
-    w.blocks(w.doc, build_tree(body_html or ""))
+        w.doc.core_properties.title = xml_safe(title)[:200]
+    w.blocks(w.doc, _xml_clean(build_tree(xml_safe(body_html))))
     buf = io.BytesIO()
     w.doc.save(buf)
     return buf.getvalue()

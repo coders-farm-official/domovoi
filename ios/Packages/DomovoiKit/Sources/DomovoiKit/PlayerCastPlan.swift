@@ -131,8 +131,7 @@ public enum PlayerCastPlanner {
     /// Whole seconds to start a track at, from a player position
     /// (`CastPlan.kt:106`).
     public static func resumeSec(_ positionSec: Double) -> Int {
-        guard positionSec.isFinite else { return 0 }
-        let s = Int(positionSec.rounded(.down))
+        guard let s = WireNumber.int(positionSec.rounded(.down)) else { return 0 }
         return s < minResumeSec ? 0 : s
     }
 

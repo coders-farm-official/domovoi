@@ -53,7 +53,7 @@ DEVICE_MODEL = Path("/proc/device-tree/model")
 
 #: A wake word's slug: an openWakeWord model stem (the core's rule,
 #: domovoi/streaming.py ``_WAKE_SLUG_RE``).
-_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
 
 
 def clean_slug(raw: object) -> str | None:

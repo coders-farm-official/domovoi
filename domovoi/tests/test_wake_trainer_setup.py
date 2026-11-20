@@ -40,7 +40,8 @@ def box(monkeypatch, tmp_path):
     calls: list[list[str]] = []
     state = {"gpus": [], "runtimes": ["io.containerd.runc.v2", "runc"], "probe_ok": True,
              "build_rc": 0, "warm_rc": 0, "mem_mib": 64 * 1024, "free_gb": 500.0,
-             "docker_ok": True, "image": (False, None), "wsl": False}
+             "docker_ok": True, "image": (False, None), "wsl": False, "arch": "x86_64",
+             "mac": False}
 
     def docker_info():
         if not state["docker_ok"]:
@@ -85,6 +86,11 @@ def box(monkeypatch, tmp_path):
     # Not the Windows install's distro unless a test says so (the Linux
     # harness itself may run in WSL).
     monkeypatch.setattr(wts, "on_wsl", lambda: state["wsl"])
+    # An x86-64 box unless a test says otherwise (the suite may run on ARM).
+    monkeypatch.setattr(wts, "machine_arch", lambda: state["arch"])
+    from domovoi import host_kind as hk
+
+    monkeypatch.setattr(hk, "is_mac_vm", lambda: state["mac"])
     monkeypatch.setattr(wts, "_physical_cores", lambda: 8)
     monkeypatch.setattr(wts, "_stream", stream)
     monkeypatch.setattr(wts, "_run", run)
@@ -611,3 +617,54 @@ async def test_turn_off_waits_for_a_training_or_a_job(box, monkeypatch):
     monkeypatch.setattr(wts, "_STARTING", True)
     with pytest.raises(wts.Refused, match="being set up"):
         await wts.turn_off()
+
+
+# ─── an ARM server (the Mac installer's VM, a Pi 5): no training at all ───
+# The trainer's base image (PyTorch's CUDA runtime) exists for x86-64 only,
+# so the setup job's build can't work there. mac-installer PHASE8-PARITY.md 4.3.
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("arch", ["x86_64", "amd64"])
+async def test_an_x86_server_has_no_unsupported_reason(box, arch):
+    box["state"]["arch"] = arch
+    with egress.override_policy("always"):
+        req = await wts.requirements(force=True)
+    assert req["unsupported"] is None and req["refusals"] == []
+    assert req["arch"] == arch
+
+
+@pytest.mark.asyncio
+async def test_the_mac_vm_says_training_isnt_available_on_a_mac(box):
+    box["state"].update(arch="aarch64", mac=True, mem_mib=6 * 1024)
+    with egress.override_policy("always"):
+        req = await wts.requirements(force=True)
+        # The one reason: not the VM's 6 GB, which would read as false of
+        # a 32 GB Mac.
+        assert req["refusals"] == [req["unsupported"]]
+        assert "isn't available on a Mac yet" in req["unsupported"]
+        assert "Apple silicon" in req["unsupported"] and "x86-64" in req["unsupported"]
+        assert "24 GB" not in " ".join(req["refusals"]) and req["notes"] == []
+        with pytest.raises(wts.Refused, match="isn't available on a Mac yet"):
+            await wts.start(cpu_ok=True)
+    assert box["calls"] == []          # nothing built, nothing pulled
+
+
+@pytest.mark.asyncio
+async def test_another_arm_server_names_its_processor(box):
+    box["state"].update(arch="aarch64", mac=False)
+    with egress.override_policy("always"):
+        req = await wts.requirements(force=True)
+        assert req["refusals"] == [req["unsupported"]]
+        assert "this one is aarch64" in req["unsupported"] and "Mac" not in req["unsupported"]
+        with pytest.raises(wts.Refused, match="isn't available on this server"):
+            await wts.start(cpu_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_a_trainer_set_up_by_hand_on_arm_is_left_alone(box, monkeypatch):
+    box["state"].update(arch="aarch64", mac=True)
+    monkeypatch.setattr(settings, "wake_word_trainer_enabled", True)
+    monkeypatch.setattr(settings, "wake_word_train_command", "/opt/my-trainer {slug}")
+    with egress.override_policy("always"):
+        req = await wts.requirements(force=True)
+    assert req["unsupported"] is None

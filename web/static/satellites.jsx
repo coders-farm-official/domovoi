@@ -3708,7 +3708,7 @@ const SpareUsbStick = ({ res, body, fire }) => {
         An old 64-bit PC or laptop, or an Intel Mac from 2012 to 2017, becomes this room: the stick
         installs a fresh system on it (Debian) and the room software, with no terminal and no password. It
         <b> erases that computer’s disk</b>, and asks first, on the computer itself, naming the disk.
-        Like the other spare devices, the stick is a preview: so far it has been tried in virtual
+        The stick is a preview: so far it has been tried in virtual
         machines; real computers are next.
       </div>
       <ul className="spare-stick-needs" style={{ ...note, margin: 0, paddingLeft: 18 }}>
@@ -3858,7 +3858,6 @@ const SpareDeviceCard = ({ fire }) => {
                        display: 'flex', alignItems: 'center', gap: 10, color: 'var(--fg)' }}>
         <Icon name="laptop" size={16}/>
         <span style={{ fontSize: 14, fontWeight: 600 }}>add a spare device</span>
-        <PreviewTag/>
         <span style={{ flex: 1 }}/>
         <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
           a laptop or PC (Linux, Windows, or an old one from a USB stick), or a phone
@@ -3870,8 +3869,7 @@ const SpareDeviceCard = ({ fire }) => {
           <div style={{ fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
             Name the room the device will be. It joins like a Pi: it waits above for its
             approval code, and nothing in this command or code is a password. Spare computers
-            (old ones from a USB stick too) and phones as rooms are a preview: they work, but
-            have been tried on fewer devices than a Pi.
+            and phones work as rooms the same way. (The USB stick is a preview: see its column below.)
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
             <input value={room} onChange={e => setRoom(e.target.value)} maxLength={64}
@@ -4039,6 +4037,10 @@ const SatellitesPage = ({ embedded = false } = {}) => {
   // the Wi-Fi setup route instead of the USB port.
   const { data: caps } = useApiObject('/api/capabilities');
   const onWsl = caps?.host_kind === 'wsl';
+  // The Mac installer's VM: no USB adoption either; its menu-bar icon
+  // writes the card when the Mac side says it can.
+  const onMac = caps?.host_kind === 'mac';
+  const macHelper = onMac && caps?.mac_card_helper === true;
   const [adoptTarget, setAdoptTarget] = React.useState(null);   // {pending, force}
   const [adoptedIds, setAdoptedIds] = React.useState({});       // pending_id → room
 
@@ -4145,6 +4147,10 @@ const SatellitesPage = ({ embedded = false } = {}) => {
         <Card><Empty glyph="sleeping" title="no rooms set up yet"
                      sub={onWsl
                        ? "build the card's files below, write them with the tray icon's card helper, then set the room up from a phone — no USB adoption while Domovoi runs inside WSL on Windows"
+                       : macHelper
+                       ? "build the card's files below, write them with the menu-bar icon's Prepare an SD card..., then set the room up from a phone"
+                       : onMac
+                       ? "build the card's files below, copy them onto the card in Finder (the zip's README.txt has the steps), then set the room up from a phone"
                        : "plug a room device into this machine's USB port to adopt it — or set one up by hand"}/></Card>
       ) : labels.length === 0 ? (
         grid(sats)

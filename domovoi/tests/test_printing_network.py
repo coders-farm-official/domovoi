@@ -318,6 +318,48 @@ def test_an_allowlisted_loopback_or_own_address_is_still_refused(home, monkeypat
         lan_target.vet("http", host, port, "/eSCL", allow_any_port=True, operator_ok=True)
 
 
+@pytest.mark.parametrize("host", [
+    # CORE-45 (round 6): these passed with an exact OUTBOUND_ALLOW_HOSTS
+    # entry and an admin's typed URL; the first two are the server itself.
+    "fd00::20", "fe80::20", "::127.0.0.1", "64:ff9b::7f00:1", "64:ff9b::c0a8:114",
+    "2002:7f00:1::1", "2001:0:4136:e378:8000:63bf:80ff:fffe", "::", "::1", "fd12:3456::1",
+    # The IPv4 forms the audit tried, refused before and still.
+    "127.0.0.1", "2130706433", "0x7f000001", "0177.0.0.1", "::ffff:127.0.0.1", "0.0.0.0",
+    "localhost", "192.168.1.20", "::ffff:192.168.1.20", "127.0.0.2",
+])
+def test_an_allowlisted_ipv6_or_own_address_is_refused_for_an_admin(home, monkeypatch, host):
+    canon = net_safety._canonical_host
+    monkeypatch.setattr(net_safety, "allow_entries", lambda: ((canon(host), 631),))
+    monkeypatch.setattr(lan_target, "resolve_name", lambda h: ["127.0.0.1"] if h == "localhost" else [])
+    with pytest.raises(lan_target.NotOnLan):
+        lan_target.vet("ipp", host, 631, "/ipp/print", allow_any_port=True, operator_ok=True)
+
+
+def test_an_unlisted_interface_table_fails_closed(home, monkeypatch):
+    """CORE-45: when the interfaces can't be read the own-address list was
+    silently short. Now nothing is dialled, and the sweep doesn't run."""
+    import psutil
+
+    from domovoi.printing import discovery
+
+    monkeypatch.undo()   # the real own_addresses, not the fixture's
+    monkeypatch.setattr(lan_target, "server_lan_ipv4", lambda: "192.168.1.20")
+    monkeypatch.setattr(lan_target, "home_networks", lambda: [ipaddress.IPv4Network("192.168.1.0/24")])
+    monkeypatch.setattr(net_safety, "allow_entries", lambda: (("10.9.9.9", 8631),))
+
+    def broken():
+        raise PermissionError("no access to the interface table")
+
+    monkeypatch.setattr(psutil, "net_if_addrs", broken)
+    with pytest.raises(lan_target.OwnAddressesUnknown):
+        lan_target.own_addresses()
+    with pytest.raises(lan_target.NotOnLan, match="couldn't check this server's own addresses"):
+        lan_target.check_address("10.9.9.9", 8631, operator_ok=True)
+    with pytest.raises(lan_target.NotOnLan):
+        lan_target.check_address("192.168.1.50", 631)
+    assert discovery.sweep_hosts() == []
+
+
 def test_allowlisted_127_0_0_1_631_is_refused_with_a_plain_reason(home, monkeypatch):
     monkeypatch.setattr(net_safety, "allow_entries", lambda: (("127.0.0.1", 631),))
     with pytest.raises(lan_target.NotOnLan, match="not USB or local ones"):

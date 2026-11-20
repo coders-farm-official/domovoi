@@ -7,7 +7,7 @@ House B imported A's friend file; it now connects to A's **pairing onion**
 On the wire, after the ``DFP1`` preface, all of it inside Noise
 ``IKpsk2`` (A's session key from the file; psk = the file's invite secret)::
 
-    B -> A  message 1   invite id (16) + commitment to nB (32)
+    B -> A  message 1   invite id (16) + commitment to B's house key and nB (32)
     A -> B  message 2   nA (32)                       [psk proven by A]
     B -> A  transport   nB (32) + the request         [psk proven by B]
     A -> B  transport   0x01 "received"
@@ -18,12 +18,15 @@ has already authorized, so A can answer on B's main onion when it accepts)
 and the name B calls itself.
 
 **The 4-digit code** (owner decision 14): both sides compute
-``SHA-256("domovoi-fh-code-v1" ‖ A ‖ B ‖ nA ‖ nB) mod 10,000``. B commits
-to nB before it sees nA and A sends nA before it sees nB, so someone who
+``SHA-256("domovoi-fh-code-v2" ‖ h ‖ A ‖ B ‖ nA ‖ nB) mod 10,000``, where
+h is the Noise handshake hash. B commits to **its house key and nB**
+before it sees nA, and A sends nA before it sees nB, so someone who
 swapped the file and sits between the two houses can't steer either code:
-a swap survives a comparison with a 1-in-10,000 chance, once per
-single-use file (finding 13). A code taken from the keys alone could be
-matched by generating keys, so it never is.
+not by choosing a nonce, and not by generating house keys after seeing nA
+(audit R6 FH-1: the first version committed to nB alone, and the house key
+that arrives later could be ground to any code in under a second). A swap
+survives a comparison with a 1-in-10,000 chance, once per single-use file
+(finding 13).
 
 Nothing in a request is trusted until the handshake proved the file's
 secret, the statement's signature checks out, and the statement names the
@@ -46,8 +49,8 @@ from domovoi.friend_houses.noise import TAGLEN, Handshake, NoiseError, Transport
 
 PREFACE = b"DFP1"
 PROLOGUE = b"domovoi-fh-pairing-v1"
-CODE_CONTEXT = b"domovoi-fh-code-v1"
-COMMIT_CONTEXT = b"domovoi-fh-code-commit-v1"
+CODE_CONTEXT = b"domovoi-fh-code-v2"
+COMMIT_CONTEXT = b"domovoi-fh-code-commit-v2"
 TIMEOUT_SEC = 60.0
 
 _MSG1_PAYLOAD = 16 + 32
@@ -62,12 +65,16 @@ class PairingRefused(Exception):
     """The request didn't go through. Never says why to the other end."""
 
 
-def commitment(nonce: bytes) -> bytes:
-    return hashlib.sha256(COMMIT_CONTEXT + nonce).digest()
+def commitment(nonce: bytes, house_key: bytes) -> bytes:
+    """What the asking house commits to before it sees the inviter's
+    nonce: its nonce AND its identity, so neither can be chosen later."""
+    return hashlib.sha256(COMMIT_CONTEXT + house_key + nonce).digest()
 
 
-def code(inviter_house: bytes, asker_house: bytes, n_inviter: bytes, n_asker: bytes) -> str:
-    digest = hashlib.sha256(CODE_CONTEXT + inviter_house + asker_house + n_inviter + n_asker).digest()
+def code(handshake_hash: bytes, inviter_house: bytes, asker_house: bytes, n_inviter: bytes,
+         n_asker: bytes) -> str:
+    digest = hashlib.sha256(CODE_CONTEXT + handshake_hash + inviter_house + asker_house
+                            + n_inviter + n_asker).digest()
     return f"{int.from_bytes(digest, 'big') % 10_000:04d}"
 
 
@@ -107,7 +114,8 @@ async def ask(
                    remote_static=file.session_key, psk=file.invite_secret)
     n_asker = secrets.token_bytes(32)
     try:
-        writer.write(PREFACE + fs.frame(hs.write_message(file.invite_id + commitment(n_asker))))
+        writer.write(PREFACE + fs.frame(hs.write_message(
+            file.invite_id + commitment(n_asker, keys.house_key))))
         await writer.drain()
         msg2 = await fs.read_frame(reader, max_size=_MSG2_SIZE, timeout=TIMEOUT_SEC)
         n_inviter = hs.read_message(msg2)
@@ -124,7 +132,7 @@ async def ask(
     except (NoiseError, fs.SessionRefused, ConnectionError) as exc:
         writer.close()  # don't leave the other end waiting for a request
         raise PairingRefused("the other house didn't take the request") from exc
-    return code(file.house_key, keys.house_key, n_inviter, n_asker)
+    return code(transport.handshake_hash, file.house_key, keys.house_key, n_inviter, n_asker)
 
 
 async def answer(
@@ -166,11 +174,11 @@ async def answer(
         request[: _REQUEST_FIXED.size])
     if len(request) != _REQUEST_FIXED.size + name_len or name_len > ff.NAME_MAX_BYTES:
         raise PairingRefused("request has the wrong size")
-    if not secrets.compare_digest(commitment(n_asker), commit):
-        raise PairingRefused("commitment doesn't match")
     statement = fid.AddressStatement.parse(raw_statement)
     if statement is None or not secrets.compare_digest(statement.session_key, hs.remote_static or b""):
         raise PairingRefused("statement doesn't match the caller")
+    if not secrets.compare_digest(commitment(n_asker, statement.house_key), commit):
+        raise PairingRefused("commitment doesn't match")  # a house key chosen after nA
     if secrets.compare_digest(statement.house_key, keys.house_key):
         raise PairingRefused("a house can't befriend itself")
     try:
@@ -182,4 +190,5 @@ async def answer(
     except (NoiseError, ConnectionError) as exc:
         raise PairingRefused("stream ended") from exc
     return Request(invite_id, statement, reach_private, name,
-                   code(keys.house_key, statement.house_key, n_inviter, n_asker))
+                   code(transport.handshake_hash, keys.house_key, statement.house_key,
+                        n_inviter, n_asker))

@@ -105,6 +105,7 @@ ROUTES: dict[str, tuple[str, str, dict | None]] = {
     "requests": ("GET", "/api/friend-houses/requests", None),
     "accept": ("POST", "/api/friend-houses/requests/rq0123abcd/accept", {"name": "Smiths"}),
     "decline": ("POST", "/api/friend-houses/requests/rq0123abcd/decline", None),
+    "withdraw": ("DELETE", "/api/friend-houses/requests/rq0123abcd", None),
     "friends": ("GET", "/api/friend-houses/friends", None),
     "verified": ("POST", "/api/friend-houses/friends/fr0123abcd/verified", None),
     "rename": ("PATCH", "/api/friend-houses/friends/fr0123abcd", {"name": "Smiths"}),
@@ -123,22 +124,43 @@ ROUTES: dict[str, tuple[str, str, dict | None]] = {
     "accept-list": ("POST", f"/api/friend-houses/shared-lists/{SPACE}/accept", {"name": "Groceries (Smiths)"}),
     "decline-list": ("POST", f"/api/friend-houses/shared-lists/{SPACE}/decline", None),
     "stop-sharing": ("DELETE", f"/api/friend-houses/shared-lists/{SPACE}", None),
+    # Blocking (admin only)
+    "block": ("POST", "/api/friend-houses/friends/fr0123abcd/block",
+              {"keep_messages": False, "new_address": True}),
+    "blocked": ("GET", "/api/friend-houses/blocked", None),
+    "unblock": ("DELETE", f"/api/friend-houses/blocked/{HOUSE}", None),
 }
 _IDS = sorted(ROUTES)
 
 
-def test_every_route_wears_the_security_tier() -> None:
-    seen = 0
+# Owner decision 17: what every household phone may do with existing
+# friends wears the device tier; everything else the security tier.
+HOUSEHOLD_ROUTES = {
+    ("GET", "/api/friend-houses"), ("GET", "/api/friend-houses/friends"),
+    ("GET", "/api/friend-houses/conversations"), ("GET", "/api/friend-houses/conversations/{house}"),
+    ("POST", "/api/friend-houses/conversations/{house}/read"), ("POST", "/api/friend-houses/messages"),
+    ("GET", "/api/friend-houses/shared-lists"),
+}
+
+
+def test_every_route_wears_its_tier() -> None:
+    seen, household = 0, set()
     for r in iter_route_contexts(web_app.routes):
         if not getattr(r, "path", "").startswith("/api/friend-houses"):
             continue
         seen += 1
         deps = {d.call for d in r.dependant.dependencies}
-        if r.methods & {"POST", "PUT", "PATCH", "DELETE"}:
+        method = next(iter(r.methods))
+        if (method, r.path) in HOUSEHOLD_ROUTES:
+            household.add((method, r.path))
+            assert admin_auth.require_device in deps, r.path
+            assert admin_auth.require_admin_security not in deps, r.path
+        elif r.methods & {"POST", "PUT", "PATCH", "DELETE"}:
             assert admin_auth.require_admin_security in deps, r.path
         else:
             assert admin_auth.require_admin_security_read in deps, r.path
     assert seen == len(ROUTES)
+    assert household == HOUSEHOLD_ROUTES
 
 
 @pytest.fixture
@@ -150,7 +172,11 @@ def forwarded(monkeypatch):
 
     def fake(method):
         async def call(path, body=None, timeout=10.0, headers=None):
-            assert headers and headers.get("Authorization") == f"Bearer {ADMIN_TOKEN}"
+            # The caller's own credential goes on: the admin Bearer, or a
+            # household phone's token on the household routes.
+            assert headers and (headers.get("Authorization") == f"Bearer {ADMIN_TOKEN}"
+                                or headers.get(admin_auth.DEVICE_TOKEN_HEADER) == HOUSEHOLD_TOKEN
+                                or headers.get("Authorization") is None)
             calls.append((method, path, body))
             return 200, {"ok": True}
         return call
@@ -198,8 +224,67 @@ async def test_before_setup_everything_is_501(name, monkeypatch, forwarded) -> N
     install_fake_db(monkeypatch, admin=False)
     async with _client() as c:
         r = await _send(c, name)
+    if _is_household(name):
+        # The device tier keeps its pre-setup LAN grace; harmless here,
+        # since Friend Houses can't be turned on before an admin exists.
+        assert r.status_code != 501, r.text
+        return
     assert r.status_code == 501, r.text
     assert forwarded == []
+
+
+def _is_household(name: str) -> bool:
+    method, path, _ = ROUTES[name]
+    pattern = path.replace(HOUSE, "{house}")
+    return (method, pattern) in HOUSEHOLD_ROUTES
+
+
+HOUSEHOLD_TOKEN = "household-token-for-tests"
+
+
+@pytest.mark.parametrize("name", _IDS)
+@pytest.mark.asyncio
+async def test_the_household_token_reaches_only_the_household_routes(name, monkeypatch, forwarded) -> None:
+    # Owner decision 17: a household phone reads the inbox, sends, sees the
+    # friends and shared lists; trust and settings stay with the admin.
+    install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN}, device_token=HOUSEHOLD_TOKEN)
+    async with _client({admin_auth.DEVICE_TOKEN_HEADER: HOUSEHOLD_TOKEN}) as c:
+        r = await _send(c, name)
+    if _is_household(name):
+        assert r.status_code == 200, r.text
+        assert len(forwarded) == 1
+    else:
+        assert r.status_code in (401, 403), (name, r.status_code)
+        assert forwarded == []
+
+
+@pytest.mark.asyncio
+async def test_the_open_conversations_own_mark_read_is_no_admin_activity(monkeypatch, forwarded) -> None:
+    # Audit R6 WEB-24: the open conversation marks itself read from its
+    # 10-second poll when a friend's message arrives. With the admin
+    # Bearer on an admin write gate, each one restarted the idle hour, so
+    # a chatty friend house could keep an admin signed in for 90 days. The
+    # route is on the device tier, whose admin fallback is read-only.
+    state = install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN})
+    async with _client(bearer(ADMIN_TOKEN)) as c:
+        r = await _send(c, "mark-read")
+        assert r.status_code == 200, r.text
+        assert state.acted == []
+        r = await _send(c, "rename")  # a person's admin action still counts
+        assert r.status_code == 200 and state.acted == [ADMIN_TOKEN]
+
+
+def test_the_page_sends_no_admin_write_by_itself() -> None:
+    # The page's own timers may only reach GETs or household routes: the
+    # one write it sends unasked is mark-read, which is on the device tier.
+    src = (STATIC / "friend_houses.jsx").read_text(encoding="utf-8")
+    body = src[src.index("const markRead"):]
+    body = body[:body.index("};") + 2]
+    assert "apiPost(`${FH_API}/conversations/${house}/read`" in body
+    assert ("POST", "/api/friend-houses/conversations/{house}/read") in HOUSEHOLD_ROUTES
+    for line in src.splitlines():
+        if "useFhEvery(" in line and "=>" in line:
+            assert not any(w in line for w in ("apiPost", "apiPut", "apiPatch", "apiDel")), line
 
 
 @pytest.mark.parametrize("name", _IDS)
@@ -210,12 +295,13 @@ async def test_an_admin_bearer_reaches_the_cores_route(name, monkeypatch, forwar
     async with _client(bearer(ADMIN_TOKEN)) as c:
         r = await _send(c, name)
     assert r.status_code == 200, r.text
+    assert r.headers.get("cache-control") == "no-store"  # R6 FE-11: friend files, messages
     assert len(forwarded) == 1
     f_method, f_path, f_body = forwarded[0]
     assert f_method == method
     assert f_path.split("?")[0] == path.replace("/api/friend-houses", "/v1/admin/friend-houses")
     if method in ("PUT", "PATCH") or name in ("make", "preview", "ask", "accept", "send",
-                                                   "share-list", "accept-list"):
+                                                   "share-list", "accept-list", "block"):
         assert f_body == body
 
 
@@ -403,3 +489,65 @@ async def test_sharing_a_list_checks_the_list_and_the_friend(monkeypatch, forwar
         assert r.status_code == 400 and "Groceries" not in r.text
         assert (await c.post(f"/api/friend-houses/shared-lists/{SPACE}/accept", json={})).status_code == 200
     assert forwarded == [("POST", f"/v1/admin/friend-houses/shared-lists/{SPACE}/accept", {})]
+
+
+# ─── presence and blocking ───────────────────────────────────────────────
+
+
+def test_presence_says_only_whether_the_house_is_online() -> None:
+    src = _code(_page())
+    presence = re.search(r"const FhPresence = .*?\n\};", src, re.S).group(0)
+    assert "<Pill tone=\"ok\">Online</Pill>" in presence
+    assert "`Last seen ${ago}`" in presence and "'Not reached yet'" in presence
+    assert "<FhPresence friend={friend}/>" in src
+
+
+def test_the_page_says_what_blocking_does() -> None:
+    src = _page()
+    for words in ("Block ${name}? They’re removed and can’t ask to be friends again unless you unblock them.",
+                  "Keep our messages with them", "Save a copy first",
+                  "Move this house to a new private address (recommended): the blocked house can’t even reach the door.",
+                  "Your other friends are told the new address automatically; messages may take a few minutes to get",
+                  "Blocked houses",
+                  "Unblock ${name}? They aren’t friends again; they can ask with a new friend file.",
+                  "You blocked this house. Unblock it first if you want to be friends again.",
+                  "They won’t be able to reach this house any more. (Block also stops them asking again.)"):
+        assert words in src, words
+    code = _code(src)
+    # Both choices default to ticked; the block is sent as a body, by id.
+    assert "const [keep, setKeep] = React.useState(true);" in code
+    assert "const [move, setMove] = React.useState(true);" in code
+    assert ("apiPost(`${FH_API}/friends/${encodeURIComponent(friend.id)}/block`,\n"
+            "                              { keep_messages: keep, new_address: move })") in code
+    # A blocked preview hides Send request, like the other refusals.
+    assert "preview.already_asked || preview.blocked);" in code
+    # The blocked list: plain text, hidden when empty, addressed by house key.
+    card = re.search(r"const FhBlockedCard = .*?\n\};", code, re.S).group(0)
+    assert "if (!list.length) return null;" in card
+    assert "apiDelete(`${FH_API}/blocked/${house.house}`)" in code
+    for banned in ("dangerouslySetInnerHTML", "innerHTML"):
+        assert banned not in code
+
+
+@pytest.mark.asyncio
+async def test_blocking_checks_the_friend_and_the_body(monkeypatch, forwarded) -> None:
+    install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN})
+    async with _client(bearer(ADMIN_TOKEN)) as c:
+        assert (await c.post("/api/friend-houses/friends/bad.id/block", json={})).status_code == 404
+        for body in ({"keep_messages": "no"}, {"new_address": 0}, {"keep_messages": None}, [True]):
+            r = await c.post("/api/friend-houses/friends/fr0123abcd/block", json=body)
+            assert r.status_code == 400, (body, r.text)
+        # Leaving both out keeps the defaults: keep the messages, move.
+        assert (await c.post("/api/friend-houses/friends/fr0123abcd/block", json={})).status_code == 200
+    assert forwarded == [("POST", "/v1/admin/friend-houses/friends/fr0123abcd/block",
+                          {"keep_messages": True, "new_address": True})]
+
+
+@pytest.mark.asyncio
+async def test_an_unblock_needs_a_house_key(monkeypatch, forwarded) -> None:
+    install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN})
+    async with _client(bearer(ADMIN_TOKEN)) as c:
+        for bad in ("ab" * 31, "AB" * 32, "zz" * 32, "ab" * 33, "fr0123abcd"):
+            r = await c.delete(f"/api/friend-houses/blocked/{bad}")
+            assert r.status_code == 404, (bad, r.status_code)
+    assert forwarded == []

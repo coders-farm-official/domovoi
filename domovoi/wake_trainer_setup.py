@@ -48,6 +48,7 @@ import asyncio
 import json
 import logging
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -338,6 +339,44 @@ def on_wsl() -> bool:
         return False
 
 
+#: Processors the trainer image builds for: its base (the PyTorch CUDA
+#: runtime, scripts/wake_word/docker/Dockerfile) has no ARM variant.
+TRAINER_ARCHES = ("x86_64", "amd64")
+
+
+def machine_arch() -> str:
+    return (platform.machine() or "").strip().lower()
+
+
+def unsupported_reason() -> str | None:
+    """Why this server can't train at all, whatever it has free, or None.
+
+    Only the processor today: the setup job builds the Dockerfile as it
+    is, and its base image exists for x86-64 only, so on an ARM server (the
+    Mac installer's VM on Apple silicon, a Pi 5, an ARM mini PC) the build
+    could never succeed. The page then shows this sentence alone, with no
+    "what it needs" list and no Train buttons (owner rule: no misleading
+    controls). A trainer someone configured by hand (``enabled()``) is left
+    alone: it runs whatever its command runs."""
+    arch = machine_arch()
+    if not arch or arch in TRAINER_ARCHES or enabled():
+        return None
+    try:
+        from domovoi.host_kind import is_mac_vm
+
+        mac = is_mac_vm()
+    except Exception:  # noqa: BLE001
+        mac = False
+    if mac:
+        return ("Training wake words isn't available on a Mac yet: the trainer only runs "
+                "on an Intel or AMD (x86-64) processor, and Domovoi's Linux system on this "
+                "Mac runs on Apple silicon. The wake word the room devices come with keeps "
+                "working.")
+    return (f"Training wake words isn't available on this server: the trainer only runs "
+            f"on an Intel or AMD (x86-64) processor, and this one is {arch}. The wake word "
+            "the room devices come with keeps working.")
+
+
 def _host_limits_report() -> dict | None:
     """DomovoiHost's report of this PC (domovoi/host_limits.py), or None
     (a Linux box, or a DomovoiHost from before it). Never raises."""
@@ -483,6 +522,7 @@ async def requirements(force: bool = False) -> dict[str, Any]:
     need_gb = (0.0 if image_current else IMAGE_GB) + (0.0 if data_ready else DATA_GB) + PER_WORD_GB
     refusals: list[str] = []
     notes: list[str] = []
+    unsupported = unsupported_reason()
 
     if egress.internet_turned_off():
         refusals.append(
@@ -559,6 +599,10 @@ async def requirements(force: bool = False) -> dict[str, Any]:
     if gpus and probe is False:
         notes.append("The last check found Docker can't reach the GPU, so training runs "
                      "on the CPU.")
+    if unsupported:
+        # The one reason that matters: the memory, disk and GPU lines are
+        # about a trainer that can't be built here.
+        refusals, notes = [unsupported], []
     cpu_min = cpu_estimate_min(ncpu, physical)
     estimate = (
         {"device": "gpu", "minutes_per_word": GPU_MIN_PER_WORD, "first_minutes": GPU_FIRST_MIN,
@@ -582,6 +626,10 @@ async def requirements(force: bool = False) -> dict[str, Any]:
                    "need_gb": 24,
                    "pc_need_gb": 32 if wsl else None},
         "wsl": wsl,
+        # The processor, and why training can't happen on it at all (None
+        # where it can: every x86-64 server).
+        "arch": machine_arch(),
+        "unsupported": unsupported,
         "download_gb": DOWNLOAD_GB,
         "image": {"name": image, "present": present, "current": image_current},
         "data_ready": data_ready,
@@ -990,7 +1038,7 @@ _PENDING: set = set()
 
 # ── turn off and free the space ──────────────────────────────────────────
 
-_SIZE_RE = re.compile(r"^\s*([0-9.]+)\s*([kKMGT]?B)\s*$")
+_SIZE_RE = re.compile(r"^\s*([0-9.]+)\s*([kKMGT]?B)\s*\Z")
 
 
 def _parse_size(text: str) -> int | None:

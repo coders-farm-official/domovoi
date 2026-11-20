@@ -40,7 +40,7 @@
 AppId={{6948152C-CFA6-47C5-BDC3-A3E1608DABC1}
 AppName=Domovoi Satellite
 AppVersion={#AppVersion}
-AppVerName=Domovoi Satellite Setup {#AppVersion} (preview)
+AppVerName=Domovoi Satellite Setup {#AppVersion}
 AppPublisher=Coders Farm
 AppPublisherURL=https://github.com/coders-farm-official/domovoi
 AppSupportURL=https://github.com/coders-farm-official/domovoi/blob/main/docs/SPARE_DEVICE_SATELLITES.md
@@ -66,7 +66,7 @@ RestartIfNeededByRun=no
 VersionInfoVersion=1.3.0.0
 VersionInfoProductTextVersion={#AppVersion}
 VersionInfoCompany=Coders Farm
-VersionInfoDescription=Domovoi Satellite Setup (preview)
+VersionInfoDescription=Domovoi Satellite Setup
 VersionInfoProductName=Domovoi
 SetupIconFile=art\domovoi.ico
 WizardImageFile=art\wizard-202x386.png,art\wizard-269x515.png,art\wizard-336x643.png,art\wizard-403x772.png,art\wizard-430x824.png,art\wizard-498x953.png,art\wizard-534x1022.png

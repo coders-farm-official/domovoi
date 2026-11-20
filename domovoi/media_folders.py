@@ -115,10 +115,10 @@ OPEN_TTL_SEC = 60
 #: the folders and their files go under it.
 MAX_ROOT = 200
 
-_ID_RE = re.compile(r"^[0-9a-f]{32}$")
-_AT_RE = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+_ID_RE = re.compile(r"^[0-9a-f]{32}\Z")
+_AT_RE = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\Z")
 _DRIVE_RE = re.compile(r"^[A-Za-z]:\\")
-_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}\Z")
 #: A name that may be an 8.3 short name (PROGRA~1). Asked only of a NEW
 #: move request ("type the full name"): a folder really named Music~2024
 #: is a folder like any other, so reports and fstab never use it, and

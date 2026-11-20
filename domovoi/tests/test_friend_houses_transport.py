@@ -41,7 +41,7 @@ def test_no_friends_means_no_main_onion_in_the_config() -> None:
     assert "hs-main" not in only_invites and "hs-pairing" in only_invites
     both = tc.render_torrc(tc.wanted(enabled=True, internet_policy="always",
                                      friends=2, open_invites=1))
-    assert "hs-main" in both and "unix:/run/fh/main.sock" in both
+    assert "hs-main" in both and "unix:/run/fh/listen/main.sock" in both
     for text in (only_invites, both):
         assert "SocksPort unix:/run/fh/socks" in text
         assert "ControlPort" not in text  # no control port, ever

@@ -1694,10 +1694,14 @@ def _markdown_to_docx(text_: str) -> bytes:
     paragraphs with bold/italic/code inline."""
     from docx import Document
 
+    from domovoi.richdoc.word import xml_safe
+
     doc = Document()
     in_code = False
     code_lines: list[str] = []
-    for line in text_.splitlines():
+    # A character XML doesn't allow (a control character) would stop the
+    # whole conversion: it is left out (DOC-14).
+    for line in xml_safe(text_).splitlines():
         stripped = line.strip()
         if stripped.startswith("```"):
             if in_code:
@@ -1756,11 +1760,26 @@ async def export_doc(rel_path: str, fmt: Literal["docx"] = Query("docx")) -> Res
         media_type=(
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         ),
-        headers={
-            "Content-Disposition": f'attachment; filename="{target.stem}.docx"',
-            "Content-Length": str(len(data)),
-        },
+        headers={**_download_headers(target.stem, ".docx"), "Content-Length": str(len(data))},
     )
+
+
+def _download_headers(stem: str, ext: str) -> dict[str, str]:
+    """``Content-Disposition`` for a file named after a document: an ASCII
+    fallback with no quote or control character in it, and the real name
+    (any alphabet) in ``filename*`` (security audit round 6, DOC-14: a
+    Cyrillic name was a 500, a quote in a name added a parameter)."""
+    from urllib.parse import quote
+
+    from web.backend.api.audio_serve import safe_download_name
+
+    name = safe_download_name(stem, fallback="Document") + ext
+    fallback = _ASCII_NAME_UNSAFE.sub("_", name)
+    return {"Content-Disposition": f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(name, safe='')}"}
+
+
+#: What the ASCII fallback name may hold; anything else becomes "_".
+_ASCII_NAME_UNSAFE = re.compile(r"[^A-Za-z0-9 ._()-]")
 
 
 @router.get("/export/sheet/{rel_path:path}", dependencies=DAILY)
@@ -1807,10 +1826,8 @@ async def export_sheet(
     return Response(
         content=data,
         media_type=media,
-        headers={
-            "Content-Disposition": f'attachment; filename="{name}"',
-            "Content-Length": str(len(data)),
-        },
+        headers={**_download_headers(target.stem, "." + name.rsplit(".", 1)[-1]),
+                 "Content-Length": str(len(data))},
     )
 
 

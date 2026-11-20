@@ -431,9 +431,41 @@ class RoomDisplayModelTest {
         for (bad in listOf("http://elsewhere/x.jpg", "//elsewhere/x.jpg", "/v1/../etc/passwd", "/api/music/library/1/cover", "/v1/a b", "/v1/a\\b")) {
             assertFalse(bad, RoomDisplayFeed.isArtPath(bad))
         }
-        assertTrue(RoomDisplayFeed.isArtPath("/v1/music/cover/12?v=3"))
+        // Only the cover route, exactly as the core writes it (audit r6 AND-16).
+        assertTrue(RoomDisplayFeed.isArtPath("/v1/music/cover/1"))
+        assertTrue(RoomDisplayFeed.isArtPath("/v1/music/cover/4294967295"))
+        for (bad in listOf(
+            "/v1/x", "/v1/%2e%2e/admin", "/v1/music/cover/%31", "/v1/music/cover/1/../x", "/v1/music/cover/abc",
+            "/v1/music/cover/", "/v1/music/cover/12?v=3", "/v1/music/cover/12#x", "/v1/music/cover/12/",
+            "/v1/music/cover/12345678901", "/v1/music/cover/-1", "/v1/music/cover/1\n", "/v1/music/cover/١",
+            "/V1/music/cover/1", " /v1/music/cover/1",
+        )) {
+            assertFalse(bad, RoomDisplayFeed.isArtPath(bad))
+        }
         val f = (RoomProtocol.parse("""{"type":"room_display","now_playing":{"state":"play","title":"x","art":"http://elsewhere/a.jpg"}}""") as RoomProtocol.ServerFrame.Display).feed
         assertNull(f.nowPlaying!!.art)
+    }
+
+    /** A cover's size is read before it is decoded (audit r6 AND-16): a
+     *  strip or a giant is refused, the rest sampled by the longer side. */
+    @Test fun aCoverIsDecodedSmallOrNotAtAll() {
+        assertNull("a 400x66000 strip", RoomDisplayFeed.artSampleSize(400, 66_000))
+        assertNull("nor on its side", RoomDisplayFeed.artSampleSize(66_000, 400))
+        assertNull("a side over 4096", RoomDisplayFeed.artSampleSize(4097, 4097))
+        assertNull("past 8:1", RoomDisplayFeed.artSampleSize(100, 801))
+        assertNull("no size (not an image)", RoomDisplayFeed.artSampleSize(-1, -1))
+        assertNull(RoomDisplayFeed.artSampleSize(0, 500))
+        assertEquals(4, RoomDisplayFeed.artSampleSize(3000, 3000))
+        assertEquals(1, RoomDisplayFeed.artSampleSize(500, 500))
+        assertEquals(1, RoomDisplayFeed.artSampleSize(1024, 128))
+        assertEquals(4, RoomDisplayFeed.artSampleSize(4096, 4096))
+        assertEquals("sampled by the LONGER side", 4, RoomDisplayFeed.artSampleSize(4000, 500))
+        // Every accepted size decodes to at most 1024 px on its long side.
+        for (w in listOf(1, 7, 300, 1023, 1025, 2048, 2049, 3000, 4096)) for (h in listOf(1, 7, 300, 1025, 3000, 4096)) {
+            val s = RoomDisplayFeed.artSampleSize(w, h) ?: continue
+            assertTrue("$w x $h / $s", maxOf(w, h) / s <= RoomDisplayFeed.ART_LONG_SIDE)
+            assertTrue("$w x $h", maxOf(w, h) <= minOf(w, h) * 8)
+        }
     }
 
     @Test fun controlFramesNameTheActionNotTheRoom() {

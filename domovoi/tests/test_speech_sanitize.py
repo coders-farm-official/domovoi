@@ -112,7 +112,11 @@ def test_all_emoji_collapses_to_empty() -> None:
 
 
 def test_whitespace_collapsed() -> None:
-    assert sanitize_for_speech("a\n\n\nb    c") == "a b c"
+    assert sanitize_for_speech("a\nb    c") == "a b c"
+    # A blank line is a paragraph break: kept, as one, for the voice's
+    # longer pause between paragraphs (tts.PARAGRAPH_SILENCE_SEC).
+    assert sanitize_for_speech("a\n\n\nb    c") == "a\n\nb c"
+    assert sanitize_for_speech("  \n\n a \n \n ") == "a"
 
 
 def test_idempotent() -> None:

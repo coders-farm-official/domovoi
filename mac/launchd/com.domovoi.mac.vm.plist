@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The VM (mac-installer PLAN 4.4): Lima's host agent for the instance, in
+  the foreground, as a LaunchDaemon run by the role account. Modelled on what
+  `limactl autostart` writes, but the label, environment and logs are ours.
+  Spike S1 (2026-10-30) ran this shape before anyone logged in.
+  A template: see com.domovoi.mac.ollama.plist for the rules.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>{{LABEL}}</string>
+{{#ROLE}}
+  <key>UserName</key><string>{{ROLE_USER}}</string>
+  <key>GroupName</key><string>{{ROLE_GROUP}}</string>
+{{/ROLE}}
+  <key>ProgramArguments</key>
+  <array>
+    <string>{{LIMACTL}}</string>
+    <string>start</string>
+    <string>--foreground</string>
+    <string>--tty=false</string>
+    <string>{{INSTANCE}}</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>LIMA_HOME</key><string>{{LIMA_HOME}}</string>
+    <key>HOME</key><string>{{JOB_HOME}}</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ProcessType</key><string>Interactive</string>
+  <!-- On bootout the host agent shuts the guest down first: give it time
+       before launchd's SIGKILL (the default is 20 s). -->
+  <key>ExitTimeOut</key><integer>90</integer>
+  <key>StandardOutPath</key><string>{{LOG_FILE}}</string>
+  <key>StandardErrorPath</key><string>{{LOG_FILE}}</string>
+</dict>
+</plist>

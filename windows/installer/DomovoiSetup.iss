@@ -1,11 +1,14 @@
-; DomovoiSetup.exe: the Windows installer, a preview (owner decision 2, 2026-10-16).
+; DomovoiSetup.exe: the Windows installer (not code-signed yet).
 ;
 ; Setup is only the user interface. Every change to the PC is made by
 ; DomovoiSetupHelper.exe, run elevated from C:\Program Files\Domovoi
 ; (admin-owned) after Setup copies it there; everything that runs as the
 ; hidden account is done by DomovoiHost.exe, the service. Setup itself
 ; only runs Windows' own dism.exe and msiexec.exe (System32) when WSL's
-; prerequisites are missing, before the install.
+; prerequisites are missing, before the install, taskkill.exe for the tray
+; icons, and, before a restart, copies itself into
+; C:\Program Files\Domovoi\resume and runs icacls.exe on that folder
+; (CreateRunOnceEntry).
 ;
 ; Flow (PLAN 4.1-4.12): preflight (ports by owner, Retry/Cancel), the AI
 ; question (AI chat and questions: Yes on a first install, the household's
@@ -76,7 +79,7 @@
 AppId={{8F3C2A61-5D4B-4E7A-9C1F-2B6D0E4A7C35}
 AppName=Domovoi
 AppVersion={#AppVersion}
-AppVerName=Domovoi {#AppVersion} (preview, {#Copy(DomovoiCommit, 1, 7)})
+AppVerName=Domovoi {#AppVersion} ({#Copy(DomovoiCommit, 1, 7)})
 AppPublisher=Coders Farm
 AppPublisherURL={#DomovoiRepoUrl}
 AppSupportURL={#DomovoiRepoUrl}/blob/main/docs/WINDOWS_HOST.md
@@ -97,6 +100,11 @@ CloseApplications=no
 ; press of the Windows update, from another account's tray, or by hand)
 ; refuses while the first runs.
 SetupMutex=Global\DomovoiSetup
+; Setup's own log, in the temporary folder of the account that ran it
+; ("Setup Log <date> #<n>.txt"; /LOG= names another place): the plain
+; messages for an error Setup can't get past name it ({log}). Nothing
+; secret goes in it (the setup code is never logged).
+SetupLogging=yes
 RestartIfNeededByRun=no
 UsePreviousAppDir=no
 Uninstallable=yes
@@ -104,7 +112,7 @@ UninstallDisplayName=Domovoi
 VersionInfoVersion=1.3.0.0
 VersionInfoProductTextVersion={#AppVersion}
 VersionInfoCompany=Coders Farm
-VersionInfoDescription=Domovoi Setup (preview)
+VersionInfoDescription=Domovoi Setup
 VersionInfoProductName=Domovoi
 ; Domovoi's own mark, made by art\make_art.py from docs/assets/domovoi-icon.png:
 ; Setup's and the uninstaller's icon, the Installed apps entry, and the
@@ -568,7 +576,7 @@ begin
         Exit;
       end;
       if MsgBox('Setup could not check this PC (' + KvValue(Preflight, 'error') + ').' + #13#10#13#10 +
-        'If Windows blocked DomovoiSetupHelper.exe, Smart App Control or an antivirus program is stopping unsigned programs: this preview is unsigned (see docs/WINDOWS_HOST.md, "Unsigned").',
+        'If Windows blocked DomovoiSetupHelper.exe, Smart App Control or an antivirus program is stopping unsigned programs: this installer is not code-signed yet (see docs/WINDOWS_HOST.md, "Unsigned").',
         mbError, MB_RETRYCANCEL) = IDRETRY then
         Continue;
       Exit;
@@ -722,7 +730,7 @@ begin
   else
     S := S + 'Downloads: about 10.5-13.5 GB (the AI models are most of it; the size depends on the models this PC''s memory gets). Ubuntu (418 MB) now; then, inside the distro, Domovoi''s code at commit {#Copy(DomovoiCommit, 1, 7)} (later updates follow the {#DomovoiChannel} channel{#ChannelWords}; you choose when, in Settings > About & updates), Docker Engine, Python packages and the AI models (one of them reads pictures in chat), each checked against a pinned hash.' + #13#10#13#10;
   S := S + 'Not changed: power and sleep settings (the icon''s "Keep this PC awake" only holds Windows awake while someone is signed in), Windows Update, Smart App Control, your user accounts and files.' + #13#10#13#10;
-  S := S + 'This preview is not code-signed: Windows SmartScreen may have warned before Setup started, and Windows may ask again about its programs.' + #13#10#13#10;
+  S := S + 'This installer is not code-signed yet: Windows SmartScreen may have warned before Setup started, and Windows may ask again about its programs.' + #13#10#13#10;
   S := S + 'Uninstalling never deletes files in your media folders: a media folder is removed only if it is empty.' + #13#10#13#10;
   S := S + 'You can undo all of this later from Settings > Apps > Installed apps > Domovoi.';
   Result := S;
@@ -1374,21 +1382,241 @@ end;
 { The entry runs Setup elevated after the restart, so it must not run it
   from wherever it was downloaded (a folder the user's own programs can
   write): it runs a copy in C:\Program Files\Domovoi\resume, which only
-  administrators can change. The uninstaller removes that copy. }
-procedure CreateRunOnceEntry;
+  administrators can change. The uninstaller removes that folder.
+
+  Setup makes the copy itself, before [Files] (PrepareToInstall), so
+  the app folder may not exist yet: the helper there isn't installed, and the one
+  in Setup's temporary folder only reads. It calls Windows directly, so a
+  refusal has Windows' own error code, in the log and in the message:
+  the bare "Runtime error ... could not copy itself" before 1.4.0 had
+  none and ended Setup. What usually refuses it: an antivirus (an
+  unsigned program copying itself into Program Files and setting itself
+  to run at the next sign-in looks like malware to some), or a copy from
+  an earlier attempt still open (that Setup still running, or being
+  scanned). A copy already there that is this Setup, byte for byte, is
+  used as it is; a locked one is tried again for a few seconds, then
+  passed by for DomovoiSetup-2.exe .. -5.exe in the same folder. The
+  entry only ever names a copy in that folder. }
+
+function CopyFileW(lpExistingFileName, lpNewFileName: String; bFailIfExists: Integer): Integer; external 'CopyFileW@kernel32.dll stdcall';
+{ lpSecurityAttributes is a pointer, always nil here (Setup's engine is 32-bit). }
+function CreateDirectoryW(lpPathName: String; lpSecurityAttributes: Integer): Integer; external 'CreateDirectoryW@kernel32.dll stdcall';
+
+{ Windows' words for an error code, with the number. }
+function WinError(Code: Integer): String;
+begin
+  Result := Trim(SysErrorMessage(Code));
+  if (Result <> '') and (Result[Length(Result)] = '.') then
+    Result := Copy(Result, 1, Length(Result) - 1);
+  Result := Result + ' (Windows error ' + IntToStr(Code) + ')';
+end;
+
+{ Someone else has the file open: sharing or lock violation, a running
+  program's image, or (on a file that is there) access denied. }
+function IsLockError(Code: Integer): Boolean;
+begin
+  Result := (Code = 5) or (Code = 32) or (Code = 33) or (Code = 1224);
+end;
+
+{ What to do, in words for the household, by what refused it. }
+function ResumeAdvice(Code: Integer; Locked: Boolean): String;
+begin
+  if (Code = 39) or (Code = 112) then
+    Result := 'Drive C: is full. Free some space on it, then try again.'
+  else if Locked and IsLockError(Code) then
+    Result := 'A copy from an earlier attempt is still in use. Close any other Domovoi Setup window (Task Manager lists it as Domovoi Setup), then try again. If none is open, your antivirus may be checking that copy: wait a minute and try again, or restart Windows and run Setup again.'
+  else
+    Result := 'Your antivirus may have blocked it: Setup isn''t code-signed yet, and it copies itself into Program Files to start again after the restart. Check your antivirus''s quarantine (in Windows Security: Virus & threat protection > Protection history), allow or restore DomovoiSetup.exe, then try again. Also close any other Domovoi Setup window.';
+end;
+
+{ A folder for the copy: made if missing (False, with Windows' error code,
+  when it can't be), never a link. }
+function MakeResumeDir(const Dir: String; var Code: Integer): Boolean;
+begin
+  Code := 0;
+  if not DirExists(Dir) then
+    if CreateDirectoryW(Dir, 0) = 0 then
+    begin
+      Code := DLLGetLastError;
+      Log('Resume copy: could not make ' + Dir + ': ' + WinError(Code));
+      { 183: made meanwhile; anything else is the answer. }
+      if not DirExists(Dir) then
+      begin
+        Result := False;
+        Exit;
+      end;
+    end;
+  Result := IsPlainDir(Dir);
+  if not Result then
+  begin
+    Code := 0;
+    Log('Resume copy: ' + Dir + ' is a link (junction or symbolic link), not a folder; Setup won''t use it');
+  end;
+end;
+
+{ The folder's rules set, not inherited: SYSTEM and Administrators full,
+  everyone else read and run (what C:\Program Files gives; the entry may
+  start before the sign-in's token is elevated). Best effort: without it
+  the folder keeps what it inherits from Program Files, admin-only too. }
+procedure LockDownResumeDir(const Dir: String);
+var
+  Code: Integer;
+begin
+  if Exec(ExpandConstant('{sys}\icacls.exe'), AddQuotes(Dir) + ' /inheritance:r /grant:r *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F *S-1-5-32-545:(OI)(CI)RX', '',
+    SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0) then
+    Log('Resume copy: ' + Dir + ': SYSTEM and Administrators full, Users read')
+  else
+    Log('Resume copy: icacls on ' + Dir + ' did not finish (' + IntToStr(Code) + '); it keeps the rules it inherits from Program Files');
+end;
+
+{ The copy at Path is this Setup, byte for byte: same size, same SHA-256. }
+function SameCopy(const Path, Src, SrcSha: String): Boolean;
+var
+  A, B: Int64;
+begin
+  Result := False;
+  try
+    if FileSize64(Path, A) and FileSize64(Src, B) and (A = B) then
+      Result := SameText(GetSHA256OfFile(Path), SrcSha);
+  except
+    Log('Resume copy: could not read ' + Path + ': ' + GetExceptionMessage);
+  end;
+end;
+
+{ True: ResumeExe is a copy of this Setup in the resume folder. False: Problem
+  says what happened and what to do, with Windows' error; the log has
+  each try. }
+function MakeResumeCopy(var ResumeExe, Problem: String): Boolean;
+var
+  Src, Dir, SrcSha: String;
+  I, Attempt, Code: Integer;
+  Existed: Boolean;
+begin
+  Result := False;
+  ResumeExe := '';
+  Src := ExpandConstant('{srcexe}');
+  Dir := ExpandConstant('{app}\resume');
+  { A second restart: Setup already runs from a copy there. }
+  if SameText(ExtractFileDir(Src), Dir) then
+  begin
+    ResumeExe := Src;
+    Result := True;
+    Exit;
+  end;
+  { Read first: a Setup run from inside a zip file, a network folder or a
+    file that is only in the cloud may not be readable to copy. }
+  try
+    SrcSha := GetSHA256OfFile(Src);
+  except
+    Log('Resume copy: could not read ' + Src + ': ' + GetExceptionMessage);
+    Problem := 'Setup couldn''t read its own file, ' + Src + '. Copy DomovoiSetup.exe to a folder on this PC, such as Downloads, and run it from there (not from inside a zip file, a network folder, or a cloud folder whose files aren''t kept on this PC).';
+    Exit;
+  end;
+  if not MakeResumeDir(ExpandConstant('{app}'), Code) or not MakeResumeDir(Dir, Code) then
+  begin
+    if Code = 0 then
+      Problem := 'Setup couldn''t use the folder ' + Dir + ': it is a link, not a folder. Delete it, then try again.'
+    else
+      Problem := 'Windows refused to make the folder ' + Dir + ': ' + WinError(Code) + '. ' + ResumeAdvice(Code, False);
+    Exit;
+  end;
+  LockDownResumeDir(Dir);
+  Code := 0;
+  Existed := False;
+  for I := 1 to 5 do
+  begin
+    if I = 1 then
+      ResumeExe := Dir + '\DomovoiSetup.exe'
+    else
+      ResumeExe := Dir + '\DomovoiSetup-' + IntToStr(I) + '.exe';
+    { A link where the copy goes would send the write elsewhere: remove it. }
+    if (GetFileAttributesW(ResumeExe) <> $FFFFFFFF) and ((GetFileAttributesW(ResumeExe) and $400) <> 0) then
+      DeleteFile(ResumeExe);
+    Existed := FileExists(ResumeExe);
+    if Existed and SameCopy(ResumeExe, Src, SrcSha) then
+    begin
+      Log('Resume copy: ' + ResumeExe + ' is already this Setup; using it');
+      Result := True;
+      Exit;
+    end;
+    for Attempt := 1 to 5 do
+    begin
+      if CopyFileW(Src, ResumeExe, 0) <> 0 then
+      begin
+        { An antivirus may let the write through, then take the file away. }
+        if SameCopy(ResumeExe, Src, SrcSha) then
+        begin
+          Log('Resume copy: copied Setup to ' + ResumeExe);
+          Result := True;
+          Exit;
+        end;
+        Code := 225;
+        Log('Resume copy: ' + ResumeExe + ' was gone or changed right after the copy');
+        Problem := 'Setup copied itself to ' + ResumeExe + ', but the copy was gone or changed right afterwards. ' + ResumeAdvice(Code, False);
+        Exit;
+      end;
+      Code := DLLGetLastError;
+      Log('Resume copy: copying to ' + ResumeExe + ' failed (try ' + IntToStr(Attempt) + '): ' + WinError(Code));
+      { Only a copy that was there and is held open is worth waiting for. }
+      if not Existed or not IsLockError(Code) then
+        Break;
+      Sleep(1000);
+    end;
+    { ... and only that one is worth passing by for another name. }
+    if not Existed or not IsLockError(Code) then
+      Break;
+  end;
+  Problem := 'Windows refused the copy of Setup in ' + Dir + ': ' + WinError(Code) + '. ' + ResumeAdvice(Code, Existed);
+  ResumeExe := '';
+end;
+
+{ The copy, then the entry. False: Problem says why (MakeResumeCopy). }
+function CreateRunOnceEntry(var Problem: String): Boolean;
 var
   Data, ResumeExe: String;
 begin
-  ResumeExe := ExpandConstant('{app}\resume\DomovoiSetup.exe');
-  { A second restart: Setup already runs from that copy. }
-  if not SameText(ExpandConstant('{srcexe}'), ResumeExe) then
-    if not ForceDirectories(ExtractFileDir(ResumeExe)) or not CopyFile(ExpandConstant('{srcexe}'), ResumeExe, False) then
-      RaiseException('Setup could not copy itself to ' + ResumeExe + ' to carry on after the restart.');
+  Result := MakeResumeCopy(ResumeExe, Problem);
+  if not Result then
+    Exit;
   Data := AddQuotes(ResumeExe) + ' /resume=1 /internet=' + InternetAnswer + ' /ai=' + AiPrepareArg +
     ' /mediaroot=' + AddQuotes(RemoveBackslashUnlessRoot(MediaPage.Values[0]));
   if NoDenyLogon then
     Data := Data + ' /nodenylogon=1';
-  RegWriteStringValue(HKLM, RunOnceKey, RunOnceName, Data);
+  Result := RegWriteStringValue(HKLM, RunOnceKey, RunOnceName, Data);
+  if not Result then
+  begin
+    Log('Resume: could not write HKLM\' + RunOnceKey + '\' + RunOnceName);
+    Problem := 'Windows refused the setting that starts Setup again after the restart (HKLM\' + RunOnceKey + '). ' + ResumeAdvice(0, False);
+  end;
+end;
+
+{ Before a restart (PrepareToInstall): the copy and the entry, offering
+  Try again while the household fixes what refused them, instead of the
+  bare Runtime error that ended Setup before 1.4.0. '': ready to restart.
+  Otherwise what Setup stops with (the Preparing page; an update's
+  result). What: what the restart finishes. }
+function ArrangeResume(const What: String): String;
+var
+  Problem, LogLine: String;
+  Stop: Boolean;
+begin
+  Result := '';
+  LogLine := '';
+  if ExpandConstant('{log}') <> '' then
+    LogLine := #13#10#13#10 + 'Setup''s log: ' + ExpandConstant('{log}');
+  while not CreateRunOnceEntry(Problem) do
+  begin
+    Log('Resume: ' + Problem);
+    { Update mode and a silent run ask nothing. }
+    Stop := UpdateMode or WizardSilent;
+    if not Stop then
+      Stop := TaskDialogMsgBox('Setup couldn''t copy itself to carry on after the restart', 'Windows has to restart to finish ' + What + ', and Setup starts again by itself afterwards, from a copy of itself in ' + ExpandConstant('{app}\resume') + '.' + #13#10#13#10 + Problem + LogLine, mbError, MB_RETRYCANCEL, ['Try again', 'Stop Setup'], 0) <> IDRETRY;
+    if Stop then
+    begin
+      Result := 'Setup stopped before the restart. ' + Problem + #13#10#13#10 + 'When that is done, restart Windows (it still has to finish ' + What + ') and run Setup again.' + LogLine;
+      Exit;
+    end;
+  end;
 end;
 
 { -- update mode (the header) -------------------------------------------- }
@@ -1470,14 +1698,14 @@ function InitializeSetup: Boolean;
 var
   Sac: Cardinal;
 begin
-  { Smart App Control blocks unsigned programs, and this preview is
+  { Smart App Control blocks unsigned programs, and this installer is
     unsigned (code signing is on hold). If Setup is running at all, Windows
     let it start; the helper and the service it unpacks would still be
     blocked, so say so now rather than fail later. 0 off, 1 on, 2
     evaluation. }
   if RegQueryDWordValue(HKLM, 'SYSTEM\CurrentControlSet\Control\CI\Policy', 'VerifiedAndReputablePolicyState', Sac) and (Sac = 1) then
   begin
-    SuppressibleMsgBox('Smart App Control is on, and this preview of Domovoi is not code-signed. Windows would block Setup''s helper and the Domovoi service, so Setup stops here.' + #13#10#13#10 +
+    SuppressibleMsgBox('Smart App Control is on, and this version of Domovoi is not code-signed yet. Windows would block Setup''s helper and the Domovoi service, so Setup stops here.' + #13#10#13#10 +
       'To install it anyway, turn Smart App Control off in Windows Security > App & browser control > Smart App Control settings. On many Windows 11 builds it can only be turned back on by resetting or reinstalling Windows; read what Windows Security says first (docs/WINDOWS_HOST.md, "Unsigned").',
       mbCriticalError, MB_OK, IDOK);
     if ExpandConstant('{param:update|0}') = '1' then
@@ -1752,7 +1980,12 @@ begin
       Code := -1;
     if Code = 3010 then
     begin
-      CreateRunOnceEntry;
+      Result := ArrangeResume('turning on Virtual Machine Platform');
+      if Result <> '' then
+      begin
+        FailureText := Result;
+        Exit;
+      end;
       NeedsRestart := True;
       Result := 'Windows has to restart to finish turning on Virtual Machine Platform. Setup starts again by itself after you sign in, and carries on from here.';
       FailureText := Result;
@@ -1778,7 +2011,12 @@ begin
       Code := -1;
     if Code = 3010 then
     begin
-      CreateRunOnceEntry;
+      Result := ArrangeResume('installing WSL');
+      if Result <> '' then
+      begin
+        FailureText := Result;
+        Exit;
+      end;
       NeedsRestart := True;
       Result := 'Windows has to restart to finish installing WSL. Setup starts again by itself after you sign in, and carries on from here.';
       Exit;

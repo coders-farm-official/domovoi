@@ -6,9 +6,11 @@ and the friends list); this router proxies the dashboard's Settings →
 Household → Friend Houses section to the core's ``/v1/admin/friend-houses``
 routes with the caller's credentials forwarded, as every live-state action
 does. Each route wears the core's tier here too, so a refused caller is
-refused before anything is forwarded: the security tier at both hops,
-reads included (a friend file is a bearer secret, and who this house's
-friends are is the household's business).
+refused before anything is forwarded. Most routes wear the security
+tier at both hops, reads included (a friend file is a bearer secret, and
+who this house's friends are is the household's business). What every
+household phone may do with existing friends (owner decision 17: the
+inbox, sending, the friends and shared lists) wears the device tier.
 
 A friend file or a message only ever travels in a POST body (preview,
 send a request, send a message) or a response body (a file just made, a
@@ -21,11 +23,12 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi.routing import APIRoute
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field, ValidationError
 
-from domovoi.admin_auth import require_admin_security, require_admin_security_read
+from domovoi.admin_auth import require_admin_security, require_admin_security_read, require_device
 from web.backend.api.csrf_guard import require_requested_with
 from web.backend.domovoi_client import (
     auth_forward_headers,
@@ -37,16 +40,37 @@ from web.backend.domovoi_client import (
     put_admin,
 )
 
-router = APIRouter(prefix="/api/friend-houses", tags=["friend-houses"])
+class _NoStoreRoute(APIRoute):
+    """Every Friend Houses answer carries ``Cache-Control: no-store``: a
+    friend file is a bearer secret, and messages are private (audit R6
+    FE-11). Set on the final response, whatever the route returned."""
+
+    def get_route_handler(self):
+        handler = super().get_route_handler()
+
+        async def no_store(request: Request) -> Response:
+            response = await handler(request)
+            response.headers["Cache-Control"] = "no-store"
+            return response
+
+        return no_store
+
+
+router = APIRouter(prefix="/api/friend-houses", tags=["friend-houses"], route_class=_NoStoreRoute)
 READ = [Depends(require_admin_security_read)]
 WRITE = [Depends(require_requested_with), Depends(require_admin_security)]
+# What every household phone may do with existing friends (owner decision
+# 17): read the inbox and send, see friends and shared lists. The household
+# token or an admin Bearer, header only, as the Lists API takes writes (the
+# cookie never authorises a write, so no CSRF guard is needed here).
+HOUSEHOLD = [Depends(require_device)]
 
 CORE = "/v1/admin/friend-houses"
 
 # The core's ids: an invite is 32 hex, a request or friend a short prefix
 # plus hex. Anything else is not one of ours and never reaches the core's
 # URL.
-_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}\Z")
 
 # A friend file is a few hundred bytes; this is a ceiling, not a format.
 MAX_FILE_CHARS = 16_000
@@ -102,7 +126,7 @@ def _file_body(body: dict[str, Any]) -> dict[str, Any]:
 # ─── status and this house ───────────────────────────────────────────────
 
 
-@router.get("", dependencies=READ)
+@router.get("", dependencies=HOUSEHOLD)
 async def friend_houses_status(request: Request):
     """Whether the private connection runs (and why not), this house's
     fingerprint and name, the default friend-file length and the limits."""
@@ -198,10 +222,19 @@ async def friend_houses_decline(request_id: str, request: Request):
     )
 
 
+@router.delete("/requests/{request_id}", dependencies=WRITE)
+async def friend_houses_withdraw(request_id: str, request: Request):
+    """Take back a request this house sent (audit R6 FH-11)."""
+    rid = _id(request_id, "request")
+    return bridge_response(
+        *await delete_admin(f"{CORE}/requests/{rid}", headers=auth_forward_headers(request))
+    )
+
+
 # ─── friends ─────────────────────────────────────────────────────────────
 
 
-@router.get("/friends", dependencies=READ)
+@router.get("/friends", dependencies=HOUSEHOLD)
 async def friend_houses_friends(request: Request):
     return bridge_response(*await get_admin(f"{CORE}/friends", headers=auth_forward_headers(request)))
 
@@ -236,7 +269,7 @@ async def friend_houses_unfriend(friend_id: str, request: Request):
 # body (a conversation, an export): never in a URL or a log line. A
 # conversation is addressed by the other house's public house key (64 hex).
 
-_HOUSE = re.compile(r"^[0-9a-f]{64}$")
+_HOUSE = re.compile(r"^[0-9a-f]{64}\Z")
 ALERTS = ("inbox", "sender", "read")
 MAX_MESSAGE_CHARS = 2000
 
@@ -256,7 +289,7 @@ class AlertBody(BaseModel):
     alert: str
 
 
-@router.get("/conversations", dependencies=READ)
+@router.get("/conversations", dependencies=HOUSEHOLD)
 async def friend_houses_conversations(request: Request):
     """The house inbox: every friend (or former friend) with messages."""
     return bridge_response(
@@ -264,7 +297,7 @@ async def friend_houses_conversations(request: Request):
     )
 
 
-@router.get("/conversations/{house}", dependencies=READ)
+@router.get("/conversations/{house}", dependencies=HOUSEHOLD)
 async def friend_houses_conversation(
     house: str,
     request: Request,
@@ -279,7 +312,7 @@ async def friend_houses_conversation(
     )
 
 
-@router.post("/conversations/{house}/read", dependencies=WRITE)
+@router.post("/conversations/{house}/read", dependencies=HOUSEHOLD)
 async def friend_houses_mark_read(house: str, request: Request):
     h = _house(house)
     return bridge_response(
@@ -305,7 +338,7 @@ async def friend_houses_delete_conversation(house: str, request: Request):
     )
 
 
-@router.post("/messages", dependencies=WRITE)
+@router.post("/messages", dependencies=HOUSEHOLD)
 async def friend_houses_send(request: Request):
     """Queue a message to a friend (1–2000 characters)."""
     body = await _body(request, MessageBody)
@@ -337,7 +370,7 @@ async def friend_houses_alert(friend_id: str, request: Request):
 # A shared list is addressed by its 32-hex id; a title or a name only ever
 # travels in a body.
 
-_SPACE = re.compile(r"^[0-9a-f]{32}$")
+_SPACE = re.compile(r"^[0-9a-f]{32}\Z")
 
 
 def _space(value: str) -> str:
@@ -355,7 +388,7 @@ class AcceptListBody(BaseModel):
     name: str | None = None
 
 
-@router.get("/shared-lists", dependencies=READ)
+@router.get("/shared-lists", dependencies=HOUSEHOLD)
 async def friend_houses_shared_lists(request: Request):
     """Lists shared with friend houses, both ways, and offers waiting here."""
     return bridge_response(
@@ -399,4 +432,42 @@ async def friend_houses_leave_list(space_id: str, request: Request):
     sid = _space(space_id)
     return bridge_response(
         *await delete_admin(f"{CORE}/shared-lists/{sid}", timeout=30.0, headers=auth_forward_headers(request))
+    )
+
+
+# ─── blocking ────────────────────────────────────────────────────────────
+# Admin only (the security tier at both hops): blocking removes a friend,
+# refuses it for good and, by default, moves this house to a new address.
+
+
+class BlockBody(BaseModel):
+    keep_messages: bool = Field(default=True, strict=True)
+    new_address: bool = Field(default=True, strict=True)
+
+
+@router.post("/friends/{friend_id}/block", dependencies=WRITE)
+async def friend_houses_block(friend_id: str, request: Request):
+    """Block a friend house: removed, refused from now on, and (by default)
+    this house moves to a new private address its other friends are told."""
+    fid = _id(friend_id, "friend house")
+    body = await _body(request, BlockBody)
+    return bridge_response(
+        *await post_admin(f"{CORE}/friends/{fid}/block", body, timeout=120.0,
+                          headers=auth_forward_headers(request))
+    )
+
+
+@router.get("/blocked", dependencies=READ)
+async def friend_houses_blocked(request: Request):
+    """The houses this house blocked."""
+    return bridge_response(*await get_admin(f"{CORE}/blocked", headers=auth_forward_headers(request)))
+
+
+@router.delete("/blocked/{house}", dependencies=WRITE)
+async def friend_houses_unblock(house: str, request: Request):
+    """Unblock a house. It isn't a friend again; it can ask with a new file."""
+    if not _HOUSE.match(house or ""):
+        raise HTTPException(status_code=404, detail="That house isn't blocked.")
+    return bridge_response(
+        *await delete_admin(f"{CORE}/blocked/{house}", headers=auth_forward_headers(request))
     )

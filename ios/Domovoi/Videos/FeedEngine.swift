@@ -259,12 +259,14 @@ final class FeedEngine {
     private func readClock() {
         guard let item = player.currentItem else { return }
         let at = item.currentTime()
-        if at.isNumeric { positionMs = max(0, Int64(at.seconds * 1000)) }
+        if at.isNumeric { positionMs = max(0, WireNumber.int64(at.seconds * 1000) ?? 0) }
         let length = item.duration
         // `.indefinite` is a live stream and `.invalid` is "not yet": both
         // leave the duration nil rather than becoming zero.
         if length.isNumeric, length.seconds.isFinite, length.seconds > 0 {
-            durationMs = Int64(length.seconds * 1000)
+            // A served file's length can be any CMTime: `Int64(1e19)` traps
+            // (security audit round 6, IOS-1).
+            durationMs = WireNumber.int64(length.seconds * 1000)
         }
         isPlaying = player.timeControlStatus == .playing
         if player.timeControlStatus != .paused { wantsToPlay = true }

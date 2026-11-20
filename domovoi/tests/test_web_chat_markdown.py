@@ -43,6 +43,11 @@ CASES = {
     "image": {"chat": "look: ![a cat](https://example.org/cat.png)"},
     "js_link": {"chat": "[click](javascript:alert(1))"},
     "half_streamed": {"chat": "so **far this is\n\n| a | b |\n|---"},
+    # A scan's "What does it say?" (FE-11): a letter's link text, kept as words.
+    "scan_summary": {"plain": (
+        "**From:** the water company\n\nPay at [your account](https://pay.example.test/x) or "
+        "https://evil.example.test/login, or <a href=\"https://e.example.test\">here</a>."
+    )},
 }
 
 
@@ -109,3 +114,13 @@ def test_no_reply_carries_a_script_or_a_live_handler(html, case) -> None:
     # Any "onerror=" left is escaped text inside the paragraph, never an attribute.
     for tag in re.findall(r"<[a-z][^>]*>", out, re.IGNORECASE):
         assert not ON_HANDLER.search(tag), tag
+
+
+def test_a_scan_summary_shows_link_text_as_words_never_a_link(html) -> None:
+    # Before: the summary went through the chat renderer, so a link a letter
+    # carried (and the model repeated) was a click away.
+    out = html["scan_summary"]
+    tags = re.findall(r"<[a-z][^>]*>", out, re.IGNORECASE)
+    assert not [t for t in tags if t.lower().startswith("<a") or "href" in t.lower()], tags
+    assert "<strong>From:</strong>" in out      # the summary's shape stays
+    assert "your account" in out and "evil.example.test/login" in out

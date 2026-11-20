@@ -16,6 +16,8 @@
 #   bash scripts/release/finish-release.sh --setup FILE       # a DomovoiSetup.exe built by build.ps1 -Pin <tag> from the tag
 #   bash scripts/release/finish-release.sh --setup F --tray T # ...and its DomovoiTray.exe (default: bin/ beside the Setup)
 #   ... --setup F --satellite-setup S                         # ...and its DomovoiSatelliteSetup.exe (default: beside the Setup)
+#   ... --mac-pkg DomovoiSetup-mac.pkg                         # the macOS installer, built on a Mac from the tag
+#                                                             # (its DomovoiSetup-mac.build.json beside it; default: none)
 #   bash scripts/release/finish-release.sh --since v1.0.0-rc2 # the tag the notes count from
 #   ... --signing-key ~/keys/domovoi-release                  # the release key's private half (or DOMOVOI_RELEASE_SIGNING_KEY)
 #   ... --signing-agent                                       # the key an ssh-agent holds (the release workflow)

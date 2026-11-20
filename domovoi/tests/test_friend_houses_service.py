@@ -110,6 +110,7 @@ def house(tmp_path, monkeypatch):
     monkeypatch.setattr(svc, "_ensure_listener", fake_ensure)
     monkeypatch.setattr(svc, "_stop_listener", fake_stop)
     monkeypatch.setattr(svc, "RELOAD_MIN_INTERVAL_SEC", 0.0)
+    monkeypatch.setattr(svc, "firewall_state", lambda: "in_place")
     monkeypatch.setitem(svc._STATE, "applied", None)
     monkeypatch.setitem(svc._STATE, "last_reload", 0.0)
     monkeypatch.setattr(settings, "friend_houses_enabled", False, raising=False)
@@ -302,3 +303,41 @@ async def test_the_pairing_address_is_forgotten_when_the_last_file_goes(house) -
     await svc.reconcile()
     assert house.docker.calls == ["start", "stop"]
     assert not (pairing / "hostname").exists()  # the next file gets a new address
+
+
+@linux_only
+async def test_a_new_address_after_a_block_restarts_tor_and_tells_friends(house) -> None:
+    house.enable()
+    house.friends.extend([_friend(1), _friend(2)])
+    await svc.reconcile()
+    main = house.root / "friend-houses" / "tor" / "data" / "hs-main"
+    (main / "hostname").write_text("old")
+    (main / "hs_ed25519_secret_key").write_text("old key")
+    house.spawned.clear()
+    await svc.move_to_new_address()
+    assert house.docker.calls == ["start", "restart"]  # a restart, never a reload
+    assert not (main / "hs_ed25519_secret_key").exists()  # Tor makes a new address
+    assert house.spawned == ["friend-houses-im-back"]  # friends get the new address
+
+
+@linux_only
+async def test_no_new_address_while_nothing_runs(house) -> None:
+    house.enable()
+    assert await svc.move_to_new_address() is False
+    assert house.docker.calls == []
+
+
+@linux_only
+async def test_no_firewall_rules_no_tor(house, monkeypatch) -> None:
+    # Audit R6 FH-14: core used to start Tor with only a warning.
+    monkeypatch.setattr(svc, "firewall_state", lambda: "missing")
+    monkeypatch.setattr(svc, "_retry_reconcile_later", lambda: None)
+    monkeypatch.delenv("DOMOVOI_MANAGE_FH_FIREWALL", raising=False)
+    house.enable()
+    house.friends.append(_friend(1))
+    await svc.reconcile()
+    assert "start" not in house.docker.calls
+    assert svc.status()["status"] == "error" and "firewall" in svc.status()["detail"]
+    monkeypatch.setenv("DOMOVOI_MANAGE_FH_FIREWALL", "0")  # the administrator's own firewall
+    await svc.reconcile()
+    assert "start" in house.docker.calls

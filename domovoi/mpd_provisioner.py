@@ -29,11 +29,20 @@ the satellites pull the audio stream from it over the LAN. A container
 that predates this split (control port published on every interface) is
 recreated on its next ``_ensure_container`` pass; its data volume, and so
 its library DB and playlists, carries over.
+
+Each container also carries a label with a fingerprint of the ``mpd.conf``
+it was made with (:data:`CONF_LABEL`). The file is mounted when the
+container is created, so a changed ``mpd.conf`` reaches a room only when
+its container is made again: the core's start does that for every room
+whose label differs, one at a time, and a room playing music then is
+left alone and done by the playback sweeper once it stops (see "the
+settings a room's player was made with" below).
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -351,6 +360,9 @@ async def _create_container(
         "-v", f"{music_dir}:/music:ro",
         *extra_mounts,
         "-v", f"{_MPD_CONF.as_posix()}:/etc/mpd.conf:ro",
+        # Which mpd.conf this container was made with: a later change to
+        # the file makes it again (_conf_verdict).
+        "--label", f"{CONF_LABEL}={conf_fingerprint()}",
         image,
         timeout=60.0,
     )
@@ -368,11 +380,15 @@ async def _ensure_container(
     volume_name: str,
     check_music_mount: bool = False,
     room_id: str | None = None,
+    check_conf: bool = False,
 ) -> None:
     """Make sure container ``name`` exists and is running. Idempotent.
     ``room_id``: the room it plays for, so a start also takes internet
     streams out of its queue under ``INTERNET_ACCESS=never``
-    (:func:`_after_start`)."""
+    (:func:`_after_start`). ``check_conf``: a container made with another
+    ``mpd.conf`` is made again, or, while its room plays, left for later
+    (:func:`_conf_verdict`); only the core's start and the sweeper's retry
+    ask for it."""
     state = await _container_state(name)
     if state is not None:
         host_ip = await _control_port_host_ip(name)
@@ -419,6 +435,22 @@ async def _ensure_container(
             if rc != 0:
                 raise RuntimeError(f"docker rm -f {name}: {err.strip()[:200]}")
             state = None
+    if state is not None and check_conf and room_id is not None:
+        verdict, had = await _conf_verdict(room_id, name, state, control_port)
+        if verdict == "recreate":
+            await _stop_and_remove(name)
+            state = None
+            _conf_pending.pop(room_id, None)
+            _conf_quiet_since.pop(room_id, None)
+            log.warning(
+                "music player for room=%s made again with the new mpd.conf (%s -> %s); "
+                "queue and data volume kept", room_id, had or "unlabelled", conf_fingerprint(),
+            )
+        elif verdict.startswith("defer"):
+            if room_id not in _conf_pending:
+                log.warning("music player for room=%s has an older mpd.conf; it is made again "
+                            "once %s", room_id, verdict.partition(":")[2].strip())
+            _conf_pending[room_id] = (int(control_port), int(http_port), name)
     if state == "running":
         return
     if state is None:
@@ -444,6 +476,177 @@ async def _ensure_container(
     # return above skips already-running daemons, leaving their live volume
     # — possibly a user's deliberate setvol — untouched).
     await _after_start(room_id, control_port)
+
+
+# ─── the settings a room's player was made with ───────────────────────────
+#
+# mpd.conf is bind-mounted when a room's container is CREATED, so a house
+# that already has its rooms keeps the old settings until each container is
+# made again. Every container carries CONF_LABEL, a fingerprint of the file
+# it was made with (none: made before 1.4.0). When the label differs from
+# today's file:
+#
+# * the core's start (warm_known_rooms) makes the container again, one room
+#   at a time, when its player is not playing: stopped first with `docker
+#   stop`, so MPD writes its state file (queue, song, place) on the way out,
+#   then removed; the new one mounts the same named data volume
+#   (/var/lib/mpd: state file, database, playlists, stickers), so the room
+#   comes back with its queue;
+# * a room that is playing (or whose player can't say) is left as it is and
+#   noted in _conf_pending; the playback sweeper (every few seconds) makes
+#   at most one such room again per tick once its player has been stopped
+#   or paused for CONF_QUIET_SEC on every look (a play starts paused until
+#   the speaker says it is ready, and a person may resume a pause: neither
+#   is a quiet room);
+# * only a room player Domovoi made (room_player_problem: Domovoi's image,
+#   the provisioner's mounts and restart policy, nothing risky), never
+#   while a tamper incident freezes risky operations, never while another
+#   operation holds the room; the room is held for the container guard
+#   while it is made again (and the minute after), so the guard sees the
+#   new container (same name, same image) as the room's player.
+
+#: The label on every room's container: the :func:`conf_fingerprint` of the
+#: mpd.conf it was created with.
+CONF_LABEL = "domovoi.mpd-conf"
+
+#: room_id -> (control port, http port, container): rooms whose player has
+#: an older mpd.conf and was playing (or couldn't be checked) when its turn
+#: came.
+_conf_pending: dict[str, tuple[int, int, str]] = {}
+
+#: room_id -> monotonic time the sweeper first saw that pending room's
+#: player not playing, since when it has not played.
+_conf_quiet_since: dict[str, float] = {}
+
+#: How long a pending room's player must have been quiet before the sweeper
+#: makes it again.
+CONF_QUIET_SEC = 60.0
+
+#: How long `docker stop` lets MPD write its state file before Docker kills it.
+STOP_GRACE_SEC = 15
+
+
+def conf_fingerprint() -> str:
+    """A short fingerprint of today's mpd.conf (line endings aside, so a
+    Windows checkout matches a Linux one)."""
+    data = _MPD_CONF.read_bytes().replace(b"\r\n", b"\n")
+    return hashlib.sha256(data).hexdigest()[:16]
+
+
+async def _conf_label(name: str) -> str | None:
+    """The :data:`CONF_LABEL` container ``name`` was made with, ``""``
+    when it has none, None when docker can't say (then nothing is
+    recreated on its word)."""
+    rc, out, _ = await _run_docker("inspect", "-f", "{{json .Config.Labels}}", name, timeout=10.0)
+    if rc != 0:
+        return None
+    try:
+        labels = json.loads(out.strip() or "null") or {}
+    except ValueError:
+        return None
+    if not isinstance(labels, dict):
+        return None
+    return str(labels.get(CONF_LABEL) or "")
+
+
+async def _room_playing(control_port: int) -> bool | None:
+    """Whether the player on ``control_port`` is playing; None when it
+    can't say (not answering), which counts as playing."""
+    from domovoi.clients.mpd import RealMPDClient
+
+    try:
+        state = await asyncio.wait_for(
+            RealMPDClient(settings.mpd_host, int(control_port)).state(), timeout=5.0)
+    except Exception:  # noqa: BLE001
+        return None
+    return state == "play"
+
+
+async def _conf_verdict(room_id: str, name: str, state: str, control_port: int) -> tuple[str, str | None]:
+    """What to do about container ``name``'s mpd.conf, and the label it
+    has: ``"keep"`` (today's, or docker can't say), ``"recreate"``,
+    ``"defer: <when>"`` (playing, frozen, can't be checked: try again
+    later) or ``"refused"`` (not a room player Domovoi made: logged, left
+    alone)."""
+    had = await _conf_label(name)
+    if had is None or had == conf_fingerprint():
+        return "keep", had
+    incident = await frozen_by()
+    if incident is not None:
+        return f"defer: risky operations are no longer frozen ({incident})", had
+    obs = await _inspect_room(name)
+    if obs is None:
+        return "keep", had
+    try:
+        image_ids = await _trusted_image_ids()
+    except Exception as e:  # noqa: BLE001 — no proof it's ours
+        return f"defer: its image can be checked ({str(e)[:120]})", had
+    problem = room_player_problem(obs, image_ids)
+    if problem is not None:
+        _warn_hourly(f"conf:{room_id}", "container %s for room=%s keeps its older mpd.conf: %s",
+                     name, room_id, problem)
+        return "refused", had
+    if state == "running" and await _room_playing(control_port) is not False:
+        return "defer: it stops playing", had
+    return "recreate", had
+
+
+async def _stop_and_remove(name: str) -> None:
+    """Stop container ``name`` the polite way (MPD writes its state file
+    on SIGTERM: queue, song and place survive), then remove it."""
+    rc, _, err = await _run_docker("stop", "-t", str(STOP_GRACE_SEC), name,
+                                   timeout=STOP_GRACE_SEC + 30.0)
+    if rc != 0:
+        log.warning("docker stop %s: %s; removing it anyway", name, err.strip()[:200])
+    rc, _, err = await _run_docker("rm", "-f", name, timeout=30.0)
+    if rc != 0:
+        raise RuntimeError(f"docker rm -f {name}: {err.strip()[:200]}")
+
+
+def conf_pending() -> dict[str, tuple[int, int, str]]:
+    """The rooms waiting to be made again with today's mpd.conf (a copy)."""
+    return dict(_conf_pending)
+
+
+async def retry_conf_pending() -> str | None:
+    """The playback sweeper's turn: make again at most ONE room still on
+    an older mpd.conf whose player has been quiet (stopped or paused) for
+    :data:`CONF_QUIET_SEC`. Returns the room
+    made again, or None. Never raises."""
+    if not _conf_pending:
+        return None
+    fp = conf_fingerprint()
+    for room_id, (ctrl, http, container) in list(_conf_pending.items()):
+        try:
+            if room_busy(room_id) is not None:
+                continue
+            had = await _conf_label(container)
+            if had is None:
+                continue              # gone or docker unhappy: next tick
+            if had == fp:
+                _conf_pending.pop(room_id, None)
+                continue              # made again by someone else meanwhile
+            if await _room_playing(ctrl) is not False:
+                _conf_quiet_since.pop(room_id, None)
+                continue
+            now = asyncio.get_running_loop().time()
+            quiet = _conf_quiet_since.setdefault(room_id, now)
+            if now - quiet < CONF_QUIET_SEC:
+                continue
+            with _room_hold(room_id, "being made again with the new mpd.conf"):
+                await _ensure_container(
+                    name=container, image=settings.mpd_image_tag, control_port=ctrl,
+                    http_port=http, music_dir=settings.music_dir,
+                    volume_name=_volume_name(room_id), room_id=room_id, check_conf=True,
+                )
+            if room_id not in _conf_pending:
+                _conf_quiet_since.pop(room_id, None)
+                return room_id
+        except Exception as e:  # noqa: BLE001 — the next tick tries again
+            _warn_hourly(f"conf-retry:{room_id}",
+                         "music player for room=%s not made again with the new mpd.conf: %s",
+                         room_id, e)
+    return None
 
 
 async def _music_mount_source(name: str) -> str | None:
@@ -479,8 +682,8 @@ async def _nested_mount_sources(name: str) -> dict[str, str]:
 #: How Docker Desktop names a Windows drive's folder on the host side of a
 #: bind mount (``docker inspect`` .Source): /run/desktop/mnt/host/c/...,
 #: older releases /host_mnt/c/....
-_DESKTOP_SOURCE = re.compile(r"^/(?:run/desktop/mnt/host|host_mnt)/([A-Za-z])(/.*)?$")
-_DRIVE_PATH = re.compile(r"^[A-Za-z]:(/.*)?$")
+_DESKTOP_SOURCE = re.compile(r"^/(?:run/desktop/mnt/host|host_mnt)/([A-Za-z])(/.*)?\Z")
+_DRIVE_PATH = re.compile(r"^[A-Za-z]:(/.*)?\Z")
 
 
 def _mount_key(path: str) -> str | None:
@@ -771,6 +974,7 @@ async def warm_known_rooms() -> int:
                     volume_name=_volume_name(room_id),
                     check_music_mount=True,
                     room_id=room_id,
+                    check_conf=True,
                 )
             rooms_warmed += 1
         except Exception as e:
@@ -836,6 +1040,8 @@ def reset_self_heal() -> None:
     global _warm_retry_task
     _heal_last.clear()
     _heal_tasks.clear()
+    _conf_pending.clear()
+    _conf_quiet_since.clear()
     _warm_retry_task = None
     _WARNED_AT.clear()
 
@@ -1188,6 +1394,8 @@ async def remove_room(room_id: str) -> dict[str, bool]:
 
         mpd_module._room_ports.pop(room_id, None)
         mpd_module._clients.pop(room_id, None)
+        _conf_pending.pop(room_id, None)
+        _conf_quiet_since.pop(room_id, None)
     log.info(
         "mpd: retired room=%s (container=%s row=%s)",
         room_id, removed_container, removed_row,

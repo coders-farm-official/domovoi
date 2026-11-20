@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The menu-bar icon (mac-installer PLAN 4.9): a LaunchAgent in
+  /Library/LaunchAgents, so one file starts it in every account's own
+  session (Aqua: a signed-in desktop, never an SSH login), as that account,
+  never as root. Domovoi itself runs whether or not this does.
+  KeepAlive only after a crash: the icon's own quit (when it finds Domovoi
+  uninstalled) ends with exit 0 and stays ended until the next sign-in. A template: DomovoiMacKit (MenuBarAgent.swift) fills the
+  double-braced names XML-escaped and checks the result parses.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>{{LABEL}}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{{APP_PROGRAM}}</string>
+    <string>--menu-bar</string>
+  </array>
+  <key>LimitLoadToSessionType</key><string>Aqua</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key><false/>
+  </dict>
+  <key>ProcessType</key><string>Interactive</string>
+  <key>AssociatedBundleIdentifiers</key><string>com.domovoi.mac.setup</string>
+</dict>
+</plist>

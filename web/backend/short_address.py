@@ -31,6 +31,13 @@ Settings says so (``taken``). The admin's switch (``PUT
 /api/short-address``) is kept in ``~/.domovoi/short_address.json`` and
 applies at once: off frees the port, on tries it again.
 
+On a Mac install the bind is the VM's, but the household reaches the Mac:
+the Mac's helper redirects the Mac's own port 80 into the VM only while
+nothing on the Mac serves it, and says which in
+``/var/lib/domovoi-mac/short_address.json`` (:func:`read_host_report`). A
+Mac whose port 80 is another program's makes the state ``taken`` here too,
+so the header never offers ``domovoi.local`` while it reaches that program.
+
 Linux only: every Domovoi server runs the dashboard on Linux (a Linux box,
 the Windows install's WSL distro, the Mac install's VM). Binding a port
 below 1024 needs ``CAP_NET_BIND_SERVICE``, which the dashboard's unit
@@ -51,6 +58,7 @@ import logging
 import os
 import re
 import socket
+import stat
 import sys
 from pathlib import Path
 from typing import Any, Callable
@@ -85,6 +93,9 @@ MESSAGES = {
     "unsupported": "Short address not available on this computer.",
 }
 
+#: ``taken`` on a Mac install whose own port 80 is another program's.
+TAKEN_ON_MAC = "Short address off: something else on this Mac uses port {port}{holder}."
+
 # One request head, at most: a browser's is well under this.
 HEAD_LIMIT = 8192
 READ_TIMEOUT_SEC = 5.0
@@ -93,9 +104,59 @@ MAX_CONNECTIONS = 64
 TARGET_MAX = 4096
 NAMES_REFRESH_SEC = 60.0
 
-_TOKEN = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
-_TARGET = re.compile(r"^/[\x21-\x7e]*$")
-_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+_TOKEN = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+\Z")
+_TARGET = re.compile(r"^/[\x21-\x7e]*\Z")
+_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
+
+
+#: The Mac helper's word on the Mac's own port 80 (mac/Sources/DomovoiMacKit/
+#: ShortAddressPort.swift, HostFiles.shortAddressFile): written as root into
+#: the VM beside lan_name.json, ``{"schema": 1, "state": "on" | "taken" |
+#: "unchecked", "holder": name | null}``.
+HOST_REPORT = "/var/lib/domovoi-mac/short_address.json"
+HOST_REPORT_MAX_BYTES = 1024
+HOST_STATES = ("on", "taken", "unchecked")
+_HOLDER = re.compile(r"^[A-Za-z0-9._ -]{1,32}\Z")
+
+
+def _root_only(st: os.stat_result) -> bool:
+    """Owned by root, writable by nobody else; nothing passes where there
+    are no POSIX owners (the tests replace this)."""
+    if not hasattr(os, "getuid"):
+        return False
+    return st.st_uid == 0 and not (st.st_mode & (stat.S_IWGRP | stat.S_IWOTH))
+
+
+def read_host_report(path: Path | None = None) -> dict[str, Any] | None:
+    """The Mac helper's report on the Mac's own port 80, or None: no file
+    (not a Mac install), not root's alone, or not the schema. Never raises."""
+    p = path or Path(HOST_REPORT)
+    try:
+        fd = os.open(p, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    except OSError:
+        return None
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or not _root_only(st) or not _root_only(os.stat(p.parent)):
+            log.warning("short address: %s isn't root's alone; not believing it", p)
+            return None
+        if st.st_size > HOST_REPORT_MAX_BYTES:
+            return None
+        raw = os.read(fd, HOST_REPORT_MAX_BYTES + 1)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    try:
+        doc = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+    if not isinstance(doc, dict) or doc.get("schema") != 1 or doc.get("state") not in HOST_STATES:
+        return None
+    holder = doc.get("holder")
+    if not (isinstance(holder, str) and _HOLDER.match(holder)):
+        holder = None
+    return {"state": doc["state"], "holder": holder}
 
 
 def state_path() -> Path:
@@ -309,6 +370,7 @@ class ShortAddress:
         port: int | None = None,
         state_file: Path | None = None,
         is_supported: Callable[[], bool] = supported,
+        host_report: Path | None = None,
     ) -> None:
         env_port = os.environ.get("DOMOVOI_SHORT_ADDRESS_PORT")
         self.port = port if port is not None else int(env_port) if env_port else DEFAULT_PORT
@@ -316,6 +378,7 @@ class ShortAddress:
         self.target_port = 6369
         self._state_file = state_file
         self._supported = is_supported
+        self._host_report = host_report
         self.state = "unsupported"
         self.error: str | None = None
         self.started = False
@@ -334,12 +397,25 @@ class ShortAddress:
 
     def status(self) -> dict[str, Any]:
         state = self.state
+        message = MESSAGES[state].format(port=self.port, dashboard=self.target_port)
+        if state == "on":
+            # Listening in the VM says nothing about the Mac in front of it:
+            # its helper redirects port 80 only while nothing on the Mac
+            # serves it (read_host_report). Elsewhere there is no report.
+            host = read_host_report(self._host_report)
+            if host is not None and host["state"] == "taken":
+                state = "taken"
+                holder = f" ({host['holder']})" if host["holder"] else ""
+                message = TAKEN_ON_MAC.format(port=self.port, holder=holder)
+            elif host is not None and host["state"] == "unchecked":
+                state = "failed"
+                message = MESSAGES["failed"].format(port=self.port, dashboard=self.target_port)
         return {
             "enabled": self.enabled(),
             "state": state,
             "port": self.port,
             "dashboard_port": self.target_port,
-            "message": MESSAGES[state].format(port=self.port, dashboard=self.target_port),
+            "message": message,
         }
 
     async def set_enabled(self, on: bool) -> dict[str, Any]:

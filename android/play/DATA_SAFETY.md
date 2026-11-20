@@ -169,7 +169,11 @@ bundle's permissions.
 default**, not offered on a shared screen or before the phone is paired.
 Turning it on asks for `READ_CALENDAR` (only if not already held), with the
 disclosure below shown above the switch first. Nothing is sent until the
-person ticks a calendar. Then the app reads the ticked calendars'
+person ticks a calendar. So the person can choose, the picker shows event
+counts for every visible calendar: the app counts each visible calendar's
+occurrences in the window below, reading only the calendar id column
+(`PhoneCalendarReader.counts`). The counts are read locally and never
+sent. Once a calendar is ticked, the app reads the ticked calendars'
 occurrences, 30 days back to 180 days ahead
 (`CalendarContract.Instances`), and sends `PUT
 /api/calendar/phones/{device_id}` to the **active, paired** Domovoi server:

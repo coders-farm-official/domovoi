@@ -421,7 +421,7 @@ async def refresh_source(source_id: int) -> CalendarSourceRefresh:
 
 # ─── Phones (the apps' "Share this phone's calendars", Android and iPhone) ─
 
-_DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{2,63}$")
+_DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{2,63}\Z")
 PHONE_MIN_GAP_SEC = 60.0
 # device id -> monotonic time of its last accepted snapshot (per process).
 _last_snapshot: dict[str, float] = {}

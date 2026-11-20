@@ -512,6 +512,7 @@ from domovoi.clients.whisper import (
     SHORT_WINDOW_SEC,
     SttUnavailableError,
     can_decode_full_window,
+    for_turn as stt_for_turn,
     get_whisper_client,
     transcribe_full_window,
     transcribe_with_window,
@@ -706,7 +707,7 @@ def _wifi_mode(value: Any) -> str | None:
     return value.strip().lower()[:16] or None
 
 
-_HOST_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+_HOST_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
 
 
 def advertised_server_names() -> list[str]:
@@ -803,7 +804,7 @@ MUSIC_HOLD_MAX_SEC = 600.0
 # replies), a barge-in, or anything else.
 EARLY_COMMIT_TRIGGERS = frozenset({"wake_word", "followup"})
 
-_WAKE_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+_WAKE_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
 
 
 def _clean_wake_slug(raw: object) -> str | None:
@@ -1183,6 +1184,30 @@ def _split_sentences(text: str) -> list[str]:
     if not text:
         return []
     return [p for p in _SENTENCE_SPLIT.split(text) if p]
+
+
+def _spoken_parts(text: str) -> tuple[list[str], set[int]]:
+    """``text``'s sentences as :func:`_split_sentences` cuts them, paragraph
+    by paragraph, and the indexes of the sentences that end a paragraph
+    (not the last): after those the speech leaves a longer silence
+    (``tts.PARAGRAPH_SILENCE_SEC``), so a list read out loud, such as the
+    news headlines, is heard item by item."""
+    from domovoi.clients.tts import split_paragraphs
+
+    sentences: list[str] = []
+    ends: set[int] = set()
+    for paragraph in split_paragraphs(text):
+        if sentences:
+            ends.add(len(sentences) - 1)
+        sentences.extend(_split_sentences(paragraph))
+    return sentences, ends
+
+
+def _paragraph_silence(sample_rate: int) -> bytes:
+    """The gap between two paragraphs of a spoken reply, as int16 PCM."""
+    from domovoi.clients.tts import PARAGRAPH_SILENCE_SEC
+
+    return bytes(2 * int(PARAGRAPH_SILENCE_SEC * sample_rate))
 
 
 def _wav_to_pcm(wav_bytes: bytes) -> tuple[bytes, int]:
@@ -1914,6 +1939,10 @@ class StreamSession:
         # when `ready` is sent.
         self._connected_at = time.monotonic()
         self.ws.app.state.active_sessions[self.room_id] = self
+        # CORE-43: the address of a room that passed pairing may fetch the
+        # household's own wake models (domovoi/wake_model_access.py).
+        from domovoi import wake_model_access
+        wake_model_access.remember_room_peer(self.ws)
         if existing is not None and existing is not self:
             log.info(
                 "ws %s connected (replacing prior session — likely a reconnect)",
@@ -2168,6 +2197,9 @@ class StreamSession:
         one is transcribed early."""
         self._utt_serial += 1
         self._utt_frames = 0
+        # This utterance's speech-to-text engine, chosen at its first
+        # decode (_turn_whisper).
+        self._stt_turn = None
         self._pi_pause = None
         self._pause_rx = None
         self._pause_clock = {}
@@ -2273,6 +2305,19 @@ class StreamSession:
             # is already long enough by the time the transcript exists.
             self._maybe_commit()
 
+    def _turn_whisper(self) -> Any:
+        """The Whisper client for this utterance: ``get_whisper_client()``
+        with, on a Mac whose speech service shares the graphics chip with
+        the language models, the engine chosen once at the utterance's
+        first decode (clients.whisper.for_turn), so the early decode, the
+        final one and the second hearing all go to the same one. Raises
+        SttUnavailableError like get_whisper_client."""
+        turn = getattr(self, "_stt_turn", None)
+        if turn is None:
+            turn = stt_for_turn(get_whisper_client())
+            self._stt_turn = turn
+        return turn
+
     async def _speculate(self, spec: _Speculation, pcm: bytes) -> _Heard | None:
         """Transcribe a copy of the capture so far, then start embedding
         the voice in it. Never raises: None means "no speculative
@@ -2287,7 +2332,7 @@ class StreamSession:
         first instead costs ~60 ms of the decode's start. The turn awaits
         the embedding only at voice identification."""
         try:
-            whisper = get_whisper_client()
+            whisper = self._turn_whisper()
         except SttUnavailableError:
             return None
         marks: dict[str, Any] = {}
@@ -4311,7 +4356,7 @@ class StreamSession:
         whisper: Any = None
         if reuse is None or reuse.task is None:
             try:
-                whisper = get_whisper_client()
+                whisper = self._turn_whisper()
             except SttUnavailableError as e:
                 # Whisper didn't load at boot. Explain out loud and end the
                 # turn; the helper sends its own response_end.
@@ -4327,7 +4372,7 @@ class StreamSession:
                     heard = await asyncio.shield(reuse.task)
                 if heard is None and whisper is None:
                     try:
-                        whisper = get_whisper_client()
+                        whisper = self._turn_whisper()
                     except SttUnavailableError as e:
                         await self._respond_stt_unavailable(e, trigger=trigger)
                         return None
@@ -4563,7 +4608,7 @@ class StreamSession:
         (``stt_deadline``): past it, the first hearing is routed — the
         turn watchdog notes the stall, the room still gets its answer."""
         try:
-            whisper = get_whisper_client()
+            whisper = self._turn_whisper()
         except SttUnavailableError:
             return heard, transcript
         if not can_decode_full_window(whisper):
@@ -5653,7 +5698,9 @@ class StreamSession:
         next sentence while the one before it is sent."""
         tts_t0 = time.perf_counter()
         tts = get_tts_client()
-        sentences = _split_sentences(response.text) or [response.text or ""]
+        sentences, paragraph_ends = _spoken_parts(response.text)
+        if not sentences:
+            sentences, paragraph_ends = [response.text or ""], set()
 
         # Resolve which voice to synthesize this turn in. A per-response
         # override (VoiceHandler sampling / switching) wins; otherwise
@@ -5729,6 +5776,10 @@ class StreamSession:
                 self._note_audio_sent(len(chunk), sr)
                 # First call only: tts_first_ms + total_ms.
                 timings.first_audio(tts_t0)
+            if 0 in paragraph_ends:
+                for chunk in _iter_chunks(_paragraph_silence(sr)):
+                    await self.ws.send_bytes(chunk)
+                    self._note_audio_sent(len(chunk), sr)
 
             for i, _ in enumerate(sentences[1:], start=1):
                 assert next_task is not None
@@ -5749,6 +5800,8 @@ class StreamSession:
                         i, pcm_sr, sr,
                     )
                     pcm = _resample_pcm(pcm, pcm_sr, sr)
+                if i in paragraph_ends:
+                    pcm += _paragraph_silence(sr)
                 for chunk in _iter_chunks(pcm):
                     await self.ws.send_bytes(chunk)
                     self._note_audio_sent(len(chunk), sr)

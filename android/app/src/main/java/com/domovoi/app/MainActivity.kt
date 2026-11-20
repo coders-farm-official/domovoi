@@ -23,6 +23,7 @@ import com.domovoi.app.alerts.EXTRA_SERVER_KEY
 import com.domovoi.app.alerts.serverKey
 import com.domovoi.app.data.LocalDeveloperOptionsOn
 import com.domovoi.app.diagnostics.Diagnostics
+import com.domovoi.app.friendhouses.FRIEND_HOUSES_ROUTE
 import com.domovoi.app.player.CoverArt
 import com.domovoi.app.roommode.RoomModeActivity
 import com.domovoi.app.roommode.RoomStore
@@ -119,6 +120,7 @@ class MainActivity : ComponentActivity() {
         (application as DomovoiApplication).container.containerAlerts.onAppResumed()
         (application as DomovoiApplication).container.helpAlerts.onAppResumed()
         (application as DomovoiApplication).container.batteryAlerts.onAppResumed()
+        (application as DomovoiApplication).container.friendHouses.onAppResumed()
         // Up next's picks still waiting, read again: the server may have
         // taken some back while the app was away (player/PhoneUpNext.kt).
         (application as DomovoiApplication).container.player.upNext?.reread()
@@ -155,8 +157,9 @@ class MainActivity : ComponentActivity() {
 
     private companion object {
         /** What a notification may ask for: Home (a timer alert), the
-         *  Containers screen (a container incident) and Chat (help steps).
-         *  Anything else is ignored. */
-        val ROUTES_FROM_OUTSIDE = setOf("home", CONTAINERS_ROUTE, CHAT_ROUTE)
+         *  Containers screen (a container incident), Chat (help steps) and
+         *  Friend houses (a message from a friend house). Anything else is
+         *  ignored. */
+        val ROUTES_FROM_OUTSIDE = setOf("home", CONTAINERS_ROUTE, CHAT_ROUTE, FRIEND_HOUSES_ROUTE)
     }
 }

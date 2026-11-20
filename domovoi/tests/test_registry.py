@@ -38,6 +38,7 @@ CORE_BANDS = {
     "repeat": 180,
     "double_check": 190,
     "dropin": 200,
+    "friend_houses": 205,
     "intercom": 210,
     "chat_mode": 220,
     "printing": 222,
@@ -238,8 +239,9 @@ def test_declared_confirmation_kinds_cover_known_flows() -> None:
         "memory": {"core.pending_memory_offer"},
         "music": {"core.music_choice", "core.music_room_or_title"},
         "playlist": {"core.playlist_choice", "core.playlist_add_choice"},
-        "news": {"core.news_fetch", "core.news_fetch_topics"},
+        "news": {"core.news_fetch", "core.news_fetch_topics", "core.news_read_article"},
         "dropin": {"core.dropin_invite"},
+        "friend_houses": {"core.friend_houses_send"},
         "music_alias": {"core.alias_replace", "core.alias_target"},
         "voice": {"core.voice_download"},
         "printing": {

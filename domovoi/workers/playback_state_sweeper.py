@@ -69,6 +69,15 @@ class PlaybackStateSweeper(Worker):
             await music_groups.upkeep(self.app)
         except Exception as e:  # noqa: BLE001 — never stops the sweep
             log.warning("sweeper: groups upkeep failed: %s", e)
+        # A room whose player was playing when the core's start found it on
+        # an older mpd.conf is made again once it stops, one per tick
+        # (mpd_provisioner, "the settings a room's player was made with").
+        from domovoi import mpd_provisioner
+
+        try:
+            await mpd_provisioner.retry_conf_pending()
+        except Exception as e:  # noqa: BLE001 — never stops the sweep
+            log.warning("sweeper: music player settings retry failed: %s", e)
         return pruned
 
     async def _sweep_stamps(self) -> int:

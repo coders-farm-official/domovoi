@@ -55,7 +55,6 @@ import androidx.core.content.ContextCompat
 import com.domovoi.app.DomovoiApplication
 import com.domovoi.app.audio.MicArbiter
 import com.domovoi.app.net.DeviceDownloads
-import com.domovoi.app.ui.components.PreviewLabel
 import com.domovoi.app.ui.theme.Domovoi
 import com.domovoi.app.ui.theme.DomovoiTheme
 import com.domovoi.app.ui.theme.ThemeMode
@@ -146,6 +145,8 @@ class RoomSetupActivity : ComponentActivity() {
         runCatching { container.player.detachForRoomMode() }
         runCatching { container.bus.stop() }
         runCatching { container.alerts.pauseForRoomMode() }
+        // Friend Houses' notifications may carry another house's message.
+        runCatching { container.friendHouses.pauseForRoomMode() }
         DeviceDownloads.networkChanged(this)
         startActivity(Intent(this, RoomModeActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         // The household app's task leaves Recents (and its last screenshot
@@ -221,7 +222,10 @@ internal val EXPLAINER: List<Pair<String, String>> = listOf(
         "and guests can control the room's music while it plays.",
     "Power and heat" to
         "Keep it on its charger and turn on the phone's battery-protection setting if it has one. Keep it off soft " +
-        "surfaces and out of the sun. The screen dims; that is expected. Never use a phone whose battery has swollen.",
+        "surfaces and out of the sun. The screen dims; that is expected. Never use a phone whose battery has swollen. " +
+        "On the charger the room stays on over the lock screen. After you unlock the phone, press the power button " +
+        "once to lock it again: when it wakes, the room is back over the lock screen and stays on. Left unlocked, " +
+        "the screen turns off as the phone's settings say.",
     "Android's rules" to
         "A notification stays while the room listens and cannot be hidden, and the green microphone dot stays on. " +
         "Its Stop listening turns the microphone off but does not leave room mode: the normal app stays locked " +
@@ -247,8 +251,6 @@ private fun Explainer(onStart: () -> Unit, onCancel: () -> Unit) {
     Column(Modifier.fillMaxSize().padding(20.dp)) {
         Text("Use this device as a room", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold,
             modifier = Modifier.semantics { heading() })
-        Spacer(Modifier.height(6.dp))
-        PreviewLabel()
         Spacer(Modifier.height(8.dp))
         Column(Modifier.weight(1f).verticalScroll(scroll)) {
             EXPLAINER.forEachIndexed { i, (title, body) ->

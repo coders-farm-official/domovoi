@@ -571,12 +571,14 @@ async def _persist_turn(
         # existed (domovoi/turn_history.py): this fills in that same row.
         history_entry=ctx.history_entry,
     )
-    await SessionRepository(session).record_exchange(
-        session_id,
-        intent.transcript,
-        response.text,
-        settings.session_recent_turns_cap,
-    )
+    if response.history_text is None:
+        await SessionRepository(session).record_exchange(
+            session_id, intent.transcript, response.text, settings.session_recent_turns_cap)
+    else:
+        # The history keeps a stand-in; "say that again" repeats what was said.
+        await SessionRepository(session).record_exchange(
+            session_id, intent.transcript, response.history_text,
+            settings.session_recent_turns_cap, last_response=response.text)
     # A turn that started music in its own room: that music is for the
     # person who spoke (None, the household, when nobody was recognised).
     # The listening history attributes the room's songs by it
@@ -613,10 +615,15 @@ async def _maybe_offer_pending_memory(
             return None
         memory_id, body, _topic = row
         await repo.mark_offered(memory_id)
-        # Conversational lead-in — keeps the offer from sounding
-        # like a system prompt. Body is the LLM's extracted phrasing
-        # so we trust it as-is rather than re-templating.
-        offer_text = f"By the way — {body}. Should I remember that?"
+        # Said to the person the fact is about: "my"/"their"/"the user"
+        # become "your" (domovoi/memory_wording.py). Word for word, a
+        # fact like "Biscuit and Pepper are their pets" sounded like
+        # Domovoi talking about someone else.
+        from domovoi.memory_wording import offer_text as _word_offer
+
+        offer_text = _word_offer(body)
+        if not offer_text:
+            return None
         return offer_text, memory_id
     except Exception as e:
         log.warning("memory surfacing failed: %s", e)

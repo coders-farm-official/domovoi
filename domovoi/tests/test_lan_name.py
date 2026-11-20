@@ -882,3 +882,140 @@ def test_the_mac_helpers_report_is_read(tmp_path, monkeypatch):
     # Not root's alone: not believed.
     monkeypatch.setattr(svc, "_root_only", lambda st: False)
     assert svc.read_report() is None
+
+
+# ─── a Mac install is host mode, with a name of its own ─────────────────
+
+
+@pytest.fixture
+def mac_host(tmp_path, monkeypatch):
+    """A Mac install as the core sees it inside the Lima VM: the helper's
+    side.json (kind "mac") and its lan_name.json, both under
+    /var/lib/domovoi-mac, both root's alone; no Windows side."""
+    from domovoi import windows_side
+
+    folder = tmp_path / "var" / "lib" / "domovoi-mac"
+    folder.mkdir(parents=True)
+    side = folder / "side.json"
+    side.write_text(json.dumps({"schema": 1, "kind": "mac", "version": "1.4.0",
+                                "written_at": "2026-11-16T10:00:00Z", "updates": 1}), encoding="utf-8")
+    report = folder / "lan_name.json"
+    monkeypatch.setenv("DOMOVOI_WINDOWS_SIDE_FILE", str(tmp_path / "no-windows" / "side.json"))
+    monkeypatch.setenv("DOMOVOI_HOST_SIDE_FILE", str(side))
+    monkeypatch.setenv("DOMOVOI_LAN_NAME_REPORT_WINDOWS", str(tmp_path / "no-windows" / "lan_name.json"))
+    monkeypatch.setenv("DOMOVOI_LAN_NAME_REPORT_MAC", str(report))
+    monkeypatch.setenv("DOMOVOI_LAN_NAME_DIR", str(tmp_path / "home" / ".domovoi" / "lan_name"))
+    monkeypatch.setattr(windows_side, "_root_only", lambda st: True)
+    monkeypatch.setattr(svc, "_root_only", lambda st: True)
+    from domovoi.config import settings
+
+    monkeypatch.setattr(settings, "lan_name", "domovoi")
+    monkeypatch.setattr(settings, "lan_name_enabled", True)
+    monkeypatch.setattr("domovoi.config_env_writer._ENV_FILE", tmp_path / ".env")
+    return {"side": side, "report": report, "dir": tmp_path / "home" / ".domovoi" / "lan_name",
+            "env": tmp_path / ".env"}
+
+
+MAC_REPORT = {
+    "schema": 1, "request_id": None, "requested": "domovoi", "claimed": "domovoi", "state": "announced",
+    "taken": None, "addresses": ["192.168.1.20"], "error": None, "written_at": "2026-11-16T10:00:00Z",
+}
+
+
+def test_a_mac_side_is_host_mode(mac_host) -> None:
+    assert svc.host_side() == "mac" and svc.mode() == "host"
+    st = svc.status()
+    assert st["host_kind"] == "mac" and st["fixed"] is True and st["state"] == "no_host"
+    assert "Mac side" in st["error"]
+    mac_host["report"].write_text(json.dumps(MAC_REPORT), encoding="utf-8")
+    st = svc.status()
+    assert st["state"] == "announced" and st["fqdn"] == "domovoi.local"
+    assert st["addresses"] == ["192.168.1.20"] and st["host_kind"] == "mac"
+
+
+def test_a_mac_side_not_roots_alone_is_no_host(mac_host, monkeypatch) -> None:
+    from domovoi import windows_side
+
+    monkeypatch.setattr(windows_side, "_root_only", lambda st: False)
+    assert svc.host_side() is None and svc.mode() != "host"
+
+
+def test_a_windows_side_still_wins(mac_host, tmp_path, monkeypatch) -> None:
+    win = tmp_path / "no-windows" / "side.json"
+    win.parent.mkdir(parents=True)
+    win.write_text(json.dumps({"schema": 1, "version": "1.4.0", "written_at": "2026-11-16T10:00:00Z"}),
+                   encoding="utf-8")
+    assert svc.host_side() == "windows" and "fixed" not in svc.status()
+
+
+def test_a_mac_takes_no_request_and_refuses_a_rename(mac_host) -> None:
+    """The Mac announces domovoi.local itself: no request file at start,
+    none from a Save, and a Save is refused rather than silently ignored."""
+    import asyncio
+
+    asyncio.run(svc.start())
+    assert not (mac_host["dir"] / svc.REQUEST_NAME).exists()
+    with pytest.raises(svc.FixedName):
+        svc.save("kitchen", None)
+    with pytest.raises(svc.FixedName):
+        svc.save(None, False)
+    assert not (mac_host["dir"] / svc.REQUEST_NAME).exists() and not mac_host["env"].exists()
+    mac_host["report"].write_text(json.dumps(MAC_REPORT), encoding="utf-8")
+    assert svc.status()["state"] == "announced", "no request to wait for: never 'checking'"
+
+
+@pytest.mark.asyncio
+async def test_the_put_route_says_409_on_a_mac(mac_host, monkeypatch) -> None:
+    from httpx import ASGITransport, AsyncClient
+
+    from domovoi.main import app as core_app
+    from domovoi.tests.auth_testkit import bearer, install_fake_db
+
+    install_fake_db(monkeypatch, admin=True, sessions={"admin-token"})
+    if not hasattr(core_app.state, "config_apply_lock"):
+        monkeypatch.setattr(core_app.state, "config_apply_lock", __import__("asyncio").Lock(), raising=False)
+    async with AsyncClient(transport=ASGITransport(app=core_app, raise_app_exceptions=False),
+                           base_url="http://test") as c:
+        r = await c.put("/v1/lan-name", json={"name": "kitchen"}, headers=bearer("admin-token"))
+        assert r.status_code == 409 and "domovoi.local" in r.json()["detail"]
+        r = await c.get("/v1/lan-name", headers=bearer("admin-token"))
+        assert r.json()["fixed"] is True and r.json()["host_kind"] == "mac"
+
+
+def test_the_settings_card_offers_no_rename_on_a_mac() -> None:
+    """Settings → About: on a Mac (``fixed``) the card shows the name and
+    its state, says the Mac announces it, and has no "change" and no
+    on/off (owner rule: no control that can't do what it says). A Windows
+    host's card keeps both."""
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    assert node, "node is required to drive web/static JSX (see jsxcheck)"
+    repo = Path(__file__).resolve().parents[2]
+    script = r"""
+h.render(); for (let i = 0; i < 4; i++) { await h.settle(); h.rerender(); }
+return { text: h.text().join(' | '),
+         buttons: h.findAll({ type: 'button' }).map((b) => h.plain(b)).map((p) => (p && p.text) || ''),
+         boxes: h.findAll({ type: 'input' }).length };
+"""
+    base = {"requested": "domovoi", "claimed": "domovoi", "fqdn": "domovoi.local", "state": "announced",
+            "taken": None, "error": None, "enabled": True, "addresses": ["192.168.1.20"], "hint": "", "help": ""}
+    scenarios = {
+        k: {"files": ["web/static/components.jsx", "web/static/settings.jsx"], "component": "NetworkNameCard",
+            "api": {"GET /api/lan-name": doc}, "script": script}
+        for k, doc in (("mac", {**base, "host_kind": "mac", "fixed": True}),
+                       ("windows", {**base, "host_kind": "windows"}))
+    }
+    proc = subprocess.run([node, str(Path(__file__).with_name("jsx_interact_harness.js")), str(repo),
+                           json.dumps(scenarios)], capture_output=True, text=True, encoding="utf-8", timeout=240)
+    assert proc.returncode == 0, proc.stderr
+    out = json.loads(proc.stdout)
+    mac, win = out["mac"], out["windows"]
+    assert "__harness_error" not in mac and "__harness_error" not in win, (mac, win)
+    assert "domovoi.local" in mac["text"] and "the Mac announces this name itself" in mac["text"]
+    assert "announce a name on this network" not in mac["text"] and mac["boxes"] == 0
+    assert not any("change" in b for b in mac["buttons"]), mac["buttons"]
+    assert "announce a name on this network" in win["text"] and win["boxes"] == 1
+    assert any("change" in b for b in win["buttons"]), win["buttons"]
+    assert "the Mac announces" not in win["text"]

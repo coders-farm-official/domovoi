@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The root helper's long-running half (mac-installer PLAN 4.4 step 1, 4.8):
+  `DomovoiHelper serve`, as root, from boot. It keeps the home network's way
+  in up (the pf redirect to the VM, lan.json in the VM, domovoi.local) as the
+  network changes, and tells the core about media the household adds from
+  the Mac. A template (LaunchdJob.swift's rules); no UserName: pf needs root.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>{{LABEL}}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{{HELPER}}</string>
+    <string>serve</string>
+    <string>--system</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>{{LOG_FILE}}</string>
+  <key>StandardErrorPath</key><string>{{LOG_FILE}}</string>
+</dict>
+</plist>

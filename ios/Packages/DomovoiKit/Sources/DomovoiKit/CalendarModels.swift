@@ -347,7 +347,7 @@ public struct CalendarDay: Hashable, Comparable, Sendable {
         parts.day = day
         let calendar = Self.zoned(timeZone)
         guard let date = calendar.date(from: parts) else { return 0 }
-        return Int64((calendar.startOfDay(for: date).timeIntervalSince1970 * 1000).rounded())
+        return WireNumber.epochMs(calendar.startOfDay(for: date))
     }
 
     /// Local `hour:minute` of this date, as epoch milliseconds — `atTime`.
@@ -364,7 +364,7 @@ public struct CalendarDay: Hashable, Comparable, Sendable {
         // `ZonedDateTime`'s rule too. Nil is unreachable for a valid y/m/d and
         // falls back to midnight rather than to the epoch.
         guard let date = calendar.date(from: parts) else { return startMs(in: timeZone) }
-        return Int64((date.timeIntervalSince1970 * 1000).rounded())
+        return WireNumber.epochMs(date)
     }
 
     /// `plusDays` — civil, so a week is seven dates and not 604 800 seconds.

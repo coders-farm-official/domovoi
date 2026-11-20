@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import socket
+from pathlib import Path
 from urllib.parse import urlsplit
 
 import pytest
@@ -449,3 +450,85 @@ async def test_the_switch_over_http_is_admin_only(tmp_path, monkeypatch) -> None
             assert r.status_code == 401
     finally:
         await svc.stop()
+
+
+# ─── a Mac install: the Mac's own port 80 decides ─────────────────────────
+
+
+def _mac_report(tmp_path, doc) -> Path:
+    folder = tmp_path / "domovoi-mac"
+    folder.mkdir(exist_ok=True)
+    f = folder / "short_address.json"
+    f.write_text(doc if isinstance(doc, str) else json.dumps(doc), encoding="utf-8")
+    return f
+
+
+def _mac_svc(tmp_path, report) -> ShortAddress:
+    svc = ShortAddress(port=80, state_file=tmp_path / "s.json", is_supported=lambda: True, host_report=report)
+    svc.state = "on"  # listening in the VM
+    return svc
+
+
+def test_a_mac_whose_port_80_is_another_programs_says_taken(tmp_path, monkeypatch) -> None:
+    """The VM's bind worked, but the Mac's helper leaves 80 out of its
+    redirect while something on the Mac serves it: the header must not
+    offer domovoi.local, which would reach that program."""
+    monkeypatch.setattr(sa, "_root_only", lambda st: True)
+    rep = _mac_report(tmp_path, {"schema": 1, "state": "taken", "holder": "httpd", "written_at": "x"})
+    st = _mac_svc(tmp_path, rep).status()
+    assert st["state"] == "taken"
+    assert st["message"] == "Short address off: something else on this Mac uses port 80 (httpd)."
+    rep.write_text(json.dumps({"schema": 1, "state": "taken", "holder": None}), encoding="utf-8")
+    assert _mac_svc(tmp_path, rep).status()["message"] == "Short address off: something else on this Mac uses port 80."
+
+
+def test_a_mac_that_passes_80_on_leaves_the_vms_state(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(sa, "_root_only", lambda st: True)
+    rep = _mac_report(tmp_path, {"schema": 1, "state": "on", "holder": None})
+    assert _mac_svc(tmp_path, rep).status()["state"] == "on"
+    # Its word only matters while the VM listens: off stays off.
+    rep.write_text(json.dumps({"schema": 1, "state": "taken", "holder": "httpd"}), encoding="utf-8")
+    svc = _mac_svc(tmp_path, rep)
+    svc.state = "off"
+    assert svc.status()["state"] == "off"
+
+
+def test_a_mac_that_couldnt_check_says_failed(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(sa, "_root_only", lambda st: True)
+    rep = _mac_report(tmp_path, {"schema": 1, "state": "unchecked", "holder": None})
+    assert _mac_svc(tmp_path, rep).status()["state"] == "failed"
+
+
+@pytest.mark.parametrize("doc", [
+    "not json",
+    {"schema": 2, "state": "taken"},
+    {"schema": 1, "state": "stolen"},
+    ["taken"],
+])
+def test_a_report_that_isnt_the_schema_is_ignored(tmp_path, monkeypatch, doc) -> None:
+    monkeypatch.setattr(sa, "_root_only", lambda st: True)
+    assert _mac_svc(tmp_path, _mac_report(tmp_path, doc)).status()["state"] == "on"
+
+
+def test_a_report_that_isnt_roots_alone_is_ignored(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(sa, "_root_only", lambda st: False)
+    rep = _mac_report(tmp_path, {"schema": 1, "state": "taken", "holder": "httpd"})
+    assert sa.read_host_report(rep) is None
+    assert _mac_svc(tmp_path, rep).status()["state"] == "on"
+
+
+def test_the_holder_is_shown_only_when_plain(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(sa, "_root_only", lambda st: True)
+    rep = _mac_report(tmp_path, {"schema": 1, "state": "taken", "holder": "<b>x</b>"})
+    assert sa.read_host_report(rep) == {"state": "taken", "holder": None}
+    assert sa.read_host_report(tmp_path / "missing.json") is None
+    big = _mac_report(tmp_path, {"schema": 1, "state": "taken", "holder": "a", "pad": "x" * 2000})
+    assert sa.read_host_report(big) is None
+
+
+def test_the_report_is_where_the_mac_helper_writes_it() -> None:
+    swift = (Path(sa.__file__).resolve().parents[2] / "mac" / "Sources" / "DomovoiMacKit" / "HostFiles.swift").read_text(
+        encoding="utf-8")
+    assert 'shortAddressFile = folder + "/short_address.json"' in swift
+    assert 'folder = "/var/lib/domovoi-mac"' in swift
+    assert sa.HOST_REPORT == "/var/lib/domovoi-mac/short_address.json"

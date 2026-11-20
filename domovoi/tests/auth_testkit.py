@@ -73,8 +73,8 @@ class FakeState:
         self.admin = admin
         self.sessions = sessions or set()
         self.device_token = device_token
-        # The tokens whose check counted as an admin action, in order
-        # (validate_token(..., activity=True): the idle timeout's clock).
+        # The tokens whose request counted as an admin action, in order
+        # (stamped by AdminActivityMiddleware on a 2xx: the idle clock).
         self.acted: list[str] = []
 
 
@@ -103,6 +103,12 @@ def install_fake_db(
             state.acted.append(token)
         return live
 
+    async def stamp_admin_activity(token):
+        live = token in state.sessions
+        if live:
+            state.acted.append(token)
+        return live
+
     # The browser cookie is its own secret since V028; in this fake a
     # session's string doubles as its cookie, so a test that hands the
     # client `cookies={COOKIE: <session>}` still means "that browser's
@@ -116,6 +122,7 @@ def install_fake_db(
     monkeypatch.setattr(admin_auth, "session_scope", fake_scope)
     monkeypatch.setattr(admin_auth, "has_admin_auth", has_admin_auth)
     monkeypatch.setattr(admin_auth, "validate_token", validate_token)
+    monkeypatch.setattr(admin_auth, "stamp_admin_activity", stamp_admin_activity)
     monkeypatch.setattr(admin_auth, "validate_cookie", validate_cookie)
     monkeypatch.setattr(admin_auth, "validate_device_token", validate_device_token)
     return state
@@ -123,6 +130,7 @@ def install_fake_db(
 
 def mini_app() -> FastAPI:
     app = FastAPI()
+    app.add_middleware(admin_auth.AdminActivityMiddleware)
 
     @app.post("/device", dependencies=[Depends(admin_auth.require_device)])
     async def _device() -> dict[str, bool]:

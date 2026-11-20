@@ -30,7 +30,9 @@ public func scanReadProgress(_ read: ScanRead) -> String {
     if read.waitingForVoice { return ScanReadStrings.paused }
     if read.state == "queued" { return ScanReadStrings.waiting }
     if read.pages > 0 {
-        return ScanReadStrings.readingPage(min(read.pagesDone + 1, read.pages), of: read.pages)
+        // Saturating: `pages_done` is the server's, and `Int.max + 1` traps
+        // (security audit round 6, IOS-1).
+        return ScanReadStrings.readingPage(min(WireNumber.add(read.pagesDone, 1), read.pages), of: read.pages)
     }
     return ScanReadStrings.readingBare
 }

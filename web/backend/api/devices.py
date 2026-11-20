@@ -127,7 +127,7 @@ DEVICE = [Depends(require_device)]
 # Device ids are minted by clients, so the server decides what shape it will
 # store: a conservative slug charset keeps them safe to echo into toasts and
 # log lines, and bounds the column.
-_DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{2,63}$")
+_DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{2,63}\Z")
 
 # A name is displayed in the queue and matched by the blocklist. Collapse
 # whitespace so " Kitchen  iPad " and "Kitchen iPad" can't become two

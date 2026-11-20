@@ -357,6 +357,8 @@ case "${1-}" in
     echo "Error: No such object: ${!#}" >&2; exit 1
     ;;
   stop)
+    # A room's player (rebuild_mpd stops it before removing it).
+    case "${!#}" in domovoi-mpd-*) exit 0 ;; esac
     echo false >"$SHIM_STATE/searxng-running"
     exit 0
     ;;
@@ -1109,6 +1111,7 @@ case_mpd_changed() {
   check "with an iidfile" called "docker build --iidfile "
   check "removes room kitchen" called "docker rm -f domovoi-mpd-kitchen"
   check "removes room office" called "docker rm -f domovoi-mpd-office"
+  check "stops a room first so it saves its place" before "docker stop -t 15 domovoi-mpd-kitchen" "docker rm -f domovoi-mpd-kitchen"
   check "leaves postgres alone" not_called "docker rm -f domovoi-postgres"
   check "rebuild while core is stopped" before "systemctl stop" "docker build"
   check "rebuild before core starts" before "docker build" "systemctl start domovoi-core.service"
@@ -1783,7 +1786,9 @@ case_fh_firewall_installed_once() {
   check "executable by root, not writable by others" eq "$(stat -c %a "$lib")" 755
   check "its folder 0755" eq "$(stat -c %a "$(dirname "$lib")")" 755
   check "the unit" cmp -s "$units/domovoi-fh-firewall.service" "$HERE/../units/domovoi-fh-firewall.service"
-  check "the unit runs the root-owned copy" grep -qx 'ExecStart=/usr/local/lib/domovoi-fh-firewall/fh-firewall.sh apply' "$units/domovoi-fh-firewall.service"
+  check "the unit applies the rules with the root-owned copy" grep -qx 'ExecStartPre=/usr/local/lib/domovoi-fh-firewall/fh-firewall.sh apply' "$units/domovoi-fh-firewall.service"
+  check "and watches them with it" grep -qx 'ExecStart=/usr/local/lib/domovoi-fh-firewall/fh-firewall.sh watch' "$units/domovoi-fh-firewall.service"
+  check "it goes in before Docker" grep -qx 'Before=docker.service' "$units/domovoi-fh-firewall.service"
   check "it follows Docker" grep -qx 'PartOf=docker.service' "$units/domovoi-fh-firewall.service"
   check "daemon-reload" called "systemctl daemon-reload"
   check "enabled and started" called "systemctl enable --now domovoi-fh-firewall.service"

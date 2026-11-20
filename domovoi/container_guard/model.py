@@ -44,15 +44,16 @@ ALLOWANCES = frozenset({"privileged", "host_network", "host_pid", "docker_socket
 RESERVED_CONTAINER_NAMES = frozenset({
     "domovoi-postgres", "domovoi-flyway", "domovoi-flyway-test",
     "domovoi-searxng", "domovoi-letta",
-    # Friend Houses' Tor daemon (domovoi/friend_houses/tor_runtime.py).
-    "domovoi-tor",
+    # Friend Houses' Tor daemon (domovoi/friend_houses/tor_runtime.py) and
+    # its inbound listener (domovoi/friend_houses/listener_runtime.py).
+    "domovoi-tor", "domovoi-fh-listener",
 })
 RESERVED_CONTAINER_PREFIXES = ("domovoi-mpd-",)
 # A Docker container name.
-CONTAINER_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$")
+CONTAINER_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}\Z")
 
 DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
-_REF_DIGEST_RE = re.compile(r"@(sha256:[0-9a-f]{64})$")
+_REF_DIGEST_RE = re.compile(r"@(sha256:[0-9a-f]{64})\Z")
 
 
 def is_host_root(source: str, system_drive: str | None = None) -> bool:
@@ -120,7 +121,7 @@ class Expected:
 
     name: str
     owner: str                     # "core" or "plugin:<slug>"
-    role: str                      # postgres | flyway | searxng | letta | mpd | tor | plugin | compose
+    role: str                      # postgres | flyway | searxng | letta | mpd | tor | fh-listener | plugin | compose
     label: str                     # plain words: "the database", "the music player for kitchen"
     state: str                     # one of STATES
     required: bool = True

@@ -324,7 +324,12 @@ where() { printf 'WSL: %s; internet: %s' "$([ "$WSL" = 1 ] && echo yes || echo n
 # Status 0 when one is; GPU_WHY says what was found, or what was missing.
 GPU_WHY=""
 gpu_visible() {
-  local out n line names=""
+  local out n line names="" arch
+  # The pinned packages and NVIDIA's repository (nvidia_repo_url .../deb/amd64,
+  # "Architectures: amd64" below) are x86_64's. An ARM box (a Raspberry Pi,
+  # a Mac host's Lima VM) has no NVIDIA GPU this could set up.
+  arch=$(uname -m)
+  if [ "$arch" != x86_64 ]; then GPU_WHY="this is $arch: the NVIDIA Container Toolkit pins are for x86_64"; return 1; fi
   if [ "$WSL" = 1 ]; then
     if [ ! -e "$DXG" ]; then GPU_WHY="WSL: no /dev/dxg, so Windows hands this distro no GPU"; return 1; fi
     if [ ! -e "$WSL_LIBCUDA" ]; then

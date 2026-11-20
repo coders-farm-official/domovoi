@@ -349,10 +349,14 @@ app = FastAPI(
 # actually meets, outermost in:
 #
 #   SecurityHeaders → CORS → process-wide body cap → Host → upload budgets
-#   → X-Requested-With → the router
+#   → X-Requested-With → admin activity stamp → the router
 #
 # Every one of those refuses before a route is chosen, and the header
 # middleware is outermost so its headers are stamped on their refusals too.
+
+# CORE-42. The very innermost: an admin write restarts the idle hour only
+# once the route answered 2xx, never on a refusal (422, 404, 409...).
+app.add_middleware(admin_auth.AdminActivityMiddleware)
 
 # WEB-6. A write under /api/ without X-Requested-With is refused in front
 # of the router, so no endpoint runs and nothing reads the body.
@@ -535,7 +539,7 @@ async def bundle() -> dict[str, str | None]:
 # verbatim and nothing with a newline in it is ever signed. The Android app
 # sends 32 hex characters.
 HEALTH_CHALLENGE_MAX_LEN = 128
-_HEALTH_CHALLENGE_RE = re.compile(rf"^[A-Za-z0-9._~-]{{1,{HEALTH_CHALLENGE_MAX_LEN}}}$")
+_HEALTH_CHALLENGE_RE = re.compile(rf"^[A-Za-z0-9._~-]{{1,{HEALTH_CHALLENGE_MAX_LEN}}}\Z")
 
 
 def health_challenge_ok(challenge: str) -> bool:
@@ -581,6 +585,7 @@ async def health(challenge: str | None = None) -> HealthResponse:
     core_ok = False
     core_alive: bool | None = None
     stt: str | None = None
+    stt_engine: dict[str, Any] | None = None
     speech: dict[str, Any] | None = None
     identity: dict[str, str] | None = None
     import httpx
@@ -601,6 +606,12 @@ async def health(challenge: str | None = None) -> HealthResponse:
                 doc = r.json()
                 if isinstance(doc, dict) and isinstance(doc.get("stt"), str):
                     stt = doc["stt"]
+                # The Mac's speech service, when the core has one: passed
+                # through (only the known keys), the same signal-not-cause.
+                if isinstance(doc, dict) and isinstance(doc.get("stt_engine"), dict):
+                    stt_engine = {k: doc["stt_engine"].get(k) for k in (
+                        "active", "host_state", "local_standby", "use_host", "down_since",
+                        "shares_gpu", "last_engine", "last_reason", "last_at")}
                 # The turn watchdog's speech-recognition block (ok / slow /
                 # stalled), for the Health page's row; absent from an older
                 # core.
@@ -628,6 +639,7 @@ async def health(challenge: str | None = None) -> HealthResponse:
         db_reachable=db_ok,
         domovoi_reachable=core_ok,
         stt=stt,
+        stt_engine=stt_engine,
         speech=speech,
         identity=identity,
         core_alive=core_alive,

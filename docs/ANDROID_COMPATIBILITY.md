@@ -12,7 +12,7 @@ Android emulator; see [What was tested](#what-was-tested) for exactly how.
   every phone from about 2017 on), 32-bit ARM (`armeabi-v7a`, older and
   budget phones, Android Go), and the x86 / x86_64 used by emulators and a
   few Chromebooks and tablets.
-- **The on-device assistant (a preview) needs a 64-bit phone** running
+- **The on-device assistant needs a 64-bit phone** running
   the 64-bit app. Its engine, LiteRT-LM, is published for 64-bit processors only.
   Everything else is the same on every ABI.
 
@@ -63,7 +63,7 @@ version from 8.0.
 | Music from the server on the phone, media notification | works | works | works | works | works | works |
 | Video feed (server and phone): pause on leaving, screen kept on | works | works | works | works | works | works |
 | Chat (text) | works | works | works | works | works | works |
-| Chat "on this phone" (the on-device assistant, a preview; needs the 64-bit app and a phone sold with 8 GB of memory or more) | works | works | works | works | works | **hidden** |
+| Chat "on this phone" (the on-device assistant; needs the 64-bit app and a phone sold with 8 GB of memory or more) | works | works | works | works | works | **hidden** |
 | A PDF attached to a phone chat (its text is read on the phone) | not read: Chat says so and offers to ask the home server | as 8 | as 8 | only with Google's PDF update (the PDF module at extension level 13); otherwise as 8 | works on 15 and later; on 13 and 14 only with the PDF update | no phone chats |
 | Drafts in a phone chat (a PDF or Word file the app writes itself, shared through Android's share sheet) | works | works | works | works | works | no phone chats |
 | Chat photos: HEIC / AVIF converted to JPEG before sending | degraded: JPEG, PNG, GIF, WebP and BMP only; a HEIC photo gets "this phone can't convert HEIC photos" | works; AVIF as 8 | as 9 | works | works | as the Android version |
@@ -74,7 +74,7 @@ version from 8.0.
 | Notifications | on, no prompt | on, no prompt | on, no prompt | on, no prompt | asked at first start | as the Android version |
 | Problem reports | degraded: crashes and freezes; no "not responding" closes, and the card says so | degraded: as 8 | works: crashes, freezes, "not responding" closes | works | works | works |
 | On-device assistant benchmark (Settings → System → About & updates → developer options: tap the app version seven times) | works; its results lack the thermal status and name the board, not the chip | works; thermal status from 10 | works | works; chip name from 12 | works | **hidden** |
-| Room mode (this device as a room) | works; the mic service starts from the room screen | works | works; mic only "while using the app": the service starts from the room screen, and after a restart needs one tap | works; the mic privacy toggle shows as **mic blocked**; the notification's Stop asks for the unlock | works; notifications asked for in the explainer; Android 14+ declares the microphone service type | works (ONNX Runtime only) |
+| Room mode (this device as a room's satellite) | works; the mic service starts from the room screen | works | works; mic only "while using the app": the service starts from the room screen, and after a restart needs one tap | works; the mic privacy toggle shows as **mic blocked**; the notification's Stop asks for the unlock | works; notifications asked for in the explainer; Android 14+ declares the microphone service type | works (ONNX Runtime only) |
 | Documents "download all" (zip) | degraded: lands in the app's own folder (Android/data/…/Download) | degraded on 9: as 8; works on 10 (public Downloads) | works | works | works | as the Android version |
 
 Notes:
@@ -109,7 +109,8 @@ Notes:
   camera; on every supported Android version these are asked at the time, and
   a refusal is remembered. Timers and alarms go to the Clock app (the
   install-time `SET_ALARM` permission, no prompt).
-- **Room mode** runs openWakeWord and the Silero voice detector on ONNX
+- **Room mode** (the phone as a satellite for a room: voice, plus the room
+  screen) runs openWakeWord and the Silero voice detector on ONNX
   Runtime, the runtime the phone's voice already ships for all four ABIs,
   and loads nothing of the on-device assistant's (LiteRT-LM,
   sherpa-onnx). From 1.4.0 it runs up to five wake words, or three on a
@@ -118,7 +119,7 @@ Notes:
   code's QR scanner, CameraX) or when a picture is taken for a phone chat, and
   it is not required to install. Drop-ins need the
   phone's echo canceller (`AcousticEchoCanceler.isAvailable()`); a phone
-  without one is a room without drop-ins (the emulator images have none).
+  without one is a satellite without drop-ins (the emulator images have none).
 
 ## Android 16 (API 36)
 
@@ -133,7 +134,7 @@ app does (`TargetApi36Test` holds the code to it):
   Android 13 (`enableOnBackInvokedCallback`), so back behaves the same
   everywhere; the app handles back only through Compose's `BackHandler`
   (no `onBackPressed`, no `KEYCODE_BACK`). The room screen still keeps
-  back from leaving the room: Exit is the way out.
+  back from leaving room mode: Exit is the way out.
 - **Large screens ignore orientation and resize locks** from 600 dp wide:
   the app has none.
 - **16 KB memory pages.** Every 64-bit native library is 16 KB aligned and

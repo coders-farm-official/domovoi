@@ -95,6 +95,40 @@ from domovoi_plugin_radio import SCHEMA
 
 log = logging.getLogger(__name__)
 
+#: How long the redirect chain of a stream may take to answer (PLG-12).
+_STREAM_RESOLVE_TIMEOUT = 10.0
+#: _final_stream_url's answer for a chain that leads somewhere refused.
+_BLOCKED = object()
+
+
+def _stream_hops_checked(sdk: Any) -> bool:
+    """Whether a station's redirect chain is followed before play. Not
+    under USE_STUBS (the test suite and a stub dev box), whose stations
+    are made up and have no stream to ask."""
+    return not bool(getattr(sdk.core_config, "use_stubs", False))
+
+
+async def _final_stream_url(sdk: Any, url: str) -> Any:
+    """The URL that answers for a station's stream once its redirects are
+    followed, each hop through the outbound check and pinned to the
+    address it judged (``net_safety.resolve_final_target``): what the
+    room's player is handed, so it has no redirect of its own to follow
+    into the house (PLG-12). :data:`_BLOCKED` when a hop is refused, None
+    when the stream couldn't be reached."""
+    if not _stream_hops_checked(sdk):
+        return url
+    try:
+        final = await net_safety.resolve_final_target(url, timeout=_STREAM_RESOLVE_TIMEOUT)
+    except egress.InternetTurnedOff:   # an UnsafeOutboundURL: before it
+        return None
+    except net_safety.OutboundFetchError as e:
+        log.warning("radio: refusing a stream whose redirects lead somewhere refused: %s", e)
+        return _BLOCKED
+    except Exception as e:  # noqa: BLE001 — unreachable now: say so, play nothing
+        log.warning("radio: couldn't reach a stream to follow its redirects: %s", type(e).__name__)
+        return None
+    return final.url
+
 
 # Tightly anchored. Every pattern leads with a distinctive verb — never
 # a bare "play X" (MusicHandler's territory). The optional literal
@@ -894,6 +928,25 @@ class RadioHandler(Handler):
                     f"I can't stream {station['name']}: its stream address "
                     "isn't one I'm allowed to fetch.",
                 )
+            # PLG-12 (round 6): the check above looks at the URL as written;
+            # the room's player then fetched it with its own DNS lookup and
+            # its own redirect following, from a container that can reach
+            # the house. A public-directory station whose stream answers 302
+            # to an address inside the house got the player to GET it. The
+            # chain is followed here, every hop checked, and the player is
+            # handed the URL that answered.
+            final = await _final_stream_url(self.sdk, str(url_to_play))
+            if final is _BLOCKED:
+                return self._reply(
+                    ctx,
+                    f"I can't stream {station['name']}: its stream address "
+                    "isn't one I'm allowed to fetch.",
+                )
+            if final is None:
+                return self._reply(
+                    ctx, f"I couldn't reach {station['name']}'s stream just now."
+                )
+            url_to_play = final
 
         elif source == "fm":
             tuner = self._tuner()

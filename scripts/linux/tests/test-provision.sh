@@ -78,7 +78,8 @@ SHIM_REAL_FLOCK=$(command -v flock || true)
 SHIM_REAL_READLINK=$(command -v readlink)
 SHIM_REAL_GIT=$(command -v git)
 SHIM_REAL_TAR=$(command -v tar)
-export SHIM_REAL_INSTALL SHIM_REAL_READLINK SHIM_REAL_GIT SHIM_REAL_TAR SHIM_REAL_FLOCK
+SHIM_REAL_UNAME=$(command -v uname)
+export SHIM_REAL_INSTALL SHIM_REAL_READLINK SHIM_REAL_GIT SHIM_REAL_TAR SHIM_REAL_FLOCK SHIM_REAL_UNAME
 
 # A remote's URL as git on Linux would print it (see the git shim).
 origin_url() {
@@ -183,7 +184,8 @@ build_origin() {
     echo "# Running the Domovoi server on Linux (fixture)"
     echo '```bash'
     echo "OLLAMA_VERSION=0.34.4"
-    echo "# arm64: 96f50a1192133028cf4e010d8c333f8af14b1505db6be7b2034c11487e7fd7e6"
+    echo "# ollama-linux-arm64.tar.zst: the same fake tarball, for the aarch64 cases"
+    echo "OLLAMA_SHA256_ARM64=$(sha256sum "$WORK/ollama.tar.zst" | cut -d' ' -f1)"
     echo "OLLAMA_SHA256=$(sha256sum "$WORK/ollama.tar.zst" | cut -d' ' -f1)"
     echo '```'
   } >"$o/docs/LINUX_HOST.md"
@@ -275,6 +277,11 @@ LOCK
   git -C "$o" commit -q -am "lock without wheel"
   git -C "$o" checkout -q main
   # A branch without the no-deps lock (faster-whisper, resemblyzer).
+  # A checkout from before the aarch64 Ollama pin.
+  git -C "$o" checkout -q -b no-arm64-pin
+  sed -i '/^OLLAMA_SHA256_ARM64=/d' "$o/docs/LINUX_HOST.md"
+  git -C "$o" commit -q -am "no aarch64 Ollama pin"
+  git -C "$o" checkout -q main
   git -C "$o" checkout -q -b no-nodeps-lock
   git -C "$o" rm -q requirements-linux-py314-no-deps.lock
   git -C "$o" commit -q -m "no no-deps lock"
@@ -421,6 +428,15 @@ while [ $# -gt 0 ]; do
 done
 echo "curl $url${out:+ -o $out}${data:+ -d $data}" >>"$SHIM_STATE/calls.log"
 active() { [ -f "$SHIM_STATE/active/$1" ]; }
+# The local Ollama answers while its unit runs. An outside one (--ollama-url,
+# its base in external-ollama-url) answers while external-ollama-up exists,
+# with the same API; ollama-version sets the version either reports.
+ollama_up() { active ollama.service; }
+ext=$(cat "$SHIM_STATE/external-ollama-url" 2>/dev/null || true)
+if [ -n "$ext" ] && [[ $url == "$ext"/api/* ]]; then
+  url=http://127.0.0.1:11434/api/${url#"$ext"/api/}
+  ollama_up() { [ -f "$SHIM_STATE/external-ollama-up" ]; }
+fi
 case $url in
   # uv and CPython for python-runtime.sh (pbs-tampered: the file served is
   # not the pinned one).
@@ -438,7 +454,7 @@ case $url in
   https://nvidia.github.io/libnvidia-container/gpgkey)
     printf 'KEY %s\n' "$(cat "$SHIM_STATE/nvidia-fpr")" >"$out"
     [ ! -f "$SHIM_STATE/nvidia-extra-key" ] || printf 'KEY %s\n' "$(cat "$SHIM_STATE/nvidia-extra-key")" >>"$out" ;;
-  https://github.com/ollama/ollama/releases/download/v*/ollama-linux-amd64.tar.zst)
+  https://github.com/ollama/ollama/releases/download/v*/ollama-linux-amd64.tar.zst|https://github.com/ollama/ollama/releases/download/v*/ollama-linux-arm64.tar.zst)
     src=$SHIM_WORK/ollama.tar.zst
     [ ! -f "$SHIM_STATE/ollama-tampered" ] || src=$SHIM_WORK/ollama-tampered.tar.zst
     if [ "$head" = 1 ]; then printf 'HTTP/2 200\r\ncontent-length: %s\r\n\r\n' "$(stat -c %s "$src")"; exit 0; fi
@@ -455,10 +471,13 @@ case $url in
       n=$(cat "$SHIM_STATE/ollama-polls" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" >"$SHIM_STATE/ollama-polls"
       [ "$n" -gt "$(cat "$SHIM_STATE/ollama-slow-polls")" ] || { echo "curl: (7) Failed to connect" >&2; exit 7; }
     fi
-    active ollama.service || { echo "curl: (7) Failed to connect" >&2; exit 7; }
-    echo "{\"version\":\"$(cat "$SHIM_STATE/ollama-unit-version" 2>/dev/null || echo 0.34.4)\"}" ;;
+    ollama_up || { echo "curl: (7) Failed to connect" >&2; exit 7; }
+    # ollama-version: an external Ollama's version (--ollama-url);
+    # ollama-unit-version: our unit's.
+    v=$(cat "$SHIM_STATE/ollama-version" 2>/dev/null || cat "$SHIM_STATE/ollama-unit-version" 2>/dev/null || echo 0.34.4)
+    echo "{\"version\":\"$v\"}" ;;
   http://127.0.0.1:11434/api/tags)
-    active ollama.service || exit 7
+    ollama_up || exit 7
     printf '{"models":['
     sep=""
     while read -r tag dg; do
@@ -735,8 +754,45 @@ case "${1-}" in
 esac
 SH
 
+  # uname -m: the case's architecture (arch, default x86_64); the rest is real.
+  cat >"$bin/uname" <<'SH'
+#!/usr/bin/env bash
+if [ "$#" = 1 ] && [ "$1" = -m ]; then cat "$SHIM_STATE/arch" 2>/dev/null || echo x86_64; exit 0; fi
+exec "$SHIM_REAL_UNAME" "$@"
+SH
+
+  cat >"$bin/dpkg" <<'SH'
+#!/usr/bin/env bash
+echo "dpkg $*" >>"$SHIM_STATE/calls.log"
+[ "${1-}" = --print-architecture ] || { echo "dpkg shim: $*" >&2; exit 2; }
+case $(cat "$SHIM_STATE/arch" 2>/dev/null || echo x86_64) in aarch64) echo arm64 ;; *) echo amd64 ;; esac
+SH
+
+  # nft -f FILE keeps FILE's text as the loaded ruleset (nft-fail: refuses);
+  # list table inet NAME answers while a loaded file declares it.
+  cat >"$bin/nft" <<'SH'
+#!/usr/bin/env bash
+echo "nft $*" >>"$SHIM_STATE/calls.log"
+case "${1-}" in
+  -f)
+    [ ! -f "$SHIM_STATE/nft-fail" ] || { echo "nft: syntax error (fixture)" >&2; exit 1; }
+    cp "$2" "$SHIM_STATE/nft-loaded" ;;
+  list)
+    [ "${2-}" = table ] && grep -qx "table inet ${4-} {" "$SHIM_STATE/nft-loaded" 2>/dev/null || { echo "Error: No such file or directory" >&2; exit 1; }
+    echo "table inet $4 { }" ;;
+  *) echo "nft shim: $*" >&2; exit 2 ;;
+esac
+SH
+
   cat >"$bin/getent" <<'SH'
 #!/usr/bin/env bash
+# ahostsv4 NAME: the line for NAME in the case's hosts file ("IP NAME").
+if [ "${1-}" = ahostsv4 ]; then
+  ip=$(awk -v n="${2-}" '$2 == n {print $1; exit}' "$SHIM_STATE/hosts" 2>/dev/null)
+  [ -n "$ip" ] || exit 2
+  printf '%s       STREAM %s\n%s       DGRAM\n' "$ip" "$2" "$ip"
+  exit 0
+fi
 [ "${1-}" = passwd ] && grep -qx -- "${2-}" "$SHIM_STATE/users" 2>/dev/null || exit 2
 printf '%s:x:1000:1000::/home/%s:/bin/bash\n' "$2" "$2"
 SH
@@ -1195,7 +1251,7 @@ final_field() { grep '"final":true' "$CASE/progress.jsonl" | tail -n 1 | sed -n 
 progress_ok() {
   [ -s "$CASE/progress.jsonl" ] || { echo "      no progress lines"; return 1; }
   if [ -z "$JSON_PY" ]; then
-    grep -qv '^{"v":1,"step":"[a-z-]*","index":[0-9]*,"total":23,"state":"[a-z]*","percent":[0-9]*,"message":"' "$CASE/progress.jsonl" \
+    grep -qv '^{"v":1,"step":"[a-z-]*","index":[0-9]*,"total":24,"state":"[a-z]*","percent":[0-9]*,"message":"' "$CASE/progress.jsonl" \
       && { echo "      a progress line does not match the protocol"; return 1; }
     return 0
   fi
@@ -1208,7 +1264,7 @@ for n, l in enumerate(lines, 1):
     o = json.loads(l)
     for k in ("v", "step", "index", "total", "state", "percent", "message"):
         assert k in o, "line %d lacks %s: %s" % (n, k, l)
-    assert o["v"] == 1 and o["total"] == 23, l
+    assert o["v"] == 1 and o["total"] == 24, l
     assert o["state"] in ("start", "progress", "done", "skip", "fail", "plan"), l
     assert 0 <= o["percent"] <= 100, l
     if o["state"] != "fail" and not o.get("final"):
@@ -1355,7 +1411,7 @@ case_dry_run_changes_nothing() {
   check "plans the vision model" said "OLLAMA_VISION_MODEL=qwen3-vl:2b-instruct-q4_K_M"
   check "plans its pull, by digest" said "ollama pull qwen3-vl:2b-instruct-q4_K_M afc393e3572c07db0bc84aa460d928a16c75f3fbb9ca9e0dccc4fbd2dafb573e"
   check "plans MPD_HTTP_BASE" said "MPD_HTTP_BASE=http://192.168.1.50"
-  check "plan lines for every step but the preflight" eq "$(grep -c '"state":"plan"' "$CASE/progress.jsonl")" 21
+  check "plan lines for every step but the preflight" eq "$(grep -c '"state":"plan"' "$CASE/progress.jsonl")" 22
   check "the phone app is listed among the downloads" \
     grep -q '"step":"phone-app".*"state":"plan".*"message":"run: Downloading the phone app"' "$CASE/progress.jsonl"
   check "with what it fetches" said "the phone app android/release.json names (about 100 MB) from the project's GitHub release"
@@ -2010,7 +2066,7 @@ case_phone_app_failure_is_not_fatal() {
   check "result ok" eq "$(final_field result)" '"ok"'
   check "progress format" progress_ok
   check "the step is done, not failed" eq "$(state_of phone-app)" done
-  check "its summary says why, plainly" grep -qF '"step":"phone-app","index":15,"total":23,"state":"done","percent":' "$CASE/progress.jsonl"
+  check "its summary says why, plainly" grep -qF '"step":"phone-app","index":16,"total":24,"state":"done","percent":' "$CASE/progress.jsonl"
   check "in these words" grep -qF "\"message\":\"The phone app couldn't be downloaded: this server needs the internet once, at some point, to put it here (or upload it in Settings)\"" "$CASE/progress.jsonl"
   check "a warning, with fetch's own word" said "WARNING: The phone app couldn't be downloaded: this server needs the internet once, at some point, to put it here (or upload it in Settings) (2 of 2 app files failed"
   check "counted with the warnings" eq "$(final_field warnings)" 3
@@ -2445,6 +2501,424 @@ case_bare_metal() {
   check "search helper up (sometimes)" called "docker compose up -d --no-deps searxng"
   check "no restart required" eq "$(final_field restart_required)" false
   check "no time zone step" eq "$(state_of timezone)" skip
+  end_case
+}
+
+# ─── aarch64, an outside Ollama, the VM guard (mac-installer PLAN §6) ────
+
+# external_ollama URL [IP NAME]: an Ollama outside the box answers at URL
+# (its base); with IP and NAME the box resolves NAME to IP (/etc/hosts).
+external_ollama() {
+  echo "$1" >"$STATE/external-ollama-url"
+  touch "$STATE/external-ollama-up"
+  if [ $# -ge 3 ]; then echo "$2 $3" >>"$STATE/hosts"; fi
+}
+LIMA_URL=http://host.lima.internal:11500
+
+case_aarch64_bare_metal_installs_the_arm64_ollama() {
+  new_case aarch64_bare_metal_installs_the_arm64_ollama --bare
+  echo aarch64 >"$STATE/arch"
+  run_prov --internet sometimes --skip-models
+  check "exit 0" eq "$RC" 0
+  check "progress format" progress_ok
+  check "preflight says ARM" said "aarch64 (ARM): the hashed lock, docker-ce for arm64 and Ollama's aarch64 build"
+  check "the arm64 tarball" called "curl https://github.com/ollama/ollama/releases/download/v0.34.4/ollama-linux-arm64.tar.zst"
+  check "not the amd64 one" not_called "ollama-linux-amd64.tar.zst"
+  check "ollama done" eq "$(state_of ollama)" done
+  check "stamp names the arm64 pin" eq "$(cat "$ROOT/usr/local/lib/ollama/.domovoi-provision")" "0.34.4 $(sha256sum "$WORK/ollama.tar.zst" | cut -d' ' -f1)"
+  check "docker source for arm64" has_line "$ROOT/etc/apt/sources.list.d/docker.sources" "Architectures: arm64"
+  check "gpu-runtime skipped" eq "$(state_of gpu-runtime)" skip
+  check "says why" said "this is aarch64: the NVIDIA Container Toolkit pins are for x86_64"
+  check "no NVIDIA repository" absent "$ROOT/etc/apt/sources.list.d/nvidia-container-toolkit.sources"
+  check "vm-guard skipped" eq "$(state_of vm-guard)" skip
+  check "no keep-alive written (no --ollama-url)" eq "$(grep -c '^OLLAMA_KEEP_ALIVE=' "$CHECKOUT/domovoi/.env")" 0
+  check "no Letta URL written" eq "$(grep -c '^LETTA_OLLAMA_BASE_URL=' "$CHECKOUT/domovoi/.env")" 0
+  # Idempotent: a second run skips every step and downloads nothing.
+  local sig; sig=$(tree_sig)
+  run_prov --internet sometimes --skip-models
+  check "re-run exit 0" eq "$RC" 0
+  check "re-run: ollama skipped" eq "$(state_of ollama)" skip
+  check "re-run: nothing downloaded" not_called "curl https://"
+  check "re-run: every file as it was" eq "$(tree_sig)" "$sig"
+  end_case
+}
+
+case_x86_64_keeps_the_amd64_pins() {
+  new_case x86_64_keeps_the_amd64_pins --bare
+  run_prov --internet sometimes --skip-models --stop-before env
+  check "exit 0" eq "$RC" 0
+  check "docker source for amd64" has_line "$ROOT/etc/apt/sources.list.d/docker.sources" "Architectures: amd64"
+  check "no ARM line" not_said "aarch64 (ARM)"
+  end_case
+}
+
+case_other_architectures_are_refused() {
+  new_case other_architectures_are_refused --bare
+  echo armv7l >"$STATE/arch"
+  run_prov --internet sometimes --skip-models
+  check "exit 1" eq "$RC" 1
+  check "progress format" progress_ok
+  check "preflight failed" eq "$(state_of preflight)" fail
+  check "says which" said "x86_64 or aarch64 only (this is armv7l)"
+  check "nothing installed" not_called "apt-get"
+  end_case
+  # aarch64 is let through with an outside Ollama as well.
+  new_case other_architectures_are_refused_url --bare
+  echo aarch64 >"$STATE/arch"
+  external_ollama "$LIMA_URL" 192.168.5.2 host.lima.internal
+  run_prov --internet sometimes --skip-models --ollama-url "$LIMA_URL" --stop-before apt
+  check "aarch64 + --ollama-url: exit 0" eq "$RC" 0
+  check "says where Ollama runs" said "aarch64 (ARM): the hashed lock and docker-ce for arm64; Ollama runs at $LIMA_URL"
+  check "no memory warning for an outside Ollama" not_said "less than about 9 GB"
+  end_case
+}
+
+case_aarch64_without_an_arm64_pin_needs_ollama_url() {
+  new_case aarch64_without_an_arm64_pin_needs_ollama_url --bare
+  echo aarch64 >"$STATE/arch"
+  run_prov --internet sometimes --skip-models --ref no-arm64-pin
+  check "exit 1" eq "$RC" 1
+  check "ollama failed" eq "$(state_of ollama)" fail
+  check "says what to do" said "pins no aarch64 Ollama (no OLLAMA_SHA256_ARM64= line in this checkout): run with --ollama-url"
+  check "no download" not_called "releases/download"
+  external_ollama "$LIMA_URL" 192.168.5.2 host.lima.internal
+  run_prov --internet sometimes --skip-models --ref no-arm64-pin --ollama-url "$LIMA_URL"
+  check "with --ollama-url: exit 0" eq "$RC" 0
+  check "ollama skipped" eq "$(state_of ollama)" skip
+  end_case
+}
+
+case_ollama_url_skips_ollama_and_pulls_through_it() {
+  new_case ollama_url_skips_ollama_and_pulls_through_it --bare
+  echo aarch64 >"$STATE/arch"
+  external_ollama "$LIMA_URL" 192.168.5.2 host.lima.internal
+  local envf=$CHECKOUT/domovoi/.env
+  run_prov --internet sometimes --tier floor --ollama-url "$LIMA_URL/"
+  check "exit 0" eq "$RC" 0
+  check "progress format" progress_ok
+  check "ollama skipped" eq "$(state_of ollama)" skip
+  check "says why" said "--ollama-url: Ollama runs outside this machine, at $LIMA_URL"
+  check "no Ollama of its own" absent "$ROOT/etc/systemd/system/ollama.service"
+  check "no tarball" not_called "releases/download"
+  check "version checked first" said "Ollama 0.34.4 at $LIMA_URL (Domovoi needs 0.12.7 or newer)"
+  check "pulled through the URL" called "curl $LIMA_URL/api/pull"
+  check "models done" eq "$(state_of models)" done
+  check "the floor router pulled" grep -q "^qwen3:4b-instruct-2507-q4_K_M " "$STATE/ollama-models"
+  check "OLLAMA_URL, trailing slash dropped" has_line "$envf" "OLLAMA_URL=$LIMA_URL"
+  check "floor keep-alive" has_line "$envf" "OLLAMA_KEEP_ALIVE=30m"
+  check "Letta by IP" has_line "$envf" "LETTA_OLLAMA_BASE_URL=http://192.168.5.2:11500/v1"
+  # Idempotent: nothing pulled, nothing written.
+  local sig; sig=$(tree_sig)
+  run_prov --internet sometimes --tier floor --ollama-url "$LIMA_URL"
+  check "re-run exit 0" eq "$RC" 0
+  check "re-run: models skipped" eq "$(state_of models)" skip
+  check "re-run: env skipped" eq "$(state_of env)" skip
+  check "re-run: no pull" not_called "/api/pull"
+  check "re-run: every file as it was" eq "$(tree_sig)" "$sig"
+  # The standard tier keeps the core's own default.
+  run_prov --internet sometimes --tier standard --ollama-url "$LIMA_URL"
+  check "standard exit 0" eq "$RC" 0
+  check "standard keep-alive" has_line "$envf" "OLLAMA_KEEP_ALIVE=24h"
+  # A keep-alive the household set in Settings wins.
+  sed -i 's/^OLLAMA_KEEP_ALIVE=.*/OLLAMA_KEEP_ALIVE=2h/' "$envf"
+  run_prov --internet sometimes --tier floor --ollama-url "$LIMA_URL"
+  check "household exit 0" eq "$RC" 0
+  check "the household's keep-alive kept" has_line "$envf" "OLLAMA_KEEP_ALIVE=2h"
+  check "says it kept it" said "OLLAMA_KEEP_ALIVE holds a value this script did not write"
+  end_case
+}
+
+case_ollama_url_older_than_the_minimum_stops() {
+  new_case ollama_url_older_than_the_minimum_stops --bare
+  external_ollama "$LIMA_URL" 192.168.5.2 host.lima.internal
+  echo 0.12.6 >"$STATE/ollama-version"
+  run_prov --internet sometimes --ollama-url "$LIMA_URL"
+  check "exit 1" eq "$RC" 1
+  check "models failed" eq "$(state_of models)" fail
+  check "says so in words" said "the Ollama at $LIMA_URL is version 0.12.6; Domovoi needs 0.12.7 or newer: update that Ollama"
+  check "nothing pulled" not_called "/api/pull"
+  echo 0.12.7 >"$STATE/ollama-version"
+  run_prov --internet sometimes --ollama-url "$LIMA_URL"
+  check "the minimum itself: exit 0" eq "$RC" 0
+  check "models done" eq "$(state_of models)" done
+  end_case
+  # Not answering at all.
+  new_case ollama_url_older_than_the_minimum_stops_down --bare
+  external_ollama "$LIMA_URL" 192.168.5.2 host.lima.internal
+  rm -f "$STATE/external-ollama-up"
+  run_prov --internet sometimes --ollama-url "$LIMA_URL"
+  check "down: exit 1" eq "$RC" 1
+  check "down: says so" said "no Ollama answers at $LIMA_URL (--ollama-url)"
+  end_case
+}
+
+# --ollama-url dropped on a later run: the two keys the script wrote go back
+# (the keep-alive to the core's 24h, the Letta URL to blank), a value the
+# household changed stays, and a box that never had the option is untouched.
+case_dropping_ollama_url_resets_what_the_script_wrote() {
+  new_case dropping_ollama_url_resets_what_the_script_wrote --bare
+  external_ollama "$LIMA_URL" 192.168.5.2 host.lima.internal
+  local envf=$CHECKOUT/domovoi/.env rec=$ROOT/var/lib/domovoi-provision/env-written
+  run_prov --internet sometimes --tier floor --skip-models --ollama-url "$LIMA_URL"
+  check "with the option: exit 0" eq "$RC" 0
+  check "keep-alive written" has_line "$envf" "OLLAMA_KEEP_ALIVE=30m"
+  check "Letta URL written" has_line "$envf" "LETTA_OLLAMA_BASE_URL=http://192.168.5.2:11500/v1"
+  check "the record marks the script's write" has_line "$rec" "_OLLAMA_EXTERNAL=1"
+  run_prov --internet sometimes --tier floor --skip-models
+  check "dropped: exit 0" eq "$RC" 0
+  check "keep-alive back to the core's default" has_line "$envf" "OLLAMA_KEEP_ALIVE=24h"
+  check "Letta URL blank" has_line "$envf" "LETTA_OLLAMA_BASE_URL="
+  check "Letta URL not left behind" eq "$(grep -c '^LETTA_OLLAMA_BASE_URL=http' "$envf")" 0
+  check "OLLAMA_URL local again" has_line "$envf" "OLLAMA_URL=http://127.0.0.1:11434"
+  check "the marker is gone" eq "$(grep -c '^_OLLAMA_EXTERNAL=' "$rec")" 0
+  # A second run without the option changes nothing.
+  local sig; sig=$(tree_sig)
+  run_prov --internet sometimes --tier floor --skip-models
+  check "again: exit 0" eq "$RC" 0
+  check "again: every file as it was" eq "$(tree_sig)" "$sig"
+  end_case
+}
+case_dropping_ollama_url_keeps_what_the_household_set() {
+  new_case dropping_ollama_url_keeps_what_the_household_set --bare
+  external_ollama "$LIMA_URL" 192.168.5.2 host.lima.internal
+  local envf=$CHECKOUT/domovoi/.env
+  run_prov --internet sometimes --tier floor --skip-models --ollama-url "$LIMA_URL"
+  check "with the option: exit 0" eq "$RC" 0
+  sed -i 's/^OLLAMA_KEEP_ALIVE=.*/OLLAMA_KEEP_ALIVE=2h/; s|^LETTA_OLLAMA_BASE_URL=.*|LETTA_OLLAMA_BASE_URL=http://10.0.0.9:11434/v1|' "$envf"
+  run_prov --internet sometimes --tier floor --skip-models
+  check "dropped: exit 0" eq "$RC" 0
+  check "the household's keep-alive kept" has_line "$envf" "OLLAMA_KEEP_ALIVE=2h"
+  check "the household's Letta URL kept" has_line "$envf" "LETTA_OLLAMA_BASE_URL=http://10.0.0.9:11434/v1"
+  end_case
+}
+case_never_having_ollama_url_leaves_the_keys_alone() {
+  new_case never_having_ollama_url_leaves_the_keys_alone --bare
+  local envf=$CHECKOUT/domovoi/.env rec=$ROOT/var/lib/domovoi-provision/env-written
+  run_prov --internet sometimes --tier floor --skip-models
+  check "exit 0" eq "$RC" 0
+  check "no keep-alive line" eq "$(grep -c '^OLLAMA_KEEP_ALIVE=' "$envf")" 0
+  check "no Letta line" eq "$(grep -c '^LETTA_OLLAMA_BASE_URL=' "$envf")" 0
+  check "no marker in the record" eq "$(grep -c '^_OLLAMA_EXTERNAL=' "$rec")" 0
+  # The household's own keep-alive, set by hand, is not the script's to reset.
+  printf 'OLLAMA_KEEP_ALIVE=1h
+' >>"$envf"
+  local sig; sig=$(tree_sig)
+  run_prov --internet sometimes --tier floor --skip-models
+  check "again: exit 0" eq "$RC" 0
+  check "their keep-alive stays" has_line "$envf" "OLLAMA_KEEP_ALIVE=1h"
+  check "again: every file as it was" eq "$(tree_sig)" "$sig"
+  end_case
+}
+case_container_ollama_url_by_kind_of_host() {
+  new_case container_ollama_url_by_kind_of_host --bare
+  local envf=$CHECKOUT/domovoi/.env
+  run_prov --internet sometimes --skip-models --ollama-url http://192.168.1.20:11434 --stop-before ollama
+  check "an address: exit 0" eq "$RC" 0
+  check "an address stays" has_line "$envf" "LETTA_OLLAMA_BASE_URL=http://192.168.1.20:11434/v1"
+  run_prov --internet sometimes --skip-models --ollama-url http://127.0.0.1:11500 --stop-before ollama
+  check "loopback: exit 0" eq "$RC" 0
+  check "loopback is the Docker host" has_line "$envf" "LETTA_OLLAMA_BASE_URL=http://host.docker.internal:11500/v1"
+  run_prov --internet sometimes --skip-models --ollama-url http://nas.example.invalid:11434 --stop-before ollama
+  check "unresolvable: exit 0" eq "$RC" 0
+  check "unresolvable: the name stays" has_line "$envf" "LETTA_OLLAMA_BASE_URL=http://nas.example.invalid:11434/v1"
+  check "unresolvable: a warning" said "can't resolve nas.example.invalid to an IPv4 address"
+  end_case
+}
+
+case_ollama_url_and_vm_guard_usage_errors() {
+  new_case ollama_url_and_vm_guard_usage_errors --bare
+  run_prov --internet sometimes --ollama-url ftp://host:1; check "ftp URL: 2" eq "$RC" 2
+  run_prov --internet sometimes --ollama-url host:11434; check "no scheme: 2" eq "$RC" 2
+  run_prov --internet sometimes --vm-guard 192.168.5.0/24; check "--vm-guard without --ollama-url: 2" eq "$RC" 2
+  check "says why" said "--vm-guard goes with --ollama-url"
+  run_prov --internet sometimes --ollama-url "$LIMA_URL" --vm-guard-dns 192.168.5.3; check "--vm-guard-dns alone: 2" eq "$RC" 2
+  run_prov --internet sometimes --ollama-url "$LIMA_URL" --vm-guard 192.168.5.0; check "no prefix: 2" eq "$RC" 2
+  run_prov --internet sometimes --ollama-url "$LIMA_URL" --vm-guard 192.168.5.0/33; check "/33: 2" eq "$RC" 2
+  run_prov --internet sometimes --ollama-url "$LIMA_URL" --vm-guard 192.168.256.0/24; check "256: 2" eq "$RC" 2
+  run_prov --internet sometimes --ollama-url "$LIMA_URL" --vm-guard 192.168.5.0/24 --vm-guard-dns 192.168.5; check "bad DNS: 2" eq "$RC" 2
+  run_prov --internet sometimes --ollama-url "$LIMA_URL" --vm-guard-lan lima0; check "--vm-guard-lan alone: 2" eq "$RC" 2
+  check "says it goes with --vm-guard" said "--vm-guard-lan goes with --vm-guard"
+  run_prov --internet sometimes --ollama-url "$LIMA_URL" --vm-guard 192.168.5.0/24 --vm-guard-lan 'lima0;x'; check "bad interface: 2" eq "$RC" 2
+  check "nothing ran" not_called "apt-get"
+  end_case
+}
+
+vm_guard_args=(--internet sometimes --skip-models --ollama-url "$LIMA_URL" --vm-guard 192.168.5.0/24 --vm-guard-dns 192.168.5.3)
+
+case_vm_guard_fences_off_the_host() {
+  new_case vm_guard_fences_off_the_host --bare
+  echo aarch64 >"$STATE/arch"
+  external_ollama "$LIMA_URL" 192.168.5.2 host.lima.internal
+  local f=$ROOT/etc/domovoi/vm-guard.nft
+  run_prov "${vm_guard_args[@]}"
+  check "exit 0" eq "$RC" 0
+  check "progress format" progress_ok
+  check "vm-guard done" eq "$(state_of vm-guard)" done
+  check "marker" marker vm-guard
+  check "after docker" before "dpkg --print-architecture" "nft -f"
+  check "replies pass" has_line "$f" $'\t\tct state established,related accept'
+  check "Ollama, by address and port" has_line "$f" $'\t\tip daddr 192.168.5.2 tcp dport 11500 accept'
+  check "DNS over UDP" has_line "$f" $'\t\tip daddr 192.168.5.3 udp dport 53 accept'
+  check "DNS over TCP" has_line "$f" $'\t\tip daddr 192.168.5.3 tcp dport 53 accept'
+  check "the rest dropped" has_line "$f" $'\t\tip daddr 192.168.5.0/24 drop'
+  check "both hooks" eq "$(grep -c 'ip daddr 192.168.5.0/24 drop' "$f")" 2
+  check "forward hook (containers)" grep -qF "type filter hook forward priority filter; policy accept;" "$f"
+  check "replaced whole on each load" has_line "$f" "delete table inet domovoi_vm_guard"
+  check "loaded now" called "nft -f $f"
+  check "the file is what was loaded" cmp -s "$f" "$STATE/nft-loaded"
+  check "unit written" has_line "$ROOT/etc/systemd/system/domovoi-vm-guard.service" "ExecStart=/usr/sbin/nft -f /etc/domovoi/vm-guard.nft"
+  check "unit before docker" grep -q '^Before=.*docker.service' "$ROOT/etc/systemd/system/domovoi-vm-guard.service"
+  check "unit enabled" test -f "$STATE/enabled/domovoi-vm-guard.service"
+  check "Letta's URL is the address the guard lets through" has_line "$CHECKOUT/domovoi/.env" "LETTA_OLLAMA_BASE_URL=http://192.168.5.2:11500/v1"
+  # Idempotent.
+  local sig; sig=$(tree_sig)
+  run_prov "${vm_guard_args[@]}"
+  check "re-run exit 0" eq "$RC" 0
+  check "re-run: skipped" eq "$(state_of vm-guard)" skip
+  check "re-run: nothing loaded" not_called "nft -f"
+  check "re-run: every file as it was" eq "$(tree_sig)" "$sig"
+  # Lost at runtime (someone flushed it): put back.
+  rm -f "$STATE/nft-loaded"
+  run_prov "${vm_guard_args[@]}"
+  check "flushed: exit 0" eq "$RC" 0
+  check "flushed: loaded again" eq "$(state_of vm-guard)" done
+  # Left out later: the guard stays, and the run says so.
+  run_prov --internet sometimes --skip-models --ollama-url "$LIMA_URL"
+  check "without --vm-guard: exit 0" eq "$RC" 0
+  check "without --vm-guard: skipped" eq "$(state_of vm-guard)" skip
+  check "says it stays" said "the guard an earlier run installed stays"
+  check "the file stays" test -f "$f"
+  end_case
+}
+
+# --host-stt-url (the Mac's speech service, mac-installer PHASE8A-STT.md):
+# WHISPER_REMOTE_URL/MODEL in .env, and one accept in the guard's OUTPUT
+# chain only (the core, never the containers' forward chain); dropped on a
+# later run, the URL is blanked and the rule goes. Without it nothing of
+# this is written (the vm-guard case above holds the unchanged file).
+case_host_stt_url_reaches_only_the_core() {
+  new_case host_stt_url_reaches_only_the_core --bare
+  echo aarch64 >"$STATE/arch"
+  external_ollama "$LIMA_URL" 192.168.5.2 host.lima.internal
+  local f=$ROOT/etc/domovoi/vm-guard.nft envf=$CHECKOUT/domovoi/.env rec=$ROOT/var/lib/domovoi-provision/env-written
+  run_prov "${vm_guard_args[@]}" --host-stt-url http://host.lima.internal:6371/ --host-stt-model small.en
+  check "exit 0" eq "$RC" 0
+  check "vm-guard done" eq "$(state_of vm-guard)" done
+  check "the speech service, by address and port" has_line "$f" $'\t\tip daddr 192.168.5.2 tcp dport 6371 accept'
+  check "in the output chain only" eq "$(grep -c 'tcp dport 6371 accept' "$f")" 1
+  check "before the drop" eq "$(awk '/chain output/{o=1} o&&/dport 6371/{print "s"} o&&/192.168.5.0\/24 drop/{print "d"; exit}' "$f" | tr -d '\n')" sd
+  check "Ollama still in both" eq "$(grep -c 'tcp dport 11500 accept' "$f")" 2
+  check "URL in .env (no trailing slash)" has_line "$envf" "WHISPER_REMOTE_URL=http://host.lima.internal:6371"
+  check "model in .env" has_line "$envf" "WHISPER_REMOTE_MODEL=small.en"
+  check "no --host-stt-shares-gpu: false" has_line "$envf" "WHISPER_REMOTE_SHARES_GPU=false"
+  check "the core's own Whisper stays" has_line "$envf" "WHISPER_DEVICE=cpu"
+  check "the record marks the script's write" has_line "$rec" "_HOST_STT=1"
+  # Idempotent.
+  run_prov "${vm_guard_args[@]}" --host-stt-url http://host.lima.internal:6371 --host-stt-model small.en
+  check "re-run: exit 0" eq "$RC" 0
+  check "re-run: guard skipped" eq "$(state_of vm-guard)" skip
+  # Dropped later (a package without the service): blanked, rule gone.
+  run_prov "${vm_guard_args[@]}"
+  check "dropped: exit 0" eq "$RC" 0
+  check "dropped: guard rewritten" eq "$(state_of vm-guard)" done
+  check "dropped: no 6371 rule" eq "$(grep -c 'dport 6371' "$f")" 0
+  check "dropped: URL blank" has_line "$envf" "WHISPER_REMOTE_URL="
+  check "dropped: not left behind" eq "$(grep -c '^WHISPER_REMOTE_URL=http' "$envf")" 0
+  check "dropped: the marker is gone" eq "$(grep -c '^_HOST_STT=' "$rec")" 0
+  # The Mac's way (its whisper-server shares Metal with Ollama): true.
+  run_prov "${vm_guard_args[@]}" --host-stt-url http://host.lima.internal:6371 --host-stt-model small.en --host-stt-shares-gpu
+  check "shares: exit 0" eq "$RC" 0
+  check "shares: true in .env" has_line "$envf" "WHISPER_REMOTE_SHARES_GPU=true"
+  check "shares: once" eq "$(grep -c '^WHISPER_REMOTE_SHARES_GPU=' "$envf")" 1
+  # Dropped again: back to false (a bool is never left blank).
+  run_prov "${vm_guard_args[@]}"
+  check "shares dropped: exit 0" eq "$RC" 0
+  check "shares dropped: false" has_line "$envf" "WHISPER_REMOTE_SHARES_GPU=false"
+  # The household's own value stays theirs.
+  run_prov "${vm_guard_args[@]}" --host-stt-url http://host.lima.internal:6371 --host-stt-shares-gpu
+  sed -i 's/^WHISPER_REMOTE_SHARES_GPU=true$/WHISPER_REMOTE_SHARES_GPU=false/' "$envf"
+  run_prov "${vm_guard_args[@]}"
+  check "theirs: still false, untouched" has_line "$envf" "WHISPER_REMOTE_SHARES_GPU=false"
+  # Bad values are usage errors.
+  run_prov "${vm_guard_args[@]}" --host-stt-shares-gpu; check "shares without a URL: 2" eq "$RC" 2
+  run_prov "${vm_guard_args[@]}" --host-stt-url host.lima.internal:6371; check "no scheme: 2" eq "$RC" 2
+  run_prov "${vm_guard_args[@]}" --host-stt-url http://host.lima.internal; check "no port: 2" eq "$RC" 2
+  run_prov "${vm_guard_args[@]}" --host-stt-url http://host.lima.internal:6371 --host-stt-model 'a b'; check "bad model: 2" eq "$RC" 2
+  end_case
+}
+
+# --vm-guard-lan (the Mac's pf redirect arrives on Lima's vzNAT lima0): a
+# prerouting chain on that interface only; the rest of the guard as before.
+case_vm_guard_lan_lets_in_only_the_lan_ports() {
+  new_case vm_guard_lan_lets_in_only_the_lan_ports --bare
+  echo aarch64 >"$STATE/arch"
+  external_ollama "$LIMA_URL" 192.168.5.2 host.lima.internal
+  local f=$ROOT/etc/domovoi/vm-guard.nft
+  run_prov "${vm_guard_args[@]}"
+  check "without it: exit 0" eq "$RC" 0
+  check "without it: no LAN chain" eq "$(grep -c 'chain lan_in' "$f")" 0
+  local before; before=$(cat "$f")
+  run_prov "${vm_guard_args[@]}" --vm-guard-lan lima0
+  check "exit 0" eq "$RC" 0
+  check "the new option re-runs the step" eq "$(state_of vm-guard)" done
+  check "says so" said "new connections on lima0 reach only TCP 80, 6369, 6370, 7676, 8050-8099, 8096, 9467"
+  check "a prerouting chain, before Docker's DNAT" has_line "$f" $'		type filter hook prerouting priority -150; policy accept;'
+  check "other interfaces untouched" has_line "$f" $'		iifname != "lima0" accept'
+  check "replies pass" eq "$(grep -c 'ct state established,related accept' "$f")" 3
+  check "ICMP passes" has_line "$f" $'		meta l4proto { icmp, ipv6-icmp } accept'
+  check "DHCP passes" has_line "$f" $'		udp dport { 68, 546 } accept'
+  check "the LAN ports" has_line "$f" $'		tcp dport { 80, 6369, 6370, 7676, 8050-8099, 8096, 9467 } accept'
+  check "the rest dropped" has_line "$f" $'		drop'
+  check "the host fence unchanged" has_line "$f" $'		ip daddr 192.168.5.0/24 drop'
+  check "still one table, replaced whole" has_line "$f" "delete table inet domovoi_vm_guard"
+  check "the file is what was loaded" cmp -s "$f" "$STATE/nft-loaded"
+  check "the old guard is a prefix of the new" eq "$(head -n "$(printf '%s
+' "$before" | wc -l)" "$f" | head -n -1)" "$(printf '%s
+' "$before" | head -n -1)"
+  local sig; sig=$(tree_sig)
+  run_prov "${vm_guard_args[@]}" --vm-guard-lan lima0
+  check "re-run: skipped" eq "$(state_of vm-guard)" skip
+  check "re-run: every file as it was" eq "$(tree_sig)" "$sig"
+  end_case
+}
+
+case_vm_guard_failures_stop() {
+  new_case vm_guard_failures_stop --bare
+  run_prov --internet sometimes --skip-models --ollama-url http://nas.example.invalid:11434 --vm-guard 192.168.5.0/24 --vm-guard-dns 192.168.5.3
+  check "unresolvable: exit 1" eq "$RC" 1
+  check "unresolvable: vm-guard failed" eq "$(state_of vm-guard)" fail
+  check "unresolvable: says why" said "can't resolve nas.example.invalid to an IPv4 address"
+  check "unresolvable: nothing loaded" not_called "nft -f"
+  end_case
+  new_case vm_guard_failures_stop_nft --bare
+  external_ollama "$LIMA_URL" 192.168.5.2 host.lima.internal
+  touch "$STATE/nft-fail"
+  run_prov "${vm_guard_args[@]}"
+  check "nft refuses: exit 1" eq "$RC" 1
+  check "nft refuses: vm-guard failed" eq "$(state_of vm-guard)" fail
+  check "nft refuses: no marker" no_marker vm-guard
+  check "nft refuses: unit not enabled" absent "$STATE/enabled/domovoi-vm-guard.service"
+  check "nft refuses: nothing after it" not_called "-m venv"
+  end_case
+  # Without --vm-guard-dns: a warning, the guard still goes in.
+  new_case vm_guard_failures_stop_nodns --bare
+  external_ollama "$LIMA_URL" 192.168.5.2 host.lima.internal
+  run_prov --internet sometimes --skip-models --ollama-url "$LIMA_URL" --vm-guard 192.168.5.0/24 --stop-before gpu-runtime
+  check "no DNS: exit 0" eq "$RC" 0
+  check "no DNS: warned" said "--vm-guard without --vm-guard-dns"
+  check "no DNS: no port 53 rule" eq "$(grep -c 'dport 53' "$ROOT/etc/domovoi/vm-guard.nft")" 0
+  end_case
+}
+
+case_vm_guard_dry_run_plans_it() {
+  new_case vm_guard_dry_run_plans_it --bare
+  external_ollama "$LIMA_URL" 192.168.5.2 host.lima.internal
+  run_prov "${vm_guard_args[@]}" --dry-run
+  check "exit 0" eq "$RC" 0
+  check "planned" eq "$(state_of vm-guard)" plan
+  check "names the Ollama rule" said "ip daddr 192.168.5.2 tcp dport 11500 accept"
+  check "nothing loaded" not_called "nft "
+  check "no file" absent "$ROOT/etc/domovoi/vm-guard.nft"
   end_case
 }
 
@@ -5292,6 +5766,22 @@ CASES=(
   case_podcasts_hand_set_dir_is_kept
   case_image_pull_failure_stops
   case_bare_metal
+  case_aarch64_bare_metal_installs_the_arm64_ollama
+  case_x86_64_keeps_the_amd64_pins
+  case_other_architectures_are_refused
+  case_aarch64_without_an_arm64_pin_needs_ollama_url
+  case_ollama_url_skips_ollama_and_pulls_through_it
+  case_dropping_ollama_url_resets_what_the_script_wrote
+  case_dropping_ollama_url_keeps_what_the_household_set
+  case_never_having_ollama_url_leaves_the_keys_alone
+  case_ollama_url_older_than_the_minimum_stops
+  case_container_ollama_url_by_kind_of_host
+  case_ollama_url_and_vm_guard_usage_errors
+  case_vm_guard_fences_off_the_host
+  case_vm_guard_failures_stop
+  case_vm_guard_dry_run_plans_it
+  case_vm_guard_lan_lets_in_only_the_lan_ports
+  case_host_stt_url_reaches_only_the_core
   case_internet_never_keeps_searxng_off
   case_wsl_without_systemd_stops_for_a_restart
   case_lock_busy_has_its_own_exit_code

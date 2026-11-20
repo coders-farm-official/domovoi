@@ -68,6 +68,37 @@ per-person voice profiles, news briefings, song lyrics, a calendar, and a text
 chat that can read pictures and documents. Everything else is a plugin away —
 installed from the dashboard as a zip upload or a GitHub URL.
 
+In short: one always-on computer is the Domovoi server. Each room of the
+house (the Kitchen, the Living room) has a satellite, a small device that
+listens for the wake word and plays the room's music. Phones use the app,
+any browser on your network opens the dashboard, and the internet is
+optional.
+
+```mermaid
+flowchart LR
+    subgraph HOME["Your home network"]
+        SERVER["Domovoi server<br/>an always-on PC"]
+        subgraph KITCHEN["Kitchen room"]
+            SATK["Satellite<br/>a Raspberry Pi, spare PC<br/>or phone in room mode"]
+        end
+        subgraph LIVING["Living room"]
+            SATL["Satellite"]
+        end
+        PHONE["Phones<br/>the Domovoi app"]
+        BROWSER["Browser<br/>the dashboard"]
+    end
+    INET["Internet<br/>optional"]
+
+    SATK <--> SERVER
+    SATL <--> SERVER
+    PHONE <--> SERVER
+    BROWSER <--> SERVER
+    SERVER -. "only if you allow it" .-> INET
+```
+
+The full picture, with ports and containers, is in
+[How the pieces fit together](#how-the-pieces-fit-together).
+
 > **Status: released and maintained.** 1.0.0 shipped in October 2026 and
 > the current release is **1.3.0**. The USB stick for old PCs has been
 > tested in virtual machines only: see
@@ -97,7 +128,8 @@ Then open that address, [claim the admin account](#2-claim-the-admin-account) an
 To read the script first, run it without questions, or install by hand: [Running the server on Linux](docs/LINUX_HOST.md#install).
 Fedora, Arch and other systems are not supported yet ([which systems, and why](docs/LINUX_HOST.md#which-distro));
 to ask for yours, [open an issue](https://github.com/coders-farm-official/domovoi/issues).
-On Windows 11, use [the Windows installer](docs/WINDOWS_HOST.md) (preview).
+On Windows 11, use [the Windows installer](docs/WINDOWS_HOST.md). On a Mac with Apple silicon and
+macOS 26 or later, use the Mac installer, `DomovoiSetup-mac.pkg`, from the [latest release](https://github.com/coders-farm-official/domovoi/releases/latest).
 
 ---
 
@@ -128,7 +160,7 @@ changed when is in the [release notes](docs/RELEASE_NOTES.md).
 - **Music in every room:** your library, podcasts, audiobooks and videos,
   a shared queue per room, and [Up next](scripts/manual/manual.md#up-next)
   to keep it playing ([music and media](scripts/manual/manual.md#music-and-media)).
-- **Voice in every room:** Raspberry Pi rooms that wake on "Domovoi",
+- **Voice in every room:** a Raspberry Pi satellite in each room wakes on "Domovoi",
   with barge-in, intercom and drop-in, and wake words you train yourself
   ([rooms and devices](scripts/manual/manual.md#rooms-and-devices) ·
   [satellite hardware](docs/SATELLITE_HARDWARE.md)).
@@ -169,10 +201,15 @@ changed when is in the [release notes](docs/RELEASE_NOTES.md).
 - **A Windows installer:** `DomovoiSetup.exe` turns a Windows 11 PC into a
   Domovoi server. It is not code-signed yet, so Windows asks before it runs
   ([Windows installer](docs/WINDOWS_HOST.md)).
+- **A Mac installer:** `DomovoiSetup-mac.pkg` turns a Mac with Apple silicon
+  (macOS 26 or later) into a Domovoi server: the server runs in a small
+  Linux virtual machine, and the AI models and speech recognition use the
+  Mac's graphics chip. It isn't from an identified developer yet, so macOS
+  asks once before it opens ([latest release](https://github.com/coders-farm-official/domovoi/releases/latest)).
 - **Satellites on spare devices:** a spare laptop or PC, or an old phone or
-  tablet in the app's room mode, can be a room instead of a Raspberry Pi
+  tablet in the app's room mode, can be a room's satellite instead of a Raspberry Pi
   ([spare-device satellites](docs/SPARE_DEVICE_SATELLITES.md)).
-- **A USB stick that turns an old PC into a room:** the dashboard prepares
+- **A USB stick that turns an old PC into a satellite:** the dashboard prepares
   the stick and the old PC installs from it. It has been tested in virtual
   machines; real computers are next
   ([old computers](docs/SPARE_DEVICE_SATELLITES.md#old-computers-usb-stick)).
@@ -202,8 +239,8 @@ phone app downloaded at install; and security updates.
 Already on `main`, not yet released: a history of what Up next picked and
 why; up to five wake words per room; a room display for a phone in room
 mode; short videos in chat; radio stations found by how you say them, and
-played in a room; a new room that asks every Domovoi server and joins the
-one you approve it on; admins signed out after an hour idle; and fixes from
+played in a room; a new satellite that asks every Domovoi server and joins
+the one you approve it on; admins signed out after an hour idle; and fixes from
 a round of home testing.
 
 What's planned is in the [roadmap](docs/ROADMAP.md), grouped Now / Next /
@@ -247,14 +284,14 @@ Wi-Fi:
   a Raspberry Pi Zero 2 W with a ReSpeaker mic board and a speaker — roughly
   the price of a commercial smart speaker per room. Details and shopping
   list: [Satellite hardware guide](docs/SATELLITE_HARDWARE.md). A spare
-  laptop, PC or old phone can be a room instead
+  laptop, PC or old phone can be the room's satellite instead
   ([spare-device satellites](docs/SPARE_DEVICE_SATELLITES.md)).
 - **The wake word** is **"Domovoi"** on a new install: Coders Farm's own
   model, trained on synthetic voices, which your server downloads once and
   gives to each room (until it has, or if the server can't download it, a
-  room wakes on "Hey Jarvis", which older installs keep). You can train
+  satellite wakes on "Hey Jarvis", which older installs keep). You can train
   your own word on your server from the dashboard (it needs 24 GB of
-  memory and a one-time download of about 22 GB), and a room that wakes on
+  memory and a one-time download of about 22 GB), and a satellite that wakes on
   the TV or misses you has **Wake sensitivity** and **Wake confirmation**
   in its Settings tab. More in the
   [FAQ](docs/FAQ.md#can-i-rename-the-assistant-or-change-the-wake-word) and
@@ -340,7 +377,7 @@ the first start (it writes the answer into the fresh `domovoi/.env`).
 
 ### 1. Install the server
 
-Three ways in:
+Four ways in:
 
 - **Linux (Ubuntu 26.04, Debian 13, Mint 22, Pop!_OS 24.04), one command:** [Install on Linux](#install-on-linux)
   above. It installs the latest release, its services and the models in
@@ -348,11 +385,18 @@ Three ways in:
   ([Release channels](docs/LINUX_HOST.md#release-channels)). Details:
   [One command](docs/LINUX_HOST.md#one-command), or
   [run the install script yourself](docs/LINUX_HOST.md#or-run-the-install-script-yourself).
-- **Windows 11, the installer (preview).** `DomovoiSetup.exe` runs that
+- **Windows 11, the installer.** `DomovoiSetup.exe` runs that
   same script inside a private WSL2 distro. It is unsigned; download it from
   the [latest release](https://github.com/coders-farm-official/domovoi/releases/latest),
   or build it with `windows\build.ps1`
   ([Windows installer](docs/WINDOWS_HOST.md)).
+- **Mac (Apple silicon, macOS 26 or later), the installer.**
+  `DomovoiSetup-mac.pkg` from the [latest release](https://github.com/coders-farm-official/domovoi/releases/latest) sets up the
+  same server in a small Linux virtual machine, with the AI models and
+  speech recognition on the Mac's graphics chip. The first time, macOS
+  won't open it (it isn't from an identified developer yet): open System
+  Settings → Privacy & Security, click **Open Anyway** under Security, and
+  enter your login password.
 - **By hand, on Windows or Linux:** the commands below.
 
 ```powershell
@@ -404,8 +448,12 @@ the server's address, `http://<server>:6369`, which always works. While
 nobody has claimed it, every page opens a welcome that asks for the
 **setup code** and a new admin password.
 
-- **The setup code** is 8 words, in `~/.domovoi/setup-code.txt` on the
-  server (in the home of the account the core runs as). The core also
+- **The setup code** is 8 words. The Windows installer shows it on its
+  last page, and on a Mac the Domovoi Setup window shows it (closed it?
+  the Domovoi cat in the menu bar, **Repair or Uninstall Domovoi...**,
+  then **Show Setup Code...**). Elsewhere it is in
+  `~/.domovoi/setup-code.txt` on the server (in the home of the account
+  the core runs as). The core also
   prints it when it runs in a terminal, but never as a service, so it
   stays out of the journal. It is valid for 24 hours (restart the core for
   a fresh one), and the file is deleted once setup is done.
@@ -434,8 +482,11 @@ Domovoi will have internet ([above](#will-your-domovoi-have-internet)).
 
 ### 3. Add your first satellite
 
-However a room starts, it ends the same way: the device shows or says a
-six-digit approval code, and you type that code into **Settings → Household → Rooms** on the dashboard (as admin) to make it a room. Three routes:
+A satellite is the device in a room that listens and plays; today each
+room has exactly one. However you set one up, it ends the same way: the
+device shows or says a six-digit approval code, and you type that code into
+**Settings → Household → Rooms** on the dashboard (as admin) to make it that
+room's satellite. Three routes:
 
 - **A Raspberry Pi.** Flash stock Raspberry Pi OS Lite (64-bit), put the
   card in the server, and use **Settings → Household → Rooms → prepare a room's
@@ -446,7 +497,7 @@ six-digit approval code, and you type that code into **Settings → Household �
   Hardware list, the two mic boards, and the by-hand route (installing the
   satellite client and pointing it at `ws://<server>:6370` yourself) are in
   the [Satellite hardware guide](docs/SATELLITE_HARDWARE.md).
-- **A spare Linux or Windows laptop or PC** (preview). **Settings → Household → Rooms → add
+- **A spare Linux or Windows laptop or PC**. **Settings → Household → Rooms → add
   a spare device**: type the room's name, press **make the code**, and run
   the one-line command it shows on that computer (an older Linux, or
   Fedora, openSUSE or Arch, gets the satellite's own Python). The computer
@@ -455,10 +506,10 @@ six-digit approval code, and you type that code into **Settings → Household �
   [Windows](docs/SPARE_DEVICE_SATELLITES.md#windows-laptops-and-pcs)). On
   Windows the card can also hand you a Setup to double-click instead of
   the command (not code-signed yet).
-- **An old phone or tablet** (Android 8.0 or later; preview). The same **add a spare
+- **An old phone or tablet** (Android 8.0 or later). The same **add a spare
   device** card shows a QR code: scan it with the phone's camera, and your
   server's page installs the Domovoi Android app (press **Download the app
-  to this server** on the card once first) and opens it as that room. A
+  to this server** on the card once first) and opens it as that room's satellite. A
   phone that already has the app can scan the code from its **Domovoi
   Room** icon instead. The phone gets
   its wake-word models from the server, so press **prepare a room's SD card
@@ -511,7 +562,7 @@ A Pi that still can't find it: edit `domovoi_url` in its
 from the server automatically.
 
 **The Windows installer** can't yet keep the data through an uninstall and
-reinstall onto it; that is not in the preview
+reinstall onto it; that is not in it yet
 ([Not in this build](docs/WINDOWS_HOST.md#not-in-this-build)).
 
 ---
@@ -522,16 +573,33 @@ reinstall onto it; that is not in the preview
 flowchart TB
     subgraph LAN["Your home network"]
         subgraph Server["Domovoi server (an always-on PC)"]
-            CORE["Core voice service\nFastAPI :6370\nWhisper (GPU or CPU) · routing · TTS"]
-            WEB["Web dashboard backend\nFastAPI :6369"]
-            PG[("Postgres 16\nhost :6432 · Docker")]
-            OLLAMA["Ollama :11434\nlocal language models"]
-            MPD["MPD per room (Docker)\ncontrol 6650+N · stream 8050+N"]
+            CORE["Core voice service<br/>FastAPI :6370<br/>Whisper (GPU or CPU) · routing · TTS"]
+            WEB["Web dashboard backend<br/>FastAPI :6369"]
+            OLLAMA["Ollama :11434<br/>local language models"]
+            GUARD["Container guard<br/>(runs in the core)"]
+
+            subgraph DOCKER["Docker containers"]
+                subgraph WATCHED["Watched by the container guard"]
+                    PG[("Postgres 16<br/>host :6432<br/>Flyway migrations at start")]
+                    MPD["Music player (MPD), one per room<br/>control 6650+N · stream 8050+N"]
+                    SEARX["SearXNG: internet lookups<br/>127.0.0.1:6888, only while<br/>the internet answer allows it"]
+                    LETTA["Letta: voice chat mode<br/>opt-in"]
+                    PLUG["Plugin containers<br/>declared by their plugin"]
+                    subgraph FH["Network domovoi-fh, firewalled off the house's ports"]
+                        TOR["Friend Houses Tor<br/>domovoi-tor"]
+                    end
+                end
+                TRAIN["Wake-word trainer<br/>only while training · not watched"]
+            end
         end
 
-        SAT1["Satellite: kitchen\nPi + mic board"]
-        SAT2["Satellite: bedroom\nspare laptop or old phone"]
-        BROWSER["Browser\ndashboard on :6369"]
+        subgraph KITCHEN["Kitchen room"]
+            SAT1["Satellite<br/>Pi + mic board"]
+        end
+        subgraph BEDROOM["Bedroom"]
+            SAT2["Satellite<br/>spare laptop or old phone"]
+        end
+        BROWSER["Browser<br/>dashboard on :6369"]
         DROID["Android app"]
 
         SAT1 -- "WebSocket audio :6370" --> CORE
@@ -540,7 +608,12 @@ flowchart TB
         CORE --- PG
         WEB --- PG
         WEB -- "admin proxy" --> CORE
-        CORE -- provisions --> MPD
+        CORE -- "starts and controls" --> MPD
+        CORE -- "lookups" --> SEARX
+        CORE -- "shared sockets" --> TOR
+        CORE -- "plugin code" --> PLUG
+        CORE -- "runs a training" --> TRAIN
+        GUARD -. watches .-> WATCHED
         MPD -- "audio stream 8050+N" --> SAT1
         MPD -- "audio stream 8050+N" --> SAT2
         BROWSER --> WEB
@@ -548,7 +621,9 @@ flowchart TB
     end
 
     INET["Internet"]
-    CORE -. "optional: news feeds, radio directories,\nmodel downloads — never your voice" .-> INET
+    CORE -. "optional: news feeds, radio directories,<br/>model downloads — never your voice" .-> INET
+    SEARX -. "when allowed" .-> INET
+    TOR -. "Friend Houses, when on" .-> INET
 ```
 
 Two server processes share one Postgres: the **core** (`:6370`) owns
@@ -557,7 +632,13 @@ text-to-speech, satellite WebSockets, background workers, the plugin runtime
 — while the **dashboard** (`:6369`) serves the web UI and proxies
 live-state/admin actions to the core. Each room gets its own MPD music
 daemon, provisioned lazily in Docker when the room's satellite first
-connects. TTS is local by default — three public-domain neural **Piper**
+connects. The other containers come and go with what you use: SearXNG
+while the internet answer is Yes or Sometimes, Letta only in voice chat
+mode, the Friend Houses Tor container (on its own network, which the
+installers firewall off the house) only while Friend Houses is on, a
+plugin's own containers while that plugin runs, and the wake-word trainer
+only while a word trains. The container guard watches all of them except
+the trainer ([container guard](docs/CONTAINER_GUARD.md)). TTS is local by default — three public-domain neural **Piper**
 voices rendered on the server through Domovoi's own permissively licensed
 text-to-phoneme converter, so Domovoi's replies are spoken on your own
 hardware, and the engine chain falls back gracefully (`piper → system`)
@@ -571,7 +652,7 @@ Deep dive: [Architecture](docs/ARCHITECTURE.md) ·
 
 ## What each interface can do
 
-| | Voice satellites (Pi; spare computer, preview) | Phone room mode (preview) | Web dashboard | Android app |
+| | Voice satellites (Pi; spare computer) | Phone room mode | Web dashboard | Android app |
 |---|---|---|---|---|
 | Hands-free voice, wake word | ✅ the whole point | ✅ | — | — |
 | Barge-in (interrupt Domovoi mid-sentence) | ✅ off until you turn it on | — | — | — |
@@ -586,14 +667,14 @@ Deep dive: [Architecture](docs/ARCHITECTURE.md) ·
 | Read a document aloud; take a letter | voice: "read me the lease", "take a letter to the landlord" | — | — | — |
 | Explain a photographed letter | — | — | ✅ in chat | ✅ in chat (on the phone, or via the home server) |
 | Print and scan with network printers | voice: "print my cover letter", "scan this to Documents" | — | ✅ Settings, Files, Documents | ✅ Settings, Files (on the home server's files) |
-| A chat that answers with no server | — | — | — | ✅ preview: 64-bit phones with 8 GB or more |
+| A chat that answers with no server | — | — | — | ✅ 64-bit phones with 8 GB or more |
 | Save music, podcasts & audiobooks to your device | — | — | ✅ browser download | ✅ music & podcasts via DownloadManager; audiobooks into the app, played offline |
 | Calendar, documents, people & voice profiles | voice where it makes sense | voice where it makes sense | ✅ | ✅ |
 | Household lists (to-do, shopping, your own) | voice: "add milk to the shopping list" | voice | ✅ Lists page | ✅ Lists screen (Tools): add, cross off, reorder, rename; updates live |
 | Edit documents and spreadsheets (documents co-edited live) | — | — | ✅ | ✅ the server's Documents, same editors |
 | Satellite management & per-room settings | — | — | ✅ edits a Pi's or spare computer's config remotely | ✅ view/manage |
 | Custom wake-word recording & training | records the clips | wakes on a pushed model; no recording | ✅ record → train → push to room | — |
-| **Plugin install & administration** | — | — | ✅ **only here** — admin-gated, two-phase trust screen | — (plugin *screens* appear when installed) |
+| **Plugin install & administration** | — | — | ✅ **only here** — admin-gated, two-phase trust screen | — (plugins add nothing to the app) |
 | Admin setup / login | — | — | ✅ | — (no admin session; the Settings sections only an admin changes open the dashboard; removing an audiobook from the server asks for the admin password for that one delete) |
 
 The differences are deliberate:
@@ -605,14 +686,15 @@ The differences are deliberate:
   what a Pi does with its voice, without the Pi's LEDs, mic-gain tuning or
   Wi-Fi self-healing. (The Android app can *initiate* a drop-in into a
   room — see below — since your phone already has a mic and speaker; it
-  just isn't a room others can call into unless it is in room mode.)
+  just isn't a satellite others can call into unless it is in room mode.)
 - **Phone room mode** turns an old phone or tablet on its charger into a
-  room: wake word, answers, the room's music, announcements, and drop-ins
-  where the phone has an echo canceller. It has no barge-in and no chat
+  satellite for a room (voice, plus the room screen): wake word, answers,
+  the room's music, announcements, and drop-ins where the phone has an
+  echo canceller. It has no barge-in and no chat
   mode, and the dashboard doesn't restart, upgrade or reconfigure it
   (beyond its voice, which the server keeps for it); the app updates like
   any other app
-  ([what a phone room does](docs/SPARE_DEVICE_SATELLITES.md#what-a-phone-room-does)).
+  ([what a phone in room mode does](docs/SPARE_DEVICE_SATELLITES.md#what-a-phone-in-room-mode-does)).
 - **The dashboard** is the seat of management. It is the *only* place plugins
   can be installed, and installs are admin-gated behind an explicit trust
   screen. It's also where you record, train, and deploy custom wake words and
@@ -626,10 +708,11 @@ The differences are deliberate:
   commandeering the kitchen. A guest's phone that was never paired can
   change the queue of a room that is playing, and pause or skip it, until
   an admin bans that guest (or switches guest access off).
-- **The Android app** mirrors the dashboard plus a native music player. Its
-  screens are **capability-gated**: it asks the server what's installed and
-  only renders screens for capabilities that exist — install the radio
-  plugin and a Stations screen appears; remove it and the screen goes away.
+- **The Android app** mirrors the dashboard plus a native music player.
+  Plugins add nothing to it. Its Stations and Images screens are the app's
+  own, written by Coders Farm for its Radio and image plugins, and they show
+  only while the server has that exact plugin; any other plugin's pages
+  open in the phone's browser, on the dashboard.
   Server administration (greetings, voices, wake words, models,
   configuration) stays on the dashboard: the app's Settings keeps what
   belongs to the phone (Rooms, People, Phones & browsers, Printers &
@@ -638,16 +721,19 @@ The differences are deliberate:
   From a satellite's page it can also **drop into that room** — your phone
   joins the room's live two-way audio bridge directly, so you can talk to
   whoever's there from anywhere on the network. Its **Chat** lists the
-  home server's chats and the phone's own (a preview, answered on the phone
+  home server's chats and the phone's own (answered on the phone
   itself with no server), each marked with where it runs.
 
 ---
 
 ## Plugins
 
-Plugins extend Domovoi end-to-end: a single package can add voice handlers,
-background workers, dashboard pages, Android screens, its own database schema,
-and its own settings. The bundled **[radio plugin](plugins/radio)** (publisher:
+Plugins extend the Domovoi server: a single package can add voice handlers,
+background workers, dashboard pages, live connections (SDK 1.11), its own
+database schema, and its own settings. Plugins never ship code to the
+Android or iPhone app. The apps' Stations and Images screens are the apps'
+own, shown only when Coders Farm's Radio or image plugin is installed
+([what a plugin does not get](docs/PLUGIN_DEVELOPMENT.md#1-concepts--what-a-plugin-can-do)). The bundled **[radio plugin](plugins/radio)** (publisher:
 Coders Farm, MIT) is the reference example — internet radio and FM via
 RTL-SDR, with station search, favorites, live tuning, and passive song
 detection that feeds the media-acquisition queue.
@@ -661,9 +747,9 @@ Installing (dashboard → Plugins, admin login required):
 3. You read it and confirm — or don't. Plugins run with real access on your
    server, so only install ones you trust.
 
-A plugin's pages, on the dashboard and in the app, sit in a frame with its
-name, publisher, a "plugin" badge and its own accent colour, so they read
-as the plugin's rather than Domovoi's.
+A plugin's dashboard pages sit in a frame with its name, publisher, a
+"plugin" badge and its own accent colour, so they read as the plugin's
+rather than Domovoi's.
 
 Media-provider functionality (pulling from external sources) ships as
 separately installed provider plugins — the core stays provider-neutral.
@@ -696,7 +782,7 @@ Want to write one? Start at the
 | [Satellite hardware](docs/SATELLITE_HARDWARE.md) | Parts list and step-by-step Pi satellite build |
 | [Pi provisioning checklist](satellite/PROVISIONING.md) | Every command and gotcha for building a Pi satellite by hand |
 | [Video satellites](satellite/VIDEO_SATELLITE.md) | A satellite with a screen: the now-playing kiosk build on a Radxa Zero 3W |
-| [Satellites on spare devices](docs/SPARE_DEVICE_SATELLITES.md) | A Linux or Windows laptop or PC, an old phone or tablet in room mode, or an old computer from a USB stick, as a room (previews): the command, QR code or stick, the approval, what each can and can't do |
+| [Satellites on spare devices](docs/SPARE_DEVICE_SATELLITES.md) | A Linux or Windows laptop or PC, an old phone or tablet in room mode, or an old computer from a USB stick, as a room's satellite (the USB stick is a preview): the command, QR code or stick, the approval, what each can and can't do |
 | [Wake-word training](scripts/wake_word/README.md) | Training your own wake word from the dashboard: what it needs, what a training does to the server, the licence of what it makes |
 | [Hardware validation](docs/HARDWARE_VALIDATION.md) | For contributors: the checks to run on real devices for room setup and video satellites |
 | [Android compatibility](docs/ANDROID_COMPATIBILITY.md) | Which phones and Android versions the app runs on, which APK to install, what each version gets |
@@ -704,7 +790,7 @@ Want to write one? Start at the
 | [Android app privacy policy](docs/PRIVACY_POLICY.md) | What the app keeps on the phone, what it sends and to whom (nothing reaches Coders Farm unless you email it) |
 | [Running without an NVIDIA GPU](docs/CPU_HOST.md) | CPU-host settings, model sizing, what gets slower and what doesn't |
 | [Running the server on Linux](docs/LINUX_HOST.md) | Linux install (one script or by hand), what differs from the Windows-first docs, systemd units, updates from the dashboard |
-| [The Windows installer (preview)](docs/WINDOWS_HOST.md) | `DomovoiSetup.exe`: the Linux server in a private WSL2 distro, every change it makes on the PC and how uninstall undoes it |
+| [The Windows installer](docs/WINDOWS_HOST.md) | `DomovoiSetup.exe`: the Linux server in a private WSL2 distro, every change it makes on the PC and how uninstall undoes it |
 | [UML diagrams](docs/uml/) | Sequence and component diagrams |
 | [Roadmap](docs/ROADMAP.md) | What's being worked on now, next and later, without dates |
 | [Release notes](docs/RELEASE_NOTES.md) | What changed, newest first, and what an operator has to do after an update |

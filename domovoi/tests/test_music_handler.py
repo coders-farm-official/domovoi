@@ -143,6 +143,12 @@ def test_now_playing_regex() -> None:
     assert _NOW_PLAYING_RE.match("what's playing")
     assert _NOW_PLAYING_RE.match("what song is this")
     assert _NOW_PLAYING_RE.match("who sang that")
+    # 2026-11-17 live: "who is this?" in a room playing music went to the
+    # Q&A model, which named a singer it made up.
+    for said in ("who is this", "who's this", "who is singing",
+                 "who's this singing", "what am i listening to"):
+        assert _NOW_PLAYING_RE.match(said), said
+    assert not _NOW_PLAYING_RE.match("who is this person on the phone")
 
 
 def test_volume_regex() -> None:

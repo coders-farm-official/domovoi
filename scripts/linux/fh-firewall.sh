@@ -25,9 +25,16 @@
 # live in one chain of their own, DOMOVOI-FH, which `apply` refills from
 # scratch, so applying twice changes nothing.
 #
+#   * FORWARD: the same jump into DOMOVOI-FH, so the fence holds even
+#     where nothing hooks DOCKER-USER into FORWARD (Docker's nftables
+#     backend) (audit R6 FH-14).
+#
 # Run as root by domovoi-fh-firewall.service (scripts/linux/units/), which
-# starts with Docker and again whenever Docker restarts (Docker rebuilds
-# its own chains then). provision.sh and the update unit install both,
+# applies the rules BEFORE Docker starts (so no container is up without
+# them after a reboot), restarts with Docker, and then keeps watching:
+# `watch` re-applies whatever another tool flushed and refreshes the state
+# file every minute, so the core can tell rules in place from a stale
+# file. provision.sh and the update unit install both,
 # like the file-cache trim (docs/LINUX_HOST.md, "Friend Houses' firewall").
 # DOMOVOI_MANAGE_FH_FIREWALL=0 in /etc/default/domovoi-update leaves them
 # to the administrator.
@@ -36,7 +43,7 @@
 # (root's, world-readable): the core reads it to tell an admin whether the
 # rules are in place before Friend Houses is turned on.
 #
-# Usage: fh-firewall.sh apply | remove | check
+# Usage: fh-firewall.sh apply | remove | check | watch
 #   check   exit 0 when every rule is in place, 1 when not.
 
 set -uo pipefail
@@ -92,11 +99,13 @@ apply_family() {
   fill_chain "$tool" "${blocked[@]}" || return 1
   ensure "$tool" DOCKER-USER -s "$( [ "$tool" = "$IPT" ] && echo "$SUBNET" || echo "::/0")" -i "$BRIDGE" -j "$CHAIN" || return 1
   ensure "$tool" INPUT -i "$BRIDGE" -j DROP || return 1
+  ensure "$tool" FORWARD -s "$( [ "$tool" = "$IPT" ] && echo "$SUBNET" || echo "::/0")" -i "$BRIDGE" -j "$CHAIN" || return 1
 }
 
 check_family() {
   local tool=$1
   "$tool" -w -C INPUT -i "$BRIDGE" -j DROP 2>/dev/null || return 1
+  "$tool" -w -C FORWARD -s "$( [ "$tool" = "$IPT" ] && echo "$SUBNET" || echo "::/0")" -i "$BRIDGE" -j "$CHAIN" 2>/dev/null || return 1
   "$tool" -w -C DOCKER-USER -s "$( [ "$tool" = "$IPT" ] && echo "$SUBNET" || echo "::/0")" -i "$BRIDGE" -j "$CHAIN" 2>/dev/null || return 1
   "$tool" -w -S "$CHAIN" >/dev/null 2>&1
 }
@@ -104,9 +113,19 @@ check_family() {
 remove_family() {
   local tool=$1
   drop "$tool" INPUT -i "$BRIDGE" -j DROP
+  drop "$tool" FORWARD -s "$( [ "$tool" = "$IPT" ] && echo "$SUBNET" || echo "::/0")" -i "$BRIDGE" -j "$CHAIN"
   drop "$tool" DOCKER-USER -s "$( [ "$tool" = "$IPT" ] && echo "$SUBNET" || echo "::/0")" -i "$BRIDGE" -j "$CHAIN"
   "$tool" -w -F "$CHAIN" 2>/dev/null || true
   "$tool" -w -X "$CHAIN" 2>/dev/null || true
+}
+
+# The state file the core reads: which network is fenced, and when the
+# rules were last seen in place (the core treats an old time as missing).
+write_state() {
+  install -d -m 0755 "$STATE_DIR" || return 1
+  printf 'version=%s\nsubnet=%s\nbridge=%s\nchecked=%s\n' "$VERSION" "$SUBNET" "$BRIDGE" "$(date +%s)" \
+    >"$STATE_DIR/applied.tmp" \
+    && chmod 0644 "$STATE_DIR/applied.tmp" && mv -f "$STATE_DIR/applied.tmp" "$STATE_DIR/applied"
 }
 
 case ${1:-} in
@@ -116,11 +135,26 @@ case ${1:-} in
     if have "$IP6T" && "$IP6T" -w -L INPUT >/dev/null 2>&1; then
       apply_family "$IP6T" BLOCK_V6 || die "the IPv6 rules could not be applied"
     fi
-    install -d -m 0755 "$STATE_DIR" || die "can't create $STATE_DIR"
-    printf 'version=%s\nsubnet=%s\nbridge=%s\n' "$VERSION" "$SUBNET" "$BRIDGE" >"$STATE_DIR/applied.tmp" \
-      && chmod 0644 "$STATE_DIR/applied.tmp" && mv -f "$STATE_DIR/applied.tmp" "$STATE_DIR/applied" \
-      || die "can't write $STATE_DIR/applied"
+    write_state || die "can't write $STATE_DIR/applied"
     log "Friend Houses' Tor network ($SUBNET on $BRIDGE) can reach the internet only"
+    ;;
+  watch)
+    # The unit's main process: every minute, check; re-apply what's gone;
+    # refresh the state file's time only while every rule is in place.
+    every=${FH_FIREWALL_EVERY:-60}
+    rounds=${FH_FIREWALL_ROUNDS:-0}   # tests: stop after this many (0: never)
+    n=0
+    while :; do
+      if ! "$0" check >/dev/null 2>&1; then
+        log "rules missing; applying them again"
+        "$0" apply >/dev/null || rm -f "$STATE_DIR/applied"
+      else
+        write_state || true
+      fi
+      n=$((n + 1))
+      [ "$rounds" -gt 0 ] && [ "$n" -ge "$rounds" ] && exit 0
+      sleep "$every"
+    done
     ;;
   remove)
     rm -f "$STATE_DIR/applied"
@@ -135,7 +169,7 @@ case ${1:-} in
     exit 0
     ;;
   *)
-    echo "usage: fh-firewall.sh apply | remove | check" >&2
+    echo "usage: fh-firewall.sh apply | remove | check | watch" >&2
     exit 2
     ;;
 esac

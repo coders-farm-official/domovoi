@@ -26,6 +26,10 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, AsyncIterator, Protocol
 
+# Module level, not lazy: the web process (which streams the typed chat
+# through chat_stream) refuses a NEW domovoi.* import after boot
+# (web/backend/plugin_host.py), and this module is preloaded there.
+from domovoi import llm_activity
 from domovoi.config import normalize_think_setting, settings
 from domovoi.log_privacy import said
 
@@ -143,6 +147,37 @@ async def ps(base_url: str | None = None, timeout: float = 2.0) -> list[dict[str
     Distinct from :func:`list_models` (on-disk). Empty list on any failure.
     """
     return await _ps_or_none(base_url, timeout) or []
+
+
+#: The oldest Ollama Domovoi runs on: Qwen3-VL, every tier's vision model,
+#: needs 0.12.7 (ollama.com/library/qwen3-vl, read 2026-10-28). The pinned
+#: release (docs/LINUX_HOST.md) is newer; this matters for an Ollama the
+#: household brings ("use my existing Ollama", OLLAMA_URL elsewhere).
+#: provision.sh's OLLAMA_MIN_VERSION is the same value (a test holds them).
+MIN_OLLAMA_VERSION = (0, 12, 7)
+
+
+async def server_version(base_url: str | None = None, timeout: float = 2.0) -> dict[str, Any]:
+    """What ``GET /api/version`` of the configured Ollama says, against
+    :data:`MIN_OLLAMA_VERSION`: ``{"version": "0.34.4" | None, "ok": True |
+    False | None, "min": "0.12.7"}``. ``ok`` is None when that can't be told:
+    Ollama didn't answer, or answered with no usable version (``0.0.0``, a
+    build from source). Never raises."""
+    import httpx
+
+    minimum = ".".join(map(str, MIN_OLLAMA_VERSION))
+    text = None
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as c:
+            resp = await c.get(f"{_ollama_base(base_url)}/api/version")
+            resp.raise_for_status()
+            payload = resp.json()
+        raw = payload.get("version") if isinstance(payload, dict) else None
+        text = raw.strip()[:40] if isinstance(raw, str) and raw.strip() else None
+    except Exception as e:  # noqa: BLE001 — unknown, not a failure
+        log.debug("ollama /api/version failed: %s", e)
+    parsed = _parse_ollama_version(text)
+    return {"version": text, "ok": None if parsed is None else parsed >= MIN_OLLAMA_VERSION, "min": minimum}
 
 
 def _parse_ollama_version(text: Any) -> tuple[int, int, int] | None:
@@ -293,7 +328,11 @@ async def chat_stream(
     if keep_alive is not None:
         body["keep_alive"] = keep_alive
     timeout = httpx.Timeout(connect=connect_timeout, read=None, write=30.0, pool=connect_timeout)
-    async with httpx.AsyncClient(timeout=timeout) as c:
+
+    # A generation in flight for as long as this stream is open
+    # (domovoi/llm_activity.py: on a Mac, speech is heard on the processor
+    # meanwhile).
+    async with llm_activity.generating("chat_stream"), httpx.AsyncClient(timeout=timeout) as c:
         while True:
             async with c.stream("POST", url, json=body) as resp:
                 if resp.status_code >= 400:
@@ -738,6 +777,10 @@ _EXTRACT_MEMORIES_SYSTEM_PROMPT = (
     "- Do NOT include transient state (what's happening right now, "
     "today's weather, current emotion).\n"
     "- Do NOT include facts about the assistant or third parties.\n"
+    "- Write each fact in the user's own words, first person, the way "
+    "they would say it: \"My pets are Biscuit and Pepper\", \"I'm "
+    "allergic to peanuts\". Never write \"the user\", \"they\" or "
+    "\"their\" for the user.\n"
     "- Confidence: 1.0 = the user explicitly stated it; 0.7 = "
     "strongly implied across multiple turns; 0.5 = only mentioned "
     "once in passing.\n"
@@ -1141,6 +1184,10 @@ class RealOllamaClient:
                 write=10.0,
                 pool=5.0,
             ),
+            # Counts each generation in flight (domovoi/llm_activity.py):
+            # on a Mac the speech service hears a turn on the processor
+            # instead while the shared graphics chip is busy here.
+            transport=llm_activity.TrackingTransport(),
         )
         self._url = url
         # See `cold_models`; shared with the cold-start twin (a shallow copy).
@@ -1771,6 +1818,7 @@ class RealOllamaClient:
                     write=10.0,
                     pool=5.0,
                 ),
+                transport=llm_activity.TrackingTransport(),
             )
             twin._cold_twin = twin
             self._cold_twin = twin

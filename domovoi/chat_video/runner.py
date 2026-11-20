@@ -15,6 +15,14 @@ before watching any video:
   saved, so nothing half-done is kept.
 * An ffmpeg pass (the scene scan, the sound) runs at the lowest CPU
   priority and is **held still** (suspended) while a turn runs, then let go.
+* **Stop works at every step** (DOC-9): before each step, quiet house or
+  not, and about once a second while an ffmpeg pass runs (the pass is
+  ended at once).
+* **What a pass reads is bounded by what was accepted** (DOC-7/DOC-8): each
+  ffmpeg pass reads at most :func:`limits.pass_seconds` of the job's
+  accepted duration and only the streams the upload's probe checked, runs
+  memory-capped on one thread (:mod:`.media`), and the sound file is read
+  only up to the size that duration makes.
 * A piece of speech is short enough (:data:`limits.SPEECH_PIECE_SEC`) to
   finish within about a second, while the person is still talking after
   the wake word, so the turn's own speech recognition doesn't wait for it.
@@ -437,6 +445,13 @@ class Runner(VoiceFirst):
         if job.stage == "combine":
             await self._combine(job)
 
+    def _streams(self, job: Job) -> tuple[int | None, int | None]:
+        """(video, audio) stream indexes the upload's probe checked (None for
+        a job queued before they were kept)."""
+        def idx(v: Any) -> int | None:
+            return v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else None
+        return idx(job.probe.get("video_index")), idx(job.probe.get("audio_index"))
+
     def _video(self, job: Job) -> Path:
         p = limits.video_path(job.token)
         if p is None:
@@ -448,10 +463,12 @@ class Runner(VoiceFirst):
         job.stage = "scan"
         await _update(job, stage="scan", eta_s=round(job.eta(), 1))
         video = self._video(job)
+        v_index, a_index = self._streams(job)
         await self.wait_for_quiet(job)
         t0 = time.monotonic()
         try:
-            scenes = await media.scene_changes(video, hold=self.hold_while_voice)
+            scenes = await media.scene_changes(video, duration=job.duration, video_index=v_index,
+                                               hold=self.pass_hold(job))
         except FileNotFoundError:
             raise JobFailed(limits.CODE_FAILED, limits.NO_TOOLS) from None
         except RuntimeError:
@@ -464,8 +481,9 @@ class Runner(VoiceFirst):
             await self.wait_for_quiet(job)
             t0 = time.monotonic()
             pcm_file = work / "audio.pcm"
-            if await media.extract_audio(video, pcm_file, hold=self.hold_while_voice):
-                pcm = pcm_file.read_bytes()
+            if await media.extract_audio(video, pcm_file, duration=job.duration, audio_index=a_index,
+                                         hold=self.pass_hold(job)):
+                pcm = await asyncio.to_thread(media.read_pcm, pcm_file, job.duration)
                 levels = await asyncio.to_thread(media.window_levels, pcm)
                 spans = media.speech_spans(levels)
                 pieces = media.speech_pieces(spans, levels)
@@ -483,13 +501,14 @@ class Runner(VoiceFirst):
         f = work / "audio.pcm"
         if not f.is_file():
             # The sound file went (a cleanup during a restart): made again.
-            if not await media.extract_audio(self._video(job), f, hold=self.hold_while_voice):
+            if not await media.extract_audio(self._video(job), f, duration=job.duration,
+                                             audio_index=self._streams(job)[1], hold=self.pass_hold(job)):
                 raise JobFailed(limits.CODE_UNREADABLE)
-        return f.read_bytes()
+        return await asyncio.to_thread(media.read_pcm, f, job.duration)
 
     async def _pass1(self, job: Job, work: Path) -> None:
         """The transcript, a short piece at a time, each saved as it ends."""
-        pieces = (job.plan or {}).get("pieces") or []
+        pieces = ((job.plan or {}).get("pieces") or [])[:limits.MAX_SPEECH_PIECES]
         done = await _saved_indexes(job.id, "chat_video_segments")
         pcm: bytes | None = None
         for i, (a, b) in enumerate(pieces):
@@ -532,7 +551,8 @@ class Runner(VoiceFirst):
             for k, t in enumerate(times):
                 await self.wait_for_quiet(job)
                 dest = work / f"cand-{k:03d}.jpg"
-                ok = await media.grab_frame(video, t, dest, hold=self.hold_while_voice)
+                ok = await media.grab_frame(video, t, dest, video_index=self._streams(job)[0],
+                                            hold=self.pass_hold(job))
                 # A frame that couldn't be grabbed has no fingerprint: it is
                 # kept, and grabbed again (or skipped) when its turn comes.
                 hashes.append(media.dhash(dest) if ok else None)
@@ -556,7 +576,8 @@ class Runner(VoiceFirst):
             t0 = time.monotonic()
             if not img.is_file():
                 await self.wait_for_quiet(job)
-                if not await media.grab_frame(self._video(job), t, img, hold=self.hold_while_voice):
+                if not await media.grab_frame(self._video(job), t, img, video_index=self._streams(job)[0],
+                                              hold=self.pass_hold(job)):
                     done.add(i)
                     continue
             jpeg = img.read_bytes()

@@ -380,9 +380,10 @@ struct RoomNowPlayingCard: View {
         .task(id: nowPlaying.art) {
             art = nil
             guard let path = nowPlaying.art, let data = await loadArt(path) else { return }
-            // A thumbnail is all it draws.
-            let full = UIImage(data: data)
-            art = full?.preparingThumbnail(of: CGSize(width: 320, height: 320)) ?? full
+            // A thumbnail is all it draws, made by ImageIO from the header
+            // up, never `UIImage(data:)` on the whole picture; one with an
+            // extreme size is not drawn (security audit round 6, IOS-4).
+            art = RoomArtImage.thumbnail(data).map { UIImage(cgImage: $0) }
         }
     }
 

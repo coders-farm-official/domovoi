@@ -6,10 +6,14 @@ import Foundation
 // look like the main one (1.3.0; Android labels its rows the same way).
 //
 // Pure: the app's EventKit reader turns `EKSource.sourceType` into
-// ``PhoneCalendarSourceKind`` and hands over the source's title, which is
-// read **only** to tell iCloud apart (EventKit reports iCloud as CalDAV). The
-// title — often an email address — is never shown and never sent: only the
-// label is (DATA_SAFETY: account names are not sent or shown).
+// ``PhoneCalendarSourceKind``, and the label comes from that type alone, as
+// Android's comes from the account type alone (`CalendarSource.kt`). The
+// source's title is never read here: it is often an email address, and it
+// is whatever the account's server chose, so a CalDAV account titled
+// "iCloud" is not evidence of iCloud (security audit round 6, IOS-5).
+// EventKit reports iCloud as CalDAV and has no iCloud type, so iCloud is
+// "Other account" like every other CalDAV source. Only the label is shown,
+// and nothing is sent (DATA_SAFETY: account names are not sent or shown).
 // ---------------------------------------------------------------------------
 
 /// `EKSourceType`, mirrored so the package needs no EventKit.
@@ -26,21 +30,17 @@ public enum PhoneCalendarSourceKind: Equatable, Sendable {
 
 /// The label a calendar's row carries.
 public enum PhoneCalendarSource: Equatable, Sendable {
-    case iCloud
     case exchange
     case otherAccount
     case subscribed
     case birthdays
     case onThisPhone
 
-    /// The source's type, plus its title **only** to spot iCloud: iCloud is a
-    /// CalDAV source whose title is "iCloud" (EventKit has no iCloud type —
-    /// the common detection, there being no documented one).
-    public static func of(_ kind: PhoneCalendarSourceKind, sourceTitle: String?) -> PhoneCalendarSource {
+    /// The source's type, and nothing else: every CalDAV source (iCloud
+    /// among them; EventKit has no iCloud type) is "Other account".
+    public static func of(_ kind: PhoneCalendarSourceKind) -> PhoneCalendarSource {
         switch kind {
-        case .calDAV:
-            let title: String = (sourceTitle ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            return title.caseInsensitiveCompare("iCloud") == .orderedSame ? .iCloud : .otherAccount
+        case .calDAV: return .otherAccount
         case .local: return .onThisPhone
         case .exchange: return .exchange
         case .subscribed: return .subscribed
@@ -52,7 +52,6 @@ public enum PhoneCalendarSource: Equatable, Sendable {
     /// The words under the calendar's name.
     public var label: String {
         switch self {
-        case .iCloud: return "iCloud"
         case .exchange: return "Microsoft / Outlook"
         case .otherAccount: return "Other account"
         case .subscribed: return "Subscribed"
@@ -61,11 +60,11 @@ public enum PhoneCalendarSource: Equatable, Sendable {
         }
     }
 
-    /// The picker's order: iCloud and the other signed-in accounts first,
+    /// The picker's order: the signed-in accounts first,
     /// subscribed and birthdays next, "On this iPhone" last.
     public var sortGroup: Int {
         switch self {
-        case .iCloud, .exchange, .otherAccount: return 0
+        case .exchange, .otherAccount: return 0
         case .subscribed, .birthdays: return 1
         case .onThisPhone: return 2
         }

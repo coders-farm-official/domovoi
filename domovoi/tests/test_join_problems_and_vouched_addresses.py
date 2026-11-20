@@ -106,6 +106,43 @@ async def test_health_signs_for_a_vouched_address_and_refuses_any_other(
     assert "signature" not in doc["identity"]
 
 
+@pytest.mark.asyncio
+async def test_health_signs_for_the_macs_address_from_its_report(
+    healthy_core, identity_in_tmp, tmp_path, monkeypatch,
+):
+    """S2-10: a room dialling the Mac's own LAN address reaches the core
+    in the VM through the pf redirect, which keeps the port. The Mac
+    helper's /var/lib/domovoi-mac/lan_name.json vouches for that address,
+    so the core signs for it at its own port, 6370, and for nothing else."""
+    import json
+
+    from domovoi.lan_name import service
+
+    report = tmp_path / "var" / "lib" / "domovoi-mac" / "lan_name.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(json.dumps({
+        "schema": 1, "request_id": None, "requested": "domovoi", "claimed": "domovoi", "state": "announced",
+        "taken": None, "addresses": ["192.168.1.20"], "error": None, "written_at": "2026-11-16T10:00:00Z",
+    }), encoding="utf-8")
+    monkeypatch.setenv("DOMOVOI_LAN_NAME_REPORT_WINDOWS", str(tmp_path / "none" / "lan_name.json"))
+    monkeypatch.setenv("DOMOVOI_LAN_NAME_REPORT_MAC", str(report))
+    monkeypatch.setattr(service, "_root_only", lambda st: True)
+    monkeypatch.setattr(server_identity, "_can_bind", _nobody_binds)
+    assert server_identity.host_vouched_addresses() == {"192.168.1.20"}
+    challenge = sat_identity.new_challenge()
+    doc = await main.health(challenge=challenge, addr="192.168.1.20:6370")
+    assert sat_identity.verify_health_document(
+        doc, challenge=challenge, expected_fingerprint=identity_in_tmp.fingerprint,
+        addr="192.168.1.20:6370",
+    ) == identity_in_tmp.fingerprint
+    for other in ("192.168.1.20:6369", "192.168.1.21:6370"):
+        doc = await main.health(challenge=challenge, addr=other)
+        assert doc["identity"]["addr_refused"] == other and "signature" not in doc["identity"]
+    # Not root's alone: the report vouches for nothing.
+    monkeypatch.setattr(service, "_root_only", lambda st: False)
+    assert server_identity.host_vouched_addresses() == set()
+
+
 # ─── why a room couldn't join ──────────────────────────────────────────────
 
 

@@ -82,6 +82,7 @@ from domovoi.clients.whisper import (
     SHORT_WINDOW_SEC,
     SttUnavailableError,
     can_decode_full_window,
+    for_turn as stt_for_turn,
     get_whisper_client,
     transcribe_full_window,
     transcribe_with_window,
@@ -102,7 +103,7 @@ MAX_CLIP_BYTES = MAX_CLIP_SEC * BYTES_PER_SEC
 #: Anything shorter is a tap, not speech: not transcribed, nothing written.
 MIN_CLIP_SEC = 0.3
 #: The devices tier's id shape (web/backend/api/devices.py _DEVICE_ID_RE).
-PHONE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{2,63}$")
+PHONE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{2,63}\Z")
 #: chat_threads.id is a BIGINT: anything past it is no thread at all.
 MAX_THREAD_ID = 2**63 - 1
 MAX_PLAYER_CHARS = 2048
@@ -381,7 +382,9 @@ async def _transcribe(pcm: bytes, stages: dict[str, int]) -> str:
     )
 
     try:
-        whisper = get_whisper_client()
+        # One engine for both hearings of this turn (a Mac whose speech
+        # service shares the graphics chip: clients.whisper.for_turn).
+        whisper = stt_for_turn(get_whisper_client())
     except SttUnavailableError as e:
         log.warning("phone voice: speech recognition is unavailable: %s", e)
         raise PhoneTurnRefused(

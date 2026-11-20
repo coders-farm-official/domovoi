@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Domovoi's speech recognition on the Mac's graphics chip (mac-installer
+  PHASE8A-STT.md): whisper.cpp's own server, unmodified, built by
+  mac/build.sh from the pinned tag. A LaunchDaemon run by the role account.
+  A template: DomovoiMacKit (LaunchdJob.swift) fills each double-braced
+  NAME XML-escaped, keeps the ROLE section only when a role account runs the
+  job (the system install), and checks the result parses.
+  It listens on the Mac's loopback only; the core in the VM reaches it at
+  host.lima.internal through one vm-guard rule (output chain only: plugins'
+  containers can't). No dash-dash-convert: it never runs ffmpeg or writes
+  temporary files; the core sends 16 kHz WAV. ProcessType Interactive: not
+  throttled as a background job. launchd opens the log file as UserName, so
+  the helper creates it, owned by that account, before it bootstraps the job.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>{{LABEL}}</string>
+{{#ROLE}}
+  <key>UserName</key><string>{{ROLE_USER}}</string>
+  <key>GroupName</key><string>{{ROLE_GROUP}}</string>
+{{/ROLE}}
+  <key>ProgramArguments</key>
+  <array>
+    <string>{{STT_BIN}}</string>
+    <string>-m</string>
+    <string>{{STT_MODEL}}</string>
+    <string>--host</string>
+    <string>127.0.0.1</string>
+    <string>--port</string>
+    <string>{{STT_PORT}}</string>
+    <string>-l</string>
+    <string>en</string>
+    <string>-bs</string>
+    <string>5</string>
+    <string>-t</string>
+    <string>4</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key><string>{{JOB_HOME}}</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ProcessType</key><string>Interactive</string>
+  <key>StandardOutPath</key><string>{{LOG_FILE}}</string>
+  <key>StandardErrorPath</key><string>{{LOG_FILE}}</string>
+</dict>
+</plist>

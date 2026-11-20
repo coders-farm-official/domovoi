@@ -125,7 +125,7 @@ public struct PlayerServerPositions: Sendable {
     ) -> Data {
         var body: [String: Any] = [
             "device_id": deviceID,
-            "position_sec": Int(positionSec.isFinite ? max(positionSec, 0) : 0),
+            "position_sec": max(0, WireNumber.int(positionSec) ?? 0),
             "speed": Double(speed),
         ]
         if let personID, let number = Int64(personID) { body["person_id"] = number }

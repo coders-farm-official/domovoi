@@ -267,9 +267,10 @@ class ListsHandler(Handler):
         return bool(_CUE_RE.search(transcript or ""))
 
     # ─── plumbing ─────────────────────────────────────────────────────
-    def _reply(self, ctx: Context, text_: str, *, ask: bool = False, data: dict | None = None) -> Response:
+    def _reply(self, ctx: Context, text_: str, *, ask: bool = False, data: dict | None = None,
+               history_text: str | None = None) -> Response:
         return Response(text=text_, session_id=ctx.session_id, matched_handler=self.name,
-                        expect_followup=ask, data=data or {})
+                        expect_followup=ask, data=data or {}, history_text=history_text)
 
     async def _ask(self, ctx: Context, session: AsyncSession, kind: str, prompt: str,
                    data: dict[str, Any]) -> Response | None:
@@ -458,15 +459,22 @@ class ListsHandler(Handler):
             if target.done_count:
                 return self._reply(ctx, f"Everything on {where} is crossed off.")
             return self._reply(ctx, f"{_cap(where)} is empty.")
-        said = [i.text for i in items[:_MAX_SPOKEN]]
+        shown = items[:_MAX_SPOKEN]
+        said = [i.text for i in shown]
+        # A friend house's items (a shared list) are said, but the chat
+        # model's history keeps a stand-in: a friend's words never become
+        # an instruction or a "fact" to it (audit R6 FH-15).
+        kept = [("something a friend house added" if getattr(i, "added_via", "") == "friend" else i.text)
+                for i in shown]
         more = len(items) - len(said)
         if more:
-            return self._reply(
-                ctx,
-                f"{_cap(where)} has {len(items)} things. The first {len(said)}: "
-                f"{_and_join(said)}. And {more} more on the Lists page.",
-            )
-        return self._reply(ctx, f"{_cap(where)} has {_things(len(items))}: {_and_join(said)}.")
+            def line(words: list[str]) -> str:
+                return (f"{_cap(where)} has {len(items)} things. The first {len(words)}: "
+                        f"{_and_join(words)}. And {more} more on the Lists page.")
+        else:
+            def line(words: list[str]) -> str:
+                return f"{_cap(where)} has {_things(len(items))}: {_and_join(words)}."
+        return self._reply(ctx, line(said), history_text=line(kept) if kept != said else None)
 
     async def _is_on(self, said: str, spoken_list: str | None, ctx: Context, session: AsyncSession) -> Response:
         target, why = await self._which(spoken_list, ctx, session)

@@ -252,8 +252,12 @@ _SKIP_THIS_RE = re.compile(r"^skip this$")
 # the next episode".
 _PLAY_NEXT_SKIP_RE = re.compile(r"^play (?:the )?next(?: song| track| one)?(?: please)?$")
 _PREV_RE = re.compile(r"^(?:previous|back|previous song|previous track|go back)$")
+# "Who is this?" with music on means the song (2026-11-17 live: the Q&A
+# model answered a member room's "who is this?" with a made-up singer).
 _NOW_PLAYING_RE = re.compile(
-    r"^(?:what(?:'s| is) playing|what song is this|what is this song|who sang that|who sings this)$"
+    r"^(?:what(?:'s| is) playing|what song is this|what is this song|who sang that|who sings this"
+    r"|who(?:'s| is) this|who(?:'s| is) singing|who(?:'s| is) this singing"
+    r"|what am i listening to)$"
 )
 _VOLUME_SET_RE = re.compile(r"^(?:set (?:the )?volume to|volume) (\d{1,3})$")
 # Volume is among the most-said things in the house, so it must stay on the

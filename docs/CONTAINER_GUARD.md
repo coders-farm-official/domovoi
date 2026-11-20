@@ -243,6 +243,18 @@ The core rebuilds the image when `Dockerfile.tor` changes and when it is
 30 days old, so Debian's tor security fixes get in; each rebuild moves the
 baseline.
 
+`domovoi-fh-listener` is Friend Houses' inbound listener: the code that
+reads what other houses send, walled off in a container with no network
+(docs/SECURITY_PRIVACY.md). The core builds its image itself from
+`domovoi/Dockerfile.fh-listener` and a copy of the listener's modules,
+and the guard pins it the same way, under
+`friend_houses_listener_image_id` (`engine.note_listener_image`). The core
+starts and stops the listener with itself and starts it again when it
+stops, so the guard expects it **stopped**: no failure when it is gone,
+but whenever it runs it must run the core's image. The image is rebuilt
+when the listener's code or its Dockerfile changes (an update of
+Domovoi) and when it is 30 days old.
+
 ### Plugins
 
 Every **loaded** plugin's declared containers (`[[containers]]` in its
@@ -352,8 +364,9 @@ conservative about what counts and loud about what does
 * **Docker coming back.** For 2 minutes after Docker answers again its
   containers are left to come back up by themselves.
 * **Work in progress** (`domovoi/container_guard/holds.py`): a room's music
-  player while it is started, warmed or removed, and a minute after; a
-  plugin while it is installed, upgraded, enabled, disabled or uninstalled,
+  player while it is started, warmed, made again with a changed `mpd.conf`
+  (the same name and image, a new container ID) or removed, and a minute
+  after; a plugin while it is installed, upgraded, enabled, disabled or uninstalled,
   and 5 minutes after (its own watchdog recreates its containers then),
   and while its upgrade waits for a restart; a plugin's container while
   the plugin says it is recreating it (believed for 30 minutes, longer

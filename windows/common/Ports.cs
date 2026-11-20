@@ -348,4 +348,57 @@ namespace Domovoi.Windows
             return "free";
         }
     }
+
+    // WIN-10 (round 6): the port-80 firewall rule follows the short
+    // address's switch. The switch lives in the distro
+    // (~/.domovoi/short_address.json, web/backend/short_address.py:
+    // read_enabled, on unless it says "enabled": false). DomovoiHost reads
+    // it every 30 s as the service user, like the other requests, and keeps
+    // the answer in host-state.json ("short_address_enabled"); Setup and
+    // every update add the rule only when that answer isn't false and no
+    // Windows program holds port 80. DomovoiHost can't change the firewall
+    // itself (it is not an administrator), so a switch turned off takes
+    // the rule away at the next update or Setup run.
+    public static class ShortAddressSwitch
+    {
+        public const string ServiceUser = "domovoi";
+        public const string StateFile = "/home/" + ServiceUser + "/.domovoi/short_address.json";
+        public const string HostStateKey = "short_address_enabled";
+        public const int MaxBytes = 4096;
+
+        // As the service user, under timeout, never more than MaxBytes + 1.
+        public static string[] ReadArgs(string distro)
+        {
+            return new[] { "-d", distro, "-u", ServiceUser, "--cd", "/", "--exec", "/usr/bin/timeout", "-s", "KILL", "5",
+                           "/usr/bin/head", "-c", Inv.S(MaxBytes + 1), StateFile };
+        }
+
+        // The switch as the dashboard reads it: false only for a JSON object
+        // whose "enabled" is false; true for no file (exitCode 1 from head),
+        // anything else, or a file it can't parse (read_enabled's rule).
+        // Null when the read itself failed (keep what was known).
+        public static bool? Parse(int exitCode, string stdout)
+        {
+            if (exitCode == 1) return true;           // head: no such file
+            if (exitCode != 0 || stdout == null) return null;
+            if (stdout.Length > MaxBytes) return true;
+            try
+            {
+                Dictionary<string, object> d = Json.ParseObject(stdout);
+                bool? v = Json.Bool(d, "enabled");
+                return v == false ? false : true;
+            }
+            catch (FormatException) { return true; }
+        }
+
+        // Whether Setup or an update adds the port-80 rule: the switch isn't
+        // known to be off, and no Windows program holds the port (then the
+        // dashboard can't bind it either, and the rule would only open port
+        // 80 of the household's own WSL VMs).
+        public static bool RuleWanted(bool? switchOn, string portState)
+        {
+            if (switchOn == false) return false;
+            return portState == null || portState == "free";
+        }
+    }
 }

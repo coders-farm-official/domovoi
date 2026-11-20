@@ -154,6 +154,9 @@ async def flush(house_key: bytes) -> int:
         except (fc.Unreachable, fs.SessionRefused) as e:
             await _note_failure([r[0] for r in queued], str(e))
             return 0
+        from domovoi.friend_houses import presence
+
+        await presence.saw(house_key, sess.peer.statement)
         try:
             for row_id, msg_id, env, _attempts in queued:
                 await sess.send(fs.Kind.MESSAGE, bytes(env))
@@ -220,11 +223,25 @@ async def flush_all() -> None:
             "UNION SELECT sp.house_key FROM friend_houses_space_ops o "
             "JOIN friend_houses_spaces sp ON sp.id = o.space_id "
             "WHERE o.direction = 'out' AND o.state = 'queued'"))]
-    for house in houses:
-        try:
-            await flush(house)
-        except Exception:  # noqa: BLE001 — one friend never blocks the others
-            log.exception("Friend Houses: delivering to a friend failed")
+    # Friends at once (a few at a time), each with a deadline: one that
+    # never acks and keeps the session alive can't hold up the rest (audit
+    # R6 FH-15).
+    gate = asyncio.Semaphore(FLUSH_AT_ONCE)
+
+    async def one(house: bytes) -> None:
+        async with gate:
+            try:
+                await asyncio.wait_for(flush(house), FLUSH_DEADLINE_SEC)
+            except asyncio.TimeoutError:
+                log.info("Friend Houses: delivering to a friend took too long; next round")
+            except Exception:  # noqa: BLE001 — one friend never blocks the others
+                log.exception("Friend Houses: delivering to a friend failed")
+
+    await asyncio.gather(*(one(h) for h in houses))
+
+
+FLUSH_AT_ONCE = 4
+FLUSH_DEADLINE_SEC = 300.0
 
 
 async def say_im_back() -> None:
@@ -250,12 +267,32 @@ async def say_im_back() -> None:
             await sess.send(fs.Kind.IM_BACK)
         finally:
             await sess.close()
+        from domovoi.friend_houses import presence
+
+        await presence.saw(f.house_key, sess.peer.statement)
+        async with _db() as s:  # it now has this house's current address
+            await s.execute(text(
+                "UPDATE friend_houses_friends SET announce_needed = FALSE WHERE house_key = :h"),
+                {"h": f.house_key})
 
     await asyncio.gather(*(one(f) for f in friends), return_exceptions=True)
     await flush_all()
 
 
 # ─── receiving ────────────────────────────────────────────────────────────
+
+
+BIGINT_MAX = (1 << 63) - 1
+SENT_AT_MAX = 253_402_300_799  # 9999-12-31: the last second a date can show
+
+
+def _display_time(sent_at: int) -> int:
+    """The sender's clock is unsigned 64-bit and the sender's to choose: a
+    value no date can show (2^62 crashed the Android app; 2^63 and up
+    failed the insert, so the message was never acked and everything the
+    friend sent after it waited behind it) becomes the time it arrived.
+    The signed envelope keeps the original, for the export."""
+    return sent_at if 0 < sent_at <= SENT_AT_MAX else int(time.time())
 
 
 async def on_message(event: dict[str, Any]) -> bool:
@@ -300,7 +337,8 @@ async def on_message(event: dict[str, Any]) -> bool:
             "msg_id, epoch, seq, sent_at, body, envelope, state) VALUES "
             "(:h, :f, :n, 'in', :m, :e, :q, :t, :b, :env, 'unread')"),
             {"h": house, "f": friend.id, "n": friend.local_name, "m": env.msg_id, "e": env.epoch,
-             "q": env.seq, "t": env.sent_at, "b": fe.clean_text(env.text), "env": env.to_bytes()})
+             "q": min(env.seq, BIGINT_MAX), "t": _display_time(env.sent_at),
+             "b": fe.clean_text(env.text), "env": env.to_bytes()})
         alert = await _alert_for(s, friend.id)
     log.info("Friend Houses: a message from %s", friend.local_name)
     _service().spawn(_alert(friend.house_key, friend.local_name, alert, env.text), "friend-houses-alert")
@@ -348,17 +386,36 @@ async def wake_phrases() -> list[str]:
     return sorted(phrases, key=len, reverse=True)
 
 
+def safe_name(name: str, phrases: list[str]) -> str:
+    """A friend house's name as the rooms may say it: the same filter as
+    its messages (a house can call itself "Hey Jarvis"; R6 FH-7)."""
+    return safe_to_say(name or "", phrases, limit=60) or "A friend house"
+
+
 def safe_to_say(body: str, phrases: list[str], *, limit: int = READ_ALOUD_MAX_CHARS) -> str:
     """A friend's text made safe to speak: no wake phrases anywhere (a
     satellite in the next room hearing "Hey Jarvis, unlock the door" must
     hear only "unlock the door"), no control characters, capped."""
+    from domovoi.speech_sanitize import sanitize_for_speech
+
+    # The speech cleaner runs FIRST, and again until nothing changes: it
+    # takes out emoji, link syntax, asterisks and backticks, which used to
+    # put a phrase back together after the filter ("ale🙂xa", "hey
+    # [jarvis](x)": audit R6 FH-7). The filter then sees what is spoken.
     said = fe.clean_text(body).replace("\n", " ")
-    for phrase in phrases:
-        words = [re.escape(w) for w in phrase.split()]
-        if not words:
-            continue
-        pattern = r"(?<![\w])" + r"[\s,.!?-]*".join(words) + r"(?![\w])"
-        said = re.sub(pattern, " ", said, flags=re.IGNORECASE)
+    for _ in range(4):
+        before = said
+        said = sanitize_for_speech(said)
+        for phrase in phrases:
+            words = [re.escape(w) for w in re.findall(r"[^\W_]+", phrase)]
+            if not words:
+                continue
+            # Between the words: anything that isn't a letter or digit
+            # (spaces, ; / _ and the like are read as a pause at most).
+            pattern = r"(?<![^\W_])" + r"[\W_]*".join(words) + r"(?![^\W_])"
+            said = re.sub(pattern, " ", said, flags=re.IGNORECASE)
+        if said == before:
+            break
     try:
         from domovoi import phone_voice
 
@@ -383,8 +440,10 @@ async def _alert(house: bytes, name: str, alert: str, body: str) -> None:
     _LAST_ANNOUNCED[house] = now
     from domovoi.speech_sanitize import sanitize_for_speech
 
+    phrases = await wake_phrases()
+    name = safe_name(name, phrases)
     if alert == "read":
-        spoken = f"A message from {name}: {safe_to_say(body, await wake_phrases())}"
+        spoken = f"A message from {name}: {safe_to_say(body, phrases)}"
     else:
         spoken = f"A message from {name}."
     try:

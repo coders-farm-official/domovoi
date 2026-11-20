@@ -62,9 +62,9 @@ URL_PREFIXES = (
     "https://cdimage.debian.org/debian-cd/",
     "https://cdimage.debian.org/cdimage/archive/",
 )
-_ISO_NAME_RE = re.compile(r"^debian-1[3-9]\.[0-9]{1,2}\.[0-9]{1,2}-amd64-netinst\.iso$")
-_VERSION_RE = re.compile(r"^1[3-9]\.[0-9]{1,2}\.[0-9]{1,2}$")
-_SHA_RE = re.compile(r"^[0-9a-f]{64}$")
+_ISO_NAME_RE = re.compile(r"^debian-1[3-9]\.[0-9]{1,2}\.[0-9]{1,2}-amd64-netinst\.iso\Z")
+_VERSION_RE = re.compile(r"^1[3-9]\.[0-9]{1,2}\.[0-9]{1,2}\Z")
+_SHA_RE = re.compile(r"^[0-9a-f]{64}\Z")
 MIN_ISO_BYTES = 300 * 1000 * 1000
 MAX_ISO_BYTES = 2 * 1000 * 1000 * 1000
 #: The spoken code (domovoi/canned_sounds.py SETUP_LINES), as the stick's
@@ -174,10 +174,10 @@ def iso_matches(path: Path, pin: dict[str, Any]) -> bool:
 
 # ─── the household's choices for the installer ────────────────────────────
 
-_TZ_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_+-]{0,40}(/[A-Za-z0-9_+-]{1,40}){0,2}$")
-_LOCALE_RE = re.compile(r"^[a-z]{2,3}_[A-Z]{2}\.UTF-8$")
-_KEYMAP_RE = re.compile(r"^[a-z]{2,8}([_-][a-z0-9]{1,12})?$")
-_COUNTRY_RE = re.compile(r"^[A-Z]{2}$")
+_TZ_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_+-]{0,40}(/[A-Za-z0-9_+-]{1,40}){0,2}\Z")
+_LOCALE_RE = re.compile(r"^[a-z]{2,3}_[A-Z]{2}\.UTF-8\Z")
+_KEYMAP_RE = re.compile(r"^[a-z]{2,8}([_-][a-z0-9]{1,12})?\Z")
+_COUNTRY_RE = re.compile(r"^[A-Z]{2}\Z")
 
 
 @dataclass(frozen=True)

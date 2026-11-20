@@ -69,11 +69,14 @@ network.
    Domovoi's dashboard asks for it (or [Settings → System → Advanced](#settings/advanced),
    **set up admin**). Type the 8-word setup code and choose a password.
    Where the code is: the Windows installer shows it on its last page; on
-   Linux it is in a file on the server. Then keep the household token it shows: every phone and
+   a Mac the Domovoi Setup window shows it (closed it? click the Domovoi
+   cat in the menu bar, **Repair or Uninstall Domovoi...**, then **Show
+   Setup Code...**); on Linux it is in a file on the server. Then keep the household token it shows: every phone and
    browser asks for it once. [More detail](README.md#2-claim-the-admin-account)
 2. **Answer the internet question**: Yes, Sometimes or No. You can change
    it later in [Settings → Privacy → Internet](#settings/internet).
-3. **Add your first room**: [Settings → Household → Rooms](#settings/rooms).
+3. **Set up your first room** and its satellite, the device that listens
+   there: [Settings → Household → Rooms](#settings/rooms).
    See [A Raspberry Pi room](#node:pi-room).
 4. **Say the wake word** in that room: {wake}, then "what time is it?"
 5. **Introduce yourself** in that room: "my name is …", then spell it and
@@ -87,14 +90,14 @@ network.
 
 ## How it works
 
-**Intro:** A room hears you and the server thinks. The answer plays in the
+**Intro:** The satellite in a room hears you and the server thinks. The answer plays in the
 room you're in. Everything runs on machines in your home.
 
 ### Hears
 
-The wake word is heard by the room itself: a Raspberry Pi, a spare
+The wake word is heard by the room's satellite: a Raspberry Pi, a spare
 computer, or a phone in room mode. Nothing is sent until it hears it.
-Then the room streams what you say to the server over your home network.
+Then the satellite streams what you say to the server over your home network.
 There, **Whisper** turns it into text.
 
 - On a server set up by the installer (Linux script or Windows), Whisper
@@ -163,7 +166,7 @@ server.
 One computer that stays on. Either:
 
 - **Linux** (Ubuntu 26.04: one script installs everything), or
-- **a Windows 11 PC** with the Windows installer *(Preview)*, which puts
+- **a Windows 11 PC** with the Windows installer, which puts
   the same Linux server inside Windows, out of sight.
 
 On a Windows PC:
@@ -185,7 +188,7 @@ A graphics card is optional everywhere. [More detail](docs/WINDOWS_HOST.md#which
   Audiobooks, Videos) and **Tools** (News, Calendar, Lists, Files), each
   opening in place, then **Plugins**. A plugin's page joins Media or
   Tools, or gets a row of its own. On a phone, Home's "everything" grid
-  has the same groups.
+  has the same groups, with the app's own screens.
 - That menu is the same in every browser, and an admin can change it in
   [Settings → System → App layout](#settings/app-layout) → **Menu**:
   rename the groups, add or delete one, move any page into a group or to
@@ -322,6 +325,16 @@ two-way call into a room.
 - "tell the kitchen dinner's ready"
 - "drop in on the kitchen"
 - "hang up"
+- "any messages"
+- "read my messages"
+
+**Friend Houses** (serverless messaging and friend system between
+households): friends are other Domovoi houses, made on the dashboard
+*(admin)*: [Settings → Household → Friend Houses](#settings/friend-houses).
+To send one a message, say "message" and its name with the message, like
+"message the Smiths dinner's at six" (or "tell the Smiths …" when AI
+features are on): Domovoi reads it back and sends it when you say yes. Messages are read aloud only when you ask, and anyone in the
+room will hear them.
 
 **App:** on a room's page, tap **drop in from this phone** to talk to that
 room.
@@ -386,7 +399,7 @@ over the greeting aren't heard.
 
 **If something's wrong**
 
-- It doesn't wake: speak closer, or check the room is online in [Your
+- It doesn't wake: speak closer, or check the room's satellite is online in [Your
   rooms](#node:rooms). An admin can lower **Wake sensitivity** (0.7 by
   default), or set **Wake confirmation** to 1, in the room's **Settings**
   tab.
@@ -1525,7 +1538,9 @@ dashboard and in the app, and a change shows everywhere at once.
 ### News
 
 A spoken briefing from the feeds your household picks, plus each person's
-own topics.
+own topics. The stories are numbered and read with a pause between them.
+Right after, ask about one of them: "tell me more about the second one",
+"the last one", or "the one about the bridge".
 
 **How to:** [News](#news) → **add topic**, or add a feed.
 
@@ -1630,7 +1645,7 @@ chats only ("home server chats show when you're home").
 
 [More detail](docs/FAQ.md#can-i-send-pictures-in-chat)
 
-### Domovoi on this phone *(Preview)*
+### Domovoi on this phone
 
 A chat **on this phone** runs on the phone itself: type or talk, in
 airplane mode too. It needs a 64-bit phone with 8 GB of memory or more.
@@ -1791,9 +1806,11 @@ chat can answer about a photo, in airplane mode too.
 
 [live slot: rooms]
 
-Each room is one listening device: a Raspberry Pi, a spare laptop, or a
-phone. [Settings → Household → Rooms](#settings/rooms) lists them.
-Each card shows:
+A room is a place in the house: its name, voice, music queue, wake
+words, timers and quiet hours. Each room has one satellite, the device
+that listens and plays there: a Raspberry Pi, a spare laptop, or a phone
+in room mode. [Settings → Household → Rooms](#settings/rooms) lists the
+rooms. Each card shows:
 
 - online or offline;
 - what's playing;
@@ -1806,22 +1823,22 @@ played**, **Notes**, **Timers**, **Logs**, and **Settings** (the gear).
 
 **How to** *(admin)*
 
-- Make a room hear the wake word more or less easily, swap its greeting
+- Make a room's satellite hear the wake word more or less easily, swap its greeting
   for a chime, or make its voice louder: its **Settings** tab, **Wake
   sensitivity** (0.7 by default; lower hears more easily), **Wake
   confirmation** (2: the word has to be heard a moment longer, which
   ignores short blips from the TV), **Wake acknowledgement**, **Voice
-  loudness boost**. A Pi or PC room set up before November 2026 keeps
+  loudness boost**. A Pi or PC satellite set up before November 2026 keeps
   0.5 until you change it.
 - Changes on the **Settings** tab are saved with **Save & restart**: the
-  room restarts to apply them and drops offline for a few seconds.
+  satellite restarts to apply them and drops offline for a few seconds.
 - A room can wake on up to five words: see [Wake word and
   greeting](#node:wake-word).
 - A Pi or spare computer acting up: its **Overview** tab, under
   **maintenance**, **Restart room**. Updating it: **Upgrade
   room**, in the same place.
-- A room moved to new hardware: **Reset pairing** (also under
-  **maintenance**), then approve the new device.
+- A room's satellite replaced with new hardware: **Reset pairing** (also
+  under **maintenance**), then approve the new device.
 
 **Quiet hours**
 
@@ -1850,20 +1867,20 @@ same rooms.
 
 **If something's wrong**
 
-- *offline*: power and Wi-Fi first. If **every** room says *can't
+- *offline*: power and Wi-Fi first. If **every** satellite says *can't
   connect*, see [Restarting](#node:restart).
-- The Wi-Fi bar is amber or red: move the room device or the router
+- The Wi-Fi bar is amber or red: move the satellite or the router
   closer.
-- A room says "having trouble reaching the network": it has lost the
+- A satellite says "having trouble reaching the network": it has lost the
   server.
-- [Health](#node:health) lists rooms that are offline, or were set up but
+- [Health](#node:health) lists satellites that are offline, or were set up but
   never connected.
 
 [More detail](docs/TROUBLESHOOTING.md#satellite-wont-connect)
 
 ### A Raspberry Pi room
 
-The usual room: a Raspberry Pi with a microphone board and a speaker.
+The usual satellite: a Raspberry Pi with a microphone board and a speaker.
 About the price of a smart speaker. [Parts list](docs/SATELLITE_HARDWARE.md)
 
 **How to** *(admin)*
@@ -1890,9 +1907,9 @@ About the price of a smart speaker. [Parts list](docs/SATELLITE_HARDWARE.md)
 **If something's wrong:** **show setup details** on the card lists the
 setup network and its page. [More detail](README.md#3-add-your-first-satellite)
 
-### A spare laptop or PC *(Preview)*
+### A spare laptop or PC
 
-A Windows 10 or 11, or Linux, laptop or PC can be a room. Use one that
+A Windows 10 or 11, or Linux, laptop or PC can be a room's satellite. Use one that
 stays plugged in, with sleep turned off, and not the computer that runs
 Domovoi.
 
@@ -1928,11 +1945,11 @@ A tray icon on Windows shows when the microphone is live, and mutes it.
 
 [More detail](docs/SPARE_DEVICE_SATELLITES.md#windows-laptops-and-pcs)
 
-### An old phone or tablet as a room *(Preview)*
+### An old phone or tablet as a room
 
-An Android 8 or newer phone on its charger becomes a room ("room mode").
-It hears the wake word, answers, plays the room's music, and takes
-announcements.
+Room mode turns an Android 8 or newer phone, on its charger, into a
+satellite for a room (voice, plus the room screen). It hears the wake
+word, answers, plays the room's music, and takes announcements.
 
 **How to**
 
@@ -1943,7 +1960,7 @@ announcements.
    code**. A QR code appears. If the card says the app isn't on the server
    yet, press **Download the app to this server** on that card first.
 3. Scan the QR code with the phone's camera. The page installs the
-   Domovoi app and opens it as that room.
+   Domovoi app and opens it as that room's satellite.
 4. Read the explainer, press **Start room mode**, allow the microphone,
    then press **Become this room**.
 5. Approve the six-digit code on the dashboard.
@@ -1951,9 +1968,9 @@ announcements.
 **App:** a phone that already has the app can do this from [Settings →
 Household → Rooms](#settings/rooms) → **Use this device as a room**,
 or from the **Domovoi Room** icon. A phone you also use every day needs a
-screen lock, and while it's a room, the rest of the app is locked.
+screen lock, and while it's in room mode, the rest of the app is locked.
 
-While it's a room, its screen shows what the room is playing, with
+In room mode, its screen (the room screen) shows what the room is playing, with
 pause, skip and back, and the room's timers and alarms counting down,
 with **stop** when one goes off. Reminders never show: anyone in the room
 can read the screen. The app and the server both need to be up to date
@@ -1964,16 +1981,16 @@ or **Forget this room**.
 
 **Battery**
 
-Keep the phone on its charger: rooms are always on. The room's card shows
+Keep the phone on its charger: satellites are always on. The room's card shows
 its battery and whether it's charging. Off its charger, at 20% and again
 at 10%:
 
 - Home shows a notice, and the Domovoi app on your phones says "Den is
   at 15%. Plug it in."
-- The room itself says "This is Den. My battery is low. Please plug me
+- The phone itself says "This is Den. My battery is low. Please plug me
   in." Not during the room's quiet hours.
 
-Each warning comes once per charge. A room that went offline nearly empty
+Each warning comes once per charge. A phone that went offline nearly empty
 says **probably out of battery**. The room's **Settings** tab has **Say
 when the battery is low** and **Notify when the battery is low**, both on.
 
@@ -1988,7 +2005,7 @@ when the battery is low** and **Notify when the battery is low**, both on.
 ### An old computer, from a USB stick *(Preview)*
 
 The server makes a USB stick. An old 64-bit PC, laptop or 2012–2017 Intel
-Mac starts from it and becomes a room that does nothing else. **This erases
+Mac starts from it and becomes a satellite that does nothing else. **This erases
 that computer's disk.** It needs a network cable while it sets up.
 
 **How to** *(admin)*
@@ -2012,11 +2029,11 @@ listens.
 
 **More than one word** *(admin)*
 
-- A room can wake on up to five words. With the room online, open its
-  **Overview** tab, then **wake word** → **Add another wake word**, put
-  the words in order (the main word first) and press **Save**; the room
-  restarts.
-- A Raspberry Pi Zero 2 W runs three. A room on older software runs one
+- A room can wake on up to five words. With its satellite online, open
+  the room's **Overview** tab, then **wake word** → **Add another wake
+  word**, put the words in order (the main word first) and press **Save**;
+  the satellite restarts.
+- A Raspberry Pi Zero 2 W runs three. A satellite on older software runs one
   until you upgrade it.
 - Most homes need only one: each extra word makes waking by mistake a
   little more likely.
@@ -2029,7 +2046,7 @@ listens.
   and about 32 GB of disk. A word takes about 20 minutes to train with an
   NVIDIA graphics card, and over an hour on the processor.
 - The steps: **Create** the word, **Record** 15 or more clips on the
-  room device itself (or create it with **synthetic voices only**, which
+  room's satellite itself (or create it with **synthetic voices only**, which
   needs no recordings; you can hear those voices first), press **Train**,
   then **Push to room**. The button
   shows the wake sensitivity the room gets with the word; the room's
@@ -2344,7 +2361,7 @@ among them, and each opens its part of Health.
 Some settings apply only after a restart: [Settings → System → About &
 updates](#settings/about) → **Restart Domovoi** *(admin)*.
 
-**If every room is offline but the dashboard opens**, the server's core
+**If every satellite is offline but the dashboard opens**, the server's core
 has stopped answering. It restarts itself within about a minute. If it
 doesn't, an admin presses **Restart the core**. It's on [Home](#home), on
 [Settings → Household → Rooms](#settings/rooms), on [Settings →
@@ -2366,7 +2383,7 @@ There's no backup button yet. What to keep safe:
   words;
 - your media folders.
 
-Keep the identity and the rooms won't need setting up again. A server set
+Keep the identity and the satellites won't need setting up again. A server set
 up by the installers also saves the database before every update.
 
 The Windows installer can't keep your data through an uninstall yet.
@@ -2374,7 +2391,9 @@ Ask whoever set up Domovoi. [More detail](docs/FAQ.md#how-do-i-back-up-and-resto
 
 ### Plugins
 
-Plugins add features: voice commands, pages, app screens.
+Plugins add features to the server: voice commands, dashboard pages and
+work in the background. They add nothing to the phone apps; use a
+plugin's pages from the phone's browser.
 
 **How to** *(admin)*: [Plugins](#plugins) → **Install from zip**, or
 **install from GitHub** → **fetch & preview**. Read the trust screen.
@@ -2409,7 +2428,7 @@ off](#node:ai-off).
 
 - **Something needs attention on Home**: it opens [Health](#node:health).
 - **A room doesn't answer**: see [Your rooms](#node:rooms).
-- **Every room is offline**: see [Restarting](#node:restart).
+- **Every satellite is offline**: see [Restarting](#node:restart).
 - **"Just a moment, I'm waking up my language model"**: normal once after
   a restart.
 - **"I'm set up for home commands"**: AI chat and questions are off. See

@@ -95,6 +95,8 @@ BAD = {
     "phoneApp": {"release": {"version_name": "1.2.0"}, "ready": False, "fetch": {"running": False},
                  "auto": {"state": "skipped", "tries": 0}},
 }
+VMGUARD_DOWN = {**GREEN, "hardware": {"disk": {"percent": 41}, "vm_guard": {"loaded": False, "unit": "domovoi-vm-guard.service"}}}
+VMGUARD_UP = {**GREEN, "hardware": {"disk": {"percent": 41}, "vm_guard": {"loaded": True, "unit": "domovoi-vm-guard.service"}}}
 CORE_DOWN = {**GREEN, "health": {"status": "degraded", "db_reachable": True, "domovoi_reachable": False}}
 UNREAD = {"viewer": {**ADMIN, "known": False}, "health": None, "rooms": None, "plugins": None, "pluginErrors": {}, "acq": None,
           "approvals": None, "pending": None, "version": None, "hardware": None, "config": None,
@@ -257,7 +259,8 @@ SCENARIOS: dict[str, dict] = {
     "checks": {
         "files": [COMPONENTS, HEALTH, HOME], "component": "(window.HomeAttentionRows = HomeAttentionRows, HomePage)",
         "setup": "window.__CASES = " + json.dumps({"green": GREEN, "bad": BAD, "core_down": CORE_DOWN,
-                                                   "unread": UNREAD, "mem_low": MEM_LOW,
+                                                   "unread": UNREAD, "vmguard_down": VMGUARD_DOWN,
+                                                   "vmguard_up": VMGUARD_UP, "mem_low": MEM_LOW,
                                                    "mem_na": MEM_NA,
                                                    "app_downloading": APP_DOWNLOADING,
                                                    "app_no_release": APP_NO_RELEASE,
@@ -349,6 +352,21 @@ def test_health_shows_every_check_green_or_not(driven) -> None:
     assert by["connection"]["text"] == "working"
     # Nothing to show, nothing on Home.
     assert green["problems"] == [] and green["home"] == []
+
+
+def test_the_vm_fence_row_exists_only_on_a_box_that_has_one(driven) -> None:
+    """provision.sh --vm-guard: a fence that isn't loaded is a warning in
+    Health and on Home; a loaded one is a quiet ok row; a house without the
+    option never sees the row (GREEN has none)."""
+    assert "vmguard" not in [c["key"] for c in driven["checks"]["green"]["checks"]]
+    assert "vmguard" not in [c["key"] for c in driven["checks"]["bad"]["checks"]]
+    down = driven["checks"]["vmguard_down"]
+    row = next(c for c in down["checks"] if c["key"] == "vmguard")
+    assert row["tone"] == "warn" and "VM fence isn't loaded" in row["text"] and row["scope"] == "admin"
+    assert [r["key"] for r in down["home"]] == ["vmguard"]
+    up = driven["checks"]["vmguard_up"]
+    assert next(c for c in up["checks"] if c["key"] == "vmguard")["tone"] == "ok"
+    assert up["home"] == []
 
 
 def test_a_check_that_has_not_answered_is_grey_never_green(driven) -> None:

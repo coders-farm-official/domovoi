@@ -612,8 +612,7 @@ one credential the app has. The rules, all unit-tested under
 
 ## On-device assistant
 
-Phone chats: **Domovoi on this phone**. **A preview**: the
-setup card says so beside the download (`PreviewLabel`, `ui/components/Kit.kt`).
+Phone chats: **Domovoi on this phone**.
 
 Domovoi can answer **on the phone itself**, with no server and, once its
 model is downloaded, no internet (a lookup is the one exception, and it
@@ -1250,10 +1249,56 @@ leaves the home network). What the phone does, exactly:
   while it ran), posted the fire it had missed and armed the new timer;
   in forced Doze the exact tick did the same (see above).
 
+## Friend houses
+
+"Serverless messaging and friend system between households": the
+server's Friend Houses (off by default; an admin turns it on in the
+dashboard). The phone gets what a household phone may do with friends
+the house already has: read the house inbox (one for the whole house),
+send a message, mark a conversation read, and see the friends and the
+shared lists (`ui/screens/friendhouses/`, `friendhouses/`).
+
+- **Where:** Tools, beside Lists (household data, like Lists and
+  Calendar; its shared lists open in Lists), with the inbox's unread
+  count as its badge.
+- **Shown only when the server says it is on:** `GET /api/friend-houses`
+  answers 2xx with `status` on, starting, stopped or error (stopped and
+  error show the server's sentence; the inbox still reads and a send
+  queues). Off, unavailable, 401, 403 (a server before the device-tier
+  change), 404 (a server before Friend Houses) and 501 hide it on every
+  launcher; a 401 or 403 on this read never raises the pairing screen.
+  Read at start, on a server or token change, on reconnect, on coming
+  back to the app, every minute while it is on screen and at every
+  background tick (`FhGate`, `FriendHouses`).
+- **Admin-only things are words, never controls** ("Only an admin can …,
+  on the dashboard"): friending, codes, alert levels, removing, blocking
+  and the blocked list, sharing, export and delete. A 403 from any call shows that sentence; a 400 or
+  404 shows the server's `detail` as written.
+- **Notifications** follow each friend's alert level, set on the
+  dashboard: `inbox` is the badge only, `sender` posts "A message from
+  <name>", `read` the name and the text (cut to about 200 characters,
+  control characters taken out). They come from the background sync's
+  tick above (`FriendHouseAlerts`, Wi-Fi or Ethernet only, on its own
+  "Friend houses" channel); the first look at a server is a baseline,
+  not a notification. No push, nothing hosted.
+- **This week:** the status's `changes` (new friend houses, our lists
+  shared with one), newest first, at most five, in the dashboard's words
+  ("The Smiths became a friend house · 2d ago"), with "Not you? Only an
+  admin can …". Unknown kinds are skipped; an older server sends none.
+- **Presence:** under each friend, "Online" (their house heard from in
+  the last 15 minutes), else "Last seen <2m ago…>", else "Not reached
+  yet": the house running, never who is home. A server without it shows
+  nothing.
+- **Hostile text:** every name, body, title and `last_error` comes from
+  another house. Shown as a plain-String `Text` only (`FhPlain`): no
+  links, markup, previews or fetches; line breaks kept. Never logged, and
+  never in a URL: a path carries only the 64-hex house key (checked
+  first) and numbers. The phone keeps only house keys and numbers
+  (`friend_houses` preferences: the last unread count and message id
+  seen per conversation).
+
 ## Room mode
 
-**A preview**, labelled on Settings → Rooms' "Use this device as a room"
-card and at the top of the explainer.
 
 A spare phone or tablet as a room satellite (the person's guide:
 [docs/SPARE_DEVICE_SATELLITES.md](../docs/SPARE_DEVICE_SATELLITES.md#phones-and-tablets-room-mode)).
@@ -1333,11 +1378,15 @@ holding `DUMP` (adb's shell) reaches it; a release APK does not contain it.
 
 ## Capability gating (plugins)
 
-The app fetches `GET /api/capabilities` from the web backend at connect
-(and again whenever the state WebSocket reconnects). Screens backed by a
-plugin are compiled in but *hidden* unless the manifest lists their
-capability — e.g. the Stations screen renders only when an installed
-plugin declares `"stations"` (the bundled radio plugin). Sidebar badges
+A plugin can't add anything to the app: the app runs no plugin code and
+renders no plugin pages. The app fetches `GET /api/capabilities` from the
+web backend at connect (and again whenever the state WebSocket
+reconnects). Its own screens for Coders Farm's plugins (Stations for the
+radio plugin, Images for the image plugin) are compiled in but *hidden*
+unless the manifest lists that exact plugin (slug and publisher Coders
+Farm) declaring the capability — e.g. the Stations screen renders only
+while the radio plugin declares `"stations"` (`AppScreenPlugins`,
+[CONVENTIONS.md](CONVENTIONS.md) rule 13). Sidebar badges
 for gated routes are skipped when the capability is absent, and history
 pill tones come from the manifest's `handler_display` entries (unknown
 names render neutral). If the endpoint is missing or unreachable, all

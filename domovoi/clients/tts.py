@@ -277,7 +277,7 @@ RETIRED_PIPER_VOICES: frozenset[str] = frozenset({
 # LANG_REGION-SPEAKER-QUALITY, the catalogue's naming ("en_US-lessac-medium",
 # "en_GB-northern_english_male-medium", "zh_CN-huayan-x_low").
 PIPER_MODEL_REF_RE = re.compile(
-    r"^(?P<lang>[a-z]{2,3})_[A-Z]{2}-[A-Za-z0-9_]{1,64}-(?:x_low|low|medium|high)$"
+    r"^(?P<lang>[a-z]{2,3})_[A-Z]{2}-[A-Za-z0-9_]{1,64}-(?:x_low|low|medium|high)\Z"
 )
 # The largest published voice is ~120 MB; anything far past that is not one.
 PIPER_ONNX_MAX_BYTES = 256 * 1024 * 1024
@@ -532,6 +532,21 @@ def piper_voice_dialect(model_ref: str) -> str:
 # Silence between the sentences of one reply, as the Piper voices' original
 # command line put it (and as the owner heard them on 2026-10-12).
 SENTENCE_SILENCE_SEC = 0.2
+# Silence between the paragraphs of one reply (a blank line in its text):
+# a list read out loud, such as the news headlines, puts each item in a
+# paragraph of its own so the items are heard apart. A sentence alone ends
+# in about 0.15 s of the voice's own silence, too little to tell one story
+# from the next (measured 2026-11-17). The satellite's speech, which says a
+# reply a sentence at a time, adds the same gap (streaming._spoken_parts).
+PARAGRAPH_SILENCE_SEC = 0.6
+_PARAGRAPH_BREAK = re.compile(r"\n[ \t]*\n\s*")
+
+
+def split_paragraphs(text: str) -> list[str]:
+    """``text``'s paragraphs (parts apart by a blank line), stripped, empty
+    ones dropped."""
+    return [p.strip() for p in _PARAGRAPH_BREAK.split(text or "") if p.strip()]
+
 # Said, in the voice, when a text has words but none the converter can read
 # (no Latin letters: another script entirely), rather than silence.
 UNREADABLE_TEXT_FALLBACK = "Sorry, I can't read that out loud."
@@ -792,17 +807,24 @@ class PiperVoice:
             return np.zeros_like(audio, dtype=np.float32)
         return np.clip(audio / peak, -1.0, 1.0).astype(np.float32)
 
-    def synthesize_pcm(self, sentences: list[str], speed: float) -> bytes:
-        """int16 mono PCM for the sentences, a short silence between them."""
+    def synthesize_pcm(self, sentences: list[str], speed: float,
+                       paragraph_starts: frozenset[int] = frozenset()) -> bytes:
+        """int16 mono PCM for the sentences, a short silence between them
+        and a longer one before each sentence whose index is in
+        ``paragraph_starts`` (:data:`PARAGRAPH_SILENCE_SEC`)."""
         np = self.np
         gap = np.zeros(int(SENTENCE_SILENCE_SEC * self.sample_rate), dtype=np.int16)
+        long_gap = np.zeros(int(PARAGRAPH_SILENCE_SEC * self.sample_rate), dtype=np.int16)
         parts = []
-        for ph in sentences:
+        new_paragraph = False
+        for i, ph in enumerate(sentences):
+            new_paragraph = new_paragraph or i in paragraph_starts
             audio = self.sentence_audio(ph, speed)
             if not audio.size:
                 continue
             if parts:
-                parts.append(gap)
+                parts.append(long_gap if new_paragraph else gap)
+            new_paragraph = False
             parts.append((audio * 32767).astype(np.int16))
         return b"".join(p.tobytes() for p in parts)
 
@@ -908,13 +930,23 @@ def _synth_piper_sync(text: str, voice: str, speed: float) -> bytes | None:
     v = _piper_voice(voice)
     text = _cap_text(text)
     dialect = getattr(v, "dialect", "en")   # the voice's phoneme set
-    sentences = _phonemize(text, dialect)
+    sentences: list[str] = []
+    paragraph_starts: set[int] = set()
+    for paragraph in split_paragraphs(text):
+        if sentences:
+            paragraph_starts.add(len(sentences))
+        sentences.extend(_phonemize(paragraph, dialect))
     if not sentences and any(ch.isalnum() for ch in text):
         # Words, but none in a script the converter reads (Cyrillic, CJK,
         # ...): say so in the voice instead of going silent.
         log.warning("TTS: no pronounceable words in a %d-character text; saying the fallback line", len(text))
         sentences = _phonemize(UNREADABLE_TEXT_FALLBACK, dialect)
-    pcm = v.synthesize_pcm(sentences, speed) if sentences else b""
+    if not sentences:
+        pcm = b""
+    elif paragraph_starts:
+        pcm = v.synthesize_pcm(sentences, speed, paragraph_starts=frozenset(paragraph_starts))
+    else:
+        pcm = v.synthesize_pcm(sentences, speed)
     if not pcm:
         # Nothing to say (punctuation only), or a voice that rendered no
         # audio: a failure, not a silent success — return None so the

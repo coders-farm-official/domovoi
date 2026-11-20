@@ -227,6 +227,31 @@ def tor_expectation(*, running: bool, image_id: str | None, hold: str | None = N
     )
 
 
+LISTENER_CONTAINER = "domovoi-fh-listener"
+LISTENER_IMAGE_TAG = "domovoi-fh-listener:latest"
+
+
+def listener_expectation(*, image_id: str | None, hold: str | None = None) -> Expected:
+    """Friend Houses' inbound listener (domovoi/friend_houses/listener_runtime.py).
+
+    The core starts and stops it with itself and watches it closely (it
+    restarts it when it stops), so the guard has no running rule for it:
+    STOPPED, which means whenever it does run it must run the image the
+    core built (:func:`domovoi.container_guard.engine.note_listener_image`),
+    and nothing else may wear its name."""
+    return Expected(
+        name=LISTENER_CONTAINER,
+        owner="core",
+        role="fh-listener",
+        label="the Friend Houses listener",
+        state=STOPPED,
+        required=False,
+        image_ref=LISTENER_IMAGE_TAG,
+        image_id=image_id,
+        hold=hold,
+    )
+
+
 # ─── the music players ────────────────────────────────────────────────────
 
 def mpd_expectations(

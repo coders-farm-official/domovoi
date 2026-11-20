@@ -58,8 +58,8 @@ MAX_CODE_CHARS = 64 * 1024
 MAX_BASEVALS = 200
 SLOTS = 4  # custom shapes, custom waves
 
-ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
-VAL_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,39}$")
+ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}\Z")
+VAL_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,39}\Z")
 
 PRESET_EQ_KEYS = ("init_eqs_eel", "frame_eqs_eel", "pixel_eqs_eel")
 SHAPE_EQ_KEYS = ("init_eqs_eel", "frame_eqs_eel")
@@ -265,7 +265,7 @@ def parse_milk(text: str) -> tuple[dict[str, Any], list[str]]:
         if low == "milkdrop_preset_version":
             milk_version = _milk_value(value) or 0.0
             continue
-        m = re.match(r"^(shapecode|wavecode)_([0-3])_(\w+)$", low)
+        m = re.match(r"^(shapecode|wavecode)_([0-3])_(\w+)\Z", low)
         if m:
             v = _milk_value(value)
             if v is not None:
@@ -275,7 +275,7 @@ def parse_milk(text: str) -> tuple[dict[str, Any], list[str]]:
         m = re.match(
             r"^(per_frame_init|per_frame|per_pixel|warp|comp"
             r"|shape_[0-3]_init|shape_[0-3]_per_frame"
-            r"|wave_[0-3]_init|wave_[0-3]_per_frame|wave_[0-3]_per_point)_?(\d+)$",
+            r"|wave_[0-3]_init|wave_[0-3]_per_frame|wave_[0-3]_per_point)_?(\d+)\Z",
             low,
         )
         if m:

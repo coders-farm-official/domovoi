@@ -86,7 +86,7 @@ MISMATCH_WORDS = {
 MISMATCH_RETRY_SEC = 5 * 60.0
 
 
-_RESULT = re.compile(r"^result=(\S+) kind=(\S+)\s*$")
+_RESULT = re.compile(r"^result=(\S+) kind=(\S+)\s*\Z")
 
 
 def parse_result(line: str) -> tuple[str | None, str | None]:

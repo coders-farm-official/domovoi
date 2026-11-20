@@ -66,9 +66,10 @@ final class PhoneCalendarReader: @unchecked Sendable {
                         name: title.isEmpty ? "Calendar" : title,
                         accountName: c.source?.title,
                         colorHex: Self.hex(c.cgColor),
-                        // The title is read only to tell iCloud apart; the
-                        // row shows the label, never the title.
-                        source: PhoneCalendarSource.of(Self.kind(c.source), sourceTitle: c.source?.title)
+                        // From the source's type alone, never its title
+                        // (security audit round 6, IOS-5); the row shows
+                        // the label, never the title.
+                        source: PhoneCalendarSource.of(Self.kind(c.source))
                     )
                 }
                 .sorted { (a: PhoneCalendarInfo, b: PhoneCalendarInfo) -> Bool in

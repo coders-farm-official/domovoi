@@ -210,6 +210,15 @@ class IntercomHandler(Handler):
         # broadcast. Anything else is treated as a literal room_id.
         if room and room.lower() in {"all", "house", "everyone", "everywhere"}:
             room = None
+        if room and _resolve_target_rooms(room) is None:
+            # "tell the Smiths dinner's at six": no room by that name, but
+            # perhaps a friend house (domovoi/handlers/friend_houses.py),
+            # which reads it back and asks before sending.
+            from domovoi.handlers.friend_houses import offer_to_friend
+
+            handed = await offer_to_friend(room, message, ctx, session)
+            if handed is not None:
+                return handed
         return self._build_response(room, message, ctx)
 
     # ─── Fast-path adapter ────────────────────────────────────────────

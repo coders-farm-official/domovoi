@@ -29,6 +29,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.lifecycleScope
 import com.domovoi.app.DomovoiApplication
 import com.domovoi.app.MainActivity
 import com.domovoi.app.update.AppUpdate
@@ -38,6 +39,10 @@ import com.domovoi.app.update.noticeFor
 import com.domovoi.app.update.openInBrowser
 import com.domovoi.app.ui.theme.DomovoiTheme
 import com.domovoi.app.ui.theme.ThemeMode
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 /**
  * The room display: a separate full-screen activity in its own task, dark
@@ -45,11 +50,13 @@ import com.domovoi.app.ui.theme.ThemeMode
  * a big clock, a state ring, this room's music and timers when the server
  * tells it about them, an always-visible mic-live chip, a big Mute, and
  * Exit (long press, then the phone's own unlock). What it draws is
- * [RoomDisplay]. While the phone is plugged in the screen stays on; on
- * battery it sleeps as the phone's settings say.
+ * [RoomDisplay]. While the phone is plugged in AND locked the screen stays
+ * on; unlocked, or on battery, it sleeps as the phone's settings say, so an
+ * unlocked room phone locks itself (RoomLockRules.keepScreenOn).
  *
- * Shown over the lock screen: anyone in the room may see it and mute it;
- * leaving room mode still takes the phone's PIN, pattern or fingerprint.
+ * Shown over the lock screen: anyone in the room may see it, mute it and
+ * use its music and timer controls; leaving room mode still takes the
+ * phone's PIN, pattern or fingerprint.
  * Opening it is also what (re)starts the room's service — Android lets a
  * microphone service start only from a screen the person is looking at.
  */
@@ -66,6 +73,14 @@ class RoomModeActivity : ComponentActivity() {
     /** A household phone without a screen lock: room mode is held (not
      *  listening) until it has one (RoomLockRules). */
     private var needsLock by mutableStateOf(false)
+
+    /** The phone has a lock and is unlocked: the screen says how to lock it
+     *  so the room stays on over the lock screen (RoomLockRules.showLockHint). */
+    private var lockHint by mutableStateOf(false)
+
+    private companion object {
+        const val RECHECK_MS = 5_000L
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -110,6 +125,7 @@ class RoomModeActivity : ComponentActivity() {
                     approvalCode = (status?.link as? RoomEngine.Link.AwaitingApproval)?.code,
                     wakeWord = store.wakeWord,
                     needsLock = needsLock,
+                    lockHint = lockHint,
                     onMute = { engine?.setMuted(!(status?.muted ?: false)) },
                     onResume = {
                         RoomStore(this@RoomModeActivity).setRunning(true)
@@ -150,27 +166,69 @@ class RoomModeActivity : ComponentActivity() {
         }
     }
 
-    /** Plugged in: the screen stays on (a room display on a charger is
-     *  meant to be seen); on battery the phone's own timeout applies. */
-    private val power = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) = keepScreenOn(intent)
+    /** On the charger and locked, the screen stays on (a room display is
+     *  meant to be seen, and Home or Recents meets the lock); unlocked, or
+     *  on battery, the phone's own timeout applies (RoomLockRules.keepScreenOn). */
+    private var plugged = false
+
+    private val screenEvents = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == Intent.ACTION_BATTERY_CHANGED) plugged = isPlugged(intent)
+            applyScreenRule()
+        }
     }
 
-    private fun keepScreenOn(battery: Intent?) {
-        val plugged = (battery?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0
-        if (plugged) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    private fun isPlugged(battery: Intent?): Boolean =
+        (battery?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0
+
+    /** The one place the room screen holds the screen on: re-decided at
+     *  every start and return, screen on and off, unlock (USER_PRESENT),
+     *  focus change (the keyguard coming or going), plug and unplug, and
+     *  every few seconds while shown (a lock with no broadcast of its own). */
+    private fun applyScreenRule() {
+        val km = getSystemService(KeyguardManager::class.java)
+        val locked = km?.isKeyguardLocked == true
+        val secure = km?.isDeviceSecure == true
+        if (RoomLockRules.keepScreenOn(keyguardLocked = locked, plugged = plugged, deviceSecure = secure)) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        lockHint = RoomLockRules.showLockHint(keyguardLocked = locked, deviceSecure = secure)
     }
 
     override fun onStart() {
         super.onStart()
-        // A sticky broadcast: the answer now, then every change.
-        keepScreenOn(ContextCompat.registerReceiver(this, power, IntentFilter(Intent.ACTION_BATTERY_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED))
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_BATTERY_CHANGED)
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_USER_PRESENT)
+        }
+        // Battery is sticky: the answer now, then every change.
+        plugged = isPlugged(ContextCompat.registerReceiver(this, screenEvents, filter, ContextCompat.RECEIVER_NOT_EXPORTED))
+        applyScreenRule()
+        recheck?.cancel()
+        recheck = lifecycleScope.launch {
+            while (isActive) {
+                delay(RECHECK_MS)
+                applyScreenRule()
+            }
+        }
     }
 
     override fun onStop() {
-        runCatching { unregisterReceiver(power) }
+        recheck?.cancel()
+        recheck = null
+        runCatching { unregisterReceiver(screenEvents) }
         super.onStop()
+    }
+
+    private var recheck: Job? = null
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        applyScreenRule()
     }
 
     override fun onResume() {
@@ -180,6 +238,7 @@ class RoomModeActivity : ComponentActivity() {
             finish()
             return
         }
+        applyScreenRule()
         // Re-checked at every return: the lock may have been set, or removed.
         checkLockAndStart()
     }
@@ -240,6 +299,7 @@ class RoomModeActivity : ComponentActivity() {
             c.containerAlerts.start()
             c.helpAlerts.start()
             c.batteryAlerts.start()
+            c.friendHouses.start()
         }
         startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK))
         finishAndRemoveTask()

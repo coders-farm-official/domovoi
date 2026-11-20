@@ -26,6 +26,9 @@ Condensed band map — core handlers occupy exactly the design §4.2 table:
     180 repeat           clusters with double_check
     190 double_check     owns "verify"/"are you sure"
     200 dropin           immediately before intercom
+    205 friend_houses    "tell <friend house> …", "any messages", "read my
+                         messages"; "tell X" is declined unless X is a friend
+                         house and never takes intercom's broadcast words
     210 intercom         before voice_notes ("tell the kitchen X")
     220 chat_mode
     222 printing         "print …", "scan this", ink and paper; after chat_mode,
@@ -66,6 +69,7 @@ from domovoi.handlers.dismiss import DismissHandler
 from domovoi.handlers.documents import DocumentsHandler
 from domovoi.handlers.double_check import DoubleCheckHandler
 from domovoi.handlers.dropin import DropInHandler
+from domovoi.handlers.friend_houses import FriendHousesHandler
 from domovoi.handlers.help import HelpHandler
 from domovoi.handlers.help_desk import HelpDeskHandler
 from domovoi.handlers.homelab import HomelabHandler
@@ -99,6 +103,7 @@ _CORE_HANDLERS: list[Handler] = [
     DocumentsHandler(),
     DoubleCheckHandler(),
     DropInHandler(),
+    FriendHousesHandler(),
     HelpHandler(),
     HelpDeskHandler(),
     HomelabHandler(),

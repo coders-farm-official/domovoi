@@ -509,3 +509,32 @@ def test_the_fresh_install_test_is_smallest_and_pinned():
     assert "secrets." not in wf
     timeout = re.search(r"timeout-minutes: (\d+)", wf)
     assert timeout and int(timeout.group(1)) <= 50
+
+
+def test_every_option_the_mac_helper_passes_is_one_provision_parses() -> None:
+    """mac/Sources/DomovoiMacKit/Provision.swift builds provision.sh's command
+    line inside the VM; an option the script doesn't know stops the install
+    with a usage error, on a Mac, where no CI runs it."""
+    swift = (REPO_ROOT / "mac" / "Sources" / "DomovoiMacKit" / "Provision.swift").read_text(encoding="utf-8")
+    body = swift[swift.index("public static func build("):swift.index("/// One `@@DOMOVOI {json}`")]
+    passed = set(re.findall(r'"(--[a-z][a-z-]*)"', body))
+    assert {"--host-stt-url", "--host-stt-model", "--host-stt-shares-gpu", "--vm-guard-lan"} <= passed
+    text = SCRIPT.read_text(encoding="utf-8")
+    parsed = set()
+    for m in re.finditer(r"^    ((?:--[a-z][a-z-]*\|)*--[a-z][a-z-]*)(?:\|-h\|--help)?\)$", text, re.M):
+        parsed.update(m.group(1).split("|"))
+    assert passed <= parsed, f"provision.sh doesn't parse {sorted(passed - parsed)}"
+
+
+def test_the_shared_gpu_line_is_written_only_with_the_host_speech_service() -> None:
+    """WHISPER_REMOTE_SHARES_GPU rides --host-stt-url: true with
+    --host-stt-shares-gpu (the Mac), false without; a key the core may not
+    know yet (ENV_NEWER_KEYS), and one the script manages."""
+    text = SCRIPT.read_text(encoding="utf-8")
+    block = text[text.index('  if [ -n "$HOST_STT_URL" ]; then\n    echo "WHISPER_REMOTE_URL='):]
+    block = block[:block.index("\n  fi\n")]
+    assert 'echo "WHISPER_REMOTE_SHARES_GPU=true"' in block and 'echo "WHISPER_REMOTE_SHARES_GPU=false"' in block
+    for name in ("ENV_MANAGED_KEYS", "ENV_NEWER_KEYS"):
+        m = re.search(rf"^{name}=\(([^)]*)\)", text, re.M)
+        assert m and "WHISPER_REMOTE_SHARES_GPU" in m.group(1).split(), name
+    assert 'usage_error "--host-stt-shares-gpu goes with --host-stt-url"' in text

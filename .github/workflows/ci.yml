@@ -34,6 +34,12 @@
 #   ios      ios/ (or a workflow) changed: the iPhone app's package tests on
 #            macOS and the app + UI-test target compiled for the Simulator,
 #            unsigned (the Simulator UI trains stay on the owner's Mac).
+#   mac      mac/ (or a workflow) changed: the Mac server's package
+#            (swift build && swift test in mac/) on macOS with a pinned
+#            Xcode. Started by hand (Run workflow), it also builds the whole
+#            installer the way release.yml's build-mac job does (mac/build.sh,
+#            a development build, nothing published), so the release's
+#            build is proven before release day.
 #   sbom     any change beyond docs: the release's three SBOMs
 #            (scripts/release/sbom.py, the app's through Gradle), made the
 #            way release.yml makes them, so a release never finds them
@@ -88,6 +94,8 @@ jobs:
       windows: ${{ steps.filter.outputs.windows }}
       # For the ios job: ios/ or this workflow changed.
       ios: ${{ steps.filter.outputs.ios }}
+      # For the mac job: mac/ or a workflow changed.
+      mac: ${{ steps.filter.outputs.mac }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -100,7 +108,7 @@ jobs:
           BEFORE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
           AFTER: ${{ github.sha }}
         run: |
-          all() { for k in code harness android android_apk windows ios; do echo "$k=true"; done >>"$GITHUB_OUTPUT"; echo "running every job: $1"; }
+          all() { for k in code harness android android_apk windows ios mac; do echo "$k=true"; done >>"$GITHUB_OUTPUT"; echo "running every job: $1"; }
           if [ "$EVENT" != push ] && [ "$EVENT" != pull_request ]; then all "started by $EVENT"; exit 0; fi
           case "$BEFORE" in ''|0000000000000000000000000000000000000000) all "no previous commit to compare with"; exit 0 ;; esac
           if ! git fetch -q --no-tags --depth=1 origin "$BEFORE" 2>/dev/null; then
@@ -126,6 +134,7 @@ jobs:
             # build.ps1's tests read domovoi/lan_name/vectors.json.
             echo "windows=$(has '^(windows/|domovoi/lan_name/|\.github/workflows/)')"
             echo "ios=$(has '^(ios/|\.github/workflows/)')"
+            echo "mac=$(has '^(mac/|\.github/workflows/)')"
           } >>"$GITHUB_OUTPUT"
           cat "$GITHUB_OUTPUT"
 
@@ -735,6 +744,46 @@ jobs:
           tail -n 60 "$RUNNER_TEMP/build.log"
           exit "$rc"
 
+  # The Mac server (mac/, docs/CONTRIBUTING.md "CI"): the SwiftPM package's
+  # build and tests on macOS, with the Xcode release.yml's build-mac job
+  # uses, picked by its path (never "whatever is newest"). Nothing here
+  # signs anything or holds a secret.
+  mac:
+    name: mac
+    needs: changes
+    if: needs.changes.outputs.mac == 'true'
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Xcode 16.4 (pinned; the same as release.yml's build-mac)
+        run: |
+          xcode=/Applications/Xcode_16.4.app
+          [ -d "$xcode" ] || { echo "::error::no $xcode on this image: move the pin here and in release.yml"; ls -d /Applications/Xcode_*.app; exit 1; }
+          sudo xcode-select -s "$xcode/Contents/Developer"
+          xcodebuild -version
+          swift --version
+      - name: swift build && swift test
+        working-directory: mac
+        run: swift build && swift test
+      # Run by hand only (Actions, ci, Run workflow): the whole installer,
+      # as release.yml's build-mac job builds it, minus the tag (a
+      # development build of this commit). Proves mac/build.sh, its pinned
+      # downloads and the build-path check on a runner; the package is
+      # thrown away with the runner.
+      - name: The installer, as the release builds it (by hand only)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          set -o pipefail
+          bash mac/build.sh --out "$RUNNER_TEMP/mac" --repo-url "https://github.com/$GITHUB_REPOSITORY" --cmake pinned 2>&1 | tee "$RUNNER_TEMP/mac-build.log"
+          ls -l "$RUNNER_TEMP/mac"
+          # Without --tag the build-path check only warns; here it fails.
+          if grep -q "hold build paths" "$RUNNER_TEMP/mac-build.log"; then
+            echo "::error::the programs hold build paths (see the note above)"; exit 1
+          fi
+
   # The release's SBOMs, made as release.yml's sbom job makes them (no
   # cache, the runner's JDK 17, the wrapper's Gradle held to its SHA-256),
   # so a broken generator shows up here and not on release day.
@@ -758,8 +807,8 @@ jobs:
         run: |
           set -euo pipefail
           props=gradle/wrapper/gradle-wrapper.properties
-          grep -qF gradle-8.14.3-bin.zip "$props"             || { echo "::error::the wrapper moved off Gradle 8.14.3: update its pinned SHA-256 here and in release.yml"; exit 1; }
-          grep -qF distributionSha256Sum "$props"             || echo 'distributionSha256Sum=bd71102213493060956ec229d946beee57158dbd89d0e62b91bca0fa2c5f3531' >>"$props"
+          grep -qF gradle-8.14.6-bin.zip "$props"             || { echo "::error::the wrapper moved off Gradle 8.14.6: update its pinned SHA-256 here and in release.yml"; exit 1; }
+          grep -qF distributionSha256Sum "$props"             || echo 'distributionSha256Sum=7988ed071b2a07900e2ec715fca15c6ab72bce6db433af301fa7fa7e9407bd24' >>"$props"
           export JAVA_HOME="$JAVA_HOME_17_X64"
           chmod +x gradlew
           ./gradlew --no-daemon --no-configuration-cache --init-script ../scripts/release/sbom-android.init.gradle             -Pdomovoi.sbomDeps="$RUNNER_TEMP/gradle-deps.json" :app:domovoiSbomDeps
@@ -777,7 +826,7 @@ jobs:
   ci-ok:
     name: ci passed
     if: always()
-    needs: [changes, docs, ruff, python, web, harness, android, android-repro-build, android-repro-compare, android-release-rehearsal, windows, ios, sbom]
+    needs: [changes, docs, ruff, python, web, harness, android, android-repro-build, android-repro-compare, android-release-rehearsal, windows, ios, mac, sbom]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

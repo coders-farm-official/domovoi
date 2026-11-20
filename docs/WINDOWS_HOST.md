@@ -1,4 +1,4 @@
-# Running the Domovoi server on Windows with the installer (preview)
+# Running the Domovoi server on Windows with the installer
 
 `DomovoiSetup.exe` puts the whole Linux server from
 [LINUX_HOST.md](LINUX_HOST.md) on a Windows 11 PC: the same systemd units,
@@ -10,7 +10,7 @@ Domovoi's icon in the notification area. After setup the dashboard at
 Domovoi is running, and prepares satellite cards
 ([The tray icon](#the-tray-icon)).
 
-**This is a preview.** Its programs are not code-signed yet, so Windows
+**Its programs are not code-signed yet, so Windows
 asks before it runs them ([Unsigned](#unsigned)), and a few things the
 finished installer will do are not in it yet, such as keeping your data
 through an uninstall ([Not in this build](#not-in-this-build)). It
@@ -138,7 +138,11 @@ signature, before it runs it.
    [Building it](#building-it)).
 7. **Turns on Virtual Machine Platform** and installs WSL 2.7.14 only if
    they are missing. If Windows needs a restart, Setup asks, and starts
-   again by itself after you sign in.
+   again by itself after you sign in, from a copy of itself in
+   `C:\Program Files\Domovoi\resume` (administrators only). If Windows
+   refuses that copy (an antivirus, or a copy from an earlier try still
+   open), Setup says why with Windows' error and its log's path, and
+   offers **Try again** ([TROUBLESHOOTING.md](TROUBLESHOOTING.md#on-the-windows-installer)).
 8. **Makes the hidden account and the service**, sets the folders' access,
    adds the firewall rules, and hands the rest to the service:
    `DomovoiHost`, running as the hidden account, writes that account's
@@ -412,7 +416,11 @@ address) or `http://domovoi.local:6369` instead of an address. The short
 address works because the dashboard inside the distro also listens on
 port 80, which mirrored networking makes this PC's port 80, and sends
 every browser on to 6369; Setup's firewall rule `Domovoi-ShortAddress-80`
-lets your home subnet reach it. When IIS or another Windows program
+lets your home subnet reach it. Setup and each update add that rule only
+while the short address is switched on and no Windows program uses port
+80, and take it away otherwise; switching it off in Settings removes the
+rule at the next update (or now, as an administrator:
+`Remove-NetFirewallHyperVRule -Name Domovoi-ShortAddress-80`). When IIS or another Windows program
 already uses port 80, the dashboard leaves it to that program and Settings
 says "Short address off: something else on this computer uses port 80.";
 `domovoi.local:6369` keeps working. Domovoi's Linux system can't do it itself (its distro isn't the

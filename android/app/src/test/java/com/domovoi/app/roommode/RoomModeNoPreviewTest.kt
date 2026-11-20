@@ -5,15 +5,15 @@ import com.domovoi.app.testing.NodeTree
 import com.domovoi.app.testing.composeTest
 import com.domovoi.app.testing.texts
 import com.domovoi.app.testing.withHeadlessWindow
-import com.domovoi.app.ui.components.PREVIEW_MEANS
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** Room mode is a preview (owner decision 2, 2026-10-16): the card that
- *  offers it and its explainer say so, as a label beside the choice. */
-class RoomModePreviewTest {
+/** Room mode is no longer a preview (owner decision 2026-11-17): neither
+ *  the card that offers it nor its explainer carries the label. */
+class RoomModeNoPreviewTest {
 
-    @Test fun theEntryCardSaysPreviewBesideTheChoice() {
+    @Test fun theEntryCardHasNoPreviewLabel() {
         val tree = NodeTree()
         var shown = emptyList<String>()
         withHeadlessWindow {
@@ -23,15 +23,15 @@ class RoomModePreviewTest {
                 shown = tree.texts()
             }
         }
-        assertTrue(shown.toString(), "preview" in shown && PREVIEW_MEANS in shown)
+        assertFalse(shown.toString(), "preview" in shown)
         assertTrue(shown.toString(), shown.count { it == "Use this device as a room" } == 2)
     }
 
-    /** The explainer is an Activity; its source holds the label under the heading. */
-    @Test fun theExplainerSaysPreviewToo() {
+    /** The explainer is an Activity; its source has no preview pill under the heading. */
+    @Test fun theExplainerHasNoPreviewLabel() {
         val repo = java.io.File(System.getProperty("domovoi.repo.dir") ?: error("domovoi.repo.dir is not set"))
         val src = java.io.File(repo, "android/app/src/main/java/com/domovoi/app/roommode/RoomSetupActivity.kt").readText()
         val explainer = src.substringAfter("private fun Explainer(").substringBefore("Start room mode")
-        assertTrue("the explainer shows PreviewLabel()", "PreviewLabel()" in explainer)
+        assertFalse("the explainer shows no preview label", "PreviewLabel" in explainer || "\"preview\"" in explainer)
     }
 }

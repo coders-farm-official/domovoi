@@ -60,13 +60,17 @@ final class RouteTests: XCTestCase {
 
     func testTheTableIsTheKotlinsTableReadFromTheKotlin() {
         let entries = Self.kotlinEntries
-        XCTAssertEqual(17, entries.count, "the Kotlin enum was not parsed; the table below proves nothing")
+        // 18 since Friend houses (Android 394473e2, `FriendHouses("Friend
+        // houses", …)` after `Lists`): the two land together.
+        XCTAssertEqual(18, entries.count, "the Kotlin enum was not parsed; the table below proves nothing")
         XCTAssertEqual(entries.map(\.name), Route.allCases.map(\.name), "names, in declaration order")
         XCTAssertEqual(entries.map(\.label), Route.allCases.map(\.label), "labels, in declaration order")
         // The one place the two diverge, said out loud so a change to either
         // side is a failure rather than a surprise.
         XCTAssertEqual("Satellites", Route.satellites.name)
         XCTAssertEqual("Rooms", Route.satellites.label)
+        XCTAssertEqual("FriendHouses", Route.friendHouses.name)
+        XCTAssertEqual("Friend houses", Route.friendHouses.label)
     }
 
     /// The parse can fail, and if it could not, the test above would pass
@@ -310,11 +314,12 @@ final class RouteTests: XCTestCase {
         XCTAssertTrue(tiles.contains(.settings))
         XCTAssertTrue(tiles.contains(.manual))
         // Together they are every route but the two launcherless ones and
-        // People.
+        // People — and the gated screens, which no manifest and no Friend
+        // Houses status leave hidden.
         XCTAssertEqual(
-            Set(Route.allCases).subtracting(launcherlessRoutes).subtracting([.stations, .images, .people]),
+            Set(Route.allCases).subtracting(launcherlessRoutes).subtracting([.stations, .images, .people, .friendHouses]),
             Set(tiles + bar),
-            "with no manifest the two gated screens are the only ones missing"
+            "with no manifest the gated screens are the only ones missing"
         )
     }
 
@@ -328,7 +333,9 @@ final class RouteTests: XCTestCase {
         XCTAssertEqual(.home, Route.fromOutside("home"))
         XCTAssertEqual(.chat, Route.fromOutside("chat"))
         XCTAssertEqual(.containers, Route.fromOutside("containers"))
-        XCTAssertEqual(["home", "containers", "chat"], AppContainer.routesFromOutside)
+        // A message from a friend house (Android 394473e2's fourth).
+        XCTAssertEqual(.friendHouses, Route.fromOutside("friend-houses"))
+        XCTAssertEqual(["home", "containers", "chat", "friend-houses"], AppContainer.routesFromOutside)
         for name in ["settings", "people", "files", "picker", "Home", "", "manual"] {
             XCTAssertNil(Route.fromOutside(name), name)
         }

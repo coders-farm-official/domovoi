@@ -185,7 +185,9 @@ async def test_read_subject_no_confirm(db_session) -> None:
     await db_session.commit()
 
     assert resp.matched_handler == "news"
-    assert not resp.expect_followup  # read verb reads immediately
+    # The read verb reads immediately; the microphone stays open only for
+    # "tell me more about it" (test_news_followup.py), with nothing parked.
+    assert resp.text.startswith("Here's what I have on lansing.")
     assert "lansing" in resp.text.lower()
 
     # No pending_confirmation parked.

@@ -951,14 +951,15 @@ public final class AppContainer: Sendable {
     // MARK: - out-of-band navigation (map §1.5)
 
     /// What something outside the UI may ask for: Home (a timer alert), the
-    /// Containers screen (a container incident) and Chat (help steps).
+    /// Containers screen (a container incident), Chat (help steps) and
+    /// Friend houses (a message from a friend house, Android 394473e2).
     /// **Anything else is ignored.**
     ///
     /// Android's `MainActivity.ROUTES_FROM_OUTSIDE`
     /// (`MainActivity.kt:151`), and the map asks for it by name: "a deep
     /// link should not be able to name an arbitrary screen". The route names
     /// are the Kotlin's — `"home"`, `CONTAINERS_ROUTE`, `CHAT_ROUTE`.
-    public static let routesFromOutside: Set<String> = ["home", "containers", "chat"]
+    public static let routesFromOutside: Set<String> = ["home", "containers", "chat", "friend-houses"]
 
     /// Ask for a route from outside the UI — a notification tap, a deep link.
     /// Returns whether it was accepted; a name not in

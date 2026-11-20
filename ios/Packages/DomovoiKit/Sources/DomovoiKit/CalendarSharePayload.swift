@@ -47,8 +47,8 @@ public struct PhoneCalendarInfo: Equatable, Sendable {
     public let accountName: String?
     /// `#rrggbb`, from `cgColor`.
     public let colorHex: String?
-    /// Where it comes from — the row's second line ("iCloud", "On this
-    /// iPhone"). On this phone only; never sent.
+    /// Where it comes from — the row's second line ("Other account", "On
+    /// this iPhone"). On this phone only; never sent.
     public let source: PhoneCalendarSource
 
     public init(id: String, name: String, accountName: String? = nil, colorHex: String? = nil,

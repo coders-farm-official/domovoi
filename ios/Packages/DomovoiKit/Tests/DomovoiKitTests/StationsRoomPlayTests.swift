@@ -314,6 +314,26 @@ final class StationsRoomPlayTests: XCTestCase {
         again.stop()
     }
 
+    /// Security audit round 6, IOS-5: the play goes only to the server the
+    /// gate was worked out for (`onlyTo`). A gate for another server than
+    /// the active one sends nothing at all.
+    func testThePlayIsHeldToTheGatesServer() async {
+        let house = House()
+        let model = rig(house)
+        model.start()
+        model.use(roomGate: gate())
+        await settleUntil({ !model.roomChoices.isEmpty }, "the rooms")
+        model.use(roomGate: StationsRoomPlayGate(
+            server: "http://10.0.0.77:6369", capabilities: Self.caps(version: "1.5.0"), paired: true, roomMode: false
+        ))
+        XCTAssertTrue(model.offersRoomPlay(Self.kestrel))
+        model.playInRoom(Self.kestrel, room: "kitchen")
+        await settleUntil({ model.toast != nil }, "the refusal")
+        XCTAssertFalse(house.asked.current.contains { $0.hasSuffix("/play-in-room") }, "nothing went to the active server")
+        XCTAssertFalse(StubURLProtocol.recorded.contains { $0.url?.path.hasSuffix("/play-in-room") == true })
+        model.stop()
+    }
+
     func testRoomModeAndAnUnpairedPhoneAreNeverOffered() async {
         let house = House()
         let model = rig(house)

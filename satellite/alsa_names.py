@@ -38,13 +38,13 @@ TYPES = frozenset({
 #: Never, bare or not: they write files, open pipes or run programs.
 DENIED = frozenset({"file", "pipe", "shm", "tee", "exec", "ladspa", "lfloat", "share"})
 
-_BARE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
-_TYPED = re.compile(r"^([A-Za-z][A-Za-z0-9_]{0,31}):([A-Za-z0-9_=,.-]{1,64})$")
+_BARE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}\Z")
+_TYPED = re.compile(r"^([A-Za-z][A-Za-z0-9_]{0,31}):([A-Za-z0-9_=,.-]{1,64})\Z")
 _BLUEALSA = re.compile(
-    r"^bluealsa(:DEV=([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}(,PROFILE=(a2dp|sco))?)?$"
+    r"^bluealsa(:DEV=([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}(,PROFILE=(a2dp|sco))?)?\Z"
 )
-_CARD = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
-_CONTROL = re.compile(r"^[A-Za-z0-9 _.,()+-]{1,48}$")
+_CARD = re.compile(r"^[A-Za-z0-9_-]{1,32}\Z")
+_CONTROL = re.compile(r"^[A-Za-z0-9 _.,()+-]{1,48}\Z")
 
 
 def safe_pcm(name: object) -> bool:

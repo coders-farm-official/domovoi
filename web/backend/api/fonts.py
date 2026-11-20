@@ -94,7 +94,7 @@ HTTP_TIMEOUT_SEC = 30.0
 FILE_CACHE_CONTROL = "public, max-age=86400"
 NOTIFY_CHANNEL = "fonts_changed"
 
-_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_SHA_RE = re.compile(r"^[0-9a-f]{40}\Z")
 _add_lock = asyncio.Lock()
 _catalogue_lock = asyncio.Lock()
 _catalogue_mem: dict[str, Any] | None = None

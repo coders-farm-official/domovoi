@@ -43,13 +43,13 @@ from domovoi.plugins_runtime.lockfile import (
 # The core SDK semver the `domovoi_api` range is checked against.
 from domovoi.sdk import API_VERSION
 
-SLUG_RE = re.compile(r"^[a-z][a-z0-9_]{1,31}$")
-SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
-MIGRATION_FILE_RE = re.compile(r"^V(\d{3})__[A-Za-z0-9_]+\.sql$")
-_PINNED_REQ_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\[\],-]*==[A-Za-z0-9.!+*]+$")
+SLUG_RE = re.compile(r"^[a-z][a-z0-9_]{1,31}\Z")
+SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+\Z")
+MIGRATION_FILE_RE = re.compile(r"^V(\d{3})__[A-Za-z0-9_]+\.sql\Z")
+_PINNED_REQ_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\[\],-]*==[A-Za-z0-9.!+*]+\Z")
 # Debian package-name charset (policy §5.6.1: lowercase alnum, +, -, .).
-_APT_PKG_RE = re.compile(r"^[a-z0-9][a-z0-9+.-]+$")
-_SPECIFIER_RE = re.compile(r"^(>=|<=|==|!=|>|<|~=)\s*(\d+(?:\.\d+)*)$")
+_APT_PKG_RE = re.compile(r"^[a-z0-9][a-z0-9+.-]+\Z")
+_SPECIFIER_RE = re.compile(r"^(>=|<=|==|!=|>|<|~=)\s*(\d+(?:\.\d+)*)\Z")
 
 # Reserved slugs: core identities, the ``public`` schema, and the path
 # segments the plugin HTTP surfaces already own — ``/v1/plugins/install``,
@@ -77,14 +77,14 @@ CORE_WEB_ROUTES = frozenset(
     }
 )
 # A page route becomes the URL hash (#<route>): lowercase slug charset only.
-WEB_ROUTE_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+WEB_ROUTE_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}\Z")
 
 WORKER_KINDS = frozenset({"poll", "longrun", "startup"})
 REQUIRES_NETWORK_VALUES = frozenset({"no", "degraded", "yes"})
 
 # [[media_libraries]] (design §7.1): per-plugin id + the fixed base vocabulary
 # the web-side resolver maps to an absolute path.
-MEDIA_LIBRARY_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+MEDIA_LIBRARY_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}\Z")
 MEDIA_LIBRARY_BASES = frozenset(
     {"install_dir", "data_dir", "music_dir", "absolute", "config"}
 )
@@ -821,9 +821,9 @@ def parse_manifest(toml_text: str) -> PluginManifest:
 
 
 # [[containers]] (SDK 1.5): id charset, and the image reference shape.
-CONTAINER_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+CONTAINER_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}\Z")
 _IMAGE_REF_RE = re.compile(
-    r"^[a-z0-9][A-Za-z0-9._/:-]{0,254}(@sha256:[0-9a-f]{64})?$"
+    r"^[a-z0-9][A-Za-z0-9._/:-]{0,254}(@sha256:[0-9a-f]{64})?\Z"
 )
 
 
@@ -901,6 +901,9 @@ def _parse_containers(raw: Any, warnings: tuple[str, ...]) -> tuple[ContainerDec
     return tuple(out)
 
 
+_ROOM_PLAY_CHARS = re.compile(r"/[A-Za-z0-9_.~{}/-]*")
+
+
 def _room_play_template(source: dict, slug: str) -> str | None:
     """``[[web.player_sources]].room_play_template`` (SDK 1.10): one of the
     plugin's OWN dashboard routes with an ``{id}`` in it. The browser
@@ -910,7 +913,18 @@ def _room_play_template(source: dict, slug: str) -> str | None:
     if val is None:
         return None
     prefix = f"/api/plugins/{slug}/"
-    if not val.startswith(prefix) or "{id}" not in val or ".." in val or "?" in val:
+    # PLG-13 (round 6): a literal ".." was the only thing refused, and a
+    # browser treats %2e%2e as a dot segment too, so
+    # /api/plugins/<slug>/%2e%2e/%2e%2e/auth/logout#{id} named any dashboard
+    # route. Now only plain path characters (no %, #, ?, backslash), and
+    # no "." or ".." segment at all: what the browser resolves is what is
+    # written here, and it stays under the plugin's own prefix.
+    segments = val[len(prefix):].split("/") if val.startswith(prefix) else []
+    if (
+        not val.startswith(prefix) or "{id}" not in val
+        or not _ROOM_PLAY_CHARS.fullmatch(val)
+        or any(seg in (".", "..") for seg in segments)
+    ):
         raise ManifestError(
             f"web.player_sources.room_play_template must be one of the "
             f"plugin's own routes ({prefix}...) containing {{id}}"

@@ -112,3 +112,22 @@ async def test_a_core_that_is_down_is_still_degraded(monkeypatch) -> None:
     body, _ = await _health(monkeypatch, httpx.ConnectError("refused"))
     assert body["domovoi_reachable"] is False
     assert body["status"] == "degraded"
+
+
+# ─── the Mac's speech service (mac-installer PHASE8A-STT.md) ─────────────
+
+
+@pytest.mark.asyncio
+async def test_the_speech_engine_is_passed_through_with_only_its_keys(monkeypatch) -> None:
+    eng = {"active": "host", "host_state": "ok", "local_standby": True, "use_host": True,
+           "down_since": None, "url": "http://host.lima.internal:6371", "last_error": "x"}
+    body, _ = await _health(monkeypatch, _Resp(200, {"status": "ok", "stt": "ok", "stt_engine": eng}))
+    assert body["stt_engine"] == {"active": "host", "host_state": "ok", "local_standby": True,
+                                  "use_host": True, "down_since": None, "shares_gpu": None,
+                                  "last_engine": None, "last_reason": None, "last_at": None}
+
+
+@pytest.mark.asyncio
+async def test_no_speech_engine_is_null(monkeypatch) -> None:
+    body, _ = await _health(monkeypatch, _Resp(200, {"status": "ok", "stt": "ok"}))
+    assert body["stt_engine"] is None

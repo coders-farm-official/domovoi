@@ -242,7 +242,14 @@ fresh box, and again after `--reset-admin` — the upgrade is closed `1008`
 with `code: setup_required` whatever it presents, and the HTTP way of
 opening a call (`POST /v1/admin/dropin/start`) answers `501` with the
 security tier. Nothing needed to finish setting a box up listens to a
-room (CORE-14).
+room (CORE-14). While a call is open, the credential that opened it is
+read again every 30 seconds, as a plugin socket's is: once the household
+token has been rotated (a lost phone), or the admin session behind a
+Bearer has been signed out, idled out or revoked, the call ends and the
+socket is closed `1008`; if the database can't answer three checks in a
+row it is closed `1011` (CORE-44, round 6). Before that only the upgrade
+was checked, and an open call kept carrying the room's microphone until
+it was hung up or fell silent.
 
 **The chat mic.** A push-to-talk turn from the app's chat screen
 (`POST /v1/phone/voice`, reached through the dashboard's
@@ -471,7 +478,9 @@ two-way sync, no sign-in with Google, Microsoft, Apple or Samsung):
 * **From a phone.** A person can switch on "Share this phone's calendars
   with the house" in the Android app (off by default; it asks
   `READ_CALENDAR` then), or in the iPhone app, which asks for calendar
-  access then, and pick calendars. The phone sends each event's
+  access then, and pick calendars. So the person can choose, the
+  Android picker shows each visible calendar's event count, read on the
+  phone and never sent. The phone sends each event's
   title, time, place and the calendar's name and colour (never
   descriptions or guests) for 30 days back to 180 ahead, to its own
   household server only, over the house's network with the household
@@ -824,7 +833,18 @@ core starts. The training container runs on Docker's default network, so it
 could reach the internet while it trains; nothing in it needs to once the
 data is cached. What the household recorded only goes into it read-only and
 into the cache volume ([Data at rest](#data-at-rest)); nothing uploads it.
-A trained model leaves the server only when an admin presses **Download**
+Rooms take a trained model from the wake-model channel
+(`GET /v1/wake-models/{file}`), and since round 6 (CORE-43) a model
+trained here is served there only to the address a room that passed
+pairing connects from (its live socket, or one seen in the last 30 days:
+a phone checks its models before it reconnects), to a household device
+(`X-Device-Token`) or to an admin; any other host gets `403`. None of the
+room kinds sends a credential on that fetch, so the room's address is
+what ties a download to a room. The list (names and digests) stays open,
+and so do the published words, which anyone can download from where they
+are published. The channel is plain HTTP, so a host that can already read
+a room's traffic on the LAN can read a download too. Otherwise a trained
+model leaves the server only when an admin presses **Download**
 (`GET /v1/admin/wake/export/{wake_word_id}`): a zip of the `.onnx`,
 `SHA256SUMS`, `MODEL_CARD.md` and `LICENSE-NOTICE.md`, with no
 recordings, clip names, rooms or paths. Sharing it is allowed under
@@ -839,8 +859,9 @@ copy of the published "Domovoi" word, trained the same way plus its own
 recordings (`domovoi/wake_tuning.py`). It is an ordinary trained word under
 a reserved name (`domovoi_v1_tuned`, which no other word may take), so
 everything above holds for it: the clips stay under `wake_clips/`, the model
-under `wake_models/`, served only to this server's own rooms over the signed
-wake-model channel, and nothing uploads either. It is never one of the
+under `wake_models/`, served only to this server's own rooms, household
+devices and an admin over the signed wake-model channel (above: by the
+room's address, CORE-43), and nothing uploads either. It is never one of the
 published words: "use a published word" and the default-word download
 refuse it. Its **Download** is the same admin-only zip as any trained word's,
 and its model card says it includes the household's recordings and is
@@ -1354,8 +1375,11 @@ one answer.
   `Host` (or none, or two) is a `400` whose text names this server's own
   address. The request target must be `/path?query` in printable ASCII; an
   absolute URL, `*` or a control character is a `400`, so nothing can
-  point the `Location` elsewhere or split the header. A `Host` with a port
-  other than 80 is refused too.
+  point the `Location` elsewhere or split the header (including a newline
+  at the very end, which a pattern ending in `$` used to let through:
+  every validator now ends in `\Z` or uses `fullmatch`, CORE-46, round 6,
+  and `domovoi/tests/test_regex_anchors.py` keeps it so). A `Host` with a
+  port other than 80 is refused too.
 * **GET and HEAD only.** Every other method is a `405` with
   `Allow: GET, HEAD`; nothing is ever forwarded to the dashboard, so a
   form posted to port 80 goes nowhere.
@@ -1381,7 +1405,17 @@ one answer.
   plugin's helper) don't inherit it. The core and database units hold no
   capability at all. On the Windows install, Setup adds the Hyper-V
   firewall rule `Domovoi-ShortAddress-80` (your home subnet only, removed
-  on uninstall like the others), and only reads what holds port 80 and
+  on uninstall like the others) only while the short address can use it:
+  its switch on (as DomovoiHost last read it from the distro, every 30
+  seconds, as the service user, into `host-state.json`) and no Windows
+  program on port 80. Otherwise Setup and every update leave it out and
+  remove an earlier one (WIN-10, round 6). The rule matches every WSL VM,
+  so while it is there a household distro of your own in mirrored mode
+  listening on port 80 is reachable from your subnet too. DomovoiHost is
+  not an administrator and can't change the firewall, so switching the
+  short address off takes the rule away at the next update, not at once
+  (`Remove-NetFirewallHyperVRule -Name Domovoi-ShortAddress-80`, as an
+  administrator, does it now). Setup only reads what holds port 80 and
   `netsh http show urlacl` for its log: it never changes a URL reservation.
 * **No new egress.** It sends nothing anywhere; it answers browsers on
   your network.
@@ -1500,6 +1534,62 @@ object or a graft. Said plainly:
   path, and the reason the update unit's own root steps were never the
   only way in; it is why the service user must not be a login anyone
   shares.
+
+### The release pipeline: what GitHub's settings bound, and what they don't
+
+What a release is checked against is decided partly in this repository and
+partly in GitHub's settings, which no file here can change. As of round 6
+(OPS-21, OPS-22, 2026-11-17):
+
+- **Provenance comes only from a release run.** The release workflow's
+  `attest` job attests the files its own signing job listed in
+  `SHA256SUMS`, in a run the owner approved through the `release`
+  environment. The `attest_published` box, which ran `attest` alone with no
+  approval and attested whatever `SHA256SUMS` a published release held, is
+  gone (OPS-21).
+- **The verify command is the strict one.** Every release page and
+  [SECURITY.md](../SECURITY.md#verifying-a-release) print
+  `gh attestation verify <file> -R coders-farm-official/domovoi --signer-workflow coders-farm-official/domovoi/.github/workflows/release.yml --source-ref refs/heads/main`.
+  Without the last two options any workflow in the repository can make an
+  attestation that passes, including one pushed on a branch by anyone with
+  write access (OPS-22). Release pages published before this change
+  (1.3.0 and earlier) still print the short form.
+- **Known limit: a pull request decides its own required check.** `main`
+  takes changes only through pull requests, and the one required check,
+  `ci passed`, is a job in `.github/workflows/ci.yml` as the pull request
+  itself has it. A pull request that edits `ci.yml` (or the release
+  workflow, or `scripts/release/`) can make that check pass, and no review
+  is required, so it merges on its own say-so. A change to the signing
+  job's code then runs with the signing secrets at the next release the
+  owner approves; the approval is the one gate in between, and it shows the
+  run, not the diff since the last one.
+- **Known limit: nobody has to review anything.** There is no
+  `CODEOWNERS` and no required approval; auto-merge is the normal path
+  (owner decision 2026-11-17).
+- **Known limit: `stable` has no rule of its own.** The one-line Linux
+  install fetches `stable` and runs it as root. The release run moves it
+  (fast-forward only, never forced), and nothing on GitHub refuses a force
+  push or a deletion there.
+
+**Options for the owner** (none changed by this repository; each is a
+GitHub setting):
+
+1. A `CODEOWNERS` file naming the owner for `.github/`, `scripts/release/`,
+   `android/scripts/` and `windows/installer/`, with "Require review from
+   Code Owners" on the `main` rule. Every other change keeps merging by
+   itself; these wait for one approval. The cheapest real fix for the first
+   two limits.
+2. Keep the "no force push" and "no deletion" rules on `main` and `stable`
+   switched on always, including while a release runs (only the
+   pull-request rule needs switching off for the release's own push). The
+   release never force-pushes or deletes, so these never get in its way.
+3. Make the required check come from `main`, not the pull request: a
+   ruleset "required workflow" (an organization feature, once the
+   repository moves to Coders Farm) runs `ci.yml` as `main` has it.
+4. Before approving a release run, compare `release.yml` and
+   `scripts/release/` with the last release's tag
+   (`git diff v<last>..main -- .github scripts/release`); the approval
+   screen doesn't show it.
 
 ## What the admin password actually gates
 
@@ -1665,9 +1755,13 @@ as they do for anyone not signed in.
 
 **What counts as an admin action, and why it is decided by the server.**
 Only a request that *changes something* (`POST`, `PUT`, `PATCH`,
-`DELETE`) and passes an admin *write* gate with the session's Bearer:
-the admin and security tiers on both processes, plugin management, a
-plugin's admin routes, and the session and password routes. Nothing else
+`DELETE`), passes an admin *write* gate with the session's Bearer, and
+is answered with a success (2xx): the admin and security tiers on both
+processes, plugin management, a plugin's admin routes, and the session
+and password routes. A write the server refuses (a body that fails
+validation, a 404, a 409, a wrong old password) changed nothing and does
+not count: the gate only notes the session, and the stamp is made after
+the route has answered (CORE-42, round 6). Nothing else
 moves the clock: no `GET` (status probes, health, the version check,
 admin reads), no WebSocket, no page load with the cookie, no reload
 taking its sign-in back (`POST /api/auth/resume`), and not the device
@@ -2453,15 +2547,20 @@ can't happen:
 
 * **Who.** Reading a scan's progress, summary and text is a household read
   (`require_device_read`), the same as reading the Documents folder the
-  scan is in; asking for a read is device tier. Only PDFs inside
-  `Documents/Scans/` are taken (no `..`, no hidden names), resolved inside
-  Documents with links refused.
+  scan is in; asking for a read and stopping one are device tier. Only
+  PDFs inside `Documents/Scans/` are taken (no `..`, no hidden names),
+  resolved inside Documents with a link anywhere on the path below
+  Documents refused (a file or folder linked into `Scans/` can't hand over
+  a PDF from another folder; `domovoi/scan_reader/runner.py`, `resolve`).
 * **The file is somebody's bytes.** A scan in Documents can be replaced by
   anyone with write access, so its pages are drawn in a short-lived
   worker process with memory and CPU caps (`domovoi/scan_reader/page_worker.py`,
-  the document reader's limits), never in the core. The page pictures go
-  to a work folder of the read's own in the system temp folder and are
-  deleted when the read ends (and at the next start, after a crash).
+  the document reader's limits), never in the core. A read first copies
+  the file (1 GB at most) into a work folder of its own in the system temp
+  folder, and hashes and draws that copy, so the text kept is always the
+  text of the bytes hashed, even when the scan is replaced mid-read. The
+  copy and the page pictures are deleted when the read ends (and at the
+  next start, after a crash).
 * **On the household's server only.** Printed text is read by Tesseract
   (an OS package, Apache-2.0, run as its own program at the lowest CPU
   priority, one thread, no network). A page it can't read well goes to the
@@ -2475,7 +2574,10 @@ can't happen:
   summary, in the database (`scan_reads`, `scan_read_pages`, V065), with
   the scan's path and the SHA-256 of its bytes, so the text is found
   wherever Domovoi reads that exact file (or a copy) and never for an
-  edited one. Text from the picture model is always introduced as what
+  edited one. The dashboard, the apps and voice show a finished read only
+  while the file at its path still hashes to the bytes it read: a scan
+  replaced after its read is shown as not read (and read again when
+  asked), never with the old file's text. Text from the picture model is always introduced as what
   the page "might say". Clearing the print and scan history doesn't delete
   it (the scan is still in Documents); the copies in the update unit's
   database dumps ([Data at rest](#data-at-rest)) keep it until they are
@@ -2483,12 +2585,24 @@ can't happen:
 * **Text from a letter is data, never instructions.** The summary goes
   through the letter reader (`domovoi/doc_qa/letter.py`): the text sits in
   a marked block, dates and amounts are shown only as the letter's own
-  sentences, and a line addressed to an AI is named, not followed.
+  sentences, and a line addressed to an AI is named, not followed. The
+  dashboard shows the summary with no link to click: link text a letter
+  carried is shown as words.
 * **Voice answers come first.** One read at a time in the house, at the
   lowest priority, holding off from a room's wake word until the reply has
   been spoken (`domovoi/voice_first.py`, shared with videos in chat);
   tesseract is held still during a turn and a picture-model step is
-  cancelled and asked again after it.
+  cancelled and asked again after it. The summary asked from a screen
+  follows the same rules: it waits for a quiet house and a turn cancels
+  it, one is made at a time in the house, once per read however many ask
+  at the same moment, and a failed one isn't asked for again for five
+  minutes (asking by voice, the person is waiting, so it is made at once).
+  The answer by voice keeps its 20-second budget inside a page too.
+* **A read can be stopped and has an end.** **Stop reading** on the
+  dashboard's sheet (`POST /v1/scan/reads/{id}/cancel`, device tier) ends
+  a waiting read at once and a running one within about a second, the
+  tesseract under way included. A read still running 4 hours after it
+  started ends with "took more than 4 hours".
 
 ## Videos in chat
 
@@ -2505,16 +2619,35 @@ and what can't happen:
   body, streamed to disk and cut off at 2 GiB (the transport guard refuses a
   larger declared size before reading anything). ffprobe, run as its own
   program at the lowest CPU priority, must find a phone format (MP4, MOV
-  or WebM; H.264, HEVC, VP8, VP9 or AV1) of at most 3 minutes, or the file
-  is deleted and the upload refused. The video is never written inside a
+  or WebM; H.264, HEVC, VP8, VP9 or AV1) of at most 3 minutes, with no
+  picture larger than 8K (7680 x 4320 either way up, no side over 8192, in
+  any picture stream of the file), or the file is deleted and the upload
+  refused. The free space on the disk is checked before the body is read
+  and again as it streams, whether or not it declared its size, and the
+  videos' folder holds at most 6 GiB of videos and 6 staged and not sent:
+  past either the upload is refused. The video is never written inside a
   media library folder: it waits in `~/.domovoi/chat_uploads/videos/`
   under a random name, and the job's frame grabs and sound in a folder of
   its own beside it.
+* **A video's length is enforced on every pass, not taken on trust.** The
+  3 minutes ffprobe reports is what the file's header says, and a header
+  can lie (a WebM that says one minute and holds two hours). So each
+  ffmpeg pass reads at most the accepted length plus two seconds, and only
+  the picture and sound streams the upload's probe checked; the sound is
+  cut off at the size that length makes and is never read past it; the
+  scene list and the speech pieces have ceilings of their own. ffprobe,
+  ffmpeg (and the scan reader's tesseract) each run with a memory cap (2
+  GiB, or a third of the server's memory, never under 1 GiB: `RLIMIT_AS`
+  on Linux, a job object on Windows) and one decoding thread, so a hostile
+  file fails its own pass, not the server; on Linux the core's unit has
+  `OOMPolicy=continue`, so a helper the kernel ends doesn't stop the core
+  (`domovoi/chat_video/media.py`).
 * **The video is deleted once it has been watched.** When the job ends,
   whether it finished, failed or was stopped, the video file and every frame
   grab and sound file it made are deleted, and the job's row records when.
-  A video picked in the composer and never sent goes after an hour; one a
-  crash left behind goes at the next start. Only text is kept: the
+  A video picked in the composer and never sent goes after an hour (the
+  dashboard's process looks every ten minutes, with or without another
+  upload); one a crash left behind goes at the next start. Only text is kept: the
   transcript with times, a short description of each of at most 12 frames,
   and a summary, in the database with the chat (`chat_video_jobs`,
   `chat_video_segments`, `chat_video_frames`, V064). Deleting the chat
@@ -2531,10 +2664,17 @@ and what can't happen:
   house, at the lowest priority, and holds off from a room's wake word until
   the reply has been spoken; a frame being described when a voice turn
   starts is cancelled and asked again after it, and ffmpeg is held still
-  during the turn.
+  during the turn. **Stop** works at every step: it is looked at before
+  each one, quiet house or not, and about once a second while ffmpeg runs
+  (which is then ended at once).
 * **Text from a video is data, never instructions.** What anyone in the
   video says, or a sign in a frame, reaches a model inside a marked block it
-  is told never to obey. A frame description is a small model's guess and
+  is told never to obey. So does the video's file name, which whoever sent
+  the video chose: a model sees it only inside a block, cut to letters,
+  digits, spaces and `. - _ ( ) '`. And a question in a chat with watched
+  videos is never offered lookups by the model (as on a document or a
+  picture turn): only the person's own typed "look up …" can send a search
+  out, so words from a video can't. A frame description is a small model's guess and
   is always shown as what a frame "might show"; no face is recognised and
   nobody is named.
 
@@ -2638,9 +2778,40 @@ Friend Houses page warns while those rules are missing.
 house; it doesn't prove who is calling, and a removed friend can keep
 reaching the onion for minutes. So every connection also runs a Noise
 handshake bound to both houses' keys, and the house checks the caller
-against its **current** friend list before reading anything else. The
-inbound side runs as its own process with no database and no network,
-reading only fixed-size, fixed-format frames.
+against its **current** friend list before reading anything else, and
+again on every frame, so a friend removed or blocked mid-connection is cut
+off at its next one. Tor's SOCKS port reaches onion addresses only.
+
+**The listener is walled off.** The code that reads what other houses
+send (the inbound listener, which reads only fixed-size, fixed-format
+frames) runs in a container of its own, `domovoi-fh-listener`, built by
+the core like the Tor image (`domovoi/Dockerfile.fh-listener`: the same
+pinned Debian base, Debian's Python and cryptography, and only the
+listener's own modules). The container has **no network at all**, a
+read-only root, no capabilities, no new privileges, no variables from the
+core's environment and no logs kept by Docker. It sees three things: the
+house keys and the listener's files (the friend list, this house's hello,
+the open friend files), both read-only, and the folder its two sockets
+live in, which holds nothing else (Tor's SOCKS socket is elsewhere). So a
+defect in the listener can't read the database, the settings or the
+house's files, can't change who is a friend, and can't reach the network:
+the most it can do is say something false to the core over its pipe, and
+the core checks every event again before acting on it. The container ends
+with the core, and the guard pins its image (docs/CONTAINER_GUARD.md).
+What a defect there could still read is the house keys, which the
+listener needs to answer the handshake; and it shares the kernel with the
+rest of the server, like any container.
+
+**Limits that keep one house from swamping this one.** A friend can send
+at most 60 messages an hour; connects, "I'm back" and accepts are capped
+at 120 an hour per house, and one accept ends its connection; friend
+requests have their own 8 connection slots and only a request naming an
+open friend file counts toward the 20 an hour; the handshake must finish
+within 20 seconds. The core handles at most 24 events from the listener
+at once and drops the rest (the other house simply tries again). A
+friend's offered lists (5 waiting at most), the changes waiting on an
+offer (2,000) and the items a shared list remembers (5,000) are capped
+too.
 
 **Friend files are bearer secrets.** A friend file (one line,
 `domovoi-friend:1:…`) lets whoever holds it ask to be a friend, **once**,
@@ -2650,18 +2821,31 @@ service for requests (the pairing address), rate-limited and answering
 only for open files; it is deleted, and a new address made for the next
 file, as soon as none is left. The file's secret isn't stored: it is
 derived from the house key when needed, so a database dump can't be used
-to answer a file. Making, listing and cancelling files, and every other
-Friend Houses route, is admin security tier, reads included.
+to answer a file. Making, listing and cancelling files, and everything that changes who is
+trusted or what the house does (accepting, alert levels, verifying codes,
+renaming or removing a friend, sharing lists, deleting or exporting a
+conversation) is admin security tier, reads included. What makes sense
+with friends the house already has is open to every household phone (the
+household token): reading the house inbox, sending a message, marking a
+conversation read, and seeing the friend list and the shared lists.
 
 **The 4-digit code.** Both houses compute the same 4-digit code from
-random values each side committed to before seeing the other's, so
+random values each side committed to before seeing the other's (the
+asking house commits to its house key too, so it can't generate keys
+until the code comes out the way it wants), so
 someone who swapped a friend file in transit can't make the codes match
 except by a 1-in-10,000 chance, once per file. Comparing codes (by phone,
 in person) is optional; a friend shows "Not verified" until someone does.
 
-**Every new friend is announced** aloud in the rooms and logged, so a
-friend added without the household knowing (for example by someone on the
-LAN who captured an admin sign-in) doesn't go unnoticed.
+**Every new friend is announced** aloud in the rooms and logged, and so
+is every list shared with a friend, so a friend added without the
+household knowing (for example by someone on the LAN who captured an
+admin sign-in) doesn't go unnoticed. During the house's quiet hours the
+announcement waits and is said when they end; the Friend Houses page (and
+the status the phones read) lists the week's new friends and shared lists
+either way. A request this house sent can be taken back before it is
+accepted, and a friend file naming a key another friend already uses is
+refused.
 
 **Messages.** There is one inbox for the whole house; Domovoi has no
 per-person sign-in, so per-person inboxes wait for one. Every message is
@@ -2687,10 +2871,36 @@ to the chat model.
 Removing a friend keeps the conversation, marked "no longer a friend", so
 it can be read or exported before it is deleted.
 
+**Blocking** is removing, plus three things. The house's key is kept on a
+blocked list, and anything signed by it is refused: it can't ask to be a
+friend again with a new file, and this house won't send it a request. By
+default this house also **moves to a new address** (a fresh onion key) and
+tells its remaining friends the new one, each in a signed statement on its
+next connection; a friend that was offline is told when it is next reached.
+So the blocked house no longer knows where this one is, even if it kept a
+copy of a reach key. Blocking can delete the conversation too; by default
+it is kept. Unblocking only lifts the refusal: the house is not a friend
+again until it asks with a new friend file and an admin accepts.
+
+**Presence.** Friends show as "Online" when this house has heard from them
+in the last 15 minutes (a message, a list change, or a check it makes every
+10 minutes on friends it hasn't heard from), and otherwise "Last seen" with
+a time. It says only that the other house is running and reachable, never
+who is home. The check is the same kind of call a message makes, so a
+friend learns no more than it already could by sending one.
+
+**By voice.** "Any messages?" says how many are new and from which friend
+houses, never the text. "Read my messages" reads them aloud (five at a
+time, wake phrases taken out as above), only when asked. "Message the
+Smiths …" (or "tell the Smiths …" when AI features are on) reads the
+message back and sends it only on "yes", within two minutes. Neither a
+friend's message nor a friend's name goes to the chat model.
+
 **Shared lists.** An admin can share a household list with a friend house.
 Each house keeps its own copy in its own Lists, and the two exchange
-signed changes (items added, edited, ticked off, removed; not the list's
-name, its order or who in the house did what). A friend's changes can
+signed changes (items added, edited, ticked off, removed; not its order
+or who in the house did what). The list's name goes with the first change,
+as the title the friend sees on the offer. A friend's changes can
 only touch the one list its share is linked to here. A list a friend
 offers waits for an admin to accept it, and declining tells nobody. Text a
 friend adds to a list is cleaned, cut at 200 characters, and has every
@@ -2890,6 +3100,73 @@ dashboard choice.
   side runs again its report is stale and the page shows what is mounted,
   with neither action.
 
+## Restart on a Mac: no password, one fixed action
+
+On the Mac installer, **any process under any local account** (a person
+signed in at the Mac, an SSH login, the Guest account, a service account)
+may ask Domovoi to restart, without a password (owner decision,
+2026-11-11). The permission is granted once, when Setup installs Domovoi as
+an administrator, and the uninstall takes it away again. How it is kept
+narrow:
+
+- **One root job, one process, one fixed action.** `com.domovoi.mac.restart`
+  is a LaunchDaemon with a launchd `Sockets` entry: launchd makes the UNIX
+  socket `/Library/Application Support/Domovoi/run/restart.sock` (mode 0666)
+  in a root-owned 0755 folder and starts `DomovoiHelper restart-trigger
+  --system` as root when someone connects. That ONE process takes the
+  socket from launchd (`launch_activate_socket`) and accepts every
+  connection itself; it is never one process per connection. It holds at
+  most 32 connections at once (more get `BUSY` and are closed), sets send
+  and receive timeouts and no SIGPIPE on each, and leaves after 30 idle
+  seconds; launchd starts it again on the next connection. Program and
+  arguments are fixed in the job file in `/Library/LaunchDaemons`; the
+  program is in Domovoi's root-owned folder. No RunAtLoad, no KeepAlive. It does what the menu's
+  Restart did with a password: restart Domovoi's services, and its virtual
+  machine when that isn't enough.
+- **Connecting is the request.** The job reads at most one byte (`R`, or
+  nothing within 200 ms); anything else is answered `ERROR` and closed.
+  Nothing an account sends becomes an argument, a path or a program, and
+  nothing an account owns is left on disk. The asking account is logged in
+  `/Library/Logs/Domovoi/helper.log` (`getpeereid`), at most one line a
+  second (the rest as "N more connections").
+- **One at a time.** The restart runs on a worker thread of that process.
+  A request while it runs (from any account) is told `RUNNING` and gets
+  that run's result; it never starts a second.
+- **Rate limit.** After a restart that acted the next one is refused for
+  two minutes, counted from when that restart finished. "Acted" means any
+  restart step ran: one that then failed part-way, or that ended with
+  Domovoi still not answering, counts. Only a refusal in the checks before
+  any step (Domovoi switched off in Login Items, an update, Setup or the
+  uninstall at work) doesn't start the two minutes. A finish time in the future (the
+  clock went back) doesn't block. The last result is kept in the
+  root-owned `state/restart.json`.
+- **The busy lock.** Setup, updates and restarts take an exclusive lock on
+  `/Library/Application Support/Domovoi/.busy`, mode 0600, so no other
+  account can open it and hold a lock that makes theirs fail. The menu reads
+  who holds it (install, repair, update, restart, uninstall or setup) from
+  the root-written `state/busy.json`, never by locking; the uninstall
+  removes that file before it removes Domovoi's folders.
+- **Deleting as root, without following links.** The uninstall (and a
+  repair, for the requests folder an early test build of this feature
+  made) removes files and folders with an fd-relative, no-follow walk:
+  every folder is opened with `O_NOFOLLOW`, checked to be the folder that
+  was looked at, taken over (root, 0700) so nothing more can be added, and
+  emptied with `unlinkat`. A folder swapped for a link mid-walk is never
+  entered; the link itself is removed. Flags are cleared only on what the
+  walk opened. Empty folders go with `rmdir`.
+- **What it can't stop.** Any local process can restart Domovoi, once every
+  two minutes after a restart that acted, and can keep up to 32 connections
+  of the one root process busy (others are told `BUSY`), which may delay a
+  real request until it tries again. The restart's health checks ask Domovoi on `127.0.0.1`: a local
+  program that takes Domovoi's ports while it is down could answer them and
+  make the menu say "back" too early (accepted for now; the checks are
+  unchanged).
+- **Older installs** have no such job: the menu then asks macOS for an
+  administrator's password as before and says that a Repair stops it
+  asking. Release builds of the app ignore the `DOMOVOI_HELPER` and
+  `DOMOVOI_UNINSTALL` environment overrides, so an account's environment
+  can't choose what runs behind that password prompt.
+
 ## Printers and scanners
 
 Domovoi prints to network printers (IPP Everywhere, AirPrint, Mopria) and
@@ -2937,7 +3214,14 @@ parts:
   and the server's own addresses are refused before anything else, on
   every check and every later connection, whatever any setting says**
   (owner, 2026-11-16: network printers only, so no local CUPS or ipp-usb
-  queue, ever). A row saved earlier that points there stops working;
+  queue, ever). A row saved earlier that points there stops working.
+  **Every IPv6 address that isn't an IPv4-mapped one is refused the same
+  way** (CORE-45, round 6): the list of the server's own addresses holds
+  IPv4 only, so `fd00::20` or `fe80::20` (the server itself), `::127.0.0.1`
+  and `64:ff9b::7f00:1` used to pass an admin's allowlisted entry; printers
+  are reached by IPv4. If the server's network interfaces can't be read,
+  nothing is dialled and the sweep doesn't run, rather than trusting a
+  short list;
 - the one escape hatch is the existing operator setting
   `OUTBOUND_ALLOW_HOSTS`, and only for an address an **admin typed**: an
   entry naming an exact `host:port` lets that address be added even though
@@ -3071,7 +3355,7 @@ watch the server's traffic under **No**.
 | **Satellite approval** — a portal-onboarded satellite waits for a human before it is paired | Every first connection from a device presenting a setup code | Type the satellite's six-digit code into the approval card. The dashboard never shows you the code — it is on the device, which is what ties the request on screen to the unit in the room. The server compares it and allows five attempts per room per five minutes. A device that brings a code must bring six digits (or the four that satellites set up before 2026-09-22 were given and still say), or nothing is parked (a request no code could ever approve would only take the name away from the real device). The first device to park holds that room name for three minutes, or until someone approves or rejects it; a different device asking for the same name inside that window is refused as a conflict (`approval_conflict`), and after it the newcomer's request **replaces** the parked one — its token and its own code together, so the code the operator hears from the device in the room is still the only one that approves anything. Being first with an unapprovable request therefore delays onboarding by minutes; it no longer blocks it until someone presses Reject (CORE-22). This is what replaces trust-on-first-use for that path; `SATELLITE_PAIRING_STRICT` still governs tokenless connects. A device set up with the server address left blank never sends its code at all: it checks the approval itself ([Asking every house](#asking-every-house-an-approval-the-device-can-check-140)). |
 | **Version check / pull** — `git fetch`/`pull` against the GitHub repo | Only when an admin clicks check/update in the dashboard | Don't click it. Nothing runs automatically. Under `never` both buttons are greyed and the core answers with the turned-off reason without running git. The follow-up **restart** is admin-gated and can only work if you granted the sudoers line in [LINUX_HOST.md](LINUX_HOST.md). A plain restart bounces systemd units and reaches no network. With the update unit installed it also re-syncs Python dependencies from PyPI (and the PyTorch CPU index) when the pull changed them, and rebuilds the MPD image (Debian's package mirrors) when that changed; it rebuilds the wake-word trainer image when that changed (on a box that built one) and, on an NVIDIA box, installs the NVIDIA Container Toolkit while it is missing (rows below). |
 | **Media acquisition** — provider plugins fetching from external sources; add-by-URL fetches the URL you gave | When you ask for something the library doesn't have, or add by URL | Don't install provider plugins / uninstall them; add-by-URL is governed by the outbound-fetch tier above. |
-| **Radio streams** — fetched by the room's music player (MPD container) or the dashboard's relay | While you're listening to an internet station (bundled radio plugin, or a plugin that plays a URL through `sdk.playback`). MPD also resumes whatever it had queued after its container restarts | Don't play internet radio; FM/SDR paths in the same plugin are local RF. Under `never` no internet URL is handed to MPD, a room playing one is stopped and internet entries are removed from every queue (at the switch and at every core start), and an open relay is cut off. |
+| **Radio streams** — fetched by the room's music player (MPD container) or the dashboard's relay | While you're listening to an internet station (bundled radio plugin, or a plugin that plays a URL through `sdk.playback`). MPD also resumes whatever it had queued after its container restarts | Don't play internet radio; FM/SDR paths in the same plugin are local RF. Under `never` no internet URL is handed to MPD, a room playing one is stopped and internet entries are removed from every queue (at the switch and at every core start), and an open relay is cut off. Before the radio plugin hands a station to the player it follows the stream's redirects itself, every hop through the outbound-URL check, and hands over the URL that answered: a station listed in the public directory whose stream redirects into the house is refused, not played (PLG-12, round 6). The player still looks that name up itself, so a name that changes its answer between the two lookups is not covered; the player's container is not fenced off the house network. |
 | **Radio detectors and lookups** — ICY "now playing" polls of favorited internet stations, short clips of them to Shazam, station-directory searches (radio-browser.info), an FM favorite's call sign to find its simulcast, the FCC import | While favorited internet stations exist (detectors), and when you search, favorite FM or import | `RADIO_SAMPLER_ENABLED=false` / `RADIO_ICY_POLLER_ENABLED=false` in `~/.domovoi/plugins/radio.env`. Offline the sampler samples only house-network streams, against your own library. |
 | **Video-satellite kiosk browser** — Chromium's own background traffic | Never: the kiosk is launched with `--disable-background-networking`, `--disable-component-update`, `--no-pings` and `--disable-domain-reliability` | Nothing to do. The page itself talks only to the Domovoi server. |
 | **Wake-word base models** — one-time openWakeWord model download (GitHub release assets) | Refreshing the satellite media cache on the server; on the Pi only for a card prepared with offline off | One-time. Every file is checked against pinned SHA-256 digests on the server and again on the Pi; a mismatch is deleted, never loaded. Under `never` the server refuses the refresh. |
@@ -4666,8 +4950,22 @@ itself, so it never says "mic off" while one is open. A drop-in (the
 microphone streamed to another room) is accepted only on a phone with an
 echo canceller and only when the core says the call is full duplex. The
 room screen shows over the lock screen so anyone in the room can see its
-state and mute it; leaving room mode takes the device credential (on a
-phone with no screen lock, a confirmation that says so). **A phone that
+state and mute it. **Its controls work over the lock screen too, and do
+exactly what saying it in that room does:** anyone in the room can pause,
+resume or skip what plays (for a group, the whole group, as the server
+applies a group's pause or skip to the group when it is said), change
+this room's volume, and stop a timer or alarm ringing there; nothing
+else. Leaving room mode takes the device credential (on a
+phone with no screen lock, a confirmation that says so). **The screen
+stays on only while the phone is locked and on its charger**
+(`RoomLockRules.keepScreenOn`, the one place the room screen sets
+`FLAG_KEEP_SCREEN_ON`): over the lock screen, Home or Recents meets the
+lock. Once someone unlocks it, the screen times out as the phone's
+settings say and the phone locks itself; the room screen says so in one
+line ("press the power button to lock this phone"). A phone with no
+secure lock has nothing to lock behind and stays on while charging. The
+decision is re-made on screen on/off, unlock, focus change, plug and
+unplug, and every few seconds while shown. **A phone that
 holds a household token needs a screen lock to be a room**: room mode
 does not start without one, and stops listening if it is removed while it
 runs (re-checked at every start and return to the room screen); a
@@ -4689,7 +4987,12 @@ detaches, it does not stop another room's music.
 shows what its room is playing and its timers and alarms, sent over the
 room's own socket and nothing else; never a reminder, since anyone in the
 room can read the screen ([Timers and reminders](#timers-and-reminders-house-wide),
-"On a room phone's screen").
+"On a room phone's screen"). A song's cover is fetched only from the
+room's own core and only at `/v1/music/cover/<digits>` (any other path,
+percent-encoding or `..` is refused), and its size is read before it is
+decoded: a cover with a side over 4096 px or longer than 8:1 is not
+drawn, and the rest are decoded to at most 1024 px on the long side, so
+a crafted cover cannot crash the room.
 
 **One microphone owner:** room mode, the phone drop-in call, the chat mic
 and phone chats (Domovoi on this phone) ask `audio/MicArbiter` first; while room mode
@@ -4813,6 +5116,43 @@ Protect may offer to scan the app; the page says so. From some date in
 unregistered developers on certified phones: the release key's
 certificate has to be registered before then
 (android/README.md, "Publishing a release").
+
+## A room phone (iPhone room mode)
+
+The iPhone app can be a room too (`ios/.../RoomMode/`), with the same
+protocol, approval, pinned server key and signed file lists as the Android
+room above. The room's pairing key is in the Keychain under room mode's own
+service; a phone that is also a household device keeps its household token,
+**unused**, while room mode is on (`HouseholdLock`), and the normal app is
+sealed until the person leaves room mode with Face ID, Touch ID or the
+passcode. As on Android, a phone that holds a household token needs a
+passcode to be a room.
+
+**The phone stays unlocked while it is a room.** iOS stops an app's
+microphone when the phone locks or the app leaves the screen, so a room
+only listens while Domovoi is open on its room screen, and the app keeps
+the screen from locking (`isIdleTimerDisabled`) for as long as the room
+runs; it dims instead. That means anyone in the room can swipe up to the
+phone's other apps: Messages, Photos, Mail and whatever else is on it. The
+Domovoi household app itself stays sealed (leaving room mode takes the
+phone's unlock), but nothing else on the phone is protected by room mode.
+Android's room screen, by contrast, shows over the lock screen and the
+phone itself stays locked.
+
+What to do about it, as the setup says:
+
+* **Guided Access** keeps the phone in Domovoi: Settings → Accessibility →
+  Guided Access, turn it on and set its passcode, then triple-click the
+  side button on the room screen and Start. Ending it takes a triple-click
+  and that passcode.
+* Or **use a spare iPhone with nothing personal on it**.
+
+The setup's explainer and its passcode screen say this in those words. On
+a phone that holds a household token (someone's own phone, not a spare
+used only as a room) the room screen keeps a line saying the phone stays
+unlocked, with the way to Guided Access, for as long as Guided Access is
+off (`UIAccessibility.isGuidedAccessEnabled`); it cannot be hidden. On a
+room-only phone it is a tip that can be hidden (`RoomGuidedAccessTip`).
 
 ## Response headers and cross-origin rules
 

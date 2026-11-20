@@ -196,6 +196,9 @@ const healthChecks = ({ viewer, health, rooms, plugins, pluginErrors, acq,
     const c = { key: 'stt', part: 'server', label: 'speech recognition', scope: 'open', order: 4,
                 fix: '#settings/models', fixLabel: 'models' };
     const stt = health && health.stt;
+    // A Mac with the speech service (mac-installer PHASE8A-STT.md): say
+    // which one hears the turns. Absent everywhere else.
+    const eng = health && health.stt_engine;
     // The turn watchdog (core /v1/health `speech`, 2026-11-09): a speech
     // worker stuck on one request (only a restart frees it), or a request
     // that timed out lately.
@@ -207,6 +210,23 @@ const healthChecks = ({ viewer, health, rooms, plugins, pluginErrors, acq,
       const mins = Math.max(1, Math.round((speech.stuck_for_s || 0) / 60));
       add({ ...c, tone: 'err', fix: '#settings/about', fixLabel: 'restart',
             text: `speech recognition is stuck (for ${mins} min) · the rooms can't understand anyone until Domovoi restarts` });
+    } else if (eng && eng.active === 'host' && eng.use_host !== false) {
+      // Which one heard the latest request: on a Mac whose language models
+      // share the graphics chip, a request that comes while they are
+      // answering is heard on the processor instead (core
+      // whisper_remote_shares_gpu).
+      const last = eng.last_engine === 'local'
+        ? (eng.last_reason === 'gpu_shared_llm_busy'
+          ? ' · the last request was heard on the processor while the language model was busy'
+          : ' · the last request was heard on the processor')
+        : '';
+      add(stt === 'unavailable'
+        ? { ...c, tone: 'warn', text: "ready · on this Mac's graphics chip only · the processor's backup didn't load" }
+        : { ...c, tone: 'ok', text: "ready · on this Mac's graphics chip" + last });
+    } else if (eng && stt !== 'unavailable' && eng.use_host !== false && eng.host_state === 'down') {
+      add({ ...c, tone: 'warn', text: "working on the processor · the Mac's speech service isn't answering" });
+    } else if (eng && stt !== 'unavailable' && eng.host_state === 'refused') {
+      add({ ...c, tone: 'warn', text: 'working on the processor · the speech service address was refused' });
     } else if (stt === 'unavailable') {
       add({ ...c, tone: 'err', text: "speech recognition is off · the rooms can't understand anyone" });
     } else if (stt === 'fallback') {
@@ -238,6 +258,20 @@ const healthChecks = ({ viewer, health, rooms, plugins, pluginErrors, acq,
       if (disk.percent >= HEALTH_DISK_WARN) {
         add({ ...c, tone: disk.percent >= HEALTH_DISK_ERR ? 'err' : 'warn', text: `home disk is ${pct}% full` });
       } else add({ ...c, tone: 'ok', text: `home disk is ${pct}% full` });
+    }
+  }
+  // A VM install's fence (provision.sh --vm-guard): a row only on a box
+  // that has one, so no other house sees it. The server still runs without
+  // the fence; this says it is missing.
+  {
+    const guardState = hardware && hardware.vm_guard;
+    if (guardState && guardState.loaded !== null && guardState.loaded !== undefined) {
+      const c = { key: 'vmguard', part: 'server', label: 'VM fence', scope: 'admin', order: 16 };
+      if (guardState.loaded === false) {
+        add({ ...c, tone: 'warn',
+              text: "the VM fence isn't loaded · this machine can reach more of the host than it should · "
+                + `see ${guardState.unit || 'domovoi-vm-guard.service'} (systemctl status)` });
+      } else add({ ...c, tone: 'ok', text: "loaded · the host's other services are out of reach" });
     }
   }
   {

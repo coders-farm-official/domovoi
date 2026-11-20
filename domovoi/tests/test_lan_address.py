@@ -15,6 +15,7 @@ Pure socket/settings checks with the socket layer faked — no DB, no
 
 from __future__ import annotations
 
+import json
 import logging
 import socket
 from pathlib import Path
@@ -314,6 +315,135 @@ def test_advertise_url_is_looked_up_at_adopt_time(monkeypatch):
     assert adoption.advertised_domovoi_url() == "ws://192.168.1.50:6370"
     _fake_network(monkeypatch, routed="192.168.1.77")
     assert adoption.advertised_domovoi_url() == "ws://192.168.1.77:6370"
+
+
+# ─── the host side's address (a server inside a VM) ──────────────────────
+
+
+@pytest.fixture
+def host_file(tmp_path, monkeypatch):
+    """A lan.json the host side wrote, in a folder of its own, believed as
+    root's (the tests can't make root files; _root_only is what checks)."""
+    d = tmp_path / "domovoi-mac"
+    d.mkdir()
+    path = d / "lan.json"
+    monkeypatch.setenv("DOMOVOI_HOST_LAN_FILE", str(path))
+    monkeypatch.setattr(lan_address, "_root_only", lambda st: True)
+
+    def write(doc) -> None:
+        path.write_text(doc if isinstance(doc, str) else json.dumps(doc), encoding="utf-8")
+
+    return write
+
+
+def test_no_host_file_is_the_lookup_as_before(monkeypatch, tmp_path):
+    monkeypatch.setenv("DOMOVOI_HOST_LAN_FILE", str(tmp_path / "nothing-here.json"))
+    handed = _probe_returns(monkeypatch, "192.168.1.50")
+    assert lan_address.host_lan_ipv4() is None
+    assert lan_address.lan_ipv4() == "192.168.1.50"
+    assert handed == ["192.168.1.50"]
+
+
+def test_the_default_path_is_the_one_the_host_side_writes():
+    assert lan_address.HOST_LAN_FILE == "/var/lib/domovoi-mac/lan.json"
+
+
+def test_the_host_sides_address_wins_over_the_vms_own(monkeypatch, host_file, caplog):
+    """Inside a Lima VM the lookup finds the VM's private address; the
+    satellites must be told the Mac's."""
+    host_file({"schema": 1, "ipv4": "192.168.1.20", "interface": "en0", "written_at": "2026-10-28T10:00:00Z"})
+    handed = _probe_returns(monkeypatch, "192.168.105.2")
+    with caplog.at_level(logging.INFO, logger="domovoi.lan_address"):
+        assert lan_address.lan_ipv4() == "192.168.1.20"
+    assert handed == [], "the VM's own lookup isn't needed"
+    assert "comes from the host side" in caplog.text
+    monkeypatch.setattr(settings, "mpd_http_base", "auto")
+    assert lan_address.mpd_http_base() == "http://192.168.1.20"
+
+
+def test_a_change_the_host_writes_is_followed_after_the_cache(monkeypatch, host_file):
+    now = [0.0]
+    monkeypatch.setattr(lan_address, "_clock", lambda: now[0])
+    _probe_returns(monkeypatch, "192.168.105.2")
+    host_file({"schema": 1, "ipv4": "192.168.1.20"})
+    assert lan_address.lan_ipv4() == "192.168.1.20"
+    host_file({"schema": 1, "ipv4": "192.168.1.21"})
+    assert lan_address.lan_ipv4() == "192.168.1.20"          # cached
+    now[0] += lan_address.CACHE_TTL_SEC + 1
+    assert lan_address.lan_ipv4() == "192.168.1.21"
+
+
+@pytest.mark.parametrize("doc", [
+    {"schema": 1, "ipv4": "127.0.0.1"},
+    {"schema": 1, "ipv4": "0.0.0.0"},
+    {"schema": 1, "ipv4": "not-an-ip"},
+    {"schema": 1, "ipv4": 3232235796},
+    {"schema": 2, "ipv4": "192.168.1.20"},
+    {"ipv4": "192.168.1.20"},
+    ["192.168.1.20"],
+    "{not json",
+])
+def test_a_host_file_without_a_usable_address_is_ignored(monkeypatch, host_file, caplog, doc):
+    host_file(doc)
+    _probe_returns(monkeypatch, "192.168.1.50")
+    with caplog.at_level(logging.WARNING, logger="domovoi.lan_address"):
+        assert lan_address.lan_ipv4() == "192.168.1.50"
+    assert "names no usable LAN address" in caplog.text
+
+
+def test_a_host_file_that_isnt_roots_alone_is_not_believed(monkeypatch, host_file, caplog):
+    """The service user, the core and the plugins can write their own files;
+    only root's tells satellites where the server is."""
+    host_file({"schema": 1, "ipv4": "192.168.1.99"})
+    monkeypatch.setattr(lan_address, "_root_only", lambda st: False)
+    _probe_returns(monkeypatch, "192.168.1.50")
+    with caplog.at_level(logging.WARNING, logger="domovoi.lan_address"):
+        assert lan_address.lan_ipv4() == "192.168.1.50"
+    assert "isn't root's alone" in caplog.text
+
+
+def test_root_only_is_owner_and_mode(monkeypatch):
+    import os
+    import stat as st_mod
+    import types
+
+    if not hasattr(os, "getuid"):
+        assert lan_address._root_only(types.SimpleNamespace(st_uid=0, st_mode=0o100644)) is False
+        return
+    mk = lambda uid, mode: types.SimpleNamespace(st_uid=uid, st_mode=st_mod.S_IFREG | mode)  # noqa: E731
+    assert lan_address._root_only(mk(0, 0o644))
+    assert not lan_address._root_only(mk(1000, 0o644))
+    assert not lan_address._root_only(mk(0, 0o664))
+    assert not lan_address._root_only(mk(0, 0o646))
+
+
+def test_a_huge_or_unreadable_host_file_is_ignored(monkeypatch, host_file, tmp_path):
+    host_file(" " * 5000)
+    _probe_returns(monkeypatch, "192.168.1.50")
+    assert lan_address.host_lan_ipv4() is None
+    monkeypatch.setenv("DOMOVOI_HOST_LAN_FILE", str(tmp_path))      # a folder, not a file
+    assert lan_address.host_lan_ipv4() is None
+
+
+def test_a_bad_host_file_is_warned_about_once(monkeypatch, host_file, caplog):
+    now = [0.0]
+    monkeypatch.setattr(lan_address, "_clock", lambda: now[0])
+    host_file({"schema": 1, "ipv4": "127.0.0.1"})
+    _probe_returns(monkeypatch, "192.168.1.50")
+    with caplog.at_level(logging.WARNING, logger="domovoi.lan_address"):
+        for _ in range(3):
+            lan_address.lan_ipv4()
+            now[0] += lan_address.CACHE_TTL_SEC + 1
+    assert caplog.text.count("names no usable LAN address") == 1
+
+
+def test_the_adoption_url_takes_the_host_sides_address(monkeypatch, host_file):
+    from web.backend import satellite_adoption as adoption
+
+    monkeypatch.setattr(settings, "satellite_adoption_advertise_url", "auto")
+    _fake_network(monkeypatch, routed="192.168.105.2")
+    host_file({"schema": 1, "ipv4": "192.168.1.20"})
+    assert adoption.advertised_domovoi_url() == "ws://192.168.1.20:6370"
 
 
 # ─── stream_url_for_peer: the address the satellite dialed wins ──────────

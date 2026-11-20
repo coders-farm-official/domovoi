@@ -72,7 +72,7 @@ flowchart LR
 | **Core voice service** (`python -m domovoi.main`) | **6370** | FastAPI app. STT → intent routing → handlers → TTS, the satellite WebSocket endpoint, background workers, the plugin runtime, admin endpoints. Whisper (faster-whisper; CUDA when there is an NVIDIA GPU, otherwise the CPU) runs in-process. |
 | **Web dashboard** (`python -m web.backend.main`) | **6369** | A separate FastAPI process. Reads the same Postgres directly; anything touching *live* state (connected satellites, now playing) is proxied to core admin endpoints. Serves the no-build React frontend. **Never runs the plugin runtime** (no handlers, workers or SDK): it mounts each enabled plugin's `web` module behind an import guard that lets plugin code reach only `domovoi.webkit` (`web/backend/plugin_host.py`). |
 | **Postgres** (docker compose, `domovoi/docker-compose.yml`) | **6432** (host) → 5432 (container) | Databases `domovoi` and `domovoi_test`. The non-default host port lets Domovoi coexist with any Postgres already on 5432. |
-| **Per-room MPD** (docker, lazy) | control **6650+N**, http-stream **8050+N** | One MPD daemon per satellite room so queues/volume are independent. Provisioned on first WebSocket connect for an unknown `room_id` by `domovoi/mpd_provisioner.py`; **not** in the compose file. Container `domovoi-mpd-<room>` maps host ports onto in-container 6600/8001. Assignments persist in the `mpd_rooms` table (allocation is `max + 1` from the bases, serialized by a Postgres advisory lock). |
+| **Per-room MPD** (docker, lazy) | control **6650+N**, http-stream **8050+N** | One MPD daemon per satellite room so queues/volume are independent. Provisioned on first WebSocket connect for an unknown `room_id` by `domovoi/mpd_provisioner.py`; **not** in the compose file. Container `domovoi-mpd-<room>` maps host ports onto in-container 6600/8001. Assignments persist in the `mpd_rooms` table (allocation is `max + 1` from the bases, serialized by a Postgres advisory lock). Each container is labelled `domovoi.mpd-conf=<fingerprint>` with the `mpd.conf` it was made with (the file is mounted at create); one with another fingerprint is made again on the same data volume at the core's start while it isn't playing, else by the playback sweeper after a minute of quiet. |
 | **Ollama** | 11434 | Two model slots — see below. |
 | **SearXNG** | 6888 (default `SEARXNG_URL`) | Local metasearch for the "want me to check that online?" flows and for chat lookups ([§6](#chat-documents-lookups-and-help)). |
 | **Letta** (docker, optional `chat` profile) | **6283** (host) → 8283 | The stateful agent behind spoken chat mode only (§2 step 4). The dashboard's Chat does not use it. It runs only under the `chat` compose profile; `LETTA_BASE_URL` points at it. |
@@ -405,7 +405,12 @@ Core's own workers live in `domovoi/workers/`:
   (`handlers/shared/room_playlist.py` loads the first 50 songs at once and
   the rest in the background, then arms a `continue` session with the
   playlist as its source). The queue is a copy: nothing that edits a room's
-  queue writes the playlist it came from.
+  queue writes the playlist it came from. The same read notices a player
+  that restarted (MPD's `uptime` went down): MPD restores a state file up
+  to two minutes old, so a daemon that died as a song ended comes back
+  playing that song from its middle. `domovoi/player_restarts.py` puts it
+  back (the next song from its top, or the same song where it was) and
+  logs `music player for room=… restarted`.
 * **The container guard** (`container_guard`, `domovoi/container_guard/`):
   every 30 s it compares the Docker containers the core expects — the
   compose stack, each room's music player, every plugin's declared

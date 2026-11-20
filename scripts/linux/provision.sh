@@ -12,9 +12,10 @@
 #   sudo bash provision.sh --dry-run ...                      # say what it would do
 #
 # What it does, in order (each is a step with an id, see STEP_IDS):
-#   preflight    root, x86_64, a supported system (Ubuntu 26.04, Debian 13,
-#                an Ubuntu derivative on 24.04 or 26.04; others stop here),
-#                systemd as PID 1, waits for cloud-init
+#   preflight    root, x86_64 or aarch64, a supported system (Ubuntu 26.04,
+#                Debian 13, an Ubuntu derivative on 24.04 or 26.04; others
+#                stop here; on aarch64 the box's python3 must be the lock's,
+#                as on Ubuntu 26.04), systemd as PID 1, waits for cloud-init
 #   apt          the LINUX_HOST.md "Install" prerequisites (+ curl, gnupg,
 #                zstd, tzdata, sudo, which this script needs)
 #   user         the service user (default domovoi): created with password
@@ -39,8 +40,19 @@
 #                manifest's versions for that suite
 #                when it is not installed yet (not held: apt upgrade moves
 #                it later, as on the Beelink); the service user in the
-#                docker group
-#   gpu-runtime  only where an NVIDIA GPU is visible (WSL: /dev/dxg and
+#                docker group. The apt source names this machine's own
+#                architecture (dpkg --print-architecture: amd64, arm64)
+#   vm-guard     only with --vm-guard CIDR (a VM whose host shares its
+#                loopback with it: the macOS host's Lima VM): an nftables
+#                table, loaded at every boot by domovoi-vm-guard.service,
+#                that drops this machine's and its containers' traffic to
+#                CIDR except to the Ollama at --ollama-url and to DNS at
+#                --vm-guard-dns; with --vm-guard-lan IFACE also the
+#                household's way in: new connections arriving on IFACE
+#                (the host's redirect from its LAN) reach only Domovoi's
+#                LAN ports
+#   gpu-runtime  x86_64 only (the NVIDIA pins are amd64 packages), and
+#                only where an NVIDIA GPU is visible (WSL: /dev/dxg and
 #                /usr/lib/wsl/lib/libcuda.so.1; bare metal: the driver's
 #                nvidia-smi lists one): scripts/linux/gpu-runtime.sh adds
 #                NVIDIA's apt repository (its key checked like Docker's), the
@@ -66,16 +78,25 @@
 #                written only when it is absent or still holds what this
 #                script last wrote there (kept in
 #                /var/lib/domovoi-provision/env-written); one the household
-#                changed (Settings, or by hand) is left alone, with a warning
-#   ollama       the Ollama release LINUX_HOST.md pins (version and SHA-256
-#                read from that file), its systemd unit as the doc gives it.
+#                changed (Settings, or by hand) is left alone, with a warning.
+#                With --ollama-url also OLLAMA_KEEP_ALIVE (shorter on the
+#                floor tier: the models hold the host's memory) and
+#                LETTA_OLLAMA_BASE_URL (that Ollama by IP address, which
+#                containers can reach where they can't resolve its name)
+#   ollama       (skipped with --ollama-url: Ollama runs elsewhere, the Mac
+#                host's own, and the models step pulls through that URL)
+#                the Ollama release LINUX_HOST.md pins (version and SHA-256
+#                read from that file, the x86_64 or the aarch64 tarball's),
+#                its systemd unit as the doc gives it.
 #                Ollama runs on every GPU it finds (inside WSL too: WSL
 #                hands NVIDIA cards through) and on the CPU without one; no
 #                CUDA_VISIBLE_DEVICES pin. The GPUs it found go in the final
 #                line ("gpu"); the tier stays a question of memory alone
 #   models       the tier's two Ollama models and its vision model (pictures
 #                in chat, about 1.9 GB; --no-vision-model: not pulled), each
-#                checked against the manifest digest after the pull
+#                checked against the manifest digest after the pull. An
+#                Ollama at --ollama-url older than OLLAMA_MIN_VERSION stops
+#                the run first
 #                (--skip-models: no; --no-ai-models, AI chat and questions
 #                left out: no, and AI_FEATURES=false in domovoi/.env; the
 #                env and ollama steps run either way, see "AI chat and
@@ -193,7 +214,7 @@
 #
 # Machine-readable progress for the Windows installer's UI: every line on
 # stdout that starts with "@@DOMOVOI " is one JSON object:
-#   {"v":1,"step":"venv","index":9,"total":23,"state":"start","percent":25,
+#   {"v":1,"step":"venv","index":10,"total":24,"state":"start","percent":25,
 #    "message":"Installing Python packages"}
 # state is start, progress, done, skip or fail (plan in a dry run); the
 # percent never goes down; progress lines of a download add "bytes" and
@@ -290,10 +311,10 @@ json_str() {
   printf '"%s"' "$s"
 }
 
-STEP_IDS=(preflight apt user wsl-config media checkout docker gpu-runtime venv env ollama models whisper piper phone-app images searxng os-jobs units timezone start update-unit finish)
+STEP_IDS=(preflight apt user wsl-config media checkout docker vm-guard gpu-runtime venv env ollama models whisper piper phone-app images searxng os-jobs units timezone start update-unit finish)
 declare -A STEP_WEIGHT=(
-  [preflight]=1 [apt]=6 [user]=1 [wsl-config]=1 [media]=1 [checkout]=3 [docker]=6 [gpu-runtime]=1
-  [venv]=15 [env]=1 [ollama]=8 [models]=26 [whisper]=4 [piper]=1 [phone-app]=2 [images]=6
+  [preflight]=1 [apt]=6 [user]=1 [wsl-config]=1 [media]=1 [checkout]=3 [docker]=6 [vm-guard]=1 [gpu-runtime]=1
+  [venv]=15 [env]=1 [ollama]=8 [models]=25 [whisper]=4 [piper]=1 [phone-app]=2 [images]=6
   [searxng]=4 [os-jobs]=1 [units]=1 [timezone]=1 [start]=6 [update-unit]=2 [finish]=2
 )
 declare -A STEP_TITLE=(
@@ -304,6 +325,7 @@ declare -A STEP_TITLE=(
   [media]="Connecting the media folders"
   [checkout]="Getting the Domovoi code"
   [docker]="Installing Docker Engine"
+  [vm-guard]="Limiting what this VM reaches on its host"
   [gpu-runtime]="Setting up the GPU for containers"
   [venv]="Installing Python packages"
   [env]="Writing the settings file"
@@ -555,6 +577,58 @@ OLLAMA_STAMP=$OLLAMA_PREFIX/lib/ollama/.domovoi-provision
 MEDIA_BASE=/srv/media
 SYSTEMCTL_PATH=/usr/bin/systemctl
 OLLAMA_API=http://127.0.0.1:11434
+# --ollama-url: an Ollama this script doesn't install or run (the macOS
+# host's, reached from its Lima VM at host.lima.internal). 1 when given.
+OLLAMA_EXTERNAL=0
+# The oldest Ollama Domovoi runs on: Qwen3-VL, every tier's vision model,
+# needs 0.12.7 (ollama.com/library/qwen3-vl, read 2026-10-28). The same
+# value as MIN_OLLAMA_VERSION in domovoi/clients/ollama.py (a test holds
+# the two together); checked against an Ollama at --ollama-url, which this
+# script doesn't pin (the pinned one is newer).
+OLLAMA_MIN_VERSION=0.12.7
+# OLLAMA_KEEP_ALIVE written with --ollama-url, by tier. An outside Ollama
+# is the host's (the Mac's Metal one): there the models hold the host's own
+# memory, about 5.3 GB on a 16 GB Mac for the floor tier (mac-installer
+# Phase 0, S5), and a load from its SSD onto the GPU takes seconds, not the
+# CPU host's 54 s. So the floor tier lets them go after half an hour;
+# standard keeps the core's own default. Without --ollama-url nothing is
+# written and the core's default (24h, domovoi/config.py) holds.
+EXTERNAL_KEEP_ALIVE_FLOOR=30m
+EXTERNAL_KEEP_ALIVE_STANDARD=24h
+# --host-stt-url URL / --host-stt-model NAME: a speech-to-text service on
+# the host (a Mac host's Metal Whisper, whisper.cpp's server, reached from
+# its Lima VM at host.lima.internal:6371; mac-installer PHASE8A-STT.md).
+# The core hears turns there first, its own Whisper (still installed and
+# loaded) when it doesn't answer: WHISPER_REMOTE_URL / WHISPER_REMOTE_MODEL
+# in .env, and with --vm-guard one more accept rule in the OUTPUT chain only
+# (this machine's own processes, the core; never the forward chain, so
+# plugins' containers can't reach it). Without the option nothing of this
+# is written: a Linux or Windows box is exactly as before.
+HOST_STT_URL=""
+HOST_STT_MODEL=small.en
+# --host-stt-shares-gpu: with --host-stt-url, that service runs on the same
+# graphics chip as the AI models at --ollama-url (a Mac: whisper-server and
+# Ollama both on Metal). WHISPER_REMOTE_SHARES_GPU=true in .env, which the
+# core reads to route around the contention; false with --host-stt-url
+# alone. Set by the Mac helper only.
+HOST_STT_SHARES_GPU=0
+# --vm-guard CIDR and --vm-guard-dns IP (repeatable): see the vm-guard step.
+VM_GUARD_NET=""
+VM_GUARD_DNS=()
+# --vm-guard-lan IFACE: the interface the host's LAN redirect delivers on
+# (Lima's vzNAT: lima0). New connections from it reach only these TCP ports:
+# the short address (80; the host redirects it only while nothing on the
+# host itself uses it), the dashboard, the core, the rooms' streams and the
+# plugin ports, the same
+# list the Windows installer's firewall rules and the Mac's pf redirect carry
+# (windows/common/Ports.cs, mac/Sources/DomovoiMacKit/PfAnchor.swift;
+# domovoi/tests/test_lan_port_parity.py keeps the three equal).
+VM_GUARD_LAN_IF=""
+VM_GUARD_LAN_PORTS="80, 6369, 6370, 7676, 8050-8099, 8096, 9467"
+VM_GUARD_FILE=$ROOT/etc/domovoi/vm-guard.nft
+VM_GUARD_UNIT=domovoi-vm-guard.service
+# This machine's architecture, as the kernel names it (x86_64, aarch64).
+MACHINE_ARCH=$(uname -m)
 CORE_HEALTH_URL=http://127.0.0.1:6370/v1/health
 WEB_HEALTH_URL=http://127.0.0.1:6369/api/health
 LOCK_NAME=requirements-linux-py314.lock
@@ -629,6 +703,41 @@ feeds.
                         with timedatectl. Ignored on WSL, with a warning:
                         there the zone follows Windows (WSL sets it at
                         every distro start)
+  --ollama-url URL      use the Ollama at URL (http://HOST:PORT) instead of
+                        installing one: the ollama step is skipped, the
+                        models step pulls and checks the tier's models
+                        through URL (which must be Ollama 0.12.7 or newer),
+                        and OLLAMA_URL=URL goes in .env, with
+                        OLLAMA_KEEP_ALIVE (30m on the floor tier, else 24h)
+                        and LETTA_OLLAMA_BASE_URL (URL by IP address, for
+                        containers). A macOS host's Lima VM passes
+                        http://host.lima.internal:11434
+  --host-stt-url URL    a speech-to-text service on the host (whisper.cpp's
+                        server, http://HOST:PORT; a Mac host passes
+                        http://host.lima.internal:6371): WHISPER_REMOTE_URL
+                        in .env, so the core hears turns there first and its
+                        own Whisper when it doesn't answer; with --vm-guard
+                        this machine (not its containers) may reach it
+  --host-stt-model NAME with --host-stt-url: the model it runs, for the
+                        records (default small.en)
+  --host-stt-shares-gpu with --host-stt-url: that service shares the graphics
+                        chip with the AI models (a Mac's Metal):
+                        WHISPER_REMOTE_SHARES_GPU=true in .env (false
+                        without it)
+  --vm-guard CIDR       VM mode (a Lima VM on a Mac): drop this machine's
+                        and its containers' connections to CIDR, the host's
+                        side of the VM network (Lima: 192.168.5.0/24),
+                        except to the Ollama at --ollama-url (needed) and
+                        to DNS at --vm-guard-dns. An nftables table, loaded
+                        at every boot by domovoi-vm-guard.service
+  --vm-guard-dns IP     with --vm-guard: a DNS server inside CIDR this
+                        machine may still reach on port 53 (repeatable;
+                        Lima: 192.168.5.3)
+  --vm-guard-lan IFACE  with --vm-guard: the interface the host's redirect
+                        from its home network arrives on (Lima's vzNAT:
+                        lima0). New connections from it reach only
+                        Domovoi's LAN ports (TCP 80, 6369, 6370, 7676,
+                        8050-8099, 8096, 9467); replies, ICMP and DHCP pass
   --lan-ip IP           write MPD_HTTP_BASE=http://IP (default: the repo's
                         "auto", which finds this host's LAN address itself)
   --media NAME=PATH     a media folder (repeatable). On WSL PATH is a Windows
@@ -685,6 +794,22 @@ see the comment at the top of this file. Exit codes: 0 done, 1 failed,
 EOF
 }
 
+# A dotted-quad IPv4 address (each part 0-255, no leading zeros), and one
+# with a /0-/32 prefix.
+valid_ipv4() {
+  local IFS=. p
+  local -a parts
+  [[ $1 =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] || return 1
+  read -r -a parts <<<"$1"
+  for p in "${parts[@]}"; do
+    [[ $p =~ ^(0|[1-9][0-9]*)$ ]] && [ "$p" -le 255 ] || return 1
+  done
+}
+valid_ipv4_cidr() {
+  local ip=${1%/*} len=${1##*/}
+  [ "$ip" != "$1" ] && valid_ipv4 "$ip" && [[ $len =~ ^(0|[1-9][0-9]?)$ ]] && [ "$len" -le 32 ]
+}
+
 usage_error() {
   printf '%s: %s\n\n' "$PROG" "$1" >&2
   usage >&2
@@ -700,7 +825,7 @@ while [ $# -gt 0 ]; do
     --*=*) val=${opt#*=}; opt=${opt%%=*}; has_val=1 ;;
   esac
   case $opt in
-    --repo-url|--ref|--track-branch|--checkout-dir|--user|--internet|--tier|--timezone|--lan-ip|--media|--health-timeout|--allowed-signers|--stop-before)
+    --repo-url|--ref|--track-branch|--checkout-dir|--user|--internet|--tier|--timezone|--lan-ip|--ollama-url|--host-stt-url|--host-stt-model|--vm-guard|--vm-guard-dns|--vm-guard-lan|--media|--health-timeout|--allowed-signers|--stop-before)
       if [ "$has_val" = 0 ]; then
         [ $# -ge 2 ] || usage_error "$opt needs a value"
         val=$2
@@ -719,13 +844,34 @@ while [ $# -gt 0 ]; do
         --tier) TIER=$val ;;
         --timezone) TIMEZONE=$val ;;
         --lan-ip) LAN_IP=$val ;;
+        --ollama-url)
+          case $val in
+            http://?*|https://?*) ;;
+            *) usage_error "--ollama-url takes http://HOST:PORT, not: $val" ;;
+          esac
+          OLLAMA_API=${val%/}; OLLAMA_EXTERNAL=1 ;;
+        --host-stt-url)
+          [[ $val =~ ^http://[A-Za-z0-9.-]+:[0-9]+/?$ ]] || usage_error "--host-stt-url takes http://HOST:PORT, not: $val"
+          HOST_STT_URL=${val%/} ;;
+        --host-stt-model)
+          [[ $val =~ ^[A-Za-z0-9._-]+$ ]] || usage_error "--host-stt-model takes a model name (small.en), not: $val"
+          HOST_STT_MODEL=$val ;;
+        --vm-guard)
+          valid_ipv4_cidr "$val" || usage_error "--vm-guard takes an IPv4 network, A.B.C.D/N, not: $val"
+          VM_GUARD_NET=$val ;;
+        --vm-guard-dns)
+          valid_ipv4 "$val" || usage_error "--vm-guard-dns takes an IPv4 address, not: $val"
+          VM_GUARD_DNS+=("$val") ;;
+        --vm-guard-lan)
+          [[ $val =~ ^[a-z][a-z0-9_.-]{0,14}$ ]] || usage_error "--vm-guard-lan takes an interface name (lima0), not: $val"
+          VM_GUARD_LAN_IF=$val ;;
         --media) MEDIA_ARGS+=("$val") ;;
         --health-timeout) HEALTH_TIMEOUT=$val ;;
         --allowed-signers) ALLOWED_SIGNERS=$val ;;
         --stop-before) STOP_BEFORE=$val ;;
       esac
       ;;
-    --wsl|--no-wsl|--skip-models|--no-vision-model|--ai-models|--no-ai-models|--dry-run|--keep-downloads|-h|--help)
+    --wsl|--no-wsl|--skip-models|--no-vision-model|--ai-models|--no-ai-models|--host-stt-shares-gpu|--dry-run|--keep-downloads|-h|--help)
       [ "$has_val" = 0 ] || usage_error "$opt takes no value"
       case $opt in
         --wsl) WSL_OPT=yes ;;
@@ -736,6 +882,7 @@ while [ $# -gt 0 ]; do
           [ -z "$AI_FLAG" ] || [ "$AI_FLAG" = "$a" ] || usage_error "--ai-models and --no-ai-models: give one of them, not both"
           AI_FLAG=$a ;;
         --no-vision-model) PULL_VISION=0 ;;
+        --host-stt-shares-gpu) HOST_STT_SHARES_GPU=1 ;;
         --dry-run) DRY_RUN=1 ;;
         --keep-downloads) KEEP_DOWNLOADS=1 ;;
         -h|--help) usage; final_line help 0 "Usage printed; nothing was done"; exit 0 ;;
@@ -752,6 +899,18 @@ if [ -n "$STOP_BEFORE" ]; then
     *" $STOP_BEFORE "*) ;;
     *) usage_error "--stop-before takes a step id from apt to update-unit, not: $STOP_BEFORE" ;;
   esac
+fi
+if [ -n "$VM_GUARD_NET" ] && [ "$OLLAMA_EXTERNAL" != 1 ]; then
+  usage_error "--vm-guard goes with --ollama-url (the one service on the host the VM may still reach)"
+fi
+if [ "${#VM_GUARD_DNS[@]}" -gt 0 ] && [ -z "$VM_GUARD_NET" ]; then
+  usage_error "--vm-guard-dns goes with --vm-guard"
+fi
+if [ "$HOST_STT_SHARES_GPU" = 1 ] && [ -z "$HOST_STT_URL" ]; then
+  usage_error "--host-stt-shares-gpu goes with --host-stt-url"
+fi
+if [ -n "$VM_GUARD_LAN_IF" ] && [ -z "$VM_GUARD_NET" ]; then
+  usage_error "--vm-guard-lan goes with --vm-guard"
 fi
 
 # ─── Small helpers ───────────────────────────────────────────────────────
@@ -1109,9 +1268,11 @@ load_manifest() {
 
 # The Ollama release docs/LINUX_HOST.md pins ("Install"), read from the
 # verified copy of $CHECKOUT/docs/LINUX_HOST.md: exactly one
-# OLLAMA_VERSION= and one OLLAMA_SHA256= line.
+# OLLAMA_VERSION= and one OLLAMA_SHA256= line (on aarch64 also one
+# OLLAMA_SHA256_ARM64= line, which then is OLLAMA_SHA256).
 OLLAMA_VERSION=""
 OLLAMA_SHA256=""
+OLLAMA_ASSET=ollama-linux-amd64.tar.zst
 load_ollama_pin() {
   local doc v s
   doc=$(src_file docs/LINUX_HOST.md)
@@ -1122,6 +1283,16 @@ load_ollama_pin() {
   [ "$(printf '%s\n' "$s" | grep -c .)" = 1 ] || die "$doc should have exactly one OLLAMA_SHA256=<sha256> line"
   OLLAMA_VERSION=$v
   OLLAMA_SHA256=$s
+  OLLAMA_ASSET=ollama-linux-amd64.tar.zst
+  if [ "$MACHINE_ARCH" = aarch64 ]; then
+    # The same release's aarch64 tarball, pinned on its own line beside the
+    # x86_64 one (a checkout from before the line has no aarch64 pin).
+    s=$(tr -d '\r' <"$doc" | sed -n 's/^OLLAMA_SHA256_ARM64=\([0-9a-f]\{64\}\)$/\1/p')
+    [ -n "$s" ] || die "$doc pins no aarch64 Ollama (no OLLAMA_SHA256_ARM64= line in this checkout): run with --ollama-url, an Ollama this machine reaches"
+    [ "$(printf '%s\n' "$s" | grep -c .)" = 1 ] || die "$doc should have exactly one OLLAMA_SHA256_ARM64=<sha256> line"
+    OLLAMA_SHA256=$s
+    OLLAMA_ASSET=ollama-linux-arm64.tar.zst
+  fi
 }
 
 resolve_tier() {
@@ -1304,9 +1475,20 @@ detect_platform() {
 }
 
 do_preflight() {
-  local arch
-  arch=$(uname -m)
-  [ "$arch" = x86_64 ] || die "x86_64 only (this is $arch): the lock and the Ollama pin are for x86_64"
+  case $MACHINE_ARCH in
+    x86_64) ;;
+    aarch64)
+      # The lock carries aarch64 wheels and hashes (every pin, checked for
+      # the mac-installer plan); docs/LINUX_HOST.md pins Ollama's aarch64
+      # tarball beside the x86_64 one (OLLAMA_SHA256_ARM64), read by the
+      # ollama step. The NVIDIA Container Toolkit pins are amd64's: the
+      # gpu-runtime step skips itself here. The CPython the venv step
+      # installs where python3 isn't the lock's is x86_64's: there the venv
+      # step stops (do_venv).
+      if [ "$OLLAMA_EXTERNAL" = 1 ]; then log "aarch64 (ARM): the hashed lock and docker-ce for arm64; Ollama runs at $OLLAMA_API"
+      else log "aarch64 (ARM): the hashed lock, docker-ce for arm64 and Ollama's aarch64 build"; fi ;;
+    *) die "x86_64 or aarch64 only (this is $MACHINE_ARCH): the lock, Docker's packages and the Ollama pin cover those two" ;;
+  esac
   detect_platform
   log "$(os_field PRETTY_NAME), $(uname -r); WSL: $([ "$WSL" = 1 ] && echo yes || echo no)"
   if ! systemd_running; then
@@ -1327,7 +1509,11 @@ do_preflight() {
   fi
   MEM_MIB=$(awk '/^MemTotal:/ {printf "%d", $2 / 1024}' "$PROC/meminfo" 2>/dev/null || echo 0)
   log "memory: ${MEM_MIB} MiB (MemTotal; on WSL that is the VM's cap)"
-  if [ "${MEM_MIB:-0}" -lt 9000 ]; then
+  if [ "$OLLAMA_EXTERNAL" = 1 ]; then
+    # The models load in the Ollama at --ollama-url (the Mac host's), not in
+    # this machine's memory, so this machine's MemTotal says nothing about them.
+    log "the models run in the Ollama at $OLLAMA_API, outside this machine's memory"
+  elif [ "${MEM_MIB:-0}" -lt 9000 ]; then
     warn "less than about 9 GB of memory: the models may not fit (the Windows floor is a 16 GB PC)"
   fi
   STEP_DONE_MSG="This machine can take Domovoi"
@@ -2679,13 +2865,24 @@ docker_missing() {
 }
 in_group() { id -nG "$SVC_USER" 2>/dev/null | tr ' ' '\n' | grep -qx "$1"; }
 
+# This machine's Debian architecture (amd64, arm64): dpkg's own answer, or,
+# should dpkg not give one, the kernel's name for it translated.
+deb_arch() {
+  local a
+  a=$(dpkg --print-architecture 2>/dev/null) || a=""
+  if [ -z "$a" ]; then
+    case $MACHINE_ARCH in x86_64) a=amd64 ;; aarch64) a=arm64 ;; *) a=$MACHINE_ARCH ;; esac
+  fi
+  printf '%s' "$a"
+}
+
 docker_sources_text() {
   cat <<EOF
 Types: deb
 URIs: $(docker_pin docker_repo_url)
 Suites: $(docker_pin docker_suite)
 Components: stable
-Architectures: amd64
+Architectures: $(deb_arch)
 Signed-By: /etc/apt/keyrings/docker.asc
 EOF
 }
@@ -2761,6 +2958,202 @@ do_docker() {
   fi
   as_svc docker info >/dev/null || die "$SVC_USER cannot use docker"
   STEP_DONE_MSG="Docker $(docker version --format '{{.Server.Version}}' 2>/dev/null || echo installed)"
+}
+
+# ─── vm-guard ────────────────────────────────────────────────────────────
+
+# A VM whose host shares its own loopback with it (Lima's user-mode network:
+# host.lima.internal, 192.168.5.2, is the Mac's 127.0.0.1, "including
+# services that listen only on the host's 127.0.0.1") can reach every
+# service the household runs on the host for itself. --vm-guard CIDR fences
+# that network off for this machine and its containers (output, and forward
+# for Docker's): replies to connections the host opened (limactl shell, the
+# port forwards) pass, as do the Ollama at --ollama-url and DNS at
+# --vm-guard-dns; anything else to CIDR is dropped. Measured on the lent Mac
+# in mac-installer Phase 0 (spike S4): Ollama, DNS, limactl shell and the
+# forwards kept working, a throwaway listener on the Mac's loopback was cut
+# off. The table is Domovoi's alone (inet domovoi_vm_guard): Docker's own
+# rules and anyone else's are never touched. It is loaded from a file by a
+# oneshot unit at every boot, before Docker and the services.
+VM_GUARD_TABLE=domovoi_vm_guard
+
+# --host-stt-url's port (the option always names one).
+host_stt_port() { [[ $HOST_STT_URL =~ :([0-9]+)$ ]] && printf '%s' "${BASH_REMATCH[1]}"; }
+
+# host_stt_ip: the IPv4 address --host-stt-url's host is (the literal, else
+# what this machine resolves the name to), or nothing.
+host_stt_ip() {
+  local host ip
+  host=$(url_host "$HOST_STT_URL") || return 0
+  if valid_ipv4 "$host"; then printf '%s' "$host"; return 0; fi
+  ip=$(getent ahostsv4 "$host" 2>/dev/null | awk 'NR == 1 {print $1}') || ip=""
+  if [ -n "$ip" ] && valid_ipv4 "$ip"; then printf '%s' "$ip"; fi
+}
+
+# The Ollama's port in --ollama-url (its scheme's default when it names none).
+ollama_url_port() {
+  if [[ $OLLAMA_API =~ ^https?://[^/:@]+:([0-9]+) ]]; then printf '%s' "${BASH_REMATCH[1]}"
+  elif [[ $OLLAMA_API == https://* ]]; then printf 443
+  else printf 80; fi
+}
+
+# vm_guard_rules IP PORT [STT_IP STT_PORT]: the speech service's accept goes
+# in the output chain only (vm_guard_text passes it there alone).
+vm_guard_rules() {
+  local ip=$1 port=$2 d
+  printf '\t\tct state established,related accept\n'
+  printf '\t\tip daddr %s tcp dport %s accept\n' "$ip" "$port"
+  if [ -n "${3:-}" ]; then printf '\t\tip daddr %s tcp dport %s accept\n' "$3" "$4"; fi
+  for d in ${VM_GUARD_DNS[@]+"${VM_GUARD_DNS[@]}"}; do
+    printf '\t\tip daddr %s udp dport 53 accept\n' "$d"
+    printf '\t\tip daddr %s tcp dport 53 accept\n' "$d"
+  done
+  printf '\t\tip daddr %s drop\n' "$VM_GUARD_NET"
+}
+
+# vm_guard_text IP PORT [STT_IP STT_PORT]: the ruleset file. "table; delete
+# table; table {...}" replaces the table whole on every load, and only it.
+# Without the speech service the text is what it always was.
+vm_guard_text() {
+  local lan stt_note=""
+  [ -z "${3:-}" ] || stt_note=$'\n'"# This machine itself (not its containers) also reaches the speech service at $3:$4."
+  lan=$(vm_guard_lan_chain)
+  [ -z "$lan" ] || lan+=$'\n'
+  cat <<EOF
+#!/usr/sbin/nft -f
+# Written by Domovoi's provision.sh --vm-guard (docs/LINUX_HOST.md, "ARM
+# and VMs"). Loaded at boot by $VM_GUARD_UNIT. This machine and its
+# containers reach $VM_GUARD_NET, the host's side of the VM network, only
+# for its Ollama and DNS.${stt_note}
+table inet $VM_GUARD_TABLE
+delete table inet $VM_GUARD_TABLE
+table inet $VM_GUARD_TABLE {
+	chain output {
+		type filter hook output priority filter; policy accept;
+$(vm_guard_rules "$1" "$2" "${3:-}" "${4:-}")
+	}
+	chain forward {
+		type filter hook forward priority filter; policy accept;
+$(vm_guard_rules "$1" "$2")
+	}
+${lan}}
+EOF
+}
+
+# With --vm-guard-lan: the household's way in. A prerouting filter (after
+# conntrack, before Docker's DNAT, so a published container port is seen as
+# the port the client asked for) on that interface only: replies, ICMP,
+# DHCP and the host's own SSH pass; new TCP connections only to the LAN
+# ports; anything else that arrives there is dropped. Nothing (not even a
+# blank line) without the option, so a guard without it is unchanged.
+vm_guard_lan_chain() {
+  [ -n "$VM_GUARD_LAN_IF" ] || return 0
+  cat <<EOF
+	chain lan_in {
+		type filter hook prerouting priority -150; policy accept;
+		iifname != "$VM_GUARD_LAN_IF" accept
+		ct state established,related accept
+		meta l4proto { icmp, ipv6-icmp } accept
+		udp dport { 68, 546 } accept
+		tcp dport 22 accept
+		tcp dport { $VM_GUARD_LAN_PORTS } accept
+		drop
+	}
+EOF
+}
+
+vm_guard_unit_text() {
+  cat <<EOF
+[Unit]
+Description=Domovoi: what this VM may reach on its host (provision.sh --vm-guard)
+DefaultDependencies=no
+After=local-fs.target
+Wants=network-pre.target
+Before=network-pre.target docker.service domovoi-db.service domovoi-core.service domovoi-web.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/domovoi/vm-guard.nft
+
+[Install]
+WantedBy=sysinit.target
+EOF
+}
+
+skip_vm_guard() {
+  if [ -n "$VM_GUARD_NET" ]; then return 1; fi
+  if [ -f "$VM_GUARD_FILE" ]; then
+    echo "no --vm-guard (the guard an earlier run installed stays: $VM_GUARD_UNIT)"
+  else
+    echo "no --vm-guard: not a VM that shares its host's loopback"
+  fi
+  return 0
+}
+# The speech service's two arguments for vm_guard_text, or none.
+vm_guard_stt_args() {
+  [ -n "$HOST_STT_URL" ] || return 0
+  local sip
+  sip=$(host_stt_ip)
+  printf '%s %s' "${sip:-unresolved}" "$(host_stt_port)"
+}
+inputs_vm_guard() {
+  local ip
+  ip=$(ollama_host_ip)
+  # shellcheck disable=SC2046 # two words or none
+  vm_guard_text "${ip:-unresolved}" "$(ollama_url_port)" $(vm_guard_stt_args)
+  vm_guard_unit_text
+}
+check_vm_guard() {
+  local ip
+  ip=$(ollama_host_ip)
+  # shellcheck disable=SC2046 # two words or none
+  [ -n "$ip" ] && vm_guard_text "$ip" "$(ollama_url_port)" $(vm_guard_stt_args) | cmp -s - "$VM_GUARD_FILE" \
+    && vm_guard_unit_text | cmp -s - "$UNIT_DIR/$VM_GUARD_UNIT" \
+    && systemctl is-enabled --quiet "$VM_GUARD_UNIT" >/dev/null 2>&1 \
+    && nft list table inet "$VM_GUARD_TABLE" >/dev/null 2>&1
+}
+plan_vm_guard() {
+  local ip
+  ip=$(ollama_host_ip)
+  echo "/etc/domovoi/vm-guard.nft (table inet $VM_GUARD_TABLE), output and forward:"
+  vm_guard_rules "${ip:-<the address of the --ollama-url host>}" "$(ollama_url_port)" | sed 's/^\t\t/  /'
+  [ -z "$HOST_STT_URL" ] || echo "output only (not containers): also the speech service at --host-stt-url, port $(host_stt_port)"
+  if [ -n "$VM_GUARD_LAN_IF" ]; then
+    echo "and new connections arriving on $VM_GUARD_LAN_IF (the host's redirect from its LAN) reach only TCP $VM_GUARD_LAN_PORTS"
+  fi
+  echo "$VM_GUARD_UNIT loads it at every boot, before Docker and the services; nft -f loads it now"
+}
+do_vm_guard() {
+  local ip port
+  ollama_host_ip >/dev/null
+  ip=$OLLAMA_HOST_IP
+  [ -n "$ip" ] || die "--vm-guard lets this machine reach the Ollama at --ollama-url by address, and $OLLAMA_HOST_IP_WHY"
+  port=$(ollama_url_port)
+  if [ "${#VM_GUARD_DNS[@]}" = 0 ]; then
+    warn "--vm-guard without --vm-guard-dns: no DNS server in $VM_GUARD_NET stays reachable (Lima's is 192.168.5.3)"
+  fi
+  if ! command -v nft >/dev/null 2>&1; then
+    log "installing nftables (the nft program loads the guard)"
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nftables || die "apt-get install nftables failed"
+  fi
+  local sip=""
+  if [ -n "$HOST_STT_URL" ]; then
+    sip=$(host_stt_ip)
+    [ -n "$sip" ] || die "--vm-guard lets this machine reach the speech service at --host-stt-url by address, and this machine can't resolve $(url_host "$HOST_STT_URL") to an IPv4 address"
+  fi
+  # shellcheck disable=SC2086 # two words or none
+  write_if_changed "$VM_GUARD_FILE" 0644 < <(vm_guard_text "$ip" "$port" ${sip:+$sip $(host_stt_port)}) || true
+  write_if_changed "$UNIT_DIR/$VM_GUARD_UNIT" 0644 < <(vm_guard_unit_text) || true
+  nft -f "$VM_GUARD_FILE" || die "nft -f /etc/domovoi/vm-guard.nft failed"
+  nft list table inet "$VM_GUARD_TABLE" >/dev/null 2>&1 || die "nft loaded /etc/domovoi/vm-guard.nft, but lists no table inet $VM_GUARD_TABLE"
+  systemctl daemon-reload
+  systemctl enable --quiet "$VM_GUARD_UNIT"
+  systemctl start "$VM_GUARD_UNIT" || die "systemctl start $VM_GUARD_UNIT failed"
+  log "this machine reaches $VM_GUARD_NET only at $ip:$port (Ollama)${VM_GUARD_DNS[*]:+ and port 53 at ${VM_GUARD_DNS[*]}}"
+  [ -z "$VM_GUARD_LAN_IF" ] || log "new connections on $VM_GUARD_LAN_IF reach only TCP $VM_GUARD_LAN_PORTS"
+  [ -z "$sip" ] || log "this machine (not its containers) also reaches the speech service at $sip:$(host_stt_port)"
+  STEP_DONE_MSG="The host's own services are fenced off (Ollama and DNS stay)"
 }
 
 # ─── gpu-runtime ─────────────────────────────────────────────────────────
@@ -3012,6 +3405,9 @@ do_venv() {
     # one Python: the manifest's CPython has to be that one.
     [ "${M[python_version]%.*}" = "$want" ] \
       || die "$LOCK_NAME is for Python $want, this box's python3 is ${have:-missing}, and the CPython provision-manifest.conf pins is ${M[python_version]}, not a $want either"
+    # The pinned CPython (and uv) are x86_64 builds: an ARM box needs the
+    # lock's Python as its own python3 (Ubuntu 26.04, as a Mac's VM runs).
+    [ "$MACHINE_ARCH" = x86_64 ]       || die "$LOCK_NAME is for Python $want and this box's python3 is ${have:-missing}; the CPython provision-manifest.conf pins is x86_64's, so on $MACHINE_ARCH install on Ubuntu 26.04 (its python3 is $want)"
     [ -f "$(python_runtime_script)" ] || die "the checkout has no scripts/linux/python-runtime.sh"
     log "$LOCK_NAME is for Python $want and this box's python3 is ${have:-missing}: the venv runs on CPython ${M[python_version]} (python-build-standalone ${M[python_build]}), installed by scripts/linux/python-runtime.sh"
     emit_frac 20 "Installing Python ${M[python_version]}"
@@ -3065,6 +3461,47 @@ do_venv() {
 
 # ─── env ─────────────────────────────────────────────────────────────────
 
+# The host part of an http(s) URL, or nothing.
+url_host() { [[ $1 =~ ^https?://([^/:@]+)(:[0-9]+)?(/.*)?$ ]] && printf '%s' "${BASH_REMATCH[1]}"; }
+
+# ollama_host_ip: the IPv4 address --ollama-url's host is, or nothing: the
+# literal itself, else the first IPv4 address this machine resolves the
+# name to (getent ahostsv4: /etc/hosts first, where Lima writes
+# host.lima.internal). OLLAMA_HOST_IP_WHY says why there is none.
+OLLAMA_HOST_IP_WHY=""
+OLLAMA_HOST_IP=""
+ollama_host_ip() {
+  local host ip
+  OLLAMA_HOST_IP_WHY=""
+  OLLAMA_HOST_IP=""
+  host=$(url_host "$OLLAMA_API") || host=""
+  if [ -z "$host" ]; then OLLAMA_HOST_IP_WHY="$OLLAMA_API has no host name this script reads"; return 0; fi
+  if valid_ipv4 "$host"; then OLLAMA_HOST_IP=$host; printf '%s' "$host"; return 0; fi
+  ip=$(getent ahostsv4 "$host" 2>/dev/null | awk 'NR == 1 {print $1}') || ip=""
+  if [ -n "$ip" ] && valid_ipv4 "$ip"; then OLLAMA_HOST_IP=$ip; printf '%s' "$ip"; return 0; fi
+  OLLAMA_HOST_IP_WHY="this machine can't resolve $host to an IPv4 address"
+}
+
+# container_ollama_url: --ollama-url as a container on this machine reaches
+# it, with the /v1 Letta's OLLAMA_BASE_URL needs. A container resolves names
+# through Docker's DNS, which knows nothing of this machine's /etc/hosts
+# (inside a Mac host's Lima VM, host.lima.internal is in there alone), so
+# the host goes in by its IPv4 address. A loopback address is the container
+# itself in there: host.docker.internal instead (compose maps that name to
+# the Docker host, this machine). A name this machine can't resolve stays as
+# it is (with a warning at the env step).
+container_ollama_url() {
+  local host ip
+  host=$(url_host "$OLLAMA_API") || host=""
+  ip=$(ollama_host_ip)
+  case $ip in
+    "") ip=$host ;;
+    127.*) ip=host.docker.internal ;;
+  esac
+  if [ -z "$host" ] || [ -z "$ip" ]; then printf '%s/v1' "$OLLAMA_API"; return 0; fi
+  printf '%s/v1' "${OLLAMA_API/:\/\/$host/://$ip}"
+}
+
 # KEY=VALUE lines for domovoi/.env (windows-installer PLAN.md 4.9; names
 # from domovoi/config.py).
 env_keys() {
@@ -3075,6 +3512,21 @@ env_keys() {
   # The IPv4 literal: Ollama listens on 127.0.0.1 only, and "localhost"
   # would try ::1 first.
   echo "OLLAMA_URL=$OLLAMA_API"
+  if [ "$OLLAMA_EXTERNAL" = 1 ]; then
+    # An outside Ollama (the Mac host's): how long it keeps the models
+    # loaded, by tier (EXTERNAL_KEEP_ALIVE_*), and the URL Letta's container
+    # reaches it at (container_ollama_url). Without --ollama-url neither is
+    # written: the core's and compose's defaults hold, as before.
+    if [ "$TIER_EFF" = floor ]; then echo "OLLAMA_KEEP_ALIVE=$EXTERNAL_KEEP_ALIVE_FLOOR"
+    else echo "OLLAMA_KEEP_ALIVE=$EXTERNAL_KEEP_ALIVE_STANDARD"; fi
+    echo "LETTA_OLLAMA_BASE_URL=$(container_ollama_url)"
+  fi
+  if [ -n "$HOST_STT_URL" ]; then
+    echo "WHISPER_REMOTE_URL=$HOST_STT_URL"
+    echo "WHISPER_REMOTE_MODEL=$HOST_STT_MODEL"
+    if [ "$HOST_STT_SHARES_GPU" = 1 ]; then echo "WHISPER_REMOTE_SHARES_GPU=true"
+    else echo "WHISPER_REMOTE_SHARES_GPU=false"; fi
+  fi
   echo "OLLAMA_MODEL=$(tier_qa)"
   echo "OLLAMA_TOOL_MODEL=$(tier_tool)"
   echo "OLLAMA_TOOL_THINK=false"
@@ -3096,14 +3548,24 @@ env_keys() {
 # Every key env_keys can write, whatever the options of this run: a .env
 # this script creates has the template's value of each recorded as the
 # script's own, so a later run with another option still replaces it.
-ENV_MANAGED_KEYS=(WHISPER_MODEL WHISPER_DEVICE WHISPER_COMPUTE_TYPE OLLAMA_URL OLLAMA_MODEL
+ENV_MANAGED_KEYS=(WHISPER_MODEL WHISPER_DEVICE WHISPER_COMPUTE_TYPE WHISPER_REMOTE_URL WHISPER_REMOTE_MODEL WHISPER_REMOTE_SHARES_GPU OLLAMA_URL OLLAMA_KEEP_ALIVE LETTA_OLLAMA_BASE_URL OLLAMA_MODEL
   OLLAMA_TOOL_MODEL OLLAMA_TOOL_THINK OLLAMA_VISION_MODEL AI_FEATURES SATELLITE_ADOPTION_ENABLED MPD_HTTP_BASE
   MUSIC_DIR PICTURES_DIR DOCUMENTS_DIR AUDIOBOOKS_DIR PODCASTS_DIR VIDEOS_DIR)
 # Keys a checkout older than this script may have no setting for (an older
 # release installed with --ref, or stable before the release that has it):
 # its core ignores them (Settings reads .env with extra="ignore"), so the
 # verify step names them instead of failing.
-ENV_NEWER_KEYS=(AI_FEATURES)
+ENV_NEWER_KEYS=(AI_FEATURES LETTA_OLLAMA_BASE_URL WHISPER_REMOTE_URL WHISPER_REMOTE_MODEL WHISPER_REMOTE_SHARES_GPU)
+# The record's marker that a --ollama-url run wrote OLLAMA_KEEP_ALIVE and
+# LETTA_OLLAMA_BASE_URL (left only by such a run), and the keep-alive the
+# core uses without one (domovoi/config.py ollama_keep_alive).
+ENV_EXTERNAL_MARK=_OLLAMA_EXTERNAL
+# The same for --host-stt-url: a later run without it (a Mac package without
+# the speech service) blanks WHISPER_REMOTE_URL and puts
+# WHISPER_REMOTE_SHARES_GPU back to false while they still hold what this
+# script wrote, so the core stops asking a service that is gone.
+ENV_STT_MARK=_HOST_STT
+ENV_KEEP_ALIVE_DEFAULT=24h
 
 # What domovoi/.env assigns now to the keys in PROVISION_ENV_NAMES, as
 # KEY=VALUE lines, read the way the core reads it (env_bootstrap.env_values:
@@ -3265,6 +3727,10 @@ do_env() {
   local -a order=() write=() same=() kept=() others=()
   [ ! -f "$envf" ] || existed=1
   before=$(file_sig "$envf")
+  if [ "$OLLAMA_EXTERNAL" = 1 ]; then
+    ollama_host_ip >/dev/null
+    [ -z "$OLLAMA_HOST_IP_WHY" ] || warn "LETTA_OLLAMA_BASE_URL keeps the name in --ollama-url ($OLLAMA_HOST_IP_WHY), which a container may not resolve: chat mode's Letta may not reach Ollama"
+  fi
   # A NEW .env with a random Postgres password and helper secrets, and the
   # internet answer; an existing one is never rewritten (env_bootstrap's
   # contract), and --repair only appends secrets it lacks.
@@ -3304,6 +3770,39 @@ do_env() {
     write_env_record last
     rm -f "$ENV_CREATING"
   fi
+
+  # --ollama-url dropped on a later run: the two keys it made the script
+  # write go back to what a box that never had it holds, but only while
+  # the record says this script wrote them (the marker below, which only a
+  # --ollama-url run leaves) and the file still holds that very value; a
+  # value the household set since is theirs. A box that never had the
+  # option has no marker, and nothing here runs for it.
+  if [ "$OLLAMA_EXTERNAL" != 1 ] && [ "${last[$ENV_EXTERNAL_MARK]-}" = 1 ]; then
+    for k in OLLAMA_KEEP_ALIVE LETTA_OLLAMA_BASE_URL; do
+      if [ -n "${have[$k]-}" ] && [ -n "${last[$k]+x}" ] && [ "${have[$k]}" = "${last[$k]}" ]; then
+        # The core's own default for the keep-alive (blank would mean "send
+        # none", Ollama's five minutes); blank for the URL (compose then
+        # uses its default).
+        if [ "$k" = OLLAMA_KEEP_ALIVE ]; then want[$k]=$ENV_KEEP_ALIVE_DEFAULT; else want[$k]=; fi
+        order+=("$k")
+      fi
+    done
+    unset "last[$ENV_EXTERNAL_MARK]"
+  fi
+  if [ "$OLLAMA_EXTERNAL" = 1 ]; then last[$ENV_EXTERNAL_MARK]=1; fi
+  if [ -z "$HOST_STT_URL" ] && [ "${last[$ENV_STT_MARK]-}" = 1 ]; then
+    k=WHISPER_REMOTE_URL
+    if [ -n "${have[$k]-}" ] && [ -n "${last[$k]+x}" ] && [ "${have[$k]}" = "${last[$k]}" ]; then
+      want[$k]=; order+=("$k")
+    fi
+    # A bool: false, never blank (the core would refuse an empty bool).
+    k=WHISPER_REMOTE_SHARES_GPU
+    if [ "${have[$k]-}" = true ] && [ -n "${last[$k]+x}" ] && [ "${have[$k]}" = "${last[$k]}" ]; then
+      want[$k]=false; order+=("$k")
+    fi
+    unset "last[$ENV_STT_MARK]"
+  fi
+  if [ -n "$HOST_STT_URL" ]; then last[$ENV_STT_MARK]=1; fi
 
   # Each key: written when absent or still as this script last wrote it;
   # one the household set since (Settings, or by hand) is theirs.
@@ -3478,6 +3977,10 @@ fetch_pinned() {
   emit_bytes "$(path_bytes "$dest")" "$(path_bytes "$dest")" "Downloaded $label"
 }
 
+skip_ollama() {
+  if [ "$OLLAMA_EXTERNAL" = 1 ]; then echo "--ollama-url: Ollama runs outside this machine, at $OLLAMA_API"; return 0; fi
+  return 1
+}
 inputs_ollama() {
   load_ollama_pin
   echo "$OLLAMA_VERSION $OLLAMA_SHA256"
@@ -3491,15 +3994,15 @@ check_ollama() {
     && [ "$(ollama_served_version)" = "$OLLAMA_VERSION" ]
 }
 plan_ollama() {
-  if [ -n "$OLLAMA_VERSION" ]; then echo "Ollama $OLLAMA_VERSION, SHA-256 $OLLAMA_SHA256 (docs/LINUX_HOST.md)"
+  if [ -n "$OLLAMA_VERSION" ]; then echo "Ollama $OLLAMA_VERSION ($OLLAMA_ASSET), SHA-256 $OLLAMA_SHA256 (docs/LINUX_HOST.md)"
   else echo "the Ollama release docs/LINUX_HOST.md pins, checked against its SHA-256"; fi
 }
 do_ollama() {
   local changed=0 url tarball v i
   load_ollama_pin
   if [ ! -x "$OLLAMA_BIN" ] || [ "$(cat "$OLLAMA_STAMP" 2>/dev/null)" != "$OLLAMA_VERSION $OLLAMA_SHA256" ]; then
-    url=https://github.com/ollama/ollama/releases/download/v$OLLAMA_VERSION/ollama-linux-amd64.tar.zst
-    tarball=$CACHE_DIR/ollama-linux-amd64-v$OLLAMA_VERSION.tar.zst
+    url=https://github.com/ollama/ollama/releases/download/v$OLLAMA_VERSION/$OLLAMA_ASSET
+    tarball=$CACHE_DIR/${OLLAMA_ASSET%.tar.zst}-v$OLLAMA_VERSION.tar.zst
     fetch_pinned "$url" "$tarball" "$OLLAMA_SHA256" "Ollama $OLLAMA_VERSION"
     systemctl stop ollama.service >/dev/null 2>&1 || true
     # docs/LINUX_HOST.md: replace lib/ollama whole, then unpack bin/ and lib/.
@@ -3686,6 +4189,37 @@ plan_models() {
   if [ "$PULL_VISION" = 0 ]; then echo "(--no-vision-model: $(tier_vision) is not pulled)"; fi
   echo "(--no-ai-models: none of these is pulled; Ollama itself is still installed)"
 }
+# version_at_least HAVE WANT: X.Y.Z HAVE is WANT or newer (a suffix such
+# as -rc0 is ignored, as domovoi/clients/ollama.py reads it).
+version_at_least() {
+  local -a h w
+  local i
+  [[ $1 =~ ^v?([0-9]+)\.([0-9]+)(\.([0-9]+))? ]] || return 1
+  h=("${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[4]:-0}")
+  [[ $2 =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || return 1
+  w=("${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}")
+  for i in 0 1 2; do
+    if [ "$((10#${h[$i]}))" -gt "$((10#${w[$i]}))" ]; then return 0; fi
+    if [ "$((10#${h[$i]}))" -lt "$((10#${w[$i]}))" ]; then return 1; fi
+  done
+  return 0
+}
+
+# An Ollama at --ollama-url is the household's or the host's, not this
+# script's pin: it must answer, and be OLLAMA_MIN_VERSION or newer, before
+# anything is pulled into it.
+check_external_ollama() {
+  local v
+  v=$(ollama_served_version) || v=""
+  [ -n "$v" ] || die "no Ollama answers at $OLLAMA_API (--ollama-url): start it, or check the address, then run this again"
+  if [ "$v" = 0.0.0 ]; then
+    warn "the Ollama at $OLLAMA_API reports version 0.0.0 (a build from source): its features can't be told from that; Domovoi needs $OLLAMA_MIN_VERSION or newer"
+  elif ! version_at_least "$v" "$OLLAMA_MIN_VERSION"; then
+    die "the Ollama at $OLLAMA_API is version $v; Domovoi needs $OLLAMA_MIN_VERSION or newer: update that Ollama, then run this again"
+  fi
+  log "Ollama $v at $OLLAMA_API (Domovoi needs $OLLAMA_MIN_VERSION or newer)"
+}
+
 # remove_model TAG: DELETE /api/delete, so a build that failed its pin is
 # not left where chat would use it. True once Ollama no longer lists TAG.
 remove_model() {
@@ -3707,6 +4241,7 @@ remove_model() {
 # it; the next provision run tries the pinned build again.
 do_models() {
   local tag want got i=0 n vision_off=""
+  if [ "$OLLAMA_EXTERNAL" = 1 ]; then check_external_ollama; fi
   n=$(model_pairs | grep -c .)
   if [ "$PULL_VISION" = 1 ]; then
     log "the vision model $(tier_vision) reads pictures in chat (about 1.9 GB; --no-vision-model leaves it out)"

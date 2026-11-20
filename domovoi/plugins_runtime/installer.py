@@ -99,7 +99,7 @@ TRUST_STATEMENT = (
 
 _GITHUB_URL_RE = re.compile(
     r"^https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?"
-    r"(?:@([A-Za-z0-9_./-]+))?/?$"
+    r"(?:@([A-Za-z0-9_./-]+))?/?\Z"
 )
 
 

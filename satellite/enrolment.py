@@ -76,10 +76,10 @@ REASONS = (
     "bad_room",             # empty, too long, or no letter/digit to make a room id from
 )
 
-_FP_RE = re.compile(r"^SHA256:[A-Za-z0-9+/]{43}$")
+_FP_RE = re.compile(r"^SHA256:[A-Za-z0-9+/]{43}\Z")
 #: The core's own room-id rule (domovoi/main.py ``_ROOM_ID_RE``, the USB
 #: adoption form's): every id this module makes matches it.
-ROOM_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+ROOM_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}\Z")
 #: Put in front of an id that would start with a digit ("2nd Bedroom").
 ROOM_ID_DIGIT_PREFIX = "room_"
 #: The home network, for the core address (``is_home_network_host``):
@@ -91,7 +91,7 @@ ROOM_ID_DIGIT_PREFIX = "room_"
 HOME_V4 = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
 HOME_V6 = ("fc00::/7", "fe80::/10")
 HOME_SUFFIXES = (".local", ".home.arpa", ".lan", ".internal")
-_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}\Z")
 _HEX = "0123456789abcdefABCDEF"
 # RFC 3986 query characters a value may carry raw: unreserved, the
 # sub-delims other than "&" and "=" (which separate pairs), ":", "@", "/"

@@ -41,8 +41,8 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 LOCK_NAME = "windows-runtime.json"
-_FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,200}\.(whl|zip)$")
-_SHA_RE = re.compile(r"^[0-9a-f]{64}$")
+_FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,200}\.(whl|zip)\Z")
+_SHA_RE = re.compile(r"^[0-9a-f]{64}\Z")
 #: Where the lock's files may come from.
 UPSTREAM_HOSTS = ("https://www.python.org/ftp/python/", "https://files.pythonhosted.org/packages/")
 MAX_FILE_BYTES = 128 * 1024 * 1024

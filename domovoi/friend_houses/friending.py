@@ -38,10 +38,13 @@ import secrets
 import time
 from typing import Any
 
+from sqlalchemy import text
+
 from domovoi.friend_houses import connect as fc
 from domovoi.friend_houses import friend_file as ff
 from domovoi.friend_houses import identity as fid
 from domovoi.friend_houses import pairing as fp
+from domovoi.friend_houses import presence
 from domovoi.friend_houses import session as fs
 from domovoi.friend_houses import store
 from domovoi.friend_houses import tor_config as tc
@@ -217,8 +220,11 @@ async def preview(text: str) -> dict[str, Any]:
     async with _db() as s:
         already = await store.friend_by_house(s, f.house_key)
         asked = await store.request_by_house(s, "out", f.house_key)
+    from domovoi.friend_houses import blocking
+
     return {"name": f.name, "fingerprint": f.fingerprint, "expired": expired,
-            "already_friends": already is not None, "already_asked": asked is not None}
+            "already_friends": already is not None, "already_asked": asked is not None,
+            "blocked": await blocking.is_blocked(f.house_key)}
 
 
 async def send_request(text: str, *, local_name: str, by: str | None = None) -> dict[str, Any]:
@@ -231,6 +237,10 @@ async def send_request(text: str, *, local_name: str, by: str | None = None) -> 
         raise FriendingError("That's this house's own friend file.")
     if f.expires_day * 86400 < time.time():
         raise FriendingError("That friend file has expired. Ask for a new one.")
+    from domovoi.friend_houses import blocking
+
+    if await blocking.is_blocked(f.house_key):
+        raise FriendingError("You blocked that house. Unblock it first if you want to be friends again.")
     reach = tc.ReachKey.generate()
     days = max(1, int((f.expires_day * 86400 - time.time()) // 86400) + 1 + ACCEPT_GRACE_DAYS)
     request_id = _new_id("r")
@@ -239,6 +249,12 @@ async def send_request(text: str, *, local_name: str, by: str | None = None) -> 
             raise FriendingError("You're already friends with that house.")
         if await store.request_by_house(s, "out", f.house_key):
             raise FriendingError("You've already asked that house. Wait for them to accept.")
+        if await store.session_key_taken(s, f.session_key):
+            # A file naming a key a friend (or another request) already
+            # uses would take that friend's place in the listener's list
+            # and lock it out (audit R6 FH-11). No honest file does that.
+            raise FriendingError("That friend file clashes with a friend house you already have. "
+                                 "Ask for a new one.")
         await store.insert_request(
             s, id=request_id, direction="out", state="unsent", house_key=f.house_key,
             session_key=f.session_key, their_name=f.name, local_name=name,
@@ -295,6 +311,11 @@ async def on_request(event: dict[str, Any]) -> None:
     if statement is None or len(reach_private) != 32 or not (len(code) == 4 and code.isdigit()):
         log.warning("Friend Houses: a request event failed its checks and was dropped")
         return
+    from domovoi.friend_houses import blocking
+
+    if await blocking.is_blocked(statement.house_key):
+        log.info("Friend Houses: a request from a blocked house was dropped")
+        return
     async with _db() as s:
         if not await store.use_invite(s, invite_id):
             log.info("Friend Houses: a request on a used or closed friend file was dropped")
@@ -327,6 +348,19 @@ async def accept(request_id: str, *, local_name: str, by: str | None = None) -> 
         statement = fid.AddressStatement.parse(row["statement"])
         if statement is None:
             raise FriendingError("That request is damaged; ask them to send a new one.")
+        already = await store.friend_by_house(s, statement.house_key) is not None
+        if already:
+            # Both houses imported each other's files and theirs accepted
+            # first: already friends (this used to be a 500, R6 FH-11).
+            await store.delete_request(s, request_id)
+    if already:
+        raise FriendingError("You're already friends with that house.")
+    async with _db() as s:
+        if await store.address_clash(s, statement.house_key, statement.onion_key, statement.session_key):
+            raise FriendingError("That house's address clashes with another friend house's. "
+                                 "Ask them for a new friend file.")
+        # Our own request to the same house is done with (R6 FH-11).
+        await store.delete_requests_for(s, statement.house_key, "out")
         await store.insert_friend(
             s, id=friend_id, house_key=statement.house_key, session_key=statement.session_key,
             onion_key=statement.onion_key, statement=statement.to_bytes(),
@@ -338,6 +372,19 @@ async def accept(request_id: str, *, local_name: str, by: str | None = None) -> 
     await _service().reconcile_within(60.0)
     _service().schedule_deliveries()
     return {"friend_id": friend_id, "name": name}
+
+
+async def withdraw(request_id: str) -> bool:
+    """Take back a request this house sent (a file imported by mistake,
+    say): its author loses the way in it gave them (audit R6 FH-11)."""
+    async with _db() as s:
+        row = await store.request(s, request_id)
+        if row is None or row["direction"] != "out" or row["state"] not in ("unsent", "sent"):
+            return False
+        done = await store.delete_request(s, request_id)
+    if done:
+        await _service().reconcile()  # withdraw their reach key from Tor
+    return done
 
 
 async def decline(request_id: str) -> bool:
@@ -391,6 +438,10 @@ async def on_accepted(event: dict[str, Any]) -> None:
         return
     if statement is None or len(gift) != 32:
         return
+    from domovoi.friend_houses import blocking
+
+    if await blocking.is_blocked(statement.house_key):
+        return
     async with _db() as s:
         existing = await store.friend_by_house(s, statement.house_key)
         if existing is not None:
@@ -400,12 +451,15 @@ async def on_accepted(event: dict[str, Any]) -> None:
             log.info("Friend Houses: an accept that matches no request was dropped")
             return
         name = row["local_name"] or row["their_name"] or "A friend house"
+        if await store.address_clash(s, statement.house_key, statement.onion_key, statement.session_key):
+            log.warning("Friend Houses: an accept naming another friend's address was dropped")
+            return
         await store.insert_friend(
             s, id=_new_id("f"), house_key=statement.house_key, session_key=statement.session_key,
             onion_key=statement.onion_key, statement=statement.to_bytes(),
             statement_at=statement.issued_at, reach_public=row["reach_public"],
             reach_private=gift, local_name=name, code=row["code"], added_by="accepted")
-        await store.delete_request(s, row["id"])
+        await store.delete_requests_for(s, statement.house_key)  # both directions (R6 FH-11)
     await _new_friend(name)
     await _service().reconcile()
 
@@ -415,22 +469,88 @@ async def on_accepted(event: dict[str, Any]) -> None:
 
 async def _new_friend(name: str) -> None:
     """Every new friend is announced aloud and logged (owner decision 13),
-    so an addition nobody in the house made can't go unnoticed (finding 3)."""
+    so an addition nobody in the house made can't go unnoticed (finding 3).
+    The dashboard and the phones also show it for a week (the status's
+    ``changes``), and during the house's quiet hours the announcement waits
+    for them to end instead of being dropped (audit R6 FH-8)."""
     log.warning("Friend Houses: %s is now a friend house", name)
+    from domovoi.friend_houses import messages
+
+    said = messages.safe_name(name, await messages.wake_phrases())
+    await announce(f"{said} is now a Friend House.")
+
+
+HELD_MAX = 20  # announcements waiting for quiet hours to end
+
+
+def _house_quiet_now() -> bool:
+    from domovoi import quiet_hours
+
+    hours = quiet_hours.house_hours()
+    return hours is not None and quiet_hours.in_window(quiet_hours._local_now(), *hours)
+
+
+async def announce(text: str) -> None:
+    """A trust change said aloud in the rooms: now, or (in the house's
+    quiet hours) as soon as they end. Never dropped."""
+    if _house_quiet_now():
+        async with _db() as s:
+            current = await store.household_settings(s)
+            held = list(current.get("held_announcements") or [])[-(HELD_MAX - 1):]
+            held.append(text[:200])
+            current["held_announcements"] = held
+            await store.save_household_settings(s, current)
+        log.info("Friend Houses: quiet hours; the announcement waits for them to end")
+        return
+    await _speak(text)
+
+
+async def _speak(text: str) -> None:
     try:
         from domovoi.sdk.speech import SpeechAPI
         from domovoi.speech_sanitize import sanitize_for_speech
 
-        await SpeechAPI("core").announce(None, sanitize_for_speech(f"{name} is now a Friend House."))
-    except Exception as e:  # noqa: BLE001 — the log line above is the record
-        log.info("Friend Houses: announcing the new friend failed: %s", e)
+        await SpeechAPI("core").announce(None, sanitize_for_speech(text))
+    except Exception as e:  # noqa: BLE001 — the log line and the status are the record
+        log.info("Friend Houses: an announcement failed: %s", e)
+
+
+async def announce_held() -> int:
+    """Say what waited for quiet hours (run by the service's retry loop)."""
+    if _house_quiet_now():
+        return 0
+    async with _db() as s:
+        current = await store.household_settings(s)
+        held = list(current.get("held_announcements") or [])
+        if not held:
+            return 0
+        current["held_announcements"] = []
+        await store.save_household_settings(s, current)
+    for text_ in held:
+        await _speak(str(text_))
+    return len(held)
+
+
+async def recent_changes(days: int = 7) -> list[dict[str, Any]]:
+    """Trust changes of the last week, newest first, for the dashboard's
+    and the phones' notice: new friends and lists shared with a friend."""
+    async with _db() as s:
+        rows = (await s.execute(text(
+            "SELECT 'friend' AS kind, local_name, NULL AS list, added_at FROM friend_houses_friends "
+            "WHERE added_at > now() - make_interval(days => :d) "
+            "UNION ALL SELECT 'shared_list', f.local_name, sp.title, sp.created_at "
+            "FROM friend_houses_spaces sp JOIN friend_houses_friends f ON f.id = sp.friend_id "
+            "WHERE sp.origin = 'us' AND sp.state = 'active' "
+            "AND sp.created_at > now() - make_interval(days => :d) "
+            "ORDER BY 4 DESC LIMIT 20"), {"d": days})).all()
+    return [{"kind": r[0], "friend": r[1], "list": r[2], "at": r[3].isoformat()} for r in rows]
 
 
 async def list_friends() -> list[dict[str, Any]]:
     async with _db() as s:
         rows = await store.active_friends(s)
     return [{"id": f.id, "name": f.local_name, "fingerprint": fid.fingerprint(f.house_key),
-             "house": f.house_key.hex(), "alert": f.alert,
+             "house": f.house_key.hex(), "alert": f.alert, **presence.view(f.last_seen_at),
              "code": f.code, "verified": f.verified_at is not None,
              "added_at": f.added_at.isoformat() if f.added_at else None} for f in rows]
 
@@ -460,7 +580,11 @@ async def unfriend(friend_id: str) -> bool:
     """Remove a friend. The listener refuses it from the next connection;
     Tor's key is withdrawn at the next (batched) reload."""
     async with _db() as s:
+        row = await store.friend(s, friend_id)
         done = await store.delete_friend(s, friend_id)
+        if done and row is not None:
+            # An accept still waiting to be delivered goes too (R6 FH-11).
+            await store.delete_requests_for(s, row.house_key)
     if done:
         log.warning("Friend Houses: a friend house was removed")
         await _service().reconcile()

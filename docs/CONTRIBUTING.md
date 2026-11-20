@@ -342,6 +342,7 @@ Markdown (and pictures under `docs/`) alone runs the docs gates only.
 | android release rehearsal | windows | the release's signing steps on leg a's APKs with a throwaway key: no environment, no secrets, nothing published |
 | windows | windows | `windows/build.ps1 -SkipInstaller` (the exes and the C# tests), then the installers when the image has Inno Setup 6 |
 | ios | macOS | the `DomovoiKit` package tests, and the app with its UI-test target compiled for the Simulator, unsigned (the UI test runs stay on a Mac with the stub house: [ios/README.md](../ios/README.md)) |
+| mac | macOS | `swift build && swift test` in `mac/` (the Mac server's package) with Xcode 16.4, picked by its path, when `mac/` or a workflow changed; started by hand ("Run workflow"), also the whole installer the way the release builds it (`mac/build.sh`, a development build, thrown away), failing if a program holds a build path |
 | sbom | ubuntu | the server's, the web's and the app's SBOMs, made as the release makes them |
 
 Reading a red run: open it from the README's CI badge or the Actions tab
@@ -784,7 +785,22 @@ setup is [docs/release/ACTIONS-SETUP.md](release/ACTIONS-SETUP.md).
    (loaded into an `ssh-agent` for that one step: no key file, no prompt),
    publishes the files, checks them and moves `stable` (step 3 below). The
    job's summary links the release.
-7. Two jobs without secrets frame it. **sbom** (Linux, read-only, while
+7. **build-mac** (macOS, read-only, no secrets, while the run waits for
+   approval) builds `DomovoiSetup-mac.pkg` with `mac/build.sh --tag`: the
+   same Xcode as CI's `mac` job, CMake, Lima and whisper.cpp at their
+   pinned versions, each checked, and a stop if any program holds a path
+   of the runner. It builds the dispatched commit, since the tag doesn't
+   exist yet: for a release that changes the app, the tag will be that
+   commit plus `android/release.json`, which the package doesn't hold. The
+   package installs the tag itself (`--ref <tag>`), and its build record
+   (`DomovoiSetup-mac.build.json`) says which commit it was built from.
+   The **release** job waits for it, and finish-release (`--mac-pkg`)
+   takes the package only when that record names the tag and describes
+   that very file, and the commit is the tag's, or the one under an app
+   release's tag; then it signs it for the Mac side's updates and attaches
+   it. One approval covers it all. The package is signed ad hoc only (no
+   Apple Developer ID), so the release page says how to open it.
+8. Two jobs without secrets frame it. **sbom** (Linux, read-only, while
    the run waits for approval) makes the software bills of materials with
    `scripts/release/sbom.py`: the server's Python packages, the
    dashboard's vendored libraries and, when the app changed, the app's
@@ -795,10 +811,12 @@ setup is [docs/release/ACTIONS-SETUP.md](release/ACTIONS-SETUP.md).
    `SHA256SUMS` as an artifact (`release-sums`), since GitHub drops a job
    output that holds a secret's value. If attest fails, the release is
    already out: **Re-run failed jobs** runs it again, and nothing is
-   published twice. A release whose run made no provenance at all (1.3.0)
-   gets it from **Run workflow** with the tag and **attest_published**
-   ticked: only attest runs, taking `SHA256SUMS` from the published
-   release (weaker than the signing job's own, so the release notes say so). How a user checks a file:
+   published twice. There is no provenance-only run: the
+   `attest_published` box that backfilled 1.3.0's ran attest with no
+   approval and attested whatever `SHA256SUMS` the release held, so it was
+   removed (OPS-21, round 6). A release whose attest never ran gets its
+   provenance by **Re-run failed jobs** on that release's own run, while
+   GitHub keeps it. How a user checks a file:
    [SECURITY.md, "Verifying a release"](../SECURITY.md#verifying-a-release).
 
 Every check the scripts make still runs; the workflow adds the plan, and a
@@ -915,10 +933,20 @@ workflow runs the same scripts. In order:
    backup off the repository, like the Android keystore. `finish-release.sh` is the same for bash; it needs `--setup FILE`
    (a Setup built that way) off Windows. `-NoPublish` leaves the files in
    `windows\build\release\<tag>\`; without a key it leaves the signatures
-   out and says so.
+   out and says so. `-MacPkg FILE` (`--mac-pkg`) also
+   attaches `DomovoiSetup-mac.pkg`, the macOS installer, built on a Mac
+   from the tag (`mac/build.sh --tag <tag> --ref <tag>`; the release
+   workflow's `build-mac` job does it): its build record
+   (`DomovoiSetup-mac.build.json`, beside it) must name the tag and its
+   commit (or, for a release that changes the app, the commit under it,
+   with the tag as the ref it installs) and describe that file. With the
+   release key it is signed the same way under its own namespaces
+   (`domovoi-mac-setup`, `domovoi-mac-setup-manifest`). Without the option
+   the release is as before.
 
 The finished release holds the two APKs (only when the app changed),
-`DomovoiSetup.exe` (not code-signed), `DomovoiTray.exe`, `DomovoiSatelliteSetup.exe`, `SHA256SUMS`,
+`DomovoiSetup.exe` (not code-signed), `DomovoiTray.exe`, `DomovoiSatelliteSetup.exe`,
+`DomovoiSetup-mac.pkg` (signed ad hoc, when given; the workflow always gives it), `SHA256SUMS`,
 and notes (in the order of "The release page", below) naming the tag's
 commit, how the Setup was built and the app's signing certificate. Neither script
 touches a keystore or a password outside `release.ps1`'s own prompts (or,

@@ -1612,7 +1612,12 @@ def test_the_sboms_are_attached_summed_and_listed(tmp_path, monkeypatch):
     assert set(fr.SBOM_ASSETS) <= {a["name"] for a in rel["assets"]}
     for n in fr.SBOM_ASSETS:
         assert f"| {n} |" in rel["body"] and sha[n] in rel["body"]
-    assert "`gh attestation verify <file> -R coders-farm-official/domovoi`" in rel["body"]
+    # OPS-22: the strict form only; the loose one passes any workflow's attestation.
+    strict = ("`gh attestation verify <file> -R coders-farm-official/domovoi "
+              "--signer-workflow coders-farm-official/domovoi/.github/workflows/release.yml "
+              "--source-ref refs/heads/main`")
+    assert strict in rel["body"]
+    assert "`gh attestation verify <file> -R coders-farm-official/domovoi`" not in rel["body"]
     assert "SECURITY.md#verifying-a-release" in rel["body"]
     assert w.run("--sbom-dir", str(d), "--provenance") == 0
 
@@ -1694,3 +1699,179 @@ def test_a_failed_signing_tool_shows_its_whole_error_without_secrets(script):
         assert "show_tool_error()" in text
         assert text.count('show_tool_error "$') == 2, "signing and verifying both show the whole output"
         assert "2>&1 >/dev/null" not in text, "signing's stdout is kept too"
+
+
+# ─── the macOS installer (--mac-pkg; mac-installer PLAN 4.12) ────────────
+
+
+def _mac_pkg(w: "World", *, tag: str | None = None, commit: str | None = None, sha: str | None = None,
+             where: Path | None = None, ref: str | None = None) -> Path:
+    """A DomovoiSetup-mac.pkg as the Mac build leaves it: the package and
+    its build record beside it."""
+    d = where or (w.tmp / "mac-build")
+    d.mkdir(parents=True, exist_ok=True)
+    pkg = d / "DomovoiSetup-mac.pkg"
+    pkg.write_bytes(b"xar! not really a package")
+    rec = {"kind": "domovoi-mac-setup-build", "schema": 1, "tag": tag or w.tag, "commit": commit or w.tag_commit,
+           "file": "DomovoiSetup-mac.pkg", "size": pkg.stat().st_size,
+           "sha256": sha or hashlib.sha256(pkg.read_bytes()).hexdigest()}
+    if ref is not None:
+        rec["ref"] = ref
+    (d / "DomovoiSetup-mac.build.json").write_text(json.dumps(rec), encoding="utf-8")
+    return pkg
+
+
+@requires_git
+def test_a_release_without_the_mac_package_is_unchanged(tmp_path, monkeypatch):
+    w = World(tmp_path, monkeypatch)
+    assert w.run("--no-publish") == 0
+    assert not (w.stage / "DomovoiSetup-mac.pkg").exists()
+    sums = (w.stage / "SHA256SUMS").read_text(encoding="ascii")
+    notes = (w.stage / "NOTES.md").read_text(encoding="utf-8")
+    assert "mac" not in sums.lower() and "DomovoiSetup-mac" not in notes and "Mac (preview)" not in notes
+
+
+@requires_git
+def test_the_mac_package_is_attached_summed_and_noted(tmp_path, monkeypatch):
+    w = World(tmp_path, monkeypatch)
+    pkg = _mac_pkg(w)
+    assert w.run("--mac-pkg", str(pkg)) == 0
+    staged = w.stage / "DomovoiSetup-mac.pkg"
+    assert staged.read_bytes() == pkg.read_bytes()
+    sha = hashlib.sha256(pkg.read_bytes()).hexdigest()
+    lines = (w.stage / "SHA256SUMS").read_text(encoding="ascii").splitlines()
+    assert f"{sha}  DomovoiSetup-mac.pkg" in lines
+    (upload,) = w.calls("upload")
+    names = [Path(a).name for a in upload[3:upload.index("--repo")]]
+    assert "DomovoiSetup-mac.pkg" in names and names[-1] == "SHA256SUMS"
+    notes = w.state["releases"][w.tag]["body"]
+    assert "| DomovoiSetup-mac.pkg |" in notes and sha in notes and "**Mac (Apple silicon, macOS 26 or later) — the server:**" in notes
+    assert "/releases/download/" + w.tag + "/DomovoiSetup-mac.pkg" in notes, "the Download section links it"
+    rel = w.load()["releases"][w.tag]
+    assert "DomovoiSetup-mac.pkg" in [a["name"] for a in rel["assets"]]
+    # A second run (the package already on GitHub) is known to the release check.
+    assert w.run("--mac-pkg", str(pkg)) == 0
+
+
+@requires_git
+@pytest.mark.parametrize("bad, why", [
+    ({"tag": "v0.9.0"}, "built from v0.9.0"),
+    ({"commit": "1" * 40}, "built from"),
+    ({"sha": "0" * 64}, "describes another package"),
+])
+def test_a_mac_package_not_built_from_the_tag_is_refused(tmp_path, monkeypatch, bad, why):
+    w = World(tmp_path, monkeypatch)
+    pkg = _mac_pkg(w, **bad)
+    with pytest.raises(fr.Refused, match=why):
+        w.run("--no-publish", "--mac-pkg", str(pkg))
+    assert w.calls("upload") == []
+
+
+@requires_git
+def test_the_release_page_says_how_to_open_the_ad_hoc_signed_mac_package(tmp_path, monkeypatch):
+    w = World(tmp_path, monkeypatch)
+    assert w.run("--mac-pkg", str(_mac_pkg(w))) == 0
+    notes = w.load()["releases"][w.tag]["body"]
+    dl = notes[:notes.index("## Files and checksums")]
+    assert fr.MAC_GATEKEEPER_LINE in dl
+    assert "Privacy & Security" in dl and "**Open Anyway**" in dl
+    assert "Windows protected your PC" in dl, "beside the Windows line"
+    assert "signed ad hoc" in notes
+
+
+@requires_git
+def test_an_app_releases_mac_package_may_come_from_the_commit_under_the_tag(tmp_path, monkeypatch):
+    """The workflow builds it from the dispatched commit (w.build), which the
+    app release's tag (w.tag_commit) adds android/release.json to; it must
+    install the tag itself."""
+    w = World(tmp_path, monkeypatch)
+    assert _git(w.work, "rev-parse", f"{w.tag_commit}^") == w.build
+    assert w.run("--no-publish", "--mac-pkg", str(_mac_pkg(w, commit=w.build, ref=w.tag))) == 0
+    with pytest.raises(fr.Refused, match=f"build it with --ref {w.tag}"):
+        w.run("--no-publish", "--mac-pkg", str(_mac_pkg(w, commit=w.build, ref=w.build)))
+    with pytest.raises(fr.Refused, match="built from"):
+        w.run("--no-publish", "--mac-pkg", str(_mac_pkg(w, commit=w.rc1, ref=w.tag)))
+
+
+@requires_git
+def test_a_wrong_mac_package_stops_the_run_before_the_windows_build(tmp_path, monkeypatch):
+    """The Mac check runs first (a wrong package costs seconds, not the
+    Setup build), and against the copy in the staging folder, the file that
+    gets signed and attached."""
+    w = World(tmp_path, monkeypatch)
+    built = []
+
+    def builder(src, tag, repo):
+        built.append(tag)
+        return w.pin_build(src, tag, repo)
+
+    pkg = _mac_pkg(w, sha="0" * 64)
+    with pytest.raises(fr.Refused, match="describes another package"):
+        w.run_built("--no-publish", "--mac-pkg", str(pkg), builder=builder)
+    assert built == [], "the Windows Setup was built before the Mac package was checked"
+    assert (w.stage / "DomovoiSetup-mac.pkg").is_file(), "the check ran against the staged copy"
+
+
+@requires_git
+def test_a_mac_package_without_its_record_or_file_is_refused(tmp_path, monkeypatch):
+    w = World(tmp_path, monkeypatch)
+    pkg = _mac_pkg(w)
+    (pkg.parent / "DomovoiSetup-mac.build.json").unlink()
+    with pytest.raises(fr.Refused, match="no readable Mac build record"):
+        w.run("--no-publish", "--mac-pkg", str(pkg))
+    with pytest.raises(fr.Refused, match="no Mac package at"):
+        w.run("--no-publish", "--mac-pkg", str(tmp_path / "missing.pkg"))
+    with pytest.raises(fr.Refused, match="--mac-build-record goes with --mac-pkg"):
+        w.run("--no-publish", "--mac-build-record", str(tmp_path / "x.json"))
+    # A record elsewhere, named.
+    other = _mac_pkg(w, where=tmp_path / "elsewhere")
+    shutil.move(str(other.parent / "DomovoiSetup-mac.build.json"), str(tmp_path / "record.json"))
+    assert w.run("--no-publish", "--mac-pkg", str(other), "--mac-build-record", str(tmp_path / "record.json")) == 0
+    (tmp_path / "record.json").write_text('{"kind": "something-else", "schema": 1}', encoding="utf-8")
+    with pytest.raises(fr.Refused, match="is not a Mac build record"):
+        w.run("--no-publish", "--mac-pkg", str(other), "--mac-build-record", str(tmp_path / "record.json"))
+
+
+@requires_git
+@requires_ssh_keygen
+def test_a_tag_that_pins_the_key_gets_the_mac_package_signed_under_its_own_namespaces(tmp_path, monkeypatch):
+    key, public = _keypair(tmp_path, "release")
+    w = World(tmp_path, monkeypatch, version="1.0.0", release_key=public)
+    pkg = _mac_pkg(w)
+    assert w.run("--signing-key", str(key), "--mac-pkg", str(pkg)) == 0
+    stage = w.stage
+    staged = stage / "DomovoiSetup-mac.pkg"
+    manifest = json.loads((stage / "DomovoiSetup-mac.manifest.json").read_bytes())
+    assert manifest == {"kind": "domovoi-mac-setup", "schema": 1, "tag": w.tag, "version": "1.0.0",
+                        "commit": w.tag_commit, "file": "DomovoiSetup-mac.pkg", "size": staged.stat().st_size,
+                        "sha256": hashlib.sha256(staged.read_bytes()).hexdigest()}
+    assert _verify(stage / "DomovoiSetup-mac.pkg.sig", staged, public, "domovoi-mac-setup", tmp_path)
+    assert _verify(stage / "DomovoiSetup-mac.manifest.json.sig", stage / "DomovoiSetup-mac.manifest.json", public,
+                   "domovoi-mac-setup-manifest", tmp_path)
+    assert not _verify(stage / "DomovoiSetup-mac.pkg.sig", staged, public, "domovoi-windows-setup", tmp_path), \
+        "a Mac signature is no Windows Setup's"
+    assert not _verify(stage / "DomovoiSetup.exe.sig", stage / "DomovoiSetup.exe", public, "domovoi-mac-setup", tmp_path)
+    names = [line.split("  ", 1)[1] for line in (stage / "SHA256SUMS").read_text(encoding="ascii").splitlines()]
+    assert names[-4:] == ["DomovoiSetup-mac.pkg", "DomovoiSetup-mac.pkg.sig", "DomovoiSetup-mac.manifest.json",
+                          "DomovoiSetup-mac.manifest.json.sig"]
+    (upload,) = w.calls("upload")
+    uploaded = [Path(a).name for a in upload[3:upload.index("--repo")]]
+    for n in ("DomovoiSetup-mac.pkg", "DomovoiSetup-mac.pkg.sig", "DomovoiSetup-mac.manifest.json",
+              "DomovoiSetup-mac.manifest.json.sig"):
+        assert n in uploaded, n
+    # The Windows files are as they were.
+    win = json.loads((stage / "DomovoiSetup.manifest.json").read_bytes())
+    assert win["kind"] == "domovoi-windows-setup" and win["file"] == "DomovoiSetup.exe"
+    assert not (stage / ".allowed_signers").exists()
+
+
+def test_the_mac_files_are_known_to_the_release_check():
+    rel = {"assets": [{"name": n} for n in ("DomovoiSetup-mac.pkg", "DomovoiSetup-mac.pkg.sig",
+                                             "DomovoiSetup-mac.manifest.json", "DomovoiSetup-mac.manifest.json.sig")]}
+    with pytest.raises(fr.Refused, match="has no a.apk"):
+        fr._check_published_apks(rel, [{"file": "a.apk", "size": 1, "sha256": "1" * 64}])
+
+
+def test_the_powershell_wrapper_passes_the_mac_package():
+    ps1 = (REPO / "scripts" / "release" / "finish-release.ps1").read_text(encoding="ascii")
+    assert "'--mac-pkg'" in ps1 and "'--mac-build-record'" in ps1 and "[string]$MacPkg" in ps1

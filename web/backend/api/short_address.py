@@ -24,7 +24,8 @@ class ShortAddressRequest(BaseModel):
 async def get_short_address() -> dict:
     """``{enabled, state, port, dashboard_port, message}``. ``state``:
     ``on`` (port 80 sends browsers to the dashboard), ``off`` (switched
-    off), ``taken`` (something else on this computer uses port 80),
+    off), ``taken`` (something else on this computer uses port 80; on a
+    Mac install, also another program on the Mac itself),
     ``no_permission`` (the dashboard may not use a low port: an install
     whose service unit predates the feature), ``failed`` or
     ``unsupported`` (not a Linux server). ``message`` is the line

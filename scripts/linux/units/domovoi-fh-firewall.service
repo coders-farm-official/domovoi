@@ -4,16 +4,23 @@
 # docs/LINUX_HOST.md, "Friend Houses' firewall"). Installed and enabled by
 # provision.sh and the update unit. It starts with Docker and again whenever
 # Docker restarts, because Docker rebuilds its own chains then.
+#
+# The rules go in BEFORE Docker starts (ExecStartPre runs to the end first),
+# so after a reboot no container Docker restores is up without them; the
+# main process then re-applies anything another tool flushes and keeps
+# the state file fresh (audit R6 FH-14).
 [Unit]
 Description=Domovoi Friend Houses firewall (the Tor container reaches the internet only)
-After=docker.service
+Before=docker.service
 PartOf=docker.service
 
 [Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/usr/local/lib/domovoi-fh-firewall/fh-firewall.sh apply
+Type=simple
+ExecStartPre=/usr/local/lib/domovoi-fh-firewall/fh-firewall.sh apply
+ExecStart=/usr/local/lib/domovoi-fh-firewall/fh-firewall.sh watch
 ExecStop=/usr/local/lib/domovoi-fh-firewall/fh-firewall.sh remove
+Restart=on-failure
+RestartSec=10
 
 [Install]
 WantedBy=docker.service

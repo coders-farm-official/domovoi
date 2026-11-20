@@ -1042,6 +1042,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from domovoi.speech_warmup import cancel_speech_warm_up, schedule_speech_warm_up
 
     schedule_speech_warm_up("boot")
+    # The Mac's speech service, when one is configured: a /health look every
+    # whisper_remote_probe_sec, so Health follows it between turns
+    # (domovoi/clients/whisper_remote.py). No task anywhere else.
+    from domovoi.clients.whisper_remote import cancel_probe as cancel_stt_probe, schedule_probe as schedule_stt_probe
+
+    schedule_stt_probe()
 
     # The Android app phones install from here: after an update brought a
     # new release, fetch it in the background where the household allows
@@ -1089,6 +1095,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             [
                 ("LLM warm-up", cancel_warm_up, 1.0),
                 ("speech warm-up", cancel_speech_warm_up, 1.0),
+                ("speech service probe", cancel_stt_probe, 1.0),
                 ("Android app refresh", _android_app.cancel_auto_refresh, 1.0),
                 # The goodbye for the network name, so caches drop it now.
                 ("network name", _lan_name.stop, 2.0),
@@ -1127,6 +1134,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="Voice Domovoi", lifespan=lifespan)
 
+# CORE-42. Innermost: an admin write restarts the idle hour only once the
+# route answered 2xx; a refused write (422, 404, 409...) changes nothing.
+app.add_middleware(admin_auth_mod.AdminActivityMiddleware)
 # CORE-8. The core has no browser UI of its own, which is exactly why it
 # was reachable: a page anywhere on the internet could point a name it
 # owns at this box (DNS rebinding) and then read /v1/admin/snapshot,
@@ -1502,6 +1512,19 @@ async def health(
         # and time. No room names: this answer is open.
         "speech": turn_watchdog.speech_health(),
     }
+    # Who hears the turns, only when a speech service on the host is
+    # configured (the Mac): Health says "on this Mac's graphics chip" or why
+    # not. Absent everywhere else, so their answer is what it was.
+    from domovoi.clients.whisper import engine_status
+
+    _engine = engine_status()
+    if _engine is not None:
+        doc["stt_engine"] = {k: _engine.get(k) for k in (
+            "active", "host_state", "local_standby", "use_host", "down_since",
+            # Who heard the latest turn and why (a Mac whose speech service
+            # shares the graphics chip hears a turn on the processor while
+            # the language model is busy: gpu_shared_llm_busy).
+            "shares_gpu", "last_engine", "last_reason", "last_at")}
     if PAIRING_PROOF_VERSION:
         # 1.4.0: this server can PROVE an approval to a room device — the
         # exchange in satellite/pairing_proof.py. A device that asks every
@@ -2629,20 +2652,32 @@ async def wake_models_manifest_signed() -> dict[str, Any]:
 
 
 @app.get("/v1/wake-models/{path:path}")
-async def wake_models_file(path: str) -> FileResponse:
+async def wake_models_file(path: str, request: Request) -> FileResponse:
     """Serve one wake-model file (.onnx / .onnx.json). Guarded against
     path-traversal and locked to the allowlisted extensions. The
     extension/existence check runs before the traversal check, mirroring
-    sounds_file / satellite_code_file."""
+    sounds_file / satellite_code_file. A model trained here (shaped by the
+    household's recordings) goes only to a room's address, a household
+    device or an admin: 403 otherwise (CORE-43,
+    :mod:`domovoi.wake_model_access`)."""
+    from domovoi import wake_model_access
+
     root = Path(settings.wake_models_dir).resolve()
     target = (root / path).resolve()
     if target.suffix not in _WAKE_MODEL_EXT_ALLOW or not target.is_file():
         raise HTTPException(status_code=404, detail="not found")
     try:
-        target.relative_to(root)
+        rel = target.relative_to(root).as_posix()
     except ValueError:
         raise HTTPException(status_code=404, detail="not found")
-    return FileResponse(target, media_type="application/octet-stream")
+    if not await wake_model_access.may_download(request, rel):
+        raise HTTPException(
+            status_code=403,
+            detail="this wake model was trained on this household's voices: "
+                   "only its rooms, household devices and an admin may download it",
+        )
+    return FileResponse(target, media_type="application/octet-stream",
+                        headers={"Cache-Control": "no-store"})
 
 
 # A fifth file channel, for spare-device satellites (an Android phone in room
@@ -3395,6 +3430,96 @@ async def windows_update_result(body: _TrayResultBody, request: Request) -> JSON
     return JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
 
 
+# The Mac's twin of the three routes above (mac-installer PLAN 4.12): the
+# Domovoi app on a Mac install polls, claims and reports here, over Lima's
+# loopback forward (a LAN client arrives through pf with its own address,
+# never as loopback). Same rule, same files; they answer only on a Mac.
+
+_NOT_LOCAL_MAC = {"detail": "this is answered only to the Domovoi app on the server's own Mac", "reason": "not_local"}
+_NO_MAC_SIDE = {"detail": "this server isn't a Mac install", "reason": "no_mac_side"}
+
+
+@app.get("/v1/mac/update")
+async def mac_update_state(request: Request, app_version: str | None = Query(default=None, alias="app")) -> JSONResponse:
+    """The Mac app's poll: as ``GET /v1/windows/update``, with the side under
+    ``"mac"`` (null, ``why_not: no_mac_side`` and no request on a server
+    that isn't a Mac install). ``app`` (its version) records that the app
+    is there, for the card's "sign in on the Mac to finish"."""
+    if not local_peer.from_this_pc(request):
+        return JSONResponse(_NOT_LOCAL_MAC, status_code=403, headers={"Cache-Control": "no-store"})
+    state = await windows_side.agent_state("mac")
+    # Only the app says who it is: the helper's own wait on the update unit
+    # (HelperUpdate.swift) polls without ``app`` and is no app.
+    if state["mac"] is not None and app_version is not None:
+        windows_side.note_tray(app_version)
+    return JSONResponse(state, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/v1/mac/update/claim")
+async def mac_update_claim(body: _TrayClaimBody, request: Request) -> JSONResponse:
+    """One Mac app (of the accounts signed in on the Mac) takes the admin's
+    request: as ``/v1/windows/update/claim``. 409 ``no_mac_side`` on a
+    server that isn't a Mac install."""
+    if not local_peer.from_this_pc(request):
+        return JSONResponse(_NOT_LOCAL_MAC, status_code=403, headers={"Cache-Control": "no-store"})
+    if (await windows_side.agent_state("mac"))["mac"] is None:
+        return JSONResponse(_NO_MAC_SIDE, status_code=409, headers={"Cache-Control": "no-store"})
+    return await windows_update_claim(body, request)
+
+
+@app.post("/v1/mac/update/result")
+async def mac_update_result(body: _TrayResultBody, request: Request) -> JSONResponse:
+    """The Mac app's outcome of a Mac step (the tray's words; the log a path
+    in Domovoi's own folders on the Mac). 409 ``no_mac_side`` on a server
+    that isn't a Mac install."""
+    if not local_peer.from_this_pc(request):
+        return JSONResponse(_NOT_LOCAL_MAC, status_code=403, headers={"Cache-Control": "no-store"})
+    state = await windows_side.agent_state("mac")
+    if state["mac"] is None:
+        return JSONResponse(_NO_MAC_SIDE, status_code=409, headers={"Cache-Control": "no-store"})
+    target = (state.get("target") or {}).get("tag")
+    try:
+        doc = await asyncio.to_thread(windows_side.record_result, body.model_dump(), target, "mac")
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    log.info("mac update: the Mac app reports %s", doc["outcome"])
+    return JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
+
+
+# ─── Media the host changed (domovoi/host_media.py) ──────────────────────
+# A VM's media folders are a share from its host, and the host's own file
+# changes raise no inotify event in here: the host side's watcher (FSEvents
+# on a Mac) says which paths changed. Loopback only, like the tray's routes:
+# the host's helper reaches it through the VM's loopback forward.
+
+_NOT_LOCAL_HOST = {"detail": "this is answered only to Domovoi's own helper on the server's host", "reason": "not_local"}
+
+
+class _HostMediaBody(BaseModel):
+    paths: list[str] = Field(..., max_length=256)
+
+
+@app.post("/v1/host/media-changed")
+async def host_media_changed(body: _HostMediaBody, request: Request) -> JSONResponse:
+    """The host's media watcher: these paths (as this machine names them,
+    under the library folders) changed. The audio files that exist are
+    indexed and every room's player reads their folders, in the background
+    (``domovoi/host_media.py``); a library folder itself asks for that
+    whole library. ``202 {queued, refused, libraries}``. Loopback peer with
+    no forwarding header only (403 ``not_local``)."""
+    from domovoi import host_media
+
+    if not local_peer.from_this_pc(request):
+        return JSONResponse(_NOT_LOCAL_HOST, status_code=403, headers={"Cache-Control": "no-store"})
+    try:
+        out = host_media.accept(body.paths)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    return JSONResponse(out, status_code=202, headers={"Cache-Control": "no-store"})
+
+
 class _WindowsRequestBody(BaseModel):
     on_this_pc: bool = False
     after_linux: bool = False
@@ -3418,10 +3543,18 @@ async def admin_windows_request(body: _WindowsRequestBody) -> dict[str, Any]:
     (``joined: true``, the same request): never a second run.
     ``{ok, request, joined, tray}``: ``tray.running`` false means no tray has
     polled for two minutes (remembered across core restarts), so nobody is
-    signed in on the PC."""
+    signed in on the PC.
+
+    On a Mac install whose Mac side has the updater it is the same request,
+    for the Domovoi app on the Mac (``on_this_pc``: a browser on that Mac;
+    macOS asks for an administrator's password there); a Mac side from
+    before the updater is refused, ``mac_by_hand``, in words."""
     await container_freeze.require_unfrozen("update_apply")
     st = await windows_side.card_state()
     if not st.get("present") or not st.get("step_needed"):
+        if st.get("kind") == "mac":
+            why = st.get("why_not") or "mac_by_hand"
+            raise HTTPException(status_code=409, detail=_MAC_WHY_NOT.get(why, "there is nothing to update on the Mac"))
         why = st.get("why_not") or "no_windows_side"
         raise HTTPException(status_code=409, detail=_WINDOWS_WHY_NOT.get(why, "there is nothing to update on the PC"))
     req, joined = await asyncio.to_thread(windows_side.make_request, body.on_this_pc, body.after_linux)
@@ -3434,6 +3567,14 @@ _WINDOWS_WHY_NOT = {
     "no_release": "the code this server runs includes no release yet",
     "up_to_date": "the Windows side is up to date",
     "unsigned_release": "that release has no signed Windows Setup",
+    "mac_by_hand": "this server runs on a Mac: its Mac side updates only when a release includes DomovoiSetup-mac.pkg, opened on the Mac",
+}
+_MAC_WHY_NOT = {
+    "internet_off": "internet access is turned off, and the Mac side updates from Domovoi's releases on the internet",
+    "no_release": "the code this server runs includes no release yet",
+    "up_to_date": "the Mac side is up to date",
+    "unsigned_release": "that release has no signed Mac package",
+    "mac_by_hand": _WINDOWS_WHY_NOT["mac_by_hand"],
 }
 
 
@@ -3783,6 +3924,12 @@ class _AdminChatToolBody(BaseModel):
 
 _FH_READ = [Depends(require_admin_security_read)]
 _FH_WRITE = [Depends(require_admin_security)]
+# What every household phone may do with existing friends (owner decision
+# 17, for the apps, which carry only the household token): read the house
+# inbox and send, see the friends and the shared lists. Header credentials
+# only (the household token or an admin Bearer): no cookie, no query token,
+# since these carry message text. Trust and household settings stay above.
+_FH_HOUSEHOLD = [Depends(require_device)]
 
 
 def _fh_error(e: Exception) -> HTTPException:
@@ -3809,7 +3956,7 @@ class _FhNameBody(BaseModel):
     name: str
 
 
-@app.get("/v1/admin/friend-houses", dependencies=_FH_READ)
+@app.get("/v1/admin/friend-houses", dependencies=_FH_HOUSEHOLD)
 async def admin_friend_houses_status() -> dict[str, Any]:
     """Friend Houses at a glance: whether its private connection runs, why
     not, this house's public fingerprint and name, the default friend-file
@@ -3823,6 +3970,7 @@ async def admin_friend_houses_status() -> dict[str, Any]:
     out["house_name"] = await friending.house_name()
     out["unread"] = await messages.unread_total()
     out["invite_days"] = await friending.invite_days_default()
+    out["changes"] = await friending.recent_changes()  # new friends, shared lists (R6 FH-8)
     out["limits"] = {"min_days": friending.MIN_DAYS, "max_days": friending.MAX_DAYS,
                      "max_open_files": friending.MAX_OPEN_INVITES}
     return out
@@ -3931,7 +4079,17 @@ async def admin_friend_houses_decline(request_id: str) -> dict[str, Any]:
     return {"declined": True}
 
 
-@app.get("/v1/admin/friend-houses/friends", dependencies=_FH_READ)
+@app.delete("/v1/admin/friend-houses/requests/{request_id}", dependencies=_FH_WRITE)
+async def admin_friend_houses_withdraw(request_id: str) -> dict[str, Any]:
+    """Take back a request this house sent, before the other house accepts."""
+    from domovoi.friend_houses import friending
+
+    if not await friending.withdraw(request_id):
+        raise HTTPException(status_code=404, detail="That request can't be taken back any more.")
+    return {"withdrawn": True}
+
+
+@app.get("/v1/admin/friend-houses/friends", dependencies=_FH_HOUSEHOLD)
 async def admin_friend_houses_friends() -> dict[str, Any]:
     from domovoi.friend_houses import friending
 
@@ -3989,7 +4147,7 @@ def _fh_house(house: str) -> bytes:
     return raw
 
 
-@app.get("/v1/admin/friend-houses/conversations", dependencies=_FH_READ)
+@app.get("/v1/admin/friend-houses/conversations", dependencies=_FH_HOUSEHOLD)
 async def admin_friend_houses_conversations() -> dict[str, Any]:
     """The house inbox: every friend (or former friend) with messages, its
     unread count and how many of ours weren't delivered."""
@@ -3999,7 +4157,7 @@ async def admin_friend_houses_conversations() -> dict[str, Any]:
             "unread": await messages.unread_total()}
 
 
-@app.get("/v1/admin/friend-houses/conversations/{house}", dependencies=_FH_READ)
+@app.get("/v1/admin/friend-houses/conversations/{house}", dependencies=_FH_HOUSEHOLD)
 async def admin_friend_houses_conversation(house: str, before: int | None = None,
                                            limit: int = 50) -> dict[str, Any]:
     from domovoi.friend_houses import messages
@@ -4007,7 +4165,7 @@ async def admin_friend_houses_conversation(house: str, before: int | None = None
     return {"messages": await messages.conversation(_fh_house(house), before=before, limit=limit)}
 
 
-@app.post("/v1/admin/friend-houses/conversations/{house}/read", dependencies=_FH_WRITE)
+@app.post("/v1/admin/friend-houses/conversations/{house}/read", dependencies=_FH_HOUSEHOLD)
 async def admin_friend_houses_mark_read(house: str) -> dict[str, Any]:
     from domovoi.friend_houses import messages
 
@@ -4030,7 +4188,7 @@ async def admin_friend_houses_delete_conversation(house: str) -> dict[str, Any]:
     return {"deleted": await messages.delete_conversation(_fh_house(house))}
 
 
-@app.post("/v1/admin/friend-houses/messages", dependencies=_FH_WRITE)
+@app.post("/v1/admin/friend-houses/messages", dependencies=_FH_HOUSEHOLD)
 async def admin_friend_houses_send(body: _FhMessageBody) -> dict[str, Any]:
     from domovoi.friend_houses import messages
 
@@ -4063,7 +4221,7 @@ class _FhAcceptListBody(BaseModel):
     name: str | None = None
 
 
-@app.get("/v1/admin/friend-houses/shared-lists", dependencies=_FH_READ)
+@app.get("/v1/admin/friend-houses/shared-lists", dependencies=_FH_HOUSEHOLD)
 async def admin_friend_houses_shared_lists() -> dict[str, Any]:
     """Lists shared with friend houses: ours they have, theirs we have, and
     theirs waiting for an admin here (``state`` invited)."""
@@ -4109,6 +4267,43 @@ async def admin_friend_houses_leave_list(space: str) -> dict[str, Any]:
     if not await shared_lists.leave(space):
         raise HTTPException(status_code=404, detail="No such shared list.")
     return {"stopped": True}
+
+
+class _FhBlockBody(BaseModel):
+    keep_messages: bool = True
+    new_address: bool = True
+
+
+@app.post("/v1/admin/friend-houses/friends/{friend_id}/block", dependencies=_FH_WRITE)
+async def admin_friend_houses_block(friend_id: str, body: _FhBlockBody) -> dict[str, Any]:
+    """Block a friend house: it is removed and refused for good, and (by
+    default) this house moves to a new address its remaining friends are
+    told about. The conversation is kept unless ``keep_messages`` is false."""
+    from domovoi.friend_houses import blocking
+
+    try:
+        return await blocking.block(friend_id, keep_messages=body.keep_messages,
+                                    new_address=body.new_address)
+    except blocking.BlockError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@app.get("/v1/admin/friend-houses/blocked", dependencies=_FH_READ)
+async def admin_friend_houses_blocked() -> dict[str, Any]:
+    from domovoi.friend_houses import blocking
+
+    return {"blocked": await blocking.blocked()}
+
+
+@app.delete("/v1/admin/friend-houses/blocked/{house}", dependencies=_FH_WRITE)
+async def admin_friend_houses_unblock(house: str) -> dict[str, Any]:
+    """Unblock a house. It isn't a friend again: it can ask with a new
+    friend file, and an admin can accept."""
+    from domovoi.friend_houses import blocking
+
+    if not await blocking.unblock(house):
+        raise HTTPException(status_code=404, detail="That house isn't blocked.")
+    return {"unblocked": True}
 
 
 @app.get(
@@ -4507,8 +4702,10 @@ async def _room_words_with_main(room_id: str, slug: str) -> tuple[list[str], lis
 
 
 class _AdminWakeRoomBody(BaseModel):
-    room_id: str
-    slugs: list[str]
+    room_id: str = Field(..., max_length=64)
+    # CORE-47: bounded here, before anything walks the list (the dashboard's
+    # own body says the same, wake_words.py). wake_default.MAX_ROOM_WORDS.
+    slugs: list[str] = Field(..., min_length=1, max_length=5)
 
 
 @app.put("/v1/admin/wake/room", dependencies=[Depends(require_admin_mutation)])
@@ -5587,7 +5784,7 @@ async def admin_reset_satellite_pairing(room_id: str) -> dict[str, Any]:
 
 # Room ids are used as WS paths, MPD container-name components, and config
 # values — keep them boring. Mirrored client-side by the AdoptModal.
-_ROOM_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+_ROOM_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}\Z")
 
 
 class _PreseedPairingBody(BaseModel):
@@ -7910,6 +8107,34 @@ async def admin_internet_search_helper() -> dict[str, Any]:
     return {"scheduled": scheduled, "search_helper": searxng_service.status()}
 
 
+class _SttEngineBody(BaseModel):
+    use_host: bool
+
+
+@app.post("/v1/admin/stt-engine", dependencies=[Depends(require_admin_mutation)])
+async def admin_stt_engine(body: _SttEngineBody) -> dict[str, Any]:
+    """The household's switch for the speech service on the host (Settings >
+    Models, shown only on a Mac that has it; mac-installer PHASE8A-STT.md):
+    ``use_host`` false makes this machine's own Whisper hear every turn.
+    Saved to .env (``whisper_remote_enabled``) and applied at once. 409 when
+    no service is configured: then there is nothing to switch, and the
+    dashboard shows no switch."""
+    from domovoi.clients.whisper import engine_status
+    from domovoi.config_env_writer import write_env_values
+
+    eng = engine_status()
+    if eng is None or eng.get("host_state") == "refused":
+        raise HTTPException(status_code=409, detail="this server has no speech service to switch")
+    try:
+        write_env_values({"whisper_remote_enabled": bool(body.use_host)})
+    except Exception as e:  # noqa: BLE001 - said, not raised
+        raise HTTPException(status_code=500, detail=f".env write failed: {e}") from e
+    settings.whisper_remote_enabled = bool(body.use_host)
+    log.info("speech recognition: the household %s the host's speech service",
+             "turned on" if body.use_host else "turned off")
+    return {"use_host": settings.whisper_remote_enabled, "engine": engine_status()}
+
+
 @app.get(
     "/v1/admin/memory",
     # Admin READ, like the container guard's status beside it on Health:
@@ -7985,7 +8210,9 @@ async def get_lan_name() -> dict[str, Any]:
     updates): ``{requested, claimed, fqdn, state, taken, error, enabled,
     host_kind, addresses, hint, help}``. ``state``: ``announced``,
     ``checking``, ``taken``, ``off``, ``no_lan``, ``failed`` or
-    ``no_host`` (nothing on this machine announces one)."""
+    ``no_host`` (nothing on this machine announces one). ``fixed: true``
+    on a Mac, whose helper announces ``domovoi.local`` itself: no change
+    or on/off from here."""
     from domovoi.lan_name import service as lan_name
 
     return await asyncio.to_thread(lan_name.status)
@@ -7996,7 +8223,8 @@ async def put_lan_name(body: LanNameBody) -> dict[str, Any]:
     """Change the name or turn it on or off: saved to ``.env``
     (``LAN_NAME``, ``LAN_NAME_ENABLED``), then checked on the network by
     whoever announces it. 202 with the state (``checking`` until the
-    probe is done); 400 for a name that can't be one. A name the
+    probe is done); 400 for a name that can't be one; 409 on a Mac, which
+    announces ``domovoi.local`` itself (``fixed`` in the GET). A name the
     household typed that another device holds is never changed: the
     state says ``taken`` and the name held before stays."""
     from domovoi.lan_name import names as lan_names
@@ -8007,6 +8235,9 @@ async def put_lan_name(body: LanNameBody) -> dict[str, Any]:
             return await asyncio.to_thread(lan_name.save, body.name, body.enabled)
         except lan_names.BadName as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
+        except lan_name.FixedName as e:
+            # A Mac announces domovoi.local itself (Settings shows no change).
+            raise HTTPException(status_code=409, detail=str(e)) from e
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
 
@@ -8163,6 +8394,10 @@ async def admin_hardware() -> dict[str, Any]:
     ``stt`` is what speech recognition actually loaded at boot next to what
     was configured (``clients.whisper.stt_status``): the Models page shows
     a banner when it is running on the cpu fallback or not at all.
+
+    ``vm_guard`` is null unless the box was provisioned with
+    ``--vm-guard``; then ``{loaded, unit}``, and Health flags a fence that
+    isn't loaded (``domovoi/vm_guard.py``).
     """
     from domovoi.handlers.homelab import _query_gpus
 
@@ -8214,7 +8449,16 @@ async def admin_hardware() -> dict[str, Any]:
     except Exception as e:  # psutil missing or a probe raised — degrade.
         log.warning("hardware probe (psutil) failed: %s", e)
 
-    return {"gpus": gpus, "cpu": cpu, "ram": ram, "disk": disk, "stt": stt_status()}
+    from domovoi import vm_guard
+
+    # ``vm_guard``: null on every box that was not provisioned with
+    # --vm-guard (Health shows nothing then); else whether its fence loaded.
+    from domovoi.host_kind import host_kind
+
+    # ``host_kind`` (domovoi/host_kind.py): on "mac" the page says the
+    # readout is the Mac installer's VM, not the Mac (Train 1 finding 13).
+    return {"gpus": gpus, "cpu": cpu, "ram": ram, "disk": disk, "stt": stt_status(),
+            "vm_guard": await asyncio.to_thread(vm_guard.status), "host_kind": host_kind()}
 
 
 class _AdminPlayPlaylistBody(BaseModel):
@@ -8762,7 +9006,8 @@ async def phone_dropin(ws: WebSocket, room_id: str) -> None:
 
     No pre-setup grace (CORE-14): before an admin exists the upgrade is
     closed 1008 with ``code: setup_required`` whatever it presents — the
-    WebSocket form of the security tier's 501.
+    WebSocket form of the security tier's 501. While the call is open the
+    credential is read again every 30 s, as a plugin socket's is (CORE-44).
     """
     from domovoi.phone_dropin import PhoneDropinSession
 
@@ -8772,7 +9017,7 @@ async def phone_dropin(ws: WebSocket, room_id: str) -> None:
             f"/v1/dropin/{room_id} from Origin {ws.headers.get('origin')!r}",
         )
         return
-    verdict = await admin_auth_mod.check_live_mic_websocket(ws)
+    verdict = await admin_auth_mod.live_mic_websocket_admission(ws)
     if verdict == "setup_required":
         await _refuse_ws(
             ws, "setup_required",
@@ -8780,7 +9025,7 @@ async def phone_dropin(ws: WebSocket, room_id: str) -> None:
             "live microphone is not part of the pre-setup grace",
         )
         return
-    if verdict != "ok":
+    if verdict not in ("ok", "admin"):
         await _refuse_ws(
             ws, "unauthorized",
             f"/v1/dropin/{room_id} needs {admin_auth_mod.DEVICE_TOKEN_HEADER} "
@@ -8794,7 +9039,10 @@ async def phone_dropin(ws: WebSocket, room_id: str) -> None:
     if not phone_id.startswith("phone-"):
         phone_id = f"phone-{phone_id}"
     session = PhoneDropinSession(ws, phone_id=phone_id, target_room=room_id)
-    await session.run()
+    # CORE-44: the credential that opened the call is read again every 30 s;
+    # a rotated token, a sign-out or an idled-out session ends it (1008).
+    await admin_auth_mod.run_while_admitted(
+        ws, verdict, session.run(), what=f"drop-in {phone_id}->{room_id}")
 
 
 def _reset_admin_cli() -> None:

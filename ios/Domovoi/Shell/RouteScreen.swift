@@ -176,6 +176,13 @@ struct RouteScreen: View {
             // `images` only), and the local shell never offers it
             // (``localTabs(phoneCanChat:sharedScreen:savedBooks:)``).
             ListsScreenView(model: model)
+        case .friendHouses:
+            // slot: friend-houses
+            // ``FriendHousesScreenView``: "Serverless messaging and friend
+            // system between households" (Android 394473e2). The check above
+            // is its gate: hidden unless `GET /api/friend-houses` says it is
+            // on (``FriendHousesGate``, through ``ShellModel/visibility``).
+            FriendHousesScreenView(model: model)
         case .stations:
             // slot: stations
             // ``StationsPhonePlayback`` over the app's one player (D46/D49) —

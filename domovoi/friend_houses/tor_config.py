@@ -48,8 +48,12 @@ RUN_MOUNT = "/run/fh"
 SOCKS_NAME = "socks"
 MAIN_SOCKET = "main.sock"
 PAIRING_SOCKET = "pairing.sock"
+# The listener's sockets live in a folder of their own under the run
+# folder: the listener's container mounts only that one, never the folder
+# with Tor's SOCKS socket (audit R6 FH-12).
+LISTEN_DIR = "listen"
 
-_FRIEND_ID = re.compile(r"^[a-z0-9]{1,32}$")
+_FRIEND_ID = re.compile(r"^[a-z0-9]{1,32}\Z")
 
 
 @dataclass(frozen=True)
@@ -80,7 +84,9 @@ def render_torrc(w: Wanted) -> str:
     lines = [
         "# Written by Domovoi (Friend Houses). Changes here are overwritten.",
         f"DataDirectory {DATA_MOUNT}/tor",
-        f"SocksPort unix:{RUN_MOUNT}/{SOCKS_NAME}",
+        # Onions only: the SOCKS port can't be used to reach the clear web
+        # (audit R6 FH-12).
+        f"SocksPort unix:{RUN_MOUNT}/{SOCKS_NAME} OnionTrafficOnly",
         f"ClientOnionAuthDir {DATA_MOUNT}/clientauth",
         "AvoidDiskWrites 1",
         "Log notice stdout",
@@ -88,12 +94,12 @@ def render_torrc(w: Wanted) -> str:
     if w.main_onion:
         lines += [
             f"HiddenServiceDir {DATA_MOUNT}/hs-main",
-            f"HiddenServicePort 80 unix:{RUN_MOUNT}/{MAIN_SOCKET}",
+            f"HiddenServicePort 80 unix:{RUN_MOUNT}/{LISTEN_DIR}/{MAIN_SOCKET}",
         ]
     if w.pairing_onion:
         lines += [
             f"HiddenServiceDir {DATA_MOUNT}/hs-pairing",
-            f"HiddenServicePort 80 unix:{RUN_MOUNT}/{PAIRING_SOCKET}",
+            f"HiddenServicePort 80 unix:{RUN_MOUNT}/{LISTEN_DIR}/{PAIRING_SOCKET}",
         ]
     lines += list(w.disguise)
     return "\n".join(lines) + "\n"
@@ -158,7 +164,7 @@ class TorFolder:
         # parents at the umask's mode.
         for d in (self.root, self.data, self.data / "tor", self.data / "clientauth",
                   self.data / "hs-main", self.data / "hs-main" / "authorized_clients",
-                  self.data / "hs-pairing", self.run):
+                  self.data / "hs-pairing", self.run, self.listen):
             d.mkdir(parents=True, exist_ok=True)
             _chmod(d, 0o700)
 
@@ -167,12 +173,17 @@ class TorFolder:
         return self.run / SOCKS_NAME
 
     @property
+    def listen(self) -> Path:
+        """The listener's socket folder (its container mounts only this)."""
+        return self.run / LISTEN_DIR
+
+    @property
     def main_socket(self) -> Path:
-        return self.run / MAIN_SOCKET
+        return self.listen / MAIN_SOCKET
 
     @property
     def pairing_socket(self) -> Path:
-        return self.run / PAIRING_SOCKET
+        return self.listen / PAIRING_SOCKET
 
     def write_torrc(self, w: Wanted) -> None:
         _write_private(self.data / "torrc", render_torrc(w))

@@ -53,7 +53,7 @@ MODES = ("house", "custom", "off")
 DEFAULT_START = "22:00"
 DEFAULT_END = "07:00"
 
-_CLOCK_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
+_CLOCK_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)\Z")
 
 
 def normalize_clock(value: Any) -> str | None:

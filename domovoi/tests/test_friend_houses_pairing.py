@@ -182,8 +182,65 @@ async def test_a_statement_for_another_session_key_is_refused(tmp_path) -> None:
 
 
 def test_the_code_depends_on_both_random_values() -> None:
-    a, b = b"\x01" * 32, b"\x02" * 32
-    base = fp.code(a, b, b"\x03" * 32, b"\x04" * 32)
-    assert base != fp.code(a, b, b"\x05" * 32, b"\x04" * 32)
-    assert base != fp.code(a, b, b"\x03" * 32, b"\x06" * 32)
-    assert base != fp.code(b, a, b"\x03" * 32, b"\x04" * 32)
+    a, b, h = b"\x01" * 32, b"\x02" * 32, b"\x07" * 32
+    base = fp.code(h, a, b, b"\x03" * 32, b"\x04" * 32)
+    assert base != fp.code(h, a, b, b"\x05" * 32, b"\x04" * 32)
+    assert base != fp.code(h, a, b, b"\x03" * 32, b"\x06" * 32)
+    assert base != fp.code(h, b, a, b"\x03" * 32, b"\x04" * 32)
+    assert base != fp.code(b"\x08" * 32, a, b, b"\x03" * 32, b"\x04" * 32)
+
+
+async def _grinding_ask(reader, writer, *, file, session_private, wanted_code=None, tries=100_000):
+    """Audit R6 FH-1's proof of concept: commit to nB, see nA, THEN pick a
+    house key (same session key) whose code is the one wanted, and send its
+    statement. Returns (statement sent, the code it was ground to)."""
+    import secrets as _s
+
+    from domovoi.friend_houses import session as fs
+    from domovoi.friend_houses.noise import Handshake
+
+    first = fid.HouseKeys(house_seed=_s.token_bytes(32), session_private=session_private)
+    hs = Handshake("IKpsk2", initiator=True, prologue=fp.PROLOGUE, static=first.session,
+                   remote_static=file.session_key, psk=file.invite_secret)
+    n_b = _s.token_bytes(32)
+    writer.write(fp.PREFACE + fs.frame(hs.write_message(
+        file.invite_id + fp.commitment(n_b, first.house_key))))
+    await writer.drain()
+    n_a = hs.read_message(await fs.read_frame(reader, max_size=fp._MSG2_SIZE, timeout=10))
+    transport = hs.transport()
+    chosen = None
+    for _ in range(tries):  # the grind: a new house key after seeing nA
+        k = fid.HouseKeys(house_seed=_s.token_bytes(32), session_private=session_private)
+        got = fp.code(transport.handshake_hash, file.house_key, k.house_key, n_a, n_b)
+        if wanted_code is None or got == wanted_code:
+            chosen = (k, got)
+            break
+    assert chosen, "grind found nothing"
+    k, got = chosen
+    statement = k.address_statement(bytes([9]) * 32, 1_800_000_000)
+    request = fp._REQUEST_FIXED.pack(n_b, statement.to_bytes(), b"\x00" * 32, 1) + b"M"
+    writer.write(fs.frame(transport.encrypt(request)))
+    await writer.drain()
+    return statement, got
+
+
+async def test_a_house_key_chosen_after_seeing_the_nonce_is_refused(tmp_path) -> None:
+    # R6 FH-1: the asking house used to commit to its nonce only, so it
+    # could generate house keys until the inviter's code matched one a
+    # victim house had shown. Its house key is now in the commitment.
+    a_keys, f = _file(tmp_path)
+    b_keys, _ = _asker(tmp_path)
+    results: list = []
+    server, port = await _inviter(a_keys, {f.invite_id}, results)
+    async with server:
+        r, w = await asyncio.open_connection("127.0.0.1", port)
+        # Any house key other than the committed one stands for the grind's
+        # result (a full grind to a chosen code takes ~10,000 keys).
+        await _grinding_ask(r, w, file=f, session_private=b_keys.session_private)
+        for _ in range(100):
+            if results:
+                break
+            await asyncio.sleep(0.05)
+        w.close()
+    assert isinstance(results[0], fp.PairingRefused)
+    assert "commitment" in str(results[0])

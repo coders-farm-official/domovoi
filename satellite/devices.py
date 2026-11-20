@@ -436,5 +436,5 @@ def valid_windows_device(value: object) -> bool:
     if isinstance(value, int):
         return 0 <= value <= 999
     if isinstance(value, str):
-        return value == "default" or bool(_WINDOWS_DEVICE_NAME_RE.match(value))
+        return value == "default" or bool(_WINDOWS_DEVICE_NAME_RE.fullmatch(value))
     return False

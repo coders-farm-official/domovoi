@@ -754,7 +754,7 @@ def _scrub_ssid(text: str, ssid: str) -> str:
 # may use, to tell them apart on hardware. Never a fix: it is cleared from
 # the profile once the join worked, so the satellite still roams later.
 JOIN_PIN: dict[str, str] = {}
-_BSSID = re.compile(r"^[0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5}$")
+_BSSID = re.compile(r"^[0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5}\Z")
 
 
 def set_join_pin(bssid: str | None, band: str | None) -> None:

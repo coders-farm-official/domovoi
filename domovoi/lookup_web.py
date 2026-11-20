@@ -64,8 +64,8 @@ HTTP_TIMEOUT_SEC = 8.0
 EXTRACT_MAX_CHARS = 1500
 #: The licence a Wikipedia text carries, said under every reply that used one.
 WIKIPEDIA_LICENCE = "CC BY-SA 4.0"
-_WIKI_HOST_RE = re.compile(r"(?:^|\.)wikipedia\.org$", re.I)
-_WIKIDATA_HOST_RE = re.compile(r"(?:^|\.)wikidata\.org$", re.I)
+_WIKI_HOST_RE = re.compile(r"(?:^|\.)wikipedia\.org\Z", re.I)
+_WIKIDATA_HOST_RE = re.compile(r"(?:^|\.)wikidata\.org\Z", re.I)
 _TAG_RE = re.compile(r"<[^>]+>")
 
 

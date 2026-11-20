@@ -28,7 +28,7 @@ LETTER = "na_letter_8.5x11in"
 A4 = "iso_a4_210x297mm"
 SIDES = ("one-sided", "two-sided-long-edge", "two-sided-short-edge")
 
-_RANGE = re.compile(r"^\s*(\d{1,5})\s*(?:-\s*(\d{1,5})?)?\s*$")
+_RANGE = re.compile(r"^\s*(\d{1,5})\s*(?:-\s*(\d{1,5})?)?\s*\Z")
 
 
 class OptionError(ValueError):

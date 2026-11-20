@@ -103,7 +103,7 @@ async def _caller(request: Request) -> tuple[str | None, str, str]:
     return ident, name, source_label(platform, ua)
 
 
-_SCAN_ID = re.compile(r"^[0-9a-f]{32}$")
+_SCAN_ID = re.compile(r"^[0-9a-f]{32}\Z")
 
 
 def _scan_id(scan_id: str) -> str:
@@ -447,6 +447,14 @@ async def scan_read_summary(read_id: str, request: Request):
     the start of the text with AI features off)."""
     status, out = await get_admin(f"/v1/scan/reads/{_scan_id(read_id)}/summary", timeout=180.0,
                                   headers=_headers(request))
+    return bridge_response(status, out)
+
+
+@router.post("/api/scan/reads/{read_id}/cancel", dependencies=DEVICE)
+async def scan_read_cancel(read_id: str, request: Request):
+    """Stop reading a scan: a waiting read ends now, one under way within
+    about a second. The pages read so far stay with it."""
+    status, out = await post_admin(f"/v1/scan/reads/{_scan_id(read_id)}/cancel", {}, headers=_headers(request))
     return bridge_response(status, out)
 
 

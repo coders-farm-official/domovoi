@@ -19,7 +19,8 @@ development** — see the note for developers at the bottom.
   proxy has a row to resolve; if it never gets starred, it's reclaimed
   when it ages out of Recent.
 * **Recent.** The last 10 stations you actually played, newest first, on
-  the Stations page and in the app. Ten and no further, by design — the
+  the Stations page and on the phone apps' Stations screen (the apps' own
+  screen, shown while this plugin is installed). Ten and no further, by design — the
   server trims on every play rather than keeping history you'd then have
   to page through. Favorites are paginated separately, and typing in the
   search box shows matching favorites immediately, above the directory
@@ -215,6 +216,11 @@ through — it exercises every extension plane:
   turn (`POST /api/plugins/radio/stations/{id}/play-in-room`, the player
   source's `room_play_template`) through `sdk.playback.ensure_room` and
   `dispatch`.
+
+Its `[android]` table (`capabilities = ["stations"]`) only tells the phone
+apps that their own, built-in Stations screen has a server to talk to; no
+plugin can add a screen to the apps
+([what a plugin does not get](../../docs/PLUGIN_DEVELOPMENT.md#1-concepts--what-a-plugin-can-do)).
 
 This version of the plugin (1.5.0) declares `domovoi_api = ">=1.10,<2.0"`,
 so it loads only on a Domovoi with SDK 1.10 or later (Domovoi 1.4.0).

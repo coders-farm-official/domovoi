@@ -29,8 +29,8 @@ public enum PlayerSleepTimer {
     /// through the countdown rather than never firing.
     public static func secondsForEndOfTrack(durationSec: Double, positionSec: Double) -> Int {
         let left = durationSec - positionSec
-        guard left.isFinite else { return 1 }
-        return max(Int(left), 1)
+        guard let whole = WireNumber.int(left) else { return 1 }
+        return max(whole, 1)
     }
 
     /// One tick of the countdown: what `remaining` becomes, and whether the

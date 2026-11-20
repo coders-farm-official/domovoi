@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The Installer's pages for DomovoiSetup-mac.pkg (mac-installer PLAN 4.11, 5
+  step 1). mac/build.sh fills @PKG_VERSION@. The package puts files in
+  place; its one script (installer/scripts/postinstall) arranges for
+  Domovoi.app to open once Installer has quit; the conclusion page says
+  so, and to open it from Applications if it doesn't. The app asks the questions and
+  does the work. (require-scripts="false" is about this file's JavaScript
+  check, not the package's postinstall.)
+-->
+<installer-gui-script minSpecVersion="2">
+  <title>Domovoi</title>
+  <welcome file="welcome.html" mime-type="text/html"/>
+  <license file="LICENSE.txt"/>
+  <conclusion file="conclusion.html" mime-type="text/html"/>
+  <options customize="never" require-scripts="false" hostArchitectures="arm64"/>
+  <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
+  <installation-check script="domovoiCheck()"/>
+  <script><![CDATA[
+function domovoiCheck() {
+  // Apple Silicon (hostArchitectures above), macOS 26 or later, 16 GB.
+  if (system.compareVersions(system.version.ProductVersion, '26.0') < 0) {
+    my.result.type = 'Fatal';
+    my.result.title = 'Domovoi needs macOS 26 or later';
+    my.result.message = 'This Mac runs macOS ' + system.version.ProductVersion + '. Update it in System Settings > General > Software Update, then open this package again.';
+    return false;
+  }
+  var mem = system.sysctl('hw.memsize');
+  if (mem < 16 * 1024 * 1024 * 1024) {
+    my.result.type = 'Fatal';
+    my.result.title = 'Domovoi needs 16 GB of memory';
+    my.result.message = 'This Mac has ' + Math.round(mem / (1024 * 1024 * 1024)) + ' GB.';
+    return false;
+  }
+  return true;
+}
+  ]]></script>
+  <choices-outline>
+    <line choice="com.domovoi.mac"/>
+  </choices-outline>
+  <choice id="com.domovoi.mac" title="Domovoi" visible="false">
+    <pkg-ref id="com.domovoi.mac"/>
+  </choice>
+  <pkg-ref id="com.domovoi.mac" version="@PKG_VERSION@" onConclusion="none">DomovoiCore.pkg</pkg-ref>
+</installer-gui-script>

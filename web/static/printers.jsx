@@ -491,10 +491,24 @@ const ScanReadSheet = ({ scan, onClose }) => {
     try { setFull(await apiGet(`/api/scan/reads/${encodeURIComponent(readId)}/text`, { quiet: true })); }
     catch (e) { setErr(printingErrorText(e) || "The text couldn't be loaded."); }
   };
+  // The summary is a model's words about text an outsider wrote (a letter, a
+  // PDF someone dropped in Scans): Markdown for its shape, never a link to
+  // click (FE-11).
   const md = (t) => (typeof window.chatMarkdownHtml === 'function'
-    ? <div className="chat-md" dangerouslySetInnerHTML={{ __html: window.chatMarkdownHtml(t) }}/>
+    ? <div className="chat-md" dangerouslySetInnerHTML={{ __html: window.chatMarkdownHtml(t, { links: false }) }}/>
     : <div style={{ whiteSpace: 'pre-wrap' }}>{t}</div>);
+  const reading = !!(read && !done && !ended);
+  const [stopping, setStopping] = React.useState(false);
+  const stop = async () => {
+    setStopping(true);
+    try {
+      const r = await apiPost(`/api/scan/reads/${encodeURIComponent(readId)}/cancel`, {});
+      if (r) setRead(r);
+    } catch (e) { setErr(printingErrorText(e) || "Domovoi couldn't stop reading it."); }
+    finally { setStopping(false); }
+  };
   const foot = <>
+    {reading && <Button icon="x" onClick={stop} disabled={stopping}>Stop reading</Button>}
     {done && !full && <Button icon="file-text" onClick={showAll}>Show the full text</Button>}
     <Button variant="primary" icon="check" onClick={onClose}>Close</Button>
   </>;
@@ -510,6 +524,7 @@ const ScanReadSheet = ({ scan, onClose }) => {
       {read && read.state === 'failed' && (
         <PrintingNotice tone="err">{read.error || "This scan couldn't be read."}</PrintingNotice>
       )}
+      {read && read.state === 'cancelled' && <PrintingMuted>Stopped. Nothing more is read from it.</PrintingMuted>}
       {done && !says && !err && <PrintingMuted>summing it up…</PrintingMuted>}
       {says && (says.content ? md(says.content) : <div style={{ fontSize: 13, lineHeight: 1.5 }}>{says.said}</div>)}
       {says && !says.ai && !says.failed && says.content == null && (

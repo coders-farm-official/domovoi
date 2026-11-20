@@ -22,7 +22,10 @@ public enum PodcastFormat {
     /// JS `Math.round` (half up), not Swift's `.rounded()` (half away from
     /// zero, which agrees for positives) or Kotlin's half-even `round()`.
     /// Written as Android writes it so the two cannot drift on a negative.
-    static func jsRound(_ x: Double) -> Int64 { Int64((x + 0.5).rounded(.down)) }
+    ///
+    /// NaN and ±infinity are 0 and a finite number past `Int64` sticks at
+    /// its end: `Int64(1e30)` traps (security audit round 6, IOS-1).
+    static func jsRound(_ x: Double) -> Int64 { WireNumber.int64((x + 0.5).rounded(.down)) ?? 0 }
 
     /// A Gregorian calendar in the phone's zone: the web's local time.
     public static var phoneCalendar: Calendar {

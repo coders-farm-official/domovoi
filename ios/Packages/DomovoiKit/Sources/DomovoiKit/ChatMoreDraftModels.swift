@@ -385,7 +385,7 @@ public enum ChatMoreDraftRules {
         default:
             // A revision based on the version straight before it says nothing
             // about where it came from, as the Kotlin's `takeIf` does.
-            let basedOn = version.basedOn.flatMap { $0 != version.version - 1 ? $0 : nil }
+            let basedOn = version.basedOn.flatMap { $0 != WireNumber.sub(version.version, 1) ? $0 : nil }
             return ChatMoreStrings.revisionLabel(instruction: version.instruction, basedOn: basedOn)
         }
     }

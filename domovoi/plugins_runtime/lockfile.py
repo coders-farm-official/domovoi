@@ -45,10 +45,10 @@ __all__ = [
 LOCK_REQUIREMENT_RE = re.compile(
     r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)"
     r"(?P<extras>\[[^\]]*\])?"
-    r"==(?P<version>[A-Za-z0-9.!+*]+)$"
+    r"==(?P<version>[A-Za-z0-9.!+*]+)\Z"
 )
 # ``--hash=<algo>:<hex>``; pip only honours the strong algorithms.
-_HASH_RE = re.compile(r"^--hash=(sha256|sha384|sha512):[0-9A-Fa-f]+$")
+_HASH_RE = re.compile(r"^--hash=(sha256|sha384|sha512):[0-9A-Fa-f]+\Z")
 # Only ``--hash=…`` / ``--hash …`` may start with a dash inside a lockfile.
 _HASH_OPTION_RE = re.compile(r"^--hash(?:=|$)", re.I)
 # A ``#`` starts a comment at line start or after whitespace (pip's rule).

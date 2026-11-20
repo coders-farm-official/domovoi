@@ -44,7 +44,7 @@ from sqlalchemy import text
 from domovoi import egress, local_peer
 from domovoi.admin_auth import require_admin_mutation, require_admin_read
 from domovoi.container_guard import freeze as container_freeze
-from domovoi.host_kind import host_kind
+from domovoi.host_kind import host_kind, mac_card_helper
 from domovoi.satellite_media import builder, cache, fetchers, overlay
 from domovoi.satellite_media.boards import BOARDS, MIC_PROFILES, PI02W
 from domovoi.satellite_payload import enabled_satellite_plugins, payload_files
@@ -133,6 +133,27 @@ _NO_DRIVES_DETAIL = (
     "choose the download for the card helper, then use Domovoi's tray icon "
     "→ Prepare a room's SD card"
 )
+# The same inside the Mac installer's VM, which has no card helper yet:
+# the zip's README.txt has the Finder steps.
+_NO_DRIVES_DETAIL_MAC = (
+    "this server runs in a Linux system on the Mac and can't see SD cards — "
+    "choose the zip download, then copy its files onto the card as its "
+    "README.txt says"
+)
+
+
+# A Mac whose menu-bar icon has the card helper.
+_NO_DRIVES_DETAIL_MAC_HELPER = (
+    "this server runs in a Linux system on the Mac and can't see SD cards — "
+    "choose the zip download, then use Domovoi's menu-bar icon → Prepare an "
+    "SD card..."
+)
+
+
+def _no_drives_detail() -> str:
+    if host_kind() != "mac":
+        return _NO_DRIVES_DETAIL
+    return _NO_DRIVES_DETAIL_MAC_HELPER if mac_card_helper() else _NO_DRIVES_DETAIL_MAC
 
 
 class PrepareRequest(BaseModel):
@@ -149,7 +170,7 @@ class PrepareRequest(BaseModel):
         default_factory=default_setup_transport,
         description=(
             "usb | portal. Omitted: usb, or portal when the server runs "
-            "inside WSL (no removable drives there)."
+            "inside WSL or the Mac installer's VM (no removable drives there)."
         ),
     )
     # No safe default exists — legal channels and power limits are per
@@ -214,10 +235,15 @@ async def media_status() -> dict[str, Any]:
             ),
         })
     return {
-        "docker_available": fetchers.docker_available(),
-        # Inside WSL there are no drive targets and USB adoption can't
-        # finish, so the card offers the zip and the Wi-Fi portal only.
+        # Up to 20 s when Docker hangs: off the event loop.
+        "docker_available": await asyncio.to_thread(fetchers.docker_available),
+        # Inside WSL and the Mac VM there are no drive targets and USB
+        # adoption can't finish, so the card offers the zip and the Wi-Fi
+        # portal only.
         "host_kind": host_kind(),
+        # On a Mac: whether its menu-bar icon has Prepare an SD card...
+        # (the Mac side's side.json says "card_helper": 1).
+        "mac_card_helper": mac_card_helper(),
         "drive_targets": removable_drives_visible(),
         "default_setup_transport": default_setup_transport(),
         "cache": cache.status(PI02W.python_version, PI02W.os_release),
@@ -291,7 +317,7 @@ async def media_prepare(body: PrepareRequest, request: Request) -> dict[str, Any
     target_ref = "zip"
     if kind == "drive":
         if not removable_drives_visible():
-            raise HTTPException(status_code=422, detail=_NO_DRIVES_DETAIL)
+            raise HTTPException(status_code=422, detail=_no_drives_detail())
         token = str(body.target.get("token") or "")
         match = next(
             (
@@ -480,7 +506,7 @@ def _shown(creds: dict[str, Any]) -> dict[str, Any]:
 
 
 # What a Domovoi setup network is called (overlay.generate_ap_credentials).
-_SETUP_SSID = re.compile(r"^Domovoi-Setup-[0-9A-F]{4}$")
+_SETUP_SSID = re.compile(r"^Domovoi-Setup-[0-9A-F]{4}\Z")
 
 _CANT_RECOVER_DETAIL = (
     "Your Domovoi server can't recover this card's password. Prepare the "
@@ -663,6 +689,9 @@ async def media_download(job_id: int) -> FileResponse:
     )
 
 
+_CACHE_REFRESH_LOCK = asyncio.Lock()
+
+
 @router.post("/cache/refresh", dependencies=[Depends(require_admin_mutation)])
 async def media_cache_refresh() -> dict[str, Any]:
     """Synchronous-ish cache refresh (wheels are the slow part; the call
@@ -677,14 +706,25 @@ async def media_cache_refresh() -> dict[str, Any]:
     from domovoi.config import settings as core_settings
 
     repo_root = Path(core_settings.repo_dir)
-    results = {
-        "wheels": fetchers.fetch_wheels(
-            repo_root, PI02W.python_version, PI02W.manylinux_platforms
-        ),
-        "debs": fetchers.fetch_debs(PI02W.os_release),
-        "oww_models": fetchers.fetch_oww_models(),
-        "xvf_host": fetchers.fetch_xvf_host(),
-    }
+
+    def fetch_all() -> dict[str, tuple[bool, str]]:
+        return {
+            "wheels": fetchers.fetch_wheels(
+                repo_root, PI02W.python_version, PI02W.manylinux_platforms
+            ),
+            "debs": fetchers.fetch_debs(PI02W.os_release),
+            "oww_models": fetchers.fetch_oww_models(),
+            "xvf_host": fetchers.fetch_xvf_host(),
+        }
+
+    # Minutes of pip, docker and downloads: in a worker thread, one refresh
+    # at a time. On the event loop they stalled every other request of the
+    # dashboard (mac-installer Train 1 finding 22: the home page timed out
+    # at 10 s, /api/capabilities took 20 s, while the core stayed fast).
+    if _CACHE_REFRESH_LOCK.locked():
+        raise HTTPException(status_code=409, detail="a cache refresh is already running")
+    async with _CACHE_REFRESH_LOCK:
+        results = await asyncio.to_thread(fetch_all)
     return {
         k: {"ok": ok, "message": msg} for k, (ok, msg) in results.items()
     }

@@ -418,7 +418,7 @@ public enum BookRules {
     public static func sizeBytes(_ book: AudiobookRow) -> Int64? {
         if let own = book.sizeBytes, own > 0 { return own }
         guard !book.files.isEmpty, !book.files.contains(where: { ($0.sizeBytes ?? 0) <= 0 }) else { return nil }
-        return book.files.reduce(Int64(0)) { $0 + ($1.sizeBytes ?? 0) }
+        return book.files.reduce(Int64(0)) { WireNumber.add($0, $1.sizeBytes ?? 0) }
     }
 
     /// The cover's server path: the cover route the server named, else the

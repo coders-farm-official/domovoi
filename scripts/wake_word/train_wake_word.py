@@ -169,12 +169,12 @@ PREVIEW_CONTAINER = os.environ.get("WAKE_TRAINER_PREVIEW_CONTAINER", "domovoi-wa
 PREVIEW_LABEL = "org.domovoi.wake-preview"
 PREVIEW_MEMORY = "4g"
 
-_CPUSET_RE = re.compile(r"^[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*$")
-_MEMORY_RE = re.compile(r"^[0-9]+(\.[0-9]+)?[bkmg]?$", re.IGNORECASE)
-_PRON_RE = re.compile(r"^[a-z0-9'.=; A-Z-]*$")
+_CPUSET_RE = re.compile(r"^[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*\Z")
+_MEMORY_RE = re.compile(r"^[0-9]+(\.[0-9]+)?[bkmg]?\Z", re.IGNORECASE)
+_PRON_RE = re.compile(r"^[a-z0-9'.=; A-Z-]*\Z")
 # word=IPA;...: plain words, IPA without blanks, quotes or shell characters.
-_EXTRA_NEG_RE = re.compile(r"^[a-z0-9 ,.';-]{1,8000}$")
-_SYNTH_RE = re.compile(r"^[a-z0-9'.-]+=[^\s=;\"'`$\\]{1,64}(;[a-z0-9'.-]+=[^\s=;\"'`$\\]{1,64})*$")
+_EXTRA_NEG_RE = re.compile(r"^[a-z0-9 ,.';-]{1,8000}\Z")
+_SYNTH_RE = re.compile(r"^[a-z0-9'.-]+=[^\s=;\"'`$\\]{1,64}(;[a-z0-9'.-]+=[^\s=;\"'`$\\]{1,64})*\Z")
 
 
 def log(msg: str) -> None:
@@ -480,7 +480,7 @@ def build_run_argv(
 # (the entrypoint removes its copies of the recorded clips on SIGTERM)
 # before it is killed.
 STOP_GRACE_SEC = 10
-_SLUG_RE = re.compile(r"^[a-z0-9_]{1,80}$")
+_SLUG_RE = re.compile(r"^[a-z0-9_]{1,80}\Z")
 
 
 def _docker(args: list[str], timeout: float) -> subprocess.CompletedProcess | None:

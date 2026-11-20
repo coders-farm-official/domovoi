@@ -11,11 +11,15 @@ Two rules hold everywhere:
 * **Text from a video is data, never instructions.** The transcript (what
   anyone in the video said, a sign in a frame) reaches the model inside a
   fenced block with a per-call code it is told never to obey or repeat.
+  So does the video's file name, which whoever sent the video chose: it is
+  only ever inside a block, cut to a plain set of characters
+  (:func:`safe_name`; security audit round 6, DOC-10).
 """
 
 from __future__ import annotations
 
 import secrets
+import unicodedata
 from typing import Any, Iterable
 
 from domovoi.chat_video import limits
@@ -40,6 +44,26 @@ MAX_FRAMES_CHARS = 3000
 
 def _fence() -> str:
     return secrets.token_hex(4).upper()
+
+
+#: The longest file name a prompt or a reply carries.
+NAME_MAX = 120
+_NAME_MARKS = set(" .-_()'")
+
+
+def safe_name(name: str | None) -> str:
+    """A video's file name as Domovoi says it and shows it to a model:
+    letters and digits of any alphabet, spaces and ``. - _ ( ) '`` only (no
+    ``:``, brackets, quotes or line breaks to dress a line up as the app's
+    own), at most :data:`NAME_MAX` characters."""
+    out = []
+    for ch in unicodedata.normalize("NFC", str(name or "")):
+        if ch.isalnum() or ch in _NAME_MARKS:
+            out.append(ch)
+        elif ch.isspace() or unicodedata.category(ch).startswith(("P", "S")):
+            out.append(" ")
+    clean = " ".join("".join(out).split())[:NAME_MAX].strip()
+    return clean or "video"
 
 
 def transcript_lines(segments: Iterable[dict[str, Any]]) -> list[str]:
@@ -70,7 +94,7 @@ def video_block(name: str, duration: float, segments: list[dict[str, Any]], fram
     shown = _cap(frame_lines(frames), MAX_FRAMES_CHARS) or "(no frames were described)"
     parts = [
         f"<<<VIDEO-{code}",
-        f"Video: {name} ({limits.clock(duration)} long)",
+        f"Video: {safe_name(name)} ({limits.clock(duration)} long)",
     ]
     if summary:
         parts.append(f"Summary (written by Domovoi from the lines below): {summary.strip()}")
@@ -98,10 +122,13 @@ def chat_rules(blocks: list[str], code: str, pending: list[str] | None = None) -
     """The system message's addition for a chat with watched videos (and
     videos still being watched: ``pending``, their names)."""
     out = RULES.format(code=code)
+    blocks = list(blocks)
     if pending:
-        names = ", ".join(pending)
-        out += (f"\nStill being watched, so not in a block yet: {names}. If asked about it, say Domovoi "
-                "is still watching it and the answer will be here when it's done.")
+        # The names are the sender's words: inside a block, like the rest.
+        names = ", ".join(safe_name(n) for n in pending)
+        out += ("\nSome videos are still being watched: their names are in the last block. If asked about "
+                "one, say Domovoi is still watching it and the answer will be here when it's done.")
+        blocks.append(f"<<<VIDEO-{code}\nStill being watched: {names}\nVIDEO-{code}>>>")
     return out + "\n\n" + "\n\n".join(blocks)
 
 
@@ -141,12 +168,12 @@ def attach_reply(name: str, duration: float, estimate_s: float | None, question:
                 f"video{'' if queued_behind == 1 else 's'} ahead of it, so it may take a while.")
     ask = ("I'll answer your question when I've finished." if question.strip()
            else "Ask me anything about it when it's done.")
-    return (f"I'm watching {name} ({limits.clock(duration)}) now.{wait} You can keep chatting "
+    return (f"I'm watching {safe_name(name)} ({limits.clock(duration)}) now.{wait} You can keep chatting "
             f"meanwhile. {ask}")
 
 
 def done_reply(name: str, summary: str, *, heard_speech: bool, frames: int, notes: list[str]) -> str:
-    lines = [f"I've watched {name}.", "", summary.strip() if summary.strip() else
+    lines = [f"I've watched {safe_name(name)}.", "", summary.strip() if summary.strip() else
              "I couldn't put together a summary, but you can still ask about it."]
     if not heard_speech:
         lines += ["", "I didn't hear anyone speaking in it."]
@@ -158,7 +185,7 @@ def done_reply(name: str, summary: str, *, heard_speech: bool, frames: int, note
 
 
 def failed_reply(name: str, reason: str) -> str:
-    return f"I couldn't finish watching {name}. {reason}"
+    return f"I couldn't finish watching {safe_name(name)}. {reason}"
 
 
 #: Plain reasons, by code (the help desk's entries say more).
