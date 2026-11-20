@@ -27,7 +27,7 @@ tqdm
 scikit-learn             # openWakeWord training utilities
 
 # FULL openWakeWord *training* dep set (train.py + data.py imports). The upstream
-# notebook pins 2022-era versions that DON'T install on py3.11/torch2.4; these
+# notebook pins 2022-era versions that DON'T install on py3.12/torch2.14; these
 # are the verified-working modern pins (see Dockerfile for the per-package
 # rationale). NOTE: NO tensorflow / onnx_tf — train.py only needs them for the
 # OPTIONAL tflite export, which the image patches out (we want .onnx only).

@@ -10,14 +10,16 @@
 # A CUDA image still *runs* on a CPU-only x86 host (it just won't see a GPU).
 # But it will NOT run on arm64 (Apple Silicon) — there is no arm64 CUDA image.
 # For a Mac/arm host, override the base at build time with a CPU/arm wheel:
-#     docker build --build-arg BASE=python:3.11-slim \
+#     docker build --build-arg BASE=python:3.12-slim \
 #                  --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cpu \
 #                  -t domovoi-wake-trainer:cpu scripts/wake_word/docker
 # (The default below is the GPU-capable image, which is what the shared Domovoi
 #  box and most contributors want.)
 # Pinned by digest (read with `docker buildx imagetools inspect` on
-# 2026-10-13): a tag can be pushed again.
-ARG BASE=pytorch/pytorch:2.4.1-cuda12.4-cudnn9-runtime@sha256:0a3b9fedefe1f61ac4d5a9de9015c0863db27ca0fde2d4e37e6268147980b726
+# 2026-11-20): a tag can be pushed again. torch 2.14.1 (2.13 is the first
+# release with no open advisory), torchaudio 2.11.0, CPython 3.12, CUDA 12.6
+# (the CUDA 13 images drop older GPUs and drivers).
+ARG BASE=pytorch/pytorch:2.14.1-cuda12.6-cudnn9-runtime@sha256:1262abc856a428933c0477b4be87079173a0b087b7691c47fcb396b7b5775c56
 FROM ${BASE}
 
 # Pin third-party repos by commit so the build doesn't drift as upstream master
@@ -27,14 +29,18 @@ FROM ${BASE}
 # against that commit's train.py).
 ARG OWW_REF=368c03716d1e92591906a84949bc477f3a834455
 ARG PSG_REF=f1988a4d54eddb23d99e86f0adfef6226a85acc7
-# When BASE is a non-torch image (e.g. python:3.11-slim for CPU/arm), set this
+# When BASE is a non-torch image (e.g. python:3.12-slim for CPU/arm), set this
 # to a pip index so torch gets installed. Empty => assume torch is already in
 # the base (the pytorch/pytorch case) and DON'T reinstall it (reinstalling can
 # pull a CPU-only wheel that fights the image's bundled CUDA torch).
 ARG TORCH_INDEX=""
 
+# PIP_BREAK_SYSTEM_PACKAGES: the base's Python is Ubuntu's, marked
+# externally managed (PEP 668), so pip refuses to install without it. The
+# image is single-purpose and nothing else uses that Python.
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
+    PIP_BREAK_SYSTEM_PACKAGES=1 \
     PIP_NO_CACHE_DIR=1 \
     OWW_CACHE=/data/cache
 
@@ -60,9 +66,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Optionally install torch for non-torch bases (CPU/arm path). No-op for the
 # pytorch/pytorch base where torch is already present. torch-cpu.lock holds
-# the CPU index's 2.4.1 wheels for CPython 3.11 (x86_64 and aarch64).
+# the CPU index's 2.14.1 wheels for CPython 3.12 (x86_64 and aarch64). PyPI
+# is an extra index only for setuptools (torch's dependency on 3.12, whose
+# fixed version the CPU index lacks); the hashes pin every file either way.
 RUN if [ -n "$TORCH_INDEX" ]; then \
-        pip install --require-hashes --index-url "$TORCH_INDEX" -r /opt/torch-cpu.lock ; \
+        pip install --require-hashes --index-url "$TORCH_INDEX" \
+            --extra-index-url https://pypi.org/simple -r /opt/torch-cpu.lock ; \
     fi
 
 WORKDIR /opt
@@ -86,6 +95,13 @@ WORKDIR /opt
 # DIFFERENT state_dict that does NOT load in this fork's generator class.
 RUN git clone https://github.com/dscripka/piper-sample-generator.git /opt/piper-sample-generator && \
     cd /opt/piper-sample-generator && git checkout "$PSG_REF"
+
+# torch 2.6+ loads weights only by default, and the v1.0.0 checkpoint below
+# is a whole pickled model: load it as one. Safe here because the build
+# checks the file's SHA-256 before anything loads it.
+RUN sed -i 's/model = torch\.load(model_path)/model = torch.load(model_path, weights_only=False)/' \
+        /opt/piper-sample-generator/generate_samples.py && \
+    grep -q "torch.load(model_path, weights_only=False)" /opt/piper-sample-generator/generate_samples.py
 
 # Bake the ~255 MB v1.0.0 VITS generator checkpoint at BUILD time (offline-capable,
 # no GitHub-Releases rate-limit hit per run). This is the en-us-libritts-high.pt
@@ -116,6 +132,24 @@ RUN sed -i 's/if args\.convert_to_tflite:/if args.convert_to_tflite is True:/' \
         /opt/openWakeWord/openwakeword/train.py && \
     grep -q "if args.convert_to_tflite is True:" /opt/openWakeWord/openwakeword/train.py
 
+# Two more for torch 2.14 / torchaudio 2.11 (the advisory-free line):
+# * torch.onnx.export defaults to the dynamo exporter since torch 2.9, which
+#   needs the onnxscript package; the trainer's small model exports fine
+#   through the TorchScript exporter it was written for, so ask for that.
+# * torchaudio 2.9+ dropped torchaudio.info, and torchaudio.load needs the
+#   torchcodec package. data.py (and torch-audiomentations' file loader,
+#   patched after the pip install below) read audio through speechbrain's
+#   soundfile-based audio_io instead, which returns the same shapes
+#   (float32, channels first) and the same num_frames/sample_rate fields.
+RUN cd /opt/openWakeWord/openwakeword && \
+    sed -i -e 's/output_names=\[class_mapping\])/output_names=[class_mapping], dynamo=False)/' \
+           -e 's/opset_version=13)/opset_version=13, dynamo=False)/' train.py && \
+    test "$(grep -c 'dynamo=False)' train.py)" = 3 && \
+    sed -i -e 's/^import torchaudio\r\?$/&\nfrom speechbrain.dataio import audio_io/' \
+           -e 's/torchaudio\.info(/audio_io.info(/g' -e 's/torchaudio\.load(/audio_io.load(/g' data.py && \
+    grep -q "^from speechbrain.dataio import audio_io" data.py && \
+    ! grep -n "torchaudio\.\(info\|load\)(" data.py
+
 # ── The Python packages: requirements.lock, then openWakeWord itself ────────
 # piper-sample-generator deps (audiomentations, espeak-phonemizer, numpy,
 # webrtcvad, soundfile); openWakeWord's inference deps (onnxruntime,
@@ -128,7 +162,7 @@ RUN sed -i 's/if args\.convert_to_tflite:/if args.convert_to_tflite is True:/' \
 # The FULL openWakeWord *training* dependency set: `pip install -e .` alone
 # would pull only openWakeWord's *inference* deps. The trainer (openwakeword/train.py + openwakeword/data.py) imports a much larger
 # stack that the upstream notebook pins at 2022-era versions which DO NOT
-# install on py3.11 / torch 2.4. The versions below are the modern ones that
+# install on py3.12 / torch 2.14. The versions below are the modern ones that
 # resolve cleanly on this base (verified import of openwakeword.{train,data,
 # utils} + AudioFeatures). Mapping to what imports them:
 #   torchinfo, torchmetrics         -> train.py
@@ -150,7 +184,15 @@ RUN sed -i 's/if args\.convert_to_tflite:/if args.convert_to_tflite is True:/' \
 RUN pip install --no-cache-dir --require-hashes -r /opt/requirements.lock && \
     pip install --no-cache-dir --no-deps -e /opt/openWakeWord
 
-# Brotli 1.2 (in requirements.lock): the base image's conda Brotli is 1.1.0, but httpx2 (what
+# torch-audiomentations' file loader (AddBackgroundNoise reads the background
+# clips through it): the same torchaudio.info/load swap as data.py above.
+RUN f="$(python -c 'import torch_audiomentations.utils.io as m; print(m.__file__)')" && \
+    sed -i -e 's/^import torchaudio\r\?$/&\nfrom speechbrain.dataio import audio_io/' \
+           -e 's/torchaudio\.info(/audio_io.info(/g' -e 's/torchaudio\.load(/audio_io.load(/g' "$f" && \
+    grep -q "^from speechbrain.dataio import audio_io" "$f" && \
+    ! grep -n "torchaudio\.\(info\|load\)(" "$f"
+
+# Brotli 1.2 (in requirements.lock): Brotli 1.1.0 (the old base's) won't do: httpx2 (what
 # huggingface_hub downloads through) passes `output_buffer_limit` to
 # Decompressor.process(), which 1.1.0 refuses ("process() takes no keyword
 # arguments"). Any brotli-encoded response then crashes the download: the
