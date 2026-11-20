@@ -1793,7 +1793,10 @@ const NavItem = ({ icon, label, badge, active, onClick }) => (
 
 /* Core nav items. `order` values are the published core_nav numbers
  * (design §5.2, echoed in /api/plugins/manifest) so plugin authors can
- * slot pages deliberately. `countKey` reads useSidebarCounts.
+ * slot pages deliberately. No core item shows a count (owner 2026-11-20):
+ * a number beside a nav item reads as "something new here", and a
+ * total of songs or people never is. Plugin badges stay, for things
+ * that are happening (downloads in progress).
  *
  * The phone strip (760px and below) is this device's phone bar
  * (PHONE_BAR_DEFAULT, home · music · videos · chat, unless someone here
@@ -1810,7 +1813,7 @@ const NavItem = ({ icon, label, badge, active, onClick }) => (
 const CORE_NAV_ITEMS = [
   { route: 'home',       icon: 'house',       label: 'Home',       order: 1, brandLink: true },
   { route: 'chat',       icon: 'message-square', label: 'Chat',    order: 8 },
-  { route: 'music',      icon: 'music',       label: 'Music',      order: 10, countKey: 'music' },
+  { route: 'music',      icon: 'music',       label: 'Music',      order: 10 },
   { route: 'podcasts',   icon: 'podcast',     label: 'Podcasts',   order: 12 },
   { route: 'audiobooks', icon: 'book-open',   label: 'Audiobooks', order: 14 },
   { route: 'videos',     icon: 'film',        label: 'Videos',     order: 15 },
@@ -1820,8 +1823,8 @@ const CORE_NAV_ITEMS = [
   // A Settings section since 2026-11-09, on no launcher but the phone bar,
   // and there only when someone here picked it (Settings → App layout):
   // a bar saved with People keeps its tab, which opens Settings → People.
-  { route: 'people',     icon: 'users',       label: 'People',     order: 20, countKey: 'people', barOnly: true },
-  { route: 'calendar',   icon: 'calendar',    label: 'Calendar',   order: 40, countKey: 'calendar' },
+  { route: 'people',     icon: 'users',       label: 'People',     order: 20, barOnly: true },
+  { route: 'calendar',   icon: 'calendar',    label: 'Calendar',   order: 40 },
   // The household's lists (V048, lists.jsx): to-do, shopping, any list it names.
   { route: 'lists',      icon: 'list-checks', label: 'Lists',      order: 42 },
   { route: 'files',      icon: 'folder',      label: 'Files',      order: 45 },
