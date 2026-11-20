@@ -32,12 +32,12 @@ struct SetupView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .onAppear { if m.report == nil { m.runPreflight() } }
-        .alert(m.conflict.map { "\($0.owner) is using Domovoi's ports" } ?? "", isPresented: $m.showConflict, presenting: m.conflict) { c in
+        .alert(m.conflict?.sheetTitle ?? "", isPresented: $m.showConflict, presenting: m.conflict) { c in
             Button("Retry") { m.runPreflight() }
             if c.ollamaUsable { Button("Use this Ollama") { m.useExistingOllama() } }
             Button("Cancel Setup", role: .cancel) { NSApp.terminate(nil) }
         } message: { c in
-            Text(conflictText(c))
+            Text(c.sheetText)
         }
     }
 
@@ -53,23 +53,6 @@ struct SetupView: View {
         case .installed: return "Domovoi is installed"
         case .uninstalled: return "Domovoi is removed"
         }
-    }
-
-    func conflictText(_ c: PortConflict) -> String {
-        var t = "\(c.owner) holds port\(c.ports.count == 1 ? "" : "s") \(Preflight.portList(c.ports)), which Domovoi needs. "
-        if c.ollamaVersion != nil {
-            t += "It is Ollama \(c.ollamaVersion!). "
-            if c.ollamaUsable {
-                t += "Domovoi can use it instead of running its own: its AI models then stay in that Ollama's own folder, and uninstalling Domovoi leaves them there."
-                if c.ollamaIsApp { t += " The Ollama app runs only while someone is signed in, so Domovoi's AI answers stop when nobody is." }
-                t += " Or quit Ollama and choose Retry, and Domovoi runs its own."
-            } else {
-                t += "It is too old for Domovoi: quit it (or update it) and choose Retry."
-            }
-        } else {
-            t += "Quit \(c.owner), then choose Retry."
-        }
-        return t
     }
 }
 
@@ -472,10 +455,103 @@ struct InstalledPage: View {
 struct UninstalledPage: View {
     @EnvironmentObject var m: SetupModel
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(m.uninstallMessage.isEmpty ? "Domovoi is removed." : m.uninstallMessage).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-            Text("Your media folder and its files are where they were.").foregroundStyle(.secondary)
+        let page = RemovedPage.parse(m.uninstallMessage)
+        VStack(alignment: .leading, spacing: 0) {
+            ScrollView {
+                // The result first; each thing left to do in its own box,
+                // the line to paste set apart; what was put back on this
+                // Mac last (Sitting 3, S3-8 / S3-10).
+                VStack(alignment: .leading, spacing: 14) {
+                    if page.result.isEmpty { Text("Domovoi is removed.").font(.title3) }
+                    ForEach(Array(page.result.enumerated()), id: \.offset) { i, line in
+                        Text(line).font(i == 0 ? .title3 : .body).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                    }
+                    ForEach(Array(page.toDo.enumerated()), id: \.offset) { _, item in ToDoBox(item: item) }
+                    if !page.macSettings.isEmpty {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(Array(page.macSettings.enumerated()), id: \.offset) { _, line in
+                                Text(line).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                    Text("Your media folder and its files are where they were.").font(.callout).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
             Footer { EmptyView() } right: { Button("Quit") { NSApp.terminate(nil) }.keyboardShortcut(.defaultAction) }
+        }
+    }
+}
+
+/// One thing left to do by hand: what and why, the line in a code box
+/// with Copy, and Open in Terminal for the account's finish line.
+struct ToDoBox: View {
+    let item: RemovedPage.ToDo
+    @State private var copied = false
+    @State private var terminalError: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("One thing left to do", systemImage: "exclamationmark.circle").font(.headline)
+            Text(item.text).fixedSize(horizontal: false, vertical: true)
+            if let command = item.command {
+                HStack(alignment: .top, spacing: 8) {
+                    Text(command)
+                        .font(.system(.body, design: .monospaced))
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Button {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(command, forType: .string)
+                        copied = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
+                    } label: {
+                        Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
+                    }
+                    .help("Copy this line")
+                }
+                .padding(12)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .textBackgroundColor)))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color(nsColor: .separatorColor)))
+                if RemovedPage.terminalScript(for: command) != nil {
+                    Button("Open in Terminal") { terminalError = TerminalFinish.open(command) }
+                    Text("Terminal opens with this line already in it and asks for your Mac password.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+                ErrorText(text: terminalError)
+            }
+            if let after = item.after {
+                Text(after).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.orange.opacity(0.08)))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.orange.opacity(0.45)))
+    }
+}
+
+/// Opens Terminal on a one-time script that runs the finish line
+/// (RemovedPage.terminalScript): Terminal runs a .command file it is
+/// handed, so no permission to control Terminal is asked for. The script
+/// is in this account's own temporary folder and deletes itself.
+enum TerminalFinish {
+    static func open(_ command: String) -> String? {
+        guard let script = RemovedPage.terminalScript(for: command) else { return "Setup can't run this line for you: copy it into Terminal instead." }
+        do {
+            let dir = FileManager.default.temporaryDirectory.appendingPathComponent("domovoi-finish-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+            let file = dir.appendingPathComponent("Finish removing Domovoi.command")
+            try Data(script.utf8).write(to: file, options: .withoutOverwriting)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: file.path)
+            let terminal = URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app")
+            NSWorkspace.shared.open([file], withApplicationAt: terminal, configuration: NSWorkspace.OpenConfiguration()) { _, error in
+                if let error { NSLog("Open in Terminal: \(error)") }
+            }
+            return nil
+        } catch {
+            return "Setup couldn't open Terminal (\(error.localizedDescription)): copy the line into Terminal instead."
         }
     }
 }

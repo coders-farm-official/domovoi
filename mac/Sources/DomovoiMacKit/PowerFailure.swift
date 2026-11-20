@@ -97,9 +97,9 @@ public final class StartAfterPowerFailure {
             try set(rec.before)
             said = "this Mac stays off after a power failure again, as before"
         } else if cur == 1 {
-            said = "this Mac started by itself after a power failure before Domovoi too: left as it was"
+            said = "this Mac already started by itself after a power failure before Domovoi, so it is left as it was"
         } else {
-            said = "this Mac's power-failure setting was changed since: left as it is"
+            said = "this Mac's power-failure setting was changed since, so it is left as it is"
         }
         try FileManager.default.removeItem(at: layout.autoRestartRecord)
         return said

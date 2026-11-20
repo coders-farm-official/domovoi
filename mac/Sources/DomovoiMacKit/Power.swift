@@ -132,9 +132,9 @@ public final class KeepAwake {
             try setACSleep(rec.acSleepBefore)
             said = "this Mac's sleep setting is back to \(rec.acSleepBefore) min"
         } else if current == 0 {
-            said = "this Mac didn't sleep while plugged in before Domovoi either: left as it was"
+            said = "this Mac already stayed awake while plugged in before Domovoi, so it is left as it was"
         } else {
-            said = "this Mac's sleep setting was changed since (\(current) min): left as it is"
+            said = "this Mac's sleep setting was changed since (\(current) min), so it is left as it is"
         }
         try FileManager.default.removeItem(at: layout.powerRecord)
         return said
