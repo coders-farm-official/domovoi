@@ -8,14 +8,13 @@
 # and an expiry date (docs/CONTRIBUTING.md, "Dependencies").
 #
 # Blocking: requirements.lock, requirements-linux-py314.lock,
-# requirements-linux-py314-no-deps.lock, the satellite's satellite/locks/*.txt
-# and the three build-tool requirement files (installer art, g2p training,
-# wake-word trainer). Not blocking, printed in the job summary: the Android
-# app's Gradle verification metadata (it also lists build-tool jars such as
-# lint's, and there are no Gradle lock files to tell them apart) and the wake
-# trainer image's requirements.lock and torch-cpu.lock (hash-locked, but they
-# also pin the base image's own packages at the base's versions, which the
-# image never installs on its default base).
+# requirements-linux-py314-no-deps.lock, the satellite's satellite/locks/*.txt,
+# the three build-tool requirement files (installer art, g2p training,
+# wake-word trainer) and the wake trainer image's two locks
+# (scripts/wake_word/docker/requirements.lock and torch-cpu.lock). Not
+# blocking, printed in the job summary: the Android app's Gradle
+# verification metadata (it also lists build-tool jars such as lint's, and
+# there are no Gradle lock files to tell them apart).
 # satellite/requirements*.txt are loose ranges, not pins: their locks above
 # are what gets scanned.
 #
@@ -75,6 +74,7 @@ jobs:
           for f in requirements.lock requirements-linux-py314.lock requirements-linux-py314-no-deps.lock \
                    satellite/locks/pc-*.txt \
                    scripts/g2p/requirements-train.txt scripts/wake_word/docker/requirements.txt \
+                   scripts/wake_word/docker/requirements.lock scripts/wake_word/docker/torch-cpu.lock \
                    windows/installer/art/requirements.txt; do
             [ -f "$f" ] || { echo "missing: $f" >&2; exit 2; }
             args+=(-L "requirements.txt:$f")
@@ -82,15 +82,14 @@ jobs:
           ./osv-scanner scan source --config osv-scanner.toml --no-resolve "${args[@]}"
 
       # Everything above passed or failed on its own: this step only reports.
-      - name: Report the Android app and the trainer image (does not fail)
+      - name: Report the Android app (does not fail)
         if: always()
         continue-on-error: true
         run: |
           ./osv-scanner scan source --config osv-scanner.toml --no-resolve \
             -L verification-metadata.xml:android/gradle/verification-metadata.xml \
-            -L requirements.txt:scripts/wake_word/docker/requirements.lock \n            -L requirements.txt:scripts/wake_word/docker/torch-cpu.lock \
             --format markdown --output-file informational.md || true
           {
-            echo "### Not blocking: Android Gradle metadata and the wake trainer's locks"
+            echo "### Not blocking: Android Gradle metadata"
             cat informational.md 2>/dev/null || echo "(no report)"
           } >> "$GITHUB_STEP_SUMMARY"

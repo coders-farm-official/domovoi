@@ -298,7 +298,7 @@ openWakeWord's own pre-trained models are CC BY-NC-SA 4.0 for the same
 reason. Domovoi's code stays MIT, and Domovoi bundles nothing GPL or LGPL.
 The trainer image does hold some: espeak-ng (GPL-3.0), the Linux
 distribution's own ffmpeg package (Ubuntu's in the default image, Debian's
-with a `python:3.11-slim` base; both are built with their GPL parts
+with a `python:3.12-slim` base; both are built with their GPL parts
 turned on), the mutagen library (GPL-2.0-or-later) and libsndfile
 (LGPL-2.1-or-later). They live only inside that image, which your own
 server builds from the Dockerfile in `scripts/wake_word/docker`; Domovoi

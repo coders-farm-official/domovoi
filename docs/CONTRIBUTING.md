@@ -478,17 +478,16 @@ merge it if CI is green.
 
 **OSV-Scanner** (`.github/workflows/osv.yml`) is what watches those lock
 files, which Dependabot can't read: it checks `requirements.lock`, the two
-Linux py314 locks, the satellite's `satellite/locks/pc-*.txt` and the three
+Linux py314 locks, the satellite's `satellite/locks/pc-*.txt`, the three
 build-tool requirement files (installer art, g2p training, wake-word
-trainer) against the OSV database on every push to `main`, on pull requests
-that touch them, by hand, and **daily**, so a new advisory turns the job red
-the same day. It fails on any known vulnerability. The fix is a bump of the
-lock (a regenerated lock, a new hash-pinned requirement). The Android
-Gradle metadata and the wake trainer's `requirements.lock` and
-`torch-cpu.lock` are listed in the job summary but don't fail it (the
-metadata includes build-tool jars, and the trainer's locks also pin the
-base image's own packages, which the image never installs on its default
-base). The scanner is a release binary
+trainer) and the wake trainer image's `requirements.lock` and
+`torch-cpu.lock` against the OSV database on every push to `main`, on pull
+requests that touch them, by hand, and **daily**, so a new advisory turns
+the job red the same day. It fails on any known vulnerability. The fix is a
+bump of the lock (a regenerated lock, a new hash-pinned requirement; for
+the trainer, scripts/wake_word/DOCKER_TRAINER.md says how its locks were
+made). The Android Gradle metadata is listed in the job summary but
+doesn't fail it (it includes build-tool jars). The scanner is a release binary
 pinned by version and SHA-256 in the workflow; bump both together, to a
 release at least 14 days old, with the checksum from the release's own
 `SHA256SUMS`.

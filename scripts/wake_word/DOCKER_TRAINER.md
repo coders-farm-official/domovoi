@@ -115,7 +115,7 @@ override the base (there is no arm64 CUDA image; the constraints were
 resolved on the default base, so expect to adjust them):
 ```bash
 docker build \
-  --build-arg BASE=python:3.11-slim \
+  --build-arg BASE=python:3.12-slim \
   --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cpu \
   -t domovoi-wake-trainer:latest scripts/wake_word/docker
 ```
@@ -124,7 +124,7 @@ docker build \
 
 | Input | Pinned how |
 |---|---|
-| Base image `pytorch/pytorch:2.4.1-cuda12.4-cudnn9-runtime` (Docker Hub) | By digest, `sha256:0a3b9fedefe1f61ac4d5a9de9015c0863db27ca0fde2d4e37e6268147980b726` (`ARG BASE`). |
+| Base image `pytorch/pytorch:2.14.1-cuda12.6-cudnn9-runtime` (Docker Hub) | By digest, `sha256:1262abc856a428933c0477b4be87079173a0b087b7691c47fcb396b7b5775c56` (`ARG BASE`). |
 | openWakeWord (`github.com/dscripka/openWakeWord`) | By commit, `OWW_REF` = `368c037` (the full SHA is in the Dockerfile). |
 | piper-sample-generator (`github.com/dscripka/piper-sample-generator`) | By commit, `PSG_REF` = `f1988a4`. |
 | Every Python package the pip installs bring in (PyPI) | By version and SHA-256: `requirements.lock`, installed with `pip install --require-hashes` (openWakeWord itself then with `--no-deps`): what pip installs on the pinned base, at the versions the 2026-10-13 spike trained with. |
@@ -174,7 +174,7 @@ training** always builds from the checkout, under the configured name.
 
 openWakeWord's *training* path (`openwakeword/train.py` + `openwakeword/data.py`)
 pulls a much larger stack than the inference install, and the upstream notebook
-pins **2022-era versions that do not install on py3.11 / torch 2.4**. The image
+pins **2022-era versions that do not install on py3.12 / torch 2.14**. The image
 installs these **modern, verified-working** versions instead (in a late
 Dockerfile layer so the slow base layers stay cached; `requirements.lock`
 holds them and the rest of the tree, hash-pinned):
@@ -277,6 +277,19 @@ anything:
    recordings of somebody's voice) and made again by the next run, and every
    run starts by removing any an earlier, killed run left. Synthetic clips
    stay cached.
+9. **torch 2.14 / torchaudio 2.11** (2026-11-20: torch 2.4.1 had open
+   advisories; 2.13 is the first release with none). Three small build-time
+   patches keep the 2022-era trainer code working on it, without new
+   packages: piper-sample-generator's `torch.load` of the v1.0.0 checkpoint
+   passes `weights_only=False` (torch 2.6+ loads weights only by default;
+   the file is SHA-256 checked first); `train.py`'s three
+   `torch.onnx.export` calls pass `dynamo=False` (the dynamo exporter,
+   default since 2.9, needs `onnxscript`); and `data.py` plus
+   torch-audiomentations' file loader read audio with speechbrain's
+   soundfile-based `audio_io.info`/`audio_io.load` instead of
+   `torchaudio.info` (gone in 2.9) and `torchaudio.load` (needs
+   `torchcodec` since 2.9). The base's Python is Ubuntu's, so the image
+   sets `PIP_BREAK_SYSTEM_PACKAGES=1` (PEP 668).
 
 **`--shm-size`.** The training DataLoader's worker processes pass batches through
 `/dev/shm`; Docker's 64 MB default overflows mid-train

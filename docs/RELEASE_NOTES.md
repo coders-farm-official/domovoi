@@ -4,6 +4,17 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.4.1 (unreleased) — The wake-word trainer image moves to torch 2.14
+
+The trainer image's pinned packages had known security advisories (torch
+2.4.1, pillow, urllib3, requests, certifi, brotli and others). Its base is
+now `pytorch/pytorch:2.14.1-cuda12.6-cudnn9-runtime` (by digest) and every
+pinned package is at a version with no open advisory; the advisory check
+now fails CI on the trainer's locks too. On a server that turned wake-word
+training on, the next update rebuilds the image once: about 4 GB more to
+download. It is still a CUDA 12 image (12.6, was 12.4). Nothing changes
+in how training is used.
+
 ## 2026-11-20 — 1.4.0
 
 Version 1.4.0: the server, the Windows Setup (1.4.0, with the Windows
