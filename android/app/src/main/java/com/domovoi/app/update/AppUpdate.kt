@@ -18,7 +18,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
  *   (web/backend/api/devices.py: the core's public view plus `join_url`);
  *   a room-mode phone reads the core's public `GET /v1/android-app` on the
  *   core it proved, with `join_url` = that core + `/join`.
- * - Never for a Google Play install (Play updates it itself), never for a
+ * - Never for a Google Play or F-Droid install (the store updates it), never for a
  *   debug build, and never when the release is signed by a key this install
  *   isn't (it couldn't install over it anyway: a self-built or Play-signed
  *   copy).
@@ -86,8 +86,9 @@ data class ThisInstall(
 /** What the app has to say about updates. Only [Available] and
  *  [NotOnServer] ever show outside Settings → About & updates. */
 sealed interface UpdateState {
-    /** Installed by Google Play, which updates it itself. */
-    data object PlayStore : UpdateState
+    /** Installed by an app store that updates it itself: Google Play, or
+     *  an F-Droid client ([store] names which, for the About line). */
+    data class StoreManaged(val store: String) : UpdateState
 
     /** A debug build: never compared with release builds. */
     data object DebugBuild : UpdateState
@@ -131,7 +132,26 @@ object AppUpdate {
     /** The join page's path (domovoi/main.py GET /join). */
     const val JOIN_PATH = "/join"
 
-    fun isPlayInstall(installer: String?): Boolean = installer == PLAY_STORE
+    /** F-Droid clients. F-Droid publishes the same developer-signed APK
+     *  as GitHub and the server, and updates it itself, as Play does.
+     *  The privileged extension installs on the client's behalf. */
+    val FDROID_CLIENTS = setOf(
+        "org.fdroid.fdroid",
+        "org.fdroid.fdroid.privileged",
+        "org.fdroid.basic",
+        "com.looker.droidify",
+        "com.machiav3lli.fdroid",
+    )
+
+    /** The store that keeps this install up to date, by its installer
+     *  package; null for a sideloaded or server-installed APK. */
+    fun storeName(installer: String?): String? = when (installer) {
+        PLAY_STORE -> "Google Play"
+        in FDROID_CLIENTS -> "F-Droid"
+        else -> null
+    }
+
+    fun isStoreManaged(installer: String?): Boolean = storeName(installer) != null
 
     fun isNewer(offered: Long, installed: Long): Boolean = offered > installed
 
@@ -162,7 +182,7 @@ object AppUpdate {
     }
 
     fun decide(install: ThisInstall, offer: AppOffer?): UpdateState {
-        if (isPlayInstall(install.installer)) return UpdateState.PlayStore
+        storeName(install.installer)?.let { return UpdateState.StoreManaged(it) }
         if (install.debuggable) return UpdateState.DebugBuild
         if (offer == null) return UpdateState.Unknown
         val rel = offer.release ?: return UpdateState.NoRelease
@@ -214,7 +234,7 @@ object AppUpdate {
 
     /** Settings → About & updates's line, for every state. */
     fun aboutText(state: UpdateState): String = noticeText(state) ?: when (state) {
-        UpdateState.PlayStore -> "Installed from Google Play, which keeps it up to date."
+        is UpdateState.StoreManaged -> "Installed from ${state.store}, which keeps it up to date."
         UpdateState.DebugBuild -> "Debug build: it isn't compared with the release builds your server hands out."
         UpdateState.Unknown -> "Your server didn't say which app release it offers."
         UpdateState.NoRelease -> "Your server has no app release to offer yet."
