@@ -117,7 +117,7 @@ final class SystemPartsTests: XCTestCase {
         p.portInUse = { [11434, 8051, 8052, 9467].contains($0) }
         let rep = p.run(pins: nil, ollamaMinimum: OllamaVersion("0.12.7"))
         // In port order; 9467's owner is out of a standard user's sight.
-        XCTAssertEqual(rep.conflicts.map(\.owner), ["node", "another program (perhaps another account's)", "Ollama"])
+        XCTAssertEqual(rep.conflicts.map(\.owner), ["node", "another program", "Ollama"])
         let ollama = try XCTUnwrap(rep.conflicts.first { $0.owner == "Ollama" })
         XCTAssertEqual(ollama.ports, [11434])
         XCTAssertEqual(ollama.ollamaVersion, "0.40.12")
