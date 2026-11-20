@@ -68,7 +68,7 @@ address it found isn't usable (a server with several network cards), tick
 
 A spare device always knows which server it belongs to (the enrolment code
 pins the server's key), so it asks only that one. (Asking every server in
-the house, coming in 1.4.0, is for Raspberry Pi satellites set up through the
+the house, since 1.4.0, is for Raspberry Pi satellites set up through the
 Wi-Fi portal with the server address left blank:
 [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#asking-every-house-an-approval-the-device-can-check-140).)
 If a device cannot join for a reason only the server knows (it reached the
