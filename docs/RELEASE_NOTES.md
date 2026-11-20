@@ -626,6 +626,10 @@ signed out and says "Signed out after 1 hour without admin activity".
   once it is updated (the same routes, docs/API_REFERENCE.md, "Videos");
   the iPhone app doesn't yet.
 
+### Draft changes view: a long rewrite no longer stalls the dashboard
+
+- Comparing two very different long drafts took seconds and gigabytes; it now stops at a fixed amount of work (well under a second, a few MB) and shows the changed stretch as removed then added, with the same view on the server and in the Android app.
+
 ## 2026-11-16 — 1.3.0
 
 Version 1.3.0: the server, the Windows Setup (1.3.0, with the Windows

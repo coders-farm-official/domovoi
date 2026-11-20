@@ -41,6 +41,7 @@ fields) start a draft.
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import json
 import logging
@@ -273,7 +274,7 @@ class DraftTurn:
             line = f"First draft of your {k.label.lower()}: {words} words."
             change = ""
         else:
-            change = diff.change_line((self.base or {}).get("body") or "", body)
+            change = await asyncio.to_thread(diff.change_line, (self.base or {}).get("body") or "", body)
             line = f"Version {version}: {change}."
             if newer is not None:
                 line = (f"Version {version}, based on version {based_on}: {change}. Version {newer} came in "
@@ -464,7 +465,10 @@ async def get_draft(draft_id: int) -> dict[str, Any]:
             raise HTTPException(status_code=404, detail="draft not found")
         versions = await _versions(s, draft_id)
     tpl = [{"id": t.id, "label": t.label} for t in templates.for_kind(d["kind"])]
-    return {"draft": d, "versions": _with_changes(versions), "templates": tpl, "formats": list(kinds.FORMATS)}
+    # Off the event loop: each diff is bounded (diff.WORK_BUDGET), but a
+    # draft can have many versions.
+    versions = await asyncio.to_thread(_with_changes, versions)
+    return {"draft": d, "versions": versions, "templates": tpl, "formats": list(kinds.FORMATS)}
 
 
 class EditBody(BaseModel):
@@ -525,7 +529,7 @@ async def edit_draft(draft_id: int, body: EditBody, request: Request = None) -> 
         async with session_scope() as s:
             latest = await _version(s, draft_id, None)
         return _stale(latest["version"] if latest else body.base_version)
-    v["change"] = diff.change_line(latest["body"] if latest else "", text_)
+    v["change"] = await asyncio.to_thread(diff.change_line, latest["body"] if latest else "", text_)
     return {"version": v}
 
 

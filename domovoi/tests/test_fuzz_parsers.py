@@ -274,30 +274,80 @@ def test_the_draft_diff_rebuilds_both_sides(old: str, new: str) -> None:
     assert diff.change_line(old, new)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "FUZZ FINDING (open): domovoi/drafts/diff.py's Myers diff keeps a copy of its V array per edit "
-    "step, so two unrelated drafts cost O((N+M)*D) time and memory: measured 1.6 s / 630 MB for two "
-    "2,000-word drafts and 6.9 s / 2.4 GB for 4,000 words; MAX_TOKENS (40,000) allows ~25 times that. "
-    "A hand edit (PUT /api/chat/drafts/{id}, up to 200,000 characters) runs it on the event loop, "
-    "and GET /api/chat/drafts/{id} diffs every version. The fix must keep the phone's twin "
-    "(DraftDiff.kt, shared_cases.json) in step."))
-def test_the_draft_diff_memory_is_bounded_for_unrelated_drafts() -> None:
-    """Deterministic (memory, not time): 200 unrelated words a side took
-    5.8 MiB; a diff whose cost grows with the input, not its square, needs
-    well under 2 MiB."""
+def _diff_cost(old: str, new: str) -> tuple[list[list[str]], float, int]:
+    """The diff, its seconds (untraced) and its peak bytes (traced)."""
+    import time
     import tracemalloc
 
     from domovoi.drafts import diff
 
-    old = " ".join(f"a{i}" for i in range(200))
-    new = " ".join(f"b{i}" for i in range(200))
+    t = time.perf_counter()
+    ops = diff.diff(old, new)
+    took = time.perf_counter() - t
     tracemalloc.start()
     try:
         diff.diff(old, new)
         peak = tracemalloc.get_traced_memory()[1]
     finally:
         tracemalloc.stop()
+    return ops, took, peak
+
+
+def _unrelated(words: int) -> tuple[str, str]:
+    return " ".join(f"a{i}" for i in range(words)), " ".join(f"b{i}" for i in range(words))
+
+
+def test_the_draft_diff_memory_is_bounded_for_unrelated_drafts() -> None:
+    """Was a fuzz finding: Myers kept a copy of its whole V array per edit
+    step, so two unrelated drafts cost O((N+M)*D): 200 unrelated words a
+    side peaked at 5.8 MiB, 2,000 words took 1.6 s / 630 MB and 4,000
+    words 6.9 s / 2.4 GB. Each step now keeps only its 2d+3 diagonals and
+    the work stops at WORK_BUDGET (deterministic: memory, not time)."""
+    ops, _, peak = _diff_cost(*_unrelated(200))
+    assert len(ops) > 4  # still compared word by word
     assert peak < 2 * 2 ** 20, f"diff of two unrelated 200-word drafts peaked at {peak // 2 ** 20} MiB"
+
+
+@pytest.mark.parametrize("shape", ["unrelated 4,000 words", "unrelated at the token cap",
+                                   "200,000 characters", "one word repeated", "two words at random"])
+def test_the_draft_diff_is_bounded_up_to_the_real_caps(shape: str) -> None:
+    """The worst a draft can ask of the diff: a hand edit is up to 200,000
+    characters (chat_drafts.MAX_BODY_CHARS) and the diff compares word by
+    word up to MAX_TOKENS. Measured after the fix: under 0.1 s and 7 MiB
+    for each (the limits here leave room for a slow CI runner); before it,
+    the unrelated cases took seconds to minutes and gigabytes. Past the
+    budget the diff keeps what both sides start and end with and shows the
+    stretch between as removed then added, and it still rebuilds both."""
+    import random
+
+    from domovoi.drafts import diff
+
+    rnd = random.Random(7)
+    old, new = {
+        "unrelated 4,000 words": _unrelated(4000),
+        "unrelated at the token cap": _unrelated(diff.MAX_TOKENS // 4),
+        "200,000 characters": ("Dear Sam, " + "a " * 99_990, "Dear Sam, " + "b " * 99_990),
+        "one word repeated": (" ".join(["x"] * 9_990), " ".join(["x"] * 10_000)),
+        "two words at random": (" ".join(rnd.choice("xy") for _ in range(10_000)),
+                                " ".join(rnd.choice("xy") for _ in range(10_000))),
+    }[shape]
+    ops, took, peak = _diff_cost(old, new)
+    assert "".join(t for op, t in ops if op != "+") == "".join(diff.tokens(old))
+    assert "".join(t for op, t in ops if op != "-") == "".join(diff.tokens(new))
+    assert peak < 16 * 2 ** 20, f"{shape}: peaked at {peak // 2 ** 20} MiB"
+    assert took < 2.0, f"{shape}: took {took:.2f} s"
+
+
+def test_the_draft_diff_past_its_budget_shows_one_replaced_stretch() -> None:
+    """The plain view, with the ops the clients already read (the iPhone app
+    drops any step that isn't an [op, text] pair): what both versions start
+    and end with kept, one removed block, one added block."""
+    from domovoi.drafts import diff
+
+    a, b = _unrelated(1000)
+    old, new = "# Notes\n\n" + a + "\n\nThanks, Sam", "# Notes\n\n" + b + "\n\nThanks, Sam"
+    assert diff.diff(old, new) == [["=", "# Notes\n\n"], ["-", a], ["+", b], ["=", "\n\nThanks, Sam"]]
+    assert diff.diff("same", "same") == [["=", "same"]]
 
 
 #: Pieces of the phrases the patterns look for, so that generated text
