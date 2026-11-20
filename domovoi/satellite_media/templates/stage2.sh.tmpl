@@ -11,7 +11,9 @@
 #
 # Idempotent + re-entrant (systemd Restart=on-failure): markers under
 # /var/lib/domovoi/bootstrap-steps/, done-flag at
-# /var/lib/domovoi/bootstrap-done.
+# /var/lib/domovoi/bootstrap-done. Stage 1 clears both when new card files
+# are written over a root that was set up before ("Card files new to this
+# root" in firstrun.sh), so this stage runs again for the new card.
 #
 # Placeholders: @SAT_USER@, @CODE_EXT_ALLOW@ (and SDIST_ONLY, APT_PACKAGES
 # and OWW_PINS where they are assigned below; a multi-line value must never

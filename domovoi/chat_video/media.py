@@ -372,7 +372,7 @@ def _num(v: Any) -> float | None:
 def _int(v: Any) -> int | None:
     try:
         return int(v)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # OverflowError: JSON's 1e400 is inf
         return None
 
 
@@ -417,8 +417,9 @@ def picture_fits(size: tuple[int, int]) -> bool:
 
 
 # ─── Pass 0: scenes ─────────────────────────────────────────────────────
-_PTS = re.compile(r"pts_time:([0-9.]+)")
-_SCORE = re.compile(r"lavfi\.scene_score=([0-9.]+)")
+# One number each ("1.2.3" is not one: float() refused it, fuzzing 2026-11).
+_PTS = re.compile(r"pts_time:([0-9]+(?:\.[0-9]*)?|\.[0-9]+)")
+_SCORE = re.compile(r"lavfi\.scene_score=([0-9]+(?:\.[0-9]*)?|\.[0-9]+)")
 
 
 def parse_scenes(log_text: str) -> list[tuple[float, float]]:

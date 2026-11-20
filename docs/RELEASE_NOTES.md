@@ -4,6 +4,16 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.4.0 (unreleased) — A satellite card that was used before sets up again
+
+- **What changed.** Preparing a room's SD card onto a card that had been set up before no longer leaves the satellite restarting forever with a slow amber light: it sets up as a new room, with its setup Wi-Fi, and keeps the old room's settings in a `before-new-card-…` folder on the card.
+
+## 1.4.0 (unreleased) — Setup code, a Mac's short address, Rooms' first step
+
+- The setup code is accepted however a phone types it: capitals, spaces or dashes (mixed is fine, and some gaps can be left out, as long as at least one is typed) (a wrong code is still refused and still counts toward the wait), and the dashboard's setup-code fields no longer auto-capitalise or autocorrect.
+- On a Mac server, `http://<the Mac's address>/` (no port) now opens the dashboard instead of a 400, and that refusal, for a name that isn't the server's, never suggests the virtual machine's private address.
+- The Rooms page with no rooms has a "prepare a room's SD card" button that opens that card and scrolls to it.
+
 ## 1.4.0 (unreleased) — Each room's music player is rebuilt once, while it is quiet
 
 - **What changed.** The stream each room's music player sends to its
@@ -625,6 +635,10 @@ signed out and says "Signed out after 1 hour without admin activity".
   server's speed from each finished video. The Android app offers it too
   once it is updated (the same routes, docs/API_REFERENCE.md, "Videos");
   the iPhone app doesn't yet.
+
+### Draft changes view: a long rewrite no longer stalls the dashboard
+
+- Comparing two very different long drafts took seconds and gigabytes; it now stops at a fixed amount of work (well under a second, a few MB) and shows the changed stretch as removed then added, with the same view on the server and in the Android app.
 
 ## 2026-11-16 — 1.3.0
 

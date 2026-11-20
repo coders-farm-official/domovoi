@@ -298,7 +298,11 @@ pkgbuild --root "$P" --component-plist "$W/component.plist" --identifier com.dom
 echo "== productbuild"
 R=$W/resources; mkdir -p "$R"
 cp "$MAC/installer/resources/"*.html "$R/"
-cp "$REPO/LICENSE" "$R/LICENSE.txt"
+# Installer wraps the licence page itself, so each paragraph goes in as one
+# line: LICENSE's own line breaks (about 80 columns) left single words on
+# lines of their own there (Sitting 3, S3-1). Blank lines stay paragraph
+# breaks; the words are untouched.
+awk 'BEGIN { RS = ""; ORS = "\n\n" } { gsub(/[ \t]*\n[ \t]*/, " "); print }' "$REPO/LICENSE" >"$R/LICENSE.txt"
 sed -e "s/@PKG_VERSION@/$PKG_VERSION/g" "$MAC/installer/distribution.xml" >"$W/distribution.xml"
 productbuild --distribution "$W/distribution.xml" --resources "$R" --package-path "$W" "$OUT/DomovoiSetup-mac.pkg" >/dev/null
 

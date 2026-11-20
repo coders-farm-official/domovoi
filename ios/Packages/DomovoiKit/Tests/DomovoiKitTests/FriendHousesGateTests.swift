@@ -285,7 +285,8 @@ final class FriendHousesGateTests: XCTestCase {
             container: container,
             probe: { true },
             wait: { _ in try await Task.sleep(for: .seconds(3600)) },
-            tick: { _ in try await Task.sleep(for: .seconds(3600)) }
+            tick: { _ in try await Task.sleep(for: .seconds(3600)) },
+            serverAnsweredAtStart: true
         )
     }
 

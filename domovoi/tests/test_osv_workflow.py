@@ -4,13 +4,15 @@ Pure file checks, no network, no DB. The scanner binary is pinned by version
 and SHA-256 and every action by commit SHA; the token is read-only and there
 is no secret; the job scans the lock files it should (every one that exists,
 named in the workflow) and fails on a vulnerability; and every accepted
-advisory in osv-scanner.toml has a reason and an expiry date that is not too
-far away.
+advisory in osv-scanner.toml (the root one, and any beside a lock file in its
+own folder, which is the one OSV-Scanner reads when OpenSSF Scorecard runs it
+over the repo) has a reason and an expiry date that is not too far away.
 """
 
 from __future__ import annotations
 
 import datetime
+import os
 import re
 import tomllib
 from pathlib import Path
@@ -21,6 +23,19 @@ REPO = Path(__file__).resolve().parents[2]
 TEXT = (REPO / ".github" / "workflows" / "osv.yml").read_text(encoding="utf-8")
 DOC = yaml.safe_load(TEXT)
 CONFIG = tomllib.loads((REPO / "osv-scanner.toml").read_text(encoding="utf-8"))
+#: Folders never searched for osv-scanner.toml: hidden ones (.git, and
+#: .claude, which can hold other worktrees), installed packages, build output.
+_SKIP_DIRS = {"node_modules", "build", "__pycache__", "venv"}
+
+
+def _all_configs() -> list[Path]:
+    found = []
+    for root, dirs, files in os.walk(REPO):
+        dirs[:] = [d for d in dirs if not d.startswith(".") and d not in _SKIP_DIRS]
+        if "osv-scanner.toml" in files:
+            found.append(Path(root) / "osv-scanner.toml")
+    return sorted(found)
+
 #: Every file the blocking step has to name.
 BLOCKING = [
     "requirements.lock",
@@ -87,7 +102,8 @@ def test_the_blocking_scan_names_every_lock_and_fails_on_a_finding():
 def test_what_the_scan_names_exists():
     for f in BLOCKING:
         assert list(REPO.glob(f)), f
-    for f in ("android/gradle/verification-metadata.xml", "scripts/wake_word/docker/constraints.txt"):
+    for f in ("android/gradle/verification-metadata.xml", "scripts/wake_word/docker/requirements.lock",
+              "scripts/wake_word/docker/torch-cpu.lock"):
         assert (REPO / f).is_file(), f
 
 
@@ -95,11 +111,17 @@ def test_the_android_and_constraints_report_does_not_fail_the_job():
     info = next(s for s in _steps() if s.get("name", "").startswith("Report"))
     assert info["continue-on-error"] is True
     assert "verification-metadata.xml:android/gradle/verification-metadata.xml" in info["run"]
-    assert "constraints.txt" in info["run"] and "GITHUB_STEP_SUMMARY" in info["run"]
+    assert "requirements.txt:scripts/wake_word/docker/requirements.lock" in info["run"]
+    assert "requirements.txt:scripts/wake_word/docker/torch-cpu.lock" in info["run"]
+    assert "GITHUB_STEP_SUMMARY" in info["run"]
 
 
 def test_every_accepted_vulnerability_has_a_reason_and_a_near_expiry():
-    entries = CONFIG.get("IgnoredVulns", [])
+    configs = _all_configs()
+    assert REPO / "osv-scanner.toml" in configs
+    entries = []
+    for path in configs:
+        entries += tomllib.loads(path.read_text(encoding="utf-8")).get("IgnoredVulns", [])
     today = datetime.date.today()
     for e in entries:
         assert re.fullmatch(r"(GHSA(-[0-9a-z]{4}){3}|PYSEC-\d{4}-\d+|CVE-\d{4}-\d+)", e["id"]), e

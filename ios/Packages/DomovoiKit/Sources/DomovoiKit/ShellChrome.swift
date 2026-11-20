@@ -191,6 +191,17 @@ public func shellChrome(
     let accessibility = name == nil ? ShellStrings.connectPill : ShellStrings.switchServer
 
     switch screen {
+    case .connecting:
+        // A cat and one line for the moment it takes at home: no pill, no
+        // banner, nothing to tap (`AppShell.kt`'s `ConnectingScreen`).
+        return ShellChrome(
+            screen: screen,
+            pill: nil,
+            banner: nil,
+            offersTrustAgain: false,
+            serverCard: choice
+        )
+
     case .pairing, .tokenTroubleCard:
         // Both replace the whole shell: no pill, no banner, and the card's own
         // words come from `TokenTrouble`, not from here.
@@ -326,7 +337,8 @@ public enum ShellHeaderFold: String, Equatable, Sendable, CaseIterable {
     /// branch, where it was always true — and it left with the gate.
     ///
     /// The trimming is here rather than at the call site because it is part of
-    /// the rule: ``ShellStrings/localTopbar`` carries two leading spaces for a
+    /// the rule: the local shell's bar title carries two leading spaces
+    /// (``ShellStrings/localTitleSpacing``) for a
     /// bar that draws them beside a dot, and **a screen reader reads a title,
     /// not a layout**. A nil is "apply no title at all", which is not the same
     /// as an empty one — an empty large title still reserves the large bar's

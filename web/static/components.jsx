@@ -3503,6 +3503,7 @@ const LoginModal = ({ onClose }) => {
               <div className="field">
                 <label>setup code</label>
                 <input className="cal-inp" value={code} ref={firstField}
+                       autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false}
                        placeholder="eight-words-separated-by-dashes"
                        onChange={(e) => setCode(e.target.value)}/>
               </div>
@@ -3975,7 +3976,7 @@ const FirstRunWelcome = () => {
           <div className="field">
             <label>setup code</label>
             <input className="cal-inp" value={code} ref={firstField}
-                   autoComplete="off" spellCheck={false}
+                   autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false}
                    placeholder="eight-words-separated-by-dashes"
                    onChange={(e) => setCode(e.target.value)} onKeyDown={enter}/>
             <button type="button" className="home-link first-run-where-toggle"

@@ -254,12 +254,18 @@ public final class Preflight {
     func owner(of port: Int) -> (name: String, program: String?, pid: Int32?) {
         guard let r = try? runner.run(Command("/usr/sbin/lsof", ["-nP", "-a", "-iTCP:\(port)", "-sTCP:LISTEN", "-Fpc"], timeout: 10)), r.ok,
               let pline = r.stdout.split(separator: "\n").first(where: { $0.hasPrefix("p") }), let pid = Int32(pline.dropFirst()) else {
-            return ("another program\(isRoot ? "" : " (perhaps another account's)")", nil, nil)
+            // Unnamed: lsof shows a standard user only its own programs, so
+            // the app's sheet says it may be another account's (S3-9: the
+            // hint was part of the name and so said three times).
+            return (Self.unnamedOwner, nil, nil)
         }
         let comm = r.stdout.split(separator: "\n").first(where: { $0.hasPrefix("c") }).map { String($0.dropFirst()) }
         let path = ProcessJobs.executable(of: pid)
         return (Self.friendlyName(command: comm, path: path), path, pid)
     }
+
+    /// The owner of a port whose program this account can't see.
+    public static let unnamedOwner = "another program"
 
     public static func friendlyName(command: String?, path: String?) -> String {
         let p = path ?? "", c = command ?? ""
@@ -271,7 +277,7 @@ public final class Preflight {
         }
         if !c.isEmpty { return c }
         if !p.isEmpty { return (p as NSString).lastPathComponent }
-        return "another program"
+        return unnamedOwner
     }
 
     // ─── the real probes ───────────────────────────────────────────────
@@ -279,19 +285,32 @@ public final class Preflight {
     /// A listener on the port: a wildcard bind fails (EADDRINUSE: someone
     /// has the port on some address), or a loopback connect succeeds.
     public static func realPortInUse(_ port: Int) -> Bool {
-        var inUse = false
+        PortCheck.inUse(port, probe: .real, wait: { Thread.sleep(forTimeInterval: $0) })
+    }
+
+    /// Whether a plain bind to the port on every address is refused
+    /// (`reuse`: with SO_REUSEADDR, which a connection lingering in
+    /// TIME_WAIT doesn't refuse, and a program listening on every address
+    /// does).
+    static func bindRefused(_ port: Int, reuse: Bool) -> Bool {
         let s = socket(AF_INET, SOCK_STREAM, 0)
-        if s >= 0 {
-            var a = sockaddr_in()
-            a.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-            a.sin_family = sa_family_t(AF_INET)
-            a.sin_port = in_port_t(UInt16(port).bigEndian)
-            a.sin_addr.s_addr = INADDR_ANY
-            let rc = withUnsafePointer(to: &a) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(s, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) } }
-            if rc != 0 && errno == EADDRINUSE { inUse = true }
-            close(s)
+        guard s >= 0 else { return false }
+        defer { close(s) }
+        if reuse {
+            var one: Int32 = 1
+            setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &one, socklen_t(MemoryLayout<Int32>.size))
         }
-        if inUse { return true }
+        var a = sockaddr_in()
+        a.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        a.sin_family = sa_family_t(AF_INET)
+        a.sin_port = in_port_t(UInt16(port).bigEndian)
+        a.sin_addr.s_addr = INADDR_ANY
+        let rc = withUnsafePointer(to: &a) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(s, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) } }
+        return rc != 0 && errno == EADDRINUSE
+    }
+
+    /// Whether something answers a connect to 127.0.0.1:`port`.
+    static func answersLocally(_ port: Int) -> Bool {
         let c = socket(AF_INET, SOCK_STREAM, 0)
         guard c >= 0 else { return false }
         defer { close(c) }

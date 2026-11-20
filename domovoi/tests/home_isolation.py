@@ -52,6 +52,7 @@ import shutil
 import sys
 import tempfile
 import time
+import types
 from pathlib import Path
 
 #: The home the run started from (the developer's), inherited by workers.
@@ -288,4 +289,9 @@ def write_report(terminalreporter) -> None:
     for line in lines:
         terminalreporter.write_line(line, red=True)
     # And in the last line, beside "N passed": the exit status alone is easy to miss.
-    terminalreporter.stats.setdefault("real-home writes", []).extend(_state["leaks"])
+    # Objects, not the bare tuples: other plugins walk every stats list as
+    # reports (Hypothesis reads report.__dict__ and crashed on a tuple,
+    # CI 2026-11-20).
+    terminalreporter.stats.setdefault("real-home writes", []).extend(
+        types.SimpleNamespace(leak=leak) for leak in _state["leaks"]
+    )

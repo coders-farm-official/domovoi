@@ -70,7 +70,10 @@ def _extended(b: bytes) -> float:
         return 0.0
     if exp == 0x7FFF:
         return math.inf
-    value = mant * 2.0 ** (exp - 16383 - 63)
+    try:
+        value = mant * 2.0 ** (exp - 16383 - 63)
+    except OverflowError:  # past a double's range: no real rate (fuzzing, 2026-11)
+        value = math.inf
     return -value if b[0] & 0x80 else value
 
 
@@ -87,7 +90,9 @@ def read_aiff(f: BinaryIO, size: int) -> tuple[float | None, ID3Tags | None]:
             comm = f.read(18)
             frames = struct.unpack_from(">I", comm, 2)[0]
             rate = _extended(comm[8:18])
-            if rate and math.isfinite(rate):
+            # A negative rate, or one so small the length is infinite, is no
+            # length (found by fuzzing, 2026-11).
+            if rate > 0 and math.isfinite(rate) and math.isfinite(frames / rate):
                 duration = frames / rate
         elif cid in _ID3_CHUNKS and tags is None:
             tags = _id3_chunk(f, at, n)

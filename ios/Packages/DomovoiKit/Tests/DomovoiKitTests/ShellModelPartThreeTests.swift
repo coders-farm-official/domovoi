@@ -49,7 +49,8 @@ final class ShellModelPartThreeTests: XCTestCase {
             tick: { _ in
                 ticks.mutate { $0 += 1 }
                 try await Task.sleep(for: .seconds(3600))
-            }
+            },
+            serverAnsweredAtStart: true
         )
         return (model, container)
     }

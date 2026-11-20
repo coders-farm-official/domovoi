@@ -108,12 +108,8 @@ public func localBanner(for choice: ServerChoice, canTrustAgain: Bool) -> String
         return nil
     case .notOurs(let label):
         return identityChangedText(address: label, canTrustAgain: canTrustAgain)
-    case .coreDown(let label):
-        return "\(label) is up but its core is not answering (starting, "
-            + "updating, or busy), so nothing was sent to it yet. Showing media on "
-            + "this phone; the workspace comes back when the core does."
-    case .unreachable(let label):
-        return "Can't reach \(label). Showing media on this phone; "
-            + "the workspace comes back when the server does."
+    case .looking, .unreachable, .coreDown:
+        // ``ServerChoice/awayLine``, `ShellMode.kt`'s `awayLine()` (2026-11-19).
+        return choice.awayLine
     }
 }

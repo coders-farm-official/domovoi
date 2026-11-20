@@ -255,6 +255,13 @@ dev = [
     # (domovoi/tests/test_phonemizer_golden.py), on the runtime a server and
     # the phone run (the real-clients floor, below).
     "onnxruntime>=1.28",
+    # Test-only tools, never installed with Domovoi: the property tests of
+    # the parsers of outside input (hypothesis, MPL-2.0: a test tool, owner
+    # rule 2026-11-15; domovoi/tests/test_fuzz_parsers.py) and the coverage
+    # report (pytest-cov, MIT, with coverage, Apache-2.0). CI pins them in
+    # .github/ci-test-tools-requirements.txt, not in requirements.lock.
+    "hypothesis>=6.170",
+    "pytest-cov>=7.1",
 ]
 
 [build-system]
@@ -275,6 +282,19 @@ markers = [
     "slow: a test that builds a large fixture (seconds, not minutes), such as Up next's 100k-track refill timing; runs by default, deselect with -m 'not slow'",
     "xdist_group(name): under pytest -n, tests of one group run on one worker, one at a time (they share something outside the process: Postgres roles, a fixed temp file); see domovoi/tests/conftest.py",
 ]
+
+# Coverage (pytest --cov, the pytest shards in CI; docs/CONTRIBUTING.md,
+# "Coverage"). Line coverage of the shipped code, tests left out. "sysmon"
+# (Python 3.12's sys.monitoring) costs far less than the classic tracer.
+[tool.coverage.run]
+source = ["domovoi", "web", "satellite", "plugins"]
+omit = ["*/tests/*", "*/node_modules/*"]
+core = "sysmon"
+relative_files = true
+
+[tool.coverage.report]
+skip_empty = true
+precision = 1
 
 # Lint only, never `ruff format`: the code is not reformatted by a tool.
 # CI runs `ruff check` (the "ruff" job); see docs/CONTRIBUTING.md, "Linting".

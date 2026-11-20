@@ -32,12 +32,13 @@ domovoi worker  --shells out-->  train_wake_word.py  --docker run-->  container
 | File | Role |
 |---|---|
 | `scripts/wake_word/train_wake_word.py` | **Host wrapper**: what `wake_word_train_command` runs. Stdlib-only (the host may not have torch). Senses Docker and the GPU, removes a leftover training container, builds the `docker run` with its resource caps, streams the output, stops the container at its deadline or when told to stop, and returns the container's exit code unchanged. `--stop` removes every training container. With `WAKE_SYNTHETIC_ONLY=1` (a synthetic-voices-only word) it mounts no clips folder at all. `--preview --phrase P --out DIR [--count N]` ("Hear the training voices") runs the image's preview mode in its own container (`domovoi-wake-preview`, label `org.domovoi.wake-preview`, so a training's clean-up never touches it): CPU, two CPUs and 4 GB at most, `--network none`, no cache volume, no clips; `--stop-preview` removes it. |
-| `scripts/wake_word/docker/Dockerfile` | **One image**, GPU or CPU. Base pinned by digest, the two upstream repositories by commit, every pip install held by `constraints.txt`; bakes the Piper generator checkpoint and the two feature models (SHA-256 checked). The ~18 GB training data is **not** baked: it lives in a named cache volume. |
-| `scripts/wake_word/docker/constraints.txt` | The version of every Python package the image's pip installs bring in (`PIP_CONSTRAINT`). |
+| `scripts/wake_word/docker/Dockerfile` | **One image**, GPU or CPU. Base pinned by digest, the two upstream repositories by commit, every pip install pinned by hash (`requirements.lock`, `--require-hashes`); bakes the Piper generator checkpoint and the two feature models (SHA-256 checked). The ~18 GB training data is **not** baked: it lives in a named cache volume. |
+| `scripts/wake_word/docker/requirements.lock` | Every Python package the image's pip installs bring in, by version and SHA-256 (`pip install --require-hashes`). |
+| `scripts/wake_word/docker/torch-cpu.lock` | torch and torchaudio for the CPU/arm `BASE` build-arg only, by version and SHA-256. |
 | `scripts/wake_word/docker/entrypoint.py` | **Container entrypoint**: lowers its own priority, detects GPU/CPU, downloads the data once, generates synthetic positives, injects the recorded clips, trains, writes `/data/models/<slug>.onnx`, exits non-zero on any failure. `--warm` downloads the data and exits. `WAKE_SYNTHETIC_ONLY=1` uses no recorded clip even if `/data/clips` is mounted. A run whose phrase (or the household's pronunciation) changed since the last run of that word drops the old synthetic clips first, so a respelling is really spoken. `--preview` writes `WAKE_PREVIEW_COUNT` clips (default 4) of `WAKE_PHRASE` to `/data/preview` with the generator, settings and pronunciations the training positives use, from speaker pairs the training itself walks, and exits (about 17 s on two CPU cores, measured 2026-11-11). |
 | `scripts/wake_word/docker/train_runner.py` | Runs `train.py` after giving every word of the phrase a pronunciation (the core's first, espeak-ng's for the rest). |
 | `scripts/wake_word/docker/train_config.template.yaml` | openWakeWord training config, rendered per run from env. |
-| `scripts/wake_word/docker/requirements.txt` | Readable list of what the Dockerfile installs and why (the versions are in `constraints.txt`). |
+| `scripts/wake_word/docker/requirements.txt` | Readable list of what the Dockerfile installs and why (the versions and hashes are in `requirements.lock`). |
 
 ---
 
@@ -126,7 +127,7 @@ docker build \
 | Base image `pytorch/pytorch:2.4.1-cuda12.4-cudnn9-runtime` (Docker Hub) | By digest, `sha256:0a3b9fedefe1f61ac4d5a9de9015c0863db27ca0fde2d4e37e6268147980b726` (`ARG BASE`). |
 | openWakeWord (`github.com/dscripka/openWakeWord`) | By commit, `OWW_REF` = `368c037` (the full SHA is in the Dockerfile). |
 | piper-sample-generator (`github.com/dscripka/piper-sample-generator`) | By commit, `PSG_REF` = `f1988a4`. |
-| Every Python package the pip installs bring in (PyPI) | `constraints.txt` through `PIP_CONSTRAINT`: the `pip freeze` of the image the 2026-10-13 spike trained with, less what the base ships; a rebuild's freeze is identical. |
+| Every Python package the pip installs bring in (PyPI) | By version and SHA-256: `requirements.lock`, installed with `pip install --require-hashes` (openWakeWord itself then with `--no-deps`): what pip installs on the pinned base, at the versions the 2026-10-13 spike trained with. |
 | `en-us-libritts-high.pt` (Piper generator v1.0.0, GitHub release asset, ~255 MB) | SHA-256 checked at build. |
 | `melspectrogram.onnx`, `embedding_model.onnx` (openWakeWord v0.5.1 release assets) | SHA-256 checked at build. |
 | The apt packages (`espeak-ng`, `ffmpeg`, `build-essential`, ...) | Not pinned: whatever the base's Ubuntu archive serves that day, checked by apt against the archive's signature. |
@@ -175,8 +176,8 @@ openWakeWord's *training* path (`openwakeword/train.py` + `openwakeword/data.py`
 pulls a much larger stack than the inference install, and the upstream notebook
 pins **2022-era versions that do not install on py3.11 / torch 2.4**. The image
 installs these **modern, verified-working** versions instead (in a late
-Dockerfile layer so the slow base layers stay cached; `constraints.txt`
-holds the rest of the tree):
+Dockerfile layer so the slow base layers stay cached; `requirements.lock`
+holds them and the rest of the tree, hash-pinned):
 
 | Package | Version | Needed by |
 |---|---|---|

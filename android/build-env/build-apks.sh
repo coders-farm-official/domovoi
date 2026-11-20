@@ -33,6 +33,32 @@ export GRADLE_USER_HOME="${GRADLE_USER_HOME:-$(mktemp -d /tmp/gradle-home.XXXXXX
 [ -f "$src/android/gradlew" ] || { echo "build-apks: $src is not a checkout of the repo" >&2; exit 2; }
 mkdir -p "$out"
 
+# DOMOVOI_MAVEN_MIRROR (CI sets it): a mirror of Maven Central, asked before Central.
+# A runner Central turns away answers "Could not find" for every library
+# for minutes on end, longer than the retries below wait (CI, 2026-11-20).
+# Where a file comes from changes nothing in the APK: every one is still
+# checked against android/gradle/verification-metadata.xml.
+if [ -n "${DOMOVOI_MAVEN_MIRROR:-}" ]; then
+  case "$DOMOVOI_MAVEN_MIRROR" in
+    https://*) ;;
+    *) echo "build-apks: DOMOVOI_MAVEN_MIRROR must be an https:// URL" >&2; exit 2 ;;
+  esac
+  mkdir -p "$GRADLE_USER_HOME/init.d"
+  cat >"$GRADLE_USER_HOME/init.d/central-mirror.gradle" <<EOF
+settingsEvaluated { s ->
+    [s.pluginManagement.repositories, s.dependencyResolutionManagement.repositories].each { repos ->
+        // Right after google(), not first: a few Android build libraries
+        // (transform-api) are on both with different bytes, and the
+        // verification metadata holds Google's.
+        def r = repos.maven { name = 'CentralMirror'; url = '$DOMOVOI_MAVEN_MIRROR' }
+        repos.remove(r)
+        repos.add(repos.findIndexOf { it.name == 'Google' } + 1, r)
+    }
+}
+EOF
+  echo "== Maven Central mirror, asked before Central: $DOMOVOI_MAVEN_MIRROR"
+fi
+
 echo "== build env"
 cat /etc/domovoi-build-env.txt
 echo "java: $(command -v java) ($JAVA_HOME)"

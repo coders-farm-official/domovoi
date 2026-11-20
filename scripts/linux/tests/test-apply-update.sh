@@ -5023,7 +5023,7 @@ case_verifier_ignores_the_checkouts_replace_refs() {
   local sha_x; sha_x=$(g rev-parse HEAD)
   g checkout -q main
   g replace "$SHA_S" "$sha_x"
-  check "the checkout's git now reads X for S" bash -c 'git -C "$1" show "$2:scripts/linux/os-jobs.sh" | grep -q planted' _ "$REPO" "$SHA_S"
+  check "the git of the checkout now reads X for S" bash -c 'git -C "$1" show "$2:scripts/linux/os-jobs.sh" | grep -q planted' _ "$REPO" "$SHA_S"
   check "HEAD still names S" eq "$(g rev-parse HEAD)" "$SHA_S"
   SIGNERS=$CASE/keys/allowed_signers run_unit
   check "status ok" eq "$(field status)" '"ok"'
@@ -5384,7 +5384,7 @@ case_owner_a_taken_folder_is_given_back_before_any_git() {
   check "the folder is writable again" test -w "$REPO/domovoi/searxng"
   check "said so" said "gave 1 path(s) in $(cd "$REPO" && pwd -P) back to tester, which a container had taken over"
   check "no step of its own" eq "$(step_names)" "signature stop-services start-services health searxng"
-  check "the dashboard's pull can replace settings.yml now" \
+  check "the dashboard pull can replace settings.yml now" \
     bash -c 'printf "x\n" >"$1/domovoi/searxng/settings.yml.new" && rm "$1/domovoi/searxng/settings.yml.new"' _ "$REPO"
   end_case
 }

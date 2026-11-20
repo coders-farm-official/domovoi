@@ -54,6 +54,11 @@ MAX_EVENTS = 5000
 MAX_OCCURRENCES = 1500
 MAX_RULE_STEPS = 20000
 MAX_TEXT = 200
+#: The longest an event may last and still keep its end: a feed's
+#: ``DURATION:PT99999999H`` (or a DTEND thousands of years on) is not
+#: believed, and the event shows with no end (an all-day one as one day),
+#: rather than its end date overflowing (found by fuzzing, 2026-11).
+MAX_SPAN = timedelta(days=3660)
 
 _WEEKDAYS = ("MO", "TU", "WE", "TH", "FR", "SA", "SU")
 
@@ -410,12 +415,20 @@ class _Zones:
 
 _DT_RE = re.compile(r"^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})?(Z)?)?$")
 
+#: The years a date may have. Python's datetime ends at 1 and 9999, and a
+#: date at either end overflows once a zone, a duration or a recurrence
+#: step is applied (found by fuzzing, 2026-11): such a value is read as no
+#: date. Outlook's VTIMEZONE rules start in 1601, well inside.
+YEARS = (1000, 9000)
+
 
 def _parse_naive(value: str) -> datetime | None:
     m = _DT_RE.match(value.strip())
     if not m:
         return None
     y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    if not YEARS[0] <= y <= YEARS[1]:
+        return None
     hh = int(m.group(4) or 0)
     mm = int(m.group(5) or 0)
     ss = int(m.group(6) or 0)
@@ -469,7 +482,10 @@ def _duration(value: str) -> timedelta | None:
         return None
     sign = -1 if m.group(1) == "-" else 1
     w, d, h, mi, s = (int(g or 0) for g in m.groups()[1:])
-    return sign * timedelta(weeks=w, days=d, hours=h, minutes=mi, seconds=s)
+    try:
+        return sign * timedelta(weeks=w, days=d, hours=h, minutes=mi, seconds=s)
+    except OverflowError:  # past timedelta's range: no duration
+        return None
 
 
 # ─── Recurrence rules ────────────────────────────────────────────────────
@@ -802,6 +818,10 @@ def parse_ics(
         return st is not None and st.value.strip().upper() == "CANCELLED"
 
     def span(c: _Component, start: _When) -> timedelta | None:
+        length = _span(c, start)
+        return length if length is None or length <= MAX_SPAN else None
+
+    def _span(c: _Component, start: _When) -> timedelta | None:
         end = _when(c.first("DTEND"), zones)
         if end is not None:
             if start.all_day:

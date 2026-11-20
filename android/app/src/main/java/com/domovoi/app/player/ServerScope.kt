@@ -82,3 +82,20 @@ object ServerSwitch {
         return ServerSwitchPlan(kept, keptIndex, removed, currentGoes)
     }
 }
+
+/** Something in the queue could not be played ([PlayerController.playFailures]). */
+data class PlayFailure(val title: String?, val fromServer: Boolean)
+
+/**
+ * The toast for a [PlayFailure]. [homeOutOfReach]: the saved server can't be
+ * reached right now, which is almost always why a song from home won't play,
+ * so the line says so; otherwise only what failed.
+ */
+fun playFailureText(failure: PlayFailure, homeOutOfReach: Boolean): String {
+    val what = failure.title?.takeIf { it.isNotBlank() }?.let { "“$it”" } ?: "that"
+    return if (failure.fromServer && homeOutOfReach) {
+        "Couldn't play $what: it's at home, and plays again when the phone reaches home."
+    } else {
+        "Couldn't play $what."
+    }
+}

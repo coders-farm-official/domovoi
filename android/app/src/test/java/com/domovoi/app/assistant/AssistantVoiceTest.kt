@@ -100,7 +100,9 @@ class AssistantVoiceTest {
         clockStyle = { ClockStyle(ZoneId.of("America/Los_Angeles"), Locale.US, is24Hour = false) },
     ).also { c -> scope.launch { c.messages.collect { said += it } } }
 
-    private fun until(what: String, timeoutMs: Long = 5_000, ok: () -> Boolean) {
+    // 20 s, not 5: a busy CI runner once took longer than 5 s for a step
+    // (main 7eeafcf2, 2026-11-20). A passing wait still ends at once.
+    private fun until(what: String, timeoutMs: Long = 20_000, ok: () -> Boolean) {
         val end = System.currentTimeMillis() + timeoutMs
         while (!ok()) {
             if (System.currentTimeMillis() > end) fail("timed out waiting for: $what (said $said)")

@@ -532,3 +532,73 @@ def test_the_report_is_where_the_mac_helper_writes_it() -> None:
     assert 'shortAddressFile = folder + "/short_address.json"' in swift
     assert 'folder = "/var/lib/domovoi-mac"' in swift
     assert sa.HOST_REPORT == "/var/lib/domovoi-mac/short_address.json"
+
+
+# ─── a VM install: the host's LAN address from lan.json ───────────────────
+
+VM_IP = "192.168.64.6"  # the VM's private address, which no device reaches
+MAC_LAN_IP = "192.168.1.20"
+
+
+def _vm_svc(tmp_path, monkeypatch, *, lan: str | None, in_vm: bool = True) -> ShortAddress:
+    monkeypatch.setattr(sa, "_host_lan_ip", lambda: lan)
+    monkeypatch.setattr(sa, "_in_vm", lambda: in_vm)
+    monkeypatch.setattr(sa, "configured_hosts", lambda: ())
+    svc = _svc(tmp_path, _free_port())
+    svc.set_lan_labels([])
+    return svc
+
+
+def _ask_svc(svc: ShortAddress, host: str, local_ip: str = VM_IP):
+    data, status = answer(
+        get("/music", host).encode("ascii"), local_ip=local_ip, names=svc.names(),
+        target_port=6369, suggest_ip=svc.suggested_ip(local_ip),
+    )
+    return status, data.decode("utf-8")
+
+
+def test_the_lan_json_address_is_this_servers_own(tmp_path, monkeypatch) -> None:
+    svc = _vm_svc(tmp_path, monkeypatch, lan=MAC_LAN_IP)
+    assert MAC_LAN_IP in svc.names()
+    status, data = _ask_svc(svc, MAC_LAN_IP)
+    assert status == 302
+    assert f"\r\nLocation: http://{MAC_LAN_IP}:6369/music\r\n" in data
+
+
+@pytest.mark.parametrize("host", ["evil.example", "192.168.1.21", "10.0.0.5", "rebind.example.com"])
+def test_a_vm_install_still_refuses_a_foreign_name(tmp_path, monkeypatch, host: str) -> None:
+    svc = _vm_svc(tmp_path, monkeypatch, lan=MAC_LAN_IP)
+    status, data = _ask_svc(svc, host)
+    assert status == 400 and "Location" not in data
+    # The refusal names the Mac's own address, never the VM's.
+    assert f"Open http://{MAC_LAN_IP}:6369/ instead." in data
+    assert VM_IP not in data
+
+
+def test_a_vm_install_without_lan_json_names_no_vm_address(tmp_path, monkeypatch) -> None:
+    svc = _vm_svc(tmp_path, monkeypatch, lan=None)
+    status, data = _ask_svc(svc, "evil.example")
+    assert status == 400
+    assert VM_IP not in data
+    assert "this server's address with :6369" in data
+
+
+def test_without_a_vm_the_connections_address_is_named_as_before(tmp_path, monkeypatch) -> None:
+    svc = _vm_svc(tmp_path, monkeypatch, lan=None, in_vm=False)
+    status, data = _ask_svc(svc, "evil.example", local_ip=LAN_IP)
+    assert status == 400
+    assert f"Open http://{LAN_IP}:6369/ instead." in data
+
+
+def test_lan_json_is_read_through_the_cores_reader(tmp_path, monkeypatch) -> None:
+    from domovoi import lan_address
+
+    d = tmp_path / "domovoi-mac"
+    d.mkdir()
+    (d / "lan.json").write_text(json.dumps({"schema": 1, "ipv4": MAC_LAN_IP}), encoding="utf-8")
+    monkeypatch.setenv("DOMOVOI_HOST_LAN_FILE", str(d / "lan.json"))
+    monkeypatch.setattr(lan_address, "_root_only", lambda st: True)
+    assert sa._host_lan_ip() == MAC_LAN_IP
+    # Not root's alone: not believed, so it adds no address.
+    monkeypatch.setattr(lan_address, "_root_only", lambda st: False)
+    assert sa._host_lan_ip() is None

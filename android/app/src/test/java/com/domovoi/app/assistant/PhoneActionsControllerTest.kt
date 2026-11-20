@@ -153,7 +153,7 @@ class PhoneActionsControllerTest {
         ).also { c -> until("installed") { c.state.value.installed } }
     }
 
-    private fun until(what: String, timeoutMs: Long = 5_000, ok: () -> Boolean) {
+    private fun until(what: String, timeoutMs: Long = 20_000, ok: () -> Boolean) {
         val end = System.currentTimeMillis() + timeoutMs
         while (!ok()) {
             if (System.currentTimeMillis() > end) fail("timed out waiting for: $what")

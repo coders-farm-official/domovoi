@@ -26,6 +26,10 @@
 # installs on the next; install them with pip's own resolver as documented
 # in the README and docs/CPU_HOST.md.
 #
+# Nor the dev extra's test tools hypothesis and pytest-cov (with coverage):
+# CI pins them in .github/ci-test-tools-requirements.txt, so this lock
+# keeps describing what an install runs. Leave them out when regenerating.
+#
 # `cryptography` IS locked here: a core dependency since 1.3.0
 # (domovoi/crypto_backend.py signs and checks signatures with it, and the
 # suite runs that path).

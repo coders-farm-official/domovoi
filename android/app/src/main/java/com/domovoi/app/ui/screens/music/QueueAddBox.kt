@@ -1,5 +1,7 @@
 package com.domovoi.app.ui.screens.music
 
+import com.domovoi.app.ui.shell.LocalServerChoice
+import com.domovoi.app.ui.shell.enabled
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -71,6 +73,9 @@ internal fun QueueAddBox(
     val app = LocalApp.current
     val token by app.prefs.deviceToken.collectAsState()
     if (token.isNullOrBlank()) return
+    // Away from home (or the server otherwise out of use) a search could only
+    // fail and a save could only be refused: neither is drawn.
+    if (!LocalServerChoice.current.enabled) return
     val server by app.prefs.serverUrl.collectAsState()
 
     val prompt = remember { queueAskPrompt() }

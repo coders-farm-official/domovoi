@@ -47,6 +47,8 @@ def read_ape_at_start(f: BinaryIO) -> APETags | None:
     head = f.read(32)
     if head[:8] != b"APETAGEX":
         return None
+    if len(head) < 32:  # struct.error before (found by fuzzing, 2026-11)
+        raise TagError("truncated APE tag header")
     _version, tag_size, count, _flags = struct.unpack_from("<IIII", head, 8)
     if tag_size < 32 or tag_size > MAX_BLOCK:
         raise TagError("implausible APE tag size")

@@ -26,7 +26,13 @@ pre-configuration.
        `/var/log/domovoi-firstrun.log`, the `bootstrap-steps` markers, and
        that `device-info.json` on the boot partition reaches
        `awaiting_provision`. **Power-cut mid-stage-1** → next boot resumes
-       idempotently.
+       idempotently (same card files: the markers are kept, and
+       `/var/lib/domovoi/bootstrap-card` is unchanged).
+       **Re-used card:** prepare a card that already finished setup (or
+       one from an older release) again → boot 1 logs "these card files
+       are new to this root: starting setup over", every step runs again,
+       `cmdline.txt` loses the `systemd.run=` hook, the old config sits in
+       `~/.domovoi/before-new-card-<time>/`, and the setup network appears.
        - Known risk: the `systemd.run=` cmdline hook's exact path semantics
          on Trixie (`/boot/firmware` vs `/boot`) — if firstrun never runs,
          compare against what Raspberry Pi Imager writes and pin ours to

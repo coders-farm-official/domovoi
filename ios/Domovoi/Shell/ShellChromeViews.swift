@@ -31,6 +31,9 @@ import SwiftUI
 struct ShellTopBar<Trailing: View>: View {
 
     let leading: String
+    /// The local shell's title says where the app is ("Away from home"), so
+    /// it is drawn as a title rather than a muted breadcrumb (2026-11-19).
+    var leadingProminent = false
     let pill: ShellPill?
     let onPill: () -> Void
     @ViewBuilder let trailing: () -> Trailing
@@ -70,9 +73,10 @@ struct ShellTopBar<Trailing: View>: View {
     /// spaces are the string's, as the note on this type says.
     private var brand: some View {
         Text(leading)
-            .font(.footnote)
-            .foregroundStyle(Color.fgMuted)
+            .font(leadingProminent ? .subheadline.weight(.semibold) : .footnote)
+            .foregroundStyle(leadingProminent ? Color.primary : Color.fgMuted)
             .fixedSize(horizontal: false, vertical: true)
+            .accessibilityAddTraits(leadingProminent ? .isHeader : [])
     }
 
     private var oneLine: some View {
@@ -85,9 +89,10 @@ struct ShellTopBar<Trailing: View>: View {
             // sizes", twice over, on a screen whose two `.lineLimit(1)`
             // labels were this one and the pill's.
             Text(leading)
-                .font(.footnote)
-                .foregroundStyle(Color.fgMuted)
+                .font(leadingProminent ? .subheadline.weight(.semibold) : .footnote)
+                .foregroundStyle(leadingProminent ? Color.primary : Color.fgMuted)
                 .fixedSize(horizontal: false, vertical: true)
+                .accessibilityAddTraits(leadingProminent ? .isHeader : [])
             Spacer(minLength: 8)
             pillAndStatus
             trailing()
@@ -192,20 +197,39 @@ struct ShellBanner: View {
     let text: String
     let offersTrustAgain: Bool
     let onTrustAgain: () -> Void
+    /// Still looking for the server: a spinner in place of the icon.
+    var busy = false
 
+    /// A tinted card, not a grey footnote (2026-11-19): the local shell has
+    /// no Home, and this is the line that says why (`AppShell.kt`'s banner).
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(text)
-                .font(.footnote)
-                .foregroundStyle(Color.fgMuted)
-                .fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                if busy {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityHidden(true)
+                } else {
+                    Image(systemName: "icloud.slash")
+                        .font(.footnote)
+                        .foregroundStyle(Color.brandInk)
+                        .accessibilityHidden(true)
+                }
+                Text(text)
+                    .font(.footnote)
+                    .foregroundStyle(Color.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if offersTrustAgain {
                 Button(trustAgainButton, action: onTrustAgain)
                     .font(.footnote)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(Color.brand.opacity(0.16), in: RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal, 12)
         .padding(.bottom, 8)
     }
 }

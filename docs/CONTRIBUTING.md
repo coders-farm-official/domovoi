@@ -322,6 +322,54 @@ non-zero. When a fix lands, take its entry off; the summary prints
 sets `DOMOVOI_FAIL_ON_NEW_ONLY=1`, under which a run whose failures are
 all known exits 0 (and says so under the summary).
 
+### Fuzz and property tests
+
+The parsers that read someone else's bytes are fuzzed: audio tags
+(`domovoi/media_tags`), ICS calendar feeds (`domovoi/calendar_ics.py`), the
+APK signature check (`domovoi/apk_signature.py`), chat documents
+(`domovoi/doc_extract`, every kind but PDF) and their zip/XML gate, the chat
+video intake's readers (`domovoi/chat_video/media.py`), upload paths
+(`files_security.safe_join`), chat drafts (`domovoi/drafts`) and the
+regexes user text meets (every handler's fast paths, the router's own, the
+draft phrases). Each is one function of raw bytes in
+`domovoi/tests/fuzz_targets.py` that runs the parser and checks what it
+promises: it answers or refuses with its own error type (anything else is a
+finding), keeps to its caps, finishes within 10 s
+(`DOMOVOI_FUZZ_SLOW_SEC`), and round-trips where that means something.
+
+They run two ways:
+
+* **In the suite, under Hypothesis** (`domovoi/tests/test_fuzz_parsers.py`):
+  random bytes, damaged real files from the fixtures, and built inputs
+  (calendars, tags, chat-sized command text). 40 examples a test,
+  derandomized, so it is quick and a red run repeats. Dig further with
+  `DOMOVOI_FUZZ_EXAMPLES=2000 DOMOVOI_FUZZ_RANDOM=1 pytest
+  domovoi/tests/test_fuzz_parsers.py`. Needs no database.
+* **Coverage-guided, under Atheris** (`scripts/dev/fuzz.py`; Linux x86_64,
+  `pip install --require-hashes -r .github/ci-fuzz-requirements.txt`):
+  `python scripts/dev/fuzz.py --list`, then
+  `python scripts/dev/fuzz.py --seeds ics corpus/ics` and
+  `python scripts/dev/fuzz.py ics -max_total_time=300 corpus/ics`. A
+  finding stops the run and saves the input as `crash-…`; replay it with
+  `python scripts/dev/fuzz.py ics crash-…`.
+
+A finding is fixed with a plain regression test beside it (the end of
+`test_fuzz_parsers.py` has the ones found so far), or, when the fix is not
+small, kept as a strict `xfail` whose reason says what is wrong. Hypothesis
+(MPL-2.0) and Atheris (Apache-2.0) are test tools, never installed with
+Domovoi.
+
+### Coverage
+
+`pytest --cov` measures line coverage of the shipped code (`domovoi`, `web`,
+`satellite`, `plugins`; tests left out), as `[tool.coverage.run]` in
+`pyproject.toml` sets it: Python's `sys.monitoring`, which costs a few per
+cent. `pytest --cov --cov-report=term` prints it; `coverage html` makes the
+browsable report. In CI every pytest shard measures, and the *coverage*
+job combines them and writes the total and a per-package table to its job
+summary (`scripts/dev/coverage_summary.py`). It is a report: no threshold
+fails a run yet.
+
 ### CI
 
 `.github/workflows/ci.yml` runs on every pull request into `main`, every push to `main`, and from the
@@ -334,7 +382,10 @@ Markdown (and pictures under `docs/`) alone runs the docs gates only.
 |---|---|---|
 | docs gates | ubuntu | `build_manual.py --check` and the file-only gate tests (privacy, licences, version copies, mermaid, the manual, the workflow pins); every push |
 | ruff (lint) | ubuntu | `ruff check` ([Linting](#linting)) |
-| pytest 1/6 … 6/6 | ubuntu | the whole suite (all three test trees), split by `scripts/dev/ci_shard.py` into six shards of whole files, each `pytest -n 4` on its own migrated Postgres |
+| gradle wrapper | ubuntu | `gradle/actions/wrapper-validation`: `android/gradle/wrapper/gradle-wrapper.jar` against Gradle's published checksums; every push |
+| pytest 1/6 … 6/6 | ubuntu | the whole suite (all three test trees), split by `scripts/dev/ci_shard.py` into six shards of whole files, each `pytest -n 4 --cov` on its own migrated Postgres |
+| coverage (report) | ubuntu | the shards' coverage combined: the total and a per-package table in the job summary ([Coverage](#coverage)); not required by `ci passed` |
+| fuzz (atheris) | ubuntu | every fuzz target under Atheris for 20 s from its seed files; a failing input is the `fuzz-findings` artifact ([Fuzz and property tests](#fuzz-and-property-tests)). Not required by `ci passed`: a random search can reach an old bug on any pull request, and the same targets' deterministic property tests already run in the shards |
 | web | ubuntu | `node scripts/dev/jsxcheck.js` (every `.jsx` compiles with the vendored Babel; no two dashboard scripts share a top-level name), then `web/openapi.json` and `web/static/manual-content.json` regenerated and diffed against the commit |
 | bash harnesses | ubuntu | `scripts/dev/run-linux-harness.sh all`, when `scripts/linux/` changed (a real install on each Linux system is its own workflow: [The fresh-install test](#the-fresh-install-test)) |
 | android | ubuntu | `./gradlew testDebugUnitTest assembleDebug`; uploads the debug APK (`domovoi-debug-apk`, 14 days) |
@@ -413,7 +464,8 @@ actions in that job, no `run` steps, no write permission at the top);
 **CodeQL** (`.github/workflows/codeql.yml`) scans the Python, JavaScript and workflow code on pushes to `main`,
 pull requests into it and weekly (Security → Code scanning, admins only), skipping the vendored code listed in
 `.github/codeql/codeql-config.yml`. What CI installs beyond `requirements.lock` is hash-pinned in
-`.github/ci-extra-requirements.txt` (`pip install --require-hashes`); bump it by hand with the new version's PyPI hashes.
+`.github/ci-extra-requirements.txt`, `.github/ci-test-tools-requirements.txt` (hypothesis, coverage, pytest-cov) and
+`.github/ci-fuzz-requirements.txt` (Atheris) (`pip install --require-hashes`); bump them by hand with the new version's PyPI hashes.
 
 **Dependabot** (`.github/dependabot.yml`) offers weekly update pull requests
 for the workflows' actions and the Android app's Gradle dependencies,
@@ -432,9 +484,11 @@ trainer) against the OSV database on every push to `main`, on pull requests
 that touch them, by hand, and **daily**, so a new advisory turns the job red
 the same day. It fails on any known vulnerability. The fix is a bump of the
 lock (a regenerated lock, a new hash-pinned requirement). The Android
-Gradle metadata and the wake trainer's `constraints.txt` are listed in the
-job summary but don't fail it (they include build-tool jars, and the
-trainer's pin set is not hash-locked yet). The scanner is a release binary
+Gradle metadata and the wake trainer's `requirements.lock` and
+`torch-cpu.lock` are listed in the job summary but don't fail it (the
+metadata includes build-tool jars, and the trainer's locks also pin the
+base image's own packages, which the image never installs on its default
+base). The scanner is a release binary
 pinned by version and SHA-256 in the workflow; bump both together, to a
 release at least 14 days old, with the checksum from the release's own
 `SHA256SUMS`.
@@ -445,6 +499,13 @@ package held back on purpose), is accepted in `osv-scanner.toml`: one
 most about two months out, and a `reason` that says what the advisory needs
 and why we don't meet it. When the date passes the job fails again, so every
 acceptance gets looked at again. Never accept something a bump would fix.
+OpenSSF Scorecard's Vulnerabilities check runs OSV-Scanner over the whole
+repo without `--config`, and then the scanner reads only the
+`osv-scanner.toml` in each lock file's own folder: an acceptance for a lock
+outside the root (the editor bundles' `scripts/vendor/editors/package-lock.json`)
+goes in an `osv-scanner.toml` beside it, under the same rules. The Android
+build tools' own libraries are lifted past their advisories by the security
+floors in `android/settings.gradle.kts`.
 To run it yourself, download the same release binary and run
 `osv-scanner scan source --config osv-scanner.toml --no-resolve -L
 requirements.txt:requirements.lock` (one `-L` per file, as the workflow

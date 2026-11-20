@@ -334,11 +334,43 @@ def verify_setup_code(candidate: str) -> bool:
     """Constant-time compare of the presented code against the file. A
     missing/empty file always fails — no code, no setup — and so does a
     file older than :data:`SETUP_CODE_TTL_SEC` (the next core boot writes
-    a fresh one)."""
+    a fresh one).
+
+    Typing it back is forgiving the way a household token is
+    (:func:`normalize_device_token`): a phone's capital first letter,
+    spaces or underscores for the dashes, stray spaces around it. That
+    canonical compare runs only when the stored code is itself canonical
+    (a generated phrase always is), and both compares always run, so the
+    timing says nothing about which form matched. The caller's login
+    backoff still counts every miss."""
     actual = read_setup_code()
     if actual is None:
         return False
-    matched = secrets.compare_digest(candidate.strip().encode(), actual.encode())
+    exact = (candidate or "").strip()
+    canonical = normalize_device_token(candidate) or ""
+    stored_canonical = actual if normalize_device_token(actual) == actual else None
+    exact_ok = secrets.compare_digest(_sha256(exact), _sha256(actual))
+    # A non-canonical stored code compares against a digest nothing can
+    # produce (the household token's sentinel), never against itself.
+    canonical_ok = secrets.compare_digest(
+        _sha256(canonical),
+        _sha256(stored_canonical) if stored_canonical is not None else _NO_CANONICAL_FORM,
+    )
+    # Owner rule (2026-11-20): the words may run together at some gaps,
+    # but not at all of them. At least one space, dash or underscore
+    # must be typed; spaces and dashes may be mixed. So the letters are
+    # compared with every separator removed, and only when the typed code
+    # holds a separator. That is no easier to guess: the words, and so
+    # the letters, are the same eight.
+    typed = (candidate or "").strip()
+    has_gap = re.search(r"\w[\s_-]+\w", typed) is not None
+    joined = re.sub(r"[\s_-]+", "", typed).lower()
+    stored_joined = re.sub(r"-", "", stored_canonical) if stored_canonical is not None else None
+    joined_ok = secrets.compare_digest(
+        _sha256(joined if has_gap else ""),
+        _sha256(stored_joined) if stored_joined is not None else _NO_CANONICAL_FORM,
+    )
+    matched = bool(exact_ok | canonical_ok | joined_ok)
     if setup_code_expired():
         log.info("setup code presented after its %.0f h window", SETUP_CODE_TTL_SEC / 3600)
         return False
