@@ -71,6 +71,7 @@ final class ShellStringsTests: XCTestCase {
         "ui/screens/settings/PairingScreen.kt",
         "ui/screens/settings/PhoneBarPanel.kt",
         "ui/screens/settings/LocalSettingsScreen.kt",
+        "ui/screens/settings/DeveloperOptionsSection.kt",
         "ui/screens/settings/ConnectionPanel.kt",
         "alerts/ContainerIncidents.kt",
         // Home's header (I1-D part 1). The rest of `ui/screens/home/` comes
@@ -832,10 +833,20 @@ final class ShellStringsTests: XCTestCase {
             ShellStrings.noServerForDashboard,
             ShellStrings.noBrowserForDashboard,
             ShellStrings.localSettingsSub,
+            ShellStrings.localSettingsButton,
+            ShellStrings.aboutThisApp,
             ShellStrings.back,
         ] {
             assertKotlinSaysWhole(s)
         }
+        // The iPhone's own first sentence, then Android's second word for word.
+        let androidSecond = "Server settings appear once a Domovoi is connected."
+        XCTAssertTrue(ShellStrings.localSettingsSub.hasSuffix(" " + androidSecond))
+        XCTAssertTrue(ShellStrings.localSettingsSubPhone.hasSuffix(" " + androidSecond))
+        XCTAssertFalse(
+            ShellStrings.localSettingsSubPhone.contains("voice"),
+            "no phone voice on an iPhone, so the screen must not promise one"
+        )
         assertKotlinSaysAround(ShellStrings.backTo(sentinel))
         assertKotlinSaysAround(ShellStrings.changedOnTheDashboard(section: sentinel))
         XCTAssertTrue(ShellStrings.settingsSearchPlaceholder.contains("·"), "middle dot")

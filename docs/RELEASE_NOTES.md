@@ -4,78 +4,169 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
-## 1.4.0 (unreleased) — A satellite card that was used before sets up again
+## 2026-11-20 — 1.4.0
 
-- **What changed.** Preparing a room's SD card onto a card that had been set up before no longer leaves the satellite restarting forever with a slow amber light: it sets up as a new room, with its setup Wi-Fi, and keeps the old room's settings in a `before-new-card-…` folder on the card.
+Version 1.4.0: the server, the Windows Setup (1.4.0, with the Windows
+satellite Setup beside it), the Mac server's first installer
+(`DomovoiSetup-mac.pkg`) and, released with it under its own version, the
+Android app (docs/CONTRIBUTING.md, "Releasing"): phones learn Friend
+Houses, the room display, more wake words in room mode, videos in chat,
+"What does it say?" for scans, Word downloads and a radio station in a
+room. It follows 1.3.0 (2026-11-16) and holds every entry between this
+heading and "1.3.0", gathered here under one heading (each was written as
+"1.4.0 (unreleased)"). The plain-language summary is
+`docs/release/v1.4.0.md`.
 
-## 1.4.0 (unreleased) — Setup code, a Mac's short address, Rooms' first step
+What a household notices:
 
-- The setup code is accepted however a phone types it: capitals, spaces or dashes (mixed is fine, and some gaps can be left out, as long as at least one is typed) (a wrong code is still refused and still counts toward the wait), and the dashboard's setup-code fields no longer auto-capitalise or autocorrect.
-- On a Mac server, `http://<the Mac's address>/` (no port) now opens the dashboard instead of a 400, and that refusal, for a name that isn't the server's, never suggests the virtual machine's private address.
-- The Rooms page with no rooms has a "prepare a room's SD card" button that opens that card and scrolls to it.
+* **Friend Houses:** become friends with other Domovoi houses, send
+  messages and share lists, house to house over Tor, with no server in
+  between. Off until an admin turns it on.
+* **Chat watches a short video** (up to 3 minutes) and answers questions
+  about it; **"What does it say?"** reads a scanned letter on the server,
+  sums it up and reads it aloud.
+* **Rooms:** up to five wake words per room; "Domovoi" tuned to your own
+  household's voices; a phone in room mode shows what its room plays and
+  its timers and alarms; "stop" silences a ringing alarm before the
+  music; a new room asks every Domovoi server and joins the one you typed
+  its code into; a re-used SD card sets up again.
+* **Music, radio and news:** Queue history (what Up next picked, and why);
+  radio stations found by how you say them, and played in a room; music
+  that no longer jumps back when a room's player restarts, and room
+  players rebuilt once so they stop dying between songs; the news read
+  story by story, with "tell me more about the second one".
+* **The dashboard:** `domovoi.local` opens it without `:6369`; admins are
+  signed out after an hour idle; the setup code is taken however a phone
+  types it; Health updates on its own; an offline room no longer looks
+  like it plays; a deleted song stops playing.
+* **Files and printing:** documents download as Word or PDF; "network
+  printers only" is said where you add a printer.
+* **A Mac can be the server** (Apple silicon, macOS 26 or later).
+* **Windows:** the tray can't get stuck on an old Setup, and Setup says
+  what to do when it can't copy itself before a restart.
+* **"Should I remember that?"** is said to you, in your own words.
+* **Fewer "preview" labels:** only the USB stick for old computers is
+  still one.
+* **Plugins:** SDK 1.9 (speech in a room's voice), 1.10 (spoken names and
+  choices) and 1.11 (live connections with phones and browsers).
+* **Security:** the round 6 audit's fixes; OpenSSF Scorecard's
+  vulnerability findings cleared (63 to 0), the parsers of outside input
+  fuzzed (13 bugs fixed), a coverage report and hash-pinned installs in
+  CI.
 
-## 1.4.0 (unreleased) — Each room's music player is rebuilt once, while it is quiet
+**Migrations V062–V071**, in order, all run by the update: V062 (room
+approvals a device can check), V063 (several wake words per room, and
+which word woke a turn), V064 (videos in chat), V065 (read scans), then
+Friend Houses: V066 (the friend list), V067 (friend files and requests),
+V068 (messages and per-friend alerts), V069 (shared lists), V070
+(presence and blocking), V071 (one friend per onion address). Nothing to
+do.
 
-- **What changed.** The stream each room's music player sends to its
-  speakers no longer carries song titles. The music player in Domovoi's
-  image (MPD 0.23.12) has a bug that can crash it at a song change when a
-  speaker connects to the stream at that moment, and the speakers
-  reconnect after every voice request. Without titles in the stream that
-  code never runs. Nothing lost: speakers never read titles from the
-  stream, and the dashboard, the apps and "what's playing" ask the player
-  directly. This is the likely cause of a player dying between songs; the
-  earlier fix puts the music back when it does.
-- **What to know.** A room's player keeps the settings it was made with,
-  so after the update each room's player is made again, once. At the
-  core's start each room that isn't playing is rebuilt there and then, one
-  at a time; a room that is playing is left alone and rebuilt about a
-  minute after its music stops or is paused. The room keeps its queue, the
-  song it was on and where in it, its playlists and its library. The core log has one line per room:
-  `music player for room=… made again with the new mpd.conf`, or `… is made
-  again once it stops playing`. The container guard doesn't report it. No
-  migration. On a Linux or Windows install the update itself removes the
-  room players when this file changes and the core makes them again at its
-  start, as before; the rebuild above covers every other way a house is
-  updated. The update now stops each room's player first (up to 15 seconds),
-  so it saves where it was and the music comes back at that spot, not at
-  one up to two minutes old.
+By hand, after updating:
 
-## 1.4.0 (unreleased) — The news is read story by story, and you can ask about one
+* **Update the phone app** (Android 1.4.0) for Friend Houses, the room
+  display, more wake words in room mode, videos in chat, "What does it
+  say?", Word downloads and a radio station in a room. Older apps keep
+  working without them.
+* **Upgrade each room** (Settings → Household → Rooms → the room's
+  **Overview** tab → Upgrade) to let it run more than one wake word and to
+  get the Wi-Fi recovery and system-package fixes. A room on older
+  software keeps working with its main word.
+* **Windows installs:** the Linux part comes first, then the Windows part
+  from the 1.4.0 Setup (the port-80 firewall rule for the short address and
+  the tray's fixes arrive only with it): **Update Domovoi** on the
+  dashboard's Version card (Settings → System → About & updates), or the
+  tray's **Finish updating Domovoi...**.
+* **Internet set to No:** the update can't install the scan reader's
+  `tesseract-ocr` and `tesseract-ocr-eng`; install them by hand, or scans
+  are read by the picture model alone (not at all with AI features off).
+* **A dashboard unit you manage yourself (Linux):** give it
+  `AmbientCapabilities=CAP_NET_BIND_SERVICE` and the same in
+  `CapabilityBoundingSet=` for the short address; until then Settings says
+  it is off.
+* **`DOMOVOI_MANAGE_FH_FIREWALL=0`:** fence Friend Houses' Docker network
+  yourself before turning it on (docs/LINUX_HOST.md, "Friend Houses'
+  firewall"). Everyone else: the update installs and starts
+  `domovoi-fh-firewall.service` by itself.
+* **A port-forward that changes the core's port** (outside 16370 to 6370,
+  say): list that `host:port` in `TRUSTED_HOSTS` so new rooms can check
+  the server.
+* **A printer on the server's own loopback,** added through
+  `OUTBOUND_ALLOW_HOSTS`, now reads "isn't on the home network any more":
+  remove it.
+* **Plugins that ask for SDK 1.9, 1.10 or 1.11** install only on this
+  release: update Domovoi first.
+* **Mac:** the first time, macOS won't open `DomovoiSetup-mac.pkg`: System
+  Settings → Privacy & Security → **Open Anyway** (right-click → Open no
+  longer gets past it on macOS 26).
 
-- **What changed.** "What's the news" used to run its headlines together
-  in one long sentence. Now each headline is a sentence of its own,
-  numbered ("First, … Second, …"), with a longer pause between stories,
-  and "Locally.", "Nationally." and "Around the world." are said on their
-  own. Your topics and "any news about …" are read the same way, each
-  story with its source. Afterwards Domovoi listens for a moment: "tell me
-  more about the second one", "the last one", "number three", "the one
-  about the bridge" or "more on that" says that story's summary and where
-  it's from. This works for ten minutes after the news was read. "Favorite
-  that" saves the story you just asked about.
-- **What to know.** When a feed gives only a line or two, Domovoi offers
-  to read the full article online and sums it up in a few sentences. It
-  asks first unless **Always allow internet** (Settings → Chat & AI →
-  Search) is on. With the internet off or unreachable, it says what it has
-  and that it can't read the article right now; with the AI features off,
-  it says what the feed gave. Any reply with a blank line in it (a
-  paragraph break) now gets the same longer pause from the voice. No
-  migration.
-## 1.4.0 (unreleased) — Music no longer jumps back when a room's player restarts
+Also in this release, without an entry of its own: "who is this?", "who's
+singing?" and "what am I listening to?" answer with the song playing
+(in a group too) instead of asking the language model; on a phone's
+browser a swipe on the now-playing visualizer, lyrics or equalizer panel
+scrolls the sheet; the Mac Setup's removal page puts the result first,
+with each step left to do in its own box with Copy and Open in Terminal,
+and its port check waits out a connection still closing; setuptools moves
+to 84.2.1, past two published advisories (GHSA-h35f-9h28-mq5c,
+GHSA-xmj3-9gf7-h52w); the Android app away from home shows "Connecting
+to …" then the phone's own media under "Away from home", instead of home
+pages that could only spin; the docs were gone through end to end; and
+every change now reaches `main` through a pull request that merges itself
+once CI passes.
 
-- **What changed.** A room's music player (its MPD container) that stops
-  unexpectedly comes back from a saved state that is up to two minutes old:
-  MPD saves it two minutes after a song starts and not again until the next
-  song. One that died as a song ended came back playing that same song from
-  about 2:00. In a group every room heard it, and the dashboard showed it
-  there too. Now the core notices the restart on its next look at the
-  player, within about 5 seconds, and puts the music back: the next song
-  from its start when the old one had ended, otherwise the same song where
-  it had got to. A paused room is left as it came back.
-- **What to know.** Nothing to do. The core log says when it happens:
-  `music player for room=… restarted`, then what it did. It does not stop
-  the player from dying, and the log line helps find out why it died.
+### Friend Houses: houses that are friends (V066–V071)
 
-## 1.4.0 (unreleased) — Friend Houses: the listener runs walled off in its own container
+"Serverless messaging and friend system between households", in the
+core. It is **off** until an admin turns it on in **Settings → Household
+→ Friend Houses**; while it's off, nothing runs and nothing connects.
+
+- **Becoming friends.** An admin makes a **friend file** (one line, valid
+  for 1 to 30 days) and sends it to the other house however they like.
+  The other house's admin uses it to ask, and nothing happens until an
+  admin here accepts. Both houses then show the same 4-digit code:
+  compare it by phone or in person to mark the friend verified. Every new
+  friend is announced aloud in the rooms, so nobody is added quietly, and
+  no change of trust is silent.
+- **Messages.** One inbox for the house. Each friend's messages can stay
+  in the inbox (the default), be announced with who it's from, or be read
+  aloud; quiet hours stay quiet. A message waits until the friend's house
+  confirms it has it, and shows "Not delivered" after a week. A
+  conversation can be exported, and stays readable after a friend is
+  removed.
+- **By voice.** "Message the Smiths dinner's at six" is read back and
+  sent only on "yes"; "any messages?" says how many and from whom, never
+  the text; "read my messages" reads them, five at a time. Friends' names
+  and words never go to the routing model.
+- **Shared lists.** A household list can be shared with a friend house:
+  each keeps its own copy, and the two keep each other up to date. A list
+  a friend offers waits for an admin. Either house can stop sharing, and
+  both keep their copy.
+- **Presence and blocking.** A friend shows as online or not (the house
+  only: nothing about people, rooms or activity). Blocking (admin) ends a
+  friendship for good and moves this house to a new address.
+- **Household phones.** With the household token, phones read the house
+  inbox, send messages and see the friend list and shared lists; adding,
+  removing, verifying, blocking and sharing stay with an admin. The phone
+  apps do this once they are updated.
+- **No server in between.** Houses reach each other over the Tor network,
+  each through an onion service only its friends can find, so neither
+  learns the other's address and no Coders Farm server is involved. Every
+  connection is checked against the current friend list, and every
+  message is signed by the house that sent it.
+- **Fenced off from the home.** Tor runs in its own container,
+  `domovoi-tor`, on its own Docker network, which
+  `domovoi-fh-firewall.service` keeps away from the server's own services
+  and the rest of the home network (every host kind: Linux, the Windows
+  distro, the Mac's VM). The page warns, and Tor doesn't start, while the
+  rules are missing. Setting the internet to No stops it.
+- **What to know.** Migrations V066–V071 add its tables (empty until it is
+  turned on). It needs the internet. Encryption is between houses, not
+  between people: the admins and software of both houses can read what is
+  stored there. Where using Tor is restricted, leave it off. Details:
+  [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#friend-houses-house-to-house-off-by-default),
+  [LINUX_HOST.md](LINUX_HOST.md#friend-houses-firewall).
+
+### Friend Houses: the listener runs walled off in its own container
 
 - **What changed.** The part of Friend Houses that answers other houses
   (the inbound listener) runs in its own container, `domovoi-fh-listener`,
@@ -91,63 +182,58 @@ a way that would otherwise get reported as a bug.
   Friend Houses status says friends can't reach the house, and the core
   keeps trying. No migration.
 
-## 1.4.0 (unreleased) — "Should I remember that?" is said to you
+### Videos in chat (dashboard)
 
-- **What changed.** When Domovoi notices a fact worth keeping and asks
-  before saving it, the question now talks to you: "By the way, your pets
-  are Biscuit and Pepper. Should I remember that?" Before, it read out the
-  fact as the AI wrote it ("…are their pets"), which sounded like Domovoi
-  talking about someone else. New facts are saved in your own words, the
-  way a fact you ask it to remember is.
-- **What to know.** Facts saved before this keep their old wording. You can
-  edit them on the People page.
+- **What changed.** A home-server chat takes one short video a message
+  (MP4, MOV or WebM, up to 3 minutes and 2 GiB) from the dashboard's
+  paperclip. The server watches it in the background ("Watching your
+  video… about 4 minutes left", with stop) while you keep chatting, then
+  writes a short summary into the chat and answers questions about it from
+  a transcript and descriptions of a few frames (always worded as what a
+  frame "might show"). The video and every frame grab are deleted as soon
+  as it has been watched; only the text stays, with the chat. It uses the
+  chat's vision model and the server's speech-to-text: no new model or
+  setting. Hidden when AI features are off. Not proactive: nothing is
+  watched unless someone attaches it in a chat.
+- **What to know.** One video is watched at a time in the house, at the
+  lowest priority. Voice comes first: watching pauses from a room's wake
+  word until the reply has been spoken, and a frame being described is
+  dropped and asked again after the turn. It needs ffmpeg on the server
+  (the dashboard offers no video without it). Migration **V064** adds
+  `chat_video_jobs`, `chat_video_segments`, `chat_video_frames`. On a
+  CPU-only server expect a few minutes per 3-minute clip, most of it the
+  frame descriptions (measured on a development PC at the lowest priority, with other work running, for a 3-minute 1080p clip: the scene scan 0.6 s, the sound 0.3 s, each frame grab 0.15 s, and the speech model (small.en on the CPU) about 1.7 s per second of speech; a frame description with qwen3-vl:2b on a CPU is expected to take 10-30 s, not measured there); the estimate starts from a fixed guess and learns this
+  server's speed from each finished video. The Android app offers it too
+  once it is updated (the same routes, docs/API_REFERENCE.md, "Videos");
+  the iPhone app doesn't yet.
 
-## 1.4.0 (unreleased) — A Mac can be the server
+### What does this scan say? (dashboard and voice)
 
-- **What changed.** Each release now carries `DomovoiSetup-mac.pkg`, the
-  Mac server's installer, for Macs with Apple silicon and macOS 26 or
-  later. It runs the Linux server in a small virtual machine, and the
-  household's Ollama and speech recognition natively on the Mac's
-  graphics chip. The release workflow builds it on a GitHub macOS runner
-  from the release's files (`build-mac`, no secrets) and its signing job
-  signs it for the Mac side's updates (`finish_release.py --mac-pkg`).
-- **What to know.** It is signed ad hoc, not with an Apple Developer ID,
-  and not notarized: the first time, macOS won't open it until you click
-  **Open Anyway** in System Settings → Privacy & Security. The Mac install
-  writes `WHISPER_REMOTE_SHARES_GPU=true`: while the core has a request
-  open to Ollama, a new voice turn is heard by the VM's own Whisper instead
-  of the Mac's speech service, chosen once per turn. Health's speech row
-  says which engine heard the last request, and `/v1/stats/latency`'s
-  `whisper.engine_reason` says why (`gpu_shared_llm_busy`). Every other
-  install leaves the setting false and is unchanged.
+- **What changed.** A scan saved to Documents → Scans is now read on the
+  server: Tesseract reads the printed words, and a page it can't read well
+  (handwriting, a photo) goes to the chat's vision model, worded as what
+  the page "might say". The Scan sheet and the scan list in Settings →
+  Printers & scanners show **What does it say?** once a scan is read (or
+  while it's being read, with its progress): a short plain summary from
+  the letter reader, and the full text on request. By voice, "scan this
+  letter" → "Want me to tell you what it says?" → yes now answers, then
+  offers to read all of it. A read scan is searchable like any document:
+  Ask about this document, chat and "read me" work on it. With AI
+  features off, printed pages are still read (OCR isn't AI); the picture
+  model is skipped and there's no summary, only the text.
+- **What to know.** The server needs `tesseract-ocr` and
+  `tesseract-ocr-eng` (Apache-2.0, Ubuntu/Debian packages): a new install
+  gets them, and an existing Linux, Windows or Mac server gets them at its
+  next update or Restart (apply-update.sh's added packages; not under
+  internet "never"). Until then a scan is read by the picture model alone,
+  or not at all with AI off, and the button doesn't show. English only:
+  Domovoi has no household language setting yet. One read at a time, at
+  the lowest priority, pausing for voice like videos in chat. Migration
+  **V065** adds `scan_reads` and `scan_read_pages`. Routes:
+  `/api/scan/reads` (docs/API_REFERENCE.md §2.9). The phone apps don't
+  show the button yet; the routes are ready for them.
 
-## 1.4.0 (unreleased) — Fewer "preview" labels
-
-- **What changed.** Chat on the phone itself, the Windows installer and spare
-  laptops, PCs and phones as rooms are no longer labelled previews. The USB
-  stick for old computers still is: it has not been tried on real computers yet.
-
-## 1.4.0 (unreleased) — Windows Setup: no dead end when it can't copy itself before a restart
-
-- **What changed.** When Windows has to restart to finish turning on WSL,
-  Setup copies itself to `C:\Program Files\Domovoi\resume` to start again
-  afterwards. When Windows refused that copy (usually an antivirus: this
-  preview isn't code-signed), Setup ended with *Runtime error ... Setup
-  could not copy itself ...* and no reason. Now it says what happened with
-  Windows' own error, what to do (check the antivirus's quarantine, close
-  any other Domovoi Setup window), where its log is, and offers **Try
-  again**; **Stop Setup** says to restart Windows and run Setup again. A
-  copy already there that is the same Setup (same size and SHA-256) is used
-  as it is; one still open from an earlier try is retried for a few
-  seconds, then passed by for `DomovoiSetup-2.exe` in the same folder. The
-  restart entry still only ever runs a copy in that administrators-only
-  folder, never the one in Downloads, and Setup now sets that folder's
-  access itself (SYSTEM and Administrators full, everyone else read).
-- **What to know.** Setup now always keeps its own log, `Setup Log <date>
-  #<n>.txt` in the temporary folder of the account that ran it (`%TEMP%`);
-  the message names it. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md#on-the-windows-installer).
-
-## 1.4.0 (unreleased) — Security fixes: videos in chat, reading scans, Word downloads
+### Security fixes: videos in chat, reading scans, Word downloads
 
 Fixes from the round 6 security audit (DOC-7 to DOC-14, FE-11). Nothing to
 do; a few limits are new.
@@ -198,7 +284,478 @@ do; a few limits are new.
   character in a page is left out instead of failing the export. The same
   for spreadsheet downloads.
 
-## 1.4.0 (unreleased) — Security fixes from audit round 6: core, plugins, Windows, releases
+### Up to five wake words per room
+
+* **A room can wake on more than one word.** In a room's
+  drawer, on the **Overview** tab ("wake word"), an admin with the room
+  online can **Add another wake word**, reorder the words and remove them,
+  then **Save**:
+  the room restarts to load them. Up to 5 per room, main word first. Most
+  homes need only one, and nothing changes for a room nobody edits. The
+  page says it plainly: each extra word makes accidental wake-ups a little
+  more likely (every word fires on its own, at its own threshold).
+* **As many as the device can run.** A satellite now says in its hello how
+  many words it runs at once (`wake_words_max`): a **Pi Zero 2 W runs 3**,
+  a bigger Pi or a spare PC 5, and a phone in room mode says its own number (the
+  Android app: 5, or 3 on a 32-bit or small-memory phone). The server
+  never sends more, and the dashboard offers no "add" past that and says
+  why instead. Satellite software from before 1.4.0 runs one word: it is
+  sent the main word only, in the frame it already understands, and keeps
+  working. Upgrade a room (Settings → Household → Rooms → the room's
+  **Overview** tab → Upgrade) to give it more.
+* **Which word woke the room** is kept with each turn
+  (`conversation_log.wake_word`) and in the core's log ("woken by …"); a
+  room's history names the word once more than one word has woken it,
+  which is how a false wake's culprit shows.
+* **Pushing one word** (Settings → Voice → Wake words → Push, or "Use …
+  here") still makes it the room's main word; extra words added on the
+  room stay after it.
+* The household's default wake word stays one word: a new room gets one.
+* **Database:** V063 adds `room_wake_words.slugs` and `device_max`, and
+  `conversation_log.wake_word`. Every existing room keeps its word as its
+  first and only entry. It must merge after V062.
+* **Protocol** (docs/uml/satellite-protocol.md): `hello` gains
+  `wake_words` and `wake_words_max`, `utterance_start` gains `wake_word`,
+  `set_wake_word` gains `words` (only to a device that sent
+  `wake_words_max`). All optional, safe both ways. New routes:
+  `PUT /v1/admin/wake/room` and its proxy `PUT /api/wake-words/room`.
+
+### Tune Domovoi to your household
+
+- **What changed.** Settings → Voice → Wake words has a new card, **Tune
+  Domovoi to your household**. Record a few clips of everyone saying
+  "Domovoi" (any room, as for any wake word), then train: the server makes
+  the household's own copy of the published "Domovoi" word, trained the
+  same way plus your recordings, and the near misses the published word is
+  trained against ("domino", "the movie", ...). Rooms keep the standard
+  word until the copy is trained, then switch to it (an offline room when
+  it next connects), and new rooms get it too. **Go back to the standard
+  Domovoi word** undoes it in every room; **Use the tuned word again**
+  switches back.
+- **What to know.** Wake-word training must be turned on (same card as
+  before). The recordings and the tuned word stay on your server and its
+  rooms: nothing uploads them, and the tuned word's model card says it
+  includes your recordings and is private. The tuned word appears in the
+  list as "Domovoi (tuned to this home)"; it can't be deleted while rooms
+  use it. The trainer also takes optional extra synthetic clips, near-miss
+  phrases, room echoes and noise beds (`scripts/wake_word/README.md`),
+  which the published models' recipe uses.
+
+### the room display: a phone in room mode shows the room
+
+- **What changed.** A phone or tablet in room mode can show what its room
+  is playing, with pause, resume, skip and back, the room's timers and
+  alarms counting down, and a stop button when one goes off. The server
+  sends it over the room's own connection, only to a paired room whose app
+  asks for it (`room_display` in its hello); a Pi and a spare computer get
+  nothing new. Reminders never appear on the screen: anyone in the room can
+  read it. Song covers come from a new open route,
+  `GET /v1/music/cover/{track_id}`, the dashboard's cover for a library
+  song and nothing else.
+- **What to know.** Saying "stop" while a timer or an alarm is going off in
+  a room now silences it and leaves the music playing (the next "stop"
+  stops the music); with nothing going off, "stop" stops the music as
+  before. "Stop the timer" now also stops an alarm that is going off. The
+  phone app shows the display once it is updated too; an older app, or an
+  older server, simply doesn't show it. Protocol: docs/uml/satellite-protocol.md,
+  "The room display".
+
+### A new room asks every Domovoi server, and joins the one you approve it on (V062)
+
+- **What changed.** A room device set up through the Wi-Fi portal with the
+  server-address field left blank used to wait for approval on whichever
+  Domovoi server answered first — on a network with a test server, or a
+  neighbour's, it could wait for ever on the wrong one. It now asks every
+  Domovoi server it finds (up to eight) and joins only the one that proves
+  it knows the six digits the device says: the server you typed them into.
+  The device never sends its code anywhere any more; the check is a
+  password-authenticated exchange (SPAKE2) that lets neither side test
+  codes behind the other's back. Once one server approves it, the device
+  withdraws its request from the others. Details and the threat model:
+  [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#asking-every-house-an-approval-the-device-can-check-140).
+- **What you see.** Typing the code on **Settings → Household → Rooms** now says "Code
+  sent" for such a device, and the room appears within about ten seconds,
+  when the device next checks in — not at the click. A code the device did
+  not accept says so on its card; type it again.
+- **What to know.** A new room device with the address left blank does
+  **not** ask a server older than this release: an approval from it can't
+  be checked. Update the server first, or type its address in the setup
+  portal (then the device asks only that server, the old way). Rooms set
+  up before, spare computers and phones in room mode work exactly as
+  before.
+- **Hardened after review (security audit round 5).** A server that keeps
+  a device's connection busy can no longer freeze it: each visit is bounded
+  as a whole, and the device adopts the server that proved the code at
+  once. A device that may not check another code right now (it allows 5
+  per 30 minutes and 20 a day of running time, and holds back for a while
+  a server whose run proved nothing) keeps visiting and declines, and the
+  server keeps the code you typed — a run in which the device made no
+  guess no longer uses your code up or marks it as rejected. The "can this
+  server prove an approval" answer is now signed, so it cannot be stripped
+  on the way. A device set up with the address left blank no longer records
+  the first server it found for its clock; it records the one that
+  approved it, at its next restart. And a server signs its identity for
+  its own address only at the port it actually listens on.
+- **What to know (ports).** If satellites reach the core through a
+  port-forward that CHANGES the port (outside 16370 to the core's 6370, for
+  example), list that `host:port` in `TRUSTED_HOSTS` (or, for a host
+  integration, vouch for it as `ip:port`); a forward that keeps the port
+  needs nothing. Every server a blank-address device asks sees its room
+  name on the approvals list for up to fifteen minutes.
+- **Migration.** V062 adds five columns to `satellite_approvals`. Nothing
+  to do: the update runs it.
+
+### A satellite card that was used before sets up again
+
+- **What changed.** Preparing a room's SD card onto a card that had been set up before no longer leaves the satellite restarting forever with a slow amber light: it sets up as a new room, with its setup Wi-Fi, and keeps the old room's settings in a `before-new-card-…` folder on the card.
+
+### Queue history: what Up next picked, and why
+
+- **What changed.** **Settings → Household → Queue history** (an admin
+  only, on the dashboard) lists every Up next session, newest first, with
+  the songs it picked in order and the reason for each, and downloads a
+  session's picks as a CSV or JSON file. It only reads: nothing there ends
+  or deletes a session.
+- **What to know.** An ended session and its picks are deleted after a
+  while (the page says when for each). Under "Keep listening history:
+  Don't keep" the page still shows the picks but not how long each played.
+
+### Radio: stations by how they're said, search past favorites, play in a room
+
+- **Radio finds stations by how they are said (Radio plugin 1.5.0).**
+  "lo-fi 24 slash 7" plays a favorite called "Lofi 24/7"; a near miss is
+  asked about ("Did you mean Lofi 24/7?"). Past the favorites it looks at
+  the other saved stations, then (internet allowed) the station directory,
+  and offers its best one or two. "Add this to my favorites" stars the
+  station playing. A station can be played in a room from the Stations page
+  and cast there from the player, by
+  `POST /api/plugins/radio/stations/{id}/play-in-room` `{"room_id"}`
+  (docs/API_REFERENCE.md §4.2); the phone apps can use it too.
+- **Plugin SDK 1.10.0:** `domovoi.sdk.spoken_names`, `domovoi.sdk.choices`,
+  `choice_kinds` / `handle_choice_reply` on plugin handlers,
+  `sdk.playback.ensure_room`, and `room_play_template` on
+  `[[web.player_sources]]` (docs/PLUGIN_DEVELOPMENT.md). The bundled Radio
+  plugin now needs `domovoi_api >=1.10`, so it loads only on a server with
+  this release.
+
+### Music no longer jumps back when a room's player restarts
+
+- **What changed.** A room's music player (its MPD container) that stops
+  unexpectedly comes back from a saved state that is up to two minutes old:
+  MPD saves it two minutes after a song starts and not again until the next
+  song. One that died as a song ended came back playing that same song from
+  about 2:00. In a group every room heard it, and the dashboard showed it
+  there too. Now the core notices the restart on its next look at the
+  player, within about 5 seconds, and puts the music back: the next song
+  from its start when the old one had ended, otherwise the same song where
+  it had got to. A paused room is left as it came back.
+- **What to know.** Nothing to do. The core log says when it happens:
+  `music player for room=… restarted`, then what it did. It does not stop
+  the player from dying, and the log line helps find out why it died.
+
+### Each room's music player is rebuilt once, while it is quiet
+
+- **What changed.** The stream each room's music player sends to its
+  speakers no longer carries song titles. The music player in Domovoi's
+  image (MPD 0.23.12) has a bug that can crash it at a song change when a
+  speaker connects to the stream at that moment, and the speakers
+  reconnect after every voice request. Without titles in the stream that
+  code never runs. Nothing lost: speakers never read titles from the
+  stream, and the dashboard, the apps and "what's playing" ask the player
+  directly. This is the likely cause of a player dying between songs; the
+  earlier fix puts the music back when it does.
+- **What to know.** A room's player keeps the settings it was made with,
+  so after the update each room's player is made again, once. At the
+  core's start each room that isn't playing is rebuilt there and then, one
+  at a time; a room that is playing is left alone and rebuilt about a
+  minute after its music stops or is paused. The room keeps its queue, the
+  song it was on and where in it, its playlists and its library. The core log has one line per room:
+  `music player for room=… made again with the new mpd.conf`, or `… is made
+  again once it stops playing`. The container guard doesn't report it. No
+  migration. On a Linux or Windows install the update itself removes the
+  room players when this file changes and the core makes them again at its
+  start, as before; the rebuild above covers every other way a house is
+  updated. The update now stops each room's player first (up to 15 seconds),
+  so it saves where it was and the music comes back at that spot, not at
+  one up to two minutes old.
+
+### The news is read story by story, and you can ask about one
+
+- **What changed.** "What's the news" used to run its headlines together
+  in one long sentence. Now each headline is a sentence of its own,
+  numbered ("First, … Second, …"), with a longer pause between stories,
+  and "Locally.", "Nationally." and "Around the world." are said on their
+  own. Your topics and "any news about …" are read the same way, each
+  story with its source. Afterwards Domovoi listens for a moment: "tell me
+  more about the second one", "the last one", "number three", "the one
+  about the bridge" or "more on that" says that story's summary and where
+  it's from. This works for ten minutes after the news was read. "Favorite
+  that" saves the story you just asked about.
+- **What to know.** When a feed gives only a line or two, Domovoi offers
+  to read the full article online and sums it up in a few sentences. It
+  asks first unless **Always allow internet** (Settings → Chat & AI →
+  Search) is on. With the internet off or unreachable, it says what it has
+  and that it can't read the article right now; with the AI features off,
+  it says what the feed gave. Any reply with a blank line in it (a
+  paragraph break) now gets the same longer pause from the voice. No
+  migration.
+
+### "Should I remember that?" is said to you
+
+- **What changed.** When Domovoi notices a fact worth keeping and asks
+  before saving it, the question now talks to you: "By the way, your pets
+  are Biscuit and Pepper. Should I remember that?" Before, it read out the
+  fact as the AI wrote it ("…are their pets"), which sounded like Domovoi
+  talking about someone else. New facts are saved in your own words, the
+  way a fact you ask it to remember is.
+- **What to know.** Facts saved before this keep their old wording. You can
+  edit them on the People page.
+
+### the short address: open domovoi.local without :6369
+
+- **What changed.** Typing `domovoi.local` (or the server's address) in a
+  browser now opens the dashboard: the dashboard also listens on port 80
+  and sends every request on to the same host on 6369, path and query
+  kept. It only redirects, only for the server's own names and address,
+  and only GET and HEAD (docs/SECURITY_PRIVACY.md, "The short address").
+  The dashboard stays on 6369 and the core on 6370: links, rooms, the apps
+  and bookmarks are unchanged. The header now shows the easiest address to
+  share (`domovoi.local`, else `domovoi.local:6369`, else the IP with
+  `:6369`); click it to copy it. That changes nothing about which address
+  the page itself talks to.
+- **What to know.** On by default only when nothing else on the server
+  uses port 80; when something does (a Pi-hole, a web server, IIS on the
+  Windows PC), Domovoi leaves it alone and Settings → System → Advanced →
+  Short address says "Short address off: something else on this computer
+  uses port 80." An admin can switch it off there to free port 80.
+  Linux: the dashboard's unit gets `CAP_NET_BIND_SERVICE`, that one
+  capability only; an existing install gets it from its next update
+  (the drop-in `domovoi-web.service.d/50-domovoi-short-address.conf`), and
+  until then Settings says the short address is off. A unit you manage
+  yourself needs `AmbientCapabilities=CAP_NET_BIND_SERVICE` and the same in
+  `CapabilityBoundingSet=` (docs/LINUX_HOST.md). Windows install: Setup
+  (and the next Windows update) adds a seventh Hyper-V firewall rule,
+  `Domovoi-ShortAddress-80`, for your home subnet only. New API:
+  `GET`/`PUT /api/short-address`.
+
+### Setup code, a Mac's short address, Rooms' first step
+
+- The setup code is accepted however a phone types it: capitals, spaces or dashes (mixed is fine, and some gaps can be left out, as long as at least one is typed) (a wrong code is still refused and still counts toward the wait), and the dashboard's setup-code fields no longer auto-capitalise or autocorrect.
+- On a Mac server, `http://<the Mac's address>/` (no port) now opens the dashboard instead of a 400, and that refusal, for a name that isn't the server's, never suggests the virtual machine's private address.
+- The Rooms page with no rooms has a "prepare a room's SD card" button that opens that card and scrolls to it.
+
+### admin signs out after 1 hour idle
+
+A dashboard tab left open overnight was still admin in the morning. Now an
+admin sign-in **signs out after 1 hour idle**: an hour with no change made
+as admin (`ADMIN_IDLE_TIMEOUT_MIN`, a constant). Pages that refresh
+themselves, status reads, sockets and reloads never count. The tab drops to
+signed out and says "Signed out after 1 hour without admin activity".
+
+* A reload, or the "Domovoi has been updated, reload" notice, keeps admin
+  while the sign-in is inside its hour: the reload window now counts from
+  the last admin change, not from the sign-in.
+* **Stay signed in after a reload** (`ADMIN_RELOAD_WINDOW_MIN`) now goes
+  0–60 minutes; a saved value above 60 reads as 60.
+* The 30-day sliding expiry is gone (the hour always ended a session
+  first); the 90-day cap stays.
+* After the update, a tab that was open stays admin for at most an hour
+  unless someone changes something in it.
+* Clients: `GET /api/auth/status`, login, setup and resume answers gain
+  `idle_timeout_min`, `idle_until` and `idle_in_sec`; the status read also
+  gains `ended`. Nothing was removed. The phone apps don't keep admin
+  sessions and need no change. Details: docs/SECURITY_PRIVACY.md, "Signing
+  out after an hour idle".
+
+### Fixes from the Mac test sitting: rooms, the dashboard, deleted songs
+
+- **A deleted song stops being played.** Taking a song out of the library
+  while it plays (Music, or the duplicates clean-up) now moves every room
+  playing it on to the next song in its queue, or stops the room when
+  nothing comes after it; every queued copy of it goes too. The dashboard's
+  own player does the same and says what happened. Playing a song whose
+  row or file is gone says so in plain words ("That song isn't in the
+  library any more.") instead of an internal error.
+- **An offline room no longer looks like it's playing.** Settings → Household → Rooms
+  showed an offline room's song with its progress bar still counting (its
+  player on the server plays on to nobody). It now says the room is offline
+  and its music isn't reaching it.
+- **Health updates on its own.** The server rows (speech recognition, the
+  database, the core) are read every ten seconds and when you come back to
+  the page, so a switch to the backup speech model shows without a reload.
+- **The waking-up line is in the room's history, and said less.** "Just a
+  moment, I'm waking up my language model." is now listed in the room's
+  history before the answer it came with, and is only said when the model
+  is still not ready after a second and a half (the warm-up after a restart
+  is often moments from done).
+- **A room device that can't install its system packages says why.** The
+  boot step that installs missing packages (mpg123, libportaudio2, ...) now
+  finishes half-installed ones the way setup does (`apt-get -f install
+  --no-remove`, on fresh package lists only), and a failed run records the
+  reason in plain words, which the room's log and its card show. The card
+  no longer promises that a reboot installs them. Rooms get this with their
+  next code upgrade from Settings → Household → Rooms.
+- **Wi-Fi recovery fits the room's network.** A room whose Wi-Fi dropped
+  used `wpa_cli` even where NetworkManager runs the network, which can't
+  work there, so only the watchdog's restart brought it back. The recovery
+  now uses NetworkManager when it answers, `wpa_cli` only where a
+  wpa_supplicant with its own control socket exists, the radio reset when
+  NetworkManager doesn't answer (only on a link that is down), and nothing
+  on any other network stack (the room's self-check restart then).
+- **Plainer Models page.** The page's wording is for households, not
+  developers, and true on every kind of server; the wake-word summary only
+  mentions training where this server can train.
+
+### Documents: Download gives a Word file
+
+- **What changed.** In Files, Documents, **Download** on a document made in
+  Domovoi's editor now offers **Word (.docx)** (the default), **PDF** (the
+  editor's print or save-as-PDF) and **Web page (.html)**. Before, it saved
+  the stored `.html` page, which looked like a broken download. Selecting
+  several files and choosing **Download as zip** now puts such documents in
+  the zip as `.docx` too. Markdown, text, spreadsheets, PDFs and pictures
+  download as before.
+- **Document editor: paste a picture.** Pasting and dropping in the
+  editor are tidied: a picture pasted from the clipboard (a screenshot,
+  "Copy image") or a picture file dropped onto the page goes in at the
+  cursor, the same as Insert photo. Text copied together with a picture
+  pastes as before. (Pasting a picture already worked; this is
+  housekeeping, and the Download is the real fix.)
+- **What to know.** The Android and iPhone apps' Files lists save such a
+  document as a Word file too, once they are updated; an older app still
+  saves the `.html` page (a zip made by the server has the `.docx` either
+  way).
+
+### Draft changes view: a long rewrite no longer stalls the dashboard
+
+- Comparing two very different long drafts took seconds and gigabytes; it now stops at a fixed amount of work (well under a second, a few MB) and shows the changed stretch as removed then added, with the same view on the server and in the Android app.
+
+### Printers: "network printers only" said where you add one
+
+- **What changed.** Domovoi has only ever printed to Wi-Fi and network
+  printers (AirPrint, IPP Everywhere or Mopria); USB printers, printers that
+  need a maker's driver, the Windows print spooler and a Linux box's own
+  CUPS queues are not supported, on any host. That is now said where people
+  add a printer, not only in the manual: under **Add by address** in
+  **Settings → Household → Printers & scanners**, in the answer when a typed
+  address isn't a printer ("Nothing at that address answered like a printer
+  or a scanner. Domovoi works with Wi-Fi and network printers…"), and in
+  the spoken answer when "set up the printer" finds none.
+- **What to know.** Looking for printers asks both ways at once, as it
+  already did: from UDP 5353 (answers come back to the group, which the
+  Windows install's WSL already lets in) and from an ordinary port. Nothing
+  changed in what it sends. `domovoi/printing/mdns.py` can now be run on
+  its own (`python3 mdns.py --iface <this machine's LAN address> --mode
+  group|legacy|both`) to see which way a network answers; it only asks,
+  never announces.
+
+### Printers: loopback and the server itself are refused, even through OUTBOUND_ALLOW_HOSTS
+
+- **What changed.** An admin could add a "printer" on this server's own
+  loopback (a local CUPS or ipp-usb queue) by listing its exact
+  `host:port` in `OUTBOUND_ALLOW_HOSTS` and typing the full address. That
+  is closed (network printers only, owner rule): printing and scanning
+  refuse 127.0.0.0/8, `::1`, `0.0.0.0` and every address the server holds,
+  whatever the setting says. The setting still lets an admin add a printer
+  on another private subnet by its exact `host:port`.
+- **What to know.** A printer saved that way before now shows "isn't on the
+  home network any more" and won't print; remove it (admin). Nothing else
+  changes: discovery, the sweep and addresses typed by household devices
+  never used the setting.
+
+### A Mac can be the server
+
+- **What changed.** Each release now carries `DomovoiSetup-mac.pkg`, the
+  Mac server's installer, for Macs with Apple silicon and macOS 26 or
+  later. It runs the Linux server in a small virtual machine, and the
+  household's Ollama and speech recognition natively on the Mac's
+  graphics chip. The release workflow builds it on a GitHub macOS runner
+  from the release's files (`build-mac`, no secrets) and its signing job
+  signs it for the Mac side's updates (`finish_release.py --mac-pkg`).
+- **What to know.** It is signed ad hoc, not with an Apple Developer ID,
+  and not notarized: the first time, macOS won't open it until you click
+  **Open Anyway** in System Settings → Privacy & Security. The Mac install
+  writes `WHISPER_REMOTE_SHARES_GPU=true`: while the core has a request
+  open to Ollama, a new voice turn is heard by the VM's own Whisper instead
+  of the Mac's speech service, chosen once per turn. Health's speech row
+  says which engine heard the last request, and `/v1/stats/latency`'s
+  `whisper.engine_reason` says why (`gpu_shared_llm_busy`). Every other
+  install leaves the setting false and is unchanged.
+
+### Windows Setup: no dead end when it can't copy itself before a restart
+
+- **What changed.** When Windows has to restart to finish turning on WSL,
+  Setup copies itself to `C:\Program Files\Domovoi\resume` to start again
+  afterwards. When Windows refused that copy (usually an antivirus: this
+  preview isn't code-signed), Setup ended with *Runtime error ... Setup
+  could not copy itself ...* and no reason. Now it says what happened with
+  Windows' own error, what to do (check the antivirus's quarantine, close
+  any other Domovoi Setup window), where its log is, and offers **Try
+  again**; **Stop Setup** says to restart Windows and run Setup again. A
+  copy already there that is the same Setup (same size and SHA-256) is used
+  as it is; one still open from an earlier try is retried for a few
+  seconds, then passed by for `DomovoiSetup-2.exe` in the same folder. The
+  restart entry still only ever runs a copy in that administrators-only
+  folder, never the one in Downloads, and Setup now sets that folder's
+  access itself (SYSTEM and Administrators full, everyone else read).
+- **What to know.** Setup now always keeps its own log, `Setup Log <date>
+  #<n>.txt` in the temporary folder of the account that ran it (`%TEMP%`);
+  the message names it. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md#on-the-windows-installer).
+
+### Windows: the tray can't get stuck on an old Setup
+
+- **What changed.** After a Setup that didn't finish, the house kept an old
+  record of the Windows side's version, and "Update Domovoi" in the tray
+  then downloaded a Setup it refused every time, without updating the
+  server either. DomovoiHost now reports its version whenever Domovoi is
+  up, the tray never downloads a Setup that isn't newer than itself (it
+  runs the server's update alone), and a Setup that didn't finish says so
+  in the tray menu and on the dashboard's Version card.
+- **What to know.** Running a newer Setup over an existing install updates
+  the Windows side only; its last page now says the server's own code
+  updates through **Update Domovoi**.
+
+### Fewer "preview" labels
+
+- **What changed.** Chat on the phone itself, the Windows installer and spare
+  laptops, PCs and phones as rooms are no longer labelled previews. The USB
+  stick for old computers still is: it has not been tried on real computers yet.
+
+### Plugin SDK 1.9: speech in a room's voice
+
+- **What changed.** Plugins can turn text into speech without playing it
+  (`sdk.speech.render(text, room_id=None)`), in the voice that room's own
+  replies use (no room: the server's voice), and can read which model the
+  house uses for questions (`core_config.ollama_url` / `ollama_model`; the
+  AI features switch still applies). The Sleep plugin's Storytime needs it.
+- **What to know.** A plugin that asks for SDK 1.9 won't install on an older
+  server: update Domovoi first.
+
+### Plugin SDK 1.11: plugins can hold a live connection with phones and browsers
+
+- **What changed.** A plugin can now keep a live, two-way connection (a
+  websocket) open with the household's phones and browsers, for things
+  like a game or a remote control. It is served by the core
+  (`WS /v1/plugins/<slug>/...`) and only for routes the plugin marks
+  `@device_endpoint`: the connection needs the household token
+  (`X-Device-Token`, or `?token=` from a browser) or an admin sign-in, a
+  browser page must be on the home network, and a refused connection never
+  reaches the plugin. An open connection is checked again every 30 seconds
+  and closed once its token is changed, its admin sign-in ends, or setup
+  finishes; it never keeps an admin signed in. A plugin may hold 32
+  connections, one device 8; messages are capped in size and rate.
+  Disabling, re-enabling or upgrading the plugin closes its connections.
+  The install trust screen lists each one among the device-tier routes.
+- **What to know.** A plugin that uses it asks for SDK 1.11
+  (`domovoi_api >=1.11`) and won't install on an older server: update
+  Domovoi first. No bundled plugin uses it. Any other plugin websocket is
+  still refused at load, now with "plugin websocket routes must be
+  @device_endpoint routes on the core router (core.py)". The server's log
+  blanks the whole `?token=` value of every connection, whatever
+  characters a chosen household token holds (before, a token starting with
+  certain punctuation could reach the log in part).
+
+### Security fixes from audit round 6: core, plugins, Windows, releases
 
 - **Admin sign-out after an hour: only a change that worked counts.** A
   write the server refused (a form that didn't validate, something not
@@ -244,401 +801,37 @@ do; a few limits are new.
   accepted any workflow in the repository. The release workflow's
   provenance-only run (`attest_published`) is gone (OPS-21, OPS-22).
 
-## 1.4.0 (unreleased) — Queue history: what Up next picked, and why
+### How it's made: Scorecard's findings, fuzzing, coverage, pinning
 
-- **What changed.** **Settings → Household → Queue history** (an admin
-  only, on the dashboard) lists every Up next session, newest first, with
-  the songs it picked in order and the reason for each, and downloads a
-  session's picks as a CSV or JSON file. It only reads: nothing there ends
-  or deletes a session.
-- **What to know.** An ended session and its picks are deleted after a
-  while (the page says when for each). Under "Keep listening history:
-  Don't keep" the page still shows the picks but not how long each played.
-
-## 1.4.0 (unreleased) — Documents: Download gives a Word file
-
-- **What changed.** In Files, Documents, **Download** on a document made in
-  Domovoi's editor now offers **Word (.docx)** (the default), **PDF** (the
-  editor's print or save-as-PDF) and **Web page (.html)**. Before, it saved
-  the stored `.html` page, which looked like a broken download. Selecting
-  several files and choosing **Download as zip** now puts such documents in
-  the zip as `.docx` too. Markdown, text, spreadsheets, PDFs and pictures
-  download as before.
-- **Document editor: paste a picture.** Pasting and dropping in the
-  editor are tidied: a picture pasted from the clipboard (a screenshot,
-  "Copy image") or a picture file dropped onto the page goes in at the
-  cursor, the same as Insert photo. Text copied together with a picture
-  pastes as before. (Pasting a picture already worked; this is
-  housekeeping, and the Download is the real fix.)
-- **What to know.** The Android and iPhone apps' Files lists save such a
-  document as a Word file too, once they are updated; an older app still
-  saves the `.html` page (a zip made by the server has the `.docx` either
-  way).
-
-## 1.4.0 (unreleased) — Plugin SDK 1.11: plugins can hold a live connection with phones and browsers
-
-- **What changed.** A plugin can now keep a live, two-way connection (a
-  websocket) open with the household's phones and browsers, for things
-  like a game or a remote control. It is served by the core
-  (`WS /v1/plugins/<slug>/...`) and only for routes the plugin marks
-  `@device_endpoint`: the connection needs the household token
-  (`X-Device-Token`, or `?token=` from a browser) or an admin sign-in, a
-  browser page must be on the home network, and a refused connection never
-  reaches the plugin. An open connection is checked again every 30 seconds
-  and closed once its token is changed, its admin sign-in ends, or setup
-  finishes; it never keeps an admin signed in. A plugin may hold 32
-  connections, one device 8; messages are capped in size and rate.
-  Disabling, re-enabling or upgrading the plugin closes its connections.
-  The install trust screen lists each one among the device-tier routes.
-- **What to know.** A plugin that uses it asks for SDK 1.11
-  (`domovoi_api >=1.11`) and won't install on an older server: update
-  Domovoi first. No bundled plugin uses it. Any other plugin websocket is
-  still refused at load, now with "plugin websocket routes must be
-  @device_endpoint routes on the core router (core.py)". The server's log
-  blanks the whole `?token=` value of every connection, whatever
-  characters a chosen household token holds (before, a token starting with
-  certain punctuation could reach the log in part).
-
-## 1.4.0 (unreleased) — the short address: open domovoi.local without :6369
-
-- **What changed.** Typing `domovoi.local` (or the server's address) in a
-  browser now opens the dashboard: the dashboard also listens on port 80
-  and sends every request on to the same host on 6369, path and query
-  kept. It only redirects, only for the server's own names and address,
-  and only GET and HEAD (docs/SECURITY_PRIVACY.md, "The short address").
-  The dashboard stays on 6369 and the core on 6370: links, rooms, the apps
-  and bookmarks are unchanged. The header now shows the easiest address to
-  share (`domovoi.local`, else `domovoi.local:6369`, else the IP with
-  `:6369`); click it to copy it. That changes nothing about which address
-  the page itself talks to.
-- **What to know.** On by default only when nothing else on the server
-  uses port 80; when something does (a Pi-hole, a web server, IIS on the
-  Windows PC), Domovoi leaves it alone and Settings → System → Advanced →
-  Short address says "Short address off: something else on this computer
-  uses port 80." An admin can switch it off there to free port 80.
-  Linux: the dashboard's unit gets `CAP_NET_BIND_SERVICE`, that one
-  capability only; an existing install gets it from its next update
-  (the drop-in `domovoi-web.service.d/50-domovoi-short-address.conf`), and
-  until then Settings says the short address is off. A unit you manage
-  yourself needs `AmbientCapabilities=CAP_NET_BIND_SERVICE` and the same in
-  `CapabilityBoundingSet=` (docs/LINUX_HOST.md). Windows install: Setup
-  (and the next Windows update) adds a seventh Hyper-V firewall rule,
-  `Domovoi-ShortAddress-80`, for your home subnet only. New API:
-  `GET`/`PUT /api/short-address`.
-
-## 1.4.0 (unreleased) — the room display: a phone in room mode shows the room
-
-- **What changed.** A phone or tablet in room mode can show what its room
-  is playing, with pause, resume, skip and back, the room's timers and
-  alarms counting down, and a stop button when one goes off. The server
-  sends it over the room's own connection, only to a paired room whose app
-  asks for it (`room_display` in its hello); a Pi and a spare computer get
-  nothing new. Reminders never appear on the screen: anyone in the room can
-  read it. Song covers come from a new open route,
-  `GET /v1/music/cover/{track_id}`, the dashboard's cover for a library
-  song and nothing else.
-- **What to know.** Saying "stop" while a timer or an alarm is going off in
-  a room now silences it and leaves the music playing (the next "stop"
-  stops the music); with nothing going off, "stop" stops the music as
-  before. "Stop the timer" now also stops an alarm that is going off. The
-  phone app shows the display once it is updated too; an older app, or an
-  older server, simply doesn't show it. Protocol: docs/uml/satellite-protocol.md,
-  "The room display".
-
-## 1.4.0 (unreleased) — Fixes from the Mac test sitting: rooms, the dashboard, deleted songs
-
-- **A deleted song stops being played.** Taking a song out of the library
-  while it plays (Music, or the duplicates clean-up) now moves every room
-  playing it on to the next song in its queue, or stops the room when
-  nothing comes after it; every queued copy of it goes too. The dashboard's
-  own player does the same and says what happened. Playing a song whose
-  row or file is gone says so in plain words ("That song isn't in the
-  library any more.") instead of an internal error.
-- **An offline room no longer looks like it's playing.** Settings → Household → Rooms
-  showed an offline room's song with its progress bar still counting (its
-  player on the server plays on to nobody). It now says the room is offline
-  and its music isn't reaching it.
-- **Health updates on its own.** The server rows (speech recognition, the
-  database, the core) are read every ten seconds and when you come back to
-  the page, so a switch to the backup speech model shows without a reload.
-- **The waking-up line is in the room's history, and said less.** "Just a
-  moment, I'm waking up my language model." is now listed in the room's
-  history before the answer it came with, and is only said when the model
-  is still not ready after a second and a half (the warm-up after a restart
-  is often moments from done).
-- **A room device that can't install its system packages says why.** The
-  boot step that installs missing packages (mpg123, libportaudio2, ...) now
-  finishes half-installed ones the way setup does (`apt-get -f install
-  --no-remove`, on fresh package lists only), and a failed run records the
-  reason in plain words, which the room's log and its card show. The card
-  no longer promises that a reboot installs them. Rooms get this with their
-  next code upgrade from Settings → Household → Rooms.
-- **Wi-Fi recovery fits the room's network.** A room whose Wi-Fi dropped
-  used `wpa_cli` even where NetworkManager runs the network, which can't
-  work there, so only the watchdog's restart brought it back. The recovery
-  now uses NetworkManager when it answers, `wpa_cli` only where a
-  wpa_supplicant with its own control socket exists, the radio reset when
-  NetworkManager doesn't answer (only on a link that is down), and nothing
-  on any other network stack (the room's self-check restart then).
-- **Plainer Models page.** The page's wording is for households, not
-  developers, and true on every kind of server; the wake-word summary only
-  mentions training where this server can train.
-
-## 1.4.0 (unreleased) — Printers: loopback and the server itself are refused, even through OUTBOUND_ALLOW_HOSTS
-
-- **What changed.** An admin could add a "printer" on this server's own
-  loopback (a local CUPS or ipp-usb queue) by listing its exact
-  `host:port` in `OUTBOUND_ALLOW_HOSTS` and typing the full address. That
-  is closed (network printers only, owner rule): printing and scanning
-  refuse 127.0.0.0/8, `::1`, `0.0.0.0` and every address the server holds,
-  whatever the setting says. The setting still lets an admin add a printer
-  on another private subnet by its exact `host:port`.
-- **What to know.** A printer saved that way before now shows "isn't on the
-  home network any more" and won't print; remove it (admin). Nothing else
-  changes: discovery, the sweep and addresses typed by household devices
-  never used the setting.
-
-## 1.4.0 (unreleased) — Printers: "network printers only" said where you add one
-
-- **What changed.** Domovoi has only ever printed to Wi-Fi and network
-  printers (AirPrint, IPP Everywhere or Mopria); USB printers, printers that
-  need a maker's driver, the Windows print spooler and a Linux box's own
-  CUPS queues are not supported, on any host. That is now said where people
-  add a printer, not only in the manual: under **Add by address** in
-  **Settings → Household → Printers & scanners**, in the answer when a typed
-  address isn't a printer ("Nothing at that address answered like a printer
-  or a scanner. Domovoi works with Wi-Fi and network printers…"), and in
-  the spoken answer when "set up the printer" finds none.
-- **What to know.** Looking for printers asks both ways at once, as it
-  already did: from UDP 5353 (answers come back to the group, which the
-  Windows install's WSL already lets in) and from an ordinary port. Nothing
-  changed in what it sends. `domovoi/printing/mdns.py` can now be run on
-  its own (`python3 mdns.py --iface <this machine's LAN address> --mode
-  group|legacy|both`) to see which way a network answers; it only asks,
-  never announces.
-
-## 1.4.0 (unreleased) — Tune Domovoi to your household
-
-- **What changed.** Settings → Voice → Wake words has a new card, **Tune
-  Domovoi to your household**. Record a few clips of everyone saying
-  "Domovoi" (any room, as for any wake word), then train: the server makes
-  the household's own copy of the published "Domovoi" word, trained the
-  same way plus your recordings, and the near misses the published word is
-  trained against ("domino", "the movie", ...). Rooms keep the standard
-  word until the copy is trained, then switch to it (an offline room when
-  it next connects), and new rooms get it too. **Go back to the standard
-  Domovoi word** undoes it in every room; **Use the tuned word again**
-  switches back.
-- **What to know.** Wake-word training must be turned on (same card as
-  before). The recordings and the tuned word stay on your server and its
-  rooms: nothing uploads them, and the tuned word's model card says it
-  includes your recordings and is private. The tuned word appears in the
-  list as "Domovoi (tuned to this home)"; it can't be deleted while rooms
-  use it. The trainer also takes optional extra synthetic clips, near-miss
-  phrases, room echoes and noise beds (`scripts/wake_word/README.md`),
-  which the published models' recipe uses.
-
-## 1.4.0 (unreleased) — Plugin SDK 1.9: speech in a room's voice
-
-- **What changed.** Plugins can turn text into speech without playing it
-  (`sdk.speech.render(text, room_id=None)`), in the voice that room's own
-  replies use (no room: the server's voice), and can read which model the
-  house uses for questions (`core_config.ollama_url` / `ollama_model`; the
-  AI features switch still applies). The Sleep plugin's Storytime needs it.
-- **What to know.** A plugin that asks for SDK 1.9 won't install on an older
-  server: update Domovoi first.
-
-## 1.4.0 (unreleased) — Radio: stations by how they're said, search past favorites, play in a room
-
-- **Radio finds stations by how they are said (Radio plugin 1.5.0).**
-  "lo-fi 24 slash 7" plays a favorite called "Lofi 24/7"; a near miss is
-  asked about ("Did you mean Lofi 24/7?"). Past the favorites it looks at
-  the other saved stations, then (internet allowed) the station directory,
-  and offers its best one or two. "Add this to my favorites" stars the
-  station playing. A station can be played in a room from the Stations page
-  and cast there from the player, by
-  `POST /api/plugins/radio/stations/{id}/play-in-room` `{"room_id"}`
-  (docs/API_REFERENCE.md §4.2); the phone apps can use it too.
-- **Plugin SDK 1.10.0:** `domovoi.sdk.spoken_names`, `domovoi.sdk.choices`,
-  `choice_kinds` / `handle_choice_reply` on plugin handlers,
-  `sdk.playback.ensure_room`, and `room_play_template` on
-  `[[web.player_sources]]` (docs/PLUGIN_DEVELOPMENT.md). The bundled Radio
-  plugin now needs `domovoi_api >=1.10`, so it loads only on a server with
-  this release.
-
-## 1.4.0 (unreleased) — A new room asks every Domovoi server, and joins the one you approve it on (V062)
-
-- **What changed.** A room device set up through the Wi-Fi portal with the
-  server-address field left blank used to wait for approval on whichever
-  Domovoi server answered first — on a network with a test server, or a
-  neighbour's, it could wait for ever on the wrong one. It now asks every
-  Domovoi server it finds (up to eight) and joins only the one that proves
-  it knows the six digits the device says: the server you typed them into.
-  The device never sends its code anywhere any more; the check is a
-  password-authenticated exchange (SPAKE2) that lets neither side test
-  codes behind the other's back. Once one server approves it, the device
-  withdraws its request from the others. Details and the threat model:
-  [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#asking-every-house-an-approval-the-device-can-check-140).
-- **What you see.** Typing the code on **Settings → Household → Rooms** now says "Code
-  sent" for such a device, and the room appears within about ten seconds,
-  when the device next checks in — not at the click. A code the device did
-  not accept says so on its card; type it again.
-- **What to know.** A new room device with the address left blank does
-  **not** ask a server older than this release: an approval from it can't
-  be checked. Update the server first, or type its address in the setup
-  portal (then the device asks only that server, the old way). Rooms set
-  up before, spare computers and phones in room mode work exactly as
+- **Vulnerability findings: 63 to 0.** OpenSSF Scorecard's
+  Vulnerabilities check (OSV-Scanner over the whole repository) found 63
+  advisories, nearly all in the Android build tools' own libraries.
+  `android/settings.gradle.kts` now holds security floors (a requested
+  version below one is raised to the fixed release on the same line),
+  Guava in the app moves up with them, and the satellite's `cryptography`
+  floor is 50.0 (the locks already pinned 50.0.2). One advisory in the
+  editors' vendored Tiptap has no 2.x fix: it is accepted, with the reason
+  and an expiry (2027-01-15), in `scripts/vendor/editors/osv-scanner.toml`.
+- **Fuzzing.** Nine targets fuzz the parsers that read outside input
+  (audio tags, calendar feeds, the APK signature check, chat documents and
+  their zip gate, the chat video intake, upload paths, chat drafts, and the
+  patterns user text meets): under Hypothesis in the test suite, and under
+  Atheris for 20 seconds each in CI's new `fuzz` job. They found 13 bugs,
+  each fixed with a regression test: a music file with an odd AIFF rate,
+  a negative Ogg position or a cut-off APE or Xing header could fail its
+  scan; a calendar feed with a huge duration or a date at year 1 or 9999
+  failed whole; a damaged document or a CSV column with a 30-digit number
+  could fail a chat upload; odd numbers from ffprobe or the scene log
+  could fail a video; and comparing two long, unrelated drafts took
+  seconds and gigabytes (the draft changes view, above).
+- **Coverage.** Every pytest shard in CI runs with coverage, and a
+  "coverage (report)" job writes the total and a per-package table to the
+  run's summary. No threshold.
+- **Pinning.** The wake-word trainer's image installs its packages from a
+  hash-checked lock (torch too, on the CPU base), the Linux lock tools are
+  hash-pinned, the CI test tools are too, and a new job validates the
+  Gradle wrapper on every push. The trainer gets the same packages as
   before.
-- **Hardened after review (security audit round 5).** A server that keeps
-  a device's connection busy can no longer freeze it: each visit is bounded
-  as a whole, and the device adopts the server that proved the code at
-  once. A device that may not check another code right now (it allows 5
-  per 30 minutes and 20 a day of running time, and holds back for a while
-  a server whose run proved nothing) keeps visiting and declines, and the
-  server keeps the code you typed — a run in which the device made no
-  guess no longer uses your code up or marks it as rejected. The "can this
-  server prove an approval" answer is now signed, so it cannot be stripped
-  on the way. A device set up with the address left blank no longer records
-  the first server it found for its clock; it records the one that
-  approved it, at its next restart. And a server signs its identity for
-  its own address only at the port it actually listens on.
-- **What to know (ports).** If satellites reach the core through a
-  port-forward that CHANGES the port (outside 16370 to the core's 6370, for
-  example), list that `host:port` in `TRUSTED_HOSTS` (or, for a host
-  integration, vouch for it as `ip:port`); a forward that keeps the port
-  needs nothing. Every server a blank-address device asks sees its room
-  name on the approvals list for up to fifteen minutes.
-- **Migration.** V062 adds five columns to `satellite_approvals`. Nothing
-  to do: the update runs it.
-
-## 1.4.0 (unreleased) — Windows: the tray can't get stuck on an old Setup
-
-- **What changed.** After a Setup that didn't finish, the house kept an old
-  record of the Windows side's version, and "Update Domovoi" in the tray
-  then downloaded a Setup it refused every time, without updating the
-  server either. DomovoiHost now reports its version whenever Domovoi is
-  up, the tray never downloads a Setup that isn't newer than itself (it
-  runs the server's update alone), and a Setup that didn't finish says so
-  in the tray menu and on the dashboard's Version card.
-- **What to know.** Running a newer Setup over an existing install updates
-  the Windows side only; its last page now says the server's own code
-  updates through **Update Domovoi**.
-
-## 1.4.0 (unreleased) — admin signs out after 1 hour idle
-
-A dashboard tab left open overnight was still admin in the morning. Now an
-admin sign-in **signs out after 1 hour idle**: an hour with no change made
-as admin (`ADMIN_IDLE_TIMEOUT_MIN`, a constant). Pages that refresh
-themselves, status reads, sockets and reloads never count. The tab drops to
-signed out and says "Signed out after 1 hour without admin activity".
-
-* A reload, or the "Domovoi has been updated, reload" notice, keeps admin
-  while the sign-in is inside its hour: the reload window now counts from
-  the last admin change, not from the sign-in.
-* **Stay signed in after a reload** (`ADMIN_RELOAD_WINDOW_MIN`) now goes
-  0–60 minutes; a saved value above 60 reads as 60.
-* The 30-day sliding expiry is gone (the hour always ended a session
-  first); the 90-day cap stays.
-* After the update, a tab that was open stays admin for at most an hour
-  unless someone changes something in it.
-* Clients: `GET /api/auth/status`, login, setup and resume answers gain
-  `idle_timeout_min`, `idle_until` and `idle_in_sec`; the status read also
-  gains `ended`. Nothing was removed. The phone apps don't keep admin
-  sessions and need no change. Details: docs/SECURITY_PRIVACY.md, "Signing
-  out after an hour idle".
-
-## 1.4.0 (unreleased)
-
-### Up to five wake words per room
-
-* **A room can wake on more than one word.** In a room's
-  drawer, on the **Overview** tab ("wake word"), an admin with the room
-  online can **Add another wake word**, reorder the words and remove them,
-  then **Save**:
-  the room restarts to load them. Up to 5 per room, main word first. Most
-  homes need only one, and nothing changes for a room nobody edits. The
-  page says it plainly: each extra word makes accidental wake-ups a little
-  more likely (every word fires on its own, at its own threshold).
-* **As many as the device can run.** A satellite now says in its hello how
-  many words it runs at once (`wake_words_max`): a **Pi Zero 2 W runs 3**,
-  a bigger Pi or a spare PC 5, and a phone in room mode says its own number (the
-  Android app: 5, or 3 on a 32-bit or small-memory phone). The server
-  never sends more, and the dashboard offers no "add" past that and says
-  why instead. Satellite software from before 1.4.0 runs one word: it is
-  sent the main word only, in the frame it already understands, and keeps
-  working. Upgrade a room (Settings → Household → Rooms → the room's
-  **Overview** tab → Upgrade) to give it more.
-* **Which word woke the room** is kept with each turn
-  (`conversation_log.wake_word`) and in the core's log ("woken by …"); a
-  room's history names the word once more than one word has woken it,
-  which is how a false wake's culprit shows.
-* **Pushing one word** (Settings → Voice → Wake words → Push, or "Use …
-  here") still makes it the room's main word; extra words added on the
-  room stay after it.
-* The household's default wake word stays one word: a new room gets one.
-* **Database:** V063 adds `room_wake_words.slugs` and `device_max`, and
-  `conversation_log.wake_word`. Every existing room keeps its word as its
-  first and only entry. It must merge after V062.
-* **Protocol** (docs/uml/satellite-protocol.md): `hello` gains
-  `wake_words` and `wake_words_max`, `utterance_start` gains `wake_word`,
-  `set_wake_word` gains `words` (only to a device that sent
-  `wake_words_max`). All optional, safe both ways. New routes:
-  `PUT /v1/admin/wake/room` and its proxy `PUT /api/wake-words/room`.
-
-### What does this scan say? (dashboard and voice)
-
-- **What changed.** A scan saved to Documents → Scans is now read on the
-  server: Tesseract reads the printed words, and a page it can't read well
-  (handwriting, a photo) goes to the chat's vision model, worded as what
-  the page "might say". The Scan sheet and the scan list in Settings →
-  Printers & scanners show **What does it say?** once a scan is read (or
-  while it's being read, with its progress): a short plain summary from
-  the letter reader, and the full text on request. By voice, "scan this
-  letter" → "Want me to tell you what it says?" → yes now answers, then
-  offers to read all of it. A read scan is searchable like any document:
-  Ask about this document, chat and "read me" work on it. With AI
-  features off, printed pages are still read (OCR isn't AI); the picture
-  model is skipped and there's no summary, only the text.
-- **What to know.** The server needs `tesseract-ocr` and
-  `tesseract-ocr-eng` (Apache-2.0, Ubuntu/Debian packages): a new install
-  gets them, and an existing Linux, Windows or Mac server gets them at its
-  next update or Restart (apply-update.sh's added packages; not under
-  internet "never"). Until then a scan is read by the picture model alone,
-  or not at all with AI off, and the button doesn't show. English only:
-  Domovoi has no household language setting yet. One read at a time, at
-  the lowest priority, pausing for voice like videos in chat. Migration
-  **V065** adds `scan_reads` and `scan_read_pages`. Routes:
-  `/api/scan/reads` (docs/API_REFERENCE.md §2.9). The phone apps don't
-  show the button yet; the routes are ready for them.
-
-### Videos in chat (dashboard)
-
-- **What changed.** A home-server chat takes one short video a message
-  (MP4, MOV or WebM, up to 3 minutes and 2 GiB) from the dashboard's
-  paperclip. The server watches it in the background ("Watching your
-  video… about 4 minutes left", with stop) while you keep chatting, then
-  writes a short summary into the chat and answers questions about it from
-  a transcript and descriptions of a few frames (always worded as what a
-  frame "might show"). The video and every frame grab are deleted as soon
-  as it has been watched; only the text stays, with the chat. It uses the
-  chat's vision model and the server's speech-to-text: no new model or
-  setting. Hidden when AI features are off. Not proactive: nothing is
-  watched unless someone attaches it in a chat.
-- **What to know.** One video is watched at a time in the house, at the
-  lowest priority. Voice comes first: watching pauses from a room's wake
-  word until the reply has been spoken, and a frame being described is
-  dropped and asked again after the turn. It needs ffmpeg on the server
-  (the dashboard offers no video without it). Migration **V064** adds
-  `chat_video_jobs`, `chat_video_segments`, `chat_video_frames`. On a
-  CPU-only server expect a few minutes per 3-minute clip, most of it the
-  frame descriptions (measured on a development PC at the lowest priority, with other work running, for a 3-minute 1080p clip: the scene scan 0.6 s, the sound 0.3 s, each frame grab 0.15 s, and the speech model (small.en on the CPU) about 1.7 s per second of speech; a frame description with qwen3-vl:2b on a CPU is expected to take 10-30 s, not measured there); the estimate starts from a fixed guess and learns this
-  server's speed from each finished video. The Android app offers it too
-  once it is updated (the same routes, docs/API_REFERENCE.md, "Videos");
-  the iPhone app doesn't yet.
-
-### Draft changes view: a long rewrite no longer stalls the dashboard
-
-- Comparing two very different long drafts took seconds and gigabytes; it now stops at a fixed amount of work (well under a second, a few MB) and shows the changed stretch as removed then added, with the same view on the server and in the Android app.
 
 ## 2026-11-16 — 1.3.0
 

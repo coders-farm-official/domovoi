@@ -12,32 +12,17 @@ or as a [feature request](https://github.com/coders-farm-official/domovoi/issues
 
 ## Now
 
-Being worked on: the next release, 1.4.0. It is already on `main`, and its
-changes are listed under "1.4.0 (unreleased)" in the
-[release notes](RELEASE_NOTES.md).
+Being worked on: the next release, 1.5.0. Its changes will be listed
+under "1.5.0 (unreleased)" in the [release notes](RELEASE_NOTES.md) as
+they reach `main`.
 
-- **Up next history.** Look back at the songs Up next picked, and why, in
-  Settings.
-- **Up to five wake words per room,** as many as the room's satellite can run.
-- **A room display.** A phone or tablet in room mode shows what is playing
-  and the room's timers and alarms, not only listening.
-- **Short videos in chat.** Attach a video of up to three minutes; the
-  server watches it and answers questions about it.
-- **Radio by the name you say,** and played in a room you choose.
-- **Satellites that ask every house.** A new satellite asks every Domovoi
-  server it finds and joins only the one you approve it on.
-- **Admins signed out after an hour idle,** so a tab left open overnight
-  is not still an admin in the morning.
-- **Fixes from home testing:** the Windows tray no longer sticks on an
-  old Setup, printing says plainly that it is for network printers, and a
-  song deleted while it plays no longer leaves a room stuck on it.
+- **Rooms with several satellites, and moving a satellite to another
+  room.** Today a room has exactly one satellite.
 
 ## Next
 
 Planned, not started or only begun.
 
-- **Rooms with several satellites, and moving a satellite to another
-  room.** Today a room has exactly one satellite.
 - **The iPhone app.** Coming: its own track, apart from the server's
   releases, with no dates yet.
 - **The Android app on F-Droid,** beside Google Play and the GitHub
