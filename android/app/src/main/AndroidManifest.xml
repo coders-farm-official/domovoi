@@ -42,6 +42,11 @@
          install). -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- ACCESS_WIFI_STATE alone makes Play treat Wi-Fi hardware as required
+         and hide the app from devices without it (Play's quick check,
+         release 1.4.0). Every Wi-Fi reading and the room's Wi-Fi lock
+         already go without one, so it is optional. -->
+    <uses-feature android:name="android.hardware.wifi" android:required="false" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />

@@ -145,9 +145,11 @@ class RoomService : Service() {
 
     @Suppress("DEPRECATION")
     private fun acquireLocks() {
-        val wm = applicationContext.getSystemService(WifiManager::class.java)
+        // Null on a device without Wi-Fi (the manifest marks it optional):
+        // no lock then, and the room runs on whatever network it has.
+        val wm: WifiManager? = applicationContext.getSystemService(WifiManager::class.java)
         wifiLock = runCatching {
-            wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "domovoi:room").apply { setReferenceCounted(false); acquire() }
+            wm?.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "domovoi:room")?.apply { setReferenceCounted(false); acquire() }
         }.getOrNull()
         val pm = getSystemService(PowerManager::class.java)
         wakeLock = runCatching {
