@@ -4,6 +4,12 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.4.0 (unreleased) — Setup code, a Mac's short address, Rooms' first step
+
+- The setup code is accepted however a phone types it: capitals, spaces or underscores for the dashes (a wrong code is still refused and still counts toward the wait), and the dashboard's setup-code fields no longer auto-capitalise or autocorrect.
+- On a Mac server, `http://<the Mac's address>/` (no port) now opens the dashboard instead of a 400, and that refusal, for a name that isn't the server's, never suggests the virtual machine's private address.
+- The Rooms page with no rooms has a "prepare a room's SD card" button that opens that card and scrolls to it.
+
 ## 1.4.0 (unreleased) — Each room's music player is rebuilt once, while it is quiet
 
 - **What changed.** The stream each room's music player sends to its

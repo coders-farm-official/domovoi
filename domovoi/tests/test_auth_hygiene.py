@@ -67,6 +67,62 @@ def test_setup_code_is_refused_after_its_window(tmp_path, monkeypatch) -> None:
     assert admin_auth.verify_setup_code(code) is False
 
 
+
+def test_setup_code_typed_on_a_phone_still_verifies(tmp_path, monkeypatch) -> None:
+    """S3-3: the phone capitalised the first letter and the dashes were
+    fiddly. The code reads back the way a household token does
+    (normalize_device_token): case, spaces, underscores, stray padding."""
+    monkeypatch.setattr(admin_auth, "CONFIG_DIR", tmp_path)
+    code = admin_auth.generate_setup_code()
+    admin_auth.write_setup_code(code)
+    words = code.split("-")
+    for typed in (
+        code.capitalize(),
+        code.upper(),
+        " ".join(words),
+        "  " + " - ".join(words) + "\n",
+        "_".join(words),
+        "--".join(words),
+        words[0].capitalize() + " " + "-".join(words[1:]) + " ",
+    ):
+        assert admin_auth.verify_setup_code(typed) is True
+
+
+def test_wrong_setup_codes_are_still_refused(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(admin_auth, "CONFIG_DIR", tmp_path)
+    code = admin_auth.generate_setup_code()
+    admin_auth.write_setup_code(code)
+    words = code.split("-")
+    other = admin_auth.generate_setup_code()
+    while other == code:
+        other = admin_auth.generate_setup_code()
+    for typed in (
+        "",
+        "   ",
+        other,
+        "-".join(words[:-1]),                 # a word short
+        code + "-" + words[0],                # a word too many
+        "".join(words),                       # the words run together
+        "-".join(reversed(words)) if words != list(reversed(words)) else other,
+        code[:-1] + ("a" if code[-1] != "a" else "b"),
+    ):
+        assert admin_auth.verify_setup_code(typed) is False
+    # Normalising never revives an expired code.
+    backdate(admin_auth.setup_code_path(), admin_auth.SETUP_CODE_TTL_SEC + 60)
+    assert admin_auth.verify_setup_code(code.upper()) is False
+
+
+def test_a_code_file_written_by_hand_matches_only_exactly(tmp_path, monkeypatch) -> None:
+    """A non-canonical code (written by hand) keeps its capitals: no
+    respelling opens it, the same two-form rule as a chosen token."""
+    monkeypatch.setattr(admin_auth, "CONFIG_DIR", tmp_path)
+    admin_auth.write_setup_code("Test Code Value")
+    assert admin_auth.verify_setup_code("Test Code Value") is True
+    assert admin_auth.verify_setup_code("  Test Code Value ") is True
+    assert admin_auth.verify_setup_code("test-code-value") is False
+    assert admin_auth.verify_setup_code("test code value") is False
+
+
 @pytest.mark.asyncio
 async def test_boot_hook_replaces_an_expired_code(tmp_path, monkeypatch, capsys) -> None:
     """A restart inside the window keeps the code the operator already

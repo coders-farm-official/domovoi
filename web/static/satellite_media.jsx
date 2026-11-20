@@ -259,6 +259,13 @@ const MediaJobRow = ({ j, onShowCredentials, cardHelper, macHelper, byHand }) =>
   );
 };
 
+// Opens the card from elsewhere on the page (the Rooms empty state).
+const PREPARE_MEDIA_CARD_OPEN_EVENT = 'domovoi-prepare-media-card-open';
+function openPrepareMediaCard() {
+  try { window.dispatchEvent(new CustomEvent(PREPARE_MEDIA_CARD_OPEN_EVENT)); }
+  catch (e) { /* no CustomEvent: nothing to open */ }
+}
+
 const PrepareMediaCard = ({ fire }) => {
   const { data: status, refresh: refreshStatus } = useApiObject('/api/satellites/media/status');
   const { items: targets, refresh: refreshTargets } = useApiList('/api/satellites/media/targets');
@@ -340,6 +347,20 @@ const PrepareMediaCard = ({ fire }) => {
   React.useEffect(() => {
     if (!drivesVisible) { setTransport('portal'); setTarget('zip'); }
   }, [drivesVisible]);
+
+  // The Rooms page's empty state has a button for this card (it sits a few
+  // sections down, collapsed): open it and bring it into view.
+  React.useEffect(() => {
+    const show = () => {
+      setOpen(true);
+      setTimeout(() => {
+        try { if (cardRef.current) cardRef.current.scrollIntoView({ block: 'start', behavior: 'smooth' }); }
+        catch (e) { /* an old browser: the card is open anyway */ }
+      }, 50);
+    };
+    window.addEventListener(PREPARE_MEDIA_CARD_OPEN_EVENT, show);
+    return () => window.removeEventListener(PREPARE_MEDIA_CARD_OPEN_EVENT, show);
+  }, []);
 
   // Scrolled to once the page above it has its height (the satellites and
   // this card's status loaded), so it lands in view.
@@ -598,3 +619,4 @@ const PrepareMediaCard = ({ fire }) => {
 };
 
 window.PrepareMediaCard = PrepareMediaCard;
+window.openPrepareMediaCard = openPrepareMediaCard;
