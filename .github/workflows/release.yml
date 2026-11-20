@@ -179,10 +179,16 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
       - name: The unsigned release APKs, in the pinned image (android/build-env)
+        env:
+          # Google's mirror of Maven Central before Central, as in ci.yml: a
+          # runner Central turns away gets "Could not find" for minutes
+          # (build-apks.sh says more). Every file is still checked against
+          # verification-metadata.xml.
+          DOMOVOI_MAVEN_MIRROR: https://maven-central.storage-download.googleapis.com/maven2/
         run: |
           docker build -q -t domovoi-android-build-env android/build-env >/dev/null
           mkdir -p "$RUNNER_TEMP/out"
-          docker run --rm -v "$PWD:/build/domovoi" -v "$RUNNER_TEMP/out:/out" \
+          docker run --rm -e DOMOVOI_MAVEN_MIRROR -v "$PWD:/build/domovoi" -v "$RUNNER_TEMP/out:/out" \
             domovoi-android-build-env bash /build/domovoi/android/build-env/build-apks.sh /build/domovoi /out
           echo "$GITHUB_SHA" >"$RUNNER_TEMP/out/COMMIT"
           {
@@ -628,6 +634,21 @@ jobs:
           grep -qF distributionSha256Sum "$props" \
             || echo 'distributionSha256Sum=7988ed071b2a07900e2ec715fca15c6ab72bce6db433af301fa7fa7e9407bd24' >>"$props"
           export JAVA_HOME="$JAVA_HOME_17_X64"
+          # Google's mirror of Maven Central right after google(), as
+          # build-apks.sh does for the APKs: release 1.4.0's first run lost
+          # this job to a runner Central turned away ("Kotlin 2.4.21 was not
+          # found"). Every file is still checked against verification-metadata.xml.
+          export GRADLE_USER_HOME="$RUNNER_TEMP/gradle-home"
+          mkdir -p "$GRADLE_USER_HOME/init.d"
+          cat >"$GRADLE_USER_HOME/init.d/central-mirror.gradle" <<'EOF'
+          settingsEvaluated { s ->
+              [s.pluginManagement.repositories, s.dependencyResolutionManagement.repositories].each { repos ->
+                  def r = repos.maven { name = 'CentralMirror'; url = 'https://maven-central.storage-download.googleapis.com/maven2/' }
+                  repos.remove(r)
+                  repos.add(repos.findIndexOf { it.name == 'Google' } + 1, r)
+              }
+          }
+          EOF
           chmod +x gradlew
           ./gradlew --no-daemon --no-configuration-cache --init-script ../scripts/release/sbom-android.init.gradle \
             -Pdomovoi.sbomDeps="$RUNNER_TEMP/gradle-deps.json" :app:domovoiSbomDeps

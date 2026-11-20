@@ -57,7 +57,9 @@ fr = _fr()
 
 
 def _job_text(name: str) -> str:
-    return yaml.safe_dump(JOBS[name])
+    # No folding: at the default width a longer step moves where a line
+    # breaks, and a phrase the tests look for can land split in two.
+    return yaml.safe_dump(JOBS[name], width=10**9)
 
 
 def _steps_using(prefix: str) -> list[tuple[str, dict]]:
