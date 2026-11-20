@@ -465,16 +465,17 @@ final class ShellModelTests: XCTestCase {
     }
 
     /// In the local shell only `"chat"` is acted on, and only when there is a
-    /// Chat tab to select. **Anything else waits**: a timer alert tapped
-    /// while the server is out of reach lands on Home when the workspace
-    /// comes back, rather than being thrown away.
-    func testTheLocalShellTakesChatAndLeavesTheRestPending() {
+    /// Chat tab to select. **Anything else is let go** (2026-11-19): it used
+    /// to wait, and a timer alert tapped away from home then jumped the app
+    /// to Home whenever the workspace came back, maybe hours later — the
+    /// away-layout audit's stale jump. Android lets it go the same way.
+    func testTheLocalShellTakesChatAndLetsTheRestGo() {
         let rig = Rig(serverURL: server, token: "household-abc", preferLocal: true, phoneCanChat: true)
         rig.model.sharedScreenAnswered(false)
 
         XCTAssertTrue(rig.container.requestRoute("home"))
         rig.model.refresh()
-        XCTAssertEqual("home", rig.container.pendingRoute, "the local shell has no Home to go to")
+        XCTAssertNil(rig.container.pendingRoute, "the local shell has no Home to go to, so it is not kept for later")
 
         XCTAssertTrue(rig.container.requestRoute("chat"))
         rig.model.refresh()
@@ -483,14 +484,15 @@ final class ShellModelTests: XCTestCase {
         rig.model.stop()
     }
 
-    /// A phone with no Chat tab — a shared screen — leaves even `"chat"`
-    /// pending rather than selecting a tab that is not there.
-    func testASharedScreenLeavesChatPendingRatherThanSelectingNothing() {
+    /// A phone with no Chat tab — a shared screen — selects no tab that is
+    /// not there, and lets `"chat"` go rather than keeping it to fire later
+    /// (2026-11-19, as Android's `OfflineShell` does).
+    func testASharedScreenLetsChatGoRatherThanSelectingNothing() {
         let rig = Rig(serverURL: server, token: "household-abc", preferLocal: true, phoneCanChat: true)
         rig.model.sharedScreenAnswered(true)
         XCTAssertTrue(rig.container.requestRoute("chat"))
         rig.model.refresh()
-        XCTAssertEqual("chat", rig.container.pendingRoute)
+        XCTAssertNil(rig.container.pendingRoute)
         XCTAssertEqual(.music, rig.model.localRoute)
         rig.model.stop()
     }

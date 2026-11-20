@@ -120,7 +120,7 @@ final class ShellAwayTests: XCTestCase {
             configuration: StubURLProtocol.session(timeout: 1),
             log: { _, _ in }
         )
-        return ShellModel(
+        let model = ShellModel(
             container: container,
             probe: { answers },
             clock: { 0 },
@@ -131,6 +131,10 @@ final class ShellAwayTests: XCTestCase {
             },
             serverAnsweredAtStart: answeredAtStart
         )
+        // The app's `AppShellView` reports the scene phase at launch
+        // (`initial: true`), which is what starts the asking.
+        model.scenePhaseChanged(to: .active)
+        return model
     }
 
     /// Bounded, so a wiring that never lands fails rather than hangs.
