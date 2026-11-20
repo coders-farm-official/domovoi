@@ -59,4 +59,8 @@ requests>=2.0,<3
 # allowed to fail there: satellite/_ed25519.py is a vendored pure-Python
 # implementation of the same thing and the code falls back to it
 # automatically. Install with `|| true` in a 32-bit bootstrap.
-cryptography>=42.0
+#
+# The floor is the release the server and the satellite locks use: older
+# releases carry known advisories (OpenSSL in their wheels, X.509 checks),
+# and a scanner reading this file takes the floor as the version.
+cryptography>=50.0
