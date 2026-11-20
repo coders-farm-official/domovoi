@@ -27,7 +27,11 @@ set -u
 # reboots on SUCCESS the device sits in an empty target with a blank screen
 # and no stage 1 at all. Confirmed on hardware 2026-09-08.
 BOOT="$(cd "$(dirname "$0")/.." && pwd)"
-STEPS=/var/lib/domovoi/bootstrap-steps
+STATE=/var/lib/domovoi
+STEPS="$STATE/bootstrap-steps"
+# Which card files the markers above belong to (see "Card files new to
+# this root" below).
+CARD_STAMP="$STATE/bootstrap-card"
 PAYDIR=/opt/domovoi-payload
 SAT_USER="@SAT_USER@"
 MIC_PROFILE="@MIC_PROFILE@"
@@ -86,6 +90,73 @@ strip_sdist_only() {
 
 info bootstrapping stage1-start
 
+# Card files new to this root.
+#
+# The markers live on the root partition; the card files (payload, this
+# script, the cmdline hook) on the boot partition. Writing new card files
+# onto a card that was set up before leaves the old root's markers in
+# place, so every step used to skip - the new payload never installed, the
+# new setup network never arrived, and (before step 8 checked the file)
+# the hook stayed in cmdline.txt: a silent reboot loop, slow amber forever.
+# Found on a re-used card, 2026-11.
+#
+# So the markers are only trusted for the card files they were written
+# under. The stamp is a hash of the files media prep writes fresh every
+# time (this script carries the prepare time, build-info.json the build
+# time), and nothing on the device rewrites any of them, so a power-cut
+# re-boot of the SAME card still matches and resumes where it stopped.
+# ap.json is left out on purpose: a bench may personalize a card's key
+# after flashing (provisioning reads the boot copy first for exactly
+# that), and a new key alone is not a new setup. A root with
+# markers but no stamp was set up by a stage 1 from before the stamp:
+# also a different card.
+card_stamp() {
+  for F in payload.sha256 firstrun.sh build-info.json server-identity.json; do
+    [ -f "$BOOT/domovoi/$F" ] || continue
+    printf '%s %s\n' "$F" "$(sha256sum <"$BOOT/domovoi/$F" | cut -d' ' -f1)"
+  done | sha256sum | cut -d' ' -f1
+}
+
+# A new card is a new setup: start this root over, stage 2 included. The
+# old adoption (config, pairing token, approval) is MOVED aside, never
+# deleted - with it in place provisioning sees a set-up unit and no setup
+# network ever appears, which is the opposite of what writing new card
+# files asked for. The satellite unit goes back to disabled until stage 2
+# enables it again, as on a fresh card.
+start_over_for_new_card() {
+  echo "these card files are new to this root: starting setup over"
+  local H KEEP F
+  # The adoption first, the markers after: a power cut in between finds
+  # the markers still there and comes back here to finish the move.
+  H="$(getent passwd "$SAT_USER" | cut -d: -f6)"
+  if [ -n "$H" ]; then
+    for F in config.toml pairing_token approved provisioning_state.json; do
+      [ -e "$H/.domovoi/$F" ] || continue
+      if [ -z "${KEEP:-}" ]; then
+        KEEP="$H/.domovoi/before-new-card-$(date +%Y%m%d-%H%M%S)"
+        mkdir -p "$KEEP"
+        echo "the previous setup's config is kept in $KEEP"
+      fi
+      mv -f "$H/.domovoi/$F" "$KEEP/"
+    done
+  fi
+  systemctl disable domovoi-satellite.service >/dev/null 2>&1 || true
+  rm -f "$STATE/bootstrap-done"
+  rm -rf "$STEPS"
+  mkdir -p "$STEPS"
+}
+
+THIS_CARD="$(card_stamp)"
+if [ "$(cat "$CARD_STAMP" 2>/dev/null)" != "$THIS_CARD" ]; then
+  if [ -n "$(ls -A "$STEPS" 2>/dev/null)" ] || [ -f "$STATE/bootstrap-done" ]; then
+    start_over_for_new_card
+  fi
+  # Recorded only after the reset: a power cut in between finds the old
+  # stamp (or none) and resets again, which is harmless.
+  printf '%s\n' "$THIS_CARD" >"$CARD_STAMP.new" && mv -f "$CARD_STAMP.new" "$CARD_STAMP"
+  sync
+fi
+
 # 0. Payload integrity (power-loss-during-copy guard).
 if ! skip verify; then
   info bootstrapping verify-payload
@@ -97,6 +168,10 @@ fi
 # 1. Extract.
 if ! skip extract; then
   info bootstrapping extract
+  # Into an empty directory: on a root set up before, the old payload's
+  # wheels and debs would otherwise sit beside the new ones and get
+  # installed with them.
+  rm -rf "$PAYDIR"
   mkdir -p "$PAYDIR"
   tar -xzf "$BOOT/domovoi/payload.tar.gz" -C "$PAYDIR" --strip-components=1 \
     || fail "payload extract failed" extract
@@ -217,6 +292,11 @@ status setting-up
 #    no network): create --without-pip, then install pip from the cache.
 if ! skip venv; then
   info bootstrapping python-venv
+  # A fresh venv every time this step runs. The requirements are ">="
+  # floors, so pip leaves whatever an old venv holds (a previous card's,
+  # or a half-built one from a power cut) in place rather than installing
+  # this payload's wheels.
+  rm -rf "$HOME_DIR/satellite-venv"
   PYV_OK=1
   python3 -m venv --without-pip "$HOME_DIR/satellite-venv" || PYV_OK=0
   if [ "$PYV_OK" = 1 ] && ls "$PAYDIR"/wheels/pip-*.whl >/dev/null 2>&1; then
@@ -247,6 +327,9 @@ fi
 if ! skip code; then
   info bootstrapping copy-code
   mkdir -p "$HOME_DIR/domovoi"
+  # Replaced, not copied over: a module the new payload dropped must not
+  # live on from a previous card.
+  rm -rf "$HOME_DIR/domovoi/satellite"
   cp -r "$PAYDIR/satellite" "$HOME_DIR/domovoi/"
   cp "$PAYDIR/pyproject.toml" "$HOME_DIR/domovoi/" 2>/dev/null || true
   mkdir -p "$HOME_DIR/.domovoi"
@@ -263,11 +346,19 @@ if ! skip code; then
   install_oww_models "$PAYDIR/oww_models"
   [ -d "$PAYDIR/sounds" ] && cp -r "$PAYDIR/sounds" "$HOME_DIR/.domovoi/" || true
   [ -d "$PAYDIR/wake_models" ] && cp -r "$PAYDIR/wake_models" "$HOME_DIR/.domovoi/" || true
+  # Cleared first: cp -r onto a plugin_payloads that already exists nests
+  # the copy inside it (plugin_payloads/plugins) instead of replacing it.
+  rm -rf "$HOME_DIR/.domovoi/plugin_payloads"
   [ -d "$PAYDIR/plugins" ] && cp -r "$PAYDIR/plugins" "$HOME_DIR/.domovoi/plugin_payloads" || true
   # The deb cache stays where step 1 unpacked it ($PAYDIR/debs, root's):
   # apply-payload installs from there. A copy in the home directory would
   # be packages the satellite account can edit and root then installs.
-  [ "$SAT_TYPE" = "video" ] && echo video >"$HOME_DIR/.domovoi/image_sat_type" || true
+  # Both ways: a voice card written over a video one must not stay video.
+  if [ "$SAT_TYPE" = "video" ]; then
+    echo video >"$HOME_DIR/.domovoi/image_sat_type"
+  else
+    rm -f "$HOME_DIR/.domovoi/image_sat_type"
+  fi
   # The mic board is decided at prepare time; provisioning mode needs it
   # to fill device_profile without asking the customer.
   printf '%s\n' "$MIC_PROFILE" >"$HOME_DIR/.domovoi/image_device_profile"
@@ -276,6 +367,10 @@ if ! skip code; then
   if [ -f "$BOOT/domovoi/ap.json" ]; then
     cp "$BOOT/domovoi/ap.json" "$HOME_DIR/.domovoi/ap.json"
     chmod 600 "$HOME_DIR/.domovoi/ap.json"
+  else
+    # A USB card written over a portal one: a stale copy would pick the
+    # portal, with the previous card's key.
+    rm -f "$HOME_DIR/.domovoi/ap.json"
   fi
   chown -R "$SAT_USER:$SAT_USER" "$HOME_DIR/domovoi" "$HOME_DIR/.domovoi" "$HOME_DIR/satellite-venv"
   done_step code
@@ -539,7 +634,24 @@ fi
 #    One line, no trailing blank line: a malformed cmdline can stop the Pi
 #    booting entirely. Only OUR tokens go; modules-load=dwc2 on a USB-gadget
 #    build must survive (provisioning removes that itself once adopted).
-if ! skip cmdline; then
+#
+#    Decided by the FILE, never by the marker alone. This script only ever
+#    runs because the hook is in cmdline.txt, so a marker saying the
+#    cleanup happened while the hook is still there is a marker from some
+#    other card (new card files written over a used root, 2026-11) - and
+#    trusting it is exactly the loop above.
+cmdline_hooked() {
+  local C
+  # The same files, in the same order, as the cleanup loop below.
+  for C in "$BOOT/cmdline.txt" /boot/firmware/cmdline.txt /boot/cmdline.txt; do
+    [ -f "$C" ] || continue
+    tr ' ' '\n' <"$C" \
+      | grep -q -e '^systemd\.run' -e '^systemd\.unit=kernel-command-line\.target$'
+    return
+  done
+  return 1
+}
+if ! skip cmdline || cmdline_hooked; then
   info bootstrapping cmdline-cleanup
   for CMD in "$BOOT/cmdline.txt" /boot/firmware/cmdline.txt /boot/cmdline.txt; do
     [ -f "$CMD" ] || continue

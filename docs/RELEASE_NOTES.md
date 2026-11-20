@@ -4,6 +4,10 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.4.0 (unreleased) — A satellite card that was used before sets up again
+
+- **What changed.** Preparing a room's SD card onto a card that had been set up before no longer leaves the satellite restarting forever with a slow amber light: it sets up as a new room, with its setup Wi-Fi, and keeps the old room's settings in a `before-new-card-…` folder on the card.
+
 ## 1.4.0 (unreleased) — Each room's music player is rebuilt once, while it is quiet
 
 - **What changed.** The stream each room's music player sends to its
