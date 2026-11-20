@@ -602,19 +602,51 @@ final class AudiobooksModelTests: XCTestCase {
         XCTAssertEqual(0, store.count)
     }
 
+    /// The oldest covers go first. The first hundred land before any more are
+    /// asked for, so nothing is in flight when the twenty more push the store
+    /// over: the eviction happens inside ``AudiobookCoverStore/want(_:)``, in
+    /// fetch order, the same on every run.
     func testOnlyAHundredCoversAreHeld() async {
         let house = Covers()
         let store = AudiobookCoverStore(fetch: house.fetch)
+        let capacity = AudiobookCoverStore.capacity
+        let first = 0..<capacity
+        let more = capacity..<(capacity + 20)
 
-        for id in 0..<(AudiobookCoverStore.capacity + 20) { store.want(Int64(id)) }
+        for id in first { store.want(Int64(id)) }
+        await settleUntil({ first.allSatisfy { Self.landed(store.cover(Int64($0))) } }, "the first hundred")
+        for id in more { store.want(Int64(id)) }
+        await settleUntil({ more.allSatisfy { Self.landed(store.cover(Int64($0))) } }, "the twenty more")
+
+        XCTAssertEqual(capacity, store.count)
+        for id in 0..<20 { XCTAssertNil(store.cover(Int64(id)), "cover \(id), among the oldest, went") }
+        for id in 20..<(capacity + 20) { XCTAssertTrue(Self.landed(store.cover(Int64(id))), "cover \(id) is held") }
+    }
+
+    /// A burst over the limit, all in flight at once, still settles at a
+    /// hundred. Which twenty go depends on the order the fetches land: a
+    /// cover still in flight is never evicted, and one that lands while the
+    /// store is full is kept, since it is the one about to be drawn. So this
+    /// test checks only the count, never which book went (it used to check
+    /// that cover 0 went, and failed whenever 0 landed late).
+    func testABurstOverTheLimitSettlesAtAHundred() async {
+        let house = Covers()
+        let store = AudiobookCoverStore(fetch: house.fetch)
+        let all = 0..<(AudiobookCoverStore.capacity + 20)
+
+        for id in all { store.want(Int64(id)) }
+        await settleUntil({ house.asked.current.count == all.count }, "every request")
         await settleUntil(
-            { house.asked.current.count == AudiobookCoverStore.capacity + 20 },
-            "every request"
+            { all.allSatisfy { store.cover(Int64($0)) != .loading } && store.count <= AudiobookCoverStore.capacity },
+            "every cover landed, and the eviction"
         )
-        await settleUntil({ store.count <= AudiobookCoverStore.capacity }, "the eviction")
 
         XCTAssertEqual(AudiobookCoverStore.capacity, store.count)
-        XCTAssertNil(store.cover(0), "the oldest went")
+    }
+
+    private nonisolated static func landed(_ cover: AudiobookCover?) -> Bool {
+        if case .image = cover { return true }
+        return false
     }
 
     // MARK: - the library model's rig
