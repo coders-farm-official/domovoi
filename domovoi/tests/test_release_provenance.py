@@ -273,6 +273,36 @@ def test_the_signing_job_attaches_the_sboms_through_finish_release():
     assert '--sbom-dir "$RUNNER_TEMP/sboms" --provenance' in finish["run"]
 
 
+def test_the_app_tag_release_comes_from_finish_release_after_release_ps1_with_no_new_permission():
+    """The app tag's own release (app-<versionName>, for F-Droid) is made by
+    finish-release in the signing job, with the token that job already has:
+    only after release.ps1 (which pushes the tag app-<versionName> at the
+    commit the APKs were built from) on an app release, and on a run that
+    finishes one (sign_app false: the tag was pushed by the earlier attempt).
+    No step makes a release of the app tag or a tag on its own."""
+    job = JOBS["release"]
+    assert job["permissions"] == {"contents": "write"}
+    names = [str(s.get("name", "")) for s in job["steps"]]
+    sign = names.index("Sign and publish the app (release.ps1)")
+    finish = next(i for i, n in enumerate(names) if n.startswith("Finish the release"))
+    assert sign < finish
+    step = job["steps"][finish]
+    assert "if" not in step, "finish-release runs on every release; it decides from the tag's android/release.json"
+    assert set(step["env"]) == {"RELEASE_SIGNING_KEY", "RELEASE_SIGNING_KEY_PASSPHRASE", "GH_TOKEN"}
+    assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
+    assert "scripts/release/finish_release.py --tag" in step["run"]
+    for s in job["steps"]:
+        run = str(s.get("run", ""))
+        assert "app-" not in run or "release create" not in run
+        assert "git tag" not in run
+    # finish-release's own app release: never Latest, at the existing tag.
+    src = (REPO / "scripts" / "release" / "finish_release.py").read_text(encoding="utf-8")
+    call = src[src.index('t.gh("release", "create", app_tag'):]
+    call = call[:call.index(")\n")]
+    assert '"--verify-tag"' in call and '"--latest=false"' in call
+    assert "--prerelease" not in call and "--clobber" not in call and "--target" not in call
+
+
 # ─── the Mac package ─────────────────────────────────────────────────────
 
 XCODE = "/Applications/Xcode_16.4.app"

@@ -33,7 +33,11 @@
 #            then, always, scripts/release/finish_release.py builds the
 #            Windows Setup from the tag, signs it with the release key held
 #            only by an ssh-agent for that one step, and the Mac package
-#            beside it, publishes the release files and fast-forwards stable.
+#            beside it, publishes the release files, then (when the app
+#            changed) the GitHub release of the app tag app-<versionName>
+#            that release.ps1 pushed (the same APKs, for F-Droid; never
+#            Latest), and fast-forwards stable. No extra permission: the
+#            same contents: write token.
 #
 # Why build-mac builds the dispatched commit, not the tag: the tag doesn't
 # exist before approval. A release that doesn't change the app is tagged

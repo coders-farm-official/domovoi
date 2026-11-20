@@ -20,7 +20,9 @@
 # stops after the commit (a failed push, gh or download) carries on from
 # the release commit when run again; nothing is built or signed again.
 # Then scripts/release/finish-release.sh adds the Windows Setup, one
-# SHA256SUMS and the notes, and moves the stable branch.
+# SHA256SUMS and the notes, publishes the app tag's own release
+# app-<versionName> (the same APKs, for F-Droid; never Latest), and moves
+# the stable branch.
 #
 # Run by the owner on his own machine (the release workflow,
 # .github/workflows/release.yml, runs release.ps1 instead). The
@@ -335,7 +337,7 @@ for e in json.load(sys.stdin)["release"]["apks"]:
   rm -rf "$work"
 
   say "done: $tag is published at ${release_commit:0:12}, with the android/release.json naming its APKs."
-  echo "Next: the Windows Setup (built from the tag, pinned to it), one SHA256SUMS and the notes, on Windows:"
+  echo "Next: the Windows Setup (built from the tag, pinned to it), one SHA256SUMS, the notes and the release app-$version_name, on Windows:"
   echo "    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\release\\finish-release.ps1 -Tag $tag"
 }
 

@@ -217,7 +217,9 @@ key**, checks them as a Domovoi server will, commits and pushes
 with `gh`, tagged at that commit (a full release, release
 candidates included; `-Prerelease` makes it a pre-release);
 `scripts/release/finish-release.ps1` then adds the Windows Setup, the
-checksums and the notes. `-NoPublish` stops before git and GitHub. The
+checksums and the notes, and publishes the release `app-<versionName>`
+(the same APKs, for F-Droid; never Latest), whose notes are this folder's
+`WHATS-NEW-v<versionName>.txt`. `-NoPublish` stops before git and GitHub. The
 APKs and the Play bundle share one `versionCode` sequence: a later build
 raises the base `versionCode` (`YYMMDDNN`) in
 `android/app/build.gradle.kts` before either script runs; both refuse to
