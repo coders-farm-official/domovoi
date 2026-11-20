@@ -95,7 +95,10 @@ def _last_granule(f: BinaryIO, serial: int, size: int) -> int | None:
             head = chunk[i:i + _PAGE_HEAD]
             if len(head) == _PAGE_HEAD and head[4] == 0:
                 granule, s = struct.unpack_from("<qI", head, 6)
-                if s == serial and granule != -1:
+                # -1 is "no granule here"; any other negative is a broken
+                # page, not a length (a negative duration before; found by
+                # fuzzing, 2026-11).
+                if s == serial and granule >= 0:
                     return granule
             i = chunk.rfind(b"OggS", 0, i)
         limit = begin

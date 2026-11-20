@@ -1,0 +1,20 @@
+# The test tools CI adds to requirements.lock in the pytest shards and the
+# fuzz job, hash-pinned so the install is `pip install --require-hashes -r`
+# (OpenSSF Scorecard's Pinned-Dependencies). The same tools are in the
+# `dev` extra (pyproject.toml) for a local `pip install -e ".[dev]"`; they
+# are test-only and never installed with Domovoi.
+#   hypothesis (MPL-2.0, test-only; owner rule 2026-11-15) + sortedcontainers
+#   (Apache-2.0): the property tests (domovoi/tests/test_fuzz_parsers.py).
+#   coverage (Apache-2.0) + pytest-cov (MIT): the coverage report.
+# Python 3.12 on the Linux x86_64 runner only (the hypothesis and coverage
+# hashes are that one wheel each); pytest and pluggy come from
+# requirements.lock. Every version is at least 14 days old. To bump: take
+# the new version's sha256 from its PyPI page (Download files).
+hypothesis==6.170.14 \
+    --hash=sha256:cde7e98694a9baa1d9761c1b595b3d617467c876200c0798a40f2016a0e85304
+sortedcontainers==2.4.0 \
+    --hash=sha256:a163dcaede0f1c021485e957a39245190e74249897e2ae4b2aa38595db237ee0
+coverage==7.17.2 \
+    --hash=sha256:36314997533266bde3d07765289674304d61bfe49165bb1b4fa9be12cb4ba0d1
+pytest-cov==7.1.0 \
+    --hash=sha256:a0461110b7865f9a271aa1b51e516c9a95de9d696734a2f71e3e78f46e1d4678

@@ -131,3 +131,44 @@ def test_pyproject_configures_ruff_without_style_rules() -> None:
     assert "F" in selected and "E9" in selected
     assert not any(code in ("E", "W", "I", "N", "D", "UP") for code in selected)
     assert "web/static/vendor" in cfg["extend-exclude"]
+
+
+def _pins(name: str) -> dict[str, str]:
+    """``{package: version}`` of a hash-pinned requirements file, every pin
+    with at least one sha256."""
+    body = (REPO_ROOT / ".github" / name).read_text(encoding="utf-8").replace("\\\n", " ")
+    pins = {}
+    for line in body.splitlines():
+        if not line.strip() or line.startswith("#"):
+            continue
+        m = re.match(r"^([\w.-]+)==(\d+(?:\.\d+)*)\s+--hash=sha256:[0-9a-f]{64}", line)
+        assert m, f"{name}: {line}"
+        pins[m.group(1)] = m.group(2)
+    return pins
+
+
+def test_the_test_tools_and_the_fuzzer_are_hash_pinned_and_installed() -> None:
+    """Scorecard's Pinned-Dependencies: the coverage and property-test tools
+    and Atheris come from exact, hash-checked pins."""
+    assert set(_pins("ci-test-tools-requirements.txt")) == {"hypothesis", "sortedcontainers", "coverage", "pytest-cov"}
+    assert set(_pins("ci-fuzz-requirements.txt")) == {"atheris"}
+    jobs = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))["jobs"]
+
+    def runs(job: str) -> str:
+        return "\n".join(str(s.get("run", "")) for s in jobs[job]["steps"])
+
+    assert "--require-hashes -r .github/ci-test-tools-requirements.txt" in runs("python")
+    assert "--cov --cov-report=" in runs("python")
+    assert "coverage_summary.py" in runs("coverage")
+    assert "--require-hashes -r .github/ci-fuzz-requirements.txt" in runs("fuzz")
+    assert "scripts/dev/fuzz.py" in runs("fuzz") and "-max_total_time=" in runs("fuzz")
+    # Report-only and random: neither gates `ci passed` (docs/CONTRIBUTING.md, "CI").
+    assert not {"coverage", "fuzz"} & set(jobs["ci-ok"]["needs"])
+    assert "python" in jobs["ci-ok"]["needs"], "the deterministic property tests do gate it"
+
+
+def test_scorecard_sees_the_fuzzer() -> None:
+    """OpenSSF Scorecard's Fuzzing check finds Python fuzzing by a *.py file
+    with a line matching ``import atheris`` (checks/raw/fuzzing.go)."""
+    text = (REPO_ROOT / "scripts" / "dev" / "fuzz.py").read_text(encoding="utf-8")
+    assert re.search(r"^\s*import atheris\s*$", text, re.M)

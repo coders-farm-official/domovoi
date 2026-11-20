@@ -1,0 +1,10 @@
+# The coverage-guided fuzzer CI runs (the "fuzz" job; scripts/dev/fuzz.py),
+# hash-pinned so the install is `pip install --require-hashes -r`
+# (OpenSSF Scorecard's Pinned-Dependencies).
+#   atheris (Apache-2.0, Google's libFuzzer engine for Python): a CI and
+#   developer tool, never installed with Domovoi. No dependencies.
+# Python 3.12 on the Linux x86_64 runner only (its wheels are Linux x86_64
+# only). The version is at least 14 days old. To bump: take the new
+# version's cp312 manylinux x86_64 sha256 from its PyPI page.
+atheris==3.1.0 \
+    --hash=sha256:ec5e11f21a4c197fe91f7aea2b2de88e623c73a21fc07b105ac6329a1588457b
