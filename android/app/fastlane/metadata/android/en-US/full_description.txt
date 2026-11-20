@@ -1,0 +1,39 @@
+Domovoi is the home computer system that just works. Your music, movies, audiobooks and files live on a computer in your own home, and play in every room and on your phone. A private AI runs at home too, when you want it. No account, no cloud, no subscription, no ads, and no internet required.
+
+<b>Works on its own, too: no server needed.</b> Play your phone's music and videos, read saved audiobooks, and chat with an AI that runs on the phone itself, even in airplane mode.
+
+With a Domovoi server (a computer in your home running the free Domovoi software), the app becomes the remote for the whole house:
+
+<b>TURN ANY OLD PHONE OR TABLET INTO A ROOM</b>
+Got a spare phone or tablet in a drawer? Domovoi turns it into a room speaker: it plays music, rings timers and answers when called, like any Domovoi room. Plug it in, put it on a shelf, done. You turn it on yourself, after a screen that explains exactly what it does, and a notification stays while it listens.
+
+WITH YOUR DOMOVOI SERVER
+• Music in every room: browse your library, build a queue and play it in any room, or on the phone.
+• Movies and videos from your library, on your phone.
+• Audiobooks: listen at home or save a book to your phone for the road. Your place is kept, and if you got further in the kitchen, the app offers to pick up from there.
+• Radio stations and podcasts.
+• Your household's files and documents: browse, open, edit and add to them from your phone. Documents and spreadsheets open in the same editors as the dashboard.
+• The whole house at a glance: which rooms are playing, every timer counting down, and anything that needs attention.
+• Timer and reminder alerts on your phone when one goes off anywhere in the house.
+• Drop in on a room like an intercom.
+
+ON ITS OWN, WITH NO SERVER
+• Play the music, videos and saved audiobooks on your phone.
+• Browse its photos and the folders you choose.
+• Chat with the on-phone AI, by voice or text.
+
+WHEN YOU WANT IT: A PRIVATE ASSISTANT
+Domovoi can also answer questions, by voice or text. At home your server answers. On the phone, a language model running on the phone itself writes the answer and reads it aloud. After a one-time download it works in airplane mode, and what you ask stays on the phone unless you allow a lookup (it shows exactly what would be sent, and where, and sends it only if you say yes) or choose to hand a document or a letter to your home server. It needs a 64-bit phone with 8 GB of memory or more and about 3 GB of free space. If an answer is offensive or wrong, long-press it to report it: you see exactly what the report holds before anything is sent.
+
+PRIVATE BY DESIGN
+• The app talks to your own Domovoi server on your home network, and to nothing run by us.
+• Phone chats turn your voice into text on the phone and never store audio.
+• Plain connections are allowed only to addresses on your home network; anything on the internet must use HTTPS.
+• Your household pairing is sealed with a key in the phone's keystore and left out of cloud backups.
+• No analytics, advertising or crash-reporting services.
+
+Domovoi keeps it in the house. It is free and open source under the MIT license, made by Coders Farm, a nonprofit that teaches people to code for free. Setting up a server, the source code and the documentation are at github.com/coders-farm-official/domovoi.
+
+<b>ON F-DROID</b>
+• Optional web lookups can go through Brave Search, a non-free service, only if you add your own Brave API key. Wikipedia or your own SearXNG work without it.
+• F-Droid keeps this app up to date. It is the same APK, signed with the same key, as the one on GitHub and on your Domovoi server, so a phone can move between them with an ordinary update.

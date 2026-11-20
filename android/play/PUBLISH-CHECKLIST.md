@@ -192,6 +192,22 @@ The "What's new" text is `WHATS-NEW-v1.0.0.txt` in this folder (en-US, under
 service entries and confirm they still match; nothing in them changes
 for 1.0.0.
 
+### Every release after that
+
+- **The release notes:** `WHATS-NEW-v<version>.txt` in this folder (under 500
+  characters), written with the version bump. Then run
+  `python android/play/fastlane_sync.py`: it copies the listing and those
+  notes into `android/app/fastlane/`, where F-Droid reads them (one
+  changelog per per-ABI versionCode). CI fails until it has been run
+  (`domovoi/tests/test_android_fastlane.py`).
+- **The signing key Play holds:** Console → the app → **Test and release →
+  App integrity → App signing**. The **App signing key certificate** SHA-256
+  must still be `29:6B:17:5C:…:65:D5:DB`, the certificate in
+  `android/release.json` and the one F-Droid checks
+  (`AllowedAPKSigningKeys`). The same key on Play, GitHub, the server and
+  F-Droid is what lets a phone move between them with an ordinary update.
+  If it ever differs, stop and find out why before uploading.
+
 ## 7. Better room-mode video (optional, recommended)
 
 The emulator's room had no server to answer. On a real spare phone paired

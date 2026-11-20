@@ -48,7 +48,7 @@ fun rememberAppUpdateNotice(): AppUpdateNotice? {
     val install = remember { InstallFacts.read(context) }
     val dismissals = remember { AppUpdates.dismissals(context) }
     val dismissed by dismissals.dismissed.collectAsState()
-    val asks = !AppUpdate.isPlayInstall(install.installer) && !install.debuggable
+    val asks = !AppUpdate.isStoreManaged(install.installer) && !install.debuggable
     val offer = rememberApi(asks) { a -> if (asks) AppUpdates.offer(a.api, a.prefs.serverUrl.value) else null }
     val state = AppUpdate.decide(install, offer.data)
     if (!AppUpdate.shows(state, dismissed)) return null
@@ -111,7 +111,7 @@ fun AboutAppUpdateCard() {
     val context = LocalContext.current
     val toast = LocalToast.current
     val install = remember { InstallFacts.read(context) }
-    val asks = !AppUpdate.isPlayInstall(install.installer) && !install.debuggable
+    val asks = !AppUpdate.isStoreManaged(install.installer) && !install.debuggable
     val offer = rememberApi(asks) { a -> if (asks) AppUpdates.offer(a.api, a.prefs.serverUrl.value, maxAgeMs = 0) else null }
     val state = AppUpdate.decide(install, offer.data)
     AboutAppUpdate(

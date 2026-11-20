@@ -1,0 +1,9 @@
+Domovoi 1.4.0
+
+- Friend houses: message the houses of friends you trust
+- Room mode: a room display you can read at a glance, and up to 5 wake words
+- Attach a short video to a home-server chat
+- Scans: ask "What does it say?"
+- Files: save a Domovoi document as Word
+- Play a radio station in any room
+- Away from home: the app says so plainly and only shows what works
