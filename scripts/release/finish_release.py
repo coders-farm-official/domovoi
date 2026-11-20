@@ -37,7 +37,12 @@ every check has passed):
      Path a: the tag's commit is ``android/release.json`` on top of the
      commit that file names (the one the APKs were built from), and
      nothing else; the GitHub release exists and holds the APKs the
-     manifest pins (size and GitHub's SHA-256 digest).
+     manifest pins (size and GitHub's SHA-256 digest). The app's own tag
+     ``app-<versionName>`` is here and on GitHub at the commit the APKs
+     were built from (release.ps1|.sh push it; this script never makes or
+     moves it), the tag holds ``android/play/WHATS-NEW-v<versionName>.txt``,
+     and the GitHub release of that tag, if there is one yet, is a full
+     (not pre-) release holding nothing but those APKs, each the pinned file.
      Path b: that other tag is an earlier release (here and on GitHub at
      the same commit, before this one), its ``android/release.json`` is
      byte for byte the one at this tag, the app at this tag
@@ -134,6 +139,19 @@ every check has passed):
    default, release candidates included, owner decision 2026-10-15) or
    mark it Latest.
 6. Check every asset on GitHub against ``SHA256SUMS``.
+   Then, path a only: the app's own GitHub release ``app-<versionName>``
+   (owner decision 2026-11-20, for F-Droid, which fetches
+   ``releases/download/app-<v>/domovoi-<v>-<abi>.apk``), at the existing
+   tag (``--verify-tag``), titled "Domovoi for Android <versionName>", its
+   notes the tag's WHATS-NEW file and a line linking this release, and
+   ``--latest=false`` (never Latest, never a pre-release: installers and
+   the update check read this release, which must stay Latest). Its files
+   are this release's APKs, downloaded from it and checked against
+   ``android/release.json``, under the same names. A run that finds it
+   made uploads only the APKs it lacks (never ``--clobber``: a file there
+   that isn't the pinned one stops the run). Each APK is then downloaded
+   back from it and checked, and for a release that isn't a pre-release,
+   GitHub's Latest is checked to be still this one.
 7. LAST, only for a release without a suffix that is not a pre-release:
    the tag on GitHub is checked once more, then
    ``git push origin <the tag's commit>:refs/heads/stable`` (the SHA that
@@ -1004,6 +1022,150 @@ def _verify_published(t: Tools, tag: str, sums: str) -> None:
             die(f"{name} on GitHub is not the file finish-release made (SHA-256 {got}, not {sha})")
 
 
+# ─── the app's own release, app-<versionName> (for F-Droid) ──────────────
+#
+# Owner decision 2026-11-20: a release that carries the APKs (path a) also
+# gets a GitHub release for the app's lightweight tag app-<versionName>, which
+# release.ps1|.sh pushed at the commit the APKs were built from. It holds the
+# very APKs v<server> holds, byte for byte and under the same names: F-Droid
+# fetches releases/download/app-<v>/domovoi-<v>-<abi>.apk. Never Latest (the
+# installers and the update check read v<server>, which stays Latest), never a
+# pre-release. finish-release never makes or moves the app tag.
+
+#: The app tag's versionName: what a tag name and a file name can hold.
+APP_VERSION_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z.+-]*", re.ASCII)
+
+
+def app_tag_of(rel: dict[str, Any]) -> str:
+    """``app-<versionName>``, the tag release.ps1|.sh push at the commit the
+    APKs were built from (the manifest's ``commit``)."""
+    name = rel.get("version_name")
+    if not isinstance(name, str) or not APP_VERSION_RE.fullmatch(name):
+        die(f"android/release.json names no usable versionName ({name!r})")
+    return f"app-{name}"
+
+
+def whats_new_path(version_name: str) -> str:
+    """The app's "What's new" (Google Play's), at the tag: the app release's notes."""
+    return f"android/play/WHATS-NEW-v{version_name}.txt"
+
+
+def app_release_notes(whats_new: str, *, tag: str) -> str:
+    """The app release's notes: the app's WHATS-NEW text, then which Domovoi
+    release it belongs to, linked."""
+    text = whats_new.replace("\r\n", "\n").strip("\n")
+    return (f"{text}\n\nPart of [Domovoi {tag[1:]}]({REPO_URL}/releases/tag/{tag}).\n")
+
+
+def _check_app_tag_release(release: dict[str, Any] | None, app_tag: str,
+                           apks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The app release as it is now (None: not made yet): never a draft or a
+    pre-release, nothing but the manifest's APKs, and each one there the
+    file the manifest pins (size and GitHub's digest). Returns the APKs it
+    still lacks. Nothing is ever replaced: a different file stops the run."""
+    if release is None:
+        return list(apks)
+    if release.get("tagName") not in (None, app_tag):
+        die(f"gh release view {app_tag} answered for {release.get('tagName')}")
+    if release.get("isDraft"):
+        die(f"the GitHub release {app_tag} is a draft: publish it or delete it on GitHub first")
+    if release.get("isPrerelease"):
+        die(f"the GitHub release {app_tag} is marked a pre-release: the app's release is a full one "
+            "(untick it on GitHub, never Latest), then run again")
+    assets = {a["name"]: a for a in release.get("assets") or []}
+    unknown = sorted(set(assets) - {e["file"] for e in apks})
+    if unknown:
+        die(f"the release {app_tag} has files that are not the app's APKs: {', '.join(unknown)} "
+            "(remove them on GitHub first)")
+    missing = []
+    for e in apks:
+        a = assets.get(e["file"])
+        if a is None:
+            missing.append(e)
+            continue
+        if a.get("size") != e["size"]:
+            die(f"{e['file']} on {app_tag} is {a.get('size')} bytes, android/release.json says {e['size']}: "
+                "not replacing it (delete it on GitHub if it is wrong, then run again)")
+        d = _digest(a)
+        if d is not None and d != e["sha256"]:
+            die(f"{e['file']} on {app_tag} is not the file android/release.json pins (SHA-256 {d}): "
+                "not replacing it (delete it on GitHub if it is wrong, then run again)")
+    return missing
+
+
+def _app_tag_on_github(t: Tools, app_tag: str, built_from: str, *, fetched: bool, publish: bool) -> None:
+    """The app tag is release.ps1|.sh's: here and on GitHub, at the commit
+    the APKs were built from. This script never makes or moves it."""
+    here = t.git("rev-parse", "--verify", "--quiet", f"refs/tags/{app_tag}^{{commit}}", check=False).strip()
+    there = _remote_ref(t, f"refs/tags/{app_tag}") if fetched else None
+    for where, sha in (("here", here), ("on GitHub", there if fetched else built_from)):
+        if sha == built_from:
+            continue
+        why = (f"the app tag {app_tag} {where} is {sha[:12] if sha else 'missing'}, not {built_from[:12]}, the commit "
+               "android/release.json says the APKs were built from (android/scripts/release.ps1 pushes it there; "
+               "this script never makes or moves a tag of the app)")
+        if publish:
+            die(why)
+        t.say(f"warning: {why}")
+
+
+def publish_app_release(t: Tools, stage: Path, *, tag: str, app_tag: str, apks: list[dict[str, Any]],
+                        notes: str, server_latest: bool) -> None:
+    """Make (or complete) the GitHub release ``app_tag`` with the manifest's
+    APKs, taken from the release ``tag`` and checked against
+    ``android/release.json`` before they go up, then downloaded back by the
+    URL F-Droid uses and checked again. Never Latest, never a pre-release;
+    when ``tag`` is Latest (``server_latest``) it must still be afterwards."""
+    release = _release_json(t, app_tag)
+    missing = _check_app_tag_release(release, app_tag, apks)
+    if missing:
+        fetch = stage / "app"
+        if fetch.exists():
+            shutil.rmtree(fetch)
+        fetch.mkdir(parents=True)
+        files = []
+        for e in missing:
+            dest = fetch / e["file"]
+            t.gh("release", "download", tag, "--repo", REPO_SLUG, "--pattern", e["file"], "--output", str(dest))
+            if not dest.is_file() or sha256_file(dest) != e["sha256"] or dest.stat().st_size != e["size"]:
+                die(f"{e['file']} downloaded from {tag} is not the file android/release.json pins")
+            files.append(dest)
+        if release is None:
+            notes_file = stage / "APP-NOTES.md"
+            notes_file.write_bytes(notes.encode("utf-8"))
+            t.say(f"creating the GitHub release {app_tag} with {', '.join(f.name for f in files)} "
+                  "(the same files as on " + tag + "; not Latest)...")
+            t.gh("release", "create", app_tag, *(str(f) for f in files), "--repo", REPO_SLUG, "--verify-tag",
+                 "--title", f"Domovoi for Android {app_tag[len('app-'):]}", "--notes-file", str(notes_file),
+                 "--latest=false")
+        else:
+            t.say(f"uploading {', '.join(f.name for f in files)} to {app_tag} (missing there)...")
+            # No --clobber: a file of that name there already stops the upload.
+            t.gh("release", "upload", app_tag, *(str(f) for f in files), "--repo", REPO_SLUG)
+    else:
+        t.say(f"{app_tag} already has both APKs: checking them")
+
+    # Read it back: the release as it should be, and each file downloaded
+    # by the URL F-Droid fetches, against android/release.json.
+    back = _release_json(t, app_tag)
+    if back is None:
+        die(f"can't read the release {app_tag} back")
+    if _check_app_tag_release(back, app_tag, apks):
+        die(f"the release {app_tag} still lacks an APK after the upload")
+    for e in apks:
+        got = t.download_sha256(_asset_url(app_tag, e["file"]))
+        if got != e["sha256"]:
+            die(f"{e['file']} on {app_tag} is not the file android/release.json pins (downloaded: SHA-256 {got})")
+    if server_latest:
+        p = t.gh("api", f"repos/{REPO_SLUG}/releases/latest", "--jq", ".tag_name")
+        latest = p.stdout.decode("utf-8", "replace").strip()
+        if latest != tag:
+            die(f"the Latest release on GitHub is {latest or 'none'}, not {tag}: mark {tag} Latest again on GitHub "
+                "(installers and the update check read it)")
+    t.say(f"{app_tag} holds {', '.join(e['file'] for e in apks)}, the files android/release.json pins"
+          + (f"; {tag} is still Latest" if server_latest else ""))
+
+
 def _stage_sboms(src: Path, stage: Path, *, version: str, app: dict[str, Any], with_apks: bool) -> dict[str, str]:
     """--sbom-dir: the server's and the web's SBOM always, the app's exactly
     when the release carries the APKs, each CycloneDX JSON naming this
@@ -1263,7 +1425,14 @@ def plan(t: Tools, repo: Path, tag_arg: str | None = None) -> dict[str, Any]:
         if app_changed and not code > released:
             die(f"the app's versionCode {code} is not above the last release's ({released}): "
                 "raise it with versionName, or put both back")
-        hand = t.git_bytes("show", f"{head}:docs/release/{tag}.md")
+        if app_changed:
+            # The app's own release (app-<versionName>, for F-Droid) takes its
+            # notes from this file: refused here, before anyone approves.
+            app_tag_of({"version_name": name})
+            if t.git_bytes("show", f"{head}:{whats_new_path(name)}") is None:
+                die(f"the app changed, but HEAD has no {whats_new_path(name)}: the notes of its release app-{name} "
+                    "(and Google Play's What's new)")
+        hand =t.git_bytes("show", f"{head}:docs/release/{tag}.md")
         problems = release_doc_problems(hand.decode("utf-8")) if hand is not None else []
         if problems:
             die(f"docs/release/{tag}.md: " + "; ".join(problems)
@@ -1435,6 +1604,17 @@ def _run(argv: list[str], *, tools: Tools | None, repo: Path | None,
         changed = t.git("diff", "--name-only", parent, tag_commit).split()
         if changed != ["android/release.json"]:
             die(f"the tag's commit changes more than android/release.json: {', '.join(changed)}")
+        # The app's own release, app-<versionName> (for F-Droid): its tag
+        # where release.ps1 put it, its notes at the tag, and what GitHub has
+        # of it already, all checked before anything changes.
+        own_app_tag = app_tag_of(rel)
+        whats_new = t.git_bytes("show", f"{tag_commit}:{whats_new_path(rel['version_name'])}")
+        if whats_new is None:
+            die(f"the tag has no {whats_new_path(rel['version_name'])}: the notes of the app's release {own_app_tag}")
+        own_app_notes = app_release_notes(whats_new.decode("utf-8"), tag=tag)
+        _app_tag_on_github(t, own_app_tag, parent, fetched=fetched, publish=publish)
+        if publish or t.gh_cmd:
+            _check_app_tag_release(_release_json(t, own_app_tag), own_app_tag, apks)
     else:
         # Path b: the app is the one an earlier release holds, unchanged.
         app_tag = rel.get("tag")
@@ -1685,6 +1865,8 @@ def _run(argv: list[str], *, tools: Tools | None, repo: Path | None,
                *(stage / n for n in SBOM_ASSETS if sboms and n in sboms), stage / SUMS_ASSET]
 
     stable_push = f"{tag_commit}:refs/heads/stable"
+    if app_changed:
+        (stage / "APP-NOTES.md").write_bytes(own_app_notes.encode("utf-8"))
     if not publish:
         say("not published (--no-publish). A real run then:")
         if push_tag:
@@ -1698,6 +1880,12 @@ def _run(argv: list[str], *, tools: Tools | None, repo: Path | None,
             print(f"    gh release edit {tag} --repo {REPO_SLUG} --title \"Domovoi v{version}\" --notes-file NOTES.md "
                   + ("--prerelease" if prerelease else "--latest") + f"    ({kind})")
         print("    (checks every file on GitHub against SHA256SUMS)")
+        if app_changed:
+            names = " ".join(e["file"] for e in apks)
+            print(f"    gh release create {own_app_tag} {names} --repo {REPO_SLUG} --verify-tag "
+                  f"--title \"Domovoi for Android {rel['version_name']}\" --notes-file APP-NOTES.md --latest=false"
+                  f"    (the APKs downloaded from {tag}; only those it lacks, if it exists; never Latest)")
+            print(f"    (downloads each APK back from {own_app_tag} and checks it against android/release.json)")
         if not moves_stable:
             print(f"    stable stays where it is: {STABLE_STAYS}")
         elif stable[0] == "already":
@@ -1733,6 +1921,11 @@ def _run(argv: list[str], *, tools: Tools | None, repo: Path | None,
     _verify_published(t, tag, sums)
     say("every file on GitHub matches SHA256SUMS")
 
+    # 6b. Path a: the app's own release, app-<versionName>, for F-Droid. ----
+    if app_changed:
+        publish_app_release(t, stage, tag=tag, app_tag=own_app_tag, apks=apks, notes=own_app_notes,
+                            server_latest=not prerelease)
+
     # 7. LAST: stable, to the SHA checked above. --------------------------------
     if not moves_stable:
         say(f"stable stays where it is: {STABLE_STAYS}")
@@ -1749,7 +1942,8 @@ def _run(argv: list[str], *, tools: Tools | None, repo: Path | None,
             t.git("push", "origin", stable_push)
             if _remote_ref(t, "refs/heads/stable") != tag_commit:
                 die("stable on GitHub is not the tag's commit after the push")
-    say(f"done: {tag} has the Setup, SHA256SUMS and its notes" + ("; stable is at it" if moves_stable else "") + ".")
+    say(f"done: {tag} has the Setup, SHA256SUMS and its notes" + ("; stable is at it" if moves_stable else "")
+        + (f"; {own_app_tag} has the APKs" if app_changed else "") + ".")
     return 0
 
 

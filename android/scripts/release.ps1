@@ -34,7 +34,9 @@ carries on from there, with the signed files it left; nothing is built or
 signed again.
 
 Then scripts\release\finish-release.ps1 adds the Windows Setup, one
-SHA256SUMS and the release notes, and moves the stable branch.
+SHA256SUMS and the release notes, publishes the app tag's own release
+app-<versionName> (the same APKs, for F-Droid; never Latest), and moves
+the stable branch.
 
 Run by the owner on his own machine, or by the release workflow
 (.github/workflows/release.yml: -SkipBuild on the APKs its build-app job
@@ -420,7 +422,7 @@ function Publish-Release([string]$ReleaseCommit, [string]$BuiltFrom, [bool]$Exis
     } finally { Remove-Item -Recurse -Force $checkDir -ErrorAction SilentlyContinue }
 
     Say "done: $tag is published at $($ReleaseCommit.Substring(0, 12)), with the android/release.json naming its APKs."
-    Write-Host 'Next: the Windows Setup (built from the tag, pinned to it), one SHA256SUMS and the notes:'
+    Write-Host "Next: the Windows Setup (built from the tag, pinned to it), one SHA256SUMS, the notes and the release $appTag`:"
     Write-Host "    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\release\finish-release.ps1 -Tag $tag"
 }
 

@@ -845,6 +845,8 @@ setup is [docs/release/ACTIONS-SETUP.md](release/ACTIONS-SETUP.md).
    (loaded into an `ssh-agent` for that one step: no key file, no prompt),
    publishes the files, checks them and moves `stable` (step 3 below). The
    job's summary links the release.
+   When the release carries the app, finish-release also publishes the
+   GitHub release of the app tag `app-<versionName>` for F-Droid (step 3).
 7. **build-mac** (macOS, read-only, no secrets, while the run waits for
    approval) builds `DomovoiSetup-mac.pkg` with `mac/build.sh --tag`: the
    same Xcode as CI's `mac` job, CMake, Lima and whisper.cpp at their
@@ -955,7 +957,13 @@ workflow runs the same scripts. In order:
    refused), and that that release on GitHub holds its APKs. Either way,
    for a version without a suffix, that `stable` can fast-forward; nothing
    on GitHub changes until all of that passes. A tag it made and didn't
-   push (a dry run, or a run that stopped first) is deleted again. Then it builds `DomovoiSetup.exe`
+   push (a dry run, or a run that stopped first) is deleted again. With the
+   app changed it also publishes, after the release's own files, the GitHub
+   release of the app tag `app-<versionName>` (release.ps1's; never made or
+   moved here) for F-Droid: "Domovoi for Android <versionName>", the same
+   two APKs under the same names, notes from
+   `android/play/WHATS-NEW-v<versionName>.txt`, never Latest; a second run
+   uploads only what it lacks and stops on a file that differs. Then it builds `DomovoiSetup.exe`
    from the tag's own files: a clean worktree of the tag, where
    `windows\build.ps1 -Pin <tag>` moves the Setup's pins to the tag's
    commit and builds, and anything but `pins.iss` changed, or a bundled
