@@ -353,7 +353,7 @@ def test_only_the_signing_job_runs_in_the_release_environment():
 def test_ci_builds_the_mac_package_with_the_same_xcode():
     ci = yaml.safe_load((REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
     job = ci["jobs"]["mac"]
-    text = yaml.safe_dump(job)
+    text = yaml.safe_dump(job, width=10**9)
     assert job["runs-on"] == "macos-15" and job["if"] == "needs.changes.outputs.mac == 'true'"
     assert XCODE in text and "sort -V" not in text and "secrets." not in text
     (step,) = [s for s in job["steps"] if s.get("working-directory") == "mac"]
@@ -373,7 +373,7 @@ def test_every_artifact_action_is_pinned_by_sha():
 def test_ci_makes_the_sboms_the_same_way():
     ci = yaml.safe_load((REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
     job = ci["jobs"]["sbom"]
-    text = yaml.safe_dump(job)
+    text = yaml.safe_dump(job, width=10**9)  # unfolded, as _job_text
     assert "secrets." not in text and "permissions" not in job
     for kind in ("server", "web", "android"):
         assert f"sbom.py {kind} " in text
