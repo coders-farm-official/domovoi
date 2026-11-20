@@ -609,16 +609,20 @@ jobs:
       - name: Build the unsigned release APKs (leg ${{ matrix.leg }})
         env:
           LEG: ${{ matrix.leg }}
+          # Google's mirror of Maven Central before Central: a runner Central turns
+          # away gets "Could not find" for minutes (build-apks.sh says more).
+          # Every file is still checked against verification-metadata.xml.
+          DOMOVOI_MAVEN_MIRROR: https://maven-central.storage-download.googleapis.com/maven2/
         run: |
           mkdir -p out
           if [ "$LEG" = a ]; then
-            docker run --rm \
+            docker run --rm -e DOMOVOI_MAVEN_MIRROR \
               -v "$PWD/src-a:/build/domovoi" -v "$PWD/out:/out" \
               domovoi-android-build-env \
               bash -c 'umask 022; exec bash /build/domovoi/android/build-env/build-apks.sh /build/domovoi /out'
           else
             jdk=/usr/lib/jvm/java-21-openjdk-amd64
-            docker run --rm --cpuset-cpus 0-1 \
+            docker run --rm --cpuset-cpus 0-1 -e DOMOVOI_MAVEN_MIRROR \
               -e TZ=Pacific/Kiritimati -e LANG=tr_TR.UTF-8 -e LC_ALL=tr_TR.UTF-8 \
               -e JAVA_HOME="$jdk" -e PATH="$jdk/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
               -v "$PWD/src-b:/tmp/x/y/src" -v "$PWD/out:/out" \
