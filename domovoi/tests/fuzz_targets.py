@@ -272,9 +272,27 @@ def zip_xml(data: bytes) -> None:
             safe.check_member("part.xml", data)
         except safe.Refused:
             return
-    low = data.lower()
-    for decl in (b"<!doctype", b"<!entity"):
-        assert decl not in low, f"{decl!r} passed check_member"
+    # What it accepted declares nothing. Asked of a parser, not of the raw
+    # bytes: "<!DOCTYPE" inside a processing instruction or a comment is
+    # text, not a declaration (Atheris on main, 2026-11-20).
+    if safe._looks_like_xml(data):
+        from xml.parsers import expat
+
+        seen: list[str] = []
+        p = expat.ParserCreate()
+        p.StartDoctypeDeclHandler = lambda *a: seen.append("doctype")
+        p.EntityDeclHandler = lambda *a: seen.append("entity")
+        p.UnparsedEntityDeclHandler = lambda *a: seen.append("entity")
+        p.NotationDeclHandler = lambda *a: seen.append("notation")
+        try:
+            p.Parse(data, True)
+        except expat.ExpatError:
+            pass
+        assert not seen, f"check_member passed a part that declares {seen}"
+    else:
+        low = data.lower()
+        for decl in (b"<!doctype", b"<!entity"):
+            assert decl not in low, f"{decl!r} passed check_member"
 
 
 # ─── Chat video intake (domovoi/chat_video) ──────────────────────────────
