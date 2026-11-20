@@ -116,6 +116,8 @@ def stream_length(f: BinaryIO, start: int, head: FrameHeader, audio_end: int) ->
             pos = off + 8
             frames = None
             if flags & 1:
+                if len(frame) < pos + 4:  # cut off: struct.error before (fuzzing, 2026-11)
+                    break
                 frames = u32be(frame, pos)
                 pos += 4
             if flags & 2:

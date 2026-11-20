@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import zipfile
+import zlib
 from pathlib import Path
 from typing import Iterator
 from xml.etree import ElementTree as ET
@@ -143,7 +144,9 @@ class SafeZip:
         self.what = what
         try:
             self.zf = zipfile.ZipFile(str(path))
-        except (zipfile.BadZipFile, OSError, ValueError) as e:
+        # NotImplementedError: a zip format version it doesn't read (found
+        # by fuzzing, 2026-11, as was zlib.error below).
+        except (zipfile.BadZipFile, OSError, ValueError, NotImplementedError) as e:
             raise Refused(f"That {what} is damaged and couldn't be read.") from e
         try:
             self._check()
@@ -185,7 +188,7 @@ class SafeZip:
                 data = f.read(cap + 1)
         except KeyError as e:
             raise Refused(f"That {self.what} is missing a part it needs.") from e
-        except (zipfile.BadZipFile, OSError, EOFError, ValueError, NotImplementedError) as e:
+        except (zipfile.BadZipFile, OSError, EOFError, ValueError, NotImplementedError, zlib.error) as e:
             raise Refused(f"That {self.what} is damaged and couldn't be read.") from e
         if len(data) > cap:
             raise Refused(f"Part of that {self.what} is too large to read.")

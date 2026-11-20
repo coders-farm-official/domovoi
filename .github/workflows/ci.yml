@@ -12,7 +12,17 @@
 #   docs     every push: the documentation gates (privacy, licences, version
 #            copies, mermaid, the manual) and the workflow pins.
 #   python   any change beyond docs: the whole pytest suite (core, radio
-#            plugin, satellite), split into shards, each on its own Postgres.
+#            plugin, satellite), split into shards, each on its own Postgres,
+#            with line coverage measured (the property tests of the parsers
+#            of outside input, domovoi/tests/test_fuzz_parsers.py, run here).
+#   coverage after the shards: their coverage combined, the total and a
+#            per-package table in the job summary. Report only (no
+#            threshold yet), so not in ci-ok's needs.
+#   fuzz     any change beyond docs: every target of scripts/dev/fuzz.py
+#            under Atheris (coverage-guided) for 20 s each; a crash input is
+#            an artifact. Random by nature, so a red run here can be an old
+#            bug the fuzzer only now reached: not in ci-ok's needs; the
+#            deterministic property tests in the pytest shards are.
 #   web      any change beyond docs: the .jsx compile + duplicate globals,
 #            and web/openapi.json and the manual's content file up to date.
 #   harness  scripts/linux/ changed: the bash harnesses in their pinned
@@ -47,7 +57,8 @@
 #   ci-ok    after all of the above: one result for the branch rule to
 #            require ("ci passed"). Green when every job passed or was
 #            skipped because nothing it checks changed.
-# A new job slots into `jobs:` beside these, and into ci-ok's `needs`.
+# A new job slots into `jobs:` beside these, and into ci-ok's `needs`
+# (coverage and fuzz excepted, as said above).
 #
 # No secrets anywhere, and none may be added: release signing and publishing
 # stay on the owner's PC with the owner's keys. Every action is pinned by
@@ -277,6 +288,10 @@ jobs:
       # suite runs on stubs.
       - name: Install what the tests import beyond the lock (scipy, feedparser)
         run: python -m pip install --require-hashes -r .github/ci-extra-requirements.txt
+      # hypothesis (the property tests) and coverage + pytest-cov, exact
+      # versions and hashes in .github/ci-test-tools-requirements.txt.
+      - name: Install the test tools (hypothesis, coverage, pytest-cov)
+        run: python -m pip install --require-hashes -r .github/ci-test-tools-requirements.txt
       # Voice ID's speaker model (25 MB), from the pinned URL and checked
       # against the pinned SHA-256 the server uses
       # (domovoi/clients/speaker_encoder.py), so test_speaker_encoder.py
@@ -326,18 +341,115 @@ jobs:
           python scripts/dev/ci_shard.py --summary 6
           python scripts/dev/ci_shard.py ${{ matrix.shard }} 6 >"$RUNNER_TEMP/shard.txt"
           echo "$(wc -l <"$RUNNER_TEMP/shard.txt") files in shard ${{ matrix.shard }}"
-      - name: pytest -n 4
+      # Line coverage of the shipped code ([tool.coverage.run] in
+      # pyproject.toml; sys.monitoring, a few per cent slower), written per
+      # shard and combined by the coverage job.
+      - name: pytest -n 4 (with coverage)
         run: |
           mkdir -p .test-results
           xargs -a "$RUNNER_TEMP/shard.txt" -d '\n' \
             python -m pytest -n 4 -p no:cacheprovider -q -ra --durations=15 \
+              --cov --cov-report= \
               --junitxml=".test-results/junit-${{ matrix.shard }}.xml"
+          if [ -f .coverage ]; then mv .coverage ".test-results/coverage-${{ matrix.shard }}"; fi
       - name: Upload the JUnit report
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pytest-junit-${{ matrix.shard }}
           path: .test-results/junit-${{ matrix.shard }}.xml
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Upload the coverage data
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-${{ matrix.shard }}
+          path: .test-results/coverage-${{ matrix.shard }}
+          if-no-files-found: ignore
+          retention-days: 7
+
+  coverage:
+    name: coverage (report)
+    needs: [changes, python]
+    if: always() && needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install coverage (pinned, hash-checked)
+        run: python -m pip install --require-hashes -r .github/ci-test-tools-requirements.txt
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: coverage-*
+          path: coverage-data
+          merge-multiple: true
+      - name: Combine the shards and write the summary
+        run: |
+          n=$(find coverage-data -type f -name 'coverage-*' 2>/dev/null | wc -l)
+          if [ "$n" -eq 0 ]; then echo "::warning::no shard uploaded coverage data"; exit 0; fi
+          python -m coverage combine --keep coverage-data/coverage-*
+          python scripts/dev/coverage_summary.py .coverage | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$n" -lt 6 ]; then echo "*Only $n of 6 shards' data: the total is partial.*" >>"$GITHUB_STEP_SUMMARY"; fi
+
+  # Coverage-guided fuzzing (Atheris, libFuzzer) of the parsers of outside
+  # input: domovoi/tests/fuzz_targets.py through scripts/dev/fuzz.py, each
+  # target from its seed files for 20 s. A crash, a broken promise or an
+  # input slower than 30 s stops that target and saves the input
+  # (artifact `fuzz-findings`); replay it with scripts/dev/fuzz.py <target>
+  # <file>. docs/CONTRIBUTING.md, "Fuzz and property tests".
+  fuzz:
+    name: fuzz (atheris)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.lock
+      - name: Install (requirements.lock and Atheris, hash-checked)
+        run: |
+          python -m pip install --require-hashes -r requirements.lock
+          python -m pip install --no-deps -e .
+          python -m pip install --require-hashes -r .github/ci-fuzz-requirements.txt
+      - name: Fuzz every target for 20 s
+        run: |
+          mkdir -p fuzz-findings
+          bad=""
+          for t in $(python scripts/dev/fuzz.py --names); do
+            corpus="$RUNNER_TEMP/corpus/$t"
+            python scripts/dev/fuzz.py --seeds "$t" "$corpus"
+            echo "::group::$t"
+            if python scripts/dev/fuzz.py "$t" -max_total_time=20 -timeout=30 -rss_limit_mb=4096 \
+                 -artifact_prefix="fuzz-findings/$t-" "$corpus" >"$RUNNER_TEMP/$t.log" 2>&1; then
+              tail -n 5 "$RUNNER_TEMP/$t.log"
+            else
+              tail -n 80 "$RUNNER_TEMP/$t.log"
+              bad="$bad $t"
+            fi
+            echo "::endgroup::"
+          done
+          if [ -n "$bad" ]; then
+            echo "::error::the fuzzer found a failing input for:$bad (artifact fuzz-findings)"
+            exit 1
+          fi
+      - name: Upload what it found
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-findings
+          path: fuzz-findings/
           if-no-files-found: ignore
           retention-days: 14
 

@@ -84,7 +84,10 @@ def number_of(s: str) -> Decimal | None:
 
 
 def _fmt(d: Decimal) -> str:
-    q = d.quantize(Decimal("0.01")) if d != d.to_integral_value() else d.quantize(Decimal("1"))
+    try:
+        q = d.quantize(Decimal("0.01")) if d != d.to_integral_value() else d.quantize(Decimal("1"))
+    except InvalidOperation:  # more digits than the context holds (a 30-digit cell; fuzzing, 2026-11)
+        q = d
     s = f"{q:,}"
     return s
 
