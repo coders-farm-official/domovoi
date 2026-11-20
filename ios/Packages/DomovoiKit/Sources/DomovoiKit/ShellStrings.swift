@@ -30,13 +30,24 @@ public enum ShellStrings {
 
     // MARK: - §7.1 chrome (ui/shell/AppShell.kt)
 
-    /// The local shell's top bar. **Two leading spaces.**
-    public static let localTopbar = "  domovoi / local media"
+    /// The local shell's top-bar title, by why it is showing
+    /// (``ServerChoice/localTitle``). It was `  domovoi / local media` until
+    /// 2026-11-19, when the owner opened the app away from home, found no
+    /// Home and no word that said why, and got lost. Drawn after the chrome's
+    /// two leading spaces (``localTitleSpacing``).
+    public static let awayTitle = "Away from home"
+    public static let lookingTitle = "Looking for home…"
+    public static let onThisPhoneTitle = "On this phone"
 
-    /// The local shell's **navigation title** at the accessibility sizes —
-    /// the breadcrumb without the house crumb in front of it.
+    /// The chrome's spacing in front of the local shell's title, as
+    /// `AppShell.kt` writes it (`"  " + choice.localTitle()`).
+    public static let localTitleSpacing = "  "
+
+    /// The local shell's **navigation title** at the accessibility sizes
+    /// (``ServerChoice/localCrumb``). iPhone only: Android has no large
+    /// title.
     ///
-    /// ### Why the title is not the breadcrumb
+    /// ### Why the title is shorter than the bar's
     ///
     /// A `UINavigationBar` large title is one line and UIKit truncates it
     /// rather than wrapping. Train I003 photographed the result at AX5 on
@@ -48,16 +59,18 @@ public enum ShellStrings {
     /// and Apple's audit named each one "Text clipped". The measured widths
     /// say the same: the label is clamped at the width left beside the
     /// toolbar pill (301.3 points for `domovoi / music`, 346.7 for
-    /// `domovoi / home`, 360.0 for `domovoi / local media`).
-    ///
-    /// ``ShellScrollAwayChrome``'s own note pre-registered the answer before
-    /// anything had been measured: "the route's label alone (`music`) in
-    /// place of the breadcrumb (`domovoi / music`), which is the same
-    /// information one word shorter". The house is still named — by the
-    /// toolbar pill's address and by ``ShellTopBar`` at every size below the
-    /// accessibility ones. This is the local shell's half of that; the
-    /// workspace's is `WorkspaceView.screenTitle(for:)`.
-    public static let localMediaTitle = "local media"
+    /// `domovoi / home`, 360.0 for `domovoi / local media`), so the bar's
+    /// "Away from home" (14 characters, against the clipped 15 of
+    /// `domovoi / music`) would not hold either. The banner right below it
+    /// says the whole sentence at every size.
+    public static let awayCrumb = "Away"
+    public static let lookingCrumb = "Looking…"
+    public static let onThisPhoneCrumb = "This phone"
+
+    /// The cover over the workspace while the server is being looked for.
+    /// The title is ``lookingCoverTitle(_:)``.
+    public static let lookingCoverLine =
+        "If you're away from home, what's on this phone opens in a few seconds."
 
     /// The server pill with no server saved, and its accessibility label.
     public static let connectPill = "connect"

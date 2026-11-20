@@ -10,6 +10,10 @@ import Synchronization
 public enum ShellMode: Equatable, Sendable {
     case local
     case workspace
+    /// Only until the saved server first answers: a plain "Connecting to
+    /// <name>…" screen, so no home page is drawn that could only spin
+    /// (Android's `ShellMode.Connecting`).
+    case connecting
 }
 
 /// A saved server is not the same as a reachable one. Take the phone out of
@@ -52,14 +56,30 @@ public func shellMode(
     pairingRequired: Bool,
     preferLocal: Bool = false,
     identityChanged: Bool = false,
-    tokenTrouble: Bool = false
+    tokenTrouble: Bool = false,
+    answeredOnce: Bool = true,
+    looking: Bool = false
 ) -> ShellMode {
     if ServerCredentials.isBlank(serverURL) { return .local }
     if preferLocal { return .local }
     if identityChanged { return .local }
     if pairingRequired || tokenTrouble { return .workspace }
     if unreachable { return .local }
+    // Before the saved server has answered even once (opening the app, or a
+    // switch of server) the workspace is not shown: a plain Connecting
+    // screen for up to ``lookingAfterMs``, then, still unanswered, the
+    // phone's own media with a "Looking for" line (`ShellMode.kt`, 2026-11-19).
+    if !answeredOnce { return looking ? .local : .connecting }
     return .workspace
+}
+
+/// Whether the workspace is covered by a "Looking for <name>…" card: the
+/// server answered earlier, but has now gone ``lookingAfterMs`` on screen
+/// without answering. The pages underneath could only spin, so they are
+/// covered rather than shown; the grace period then drops the app to the
+/// phone's own media as before (`ShellMode.kt`'s `coversWorkspace`).
+public func coversWorkspace(mode: ShellMode, answeredOnce: Bool, looking: Bool, unreachable: Bool) -> Bool {
+    mode == .workspace && answeredOnce && looking && !unreachable
 }
 
 // MARK: - the whole state machine, which Android spreads over two files
@@ -118,11 +138,14 @@ public enum LocalReason: Equatable, Sendable {
 /// | `.tokenTroubleCard` | `if (trouble != null)` (§2.8) |
 /// | `.pairing` | `if (pairingRequired && !pairingDismissed)` (§2.7) |
 /// | `.workspace` | the rest (§2.9) |
+/// | `.connecting` | `shellMode`'s `Connecting`: the saved server has not answered yet (2026-11-19) |
 ///
 /// Room mode (§2.10) is **not** a leaf of this on either platform: it is a
 /// separate activity on Android and will be a separate scene here, decided
 /// before the container is built at all.
 public enum ShellScreen: Equatable, Sendable {
+    /// Before the saved server first answers (``ShellMode/connecting``).
+    case connecting
     case localMedia(LocalReason)
     case tokenTroubleCard(TokenTrouble)
     case pairing
@@ -151,7 +174,9 @@ public func shellScreen(
     preferLocal: Bool = false,
     identityChanged: Bool = false,
     trouble: TokenTrouble? = nil,
-    pairingDismissed: Bool = false
+    pairingDismissed: Bool = false,
+    answeredOnce: Bool = true,
+    looking: Bool = false
 ) -> ShellScreen {
     let mode = shellMode(
         serverURL: serverURL,
@@ -159,8 +184,11 @@ public func shellScreen(
         pairingRequired: pairingRequired,
         preferLocal: preferLocal,
         identityChanged: identityChanged,
-        tokenTrouble: trouble != nil
+        tokenTrouble: trouble != nil,
+        answeredOnce: answeredOnce,
+        looking: looking
     )
+    if mode == .connecting { return .connecting }
     if mode == .local {
         // The same four questions `shellMode` just asked, in the same order,
         // only to name which one answered. Re-asked rather than returned
@@ -188,6 +216,10 @@ public enum ServerChoice: Equatable, Sendable {
     /// No server saved yet: the picker below the switch is how to add one.
     case noServer
 
+    /// Saved, not answered yet, and still inside the grace period: being
+    /// looked for.
+    case looking(label: String)
+
     /// Saved, but nothing has answered for the grace period.
     case unreachable(label: String)
 
@@ -213,6 +245,7 @@ public enum ServerChoice: Equatable, Sendable {
     public var reason: String {
         switch self {
         case .noServer: return "no server yet · pick one below"
+        case .looking: return "looking for it…"
         case .unreachable: return "can't reach it right now"
         case .notOurs: return "looks like a different Domovoi, or it was reinstalled"
         case .coreDown: return "up, but its core isn't answering yet"
@@ -225,7 +258,7 @@ public enum ServerChoice: Equatable, Sendable {
     public var title: String {
         switch self {
         case .noServer: return "your Domovoi"
-        case .unreachable(let label), .notOurs(let label), .coreDown(let label): return label
+        case .looking(let label), .unreachable(let label), .notOurs(let label), .coreDown(let label): return label
         case .available(let label, _): return label
         }
     }
@@ -245,7 +278,8 @@ public func serverChoice(
     unreachable: Bool,
     notOurs: Bool,
     pairingRequired: Bool,
-    coreDown: Bool = false
+    coreDown: Bool = false,
+    looking: Bool = false
 ) -> ServerChoice {
     if ServerCredentials.isBlank(serverURL) { return .noServer }
     // If the inputs disagree the impostor reading wins: it is the one that
@@ -256,8 +290,74 @@ public func serverChoice(
     // (`ShellModeTest.aServerWhoseCoreIsDownIsGreyedWithItsOwnReasonNotUnreachable`).
     if coreDown { return .coreDown(label: label) }
     if unreachable { return .unreachable(label: label) }
+    if looking { return .looking(label: label) }
     return .available(label: label, needsPairing: pairingRequired)
 }
+
+// MARK: - the phone's-own-media layout says where it is (2026-11-19)
+
+extension ServerChoice {
+
+    /// Being looked for (``ServerChoice/looking(label:)``).
+    public var isLooking: Bool {
+        if case .looking = self { return true }
+        return false
+    }
+
+    /// The local shell's top-bar title. It says plainly where the app is,
+    /// since that shell's bar has no Home (home pages need the server).
+    /// `ShellMode.kt`'s `localTitle()`.
+    public var localTitle: String {
+        switch self {
+        case .looking: return ShellStrings.lookingTitle
+        case .unreachable: return ShellStrings.awayTitle
+        default: return ShellStrings.onThisPhoneTitle
+        }
+    }
+
+    /// The same, as the one-line large title at the accessibility sizes,
+    /// where UIKit truncates rather than wraps (``ShellStrings/awayCrumb``).
+    public var localCrumb: String {
+        switch self {
+        case .looking: return ShellStrings.lookingCrumb
+        case .unreachable: return ShellStrings.awayCrumb
+        default: return ShellStrings.onThisPhoneCrumb
+        }
+    }
+
+    /// The line under the title when the saved server can't be used right
+    /// now; nil when there is nothing to explain. A changed identity has its
+    /// own words (`IdentityChanged.swift`), so it is not here.
+    /// `ShellMode.kt`'s `awayLine()`.
+    public var awayLine: String? {
+        switch self {
+        case .looking(let label):
+            return "Looking for \(label). Until it answers, here's what's on this phone."
+        case .unreachable(let label):
+            return "You're away from home, or \(label) is off. Here's what's on this phone. "
+                + "Your home pages come back by themselves when the phone reaches \(label) again."
+        case .coreDown(let label):
+            return "\(label) is up but its core is not answering (starting, updating, or busy), so "
+                + "nothing was sent to it yet. Here's what's on this phone. Your home pages "
+                + "come back when the core does."
+        case .noServer, .notOurs, .available:
+            return nil
+        }
+    }
+}
+
+/// The cover over the workspace while the server is being looked for
+/// (``coversWorkspace(mode:answeredOnce:looking:unreachable:)``).
+public func lookingCoverTitle(_ label: String) -> String { "Looking for \(label)…" }
+
+/// The plain screen shown before the saved server first answers
+/// (``ShellScreen/connecting``).
+public func connectingLine(_ label: String) -> String { "Connecting to \(label)…" }
+
+/// How long the app asks, on screen, before it stops showing the server's
+/// pages (or the Connecting screen) and says it is looking. At home the live
+/// socket is up well inside this. `ShellMode.kt`'s `LOOKING_AFTER_MS`.
+public let lookingAfterMs: Int64 = 2_000
 
 // MARK: - reachability
 
@@ -519,6 +619,7 @@ public func askWhileOnScreen(
     probe: @Sendable () async -> Bool,
     clock: @Sendable () -> Int64,
     wait: @Sendable (Int64) async throws -> Void = { try await Task.sleep(for: .milliseconds($0)) },
+    onAnswer: @Sendable () -> Void = {},
     publish: @Sendable (Bool) -> Void
 ) async {
     // A task that was cancelled before it ran an instruction must not start
@@ -538,7 +639,12 @@ public func askWhileOnScreen(
         // See the note on the type: this is the dropped straddling probe.
         if Task.isCancelled { return }
         let now = clock()
-        if answered { reach.answered(now) } else { reach.missed(now) }
+        if answered {
+            reach.answered(now)
+            onAnswer()
+        } else {
+            reach.missed(now)
+        }
         publish(reach.unreachable)
         do { try await wait(reachProbeEveryMs) } catch { return }
     }

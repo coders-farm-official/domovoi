@@ -282,7 +282,8 @@ final class IntegrationShellTests: XCTestCase {
             deviceSelf: { DeviceSelf(deviceID: "ios-1a2b", name: "iPhone", userAgent: "ua") },
             listeners: PlayerListenerStore(place: SavedStateBox()),
             owners: book,
-            listenOutbox: outbox
+            listenOutbox: outbox,
+            serverAnsweredAtStart: true
         )
         return (model, store, book)
     }

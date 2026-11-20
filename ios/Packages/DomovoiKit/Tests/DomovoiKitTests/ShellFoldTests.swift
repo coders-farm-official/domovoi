@@ -329,7 +329,7 @@ final class ShellFoldTests: XCTestCase {
 
     /// At them it is the breadcrumb, **trimmed**.
     ///
-    /// `ShellStrings.localTopbar` carries two leading spaces for a bar that
+    /// The local shell's bar title carries two leading spaces for a bar that
     /// draws them beside a dot; a screen reader reads a title, not a layout.
     /// The trimming is part of the rule rather than something a call site
     /// remembers, which is why it is asserted here with the string that has
@@ -338,8 +338,8 @@ final class ShellFoldTests: XCTestCase {
         let folded = ShellHeaderFold.forHeader(drawn: true, isAccessibilitySize: true)
         XCTAssertEqual("domovoi / home", folded.navigationTitle(crumb: "domovoi / home"))
         XCTAssertEqual(
-            "domovoi / local media",
-            folded.navigationTitle(crumb: ShellStrings.localTopbar),
+            "Away from home",
+            folded.navigationTitle(crumb: ShellStrings.localTitleSpacing + ShellStrings.awayTitle),
             "the local shell's title keeps the bar's leading spaces"
         )
         XCTAssertFalse(folded.drawsBarAboveTheStack)

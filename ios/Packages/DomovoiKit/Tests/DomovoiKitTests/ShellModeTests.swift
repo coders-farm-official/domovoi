@@ -437,14 +437,18 @@ final class ShellModeTests: XCTestCase {
 
     func testTheBannerSaysWhichOfTheThreeFacesItIs() {
         XCTAssertEqual(
-            "Can't reach 10.0.0.42:6369. Showing media on this phone; "
-                + "the workspace comes back when the server does.",
+            "You're away from home, or 10.0.0.42:6369 is off. Here's what's on this phone. "
+                + "Your home pages come back by themselves when the phone reaches 10.0.0.42:6369 again.",
             localBanner(for: .unreachable(label: "10.0.0.42:6369"), canTrustAgain: false)
         )
         XCTAssertEqual(
             "10.0.0.42:6369 is up but its core is not answering (starting, updating, or busy), so nothing "
-                + "was sent to it yet. Showing media on this phone; the workspace comes back when the core does.",
+                + "was sent to it yet. Here's what's on this phone. Your home pages come back when the core does.",
             localBanner(for: .coreDown(label: "10.0.0.42:6369"), canTrustAgain: false)
+        )
+        XCTAssertEqual(
+            "Looking for 10.0.0.42:6369. Until it answers, here's what's on this phone.",
+            localBanner(for: .looking(label: "10.0.0.42:6369"), canTrustAgain: false)
         )
         let notOurs = localBanner(for: .notOurs(label: "10.0.0.42:6369"), canTrustAgain: true)
         XCTAssertEqual(identityChangedText(address: "10.0.0.42:6369", canTrustAgain: true), notOurs)
@@ -463,7 +467,7 @@ final class ShellModeTests: XCTestCase {
     /// server (map §10.2).
     func testCoreDownIsNeverWordedAsAnOutageOrAnImpostor() {
         let text = localBanner(for: .coreDown(label: "box:6369"), canTrustAgain: false) ?? ""
-        XCTAssertFalse(text.contains("Can't reach"), text)
+        XCTAssertFalse(text.contains("away from home"), text)
         XCTAssertFalse(text.lowercased().contains("different domovoi"), text)
         XCTAssertFalse(text.lowercased().contains("forget"), text)
         XCTAssertFalse(ServerChoice.coreDown(label: "x").reason.contains("reach"))

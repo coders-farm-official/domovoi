@@ -1212,7 +1212,7 @@ public final class AppContainer: Sendable {
     /// `unreachable` is passed in, not read from the container: it is the
     /// ``Reachability`` verdict, and the container does not own the loop that
     /// produces it.
-    public func serverChoice(_ inputs: ShellInputs, label: String, unreachable: Bool) -> ServerChoice {
+    public func serverChoice(_ inputs: ShellInputs, label: String, unreachable: Bool, looking: Bool = false) -> ServerChoice {
         let needsToken: Bool
         if case .notRecognised = inputs.trouble { needsToken = true } else { needsToken = false }
         return DomovoiKit.serverChoice(
@@ -1221,7 +1221,8 @@ public final class AppContainer: Sendable {
             unreachable: unreachable,
             notOurs: inputs.notOurs,
             pairingRequired: inputs.pairingRequired || needsToken,
-            coreDown: inputs.coreDown
+            coreDown: inputs.coreDown,
+            looking: looking
         )
     }
 }

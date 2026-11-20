@@ -135,6 +135,8 @@ public final class ReachabilityDriver: Sendable {
     private let clock: @Sendable () -> Int64
     private let wait: @Sendable (Int64) async throws -> Void
     private let publish: @Sendable (Bool) -> Void
+    private let lookingWait: @Sendable (Int64) async throws -> Void
+    private let events: @Sendable (ReachEvent) -> Void
 
     /// - Parameters:
     ///   - probe: one question to the server. Android's `api.answers()`,
@@ -144,18 +146,28 @@ public final class ReachabilityDriver: Sendable {
     ///     counterpart here. **It keeps running while the device sleeps on
     ///     both platforms**, which is exactly why the loop has to be
     ///     cancelled rather than trusted to notice.
+    ///   - lookingWait: the stretch's ``lookingAfterMs`` timer, apart from
+    ///     `wait` so a test that counts the probe cadence counts only that.
+    ///   - events: every answer, and a stretch that went ``lookingAfterMs``
+    ///     without one, each tagged with the server it was asked of
+    ///     (``ReachEvent``). The model drops one for a server that is no
+    ///     longer the active one.
     ///   - publish: the verdict after each probe, for the shell to read.
     public init(
         graceMs: Int64 = unreachableGraceMs,
         probe: @Sendable @escaping () async -> Bool,
         clock: @Sendable @escaping () -> Int64 = TokenHealth.monotonicMs,
         wait: @Sendable @escaping (Int64) async throws -> Void = { try await Task.sleep(for: .milliseconds($0)) },
+        lookingWait: @Sendable @escaping (Int64) async throws -> Void = { try await Task.sleep(for: .milliseconds($0)) },
+        events: @Sendable @escaping (ReachEvent) -> Void = { _ in },
         publish: @Sendable @escaping (Bool) -> Void
     ) {
         self.graceMs = graceMs
         self.probe = probe
         self.clock = clock
         self.wait = wait
+        self.lookingWait = lookingWait
+        self.events = events
         self.publish = publish
         self.state = Mutex(State(
             serverURL: nil,
@@ -231,10 +243,11 @@ public final class ReachabilityDriver: Sendable {
                     cancelled: cancelled,
                     tellReachable: tellReachable,
                     start: current.reach,
-                    ticket: ticket
+                    ticket: ticket,
+                    server: serverURL
                 )
             }
-            return Decision(cancelled: cancelled, tellReachable: tellReachable, start: nil, ticket: nil)
+            return Decision(cancelled: cancelled, tellReachable: tellReachable, start: nil, ticket: nil, server: serverURL)
         }
 
         decision.cancelled?.cancel()
@@ -243,8 +256,34 @@ public final class ReachabilityDriver: Sendable {
 
         // Started outside the lock, then stored. `askWhileOnScreen` resumes
         // the stopwatch itself, so the stretch begins when the loop does.
-        let task = Task { [probe, clock, wait, publish] in
-            await askWhileOnScreen(reach: reach, probe: probe, clock: clock, wait: wait, publish: publish)
+        //
+        // Beside it, the stretch's "looking" timer (2026-11-19): a stretch
+        // that goes ``lookingAfterMs`` without an answer says so, and the
+        // shell stops showing pages that could only spin. Both are children
+        // of this task, so cancelling it ends both.
+        let server = decision.server
+        let task = Task { [probe, clock, wait, publish, lookingWait, events] in
+            let answered = AnsweredFlag()
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    do { try await lookingWait(lookingAfterMs) } catch { return }
+                    if Task.isCancelled || answered.isSet { return }
+                    events(.looking(server: server))
+                }
+                group.addTask {
+                    await askWhileOnScreen(
+                        reach: reach,
+                        probe: probe,
+                        clock: clock,
+                        wait: wait,
+                        onAnswer: {
+                            answered.set()
+                            events(.answered(server: server))
+                        },
+                        publish: publish
+                    )
+                }
+            }
         }
         // The reservation is still this call's only if nothing has happened
         // in between. A phase change, a live socket or a server switch voids
@@ -269,6 +308,15 @@ public final class ReachabilityDriver: Sendable {
         let start: Reachability?
         /// The slot reservation this call holds, from ``State/starting``.
         let ticket: Int64?
+        /// The server this call was about, which a stretch it starts asks.
+        let server: String
+    }
+
+    /// Whether this stretch has had an answer, for its looking timer.
+    private final class AnsweredFlag: Sendable {
+        private let value = Mutex(false)
+        var isSet: Bool { value.withLock { $0 } }
+        func set() { value.withLock { $0 = true } }
     }
 
     /// Stop for good: the shell is going away. Keeps nothing.
@@ -302,6 +350,16 @@ public final class ReachabilityDriver: Sendable {
 /// Why it matters, in Android's words: nothing pushes an admin's
 /// shared-screen change, and a wall tablet never leaves Home. Asking is an
 /// upsert, so asking is cheap; asking on every return is not.
+/// What a stretch of asking learned, beside the verdict
+/// (``ReachabilityDriver/init(graceMs:probe:clock:wait:lookingWait:events:publish:)``).
+/// Android's `onAnswer` and its `LOOKING_AFTER_MS` timer in `AppShell.kt`.
+public enum ReachEvent: Equatable, Sendable {
+    /// The server answered (any HTTP answer).
+    case answered(server: String)
+    /// The stretch went ``lookingAfterMs`` on screen without an answer.
+    case looking(server: String)
+}
+
 public final class RegisterCadence: Sendable {
 
     private let last = Mutex<Int64?>(nil)

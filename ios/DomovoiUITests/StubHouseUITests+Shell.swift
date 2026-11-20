@@ -68,7 +68,8 @@ extension StubHouseUITests {
         static let homeTitle = "home"
         static let videosTitle = "videos"
         static let settingsTitle = "settings"
-        static let localMediaTitle = "local media"
+        /// ``ShellStrings/onThisPhoneCrumb``: a fresh install, no server.
+        static let localMediaTitle = "This phone"
 
         /// ``ShellPill/accessibilityLabel`` for a saved server **on its own**,
         /// which is the bar's pill (`ShellStringsUnderTest.pillLabel`), and the

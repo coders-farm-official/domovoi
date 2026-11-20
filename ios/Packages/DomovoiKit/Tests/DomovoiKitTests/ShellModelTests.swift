@@ -50,6 +50,9 @@ final class ShellModelTests: XCTestCase {
         ///     advances the fake clock by this much instead of sleeping, so a
         ///     wait that is minutes long runs out in a handful of yields and
         ///     nothing waits on real time.
+        ///   - answered: start as if the server had already answered, so the
+        ///     workspace is drawn at once (every test written before the
+        ///     Connecting screen, 2026-11-19); off to watch the start-up path.
         init(
             serverURL: String,
             token: String? = nil,
@@ -58,7 +61,8 @@ final class ShellModelTests: XCTestCase {
             answers: Bool = true,
             costMs: Int64 = 300,
             sharesClock: Bool = false,
-            tickAdvancesMs: Int64 = 0
+            tickAdvancesMs: Int64 = 0,
+            answered: Bool = true
         ) {
             let store = InMemoryShellStore(serverURL: serverURL, preferLocal: preferLocal, token: token)
             self.store = store
@@ -104,7 +108,9 @@ final class ShellModelTests: XCTestCase {
                     }
                     clock.advance(tickAdvancesMs)
                     _ = ms
-                }
+                },
+                lookingWait: { _ in try await Task.sleep(for: .seconds(3600)) },
+                serverAnsweredAtStart: answered
             )
         }
 

@@ -143,7 +143,8 @@ final class PlayerOwnerTests: XCTestCase {
                 probe: { true },
                 // Parked, so nothing here waits on the reachability loop.
                 wait: { _ in try await Task.sleep(for: .seconds(3600)) },
-                tick: { _ in try await Task.sleep(for: .seconds(3600)) }
+                tick: { _ in try await Task.sleep(for: .seconds(3600)) },
+                serverAnsweredAtStart: true
             )
             self.store = store
             self.container = container

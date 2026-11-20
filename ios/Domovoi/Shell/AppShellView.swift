@@ -97,12 +97,22 @@ struct AppShellView: View {
             UnclaimedServerView(model: model)
         } else {
             shellScreen
+                // Over the workspace, not instead of it: a screen waiting on
+                // a system sheet still gets its answer underneath
+                // (``ShellModel/coversWorkspace``).
+                .overlay {
+                    if model.coversWorkspace {
+                        LookingCoverView(serverName: model.serverChoice.title)
+                    }
+                }
         }
     }
 
     @ViewBuilder
     private var shellScreen: some View {
         switch model.screen {
+        case .connecting:
+            ConnectingView(serverName: model.serverChoice.title)
         case .localMedia:
             LocalShellView(model: model)
         case .workspace:
