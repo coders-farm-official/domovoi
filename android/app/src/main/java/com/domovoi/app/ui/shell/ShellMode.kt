@@ -5,10 +5,11 @@ import kotlinx.coroutines.delay
 
 /**
  * Which shell [AppShell] renders: the on-device shell (music + videos from
- * MediaStore, and the phone's own files; no domovoi needed) or the full
- * server workspace.
+ * MediaStore, and the phone's own files; no domovoi needed), the full
+ * server workspace, or (only until the saved server first answers) a
+ * plain "Connecting to <name>…" screen ([Connecting]).
  */
-internal enum class ShellMode { Local, Workspace }
+internal enum class ShellMode { Local, Workspace, Connecting }
 
 /**
  * A saved server is not the same as a reachable one. Take the phone out of
@@ -23,6 +24,15 @@ internal enum class ShellMode { Local, Workspace }
  * [preferLocal] is the person's own choice in the connection dialog ("this
  * phone"): it holds even at home with the server answering, until they pick
  * the server again. Choosing the server keeps the automatic fallback above.
+ *
+ * Before the saved server has answered even once ([answeredOnce]: opening
+ * the app, or switching servers) the workspace is not shown at all: its
+ * pages could only spin, and away from home they spun for the whole grace
+ * period before the switch, which is where people got lost. Instead a plain
+ * "Connecting" screen for up to [LOOKING_AFTER_MS] (at home the server
+ * answers well inside it), then, still unanswered ([looking]), the phone's
+ * own media with a "Looking for <name>" line until it answers or the grace
+ * runs out.
  */
 internal fun shellMode(
     serverUrl: String,
@@ -36,6 +46,11 @@ internal fun shellMode(
     /** The server refused this phone's token, or asked it to wait
      *  ([tokenTrouble]): the workspace stays up to show the one card. */
     tokenTrouble: Boolean = false,
+    /** The server has answered at least once since the app opened (or since
+     *  this server was picked): the live socket, or any HTTP answer. */
+    answeredOnce: Boolean = true,
+    /** Asked for [LOOKING_AFTER_MS] on screen without an answer. */
+    looking: Boolean = false,
 ): ShellMode =
     when {
         serverUrl.isBlank() -> ShellMode.Local
@@ -43,8 +58,21 @@ internal fun shellMode(
         identityChanged -> ShellMode.Local
         pairingRequired || tokenTrouble -> ShellMode.Workspace
         unreachable -> ShellMode.Local
+        !answeredOnce -> if (looking) ShellMode.Local else ShellMode.Connecting
         else -> ShellMode.Workspace
     }
+
+/**
+ * Whether the workspace is covered by a "Looking for <name>…" card: the
+ * server answered earlier, but has now gone [LOOKING_AFTER_MS] on screen
+ * without answering (the phone left the house with the app open, or came
+ * back to the app away from home). The pages underneath could only spin, so
+ * they are covered rather than shown. They stay composed under the cover,
+ * so a screen waiting on the system picker still gets its answer. The grace
+ * period then drops the app to the phone's own media as before.
+ */
+internal fun coversWorkspace(mode: ShellMode, answeredOnce: Boolean, looking: Boolean, unreachable: Boolean): Boolean =
+    mode == ShellMode.Workspace && answeredOnce && looking && !unreachable
 
 /**
  * What stands between this phone and its server when the server answered
@@ -94,6 +122,10 @@ internal sealed interface ServerChoice {
     /** No server saved yet: the picker below the switch is how to add one. */
     data object NoServer : ServerChoice
 
+    /** Saved, not answered yet, and still inside the grace period: being
+     *  looked for ([shellMode]'s `looking`). */
+    data class Looking(val label: String) : ServerChoice
+
     /** Saved, but nothing has answered for the grace period. */
     data class Unreachable(val label: String) : ServerChoice
 
@@ -118,6 +150,7 @@ internal fun serverChoice(
     notOurs: Boolean,
     pairingRequired: Boolean,
     coreDown: Boolean = false,
+    looking: Boolean = false,
 ): ServerChoice = when {
     serverUrl.isBlank() -> ServerChoice.NoServer
     notOurs -> ServerChoice.NotOurs(label)
@@ -125,12 +158,14 @@ internal fun serverChoice(
     // unreachable; the identity verdict says why, so it is named first.
     coreDown -> ServerChoice.CoreDown(label)
     unreachable -> ServerChoice.Unreachable(label)
+    looking -> ServerChoice.Looking(label)
     else -> ServerChoice.Available(label, pairingRequired)
 }
 
 /** The one-line status under the server side of the switch. */
 internal fun ServerChoice.reason(): String = when (this) {
     ServerChoice.NoServer -> "no server yet · pick one below"
+    is ServerChoice.Looking -> "looking for it…"
     is ServerChoice.Unreachable -> "can't reach it right now"
     is ServerChoice.NotOurs -> "looks like a different Domovoi, or it was reinstalled"
     is ServerChoice.CoreDown -> "up, but its core isn't answering yet"
@@ -140,11 +175,59 @@ internal fun ServerChoice.reason(): String = when (this) {
 /** Name for the server side of the switch. */
 internal fun ServerChoice.title(): String = when (this) {
     ServerChoice.NoServer -> "your Domovoi"
+    is ServerChoice.Looking -> label
     is ServerChoice.Unreachable -> label
     is ServerChoice.NotOurs -> label
     is ServerChoice.CoreDown -> label
     is ServerChoice.Available -> label
 }
+
+/**
+ * The phone's-own-media layout's top-bar title. It says plainly where the
+ * app is, since that layout's bar has no Home (home pages need the server).
+ */
+internal fun ServerChoice.localTitle(): String = when (this) {
+    is ServerChoice.Looking -> LOOKING_TITLE
+    is ServerChoice.Unreachable -> AWAY_TITLE
+    else -> ON_THIS_PHONE_TITLE
+}
+
+internal const val AWAY_TITLE = "Away from home"
+internal const val LOOKING_TITLE = "Looking for home…"
+internal const val ON_THIS_PHONE_TITLE = "On this phone"
+
+/**
+ * The line under the title when the saved server can't be used right now
+ * (null when there is nothing to explain). A changed identity has its own
+ * words and button (IdentityChanged.kt), so it is not here.
+ */
+internal fun ServerChoice.awayLine(): String? = when (this) {
+    is ServerChoice.Looking ->
+        "Looking for $label. Until it answers, here's what's on this phone."
+    is ServerChoice.Unreachable ->
+        "You're away from home, or $label is off. Here's what's on this phone. " +
+            "Your home pages come back by themselves when the phone reaches $label again."
+    is ServerChoice.CoreDown ->
+        "$label is up but its core is not answering (starting, updating, or busy), so " +
+            "nothing was sent to it yet. Here's what's on this phone. Your home pages " +
+            "come back when the core does."
+    else -> null
+}
+
+/** The cover over the workspace while the server is being looked for ([coversWorkspace]). */
+internal fun lookingCoverTitle(label: String): String = "Looking for $label…"
+internal const val LOOKING_COVER_LINE =
+    "If you're away from home, what's on this phone opens in a few seconds."
+
+/** The plain screen shown before the saved server first answers ([ShellMode.Connecting]). */
+internal fun connectingLine(label: String): String = "Connecting to $label…"
+
+/**
+ * How long the app asks, on screen, before it stops showing the server's
+ * pages (or the Connecting screen) and says it is looking. At home the live
+ * socket is up well inside this.
+ */
+internal const val LOOKING_AFTER_MS = 2_000L
 
 /** The current [ServerChoice], provided by AppShell to both shells' connection dialogs. */
 internal val LocalServerChoice = compositionLocalOf<ServerChoice> { ServerChoice.NoServer }
@@ -232,6 +315,8 @@ internal suspend fun askWhileOnScreen(
     probe: suspend () -> Boolean,
     clock: () -> Long,
     wait: suspend (Long) -> Unit = { delay(it) },
+    /** Called on every answer, before [publish]. */
+    onAnswer: () -> Unit = {},
     publish: (unreachable: Boolean) -> Unit,
 ) {
     reach.resume(clock())
@@ -239,7 +324,12 @@ internal suspend fun askWhileOnScreen(
         while (true) {
             val answered = probe()
             val now = clock()
-            if (answered) reach.answered(now) else reach.missed(now)
+            if (answered) {
+                reach.answered(now)
+                onAnswer()
+            } else {
+                reach.missed(now)
+            }
             publish(reach.unreachable)
             wait(REACH_PROBE_EVERY_MS)
         }
