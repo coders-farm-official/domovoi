@@ -124,7 +124,7 @@ class Pins:
         self.commit = commit
         self.manifest: dict[str, str] = {}
         for line in git_show(commit, "scripts/linux/provision-manifest.conf").decode().splitlines():
-            m = re.match(r"^([a-z][a-z0-9_]*)=(\S+)$", line)
+            m = re.match(r"^([a-z][a-z0-9_]*)=(\S+)\Z", line)
             if m:
                 self.manifest[m.group(1)] = m.group(2)
         doc = git_show(commit, "docs/LINUX_HOST.md").decode()
