@@ -5118,7 +5118,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
         log.warning("self-check: capture stream reopened (%s)", reason)
         # The array may have been unplugged and come back with its firmware
         # values: put the chosen preset back on it.
-        self._mic_dsp_reapply("mic reopened")
+        self._mic_dsp_reapply("mic reopened", only_active=True)
 
     def _health_reboot(self, reason: str) -> None:
         if not _reboot_helper_installed(self.cfg):
@@ -5280,6 +5280,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
             except Exception:  # noqa: BLE001 — never take the client down
                 log.exception("mic_dsp: preset change failed")
                 return
+            if state is None:
+                return  # skipped: another change held the array
             # Only to a core that knows the frame (an older one answers
             # an unknown frame with `error`).
             if "mic_dsp" in getattr(self, "_core_features", frozenset()):
@@ -5295,10 +5297,13 @@ class Satellite(pc_engine.SpareDeviceEngine):
             return
         self._mic_dsp_run(self._mic_dsp.apply, preset)
 
-    def _mic_dsp_reapply(self, reason: str) -> None:
+    def _mic_dsp_reapply(self, reason: str, *, only_active: bool = False) -> None:
+        """Put the preset back (and report it). ``only_active``: only when
+        a preset of ours is on the chip (a replug at factory needs nothing)."""
         dsp = getattr(self, "_mic_dsp", None)
-        if dsp is not None:
-            self._mic_dsp_run(dsp.reapply, reason)
+        if dsp is None or (only_active and not dsp.active):
+            return
+        self._mic_dsp_run(dsp.reapply, reason)
 
     def _emit_config_status(self) -> None:
         """Report current config to the server so the web dashboard's

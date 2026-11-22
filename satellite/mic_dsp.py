@@ -29,7 +29,9 @@ import logging
 import os
 import re
 import shutil
+import signal
 import subprocess
+import sys
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -78,12 +80,47 @@ MARK_MAX = 120
 
 _NUM_RE = re.compile(r"-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")
 
+#: How long one ``xvf_host`` call may take before its process group is
+#: killed, and how long a change waits for one already running.
+CALL_TIMEOUT = 5.0
+LOCK_TIMEOUT = 10.0
+
 Runner = Callable[[list[str]], "tuple[int, str]"]
 
 
+def _kill_group(proc: subprocess.Popen) -> None:
+    """End a call that hung, children included. Under ``sudo -n`` the
+    tool runs as root in sudo's session: SIGTERM to the group reaches sudo,
+    which relays it to the tool; SIGKILL then ends whatever is left that
+    this user may signal."""
+    if sys.platform == "win32":
+        proc.kill()
+        return
+    for sig in (signal.SIGTERM, getattr(signal, "SIGKILL", signal.SIGTERM)):
+        try:
+            os.killpg(proc.pid, sig)
+        except OSError:
+            pass
+        try:
+            proc.wait(timeout=1.0)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+
+
 def _run(argv: list[str]) -> tuple[int, str]:
-    r = subprocess.run(argv, capture_output=True, text=True, timeout=5.0)
-    return r.returncode, r.stdout
+    # Its own session, so a timeout can end the whole group and not only
+    # sudo (subprocess.run's timeout would leave the tool running).
+    proc = subprocess.Popen(
+        argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        start_new_session=True,
+    )
+    try:
+        out, _ = proc.communicate(timeout=CALL_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        _kill_group(proc)
+        raise
+    return proc.returncode, out
 
 
 def clean_mark(text: object) -> str:
@@ -213,7 +250,8 @@ class XvfDsp:
             # A preset kept from an earlier run may still be on the chip.
             self._dirty = preset != "factory"
 
-    def _save(self) -> None:
+    def _save(self) -> bool:
+        """Write the preset and the factory values; False when it failed."""
         try:
             self._state_file.parent.mkdir(parents=True, exist_ok=True)
             tmp = self._state_file.with_suffix(".tmp")
@@ -222,6 +260,8 @@ class XvfDsp:
             os.replace(tmp, self._state_file)
         except OSError as e:
             log.warning("mic_dsp: could not save %s: %s", self._state_file, e)
+            return False
+        return True
 
     # ── presets ──────────────────────────────────────────────────────
 
@@ -237,21 +277,40 @@ class XvfDsp:
         self._factory = {p: _fmt(v) for p, v in read.items() if v}
         self._save()
 
-    def apply(self, name: str | None, *, reason: str = "change") -> dict:
+    def apply(self, name: str | None, *, reason: str = "change") -> dict | None:
         """Apply preset ``name`` (None: the current one, read under the
-        lock so a change in flight wins) and return the state to report.
-        Raises ValueError (nothing written) for a name not in
+        lock so a change in flight wins) and return the state to report;
+        None when another change held the array too long. Raises ValueError (nothing written) for a name not in
         :data:`PRESETS`."""
         if name is not None and (not isinstance(name, str) or name not in PRESETS):
             raise ValueError(f"unknown mic DSP preset {str(name)[:40]!r}")
-        with self._lock:
+        # Bounded: a call that hangs must not pile up every later
+        # reconnect behind it.
+        if not self._lock.acquire(timeout=LOCK_TIMEOUT):
+            log.warning("mic_dsp: %s skipped: another change still holds the array", reason)
+            return None
+        try:
             if name is None:
                 name = self._preset
+                if name == "factory" and not self._dirty:
+                    # Nothing of ours is on the chip: report, touch nothing.
+                    state = self._state(applied={}, readback={}, error=None)
+                    return state
             error = None
             applied: dict[str, list[str]] = {}
             try:
                 self._capture_factory()
                 assert self._factory is not None
+                # Kept BEFORE the chip is touched: a restart after a crash
+                # mid-write (or a later one) then knows a preset may be on
+                # the chip and keeps the saved factory values. A preset
+                # that can't be kept is refused, so the chip never holds
+                # values a restart could read in as factory.
+                previous, self._preset = self._preset, name
+                if not self._save() and name != "factory":
+                    self._preset = previous
+                    raise RuntimeError(
+                        f"could not save {self._state_file.name}; not changing the array")
                 # Back to the factory values first, so presets don't stack.
                 if self._dirty:
                     for p in PARAMS:
@@ -264,24 +323,13 @@ class XvfDsp:
                         applied[param] = list(values)
                     else:
                         error = f"xvf_host refused {param}"
-                self._preset = name
-                self._save()
                 readback = self._read_all()
             except RuntimeError as e:
                 error = str(e)
                 readback = {}
-            state = {
-                "type": "mic_dsp_state",
-                "preset": self._preset,
-                "presets": list(PRESETS),
-                "applied": applied,
-                "factory": dict(self._factory or {}),
-                "readback": readback,
-                "ok": error is None,
-                "error": error,
-                "at": _now(),
-            }
-            self.last_state = state
+            state = self._state(applied=applied, readback=readback, error=error)
+        finally:
+            self._lock.release()
         log.info(
             "mic_dsp: at=%s reason=%s preset=%s applied=%s readback=%s%s",
             state["at"], reason, name,
@@ -291,9 +339,31 @@ class XvfDsp:
         )
         return state
 
-    def reapply(self, reason: str) -> dict:
+    def _state(self, *, applied: dict, readback: dict, error: str | None) -> dict:
+        state = {
+            "type": "mic_dsp_state",
+            "preset": self._preset,
+            "presets": list(PRESETS),
+            "applied": applied,
+            "factory": dict(self._factory or {}),
+            "readback": readback,
+            "ok": error is None,
+            "error": error,
+            "at": _now(),
+        }
+        self.last_state = state
+        return state
+
+    @property
+    def active(self) -> bool:
+        """A preset of ours is (or may be) on the chip."""
+        return self._preset != "factory" or self._dirty
+
+    def reapply(self, reason: str) -> dict | None:
         """The current preset again: after a reconnect, or when the array
-        came back from a USB replug (it then holds its firmware values)."""
+        came back from a USB replug (it then holds its firmware values).
+        At factory with nothing of ours on the chip it only reports: no
+        ``xvf_host`` call, no file write. None when skipped (busy)."""
         return self.apply(None, reason=reason)
 
     def mark(self, text: object) -> str:

@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import sys
+import time
 import types
 
 import pytest
@@ -263,3 +266,128 @@ def test_the_frames_are_routed(tmp_path, monkeypatch):
     sat._handle_text_frame({"type": "set_mic_dsp", "preset": "C"})
     sat._handle_text_frame({"type": "mic_dsp_mark", "text": "block 2, 1m"})
     assert seen.set == "C" and seen.mark == "block 2, 1m"
+
+
+# ─── follow-up: saving first, hung calls, inert at factory ───────────────
+
+
+def test_a_failed_save_refuses_a_preset_and_writes_nothing(tmp_path):
+    blocker = tmp_path / "not-a-dir"
+    blocker.write_text("")  # the state file's parent is a file: every save fails
+    fake = FakeXvf()
+    dsp = mic_dsp.XvfDsp("/opt/xvf3800/xvf_host", runner=fake, state_file=blocker / "mic_dsp.json")
+    state = dsp.apply("B")
+    assert fake.writes == [] and fake.values == FACTORY
+    assert state["ok"] is False and "could not save" in state["error"]
+    assert state["preset"] == "factory" and dsp.active is False
+
+
+class _Crash(BaseException):
+    pass
+
+
+def test_a_crash_between_the_save_and_the_writes_still_restores_factory(tmp_path):
+    fake = FakeXvf()
+    writes = []
+
+    def dies_mid_write(argv):
+        if len(argv) > 4:
+            writes.append(argv)
+            if len(writes) == 3:
+                raise _Crash()
+        return fake(argv)
+
+    first = mic_dsp.XvfDsp("/opt/xvf3800/xvf_host", runner=dies_mid_write,
+                           state_file=tmp_path / "mic_dsp.json")
+    with pytest.raises(_Crash):
+        first.apply("D")
+    assert fake.values != FACTORY  # part of D reached the chip
+    # The restart: the saved D means the chip's values are not read in as factory.
+    again = _dsp(tmp_path, fake)
+    assert again.preset == "D" and again.active
+    again.apply("factory")
+    assert fake.values == FACTORY
+
+
+def test_a_hung_call_has_its_process_group_killed(monkeypatch):
+    seen = {}
+
+    class HungProc:
+        pid = 4242
+        returncode = None
+
+        def __init__(self, argv, **kw):
+            seen["kw"] = kw
+
+        def communicate(self, timeout=None):
+            raise mic_dsp.subprocess.TimeoutExpired("xvf_host", timeout)
+
+        def wait(self, timeout=None):
+            return 0
+
+    monkeypatch.setattr(mic_dsp.subprocess, "Popen", HungProc)
+    monkeypatch.setattr(mic_dsp.sys, "platform", "linux")
+    killed = []
+    monkeypatch.setattr(mic_dsp.os, "killpg", lambda pid, sig: killed.append((pid, sig)), raising=False)
+    with pytest.raises(mic_dsp.subprocess.TimeoutExpired):
+        mic_dsp._run(["sudo", "-n", "/opt/xvf3800/xvf_host", "PP_AGCGAIN"])
+    assert seen["kw"]["start_new_session"] is True
+    assert killed == [(4242, mic_dsp.signal.SIGTERM)]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="process groups are POSIX")
+def test_a_real_hung_tool_and_its_child_are_gone_after_the_timeout(tmp_path, monkeypatch):
+    pid_file = tmp_path / "child.pid"
+    tool = tmp_path / "xvf_host"
+    tool.write_text(
+        "#!/bin/sh\nsleep 60 &\necho $! > " + str(pid_file) + "\nwait\n", encoding="utf-8")
+    tool.chmod(0o755)
+    monkeypatch.setattr(mic_dsp, "CALL_TIMEOUT", 0.5)
+    with pytest.raises(mic_dsp.subprocess.TimeoutExpired):
+        mic_dsp._run([str(tool), "PP_AGCGAIN"])
+    child = int(pid_file.read_text())
+    for _ in range(50):
+        try:
+            os.kill(child, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail("the hung tool's child is still running")
+
+
+def test_a_second_change_while_one_holds_the_array_is_skipped(tmp_path, monkeypatch):
+    fake = FakeXvf()
+    dsp = _dsp(tmp_path, fake)
+    monkeypatch.setattr(mic_dsp, "LOCK_TIMEOUT", 0.05)
+    dsp._lock.acquire()
+    try:
+        started = time.monotonic()
+        assert dsp.apply("B") is None
+        assert time.monotonic() - started < 2
+    finally:
+        dsp._lock.release()
+    assert fake.calls == []
+
+
+def test_ready_at_factory_makes_no_xvf_host_call_and_writes_no_file(tmp_path, monkeypatch):
+    sat, fake, sent, inline = _sat_with_fake(tmp_path)
+    monkeypatch.setattr(client.threading, "Thread", inline)
+    monkeypatch.setattr(client, "_promote_pending_server", lambda path: None)
+    sat._sync_time_with_server = lambda: None
+    sat._note_session_accepted = lambda: None
+    sat._handle_text_frame({"type": "ready", "features": ["mic_dsp"]})
+    assert fake.calls == []
+    assert not (tmp_path / "mic_dsp.json").exists()
+    assert sent and sent[-1]["type"] == "mic_dsp_state" and sent[-1]["preset"] == "factory"
+
+
+def test_a_reopened_mic_at_factory_touches_nothing(tmp_path, monkeypatch):
+    sat, fake, sent, inline = _sat_with_fake(tmp_path)
+    monkeypatch.setattr(client.threading, "Thread", inline)
+    sat._voice_input_started = True
+    monkeypatch.setattr(sat, "_stop_mic", lambda: None)
+    monkeypatch.setattr(sat, "_start_mic", lambda: None)
+    sat._mic_frames_total = 0
+    sat._health_reopen_mic("capture went silent", 0.0)
+    assert fake.calls == [] and sent == []
