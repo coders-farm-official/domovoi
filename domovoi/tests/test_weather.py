@@ -181,3 +181,15 @@ def test_a_us_place_hears_fahrenheit_and_others_celsius():
         "Right now in Springfield it's 45 degrees Fahrenheit and light rain.")
     assert spoken_weather(payload("GB")) == (
         "Right now in Springfield it's 7 degrees Celsius and light rain.")
+
+
+def test_a_plugin_can_read_the_household_place_and_take_weather_over():
+    """SDK 1.12: the weather plugin (1.5.0) reads the same place and
+    registers the "weather" capability to take weather questions over."""
+    from domovoi.capabilities import WEATHER_PROVIDER
+    from domovoi.sdk import API_VERSION
+    from domovoi.sdk.coreconfig import CORE_CONFIG_WHITELIST
+
+    assert "news_location" in CORE_CONFIG_WHITELIST
+    assert WEATHER_PROVIDER == "weather"
+    assert tuple(int(p) for p in API_VERSION.split(".")[:2]) >= (1, 12)

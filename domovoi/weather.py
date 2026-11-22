@@ -6,7 +6,7 @@ that scopes local news). ``None`` means "nothing usable": the caller falls
 back to the general web search, unchanged.
 
 A weather plugin takes over by registering the ``WEATHER_PROVIDER``
-capability (``ctx.add_capability("weather-provider", impl)``). While one is
+capability (``ctx.add_capability("weather", impl)``). While one is
 registered core steps aside completely: the router skips the weather offer
 and the lookup, and the plugin's own handler answers. (A plugin can also
 simply claim weather phrases in its handler's priority band; the capability

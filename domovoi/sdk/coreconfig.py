@@ -36,6 +36,9 @@ CORE_CONFIG_WHITELIST: tuple[str, ...] = (
     # nothing may ask a language model, and sdk.http refuses requests that
     # would (SDK 1.7). Read it to skip a summary step up front.
     "ai_features",
+    # The household's place (SDK 1.12), the same one core's weather and
+    # local news use, so a weather plugin needn't ask for it again.
+    "news_location",
 )
 
 
