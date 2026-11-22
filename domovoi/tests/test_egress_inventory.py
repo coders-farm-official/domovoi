@@ -76,9 +76,6 @@ CODE_SUFFIXES = frozenset({
 # where it appears; a host that the code DOES fetch belongs in the
 # inventory instead, never here.
 NEVER_CONTACTED = frozenset({
-    # The GeoNames credit link under Settings > Household > Home location
-    # (web/static/home_location.jsx); the place list is bundled, never fetched.
-    "www.geonames.org",
     # XML namespaces (document formats, printing, SVG, Android resources)
     "www.w3.org",
     "schemas.openxmlformats.org",
