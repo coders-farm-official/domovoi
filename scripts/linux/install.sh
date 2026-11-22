@@ -499,12 +499,12 @@ kit_apt_install() {
   keyring=$(sed -n 's/^Signed-By:[[:space:]]*//p' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null | head -n 1)
   [ -n "$keyring" ] || keyring=/usr/share/keyrings/ubuntu-archive-keyring.gpg
   : >"$d/sources.list.d/offline-kit.sources"
-  for s in "$KIT"/apt/ubuntu/dists/*/; do
+  for s in "$KIT"/apt/amd64/ubuntu/dists/*/; do
     [ -f "$s/InRelease" ] || continue
     suite=$(basename "$s") comps=""
     for c in "$s"*/; do [ -d "$c/binary-amd64" ] && comps+=" $(basename "$c")"; done
     [ -n "$comps" ] || continue
-    printf 'Types: deb\nURIs: file:%s/apt/ubuntu\nSuites: %s\nComponents:%s\nArchitectures: amd64\nSigned-By: %s\nCheck-Valid-Until: no\nCheck-Date: no\n\n' \
+    printf 'Types: deb\nURIs: file:%s/apt/amd64/ubuntu\nSuites: %s\nComponents:%s\nArchitectures: amd64\nSigned-By: %s\nCheck-Valid-Until: no\nCheck-Date: no\n\n' \
       "$KIT" "$suite" "$comps" "$keyring" >>"$d/sources.list.d/offline-kit.sources"
   done
   local -a o=(-o "Dir::Etc::SourceList=$d/sources.list" -o "Dir::Etc::SourceParts=$d/sources.list.d"

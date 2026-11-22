@@ -346,9 +346,14 @@ make_kit() {
   local dir=$1 opts=" ${*:2} " src=$WORK/kit-src
   if [ ! -f "$WORK/kit.bundle" ]; then
     rm -rf "$WORK/kit-bare.git"
+    # As the server's kit builder writes it: the release tag and HEAD, both
+    # at the release commit (no stable branch: provision.sh starts
+    # origin/stable there).
     git clone -q --bare "$ORIGIN" "$WORK/kit-bare.git"
-    git -C "$WORK/kit-bare.git" update-ref refs/heads/stable "$FIXTURE_A"
-    git -C "$WORK/kit-bare.git" bundle create -q "$WORK/kit.bundle" refs/heads/stable refs/heads/main
+    git -C "$WORK/kit-bare.git" update-ref refs/heads/kit "$FIXTURE_A"
+    git -C "$WORK/kit-bare.git" symbolic-ref HEAD refs/heads/kit
+    git -C "$WORK/kit-bare.git" tag v9.9.9 "$FIXTURE_A"
+    git -C "$WORK/kit-bare.git" bundle create -q "$WORK/kit.bundle" refs/tags/v9.9.9 HEAD
     KIT_COMMIT=$FIXTURE_A
   fi
   rm -rf "$src" "$dir"
@@ -365,13 +370,13 @@ pins = dict(l.split("=", 1) for l in open(manifest, encoding="utf-8").read().spl
 c = [
     Component("source", "domovoi", "9.9.9", "MIT", [Source("source/domovoi.bundle", work / "kit.bundle")]),
     Component("apt", "ubuntu", "snapshot", "LicenseRef-distro-archive", [
-        Source("apt/ubuntu/dists/resolute/InRelease", b"fixture InRelease\n"),
-        Source("apt/ubuntu/dists/resolute/main/binary-amd64/Packages", b"Package: fixture\n"),
-        Source("apt/ubuntu/pool/main/f/fixture/fixture_1_amd64.deb", b"deb")]),
+        Source("apt/amd64/ubuntu/dists/resolute/InRelease", b"fixture InRelease\n"),
+        Source("apt/amd64/ubuntu/dists/resolute/main/binary-amd64/Packages", b"Package: fixture\n"),
+        Source("apt/amd64/ubuntu/pool/main/f/fixture/fixture_1_amd64.deb", b"deb")]),
     Component("apt", "docker", "snapshot", "LicenseRef-distro-archive", [
-        Source("apt/docker/gpg", b"KEY 9DC858229FC7DD38854AE2D88D81803C0EBFCD88\n"),
-        Source("apt/docker/dists/resolute/InRelease", b"fixture InRelease\n"),
-        Source("apt/docker/dists/resolute/stable/binary-amd64/Packages", b"Package: docker-ce\n")]),
+        Source("apt/amd64/docker/gpg", b"KEY 9DC858229FC7DD38854AE2D88D81803C0EBFCD88\n"),
+        Source("apt/amd64/docker/dists/resolute/InRelease", b"fixture InRelease\n"),
+        Source("apt/amd64/docker/dists/resolute/stable/binary-amd64/Packages", b"Package: docker-ce\n")]),
     Component("python-wheels", "cp314-x86_64", "lock", "LicenseRef-mixed-see-sbom", [
         Source("python/cp314-x86_64/fixture-1.0-py3-none-any.whl", b"wheel"),
         Source("python/cp314-x86_64/fastapi-1.0-py3-none-any.whl", b"wheel")]),
@@ -379,8 +384,8 @@ c = [
               [Source("images/postgres.tar", b"postgres:16.15-trixie@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d\n")]),
     Component("container-image", "flyway/flyway:10.22.0@sha256:43592cc125eb0594d9b013e8dced2fa67d473c091abaa5dec03b22f49e682949", "x", "Apache-2.0",
               [Source("images/flyway.tar", b"flyway/flyway:10.22.0@sha256:43592cc125eb0594d9b013e8dced2fa67d473c091abaa5dec03b22f49e682949\n")]),
-    Component("container-image", "domovoi-mpd", "x", "LicenseRef-distro-archive",
-              [Source("images/domovoi-mpd.tar", b"domovoi-mpd:latest\n")]),
+    Component("container-image", "domovoi-mpd:latest", "x", "LicenseRef-distro-archive",
+              [Source("images/domovoi-mpd_latest.tar", b"domovoi-mpd:latest\n")]),
     Component("ollama-runtime", "ollama", "0.34.4", "MIT", [Source("ollama/ollama-linux-amd64.tar.zst", ollama.encode())]),
     Component("whisper-model", "small.en", "x", "MIT", [
         Source("speech/whisper-small.en/model.bin", whisper.encode()),
@@ -757,6 +762,10 @@ case "$1 ${2-}" in
     [ -f "$SHIM_STATE/active/docker.service" ] || { echo "Cannot connect to the Docker daemon at unix:///var/run/docker.sock" >&2; exit 1; }
     case " $* " in
       *Runtimes*) printf 'io.containerd.runc.v2 '; grep -q '"nvidia"' "$SHIM_STATE/docker-loaded" 2>/dev/null && printf 'nvidia '; echo 'runc ' ;;
+      # The image store: containerd's (Docker 29's default), or with
+      # legacy-store the older overlay2 one.
+      *DriverStatus*) if [ -f "$SHIM_STATE/legacy-store" ]; then echo '[["Backing Filesystem","extfs"]]'
+                      else echo '[["driver-type","io.containerd.snapshotter.v1"]]'; fi ;;
     esac
     exit 0 ;;
   "version "*) echo 29.8.1 ;;
@@ -3178,7 +3187,7 @@ case_debian_13_bare_metal() {
   check "result ok" eq "$(final_field result)" '"ok"'
   check "said what it is" said "Debian GNU/Linux 13 (trixie), "
   check "no warning about the system" not_said "made for 26.04"
-  check "the same system packages" called "install -y python3 python3-venv python3-dev build-essential pkg-config libasound2-dev git ffmpeg mpg123 libchromaprint-tools xorriso tesseract-ocr tesseract-ocr-eng zstd ca-certificates curl gnupg tzdata sudo"
+  check "the same system packages" called "install -y python3 python3-venv python3-dev build-essential pkg-config libasound2-dev git ffmpeg mpg123 libchromaprint-tools xorriso tesseract-ocr tesseract-ocr-eng dosfstools mtools zstd ca-certificates curl gnupg tzdata sudo"
   # Docker
   check "Docker's key from its Debian repository" called "curl https://download.docker.com/linux/debian/gpg"
   check "nothing from its Ubuntu one" not_called "download.docker.com/linux/ubuntu"
@@ -5906,6 +5915,8 @@ case_kit_full_install() {
   check "nothing reached for the internet" no_internet
   check "HEAD is the kit's commit" eq "$(final_field head)" "\"$FIXTURE_A\""
   check "on stable" eq "$(git -C "$CHECKOUT" rev-parse --abbrev-ref '@{u}')" origin/stable
+  check "origin/stable starts at the kit's commit" eq "$(git -C "$CHECKOUT" rev-parse origin/stable)" "$FIXTURE_A"
+  check "the core's account reads Ollama's models" has_line "$STATE/groups" "domovoi ollama"
   check "origin is the repository URL, not the stick" eq "$(origin_url "$CHECKOUT")" "$ORIGIN"
   check "apt used the kit's sources only" called "Dir::Etc::SourceParts="
   check "  and its own lists" called "Dir::State::Lists="
@@ -6060,6 +6071,17 @@ case_kit_download_path_stops_loudly() {
   check "at the venv" eq "$(final_field failed_step)" '"venv"'
   check "loudly" said "would use the internet, and this install is from an offline kit: nothing may"
   check "nothing downloaded" no_internet
+  end_case
+}
+
+case_kit_needs_dockers_containerd_store() {
+  kit_case kit_needs_dockers_containerd_store || return 0
+  touch "$STATE/legacy-store"
+  run_prov --offline-kit "$KIT" --internet never --no-ai-models
+  check "stopped" eq "$RC" 1
+  check "at the images" eq "$(final_field failed_step)" '"images"'
+  check "says why and how" said "keeps images in its older image store"
+  check "loaded nothing" not_called "docker load"
   end_case
 }
 
@@ -6274,6 +6296,7 @@ CASES=(
   case_kit_damaged_file_stops
   case_kit_download_path_stops_loudly
   case_kit_without_the_wake_word_warns
+  case_kit_needs_dockers_containerd_store
 )
 
 # --case / --list / ONLY=<regex> (case-filter.sh) pick what runs; the suite

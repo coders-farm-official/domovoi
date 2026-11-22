@@ -163,19 +163,18 @@ class Pins:
 
 
 def make_bundle(work: Path, commit: str, tag: str) -> Path:
-    """A git bundle whose stable and main are COMMIT and whose TAG names it
-    (the full history up to it, as a release kit carries)."""
+    """A git bundle of the history up to COMMIT with two refs, the release
+    tag and HEAD, both at COMMIT: what the server's kit builder writes."""
     out = work / f"domovoi-{commit[:12]}.bundle"
     if out.is_file():
         return out
     bare = work / "bundle.git"
     rmtree(bare)
     run("git", "clone", "-q", "--bare", "--no-local", str(REPO), str(bare))
-    for ref in ("refs/heads/stable", "refs/heads/main"):
-        run("git", "-C", str(bare), "update-ref", ref, commit)
+    run("git", "-C", str(bare), "update-ref", "refs/heads/kit", commit)
+    run("git", "-C", str(bare), "symbolic-ref", "HEAD", "refs/heads/kit")
     run("git", "-C", str(bare), "tag", "-f", tag, commit)
-    run("git", "-C", str(bare), "bundle", "create", "-q", str(out), "refs/heads/stable", "refs/heads/main",
-        f"refs/tags/{tag}")
+    run("git", "-C", str(bare), "bundle", "create", "-q", str(out), f"refs/tags/{tag}", "HEAD")
     rmtree(bare)
     return out
 
@@ -321,16 +320,17 @@ def make_images(work: Path, pins: Pins, commit: str) -> list[tuple[str, Path]]:
         name = ref.split("@")[0]
         if not any(s in name for s in ("postgres", "flyway")):
             continue
-        f = out / (re.sub(r"[^A-Za-z0-9._-]", "_", name) + ".tar")
+        # As the server saves it (domovoi/kit_builder/images.py): under its
+        # compose name, no --platform, so the archive keeps the index digest.
+        repo, tag = name.rsplit(":", 1)
+        f = out / (re.sub(r"[^A-Za-z0-9._-]", "_", f"{repo.replace('/', '_')}_{tag}") + ".tar")
         if not f.is_file():
             log(f"docker pull + save {ref}")
             docker("pull", "-q", "--platform", "linux/amd64", ref)
-            digest = ref.split("@")[1]
-            repo = name.rsplit(":", 1)[0]
             docker("tag", ref, name)
-            docker("save", "--platform", "linux/amd64", "-o", str(f), name, f"{repo}@{digest}")
+            docker("save", "-o", str(f), name)
         res.append((ref, f))
-    f = out / f"domovoi-mpd-{hashlib.sha256(git_show(commit, 'domovoi/Dockerfile.mpd')).hexdigest()[:12]}.tar"
+    f = out / f"domovoi-mpd_latest-{hashlib.sha256(git_show(commit, 'domovoi/Dockerfile.mpd')).hexdigest()[:12]}.tar"
     if not f.is_file():
         log("docker build of the music player (domovoi/Dockerfile.mpd at the commit) + save")
         # Dockerfile.mpd copies nothing in: its own text is the whole context.
@@ -338,8 +338,8 @@ def make_images(work: Path, pins: Pins, commit: str) -> list[tuple[str, Path]]:
             (Path(d) / "Dockerfile.mpd").write_bytes(git_show(commit, "domovoi/Dockerfile.mpd"))
             docker("build", "-q", "--platform", "linux/amd64", "-t", "domovoi-mpd:latest", "-f",
                    str(Path(d) / "Dockerfile.mpd"), d)
-        docker("save", "--platform", "linux/amd64", "-o", str(f), "domovoi-mpd:latest")
-    res.append(("domovoi-mpd", f))
+        docker("save", "-o", str(f), "domovoi-mpd:latest")
+    res.append(("domovoi-mpd:latest", f))
     return res
 
 
@@ -407,7 +407,7 @@ def make_kit(args: argparse.Namespace) -> None:
     apt = make_apt(work, pins, commit)
     for sub, name in (("ubuntu", "ubuntu-26.04"), ("docker", "docker-ce")):
         root = apt / sub
-        files = [Source(f"apt/{sub}/{p.relative_to(root).as_posix()}", p)
+        files = [Source(f"apt/amd64/{sub}/{p.relative_to(root).as_posix()}", p)
                  for p in sorted(root.rglob("*")) if p.is_file()]
         comps.append(Component("apt", name, "snapshot", "LicenseRef-distro-archive", files,
                                pinned_by="the archive's signed InRelease"))
@@ -419,7 +419,7 @@ def make_kit(args: argparse.Namespace) -> None:
         lic = "PostgreSQL" if "postgres" in name else ("Apache-2.0" if "flyway" in name else "LicenseRef-distro-archive")
         comps.append(Component("container-image", name, name.split("@")[-1], lic,
                                [Source(f"images/{f.name}", f)],
-                               pinned_by=None if name == "domovoi-mpd" else "domovoi/docker-compose.yml"))
+                               pinned_by=None if "@" not in name else "domovoi/docker-compose.yml"))
     asset = "ollama-linux-amd64.tar.zst"
     olla = fetch(f"https://github.com/ollama/ollama/releases/download/v{pins.ollama_version}/{asset}",
                  work / f"ollama-{pins.ollama_version}-{asset}", sha=pins.ollama_sha)

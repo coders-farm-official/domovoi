@@ -23,6 +23,13 @@ a way that would otherwise get reported as a bug.
   one, one without AI models when AI is wanted, a damaged stick) is
   refused in plain words before anything changes. LINUX_HOST.md,
   "Installing without internet".
+- **Also.** provision.sh now installs `dosfstools` and `mtools` (the
+  server makes a kit's FAT32 image with them), and puts the service user
+  in the `ollama` group with the `ollama` account's home open to that
+  group (not to others), so the server can put the AI models it already
+  has on a kit instead of downloading them again. A box set up before
+  gets both when provision.sh runs again (Windows Setup's repair, or by
+  hand); the dashboard's update doesn't add them yet.
 
 ## 1.5.0 (unreleased) — A server can make an offline kit
 

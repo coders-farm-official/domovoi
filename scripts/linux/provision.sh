@@ -1208,7 +1208,8 @@ fstab_source() {
 # that downloads online takes its file from DIR instead and checks it
 # against the same pin as online, from the checkout at the kit's commit:
 #   apt          a temporary apt configuration that knows only the kit's
-#                partial mirrors (apt/ubuntu, apt/docker): Ubuntu's own signed
+#                partial mirrors (apt/<arch>/ubuntu, apt/<arch>/docker, the
+#                arch dpkg's: amd64, arm64): Ubuntu's own signed
 #                InRelease, checked with the keyring this system already has,
 #                and Docker's, checked with Docker's key once the docker step
 #                has checked that key's fingerprint against the manifest. apt
@@ -1219,8 +1220,9 @@ fstab_source() {
 #                origin is then set to --repo-url (GitHub), so a house that
 #                later gets internet updates as usual; HEAD must be the
 #                kit's commit
-#   docker       Docker's key from apt/docker/gpg (fingerprint checked as
-#                online), docker-ce from apt/docker
+#   docker       Docker's key from apt/<arch>/docker/gpg, the file Docker
+#                serves (fingerprint checked as online), docker-ce from
+#                apt/<arch>/docker
 #   venv         pip install --no-index --find-links (the kit's wheels for
 #                this machine), still --require-hashes from the lock
 #   ollama       the kit's tarball, checked against the LINUX_HOST.md pin
@@ -1418,18 +1420,18 @@ ubuntu_keyring() {
 kit_apt_sources() {
   local d suite comps c arch
   arch=$(deb_arch)
-  for d in "$OFFLINE_KIT"/apt/ubuntu/dists/*/; do
+  for d in "$OFFLINE_KIT/apt/$arch/ubuntu/dists"/*/; do
     [ -f "$d/InRelease" ] || continue
     suite=$(basename "$d")
     comps=""
     for c in "$d"*/; do [ -d "$c/binary-$arch" ] && comps+=" $(basename "$c")"; done
     [ -n "$comps" ] || continue
-    printf 'Types: deb\nURIs: file:%s/apt/ubuntu\nSuites: %s\nComponents:%s\nArchitectures: %s\nSigned-By: %s\nCheck-Valid-Until: no\nCheck-Date: no\n\n' \
-      "$OFFLINE_KIT" "$suite" "$comps" "$arch" "$(ubuntu_keyring)"
+    printf 'Types: deb\nURIs: file:%s/apt/%s/ubuntu\nSuites: %s\nComponents:%s\nArchitectures: %s\nSigned-By: %s\nCheck-Valid-Until: no\nCheck-Date: no\n\n' \
+      "$OFFLINE_KIT" "$arch" "$suite" "$comps" "$arch" "$(ubuntu_keyring)"
   done
-  if [ -n "${MANIFEST_FILE:-}" ] && [ -s "$APT_KEYRING" ] && [ -f "$OFFLINE_KIT/apt/docker/dists/$(docker_pin docker_suite)/InRelease" ]; then
-    printf 'Types: deb\nURIs: file:%s/apt/docker\nSuites: %s\nComponents: stable\nArchitectures: %s\nSigned-By: %s\nCheck-Valid-Until: no\nCheck-Date: no\n' \
-      "$OFFLINE_KIT" "$(docker_pin docker_suite)" "$arch" "${APT_KEYRING#"$ROOT"}"
+  if [ -n "${MANIFEST_FILE:-}" ] && [ -s "$APT_KEYRING" ] && [ -f "$OFFLINE_KIT/apt/$arch/docker/dists/$(docker_pin docker_suite)/InRelease" ]; then
+    printf 'Types: deb\nURIs: file:%s/apt/%s/docker\nSuites: %s\nComponents: stable\nArchitectures: %s\nSigned-By: %s\nCheck-Valid-Until: no\nCheck-Date: no\n' \
+      "$OFFLINE_KIT" "$arch" "$(docker_pin docker_suite)" "$arch" "${APT_KEYRING#"$ROOT"}"
   fi
 }
 kit_apt_args() {
@@ -1511,8 +1513,9 @@ kit_check() {
   fi
   # The parts every install needs.
   kit_has source/domovoi.bundle || missing+=("Domovoi's source (source/domovoi.bundle)")
-  [ -n "$(kit_py list apt/ubuntu/dists/)" ] || missing+=("Ubuntu's packages (apt/ubuntu)")
-  [ -n "$(kit_py list apt/docker/dists/)" ] && kit_has apt/docker/gpg || missing+=("Docker's packages and key (apt/docker)")
+  t=$(deb_arch)
+  [ -n "$(kit_py list "apt/$t/ubuntu/dists/")" ] || missing+=("Ubuntu's packages (apt/$t/ubuntu)")
+  [ -n "$(kit_py list "apt/$t/docker/dists/")" ] && kit_has "apt/$t/docker/gpg" || missing+=("Docker's packages and key (apt/$t/docker, with gpg)")
   [ -n "$(kit_py list "python/cp314-$MACHINE_ARCH/")" ] || missing+=("the Python packages for $MACHINE_ARCH (python/cp314-$MACHINE_ARCH)")
   [ -n "$(kit_py names container-image)" ] || missing+=("the database images (images/)")
   [ -n "$(kit_py names ollama-runtime)" ] || missing+=("Ollama (ollama/)")
@@ -1900,6 +1903,9 @@ do_preflight() {
 # Apache-2.0; liblept5 under the BSD-style Leptonica licence. Other languages are not
 # installed: Domovoi has no household language setting yet. Boxes installed
 # before 1.4.0 get both from apply-update.sh's ADDED_PACKAGES.
+# dosfstools and mtools (GPL, OS packages run as separate programs, like
+# xorriso) are what the server makes an offline kit's FAT32 image with
+# (domovoi/kit_builder/fatimage.py, 1.5.0).
 # The same names on every system this installs on: each of them is a
 # package of that name in Debian 13 (trixie) and Ubuntu 24.04 (noble) too
 # (checked against both archives on 2026-11-15; Debian's pkg-config is the
@@ -1909,7 +1915,7 @@ do_preflight() {
 # it (/usr/bin/python3: the cache trim, the checkout-owner check), and the
 # list stays one list.
 APT_PACKAGES=(python3 python3-venv python3-dev build-essential pkg-config libasound2-dev
-  git ffmpeg mpg123 libchromaprint-tools xorriso tesseract-ocr tesseract-ocr-eng
+  git ffmpeg mpg123 libchromaprint-tools xorriso tesseract-ocr tesseract-ocr-eng dosfstools mtools
   zstd ca-certificates curl gnupg tzdata sudo)
 
 pkgs_installed() {
@@ -3176,8 +3182,16 @@ do_checkout() {
       (cd / && as_svc git -c transfer.fsckObjects=true -c init.defaultBranch=main clone --quiet --no-checkout "$bundle" "$tmp") \
         || die "git clone of the offline kit's source/domovoi.bundle failed: the stick may be damaged; make it again"
       gd "$tmp" remote set-url origin "$REPO_URL" || die "can't point origin at $REPO_URL"
-      gd "$tmp" rev-parse -q --verify "refs/remotes/origin/$TRACK_BRANCH" >/dev/null \
-        || die "the offline kit's source/domovoi.bundle has no $TRACK_BRANCH branch for updates to follow: the kit is not right; make it again"
+      # The bundle carries the release's tag and HEAD; updates follow
+      # TRACK_BRANCH (stable), which a release commit is on by definition.
+      # Without it in the bundle, origin's TRACK_BRANCH starts at the
+      # kit's commit, until the first update with internet fetches it.
+      if ! gd "$tmp" rev-parse -q --verify "refs/remotes/origin/$TRACK_BRANCH" >/dev/null; then
+        gd "$tmp" cat-file -e "$KIT_COMMIT^{commit}" 2>/dev/null \
+          || die "the offline kit's source/domovoi.bundle doesn't hold the kit's commit $KIT_COMMIT: make the stick again"
+        gd "$tmp" update-ref "refs/remotes/origin/$TRACK_BRANCH" "$KIT_COMMIT" || die "can't set origin/$TRACK_BRANCH"
+        log "origin/$TRACK_BRANCH starts at the kit's commit (the bundle carries the release tag, not the branch)"
+      fi
       checkout_ref "$tmp"
       kit_stage_clear
     else
@@ -3324,7 +3338,7 @@ do_docker() {
   if kit; then
     # The file Docker serves at docker_key_url, as the kit carries it:
     # held to the manifest's fingerprint exactly as a download is.
-    kit_py copy apt/docker/gpg "$key" || die "offline kit: Docker's apt key (apt/docker/gpg) can't be copied off the stick"
+    kit_py copy "apt/$(deb_arch)/docker/gpg" "$key" || die "offline kit: Docker's apt key (apt/$(deb_arch)/docker/gpg) can't be copied off the stick"
   else
     curl -fsSL --retry 3 -o "$key" "$(docker_pin docker_key_url)" || die "could not download Docker's apt key from $(docker_pin docker_key_url)"
   fi
@@ -4405,9 +4419,26 @@ inputs_ollama() {
   echo "$OLLAMA_VERSION $OLLAMA_SHA256"
   ollama_unit_text
 }
+# The core's account reads Ollama's models folder (the server's offline
+# kit builder copies the models this server has instead of downloading
+# them again, domovoi/kit_builder/ollama_store.py): the service user joins
+# the ollama group, and the ollama account's home (0750 from useradd on
+# Ubuntu) lets that group in. Ollama writes its models 0755/0644 itself.
+# Nothing is opened to other accounts; ollama's own key (~/.ollama/id_*,
+# 0600) stays its own.
+ollama_home() { getent passwd ollama 2>/dev/null | cut -d: -f6; }
+ollama_models_readable() {
+  local h
+  if ! in_group ollama; then
+    usermod -aG ollama "$SVC_USER" || die "usermod -aG ollama $SVC_USER failed"
+    log "added $SVC_USER to the ollama group: the core reads Ollama's models folder (for the offline kit)"
+  fi
+  h=$(ollama_home)
+  if [ -n "$h" ] && [ -d "$ROOT$h" ]; then chmod g+rx "$ROOT$h" || warn "can't let the ollama group into $h"; fi
+}
 check_ollama() {
   load_ollama_pin
-  [ -x "$OLLAMA_BIN" ] && [ "$(cat "$OLLAMA_STAMP" 2>/dev/null)" = "$OLLAMA_VERSION $OLLAMA_SHA256" ] \
+  in_group ollama && [ -x "$OLLAMA_BIN" ] && [ "$(cat "$OLLAMA_STAMP" 2>/dev/null)" = "$OLLAMA_VERSION $OLLAMA_SHA256" ] \
     && ollama_unit_text | cmp -s - "$UNIT_DIR/ollama.service" \
     && systemctl is-active --quiet ollama.service \
     && [ "$(ollama_served_version)" = "$OLLAMA_VERSION" ]
@@ -4447,6 +4478,7 @@ do_ollama() {
   if ! id -u ollama >/dev/null 2>&1; then
     useradd -r -s /bin/false -U -m -d /usr/share/ollama ollama
   fi
+  ollama_models_readable
   if write_if_changed "$UNIT_DIR/ollama.service" 0644 < <(ollama_unit_text); then changed=1; fi
   systemctl daemon-reload
   systemctl enable --quiet ollama.service
@@ -5400,8 +5432,25 @@ plan_images() {
 # image the compose file pins for the database must be there by its digest
 # (`docker image inspect NAME:TAG@sha256:...` answers only for that image),
 # as after a pull. The kit's component names say which is which: the
-# compose reference for a pinned image, MPD_KIT_NAME for the music player.
-MPD_KIT_NAME=domovoi-mpd
+# compose reference for a pinned image; the music player is the one that
+# isn't one (its MPD_IMAGE_TAG on the server that made it, saved under it).
+# Digests survive `docker save` / `docker load` only on Docker's containerd
+# image store (the default of the Docker 29 this installs; not of a Docker
+# upgraded from an older one): kit_image_store checks before loading.
+kit_image_store() {
+  local st
+  st=$(as_svc docker info -f '{{json .DriverStatus}}' 2>/dev/null) || st=""
+  [[ $st == *io.containerd.snapshotter* ]] && return 0
+  die "Docker on this computer keeps images in its older image store, where the offline kit's images lose the digests this release pins (they are checked by digest). Turn on Docker's containerd image store (\"features\": {\"containerd-snapshotter\": true} in /etc/docker/daemon.json, then sudo systemctl restart docker), then run this again. A new Docker 29 uses it already."
+}
+kit_mpd_name() {
+  local refs=$1 name
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    printf '%s\n' "$refs" | grep -qxF -- "$name" || { printf '%s' "$name"; return 0; }
+  done < <(kit_py names container-image)
+  return 1
+}
 kit_load_image() {
   local name=$1 p f out
   while IFS= read -r p; do
@@ -5416,8 +5465,9 @@ kit_images() {
   local name ref refs
   emit_frac 50 "Loading the database images from the offline kit"
   refs=$(compose_refs "${DB_SERVICES[@]}") && [ -n "$refs" ] || die "docker compose config --images named no database images"
+  kit_image_store
   while IFS= read -r name; do
-    [ -n "$name" ] && [ "$name" != "$MPD_KIT_NAME" ] || continue
+    [ -n "$name" ] || continue
     # Only what this release pins: anything else on the kit stays there.
     if printf '%s\n' "$refs" | grep -qxF -- "$name"; then kit_load_image "$name"; fi
   done < <(kit_py names container-image)
@@ -5432,15 +5482,18 @@ kit_images() {
 # (pinned by nothing but its Dockerfile.mpd, the same release's), loaded
 # and tagged as this box names it. Prints its image ID.
 kit_mpd_image() {
-  local tag loaded
+  local tag loaded name comp
   tag=$(mpd_tag)
-  [ -n "$(kit_py files container-image "$MPD_KIT_NAME")" ] \
-    || die "The offline kit has no music player image (images/, $MPD_KIT_NAME), and without internet it can't be built here: make the kit again"
-  kit_load_image "$MPD_KIT_NAME" >&2
-  loaded=$(as_svc docker image inspect -f '{{.Id}}' "$MPD_KIT_NAME:latest" 2>/dev/null | tr -d '[:space:]') \
-    || die "the offline kit's music player image loaded, but there is no $MPD_KIT_NAME:latest"
-  if [ "$tag" != "$MPD_KIT_NAME:latest" ]; then
-    as_svc docker tag "$MPD_KIT_NAME:latest" "$tag" || die "docker tag $MPD_KIT_NAME:latest $tag failed"
+  comp=$(kit_mpd_name "$(compose_refs "${DB_SERVICES[@]}")") \
+    || die "The offline kit has no music player image (images/), and without internet it can't be built here: make the kit again"
+  name=$comp
+  [[ $name == *:* ]] || name=$name:latest
+  kit_load_image "$comp" >&2
+  loaded=$(as_svc docker image inspect -f '{{.Id}}' "$name" 2>/dev/null | tr -d '[:space:]') \
+    || die "the offline kit's music player image loaded, but there is no $name"
+  [ -n "$loaded" ] || die "the offline kit's music player image loaded, but there is no $name"
+  if [ "$tag" != "$name" ]; then
+    as_svc docker tag "$name" "$tag" || die "docker tag $name $tag failed"
   fi
   kit_stage_clear
   printf '%s' "$loaded"

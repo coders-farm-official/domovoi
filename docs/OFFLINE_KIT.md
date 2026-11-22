@@ -250,7 +250,11 @@ it goes.
   works; apt warns once per index that it found no `.xz` and then uses the
   uncompressed file. Tried on 2026-11-22: an `ubuntu:26.04` container with
   no network installed `APT_PACKAGES`, the pinned docker-ce and the NVIDIA
-  toolkit from such a mirror.
+  toolkit from such a mirror. The install also needs Docker's key file as
+  Docker serves it (`docker_key_url`), at `apt/<arch>/docker/gpg`: it
+  checks its fingerprint against `provision-manifest.conf`, as online, and
+  only then lets apt trust Docker's `InRelease` (NVIDIA's likewise at
+  `apt/amd64/nvidia/gpg`, when the GPU runtime comes from a kit).
 - `python/cp314-x86_64/`, `python/cp314-aarch64/`: one file per locked
   package (both locks), for `pip install --no-index --find-links …
   --require-hashes`. A package with no wheel for that machine is its
