@@ -333,3 +333,112 @@ def build(p: Pins, arch: str, run: Run = subprocess.run) -> dict:
     doc = {"key": key(p, arch), "arch": arch, "made": time.time(), "image": IMAGE, "files": files}
     (base / MIRROR_JSON).write_text(json.dumps(doc, indent=1) + "\n", encoding="utf-8")
     return doc
+
+
+# ─── the repositories' signing keys ──────────────────────────────────────
+# An offline install adds Docker's (and NVIDIA's) repository with the key
+# provision.sh would fetch from docker_key_url / nvidia_key_url, so the kit
+# carries it: apt/<arch>/docker/gpg and apt/amd64/nvidia/gpg, the file the
+# vendor serves, byte for byte. It is fetched through the outbound gate
+# and kept only when it holds exactly one primary key with the pinned
+# fingerprint (provision.sh's own check, made here without gpg).
+
+class KeyFileError(AptError):
+    pass
+
+
+def _dearmor(raw: bytes) -> bytes:
+    import base64
+
+    text = raw.decode("ascii", "replace")
+    if "-----BEGIN PGP PUBLIC KEY BLOCK-----" not in text:
+        return raw  # already binary
+    body = text.split("-----BEGIN PGP PUBLIC KEY BLOCK-----", 1)[1].split("-----END PGP", 1)[0]
+    lines = [ln.strip() for ln in body.strip().splitlines()]
+    # Armor headers end at the first blank line; the checksum line starts with "=".
+    if "" in lines:
+        lines = lines[lines.index("") + 1:]
+    data = "".join(ln for ln in lines if ln and not ln.startswith("="))
+    try:
+        return base64.b64decode(data, validate=True)
+    except ValueError as e:
+        raise KeyFileError(f"the key file isn't a valid OpenPGP armor ({e})") from None
+
+
+def primary_fingerprints(raw: bytes) -> list[str]:
+    """The fingerprints of every primary public key (packet tag 6) in an
+    OpenPGP key file, armored or binary. v4 keys: SHA-1 over 0x99, the
+    two-byte length and the packet body (RFC 4880 12.2)."""
+    data = _dearmor(raw)
+    out, i = [], 0
+    while i < len(data):
+        b = data[i]
+        if not b & 0x80:
+            raise KeyFileError("the key file isn't OpenPGP data")
+        if b & 0x40:  # new format
+            tag, i = b & 0x3F, i + 1
+            first = data[i]
+            if first < 192:
+                length, i = first, i + 1
+            elif first < 224:
+                length, i = ((first - 192) << 8) + data[i + 1] + 192, i + 2
+            elif first == 255:
+                length, i = int.from_bytes(data[i + 1:i + 5], "big"), i + 5
+            else:
+                raise KeyFileError("the key file uses partial lengths")
+        else:  # old format
+            tag, lt, i = (b >> 2) & 0x0F, b & 0x03, i + 1
+            if lt == 3:
+                raise KeyFileError("the key file uses an indeterminate length")
+            n = (1, 2, 4)[lt]
+            length, i = int.from_bytes(data[i:i + n], "big"), i + n
+        body = data[i:i + length]
+        if len(body) != length:
+            raise KeyFileError("the key file is cut short")
+        if tag == 6:
+            if not body or body[0] != 4:
+                raise KeyFileError(f"a version {body[0] if body else '?'} key; only version 4 is understood")
+            out.append(hashlib.sha1(b"\x99" + length.to_bytes(2, "big") + body).hexdigest().upper())
+        i += length
+    return out
+
+
+def key_problem(raw: bytes, fpr: str) -> str | None:
+    """Why ``raw`` isn't the pinned key, or None."""
+    try:
+        fprs = primary_fingerprints(raw)
+    except KeyFileError as e:
+        return str(e)
+    if fprs != [fpr.upper()]:
+        return f"it holds {len(fprs)} primary key(s) {', '.join(f[-16:] for f in fprs)}, not only {fpr}"
+    return None
+
+
+def keys(p: Pins, arch: str) -> list[tuple[str, str, str]]:
+    """(kit path, url, pinned fingerprint) of the keys a kit for ``arch``
+    carries."""
+    m = p.manifest
+    out = [(f"apt/{arch}/docker/gpg", m["docker_key_url"], m["docker_key_fpr"])]
+    if arch == "amd64":
+        out.append((f"apt/{arch}/nvidia/gpg", m["nvidia_key_url"], m["nvidia_key_fpr"]))
+    return out
+
+
+def key_file(path: str, url: str, fpr: str) -> bytes:
+    """The key for kit path ``path``: the cached copy when it still holds
+    the pinned key, else fetched (through the outbound gate) and checked."""
+    from . import fetch
+
+    cache = host.cache_dir("apt", "keys") / hashlib.sha256(url.encode()).hexdigest()[:16]
+    try:
+        raw = cache.read_bytes()
+        if key_problem(raw, fpr) is None:
+            return raw
+    except OSError:
+        pass
+    raw = fetch.fetch_bytes(url, max_bytes=256 * 1024)
+    why = key_problem(raw, fpr)
+    if why:
+        raise AptError(f"the key at {url} is not the pinned one: {why}")
+    cache.write_bytes(raw)
+    return raw

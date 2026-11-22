@@ -25,7 +25,7 @@ from domovoi.kit_builder import (
     apt_mirror, fatimage, fetch, guide, host, images, jobs, licences, ollama_store, parts, pins, plan,
     wheels,
 )
-from domovoi.kit_builder.parts import Part, Release
+from domovoi.kit_builder.parts import Ctx, Part, Release
 from domovoi.offline_kit import FolderSink, Source, verify
 
 REPO = Path(__file__).resolve().parents[2]
@@ -710,3 +710,63 @@ def test_when_done_imager_download_and_delete(rendered):
     assert "Your offline kit is ready." in t and "Everything on the stick will be replaced." in t
     assert any(str(e["props"].get("href", "")).startswith("rpi-imager://?repo=") for e in els)
     assert "delete the kit" in t and "deleted by itself" in t
+
+
+# ─── the repositories' signing keys (apt/<arch>/docker/gpg) ──────────────
+
+def _pubkey(seed: bytes, *, version: int = 4) -> tuple[bytes, str]:
+    """A v4 public-key packet (old format, tag 6) and its fingerprint."""
+    body = bytes([version]) + b"\x5f\x00\x00\x00" + b"\x01" + b"\x00\x40" + seed.ljust(8, b"\0")[:8]
+    packet = bytes([0x80 | (6 << 2) | 0]) + bytes([len(body)]) + body
+    return packet, hashlib.sha1(b"\x99" + len(body).to_bytes(2, "big") + body).hexdigest().upper()
+
+
+def _armor(data: bytes) -> bytes:
+    import base64
+    return (b"-----BEGIN PGP PUBLIC KEY BLOCK-----\nComment: test\n\n" + base64.encodebytes(data)
+            + b"=abcd\n-----END PGP PUBLIC KEY BLOCK-----\n")
+
+
+def test_a_repository_key_is_held_to_its_pinned_fingerprint():
+    one, fpr = _pubkey(b"docker")
+    two, _ = _pubkey(b"other")
+    uid = bytes([0x80 | (13 << 2)]) + bytes([4]) + b"name"     # a user id packet after it
+    assert apt_mirror.primary_fingerprints(_armor(one + uid)) == [fpr]
+    assert apt_mirror.key_problem(_armor(one + uid), fpr) is None
+    assert apt_mirror.key_problem(one, fpr.lower()) is None          # binary, any case
+    assert "2 primary" in apt_mirror.key_problem(_armor(one + two), fpr)
+    assert apt_mirror.key_problem(_armor(two), fpr)
+    assert apt_mirror.key_problem(b"<html>not a key</html>", fpr)
+    assert apt_mirror.key_problem(_pubkey(b"x", version=5)[0], fpr)
+
+
+def test_the_kit_carries_docker_s_and_nvidia_s_keys_beside_their_mirrors(kit_home, monkeypatch):
+    p = pins.load(repo_read, COMMIT)
+    docker_key, docker_fpr = _pubkey(b"docker")
+    nvidia_key, nvidia_fpr = _pubkey(b"nvidia")
+    p.manifest = {**p.manifest, "docker_key_fpr": docker_fpr, "nvidia_key_fpr": nvidia_fpr}
+    served = {p.manifest["docker_key_url"]: _armor(docker_key), p.manifest["nvidia_key_url"]: _armor(nvidia_key)}
+    asked = []
+
+    def fetch_bytes(url, **kw):
+        asked.append(url)
+        return served[url]
+
+    monkeypatch.setattr(fetch, "fetch_bytes", fetch_bytes)
+    monkeypatch.setattr(apt_mirror, "cached", lambda pins_, arch: {"files": [], "made": time.time()})
+    amd64, arm64 = parts.apt_parts(p)
+    srcs = {s.path: s.src for s in amd64.acquire(Ctx(targets=("pc-x86_64",)))}
+    assert srcs["apt/amd64/docker/gpg"] == served[p.manifest["docker_key_url"]]
+    assert srcs["apt/amd64/nvidia/gpg"] == served[p.manifest["nvidia_key_url"]]
+    assert [s.path for s in arm64.acquire(Ctx(targets=("mac-arm64",)))] == ["apt/arm64/docker/gpg"]
+    assert len(asked) == 2                         # the arm64 kit reuses the cached Docker key
+    # A key that isn't the pinned one is never kept.
+    served[p.manifest["docker_key_url"]] = _armor(_pubkey(b"evil")[0])
+    for f in (kit_home / "cache" / "apt" / "keys").iterdir():
+        f.unlink()
+    with pytest.raises(apt_mirror.AptError, match="not the pinned one"):
+        amd64.acquire(Ctx(targets=("pc-x86_64",)))
+    # Under never the key is refused like every download.
+    monkeypatch.setattr(fetch, "fetch_bytes", lambda url, **kw: (_ for _ in ()).throw(egress.InternetTurnedOff(url)))
+    with pytest.raises(egress.InternetTurnedOff):
+        amd64.acquire(Ctx(targets=("pc-x86_64",)))
