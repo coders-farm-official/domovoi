@@ -56,6 +56,7 @@ from domovoi.clients.mpd import (
 from domovoi.config import settings
 from domovoi.main import app
 from domovoi.models import Response
+from domovoi import streaming
 from domovoi.streaming import StreamSession, send_music_start
 from domovoi.tests.test_streaming import _FakeTTS, _FakeWhisper, _hello, _patch_pipeline
 
@@ -689,6 +690,68 @@ def test_music_failed_logs_what_the_satellite_said_bounded_and_quoted(
 
 
 def test_music_failed_leaves_a_newer_start_alone(monkeypatch, playing_room) -> None:
+    """A start for another stream is in flight: its own music_ready or
+    fallback decides."""
+    url, newer = "http://test.local:8051", "http://test.local:8052"
+    _patch_pipeline(monkeypatch, whisper=_FakeWhisper())
+    with TestClient(app) as client:
+        app.state.resumable_music[ROOM] = newer
+        app.state.pending_music_start[ROOM] = {"url": newer, "task": None}
+        try:
+            with client.websocket_connect(f"/v1/stream/{ROOM}") as ws:
+                _hello(ws, ROOM)
+                _failed_then_flush(ws, url)
+            assert playing_room._state == "play"
+            assert ROOM in app.state.pending_music_start
+        finally:
+            app.state.resumable_music.clear()
+            app.state.pending_music_start.clear()
+
+
+def test_music_failed_for_the_pending_start_is_that_starts_failure(
+    monkeypatch, playing_room,
+) -> None:
+    """Office, 2026-11-22: the pending handshake is usually the very start
+    that failed (mpg123 gives up within its 1 s connect grace, well inside
+    the 5 s window). It used to be read as "a newer start is in flight" and
+    ignored, and the fallback then resumed MPD into a silent room. Now the
+    fallback is cancelled, MPD paused (the dashboard tells the truth) and
+    the room marked silent."""
+    url = "http://test.local:8051"
+    _patch_pipeline(monkeypatch, whisper=_FakeWhisper())
+    with TestClient(app) as client:
+        app.state.resumable_music[ROOM] = url
+        fallback = client.portal.call(_sleeper)
+        app.state.pending_music_start[ROOM] = {"url": url, "task": fallback}
+        try:
+            with client.websocket_connect(f"/v1/stream/{ROOM}") as ws:
+                _hello(ws, ROOM)
+                _failed_then_flush(ws, url)
+            assert playing_room._state == "pause"
+            assert ROOM not in app.state.pending_music_start
+            assert client.portal.call(_cancelled, fallback)
+            assert streaming.satellite_music_silent(app, ROOM)
+            assert app.state.resumable_music[ROOM] == url        # kept for "play"
+        finally:
+            app.state.resumable_music.clear()
+            app.state.pending_music_start.clear()
+            streaming.note_satellite_music_silent(app, ROOM, False)
+
+
+async def _sleeper():
+    return asyncio.get_running_loop().create_task(asyncio.sleep(30))
+
+
+async def _cancelled(task) -> bool:
+    await asyncio.sleep(0)
+    return task.cancelled()
+
+
+def test_a_music_ready_after_a_crossed_failure_resumes_mpd(monkeypatch, playing_room) -> None:
+    """A report from an older start crossed a newer start for the same
+    stream on the wire and was taken for the newer one's failure (MPD
+    paused, fallback cancelled). The newer start then plays: its
+    music_ready resumes MPD all the same."""
     url = "http://test.local:8051"
     _patch_pipeline(monkeypatch, whisper=_FakeWhisper())
     with TestClient(app) as client:
@@ -698,10 +761,61 @@ def test_music_failed_leaves_a_newer_start_alone(monkeypatch, playing_room) -> N
             with client.websocket_connect(f"/v1/stream/{ROOM}") as ws:
                 _hello(ws, ROOM)
                 _failed_then_flush(ws, url)
+                assert playing_room._state == "pause"
+                ws.send_text(json.dumps({"type": "music_ready"}))
+                ws.send_text(json.dumps({"type": "ping"}))
+                assert ws.receive_json() == {"type": "pong"}
             assert playing_room._state == "play"
+            assert not streaming.satellite_music_silent(app, ROOM)
         finally:
             app.state.resumable_music.clear()
             app.state.pending_music_start.clear()
+            streaming.note_satellite_music_silent(app, ROOM, False)
+
+
+async def test_play_resends_music_start_when_the_satellite_stream_failed(
+    monkeypatch, playing_room,
+) -> None:
+    """MPD says "playing", but the satellite reported its stream failed:
+    "play" (the handler's resume) must send music_start again, not only
+    resume MPD, which would change nothing in the room."""
+    from domovoi.handlers.music import MusicHandler
+    from domovoi.models import Context
+    from domovoi.room_music import dispatch_music
+
+    url = "http://test.local:8051"
+    fake_app = FakeApp()
+    fake_app.state.resumable_music = {ROOM: url}
+    fake_app.state.active_sessions = {}
+    sess = FakeSession()
+    fake_app.state.active_sessions[ROOM] = sess
+    fake_app.state.pending_music_start[ROOM] = {"url": url, "task": None}
+    await streaming.consume_music_failed(
+        fake_app, ROOM, {"type": "music_failed", "stream_url": url, "reason": "x"},
+    )
+    playing_room._state = "play"          # the dashboard still says playing
+    ctx = Context(room_id=ROOM, online=True, bot_name="Domovoi", app=fake_app)
+    response = await MusicHandler()._simple_ack("resume", ctx)
+    assert response.music_action == "start" and response.music_stream_url == url
+    await dispatch_music(fake_app, response, ROOM)
+    try:
+        assert [p for p, _ in sess.sent] == [{"type": "music_start", "stream_url": url}]
+    finally:
+        _drop_pending(fake_app)
+
+
+async def test_play_in_a_room_whose_satellite_plays_only_resumes(playing_room) -> None:
+    """Nothing reported: "play" is the plain MPD resume, as before."""
+    fake_app = FakeApp()
+    fake_app.state.resumable_music = {ROOM: "http://test.local:8051"}
+    from domovoi.handlers.music import MusicHandler
+    from domovoi.models import Context
+
+    playing_room._state = "pause"
+    ctx = Context(room_id=ROOM, online=True, bot_name="Domovoi", app=fake_app)
+    response = await MusicHandler()._simple_ack("resume", ctx)
+    assert response.music_action is None
+    assert playing_room._state == "play"
 
 
 def test_music_failed_leaves_a_room_that_moved_on_alone(monkeypatch, playing_room) -> None:

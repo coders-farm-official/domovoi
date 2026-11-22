@@ -80,6 +80,10 @@ _STREAM_PCM_BYTES_PER_SEC = 44100 * 2 * 2
 _MPG123_BUFFER_KIB_MIN = 1024
 
 
+#: mpg123's ``--timeout`` for a room stream, in seconds.
+MPG123_TIMEOUT_SEC = 5
+
+
 def mpg123_buffer_args(buffer_sec: float) -> list[str]:
     """``-b`` and ``--preload`` holding ``buffer_sec`` of the stream before
     playback starts: the buffer is at least twice that (and never under
@@ -120,8 +124,14 @@ class AlsaAudioOut:
                     buffer_sec: float = MUSIC_BUFFER_SEC_DEFAULT) -> list[str]:
         device = _pcm(device)
         # -b / --preload / --devbuffer 1.0: see Satellite._spawn_music.
-        return ["mpg123", "-q", *mpg123_buffer_args(buffer_sec), "--devbuffer", "1.0",
-                "-o", "alsa", "-a", device, url]
+        # Not -q: the line mpg123 prints once it has decoded the stream's
+        # first frame ("MPEG 1.0 L III ...") is how the engine knows audio
+        # arrived (client.py `_MUSIC_AUDIO_RE`). --timeout bounds a connect
+        # that hangs; it does not end a stream that connects and then sends
+        # nothing (measured on mpg123 1.32.10) — the engine's own deadline
+        # does (`MUSIC_AUDIO_TIMEOUT_SEC`).
+        return ["mpg123", *mpg123_buffer_args(buffer_sec), "--devbuffer", "1.0",
+                "--timeout", str(MPG123_TIMEOUT_SEC), "-o", "alsa", "-a", device, url]
 
     def mp3_argv(self, device: str, path: str, gain: float) -> list[str]:
         device = _pcm(device)

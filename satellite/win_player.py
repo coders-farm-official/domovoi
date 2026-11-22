@@ -314,7 +314,14 @@ def play_stream(url: str, *, device: Any = None, buffer_sec: float = 0.0) -> Non
         raise PlayerError(f"cannot decode the stream: {e}") from e
     stream = _open_output(device, STREAM_RATE, STREAM_CHANNELS, "music")
     try:
+        first = True
         for samples in frames:
+            if first:
+                # What the engine waits for before music_ready, in the shape
+                # of the line mpg123 prints after the first decoded frame
+                # (client.py `_MUSIC_AUDIO_RE`).
+                print("MPEG stream decoding", file=sys.stderr, flush=True)
+                first = False
             stream.write(samples.tobytes())
     finally:
         _finish(stream)

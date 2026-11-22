@@ -71,6 +71,8 @@ NO_DATA = (
     b"stream_parse_headers(): no data at all from network resource\n"
 )
 ALSA = b"[src/libout123/modules/alsa.c:open_alsa():204] error: cannot open device plughw:CARD=Array,DEV=0\n"
+# What mpg123 (not -q) prints once it has decoded the stream's first frame.
+HEADER = b"MPEG 1.0 L III cbr192 44100 j-s\n"
 
 
 LIVE: list["FakeMpg123"] = []
@@ -86,7 +88,9 @@ def _no_fake_outlives_its_test():
 class FakeMpg123:
     """One mpg123 process. ``plan`` is what its connection does:
     ("refused",) / ("no_data",) / ("alsa",) exit rc=1 after ``after`` s with
-    mpg123's own stderr; ("plays",) runs until terminated or `drop()`."""
+    mpg123's own stderr; ("plays",) prints the first frame's header line and
+    runs until terminated or `drop()`; ("silent",) connects and runs, but no
+    audio ever arrives (no header line)."""
 
     def __init__(self, argv, plan, after: float) -> None:
         self.argv = argv
@@ -95,9 +99,10 @@ class FakeMpg123:
         self._done = threading.Event()
         self.watched = threading.Event()   # the music-watch thread is done with it
         self._err = b""
+        self._head = HEADER if plan[0] == "plays" else b""
         self.stderr = self
         LIVE.append(self)
-        if plan[0] != "plays":
+        if plan[0] not in ("plays", "silent"):
             self._err = {"refused": REFUSED, "no_data": NO_DATA, "alsa": ALSA}[plan[0]]
             threading.Timer(after, self._exit, args=(1,)).start()
 
@@ -106,10 +111,18 @@ class FakeMpg123:
             self.returncode = rc
             self._done.set()
 
-    # stderr pipe: read() returns at EOF, i.e. when the process is gone.
-    def read(self) -> bytes:
+    # stderr pipe: the header line at once (a stream that plays), the
+    # rest at EOF, i.e. when the process is gone.
+    def readline(self) -> bytes:
+        if self._head:
+            line, self._head = self._head, b""
+            return line
         self._done.wait()
-        return self._err
+        if not self._err:
+            return b""
+        nl = self._err.find(b"\n") + 1 or len(self._err)
+        line, self._err = self._err[:nl], self._err[nl:]
+        return line
 
     def poll(self):
         return self.returncode
@@ -524,11 +537,11 @@ def defer_runs(sat) -> list[threading.Event]:
     runs: list[threading.Event] = []
     real = client.Satellite._start_music_when_idle.__get__(sat)
 
-    def wrapped(url, stop_gen=None):
+    def wrapped(url, stop_gen=None, start_seq=None):
         done = threading.Event()
         runs.append(done)
         try:
-            real(url, stop_gen)
+            real(url, stop_gen, start_seq)
         finally:
             done.set()
 
@@ -582,7 +595,10 @@ def test_a_wake_while_the_start_waits_for_the_speaker_cancels_it(monkeypatch):
     sat._stop_music()
     sat._playback_idle.set()
     assert runs[0].wait(3)
-    assert sat.procs == [] and sat.frames == []
+    assert sat.procs == []
+    # The core is told the start it sent will not play (2026-11-22), so its
+    # fallback does not resume MPD into a silent room.
+    assert sat.frames == [DROPPED]
     assert sat._leds.state == "listening"
 
 
@@ -636,6 +652,7 @@ def test_a_barge_in_while_the_start_waits_for_the_speaker_cancels_it(monkeypatch
     assert runs[0].wait(3)
     assert sat.procs == []
     assert "music_ready" not in [f["type"] for f in sat.frames]
+    assert sat.frames[-1] == DROPPED
 
 
 def test_a_newer_music_start_does_not_cancel_the_one_waiting(monkeypatch):
@@ -747,3 +764,59 @@ def test_an_http_stream_url_still_plays(monkeypatch):
     music_start(sat, "HTTP://192.168.1.20:8051")
     wait_for(lambda: len(sat.procs) == 1)
     assert sat.procs[0].argv[-1] == "HTTP://192.168.1.20:8051"
+
+
+# ─── a start that will not play is reported (2026-11-22) ─────────────────
+#
+# Office, 1.4.0: the core arms a fallback that resumes the room's MPD 5 s
+# after every music_start. A start the satellite dropped silently, or a
+# player that connected and got no audio but still sent music_ready, left
+# MPD playing to a silent room with the dashboard reading "playing".
+
+DROPPED = {"type": "music_failed", "stream_url": URL,
+           "reason": "stopped_while_waiting", "attempts": 0}
+
+
+def test_the_speaker_wait_running_out_is_reported(monkeypatch):
+    sat, runs = speaker_busy(monkeypatch)
+    sat.MUSIC_SPEAKER_WAIT_SEC = 0.1
+    music_start(sat)
+    assert runs[0].wait(3)
+    assert sat.procs == []
+    assert sat.frames == [{"type": "music_failed", "stream_url": URL,
+                           "reason": "speaker_busy", "attempts": 0}]
+
+
+def test_a_start_dropped_by_the_cores_own_music_stop_is_not_reported(monkeypatch):
+    sat, runs = speaker_busy(monkeypatch)
+    music_start(sat)
+    sat._handle_text_frame({"type": "music_stop"})
+    sat._playback_idle.set()
+    assert runs[0].wait(3)
+    assert sat.frames == []
+
+
+def test_only_the_newest_dropped_start_is_reported(monkeypatch):
+    sat, runs = speaker_busy(monkeypatch)
+    music_start(sat)
+    music_start(sat)
+    sat._stop_music()
+    sat._playback_idle.set()
+    assert runs[0].wait(3) and runs[1].wait(3)
+    assert sat.frames == [DROPPED]
+
+
+def test_a_player_that_gets_no_audio_is_not_ready_and_is_reported(monkeypatch):
+    """Connected, but the stream sends nothing: no music_ready (it used to
+    go out once the player had been up for the prime), and the player is
+    stopped and reported before the core's 5 s fallback."""
+    sat = make_sat(monkeypatch, [("silent",)])
+    sat.MUSIC_AUDIO_TIMEOUT_SEC = 0.3
+    start(sat).join(5)
+    settle(sat)
+    assert len(sat.procs) == 1 and sat.procs[0].poll() is not None   # stopped
+    assert sat.frames == [{"type": "music_failed", "stream_url": URL,
+                           "reason": "no audio from the stream within 0.3s",
+                           "attempts": 1}]
+    assert not sat._is_music_playing() and sat._leds.state == "idle"
+    assert client.Satellite.MUSIC_AUDIO_TIMEOUT_SEC < 5.0   # the core's fallback

@@ -4,6 +4,23 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.4.1 (unreleased) — Music no longer goes silent after a question
+
+- **What changed.** Music no longer goes silent after a question while it
+  plays. A room could end a voice turn with the dashboard saying "playing"
+  and nothing coming out of the speaker, and "play" didn't bring it back.
+  Now every turn brings the music back, including one the satellite
+  drops (nothing was said, it heard its own reply, it was too noisy). A
+  room whose satellite can't play the stream says "paused" on the
+  dashboard instead of "playing", and "play" there starts the satellite's
+  player again. A satellite that loses its connection to the server during
+  a question gets its music back once it reconnects.
+- **Satellites.** Update the satellites as well: they now tell the server
+  when music they were sent will not play, and count music as playing only
+  once sound actually arrives from the stream (a stream that connects and
+  sends nothing is given up on after 4 seconds instead of being counted as
+  playing).
+
 ## 1.4.1 (unreleased) — The wake-word trainer image moves to torch 2.14
 
 The trainer image's pinned packages had known security advisories (torch

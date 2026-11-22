@@ -1956,11 +1956,19 @@ class MusicHandler(MusicRoomsMixin, MusicQueueMixin, MusicChoiceMixin, Handler):
             grouped = await self._stop_group(ctx)
             if grouped is not None:
                 return grouped
+        resend = self._resend_url(action, ctx)
         mpd = get_mpd_client_for(ctx.room_id)
         try:
             if action == "pause":
                 await mpd.pause()
                 text = "Paused."
+            elif action == "resume" and resend is not None:
+                # The room's satellite said its music isn't playing: MPD's
+                # state says nothing about the room then, and resuming it
+                # alone changes nothing there. The music_start below makes
+                # the satellite join the stream again; its music_ready
+                # resumes MPD (domovoi/streaming.py, 2026-11-22).
+                text = "Resuming."
             elif action == "resume":
                 await mpd.resume()
                 text = "Resuming."
@@ -2003,12 +2011,35 @@ class MusicHandler(MusicRoomsMixin, MusicQueueMixin, MusicChoiceMixin, Handler):
         # HTTP stream open (MPD just stops sending audio frames during pause)
         # so no Pi-side state change needed.
         music_action: str | None = "stop" if action == "stop" else None
+        if resend is not None:
+            return Response(
+                text=text,
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+                music_action="start",
+                music_stream_url=resend,
+            )
         return Response(
             text=text,
             session_id=ctx.session_id,
             matched_handler=self.name,
             music_action=music_action,
         )
+
+    @staticmethod
+    def _resend_url(action: str, ctx: Context) -> str | None:
+        """For a "play"/"resume": the room's stream when its satellite
+        reported its music not playing (`satellite_music_silent`), so the
+        reply sends music_start again even though MPD may say "playing".
+        None otherwise — the plain resume, as before."""
+        if action != "resume" or ctx.app is None:
+            return None
+        from domovoi.streaming import satellite_music_silent
+
+        if not satellite_music_silent(ctx.app, ctx.room_id):
+            return None
+        resumable = getattr(ctx.app.state, "resumable_music", None) or {}
+        return resumable.get(ctx.room_id)
 
     async def _stop_group(self, ctx: Context) -> Response | None:
         """ "Stop" in a room that shares a queue (a group, "everywhere"

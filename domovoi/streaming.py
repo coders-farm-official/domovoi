@@ -233,13 +233,17 @@ Client → Server
                            "music_failed". The Pi's stream player was
                            refused or dropped and it has stopped retrying
                            (it retries a refused stream for ~8 s); its
-                           music LEDs are off again. Sent only for the
-                           music it is still meant to be playing — a
-                           music_stop, a newer music_start, a wake or a
-                           response supersedes the attempt silently. The
-                           server pauses MPD (so it doesn't play on to
-                           nobody) unless a newer music_start's handshake
-                           is pending or the room has moved on.
+                           music LEDs are off again. Also (attempts 0)
+                           for a music_start it dropped before it played:
+                           a wake, a barge-in or a reply stopped it while
+                           it waited, or the speaker never came free.
+                           Never for one the server's own music_stop or a
+                           newer music_start superseded. The server pauses
+                           MPD (so it doesn't play on to nobody) and
+                           cancels the music_ready fallback of the start
+                           that failed, unless a start for another stream
+                           is pending or the room has moved on; a "play"
+                           then sends music_start again.
   text  dropin_end         {"type":"dropin_end"} — Pi asks to end the
                            active drop-in call (a hardware button or a
                            client-detected hang-up). The spoken "hang up"
@@ -957,6 +961,38 @@ class _LogRequest:
         return True
 
 
+def _silent_music_rooms(app: Any) -> set[str]:
+    """The rooms whose satellite said its music is not playing
+    (`music_failed`) and has not said otherwise since (`music_ready`)."""
+    rooms = getattr(app.state, "music_satellite_silent", None)
+    if rooms is None:
+        rooms = set()
+        app.state.music_satellite_silent = rooms
+    return rooms
+
+
+def satellite_music_silent(app: Any, room_id: str) -> bool:
+    """Whether this room's satellite reported its music not playing (a
+    `music_failed` for what the room is meant to play) and no `music_ready`
+    or music_stop has come since. The room's MPD state can't say it: the
+    dashboard reads MPD, and MPD may be playing to nobody. A "play" in
+    such a room sends music_start again (handlers/music.py `_simple_ack`)
+    instead of only resuming MPD, which would change nothing there."""
+    if app is None:
+        return False
+    return room_id in _silent_music_rooms(app)
+
+
+def note_satellite_music_silent(app: Any, room_id: str, silent: bool) -> None:
+    if app is None:
+        return
+    rooms = _silent_music_rooms(app)
+    if silent:
+        rooms.add(room_id)
+    else:
+        rooms.discard(room_id)
+
+
 async def _resume_mpd_for_room(room_id: str) -> None:
     """Best-effort `mpd.resume()` for a room. No-op when MPD isn't reachable.
 
@@ -1101,22 +1137,33 @@ async def send_music_start(
 
 async def consume_music_failed(app: Any, room_id: str, ctrl: dict[str, Any]) -> None:
     """Handle a ``music_failed`` frame: the satellite could not play the
-    stream and has stopped trying (its music LEDs are off again).
+    stream, or dropped a start before it played (a wake word or a reply
+    stopped it while it waited, or the speaker never came free), and has
+    stopped trying (its music LEDs are off again).
 
     Without it the core cannot tell a playing room from a silent one: the
-    music_ready fallback has usually unpaused MPD by then, so the room plays
-    on to nobody and the dashboard reads "playing". So MPD is paused — which
-    also keeps the place in the song for the next start (a turn's
-    auto-resume re-sends music_start from ``resumable_music``, which is left
-    alone).
+    music_ready fallback unpauses MPD five seconds after a music_start, so
+    the room plays on to nobody and the dashboard reads "playing". So MPD
+    is paused — which also keeps the place in the song for the next start
+    (a turn's auto-resume re-sends music_start from ``resumable_music``,
+    which is left alone) — and the room is marked silent, so a "play" there
+    sends music_start again (`satellite_music_silent`).
 
-    Only when the report is about what the room is still meant to be
-    playing, and no newer start is in flight: a pending handshake means the
-    core has already sent another music_start, whose own music_ready or
-    fallback decides; a stopped room (no resumable entry) or another stream
-    has moved on. The satellite reports only a failure no newer start has
-    superseded, and the socket is ordered, so this cannot pause a start that
-    came after it.
+    Whose failure it is:
+
+    * A pending handshake for THIS stream: the start that failed is the
+      pending one (2026-11-22, office: an mpg123 that gives up within its
+      one-second connect grace reports well inside the 5 s window). Its
+      fallback is cancelled — it would only resume MPD into a silent room —
+      and MPD is paused. (A report from an older start for the same stream
+      that crossed a newer music_start on the wire lands here too; that
+      newer start's own music_ready then resumes MPD, see
+      `consume_music_ready`.)
+    * A pending handshake for ANOTHER stream: a newer start is in flight,
+      whose own music_ready or fallback decides. Nothing is done.
+    * No handshake pending: the room's music (it played, then dropped) —
+      only if the room is still meant to be playing that stream; a stopped
+      room (no resumable entry) or another stream has moved on.
     """
     url = str(ctrl.get("stream_url") or "")
     reason = str(ctrl.get("reason") or "")[:300]
@@ -1130,12 +1177,28 @@ async def consume_music_failed(app: Any, room_id: str, ctrl: dict[str, Any]) -> 
         attempts if isinstance(attempts, int) and not isinstance(attempts, bool) else "?",
         reason or "?",
     )
+    if not url:
+        return
     pending: dict[str, dict[str, Any]] = app.state.pending_music_start
-    if room_id in pending:
-        return
+    entry = pending.get(room_id)
     resumable: dict[str, str] = app.state.resumable_music
-    if not url or resumable.get(room_id) != url:
-        return
+    if entry is not None:
+        if entry.get("url") != url:
+            return
+        # This start's own failure: its fallback must not resume MPD.
+        pending.pop(room_id, None)
+        task = entry.get("task")
+        if task is not None and not task.done():
+            task.cancel()
+        log.info(
+            "music handshake: room=%s could not play the stream it was just "
+            "sent; no fallback resume", room_id,
+        )
+        if room_id not in resumable:
+            return
+    else:
+        if resumable.get(room_id) != url:
+            return
     from domovoi import music_groups
 
     if music_groups.share_of(room_id) is not None:
@@ -1143,6 +1206,7 @@ async def consume_music_failed(app: Any, room_id: str, ctrl: dict[str, Any]) -> 
         # player is the host's and the other rooms are listening to it.
         log.info("music: room=%s is in a shared queue; its player plays on", room_id)
         return
+    note_satellite_music_silent(app, room_id, True)
     from domovoi.clients.mpd import get_mpd_client_for
 
     try:
@@ -1155,18 +1219,30 @@ async def consume_music_failed(app: Any, room_id: str, ctrl: dict[str, Any]) -> 
 async def consume_music_ready(app: Any, room_id: str) -> None:
     """Handle an incoming `music_ready` frame: cancel fallback, resume MPD."""
     pending: dict[str, dict[str, Any]] = app.state.pending_music_start
+    was_silent = satellite_music_silent(app, room_id)
+    # The satellite is playing the stream again, whatever it said before.
+    note_satellite_music_silent(app, room_id, False)
     entry = pending.pop(room_id, None)
     if entry is None:
-        # No prepared track waiting — either the fallback timer just
-        # fired or the Pi double-sent. Either way, nothing to do.
-        log.debug(
-            "music handshake: music_ready from room=%s without pending entry",
-            room_id,
+        if not was_silent or room_id not in app.state.resumable_music:
+            # No prepared track waiting — either the fallback timer just
+            # fired or the Pi double-sent. Either way, nothing to do.
+            log.debug(
+                "music handshake: music_ready from room=%s without pending entry",
+                room_id,
+            )
+            return
+        # A failure report from an older start crossed this start on the
+        # wire and was taken for its own (`consume_music_failed`), which
+        # paused MPD and cancelled its fallback. This start plays: resume.
+        log.info(
+            "music handshake: music_ready from room=%s after a reported failure; "
+            "resuming MPD", room_id,
         )
-        return
-    task = entry.get("task")
-    if task is not None and not task.done():
-        task.cancel()
+    else:
+        task = entry.get("task")
+        if task is not None and not task.done():
+            task.cancel()
     if paused_by_person(app, room_id):
         # The satellite's player is back on the (paused) stream, so a
         # person's "resume" is heard at once; until then it stays paused.
@@ -1175,7 +1251,8 @@ async def consume_music_ready(app: Any, room_id: str) -> None:
             "by a person, leaving MPD paused", room_id,
         )
         return
-    log.info("music handshake: music_ready from room=%s; resuming MPD", room_id)
+    if entry is not None:
+        log.info("music handshake: music_ready from room=%s; resuming MPD", room_id)
     await _resume_mpd_for_room(room_id)
 
 
@@ -1762,6 +1839,10 @@ class StreamSession:
         # listening, answering or asking (`music_block`). Any music frame
         # that goes out to the room supersedes it (`_safe_send_text`).
         self._music_hold_task: asyncio.Task[None] | None = None
+        # The stream that held start is for (None with no hold).
+        self._music_hold_url: str | None = None
+        # `ready` has gone out: frames other than it may follow.
+        self._ready_sent = False
         # ── Two-way drop-in (Feature 4) ──────────────────────────────
         # When paired, `dropin_peer` is the live StreamSession on the
         # other end of the call. While it's set (and no utterance is
@@ -1983,6 +2064,10 @@ class StreamSession:
             ready["room_voice"] = await self._restore_room_voice()
         await self._safe_send_text(ready)
         self._connected_at = time.monotonic()
+        self._ready_sent = True
+        # A music_start the room's previous socket was holding when it
+        # closed (a Wi-Fi blip mid-turn) is held again here.
+        self._take_carried_music()
         # A timer or reminder that went off while this room was away (or
         # during a core restart) is announced now, if it is still within
         # its grace window. Non-blocking: it schedules its own work.
@@ -2033,7 +2118,10 @@ class StreamSession:
                 await feed.stop()
             if self._response_task and not self._response_task.done():
                 self._response_task.cancel()
-            # A music_start held for this socket has nobody to go to.
+            # A music_start held for this socket has nobody to go to — on
+            # this socket. The room still wants its music: the next session
+            # for the room gets it (`_carry_held_music`).
+            self._carry_held_music()
             self._drop_music_hold()
             # Nobody is left to use a speculative transcript.
             self._discard_speculation()
@@ -4192,6 +4280,8 @@ class StreamSession:
             "give it another try."
         )
         await self._speak_system_line(text, matched_handler="noisy_capture")
+        # The wake word stopped the music for the capture that was too noisy.
+        await self._resume_music_after_failed_turn("noisy_capture")
 
     async def _respond_stt_unavailable(
         self, error: SttUnavailableError, *, trigger: str | None = None
@@ -4223,18 +4313,19 @@ class StreamSession:
                 "interrupted": True,
                 "expect_followup": False,
             })
-            return
-        text = (
-            "Sorry, I can't understand speech right now. Speech recognition "
-            "didn't start on the Domovoi server. The Models page in the "
-            "dashboard says why."
-        )
-        if not await self._speak_system_line(text, matched_handler="stt_unavailable"):
-            await self._safe_send_text({
-                "type": "response_end",
-                "interrupted": True,
-                "expect_followup": False,
-            })
+        else:
+            text = (
+                "Sorry, I can't understand speech right now. Speech recognition "
+                "didn't start on the Domovoi server. The Models page in the "
+                "dashboard says why."
+            )
+            if not await self._speak_system_line(text, matched_handler="stt_unavailable"):
+                await self._safe_send_text({
+                    "type": "response_end",
+                    "interrupted": True,
+                    "expect_followup": False,
+                })
+        await self._resume_music_after_failed_turn(trigger)
 
     def _greeting_candidates(self, clip: str | None) -> tuple[list[str], bool]:
         """The greeting lines a greeting-played transcript is checked
@@ -4474,6 +4565,8 @@ class StreamSession:
             "interrupted": True,
             "expect_followup": False,
         })
+        # The wake word (or the barge-in) stopped the music for this capture.
+        await self._resume_music_after_failed_turn(trigger)
         return None
 
     def _screen_transcript(
@@ -4938,19 +5031,38 @@ class StreamSession:
         await self._resume_music_after_failed_turn(trigger)
 
     async def _resume_music_after_failed_turn(self, trigger: str | None) -> None:
-        """The music the wake word stopped comes back, as after any turn
-        that wasn't about music (the auto-resume in `_process_utterance_turn`)
-        — not after a barge-in (an interrupted turn never resumes) and not
-        during a call. Best-effort."""
-        if trigger == "barge_in" or self.dropin_peer is not None:
+        """A turn that ends with no routed reply — dropped (a blank capture,
+        the wake greeting or the reply's own echo coming back, background
+        talk), apologised for (a noisy capture, speech recognition down),
+        timed out or failed — brings back the music its wake word (or its
+        barge-in) stopped, as the auto-resume does after any turn that
+        wasn't about music (`_process_utterance_turn`). Nothing else would:
+        the satellite stopped its player for this capture, and only a
+        routed turn's end decides the music again.
+
+        A barge-in too (2026-11-22): the interrupted reply's turn makes no
+        music decision because the barge-in turn's end makes it — so a
+        barge-in whose capture is then dropped (most often the speaker's own
+        echo) must, or the music stays off with MPD playing to nobody.
+
+        Through `start_music`: sent now when the room is free, else held for
+        when it is (a question's follow-up window, chat mode). Sending it
+        also supersedes a start already held here — the one a question held
+        for its answer, when that answer is this dropped turn. Not during a
+        call (its end restores the music). Best-effort."""
+        if self.dropin_peer is not None:
             return
         try:
             resumable = getattr(self.ws.app.state, "resumable_music", None) or {}
             url = resumable.get(self.room_id)
             if url:
-                await send_music_start(self.ws.app, self, self.room_id, url)
+                log.info(
+                    "stream %s: the %s turn ended with no reply; bringing its music back",
+                    self.room_id, trigger or "?",
+                )
+                await self.start_music(url)
         except Exception as e:  # noqa: BLE001
-            log.warning("stream %s: resuming music after a timed-out turn failed: %s",
+            log.warning("stream %s: resuming music after a turn with no reply failed: %s",
                         self.room_id, e)
 
     async def _tell_turn_failed(self, message: str, *, trigger: str | None) -> None:
@@ -5017,6 +5129,9 @@ class StreamSession:
                 ))
         else:
             self._close_history_later(history, turn_history.ERROR)
+        # The music comes back, unless what failed was asked to stop it.
+        if getattr(response, "music_action", None) != "stop":
+            await self._resume_music_after_failed_turn(trigger)
         # A turn can fail after its row committed (TTS down): record
         # how far it got.
         timing_write = self._finish_turn_timings(
@@ -6762,6 +6877,7 @@ class StreamSession:
             self._send_held_music(url, reason), name=f"music-hold-{self.room_id}",
         )
         self._music_hold_task = task
+        self._music_hold_url = url
         _MUSIC_HOLDS.add(task)
         task.add_done_callback(_MUSIC_HOLDS.discard)
 
@@ -6770,6 +6886,7 @@ class StreamSession:
         `hold_music_start`). Safe from the held task itself: it is then
         let finish, not cancelled."""
         task, self._music_hold_task = self._music_hold_task, None
+        self._music_hold_url = None
         if task is None or task.done():
             return
         try:
@@ -6778,6 +6895,50 @@ class StreamSession:
             me = None
         if task is not me:
             task.cancel()
+
+    def _carry_held_music(self) -> None:
+        """This socket is closing with a music_start held (`hold_music_start`):
+        hand it to the room's newer session when a reconnect has already
+        replaced this one, else keep it for the next one (`_take_carried_music`),
+        for as long as a hold may last. Dropped with the socket, as it used
+        to be, a reconnect between a question and its answer left the room
+        silent with MPD playing (2026-11-22)."""
+        task, url = self._music_hold_task, self._music_hold_url
+        if task is None or task.done() or not url:
+            return
+        app = self.ws.app
+        if getattr(app.state, "resumable_music", {}).get(self.room_id) != url:
+            return
+        carried = getattr(app.state, "music_held_for_reconnect", None)
+        if carried is None:
+            carried = {}
+            app.state.music_held_for_reconnect = carried
+        carried[self.room_id] = (url, time.monotonic() + MUSIC_HOLD_MAX_SEC)
+        newer = app.state.active_sessions.get(self.room_id)
+        if newer is not None and newer is not self and getattr(newer, "_ready_sent", False):
+            # The reconnect got here first and is already up.
+            newer._take_carried_music()
+        else:
+            log.info("music: room=%s disconnected with its music_start held; it is "
+                     "sent once the room reconnects", self.room_id)
+
+    def _take_carried_music(self) -> None:
+        """The held start `_carry_held_music` kept for this room, held here
+        if the room still wants that stream and the hold hasn't expired."""
+        carried = getattr(self.ws.app.state, "music_held_for_reconnect", None)
+        if not carried:
+            return
+        item = carried.pop(self.room_id, None)
+        if item is None:
+            return
+        url, until = item
+        if time.monotonic() >= until:
+            return
+        if self.ws.app.state.resumable_music.get(self.room_id) != url:
+            return
+        log.info("music: room=%s reconnected; sending the music_start it was "
+                 "waiting for", self.room_id)
+        self.hold_music_start(url, "reconnect")
 
     async def _send_held_music(self, url: str, reason: str) -> None:
         """The held start's task: wait until the room is free, then send it
@@ -7328,6 +7489,10 @@ class StreamSession:
             # it (`hold_music_start`) — dropped BEFORE the send, so the held
             # one cannot go out behind this frame.
             self._drop_music_hold()
+            if payload.get("type") == "music_stop":
+                # No music is meant to play here now: a silence reported
+                # before is moot (`satellite_music_silent`).
+                note_satellite_music_silent(self.ws.app, self.room_id, False)
             # The music changed: every room display looks again (a group's
             # other rooms show it too).
             room_display.poke_all(self.ws.app)
