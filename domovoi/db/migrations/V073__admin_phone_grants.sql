@@ -1,4 +1,4 @@
--- V085 — phone grants: admin sign-in on the phones for the rest of the day
+-- V073 — phone grants: admin sign-in on the phones for the rest of the day
 -- (1.5.0, owner-approved 2026-11-22; docs/SECURITY_PRIVACY.md, "Admin on a
 -- phone: the day's grant").
 --
