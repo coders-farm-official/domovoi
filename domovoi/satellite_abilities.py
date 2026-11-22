@@ -154,6 +154,25 @@ def clean_board(raw: Any) -> str | None:
     return value if _BOARD_RE.match(value) else None
 
 
+_MAC_RE = re.compile(r"^[0-9a-f]{2}([:-][0-9a-f]{2}){5}\Z")
+
+
+def clean_mac(raw: Any) -> str | None:
+    """A hello's ``mac`` as it may be stored and shown, or None: six
+    hex pairs, lower-cased. Free text from the device, bounded like
+    :func:`clean_board`."""
+    if not isinstance(raw, str):
+        return None
+    value = raw.strip().lower()
+    return value if _MAC_RE.match(value) else None
+
+
+def clean_sat_type(raw: Any) -> str:
+    """A hello's ``sat_type``: ``video`` or ``voice`` (anything else reads
+    as ``voice``, as the accepted hello treats it)."""
+    return "video" if raw == "video" else "voice"
+
+
 @dataclass(frozen=True)
 class Abilities:
     """One connection's abilities, decided once from its hello.

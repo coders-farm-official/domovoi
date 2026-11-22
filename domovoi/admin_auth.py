@@ -1927,7 +1927,8 @@ LIVE_MIC_RECHECK_MAX_FAILURES = 3
 
 
 async def run_while_admitted(
-    ws: Any, admitted: DeviceCheckResult, work: Any, *, what: str = "socket"
+    ws: Any, admitted: DeviceCheckResult | None, work: Any, *, what: str = "socket",
+    still: Any = None,
 ) -> None:
     """Run ``work`` (the socket's session coroutine) while re-reading the
     credential that opened ``ws`` every :data:`LIVE_MIC_RECHECK_SEC`
@@ -1935,6 +1936,10 @@ async def run_while_admitted(
     the socket, the socket is closed 1008 and the session cancelled (its own
     teardown ends the call); after :data:`LIVE_MIC_RECHECK_MAX_FAILURES`
     checks the database could not answer, closed 1011 the same way.
+
+    ``still``, when given, is a no-argument coroutine function that answers
+    the recheck instead (a socket whose admission is not one device-tier
+    result, such as the dashboard's state socket).
 
     Before CORE-44 only plugin sockets were re-checked: a drop-in opened
     with a household token kept carrying the room's microphone after the
@@ -1960,7 +1965,10 @@ async def run_while_admitted(
             if task.done():
                 return
             try:
-                still = await device_websocket_still_admitted(ws, admitted)
+                ok = (
+                    await still() if still is not None
+                    else await device_websocket_still_admitted(ws, admitted)
+                )
             except Exception as e:  # noqa: BLE001 — a DB blip: judged below
                 failures += 1
                 log.warning("%s: credential recheck failed (%d/%d): %s", what, failures,
@@ -1970,7 +1978,7 @@ async def run_while_admitted(
                     return
                 continue
             failures = 0
-            if not still:
+            if not ok:
                 log.info("%s closed: its credential no longer opens it", what)
                 await _end(1008, "household device token or admin session required")
                 return

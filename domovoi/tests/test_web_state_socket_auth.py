@@ -122,6 +122,41 @@ def test_the_signed_in_dashboard_s_cookie_gets_in(claimed, broadcaster) -> None:
         assert broadcaster.client_count() == 1
 
 
+def test_the_cookie_counts_only_from_the_dashboard_s_own_port(claimed, broadcaster) -> None:
+    """The cookie reaches every port of this host, so a page served by
+    another service on it must not open the stream with it."""
+    client = _client(cookies={COOKIE: ADMIN_TOKEN})
+    with pytest.raises(Exception):
+        with client.websocket_connect(
+            "/ws/state", headers={"origin": "http://testserver:8096"}
+        ):
+            pass  # pragma: no cover
+    assert broadcaster.client_count() == 0
+    with client.websocket_connect(
+        "/ws/state", headers={"origin": "http://testserver:6369"}
+    ) as ws:
+        ws.send_json({"subscribe": []})
+        assert broadcaster.client_count() == 1
+
+
+def test_an_open_socket_ends_when_its_credential_does(
+    claimed, broadcaster, monkeypatch
+) -> None:
+    """The credential is read again while the socket lives: signing out
+    (or rotating the household token) ends the subscription."""
+    from domovoi import admin_auth
+
+    monkeypatch.setattr(admin_auth, "LIVE_MIC_RECHECK_SEC", 0.05)
+    client = _client(cookies={COOKIE: ADMIN_TOKEN})
+    with client.websocket_connect("/ws/state") as ws:
+        ws.send_json({"subscribe": []})
+        assert broadcaster.client_count() == 1
+        claimed.sessions.discard(ADMIN_TOKEN)
+        with pytest.raises(Exception):
+            ws.receive_json()
+    assert broadcaster.client_count() == 0
+
+
 def test_a_browser_can_present_the_token_as_a_subprotocol(claimed, broadcaster) -> None:
     """A browser cannot set a header on a WebSocket handshake, and a query
     string would land in the access log — so the paired-but-not-signed-in

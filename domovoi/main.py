@@ -4455,9 +4455,10 @@ async def admin_chat_resync() -> dict[str, Any]:
 
 @app.post(
     "/v1/admin/wake/record/start",
-    # Admin tier: opens the room's mic for a long capture run that adds
-    # clips to the word. The dashboard hop is admin-gated too.
-    dependencies=[Depends(require_admin_mutation)],
+    # Security tier: opens the room's mic for a long capture run that adds
+    # clips to the word, so no pre-setup grace (501 until an admin exists,
+    # as for a drop-in). The dashboard hop wears the same gate.
+    dependencies=[Depends(require_admin_security)],
 )
 async def admin_wake_record_start(
     body: _AdminWakeRecordStartBody,

@@ -439,7 +439,12 @@ async def test_admin_display_endpoint_paths() -> None:
 
 @requires_db
 @pytest.mark.asyncio
-async def test_wake_record_refused_for_mic_disabled_room() -> None:
+async def test_wake_record_refused_for_mic_disabled_room(monkeypatch) -> None:
+    from domovoi import admin_auth
+
+    # record/start is on the security tier: drive it as a signed-in admin.
+    monkeypatch.setitem(
+        core_app.dependency_overrides, admin_auth.require_admin_security, lambda: None)
     transport = ASGITransport(app=core_app)
     async with core_app.router.lifespan_context(core_app):
         fake = type("FakeSession", (), {"room_id": "den"})()
