@@ -99,11 +99,16 @@ const FhNote = ({ children }) => (
   <div style={{ padding: '12px 16px', fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 }}>{children}</div>
 );
 
-// The 4-digit code, large, one digit per cell (plain text).
+// The code both houses computed, large (plain text): 6 digits shown as two
+// groups of three; friends made before 1.5.0 have a 4-digit one.
+const fhCodeGroups = (code) => {
+  const digits = String(code || '');
+  return digits.length === 6 ? `${digits.slice(0, 3)} ${digits.slice(3)}` : digits;
+};
 const FhCode = ({ code }) => (
   <span className="mono" aria-label={`code ${String(code || '').split('').join(' ')}`}
-        style={{ fontSize: 28, fontWeight: 600, letterSpacing: '0.3em', color: 'var(--fg)' }}>
-    {String(code || '')}
+        style={{ fontSize: 28, fontWeight: 600, letterSpacing: '0.3em', color: 'var(--fg)', whiteSpace: 'nowrap' }}>
+    {fhCodeGroups(code)}
   </span>
 );
 
@@ -615,6 +620,9 @@ const FhOutgoing = ({ req, fire, onChanged }) => {
       <div style={fhMuted}>
         Still trying to reach them{req.last_error ? <>: {String(req.last_error)}</> : '.'}
       </div>
+    )}
+    {!req.trying && req.state === 'unsent' && req.last_error && (
+      <div style={fhMuted}>{String(req.last_error)}</div>
     )}
     {req.expires_at && <div style={fhMuted}>the request ends {fhDay(req.expires_at)}</div>}
   </div>
