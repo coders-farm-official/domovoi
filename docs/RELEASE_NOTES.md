@@ -4,6 +4,82 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+
+## 1.4.1 (unreleased) — Home location, in Settings → Household
+
+- **What changed.** The household's town has its own place: Settings →
+  Household → **Home location**, one field where you start typing and pick
+  your town from a list ("Denver, Colorado, US"). Weather answers and local
+  news use it. The list comes with Domovoi (GeoNames, CC BY 4.0), so what
+  you type never leaves the house. It replaces **Local news location** in
+  Settings → System → Advanced → News, which is gone.
+- **Carried over once.** On the first start of 1.4.1, the text you had in
+  Local news location becomes your Home location. When it clearly names one
+  town, that town is picked for you. When it doesn't ("Springfield": there
+  are several), the text is kept and the field asks you to pick your town
+  from the list; until then weather and news use the text as before. With
+  nothing there, Home location starts empty.
+- **What to know.** Only an admin can change it; every household device can
+  see it. Plugins: `core_config.news_location` still works and is now the
+  Home location's name; the whole place, coordinates included, is
+  `sdk.household.home_location()` (SDK 1.13,
+  [PLUGIN_DEVELOPMENT.md](PLUGIN_DEVELOPMENT.md)).
+
+## 1.4.1 (unreleased) — Weather answers are back
+
+- **What changed.** "What's the weather today?" now has your server's own
+  search service look up your place with Open-Meteo (free for personal,
+  non-commercial use; data CC BY 4.0), or wttr.in when Open-Meteo has no
+  answer, and answers with the current temperature and conditions (in
+  Fahrenheit for a US place). The place is the
+  **Home location** in Settings → Household (above). With
+  Settings > Privacy > Internet on "always", Domovoi no longer asks "want me
+  to check?" first. With no place set it says where to set it. If the
+  weather sources return nothing, it falls back to a general web search as
+  before. It used to find encyclopedia pages and say it had no real-time
+  information.
+- **What to know.** Set your Home location to get a local answer. The bundled search service restarts once on update to pick
+  up the new weather source. An installed weather plugin takes over
+  weather questions and core steps aside.
+
+## 1.4.1 (unreleased) — "Print this" works on a picture or file in a chat
+
+Attach a picture or a document to a chat and say "print this" (or "print
+it", "can you print this please?"): Domovoi now opens the Print dialog on
+that attachment instead of the chat model answering that it can't print.
+With both a draft and an attachment in the chat, the one you attached with
+that message is printed, otherwise the newer of the two. The chat model is
+also told that printing is Domovoi's job. The phone apps show this card
+once they update.
+
+## 1.4.1 (unreleased) — A chime before announcements and broadcasts
+
+A room now plays a short two-note chime before an announcement or a
+broadcast speaks, so people catch the first words. That covers "tell the
+kitchen dinner is ready", Broadcast, timers and reminders, and plugin
+announcements; normal answers never get it. It plays on every kind of room
+(Raspberry Pi, spare PC, phone in room mode) with no update on the room.
+To turn it off, untick "Chime before announcements" in Settings, Voice &
+speech (`announce_chime_enabled`).
+
+## 1.4.1 (unreleased) — A new plugin's page shows up without a restart or reload
+
+Installing or enabling a plugin from the Plugins page now adds its page and
+menu item to the dashboard right away, in every open tab. Nothing needs a
+restart, and no reload either. Before, the menu stayed as it was until the
+page was reloaded. An upgrade of a plugin whose page a tab already runs
+still asks for a reload (and a restart when its server side changed), as
+before.
+
+## 1.4.1 (unreleased) — Settings search finds every setting
+
+- **What changed.** Searching Settings for a word like "news", "town" or
+  "weather" now finds the Home location. The search also looks at each
+  setting's group, its help text and a few extra words it can be known by,
+  shows more results, and tries again if the list of settings was not ready
+  the first time you typed.
+- **What to know.** Nothing to do.
+
 ## 1.4.1 (unreleased) — A refused plugin install says which package clashes
 
 - **What changed.** When a plugin is refused because its requirements would
@@ -25,6 +101,40 @@ your voice. Your samples from other rooms, and other people's, are never
 touched. A room that already has a good (4 seconds or longer) sample of you
 still adds, as before. The API docs also gave the wrong default for the
 voice match threshold: it is 0.58, not 0.75.
+
+A short room sample no longer stands in for your whole voice in that room.
+Before, if a room had any sample of you, even a one-second clip, you were
+judged against that room's samples alone. Now that only happens when one of
+them holds at least 4 seconds of speech; otherwise all your samples count,
+so a good sample from another room still helps you be recognized. A room
+with only short samples of you also learns again: it may ask "By the way,
+was that you?" when it nearly recognized you, and after three clear
+recognitions in a row it replaces the short sample, but only with a
+recording that holds more of your voice. A good sample is never changed.
+
+"Was that you?" can now only be answered by that person. The voice that
+says yes must sound at least about as much like them as the voice the
+question was about, and not like anyone else in the house. Otherwise
+nothing is saved and Domovoi says it will ask them itself next time. A bare
+"yes" is often too short to tell whose voice it is, so say "yes, that was
+me" instead.
+
+## 1.4.1 (unreleased) — Music no longer goes silent after a question
+
+- **What changed.** Music no longer goes silent after a question while it
+  plays. A room could end a voice turn with the dashboard saying "playing"
+  and nothing coming out of the speaker, and "play" didn't bring it back.
+  Now every turn brings the music back, including one the satellite
+  drops (nothing was said, it heard its own reply, it was too noisy). A
+  room whose satellite can't play the stream says "paused" on the
+  dashboard instead of "playing", and "play" there starts the satellite's
+  player again. A satellite that loses its connection to the server during
+  a question gets its music back once it reconnects.
+- **Satellites.** Update the satellites as well: they now tell the server
+  when music they were sent will not play, and count music as playing only
+  once sound actually arrives from the stream (a stream that connects and
+  sends nothing is given up on after 4 seconds instead of being counted as
+  playing).
 
 ## 1.4.1 (unreleased) — The wake-word trainer image moves to torch 2.14
 

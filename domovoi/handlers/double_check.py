@@ -39,7 +39,8 @@ import re
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from domovoi import egress
-from domovoi import ai_features
+from domovoi import ai_features, weather
+from domovoi.uncertainty import CATEGORY_WEATHER, categorize_question
 from domovoi.clients.ollama import get_ollama_client
 from domovoi.clients.searxng import SearchOutcome, SearchResult, get_searxng_client
 from domovoi.config import settings
@@ -763,6 +764,15 @@ class DoubleCheckHandler(Handler):
         off = self._ai_off(ctx)
         if off is not None:
             return off
+        if categorize_question(question) == CATEGORY_WEATHER:
+            spoken = await weather.answer_weather(question, ctx)
+            if spoken:
+                return Response(
+                    text=spoken,
+                    session_id=ctx.session_id,
+                    matched_handler=self.name,
+                    data={"question": question, "source": "weather"},
+                )
         outcome = await self._search(question)
         results = outcome.results
         if not results:

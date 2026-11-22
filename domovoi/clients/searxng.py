@@ -89,6 +89,56 @@ class SearchOutcome(NamedTuple):
     status: SearchStatus
 
 
+def _num(v: Any) -> float | None:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+_WEATHER_ENGINES = ("openmeteo", "wttr.in")
+_UNIT_WORDS = {"°C": "Celsius", "°F": "Fahrenheit", "K": "kelvin"}
+# Where people say Fahrenheit; the engines answer in Celsius everywhere.
+_FAHRENHEIT_COUNTRIES = {"US", "LR", "MM"}
+
+
+def spoken_weather(payload: Any, place: str = "") -> str | None:
+    """A short spoken line from SearXNG's weather answer, or None.
+
+    The weather engines put a ``WeatherAnswer`` in ``answers``: ``current``
+    holds ``location``, ``temperature`` (``{"val", "unit"}``), ``condition``
+    and optionally ``summary`` / ``feels_like``. A plain-text ``answer``
+    (some engines) is spoken as it is."""
+    answers = payload.get("answers") if isinstance(payload, dict) else None
+    for a in answers or []:
+        if isinstance(a, str) and a.strip():
+            return a.strip()[:300]
+        if not isinstance(a, dict):
+            continue
+        cur = a.get("current")
+        if isinstance(cur, dict):
+            temp = cur.get("temperature")
+            val = _num(temp.get("val")) if isinstance(temp, dict) else None
+            if val is None:
+                continue
+            unit = _UNIT_WORDS.get(str(temp.get("unit")), "")
+            loc = cur.get("location")
+            country = loc.get("country_code") if isinstance(loc, dict) else None
+            if unit == "Celsius" and country in _FAHRENHEIT_COUNTRIES:
+                val, unit = val * 9 / 5 + 32, "Fahrenheit"
+            name = (loc.get("name") if isinstance(loc, dict) else loc) or place
+            cond = str(cur.get("condition") or "").strip().lower()
+            text = f"Right now in {name}" if name else "Right now"
+            text += f" it's {round(val)} degrees {unit}".rstrip()
+            if cond:
+                text += f" and {cond}"
+            return text + "."
+        text = a.get("answer")
+        if isinstance(text, str) and text.strip():
+            return text.strip()[:300]
+    return None
+
+
 class SearxNGClient(Protocol):
     async def search(self, query: str, max_results: int = 5) -> list[SearchResult]:
         ...
@@ -210,6 +260,44 @@ class RealSearxNGClient:
             )
             return SearchOutcome([], "engines_failed")
         return SearchOutcome([], "no_results")
+
+    async def weather(self, place: str) -> str | None:
+        """The spoken weather for ``place`` from SearXNG's weather engines,
+        or None when they returned nothing usable.
+
+        One engine at a time, in ``_WEATHER_ENGINES`` order: with
+        ``categories=weather`` every weather engine runs at once and they
+        trip over SearXNG's shared weather cache ("database is locked"). The
+        query is the place alone, which the engines geocode. Both checked
+        against the pinned image, 2026-11-22.
+
+        Sources and terms: this is the household's own SearXNG asking for
+        its own weather. Open-Meteo's free API is for non-commercial use,
+        data CC BY 4.0 (open-meteo.com/en/terms); wttr.in is a free public
+        service and only asked when Open-Meteo has no answer.
+        Never raises; the caller falls back to the general search."""
+        if not place.strip():
+            return None
+        try:
+            egress.require_internet("weather lookup")
+        except egress.InternetTurnedOff:
+            return None
+        import httpx
+
+        for engine in _WEATHER_ENGINES:
+            params = {"q": place, "format": "json", "language": "en-US",
+                      "engines": engine}
+            try:
+                async with httpx.AsyncClient(timeout=8.0) as client:
+                    response = await client.get(f"{self._base_url}/search", params=params)
+                    response.raise_for_status()
+                    spoken = spoken_weather(response.json(), place)
+            except Exception as e:
+                log.warning("SearxNG weather query (%s) failed: %s", engine, type(e).__name__)
+                continue
+            if spoken:
+                return spoken
+        return None
 
     @property
     def base_url(self) -> str:

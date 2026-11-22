@@ -127,7 +127,9 @@ fun satUpgradeClock(ms: Long): String {
     return "%d:%02d".format(sec / 60, sec % 60)
 }
 
-/** Ask the server to upgrade [room]; the answer says what it recorded. */
+/** Ask the server to upgrade [room]; the answer says what it recorded.
+ *  Admin only on the server, so the phone offers no upgrade button today
+ *  (22 Nov 2026); this stays for a phone admin sign-in. */
 suspend fun requestSatUpgrade(api: ApiClient, room: String, nowMs: Long = System.currentTimeMillis()): SatUpgradePress {
     val answer = api.post("/api/satellites/$room/upgrade").decode<SatUpgradeAnswer>()
     return SatUpgradePress(

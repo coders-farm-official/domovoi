@@ -687,6 +687,13 @@ public enum MusicStrings {
 
     public static func deleteFailed(_ reason: String) -> String { "delete failed: \(reason)" }
 
+    /// Where the library's upkeep is (22 Nov 2026): deleting a track, the
+    /// rescan and the tag fixer are all admin on the server, and a phone has
+    /// no admin session, so the track sheet says this instead of offering
+    /// them. Android's `MUSIC_UPKEEP_ON_DASHBOARD`, word for word.
+    public static let upkeepOnDashboard =
+        "rescanning the library, fixing tags and deleting tracks are done on the dashboard"
+
     // ---- rescan and enrich -----------------------------------------------
 
     public static let rescan = "rescan the library"

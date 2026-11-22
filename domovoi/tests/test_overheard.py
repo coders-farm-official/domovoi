@@ -449,7 +449,7 @@ async def test_the_music_the_wake_stopped_comes_back_after_ignoring(
     monkeypatch.setattr(streaming, "get_whisper_client", lambda: _Whisper(TV_DIALOGUE))
     started: list[str] = []
 
-    async def _music_start(app, sess, room, url):
+    async def _music_start(app, sess, room, url, **_kw):
         started.append(url)
 
     monkeypatch.setattr(streaming, "send_music_start", _music_start)

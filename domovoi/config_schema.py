@@ -141,6 +141,10 @@ class FieldSpec:
     # ("more sensitive", "fewer false wakes"). None = a number box.
     widget: Literal["slider"] | None = None
     slider_labels: tuple[str, str] | None = None
+    # Extra words the dashboard's settings search finds this field by, when
+    # they aren't in its label ("town", "weather"). Optional; sent as
+    # ``keywords`` with every field the config reads return.
+    keywords: tuple[str, ...] = ()
 
     @property
     def secret(self) -> bool:
@@ -440,6 +444,14 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "reminders still ring, and it still answers when you ask it "
         "something. Each room can keep its own hours or turn them off in its "
         "Settings tab. Applies immediately.",
+        "bool", tier="hot",
+    ),
+    FieldSpec(
+        "announce_chime_enabled", "Chime before announcements", "Voice & speech",
+        "Play a short two-note chime before an announcement or a broadcast "
+        "speaks in a room (intercom, Broadcast, timers, plugin "
+        "announcements), so people catch the first words. Normal answers "
+        "never get it. Applies to the next announcement.",
         "bool", tier="hot",
     ),
     FieldSpec(
@@ -814,13 +826,9 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "int", min=1, max=10, unit="items", widget="slider",
         slider_labels=("fewer stories", "more stories"),
     ),
-    FieldSpec(
-        "news_location", "Local news location", "News",
-        "City or region used to build the 'local' news scope. Empty = the "
-        "general briefing skips the local block. Used to discover/select the "
-        "local RSS feed.",
-        "str", needs_internet=True,
-    ),
+    # "Local news location" (news_location) moved to Settings → Household →
+    # Home location in 1.4.1 (domovoi/home_location.py); its search words
+    # went with it (the 'home-location' section in web/static/settings.jsx).
     FieldSpec(
         "news_retention_days", "News retention", "News",
         "How long fetched news items are kept before the daily sweep deletes "
@@ -1322,6 +1330,7 @@ def widget_payload(spec: FieldSpec) -> dict[str, object]:
     )
     return {
         "step": effective_step(spec),
+        "keywords": list(spec.keywords),
         "widget": "slider" if slider else None,
         "slider_labels": list(spec.slider_labels) if slider and spec.slider_labels else None,
     }

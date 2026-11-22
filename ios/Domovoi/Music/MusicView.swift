@@ -17,8 +17,9 @@ import SwiftUI
 /// **room's** queue, reorderable and clearable; and the library's
 /// whole-house numbers. A track opens a sheet with its cover, everything the
 /// server knows about it, its words, which playlists it is in, where to play
-/// it and how to delete it. In the header, the two library-wide jobs:
-/// rescan, and identify untagged tracks.
+/// it. Deleting a track, rescanning the library and identifying untagged
+/// tracks are admin on the server, so the track sheet says they are on the
+/// dashboard instead of offering them (the phone admin audit, 22 Nov 2026).
 ///
 /// Cover art is read **from the file** — the picture built into it, else the
 /// first image in its folder, else nothing — which is the owner's 2026-10-02
@@ -632,27 +633,6 @@ struct MusicView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
-            jobs
-        }
-    }
-
-    /// Rescan and enrich.
-    ///
-    /// A menu rather than Android's two bare icon buttons in the header: the
-    /// two icons there are a circular arrow and a sparkle, and neither says
-    /// which of them rewrites tags. Here they are words.
-    @ViewBuilder
-    private var jobs: some View {
-        if let music {
-            Menu {
-                Button(MusicStrings.rescan) { music.rescanLibrary() }
-                Button(MusicStrings.enrich) { music.enrichLibrary() }
-            } label: {
-                Image(systemName: "ellipsis.circle")
-                    .frame(minWidth: 44, minHeight: 44)
-                    .contentShape(.rect)
-            }
-            .accessibilityLabel(MusicStrings.title)
         }
     }
 }

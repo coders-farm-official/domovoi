@@ -77,8 +77,9 @@ def test_the_entrypoint_is_told_not_to_chown():
 def test_the_settings_revision_moved_with_the_mount():
     """A running container keeps its old mount until it is recreated: the
     revision is what makes the next update recreate it (2 was the
-    Wikipedia ranking; 3 is the read-only mount)."""
-    assert _searxng()["environment"]["DOMOVOI_SEARXNG_SETTINGS_REV"] == "3"
+    Wikipedia ranking; 3 is the read-only mount; 4 adds the openmeteo
+    weather engine)."""
+    assert _searxng()["environment"]["DOMOVOI_SEARXNG_SETTINGS_REV"] == "4"
 
 
 def test_provisions_read_only_entry_matches_the_compose_file():

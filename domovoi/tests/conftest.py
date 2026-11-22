@@ -449,6 +449,12 @@ async def db_session():
     """Fresh session per test, with all tables truncated first."""
     async with engine.begin() as conn:
         await conn.execute(text(f"TRUNCATE {', '.join(TABLES_TO_TRUNCATE)} RESTART IDENTITY CASCADE"))
+        # The Home location (domovoi/home_location.py) starts unset; the rest
+        # of household_settings keeps the rows its migrations seeded.
+        await conn.execute(text("DELETE FROM household_settings WHERE key = 'home_location'"))
+    from domovoi import home_location
+
+    home_location._remember(None)
     async with SessionLocal() as s:
         yield s
         await s.rollback()

@@ -92,10 +92,56 @@ final class PhoneMediaListModelTests: XCTestCase {
         )
     }
 
-    /// Let the model's `Task`s run. Several hops, because `start()` reads the
-    /// libraries and the pager it then builds reads a page.
-    private func settle(_ hops: Int = 8) async {
-        for _ in 0..<hops { await Task.yield() }
+    /// Let the model's `Task`s run until it is **quiet**: the libraries
+    /// answered, a typed filter settled into the needle, and the list's page
+    /// read (or refused). The source answers off the main actor, so a fixed
+    /// number of yields was a race: eight were not enough on a slow CI runner
+    /// (1.4.1 PR #28's `ios` job, 2026-11-22), and a Mac run of this file
+    /// failed 8 times in 30. A few more yields after it goes quiet let
+    /// anything it starts next begin, for the assertions that something did
+    /// NOT happen.
+    private func settle(
+        _ list: PhoneMediaListModel,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        await settleUntil({ self.quiet(list) }, "the list", file: file, line: line)
+        for _ in 0..<8 { await Task.yield() }
+        await settleUntil({ self.quiet(list) }, "the list", file: file, line: line)
+    }
+
+    private func quiet(_ list: PhoneMediaListModel) -> Bool {
+        list.answeredLibraries
+            && list.needle == list.filter.trimmingCharacters(in: .whitespacesAndNewlines)
+            && !list.rows.state.loading
+            && (list.selectedID == nil || list.rows.state.loaded || list.rows.state.error != nil)
+    }
+
+    /// Yield, then wait in 1 ms steps, until [done] holds; fail with a named
+    /// message after 5 s.
+    private func settleUntil(
+        _ done: @MainActor () -> Bool,
+        _ what: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        for _ in 0..<200 {
+            if done() { return }
+            await Task.yield()
+        }
+        for _ in 0..<5_000 {
+            if done() { return }
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        XCTFail("\(what) never settled", file: file, line: line)
+    }
+
+    private func note(_ list: PhoneMediaListModel) -> (title: String, detail: String)? {
+        list.emptyNote(
+            noMatch: PhoneMediaStrings.noTracksMatch,
+            nothingHere: PhoneMediaStrings.noMusicOnDevice,
+            nothingHereDetail: PhoneMediaStrings.downloadsLandHere
+        )
     }
 
     // MARK: - the libraries
@@ -108,7 +154,7 @@ final class PhoneMediaListModelTests: XCTestCase {
         let list = model(source, kinds: PhoneMediaKind.audioOnly)
         XCTAssertFalse(list.answeredLibraries)
         list.start()
-        await settle()
+        await settle(list)
         XCTAssertEqual(list.selectedID, "phone:folder:/a")
         XCTAssertEqual(list.rows.state.items.map(\.name), ["quenlo lullaby.mp3"])
         // The kinds the model was built with reach the source: a list that
@@ -121,7 +167,7 @@ final class PhoneMediaListModelTests: XCTestCase {
     func testNoLibrariesIsAnsweredAndNotASpinner() async {
         let list = model(ListSource(rows: [:], libs: []))
         list.start()
-        await settle()
+        await settle(list)
         XCTAssertTrue(list.hasNoLibraries)
         XCTAssertNil(list.selectedID)
         XCTAssertNil(list.emptyNote(noMatch: "a", nothingHere: "b", nothingHereDetail: "c"))
@@ -140,11 +186,11 @@ final class PhoneMediaListModelTests: XCTestCase {
         )
         let list = model(source)
         list.start()
-        await settle()
+        await settle(list)
         XCTAssertEqual(list.selectedID, "phone:folder:/a")
         source.setLibraries([library("phone:folder:/b", "B")])
         list.reloadLibraries()
-        await settle()
+        await settle(list)
         XCTAssertEqual(list.selectedID, "phone:folder:/b")
         XCTAssertEqual(list.rows.state.items.map(\.name), ["grendalf hum.mp3"])
     }
@@ -160,7 +206,7 @@ final class PhoneMediaListModelTests: XCTestCase {
         )
         let list = model(source)
         list.start()
-        await settle()
+        await settle(list)
         guard let only = list.libraries.first else { return XCTFail("no library") }
         XCTAssertTrue(list.isGone(only))
         // And the failed page is a failure, not an empty folder: the two draw
@@ -182,20 +228,20 @@ final class PhoneMediaListModelTests: XCTestCase {
         )
         let list = model(source)
         list.start()
-        await settle()
+        await settle(list)
         // A needle the FOLDER row matches, because the source's filter
         // applies to folders too (``PhoneFolderSource/page(_:)``) — a needle
         // matching only the file inside would leave no row to tap, which is
         // what this case first asserted and the real source does not do.
         list.typed("trips")
-        await settle()
+        await settle(list)
         XCTAssertEqual(list.needle, "trips")
 
         guard let folder = list.rows.state.items.first(where: \.isDir) else {
             return XCTFail("the folder row is not there")
         }
         list.enter(folder)
-        await settle()
+        await settle(list)
         XCTAssertEqual(list.path, "Trips")
         XCTAssertEqual(list.breadcrumb, ["Trips"])
         // Dropped, because it was a search of the folder being left
@@ -217,24 +263,24 @@ final class PhoneMediaListModelTests: XCTestCase {
         )
         let list = model(source)
         list.start()
-        await settle()
+        await settle(list)
         list.enter(item("Trips", kind: .folder, isDir: true))
-        await settle()
+        await settle(list)
         list.enter(item("2026", path: "Trips", kind: .folder, isDir: true))
-        await settle()
+        await settle(list)
         XCTAssertEqual(list.breadcrumb, ["Trips", "2026"])
 
         // Out of range: nothing moves. Walking somewhere nobody pointed at is
         // worse than doing nothing.
         list.goToCrumb(7)
-        await settle()
+        await settle(list)
         XCTAssertEqual(list.path, "Trips/2026")
 
         list.goToCrumb(0)
-        await settle()
+        await settle(list)
         XCTAssertEqual(list.path, "Trips")
         list.goToRoot()
-        await settle()
+        await settle(list)
         XCTAssertEqual(list.path, "")
         XCTAssertEqual(list.breadcrumb, [])
     }
@@ -248,13 +294,13 @@ final class PhoneMediaListModelTests: XCTestCase {
         )
         let list = model(source)
         list.start()
-        await settle()
+        await settle(list)
         let before = source.requests.count
 
         list.typed("q")
         list.typed("qu")
         list.typed("quenlo")
-        await settle()
+        await settle(list)
         XCTAssertEqual(list.needle, "quenlo")
         XCTAssertEqual(list.rows.state.items.map(\.name), ["quenlo lullaby.mp3"])
         // One new list, not three: the two cancelled keystrokes never became
@@ -270,34 +316,24 @@ final class PhoneMediaListModelTests: XCTestCase {
         )
         let list = model(source)
         list.start()
-        await settle()
+        await settle(list)
         list.typed("  grendalf  ")
-        await settle()
+        await settleUntil({ self.note(list)?.title == PhoneMediaStrings.noTracksMatch }, "the filtered list")
         // Trimmed before it is asked, and the trimmed form is what is named
         // back: a person reading `filter = "  grendalf  "` would think the
         // spaces were the problem.
         XCTAssertEqual(list.needle, "grendalf")
-        let note = list.emptyNote(
-            noMatch: PhoneMediaStrings.noTracksMatch,
-            nothingHere: PhoneMediaStrings.noMusicOnDevice,
-            nothingHereDetail: PhoneMediaStrings.downloadsLandHere
-        )
-        XCTAssertEqual(note?.title, PhoneMediaStrings.noTracksMatch)
-        XCTAssertEqual(note?.detail, PhoneMediaStrings.filterIs("grendalf"))
+        XCTAssertEqual(note(list)?.title, PhoneMediaStrings.noTracksMatch)
+        XCTAssertEqual(note(list)?.detail, PhoneMediaStrings.filterIs("grendalf"))
     }
 
     func testAnEmptyLibrarySaysNothingHereAndNotNoMatch() async {
         let source = ListSource(rows: [:], libs: [library("phone:folder:/a", "A")])
         let list = model(source)
         list.start()
-        await settle()
-        let note = list.emptyNote(
-            noMatch: PhoneMediaStrings.noTracksMatch,
-            nothingHere: PhoneMediaStrings.noMusicOnDevice,
-            nothingHereDetail: PhoneMediaStrings.downloadsLandHere
-        )
-        XCTAssertEqual(note?.title, PhoneMediaStrings.noMusicOnDevice)
-        XCTAssertEqual(note?.detail, PhoneMediaStrings.downloadsLandHere)
+        await settleUntil({ self.note(list) != nil }, "the empty library")
+        XCTAssertEqual(note(list)?.title, PhoneMediaStrings.noMusicOnDevice)
+        XCTAssertEqual(note(list)?.detail, PhoneMediaStrings.downloadsLandHere)
     }
 
     // MARK: - paging
@@ -307,14 +343,14 @@ final class PhoneMediaListModelTests: XCTestCase {
         let source = ListSource(rows: ["phone:folder:/a|": many], libs: [library("phone:folder:/a", "A")])
         let list = model(source, pageSize: 50)
         list.start()
-        await settle()
+        await settle(list)
         XCTAssertEqual(list.rows.state.items.count, 50)
         XCTAssertTrue(list.rows.state.hasMore)
         // Row 10 of 50 is not near the end.
         XCTAssertFalse(list.shouldLoadMore(lastVisible: 10))
         XCTAssertTrue(list.shouldLoadMore(lastVisible: 45))
         list.rows.loadMore()
-        await settle()
+        await settle(list)
         XCTAssertEqual(list.rows.state.items.count, 100)
         XCTAssertEqual(list.countText(noun: "tracks"), Paging.countText(shown: 100, total: 120, noun: "tracks"))
     }

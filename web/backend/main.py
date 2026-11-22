@@ -78,6 +78,7 @@ from web.backend.api import stats as stats_api
 from web.backend.api import up_next as up_next_api
 from web.backend.api import up_next_history as up_next_history_api
 from web.backend.api import music_mix as music_mix_api
+from web.backend.api import home_location as home_location_api
 from web.backend.api import videos as videos_api
 from web.backend.api import visualizer as visualizer_api
 from web.backend.api import voice as voice_api
@@ -448,6 +449,7 @@ app.include_router(up_next_api.router)
 # what Up next picked and why; read-only, its own literal prefix.
 app.include_router(up_next_history_api.router)
 app.include_router(music_mix_api.router)
+app.include_router(home_location_api.router)
 # Groups (V060): /api/music/groups — named sets of rooms and the shared
 # queues; its own literal prefix, proxied to the core.
 app.include_router(music_groups_api.router)

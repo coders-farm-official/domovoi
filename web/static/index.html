@@ -109,6 +109,8 @@
   <script type="text/babel" data-presets="react" src="printers.jsx"></script>
   <!-- The editors' fonts: window.DomovoiFonts, the font picker and Settings → Documents → Fonts. -->
   <script type="text/babel" data-presets="react" src="fonts.jsx"></script>
+  <!-- Settings → Household → Home location (registers its panel). -->
+  <script type="text/babel" data-presets="react" src="home_location.jsx"></script>
   <!-- Settings → Household → Media folders (registers its panel). -->
   <script type="text/babel" data-presets="react" src="media_folders.jsx"></script>
   <script type="text/babel" data-presets="react" src="music_mix.jsx"></script>
@@ -226,7 +228,12 @@
         console.warn('selected server is not trusted — plugin pages skipped:', ServerStore.current());
         return errors;
       }
+      const loaded = window.DomovoiLoadedPlugins = window.DomovoiLoadedPlugins || {};
       for (const plugin of manifest.plugins || []) {
+        // Already running in this tab (a refresh after an install): its
+        // code can't be re-imported, so it stays as it is.
+        if (plugin.slug in loaded) continue;
+        loaded[plugin.slug] = plugin.version || '';
         for (const url of plugin.scripts || []) {
           try {
             // `no-cache`, not a bare fetch. A plugin upgrade changes these
@@ -250,6 +257,73 @@
         }
       }
       return errors;
+    };
+
+    // Makes a manifest the one the dashboard runs on: the nav, the routes and
+    // the player's source kinds all read it from here.
+    const adoptManifest = (manifest, scriptErrors) => {
+      window.DomovoiPluginManifest = manifest;
+      window.DomovoiPluginScriptErrors = scriptErrors;
+      window.DomovoiPlayerSources = window.DomovoiPlayerSources || {};
+      // Seed the browser player's source registry (player.jsx reads it
+      // to resolve queue-item kinds → stream URLs; unknown kinds are
+      // hidden with a console warn, never a crash). `room_play_template`
+      // (SDK 1.10) is where a cast sends one of the kind's items to a room;
+      // only one of the plugin's own routes is kept: plain path characters
+      // (no %, #, ? or backslash) that the browser resolves to exactly what
+      // is written, under the plugin's prefix (PLG-13: %2e%2e is a dot
+      // segment too, and a literal '..' was the only thing refused).
+      const roomPlayOk = (tpl, own) => {
+        if (typeof tpl !== 'string' || !tpl.startsWith(own) || !tpl.includes('{id}')) return false;
+        if (/[%#?\\]/.test(tpl)) return false;
+        const probe = tpl.split('{id}').join('x');
+        try {
+          const base = 'http://player.invalid';   // only the path matters
+          const u = new URL(probe, base);
+          return u.origin === base && u.pathname === probe && u.pathname.startsWith(own);
+        } catch { return false; }
+      };
+    (manifest.plugins || []).forEach((p) => {
+      (p.player_sources || []).forEach((src) => {
+        const own = `/api/plugins/${p.slug}/`;
+        const roomPlay = roomPlayOk(src.room_play_template, own) ? src.room_play_template : null;
+        window.DomovoiPlayerSources[src.kind] = {
+          plugin: p.slug,
+          stream_url_template: src.stream_url_template,
+          room_play_template: roomPlay,
+        };
+      });
+    });
+    };
+
+    // plugins.changed → read the manifest again, run the scripts of plugins
+    // this tab has not run yet, and hand back whether anything needs a
+    // reload: only a plugin this tab already runs that was upgraded (its
+    // code can't be swapped in a running page). A new plugin's page and nav
+    // item appear with no reload. Never throws: a failed refresh answers true (reload).
+    let pluginRefresh = null;
+    const refreshPlugins = () => {
+      if (pluginRefresh) { pluginRefresh.again = true; return pluginRefresh.done; }
+      const state = { again: false };
+      state.done = (async () => {
+        let needsReload = false;
+        do {
+          state.again = false;
+          const manifest = await apiGet('/api/plugins/manifest');
+          const loaded = window.DomovoiLoadedPlugins || {};
+          (manifest.plugins || []).forEach((p) => {
+            if ((p.slug in loaded) && (loaded[p.slug] || '') !== (p.version || '')) needsReload = true;
+          });
+          const errors = await loadPluginScripts(manifest);
+          adoptManifest(manifest, Object.assign({}, window.DomovoiPluginScriptErrors || {}, errors));
+        } while (state.again);
+        return needsReload;
+      })().catch((e) => {
+        console.warn('plugin refresh failed — reload needed:', e);
+        return true;
+      }).finally(() => { pluginRefresh = null; });
+      pluginRefresh = state;
+      return state.done;
     };
 
     const bootstrap = async () => {
@@ -284,38 +358,7 @@
         console.warn('plugin manifest unavailable — core pages only:', e);
       }
       const scriptErrors = await loadPluginScripts(manifest);
-      window.DomovoiPluginManifest = manifest;
-      window.DomovoiPluginScriptErrors = scriptErrors;
-      window.DomovoiPlayerSources = window.DomovoiPlayerSources || {};
-      // Seed the browser player's source registry (player.jsx reads it
-      // to resolve queue-item kinds → stream URLs; unknown kinds are
-      // hidden with a console warn, never a crash). `room_play_template`
-      // (SDK 1.10) is where a cast sends one of the kind's items to a room;
-      // only one of the plugin's own routes is kept: plain path characters
-      // (no %, #, ? or backslash) that the browser resolves to exactly what
-      // is written, under the plugin's prefix (PLG-13: %2e%2e is a dot
-      // segment too, and a literal '..' was the only thing refused).
-      const roomPlayOk = (tpl, own) => {
-        if (typeof tpl !== 'string' || !tpl.startsWith(own) || !tpl.includes('{id}')) return false;
-        if (/[%#?\\]/.test(tpl)) return false;
-        const probe = tpl.split('{id}').join('x');
-        try {
-          const base = 'http://player.invalid';   // only the path matters
-          const u = new URL(probe, base);
-          return u.origin === base && u.pathname === probe && u.pathname.startsWith(own);
-        } catch { return false; }
-      };
-      (manifest.plugins || []).forEach((p) => {
-        (p.player_sources || []).forEach((src) => {
-          const own = `/api/plugins/${p.slug}/`;
-          const roomPlay = roomPlayOk(src.room_play_template, own) ? src.room_play_template : null;
-          window.DomovoiPlayerSources[src.kind] = {
-            plugin: p.slug,
-            stream_url_template: src.stream_url_template,
-            room_play_template: roomPlay,
-          };
-        });
-      });
+      adoptManifest(manifest, scriptErrors);
       try { await authReady; } catch { /* never fatal: render as the status says */ }
       try { await navLayoutReady; } catch { /* never fatal: the default menu */ }
       renderApp();
@@ -400,10 +443,17 @@
       }, []);
 
       // A plugins.changed push means the manifest is stale (new pages,
-      // dropped pages). Loaded plugin code can't be re-imported into a
-      // running page — show the reload toast instead (§3.2 step 15).
+      // dropped pages). New plugins load in place (refreshPlugins); loaded
+      // plugin code can't be re-imported into a running page, so an upgrade
+      // of one this tab runs shows the reload toast (§3.2 step 15).
       const [pluginsStale, setPluginsStale] = React.useState(false);
-      useStateEvents(['plugins.changed'], () => setPluginsStale(true));
+      const [, setManifestTick] = React.useState(0);
+      useStateEvents(['plugins.changed'], () => {
+        refreshPlugins().then((needsReload) => {
+          if (needsReload) setPluginsStale(true);
+          else setManifestTick((n) => n + 1);   // the nav re-reads the manifest
+        });
+      });
 
       // Re-render Lucide icons whenever route changes — Babel-in-browser
       // creates fresh <i data-lucide> elements that lucide.createIcons

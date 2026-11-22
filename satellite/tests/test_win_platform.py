@@ -145,6 +145,19 @@ def test_the_windows_player_holds_the_first_read_until_the_buffer_is_in():
     assert got == [b"a" * 1000 + b"b" * 1000 + b"c" * 1000]
 
 
+def test_the_windows_player_says_audio_arrived_before_its_buffer_fills(capsys):
+    """The engine waits for this line before music_ready (4 s at most);
+    the buffer (`--buffer-sec`, 3 s by default) fills only at the stream's
+    real-time pace, so the line must not wait for it."""
+    body = _TrickleBody([b"a" * 1000])
+    win_player._Prefetch(body, start_bytes=10_000)
+    body.allow.release()
+    deadline = time.monotonic() + 2.0
+    while "MPEG" not in capsys.readouterr().err:
+        assert time.monotonic() < deadline, "no audio line"
+        time.sleep(0.01)
+
+
 def test_the_windows_player_plays_a_stream_shorter_than_its_buffer():
     body = _TrickleBody([b"x" * 100])
     feed = win_player._Prefetch(body, start_bytes=10_000)

@@ -36,6 +36,20 @@ internal data class ServerDraftRef(
     val parts: Int? = null,
 )
 
+/** A reply that offers to print a file attached in the chat ("print this",
+ *  1.4.1): the attachment's token, file name and kind ("image" or
+ *  "document"). Its own key beside [ServerDraftRef], so an app from before
+ *  it shows only the reply's text and never a Print that can't work. */
+@Serializable
+internal data class PrintAttachmentRef(
+    val token: String = "",
+    val name: String = "",
+    val kind: String = "document",
+) {
+    /** Only a token that is plainly the server's (hex) goes into a path. */
+    val usable: Boolean get() = token.isNotEmpty() && token.length <= 128 && token.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }
+}
+
 /**
  * A home-server chat's draft, through `/api/chat/drafts/{id}`: its versions
  * are the household's (kept on the server), a save goes into the server's

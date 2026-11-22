@@ -953,7 +953,11 @@ public final class DomovoiClient: Sendable {
         let failure = ApiFailure(
             status: status,
             // See ApiFailure.message: there is no reason phrase to put here.
-            message: "\(status): \(body.prefix(200))",
+            // An admin-only refusal reads as the one plain sentence, so a
+            // toast that shows the message never shows the raw 401.
+            message: isAdminRefusal(status: status, body: body)
+                ? adminOnly
+                : "\(status): \(body.prefix(200))",
             deviceTokenRequired: deviceTokenRequired,
             body: body,
             refusal: response.value(forHTTPHeaderField: refusalHeader)

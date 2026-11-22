@@ -110,7 +110,7 @@ internal object ServerFileTransfer {
         return app.api.http.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) {
                 val detail = runCatching { resp.body?.string()?.take(400) }.getOrNull().orEmpty()
-                throw ApiException(resp.code, "${resp.code} ${resp.message}: $detail", body = detail)
+                throw ApiException(resp.code, apiErrorMessage(resp.code, resp.message, detail), body = detail)
             }
             val stream = resp.body?.byteStream() ?: throw IOException("empty response")
             body(stream)

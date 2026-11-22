@@ -100,6 +100,10 @@ public extension MusicModel {
     }
 
     // MARK: - the two library-wide jobs
+    //
+    // Not offered in the app since 22 Nov 2026: both are admin on the server
+    // and a phone has no admin session (the phone admin audit). Kept, with
+    // their tests, for a phone admin sign-in.
 
     /// Rescan the music folders — `POST /api/music/library/reindex`.
     ///

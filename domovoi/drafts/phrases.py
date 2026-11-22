@@ -190,7 +190,7 @@ def revision_request(text: str, after_draft: bool = False) -> bool:
 
 
 def print_request(text: str) -> bool:
-    return bool(_PRINT.match(normalize(text)))
+    return bool(_PRINT.match(_POLITE_END.sub("", normalize(text))))
 
 
 def title_for(kind_label: str, topic: str) -> str:
