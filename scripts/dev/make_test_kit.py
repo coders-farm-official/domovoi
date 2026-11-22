@@ -257,11 +257,6 @@ echo "apt mirror: $n packages"
 
 
 def make_apt(work: Path, pins: Pins, commit: str) -> Path:
-    out = work / "apt-out"
-    if (out / "apt" / "ubuntu").is_dir():
-        return out / "apt"
-    shutil.rmtree(out, ignore_errors=True)
-    out.mkdir(parents=True)
     prov = git_show(commit, "scripts/linux/provision.sh").decode()
     m = re.search(r"^APT_PACKAGES=\(([^)]*)\)", prov, re.M | re.S)
     pkgs = m.group(1).split()
@@ -269,6 +264,12 @@ def make_apt(work: Path, pins: Pins, commit: str) -> Path:
     pkgs += ["openssh-client", f"docker-ce={m['docker_ce']}", f"docker-ce-cli={m['docker_ce_cli']}",
              f"containerd.io={m['containerd_io']}", f"docker-buildx-plugin={m['docker_buildx_plugin']}",
              f"docker-compose-plugin={m['docker_compose_plugin']}"]
+    # One mirror per package set (a new APT_PACKAGES makes a new one).
+    out = work / f"apt-out-{hashlib.sha256(' '.join(pkgs).encode()).hexdigest()[:12]}"
+    if (out / "apt" / "ubuntu").is_dir():
+        return out / "apt"
+    rmtree(out)
+    out.mkdir(parents=True)
     log(f"apt mirror for {len(pkgs)} packages and what they need (a container, with network)")
     docker("run", "--rm", "--cpu-shares", "256", "-v", f"{docker_path(out)}:/out",
            "-e", f"DOCKER_KEY_URL={m['docker_key_url']}", "-e", f"DOCKER_REPO_URL={m['docker_repo_url']}",
@@ -276,7 +277,7 @@ def make_apt(work: Path, pins: Pins, commit: str) -> Path:
            UBUNTU, "bash", "-c", APT_SCRIPT)
     for sub in ("ubuntu", "docker"):
         if not list((out / "apt" / sub / "dists").glob("*/*/binary-amd64/Packages")):
-            shutil.rmtree(out)
+            rmtree(out)
             raise SystemExit(f"make-test-kit: the {sub} mirror has no Packages index (apt kept its lists compressed?)")
     return out / "apt"
 
