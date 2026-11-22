@@ -7928,6 +7928,8 @@ class StreamSession:
         if probe not in satellite_diagnostics.PROBES:
             raise ValueError(f"unknown probe {probe!r}")
         self._require("diagnostics", "diag_request")
+        if probe in satellite_diagnostics.PROBE_ABILITY:
+            self._require(satellite_diagnostics.PROBE_ABILITY[probe], f"diag_request {probe}")
         fut = self._diag_requests.get(probe)
         if fut is None or fut.done():
             fut = asyncio.get_running_loop().create_future()

@@ -10,8 +10,9 @@ a way that would otherwise get reported as a bug.
   shows, from the device itself, its recent log lines, its network (Wi-Fi
   signal, address, gateway, DNS and latency to the server; the network's
   name only as a short hash), disk, memory, load, CPU temperature and
-  uptime, its audio devices, its versions, and its service restarts and
-  last exit. Each result has a time, can be run again on its own, and
+  uptime, its audio devices, its versions, its service restarts and last
+  exit, and on an XVF3800 its active mic DSP preset with the five values
+  the chip holds. Each result has a time, can be run again on its own, and
   **Copy** puts them all on the clipboard. New: `POST
   /v1/admin/satellite/{room}/diagnostics` and `.../diagnostics/{probe}`
   (admin), and their `/api/satellites/...` twins.
