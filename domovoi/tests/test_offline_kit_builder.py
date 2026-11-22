@@ -579,6 +579,31 @@ def _kit_parts(tmp: Path) -> list[Part]:
     ]
 
 
+def test_a_built_kit_carries_install_sh_and_provision_sh_from_the_release_commit(kit_home, tmp_path, monkeypatch):
+    from domovoi import git_run
+
+    shown = []
+
+    def fake_git(cmd, *, timeout, cwd=None, **kw):
+        assert cmd[:2] == ["git", "show"]
+        shown.append(cmd[2])
+        return subprocess.CompletedProcess(cmd, 0, b"#!/bin/bash\n# " + cmd[2].encode() + b"\n", b"")
+
+    monkeypatch.setattr(git_run, "run", fake_git)
+    monkeypatch.setattr(parts, "_pack_size", lambda d: 1)
+    monkeypatch.setattr(fatimage, "FatImage", _FolderImage)
+    monkeypatch.setattr(plan, "free_bytes", lambda p: 10 ** 13)
+    rel = Release("1.5.0", "v1.5.0", COMMIT)
+    scripts = [p for p in parts.source_parts(rel, "/repo") if p.id == "source:install-sh"]
+    jobs.build(rel, plan.Selection(), scripts + _kit_parts(tmp_path))
+    assert shown == [f"{COMMIT}:scripts/linux/install.sh", f"{COMMIT}:scripts/linux/provision.sh"]
+    kit = json.loads((_FolderImage.last / "kit.json").read_text())
+    listed = {f["path"] for c in kit["components"] for f in c["files"]}
+    assert {"linux/install.sh", "linux/provision.sh"} <= listed
+    assert (_FolderImage.last / "linux" / "provision.sh").read_bytes().endswith(b"scripts/linux/provision.sh\n")
+    assert verify(_FolderImage.last, release_key=None).ok
+
+
 def test_a_kit_is_made_kept_listed_and_passes_the_checker(kit_home, tmp_path, monkeypatch):
     monkeypatch.setattr(fatimage, "FatImage", _FolderImage)
     monkeypatch.setattr(plan, "free_bytes", lambda p: 10 ** 13)

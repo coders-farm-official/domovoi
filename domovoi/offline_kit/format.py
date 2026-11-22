@@ -8,7 +8,7 @@ A kit is a folder (the root of a FAT32 stick labelled ``DOMOVOIKIT``)::
     release/    the GitHub release's own files: DomovoiSetup.exe and its
                 signed manifest (PC), DomovoiSetup-mac.pkg and its signed
                 manifest (Mac), the release's SHA256SUMS
-    linux/      install.sh at the release commit
+    linux/      install.sh and provision.sh at the release commit
     source/     domovoi.bundle, a git bundle up to the release tag
     apt/        partial apt mirrors (ubuntu/, docker/, nvidia/)
     python/     wheels from the lock, one folder per platform

@@ -220,16 +220,21 @@ def release_parts(rel: Release) -> list[Part]:
 # ─── the parts ───────────────────────────────────────────────────────────
 
 def source_parts(rel: Release, repo_dir: str, run=subprocess.run) -> list[Part]:
-    """install.sh at the release commit, and the git bundle up to the tag
-    (refs: the tag and HEAD, both at the release commit)."""
+    """install.sh and provision.sh at the release commit (Linux's
+    installer, and the script Windows Setup runs in its distro), and the
+    git bundle up to the tag (refs: the tag and HEAD, both at the release
+    commit)."""
     from domovoi import git_run
 
     def install_sh(ctx: Ctx) -> list[Source]:
-        r = git_run.run(["git", "show", f"{rel.commit}:scripts/linux/install.sh"], cwd=repo_dir,
-                        timeout=30, binary=True)
-        if r.returncode != 0:
-            raise PartError("install.sh isn't in the release commit")
-        return [Source("linux/install.sh", r.stdout)]
+        out = []
+        for name in ("install.sh", "provision.sh"):
+            r = git_run.run(["git", "show", f"{rel.commit}:scripts/linux/{name}"], cwd=repo_dir,
+                            timeout=30, binary=True)
+            if r.returncode != 0:
+                raise PartError(f"{name} isn't in the release commit")
+            out.append(Source(f"linux/{name}", r.stdout))
+        return out
 
     bundle = host.cache_dir("source") / f"domovoi-{rel.tag}.bundle"
 
@@ -257,9 +262,9 @@ def source_parts(rel: Release, repo_dir: str, run=subprocess.run) -> list[Part]:
 
     size = bundle.stat().st_size if bundle.is_file() else _pack_size(repo_dir)
     return [
-        Part(id="source:install-sh", group="base", kind="linux-installer", name="install.sh",
-             version=rel.version, licence="MIT", pinned_by="the release commit", size=64 * 1024,
-             exact=False, download=0, acquire=install_sh),
+        Part(id="source:install-sh", group="base", kind="linux-installer", name="install.sh and provision.sh",
+             version=rel.version, licence="MIT", pinned_by="the release commit", size=448 * 1024,
+             exact=False, download=0, acquire=install_sh, files_estimate=2),
         Part(id="source:bundle", group="base", kind="source", name="Domovoi's source (git bundle)",
              version=rel.tag, licence="MIT", pinned_by="the release commit (signed tag)", size=size,
              exact=bundle.is_file(), download=0, acquire=make_bundle),
