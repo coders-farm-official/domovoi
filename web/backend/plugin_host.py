@@ -836,6 +836,8 @@ class PluginHost:
                         _asset_url(sc) for sc in (web.get("scripts") or [])
                     ],
                     "pages": pages,
+                    # Its [[web.home_cards]] (home.jsx PluginHomeCards).
+                    "home_cards": _home_cards_out(web.get("home_cards")),
                     "page_errors": self.page_route_errors(slug),
                     "player_sources": web.get("player_sources") or [],
                     "realtime_channels": realtime_channels,

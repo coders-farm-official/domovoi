@@ -83,6 +83,7 @@ class RoomPlayout:
     def streamer(self, room_id: str) -> RoomStreamer:
         st = self.streamers.get(room_id)
         if st is None:
+            self.reap_idle()
             st = RoomStreamer(room_id, next(self._timeline_ids), clock=self.clock,
                               playout_ms=self.playout_ms)
             self.streamers[room_id] = st
@@ -134,6 +135,20 @@ class RoomPlayout:
         st = self.streamers.get(cur[0])
         if st is not None:
             st.unsubscribe(cur[1])
+        self.reap_idle()
+
+    def reap_idle(self) -> list[str]:
+        """Drop the streamers of rooms with no speaker and nothing to play
+        (no music attached, paused or not, and no sound queued). Returns the
+        rooms dropped; the next call for one makes it a new timeline."""
+        gone = [r for r, st in self.streamers.items()
+                if not st.sinks and not st.active and st.music is None]
+        for room_id in gone:
+            del self.streamers[room_id]
+            task = self._tasks.pop(room_id, None)
+            if task is not None:
+                task.cancel()
+        return gone
 
     def rebind(self, satellite_id: str) -> str | None:
         """After a move (slice 2 calls this): re-subscribe the device to its

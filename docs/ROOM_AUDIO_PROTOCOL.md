@@ -22,7 +22,9 @@ GET ws://<server>:6370/v1/room-audio/{satellite_id}
 ```
 
 * `satellite_id` is the device's id, the same id its `/v1/stream/{id}`
-  socket uses (today: the room id it paired with).
+  socket uses (today: the room id it paired with). It must match
+  `^[a-z][a-z0-9_]{0,31}$`; any other id is refused (`bad_hello`, close
+  1008) before the hello is read.
 * The socket is an addition to `/v1/stream`, not a replacement: the device
   keeps its stream socket for wake words, commands and control, and opens
   this one when it declares `room_audio` in its stream hello: in its
@@ -99,10 +101,11 @@ The pairing token from `/v1/stream` authenticates this socket too. The
 server compares `sha256(pairing_token)` with the device's pairing row:
 
 * token present and matching: accepted;
-* token present but wrong, or missing while the device has a pairing row:
-  refused (`pairing_rejected`, close 1008);
-* no token and no pairing row: accepted only when strict pairing is off
-  (`SATELLITE_PAIRING_STRICT=false`), as on `/v1/stream`;
+* token present but wrong, or no pairing row for the device: refused
+  (`pairing_rejected`, close 1008);
+* no token: refused (`pairing_rejected`), whatever the pairing mode. Unlike
+  `/v1/stream`, this socket does not admit unpaired devices when strict
+  pairing is off (`SATELLITE_PAIRING_STRICT=false`);
 * this socket never pairs a device or parks it for approval. A device that
   is not paired yet pairs on `/v1/stream` first, then connects here.
 
@@ -197,7 +200,8 @@ server keeps the latest per device (the room drawer's sync state; automatic
 The client estimates the server clock from four-timestamp exchanges.
 
 1. **Ping rate**: 20 per second for the first second after `ready`, then 4
-   per second. The server ignores pings beyond 50 per second.
+   per second. The server ignores pings beyond 50 per second, and keeps
+   at most 50 unsent pongs (the oldest are dropped).
 2. **Timestamps**: `t0` taken just before the ping is written; `t3` taken
    the moment the pong's bytes are read from the socket, **in the socket's
    reader thread, before parsing or queueing** (a timestamp taken after an

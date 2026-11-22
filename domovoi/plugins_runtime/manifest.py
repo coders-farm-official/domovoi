@@ -211,8 +211,8 @@ class WebPageDecl:
     badge: dict[str, str] | None = None
 
 
-HOME_CARD_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
-HOME_CARD_COMPONENT_RE = re.compile(r"^[A-Za-z_$][A-Za-z0-9_$]{0,63}$")
+HOME_CARD_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}\Z")
+HOME_CARD_COMPONENT_RE = re.compile(r"^[A-Za-z_$][A-Za-z0-9_$]{0,63}\Z")
 
 
 @dataclass(frozen=True)

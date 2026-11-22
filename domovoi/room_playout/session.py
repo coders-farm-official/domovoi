@@ -2,7 +2,8 @@
 
 Auth is the device's pairing token, checked against its pairing row the
 way ``StreamSession._validate_pairing`` does, minus the pairing and
-parking: this socket never creates trust, it only reuses it.
+parking: this socket never creates trust, it only reuses it. A hello
+without a token is refused whatever the pairing mode.
 
 Outgoing traffic goes through one sender task, so the streamer's
 ``send_audio`` never waits. Pongs jump the queue and are stamped (``t2``)
@@ -29,6 +30,7 @@ log = logging.getLogger(__name__)
 HELLO_TIMEOUT_S = 10.0
 MAX_QUEUE = 250            # 5 s of chunks: a client this far behind is gone
 MAX_PINGS_PER_S = 50
+MAX_PONGS = MAX_PINGS_PER_S  # unsent pongs kept; older ones are dropped
 STATS_KEYS = ("offset_us", "rate_ppm", "rtt_us", "err_us", "underruns", "late",
               "corrections", "jumps")
 
@@ -37,15 +39,14 @@ Auth = Callable[[str, "str | None"], Awaitable[bool]]
 
 async def pairing_auth(satellite_id: str, token: str | None) -> bool:
     from domovoi.admin_auth import token_sha256
-    from domovoi.config import settings
     from domovoi.db.repositories import SatellitePairingRepository
     from domovoi.db.session import session_scope
 
+    if not token:
+        return False
     async with session_scope() as s:
         row = await SatellitePairingRepository(s).get_pairing(satellite_id)
-    if token:
-        return row is not None and secrets.compare_digest(row[0], token_sha256(token))
-    return row is None and not settings.satellite_pairing_strict
+    return row is not None and secrets.compare_digest(row[0], token_sha256(token))
 
 
 class RoomAudioSession:
@@ -58,7 +59,7 @@ class RoomAudioSession:
         self.clock = clock
         self.room_id: str | None = None
         self._out: deque[tuple[str, Any]] = deque()
-        self._pongs: deque[tuple[Any, int]] = deque()
+        self._pongs: deque[tuple[Any, int]] = deque(maxlen=MAX_PONGS)
         self._wake = asyncio.Event()
         self._overflow = False
         self._ping_window = (0, 0)   # (second, count)
@@ -95,6 +96,11 @@ class RoomAudioSession:
 
     async def run(self) -> None:
         await self.ws.accept()
+        if not P.SATELLITE_ID_RE.fullmatch(self.satellite_id):
+            log.warning("room-audio: refused a malformed satellite id")
+            self.satellite_id = "?"
+            await self._refuse("bad_hello")
+            return
         hello = await self._hello()
         if hello is None or hello.get("type") != "hello":
             await self._refuse("bad_hello")

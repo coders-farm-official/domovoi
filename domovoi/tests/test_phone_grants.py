@@ -24,9 +24,11 @@ and revokes grants on the dashboard (``GET`` / ``DELETE
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import pytest
 from sqlalchemy import text
 
 from domovoi import admin_auth
@@ -375,6 +377,36 @@ async def test_a_wrong_password_throttles_the_exchange(_db) -> None:
     assert r.status_code == 429 and "Retry-After" in r.headers
     admin_auth.LOGIN_BACKOFF.reset()
     assert (await exchange(dt, grant)).status_code == 200
+
+
+@requires_db
+async def test_good_exchanges_leave_the_password_backoff_climbing(_db) -> None:
+    """Wrong passwords interleaved with good exchanges still lengthen the
+    per-address wait: an exchange hands back its own attempt only."""
+    token, dt = await claimed()
+    grant = (await mint(token, dt)).json()["grant"]
+    admin_auth.LOGIN_BACKOFF.reset()
+    ledger = admin_auth.LOGIN_BACKOFF._failures
+
+    def let_the_wait_pass() -> None:
+        # Keep the streak, move its last failure into the past.
+        for source, (count, _last) in list(ledger.items()):
+            ledger[source] = (count, time.monotonic() - admin_auth.BACKOFF_CAP_SEC)
+
+    for expected in range(1, 5):
+        async with web_client() as c:
+            r = await c.post("/api/auth/login", json={"password": "wrong-pass"})
+        assert r.status_code == 401
+        (source,) = ledger
+        assert ledger[source][0] == expected
+        wait = admin_auth.LOGIN_BACKOFF.retry_after(source)
+        assert wait == pytest.approx(
+            admin_auth.BACKOFF_BASE_SEC * 2 ** (expected - 1), abs=0.5
+        )
+        let_the_wait_pass()
+        assert (await exchange(dt, grant)).status_code == 200
+        assert ledger[source][0] == expected
+    admin_auth.LOGIN_BACKOFF.reset()
 
 
 # ═══ Who may ══════════════════════════════════════════════════════════════
