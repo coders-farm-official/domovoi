@@ -2552,6 +2552,124 @@ async def usb_stick_manifest(build_id: str) -> FastAPIResponse:
     )
 
 
+# ─── The offline kit (release 1.5.0) ──────────────────────────────────────
+# Settings → System → Offline kit (admins): the server makes a FAT32 image
+# of everything an install would download (domovoi/kit_builder/, format in
+# domovoi/offline_kit/), and serves it with a Raspberry Pi Imager list at
+# /v1/offline-kit/<id>/… without a login, like the room stick: Imager and a
+# browser download can't send one, and nothing on a kit is a secret (a
+# public release and public models; no household data, design section 7).
+
+
+class _OfflineKitBody(BaseModel):
+    targets: list[str] = Field(default_factory=lambda: ["pc-x86_64"], max_length=4)
+    includes: list[str] = Field(default_factory=lambda: ["ai", "vision", "rooms"], max_length=8)
+    household: list[str] = Field(default_factory=list, max_length=64)
+    stick_gb: int | None = None
+    force: bool = False
+    core: str | None = Field(default=None, max_length=256)
+
+
+def _kit_core(core: str | None) -> str:
+    """The server's address as phones and Imager reach it (the dashboard
+    sends it), checked to be a plain http(s) origin."""
+    import re as _re
+
+    if core and _re.fullmatch(r"https?://[A-Za-z0-9.\-\[\]:]{1,200}", core.rstrip("/")):
+        return core.rstrip("/")
+    return ""
+
+
+@app.get("/v1/admin/offline-kit", dependencies=[Depends(require_admin_read)])
+async def admin_offline_kit(
+    targets: str | None = Query(default=None, max_length=200),
+    includes: str | None = Query(default=None, max_length=200),
+    household: str | None = Query(default=None, max_length=4000),
+    stick_gb: int | None = Query(default=None),
+) -> dict[str, Any]:
+    """The card for the boxes ticked (comma-separated ``targets``,
+    ``includes``, ``household`` ids; the defaults: PC ticked, Mac not, AI,
+    pictures and rooms ticked, no household items): the release, the
+    sizes, the fit check for ``stick_gb``, the first refusal, the
+    behind-the-latest warning, the job and the finished kit. Reads only."""
+    from domovoi.kit_builder import service
+
+    body: dict[str, Any] = {"stick_gb": stick_gb}
+    for key, raw in (("targets", targets), ("includes", includes), ("household", household)):
+        if raw is not None:
+            body[key] = [x for x in raw.split(",") if x]
+    return await asyncio.to_thread(service.status, body)
+
+
+@app.post("/v1/admin/offline-kit/build", dependencies=[Depends(require_admin_mutation)])
+async def admin_offline_kit_build(body: _OfflineKitBody) -> dict[str, Any]:
+    """Start making the kit in the background. 409 ``{reason, message}``
+    when it can't (the card says why; ``behind`` needs ``force``). Answers
+    at once; poll the status."""
+    await container_freeze.require_unfrozen("offline_kit")
+    from domovoi.kit_builder import service
+
+    started, view = await asyncio.to_thread(service.start, body.model_dump(), _kit_core(body.core))
+    if not started:
+        raise HTTPException(status_code=409, detail=view.get("refusal") or {"reason": "failed",
+                                                                            "message": "not started"})
+    return {"started": True, **view}
+
+
+@app.post("/v1/admin/offline-kit/cancel", dependencies=[Depends(require_admin_mutation)])
+async def admin_offline_kit_cancel() -> dict[str, Any]:
+    """Stop the kit being made; nothing it made is kept."""
+    from domovoi.kit_builder import jobs as kit_jobs
+
+    return {"cancelling": await asyncio.to_thread(kit_jobs.cancel), "job": kit_jobs.job_state()}
+
+
+@app.delete("/v1/admin/offline-kit/builds/{build_id}", dependencies=[Depends(require_admin_mutation)])
+async def admin_offline_kit_delete(build_id: str) -> dict[str, Any]:
+    """Remove a finished kit image from this server (it frees its size)."""
+    from domovoi.kit_builder import jobs as kit_jobs
+    from domovoi.kit_builder import service
+
+    if not await asyncio.to_thread(kit_jobs.delete_build, build_id):
+        raise HTTPException(status_code=404, detail="no such kit")
+    return await asyncio.to_thread(service.status, None)
+
+
+def _offline_kit_or_404(build_id: str) -> dict[str, Any]:
+    from domovoi.kit_builder import jobs as kit_jobs
+
+    doc = kit_jobs.build_info(build_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="not found")
+    return doc
+
+
+@app.get("/v1/offline-kit/{build_id}/{name}")
+async def offline_kit_file(build_id: str, name: str) -> FastAPIResponse:
+    """One kit's image, its Imager list (``os-list.json``) or its Imager
+    manifest. Public by its random id (see above). 423 while the container
+    guard's freeze is on."""
+    await container_freeze.require_unfrozen("offline_kit", public=True)
+    from domovoi.kit_builder import jobs as kit_jobs
+
+    doc = await asyncio.to_thread(_offline_kit_or_404, build_id)
+    if name == kit_jobs.OS_LIST:
+        return JSONResponse(kit_jobs.os_list(doc), headers={"Cache-Control": "no-store"})
+    if name == kit_jobs.MANIFEST:
+        return FastAPIResponse(
+            content=json.dumps(kit_jobs.os_list(doc), indent=2).encode("utf-8"),
+            media_type="application/vnd.raspberrypi.imager-manifest+json",
+            headers={"Content-Disposition": f'attachment; filename="{kit_jobs.MANIFEST}"',
+                     "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"})
+    if name == kit_jobs.image_name(doc["domovoi_version"]):
+        path = await asyncio.to_thread(kit_jobs.image_file, build_id)
+        if path is None:
+            raise HTTPException(status_code=404, detail="not found")
+        return FileResponse(path, media_type="application/octet-stream", filename=name,
+                            headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"})
+    raise HTTPException(status_code=404, detail="not found")
+
+
 # ─── Satellite plugin-payload channel ──────────────────────────────────────
 # A fourth file channel, parallel to /v1/sounds, /v1/satellite-code, and
 # /v1/wake-models — but for ENABLED plugins' [satellite] payloads (files a

@@ -24,18 +24,21 @@ from __future__ import annotations
 
 from .format import KIT_FORMAT, KitProblem, part_paths, read_kit
 from .checker import Finding, Report, verify
-from .write import Component, Source, reassemble, write_kit
+from .write import Component, FolderSink, Source, check_components, reassemble, write_kit, write_kit_to
 
 __all__ = [
     "KIT_FORMAT",
     "Component",
     "Finding",
+    "FolderSink",
     "KitProblem",
     "Report",
     "Source",
+    "check_components",
     "part_paths",
     "read_kit",
     "reassemble",
     "verify",
     "write_kit",
+    "write_kit_to",
 ]
