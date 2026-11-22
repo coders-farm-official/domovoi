@@ -181,9 +181,11 @@ class Switches:
 
 
 async def switches(s: AsyncSession, room_id: str) -> Switches:
-    """The room's two switches; both on when it has no ``satellites`` row."""
+    """The device's two switches; both on when it has no ``satellites`` row.
+    ``room_id``: the device's id (V080; the same as its room's for a phone
+    in a room of its own)."""
     row = (await s.execute(
-        text("SELECT battery_say, battery_notify FROM satellites WHERE room_id = :r"),
+        text("SELECT battery_say, battery_notify FROM satellites WHERE satellite_id = :r"),
         {"r": room_id},
     )).first()
     if row is None:
@@ -196,15 +198,16 @@ async def set_switches(
 ) -> Switches:
     """Change one or both switches (an upsert: a room with no row gets
     one), and say so on the live socket. Returns what they are now."""
+    from domovoi.db.repositories import ensure_satellite
+
     cur = await switches(s, room_id)
+    await ensure_satellite(s, room_id, adopted_via="manual")
     new = Switches(say=cur.say if say is None else bool(say),
                    notify=cur.notify if notify is None else bool(notify))
     await s.execute(
         text(
-            "INSERT INTO satellites (room_id, battery_say, battery_notify, adopted_via) "
-            "VALUES (:r, :say, :notify, 'manual') "
-            "ON CONFLICT (room_id) DO UPDATE SET battery_say = EXCLUDED.battery_say, "
-            "battery_notify = EXCLUDED.battery_notify, updated_at = now()"
+            "UPDATE satellites SET battery_say = :say, battery_notify = :notify, "
+            "updated_at = now() WHERE satellite_id = :r"
         ),
         {"r": room_id, "say": new.say, "notify": new.notify},
     )
@@ -218,10 +221,12 @@ async def notify_changed(s: AsyncSession, reason: str) -> None:
 
 async def last_reports(s: AsyncSession, room_id: str | None = None) -> dict[str, dict[str, Any]]:
     """room -> ``{percent, charging, on_power, reported_at}``."""
-    sql = "SELECT room_id, percent, charging, on_power, reported_at FROM room_battery"
+    sql = (
+        "SELECT satellite_id, percent, charging, on_power, reported_at FROM room_battery"
+    )
     params: dict[str, Any] = {}
     if room_id is not None:
-        sql += " WHERE room_id = :r"
+        sql += " WHERE satellite_id = :r"
         params["r"] = room_id
     rows = (await s.execute(text(sql), params)).all()
     return {
@@ -238,8 +243,11 @@ async def open_warnings(s: AsyncSession, room_id: str | None = None,
     phones show)."""
     sql = (
         "SELECT w.id, w.room_id, w.threshold, w.percent, w.spoken, w.created_at, "
-        "sat.room_label, COALESCE(sat.battery_notify, TRUE) AS notify "
-        "FROM room_battery_warnings w LEFT JOIN satellites sat ON sat.room_id = w.room_id "
+        "NULLIF(r.name, r.room_id) AS room_label, "
+        "COALESCE(sat.battery_notify, TRUE) AS notify "
+        "FROM room_battery_warnings w "
+        "LEFT JOIN satellites sat ON sat.satellite_id = w.room_id "
+        "LEFT JOIN rooms r ON r.room_id = sat.room_id "
         "WHERE w.ended_at IS NULL"
     )
     params: dict[str, Any] = {}
@@ -352,8 +360,9 @@ class BatteryWatch:
             if held is None or held[0] != reading or now - held[1] >= REPORT_REFRESH_SEC:
                 await s.execute(
                     text(
-                        "INSERT INTO room_battery (room_id, percent, charging, on_power, reported_at) "
-                        "VALUES (:r, :p, :c, :o, now()) ON CONFLICT (room_id) DO UPDATE SET "
+                        "INSERT INTO room_battery "
+                        "(satellite_id, percent, charging, on_power, reported_at) "
+                        "VALUES (:r, :p, :c, :o, now()) ON CONFLICT (satellite_id) DO UPDATE SET "
                         "percent = EXCLUDED.percent, charging = EXCLUDED.charging, "
                         "on_power = EXCLUDED.on_power, reported_at = now()"
                     ),
@@ -445,8 +454,10 @@ class BatteryWatch:
 
 
 async def _label(s: AsyncSession, room_id: str) -> str | None:
-    row = (await s.execute(text("SELECT room_label FROM satellites WHERE room_id = :r"),
-                           {"r": room_id})).first()
+    row = (await s.execute(
+        text("SELECT NULLIF(r.name, r.room_id) FROM satellites s "
+             "JOIN rooms r ON r.room_id = s.room_id WHERE s.satellite_id = :r"),
+        {"r": room_id})).first()
     return row[0] if row else None
 
 

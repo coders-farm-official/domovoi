@@ -457,9 +457,17 @@ async def word_payload(s, slugs: list[str]) -> list[dict[str, Any]]:
 
 # ─── rooms ───────────────────────────────────────────────────────────────
 
+#: A room's ``device_max``: the least any of its devices said it can run
+#: (V080 moved it to ``satellites.wake_max``); NULL when none said.
+_DEVICE_MAX = (
+    "(SELECT min(sat.wake_max) FROM satellites sat "
+    "WHERE sat.room_id = room_wake_words.room_id)"
+)
+
 async def room_state(s, room_id: str) -> dict | None:
     row = (await s.execute(
-        text("SELECT state, slug, slugs, device_max FROM room_wake_words WHERE room_id = :r"),
+        text(f"SELECT state, slug, slugs, {_DEVICE_MAX} "
+             "FROM room_wake_words WHERE room_id = :r"),
         {"r": room_id})).first()
     return ({"state": row[0], "slug": row[1], "slugs": list(row[2]) if row[2] else None,
              "device_max": row[3]} if row else None)
@@ -490,13 +498,13 @@ async def mark_chosen(s, room_id: str, slug: str, slugs: list[str] | None = None
 
 
 async def record_device_max(s, room_id: str, declared: int | None) -> None:
-    """Keep what the room's device said it can run (None: it didn't say,
-    an older device). Only on a room that has a row."""
-    await s.execute(
-        text("UPDATE room_wake_words SET device_max = :m WHERE room_id = :r "
-             "AND device_max IS DISTINCT FROM :m"),
-        {"r": room_id, "m": declared},
-    )
+    """Keep what the device said it can run (None: it didn't say, an older
+    device). Kept on the device's row (V080 ``satellites.wake_max``);
+    ``room_id`` is the device's id. A room's ``device_max`` is the least
+    any of its devices can run."""
+    from domovoi.db.repositories import SatellitesRepository
+
+    await SatellitesRepository(s).set_wake_max(room_id, declared)
 
 
 Push = Callable[[str, "float | None"], Awaitable[None]]
@@ -667,7 +675,7 @@ async def word_names(s) -> dict[str, str]:
 async def room_states(s, room_id: str | None = None) -> dict[str, dict]:
     """room -> ``{state, slug, slugs, device_max}`` from ``room_wake_words``
     (one room, or all)."""
-    cols = "room_id, state, slug, slugs, device_max"
+    cols = f"room_id, state, slug, slugs, {_DEVICE_MAX}"
     if room_id is None:
         rows = (await s.execute(text(f"SELECT {cols} FROM room_wake_words"))).all()
     else:

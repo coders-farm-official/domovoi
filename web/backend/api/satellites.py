@@ -2070,10 +2070,10 @@ async def _list_rooms() -> list[dict[str, Any]]:
     but-never-connected ones (satellites rows only → null ports, rendered
     as `waiting`). Falls back to mpd_rooms alone when V003 isn't applied."""
     query_full = """
-        SELECT COALESCE(m.room_id, s.room_id) AS room_id,
+        SELECT COALESCE(m.room_id, s.satellite_id) AS room_id,
                m.control_port, m.http_port, m.last_connected_at
         FROM mpd_rooms m
-        FULL OUTER JOIN satellites s ON s.room_id = m.room_id
+        FULL OUTER JOIN satellites s ON s.satellite_id = m.room_id
         ORDER BY 1
         """
     query_legacy = """
@@ -2107,7 +2107,7 @@ async def _list_pairings() -> dict[str, dict[str, Any]]:
     async with session_scope() as s:
         rows = await s.execute(
             text(
-                "SELECT room_id, paired_at, last_seen_at FROM satellite_pairings"
+                "SELECT satellite_id, paired_at, last_seen_at FROM satellite_pairings"
             )
         )
     return {
@@ -2124,8 +2124,9 @@ async def _list_satellite_meta() -> dict[str, dict[str, Any]]:
         async with session_scope() as s:
             rows = await s.execute(
                 text(
-                    "SELECT room_id, sat_type, room_label, hardware, board, "
-                    "mac, adopted_at, voice FROM satellites"
+                    "SELECT s.satellite_id, s.sat_type, NULLIF(r.name, r.room_id), "
+                    "s.hardware, s.board, s.mac, s.adopted_at, r.voice "
+                    "FROM satellites s JOIN rooms r ON r.room_id = s.room_id"
                 )
             )
         return {
@@ -2154,11 +2155,12 @@ async def _last_heard_or_empty(room_id: str | None = None) -> dict[str, Any]:
         async with session_scope() as s:
             if room_id is None:
                 rows = await s.execute(text(
-                    "SELECT room_id, max(received_at) FROM satellite_health GROUP BY room_id"))
+                    "SELECT satellite_id, max(received_at) FROM satellite_health "
+                    "GROUP BY satellite_id"))
             else:
                 rows = await s.execute(text(
-                    "SELECT room_id, max(received_at) FROM satellite_health "
-                    "WHERE room_id = :r GROUP BY room_id"), {"r": room_id})
+                    "SELECT satellite_id, max(received_at) FROM satellite_health "
+                    "WHERE satellite_id = :r GROUP BY satellite_id"), {"r": room_id})
             return {r[0]: r[1] for r in rows.all() if r[1] is not None}
     except Exception as e:  # noqa: BLE001
         log.debug("satellite health times unavailable: %s", e)
@@ -2193,10 +2195,11 @@ async def _room_wake_facts_or_empty(room_id: str | None = None) -> dict[str, Any
         async with session_scope() as s:
             names = await wake_default.word_names(s)
             states = await wake_default.room_states(s, room_id)
-            where = "" if room_id is None else "WHERE room_id = :r "
+            where = "" if room_id is None else "WHERE satellite_id = :r "
             rows = (await s.execute(text(
-                "SELECT DISTINCT ON (room_id) room_id, sample->>'wake_word', received_at "
-                f"FROM satellite_health {where}ORDER BY room_id, received_at DESC"),
+                "SELECT DISTINCT ON (satellite_id) satellite_id, sample->>'wake_word', "
+                f"received_at FROM satellite_health {where}"
+                "ORDER BY satellite_id, received_at DESC"),
                 {} if room_id is None else {"r": room_id})).all()
         return {"names": names, "states": states,
                 "samples": {r[0]: (r[1], r[2]) for r in rows}}

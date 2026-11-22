@@ -1369,7 +1369,8 @@ class VoiceProfileHandler(Handler):
         label: str | None = None
         try:
             row = (await session.execute(
-                sql_text("SELECT room_label FROM satellites WHERE room_id = :r"), {"r": room_id},
+                sql_text("SELECT NULLIF(name, room_id) FROM rooms WHERE room_id = :r"),
+                {"r": room_id},
             )).first()
             label = row[0] if row else None
         except Exception as e:
