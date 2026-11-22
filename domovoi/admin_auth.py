@@ -682,23 +682,40 @@ async def prune_dead_sessions(session: AsyncSession) -> int:
     return len(result.all())
 
 
-async def create_session(session: AsyncSession, label: str | None = None) -> str:
+async def create_session(
+    session: AsyncSession,
+    label: str | None = None,
+    *,
+    phone_grant_id: int | None = None,
+) -> str:
     """Mint a 256-bit bearer token; store only its sha256. Returns the
     raw token — the ONLY time it exists outside the caller's memory.
 
-    Called only once the password (login) or the setup code plus a new
+    Called once the password (login) or the setup code plus a new
     password (first-run setup) has been proved, so the row is stamped
     ``signed_in_at = now()`` and ``last_used_at = now()``: signing in is
-    the first admin action, and the idle hour counts from it."""
+    the first admin action, and the idle hour counts from it.
+
+    With ``phone_grant_id`` the session was minted from a phone grant
+    (:func:`exchange_phone_grant`), not the password: ``signed_in_at``
+    stays NULL, so it is never "freshly signed in" and can never mint a
+    grant of its own (:func:`signed_in_recently`)."""
     await prune_dead_sessions(session)
     token = secrets.token_hex(32)  # 256 bits
+    signed_in = "NULL" if phone_grant_id is not None else "now()"
     await session.execute(
         text(
             "INSERT INTO admin_sessions "
-            "(token_hash, label, expires_at, signed_in_at, last_used_at) "
-            "VALUES (:h, :label, now() + make_interval(mins => :idle_min), now(), now())"
+            "(token_hash, label, expires_at, signed_in_at, last_used_at, phone_grant_id) "
+            "VALUES (:h, :label, now() + make_interval(mins => :idle_min), "
+            f"{signed_in}, now(), :grant)"
         ),
-        {"h": _sha256(token), "label": label, "idle_min": int(SESSION_IDLE_TIMEOUT_MIN)},
+        {
+            "h": _sha256(token),
+            "label": label,
+            "idle_min": int(SESSION_IDLE_TIMEOUT_MIN),
+            "grant": phone_grant_id,
+        },
     )
     return token
 
@@ -1473,6 +1490,199 @@ async def list_sessions(session: AsyncSession) -> list[dict[str, Any]]:
     ]
 
 
+# ─── Phone grants: admin on a phone for the rest of the day (V085) ────────
+#
+# Owner-approved 2026-11-22; docs/SECURITY_PRIVACY.md, "Admin on a phone:
+# the day's grant". After a PASSWORD sign-in on a phone (signed_in_at
+# inside PHONE_GRANT_FRESH_SIGNIN_SEC), the phone may ask for a grant: 256
+# random bits, bound to its device id, ending PHONE_GRANT_TTL_HOURS after
+# issue whatever happens. The phone keeps it behind its biometrics and
+# swaps it (with the household token and the same device id) for a fresh
+# admin session when it needs a Bearer again. Only the sha256 is stored.
+# The session a grant mints has no signed_in_at, so it can never mint a
+# grant: a day of access needs the password, every day. Deleting a grant
+# row (revoke, replace, password change, --reset-admin) ends the sessions
+# it minted too (admin_sessions.phone_grant_id, ON DELETE CASCADE).
+
+PHONE_GRANT_TTL_HOURS = 24
+# How recently the minting session must have proved the password.
+PHONE_GRANT_FRESH_SIGNIN_SEC = 300
+# Grants that ended this long ago are deleted when a new one is issued
+# (the table holds one row per device, so this only tidies the list).
+PHONE_GRANT_PRUNE_AFTER_DAYS = 1
+PHONE_GRANT_LABEL_MAX = 60
+PHONE_GRANT_DEVICE_ID_MIN = 3
+PHONE_GRANT_DEVICE_ID_MAX = 64
+
+# Compared against when a device id has no grant, so the answer takes the
+# same path (a constant-time compare) whether or not the id is known.
+_NO_GRANT_HASH = _sha256("\x00no-phone-grant\x00" + secrets.token_hex(32))
+
+
+async def signed_in_recently(session: AsyncSession, token: str | None) -> bool:
+    """Whether the live session ``token`` names proved the PASSWORD within
+    :data:`PHONE_GRANT_FRESH_SIGNIN_SEC`. ``signed_in_at`` is stamped only
+    by a password sign-in (login, setup, a password change); an admin
+    action, a resume or a grant exchange never moves it, so a kept-alive
+    or stolen Bearer is stale five minutes after its sign-in. A stamp from
+    the future past the clock slack is not trusted."""
+    if not token:
+        return False
+    row = (
+        await session.execute(
+            text(
+                "SELECT 1 FROM admin_sessions WHERE token_hash = :h "
+                f"AND {_SESSION_LIVE_SQL} AND signed_in_at IS NOT NULL "
+                "AND signed_in_at > now() - make_interval(secs => :fresh) "
+                "AND signed_in_at <= now() + make_interval(secs => :slack_sec)"
+            ),
+            {
+                "h": _sha256(token),
+                "fresh": float(PHONE_GRANT_FRESH_SIGNIN_SEC),
+                **_clock_params(),
+            },
+        )
+    ).first()
+    return row is not None
+
+
+async def issue_phone_grant(
+    session: AsyncSession, device_id: str, label: str
+) -> tuple[str, datetime]:
+    """Mint a grant for ``device_id``, replacing any it had (and with it
+    the sessions the old one minted). Returns ``(grant, expires_at)``; the
+    raw grant exists nowhere else. The caller has checked the admin
+    Bearer, its freshness and the household token."""
+    await session.execute(
+        text(
+            "DELETE FROM admin_phone_grants WHERE device_id = :d "
+            "OR expires_at < now() - make_interval(days => :prune)"
+        ),
+        {"d": device_id, "prune": int(PHONE_GRANT_PRUNE_AFTER_DAYS)},
+    )
+    grant = secrets.token_hex(32)  # 256 bits
+    row = (
+        await session.execute(
+            text(
+                "INSERT INTO admin_phone_grants (grant_hash, device_id, label, expires_at) "
+                "VALUES (:h, :d, :label, now() + make_interval(hours => :ttl)) "
+                "RETURNING expires_at"
+            ),
+            {
+                "h": _sha256(grant),
+                "d": device_id,
+                "label": label,
+                "ttl": int(PHONE_GRANT_TTL_HOURS),
+            },
+        )
+    ).one()
+    return grant, row.expires_at
+
+
+PhoneGrantRefusal = Literal["invalid", "expired"]
+
+
+async def exchange_phone_grant(
+    session: AsyncSession, grant: str, device_id: str
+) -> tuple[str, datetime] | PhoneGrantRefusal:
+    """Swap a grant for a fresh admin session labelled ``phone: <label>``.
+
+    The row is found by ``device_id`` and its hash compared in constant
+    time, so a grant presented with another device's id is refused exactly
+    like a wrong grant (``"invalid"``). A matching grant past its end is
+    deleted and answers ``"expired"``. On success the grant's
+    ``last_used_at`` is stamped and ``(token, grant_expires_at)`` returned.
+    The row is locked for the swap, so a revoke racing it either lands
+    first (refused) or after (and ends the new session with the grant)."""
+    row = (
+        await session.execute(
+            text(
+                "SELECT id, grant_hash, label, expires_at, (expires_at > now()) AS live "
+                "FROM admin_phone_grants WHERE device_id = :d FOR UPDATE"
+            ),
+            {"d": device_id},
+        )
+    ).first()
+    stored = row.grant_hash if row is not None else _NO_GRANT_HASH
+    if not hmac.compare_digest(_sha256(grant), stored) or row is None:
+        return "invalid"
+    if not row.live:
+        await session.execute(
+            text("DELETE FROM admin_phone_grants WHERE id = :id"), {"id": row.id}
+        )
+        return "expired"
+    await session.execute(
+        text("UPDATE admin_phone_grants SET last_used_at = now() WHERE id = :id"),
+        {"id": row.id},
+    )
+    token = await create_session(session, label=f"phone: {row.label}", phone_grant_id=row.id)
+    return token, row.expires_at
+
+
+async def revoke_phone_grant_by_secret(session: AsyncSession, grant: str) -> bool:
+    """The phone's own sign-out: delete the grant it holds (and the
+    sessions it minted). Whether one existed is for the log only."""
+    row = (
+        await session.execute(
+            text("DELETE FROM admin_phone_grants WHERE grant_hash = :h RETURNING 1"),
+            {"h": _sha256(grant)},
+        )
+    ).first()
+    return row is not None
+
+
+async def revoke_phone_grant(session: AsyncSession, grant_id: int) -> bool:
+    """An admin's revoke from the dashboard list."""
+    row = (
+        await session.execute(
+            text("DELETE FROM admin_phone_grants WHERE id = :id RETURNING 1"),
+            {"id": grant_id},
+        )
+    ).first()
+    return row is not None
+
+
+async def revoke_all_phone_grants(
+    session: AsyncSession, keep_token_hash: str | None = None
+) -> int:
+    """Delete every grant (an admin password change). The session making
+    the change is kept even when a grant minted it: it is detached first,
+    so the cascade does not end the session that just proved the
+    password."""
+    if keep_token_hash is not None:
+        await session.execute(
+            text("UPDATE admin_sessions SET phone_grant_id = NULL WHERE token_hash = :h"),
+            {"h": keep_token_hash},
+        )
+    result = await session.execute(text("DELETE FROM admin_phone_grants RETURNING 1"))
+    return len(result.all())
+
+
+async def list_phone_grants(session: AsyncSession) -> list[dict[str, Any]]:
+    """Every grant, newest first: never the hash, never the secret."""
+    rows = (
+        await session.execute(
+            text(
+                "SELECT id, device_id, label, created_at, expires_at, last_used_at, "
+                "(expires_at > now()) AS live FROM admin_phone_grants "
+                "ORDER BY created_at DESC, id DESC"
+            )
+        )
+    ).all()
+    return [
+        {
+            "id": int(r.id),
+            "device_id": r.device_id,
+            "label": r.label,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "expires_at": r.expires_at.isoformat() if r.expires_at else None,
+            "last_used_at": r.last_used_at.isoformat() if r.last_used_at else None,
+            "live": bool(r.live),
+        }
+        for r in rows
+    ]
+
+
 async def reset_admin() -> str:
     """``--reset-admin`` (§7.2 password recovery): drop the credential
     and every session, regenerate + persist a fresh setup code. Returns
@@ -1482,6 +1692,7 @@ async def reset_admin() -> str:
     setup completes again."""
     async with session_scope() as s:
         await s.execute(text("DELETE FROM admin_sessions"))
+        await s.execute(text("DELETE FROM admin_phone_grants"))
         await s.execute(text("DELETE FROM admin_auth"))
     code = generate_setup_code()
     write_setup_code(code)

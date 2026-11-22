@@ -262,6 +262,199 @@
         }
       }
     },
+    "/api/auth/phone-grant": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Auth Phone Grant",
+        "description": "Issue this phone's grant for the rest of the day. Needs the\nhousehold token AND an admin Bearer whose session proved the password\nwithin the last five minutes (``signed_in_at``): a Bearer that was\nkept alive, resumed, stolen or minted from a grant is refused (403).\nOne grant per device id: a new one replaces the old, and ends the\nsessions the old one minted. The grant is in this answer and nowhere\nelse.",
+        "operationId": "auth_phone_grant_api_auth_phone_grant_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PhoneGrantRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/phone-grant/exchange": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Auth Phone Grant Exchange",
+        "description": "Swap a phone grant for a fresh admin session (``phone: <label>``,\nthe usual idle hour, NOT freshly signed in, so it cannot mint a grant).\nNeeds the household token, then sits behind the password login's own\nper-source backoff (the attempt is counted before the check; 429 with\n``Retry-After`` while throttled). 401 when the grant is wrong, belongs\nto another device id, or has expired (the expired row is deleted).",
+        "operationId": "auth_phone_grant_exchange_api_auth_phone_grant_exchange_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PhoneGrantExchangeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/phone-grant/revoke": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Auth Phone Grant Revoke",
+        "description": "The phone's own sign-out: end the grant it holds, and the sessions\nit minted. No admin needed: holding the grant proves it is yours. The\nsame answer whether or not it existed.",
+        "operationId": "auth_phone_grant_revoke_api_auth_phone_grant_revoke_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PhoneGrantRevokeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Auth Phone Grant Revoke Api Auth Phone Grant Revoke Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/phone-grants": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Auth Phone Grants",
+        "description": "The phone grants, for the dashboard list beside the sessions:\ndevice id, label, issued, until, last used, live. Never a secret or a\nhash. GET state: the cookie may render it.",
+        "operationId": "auth_phone_grants_api_auth_phone_grants_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Auth Phone Grants Api Auth Phone Grants Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/phone-grants/{grant_id}": {
+      "delete": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Auth Revoke Phone Grant",
+        "description": "An admin revokes a phone's grant (and the sessions it minted).\nBearer-only; an admin action.",
+        "operationId": "auth_revoke_phone_grant_api_auth_phone_grants__grant_id__delete",
+        "parameters": [
+          {
+            "name": "grant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Grant Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Auth Revoke Phone Grant Api Auth Phone Grants  Grant Id  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/auth/device-token": {
       "get": {
         "tags": [
@@ -30188,6 +30381,59 @@
           "events"
         ],
         "title": "PhoneCalendarStored"
+      },
+      "PhoneGrantExchangeRequest": {
+        "properties": {
+          "grant": {
+            "type": "string",
+            "title": "Grant"
+          },
+          "device_id": {
+            "type": "string",
+            "title": "Device Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "grant",
+          "device_id"
+        ],
+        "title": "PhoneGrantExchangeRequest"
+      },
+      "PhoneGrantRequest": {
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 3,
+            "title": "Device Id"
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 60,
+            "minLength": 1,
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "device_id",
+          "label"
+        ],
+        "title": "PhoneGrantRequest"
+      },
+      "PhoneGrantRevokeRequest": {
+        "properties": {
+          "grant": {
+            "type": "string",
+            "title": "Grant"
+          }
+        },
+        "type": "object",
+        "required": [
+          "grant"
+        ],
+        "title": "PhoneGrantRevokeRequest"
       },
       "PhoneLookupBody": {
         "properties": {

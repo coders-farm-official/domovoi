@@ -515,9 +515,207 @@ async def auth_change_password(
         ):
             raise HTTPException(status_code=401, detail="wrong password")
         await admin_auth.set_password(s, body.new_password)
+        # Every phone's day grant ends with the old password (and the
+        # sessions they minted with it); the calling session is kept.
+        await admin_auth.revoke_all_phone_grants(s, keep)
         revoked = await admin_auth.revoke_other_sessions(s, keep)
         await admin_auth.mark_signed_in(s, keep)
     return {"ok": True, "revoked_sessions": revoked}
+
+
+# ─── Phone grants: admin on a phone for the rest of the day (V085) ────────
+#
+# docs/SECURITY_PRIVACY.md, "Admin on a phone: the day's grant". A phone
+# that has just signed in with the password asks for a grant (256 bits,
+# bound to its device id, 24 hours), keeps it behind its biometrics, and
+# swaps it here for a fresh admin session when it needs a Bearer again.
+# Never logged: the grant, the token, the password. The device id and the
+# label are not secrets and are logged.
+
+_GRANT_SECRET_MAX = 256
+
+_PHONE_GRANT_DEVICE_DETAIL = (
+    f"{admin_auth.DEVICE_TOKEN_HEADER} required — a phone grant is only for "
+    "a paired phone"
+)
+_PHONE_GRANT_STALE_DETAIL = (
+    "sign in with the password again first — a phone grant is only issued "
+    f"within {admin_auth.PHONE_GRANT_FRESH_SIGNIN_SEC // 60} minutes of a "
+    "password sign-in"
+)
+_PHONE_GRANT_INVALID_DETAIL = "phone grant not valid — sign in with the password"
+_PHONE_GRANT_EXPIRED_DETAIL = "phone grant has expired — sign in with the password"
+_PHONE_GRANT_PRE_SETUP_DETAIL = (
+    "auth not configured — complete the first-run admin setup first"
+)
+
+
+class PhoneGrantRequest(BaseModel):
+    device_id: str = Field(
+        ...,
+        min_length=admin_auth.PHONE_GRANT_DEVICE_ID_MIN,
+        max_length=admin_auth.PHONE_GRANT_DEVICE_ID_MAX,
+    )
+    label: str = Field(..., min_length=1, max_length=admin_auth.PHONE_GRANT_LABEL_MAX)
+
+
+class PhoneGrantExchangeRequest(BaseModel):
+    # PLAIN strs, checked in the handler: a pydantic constraint reports
+    # the rejected value back as `input` in FastAPI's 422 body, and a
+    # near-miss grant must never travel back out (DeviceTokenRequest's rule).
+    grant: str
+    device_id: str
+
+
+class PhoneGrantRevokeRequest(BaseModel):
+    grant: str  # plain, for the same reason
+
+
+def _grant_shape_ok(grant: str) -> bool:
+    return 0 < len(grant) <= _GRANT_SECRET_MAX
+
+
+async def _require_household_token(request: Request) -> None:
+    """The phone-grant routes take the household token ITSELF: an admin
+    Bearer is not a substitute (the device tier's admin fallback is not
+    enough here)."""
+    result = await admin_auth.check_device_request(request)
+    if result == "ok":
+        return
+    if result == "throttled":
+        raise admin_auth.device_token_throttled_error(request)
+    raise HTTPException(status_code=401, detail=_PHONE_GRANT_DEVICE_DETAIL)
+
+
+def _no_store(payload: dict[str, Any]) -> JSONResponse:
+    response = JSONResponse(payload)
+    response.headers["Cache-Control"] = "no-store"  # the answer is a credential
+    return response
+
+
+@router.post("/phone-grant")
+async def auth_phone_grant(body: PhoneGrantRequest, request: Request) -> JSONResponse:
+    """Issue this phone's grant for the rest of the day. Needs the
+    household token AND an admin Bearer whose session proved the password
+    within the last five minutes (``signed_in_at``): a Bearer that was
+    kept alive, resumed, stolen or minted from a grant is refused (403).
+    One grant per device id: a new one replaces the old, and ends the
+    sessions the old one minted. The grant is in this answer and nowhere
+    else."""
+    await _require_household_token(request)
+    result = await admin_auth.check_admin_request(request, activity=True)
+    if result == "pre-setup":
+        raise HTTPException(status_code=501, detail=_PHONE_GRANT_PRE_SETUP_DETAIL)
+    if result == "cookie-only":
+        raise HTTPException(
+            status_code=403, detail="mutations require Authorization: Bearer"
+        )
+    if result != "ok":
+        raise HTTPException(status_code=401, detail="admin session required")
+    async with session_scope() as s:
+        if not await admin_auth.signed_in_recently(s, admin_auth.bearer_token(request)):
+            raise HTTPException(status_code=403, detail=_PHONE_GRANT_STALE_DETAIL)
+        grant, expires_at = await admin_auth.issue_phone_grant(s, body.device_id, body.label)
+    log.info("phone grant issued (device %r, label %r)", body.device_id, body.label)
+    return _no_store({"grant": grant, "expires_at": expires_at.isoformat()})
+
+
+@router.post("/phone-grant/exchange")
+async def auth_phone_grant_exchange(
+    body: PhoneGrantExchangeRequest, request: Request
+) -> JSONResponse:
+    """Swap a phone grant for a fresh admin session (``phone: <label>``,
+    the usual idle hour, NOT freshly signed in, so it cannot mint a grant).
+    Needs the household token, then sits behind the password login's own
+    per-source backoff (the attempt is counted before the check; 429 with
+    ``Retry-After`` while throttled). 401 when the grant is wrong, belongs
+    to another device id, or has expired (the expired row is deleted)."""
+    await _require_household_token(request)
+    source = admin_auth.enforce_login_backoff(request)
+    if not _grant_shape_ok(body.grant) or not (
+        admin_auth.PHONE_GRANT_DEVICE_ID_MIN
+        <= len(body.device_id)
+        <= admin_auth.PHONE_GRANT_DEVICE_ID_MAX
+    ):
+        admin_auth.LOGIN_BACKOFF.record_failure(source)
+        log.info("phone grant exchange refused: malformed request")
+        raise HTTPException(status_code=401, detail=_PHONE_GRANT_INVALID_DETAIL)
+    async with session_scope() as s:
+        if not await admin_auth.has_admin_auth(s):
+            admin_auth.LOGIN_BACKOFF.release(source)
+            raise HTTPException(status_code=501, detail=_PHONE_GRANT_PRE_SETUP_DETAIL)
+        outcome = await admin_auth.exchange_phone_grant(s, body.grant, body.device_id)
+        idle = (
+            await admin_auth.session_idle_clock(s, token=outcome[0])
+            if isinstance(outcome, tuple) else None
+        )
+    if outcome == "invalid":
+        admin_auth.LOGIN_BACKOFF.record_failure(source)
+        log.info("phone grant exchange refused: no such grant (device %r)", body.device_id)
+        raise HTTPException(status_code=401, detail=_PHONE_GRANT_INVALID_DETAIL)
+    if outcome == "expired":
+        admin_auth.LOGIN_BACKOFF.record_failure(source)
+        log.info("phone grant exchange refused: expired (device %r)", body.device_id)
+        raise HTTPException(status_code=401, detail=_PHONE_GRANT_EXPIRED_DETAIL)
+    token, grant_expires_at = outcome
+    admin_auth.LOGIN_BACKOFF.record_success(source)
+    log.info("phone grant exchanged for an admin session (device %r)", body.device_id)
+    payload: dict[str, Any] = {
+        "token": token,
+        "grant_expires_at": grant_expires_at.isoformat(),
+        "idle_timeout_min": int(admin_auth.SESSION_IDLE_TIMEOUT_MIN),
+        "idle_until": None,
+        "idle_in_sec": None,
+    }
+    if idle is not None:
+        payload.update(idle.as_json())
+    return _no_store(payload)
+
+
+@router.post("/phone-grant/revoke")
+async def auth_phone_grant_revoke(body: PhoneGrantRevokeRequest) -> dict:
+    """The phone's own sign-out: end the grant it holds, and the sessions
+    it minted. No admin needed: holding the grant proves it is yours. The
+    same answer whether or not it existed."""
+    revoked = False
+    if _grant_shape_ok(body.grant):
+        async with session_scope() as s:
+            revoked = await admin_auth.revoke_phone_grant_by_secret(s, body.grant)
+    if revoked:
+        log.info("phone grant revoked by the phone holding it")
+    return {"ok": True}
+
+
+@router.get("/phone-grants")
+async def auth_phone_grants(request: Request) -> dict:
+    """The phone grants, for the dashboard list beside the sessions:
+    device id, label, issued, until, last used, live. Never a secret or a
+    hash. GET state: the cookie may render it."""
+    result = await admin_auth.check_admin_request(request)
+    if result not in ("ok", "cookie-only"):
+        raise HTTPException(status_code=401, detail="admin session required")
+    async with session_scope() as s:
+        grants = await admin_auth.list_phone_grants(s)
+    return {"grants": grants}
+
+
+@router.delete("/phone-grants/{grant_id}")
+async def auth_revoke_phone_grant(grant_id: int, request: Request) -> dict:
+    """An admin revokes a phone's grant (and the sessions it minted).
+    Bearer-only; an admin action."""
+    result = await admin_auth.check_admin_request(request, activity=True)
+    if result == "cookie-only":
+        raise HTTPException(
+            status_code=403, detail="mutations require Authorization: Bearer"
+        )
+    if result != "ok":
+        raise HTTPException(status_code=401, detail="admin session required")
+    async with session_scope() as s:
+        revoked = await admin_auth.revoke_phone_grant(s, grant_id)
+    if not revoked:
+        raise HTTPException(status_code=404, detail="no such phone grant")
+    log.info("phone grant %d revoked by an admin", grant_id)
+    return {"ok": True}
 
 
 # ─── Household device token (device tier) ─────────────────────────────────

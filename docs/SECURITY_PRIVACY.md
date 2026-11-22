@@ -1627,7 +1627,7 @@ admin tier is code execution and configuration, not day-to-day use.
 | **Pulling new code, and clearing a tamper incident** (the pull moves the code on disk that the core runs and serves to satellites, and on an install no one has claimed yet it would move a pinned Windows install to upstream's tip; clearing the last open tamper incident lifts the container guard's freeze) | Core: `POST /v1/admin/version/pull`, `POST /v1/admin/containers/incidents/{id}/clear`. Dashboard: `POST /api/config/version/pull`, `POST /api/containers/incidents/{id}/clear`. | **Fails closed** — 501 until setup (delta review N5, 2026-10-16; both had the pre-setup grace before). Acknowledging a failure and running a check now stay on the admin tier with the grace. |
 | **Library sweeps** (long server-side jobs) | Dashboard: `POST /api/music/library/reindex`, `POST /api/music/library/enrich`, `POST /api/music/library/enrich/repair`. The version *check* beside the code pull is device tier — it fetches and reports, it never moves HEAD — and so is the version *read* (`GET /v1/admin/version`, `GET /api/config/version`), because beside the running commit it carries the update unit's last run, its error text included, and whether this host can restart itself (CORE-21). | Pre-setup grace. |
 | **Plugin mutations on the default tier** (every non-GET plugin route its author did not mark `@device_endpoint` or `@open_endpoint`) | Core: `/v1/plugins/<slug>/…`. Dashboard: `/api/plugins/<slug>/…`. For the bundled radio plugin that is the FCC bulk import (`POST /api/plugins/radio/fcc-import` and the core route it forwards to) — a long server-side job, like the library sweeps; its everyday mutations are device tier (above). | Pre-setup grace. |
-| **Auth/session management** | `POST /api/auth/logout`, `DELETE /api/auth/sessions/{token_hash}`, `POST /api/auth/password`; `POST /api/auth/resume` (the session cookie, same origin, inside the reload window — [Staying signed in across a reload](#staying-signed-in-across-a-reload)); every admin session signs out after an hour without an admin action ([Signing out after an hour idle](#signing-out-after-an-hour-idle)) | n/a — these only exist once setup is done. |
+| **Auth/session management** | `POST /api/auth/logout`, `DELETE /api/auth/sessions/{token_hash}`, `POST /api/auth/password`, `POST /api/auth/phone-grant` and `GET` / `DELETE /api/auth/phone-grants[/{id}]` ([Admin on a phone](#admin-on-a-phone-the-days-grant)); `POST /api/auth/resume` (the session cookie, same origin, inside the reload window — [Staying signed in across a reload](#staying-signed-in-across-a-reload)); every admin session signs out after an hour without an admin action ([Signing out after an hour idle](#signing-out-after-an-hour-idle)) | n/a — these only exist once setup is done. |
 
 The `admin` in a `/v1/admin/...` path means "used by the dashboard," not
 "requires the admin password" — but none of those routes is open any more.
@@ -1693,7 +1693,7 @@ reason, so a new route cannot quietly ship open.
 - **The password** is hashed with **argon2id**; only the hash is stored (a
   single row in Postgres). Minimum 10 characters. **Changing it revokes
   every other session** — only the session that made the change stays
-  logged in.
+  logged in — and every phone grant ([Admin on a phone](#admin-on-a-phone-the-days-grant)).
 - **Sessions** are 256-bit bearer tokens; the database stores **only the
   sha256** of each token. A session **signs out after 1 hour idle**: an
   hour after its last *admin action* (a change made as admin), whatever
@@ -1732,8 +1732,8 @@ reason, so a new route cannot quietly ship open.
   rendering is let the dashboard's own page take its Bearer back after a
   reload, inside the reload window — below.
 - **Forgot the password?** `python -m domovoi.main --reset-admin` on the
-  server clears the credential and every session and prints a fresh setup
-  code. Requires being at the machine — same proof-of-possession logic.
+  server clears the credential, every session and every phone grant, and
+  prints a fresh setup code. Requires being at the machine — same proof-of-possession logic.
 
 ### Signing out after an hour idle
 
@@ -1922,6 +1922,72 @@ what such a script could do to a signed-in tab. Behind a reverse proxy
 that shows the browser a different scheme or port than the dashboard
 sees, the same-origin rule refuses the resume and a reload is view only,
 as before (uvicorn believes `X-Forwarded-Proto` from loopback only).
+
+### Admin on a phone: the day's grant
+
+1.5.0, owner-approved 2026-11-22. The phone apps let an admin sign in
+with the password and then keep admin **for the rest of the day** behind
+the phone's fingerprint or Face ID, without the phone ever storing the
+password or a Bearer.
+
+**How.** The phone signs in with the password (`POST /api/auth/login`) and
+holds that Bearer in memory, like the dashboard. With the switch on, it
+then asks for a **phone grant** (`POST /api/auth/phone-grant`): 256 random
+bits, bound to the phone's device id, ending **24 hours after it was
+issued**. The server keeps only its sha256. The phone keeps the grant
+encrypted under a key its biometrics unlock (Android Keystore, iPhone
+Keychain), and when it needs a Bearer again (the idle hour lapsed, the app
+restarted) it unlocks the grant and swaps it for a fresh admin session
+(`POST /api/auth/phone-grant/exchange`): an ordinary one, labelled
+`phone: <label>`, with the usual idle hour.
+
+**The rules the server holds.**
+
+* **A grant needs a fresh password sign-in.** It is issued only to a
+  session that proved the password within the last **5 minutes**
+  (`admin_sessions.signed_in_at`). That stamp is set by a password
+  sign-in, first-run setup and a password change, and by nothing else: an
+  admin action, a reload resume or a grant exchange never moves it. So a
+  Bearer that was stolen, or kept alive by admin changes, cannot mint a day
+  of access, and a session minted **from** a grant has no `signed_in_at` at
+  all: a grant cannot make another grant. A new day needs the password.
+* **Both credentials, every time.** Issuing and exchanging take the
+  household token itself (`X-Device-Token`); an admin Bearer is no
+  substitute. The exchange also needs the device id the grant was issued
+  for: a copied grant presented under another id is refused like a wrong
+  one (compared in constant time).
+* **The login's own throttle.** A wrong grant counts against the same
+  per-source backoff as a wrong password, both ways (a run of wrong grants
+  delays the password login from that address, and the reverse).
+* **One grant per phone.** A new grant for a device id replaces the old,
+  and the sessions the old one minted end with it.
+* **The end is the server's.** 24 hours after issue the grant is refused
+  (and deleted) whatever the phone thinks the time is.
+
+**What ends a grant, at once:** the phone's sign-out
+(`POST /api/auth/phone-grant/revoke`: holding the grant is the credential,
+and the answer is the same whether or not it existed), an admin's revoke
+on the dashboard (Settings → Advanced, **Admin on phones**: label, until
+when, last used), a password change, `--reset-admin`, and the 24 hours.
+Ending a grant also ends every admin session the phone made with it
+(`admin_sessions.phone_grant_id`). Biometrics enrolled anew on the phone
+invalidate its key, so the phone drops the grant and asks for the password.
+
+**What it costs, said plainly.** The grant does not rotate on each
+exchange (a new one would need a second biometric prompt to store it), so
+one grant is good, through one endpoint, for at most a day. Someone who
+copied the phone's stored grant AND has the household token AND the
+phone's device id can be admin until the grant ends or is revoked; the
+grant is encrypted under a biometric-gated key on the phone, so copying it
+means unlocking that key. The traffic is plain LAN HTTP like every other
+admin flow ([No TLS](#1-no-tls-on-admin-flows-or-anything-else)): a
+listener on the Wi-Fi who sees an exchange sees the grant and the Bearer.
+A session a grant minted lives by the ordinary rules (the idle hour, the
+90-day cap) and is not cut short when its grant reaches its 24 hours; it
+ends with the grant only when the grant is revoked, replaced or deleted.
+Ended grants are tidied away a day after they end, when the next one is
+issued. Never logged: the grant, the token, the password; the log names
+the device id and the label.
 
 ## Plugin trust model — read this before installing anything
 

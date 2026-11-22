@@ -4,6 +4,20 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Admin on a phone for the rest of the day (server side)
+
+- **What changed.** After signing in as admin with the password, a phone
+  may keep admin for the rest of the day behind its fingerprint or Face ID:
+  it asks the server for a **phone grant** (`POST /api/auth/phone-grant`,
+  only within 5 minutes of a password sign-in) and later swaps it for a
+  fresh admin sign-in (`POST /api/auth/phone-grant/exchange`). A grant is
+  bound to the phone's device id and ends 24 hours after it was issued,
+  whatever happens. Migration V085 adds the `admin_phone_grants` table.
+- **What to know.** Settings → Advanced lists the phones under "Admin on
+  phones", each with a revoke. Changing the admin password, or
+  `--reset-admin`, ends every grant. The phone apps use it from their next
+  release; until then the list stays empty.
+
 ## 1.4.1 (unreleased) — The wake-word trainer image moves to torch 2.14
 
 The trainer image's pinned packages had known security advisories (torch
