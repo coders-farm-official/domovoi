@@ -660,7 +660,12 @@ def test_same_tier_as_the_library_listing():
     by URL and can't attach a credential."""
     listing = _route("/api/music/library")
     cover = _route("/api/music/library/{track_id}/cover")
-    deps = lambda r: sorted(d.call.__name__ for d in r.dependant.dependencies)  # noqa: E731
+    # require_room_id_path only validates a {room_id} path value (the
+    # music router carries it); it grants nothing, so it is not a tier.
+    deps = lambda r: sorted(  # noqa: E731
+        d.call.__name__ for d in r.dependant.dependencies
+        if d.call.__name__ != "require_room_id_path"
+    )
     assert deps(cover) == deps(listing) == []
 
 

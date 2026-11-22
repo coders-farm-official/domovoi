@@ -610,7 +610,9 @@ async def download_episode(session, episode: dict[str, Any]) -> bool | None:
 
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
-            r = await net_safety.open_stream(client, url)
+            r = await net_safety.open_stream(
+                client, url, headers=dict(net_safety.IDENTITY_ENCODING)
+            )
             try:
                 r.raise_for_status()
                 with dest.open("wb") as fh:

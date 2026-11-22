@@ -2757,7 +2757,7 @@ const MusicPage = () => {
   };
   const transport = (verb) => async (room_id) => {
     try {
-      const path = `/api/music/${verb}/${room_id}`;
+      const path = `/api/music/${verb}/${encodeURIComponent(room_id)}`;
       await (guest ? guestSend(path) : apiPost(path));
       refreshNP();
     } catch (e) {
@@ -2797,7 +2797,7 @@ const MusicPage = () => {
 
   const onFavorite = async (room_id) => {
     try {
-      const r = await apiPost(`/api/music/now-playing/${room_id}/favorite`);
+      const r = await apiPost(`/api/music/now-playing/${encodeURIComponent(room_id)}/favorite`);
       const label = r.title || 'track';
       if (r.already_favorited) {
         if (r.kind === 'library') fire(`${label} is already favorited`);

@@ -760,7 +760,7 @@ const SatHealthCard = ({ room, online }) => {
     let alive = true;
     (async () => {
       try {
-        const d = await apiGet(`/api/satellites/${room}/health`);
+        const d = await apiGet(`/api/satellites/${encodeURIComponent(room)}/health`);
         if (alive) { setData(d); setError(null); }
       } catch (e) {
         if (alive) setError(e.message || String(e));
@@ -904,7 +904,7 @@ const VolumeControl = ({ s, fire }) => {
 
   const commit = async (level) => {
     try {
-      await apiPost(`/api/satellites/${s.room_id}/volume`, { level });
+      await apiPost(`/api/satellites/${encodeURIComponent(s.room_id)}/volume`, { level });
       fire(`${s.room_id} volume set to ${level}%`);
     } catch (e) {
       reportMutationFailure(fire, 'volume', e);
@@ -963,7 +963,7 @@ const VideoControls = ({ s, fire }) => {
   const online = s.status === 'online';
   const sendDisplay = async (action) => {
     try {
-      await apiPost(`/api/satellites/${s.room_id}/display`, { action });
+      await apiPost(`/api/satellites/${encodeURIComponent(s.room_id)}/display`, { action });
       fire(action === 'restart_kiosk'
         ? `restarting kiosk on ${s.room_id}…`
         : `screen ${action} sent to ${s.room_id}`);
@@ -1273,7 +1273,7 @@ const RoomVoicePicker = ({ s, fire, refresh }) => {
     if (value === current) return;
     setBusy(true);
     try {
-      const res = await apiPost(`/api/satellites/${s.room_id}/voice`, { voice: value || null });
+      const res = await apiPost(`/api/satellites/${encodeURIComponent(s.room_id)}/voice`, { voice: value || null });
       const spoken = res?.voice || serverLabel;
       fire(res?.kept_on === 'device'
         ? `${s.room_id} switches to ${spoken}: it says so in the new voice`
@@ -1393,7 +1393,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
       // The server returns a 200 with `announced_to: []` when
       // the WS to this room is dead under the active-sessions map.
       // Inspect that to give an honest toast.
-      const result = await apiPost(`/api/satellites/${s.room_id}/announce`, { message: msg });
+      const result = await apiPost(`/api/satellites/${encodeURIComponent(s.room_id)}/announce`, { message: msg });
       const delivered = Array.isArray(result?.announced_to) ? result.announced_to : [];
       if (delivered.includes(s.room_id)) {
         fire(`announced to ${s.room_id}`);
@@ -1411,7 +1411,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
     if (s.status !== 'online') { fire(`${s.room_id} is offline`); return; }
     if (!window.confirm(`Restart the ${s.room_id} room? It'll drop offline for a few seconds while the service bounces.`)) return;
     try {
-      await apiPost(`/api/satellites/${s.room_id}/restart`, {});
+      await apiPost(`/api/satellites/${encodeURIComponent(s.room_id)}/restart`, {});
       fire(`restarting ${s.room_id}…`);
     } catch (e) {
       reportMutationFailure(fire, 'restart', e);
@@ -1432,7 +1432,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
     setUpgradeErr(null);
     setAsking(true);
     try {
-      const res = await apiPost(`/api/satellites/${s.room_id}/upgrade`, {});
+      const res = await apiPost(`/api/satellites/${encodeURIComponent(s.room_id)}/upgrade`, {});
       // Locked from here until the satellite is back (satUpgradeView).
       const rec = res && res.upgrade;
       const startedMs = rec && rec.started_at ? Date.parse(rec.started_at) : NaN;
@@ -1467,7 +1467,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
       `the room.`
     )) return;
     try {
-      const r = await apiPost(`/api/satellites/${s.room_id}/pairing/reset`, {});
+      const r = await apiPost(`/api/satellites/${encodeURIComponent(s.room_id)}/pairing/reset`, {});
       fire(r && r.reset ? `pairing reset for ${s.room_id}` : `${s.room_id} had no pairing to reset`);
     } catch (e) {
       reportMutationFailure(fire, 'reset pairing', e);
@@ -1485,7 +1485,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
     if (!peer) { fire('pick a room to drop in on'); return; }
     if (s.status !== 'online') { fire(`${s.room_id} is offline`); return; }
     try {
-      await apiPost(`/api/satellites/${s.room_id}/dropin/start`, { target_room: peer });
+      await apiPost(`/api/satellites/${encodeURIComponent(s.room_id)}/dropin/start`, { target_room: peer });
       fire(`dropping in: ${s.room_id} → ${peer}`);
       setPeer('');
     } catch (e) {
@@ -1494,7 +1494,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
   };
   const hangUp = async () => {
     try {
-      await apiPost(`/api/satellites/${s.room_id}/dropin/end`, {});
+      await apiPost(`/api/satellites/${encodeURIComponent(s.room_id)}/dropin/end`, {});
       fire(`hung up ${s.room_id}`);
     } catch (e) {
       reportMutationFailure(fire, 'hang up', e);
@@ -1536,17 +1536,17 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
                   <IconButton name={np.state === 'play' ? 'pause' : 'play'}
                               title={np.state === 'play' ? 'pause' : 'resume'}
                               onClick={async () => {
-                                try { await apiPost(`/api/music/${np.state === 'play' ? 'pause' : 'resume'}/${s.room_id}`); }
+                                try { await apiPost(`/api/music/${np.state === 'play' ? 'pause' : 'resume'}/${encodeURIComponent(s.room_id)}`); }
                                 catch (e) { reportMutationFailure(fire, np.state === 'play' ? 'pause' : 'resume', e); }
                               }}/>
                   <IconButton name="skip-forward" title="skip"
                               onClick={async () => {
-                                try { await apiPost(`/api/music/skip/${s.room_id}`); }
+                                try { await apiPost(`/api/music/skip/${encodeURIComponent(s.room_id)}`); }
                                 catch (e) { reportMutationFailure(fire, 'skip', e); }
                               }}/>
                   <IconButton name="square" title="stop"
                               onClick={async () => {
-                                try { await apiPost(`/api/music/stop/${s.room_id}`); }
+                                try { await apiPost(`/api/music/stop/${encodeURIComponent(s.room_id)}`); }
                                 catch (e) { reportMutationFailure(fire, 'stop', e); }
                               }}/>
                 </div>
@@ -1687,7 +1687,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
             const v = window.prompt('Room label (empty to clear):', s.room_label || '');
             if (v === null) return;
             try {
-              await apiPatch(`/api/satellites/${s.room_id}`, { room_label: v.trim() || null });
+              await apiPatch(`/api/satellites/${encodeURIComponent(s.room_id)}`, { room_label: v.trim() || null });
               fire(v.trim() ? `labeled ${s.room_id} as "${v.trim()}"` : `cleared ${s.room_id}'s room label`);
               refresh && refresh();
             } catch (e) {
@@ -1729,7 +1729,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
                 `preseeded pairing. Do this if the device was unplugged mid-setup or adopted by mistake.`
               )) return;
               try {
-                await apiDelete(`/api/satellites/${s.room_id}`);
+                await apiDelete(`/api/satellites/${encodeURIComponent(s.room_id)}`);
                 fire(`removed ${s.room_id}`);
                 onClose && onClose();
                 refresh && refresh();
@@ -1754,7 +1754,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
                 `Saved playlists for the room and conversation history are kept.`
               )) return;
               try {
-                await apiDelete(`/api/satellites/${s.room_id}?purge=true`);
+                await apiDelete(`/api/satellites/${encodeURIComponent(s.room_id)}?purge=true`);
                 fire(`retired ${s.room_id} - the name is free again`);
                 onClose && onClose();
                 refresh && refresh();
@@ -1809,8 +1809,8 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
 };
 
 const RoomSessionsBody = ({ room }) => {
-  const { items: sessions, loading } = useApiList(`/api/satellites/${room}/sessions?limit=100`);
-  const { items: convos, reread } = useApiList(`/api/satellites/${room}/conversations?limit=300`);
+  const { items: sessions, loading } = useApiList(`/api/satellites/${encodeURIComponent(room)}/sessions?limit=100`);
+  const { items: convos, reread } = useApiList(`/api/satellites/${encodeURIComponent(room)}/conversations?limit=300`);
   useSatPendingRefresh(convos, reread);
   if (loading && sessions.length === 0)
     return <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading sessions…</div>;
@@ -1822,7 +1822,7 @@ const RoomSessionsBody = ({ room }) => {
 
 const RoomConversationsBody = ({ room }) => {
   const [q, setQ] = React.useState('');
-  const { items: all, loading, error, reread } = useApiList(`/api/satellites/${room}/conversations?limit=300`);
+  const { items: all, loading, error, reread } = useApiList(`/api/satellites/${encodeURIComponent(room)}/conversations?limit=300`);
   useSatPendingRefresh(all, reread);
   const filtered = all.filter(c => !q || ((c.user_text || '') + ' ' + (c.assistant_text || '')).toLowerCase().includes(q.toLowerCase()));
   const several = severalWakeWords(all);
@@ -1854,7 +1854,7 @@ const RoomConversationsBody = ({ room }) => {
 };
 
 const RoomNotesBody = ({ room }) => {
-  const { items: notes, loading, error } = useApiList(`/api/satellites/${room}/notes`);
+  const { items: notes, loading, error } = useApiList(`/api/satellites/${encodeURIComponent(room)}/notes`);
   if (loading && notes.length === 0)
     return <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading notes…</div>;
   if (error && error.deviceTokenRequired && notes.length === 0)
@@ -1930,7 +1930,7 @@ const RoomTimersBody = ({ room, fire }) => {
   const shared = useSharedScreen();
   // A reminder's words answer to a household credential (rule M1):
   // re-read when one arrives or goes.
-  const { items: rows, loading, refresh } = useApiList(`/api/satellites/${room}/timers`,
+  const { items: rows, loading, refresh } = useApiList(`/api/satellites/${encodeURIComponent(room)}/timers`,
                                                        { refetchOnAuth: true });
   // Tick state so the remaining-time column counts down between fetches.
   const [, setTick] = React.useState(0);
@@ -1941,7 +1941,7 @@ const RoomTimersBody = ({ room, fire }) => {
 
   const onCancel = async (t) => {
     try {
-      await apiDelete(`/api/satellites/${room}/timers/${t.id}`);
+      await apiDelete(`/api/satellites/${encodeURIComponent(room)}/timers/${t.id}`);
       fire(`cancelled ${t.is_reminder ? 'reminder' : 'timer'} #${t.id}`);
       refresh();
     } catch (e) {
@@ -2020,7 +2020,7 @@ const useSourceTones = () => {
 };
 
 const RoomRecentlyPlayedBody = ({ room, fire }) => {
-  const { items: rows, loading, refresh } = useApiList(`/api/satellites/${room}/recently-played?limit=100`);
+  const { items: rows, loading, refresh } = useApiList(`/api/satellites/${encodeURIComponent(room)}/recently-played?limit=100`);
   const sourceTones = useSourceTones();
   // Fulfiller availability gates the "+ add" affordance (design §10.1:
   // the button appears while a media-acquisition-fulfiller capability
@@ -2245,7 +2245,7 @@ const RoomQuietHoursSettings = ({ room, fire }) => {
 // from components.jsx (same field UI as the server gear). Saving
 // pushes edits to the Pi, which rewrites config.toml and restarts.
 const RoomSettingsBody = ({ room, fire }) => {
-  const { data, loading } = useApiObject(`/api/satellites/${room}/config`);
+  const { data, loading } = useApiObject(`/api/satellites/${encodeURIComponent(room)}/config`);
   const fields = (data && data.fields) || [];
   const reported = data && data.reported;
   const [edits, setEdits] = React.useState({});
@@ -2268,7 +2268,7 @@ const RoomSettingsBody = ({ room, fire }) => {
     if (!window.confirm(`Save and restart the ${room} room? It'll drop offline for a few seconds while it applies the change.`)) return;
     setSaving(true); setResult(null);
     try {
-      const res = await apiPatch(`/api/satellites/${room}/config`, { changes: edits });
+      const res = await apiPatch(`/api/satellites/${encodeURIComponent(room)}/config`, { changes: edits });
       setResult(res);
       const rejected = (res && res.rejected) || {};
       setEdits(prev => { const n = {}; Object.keys(prev).forEach(k => { if (k in rejected) n[k] = prev[k]; }); return n; });
@@ -2364,7 +2364,7 @@ const RoomLogsBody = ({ room, online }) => {
   const load = React.useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      setData(await apiGet(`/api/satellites/${room}/logs?max_bytes=${LOG_VIEW_BYTES}`));
+      setData(await apiGet(`/api/satellites/${encodeURIComponent(room)}/logs?max_bytes=${LOG_VIEW_BYTES}`));
       setRefusal(null);
     } catch (e) {
       setError(e.message || String(e));
@@ -4003,7 +4003,7 @@ const SatellitesPage = ({ embedded = false } = {}) => {
     try {
       // The code rides with the approval: the server compares it before it
       // binds the room to that device, so an approve without one is refused.
-      const r = await apiPost(`/api/satellites/approvals/${a.room_id}/${action}`,
+      const r = await apiPost(`/api/satellites/approvals/${encodeURIComponent(a.room_id)}/${action}`,
                               action === 'approve' ? { code } : {});
       // A room device that checks the code itself (1.4.0) hasn't said yes
       // yet: it confirms on its next visit, within seconds. Don't call it

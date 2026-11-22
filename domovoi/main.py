@@ -4,7 +4,6 @@ import asyncio
 import hashlib
 import json
 import logging
-import re
 import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -44,6 +43,7 @@ from domovoi import local_peer, windows_side  # noqa: E402
 from domovoi import voice_activity  # noqa: E402
 from domovoi import turn_watchdog  # noqa: E402
 from domovoi import join_problems, server_identity  # noqa: E402
+from domovoi import room_ids  # noqa: E402
 from domovoi import crypto_backend  # noqa: E402
 try:  # noqa: E402 — the satellite tree ships beside the core (it serves it to rooms)
     from satellite.pairing_proof import VERSION as PAIRING_PROOF_VERSION
@@ -818,7 +818,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     #   memory_extractor → lyrics_index → news_fetcher → wake_word_trainer →
     #   podcast_feed_poller → calendar_feed_refresher → audiobook_indexer →
     #   room_book_positions →
-    #   command_capture_pruner → guests_seen_pruner → printer_status → print_jobs →
+    #   command_capture_pruner → acquisition_budget_sweeper → guests_seen_pruner →
+    #   printer_status → print_jobs →
     #   print_history → voice_history_pruner → container_guard → chat_video → scan_reader →
     #   listenbrainz_fetch →
     #   library_alias_fetch → lyrics_scan → lyrics_fetch →
@@ -878,6 +879,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Opt-in command recordings: 14-day retention, the disk cap, and the
     # sweep of rooms no longer opted in (domovoi/command_captures.py).
     WORKERS.add_worker(CommandCapturePruner(), owner="core")
+    # The acquisition time budget: a claimed acquisition past
+    # acquisition_max_seconds fails for good (domovoi/acquisitions.py).
+    from domovoi.workers.acquisition_budget import AcquisitionBudgetSweeper
+
+    WORKERS.add_worker(AcquisitionBudgetSweeper(), owner="core")
     # Guests seen (V023): a guest's id, address and user agent, deleted 30
     # days after its last action (domovoi/workers/guests_seen_pruner.py).
     from domovoi.workers.guests_seen_pruner import GuestsSeenPruner
@@ -5794,8 +5800,9 @@ async def admin_reset_satellite_pairing(room_id: str) -> dict[str, Any]:
 
 
 # Room ids are used as WS paths, MPD container-name components, and config
-# values — keep them boring. Mirrored client-side by the AdoptModal.
-_ROOM_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}\Z")
+# values — keep them boring (domovoi/room_ids.py). Mirrored client-side by
+# the AdoptModal.
+_ROOM_ID_RE = room_ids.ROOM_ID_RE
 
 
 class _PreseedPairingBody(BaseModel):
@@ -7321,6 +7328,28 @@ async def admin_music_add_by_url(
         )
 
     async with session_scope() as s:
+        if not decision.admin:
+            # Without an admin session this adds one song at a time, never
+            # a backlog: past the cap of link adds waiting, it is refused
+            # until some finish (each one also runs under the acquisition
+            # budget, domovoi/acquisitions.py).
+            waiting = (
+                await s.execute(
+                    text(
+                        "SELECT COUNT(*) FROM media_acquisitions "
+                        "WHERE kind = 'url' AND requested_by = 'web' "
+                        "AND status IN ('pending', 'claimed')"
+                    )
+                )
+            ).scalar_one()
+            if int(waiting) >= settings.acquisition_open_url_pending_cap:
+                raise HTTPException(
+                    status_code=429,
+                    detail=(
+                        "Too many links are waiting to download. Try again "
+                        "when some have finished."
+                    ),
+                )
         result = await ACQUISITIONS.enqueue(
             s,
             kind="url",
@@ -8991,6 +9020,9 @@ async def stream(ws: WebSocket, room_id: str) -> None:
             ws, "cross_origin",
             f"/v1/stream/{room_id} from Origin {ws.headers.get('origin')!r}",
         )
+        return
+    if not room_ids.is_room_id(room_id):
+        await _refuse_ws(ws, "bad_room_id", f"/v1/stream/{room_id!r} is not a room id")
         return
     session = StreamSession(ws, room_id)
     await session.run()

@@ -46,6 +46,7 @@ from fastapi.routing import APIRoute
 from sqlalchemy import text
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from domovoi.room_ids import require_room_id_path
 from domovoi.admin_auth import require_device_read
 from web.backend.api import music as music_api
 from web.backend.db import session_scope
@@ -92,7 +93,10 @@ class _NoStoreRoute(APIRoute):
         return no_store_handler
 
 
-router = APIRouter(prefix="/api/music", tags=["music"], route_class=_NoStoreRoute)
+router = APIRouter(
+    prefix="/api/music", tags=["music"], route_class=_NoStoreRoute,
+    dependencies=[Depends(require_room_id_path)],
+)
 
 
 # ─── V021 present? ────────────────────────────────────────────────────────

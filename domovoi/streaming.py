@@ -507,6 +507,7 @@ from sqlalchemy import text
 
 from domovoi import ai_features, command_captures, join_problems, lan_address
 from domovoi import fast_lane
+from domovoi import room_ids
 from domovoi import voice_activity
 from domovoi.admin_auth import TRUSTED_PROXIES, SlidingWindowLimiter, token_sha256
 from domovoi.clients.letta import get_letta_client
@@ -3041,6 +3042,11 @@ class StreamSession:
         * a code minted here when the device brought none, so there is
           always something for the operator to match.
         """
+        if not room_ids.is_room_id(self.room_id):
+            # The socket route refuses these already; never park one.
+            log.warning("pairing: approval request refused — not a room id")
+            await self._safe_send_text({"type": "error", "reason": "bad_room_id"})
+            return False
         if code is not None and not _is_approval_code(code):
             # Refused before the budget is spent and before anything is
             # written: no satellite was ever given this code — one that is

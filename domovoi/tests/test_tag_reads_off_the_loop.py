@@ -246,7 +246,7 @@ async def test_a_downloaded_episodes_chapters_are_read_in_the_tags_pool(monkeypa
         def raise_for_status(self) -> None:
             pass
 
-    async def open_stream(client, url):
+    async def open_stream(client, url, **_kw):
         return _Response()
 
     async def iter_capped(response, cap):
