@@ -827,6 +827,9 @@ run_update() {
   # Off unless a case asks (the cache_trim_* cases), so every other case's
   # step list stays as it is.
   gpu_env+=(DOMOVOI_MANAGE_CACHE_TRIM="${MANAGE_CACHE_TRIM:-0}")
+  # Off unless a case asks (the ollama_access_* cases): every other case
+  # would otherwise ask this machine's own getent about an ollama group.
+  gpu_env+=(DOMOVOI_MANAGE_OLLAMA_ACCESS="${MANAGE_OLLAMA_ACCESS:-0}")
   # Off unless a case asks (the fh_firewall_* cases), the same way.
   gpu_env+=(DOMOVOI_MANAGE_FH_FIREWALL="${MANAGE_FH_FIREWALL:-0}")
   # Unset, EPOCHREALTIME is an ordinary (empty) variable in that shell.
@@ -854,7 +857,8 @@ run_update() {
     -u DOMOVOI_VENV -u DOMOVOI_MANAGE_SEARXNG -u DOMOVOI_REVOKED_SIGNERS \
     -u DOMOVOI_UPSTREAM_URL -u DOMOVOI_UPSTREAM_BRANCH -u DOMOVOI_USE_LOCK -u DOMOVOI_MANAGE_OS_JOBS \
     -u DOMOVOI_MANAGE_GPU_RUNTIME -u DOMOVOI_MANAGE_WAKE_TRAINER -u DOMOVOI_WAKE_TRAINER_IMAGE \
-    -u DOMOVOI_MANAGE_JOURNAL -u DOMOVOI_MANAGE_PACKAGES -u DOMOVOI_MANAGE_CACHE_TRIM PATH="$path" \
+    -u DOMOVOI_MANAGE_JOURNAL -u DOMOVOI_MANAGE_PACKAGES -u DOMOVOI_MANAGE_CACHE_TRIM \
+    -u DOMOVOI_MANAGE_OLLAMA_ACCESS PATH="$path" \
     DOMOVOI_REPO_DIR="$REPO" \
     DOMOVOI_PROVISION_ROOT="$OSROOT" DOMOVOI_PROVISION_TEST_HARNESS=1 \
     ${venv_env[@]+"${venv_env[@]}"} \
@@ -4298,8 +4302,8 @@ case_added_packages_installed_on_a_restart() {
   check "mode restart" eq "$(field mode)" '"restart"'
   check "a step of its own, after the search helper" eq "$(step_names)" "signature stop-services start-services health searxng added-packages"
   check "an ok step" step_is added-packages ok
-  check "it says what it installed" grep -qF '"detail": "installed xorriso tesseract-ocr tesseract-ocr-eng"' "$RESULT"
-  check "no recommends, a short wait for apt's lock" called "apt-get -o Dpkg::Use-Pty=0 -o DPkg::Lock::Timeout=20 -q install -y --no-install-recommends xorriso tesseract-ocr tesseract-ocr-eng"
+  check "it says what it installed" grep -qF '"detail": "installed xorriso tesseract-ocr tesseract-ocr-eng dosfstools mtools"' "$RESULT"
+  check "no recommends, a short wait for apt's lock" called "apt-get -o Dpkg::Use-Pty=0 -o DPkg::Lock::Timeout=20 -q install -y --no-install-recommends xorriso tesseract-ocr tesseract-ocr-eng dosfstools mtools"
   check "installed after health" before "curl http://127.0.0.1:6369/api/health" "install -y --no-install-recommends xorriso"
   check "with the lists apt had: no update" not_called "DPkg::Lock::Timeout=20 -q update"
   check "not held" not_called "apt-mark"
@@ -4324,8 +4328,8 @@ case_added_packages_only_what_is_missing() {
   MANAGE_PACKAGES=1 run_update "$CASE/pkgbin"
   check "status ok" eq "$(field status)" '"ok"'
   check "an ok step" step_is added-packages ok
-  check "it says what it installed" grep -qF '"detail": "installed tesseract-ocr tesseract-ocr-eng"' "$RESULT"
-  check "only the missing ones" called "install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng"
+  check "it says what it installed" grep -qF '"detail": "installed tesseract-ocr tesseract-ocr-eng dosfstools mtools"' "$RESULT"
+  check "only the missing ones" called "install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng dosfstools mtools"
   check "not xorriso again" not_called "--no-install-recommends xorriso"
   end_case
 }
@@ -4342,7 +4346,7 @@ case_added_packages_on_an_update_and_never_under_never() {
   check "never: status ok" eq "$(field status)" '"ok"'
   check "never: no step" eq "$(step_names)" "signature stop-services start-services health searxng"
   check "never: no apt" not_called "apt-get"
-  check "never: the journal says why" grep -qF "not installed while internet access is turned off: xorriso tesseract-ocr tesseract-ocr-eng (USB sticks for old computers need xorriso; reading scans needs tesseract-ocr)" "$CASE/output.log"
+  check "never: the journal says why" grep -qF "not installed while internet access is turned off: xorriso tesseract-ocr tesseract-ocr-eng dosfstools mtools (USB sticks for old computers need xorriso; reading scans needs tesseract-ocr; offline kits need dosfstools and mtools)" "$CASE/output.log"
   printf 'print("b")\n' >"$REPO/domovoi/app.py"
   local sha_b; sha_b=$(commit_all "B: code")
   echo sometimes >"$STATE/internet-policy"
@@ -4353,6 +4357,91 @@ case_added_packages_on_an_update_and_never_under_never() {
   check "update: after the plugins check and the search helper" eq "$(step_names)" "signature preflight backup stop-services migrate start-services health plugins searxng added-packages"
   check "update: installed" grep -qx "xorriso=1" "$STATE/dpkg"
   check "update: applied_sha moves to B" file_is "$UPD/applied_sha" "$sha_b"
+  end_case
+}
+
+# ─── the core reads Ollama's models (offline kit, 1.5.0) ────────────────
+
+# write_ollama_shims BIN: an ollama group and account whose home is
+# $CASE/ollama-home (0750 is what the step makes of useradd's 0700/0750);
+# `id -nG tester` answers from $STATE/groups, which the usermod shim
+# appends to.
+write_ollama_shims() {
+  mkdir -p "$1" "$CASE/ollama-home"
+  chmod 0700 "$CASE/ollama-home"
+  : >"$STATE/groups"
+  cat >"$1/getent" <<SH
+#!/usr/bin/env bash
+case "\${1-} \${2-}" in
+  "group ollama") [ -e "$STATE/no-ollama-group" ] && exit 2; echo "ollama:x:998:" ;;
+  "passwd ollama") echo "ollama:x:998:998::$CASE/ollama-home:/bin/false" ;;
+  "passwd tester") echo "tester:x:1000:1000::$CASE/home:/bin/bash" ;;
+  *) exit 2 ;;
+esac
+SH
+  cat >"$1/id" <<SH
+#!/usr/bin/env bash
+if [ "\${1-}" = -nG ]; then echo "tester \$(tr '\n' ' ' <"$STATE/groups")"; exit 0; fi
+exec /usr/bin/id "\$@"
+SH
+  cat >"$1/usermod" <<SH
+#!/usr/bin/env bash
+echo "usermod \$*" >>"$STATE/calls.log"
+[ -e "$STATE/usermod-fail" ] && exit 6
+[ "\${1-}" = -aG ] && echo "\$2" >>"$STATE/groups"
+exit 0
+SH
+  chmod +x "$1/getent" "$1/id" "$1/usermod"
+}
+
+# A box provisioned before 1.5.0: the next Restart puts the service user in
+# the ollama group and lets that group into Ollama's home, before the
+# services stop (so the core starts in the group); the Restart after that
+# changes nothing. Off: nothing.
+case_ollama_access_granted_once() {
+  new_case ollama_access_granted_once
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  write_ollama_shims "$CASE/olbin"
+  MANAGE_OLLAMA_ACCESS=1 run_update "$CASE/olbin"
+  check "status ok" eq "$(field status)" '"ok"'
+  check "a step before the services stop" eq "$(step_names)" "signature ollama-access stop-services start-services health searxng"
+  check "an ok step" step_is ollama-access ok
+  check "it joined the group" called "usermod -aG ollama tester"
+  check "the home lets the group in" eq "$(stat -c %a "$CASE/ollama-home")" 750
+  check "it says what it did" grep -qF "tester joined the ollama group" "$RESULT"
+  : >"$STATE/calls.log"
+  MANAGE_OLLAMA_ACCESS=1 run_update "$CASE/olbin"
+  check "again: no step" eq "$(step_names)" "signature stop-services start-services health searxng"
+  check "again: no usermod" not_called "usermod"
+  chmod 0700 "$CASE/ollama-home"
+  : >"$STATE/calls.log"
+  MANAGE_OLLAMA_ACCESS=1 run_update "$CASE/olbin"
+  check "a home closed again is opened to the group" eq "$(stat -c %a "$CASE/ollama-home")" 750
+  check "only the home this time" step_is ollama-access ok
+  check "no usermod this time" not_called "usermod"
+  chmod 0700 "$CASE/ollama-home"
+  MANAGE_OLLAMA_ACCESS=0 run_update "$CASE/olbin"
+  check "off: no step" eq "$(step_names)" "signature stop-services start-services health searxng"
+  check "off: the home as it was" eq "$(stat -c %a "$CASE/ollama-home")" 700
+  end_case
+}
+
+# usermod fails: a warn step saying what it costs; the run stays ok.
+# No ollama group (a box that uses another machine's Ollama): nothing.
+case_ollama_access_failure_is_a_warning_and_no_group_is_nothing() {
+  new_case ollama_access_failure_is_a_warning_and_no_group_is_nothing
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  write_ollama_shims "$CASE/olbin"
+  touch "$STATE/usermod-fail"
+  MANAGE_OLLAMA_ACCESS=1 run_update "$CASE/olbin"
+  check "status ok" eq "$(field status)" '"ok"'
+  check "a warn step" step_is ollama-access warn
+  check "it says what it costs" grep -qF "the offline kit downloads the models again instead of copying them" "$RESULT"
+  rm -f "$STATE/usermod-fail"
+  touch "$STATE/no-ollama-group"
+  chmod 0700 "$CASE/ollama-home"
+  MANAGE_OLLAMA_ACCESS=1 run_update "$CASE/olbin"
+  check "no group: no step" eq "$(step_names)" "signature stop-services start-services health searxng"
   end_case
 }
 
@@ -4370,7 +4459,7 @@ case_added_packages_failure_is_a_warning_and_opt_out_is_honoured() {
   check "exit 0" eq "$RC" 0
   check "status ok" eq "$(field status)" '"ok"'
   check "a warn step" step_is added-packages warn
-  check "its detail is ours" grep -qF '"detail": "not installed: xorriso tesseract-ocr tesseract-ocr-eng (apt-get failed, exit 100, or another program was using apt; journalctl -u domovoi-update says why). The next update or Restart tries again. USB sticks for old computers need xorriso; reading scans needs tesseract-ocr"' "$RESULT"
+  check "its detail is ours" grep -qF '"detail": "not installed: xorriso tesseract-ocr tesseract-ocr-eng dosfstools mtools (apt-get failed, exit 100, or another program was using apt; journalctl -u domovoi-update says why). The next update or Restart tries again. USB sticks for old computers need xorriso; reading scans needs tesseract-ocr; offline kits need dosfstools and mtools"' "$RESULT"
   check "tried again with fresh lists" called "apt-get -o Dpkg::Use-Pty=0 -o DPkg::Lock::Timeout=20 -q update"
   check "no error on the run" eq "$(field error)" null
   check "no rollback" not_called "reset --keep"
@@ -5844,6 +5933,8 @@ CASES=(
   case_added_packages_only_what_is_missing
   case_added_packages_on_an_update_and_never_under_never
   case_added_packages_failure_is_a_warning_and_opt_out_is_honoured
+  case_ollama_access_granted_once
+  case_ollama_access_failure_is_a_warning_and_no_group_is_nothing
   case_gpu_runtime_installed_while_the_services_are_stopped
   case_gpu_runtime_under_never_downloads_nothing
   case_gpu_runtime_docker_restart_on_a_plain_restart_restarts_the_database

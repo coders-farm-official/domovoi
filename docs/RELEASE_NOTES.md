@@ -50,9 +50,12 @@ a way that would otherwise get reported as a bug.
   part of 1.5.0; docs/OFFLINE_KIT.md says what works so far.
 - **What to know.** A kit is made only from a server on the stable
   channel, at a release; a server behind the latest release is warned and
-  may go on. The server needs the `dosfstools` and `mtools` packages
-  (`sudo apt install dosfstools mtools` on a server you set up yourself)
-  and Docker's containerd image store (the default of the Docker that
+  may go on. The server needs the `dosfstools` and `mtools` packages (the
+  next dashboard update or Restart installs them on a server set up
+  before 1.5.0, from Ubuntu's archive, and puts the core's account in the
+  `ollama` group so it copies the models this server has instead of
+  downloading them again; on a server you set up yourself,
+  `sudo apt install dosfstools mtools`) and Docker's containerd image store (the default of the Docker that
   provision.sh installs). A kit is about 12 GB for a PC with AI, pictures
   and rooms (a 16 GB stick), about 3.3 GB without AI; the image is deleted
   by itself after 3 days. On a Windows or Mac server, Domovoi's disk grows
