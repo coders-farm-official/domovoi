@@ -35,6 +35,7 @@ from domovoi.events import EVENTS, EventBus, EventCallback, Subscription
 from domovoi.now_playing import NOW_PLAYING, NowPlayingStamp
 from domovoi.sdk.assets import AssetAPI
 from domovoi.sdk.coreconfig import CoreConfigView
+from domovoi.sdk.household import HouseholdAPI, PlacesAPI
 from domovoi.sdk.http import HttpFactory
 from domovoi.sdk.library import LibraryAPI
 from domovoi.sdk.observability import get_logger
@@ -239,6 +240,8 @@ class PluginSDK:
         self.assets = AssetAPI(slug)
         self.state: MutableMapping[str, Any] = _STATE_STORES.setdefault(slug, {})
         self.http = HttpFactory(version)
+        self.household = HouseholdAPI()
+        self.places = PlacesAPI()
 
     def ensure_data_dir(self) -> Path:
         self.data_dir.mkdir(parents=True, exist_ok=True)

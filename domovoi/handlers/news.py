@@ -474,7 +474,9 @@ class NewsHandler(Handler):
     ) -> Response:
         n = count or settings.news_items_per_ask
         groups: list[tuple[str, list[dict[str, Any]]]] = []
-        scopes = [("local", "Locally")] if settings.news_location.strip() else []
+        from domovoi import home_location
+
+        scopes = [("local", "Locally")] if await home_location.load(session) else []
         scopes += [("national", "Nationally"), ("global", "Around the world")]
         for scope, label in scopes:
             items = await news_service.read_scope_items(session, scope, limit=n)

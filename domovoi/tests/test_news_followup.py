@@ -175,7 +175,6 @@ _LONG = (
 async def _briefing(db_session, monkeypatch, *, online: bool = True):
     """National: 2 stories, world: 1 (no location set, so no local)."""
     monkeypatch.setattr(settings, "news_items_per_ask", 3)
-    monkeypatch.setattr(settings, "news_location", "")
     ids = [
         await _seed(db_session, "national", "County bridge closes for repairs", n=1,
                     summary=_LONG, url="https://news.example/bridge"),
@@ -225,7 +224,9 @@ async def test_briefing_reads_each_headline_as_its_own_numbered_paragraph(
 
 @requires_db
 async def test_local_scope_label_is_its_own_sentence(db_session, monkeypatch) -> None:
-    monkeypatch.setattr(settings, "news_location", "Springfield")
+    from domovoi import home_location
+
+    await home_location.save(db_session, {"name": "Springfield"})
     await _seed(db_session, "local", "Library opens a new wing", n=1)
     await db_session.commit()
     r = await route(Intent(transcript="what's the news", room_id="kitchen"),

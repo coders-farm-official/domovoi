@@ -818,14 +818,9 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "int", min=1, max=10, unit="items", widget="slider",
         slider_labels=("fewer stories", "more stories"),
     ),
-    FieldSpec(
-        "news_location", "Local news location", "News",
-        "City or region used to build the 'local' news scope. Empty = the "
-        "general briefing skips the local block. Used to discover/select the "
-        "local RSS feed.",
-        "str", needs_internet=True,
-        keywords=("news", "location", "town", "city", "weather", "home", "place"),
-    ),
+    # "Local news location" (news_location) moved to Settings → Household →
+    # Home location in 1.4.1 (domovoi/home_location.py); its search words
+    # went with it (the 'home-location' section in web/static/settings.jsx).
     FieldSpec(
         "news_retention_days", "News retention", "News",
         "How long fetched news items are kept before the daily sweep deletes "

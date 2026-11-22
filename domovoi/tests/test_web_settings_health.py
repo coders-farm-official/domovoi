@@ -633,9 +633,13 @@ def test_advanced_opens_folded_and_a_named_setting_unfolds_it() -> None:
     assert "<VersionSection/>" in about[:about.index("\n};")]
 
 
-def test_the_news_location_field_carries_its_search_keywords() -> None:
+def test_the_home_location_carries_the_old_news_location_keywords() -> None:
+    """1.4.1: "Local news location" moved to Settings → Household → Home
+    location; its search words went with it."""
     from domovoi.config_schema import EDITABLE_FIELDS, widget_payload
-    spec = next(f for f in EDITABLE_FIELDS if f.name == "news_location")
-    assert set(spec.keywords) == {"news", "location", "town", "city", "weather", "home", "place"}
-    assert widget_payload(spec)["keywords"] == list(spec.keywords)
+    assert not any(f.name == "news_location" for f in EDITABLE_FIELDS)
     assert widget_payload(next(f for f in EDITABLE_FIELDS if f.name == "bot_name"))["keywords"] == []
+    s = _src("settings.jsx")
+    entry = s[s.index("{ id: 'home-location'"):]
+    entry = entry[:entry.index("},")]
+    assert set("news location town city weather home place".split()) <= set(entry.split("words: '")[1].split("'")[0].split())

@@ -6073,7 +6073,7 @@ const CapturesPanel = () => {
 const SETTINGS_GROUPS = [
   // "Rooms & devices" until 2026-11-09: its old address still opens it.
   { id: 'household', label: 'Household', icon: 'house', aliases: ['rooms-and-devices'],
-    sections: ['rooms', 'people', 'phones-and-browsers', 'calendars', 'media-folders', 'music-mix', 'queue-history', 'printers', 'friend-houses'] },
+    sections: ['rooms', 'people', 'phones-and-browsers', 'home-location', 'calendars', 'media-folders', 'music-mix', 'queue-history', 'printers', 'friend-houses'] },
   { id: 'voice', label: 'Voice', icon: 'audio-lines', sections: ['wake-words', 'voices', 'greetings'] },
   { id: 'chat-and-ai', label: 'Chat & AI', icon: 'sparkles', sections: ['models', 'search', 'chat'] },
   { id: 'privacy', label: 'Privacy', icon: 'shield', sections: ['internet', 'voice-history', 'listening-history'] },
@@ -6094,6 +6094,12 @@ const SETTINGS_SECTIONS = [
   { id: 'phones-and-browsers', label: 'Phones & browsers', aliases: ['devices'],
     sub: 'Name this device, get the app, the household token, guests, and who may edit a room’s play queue.',
     words: 'device devices phone phones browser browsers name rename household token pair pairing guest guests queue files shared screen tablet app android' },
+  // home_location.jsx registers it (1.4.1): the household's town, for
+  // weather and local news; "Local news location" in Advanced → News until
+  // then, so its search words came with it.
+  { id: 'home-location', label: 'Home location', optional: true,
+    sub: 'The town weather answers and local news are for.',
+    words: 'news location town city weather home place local' },
   // calendar.jsx registers it (1.3.0): calendars by link and phones' shared
   // calendars, read-only.
   { id: 'calendars', label: 'Calendars', optional: true,

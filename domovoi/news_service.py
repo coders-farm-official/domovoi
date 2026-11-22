@@ -27,7 +27,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from domovoi.clients import news_feeds
 from domovoi import ai_features
 from domovoi.clients.ollama import get_ollama_client
-from domovoi.config import settings
 
 log = logging.getLogger(__name__)
 
@@ -88,21 +87,24 @@ async def _attach_topic_feed(session: AsyncSession, topic_id: int, feed_id: int)
 
 async def ensure_house_feeds(session: AsyncSession) -> None:
     """Seed the curated national + global scope feeds (idempotent) and, when
-    ``news_location`` is configured and no local feed exists yet, discover one.
+    the Home location is set and no local feed exists yet, discover one.
     Called by the worker before a house-scope fetch."""
     for url in news_feeds.NATIONAL_FEEDS:
         await _upsert_feed(session, url, discovered_via="default", scope="national")
     for url in news_feeds.GLOBAL_FEEDS:
         await _upsert_feed(session, url, discovered_via="default", scope="global")
 
-    if settings.news_location.strip():
+    from domovoi import home_location
+
+    place = ((await home_location.load(session)) or {}).get("name") or ""
+    if place:
         has_local = (
             await session.execute(
                 text("SELECT 1 FROM news_feeds WHERE scope = 'local' LIMIT 1")
             )
         ).first()
         if has_local is None:
-            for feed in await news_feeds.local_feed_candidates(settings.news_location):
+            for feed in await news_feeds.local_feed_candidates(place):
                 await _upsert_feed(
                     session, feed.url, title=feed.title, source=feed.source,
                     discovered_via="searxng", scope="local",

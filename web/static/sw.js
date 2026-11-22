@@ -88,6 +88,8 @@ const SHELL_ASSETS = [
   '/lists.jsx',
   '/plugins.jsx',
   '/settings.jsx',
+  // Settings → Household → Home location.
+  '/home_location.jsx',
   // Settings → Household → Media folders.
   '/media_folders.jsx',
   '/music_mix.jsx',

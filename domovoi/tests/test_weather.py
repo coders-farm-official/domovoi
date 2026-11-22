@@ -8,10 +8,9 @@ from unittest.mock import patch
 import httpx
 import pytest
 
-from domovoi import egress
+from domovoi import egress, home_location
 from domovoi.capabilities import CAPABILITIES, WEATHER_PROVIDER
 from domovoi.clients.searxng import RealSearxNGClient, SearchOutcome, SearchResult
-from domovoi.config import settings
 from domovoi.models import Context, Intent
 from domovoi.router import route
 from domovoi.tests.conftest import requires_db
@@ -117,7 +116,8 @@ async def _ask(db_session, text="what's the weather for today"):
 @requires_db
 @pytest.mark.asyncio
 async def test_always_skips_offer_and_speaks_weather(db_session, monkeypatch) -> None:
-    monkeypatch.setattr(settings, "news_location", "Springfield")
+    await home_location.save(db_session, {"name": "Springfield"})
+    await db_session.commit()
     fake = _FakeSearx("It's 70 and sunny in Springfield.")
     a, b, c = _patched(fake)
     with a, b, c, egress.override_policy("always"):
@@ -131,7 +131,8 @@ async def test_always_skips_offer_and_speaks_weather(db_session, monkeypatch) ->
 @requires_db
 @pytest.mark.asyncio
 async def test_empty_weather_falls_back_to_general_search(db_session, monkeypatch) -> None:
-    monkeypatch.setattr(settings, "news_location", "")
+    await home_location.save(db_session, {"name": "Springfield"})
+    await db_session.commit()
     fake = _FakeSearx(None)
     a, b, c = _patched(fake)
     with a, b, c, egress.override_policy("always"):
