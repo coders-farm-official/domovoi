@@ -71,7 +71,7 @@ a way that would otherwise get reported as a bug.
   only within 5 minutes of a password sign-in) and later swaps it for a
   fresh admin sign-in (`POST /api/auth/phone-grant/exchange`). A grant is
   bound to the phone's device id and ends 24 hours after it was issued,
-  whatever happens. Migration V085 adds the `admin_phone_grants` table.
+  whatever happens. Migration V073 adds the `admin_phone_grants` table.
 - **What to know.** Settings → Advanced lists the phones under "Admin on
   phones", each with a revoke. Changing the admin password, or
   `--reset-admin`, ends every grant. The phone apps use it from their next

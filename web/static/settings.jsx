@@ -907,7 +907,7 @@ const AdminSection = ({ setupAsked = false }) => {
   );
 };
 
-/* ---- Phone grants (V085, 1.5.0) ------------------------------------- */
+/* ---- Phone grants (V073, 1.5.0) ------------------------------------- */
 /*
  * A phone that signed in as admin with the password may keep a grant
  * for the rest of the day behind its fingerprint (or Face ID), and swap it

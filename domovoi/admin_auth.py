@@ -529,7 +529,7 @@ _sha256 = token_sha256  # internal alias
 # When the session last acted (or, never having acted, was minted).
 _LAST_ACTIVE_SQL = "COALESCE(last_used_at, created_at)"
 # When it stops: an hour after that, or at the 90-day cap if sooner, or at
-# its hard end (``hard_expires_at``, V085: a session minted from a phone
+# its hard end (``hard_expires_at``, V073: a session minted from a phone
 # grant ends when the grant does; NULL for a password sign-in, and LEAST
 # ignores a NULL).
 _IDLE_DEADLINE_SQL = (
@@ -1503,7 +1503,7 @@ async def list_sessions(session: AsyncSession) -> list[dict[str, Any]]:
     ]
 
 
-# ─── Phone grants: admin on a phone for the rest of the day (V085) ────────
+# ─── Phone grants: admin on a phone for the rest of the day (V073) ────────
 #
 # Owner-approved 2026-11-22; docs/SECURITY_PRIVACY.md, "Admin on a phone:
 # the day's grant". After a PASSWORD sign-in on a phone (signed_in_at
