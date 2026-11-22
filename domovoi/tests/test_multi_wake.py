@@ -199,6 +199,8 @@ async def _clean() -> None:
         await s.execute(text("DELETE FROM room_wake_words WHERE room_id LIKE 'mw\\_%'"))
         await s.execute(text("DELETE FROM wake_words WHERE slug LIKE 'test_mw_%'"))
         await s.execute(text("DELETE FROM conversation_log WHERE room_id LIKE 'mw\\_%'"))
+        await s.execute(text("DELETE FROM satellites WHERE satellite_id LIKE 'mw\\_%'"))
+        await s.execute(text("DELETE FROM rooms WHERE room_id LIKE 'mw\\_%'"))
 
 
 @pytest_asyncio.fixture

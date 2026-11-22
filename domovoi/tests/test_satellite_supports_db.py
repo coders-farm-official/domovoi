@@ -31,7 +31,7 @@ async def _clean():
     async def wipe():
         async with engine.begin() as conn:
             await conn.execute(
-                text("TRUNCATE satellite_approvals, satellite_pairings, satellites CASCADE")
+                text("TRUNCATE satellite_approvals, satellite_pairings, satellites, rooms CASCADE")
             )
 
     await wipe()
@@ -66,10 +66,13 @@ async def test_approval_keeps_the_board_the_parked_hello_named():
     assert row["sat_type"] == "voice" and row["adopted_via"] == "hello"
 
 
-async def test_approving_a_pi_writes_no_inventory_row_as_before():
+async def test_approving_a_pi_writes_a_bare_inventory_row_in_its_own_room():
+    # Since V080 every paired device has a row (and a room); a Pi's names
+    # no board and keeps the defaults.
     await _park(None)
     assert await _approve() == "approved"
-    assert await _row(ROOM) is None
+    row = await _row(ROOM)
+    assert (row["room_id"], row["board"], row["sat_type"]) == (ROOM, None, "voice")
 
 
 async def test_approval_updates_only_the_board_of_an_existing_row():

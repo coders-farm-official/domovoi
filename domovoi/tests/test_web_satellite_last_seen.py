@@ -22,8 +22,10 @@ ROOMS = ("lastseen_health", "lastseen_pairing", "lastseen_mpd_only")
 
 async def _clean() -> None:
     async with session_scope() as s:
-        for table in ("satellite_health", "satellite_pairings", "mpd_rooms"):
-            await s.execute(text(f"DELETE FROM {table} WHERE room_id = ANY(:r)"), {"r": list(ROOMS)})
+        for table, key in (("satellite_health", "satellite_id"),
+                           ("satellite_pairings", "satellite_id"), ("mpd_rooms", "room_id")):
+            await s.execute(text(f"DELETE FROM {table} WHERE {key} = ANY(:r)"),
+                            {"r": list(ROOMS)})
 
 
 @requires_db
@@ -48,10 +50,10 @@ async def test_last_seen_is_when_the_room_was_last_heard(monkeypatch) -> None:
                     {"r": room, "c": 16650 + i, "h": 18050 + i, "n": f"x-{room}", "t": allocated})
             for room in ROOMS[:2]:
                 await s.execute(text(
-                    "INSERT INTO satellite_pairings (room_id, token_hash, last_seen_at) "
+                    "INSERT INTO satellite_pairings (satellite_id, token_hash, last_seen_at) "
                     "VALUES (:r, :h, :t)"), {"r": room, "h": "0" * 64, "t": paired_hello})
             await s.execute(text(
-                "INSERT INTO satellite_health (room_id, sample, received_at) "
+                "INSERT INTO satellite_health (satellite_id, sample, received_at) "
                 "VALUES (:r, CAST('{}' AS jsonb), :t)"), {"r": ROOMS[0], "t": sample})
         rows = {r.room_id: r for r in await sat_api.list_satellites() if r.room_id in ROOMS}
         assert set(rows) == set(ROOMS)
@@ -88,14 +90,14 @@ async def test_last_heard_survives_the_24_hour_prune() -> None:
         async with session_scope() as s:
             for hours in (100, 80, 50):
                 await s.execute(text(
-                    "INSERT INTO satellite_health (room_id, sample, received_at) "
+                    "INSERT INTO satellite_health (satellite_id, sample, received_at) "
                     "VALUES (:r, CAST('{}' AS jsonb), :t)"),
                     {"r": rooms[0], "t": now - timedelta(hours=hours)})
             await s.execute(text(
-                "INSERT INTO satellite_health (room_id, sample, received_at) "
+                "INSERT INTO satellite_health (satellite_id, sample, received_at) "
                 "VALUES (:r, CAST('{}' AS jsonb), :t)"), {"r": rooms[1], "t": now - timedelta(hours=1)})
             await s.execute(text(
-                "INSERT INTO satellite_health (room_id, sample, received_at) "
+                "INSERT INTO satellite_health (satellite_id, sample, received_at) "
                 "VALUES (:r, CAST('{}' AS jsonb), :t)"), {"r": rooms[1], "t": now - timedelta(hours=30)})
         async with session_scope() as s:
             removed = await SatelliteHealthRepository(s).prune(None, 24)

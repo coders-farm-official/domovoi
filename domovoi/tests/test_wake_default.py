@@ -20,6 +20,7 @@ import pytest_asyncio
 from sqlalchemy import text
 
 from domovoi import egress, wake_default
+from domovoi.db.repositories import ensure_satellite
 from domovoi.db.session import session_scope
 
 
@@ -87,6 +88,9 @@ class Pushes:
 
 def _seed_statements() -> list[str]:
     sql = re.sub(r"--[^\n]*", "", MIGRATION.read_text(encoding="utf-8"))
+    # V080 renamed the pairing's key: replay V054's seed on today's schema.
+    sql = sql.replace("SELECT room_id FROM satellite_pairings",
+                      "SELECT satellite_id FROM satellite_pairings")
     return [st.strip() for st in sql.split(";") if st.strip().upper().startswith("INSERT")]
 
 
@@ -103,9 +107,9 @@ async def test_a_new_install_starts_on_the_published_word(house):
 
 async def test_a_server_that_had_rooms_keeps_hey_jarvis_and_its_rooms(house):
     async with session_scope() as s:
-        await s.execute(text("INSERT INTO satellite_pairings (room_id, token_hash) "
+        await s.execute(text("INSERT INTO satellite_pairings (satellite_id, token_hash) "
                              "VALUES ('kitchen', 'x')"))
-        await s.execute(text("INSERT INTO satellites (room_id) VALUES ('office')"))
+        await ensure_satellite(s, "office")
     assert await _run_seed() == "hey_jarvis"
     assert (await _state("kitchen"))["state"] == "kept"
     assert (await _state("office"))["state"] == "kept"
@@ -117,7 +121,7 @@ async def test_a_household_default_trained_word_stays_the_default(house):
             "INSERT INTO wake_words (name, slug, phrase, status, model_ref, is_default) "
             "VALUES ('Test WD Hey Alex', 'test_wd_hey_alex', 'hey alex', 'ready', "
             "'test_wd_hey_alex', TRUE)"))
-        await s.execute(text("INSERT INTO satellites (room_id) VALUES ('office')"))
+        await ensure_satellite(s, "office")
     assert await _run_seed() == "test_wd_hey_alex"
 
 

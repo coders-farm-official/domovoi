@@ -861,8 +861,11 @@ async def test_with_the_real_resolver_weezer_in_the_garage(db_session, monkeypat
             {"p": str(tmp_path / f"t{i}.mp3"), "t": title, "a": artist, "al": album, "sid": f"crm-{i}"})
     for room_id, label, sat_type, _seen in HOUSE:
         await db_session.execute(text(
-            "INSERT INTO satellites (room_id, room_label, sat_type, adopted_via) "
-            "VALUES (:r, :l, :t, 'manual')"), {"r": room_id, "l": label, "t": sat_type})
+            "INSERT INTO rooms (room_id, name) VALUES (:r, :l)"),
+            {"r": room_id, "l": label or room_id})
+        await db_session.execute(text(
+            "INSERT INTO satellites (satellite_id, room_id, sat_type, adopted_via) "
+            "VALUES (:r, :r, :t, 'manual')"), {"r": room_id, "t": sat_type})
     await db_session.commit()
     try:
         async def say(said):

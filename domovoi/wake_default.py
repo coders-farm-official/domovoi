@@ -502,8 +502,9 @@ async def record_device_max(s, room_id: str, declared: int | None) -> None:
     device). Kept on the device's row (V080 ``satellites.wake_max``);
     ``room_id`` is the device's id. A room's ``device_max`` is the least
     any of its devices can run."""
-    from domovoi.db.repositories import SatellitesRepository
+    from domovoi.db.repositories import SatellitesRepository, ensure_satellite
 
+    await ensure_satellite(s, room_id)
     await SatellitesRepository(s).set_wake_max(room_id, declared)
 
 
