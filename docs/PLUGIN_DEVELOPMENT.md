@@ -590,6 +590,13 @@ badge = { endpoint = "/api/plugins/radio/badge", key = "favorites" }
 kind = "radio"
 stream_url_template = "/api/plugins/radio/stations/{id}/stream"
 room_play_template = "/api/plugins/radio/stations/{id}/play-in-room"   # SDK 1.10, optional
+
+[[web.home_cards]]                              # SDK 1.13: a card on Home
+id = "today"
+title = "Today's weather"
+component = "WeatherTodayCard"
+default_on = true
+order = 50
 ```
 
 * `scripts` — zero-build JSX files, Babel-compiled by the dashboard shell and
@@ -658,6 +665,33 @@ room_play_template = "/api/plugins/radio/stations/{id}/play-in-room"   # SDK 1.1
   `@device_endpoint` and play with `sdk.playback.ensure_room`, `play_url`
   and `dispatch` on the core side (§4.5). The radio plugin's
   `/stations/{id}/play-in-room` is the example.
+
+* `[[web.home_cards]]` (SDK 1.13) — a card on the dashboard's Home page.
+  `id` is lowercase letters, digits, `_` and `-` (1-40 characters, unique in
+  the plugin), `title` is at most 60 characters, `component` names a key of
+  `window.DomovoiPlugins.<slug>.homeCards` (a plain JavaScript name), and
+  the optional `default_on` (default `true`) and `order` (an integer,
+  default 50; lower comes first) say whether it shows and where. Register
+  the component from a `scripts` bundle next to your pages:
+
+  ```js
+  window.DomovoiPlugins.weather.homeCards = Object.assign(
+    {}, window.DomovoiPlugins.weather.homeCards, { WeatherTodayCard });
+  ```
+
+  Home renders `<WeatherTodayCard quiet title guest />` and draws nothing
+  around it: the component returns its own `<Card>`, or `null` when it has
+  nothing to say. Home is the page a **household** member (and a guest)
+  lands on, so the card must read **household-tier** data: a
+  `@device_endpoint` route (a `GET`, or a `POST` marked `@device_endpoint`),
+  called with `apiFetch(path, { method, body, noPrompt: true })` so an
+  unpaired browser is refused silently instead of prompted. The slot is
+  quiet by contract: a card that is not registered, throws, renders `null`
+  or whose data fails shows **nothing** on Home — no error box, no empty
+  frame, no "needs attention" row — so catch your own errors and return
+  `null`. A disabled or uninstalled plugin shows no cards. Home has no
+  per-household card settings yet, so a card with `default_on = false` is
+  not shown. A core before 1.13 ignores the table.
 
 #### The frame and your accent
 
@@ -945,6 +979,7 @@ from domovoi.sdk import (
 | 1.9 | `sdk.speech.render` (§4.17); `core_config.ollama_url` / `ollama_model` (§4.13) |
 | 1.10 | `spoken_names` and `choices` (§4.20); `choice_kinds` on plugin handlers (§4.2); `playback.ensure_room` (§4.5); the player source's `room_play_template` (§3) |
 | 1.11 | `@device_endpoint` websocket routes on the core router (§4.15) |
+| 1.13 | `[[web.home_cards]]`: a plugin card on the dashboard Home page (§3) |
 
 Ask for the version whose names you use (`">=1.4"` for 1.4's), or
 feature-test so an older core still loads you: call `ctx.add_container` only

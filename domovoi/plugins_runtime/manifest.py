@@ -211,6 +211,23 @@ class WebPageDecl:
     badge: dict[str, str] | None = None
 
 
+HOME_CARD_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
+HOME_CARD_COMPONENT_RE = re.compile(r"^[A-Za-z_$][A-Za-z0-9_$]{0,63}$")
+
+
+@dataclass(frozen=True)
+class HomeCardDecl:
+    """A ``[[web.home_cards]]`` entry (SDK 1.13): a card on the dashboard's
+    Home page. ``component`` names a key in
+    ``window.DomovoiPlugins.<slug>.homeCards``."""
+
+    id: str
+    title: str
+    component: str
+    default_on: bool = True
+    order: int = 50
+
+
 @dataclass(frozen=True)
 class PlayerSourceDecl:
     kind: str
@@ -325,6 +342,7 @@ class PluginManifest:
     web_scripts: tuple[str, ...] = ()
     web_pages: tuple[WebPageDecl, ...] = ()
     player_sources: tuple[PlayerSourceDecl, ...] = ()
+    home_cards: tuple[HomeCardDecl, ...] = ()
     # [[realtime]]
     realtime: tuple[RealtimeDecl, ...] = ()
     # [[media_libraries]]
@@ -640,6 +658,8 @@ def parse_manifest(toml_text: str) -> PluginManifest:
         if isinstance(s, dict) or _bad_table("web.player_sources")
     )
 
+    home_cards = _home_cards(web.get("home_cards", []))
+
     realtime_raw = data.get("realtime", [])
     if not isinstance(realtime_raw, list):
         raise ManifestError("[[realtime]] must be an array of tables")
@@ -809,6 +829,7 @@ def parse_manifest(toml_text: str) -> PluginManifest:
         web_scripts=web_scripts,
         web_pages=tuple(web_pages),
         player_sources=player_sources,
+        home_cards=home_cards,
         realtime=tuple(realtime),
         media_libraries=tuple(media_libraries),
         satellite=satellite,
@@ -902,6 +923,40 @@ def _parse_containers(raw: Any, warnings: tuple[str, ...]) -> tuple[ContainerDec
 
 
 _ROOM_PLAY_CHARS = re.compile(r"/[A-Za-z0-9_.~{}/-]*")
+
+
+def _home_cards(raw: object) -> tuple[HomeCardDecl, ...]:
+    """``[[web.home_cards]]`` (SDK 1.13): id, title, component, default_on, order."""
+    if not isinstance(raw, list):
+        raise ManifestError("[[web.home_cards]] must be an array of tables")
+    cards: list[HomeCardDecl] = []
+    for c in raw:
+        if not isinstance(c, dict):
+            raise ManifestError("each [[web.home_cards]] entry must be a table")
+        cid = _req_str(c, "id", "web.home_cards")
+        if not HOME_CARD_ID_RE.match(cid):
+            raise ManifestError(
+                "web.home_cards.id must be lowercase letters, digits, '_' and '-' "
+                "(1-40 characters, starting with a letter or digit)"
+            )
+        if any(x.id == cid for x in cards):
+            raise ManifestError(f"web.home_cards.id {cid!r} is declared twice")
+        title = _req_str(c, "title", "web.home_cards")
+        if len(title) > 60:
+            raise ManifestError("web.home_cards.title must be at most 60 characters")
+        component = _req_str(c, "component", "web.home_cards")
+        if not HOME_CARD_COMPONENT_RE.match(component):
+            raise ManifestError(
+                "web.home_cards.component must be a plain name (letters, digits, '_' or '$')"
+            )
+        default_on = c.get("default_on", True)
+        if not isinstance(default_on, bool):
+            raise ManifestError("web.home_cards.default_on must be true or false")
+        order = c.get("order", 50)
+        if not isinstance(order, int) or isinstance(order, bool):
+            raise ManifestError("web.home_cards.order must be an integer")
+        cards.append(HomeCardDecl(cid, title, component, default_on, order))
+    return tuple(cards)
 
 
 def _room_play_template(source: dict, slug: str) -> str | None:

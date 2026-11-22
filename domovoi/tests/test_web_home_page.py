@@ -940,6 +940,39 @@ SCENARIOS["tick_rereads_the_setting"] = scenario(
     ls=PAIRED_LS,
 )
 
+# Plugin cards (SDK 1.13): the registry, the quiet slot ----------------------
+_CARD_MANIFEST = {"plugins": [
+    {"slug": "wx", "status": "ok", "home_cards": [
+        {"id": "today", "title": "Today", "component": "TodayCard", "default_on": True, "order": 20},
+        {"id": "boom", "title": "Boom", "component": "BrokenCard", "default_on": True, "order": 10},
+        {"id": "none", "title": "None", "component": "EmptyCard", "default_on": True, "order": 30},
+        {"id": "gone", "title": "Gone", "component": "NotRegistered", "default_on": True, "order": 40},
+        {"id": "off", "title": "Off", "component": "OffCard", "default_on": False, "order": 50}]},
+    {"slug": "dead", "status": "disabled", "home_cards": [
+        {"id": "x", "title": "X", "component": "DeadCard", "default_on": True, "order": 1}]},
+]}
+_CARD_SETUP = (
+    "const w = h.global('window'); const R = h.global('React');"
+    "w.DomovoiPlugins = { wx: { homeCards: {"
+    " TodayCard: (p) => R.createElement('div', { className: 'wx-card', 'data-quiet': String(p.quiet) },"
+    "   'sunny ' + p.title),"
+    " BrokenCard: () => { throw new Error('boom'); },"
+    " EmptyCard: () => null,"
+    " OffCard: () => R.createElement('div', { className: 'wx-off' }, 'off') } },"
+    " dead: { homeCards: { DeadCard: () => R.createElement('div', { className: 'dead-card' }, 'dead') } } };"
+    "h.render(); await w.__flush(h);"
+    "return { cards: h.findAll((e) => w.__cls(e).includes('wx-card')).map((e) => ({ text: w.__deepText(e), quiet: e.props['data-quiet'] })),"
+    " off: h.findAll((e) => w.__cls(e).includes('wx-off')).length,"
+    " dead: h.findAll((e) => w.__cls(e).includes('dead-card')).length,"
+    " slot: h.findAll((e) => w.__cls(e).includes('home-plugin-cards')).length,"
+    " snap: w.__snap(h) };"
+)
+SCENARIOS["plugin_cards"] = {**scenario(house(), "", ls=PAIRED_LS, manifest=_CARD_MANIFEST),
+                             "script": _CARD_SETUP}
+SCENARIOS["plugin_cards_none"] = scenario(
+    house(), "return { slot: h.findAll((e) => w.__cls(e).includes('home-plugin-cards')).length };",
+    ls=PAIRED_LS)
+
 
 # ─── run ─────────────────────────────────────────────────────────────────
 
@@ -1767,3 +1800,24 @@ def test_a_guests_refused_calendar_says_how_to_connect(driven) -> None:
     assert guest["modal"] is False and guest["pair"] is False
     # A household reader's failed read is still "unavailable".
     assert "calendar unavailable" in driven["paired_calendar_failed"]["text"]
+
+
+# ─── plugin cards ────────────────────────────────────────────────────────
+
+
+def test_a_registered_enabled_card_renders_with_quiet_and_in_order(driven) -> None:
+    out = driven["plugin_cards"]
+    assert out["cards"] == [{"text": "sunny Today", "quiet": "true"}]
+
+
+def test_failing_empty_unregistered_off_and_disabled_cards_stay_silent(driven) -> None:
+    out = driven["plugin_cards"]
+    assert out["off"] == 0 and out["dead"] == 0
+    blob = out["snap"]["blob"].lower()
+    assert "boom" not in blob and "error" not in blob and "failed" not in blob
+    # the rest of Home is untouched by the broken card
+    assert out["snap"]["rooms"]
+
+
+def test_no_plugin_cards_means_no_slot(driven) -> None:
+    assert driven["plugin_cards_none"]["slot"] == 0

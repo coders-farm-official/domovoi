@@ -1770,6 +1770,9 @@ textarea.cal-inp { resize: vertical; min-height: 64px; line-height: 1.4; }
 .home-pair { display: flex; gap: 20px; align-items: flex-start; }
 .home-pair > .home-sec { flex: 1 1 0; min-width: 0; }
 .home-sec { min-width: 0; }
+/* Plugin cards (SDK 1.13): quiet, so a slot whose cards all render nothing is gone. */
+.home-plugin-cards { display: flex; flex-direction: column; gap: 20px; }
+.home-plugin-cards:empty { display: none; }
 /* The everything grid is the phone's "more" menu; the desktop sidebar
    already lists every page. */
 .home-sec-everything { display: none; }
@@ -1938,6 +1941,7 @@ a.home-att-row:hover { background: var(--brand-soft); }
   .home-sec-rooms { order: 3; }
   .home-sec-announce { order: 4; }
   .home-sec-today { order: 5; }
+  .home-plugin-cards { order: 5; }
   .home-sec-everything { order: 6; }
 }
 @media (max-width: 760px) {

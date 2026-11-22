@@ -1185,6 +1185,66 @@ const HomeEverything = ({ counts, badges: given, shared }) => {
 
 /* ---- the page ------------------------------------------------------- */
 
+/* Plugin cards (SDK 1.13, [[web.home_cards]]). A plugin's panel bundle
+ * registers `window.DomovoiPlugins.<slug>.homeCards.<Component>`; the
+ * manifest (enabled plugins only: a disabled or uninstalled one is not in
+ * it) says which cards exist. The slot is QUIET: a card whose script never
+ * loaded, that isn't registered, that throws, or that renders nothing
+ * (no data) leaves no trace on Home — no error box, no empty frame, and
+ * nothing in "needs attention". The card draws its own <Card> and reads
+ * its data quietly (apiFetch with noPrompt: true), so an unpaired guest is
+ * never prompted. `default_on = false` cards are not shown (Home has no
+ * per-household card settings yet). */
+const HomePluginCardBoundary = (typeof React.Component === 'function') ? class extends React.Component {
+  constructor(props) { super(props); this.state = { failed: false }; }
+  static getDerivedStateFromError() { return { failed: true }; }
+  componentDidCatch(error) {
+    try { console.warn(`home card ${this.props.slug}/${this.props.id} failed:`, error); } catch {}
+  }
+  render() { return this.state.failed ? null : this.props.children; }
+} : null;   // the render-test harness has no class components
+
+const HomePluginCard = ({ slug, id, title, guest, Comp }) => {
+  const props = { quiet: true, title, guest: !!guest };
+  if (!HomePluginCardBoundary) {
+    try { return Comp(props); } catch (e) { return null; }
+  }
+  return (
+    <HomePluginCardBoundary slug={slug} id={id}>
+      <Comp {...props}/>
+    </HomePluginCardBoundary>
+  );
+};
+
+const HomePluginCardList = (manifest) => {
+  const out = [];
+  const registry = window.DomovoiPlugins || {};
+  ((manifest && manifest.plugins) || []).forEach((p) => {
+    if (!p || p.status === 'uninstalled' || p.status === 'disabled') return;
+    const reg = registry[p.slug];
+    const comps = reg && reg.homeCards;
+    if (!comps || typeof comps !== 'object') return;
+    (p.home_cards || []).forEach((c) => {
+      const Comp = comps[c.component];
+      if (typeof Comp !== 'function' || c.default_on === false) return;
+      out.push({ slug: p.slug, id: c.id, title: c.title, order: c.order == null ? 50 : c.order, Comp });
+    });
+  });
+  return out.sort((a, b) => (a.order - b.order) || a.slug.localeCompare(b.slug) || a.id.localeCompare(b.id));
+};
+
+const HomePluginCards = ({ manifest, guest }) => {
+  const cards = HomePluginCardList(manifest || window.DomovoiPluginManifest);
+  if (!cards.length) return null;
+  return (
+    <div className="home-sec home-plugin-cards">
+      {cards.map(({ slug, id, title, Comp }) => (
+        <HomePluginCard key={`${slug}/${id}`} slug={slug} id={id} title={title} guest={guest} Comp={Comp}/>
+      ))}
+    </div>
+  );
+};
+
 const HomePage = ({ counts, badges }) => {
   const [fire, toastNode] = useToast();
   const viewer = HomeHooks.useViewer();
@@ -1536,6 +1596,7 @@ const HomePage = ({ counts, badges }) => {
               <Broadcast compact onlineCount={coreDown ? 0 : online.length} fire={fire}/>
             </div>
           )}
+          <HomePluginCards guest={guest}/>
           {isPhone !== false && <HomeEverything counts={counts} badges={badges} shared={shared}/>}
         </div>
       </div>
