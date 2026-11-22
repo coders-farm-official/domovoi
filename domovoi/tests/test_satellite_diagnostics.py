@@ -154,9 +154,11 @@ def sessions(monkeypatch):
 async def test_run_all_returns_every_probe_in_order(sessions):
     sessions["office"] = answering(text="fine")
     body = await core_main.admin_run_satellite_diagnostics("office")
-    assert [r["probe"] for r in body["results"]] == list(sd.PROBES)
+    expected = [p for p in sd.PROBES if p != "mic_dsp"]
+    assert [r["probe"] for r in body["results"]] == expected
+    assert list(body["probes"]) == expected, "no mic_dsp without an XVF3800"
     assert all(r["ok"] and r["text"] == "fine" for r in body["results"])
-    assert body["probes"] == sd.PROBES
+    assert "mic_dsp" not in [f["probe"] for f in sessions["office"].ws.sent]
 
 
 @pytest.mark.asyncio
@@ -202,3 +204,26 @@ async def test_a_probe_that_gets_no_answer_is_listed_as_failed(sessions):
     body = await core_main.admin_run_satellite_diagnostic("office", "network")
     assert body["results"][0]["ok"] is False
     assert "didn't answer" in body["results"][0]["text"]
+
+
+# --- mic_dsp: only for a satellite that declared it ------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_all_includes_mic_dsp_for_an_xvf3800(sessions):
+    sessions["office"] = answering(text="active preset: B", hello={"diagnostics": True, "mic_dsp": True})
+    body = await core_main.admin_run_satellite_diagnostics("office")
+    assert [r["probe"] for r in body["results"]] == list(sd.PROBES)
+    assert body["results"][-1]["probe"] == "mic_dsp"
+
+
+@pytest.mark.asyncio
+async def test_mic_dsp_is_refused_without_the_ability_and_nothing_is_sent(sessions):
+    s = answering()
+    sessions["office"] = s
+    with pytest.raises(HTTPException) as e:
+        await core_main.admin_run_satellite_diagnostic("office", "mic_dsp")
+    assert e.value.status_code == 409 and s.ws.sent == []
+    with pytest.raises(NotDeclared):
+        await s.request_diagnostic("mic_dsp")
+    assert s.ws.sent == []

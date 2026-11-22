@@ -187,3 +187,47 @@ def test_the_client_answers_diag_request_and_declares_the_ability():
     assert 'elif t == "diag_request":' in src
     assert '"diagnostics": True,' in src
     assert '"type": "diag_result"' in src
+
+
+# --- mic_dsp (an XVF3800's DSP presets, satellite/mic_dsp.py) ---------------
+
+
+def test_mic_dsp_reads_the_five_values_and_the_preset_through_mic_dsp(tmp_path):
+    from satellite import mic_dsp
+    from satellite.tests.test_mic_dsp import FakeXvf
+
+    fake = FakeXvf()
+    dsp = mic_dsp.XvfDsp("/opt/xvf3800/xvf_host", runner=fake, state_file=tmp_path / "m.json")
+    dsp.apply("C")
+    writes_before = list(fake.writes)
+    r = d.run_probe("mic_dsp", _ctx(tmp_path, mic_dsp=dsp))
+    assert r["ok"] is True
+    text = r["text"]
+    assert "active preset: C" in text
+    for line in ("PP_AGCONOFF: 1", "PP_AGCMAXGAIN: 31.6", "PP_AGCGAIN: 1",
+                 "PP_MIN_NS: 0.05", "PP_MIN_NN: 0.05"):
+        assert line in text, line
+    assert fake.writes == writes_before, "the probe writes nothing"
+    assert all(c[:3] == ["sudo", "-n", "/opt/xvf3800/xvf_host"] or c[:1] == ["/opt/xvf3800/xvf_host"]
+               for c in fake.calls), "only mic_dsp's own xvf_host calls"
+
+
+def test_mic_dsp_with_a_fake_control_and_a_chip_that_does_not_answer(tmp_path):
+    class Fake:
+        def __init__(self, current):
+            self.current = current
+
+        def read_current(self):
+            return self.current
+
+    r = d.run_probe("mic_dsp", _ctx(tmp_path, mic_dsp=Fake(
+        {"preset": "factory", "readback": {"PP_AGCONOFF": [1.0], "PP_MIN_NS": None}})))
+    assert "active preset: factory" in r["text"] and "PP_MIN_NS: no answer" in r["text"]
+    busy = d.run_probe("mic_dsp", _ctx(tmp_path, mic_dsp=Fake(None)))
+    assert busy["ok"] and "busy" in busy["text"]
+
+
+def test_mic_dsp_is_not_available_without_an_xvf3800(tmp_path):
+    r = d.run_probe("mic_dsp", _ctx(tmp_path))
+    assert r == {"probe": "mic_dsp", "ok": False,
+                 "text": "no XVF3800 DSP control on this satellite", "at": 4600.0}

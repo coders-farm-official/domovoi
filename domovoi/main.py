@@ -5845,10 +5845,11 @@ async def admin_run_satellite_diagnostics(room_id: str) -> dict[str, Any]:
     ``diagnostics``. 404 offline, 409 not declared, 429 over the
     per-satellite rate limit. A probe that gets no answer is in the list
     with ``ok: false``."""
-    probes = list(satellite_diagnostics.PROBES)
+    target = app.state.active_sessions.get(room_id)
+    probes = satellite_diagnostics.probes_for(satellite_abilities.session_abilities(target))
     target = _diag_target(room_id, len(probes))
     results = await asyncio.gather(*(_run_diag(target, p) for p in probes))
-    return {"room_id": room_id, "probes": satellite_diagnostics.PROBES, "results": list(results)}
+    return {"room_id": room_id, "probes": probes, "results": list(results)}
 
 
 @app.post(
@@ -5861,8 +5862,12 @@ async def admin_run_satellite_diagnostic(room_id: str, probe: str) -> dict[str, 
     if probe not in satellite_diagnostics.PROBES:
         raise HTTPException(status_code=404, detail="unknown probe")
     target = _diag_target(room_id, 1)
+    needed = satellite_diagnostics.PROBE_ABILITY.get(probe)
+    if needed:
+        _require_declared(target, needed, f"the {probe} probe")
     result = await _run_diag(target, probe)
-    return {"room_id": room_id, "probes": satellite_diagnostics.PROBES, "results": [result]}
+    probes = satellite_diagnostics.probes_for(satellite_abilities.session_abilities(target))
+    return {"room_id": room_id, "probes": probes, "results": [result]}
 
 
 @app.get(

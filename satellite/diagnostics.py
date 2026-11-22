@@ -46,6 +46,7 @@ PROBES: dict[str, str] = {
     "audio": "the audio devices found",
     "versions": "satellite code, operating system and Python versions",
     "service": "service restarts and the last exit reason, where the system logs them",
+    "mic_dsp": "the XVF3800's active DSP preset and the five values it holds (only with an XVF3800)",
 }
 
 #: Most characters one answer may carry, after scrubbing.
@@ -116,6 +117,8 @@ class Context:
     service_unit: str = "domovoi-satellite.service"
     started_at: float = field(default_factory=time.time)
     known_secrets: tuple[str, ...] = ()
+    #: The XVF3800's DSP control (satellite/mic_dsp.XvfDsp), or None.
+    mic_dsp: Any = None
     now: Callable[[], float] = time.time
     monotonic: Callable[[], float] = time.monotonic
 
@@ -293,6 +296,23 @@ def probe_service(ctx: Context) -> str:
     return "\n".join(out)
 
 
+class NotAvailable(Exception):
+    """The probe has nothing to read on this device."""
+
+
+def probe_mic_dsp(ctx: Context) -> str:
+    if ctx.mic_dsp is None:
+        raise NotAvailable("no XVF3800 DSP control on this satellite")
+    current = ctx.mic_dsp.read_current()
+    if current is None:
+        return "the array is busy with a preset change: run it again"
+    out = [f"active preset: {current.get('preset') or 'unknown'}"]
+    for param, values in (current.get("readback") or {}).items():
+        shown = ", ".join(f"{v:g}" for v in values) if values else "no answer"
+        out.append(f"{param}: {shown}")
+    return "\n".join(out)
+
+
 _RUNNERS: dict[str, Callable[[Context], str]] = {
     "recent_logs": probe_recent_logs,
     "network": probe_network,
@@ -300,6 +320,7 @@ _RUNNERS: dict[str, Callable[[Context], str]] = {
     "audio": probe_audio,
     "versions": probe_versions,
     "service": probe_service,
+    "mic_dsp": probe_mic_dsp,
 }
 assert set(_RUNNERS) == set(PROBES)
 
@@ -316,6 +337,8 @@ def run_probe(name: Any, ctx: Context) -> dict[str, Any]:
         return {"probe": probe, "ok": False, "text": "unknown probe: refused", "at": at}
     try:
         text, ok = runner(ctx), True
+    except NotAvailable as e:
+        text, ok = str(e), False
     except Exception as e:  # noqa: BLE001 — a probe never takes the client down
         text, ok = f"the probe failed ({type(e).__name__})", False
     return {"probe": probe, "ok": ok, "text": scrub(text, ctx.known_secrets), "at": at}

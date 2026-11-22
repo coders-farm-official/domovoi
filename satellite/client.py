@@ -2550,6 +2550,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 audio_devices=sd.query_devices,
                 started_at=_PROCESS_STARTED_WALL,
                 known_secrets=tuple(v for v in (token,) if v),
+                mic_dsp=getattr(self, "_mic_dsp", None),
             )
             result = await asyncio.to_thread(diagnostics.run_probe, probe, ctx)
         self._emit_text({"type": "diag_result", **result})

@@ -381,6 +381,18 @@ class XvfDsp:
                 return False
         return True
 
+    def read_current(self) -> dict | None:
+        """The active preset and the five values the chip holds now: the
+        same ``xvf_host`` reads :meth:`apply` makes after a change, nothing
+        written. None when a change held the array too long (busy). For the
+        read-only diagnostics probe (satellite/diagnostics.py)."""
+        if not self._lock.acquire(timeout=LOCK_TIMEOUT):
+            return None
+        try:
+            return {"preset": self._preset, "readback": self._read_all()}
+        finally:
+            self._lock.release()
+
     @property
     def active(self) -> bool:
         """A preset of ours is (or may be) on the chip."""

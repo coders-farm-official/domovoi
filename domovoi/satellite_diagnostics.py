@@ -32,7 +32,19 @@ PROBES: dict[str, str] = {
     "audio": "Audio devices",
     "versions": "Versions",
     "service": "Restarts and last exit",
+    "mic_dsp": "Mic DSP (XVF3800)",
 }
+
+#: Probes only a device that declared an ability gets (run-all leaves them
+#: out for any other; one asked for by name is refused with 409).
+PROBE_ABILITY: dict[str, str] = {"mic_dsp": "mic_dsp"}
+
+
+def probes_for(abilities) -> dict[str, str]:
+    """The probes a device with ``abilities`` (satellite_abilities.Abilities)
+    is asked for, in order."""
+    return {name: label for name, label in PROBES.items()
+            if name not in PROBE_ABILITY or abilities.allows(PROBE_ABILITY[name])}
 
 #: Most characters of one probe's text the core keeps (the satellite cuts
 #: at the same size; a little slack for its "[cut short]" marker).
@@ -42,7 +54,7 @@ PROBE_TIMEOUT_S = 15.0
 #: Per satellite: at most this many probe runs in any window (a run-all
 #: counts one per probe): three run-alls a minute, or single re-runs.
 RATE_WINDOW_S = 60.0
-RATE_MAX_RUNS = 3 * len(PROBES)
+RATE_MAX_RUNS = 18
 
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f​-‏ -‮⁦-⁩]")
 _SECRET_RULES: list[tuple[re.Pattern[str], str]] = [
