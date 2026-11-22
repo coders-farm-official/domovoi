@@ -79,6 +79,37 @@ static partial class Tests
         File.WriteAllText(Path.Combine(root, "SHA256SUMS"), string.Join("\n", lines.ToArray()) + "\n", new UTF8Encoding(false));
     }
 
+    // The bundle stored as parts, the way the writer splits a file bigger
+    // than part_size (domovoi/offline_kit/write.py): <path>.part01, .part02,
+    // every part but the last exactly partSize bytes, each listed in
+    // kit.json's "parts" with its size and SHA-256, and SHA256SUMS listing
+    // the parts, not the whole. The fixture itself is never split: the
+    // format's floor is 1 MiB, and the fixture stays a few KB.
+    static void SplitBundle(string root, int partSize)
+    {
+        string whole = Path.Combine(root, @"source\domovoi.bundle");
+        byte[] b = File.ReadAllBytes(whole);
+        var parts = new List<object>();
+        for (int i = 0, n = 1; i < b.Length; i += partSize, n++)
+        {
+            byte[] chunk = new byte[Math.Min(partSize, b.Length - i)];
+            Array.Copy(b, i, chunk, 0, chunk.Length);
+            string rel = "source/domovoi.bundle.part" + n.ToString("00");
+            File.WriteAllBytes(Path.Combine(root, rel.Replace('/', '\\')), chunk);
+            using (var h = SHA256.Create())
+                parts.Add(new Dictionary<string, object> { { "path", rel }, { "size", chunk.Length }, { "sha256", Sha256.Hex(h.ComputeHash(chunk)) } });
+        }
+        File.Delete(whole);
+        string kj = Path.Combine(root, "kit.json");
+        Dictionary<string, object> d = Json.ParseObject(File.ReadAllText(kj, new UTF8Encoding(false)));
+        d["part_size"] = partSize;
+        foreach (var c in Json.ObjList(d, "components"))
+            foreach (var f in Json.ObjList(c, "files"))
+                if (Json.Str(f, "path") == "source/domovoi.bundle") f["parts"] = parts.ToArray();
+        File.WriteAllText(kj, Json.Serialize(d), new UTF8Encoding(false));
+        Resum(root);
+    }
+
     static void EditKitJson(string root, Func<string, string> edit)
     {
         string p = Path.Combine(root, "kit.json");
@@ -98,7 +129,7 @@ static partial class Tests
 
     static void KitTests()
     {
-        Run("kit: the fixture made by the real writer passes, split bundle and all", delegate
+        Run("kit: the fixture made by the real writer passes", delegate
         {
             KitReport r = OfflineKit.Check(KitFixture(), FixtureWant());
             True(r.Ok, "ok: " + string.Join(" | ", r.Problems.ToArray()));
@@ -117,9 +148,13 @@ static partial class Tests
             Has(p, "This stick has a damaged file: images/postgres_16.15-trixie.tar.", "named");
             Has(p, "Make the stick again.", "advice");
         });
-        Run("kit: a damaged part of a split file is named", delegate
+        Run("kit: a split file passes, and a missing part is named", delegate
         {
             string k = KitCopy();
+            SplitBundle(k, 4000);
+            True(!File.Exists(Path.Combine(k, @"source\domovoi.bundle")), "stored as parts only");
+            KitReport r = OfflineKit.Check(k, FixtureWant());
+            True(r.Ok, "split: " + string.Join(" | ", r.Problems.ToArray()));
             File.Delete(Path.Combine(k, @"source\domovoi.bundle.part02"));
             Has(OneProblem(OfflineKit.Check(k, FixtureWant())), "source/domovoi.bundle.part02 (missing)", "the part");
         });
