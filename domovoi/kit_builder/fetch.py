@@ -4,7 +4,8 @@ outbound gate.
 Every request goes through ``egress.sync_client`` (refused, redirects
 included, under ``INTERNET_ACCESS=never``) and ``net_safety`` (public
 addresses only). Nothing is kept that isn't exactly its pinned SHA-256
-(and size, when the pin has one). Tests replace :func:`http_client`.
+and size; a file with no pinned size isn't downloaded at all, so no
+download is uncapped. Tests replace :func:`http_client`.
 """
 
 from __future__ import annotations
@@ -33,9 +34,12 @@ def http_client():
 
 def fetch_file(url: str, dest: Path, *, sha256: str, size: int | None,
                progress: Tick | None = None, headers: dict[str, str] | None = None) -> Path:
-    """Download ``url`` to ``dest``; kept only when it is ``sha256`` (and
-    ``size`` bytes, when given). ``progress`` gets each chunk's length and
-    may raise to stop. Raises FetchError (nothing partial is left)."""
+    """Download ``url`` to ``dest``; kept only when it is ``sha256`` and
+    ``size`` bytes (never more is read). ``progress`` gets each chunk's
+    length and may raise to stop. Raises FetchError (nothing partial is
+    left), at once when ``size`` is None."""
+    if size is None or size < 0:
+        raise FetchError(f"{dest.name} has no pinned size, so it isn't downloaded")
     egress.require_destination(url)
     dest.parent.mkdir(parents=True, exist_ok=True)
     part = dest.with_name(f".{dest.name}.part")
@@ -50,7 +54,7 @@ def fetch_file(url: str, dest: Path, *, sha256: str, size: int | None,
                 with open(part, "wb") as f:
                     for chunk in response.iter_bytes(_CHUNK):
                         written += len(chunk)
-                        if size is not None and written > size:
+                        if written > size:
                             raise FetchError(f"{dest.name} is larger than its pinned {size} bytes")
                         h.update(chunk)
                         f.write(chunk)
@@ -58,7 +62,7 @@ def fetch_file(url: str, dest: Path, *, sha256: str, size: int | None,
                             progress(len(chunk))
             finally:
                 response.close()
-        if size is not None and written != size:
+        if written != size:
             raise FetchError(f"{dest.name}: {written} bytes, pinned {size}")
         if h.hexdigest() != sha256:
             raise FetchError(f"{dest.name} doesn't match its pin (SHA-256 {h.hexdigest()[:12]}…, "

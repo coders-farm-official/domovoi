@@ -94,7 +94,9 @@ def local_model(model: str, digest: str | None = None,
                 folders: list[Path] | None = None) -> Model | None:
     """``model`` from a readable Ollama folder whose manifest is ``digest``
     (when given) and whose blobs are all there at their sizes. Cheap: the
-    blobs' SHA-256 is checked as they are copied onto the kit."""
+    blobs' SHA-256 is not read here. Each blob's Source carries its digest
+    (parts._model_sources), and the kit writer refuses a blob whose bytes
+    don't hash to it as it copies them."""
     for folder in folders if folders is not None else host.ollama_models_dirs():
         mf = _manifest_file(folder, model)
         try:

@@ -4,8 +4,9 @@ An offline Ubuntu 26.04 install needs every package provision.sh installs
 (``APT_PACKAGES``, docker-ce at its pins, nftables, the NVIDIA container
 toolkit) and everything they pull in, as apt would resolve it on a fresh
 system. The builder lets apt itself work that out, in a clean
-``ubuntu:26.04`` container (an unprivileged ``docker run``: no
-``--privileged``, no host mounts but the output folder), the trick
+``ubuntu:26.04`` container pinned by digest (``pins.APT_MIRROR_IMAGE``; an
+unprivileged ``docker run``: no ``--privileged``, no host mounts but the
+output folder), the trick
 ``domovoi/satellite_media/fetchers.py`` uses for the rooms' packages:
 
 1. The container records its own package status first (``status.clean``),
@@ -30,7 +31,9 @@ repositories, one per archive, that apt checks with its own keys:
 ``<arch>`` is ``amd64`` (and ``arm64`` for a Mac's VM, from
 ports.ubuntu.com, in an arm64 container). Every ``.deb`` is matched to its
 index entry by SHA-256 before it is kept; a ``.deb`` no index names stops
-the build. The ``Packages`` files are kept uncompressed: Ubuntu's,
+the build. Only regular files are taken from the container's output: a
+symlink, a device or a folder where a file should be stops the build.
+The ``Packages`` files are kept uncompressed: Ubuntu's,
 Docker's and NVIDIA's ``InRelease`` list the uncompressed index's hash,
 so apt verifies them as they are.
 
@@ -47,7 +50,9 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
+import stat
 import subprocess
 import time
 from dataclasses import dataclass
@@ -55,9 +60,12 @@ from pathlib import Path
 from typing import Callable
 
 from . import host
-from .pins import Pins
+from .pins import APT_MIRROR_IMAGE, Pins
 
-IMAGE = "ubuntu:26.04"
+IMAGE = APT_MIRROR_IMAGE
+#: Every container the kit builder runs is named with this prefix, so a
+#: cancel, a timeout or the next start can find and remove it.
+CONTAINER_PREFIX = "domovoi-kit-"
 MAX_AGE_SEC = 14 * 24 * 3600
 TIMEOUT_SEC = 3600
 #: Installed by provision.sh beside APT_PACKAGES (do_vm_guard), and what a
@@ -175,8 +183,13 @@ def _nice() -> list[str]:
     return out
 
 
-def docker_command(p: Pins, arch: str, raw: Path) -> list[str]:
-    return [*_nice(), "docker", "run", "--rm", "--platform", f"linux/{arch}",
+def container_name(arch: str) -> str:
+    return f"{CONTAINER_PREFIX}apt-{arch}-{secrets.token_hex(4)}"
+
+
+def docker_command(p: Pins, arch: str, raw: Path, name: str | None = None) -> list[str]:
+    return [*_nice(), "docker", "run", "--rm", "--name", name or container_name(arch),
+            "--platform", f"linux/{arch}",
             "--security-opt", "no-new-privileges", "--cpu-shares", "128",
             "-v", f"{raw}:/out", IMAGE, "sh", "-c", script(p, arch, _owner())]
 
@@ -232,6 +245,28 @@ def parse_packages(text: str) -> dict[str, str]:
     return out
 
 
+def _regular(path: Path) -> Path:
+    """``path`` itself (not what a link points at) is a regular file."""
+    try:
+        st = os.lstat(path)
+    except OSError as e:
+        raise AptError(f"{path.name} can't be read ({e.strerror or e})") from None
+    if not stat.S_ISREG(st.st_mode):
+        raise AptError(f"the package download left {path.name}, which is not a regular file; "
+                       "nothing was kept")
+    return path
+
+
+def _regular_dir(path: Path) -> Path:
+    try:
+        st = os.lstat(path)
+    except OSError as e:
+        raise AptError(f"the package download left no {path.name} folder ({e.strerror or e})") from None
+    if not stat.S_ISDIR(st.st_mode):
+        raise AptError(f"the package download's {path.name} is not a folder; nothing was kept")
+    return path
+
+
 def _safe_rel(rel: str) -> str:
     rel = rel.removeprefix("./")
     parts = rel.split("/")
@@ -248,10 +283,12 @@ def assemble(raw: Path, out: Path) -> list[str]:
         shutil.rmtree(out)
     files: list[str] = []
     by_sha: dict[str, tuple[str, str]] = {}
-    for lf in sorted((raw / "lists").iterdir()):
+    lists, debs = _regular_dir(raw / "lists"), _regular_dir(raw / "debs")
+    for lf in sorted(lists.iterdir()):
         idx = classify(lf.name)
         if idx is None:
             continue
+        _regular(lf)
         dest = out / idx.repo / idx.rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(lf, dest)
@@ -260,7 +297,8 @@ def assemble(raw: Path, out: Path) -> list[str]:
             for sha, fn in parse_packages(lf.read_text(encoding="utf-8", errors="replace")).items():
                 by_sha.setdefault(sha, (idx.repo, fn))
     unknown = []
-    for deb in sorted((raw / "debs").glob("*.deb")):
+    for deb in sorted(debs.glob("*.deb")):
+        _regular(deb)
         h = hashlib.sha256()
         with open(deb, "rb") as f:
             while chunk := f.read(1 << 20):
@@ -302,6 +340,26 @@ def cached(p: Pins, arch: str) -> dict | None:
     return doc
 
 
+def deb_hashes(root: Path, files: list[str]) -> dict[str, str]:
+    """{mirror path: SHA-256} of every .deb in ``files``, from the
+    mirror's own ``Packages`` indexes (the hashes apt checks)."""
+    out: dict[str, str] = {}
+    for f in files:
+        if not f.endswith("Packages"):
+            continue
+        repo = f.split("/", 1)[0]
+        try:
+            text = (root / f).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for sha, fn in parse_packages(text).items():
+            try:
+                out.setdefault(f"{repo}/{_safe_rel(fn)}", sha)
+            except AptError:
+                continue
+    return out
+
+
 def fresh(doc: dict | None, now: float | None = None) -> bool:
     return bool(doc) and (now or time.time()) - float(doc.get("made", 0)) < MAX_AGE_SEC
 
@@ -318,7 +376,10 @@ def build(p: Pins, arch: str, run: Run = subprocess.run) -> dict:
         shutil.rmtree(raw)
     raw.mkdir(parents=True)
     try:
-        r = run(docker_command(p, arch, raw), capture_output=True, text=True, timeout=TIMEOUT_SEC)
+        try:
+            r = run(docker_command(p, arch, raw), capture_output=True, text=True, timeout=TIMEOUT_SEC)
+        except subprocess.TimeoutExpired:
+            raise AptError("the package download took longer than an hour; nothing was kept") from None
         if r.returncode != 0:
             err = (r.stderr or "")[-600:]
             if "DOMOVOI_KEY" in err:

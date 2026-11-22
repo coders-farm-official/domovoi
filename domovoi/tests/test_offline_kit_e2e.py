@@ -49,7 +49,7 @@ def test_a_tiny_kit_image_is_written_and_passes_the_checker(tmp_path, monkeypatc
              size=4, exact=True, download=0, acquire=lambda ctx: [Source("wake/domovoi_v1.onnx", b"wake")]),
     ]
     rel = Release("1.5.0", "v1.5.0", COMMIT)
-    doc = jobs.build(rel, plan.Selection(), parts, core="http://192.168.1.20:6370", part_size=1_000_000)
+    doc = jobs.build(rel, plan.Selection(), parts, core="http://192.168.1.20:6370", part_size=1_048_576)
     img = jobs.image_file(doc["id"])
     assert img is not None and img.stat().st_size == doc["size"]
 
@@ -66,7 +66,7 @@ def test_a_tiny_kit_image_is_written_and_passes_the_checker(tmp_path, monkeypatc
     report = verify(out, release_key=None)
     assert report.ok, report.errors
     kit = json.loads((out / "kit.json").read_text())
-    assert kit["domovoi_version"] == "1.5.0" and kit["part_size"] == 1_000_000
+    assert kit["domovoi_version"] == "1.5.0" and kit["part_size"] == 1_048_576
     assert {n["id"] for n in kit["notices"]} == {"do-not-sell", "wake-word-nc-sa"}
     # The checker an installer runs, as a program.
     r = subprocess.run([sys.executable, "-m", "domovoi.offline_kit", "verify", "--no-release-check", str(out)],

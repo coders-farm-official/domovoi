@@ -92,6 +92,8 @@ NEVER_CONTACTED = frozenset({
     "aka.ms",                  # the Visual C++ runtime, named in a satellite error message
     # Licence, model-card and attribution links, and comments
     "creativecommons.org",
+    "launchpad.net",        # the offline kit's licences/README.txt: where Ubuntu's sources are
+    "sources.debian.org",   # the same note, for Debian's
     "learn.microsoft.com",
     "docs.docker.com",
     "docs.nvidia.com",

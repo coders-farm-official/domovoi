@@ -43,7 +43,7 @@ import signal
 import subprocess
 import sys
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 
 log = logging.getLogger(__name__)
 
@@ -119,6 +119,7 @@ def run(
     cwd: str | os.PathLike | None = None,
     env: Mapping[str, str] | None = None,
     binary: bool = False,
+    stop: Callable[[], bool] | None = None,
     **_ignored: object,
 ) -> subprocess.CompletedProcess:
     """Run ``cmd`` (``cmd[0]`` is git) and capture its text output, like
@@ -131,7 +132,8 @@ def run(
     bytes (a blob's content, git_lock), not text. Raises ``FileNotFoundError`` with
     no git, and ``subprocess.TimeoutExpired`` once ``timeout`` has passed:
     by then git and everything it started have been killed, and the locks
-    it left in ``cwd`` removed."""
+    it left in ``cwd`` removed. ``stop``, when given, is asked about once a
+    second; when it answers True, git is stopped the same way."""
     started_at = time.time()
     proc = subprocess.Popen(
         list(cmd),
@@ -144,7 +146,17 @@ def run(
         **_popen_kwargs(),
     )
     try:
-        out, err = proc.communicate(timeout=timeout)
+        if stop is None:
+            out, err = proc.communicate(timeout=timeout)
+        else:
+            deadline = time.monotonic() + timeout
+            while True:
+                try:
+                    out, err = proc.communicate(timeout=max(0.01, min(1.0, deadline - time.monotonic())))
+                    break
+                except subprocess.TimeoutExpired:
+                    if stop() or time.monotonic() >= deadline:
+                        raise
     except subprocess.TimeoutExpired:
         _kill_tree(proc)
         out = err = None

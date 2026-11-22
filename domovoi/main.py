@@ -539,6 +539,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.wake_default_task = asyncio.create_task(
         _wake_default_boot(), name="wake-default-boot")
 
+    # The offline kit's job state is in memory: a kit a restart cut short
+    # leaves its half-made image and maybe its package container, removed
+    # here (domovoi/kit_builder/jobs.py). In the background, off the loop.
+    if not settings.use_stubs:
+        from domovoi.kit_builder import jobs as kit_jobs
+
+        app.state.offline_kit_tidy_task = asyncio.create_task(
+            asyncio.to_thread(kit_jobs.tidy_at_start), name="offline-kit-tidy")
+
     # Re-render the satellite-side canned MP3s (network_issues.mp3 today)
     # if the configured TTS voice has changed since the last render.
     # No-op when up-to-date; doesn't hit the network when nothing needs
@@ -2557,8 +2566,11 @@ async def usb_stick_manifest(build_id: str) -> FastAPIResponse:
 # of everything an install would download (domovoi/kit_builder/, format in
 # domovoi/offline_kit/), and serves it with a Raspberry Pi Imager list at
 # /v1/offline-kit/<id>/… without a login, like the room stick: Imager and a
-# browser download can't send one, and nothing on a kit is a secret (a
-# public release and public models; no household data, design section 7).
+# browser download can't send one, and a plain kit holds a public release
+# and public models (no household data, design section 7). A kit with
+# household items ticked (the house's own models, trained wake words) is
+# served only to the admin's Bearer; the card downloads it through the
+# dashboard (web/backend/api/offline_kit.py).
 
 
 class _OfflineKitBody(BaseModel):
@@ -2645,14 +2657,19 @@ def _offline_kit_or_404(build_id: str) -> dict[str, Any]:
 
 
 @app.get("/v1/offline-kit/{build_id}/{name}")
-async def offline_kit_file(build_id: str, name: str) -> FastAPIResponse:
+async def offline_kit_file(build_id: str, name: str, request: Request) -> FastAPIResponse:
     """One kit's image, its Imager list (``os-list.json``) or its Imager
-    manifest. Public by its random id (see above). 423 while the container
-    guard's freeze is on."""
+    manifest. Public by its random id (see above), but a kit carrying
+    household items needs the admin's Bearer (401 without). 423 while the
+    container guard's freeze is on."""
     await container_freeze.require_unfrozen("offline_kit", public=True)
     from domovoi.kit_builder import jobs as kit_jobs
 
     doc = await asyncio.to_thread(_offline_kit_or_404, build_id)
+    if kit_jobs.needs_admin(doc) and await check_admin_request(request) not in ("ok", "pre-setup"):
+        raise HTTPException(status_code=401, detail=(
+            "This kit carries items this house added, so it downloads only with the admin "
+            "sign-in, from the Offline kit card."))
     if name == kit_jobs.OS_LIST:
         return JSONResponse(kit_jobs.os_list(doc), headers={"Cache-Control": "no-store"})
     if name == kit_jobs.MANIFEST:

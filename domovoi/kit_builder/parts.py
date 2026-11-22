@@ -58,12 +58,16 @@ class PartError(RuntimeError):
 @dataclass
 class Ctx:
     """What acquiring needs: progress (bytes), the cancel check, a logger
-    line for the card, and the targets ticked."""
+    line for the card, and the targets ticked. ``run`` runs the long
+    commands (the job's stops them on a cancel); ``check`` raises when the
+    job was cancelled, and ``cancelled`` says whether it was."""
 
     targets: tuple[str, ...]
     progress: Callable[[int], None] = lambda n: None
     say: Callable[[str], None] = lambda s: None
     run: Callable[..., subprocess.CompletedProcess] = subprocess.run
+    check: Callable[[], None] = lambda: None
+    cancelled: Callable[[], bool] = lambda: False
 
 
 @dataclass
@@ -108,12 +112,14 @@ def _pinned_file(pin: FilePin, subdir: str, kit_path: str, *, local: Path | None
     missing = 0 if here else pin.size_or_zero
 
     def get(ctx: Ctx) -> Source:
+        # The writer holds the copy to the pin again (the file could change
+        # between this check and the copy).
         if local is not None and fetch.matches(local, pin.sha256, pin.size):
-            return Source(kit_path, local)
+            return Source(kit_path, local, pin.sha256)
         if not fetch.matches(cached, pin.sha256, pin.size):
             ctx.say(f"Downloading {pin.name}")
             fetch.fetch_file(pin.url, cached, sha256=pin.sha256, size=pin.size, progress=ctx.progress)
-        return Source(kit_path, cached)
+        return Source(kit_path, cached, pin.sha256)
 
     return missing, get
 
@@ -214,16 +220,21 @@ def release_parts(rel: Release) -> list[Part]:
 # ─── the parts ───────────────────────────────────────────────────────────
 
 def source_parts(rel: Release, repo_dir: str, run=subprocess.run) -> list[Part]:
-    """install.sh at the release commit, and the git bundle up to the tag
-    (refs: the tag and HEAD, both at the release commit)."""
+    """install.sh and provision.sh at the release commit (Linux's
+    installer, and the script Windows Setup runs in its distro), and the
+    git bundle up to the tag (refs: the tag and HEAD, both at the release
+    commit)."""
     from domovoi import git_run
 
     def install_sh(ctx: Ctx) -> list[Source]:
-        r = git_run.run(["git", "show", f"{rel.commit}:scripts/linux/install.sh"], cwd=repo_dir,
-                        timeout=30, binary=True)
-        if r.returncode != 0:
-            raise PartError("install.sh isn't in the release commit")
-        return [Source("linux/install.sh", r.stdout)]
+        out = []
+        for name in ("install.sh", "provision.sh"):
+            r = git_run.run(["git", "show", f"{rel.commit}:scripts/linux/{name}"], cwd=repo_dir,
+                            timeout=30, binary=True)
+            if r.returncode != 0:
+                raise PartError(f"{name} isn't in the release commit")
+            out.append(Source(f"linux/{name}", r.stdout))
+        return out
 
     bundle = host.cache_dir("source") / f"domovoi-{rel.tag}.bundle"
 
@@ -236,8 +247,13 @@ def source_parts(rel: Release, repo_dir: str, run=subprocess.run) -> list[Part]:
                 raise PartError(f"this server no longer runs {rel.tag}; open the card again")
             ctx.say("Packing Domovoi's source")
             part = bundle.with_name(bundle.name + ".part")
-            r = git_run.run(["git", "bundle", "create", str(part), rel.tag, "HEAD"], cwd=repo_dir,
-                            timeout=1800)
+            try:
+                r = git_run.run(["git", "bundle", "create", str(part), rel.tag, "HEAD"], cwd=repo_dir,
+                                timeout=1800, stop=ctx.cancelled)
+            except subprocess.TimeoutExpired:
+                part.unlink(missing_ok=True)
+                ctx.check()
+                raise PartError("packing Domovoi's source took too long") from None
             if r.returncode != 0:
                 part.unlink(missing_ok=True)
                 raise PartError(f"git bundle failed: {(r.stderr or '').strip()[-300:]}")
@@ -246,9 +262,9 @@ def source_parts(rel: Release, repo_dir: str, run=subprocess.run) -> list[Part]:
 
     size = bundle.stat().st_size if bundle.is_file() else _pack_size(repo_dir)
     return [
-        Part(id="source:install-sh", group="base", kind="linux-installer", name="install.sh",
-             version=rel.version, licence="MIT", pinned_by="the release commit", size=64 * 1024,
-             exact=False, download=0, acquire=install_sh),
+        Part(id="source:install-sh", group="base", kind="linux-installer", name="install.sh and provision.sh",
+             version=rel.version, licence="MIT", pinned_by="the release commit", size=448 * 1024,
+             exact=False, download=0, acquire=install_sh, files_estimate=2),
         Part(id="source:bundle", group="base", kind="source", name="Domovoi's source (git bundle)",
              version=rel.tag, licence="MIT", pinned_by="the release commit (signed tag)", size=size,
              exact=bundle.is_file(), download=0, acquire=make_bundle),
@@ -286,7 +302,9 @@ def apt_parts(p: Pins) -> list[Part]:
             r = apt_mirror.mirror_dir(arch) / "mirror"
             # The repositories' signing keys, which the install adds them with.
             ks = [Source(path, apt_mirror.key_file(path, url, fpr)) for path, url, fpr in apt_mirror.keys(p, arch)]
-            return [Source(f"apt/{arch}/{f}", r / f) for f in d["files"]] + ks
+            # Each .deb is held to the SHA-256 its signed index lists.
+            shas = apt_mirror.deb_hashes(r, d["files"])
+            return [Source(f"apt/{arch}/{f}", r / f, shas.get(f)) for f in d["files"]] + ks
 
         out.append(Part(id=f"apt:{arch}", group="base", targets=(target,), kind="apt",
                         name=f"Ubuntu 26.04 and Docker packages ({arch})", version=p.manifest["docker_ce"],
@@ -315,7 +333,7 @@ def wheel_parts(p: Pins) -> list[Part]:
             if wheels.missing(ps):
                 ctx.say(f"Downloading Python packages ({arch})")
                 wheels.download(ps, ctx.progress)
-            return [Source(f"{wheels.folder(arch)}/{x.filename}", wheels.file_path(x)) for x in ps]
+            return [Source(f"{wheels.folder(arch)}/{x.filename}", wheels.file_path(x), x.sha256) for x in ps]
 
         out.append(Part(id=f"python:{arch}", group="base", targets=(target,), kind="python-wheels",
                         name=f"Python packages ({arch})", version=wheels.lock_key(p.lock_text, p.nodeps_lock_text),
@@ -408,12 +426,13 @@ def _model_part(tag: str, digest: str | None, group: str, *, household: bool = F
 
 
 def _model_sources(m: ollama_store.Model, dirs: list[Path]) -> list[Source]:
-    srcs = [Source(f"ollama/models/{m.manifest_path()}", m.manifest)]
+    srcs = [Source(f"ollama/models/{m.manifest_path()}", m.manifest, m.digest)]
     for b in m.blobs:
         src = ollama_store.blob_source(m, b, dirs)
         if src is None:
             raise PartError(f"{m.tag}: a blob went missing while the kit was made")
-        srcs.append(Source(f"ollama/models/{m.blob_path(b)}", src))
+        # A blob is named by its digest: the writer holds the copy to it.
+        srcs.append(Source(f"ollama/models/{m.blob_path(b)}", src, b.digest))
     return srcs
 
 
@@ -511,7 +530,8 @@ def speech_parts(p: Pins) -> list[Part]:
         folder = snap or _fetch_whisper(w, ctx)
         if not fetch.matches(folder / "model.bin", w["whisper_model_bin_sha256"], w["whisper_model_bin_bytes"]):
             raise PartError("Whisper's model.bin doesn't match its pin")
-        return [Source(f"speech/whisper-{w['whisper_model']}/{f.name}", f.resolve())
+        return [Source(f"speech/whisper-{w['whisper_model']}/{f.name}", f.resolve(),
+                       w["whisper_model_bin_sha256"] if f.name == "model.bin" else None)
                 for f in sorted(folder.iterdir()) if f.is_file()]
 
     out.append(Part(id="speech:whisper", group="base", targets=(PC,), kind="whisper-model",
@@ -530,7 +550,7 @@ def speech_parts(p: Pins) -> list[Part]:
                 ctx.say(f"Downloading the voice {v.name}")
                 voices.mkdir(parents=True, exist_ok=True)
                 tts._piper_download(v.model_ref, voices)
-            return [Source(f"speech/piper/{onnx.name}", onnx), Source(f"speech/piper/{js.name}", js)]
+            return [Source(f"speech/piper/{onnx.name}", onnx, v.onnx_sha256), Source(f"speech/piper/{js.name}", js)]
 
         out.append(Part(id=f"voice:{v.model_ref}", group="base", kind="piper-voice", name=v.model_ref,
                         version=tts.PIPER_PINNED_REVISION, licence="LicenseRef-public-domain",
@@ -544,7 +564,7 @@ def speech_parts(p: Pins) -> list[Part]:
         if not fetch.matches(spk, se.MODEL_SHA256, se.MODEL_BYTES):
             ctx.say("Downloading voice ID's model")
             se.download_model(voices)
-        return [Source(f"speech/speaker/{se.MODEL_FILE}", spk)]
+        return [Source(f"speech/speaker/{se.MODEL_FILE}", spk, se.MODEL_SHA256)]
 
     out.append(Part(id="speech:speaker", group="base", kind="speaker-model", name=se.MODEL_TAG,
                     version=se.MODEL_SHA256[:12], licence="Apache-2.0",
