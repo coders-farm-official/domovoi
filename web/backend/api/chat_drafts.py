@@ -564,6 +564,16 @@ async def edit_draft(draft_id: int, body: EditBody, request: Request = None) -> 
     return {"version": v}
 
 
+async def render_file(markdown: str, template_id: str, fmt: str, title: str) -> bytes:
+    """:func:`render` for a route: the length checked first, then built in
+    the documents pool, never on the event loop."""
+    from domovoi import executors
+    from web.backend.api.documents import assert_docx_lines
+
+    assert_docx_lines(markdown)
+    return await executors.run("documents", render, markdown, template_id, fmt, title)
+
+
 def render(markdown: str, template_id: str, fmt: str, title: str) -> bytes:
     tpl = templates.get(template_id)
     if fmt == "pdf":
@@ -629,7 +639,7 @@ async def save_draft(draft_id: int, body: SaveBody, request: Request) -> dict[st
         d, v = await _target(s, draft_id, body.version)
     fmt = body.format or kinds.default_format(d["kind"])
     tpl = _template_for(d, body.template)
-    data = render(v["body"], tpl, fmt, d["title"])
+    data = await render_file(v["body"], tpl, fmt, d["title"])
     check = ats.check(data, fmt, v["body"])
     rel = _write_into_chat_folder(file_name(d["title"], v["version"], fmt), data)
     entry = {"format": fmt, "rel_path": rel, "check": check.as_json(), "template": tpl,
@@ -652,7 +662,7 @@ async def export_draft(draft_id: int, version: Optional[int] = Query(None, ge=1)
     async with session_scope() as s:
         d, v = await _target(s, draft_id, version)
     fmt = format or kinds.default_format(d["kind"])
-    data = render(v["body"], _template_for(d, template), fmt, d["title"])
+    data = await render_file(v["body"], _template_for(d, template), fmt, d["title"])
     name = file_name(d["title"], v["version"], fmt)
     from urllib.parse import quote
 
@@ -673,7 +683,7 @@ async def _print(core_path: str, draft_id: int, body: PrintDraftBody, request: R
 
     async with session_scope() as s:
         d, v = await _target(s, draft_id, body.version)
-    data = render(v["body"], _template_for(d, body.template), "pdf", d["title"])
+    data = await render_file(v["body"], _template_for(d, body.template), "pdf", d["title"])
     return await printers.forward_print_bytes(
         core_path, request, data, file_name(d["title"], v["version"], "pdf"),
         title=f"{d['title']} v{v['version']}", printer_id=body.printer_id, options=body.options, timeout=120.0)

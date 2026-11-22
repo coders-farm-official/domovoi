@@ -24,7 +24,8 @@ core keeps it going:
     (``up_next_refill_at``), the next batch is appended by exact file
     path and each pick remembers its songid;
   - more than :data:`TRIM_KEEP_BEHIND` songs behind the current one: the
-    oldest go, so a day-long session keeps a small queue and "previous"
+    oldest the room was heard playing go (a jump ahead leaves the songs it
+    passed), so a day-long session keeps a small queue and "previous"
     still works.
 
 * **After a stream** — a song from an external source (a streaming-search
@@ -52,7 +53,7 @@ import re
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Iterable, Iterator
 
 from sqlalchemy import text
@@ -94,6 +95,9 @@ class _Seen:
     active: bool = False                 # seen playing or paused since it started
     idle_since: float | None = None      # monotonic: paused or stopped since
     backoff_until: float = 0.0           # monotonic: no refill before this
+    #: songids this extender saw as the current song while playing. Only
+    #: these are trimmed: a jump forward leaves the entries it passed.
+    heard: set[int] = field(default_factory=set)
 
 
 #: session id -> what the extender knows of it. :func:`start` writes the
@@ -555,9 +559,12 @@ async def look(room_id: str, client: Any, snap: dict[str, Any], *,
         did["removed"] = len(removed)
         ids = [i for i in ids if i not in set(removed)]
         cur = ids.index(int(songid))
+    seen.heard.add(int(songid))
+    seen.heard &= set(ids)
     if cur > TRIM_KEEP_BEHIND:
-        old = ids[: cur - TRIM_KEEP_BEHIND]
-        trimmed = await client.queue_remove(old)
+        # "Behind" is not "played": only songs the room was heard playing go.
+        old = [i for i in ids[: cur - TRIM_KEEP_BEHIND] if i in seen.heard]
+        trimmed = await client.queue_remove(old) if old else []
         did["trimmed"] = len(trimmed)
         ids = [i for i in ids if i not in set(trimmed)]
         cur = ids.index(int(songid))

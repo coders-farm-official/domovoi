@@ -64,6 +64,25 @@ a way that would otherwise get reported as a bug.
 - Friend Houses: a friend's messages and names read aloud stay out of the
   chat model's history, and "double check that" declines such a reply.
 
+## 1.4.1 (unreleased) — Queue, downloads, podcast and Word export hardening
+
+- **Up next** trims only songs a room was heard playing. Jumping ahead in a
+  long queue no longer lets the songs it passed be trimmed as played.
+- **Radio**: the docs now say exactly what the stream redirect check
+  covers. It judges the server's own request; the room's player makes its
+  own. Nothing changed in how stations play.
+- **Download queue**: `GET /v1/acquisitions` and `GET /api/acquisitions`
+  stay open, but a caller who is not admin gets `requested_by` and
+  `origin_ref` as `null` and `error` as a fixed sentence. An admin still
+  reads the raw values.
+- **Podcasts**: `GET /api/podcasts/positions/{episode_id}` is a device-tier
+  read now, like the audiobook one. The episode list stays open, but
+  `position_sec` is filled in only for a caller with a household
+  credential.
+- **Word export**: a Word copy of a Markdown or text file, and a chat
+  draft's file, are built off the dashboard's main loop, and one longer
+  than 20,000 lines is refused with `413`.
+
 ## 1.4.1 (unreleased) — Home location, in Settings → Household
 
 - **What changed.** The household's town has its own place: Settings →

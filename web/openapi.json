@@ -18460,7 +18460,7 @@
           "podcasts"
         ],
         "summary": "List Episodes",
-        "description": "One show's episodes, newest first by default. Paged when ``limit`` /\n``cursor`` / ``offset`` is sent (``{items, total, \u2026}``, paging.py \u2014 a\nlong back catalogue no longer arrives in one answer); the bare list, as\nbefore, for a client that sends none of them.",
+        "description": "One show's episodes, newest first by default. Paged when ``limit`` /\n``cursor`` / ``offset`` is sent (``{items, total, \u2026}``, paging.py \u2014 a\nlong back catalogue no longer arrives in one answer); the bare list, as\nbefore, for a client that sends none of them. The list is open; a\nlistener's place (``device_id``/``person_id``) is the household's read,\nso without a device-tier credential ``position_sec`` stays null.",
         "operationId": "list_episodes_api_podcasts_subscriptions__sub_id__episodes_get",
         "parameters": [
           {
@@ -18815,6 +18815,7 @@
           "podcasts"
         ],
         "summary": "Get Position",
+        "description": "A listener's place in an episode. Device tier: it names any person,\nlike the audiobook twin (audiobooks.py).",
         "operationId": "get_position_api_podcasts_positions__episode_id__get",
         "parameters": [
           {

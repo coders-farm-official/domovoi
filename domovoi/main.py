@@ -101,7 +101,7 @@ from domovoi.models import (  # noqa: E402
     Intent,
     Response,
 )
-from domovoi.acquisitions import ACQUISITIONS  # noqa: E402
+from domovoi.acquisitions import ACQUISITIONS, redact_for_household  # noqa: E402
 from domovoi.capabilities import CAPABILITIES  # noqa: E402
 from domovoi.now_playing import NOW_PLAYING  # noqa: E402
 from domovoi.router import route  # noqa: E402
@@ -7511,11 +7511,13 @@ async def admin_music_add_by_url(
 
 @app.get("/v1/acquisitions")
 async def list_acquisitions(
-    status: str | None = None, limit: int = 50
+    request: Request, status: str | None = None, limit: int = 50
 ) -> dict[str, Any]:
     """Generic read view of the acquisition queue (design §4.8) — the
     web "Downloads"-style page renders this; provider plugins layer
-    richer state on top from their own routers."""
+    richer state on top from their own routers. Open; a caller who is
+    not admin reads each row through
+    :func:`domovoi.acquisitions.redact_for_household`."""
     limit = max(1, min(int(limit), 200))
     where = "WHERE status = :status" if status else ""
     async with session_scope() as s:
@@ -7535,9 +7537,11 @@ async def list_acquisitions(
             )
         ).all()
     availability = ACQUISITIONS.availability()
+    admin = await admin_auth_mod.check_admin_request(request) in ("ok", "pre-setup", "cookie-only")
+    shown = (lambda row: row) if admin else redact_for_household
     return {
         "acquisitions": [
-            {
+            shown({
                 "id": int(r.id), "kind": r.kind, "text": r.text,
                 "metadata": dict(r.metadata or {}),
                 "requested_by": r.requested_by, "origin_ref": r.origin_ref,
@@ -7550,7 +7554,7 @@ async def list_acquisitions(
                 "completed_at": (
                     r.completed_at.isoformat() if r.completed_at else None
                 ),
-            }
+            })
             for r in rows
         ],
         "fulfillers": availability.fulfillers,

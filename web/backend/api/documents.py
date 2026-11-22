@@ -1688,6 +1688,21 @@ def _md_runs(paragraph, text_: str) -> None:
             paragraph.add_run(part)
 
 
+#: The most lines a Markdown or text file may have to be made into Word:
+#: building the copy costs more per line the longer it gets.
+DOCX_MAX_LINES = 20_000
+
+
+def assert_docx_lines(text_: str) -> None:
+    """Refuse (``413``) a text past :data:`DOCX_MAX_LINES` lines before any
+    Word copy of it is built."""
+    if text_.count("\n") >= DOCX_MAX_LINES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"that is more than {DOCX_MAX_LINES:,} lines, too long to make into Word",
+        )
+
+
 def _markdown_to_docx(text_: str) -> bytes:
     """Markdown → .docx with the structures the editor's toolbar can
     produce: headings, bullet/numbered lists, fenced code blocks, plain
@@ -1754,7 +1769,8 @@ async def export_doc(rel_path: str, fmt: Literal["docx"] = Query("docx")) -> Res
     if ext in _FORMATTED_EXTS:
         data = await _word_copy(richdoc.document_body(text_), target.stem)
     else:
-        data = _markdown_to_docx(text_)
+        assert_docx_lines(text_)
+        data = await executors.run("documents", _markdown_to_docx, text_)
     return Response(
         content=data,
         media_type=(

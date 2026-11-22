@@ -19,9 +19,11 @@ import os
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy import text
 
+from domovoi.acquisitions import redact_for_household
+from domovoi.admin_auth import check_admin_request
 from web.backend.db import session_scope
 
 log = logging.getLogger(__name__)
@@ -56,6 +58,7 @@ async def _availability() -> dict[str, Any]:
 
 @router.get("")
 async def list_acquisitions(
+    request: Request,
     status: str | None = Query(
         default=None,
         description="Filter by status "
@@ -86,9 +89,12 @@ async def list_acquisitions(
             )
         ).all()
     availability = await _availability()
+    # Open: who queued what and the raw error text are an admin's only.
+    admin = await check_admin_request(request) in ("ok", "pre-setup", "cookie-only")
+    shown = (lambda row: row) if admin else redact_for_household
     return {
         "acquisitions": [
-            {
+            shown({
                 "id": int(r.id),
                 "kind": r.kind,
                 "text": r.text,
@@ -102,7 +108,7 @@ async def list_acquisitions(
                 "error": r.error,
                 "requested_at": r.requested_at.isoformat() if r.requested_at else None,
                 "completed_at": r.completed_at.isoformat() if r.completed_at else None,
-            }
+            })
             for r in rows
         ],
         **availability,
