@@ -128,7 +128,7 @@ async def test_the_house_name_goes_in_the_file(house) -> None:
 # ─── A: a request arrives, is accepted ────────────────────────────────────
 
 
-def _request_event(invite_id: str, asker: fid.HouseKeys, code: str = "1234") -> dict:
+def _request_event(invite_id: str, asker: fid.HouseKeys, code: str = "123456") -> dict:
     return {"event": "request", "invite": invite_id,
             "statement": asker.address_statement(bytes([5]) * 32, int(time.time())).to_bytes().hex(),
             "reach_private": (b"\x09" * 32).hex(), "name": "The Patels", "code": code}
@@ -141,7 +141,7 @@ async def test_a_request_uses_the_file_up_once(house) -> None:
     await fr.on_request(_request_event(made["id"], _other(house.tmp, "c")))  # same file again
     reqs = await fr.list_requests()
     assert len(reqs) == 1 and reqs[0]["direction"] == "in" and reqs[0]["state"] == "waiting"
-    assert reqs[0]["their_name"] == "The Patels" and reqs[0]["code"] == "1234"
+    assert reqs[0]["their_name"] == "The Patels" and reqs[0]["code"] == "123456"
     assert await fr.list_invites() == []
     with pytest.raises(fr.FriendingError):
         await fr.invite_with_file(made["id"])
@@ -181,12 +181,12 @@ async def test_declining_stores_nothing_and_tells_nobody(house) -> None:
 async def test_accepting_adds_the_friend_announces_it_and_delivers(house, monkeypatch) -> None:
     made = await fr.make_invite()
     b = _other(house.tmp, "b")
-    await fr.on_request(_request_event(made["id"], b, code="0042"))
+    await fr.on_request(_request_event(made["id"], b, code="004200"))
     req = (await fr.list_requests())[0]
     result = await fr.accept(req["id"], local_name="Patels")
     assert house.announced == ["Patels"]
     friends = await fr.list_friends()
-    assert friends[0]["name"] == "Patels" and friends[0]["code"] == "0042"
+    assert friends[0]["name"] == "Patels" and friends[0]["code"] == "004200"
     assert friends[0]["verified"] is False  # "Not verified" until compared
     assert friends[0]["id"] == result["friend_id"]
 
@@ -278,13 +278,13 @@ async def test_asking_then_being_accepted(house, monkeypatch) -> None:
 
     async def ask(r, w, *, file, keys, statement, reach_private, name):
         assert statement.house_key == keys.house_key and len(reach_private) == 32
-        return "5678"
+        return "567890"
 
     monkeypatch.setattr(fc, "open_stream", open_stream)
     monkeypatch.setattr(fp, "ask", ask)
     await fr.deliver_pending()
     sent = (await fr.list_requests())[0]
-    assert sent["state"] == "sent" and sent["code"] == "5678"
+    assert sent["state"] == "sent" and sent["code"] == "567890"
 
     # A's accept arrives (the listener checked the session; core checks the match).
     statement = a.address_statement(ONION, int(time.time()))
@@ -292,7 +292,7 @@ async def test_asking_then_being_accepted(house, monkeypatch) -> None:
                           "statement": statement.to_bytes().hex(),
                           "reach_private": (b"\x44" * 32).hex()})
     friends = await fr.list_friends()
-    assert [f["name"] for f in friends] == ["Smiths"] and friends[0]["code"] == "5678"
+    assert [f["name"] for f in friends] == ["Smiths"] and friends[0]["code"] == "567890"
     assert house.announced == ["Smiths"]
     assert await fr.list_requests() == []
     # A repeat accept (our ACCEPT_OK was lost) changes nothing.
@@ -405,3 +405,79 @@ async def test_fh8_the_weeks_changes_name_new_friends(house) -> None:
     await _a_friend(v)
     changes = await fr.recent_changes()
     assert changes[0]["kind"] == "friend" and changes[0]["friend"] == "V"
+
+
+# ─── pairing v2 (1.5.0): 6-digit codes, old houses and old files ──────────
+
+
+def _v1_text(keys: fid.HouseKeys, days: int = 5) -> str:
+    """A friend file as a house before 1.5.0 makes it (version byte 1)."""
+    import base64
+    import struct
+
+    name, invite = b"Old House", b"\x55" * 16
+    body = struct.pack(">B32s32s32s16s32sIB", 1, keys.house_key, keys.session_key, PAIRING, invite,
+                       keys.invite_secret(invite), int(time.time() // 86400) + days, len(name)) + name
+    raw = body + keys.sign(fid.CTX_FRIEND_FILE, body)
+    return ff.PREFIX + base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+async def test_v2_an_old_houses_file_is_refused_with_a_plain_message(house) -> None:
+    fid.create()
+    old = _v1_text(_other(house.tmp, "old"))
+    for call in (fr.preview(old), fr.send_request(old, local_name="Old")):
+        with pytest.raises(ff.OldFriendFile, match="needs updating to add friends"):
+            await call
+    assert await fr.list_requests() == []
+
+
+async def test_v2_a_request_imported_before_the_update_stops_with_the_message(house, monkeypatch) -> None:
+    from domovoi.friend_houses import store
+
+    fid.create()
+    old = _other(house.tmp, "old")
+    async with fr._db() as s:
+        await store.insert_request(
+            s, id="rold", direction="out", state="unsent", house_key=old.house_key,
+            session_key=old.session_key, their_name="Old House", local_name="Old",
+            invite_id=("55" * 16), reach_public=b"\x01" * 32, reach_gift=b"\x02" * 32,
+            friend_file=_v1_text(old), days=5)
+    dialled: list = []
+
+    async def open_stream(socks, *, onion, timeout=0):
+        dialled.append(onion)
+        raise fc.Unreachable("not expected")
+
+    monkeypatch.setattr(fc, "open_stream", open_stream)
+    await fr.deliver_pending()
+    await fr.deliver_pending()
+    assert dialled == []  # never asked with the old pairing, never dialled
+    req = (await fr.list_requests())[0]
+    assert req["last_error"] == ff.OLD_FILE and req["trying"] is False and req["state"] == "unsent"
+
+
+async def test_v2_a_4_digit_code_from_the_listener_is_dropped(house) -> None:
+    made = await fr.make_invite()
+    await fr.on_request(_request_event(made["id"], _other(house.tmp, "b"), code="1234"))
+    assert await fr.list_requests() == []
+    assert len(await fr.list_invites()) == 1  # not used up
+
+
+async def test_v2_friends_made_with_4_digits_keep_their_code(house, db_session) -> None:
+    import sqlalchemy.exc
+
+    from domovoi.friend_houses import store
+
+    old = _other(house.tmp, "old")
+    await _a_friend(old, "fold")  # code "1234", made before 1.5.0
+    friends = await fr.list_friends()
+    assert [(f["id"], f["code"], f["verified"]) for f in friends] == [("fold", "1234", False)]
+    assert await fr.mark_verified("fold")
+    for bad in ("12345", "1234567"):
+        with pytest.raises(sqlalchemy.exc.IntegrityError):
+            async with fr._db() as s:
+                await store.insert_friend(
+                    s, id="fbad", house_key=b"\x61" * 32, session_key=b"\x62" * 32,
+                    onion_key=b"\x63" * 32, statement=b"x", statement_at=1,
+                    reach_public=b"\x01" * 32, reach_private=None, local_name="Bad", code=bad,
+                    added_by="t")

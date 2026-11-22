@@ -2914,13 +2914,36 @@ with friends the house already has is open to every household phone (the
 household token): reading the house inbox, sending a message, marking a
 conversation read, and seeing the friend list and the shared lists.
 
-**The 4-digit code.** Both houses compute the same 4-digit code from
+**The 6-digit code.** Both houses compute the same 6-digit code from
 random values each side committed to before seeing the other's (the
 asking house commits to its house key too, so it can't generate keys
 until the code comes out the way it wants), so
 someone who swapped a friend file in transit can't make the codes match
-except by a 1-in-10,000 chance, once per file. Comparing codes (by phone,
-in person) is optional; a friend shows "Not verified" until someone does.
+except by a 1-in-1,000,000 chance on each try, and the tries are limited
+by the 20 requests an hour above and by the file's expiry. Comparing codes
+(by phone, in person) is optional; a friend shows "Not verified" until
+someone does. The code was 4 digits before 1.5.0; friends made then keep
+the 4-digit code they were shown.
+
+**Pairing versions, and no way back to 4 digits.** The 6-digit code
+belongs to pairing version 2 (1.5.0). The version is a byte inside the
+friend file, under the inviting house's signature, and it is bound into
+the request's handshake (its own preface, and a Noise prologue and code
+context of its own, so a v2 handshake hash or code can't be mixed with a
+v1 one). A house from 1.5.0 on asks only with a version-2 file and answers
+only version-2 requests; it doesn't speak version 1 at all, in either
+role. So there is nothing to negotiate down to: a house, or someone in
+the middle, that claims to be older gets no answer and no code, and a
+file relabelled as version 1 fails its signature. With an older house:
+
+- importing an older house's friend file is refused at once with "Your
+  friend's Domovoi needs updating to add friends." (a request imported
+  before this house updated shows the same message and isn't retried);
+- an older house importing a new friend file is told by its own Domovoi
+  that the file "is from a newer Domovoi";
+- friends made before either house updated are unaffected: only the
+  making of new friends changed, and the friend-to-friend connection
+  (messages, presence, lists) is the same protocol as before.
 
 **Every new friend is announced** aloud in the rooms and logged, and so
 is every list shared with a friend, so a friend added without the

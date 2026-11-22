@@ -4,6 +4,24 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Friend Houses: the friend code is 6 digits
+
+- **What changed.** When two houses become friends, both now show a
+  **6-digit** code (it was 4), which makes a swapped friend file far
+  harder to get past a comparison. This is a new version of the way
+  friend requests are made (pairing version 2); friend files made from
+  1.5.0 on carry it, under the house's signature.
+- **What to know.** Both houses need 1.5.0 or later to **add** a friend:
+  importing an older house's friend file says "Your friend's Domovoi
+  needs updating to add friends.", and an older house importing a new
+  file is told it "is from a newer Domovoi". A request imported before
+  this house updated shows the same message and stops retrying; once
+  the other house has updated, ask it for a new friend file. There is no
+  fallback to 4 digits. Friends you already have are unaffected: they
+  keep messaging, and keep the 4-digit code they were shown. Migration
+  V074 lets the stored code be 4 or 6 digits. SECURITY_PRIVACY.md,
+  "Pairing versions, and no way back to 4 digits".
+
 ## 1.5.0 (unreleased) — Plugin update checks on the Plugins page
 
 - **What changed.** A plugin installed from GitHub is checked once a day

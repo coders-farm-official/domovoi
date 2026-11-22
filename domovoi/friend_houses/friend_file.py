@@ -16,7 +16,8 @@ The payload (at most 253 bytes, about 360 characters on the line):
 ====================  =======  =============================================
 field                 bytes    why
 ====================  =======  =============================================
-version               1        ``1``; anything else is refused (finding 17)
+version               1        ``2`` (pairing v2, 6-digit code, 1.5.0);
+                               anything else is refused (finding 17)
 house key             32       the inviting house's identity (Ed25519)
 session key           32       its Noise static key (X25519)
 pairing onion         32       its short-lived pairing address (finding 8)
@@ -29,6 +30,14 @@ name length + name    1 + ≤40  what the house calls itself: only ever shown
 signature             64       house key over all of the above, context
                                ``domovoi-fh-friend-file-v1``
 ====================  =======  =============================================
+
+The ``1`` in the prefix is the line's format and stays ``1``: the version
+byte inside the signed payload is what changes, so a house too old for a
+file says "from a newer Domovoi" instead of "not a friend file". A
+version-1 file (from a house before 1.5.0, whose pairing uses the 4-digit
+code) is refused with :data:`OLD_FILE`: this house doesn't speak that
+pairing, and the version is under the inviting house's signature, so it
+can't be changed in transit.
 
 It's a **bearer secret**: anyone holding it can ask to be a friend, once.
 The inviting house doesn't store the invite secret at all: it derives it
@@ -47,7 +56,10 @@ from dataclasses import dataclass
 from domovoi.friend_houses import identity as fid
 
 PREFIX = "domovoi-friend:1:"
-VERSION = 1
+VERSION = 2
+OLDEST_KNOWN = 1  # same layout as 2; refused after its signature checks out
+OLD_FILE = ("Your friend's Domovoi needs updating to add friends. Once it's updated, "
+            "ask them for a new friend file.")
 NAME_MAX_BYTES = 40
 FILE_EXTENSION = ".domovoi-friend"
 _FIXED = struct.Struct(">B32s32s32s16s32sIB")
@@ -110,10 +122,16 @@ class BadFriendFile(ValueError):
     """Not a friend file this house can use. The message is for a person."""
 
 
+class OldFriendFile(BadFriendFile):
+    """A friend file from a house that pairs with the old 4-digit code."""
+
+
 def parse(text: str) -> FriendFile:
     """Find and check the friend file line in ``text`` (a whole file, a
     pasted message, a link). Size, then version, then signature, before
-    any field is trusted."""
+    any field is trusted. A version-1 file is refused with
+    :class:`OldFriendFile` once its signature checks out (a byte changed in
+    transit reads as damaged, not as old)."""
     if not isinstance(text, str) or len(text) > MAX_TEXT:
         raise BadFriendFile("That isn't a friend file.")
     match = _LINE.search(text)
@@ -128,13 +146,15 @@ def parse(text: str) -> FriendFile:
         raise BadFriendFile("The friend file is damaged. Ask for it again.")
     version, house, session, pairing, invite_id, secret, expires, name_len = _FIXED.unpack(
         raw[: _FIXED.size])
-    if version != VERSION:
+    if version > VERSION or version < OLDEST_KNOWN:
         raise BadFriendFile("This friend file is from a newer Domovoi. Update this house first.")
     if name_len > NAME_MAX_BYTES or len(raw) != _FIXED.size + name_len + 64:
         raise BadFriendFile("The friend file is damaged. Ask for it again.")
     body, signature = raw[: _FIXED.size + name_len], raw[_FIXED.size + name_len:]
     if not fid.verify(house, fid.CTX_FRIEND_FILE, body, signature):
         raise BadFriendFile("The friend file has been changed or damaged. Ask for it again.")
+    if version != VERSION:  # signed as v1 by its house: it pairs the old way
+        raise OldFriendFile(OLD_FILE)
     try:
         name = body[_FIXED.size:].decode("utf-8")
     except UnicodeDecodeError as exc:
