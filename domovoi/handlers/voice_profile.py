@@ -1795,7 +1795,12 @@ class VoiceProfileHandler(Handler):
         """The answer to "I already know someone called X. Is that you?"
         (owner decision 2026-10-15). Yes: it is that person — the clip from
         the question's turn goes into X's SATELLITE samples, tagged with the
-        room it was asked in. No: a different X — a new person with the
+        room it was asked in. When X already has samples there, all of them
+        short (under :data:`ROOM_SAMPLE_GOOD_SEC`), the yes instead starts
+        the room-learning collection a recognized X gets
+        (:meth:`_offer_learn_here`): its longer recording replaces X's
+        samples in that room, and only if it holds more speech than they
+        did. No: a different X — a new person with the
         name, enrolled from the same clip right away, and the People page
         flags the pair (``namesakes``). Only from a satellite: a chat mic
         never writes a satellite sample."""
@@ -1822,6 +1827,19 @@ class VoiceProfileHandler(Handler):
                 sample_seconds=_speech_of(clips) if clips is not None else None,
             )
             return await self._go_on(response, saved, clips, ctx, session, keep_text=True)
+        # X already has short samples here (a one-second clip, say): learn
+        # the room as X's own recognized voice would (_offer_learn_here), so
+        # the longer recording REPLACES them instead of sitting beside them.
+        here = await self._short_room_samples(person_id, room_id, ctx, session, clips)
+        if here:
+            if await self._is_denylisted(embedding, session):
+                return self._say("I wasn't able to save that voice profile.", ctx)
+            learn = await self._start_room_learning(
+                person_id, name, room_id, here, clips, ctx, session,
+                claimed_by=_claimed_by(data), lead=f"Thanks, {name}.",
+            )
+            if learn is not None:
+                return learn
         response = await self._add_room_sample(
             person_id, name, embedding, room_id, ctx, session, claimed_by=_claimed_by(data),
             saved=saved, sample_seconds=_speech_of(clips) if clips is not None else None,
@@ -2124,35 +2142,79 @@ class VoiceProfileHandler(Handler):
         the room's sample (claimed for the room), replacing the short ones
         there. None: the room has a good sample (today's "I already know
         you" stands), or this is not a satellite's introduction."""
-        if clips is None or not ctx.room_id or phone_chat_mic(ctx) or is_phone_room(ctx.room_id):
-            return None
         person_id, name = int(existing[0]), existing[1]
+        here = await self._short_room_samples(person_id, ctx.room_id, ctx, session, clips)
+        if here is None:
+            return None
+        return await self._start_room_learning(
+            person_id, name, ctx.room_id, here, clips, ctx, session,
+            claimed_by=person_id, lead=f"I already know you, {name}.",
+        )
+
+    async def _short_room_samples(
+        self,
+        person_id: int,
+        room_id: str | None,
+        ctx: Context,
+        session: AsyncSession,
+        clips: list | None,
+    ) -> list[tuple[int, float | None]] | None:
+        """``(id, sample_seconds)`` of ``person_id``'s SATELLITE samples in
+        ``room_id`` (oldest first, maybe none) when none of them holds
+        :data:`ROOM_SAMPLE_GOOD_SEC` of speech: the samples a room-learning
+        collection (:meth:`_start_room_learning`) may replace. Only that
+        person, only that room. None: the room has a good one, the read
+        failed, or this is not a satellite's collecting introduction."""
+        if clips is None or not room_id or phone_chat_mic(ctx) or is_phone_room(room_id):
+            return None
         try:
             here = await VoiceProfilesRepository(session).room_samples(
-                person_id, ctx.room_id, VoiceProfilesRepository.EMBEDDING_MODEL_TAG,
+                person_id, room_id, VoiceProfilesRepository.EMBEDDING_MODEL_TAG,
             )
         except Exception as e:
             log.warning("learning a room: reading its samples failed: %s", e)
             return None
         if any((secs or 0.0) >= ROOM_SAMPLE_GOOD_SEC for _id, secs in here):
             return None
+        return here
+
+    async def _start_room_learning(
+        self,
+        person_id: int,
+        name: str,
+        room_id: str,
+        here: list[tuple[int, float | None]],
+        clips: list,
+        ctx: Context,
+        session: AsyncSession,
+        *,
+        claimed_by: int | None,
+        lead: str,
+    ) -> Response | None:
+        """Park a room-learning collection for ``person_id`` in ``room_id``,
+        seeded with ``clips``: "<lead> Let me learn your voice better here:
+        count from one to ten …". Nothing is saved now. Its result becomes
+        the room's sample in place of ``here`` (:meth:`_save_learned_room`),
+        and only when it holds more speech than the best of them, so a
+        collection that ends early, short or not at all keeps them. None:
+        it couldn't be parked."""
         parked = await self._park_collect(
             _STAGE_COUNT, name, person_id, None, clips, ctx, session,
             extra={
-                _LEARN_ROOM_KEY: ctx.room_id,
+                _LEARN_ROOM_KEY: room_id,
                 "replace_ids": [int(i) for i, _s in here],
                 "have_secs": max([float(s or 0.0) for _i, s in here], default=0.0),
-                _CLAIMED_BY_KEY: person_id,
+                _CLAIMED_BY_KEY: claimed_by,
             },
         )
         if not parked:
             return None
         log.info(
             "learning person_id=%d's voice in room=%s (%d short sample(s) there)",
-            person_id, ctx.room_id, len(here),
+            person_id, room_id, len(here),
         )
         return Response(
-            text=f"I already know you, {name}. Let me learn your voice better here: "
+            text=f"{lead} Let me learn your voice better here: "
             "count from one to ten for me, at your normal voice.",
             session_id=ctx.session_id, matched_handler=self.name, expect_followup=True,
         )

@@ -528,3 +528,22 @@ def test_person_names_module_is_pure() -> None:
         for a in (n.names if isinstance(n, ast.Import) else [n])
     }
     assert not any(m and (m.startswith("domovoi.db") or m == "domovoi.config") for m in imported)
+
+
+def test_the_voice_match_docs_quote_the_configs_default_threshold() -> None:
+    """The API docs' default threshold is read from the config (it once
+    said 0.75, Resemblyzer's, long after the default became 0.58); the
+    committed web/openapi.json carries the same text."""
+    import json
+    from pathlib import Path
+
+    from domovoi.config import Settings
+    from web.backend.schemas import VoiceMatchInfo
+
+    default = Settings.model_fields["voice_profile_match_threshold"].default
+    quoted = f"``voice_profile_match_threshold``,\n{default} by default"
+    assert quoted in VoiceMatchInfo.model_json_schema()["description"]
+    spec = json.loads(
+        (Path(__file__).resolve().parents[2] / "web" / "openapi.json").read_text(encoding="utf-8"),
+    )
+    assert quoted in spec["components"]["schemas"]["VoiceMatchInfo"]["description"]
