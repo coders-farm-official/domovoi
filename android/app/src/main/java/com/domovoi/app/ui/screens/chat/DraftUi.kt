@@ -552,3 +552,47 @@ internal fun shareDraftFile(context: Context, name: String, bytes: ByteArray): B
         .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
     context.startActivity(android.content.Intent.createChooser(send, name).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
 }.isSuccess
+
+/** Under a chat attachment's print card when the home has no printer yet. */
+internal const val ATTACHMENT_NO_PRINTER = "No printer is set up yet. Add one in Settings → Printers & scanners."
+
+/**
+ * The card on a reply that offers to print a file attached in the chat
+ * ("print this", 1.4.1): the file's name and kind, and Print, which opens
+ * the home's Print sheet for it. Nothing to open, save or share here: the
+ * attachment is the chat's, not a draft. With no printer at the home, the
+ * card says so instead of offering a Print that can't work; while the
+ * printers are still being read ([printers] null), it offers nothing yet.
+ */
+@Composable
+internal fun AttachmentPrintCard(
+    att: PrintAttachmentRef,
+    printers: com.domovoi.app.ui.screens.printing.PrintersResponse?,
+    onPrint: () -> Unit,
+) {
+    val kind = if (att.kind == "image") "image" else "document"
+    val name = att.name.ifBlank { "attachment" }
+    Column(
+        Modifier.widthIn(max = 480.dp).fillMaxWidth()
+            .background(Domovoi.colors.card, RoundedCornerShape(10.dp))
+            .border(1.dp, Domovoi.colors.border, RoundedCornerShape(10.dp))
+            .padding(12.dp)
+            .semantics(mergeDescendants = true) { contentDescription = "$kind to print: $name" },
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Icon(Icons.Outlined.Print, null, tint = Domovoi.colors.fgMuted)
+            Text("$kind ·", style = MaterialTheme.typography.labelMedium, color = Domovoi.colors.fgMuted)
+            Text(name, style = MaterialTheme.typography.labelLarge, color = Domovoi.colors.fg, maxLines = 1,
+                overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+        }
+        when {
+            printers == null -> Unit
+            printers.hasPrinter -> Button(onClick = onPrint) {
+                Icon(Icons.Outlined.Print, null, modifier = Modifier.padding(end = 6.dp))
+                Text("Print")
+            }
+            else -> Text(ATTACHMENT_NO_PRINTER, style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted)
+        }
+    }
+}
