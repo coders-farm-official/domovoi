@@ -2,6 +2,7 @@ package com.domovoi.app.assistant
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -96,7 +97,7 @@ class FoldCheckVoiceTest {
         clockStyle = { ClockStyle(la, Locale.US, is24Hour = false) },
         actions = host,
     ).also { c ->
-        scope.launch { c.messages.collect { said += it } }
+        scope.launch(start = CoroutineStart.UNDISPATCHED) { c.messages.collect { said += it } }
         until("ready") { c.state.value.installed && c.state.value.voiceReady }
     }
 
