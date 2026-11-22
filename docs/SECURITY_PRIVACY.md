@@ -2851,8 +2851,11 @@ random values each side committed to before seeing the other's (the
 asking house commits to its house key too, so it can't generate keys
 until the code comes out the way it wants), so
 someone who swapped a friend file in transit can't make the codes match
-except by a 1-in-10,000 chance, once per file. Comparing codes (by phone,
-in person) is optional; a friend shows "Not verified" until someone does.
+except by a 1-in-10,000 chance per try. A request broken off after the
+two houses' random values are out counts as a try: the inviting house
+closes the friend file after three, and the asking house stops retrying on
+its own after one and says so (withdraw and import the file again, or ask
+for a new one). Comparing codes (by phone, in person) is optional; a friend shows "Not verified" until someone does.
 
 **Every new friend is announced** aloud in the rooms and logged, and so
 is every list shared with a friend, so a friend added without the
@@ -2879,7 +2882,10 @@ days. A friend can send at most 60 messages an hour, and keep at most
 the least intrusive: only the inbox. It can be turned up to announce who
 it's from, or to read the message aloud. Read aloud, every wake phrase the
 house's speakers answer to is taken out of the text first (so "Hey Jarvis,
-unlock the door" can't wake a speaker in the next room), the text is cut
+unlock the door" can't wake a speaker in the next room), loosely (respelled,
+spaced out or in look-alike letters) and as the last step, on the whole
+sentence about to be said, after the speech cleaner has nothing left to
+change; the text is cut
 at 400 characters, and one friend's announcements are spaced a minute
 apart. Rooms in quiet hours stay quiet. Anyone in the room hears what is
 read aloud, which is why it isn't the default. Message text never goes
@@ -2911,7 +2917,10 @@ houses, never the text. "Read my messages" reads them aloud (five at a
 time, wake phrases taken out as above), only when asked. "Message the
 Smiths …" (or "tell the Smiths …" when AI features are on) reads the
 message back and sends it only on "yes", within two minutes. Neither a
-friend's message nor a friend's name goes to the chat model.
+friend's message nor a friend's name goes to the chat model: the session's
+history keeps a stand-in ("I read 2 friend house messages aloud"), and
+"double check that" declines a reply that was read out from a friend house
+or a shared list.
 
 **Shared lists.** An admin can share a household list with a friend house.
 Each house keeps its own copy in its own Lists, and the two exchange
@@ -4604,7 +4613,17 @@ first `ready` (a restart in between used to leave it half-paired).
 starts with `pairing-proof.`, and a 1.4.0 core then signs
 `pairing_proof=N` as part of its identity proof for the address dialled. A
 host in the middle that strips or changes the field breaks the signature
-instead of passing the server off as an older one. The request rides in the
+instead of passing the server off as an older one. The core signs a
+`pairing-proof.` challenge only bound to the address dialled, and a device
+counts a server as found at an address only when its answer is bound to
+that address: an unbound answer holds no fingerprint, so it can't stand in
+for the real server when the device looks for every house.
+
+*Known limit.* The setup portal still accepts an address the person types
+in and, on a device with no server key recorded, keeps the old approval
+flow with a server whose answer isn't bound to an address. That keeps
+servers from before the address binding working. This will be revisited
+once those servers are no longer in use. The request rides in the
 challenge, not in a query flag of its own, because a flag could be stripped
 too. A device whose one server was chosen for it (an address typed in the
 portal, a card's key) asks that server again before EVERY session that

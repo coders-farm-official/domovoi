@@ -144,9 +144,10 @@ class FriendHousesHandler(Handler):
     def offers_tool(self, transcript: str) -> bool:
         return False  # friend text and friend names stay out of the model
 
-    def _reply(self, ctx: Context, text_: str, *, ask: bool = False) -> Response:
+    def _reply(self, ctx: Context, text_: str, *, ask: bool = False,
+               history_text: str | None = None) -> Response:
         return Response(text=text_, session_id=ctx.session_id, matched_handler=self.name,
-                        expect_followup=ask)
+                        expect_followup=ask, history_text=history_text)
 
     async def execute(self, intent: Intent, ctx: Context, session: AsyncSession) -> Response:
         return self._reply(ctx, "Say \"any messages\", \"read my messages\", or \"tell\" and a "
@@ -206,7 +207,11 @@ class FriendHousesHandler(Handler):
         names = [messages.safe_name(c["name"], phrases) for c in convos]
         who = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
         word = "message" if total == 1 else "messages"
-        return self._reply(ctx, f"{total} new {word}, from {who}. Say \"read my messages\" to hear them.")
+        # The chat model's history keeps a stand-in: friend house names are
+        # the friends' own words, as their messages are (see _read).
+        return self._reply(ctx, f"{total} new {word}, from {who}. Say \"read my messages\" to hear them.",
+                           history_text=f"I said there {'is' if total == 1 else 'are'} {total} new "
+                                        f"friend house {word}.")
 
     # ─── read ─────────────────────────────────────────────────────────
     async def _read(self, m: re.Match[str], ctx: Context, session: AsyncSession) -> Response:
@@ -242,7 +247,15 @@ class FriendHousesHandler(Handler):
                 break
         more = sum(c["unread"] for c in convos) - read
         tail = f" There {'is' if more == 1 else 'are'} {more} more in the inbox." if more > 0 else ""
-        return self._reply(ctx, " ".join(parts) + tail if parts else "No new messages.")
+        if not parts:
+            return self._reply(ctx, "No new messages.")
+        # The whole sentence is filtered once more: two messages side by
+        # side can make a phrase that neither has alone. The chat model's
+        # history keeps a stand-in, as the Lists handler does for a friend's
+        # items: a friend's words never become an earlier answer to it.
+        return self._reply(ctx, messages.speakable(" ".join(parts) + tail, phrases),
+                           history_text=f"I read {len(parts)} friend house "
+                                        f"{'message' if len(parts) == 1 else 'messages'} aloud.")
 
 
 async def offer_to_friend(target: str, body: str, ctx: Context,

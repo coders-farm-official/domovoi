@@ -1498,6 +1498,9 @@ class SessionRepository:
 
         ctx["recent_turns"] = recent
         ctx["last_assistant_response"] = last_response if last_response is not None else assistant_text
+        # A reply the history keeps a stand-in for carries text that must not
+        # reach a model (a friend house's words): "double check that" asks.
+        ctx["last_response_kept_out"] = last_response is not None
 
         await self.s.execute(
             text(

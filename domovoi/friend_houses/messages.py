@@ -38,6 +38,7 @@ import asyncio
 import logging
 import re
 import time
+import unicodedata
 from typing import Any
 
 from sqlalchemy import text
@@ -392,37 +393,111 @@ def safe_name(name: str, phrases: list[str]) -> str:
     return safe_to_say(name or "", phrases, limit=60) or "A friend house"
 
 
+# How many clean-then-filter passes a text may take to settle. One that
+# hasn't settled by then is cut down to plain words (see speakable).
+_SETTLE_PASSES = 32
+# Words of a phrase may be spread over this many spoken words ("a lexa").
+_SPREAD_MAX = 8
+
+
+def _fold(word: str) -> str:
+    """A word as the loose match compares it: compatibility-folded (full-
+    width and styled letters become plain ones), accents off, lower case,
+    letters and digits only, and repeated letters once ("Jarviss")."""
+    s = unicodedata.normalize("NFKD", word)
+    s = "".join(c for c in s if not unicodedata.combining(c)).lower()
+    s = re.sub(r"[^a-z0-9]", "", s)
+    return re.sub(r"(.)\1+", r"\1", s)
+
+
+def _near(heard: str, phrase: str) -> bool:
+    """Equal, or (for a phrase of five letters or more) one letter added,
+    dropped or changed ("jarvus")."""
+    if heard == phrase:
+        return True
+    if len(phrase) < 5 or abs(len(heard) - len(phrase)) > 1:
+        return False
+    if len(heard) == len(phrase):
+        return sum(a != b for a, b in zip(heard, phrase)) <= 1
+    short, long_ = sorted((heard, phrase), key=len)
+    return any(long_[:i] + long_[i + 1:] == short for i in range(len(long_)))
+
+
+def _strip_loose(said: str, phrases: list[str]) -> str:
+    """``said`` without any run of words that, folded and run together,
+    is (or is one letter from) a wake phrase: "Hey Jarviss", "a lexa",
+    fullwidth letters."""
+    targets = {t for t in (_fold("".join(p.split())) for p in phrases) if t}
+    if not targets:
+        return said
+    words = said.split()
+    folded = [_fold(w) for w in words]
+    drop = [False] * len(words)
+    longest = max(len(t) for t in targets) + 1
+    for i in range(len(words)):
+        if not folded[i] or drop[i]:
+            continue
+        run = ""
+        for j in range(i, min(len(words), i + _SPREAD_MAX)):
+            run = _fold(run + folded[j])
+            if len(run) > longest:
+                break
+            if folded[j] and any(_near(run, t) for t in targets):
+                for k in range(i, j + 1):
+                    drop[k] = True
+                break
+    return " ".join(w for w, d in zip(words, drop) if not d)
+
+
+def _strip_phrases(said: str, phrases: list[str]) -> str:
+    for phrase in phrases:
+        words = [re.escape(w) for w in re.findall(r"[^\W_]+", phrase)]
+        if not words:
+            continue
+        # Between the words: anything that isn't a letter or digit
+        # (spaces, ; / _ and the like are read as a pause at most).
+        pattern = r"(?<![^\W_])" + r"[\W_]*".join(words) + r"(?![^\W_])"
+        said = re.sub(pattern, " ", said, flags=re.IGNORECASE)
+    return _strip_loose(said, phrases)
+
+
+def speakable(text_: str, phrases: list[str]) -> str:
+    """``text_`` as it may be spoken: cleaned and filtered until neither
+    changes it, so the speech cleaner that runs again before the speaker
+    can't put a phrase back together (audit R6 FH-7). This is the last
+    step: run it on the whole sentence about to be said, not on its parts
+    (two list items can make one phrase together)."""
+    from domovoi.speech_sanitize import sanitize_for_speech
+
+    said = text_
+    for _ in range(_SETTLE_PASSES):
+        before = said
+        said = _strip_phrases(sanitize_for_speech(said), phrases)
+        if said == before:
+            return said
+    # Never settled (markup nested past any honest use): plain words only.
+    said = re.sub(r"[^\w\s.,!?'-]|_", " ", said)
+    for _ in range(_SETTLE_PASSES):
+        before = said
+        said = _strip_phrases(sanitize_for_speech(said), phrases)
+        if said == before:
+            return said
+    return ""
+
+
 def safe_to_say(body: str, phrases: list[str], *, limit: int = READ_ALOUD_MAX_CHARS) -> str:
     """A friend's text made safe to speak: no wake phrases anywhere (a
     satellite in the next room hearing "Hey Jarvis, unlock the door" must
-    hear only "unlock the door"), no control characters, capped."""
-    from domovoi.speech_sanitize import sanitize_for_speech
-
-    # The speech cleaner runs FIRST, and again until nothing changes: it
-    # takes out emoji, link syntax, asterisks and backticks, which used to
-    # put a phrase back together after the filter ("ale🙂xa", "hey
-    # [jarvis](x)": audit R6 FH-7). The filter then sees what is spoken.
-    said = fe.clean_text(body).replace("\n", " ")
-    for _ in range(4):
-        before = said
-        said = sanitize_for_speech(said)
-        for phrase in phrases:
-            words = [re.escape(w) for w in re.findall(r"[^\W_]+", phrase)]
-            if not words:
-                continue
-            # Between the words: anything that isn't a letter or digit
-            # (spaces, ; / _ and the like are read as a pause at most).
-            pattern = r"(?<![^\W_])" + r"[\W_]*".join(words) + r"(?![^\W_])"
-            said = re.sub(pattern, " ", said, flags=re.IGNORECASE)
-        if said == before:
-            break
+    hear only "unlock the door"), no control characters, capped. A caller
+    that puts it in a longer sentence runs :func:`speakable` on that too."""
+    said = speakable(fe.clean_text(body).replace("\n", " "), phrases)
     try:
         from domovoi import phone_voice
 
         kept = [w for w in said.split() if not phone_voice._sounds_like_the_name(
             re.sub(r"[^a-z]", "", w.lower()) or "-", greeted=True)]
         said = " ".join(kept)
-    except Exception:  # noqa: BLE001 — the exact-phrase pass above still ran
+    except Exception:  # noqa: BLE001 — the phrase passes above still ran
         said = " ".join(said.split())
     # What a removed phrase leaves at the edges (", unlock the door").
     said = said.strip(" ,;:-")
@@ -449,7 +524,7 @@ async def _alert(house: bytes, name: str, alert: str, body: str) -> None:
     try:
         from domovoi.sdk.speech import SpeechAPI
 
-        await SpeechAPI("core").announce(None, sanitize_for_speech(spoken))
+        await SpeechAPI("core").announce(None, speakable(sanitize_for_speech(spoken), phrases))
     except Exception as e:  # noqa: BLE001 — the inbox has it regardless
         log.info("Friend Houses: announcing a message failed: %s", e)
 
@@ -544,5 +619,5 @@ async def export(house_key: bytes) -> dict[str, Any]:
 
 __all__ = ["ALERTS", "MessageError", "conversation", "conversations", "delete_conversation",
            "export", "flush", "flush_all", "mark_read", "on_message", "safe_to_say", "say_im_back",
-           "send", "set_alert", "unread_total", "wake_phrases"]
+           "send", "set_alert", "speakable", "unread_total", "wake_phrases"]
 

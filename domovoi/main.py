@@ -1565,6 +1565,13 @@ async def health(
         identity = server_identity.load_or_create()
         if not challenge:
             doc["identity"] = identity.public_document()
+        elif addr is None and server_identity.asks_for_pairing_proof(challenge):
+            # Every device that asks this form also names the address it
+            # dialed: an unbound answer to it is only ever useful to
+            # something in between, so it is not signed.
+            block = identity.public_document()
+            block["challenge"] = challenge
+            doc["identity"] = block
         elif addr is None:
             if not _UNBOUND_CHALLENGE_SEEN:
                 _UNBOUND_CHALLENGE_SEEN = True
@@ -4000,9 +4007,20 @@ async def admin_friend_houses_status() -> dict[str, Any]:
     out["unread"] = await messages.unread_total()
     out["invite_days"] = await friending.invite_days_default()
     out["changes"] = await friending.recent_changes()  # new friends, shared lists (R6 FH-8)
+    out["notice"] = await friending.notice()  # e.g. a friend file closed after failed tries
     out["limits"] = {"min_days": friending.MIN_DAYS, "max_days": friending.MAX_DAYS,
                      "max_open_files": friending.MAX_OPEN_INVITES}
     return out
+
+
+@app.delete("/v1/admin/friend-houses/notice", dependencies=_FH_WRITE)
+async def admin_friend_houses_dismiss_notice() -> dict[str, Any]:
+    """Dismiss the Friend Houses page's notice (making a friend file clears
+    it too)."""
+    from domovoi.friend_houses import friending
+
+    await friending.dismiss_notice()
+    return {"dismissed": True}
 
 
 @app.put("/v1/admin/friend-houses/settings", dependencies=_FH_WRITE)
