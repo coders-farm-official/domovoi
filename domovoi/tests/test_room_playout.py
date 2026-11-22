@@ -457,3 +457,76 @@ def test_core_serves_the_room_audio_route() -> None:
     from domovoi.main import app
 
     assert any(getattr(r, "path", None) == "/v1/room-audio/{satellite_id}" for r in app.routes)
+
+
+def test_pairing_auth_refuses_a_missing_token_in_any_pairing_mode(monkeypatch) -> None:
+    from domovoi.config import settings
+    from domovoi.room_playout import session as S
+
+    for strict in (False, True):
+        monkeypatch.setattr(settings, "satellite_pairing_strict", strict)
+        assert asyncio.run(S.pairing_auth("kitchen", None)) is False
+        assert asyncio.run(S.pairing_auth("kitchen", "")) is False
+
+
+@pytest.mark.parametrize("sid", ["Kitchen", "kitchen-2", "2kitchen", "k" * 33, "kitchen%0A"])
+def test_socket_refuses_a_malformed_satellite_id(sid: str) -> None:
+    playout = RoomPlayout(InMemoryRoomRegistry(), run_tasks=False)
+    client = TestClient(_app(playout, {sid: "tok"}))
+    with client.websocket_connect(f"/v1/room-audio/{sid}") as ws:
+        ws.send_text(_hello())
+        err = P.decode_msg(ws.receive_text())
+        assert err["type"] == "error" and err["reason"] == "bad_hello"
+    assert playout.streamers == {} and playout.speakers(sid) == []
+
+
+def test_satellite_id_rule_matches_the_core() -> None:
+    from domovoi.main import _ROOM_ID_RE
+
+    assert P.SATELLITE_ID_RE.pattern == _ROOM_ID_RE.pattern
+
+
+def test_idle_streamers_are_dropped_once_no_one_listens() -> None:
+    playout = RoomPlayout(InMemoryRoomRegistry(), run_tasks=False)
+    a, b = ListSink(), ListSink()
+    for n in range(20):
+        playout.attach(f"room_{n}", a)
+        playout.detach(f"room_{n}")
+    assert playout.streamers == {}
+
+    # A room that still plays keeps its streamer until it is silent.
+    playout.attach("kitchen", a)
+    playout.attach("den", b)
+    playout.say("kitchen", np.zeros(960, "<i2").tobytes(), 48_000, 1)
+    playout.detach("kitchen")
+    assert set(playout.streamers) == {"kitchen", "den"}
+    playout.stop("kitchen")
+    assert playout.reap_idle() == ["kitchen"]
+    assert set(playout.streamers) == {"den"}      # den still has a listener
+    playout.detach("den")
+    assert playout.streamers == {}
+
+
+def test_unsent_pongs_are_capped() -> None:
+    """Pings keep arriving while nothing is sent (a stuck reader): the
+    pongs waiting to go out stay bounded."""
+    from domovoi.room_playout import session as S
+
+    pings = 10 * S.MAX_PINGS_PER_S
+    clock = iter(range(0, pings * 20_000 + 1, 20_000))   # 50 pings a second
+
+    class FakeWs:
+        n = 0
+
+        async def receive(self) -> dict:
+            self.n += 1
+            if self.n > pings:
+                return {"type": "websocket.disconnect"}
+            return {"type": "websocket.receive",
+                    "text": P.encode_msg({"type": "ping", "t0": self.n})}
+
+    sess = S.RoomAudioSession(FakeWs(), "kitchen", RoomPlayout(run_tasks=False),  # type: ignore[arg-type]
+                              clock=lambda: next(clock))
+    asyncio.run(sess._recv_loop())
+    assert len(sess._pongs) == S.MAX_PONGS
+    assert sess._pongs[-1][0] == pings          # the newest are kept
