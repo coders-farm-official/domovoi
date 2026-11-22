@@ -1531,6 +1531,12 @@ kit_check() {
     refuse 1 failed "The kit has no AI models. Install with --no-ai-models (AI chat and questions can be added later, with internet), or make a kit with AI chat ticked."
   fi
   kit_env
+  # What the installer's window says: nothing is downloaded.
+  STEP_TITLE[models]="Copying the AI models from the offline kit"
+  STEP_TITLE[whisper]="Copying the speech recognition model from the offline kit"
+  STEP_TITLE[piper]="Copying the voices from the offline kit"
+  STEP_TITLE[phone-app]="Copying the phone app from the offline kit"
+  STEP_TITLE[images]="Loading the container images from the offline kit"
   log "offline kit: Domovoi $KIT_VERSION ($KIT_TAG, commit ${KIT_COMMIT:0:12}) at $OFFLINE_KIT, for ${KIT_TARGETS// /, }; includes: ${KIT_INCLUDES:-nothing optional}; nothing is downloaded"
 }
 
