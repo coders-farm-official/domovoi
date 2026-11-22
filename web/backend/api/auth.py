@@ -658,7 +658,10 @@ async def auth_phone_grant_exchange(
         log.info("phone grant exchange refused: expired (device %r)", body.device_id)
         raise HTTPException(status_code=401, detail=_PHONE_GRANT_EXPIRED_DETAIL)
     token, grant_expires_at = outcome
-    admin_auth.LOGIN_BACKOFF.record_success(source)
+    # Hand back this attempt's reservation only. record_success would also
+    # clear the address's wrong-password streak, and a good exchange says
+    # nothing about the password, so that streak is left as it was.
+    admin_auth.LOGIN_BACKOFF.release(source)
     log.info("phone grant exchanged for an admin session (device %r)", body.device_id)
     payload: dict[str, Any] = {
         "token": token,

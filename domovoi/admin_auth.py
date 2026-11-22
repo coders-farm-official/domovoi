@@ -2410,6 +2410,9 @@ class LoginBackoff:
         self._global: list[float] = []
         # source -> the global timestamp of its outstanding reservation
         self._reserved: dict[str, float] = {}
+        # source -> the last-failure time before its reservation, so a
+        # released attempt leaves the wait where it was
+        self._prior_last: dict[str, float] = {}
 
     def _prune_global(self, now: float) -> None:
         cutoff = now - GLOBAL_LOGIN_WINDOW_SEC
@@ -2451,6 +2454,7 @@ class LoginBackoff:
     def record_failure(self, source: str) -> None:
         """A confirmed failure. If the attempt was :meth:`reserve`d this
         is a no-op on the counters — the reservation already counted it."""
+        self._prior_last.pop(source, None)
         if self._reserved.pop(source, None) is None:
             self._count(source)
 
@@ -2461,14 +2465,17 @@ class LoginBackoff:
         source could all pass the check before any of them was recorded.
         Reserving up front closes that window: the attempt is a failure
         until :meth:`record_success` says otherwise."""
+        self._prior_last[source] = self._failures.get(source, (0, 0.0))[1]
         self._reserved[source] = self._count(source)
 
     def release(self, source: str) -> None:
         """Hand back an outstanding reservation WITHOUT a verdict: the check
         could not run (the database did not answer), so the attempt was
-        neither a failure nor a success. Undoes what :meth:`reserve` counted;
-        the streak before it is left as it was."""
+        neither a failure nor a success; or the attempt said nothing about
+        the password (a good phone-grant exchange). Undoes what :meth:`reserve` counted,
+        and the streak and its wait are left as they were."""
         reserved = self._reserved.pop(source, None)
+        prior_last = self._prior_last.pop(source, None)
         if reserved is None:
             return
         try:
@@ -2481,7 +2488,9 @@ class LoginBackoff:
             if failures <= 1:
                 self._failures.pop(source, None)
             else:
-                self._failures[source] = (failures - 1, last)
+                self._failures[source] = (
+                    failures - 1, last if prior_last is None else prior_last
+                )
 
     def record_success(self, source: str) -> None:
         # Clears the source's OWN streak. A reservation this attempt made
@@ -2490,6 +2499,7 @@ class LoginBackoff:
         # ceiling is an aggregate-abuse backstop and drains only on its
         # own clock, so a single success can't reset it.
         self._failures.pop(source, None)
+        self._prior_last.pop(source, None)
         reserved = self._reserved.pop(source, None)
         if reserved is not None:
             try:
@@ -2501,6 +2511,7 @@ class LoginBackoff:
         self._failures.clear()
         self._global.clear()
         self._reserved.clear()
+        self._prior_last.clear()
 
 
 LOGIN_BACKOFF = LoginBackoff()
