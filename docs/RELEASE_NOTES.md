@@ -32,7 +32,7 @@ a way that would otherwise get reported as a bug.
   non-commercial use; data CC BY 4.0), or wttr.in when Open-Meteo has no
   answer, and answers with the current temperature and conditions (in
   Fahrenheit for a US place). The place is the
-  **Home location** in Settings → Household (below). With
+  **Home location** in Settings → Household (above). With
   Settings > Privacy > Internet on "always", Domovoi no longer asks "want me
   to check?" first. With no place set it says where to set it. If the
   weather sources return nothing, it falls back to a general web search as
