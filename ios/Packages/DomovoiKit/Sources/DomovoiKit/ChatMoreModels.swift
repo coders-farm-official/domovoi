@@ -627,6 +627,43 @@ public struct ChatMoreInternet: Equatable, Sendable, Decodable {
 
 // MARK: - the per-row extras, and the read they come from
 
+/// A file attached in a home-server chat that a reply offers to print
+/// (`print_attachment`: `{token, name, kind}`, 1.4.1). Its Print goes to
+/// `/api/chat/attachments/{token}/print/...` (``PrintingTarget/chatAttachment(token:)``).
+public struct ChatPrintAttachment: Equatable, Sendable, Decodable {
+    public let token: String
+    public let name: String
+    /// `image` or `document`.
+    public let kind: String
+
+    public init(token: String, name: String, kind: String = "document") {
+        self.token = token
+        self.name = name
+        self.kind = kind
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        token = try values.decodeIfPresent(String.self, forKey: .token) ?? ""
+        name = try values.decodeIfPresent(String.self, forKey: .name) ?? ""
+        kind = try values.decodeIfPresent(String.self, forKey: .kind) ?? "document"
+    }
+
+    private enum CodingKeys: String, CodingKey { case token, name, kind }
+
+    /// Only a token that is plainly the server's (hex, at most 128) goes into
+    /// a path. Android's `PrintAttachmentRef.usable`.
+    public var usable: Bool {
+        !token.isEmpty && token.count <= 128 && token.allSatisfy { $0.isHexDigit && $0.isASCII }
+    }
+
+    /// The card's kind word: `image` or `document`.
+    public var kindWord: String { kind == "image" ? "image" : "document" }
+
+    /// The file's name, or `attachment` when the server sent none.
+    public var shownName: String { name.isEmpty ? "attachment" : name }
+}
+
 /// Everything a row carries that the transcript drops.
 ///
 /// Keyed by message id in ``ChatMoreDetail``, so ``ChatTranscript`` and
@@ -648,6 +685,10 @@ public struct ChatMoreRowExtras: Equatable, Sendable {
     public let speakerName: String?
     public let speakerConfidence: Double?
     public let speakerConfident: Bool
+    /// A reply offering to print a file attached in the chat ("print this",
+    /// 1.4.1), under its own key so an app from before it shows only the
+    /// reply's words. Android's `PrintAttachmentRef`.
+    public let printAttachment: ChatPrintAttachment?
 
     public init(
         id: Int64,
@@ -664,7 +705,8 @@ public struct ChatMoreRowExtras: Equatable, Sendable {
         speakerPersonID: Int64? = nil,
         speakerName: String? = nil,
         speakerConfidence: Double? = nil,
-        speakerConfident: Bool = false
+        speakerConfident: Bool = false,
+        printAttachment: ChatPrintAttachment? = nil
     ) {
         self.id = id
         self.role = role
@@ -681,6 +723,7 @@ public struct ChatMoreRowExtras: Equatable, Sendable {
         self.speakerName = speakerName
         self.speakerConfidence = speakerConfidence
         self.speakerConfident = speakerConfident
+        self.printAttachment = printAttachment
     }
 
     /// The row **is** a card rather than words: a lookup permission card, or
@@ -724,6 +767,7 @@ struct ChatMoreRow: Decodable {
         case speakerName = "speaker_name"
         case speakerConfidence = "speaker_confidence"
         case speakerConfident = "speaker_confident"
+        case printAttachment = "print_attachment"
     }
 
     init(from decoder: any Decoder) throws {
@@ -743,7 +787,8 @@ struct ChatMoreRow: Decodable {
             speakerPersonID: try values.decodeIfPresent(Int64.self, forKey: .speakerPersonID),
             speakerName: try values.decodeIfPresent(String.self, forKey: .speakerName),
             speakerConfidence: try values.decodeIfPresent(Double.self, forKey: .speakerConfidence),
-            speakerConfident: try values.decodeIfPresent(Bool.self, forKey: .speakerConfident) ?? false
+            speakerConfident: try values.decodeIfPresent(Bool.self, forKey: .speakerConfident) ?? false,
+            printAttachment: try? values.decodeIfPresent(ChatPrintAttachment.self, forKey: .printAttachment)
         )
     }
 }

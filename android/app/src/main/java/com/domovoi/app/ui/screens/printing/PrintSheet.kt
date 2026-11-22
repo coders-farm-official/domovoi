@@ -99,7 +99,7 @@ internal fun PrintSheet(
                 preview = it
                 previewError = null
             }
-            .onFailure { previewError = printFailureText("preview", it) }
+            .onFailure { previewError = what.failureText("preview", it) }
         previewing = false
     }
 
@@ -231,7 +231,7 @@ internal fun PrintSheet(
                         scope.launch {
                             runAction { io.print(what, printerId, options) }
                                 .onSuccess { job = it }
-                                .onFailure { toast(printFailureText("print", it)) }
+                                .onFailure { toast(what.failureText("print", it)) }
                             sending = false
                         }
                     },

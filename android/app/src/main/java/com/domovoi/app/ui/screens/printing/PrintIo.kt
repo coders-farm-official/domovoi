@@ -115,6 +115,9 @@ internal sealed interface PrintTarget {
     val submitPath: String
     fun body(printerId: Long?, options: PrintOptions): JsonObject
 
+    /** What a failed preview or print says. */
+    fun failureText(action: String, e: Throwable): String = printFailureText(action, e)
+
     data class File(val libraryId: String, val path: String) : PrintTarget {
         override val previewPath = "/api/print/preview"
         override val submitPath = "/api/print/jobs"
@@ -126,7 +129,22 @@ internal sealed interface PrintTarget {
         override val submitPath = "/api/chat/drafts/$draftId/print/jobs"
         override fun body(printerId: Long?, options: PrintOptions) = printBody(null, null, printerId, options, version)
     }
+
+    /** A file attached in a home-server chat, printed from the reply that
+     *  offered it ("print this", 1.4.1): `/api/chat/attachments/{token}/print`.
+     *  A 404 means the attachment is gone from the server. */
+    data class ChatAttachment(val token: String) : PrintTarget {
+        override val previewPath = "/api/chat/attachments/$token/print/preview"
+        override val submitPath = "/api/chat/attachments/$token/print/jobs"
+        override fun body(printerId: Long?, options: PrintOptions) = printBody(null, null, printerId, options)
+        override fun failureText(action: String, e: Throwable): String =
+            if ((e as? com.domovoi.app.net.ApiException)?.status == 404) ATTACHMENT_GONE
+            else printFailureText(action, e)
+    }
 }
+
+/** A chat attachment that is no longer on the server. */
+internal const val ATTACHMENT_GONE = "this attachment isn't on the server any more, so it can't be printed"
 
 internal fun printBody(libraryId: String?, path: String?, printerId: Long?, options: PrintOptions, version: Int? = null): JsonObject =
     buildJsonObject {
