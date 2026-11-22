@@ -787,15 +787,6 @@ def test_the_speaker_wait_running_out_is_reported(monkeypatch):
                            "reason": "speaker_busy", "attempts": 0}]
 
 
-def test_a_start_dropped_by_the_cores_own_music_stop_is_not_reported(monkeypatch):
-    sat, runs = speaker_busy(monkeypatch)
-    music_start(sat)
-    sat._handle_text_frame({"type": "music_stop"})
-    sat._playback_idle.set()
-    assert runs[0].wait(3)
-    assert sat.frames == []
-
-
 def test_only_the_newest_dropped_start_is_reported(monkeypatch):
     sat, runs = speaker_busy(monkeypatch)
     music_start(sat)

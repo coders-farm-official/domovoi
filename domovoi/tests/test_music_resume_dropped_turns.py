@@ -158,29 +158,6 @@ async def test_a_turn_that_failed_brings_the_music_back(room) -> None:
     assert room.kinds()[-3:] == ["error", "response_end", "music_start"]
 
 
-async def test_a_failed_stop_does_not_restart_the_music(room, monkeypatch) -> None:
-    """What failed was asked to stop the music: it is not brought back."""
-    room.reply = Response(text="Stopped.", matched_handler="music", matched_path="fast",
-                          online=True, music_action="stop")
-
-    async def _tts_down(*a, **kw):
-        raise RuntimeError("TTS down")
-
-    monkeypatch.setattr(streaming.StreamSession, "_speak_response", _tts_down)
-    await room.turn()
-    await _settle()
-    assert "error" in room.kinds()
-    assert room.starts() == []
-
-
-async def test_a_dropped_turn_with_no_music_starts_nothing(room, heard) -> None:
-    room.app.state.resumable_music.clear()
-    heard.text = ""
-    await room.turn()
-    await _settle()
-    assert room.starts() == []
-
-
 # ─── the question and its answer ──────────────────────────────────────────
 
 

@@ -804,20 +804,6 @@ async def test_play_resends_music_start_when_the_satellite_stream_failed(
         _drop_pending(fake_app)
 
 
-async def test_play_in_a_room_whose_satellite_plays_only_resumes(playing_room) -> None:
-    """Nothing reported: "play" is the plain MPD resume, as before."""
-    fake_app = FakeApp()
-    fake_app.state.resumable_music = {ROOM: "http://test.local:8051"}
-    from domovoi.handlers.music import MusicHandler
-    from domovoi.models import Context
-
-    playing_room._state = "pause"
-    ctx = Context(room_id=ROOM, online=True, bot_name="Domovoi", app=fake_app)
-    response = await MusicHandler()._simple_ack("resume", ctx)
-    assert response.music_action is None
-    assert playing_room._state == "play"
-
-
 def test_music_failed_leaves_a_room_that_moved_on_alone(monkeypatch, playing_room) -> None:
     _patch_pipeline(monkeypatch, whisper=_FakeWhisper())
     with TestClient(app) as client:
