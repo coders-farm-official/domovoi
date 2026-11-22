@@ -432,3 +432,54 @@ async def test_no_grant_token_or_password_reaches_the_log(_db, caplog) -> None:
     for secret in (STRONG_PW, grant, wrong, token, minted, dt,
                    admin_auth.token_sha256(grant), admin_auth.token_sha256(minted)):
         assert secret not in logged
+
+
+# ═══ A grant's session ends with the grant ════════════════════════════════
+
+
+@requires_db
+async def test_a_grant_session_ends_at_the_grant_end_even_inside_its_hour(_db) -> None:
+    token, dt = await claimed()
+    grant = (await mint(token, dt)).json()["grant"]
+    # Ten minutes of the grant left: the session's clock says so too.
+    await sql("UPDATE admin_phone_grants SET expires_at = now() + interval '10 minutes'")
+    r = await exchange(dt, grant)
+    assert r.status_code == 200, r.text
+    minted = r.json()["token"]
+    assert r.json()["idle_in_sec"] <= 600
+    (row,) = await sql(
+        "SELECT s.hard_expires_at, g.expires_at FROM admin_sessions s "
+        "JOIN admin_phone_grants g ON g.id = s.phone_grant_id WHERE s.token_hash = :h",
+        h=admin_auth.token_sha256(minted),
+    )
+    assert row.hard_expires_at == row.expires_at
+    # An admin action inside the hour does not carry it past the grant's end.
+    assert await admin_auth.stamp_admin_activity(minted)
+    (after,) = await sql(
+        "SELECT expires_at, hard_expires_at FROM admin_sessions WHERE token_hash = :h",
+        h=admin_auth.token_sha256(minted),
+    )
+    assert after.expires_at <= after.hard_expires_at
+    # The grant's end passes: refused, though its last action was just now.
+    await sql(
+        "UPDATE admin_sessions SET hard_expires_at = now() - interval '1 second' "
+        "WHERE token_hash = :h", h=admin_auth.token_sha256(minted),
+    )
+    assert not await is_live(minted)
+    assert not await admin_auth.stamp_admin_activity(minted)
+    async with web_client(headers={**RW, **bearer(minted)}) as c:
+        assert (await c.get("/api/auth/sessions")).status_code == 401
+    assert await is_live(token)  # a password sign-in has no hard end
+
+
+@requires_db
+async def test_expired_grants_are_cleaned_up_with_the_sessions(_db) -> None:
+    token, dt = await claimed()
+    grant = (await mint(token, dt)).json()["grant"]
+    await mint(token, dt, device_id="second-phone")
+    await sql("UPDATE admin_phone_grants SET expires_at = now() - interval '1 second' "
+              "WHERE device_id = :d", d=DEVICE)
+    await login()  # what prunes ended sessions prunes ended grants too
+    rows = await sql("SELECT device_id FROM admin_phone_grants")
+    assert [r.device_id for r in rows] == ["second-phone"]
+    assert (await exchange(dt, grant)).status_code == 401

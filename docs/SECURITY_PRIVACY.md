@@ -1982,11 +1982,11 @@ grant is encrypted under a biometric-gated key on the phone, so copying it
 means unlocking that key. The traffic is plain LAN HTTP like every other
 admin flow ([No TLS](#1-no-tls-on-admin-flows-or-anything-else)): a
 listener on the Wi-Fi who sees an exchange sees the grant and the Bearer.
-A session a grant minted lives by the ordinary rules (the idle hour, the
-90-day cap) and is not cut short when its grant reaches its 24 hours; it
-ends with the grant only when the grant is revoked, replaced or deleted.
-Ended grants are tidied away a day after they end, when the next one is
-issued. Never logged: the grant, the token, the password; the log names
+A session a grant minted ends when its grant does: at the grant's 24
+hours (`admin_sessions.hard_expires_at`, which no admin action moves), or
+at once when the grant is revoked, replaced or deleted, or earlier at its
+own idle hour. Ended grants are deleted at the next sign-in or exchange,
+where ended sessions are. Never logged: the grant, the token, the password; the log names
 the device id and the label.
 
 ## Plugin trust model — read this before installing anything

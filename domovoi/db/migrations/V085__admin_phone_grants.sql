@@ -16,6 +16,10 @@
 -- from, so revoking (or replacing) a grant ends the sessions it made at
 -- once. NULL for every password sign-in.
 --
+-- admin_sessions.hard_expires_at is an end no admin action moves: a session
+-- minted from a grant ends when the grant does (its expires_at), even
+-- inside its idle hour. NULL for every password sign-in.
+--
 -- IF NOT EXISTS throughout. No semicolon or double dash inside a
 -- statement: the test kits split this file naively.
 
@@ -34,3 +38,5 @@ CREATE INDEX IF NOT EXISTS idx_admin_phone_grants_expires
 
 ALTER TABLE admin_sessions ADD COLUMN IF NOT EXISTS phone_grant_id BIGINT
     REFERENCES admin_phone_grants (id) ON DELETE CASCADE;
+
+ALTER TABLE admin_sessions ADD COLUMN IF NOT EXISTS hard_expires_at TIMESTAMPTZ;

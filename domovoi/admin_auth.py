@@ -528,15 +528,18 @@ _sha256 = token_sha256  # internal alias
 
 # When the session last acted (or, never having acted, was minted).
 _LAST_ACTIVE_SQL = "COALESCE(last_used_at, created_at)"
-# When it stops: an hour after that, or at the 90-day cap if sooner.
+# When it stops: an hour after that, or at the 90-day cap if sooner, or at
+# its hard end (``hard_expires_at``, V085: a session minted from a phone
+# grant ends when the grant does; NULL for a password sign-in, and LEAST
+# ignores a NULL).
 _IDLE_DEADLINE_SQL = (
     f"LEAST({_LAST_ACTIVE_SQL} + make_interval(mins => :idle_min), "
-    "created_at + make_interval(days => :max_age_days))"
+    "created_at + make_interval(days => :max_age_days), hard_expires_at)"
 )
 # The deadline an admin action RIGHT NOW sets: what ``expires_at`` holds.
 _DEADLINE_FROM_NOW_SQL = (
     "LEAST(now() + make_interval(mins => :idle_min), "
-    "created_at + make_interval(days => :max_age_days))"
+    "created_at + make_interval(days => :max_age_days), hard_expires_at)"
 )
 # A live session by its row's own rules. ``expires_at`` is the idle
 # deadline for every session this code wrote; for one from before it is the
@@ -545,6 +548,7 @@ _DEADLINE_FROM_NOW_SQL = (
 # is refused, never trusted to stretch the hour.
 _SESSION_LIVE_SQL = (
     "expires_at > now() "
+    "AND (hard_expires_at IS NULL OR hard_expires_at > now()) "
     "AND created_at > now() - make_interval(days => :max_age_days) "
     f"AND {_LAST_ACTIVE_SQL} > now() - make_interval(mins => :idle_min) "
     f"AND {_LAST_ACTIVE_SQL} <= now() + make_interval(secs => :slack_sec)"
@@ -670,7 +674,10 @@ class AdminActivityMiddleware:
 async def prune_dead_sessions(session: AsyncSession) -> int:
     """Delete sessions that have been over (idle, expired or past the cap)
     for :data:`SESSION_PRUNE_AFTER_DAYS`. Run at each sign-in, so the table
-    holds the live sessions and the recently ended ones and nothing else."""
+    holds the live sessions and the recently ended ones and nothing else.
+    Phone grants past their end go at the same time (with any session they
+    minted, which ended with them: ``hard_expires_at``)."""
+    await session.execute(text("DELETE FROM admin_phone_grants WHERE expires_at <= now()"))
     result = await session.execute(
         text(
             "DELETE FROM admin_sessions WHERE "
@@ -687,6 +694,7 @@ async def create_session(
     label: str | None = None,
     *,
     phone_grant_id: int | None = None,
+    hard_expires_at: datetime | None = None,
 ) -> str:
     """Mint a 256-bit bearer token; store only its sha256. Returns the
     raw token — the ONLY time it exists outside the caller's memory.
@@ -699,22 +707,27 @@ async def create_session(
     With ``phone_grant_id`` the session was minted from a phone grant
     (:func:`exchange_phone_grant`), not the password: ``signed_in_at``
     stays NULL, so it is never "freshly signed in" and can never mint a
-    grant of its own (:func:`signed_in_recently`)."""
+    grant of its own (:func:`signed_in_recently`). ``hard_expires_at``
+    is the grant's own end: the session is refused after it whatever its
+    idle hour says."""
     await prune_dead_sessions(session)
     token = secrets.token_hex(32)  # 256 bits
     signed_in = "NULL" if phone_grant_id is not None else "now()"
     await session.execute(
         text(
             "INSERT INTO admin_sessions "
-            "(token_hash, label, expires_at, signed_in_at, last_used_at, phone_grant_id) "
-            "VALUES (:h, :label, now() + make_interval(mins => :idle_min), "
-            f"{signed_in}, now(), :grant)"
+            "(token_hash, label, expires_at, signed_in_at, last_used_at, "
+            "phone_grant_id, hard_expires_at) "
+            "VALUES (:h, :label, LEAST(now() + make_interval(mins => :idle_min), "
+            "CAST(:hard AS timestamptz)), "
+            f"{signed_in}, now(), :grant, :hard)"
         ),
         {
             "h": _sha256(token),
             "label": label,
             "idle_min": int(SESSION_IDLE_TIMEOUT_MIN),
             "grant": phone_grant_id,
+            "hard": hard_expires_at,
         },
     )
     return token
@@ -994,7 +1007,7 @@ def clamp_reload_window(value: Any) -> int:
 # up) are at least 1.
 _RESUME_DEADLINE_SQL = (
     f"LEAST({_LAST_ACTIVE_SQL} + make_interval(mins => :w), "
-    "created_at + make_interval(days => :max_age_days))"
+    "created_at + make_interval(days => :max_age_days), hard_expires_at)"
 )
 # The session is live (its idle hour, its cap, and no last-activity stamp
 # from the future past the slack — review finding 3's rule, now on the
@@ -1500,7 +1513,8 @@ async def list_sessions(session: AsyncSession) -> list[dict[str, Any]]:
 # swaps it (with the household token and the same device id) for a fresh
 # admin session when it needs a Bearer again. Only the sha256 is stored.
 # The session a grant mints has no signed_in_at, so it can never mint a
-# grant: a day of access needs the password, every day. Deleting a grant
+# grant: a day of access needs the password, every day; and it ends when
+# the grant does (hard_expires_at), whatever its idle hour says. Deleting a grant
 # row (revoke, replace, password change, --reset-admin) ends the sessions
 # it minted too (admin_sessions.phone_grant_id, ON DELETE CASCADE).
 
@@ -1615,7 +1629,10 @@ async def exchange_phone_grant(
         text("UPDATE admin_phone_grants SET last_used_at = now() WHERE id = :id"),
         {"id": row.id},
     )
-    token = await create_session(session, label=f"phone: {row.label}", phone_grant_id=row.id)
+    token = await create_session(
+        session, label=f"phone: {row.label}", phone_grant_id=row.id,
+        hard_expires_at=row.expires_at,
+    )
     return token, row.expires_at
 
 
