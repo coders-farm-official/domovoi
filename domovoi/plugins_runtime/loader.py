@@ -309,6 +309,7 @@ class PluginLoader:
 
         cuda_before = _cuda_initialized()
         t0 = time.monotonic()
+        cpu0 = time.process_time()
         try:
             module = importlib.import_module(manifest.entry_core)
         except Exception as e:
@@ -321,6 +322,7 @@ class PluginLoader:
             )
             raise
         import_seconds = time.monotonic() - t0
+        import_cpu_seconds = time.process_time() - cpu0
         if first_import:
             self.imported_versions[slug] = manifest.version
         cuda_initialized = _cuda_initialized() and not cuda_before
@@ -366,6 +368,7 @@ class PluginLoader:
             if foreign_web_routes is not None
             else await self._foreign_web_routes(exclude=slug),
             import_seconds=import_seconds,
+            import_cpu_seconds=import_cpu_seconds,
             cuda_initialized=cuda_initialized,
             routers=ctx.routers,
             package_dir=install_dir / manifest.package_name,
@@ -411,8 +414,11 @@ class PluginLoader:
         )
         self.loaded[slug] = lp
         status = "degraded" if degraded else "ok"
+        # A slow import rides along as a soft note (the plugin stays
+        # enabled and loaded); the card shows it without an error pill.
+        notes = [*degraded, *([report.slow_import] if report.slow_import else [])]
         await self._record_status(
-            slug, status, "; ".join(degraded) or None,
+            slug, status, "; ".join(notes) or None,
             update=update_registry_status,
         )
         log.info(

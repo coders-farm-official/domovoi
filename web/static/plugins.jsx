@@ -636,8 +636,9 @@ const PluginRow = ({ p, restartPending, onEnable, onDisable, onUninstall, onUpgr
             {activePerms.length > 0 && <> · {activePerms.join(', ')}</>}
           </div>
           {p.last_error && (
-            <div className="mono" style={{ fontSize: 11, color: 'var(--err-ink)', marginTop: 2 }}>
-              server: {p.last_error}
+            <div className={p.status === 'load_error' ? 'mono' : 'mono plugin-soft-note'}
+              style={{ fontSize: 11, color: p.status === 'load_error' ? 'var(--err-ink)' : 'var(--warn-ink)', marginTop: 2 }}>
+              {p.status === 'load_error' ? 'server: ' : 'note: '}{p.last_error}
             </div>
           )}
           {p.web_load_error && (
