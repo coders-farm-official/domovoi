@@ -783,3 +783,17 @@ async def test_add_by_url_unauthenticated_rate_limited(monkeypatch) -> None:
             assert r.status_code == 200
     finally:
         ACQUISITIONS.unregister_fulfiller("prov")
+
+
+def test_add_by_url_refusals_never_tell_a_phone_to_sign_in_as_admin():
+    """Phones show this text as-is and can never be an admin, so neither
+    refusal may tell the reader to log in (phone admin audit, 2026-11-22)."""
+    import inspect
+
+    from domovoi import admin_auth
+
+    src = inspect.getsource(admin_auth.check_outbound_fetch)
+    assert "log in as admin" not in src
+    assert "requires an admin session" not in src
+    assert "Too many links at once. Try again in a minute." in src
+    assert "only an admin can add other links, on the dashboard." in src

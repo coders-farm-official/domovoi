@@ -577,9 +577,14 @@ LEARN = (
 
 async def _sarah(*samples: tuple[int, str, float]) -> int:
     """Sarah, with a satellite sample per ``(voice level, room, speech seconds)``."""
+    return await _named("Sarah", *samples)
+
+
+async def _named(name: str, *samples: tuple[int, str, float]) -> int:
+    """``name``, with a satellite sample per ``(voice level, room, speech seconds)``."""
     async with SessionLocal() as s:
         pid = int((await s.execute(
-            text("INSERT INTO people (name) VALUES ('Sarah') RETURNING id"),
+            text("INSERT INTO people (name) VALUES (:n) RETURNING id"), {"n": name},
         )).scalar_one())
         repo = VoiceProfilesRepository(s)
         for level, room_id, secs in samples:
@@ -645,3 +650,112 @@ async def test_a_good_sample_in_the_room_keeps_the_plain_reply(room) -> None:
     assert _reply(said) == "I already know you, Sarah."
     assert await room.pending() is None
     assert [r[1] for r in await _room_rows(pid, ROOM)] == [5.0]
+
+
+# ─── "Is that you?" re-enrolment replaces a short room sample (1.4.1) ─────
+#
+# "my name is X" in a room whose short sample of X doesn't recognize X's
+# voice goes through "I already know someone called X. Is that you?". Its
+# yes used to ADD a sample beside the short one (a 1.17 s clip kept diluting
+# the room); now it learns the room like a recognized X does: the longer
+# recording replaces X's samples in THAT room only, and only once it holds
+# more speech than they did.
+
+IS_THAT_YOU = "I already know someone called Sarah. Is that you?"
+LEARN_AFTER_YES = (
+    "Thanks, Sarah. Let me learn your voice better here: count from one to "
+    "ten for me, at your normal voice."
+)
+
+
+async def _ids(pid: int) -> list[int]:
+    async with SessionLocal() as s:
+        rows = (await s.execute(
+            text("SELECT id FROM voice_profiles WHERE person_id = :p ORDER BY id"), {"p": pid},
+        )).all()
+    return [int(r[0]) for r in rows]
+
+
+@requires_db
+async def test_unrecognised_reintroduction_replaces_the_same_rooms_short_sample(room) -> None:
+    sarah = await _sarah((700, "garage", 1.0), (701, ROOM, 1.17))
+    # Another person with a short sample in the same room: never touched.
+    priya = await _named("Priya", (500, ROOM, 1.0), (501, "garage", 1.0))
+    [(old_id, _s, _c)] = await _room_rows(sarah, ROOM)
+    garage_before = await _room_rows(sarah, "garage")
+    priya_before = await _ids(priya)
+
+    # A voice this room's short sample doesn't recognize as Sarah.
+    asked = await room.say("My name is Sarah.", _pcm(1.0, 901))
+    assert _reply(asked) == IS_THAT_YOU
+    yes = await room.say("Yes.", _pcm(1.0, 902), trigger="followup")
+    assert _reply(yes) == LEARN_AFTER_YES
+    assert (await room.pending())["stage"] == "count"
+    # Nothing replaced until the collection has more speech than the old.
+    assert [r[0] for r in await _room_rows(sarah, ROOM)] == [old_id]
+
+    done = await room.say(COUNTING, _pcm(8.0, 903), trigger="followup")
+    assert _reply(done) == "Thanks, Sarah! I'll know your voice now."
+    rows = await _room_rows(sarah, ROOM)
+    assert len(rows) == 1
+    new_id, secs, claimed = rows[0]
+    assert new_id != old_id and secs > 1.17 and claimed
+    # Her other room, and the other person, as they were.
+    assert await _room_rows(sarah, "garage") == garage_before
+    assert await _ids(priya) == priya_before
+    assert [n for _p, n in await _people()] == ["Sarah", "Priya"]
+
+
+@requires_db
+async def test_unrecognised_reintroduction_that_stops_short_keeps_the_old_sample(room) -> None:
+    sarah = await _sarah((700, "garage", 1.0), (701, ROOM, 3.0))
+    before = await _ids(sarah)
+    await room.say("My name is Sarah.", _pcm(1.0, 911))
+    yes = await room.say("Yes.", _pcm(1.0, 912), trigger="followup")
+    assert _reply(yes) == LEARN_AFTER_YES
+    # Two seconds heard, the room's sample has three: "stop" saves nothing.
+    stopped = await room.say("Stop.", _pcm(1.0, 913), trigger="followup")
+    assert _reply(stopped) == "Okay, I'll stop there. I'll still know your voice, Sarah."
+    assert await room.pending() is None
+    assert await _ids(sarah) == before
+    assert [r[1] for r in await _room_rows(sarah, ROOM)] == [3.0]
+
+
+@requires_db
+async def test_unrecognised_reintroduction_walked_away_from_keeps_the_old_sample(room) -> None:
+    sarah = await _sarah((701, ROOM, 1.0))
+    before = await _ids(sarah)
+    await room.say("My name is Sarah.", _pcm(1.0, 921))
+    await room.say("Yes.", _pcm(1.0, 922), trigger="followup")
+    # No counting ever comes: the old sample is all there is.
+    assert await _ids(sarah) == before
+
+
+@requires_db
+async def test_unrecognised_reintroduction_of_an_opted_out_voice_saves_nothing(room) -> None:
+    from domovoi.db.repositories import VoiceDenylistRepository
+
+    sarah = await _sarah((701, ROOM, 1.0))
+    before = await _ids(sarah)
+    await room.say("My name is Sarah.", _pcm(1.0, 931))
+    async with SessionLocal() as s:
+        await VoiceDenylistRepository(s).add(
+            embedding=(await _vec(_pcm(1.0, 931))).tobytes(),
+            model=VoiceDenylistRepository.EMBEDDING_MODEL_TAG,
+        )
+        await s.commit()
+    no = await room.say("Yes.", _pcm(1.0, 932), trigger="followup")
+    assert _reply(no) == "I wasn't able to save that voice profile."
+    assert await room.pending() is None
+    assert await _ids(sarah) == before
+
+
+@requires_db
+async def test_unrecognised_reintroduction_beside_a_good_sample_still_adds(room) -> None:
+    """A room with a good sample of X (4 s or more) is not relearned, the
+    recognized path's rule: the yes adds the clip as before."""
+    sarah = await _sarah((701, ROOM, 5.0))
+    await room.say("My name is Sarah.", _pcm(1.0, 941))
+    yes = await room.say("Yes.", _pcm(1.0, 942), trigger="followup")
+    assert _reply(yes) == COUNT
+    assert len(await _room_rows(sarah, ROOM)) == 2

@@ -4,6 +4,28 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.4.1 (unreleased) — A refused plugin install says which package clashes
+
+- **What changed.** When a plugin is refused because its requirements would
+  change a package Domovoi already uses, the Plugins page now names each
+  package ("certifi: the plugin wants 2026.6.17, Domovoi has 2026.10.23",
+  up to five, then "and N more") and says to ask the plugin's publisher for
+  a version built for this Domovoi. It used to give only a general sentence.
+- **What to know.** Nothing to do. Plugin authors: compile the lock with
+  `pip-compile -c requirements-linux-py314.lock`
+  ([PLUGIN_DEVELOPMENT.md](PLUGIN_DEVELOPMENT.md)).
+
+## 1.4.1 (unreleased) — "My name is …" again replaces a short room sample
+
+Saying "my name is …" again in a room that doesn't recognize your voice,
+and answering yes to "Is that you?", now replaces your old short sample for
+that room instead of adding a second one beside it. It asks you to count to
+ten first, and your old sample stays unless the new recording holds more of
+your voice. Your samples from other rooms, and other people's, are never
+touched. A room that already has a good (4 seconds or longer) sample of you
+still adds, as before. The API docs also gave the wrong default for the
+voice match threshold: it is 0.58, not 0.75.
+
 ## 1.4.1 (unreleased) — The wake-word trainer image moves to torch 2.14
 
 The trainer image's pinned packages had known security advisories (torch
