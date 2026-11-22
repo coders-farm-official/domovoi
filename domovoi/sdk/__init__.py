@@ -54,7 +54,9 @@ from __future__ import annotations
 #         socket caps, message size and rate limits; open sockets closed
 #         on disable or reload). Any other plugin websocket is still
 #         refused at load, and the web process serves none.
-API_VERSION = "1.11.0"
+# 1.13.0: [[web.home_cards]]: a plugin card on the dashboard's Home page
+#         (window.DomovoiPlugins.<slug>.homeCards.<Component>).
+API_VERSION = "1.13.0"
 
 from domovoi.capabilities import (  # noqa: E402,F401
     CAPABILITIES,

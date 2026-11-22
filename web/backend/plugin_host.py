@@ -339,6 +339,24 @@ def _on_disk_version(install_dir: Path) -> str | None:
 # ─── The host state ────────────────────────────────────────────────────────
 
 
+def _home_cards_out(raw: object) -> list[dict]:
+    """The plugin's ``[[web.home_cards]]`` as the browser gets them; a
+    malformed row (written by a newer core) is skipped, never an error."""
+    out: list[dict] = []
+    for c in raw if isinstance(raw, list) else []:
+        if not isinstance(c, dict) or not isinstance(c.get("id"), str):
+            continue
+        if not isinstance(c.get("component"), str) or not isinstance(c.get("title"), str):
+            continue
+        order = c.get("order", 50)
+        out.append({
+            "id": c["id"], "title": c["title"], "component": c["component"],
+            "default_on": c.get("default_on", True) is not False,
+            "order": order if isinstance(order, int) and not isinstance(order, bool) else 50,
+        })
+    return out
+
+
 class WebPluginContext:
     """Handed to a plugin's ``register_web(ctx)`` (design §5.1)."""
 
