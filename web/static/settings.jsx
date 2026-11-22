@@ -6265,11 +6265,15 @@ const settingsSearchIndex = (groups, fields) => {
       // The media paths are edited in Household → Media folders.
       if (f.group === 'Paths' && shown.has('media-folders')) {
         out.push({ key: `media-folders/${f.name}`, label: f.label, where: shown.get('media-folders'),
-                   route: 'settings/media-folders', words: `${f.name.replace(/_/g, ' ')} media folders` });
+                   route: 'settings/media-folders',
+                   words: `${f.name.replace(/_/g, ' ')} media folders ${(f.keywords || []).join(' ')}` });
         return;
       }
+      // Found by its name, group title, its own aliases (``keywords`` from
+      // the schema) and the words of its help, not only by its label.
       out.push({ key: `advanced/${f.name}`, label: f.label, where: shown.get('advanced'),
-                 route: `settings/advanced/${f.name}`, words: `${f.name.replace(/_/g, ' ')} ${f.group || ''}` });
+                 route: `settings/advanced/${f.name}`,
+                 words: `${f.name.replace(/_/g, ' ')} ${f.group || ''} ${(f.keywords || []).join(' ')} ${f.help || ''}` });
     });
   }
   return out;
@@ -6277,7 +6281,7 @@ const settingsSearchIndex = (groups, fields) => {
 
 /* The best matches for `query`: every word typed must start a word of
  * the entry; its own name beats its group and its keywords. */
-const settingsSearch = (index, query, limit = 8) => {
+const settingsSearch = (index, query, limit = 12) => {
   const q = settingsWords(query);
   if (!q.length) return [];
   const phrase = q.join(' ');
@@ -6302,13 +6306,17 @@ const SettingsSearch = ({ groups }) => {
   // Advanced's settings join the index the first time someone searches
   // (quiet: a browser that may not read them simply finds fewer).
   const [fields, setFields] = React.useState(null);
-  const asked = React.useRef(false);
+  // A read that failed (not signed in yet, the server busy) is tried again
+  // on the next keystroke after a few seconds, never latched as "no settings".
+  const asked = React.useRef(0);
+  const got = React.useRef(false);
   const askFields = () => {
-    if (asked.current) return;
-    asked.current = true;
+    const now = Date.now();
+    if (got.current || now - asked.current < 4000) return;
+    asked.current = now;
     apiGet('/api/config/editable', { quiet: true })
-      .then((r) => setFields((r && r.fields) || []))
-      .catch(() => setFields([]));
+      .then((r) => { got.current = !!(r && r.fields && r.fields.length); setFields((r && r.fields) || []); })
+      .catch(() => setFields((cur) => cur || []));
   };
   const index = React.useMemo(() => settingsSearchIndex(groups, fields), [groups, fields]);
   const hits = settingsSearch(index, q);
