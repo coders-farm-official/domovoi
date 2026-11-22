@@ -204,8 +204,7 @@ class DraftTurn:
 
     def immediate_card(self) -> dict[str, Any]:
         if self.attachment is not None:
-            return {"id": None, "version": None, "kind": "attachment", "title": self.title, "action": "print",
-                    "attachment": self.attachment}
+            return {"print_attachment": self.attachment}
         b = self.base or {}
         return self.card(int(b.get("version") or 1), int(b.get("words") or 0))
 
@@ -386,7 +385,7 @@ async def attachment_print_turn(thread_id: int, question: str, *, current: bool)
     name = str(item.get("name") or ("picture" if kind == "image" else "document"))
     return DraftTurn(action="print", thread_id=thread_id, kind="attachment", template="", title=name,
                      request=question, attachment={"token": item["token"], "name": name, "kind": kind},
-                     immediate=f"Ready to print “{name}”. Check the preview, then press Print.")
+                     immediate=f"Here's {name}, ready to print. Check the preview, then press Print.")
 
 
 async def plan_turn(thread_id: int, question: str, revise_draft: int | None = None,

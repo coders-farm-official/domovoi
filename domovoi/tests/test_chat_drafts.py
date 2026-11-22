@@ -351,18 +351,19 @@ def test_print_this_with_a_picture_prints_the_picture_and_asks_no_model(model, m
                    json={"content": "can you print this please?", "images": [up]})
         done = next(d for ev, d in _sse(r.text) if ev == "done")
         assert model.calls == []                              # no model asked, so no "I can't print"
-        assert done["draft"]["action"] == "print" and done["draft"]["id"] is None
-        assert done["draft"]["attachment"] == {"token": up["token"], "name": "cat.png", "kind": "image"}
+        assert not done.get("draft")                          # never a draft card: old apps would draw it broken
+        assert done["print_attachment"] == {"token": up["token"], "name": "cat.png", "kind": "image"}
+        assert done["content"] == "Here's cat.png, ready to print. Check the preview, then press Print."
         # A later "print it" finds the picture again; a draft made after it wins instead.
         again, _ = _send(c, tid, "print it")
-        assert again["draft"]["attachment"]["token"] == up["token"] and model.calls == []
+        assert again["print_attachment"]["token"] == up["token"] and model.calls == []
         r = c.post(f"/api/chat/attachments/{up['token']}/print/preview", json={"options": {"copies": 2}})
         assert r.status_code == 200 and sent[-1]["data"] == TINY_PNG and sent[-1]["options"] == {"copies": 2}
         assert c.post("/api/chat/attachments/" + "0" * 32 + "/print/jobs", json={}).status_code == 404
         model.replies = ["Here is your cover letter:" + chr(10) * 2 + LETTER]
         _send(c, tid, "Write a cover letter for the warehouse lead job at Acme Logistics")
         draft, _ = _send(c, tid, "print it")
-        assert draft["draft"]["id"] is not None and "attachment" not in draft["draft"]
+        assert draft["draft"]["id"] is not None and not draft.get("print_attachment")
 
 
 @requires_db
