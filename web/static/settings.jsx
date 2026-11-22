@@ -6078,7 +6078,7 @@ const SETTINGS_GROUPS = [
   { id: 'chat-and-ai', label: 'Chat & AI', icon: 'sparkles', sections: ['models', 'search', 'chat'] },
   { id: 'privacy', label: 'Privacy', icon: 'shield', sections: ['internet', 'voice-history', 'listening-history'] },
   { id: 'documents', label: 'Documents', icon: 'file-text', sections: ['fonts'] },
-  { id: 'system', label: 'System', icon: 'server', sections: ['about', 'health', 'app-layout', 'advanced'] },
+  { id: 'system', label: 'System', icon: 'server', sections: ['about', 'offline-kit', 'health', 'app-layout', 'advanced'] },
 ];
 
 const SETTINGS_SECTIONS = [
@@ -6158,6 +6158,11 @@ const SETTINGS_SECTIONS = [
   { id: 'about', label: 'About & updates',
     sub: 'What Domovoi is, its name on your network, the version it runs, and its updates.',
     words: 'about version update updates upgrade check pull restart channel stable main release manual licence licences license fingerprint network name local domovoi.local mdns hostname address bonjour' },
+  // offline_kit.jsx registers it (1.5.0): a USB stick for a house with
+  // no internet (admin).
+  { id: 'offline-kit', label: 'Offline kit', optional: true, aliases: ['kit'],
+    sub: 'A USB stick that sets up Domovoi in a house with no internet: the models, the phone app and the installers.',
+    words: 'offline kit usb stick no internet install installer copy models phone app imager raspberry pi image air gapped' },
   { id: 'health', label: 'Health', optional: true,
     sub: 'Every check on this Domovoi, green or not: the server, updates, rooms, plugins, internet and containers.',
     words: 'health status problems problem check checks containers container guard incident incidents tamper disk database server attention' },

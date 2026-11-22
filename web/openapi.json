@@ -16914,6 +16914,201 @@
         }
       }
     },
+    "/api/offline-kit": {
+      "get": {
+        "tags": [
+          "offline-kit"
+        ],
+        "summary": "Offline Kit Status",
+        "description": "The card for the boxes ticked: sizes, the fit check, the refusal or\nwarning, the job and the finished kit.",
+        "operationId": "offline_kit_status_api_offline_kit_get",
+        "parameters": [
+          {
+            "name": "targets",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Targets"
+            }
+          },
+          {
+            "name": "includes",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Includes"
+            }
+          },
+          {
+            "name": "household",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Household"
+            }
+          },
+          {
+            "name": "stick_gb",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Stick Gb"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "offline-kit"
+        ],
+        "summary": "Offline Kit Make",
+        "description": "Start making the kit. 409 ``{reason, message}`` when it can't\n(``behind``: send again with ``force`` for \"Make it anyway\").",
+        "operationId": "offline_kit_make_api_offline_kit_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OfflineKitBuild"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/offline-kit/cancel": {
+      "post": {
+        "tags": [
+          "offline-kit"
+        ],
+        "summary": "Offline Kit Cancel",
+        "description": "Stop the kit being made; nothing it made is kept.",
+        "operationId": "offline_kit_cancel_api_offline_kit_cancel_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/offline-kit/{build_id}": {
+      "delete": {
+        "tags": [
+          "offline-kit"
+        ],
+        "summary": "Offline Kit Delete",
+        "description": "Remove a finished kit image from the server.",
+        "operationId": "offline_kit_delete_api_offline_kit__build_id__delete",
+        "parameters": [
+          {
+            "name": "build_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Build Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/friend-houses": {
       "get": {
         "tags": [
@@ -29605,6 +29800,52 @@
           "file"
         ],
         "title": "NowPlayingSong"
+      },
+      "OfflineKitBuild": {
+        "properties": {
+          "targets": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 4,
+            "title": "Targets"
+          },
+          "includes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 8,
+            "title": "Includes"
+          },
+          "household": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 64,
+            "title": "Household"
+          },
+          "stick_gb": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stick Gb"
+          },
+          "force": {
+            "type": "boolean",
+            "title": "Force",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "OfflineKitBuild"
       },
       "OverrideIn": {
         "properties": {

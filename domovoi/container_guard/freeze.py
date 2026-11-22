@@ -56,6 +56,7 @@ OPERATIONS: dict[str, str] = {
     "satellite_channel": "Satellite code and plugin payload downloads are",
     "satellite_media": "Satellite media preparation is",
     "android_app": "Handing out the Android app is",
+    "offline_kit": "Making and handing out offline kits is",
     "update_pull": "Pulling Domovoi updates is",
     "update_apply": "Applying Domovoi updates is",
 }
