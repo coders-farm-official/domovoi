@@ -1,7 +1,7 @@
 """Make an offline kit for testing the Linux install from one (release 1.5.0,
 docs/OFFLINE_KIT.md), until the server makes real ones.
 
-    python scripts/dev/make-test-kit.py --out DIR [--work DIR] [--commit SHA]
+    python scripts/dev/make_test_kit.py --out DIR [--work DIR] [--commit SHA]
         [--version 1.5.0] [--key FILE] [--ai] [--vision] [--image FILE]
 
 It writes a kit for a Windows or Linux PC (pc-x86_64) with the real writer
@@ -94,6 +94,15 @@ def fetch(url: str, dest: Path, *, sha: str | None = None, size: int | None = No
     return dest
 
 
+def rmtree(path: Path) -> None:
+    """shutil.rmtree, also through git's read-only pack files (Windows)."""
+    def onerror(func, p, _exc):
+        os.chmod(p, 0o700)
+        func(p)
+    if path.exists():
+        shutil.rmtree(path, onerror=onerror)
+
+
 def git_show(commit: str, path: str) -> bytes:
     return subprocess.run(["git", "show", f"{commit}:{path}"], cwd=REPO, capture_output=True, check=True).stdout
 
@@ -160,14 +169,14 @@ def make_bundle(work: Path, commit: str, tag: str) -> Path:
     if out.is_file():
         return out
     bare = work / "bundle.git"
-    shutil.rmtree(bare, ignore_errors=True)
+    rmtree(bare)
     run("git", "clone", "-q", "--bare", "--no-local", str(REPO), str(bare))
     for ref in ("refs/heads/stable", "refs/heads/main"):
         run("git", "-C", str(bare), "update-ref", ref, commit)
     run("git", "-C", str(bare), "tag", "-f", tag, commit)
     run("git", "-C", str(bare), "bundle", "create", "-q", str(out), "refs/heads/stable", "refs/heads/main",
         f"refs/tags/{tag}")
-    shutil.rmtree(bare, ignore_errors=True)
+    rmtree(bare)
     return out
 
 
@@ -384,7 +393,7 @@ def make_kit(args: argparse.Namespace) -> None:
     comps.append(Component("guide", "START-HERE", version, "MIT", [
         Source("START-HERE.txt", (
             f"A TEST offline kit of Domovoi {version} (commit {commit}), made by "
-            "scripts/dev/make-test-kit.py. Its release signature is a throwaway key's, not "
+            "scripts/dev/make_test_kit.py. Its release signature is a throwaway key's, not "
             "Domovoi's: it is for testing the install, never for a real house.\n").encode())]))
     comps.append(Component("release", "DomovoiSetup", version, "MIT", make_release(work, key, version, commit),
                            pinned_by="release signature"))

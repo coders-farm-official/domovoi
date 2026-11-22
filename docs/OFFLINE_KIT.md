@@ -6,9 +6,10 @@ later updates from a newer one. The stick holds everything an install
 would otherwise download: the installers, the models, the phone app, the
 packages.
 
-> **Coming in 1.5.0, being built.** This page describes the kit's format
-> and how to check a stick. Making a kit from the dashboard and installing
-> from one arrive in later steps of 1.5.0; this page grows with them.
+> **Coming in 1.5.0, being built.** This page describes the kit's format,
+> how to check a stick and how a Linux computer installs from one. Making
+> a kit from the dashboard, and Windows and Mac installing from one,
+> arrive in later steps of 1.5.0; this page grows with them.
 
 ## What's on the stick
 
@@ -40,6 +41,18 @@ with an Apple chip** (unticked by default), or both.
 
 Nothing from your household is on it: no database, no passwords, no
 names, no media, no voice profiles. A kit is not a backup.
+
+## Installing from a kit
+
+**Linux (Ubuntu 26.04).** Install Ubuntu 26.04 first, plug in the kit and
+run `sudo bash /media/alex/DOMOVOIKIT/linux/install.sh --kit`. It checks
+the stick (checksums, the release signature, the source at the signed
+commit, then every file with the checker from that commit) before it runs
+anything from it, and the install then checks every file against the same
+pins as an online install. Nothing is downloaded.
+[LINUX_HOST.md, Installing without internet](LINUX_HOST.md#installing-without-internet)
+has the steps and what each check proves. Other Linux systems, Windows and
+Mac follow in later steps of 1.5.0.
 
 ## Checking a stick
 
@@ -130,3 +143,29 @@ itself.
 components (it splits files, fills in the notices and writes `kit.json`
 and `SHA256SUMS`); `reassemble` joins a split file back, checking it as
 it goes.
+
+### What the Linux install reads
+
+`install.sh --kit` and `provision.sh --offline-kit` find each file by its
+path, the layout above, and the component's `kind` and `name` where a path
+can't say it:
+
+| What | Where on the stick | The pin it is checked against |
+|---|---|---|
+| Domovoi's source | `source/domovoi.bundle`: a git bundle with `refs/heads/stable` holding the release commit (and its tag), the full history | the signed manifest's commit |
+| The release's signed manifest | `release/DomovoiSetup.manifest.json` + `.sig` (and `DomovoiSetup.exe`) | the release key |
+| Ubuntu's packages | `apt/ubuntu/dists/<suite>/InRelease`, `dists/<suite>/<component>/binary-amd64/Packages` (as the archive serves them), each `.deb` at its index's `Filename` | Ubuntu's archive key, already on the system |
+| Docker's packages | `apt/docker/gpg` (the key file Docker serves), `apt/docker/dists/resolute/...` like Ubuntu's | the key's fingerprint in `provision-manifest.conf`, then that key |
+| Python packages | `python/cp314-x86_64/`: every file `pip download --no-deps --require-hashes` takes for the two locks (sdists too) | the lock's hashes |
+| Images | kind `container-image`: named by the compose file's reference (`postgres:16.15-trixie@sha256:...`), a `docker save` file under `images/`; the music player named `domovoi-mpd`, saved as `domovoi-mpd:latest` | the compose digests (the music player: none, it is the house's own build) |
+| Ollama | `ollama/ollama-linux-amd64.tar.zst` | `OLLAMA_SHA256` in LINUX_HOST.md |
+| AI models | `ollama/models/manifests/registry.ollama.ai/library/<model>/<tag>` and `ollama/models/blobs/sha256-<hex>` | the tier digests (the manifest's SHA-256), each blob its name |
+| Whisper | `speech/whisper-small.en/` (`model.bin` and the small files beside it) | `whisper_model_bin_sha256` |
+| Voices, voice ID | `speech/piper/<voice>.onnx` + `.onnx.json`; `speech/speaker/<model file>` | `PIPER_PINS`; `MODEL_SHA256` |
+| The wake word | `wake/domovoi_v1.onnx` | `wake_default.PUBLISHED` |
+| The phone app | `phone/*.apk` | `android/release.json` and the release key (`accept_upload`) |
+
+`scripts/dev/make_test_kit.py` makes a kit like that from the real pinned
+files, signed with a throwaway key, for testing the install
+(`scripts/dev/linux-install-vm.sh --offline-kit` runs one in a VM with no
+internet).

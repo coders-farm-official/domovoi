@@ -17,7 +17,7 @@
 #              look around; stop it with: sudo kill "$(cat DIR/qemu.pid)"
 #   --offline-kit IMAGE  instead of phases 2-6: the install from an offline
 #              kit (docs/OFFLINE_KIT.md) with no internet. IMAGE is the
-#              stick's FAT32 image (scripts/dev/make-test-kit.py --image);
+#              stick's FAT32 image (scripts/dev/make_test_kit.py --image);
 #              ubuntu-26.04 only. See "Offline kit" below
 #   --release-key KEY  with --offline-kit: the ssh-ed25519 public key (a
 #              file, or the key line) the test kit's release is signed with

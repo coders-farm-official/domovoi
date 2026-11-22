@@ -557,7 +557,7 @@ kit_verify() {
   KIT_BAD=""
   say "Checking the offline kit at $KIT..."
   # 1. The files the trust chain reads, against the stick's checksums.
-  kit_sums kit.json release/DomovoiSetup.manifest.json release/DomovoiSetup.manifest.json.sig source/domovoi.bundle \
+  kit_sums kit.json release/DomovoiSetup.manifest.json release/DomovoiSetup.manifest.json.sig "source/domovoi.bundle" \
     || die "This stick has a damaged file: $KIT_BAD. Make the stick again."
   info=$(kit_json_info 2>&1) || die "kit.json can't be read ($(printf '%s' "$info" | tail -n 1)). Make the stick again."
   fmt=$(printf '%s\n' "$info" | sed -n 's/^kit_format=//p')
@@ -583,10 +583,10 @@ kit_verify() {
   TAG=$tag
   say "Checked: the kit is Domovoi $KIT_VERSION ($TAG, commit ${commit:0:12}), signed with Domovoi's release key."
   # 3. The source at that commit: git checks every object as it clones.
-  bundle=$KIT/source/domovoi.bundle
+  bundle="$KIT/source/domovoi.bundle"
   if [ -n "$parts" ] && [ "$parts" -gt 0 ]; then
     bundle=$WORK/domovoi.bundle
-    cat "$KIT"/source/domovoi.bundle.part* >"$bundle" || die "can't join the kit's source/domovoi.bundle. Make the stick again."
+    cat "$KIT/source/domovoi.bundle".part*>"$bundle" || die "can't join the kit's source/domovoi.bundle. Make the stick again."
   fi
   dir=$WORK/domovoi
   git -c transfer.fsckObjects=true clone --quiet --no-checkout "$bundle" "$dir" </dev/null \
