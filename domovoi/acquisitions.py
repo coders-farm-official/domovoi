@@ -61,6 +61,29 @@ _ROW_COLUMNS = (
 )
 
 
+#: What a caller who is not admin reads in place of a row's error text,
+#: by status. The raw text (a downloader's own message, which can name a
+#: place on the server's disk) is for an admin only.
+_ERROR_FOR_HOUSEHOLD = {
+    "failed": "The download failed.",
+    "unfulfillable": "Nothing installed can fetch this.",
+    "cancelled": "Cancelled.",
+}
+
+
+def redact_for_household(row: dict[str, Any]) -> dict[str, Any]:
+    """A queue row as a caller who is not admin reads it (the open
+    listings ``GET /v1/acquisitions`` and the web's ``/api/acquisitions``):
+    no ``requested_by`` or ``origin_ref`` (they say which device queued
+    what), and an error from a fixed set of sentences."""
+    out = dict(row)
+    out["requested_by"] = None
+    out["origin_ref"] = None
+    if out.get("error"):
+        out["error"] = _ERROR_FOR_HOUSEHOLD.get(str(out.get("status")), "The download didn't finish.")
+    return out
+
+
 @dataclass(frozen=True)
 class Acquisition:
     """One ``media_acquisitions`` row, as fulfillers and events see it."""

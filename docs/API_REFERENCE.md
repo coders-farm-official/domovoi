@@ -446,7 +446,7 @@ fulfiller later drains the backlog.
 
 | Method & path | Auth | Request | Response / purpose |
 |---|---|---|---|
-| `GET /v1/acquisitions` | Open | `?status=&limit=50` (max 200) | `{"acquisitions": [...], "fulfillers": [...], "can_fulfill_query", "can_fulfill_url"}` — rows from `media_acquisitions`, newest first. |
+| `GET /v1/acquisitions` | Open | `?status=&limit=50` (max 200) | `{"acquisitions": [...], "fulfillers": [...], "can_fulfill_query", "can_fulfill_url"}` — rows from `media_acquisitions`, newest first. A caller who is not admin gets `requested_by` and `origin_ref` as `null` and `error` as a fixed sentence; an admin (Bearer or the dashboard cookie) reads the raw values. |
 | `POST /v1/acquisitions/url-allowed` | **Device (`X-Device-Token` or Bearer)** | `{urls: [...]}` (≤500) | `{allowed: {url: bool}}`: which of these URLs an installed fulfiller's URL allowlist recognizes, so a client shows "+ add to library" only where a non-admin press would pass (the web's recently-played `can_add` asks it). Runs the matchers in a worker thread; no fetch, no queue row, and it does not spend add-by-url's rate limit. |
 | `POST /v1/admin/music/add-by-query` | **Device (`X-Device-Token` or Bearer)** | `{room_id, query, artist?, attach_to_playlist_id?}` | Enqueue a free-text acquisition. `attach_to_playlist_id` is a soft reference: when the download completes the song goes on the end of that playlist, unless the playlist is gone or was made from the music files (read-only, V058) — then it is only added to the library, and for the second the acquisition's `result.attach_skipped` says why. Returns `{queued, outcome, message, already_in_library, already_downloading, acquisition_id, fulfiller_available, title}`. |
 | `POST /v1/admin/music/add-by-url` | **Outbound-fetch** | `{room_id, url, title?, dedup_key?, attach_to_playlist_id?}` | Enqueue an acquisition for an exact external URL (skips fuzzy library dedup; honors `dedup_key`). Gated because it triggers provider code against a caller-chosen URL. Whoever asks — an admin session included — the URL also has to pass the outbound-URL check in store mode (§1.1): `400` for a non-http(s) scheme, `localhost`, or a host that is or resolves to a loopback / private / link-local address. `409` with `X-Domovoi-Refusal: internet-off` under the **No** internet answer (§1.6), before anything is queued. Without an admin session, `429` once `acquisition_open_url_pending_cap` (10) link adds are already waiting. Every acquisition runs under the acquisition budget (`acquisition_max_seconds`, `acquisition_max_bytes`): past either it ends `failed` and its file is not kept. |
@@ -780,7 +780,7 @@ next load.
 
 | Method & path | Auth | Request | Response / purpose |
 |---|---|---|---|
-| `GET /api/acquisitions` | Open | `?status=&limit=100` | The generic acquisition queue for the Downloads-style page (reads the DB directly; fulfiller availability included). |
+| `GET /api/acquisitions` | Open | `?status=&limit=100` | The generic acquisition queue for the Downloads-style page (reads the DB directly; fulfiller availability included). Rows are shown to a caller who is not admin as `GET /v1/acquisitions` shows them: no `requested_by` or `origin_ref`, a fixed sentence for `error`. |
 
 ### 3.5 Music: library, player, transport
 
