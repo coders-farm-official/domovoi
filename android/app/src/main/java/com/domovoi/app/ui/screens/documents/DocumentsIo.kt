@@ -1,13 +1,8 @@
 package com.domovoi.app.ui.screens.documents
 
 import android.content.ContentResolver
-import android.content.ContentValues
 import android.content.Context
-import android.content.Intent
 import android.net.Uri
-import android.os.Build
-import android.os.Environment
-import android.provider.MediaStore
 import android.provider.OpenableColumns
 import com.domovoi.app.AppContainer
 import com.domovoi.app.ui.components.relTime
@@ -15,16 +10,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.add
-import kotlinx.serialization.json.buildJsonArray
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
-import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
-import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import java.io.File
 import java.io.IOException
 import java.time.Instant
 
@@ -50,51 +38,6 @@ internal fun docWordExportPath(rel: String): String =
 internal fun relFromEpochSec(sec: Double?): String {
     val s = sec ?: return "—"
     return relTime(Instant.ofEpochMilli((s * 1000).toLong()).toString())
-}
-
-// ---------------------------------------------------------------------------
-// Bulk zip download — streamed straight into Downloads (or the app dir).
-// ---------------------------------------------------------------------------
-
-/** POST /api/documents/download-zip and stream the body to storage. Returns the shown path. */
-internal suspend fun downloadDocsZip(
-    context: Context,
-    app: AppContainer,
-    rels: List<String>,
-): String = withContext(Dispatchers.IO) {
-    val payload = buildJsonObject {
-        put("rel_paths", buildJsonArray { rels.forEach { add(it) } })
-    }.toString().toRequestBody("application/json".toMediaType())
-    val req = Request.Builder()
-        .url(app.api.absolute("/api/documents/download-zip"))
-        // Streams the zip to a file, so it builds its own call instead of
-        // using ApiClient.raw() — same preflight-forcing header (WEB-6).
-        .header("X-Requested-With", "DomovoiApp")
-        .post(payload)
-        .build()
-    app.api.http.newCall(req).execute().use { resp ->
-        if (!resp.isSuccessful) throw IOException("${resp.code} ${resp.message}")
-        val stream = resp.body?.byteStream() ?: throw IOException("empty response")
-        val fileName = "domovoi-documents-${System.currentTimeMillis()}.zip"
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val resolver = context.contentResolver
-            val values = ContentValues().apply {
-                put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
-                put(MediaStore.MediaColumns.MIME_TYPE, "application/zip")
-            }
-            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                ?: throw IOException("couldn't create the download entry")
-            val out = resolver.openOutputStream(uri)
-                ?: throw IOException("couldn't open the download for writing")
-            out.use { stream.copyTo(it) }
-            "Downloads/$fileName"
-        } else {
-            val dir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir
-            val file = File(dir, fileName)
-            file.outputStream().use { stream.copyTo(it) }
-            file.absolutePath
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------

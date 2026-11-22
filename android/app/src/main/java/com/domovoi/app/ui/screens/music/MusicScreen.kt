@@ -13,8 +13,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -43,7 +41,6 @@ import com.domovoi.app.net.rememberApi
 import com.domovoi.app.net.toPage
 import com.domovoi.app.player.CastPlanner
 import com.domovoi.app.player.PlayItem
-import com.domovoi.app.player.PlayKind
 import com.domovoi.app.player.PlayerController
 import com.domovoi.app.ui.components.DomovoiCard
 import com.domovoi.app.ui.components.ErrorState
@@ -65,7 +62,6 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
@@ -279,21 +275,6 @@ fun MusicScreen() {
         }
     }
 
-    val onRescan: () -> Unit = {
-        scope.launchAction(
-            action = { app.api.post("/api/music/library/reindex") },
-            onSuccess = { toast("rescan started") },
-            onFailure = { toast("rescan failed: ${it.message}") },
-        )
-    }
-    val onEnrich: () -> Unit = {
-        scope.launchAction(
-            action = { app.api.post("/api/music/library/enrich") },
-            onSuccess = { toast(enrichReplyText(it)) },
-            onFailure = { toast("enrich failed: ${it.message}") },
-        )
-    }
-
     // ── Upload ────────────────────────────────────────────────────────
     val pickFiles = rememberLauncherForActivityResult(
         ActivityResultContracts.GetMultipleContents(),
@@ -404,20 +385,6 @@ fun MusicScreen() {
                                 tint = if (ui.uploading) Domovoi.colors.fgFaint else Domovoi.colors.brand,
                             )
                         }
-                        IconButton(onClick = onRescan) {
-                            Icon(
-                                Icons.Filled.Refresh,
-                                contentDescription = "rescan library",
-                                tint = Domovoi.colors.fgMuted,
-                            )
-                        }
-                        IconButton(onClick = onEnrich) {
-                            Icon(
-                                Icons.Filled.AutoAwesome,
-                                contentDescription = "enrich tags",
-                                tint = Domovoi.colors.fgMuted,
-                            )
-                        }
                     },
                 )
             }
@@ -517,8 +484,6 @@ fun MusicScreen() {
                 onBrowserPlay = onBrowserPlay,
                 // The drawer's "this device" button: always this phone's queue.
                 onQueueTrack = { t -> queueSongTo(QueueTarget.Phone, t, false) },
-                refreshLib = { libPager.reload() },
-                refreshStats = stats.refresh,
                 refreshNP = nowPlaying.refresh,
                 listContext = ui.detailContext,
             )
