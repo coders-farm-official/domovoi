@@ -213,11 +213,12 @@ printf 'Types: deb\nURIs: %s\nSuites: %s\nComponents: stable\nArchitectures: amd
 apt-get -qq update
 # Everything the install needs, as if nothing were installed (an empty
 # dpkg status): the closure then holds every dependency at the snapshot's
-# version, whatever the box installing from it has already.
+# version, whatever the box installing from it has already. With
+# Recommends, as provision.sh's own apt-get install takes them.
 mkdir -p /tmp/debs/partial /tmp/st
 : >/tmp/st/status
 apt-get -qq -o Dir::State::status=/tmp/st/status -o Dir::Cache::archives=/tmp/debs \
-  install -y --download-only --no-install-recommends $PACKAGES >/dev/null
+  install -y --download-only $PACKAGES >/dev/null
 # And everything a fresh Ubuntu 26.04 has, at the snapshot's version, for
 # the upgrades the packages above may pull in.
 apt-get -qq -o Dir::Cache::archives=/tmp/debs dist-upgrade -y --download-only >/dev/null || true

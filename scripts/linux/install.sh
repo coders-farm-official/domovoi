@@ -589,7 +589,7 @@ kit_verify() {
     cat "$KIT/source/domovoi.bundle".part*>"$bundle" || die "can't join the kit's source/domovoi.bundle. Make the stick again."
   fi
   dir=$WORK/domovoi
-  git -c transfer.fsckObjects=true clone --quiet --no-checkout "$bundle" "$dir" </dev/null \
+  git -c transfer.fsckObjects=true -c init.defaultBranch=main clone --quiet --no-checkout "$bundle" "$dir" </dev/null \
     || die "the kit's source/domovoi.bundle can't be read by git. Make the stick again."
   git -C "$dir" cat-file -e "$commit^{commit}" 2>/dev/null \
     || die "the kit's source/domovoi.bundle doesn't hold commit $commit, the one the signed release names. Make the stick again."

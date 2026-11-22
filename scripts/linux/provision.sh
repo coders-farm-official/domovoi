@@ -1922,8 +1922,14 @@ inputs_apt() { printf '%s\n' "${APT_PACKAGES[@]}"; }
 check_apt() { pkgs_installed "${APT_PACKAGES[@]}"; }
 plan_apt() { echo "apt-get install ${APT_PACKAGES[*]}"; }
 do_apt() {
-  apt_get update
-  apt_get install -y "${APT_PACKAGES[@]}"
+  if kit; then
+    apt_get update || die "apt can't read the offline kit's Ubuntu packages (the lines above say why): the stick may be damaged; make it again"
+    apt_get install -y "${APT_PACKAGES[@]}" \
+      || die "installing the system packages from the offline kit failed (the lines above say why): the kit lacks a package this computer needs; make the kit again, from a server with a newer Domovoi if this keeps happening"
+  else
+    apt_get update
+    apt_get install -y "${APT_PACKAGES[@]}"
+  fi
   pkgs_installed "${APT_PACKAGES[@]}" || die "apt-get reported success but not every package is installed: ${APT_PACKAGES[*]}"
   STEP_DONE_MSG="System packages installed"
 }
@@ -3167,7 +3173,7 @@ do_checkout() {
       local bundle
       bundle=$(kit_stage source/domovoi.bundle)
       log "cloning Domovoi $KIT_VERSION from the offline kit's source/domovoi.bundle (into $tmp until it is checked out)"
-      (cd / && as_svc git -c transfer.fsckObjects=true clone --quiet --no-checkout "$bundle" "$tmp") \
+      (cd / && as_svc git -c transfer.fsckObjects=true -c init.defaultBranch=main clone --quiet --no-checkout "$bundle" "$tmp") \
         || die "git clone of the offline kit's source/domovoi.bundle failed: the stick may be damaged; make it again"
       gd "$tmp" remote set-url origin "$REPO_URL" || die "can't point origin at $REPO_URL"
       gd "$tmp" rev-parse -q --verify "refs/remotes/origin/$TRACK_BRANCH" >/dev/null \
@@ -3332,7 +3338,12 @@ do_docker() {
     # the Beelink docker-ce moves with apt upgrade like any package, and so
     # it does here.
     # shellcheck disable=SC2086
-    apt_get install -y $missing
+    if kit; then
+      apt_get install -y $missing \
+        || die "installing Docker $(docker_pin docker_ce) from the offline kit failed (the lines above say why): the kit lacks a package; make the kit again"
+    else
+      apt_get install -y $missing
+    fi
     [ -z "$(docker_missing)" ] || die "docker packages missing after the install: $(docker_missing | tr '\n' ' ')"
   fi
   log "docker packages: $(docker_installed | tr '\n' ' ')"
