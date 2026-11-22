@@ -108,12 +108,13 @@ def test_a_room_id_never_looks_like_a_path_or_an_option():
 
 
 def test_the_room_id_rule_is_the_core_s():
-    """domovoi/main.py's _ROOM_ID_RE is the source of truth: USB adoption,
-    the preseed route and the dashboard's adopt form all hold ids to it."""
+    """domovoi/room_ids.py's ROOM_ID_RE (imported by main.py as _ROOM_ID_RE)
+    is the source of truth: USB adoption, the preseed route and the
+    dashboard's adopt form all hold ids to it."""
     import re
 
-    main_src = (ROOT / "domovoi" / "main.py").read_text(encoding="utf-8")
-    m = re.search(r'_ROOM_ID_RE = re\.compile\(r"(.+?)"\)', main_src)
+    src = (ROOT / "domovoi" / "room_ids.py").read_text(encoding="utf-8")
+    m = re.search(r'ROOM_ID_RE = re\.compile\(r"(.+?)"\)', src)
     assert m and m.group(1) == en.ROOM_ID_RE.pattern
 
 

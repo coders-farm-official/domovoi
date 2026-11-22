@@ -701,7 +701,7 @@ const _castFollowRoom = (queue, index, np) => {
  * (before, a 200 carrying "I couldn't reach the music player.", which every
  * hand-off took for "paused"); a 2xx saying `ok: false` is refused too. */
 const _roomControl = async (verb, roomId) => {
-  const r = await apiPost(`/api/music/${verb}/${roomId}`);
+  const r = await apiPost(`/api/music/${verb}/${encodeURIComponent(roomId)}`);
   if (r && r.ok === false) throw new Error(`${verb} didn't happen in ${roomId}`);
   return r;
 };
@@ -1558,18 +1558,18 @@ const PlaybackProvider = ({ children }) => {
   }, [queue, loadAndPlay, target]);
 
   function play() {
-    if (target.kind === 'room') { apiPost(`/api/music/resume/${target.roomId}`).catch(() => {}); return; }
+    if (target.kind === 'room') { apiPost(`/api/music/resume/${encodeURIComponent(target.roomId)}`).catch(() => {}); return; }
     const el = activeEl();
     if (el) { el.play().then(() => setStatus('playing')).catch(() => {}); }
     else if (current) loadAndPlay(current);
   }
   function pause() {
-    if (target.kind === 'room') { apiPost(`/api/music/pause/${target.roomId}`).catch(() => {}); return; }
+    if (target.kind === 'room') { apiPost(`/api/music/pause/${encodeURIComponent(target.roomId)}`).catch(() => {}); return; }
     const el = activeEl();
     if (el) { el.pause(); setStatus('paused'); saveSpokenPosition(true); }
   }
   function stop() {
-    if (target.kind === 'room') { apiPost(`/api/music/stop/${target.roomId}`).catch(() => {}); setStatus('stopped'); return; }
+    if (target.kind === 'room') { apiPost(`/api/music/stop/${encodeURIComponent(target.roomId)}`).catch(() => {}); setStatus('stopped'); return; }
     const g = graphRef.current;
     if (g) g.els.forEach((el) => { try { el.pause(); } catch {} });
     ListenLog.close();
@@ -1598,7 +1598,7 @@ const PlaybackProvider = ({ children }) => {
     // While casting: the room's next song. The core follows the queue the
     // room was cast (since 2026-10-01; before, skip swapped it for one
     // random library track).
-    if (target.kind === 'room') { apiPost(`/api/music/skip/${target.roomId}`).catch(() => {}); return; }
+    if (target.kind === 'room') { apiPost(`/api/music/skip/${encodeURIComponent(target.roomId)}`).catch(() => {}); return; }
     ListenLog.skip();
     const ni = index + 1;
     if (ni < queue.length) advanceTo(ni, { crossfade: false });
@@ -1612,7 +1612,7 @@ const PlaybackProvider = ({ children }) => {
     // previoustrack all land here. It used to post skip — previous moved the
     // room FORWARD — and then did nothing while there was no previous
     // route. Same as the Android app (PlayerController.prev).
-    if (target.kind === 'room') { apiPost(`/api/music/previous/${target.roomId}`).catch(() => {}); return; }
+    if (target.kind === 'room') { apiPost(`/api/music/previous/${encodeURIComponent(target.roomId)}`).catch(() => {}); return; }
     // Restart current if >3s in, else go to previous.
     const el = activeEl();
     if (el && el.currentTime > 3) { el.currentTime = 0; return; }

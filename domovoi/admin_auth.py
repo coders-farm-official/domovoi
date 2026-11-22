@@ -2626,6 +2626,8 @@ class OutboundFetchDecision:
     allowed: bool
     status: int = 200
     detail: str = ""
+    # True when an admin session let it through (no per-source limits).
+    admin: bool = False
 
 
 async def check_outbound_fetch(
@@ -2639,7 +2641,7 @@ async def check_outbound_fetch(
     without dragging in the core acquisition service."""
     result = await check_admin_request(request)
     if result == "ok":
-        return OutboundFetchDecision(True)
+        return OutboundFetchDecision(True, admin=True)
     source = request_source(request)
     if not URL_FETCH_LIMITER.allow(source):
         return OutboundFetchDecision(

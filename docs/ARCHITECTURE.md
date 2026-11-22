@@ -523,7 +523,11 @@ requests (`{kind: query|url, text, metadata, …}`), never a provider wire
 format. Registered fulfillers (media-provider plugins) claim rows with
 `SELECT … FOR UPDATE SKIP LOCKED` and complete or fail them (retry with
 backoff up to `acquisition_max_attempts`, or terminal
-`failed`/`unfulfillable`).
+`failed`/`unfulfillable`). Each acquisition also has a budget that no plugin's
+own limits decide: a claimed row running past `acquisition_max_seconds` is
+failed for good by the `acquisition_budget_sweeper` worker, and a completion
+past that time or with a file bigger than `acquisition_max_bytes` is refused
+and its file removed.
 
 Graceful absence: enqueue always succeeds; with no fulfiller enabled, rows sit
 `pending` and the user hears *"I've noted that down, but no media provider is

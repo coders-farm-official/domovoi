@@ -34,6 +34,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import AwareDatetime, BaseModel, ConfigDict
 from sqlalchemy import text
 
+from domovoi.room_ids import require_room_id_path
 from domovoi.admin_auth import check_device_request, require_admin_mutation, require_device
 from domovoi.cover_art_writer import cover_cache_file
 from domovoi.library_cover_version import cover_url
@@ -69,7 +70,10 @@ from web.backend.schemas import (
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/music", tags=["music"])
+router = APIRouter(
+    prefix="/api/music", tags=["music"],
+    dependencies=[Depends(require_room_id_path)],
+)
 
 # ─── Auth tiers (REV-1) ────────────────────────────────────────────────────
 # Playing, queueing, tagging and uploading music are ORDINARY household

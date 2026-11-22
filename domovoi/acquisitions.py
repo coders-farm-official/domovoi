@@ -30,8 +30,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Callable, Literal
 
 from sqlalchemy import text
@@ -145,6 +147,18 @@ class EnqueueResult:
     library_match: dict[str, str | None] | None = None
 
 
+# The error a row records when its budget stopped it (settings
+# acquisition_max_seconds / acquisition_max_bytes).
+OVER_TIME_BUDGET = "over the time budget"
+OVER_SIZE_BUDGET = "over the size budget"
+
+
+class AcquisitionOverBudget(RuntimeError):
+    """``complete()`` refused a result past the acquisition's budget. The
+    file it named was removed; the row fails for good when the fulfiller
+    reports the failure (or the budget sweep reaches it)."""
+
+
 @dataclass(frozen=True)
 class AcquisitionAvailability:
     fulfillers: list[str]
@@ -161,6 +175,27 @@ class _Fulfiller:
     url_matcher: Callable[[str], bool] | None = None
 
 
+_TERMINAL_STATUSES = frozenset({"done", "failed", "unfulfillable"})
+
+
+def _remove_library_file(file_path: str) -> None:
+    """Remove a refused acquisition's file, only inside the music folder."""
+    if not file_path:
+        return
+    try:
+        target = Path(file_path).resolve()
+        target.relative_to(Path(settings.music_dir).resolve())
+    except (OSError, ValueError):
+        log.warning("acquisition budget: not removing a file outside the music folder")
+        return
+    try:
+        target.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        log.warning("acquisition budget: could not remove a refused file: %s", e)
+
+
 async def _notify(session: AsyncSession, reason: str) -> None:
     await session.execute(
         text("SELECT pg_notify('acquisitions_changed', :reason)"),
@@ -173,7 +208,22 @@ class AcquisitionService:
     fulfiller registrations live in the shared
     :data:`domovoi.capabilities.CAPABILITIES` registry so presence checks,
     ``GET /v1/capabilities`` introspection, and plugin teardown
-    (``unregister_all_for``) all see one source of truth."""
+    (``unregister_all_for``) all see one source of truth.
+
+    The budget: one fulfiller's own limits never decide alone how long an
+    acquisition may run or how big its file may be. A claimed row past
+    ``acquisition_max_seconds`` is failed for good by
+    :meth:`sweep_over_budget` (a core worker runs it), and
+    :meth:`complete` refuses a result past either limit, removing its
+    file. Fulfillers run inside the core process, so the core can't stop
+    one mid-download; what it guarantees is that an over-budget
+    acquisition ends as ``failed``, frees its queue slot, and never puts
+    a file in the library."""
+
+    def __init__(self) -> None:
+        # Rows complete() refused, until their fulfiller reports the
+        # failure: that report is terminal whatever retry it asks for.
+        self._over_budget: dict[int, str] = {}
 
     # ── Fulfiller registration (through the capability registry) ───────
     def register_fulfiller(
@@ -435,7 +485,17 @@ class AcquisitionService:
         """Mark done + perform the playlist attach (soft ref — skipped
         with a log if the playlist died meanwhile, locked 5; skipped too
         for a playlist made from the music files, read-only (V058), with
-        ``result.attach_skipped`` saying why)."""
+        ``result.attach_skipped`` saying why).
+
+        Raises :class:`AcquisitionOverBudget` (and removes ``file_path``)
+        when the row ran past ``acquisition_max_seconds`` or the file is
+        bigger than ``acquisition_max_bytes``."""
+        reason = await self._budget_exceeded(session, acq_id, file_path)
+        if reason is not None:
+            self._over_budget[acq_id] = reason
+            _remove_library_file(file_path)
+            log.warning("acquisition %s refused at completion: %s", acq_id, reason)
+            raise AcquisitionOverBudget(reason)
         registered_values.require("acquisition_status", "done")
         row = (
             await session.execute(
@@ -528,12 +588,23 @@ class AcquisitionService:
         """
         current = (
             await session.execute(
-                text("SELECT attempts FROM media_acquisitions WHERE id = :id"),
+                text("SELECT attempts, status FROM media_acquisitions WHERE id = :id"),
                 {"id": acq_id},
             )
         ).first()
         if current is None:
             raise ValueError(f"fail: acquisition {acq_id} not found")
+        over_budget = self._over_budget.pop(acq_id, None)
+        if current.status in _TERMINAL_STATUSES:
+            # Already finished (e.g. failed by the budget sweep while its
+            # fulfiller was still working): a late report never revives it.
+            log.info(
+                "fail: acquisition %s is already %s; left as it is",
+                acq_id, current.status,
+            )
+            return
+        if over_budget is not None:
+            error, retry_in, unfulfillable = over_budget, None, False
 
         if unfulfillable:
             new_status = registered_values.require(
@@ -584,6 +655,69 @@ class AcquisitionService:
 
         await _notify(session, new_status)
         EVENTS.emit("core.acquisition_failed", _row_to_acquisition(row).snapshot())
+
+    # ── The budget ──────────────────────────────────────────────────────
+    @staticmethod
+    async def _budget_exceeded(
+        session: AsyncSession, acq_id: int, file_path: str
+    ) -> str | None:
+        max_seconds = float(settings.acquisition_max_seconds or 0)
+        max_bytes = int(settings.acquisition_max_bytes or 0)
+        if max_seconds > 0:
+            row = (
+                await session.execute(
+                    text(
+                        "SELECT EXTRACT(EPOCH FROM (NOW() - claimed_at)) AS elapsed "
+                        "FROM media_acquisitions WHERE id = :id"
+                    ),
+                    {"id": acq_id},
+                )
+            ).first()
+            if (
+                row is not None
+                and row.elapsed is not None
+                and float(row.elapsed) > max_seconds
+            ):
+                return OVER_TIME_BUDGET
+        if max_bytes > 0 and file_path:
+            try:
+                size = os.stat(file_path).st_size
+            except OSError:
+                size = None
+            if size is not None and size > max_bytes:
+                return OVER_SIZE_BUDGET
+        return None
+
+    async def sweep_over_budget(self, session: AsyncSession) -> int:
+        """Fail for good every claimed row running longer than
+        ``acquisition_max_seconds``; returns how many. Its queue slot (and
+        dedup key) is free again, and the fulfiller's late completion is
+        refused."""
+        max_seconds = float(settings.acquisition_max_seconds or 0)
+        if max_seconds <= 0:
+            return 0
+        registered_values.require("acquisition_status", "failed")
+        rows = (
+            await session.execute(
+                text(
+                    f"""
+                    UPDATE media_acquisitions
+                    SET status = 'failed', error = :err, completed_at = NOW()
+                    WHERE status = 'claimed'
+                      AND claimed_at < NOW() - make_interval(secs => :sec)
+                    RETURNING {_ROW_COLUMNS}
+                    """
+                ),
+                {"err": OVER_TIME_BUDGET, "sec": max_seconds},
+            )
+        ).all()
+        if rows:
+            await _notify(session, "failed")
+            for row in rows:
+                acq = _row_to_acquisition(row)
+                log.warning("acquisition %s failed: %s", acq.id, OVER_TIME_BUDGET)
+                EVENTS.emit("core.acquisition_failed", acq.snapshot())
+        return len(rows)
 
     # ── Reconciliation-sweep helper (§4.9 normative pairing) ───────────
     async def completed_for_origin(

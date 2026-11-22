@@ -40,13 +40,17 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
+from domovoi.room_ids import require_room_id_path
 from domovoi import command_captures as cc
 from domovoi.admin_auth import require_admin_security, require_admin_security_read
 from web.backend.db import session_scope
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/captures", tags=["captures"])
+router = APIRouter(
+    prefix="/api/captures", tags=["captures"],
+    dependencies=[Depends(require_room_id_path)],
+)
 
 READ = [Depends(require_admin_security_read)]
 WRITE = [Depends(require_admin_security)]

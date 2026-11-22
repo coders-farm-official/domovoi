@@ -176,6 +176,28 @@ before.
   the first time you typed.
 - **What to know.** Nothing to do.
 
+## 1.4.1 (unreleased) — Feed and download reads are bounded more tightly
+
+- The part of a podcast or news feed before its first item is read in one
+  pass and capped at 256 KiB; a feed with a longer head is reported as too
+  large, as an over-size feed already is.
+- Outbound fetches accept no Content-Encoding or exactly one of gzip or
+  deflate, always inflate it under the caller's byte cap, and refuse any
+  other encoding; podcast episode downloads ask for an unencoded body.
+- Plugin acquisitions get a time and size budget (Settings: `acquisition_max_seconds`,
+  default 1 hour; `acquisition_max_bytes`, default 1 GiB; 0 turns one off). One over
+  the budget ends as failed and its file is not kept. Adding by link without an
+  admin session is limited to 10 waiting links at a time.
+
+## 1.4.1 (unreleased) — Room names are checked more strictly when a satellite connects
+
+- **What changed.** Room names are checked more strictly when a satellite
+  connects: lowercase letters, digits, `_` and `-`, up to 32 characters,
+  starting with a letter or digit. The dashboard's room addresses take the
+  same rule.
+- **What to know.** Nothing to do. Every way of setting up a room already
+  makes names like these.
+
 ## 1.4.1 (unreleased) — A refused plugin install says which package clashes
 
 - **What changed.** When a plugin is refused because its requirements would

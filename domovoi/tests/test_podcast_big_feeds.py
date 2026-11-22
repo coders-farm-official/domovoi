@@ -185,6 +185,47 @@ def test_a_prefix_with_no_whole_item_is_refused_not_guessed() -> None:
         feed_prefix.cut_to_last_item(whole[: whole.index(b"<item>")])
 
 
+def test_the_head_scan_is_linear() -> None:
+    import time
+
+    head = b"<rss><channel><title>T</title>" + b"<a x" * 16384
+    doc = head + b"<item><guid>a</guid></item><item><guid>b"
+    started = time.perf_counter()
+    out = feed_prefix.cut_to_last_item(doc)
+    assert time.perf_counter() - started < 0.5
+    assert out.rstrip().endswith(b"</item>\n</channel></rss>")
+
+
+@pytest.mark.parametrize("head", [
+    b'<a x="<" y="<" ' * 4096,
+    b'<a x="' * 8192,
+    b"<a x=y " * 8192,
+], ids=["quoted", "unclosed", "unquoted"])
+def test_malformed_head_tags_are_skipped_quickly(head) -> None:
+    import time
+
+    doc = b"<rss><channel>" + head + b"<item><guid>a</guid></item>"
+    started = time.perf_counter()
+    out = feed_prefix.cut_to_last_item(doc)
+    assert time.perf_counter() - started < 0.5
+    assert out.rstrip().endswith(b"<guid>a</guid></item>") or out.rstrip().endswith(b"</channel></rss>")
+
+
+def test_head_tags_with_quoted_attributes_and_cdata_are_read() -> None:
+    doc = (b"<?xml version='1.0'?><rss version='2.0' a='x>y'><channel>"
+           b'<title><![CDATA[<feed>]]></title><!-- <wrap> -->'
+           b'<image url="https://x.example/i.png"/><item><guid>a</guid></item>')
+    out = feed_prefix.cut_to_last_item(doc)
+    assert out.endswith(b"</item>\n</channel></rss>\n")
+
+
+def test_a_head_past_the_limit_is_refused() -> None:
+    doc = (b"<rss><channel><description>" + b"x" * (feed_prefix.MAX_HEAD_BYTES + 1)
+           + b"</description><item><guid>a</guid></item>")
+    with pytest.raises(feed_prefix.NoCompleteItem):
+        feed_prefix.cut_to_last_item(doc)
+
+
 def test_rss_1_items_list_is_not_an_item() -> None:
     doc = (b'<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" '
            b'xmlns="http://purl.org/rss/1.0/"><channel><title>R</title><items>'
@@ -515,6 +556,103 @@ def test_a_small_gzipped_body_comes_back_whole(dns) -> None:
     with httpx.Client(transport=transport) as client:
         got = net_safety.fetch_bytes_sync(FEED_URL, max_bytes=1 << 20, client=client)
     assert got.content == doc and not got.truncated
+
+
+def _awire(data: bytes, encoding: str) -> httpx.Response:
+    """:func:`_wire` for an async client."""
+    async def pieces():
+        for i in range(0, len(data), 65536):
+            yield data[i:i + 65536]
+
+    return httpx.Response(200, content=pieces(), headers={"Content-Encoding": encoding})
+
+
+def _double_gzip_zeros(mib: int) -> bytes:
+    import zlib
+
+    z = zlib.compressobj(9, zlib.DEFLATED, zlib.MAX_WBITS | 16)
+    inner = b"".join(z.compress(b"\0" * (1 << 20)) for _ in range(mib)) + z.flush()
+    return _gzip(inner)
+
+
+@pytest.mark.parametrize("encoding", ["gzip, gzip", "gzip,deflate", "br", "zstd", "compress"])
+def test_only_one_known_content_encoding_is_read(dns, encoding) -> None:
+    import tracemalloc
+
+    body = _double_gzip_zeros(64)
+    transport = httpx.MockTransport(lambda r: _wire(body, encoding))
+    cap = 1 << 20
+    with httpx.Client(transport=transport) as client:
+        tracemalloc.start()
+        try:
+            for truncate in (False, True):
+                with pytest.raises(net_safety.UnsupportedContentEncoding):
+                    net_safety.fetch_bytes_sync(
+                        FEED_URL, max_bytes=cap, client=client, truncate=truncate)
+            _cur, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+    assert peak < 8 * cap, peak
+
+
+@pytest.mark.asyncio
+async def test_only_one_known_content_encoding_is_read_async(dns) -> None:
+    body = _double_gzip_zeros(64)
+    transport = httpx.MockTransport(lambda r: _awire(body, "gzip, gzip"))
+    async with httpx.AsyncClient(transport=transport) as client:
+        with pytest.raises(net_safety.UnsupportedContentEncoding):
+            await net_safety.fetch_bytes(FEED_URL, max_bytes=1 << 20, client=client, truncate=True)
+
+
+@pytest.mark.asyncio
+async def test_a_gzipped_body_comes_back_whole_async(dns) -> None:
+    doc = _rss(4)
+    transport = httpx.MockTransport(lambda r: _awire(_gzip(doc), "x-gzip"))
+    async with httpx.AsyncClient(transport=transport) as client:
+        got = await net_safety.fetch_bytes(FEED_URL, max_bytes=1 << 20, client=client)
+    assert got.content == doc and not got.truncated
+
+
+@pytest.mark.parametrize("encoding", ["", "identity"])
+def test_an_unencoded_body_comes_back_whole(dns, encoding) -> None:
+    doc = _rss(4)
+    transport = httpx.MockTransport(lambda r: _wire(doc, encoding))
+    with httpx.Client(transport=transport) as client:
+        got = net_safety.fetch_bytes_sync(FEED_URL, max_bytes=1 << 20, client=client)
+    assert got.content == doc and not got.truncated
+
+
+async def _iter_capped_body(encoding: str, body: bytes, max_bytes: int) -> bytes:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return _awire(body, encoding)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        response = await net_safety.open_stream(
+            client, FEED_URL, headers=dict(net_safety.IDENTITY_ENCODING))
+        try:
+            out = b"".join([c async for c in net_safety.iter_capped(response, max_bytes)])
+        finally:
+            await response.aclose()
+    assert seen[0].headers["accept-encoding"] == "identity"
+    return out
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("encoding", ["gzip", "deflate", "gzip, gzip", "br"])
+async def test_iter_capped_refuses_an_encoded_answer(dns, encoding) -> None:
+    with pytest.raises(net_safety.UnsupportedContentEncoding):
+        await _iter_capped_body(encoding, _double_gzip_zeros(8), 1 << 20)
+
+
+@pytest.mark.asyncio
+async def test_iter_capped_passes_a_plain_body_and_caps_it(dns) -> None:
+    assert await _iter_capped_body("", b"abc" * 1000, 1 << 20) == b"abc" * 1000
+    assert await _iter_capped_body("identity", b"abc", 1 << 20) == b"abc"
+    with pytest.raises(net_safety.ResponseTooLarge):
+        await _iter_capped_body("", b"\0" * 5000, 4096)
 
 
 # ─── RFC 5005 paging links don't break the cut ────────────────────────────
