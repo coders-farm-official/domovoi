@@ -117,7 +117,8 @@ def test_a_restart_while_a_preset_is_on_keeps_the_real_factory_values(tmp_path):
     again.apply("factory")
     assert fake.values == FACTORY
     saved = json.loads((tmp_path / "mic_dsp.json").read_text())
-    assert saved == {"preset": "factory", "factory": {p: [v] for p, v in FACTORY.items()}}
+    assert saved == {"preset": "factory", "factory": {p: [v] for p, v in FACTORY.items()},
+                     "dirty": False}
 
 
 def test_the_preset_goes_back_on_after_a_usb_replug(tmp_path):
@@ -391,3 +392,61 @@ def test_a_reopened_mic_at_factory_touches_nothing(tmp_path, monkeypatch):
     sat._mic_frames_total = 0
     sat._health_reopen_mic("capture went silent", 0.0)
     assert fake.calls == [] and sent == []
+
+
+# ─── follow-up 2: factory values are never replaced by a preset's ─────────
+
+
+def test_a_crash_mid_restore_then_restart_then_b_keeps_factory(tmp_path):
+    fake = FakeXvf()
+    _dsp(tmp_path, fake).apply("C")
+    writes = []
+
+    def dies_mid_restore(argv):
+        if len(argv) > 4:
+            writes.append(argv)
+            if len(writes) == 2:
+                raise _Crash()
+        return fake(argv)
+
+    restoring = mic_dsp.XvfDsp("/opt/xvf3800/xvf_host", runner=dies_mid_restore,
+                               state_file=tmp_path / "mic_dsp.json")
+    with pytest.raises(_Crash):
+        restoring.apply("factory")
+    assert fake.values["PP_MIN_NN"] == "0.05"  # C's values are still on the chip
+    again = _dsp(tmp_path, fake)
+    assert again.preset == "factory" and again.active  # the restore is still owed
+    again.apply("B")
+    saved = json.loads((tmp_path / "mic_dsp.json").read_text())
+    assert saved["factory"] == {p: [v] for p, v in FACTORY.items()}
+    assert fake.values == {**FACTORY, "PP_AGCMAXGAIN": "31.6"}
+    again.apply("factory")
+    assert fake.values == FACTORY and not again.active
+
+
+def test_a_failed_restore_stays_dirty_and_the_retry_restores_factory(tmp_path):
+    fake = FakeXvf()
+    refuse = {"on": True}
+
+    def refuses_one_restore(argv):
+        if refuse["on"] and argv[3:] == ["PP_MIN_NS", FACTORY["PP_MIN_NS"]]:
+            fake.calls.append(list(argv))
+            return 1, ""
+        return fake(argv)
+
+    dsp = mic_dsp.XvfDsp("/opt/xvf3800/xvf_host", runner=refuses_one_restore,
+                         state_file=tmp_path / "mic_dsp.json")
+    dsp.apply("C")
+    state = dsp.apply("factory")
+    assert state["ok"] is False and dsp.active
+    assert json.loads((tmp_path / "mic_dsp.json").read_text())["dirty"] is True
+    # A preset now must not take the chip's C values for factory.
+    dsp.apply("B")
+    refuse["on"] = False
+    retry = _dsp(tmp_path, fake).reapply("reconnect")  # a restart, then ready
+    assert retry["preset"] == "B"
+    _dsp(tmp_path, fake).apply("factory")
+    assert fake.values == FACTORY
+    saved = json.loads((tmp_path / "mic_dsp.json").read_text())
+    assert saved == {"preset": "factory", "factory": {p: [v] for p, v in FACTORY.items()},
+                     "dirty": False}
