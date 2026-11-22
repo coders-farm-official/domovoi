@@ -50,6 +50,15 @@ page was reloaded. An upgrade of a plugin whose page a tab already runs
 still asks for a reload (and a restart when its server side changed), as
 before.
 
+## 1.4.1 (unreleased) — Settings search finds every setting
+
+- **What changed.** Searching Settings for a word like "news", "town" or
+  "weather" now finds "Local news location". The search also looks at each
+  setting's group, its help text and a few extra words it can be known by,
+  shows more results, and tries again if the list of settings was not ready
+  the first time you typed.
+- **What to know.** Nothing to do.
+
 ## 1.4.1 (unreleased) — A refused plugin install says which package clashes
 
 - **What changed.** When a plugin is refused because its requirements would
