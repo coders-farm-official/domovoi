@@ -7,6 +7,7 @@
 #
 # Usage:
 #   scripts/dev/linux-install-vm.sh SYSTEM [--work DIR] [--keep-vm]
+#       [--offline-kit IMAGE --release-key KEY]
 #
 #   SYSTEM     ubuntu-26.04 | debian-13: the cloud image the VM boots
 #              (pinned below by release and checksum)
@@ -14,6 +15,14 @@
 #              .test-results/linux-install/SYSTEM in this checkout)
 #   --keep-vm  leave the VM running at the end (ssh line printed), for a
 #              look around; stop it with: sudo kill "$(cat DIR/qemu.pid)"
+#   --offline-kit IMAGE  instead of phases 2-6: the install from an offline
+#              kit (docs/OFFLINE_KIT.md) with no internet. IMAGE is the
+#              stick's FAT32 image (scripts/dev/make-test-kit.py --image);
+#              ubuntu-26.04 only. See "Offline kit" below
+#   --release-key KEY  with --offline-kit: the ssh-ed25519 public key (a
+#              file, or the key line) the test kit's release is signed with
+#              (a test kit carries a throwaway key's signature, so install.sh
+#              runs in its test harness mode with this key)
 #
 # Needs a Linux x86_64 host with KVM (/dev/kvm), about 12 GB of memory and
 # 40 GB of disk to spare, and: qemu-system-x86_64, qemu-img, genisoimage
@@ -49,6 +58,20 @@
 #   6. The rollback: main moved to U2, pulled, the update unit started.
 #      Checks: the result is rolled_back, the checkout is back at U1, and
 #      it is healthy.
+# Offline kit (--offline-kit), instead of 2-6:
+#   K1. The VM has no internet: its network is QEMU's restrict=on user
+#      network, which takes the ssh this script drives it with and nothing
+#      else (no route out, no DNS: checked). The kit's image is a second,
+#      read-only disk, mounted as a desktop mounts a stick: at
+#      /media/alex/DOMOVOIKIT, readable by its user only.
+#   K2. sudo bash /media/alex/DOMOVOIKIT/linux/install.sh --kit --yes, the
+#      stick's own installer (its test harness mode only for the release
+#      key): AI from the kit when it has it (--tier floor), else
+#      --no-ai-models. Checks: ok; the units, docker and ollama active;
+#      both health checks; the database images by their pinned digests;
+#      Whisper, the voices, the wake word and the phone app in place; with
+#      AI, every model at its pinned digest; nothing ever reached out.
+#   K3. Again: every step skipped.
 # On the way out, whatever happened: the provision log, both result
 # files, the journal of the Domovoi units and the VM's console in
 # --work/logs, and a summary (also into GITHUB_STEP_SUMMARY on Actions).
@@ -62,10 +85,14 @@ die() { echo "linux-install-vm: $*" >&2; exit 2; }
 SYSTEM=""
 WORK=""
 KEEP_VM=0
+KIT_IMG=""
+KIT_KEY=""
 while [ $# -gt 0 ]; do
   case $1 in
     --work) [ $# -ge 2 ] || die "--work needs a directory"; WORK=$2; shift 2 ;;
     --keep-vm) KEEP_VM=1; shift ;;
+    --offline-kit) [ $# -ge 2 ] || die "--offline-kit needs the kit's image"; KIT_IMG=$2; shift 2 ;;
+    --release-key) [ $# -ge 2 ] || die "--release-key needs a key"; KIT_KEY=$2; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     -*) die "unknown option: $1 (--help)" ;;
     *) [ -z "$SYSTEM" ] || die "one system at a time"; SYSTEM=$1; shift ;;
@@ -87,6 +114,15 @@ case $SYSTEM in
   "") usage >&2; exit 2 ;;
   *) die "SYSTEM is ubuntu-26.04 or debian-13, not: $SYSTEM" ;;
 esac
+
+if [ -n "$KIT_IMG" ] || [ -n "$KIT_KEY" ]; then
+  [ -n "$KIT_IMG" ] && [ -n "$KIT_KEY" ] || die "--offline-kit and --release-key go together"
+  [ "$SYSTEM" = ubuntu-26.04 ] || die "--offline-kit: an install from a kit is for Ubuntu 26.04 only"
+  [ -f "$KIT_IMG" ] || die "--offline-kit: no such image: $KIT_IMG"
+  KIT_IMG=$(cd "$(dirname "$KIT_IMG")" && pwd)/$(basename "$KIT_IMG")
+  if [ -f "$KIT_KEY" ]; then KIT_KEY=$(awk '{print $1, $2; exit}' "$KIT_KEY"); fi
+  [[ $KIT_KEY =~ ^ssh-ed25519\ [A-Za-z0-9+/=]+$ ]] || die "--release-key: not an ssh-ed25519 public key"
+fi
 
 # U1's CPython: the same 3.14.10, python-build-standalone's next build,
 # with the uv release that carries its checksum (both read from GitHub's
@@ -193,10 +229,19 @@ else
   genisoimage -quiet -output "$WORK/seed.iso" -volid cidata -joliet -rock "$WORK/seed/user-data" "$WORK/seed/meta-data"
 fi
 rm -f "$WORK/qemu.pid" "$WORK/serial.log"
+# An offline kit: restrict=on takes the ssh forward in and lets nothing
+# out, and the kit is a second, read-only disk (a stick).
+NET_OPTS="user,id=n0,hostfwd=tcp:127.0.0.1:$SSH_PORT-:22"
+KIT_DRIVE=()
+if [ -n "$KIT_IMG" ]; then
+  NET_OPTS="user,id=n0,restrict=on,hostfwd=tcp:127.0.0.1:$SSH_PORT-:22"
+  KIT_DRIVE=(-drive "file=$KIT_IMG,if=virtio,format=raw,readonly=on")
+fi
 as_root qemu-system-x86_64 -enable-kvm -cpu host -smp "$VM_CPUS" -m "$VM_MEM_MB" \
   -drive "file=$WORK/disk.qcow2,if=virtio,format=qcow2" \
   -drive "file=$WORK/seed.iso,if=virtio,format=raw,readonly=on" \
-  -netdev "user,id=n0,hostfwd=tcp:127.0.0.1:$SSH_PORT-:22" -device virtio-net-pci,netdev=n0 \
+  ${KIT_DRIVE[@]+"${KIT_DRIVE[@]}"} \
+  -netdev "$NET_OPTS" -device virtio-net-pci,netdev=n0 \
   -display none -serial "file:$WORK/serial.log" -daemonize -pidfile "$WORK/qemu.pid"
 QEMU_PID=$(as_root cat "$WORK/qemu.pid")
 say "VM started (pid $QEMU_PID, $VM_CPUS CPUs, $VM_MEM_MB MB)"
@@ -207,6 +252,61 @@ done
 vm true || { failc "the VM answers ssh within 5 minutes"; exit 1; }
 vm 'sudo cloud-init status --wait >/dev/null 2>&1 || true; . /etc/os-release; echo "$PRETTY_NAME, $(uname -r), $(nproc) CPUs, $(free -m | awk "/^Mem:/ {print \$2}") MB, $(df -h / | awk "NR==2 {print \$2}") disk"' | tee "$LOGS/vm.txt"
 pass "VM up: $(cat "$LOGS/vm.txt")"
+
+# ─── K. An offline kit ───────────────────────────────────────────────────
+
+if [ -n "$KIT_IMG" ]; then
+  phase "no internet in the VM"
+  check "no route out (https to github.com fails)" vm '! curl -fsS --max-time 15 -o /dev/null https://github.com'
+  check "no DNS" vm '! getent hosts github.com >/dev/null'
+  check "no plain IP either" vm '! curl -fsS --max-time 15 -o /dev/null http://1.1.1.1'
+
+  phase "the kit, mounted as a desktop mounts a stick"
+  vm 'sudo mkdir -p /media/alex/DOMOVOIKIT && sudo chown ci: /media/alex && sudo chmod 0750 /media/alex \
+    && sudo mount -o ro,uid=1000,gid=1000,umask=077 "$(sudo blkid -L DOMOVOIKIT)" /media/alex/DOMOVOIKIT \
+    && ls /media/alex/DOMOVOIKIT' >"$LOGS/kit-ls.txt" 2>&1
+  check "mounted at /media/alex/DOMOVOIKIT" grep -q kit.json "$LOGS/kit-ls.txt"
+  check "the service user can't read the stick (the install must copy what it needs)" \
+    vm '! sudo -u nobody test -r /media/alex/DOMOVOIKIT/kit.json'
+  KIT_AI="--no-ai-models"
+  if vm 'grep -q "\"ai\"" /media/alex/DOMOVOIKIT/kit.json' 2>/dev/null \
+     && vm 'python3 -c "import json,sys; sys.exit(0 if \"ai\" in json.load(open(\"/media/alex/DOMOVOIKIT/kit.json\"))[\"includes\"] else 1)"'; then
+    KIT_AI="--tier floor"
+  fi
+  say "AI: $KIT_AI"
+
+  phase "the install from the kit"
+  KIT_ENV="DOMOVOI_INSTALL_TEST_HARNESS=1 DOMOVOI_INSTALL_REPO_URL=file:///nonexistent DOMOVOI_INSTALL_RELEASES_URL=file:///nonexistent DOMOVOI_INSTALL_RELEASE_KEY='$KIT_KEY'"
+  set +e
+  vm "sudo env $KIT_ENV bash /media/alex/DOMOVOIKIT/linux/install.sh --kit --yes --timezone Etc/UTC $KIT_AI --health-timeout 900 </dev/null" 2>&1 | tee "$LOGS/install-kit.log"
+  rc=${PIPESTATUS[0]}
+  set -e
+  vm 'sudo cat /var/lib/domovoi-provision/result.json' >"$LOGS/provision-result.json" 2>/dev/null || true
+  check "install.sh --kit finished (exit $rc)" [ "$rc" = 0 ]
+  check "the trust chain was checked: signature, then the whole stick" \
+    bash -c 'grep -q "signed with Domovoi.s release key" "$1" && grep -q "The kit is fine" "$1"' _ "$LOGS/install-kit.log"
+  check "provision.sh's result: ok" grep -q '"result":"ok"' "$LOGS/provision-result.json"
+  health() { vm 'curl -fsS -o /dev/null --max-time 10 http://127.0.0.1:6370/v1/health && curl -fsS -o /dev/null --max-time 10 http://127.0.0.1:6369/api/health'; }
+  check "domovoi-db, -core, -web, docker and ollama are active" vm "systemctl is-active --quiet domovoi-db domovoi-core domovoi-web docker ollama"
+  check "/v1/health and /api/health answer" health
+  check "the database images at their pinned digests" vm 'cd /opt/domovoi/domovoi && for r in $(sudo -u domovoi docker compose config --images postgres flyway); do sudo docker image inspect "$r" >/dev/null || exit 1; done'
+  check "the music player image is here" vm 'sudo docker image inspect domovoi-mpd:latest >/dev/null'
+  check "Whisper's pinned snapshot" vm 'sudo test -f /home/domovoi/.cache/huggingface/hub/models--Systran--faster-whisper-small.en/snapshots/$(sed -n "s/^whisper_revision=//p" /opt/domovoi/scripts/linux/provision-manifest.conf)/model.bin'
+  check "the three voices and voice ID's model" vm '[ "$(sudo ls /home/domovoi/.domovoi/piper_voices | grep -c "\.onnx$")" -ge 4 ]'
+  check "the Domovoi wake word" vm 'sudo find /home/domovoi/.domovoi -name domovoi_v1.onnx | grep -q .'
+  check "the phone app (final line)" grep -q '"phone_app":true' "$LOGS/provision-result.json"
+  if [ "$KIT_AI" = "--tier floor" ]; then
+    check "the floor tier's models at their pinned digests" vm 'm=/opt/domovoi/scripts/linux/provision-manifest.conf; t=$(curl -fsS http://127.0.0.1:11434/api/tags); for k in tool qa; do n=$(sed -n "s/^tier_floor_${k}_model=//p" $m); d=$(sed -n "s/^tier_floor_${k}_digest=//p" $m); printf "%s" "$t" | grep -q "\"name\":\"$n\"[^}]*\"digest\":\"$d\"" || exit 1; done'
+  fi
+  check "searxng is not there (not on a kit)" vm '! sudo docker ps -a --format "{{.Names}}" | grep -q searxng'
+  check "still no internet afterwards" vm '! curl -fsS --max-time 10 -o /dev/null https://github.com'
+
+  phase "install.sh --kit again"
+  vm "sudo env $KIT_ENV bash /media/alex/DOMOVOIKIT/linux/install.sh --kit --yes --timezone Etc/UTC $KIT_AI </dev/null" >"$LOGS/install-kit-again.log" 2>&1 || true
+  check "the second run ends ok" grep -q 'Domovoi is installed and running' "$LOGS/install-kit-again.log"
+  check "and skips the venv" grep -q '\[venv\] already done, inputs unchanged' "$LOGS/install-kit-again.log"
+  exit "$FAILED"
+fi
 
 # ─── 2. The commits ──────────────────────────────────────────────────────
 

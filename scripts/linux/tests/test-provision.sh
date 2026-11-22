@@ -49,6 +49,15 @@
 #     phone-app-none: no release yet; phone-app-unreadable: a bad manifest);
 #     `-m pip install -r` fails when pip-fail is set.
 #
+# The kit_* cases install from an offline kit (--offline-kit): a kit the
+# real writer (domovoi.offline_kit.write_kit, run with HARNESS_PYTHON) makes
+# from fake files whose hashes the fixture origin pins (its tier digests
+# are the fake model manifests'). The kit's helper runs for real (the
+# python3 shim passes "#provision:kit" through); docker load registers the
+# image references a fake save file lists; the venv's python stands in
+# for the from-kit snippets (piper, speaker, wake word, phone app), each
+# holding its file to the fixture's pin. Without a Python they are skipped.
+#
 # Usage: bash scripts/linux/tests/test-provision.sh [--case NAME|GLOB]... [--list]
 # (case-filter.sh says how --case picks; scripts/dev/run-linux-harness.sh
 # runs this in a pinned Linux container, much faster than Git Bash.)
@@ -190,12 +199,16 @@ build_origin() {
     echo '```'
   } >"$o/docs/LINUX_HOST.md"
   build_own_python_downloads
+  build_kit_models
   # The real manifest, with the Whisper pin swapped for the fake model's,
-  # and uv's and CPython's for the fake downloads'.
+  # and uv's and CPython's for the fake downloads', and the tier models'
+  # digests for the fake manifests an offline kit carries (kit_* cases;
+  # the registry the curl shim plays serves those digests too).
+  sed "${KIT_MODEL_SED[@]}" "$REAL_REPO/scripts/linux/provision-manifest.conf" >"$WORK/manifest.kit"
   sed -e "s/^whisper_model_bin_sha256=.*/whisper_model_bin_sha256=$(sha_of_text "$WHISPER_CONTENT")/" \
     -e "s/^uv_sha256=.*/uv_sha256=$(sha256sum "$WORK/uv.tar.gz" | cut -d' ' -f1)/" \
     -e "s/^python_sha256=.*/python_sha256=$(sha256sum "$WORK/pbs.tar.gz" | cut -d' ' -f1)/" \
-    "$REAL_REPO/scripts/linux/provision-manifest.conf" >"$o/scripts/linux/provision-manifest.conf"
+    "$WORK/manifest.kit" >"$o/scripts/linux/provision-manifest.conf"
   cp "$REAL_REPO"/scripts/linux/units/*.service "$REAL_REPO"/scripts/linux/units/*.timer \
     "$REAL_REPO/scripts/linux/units/journald-domovoi.conf" "$o/scripts/linux/units/"
   cp "$REAL_REPO/scripts/linux/cache-trim.py" "$o/scripts/linux/cache-trim.py"
@@ -300,6 +313,115 @@ LOCK
   git -C "$o" checkout -q main
   git -C "$o" bundle create -q "$WORK/origin.bundle" --all 2>/dev/null || git -C "$o" bundle create "$WORK/origin.bundle" --all >/dev/null 2>&1
   ORIGIN=$o
+}
+
+# ─── the offline kit (kit_* cases) ───────────────────────────────────────
+
+# Each tier model as an offline kit carries it: a manifest naming a config
+# and one layer, each a small fake blob. KIT_MODEL_SED pins the manifests'
+# SHA-256 as the tier digests (what Ollama reports is the manifest's hash).
+KIT_MODEL_SED=()
+build_kit_models() {
+  local m=$WORK/kit-models key tag cfg layer man
+  mkdir -p "$m/blobs" "$m/manifests"
+  for key in $(sed -n 's/^\(tier_[a-z]*_[a-z]*\)_model=.*$/\1/p' "$REAL_REPO/scripts/linux/provision-manifest.conf"); do
+    tag=$(sed -n "s/^${key}_model=//p" "$REAL_REPO/scripts/linux/provision-manifest.conf")
+    printf 'config of %s' "$tag" >"$m/cfg"
+    printf 'weights of %s' "$tag" >"$m/layer"
+    cfg=$(sha256sum "$m/cfg" | cut -d' ' -f1)
+    layer=$(sha256sum "$m/layer" | cut -d' ' -f1)
+    mv "$m/cfg" "$m/blobs/sha256-$cfg"
+    mv "$m/layer" "$m/blobs/sha256-$layer"
+    man=$m/manifests/${tag//\//_}
+    printf '{"schemaVersion":2,"config":{"digest":"sha256:%s","size":%s},"layers":[{"digest":"sha256:%s","size":%s}]}' \
+      "$cfg" "$(stat -c %s "$m/blobs/sha256-$cfg")" "$layer" "$(stat -c %s "$m/blobs/sha256-$layer")" >"$man"
+    KIT_MODEL_SED+=(-e "s/^${key}_digest=.*/${key}_digest=$(sha256sum "$man" | cut -d' ' -f1)/")
+  done
+}
+
+# make_kit DIR [noai] [novision] [tamper-model] [no-wake]: a kit of the
+# fixture origin's FIXTURE_A, written by the real write_kit.
+KIT_COMMIT=""
+make_kit() {
+  local dir=$1 opts=" ${*:2} " src=$WORK/kit-src
+  if [ ! -f "$WORK/kit.bundle" ]; then
+    rm -rf "$WORK/kit-bare.git"
+    git clone -q --bare "$ORIGIN" "$WORK/kit-bare.git"
+    git -C "$WORK/kit-bare.git" update-ref refs/heads/stable "$FIXTURE_A"
+    git -C "$WORK/kit-bare.git" bundle create -q "$WORK/kit.bundle" refs/heads/stable refs/heads/main
+    KIT_COMMIT=$FIXTURE_A
+  fi
+  rm -rf "$src" "$dir"
+  mkdir -p "$src"
+  "$JSON_PY" - "$REAL_REPO" "$dir" "$WORK" "$FIXTURE_A" "$opts" "$OLLAMA_CONTENT" "$WHISPER_CONTENT" \
+    "$PIPER_CONTENT" "$SPEAKER_CONTENT" "$ORIGIN/scripts/linux/provision-manifest.conf" <<'PY'
+import sys
+from pathlib import Path
+repo, out, work, commit, opts, ollama, whisper, piper, speaker, manifest = sys.argv[1:]
+sys.path.insert(0, repo)
+from domovoi.offline_kit import Component, Source, write_kit
+work = Path(work)
+pins = dict(l.split("=", 1) for l in open(manifest, encoding="utf-8").read().splitlines() if "=" in l and not l.startswith("#"))
+c = [
+    Component("source", "domovoi", "9.9.9", "MIT", [Source("source/domovoi.bundle", work / "kit.bundle")]),
+    Component("apt", "ubuntu", "snapshot", "LicenseRef-distro-archive", [
+        Source("apt/ubuntu/dists/resolute/InRelease", b"fixture InRelease\n"),
+        Source("apt/ubuntu/dists/resolute/main/binary-amd64/Packages", b"Package: fixture\n"),
+        Source("apt/ubuntu/pool/main/f/fixture/fixture_1_amd64.deb", b"deb")]),
+    Component("apt", "docker", "snapshot", "LicenseRef-distro-archive", [
+        Source("apt/docker/gpg", b"KEY 9DC858229FC7DD38854AE2D88D81803C0EBFCD88\n"),
+        Source("apt/docker/dists/resolute/InRelease", b"fixture InRelease\n"),
+        Source("apt/docker/dists/resolute/stable/binary-amd64/Packages", b"Package: docker-ce\n")]),
+    Component("python-wheels", "cp314-x86_64", "lock", "LicenseRef-mixed-see-sbom", [
+        Source("python/cp314-x86_64/fixture-1.0-py3-none-any.whl", b"wheel"),
+        Source("python/cp314-x86_64/fastapi-1.0-py3-none-any.whl", b"wheel")]),
+    Component("container-image", "postgres:16.15-trixie@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d", "x", "PostgreSQL",
+              [Source("images/postgres.tar", b"postgres:16.15-trixie@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d\n")]),
+    Component("container-image", "flyway/flyway:10.22.0@sha256:43592cc125eb0594d9b013e8dced2fa67d473c091abaa5dec03b22f49e682949", "x", "Apache-2.0",
+              [Source("images/flyway.tar", b"flyway/flyway:10.22.0@sha256:43592cc125eb0594d9b013e8dced2fa67d473c091abaa5dec03b22f49e682949\n")]),
+    Component("container-image", "domovoi-mpd", "x", "LicenseRef-distro-archive",
+              [Source("images/domovoi-mpd.tar", b"domovoi-mpd:latest\n")]),
+    Component("ollama-runtime", "ollama", "0.34.4", "MIT", [Source("ollama/ollama-linux-amd64.tar.zst", ollama.encode())]),
+    Component("whisper-model", "small.en", "x", "MIT", [
+        Source("speech/whisper-small.en/model.bin", whisper.encode()),
+        Source("speech/whisper-small.en/config.json", b"{}")]),
+    Component("speaker-model", "speaker", "x", "Apache-2.0", [Source("speech/speaker/speaker.onnx", speaker.encode())]),
+    Component("phone-app", "android", "1.2.0", "MIT", [
+        Source("phone/domovoi-1.2.0-arm64-v8a.apk", b"arm64\n"),
+        Source("phone/domovoi-1.2.0-armeabi-v7a.apk", b"v7a\n")]),
+]
+if " no-wake " not in opts:
+    c.append(Component("wake-word", "domovoi_v1", "x", "CC-BY-NC-SA-4.0", [Source("wake/domovoi_v1.onnx", b"wake word")]))
+for v in ("en_US-norman-medium", "en_US-kristin-medium", "en_US-ljspeech-medium"):
+    c.append(Component("piper-voice", v, "x", "LicenseRef-public-domain", [
+        Source(f"speech/piper/{v}.onnx", piper.encode()), Source(f"speech/piper/{v}.onnx.json", b"{}")]))
+includes = []
+if " noai " not in opts:
+    includes.append("ai")
+    models = work / "kit-models"
+    kinds = ("tool", "qa") + (() if " novision " in opts else ("vision",))
+    if " novision " not in opts:
+        includes.append("vision")
+    seen = set()
+    for tier in ("floor", "standard"):
+        for k in kinds:
+            tag = pins["tier_%s_%s_model" % (tier, k)]
+            if tag in seen:
+                continue
+            seen.add(tag)
+            name, ver = tag.split(":", 1)
+            mf = models / "manifests" / tag.replace("/", "_")
+            data = mf.read_bytes()
+            if " tamper-model " in opts and k == "tool" and tier == "floor":
+                data = data.replace(b'"schemaVersion":2', b'"schemaVersion":2 ')
+            import json, re
+            files = [Source("ollama/models/manifests/registry.ollama.ai/library/%s/%s" % (name, ver), data)]
+            for d in re.findall(r"sha256:([0-9a-f]{64})", data.decode()):
+                files.append(Source("ollama/models/blobs/sha256-" + d, models / "blobs" / ("sha256-" + d)))
+            lic = "LicenseRef-Llama-3.2-Community" if tag.startswith("llama") else "Apache-2.0"
+            c.append(Component("ollama-model", tag, "x", lic, files))
+write_kit(out, version="9.9.9", commit=commit, components=c, includes=includes, created_at="2026-11-22T10:15:00Z")
+PY
 }
 
 # ─── shims ───────────────────────────────────────────────────────────────
@@ -485,6 +607,14 @@ case $url in
       printf '%s{"name":"%s","model":"%s","size":1,"digest":"%s","details":{"format":"gguf"}}' "$sep" "$tag" "$tag" "$dg"
       sep=","
     done <"$SHIM_STATE/ollama-models"
+    # And what an offline kit copied into Ollama's models folder: the
+    # digest Ollama reports is the manifest's SHA-256.
+    for f in "$SHIM_ROOT"/home/ollama/.ollama/models/manifests/registry.ollama.ai/library/*/*; do
+      [ -f "$f" ] || continue
+      t=${f%/*}; t=${t##*/}:${f##*/}
+      printf '%s{"name":"%s","model":"%s","size":1,"digest":"%s","details":{"format":"gguf"}}' "$sep" "$t" "$t" "$(sha256sum "$f" | cut -d' ' -f1)"
+      sep=","
+    done
     printf ']}\n' ;;
   http://127.0.0.1:11434/api/pull)
     tag=$(printf '%s' "$data" | sed -n 's/.*"model":"\([^"]*\)".*/\1/p')
@@ -659,6 +789,15 @@ case "$1 ${2-}" in
   # Room containers: $SHIM_STATE/containers/NAME holds the image ID it runs.
   "ps -a") ls "$SHIM_STATE/containers" 2>/dev/null || true ;;
   "compose config") echo "$refs" ;;
+  # docker load -i FILE: a fake save file lists the references it holds.
+  "load -i")
+    [ ! -f "$SHIM_STATE/load-fail" ] || { echo "Error: fixture: invalid tar header" >&2; exit 1; }
+    while IFS= read -r r; do
+      [ -n "$r" ] || continue
+      printf 'sha256:%s\n' "$(printf 'loaded %s' "$r" | sha256sum | cut -c1-64)" >"$SHIM_STATE/images/${r//[:\/@]/_}"
+      echo "Loaded image: $r"
+    done <"$3" ;;
+  "tag "*) cp "$SHIM_STATE/images/${2//[:\/@]/_}" "$SHIM_STATE/images/${3//[:\/@]/_}" ;;
   "compose pull")
     [ ! -f "$SHIM_STATE/pull-fail" ] || { echo "Error response from daemon: toomanyrequests" >&2; exit 1; }
     for r in $refs; do touch "$SHIM_STATE/images/${r//[:\/@]/_}"; done ;;
@@ -984,6 +1123,11 @@ SH
   # itself runs for real in the owner_snippet_* cases.
   cat >"$bin/python3" <<'SH'
 #!/usr/bin/env bash
+# The offline kit's helper reads kit.json and copies off the kit for real.
+if [ "${1-}" = -I ] && [ "${2-}" = -c ] && [[ ${3-} == "#provision:kit"* ]]; then
+  echo "python3 kit ${4-}" >>"$SHIM_STATE/calls.log"
+  exec "$SHIM_REAL_PYTHON" "$@"
+fi
 if [ "${1-}" = -I ] && [ "${2-}" = -c ] && [[ ${3-} == "# domovoi:checkout-owner"* ]]; then
   echo "python3 checkout-owner $4 $5 $6 $7" >>"$SHIM_STATE/calls.log"
   tracked=$(tr '\0' '\n')
@@ -1118,6 +1262,24 @@ if [ "${1-}" = -c ]; then
       d=$SHIM_ROOT$HOME/.domovoi/satellite_media/cache/android_app/26111301; mkdir -p "$d"
       echo arm64 >"$d/domovoi-1.2.0-arm64-v8a.apk"; echo v7a >"$d/domovoi-1.2.0-armeabi-v7a.apk"
       echo "2 app files verified (2 downloaded)"; exit 0 ;;
+    # The offline kit's files, each held to the fixture's pin as the real
+    # snippets hold them to the code's. kit-env: what the snippet's
+    # environment says about the internet.
+    "#provision:piper-from-kit")
+      echo "kit-env http_proxy=${http_proxy-} GIT_ALLOW_PROTOCOL=${GIT_ALLOW_PROTOCOL-} PIP_NO_INDEX=${PIP_NO_INDEX-}" >>"$SHIM_STATE/calls.log"
+      [ "$(sha256sum "$4" | cut -d' ' -f1)" = "$(cat "$SHIM_STATE/piper-pin")" ] || { echo "$3.onnx on the offline kit does not match its pin" >&2; exit 1; }
+      d=$SHIM_ROOT$6; mkdir -p "$d"; cp "$4" "$d/$3.onnx"; cp "$5" "$d/$3.onnx.json"; echo "$d/$3.onnx"; exit 0 ;;
+    "#provision:speaker-from-kit")
+      [ "$(sha256sum "$3" | cut -d' ' -f1)" = "$(cat "$SHIM_STATE/speaker-pin")" ] || { echo "speaker.onnx does not match its pin" >&2; exit 1; }
+      d=$SHIM_ROOT$4; mkdir -p "$d"; cp "$3" "$d/speaker.onnx"; exit 0 ;;
+    "#provision:wake-from-kit")
+      w=$SHIM_ROOT$HOME/.domovoi/wake_models/domovoi_v1.onnx
+      if [ "$3" = check ]; then [ -f "$w" ]; exit; fi
+      mkdir -p "${w%/*}"; cp "$4" "$w"; exit 0 ;;
+    "#provision:phone-app-from-kit")
+      d=$SHIM_ROOT$HOME/.domovoi/satellite_media/cache/android_app/26111301; mkdir -p "$d"
+      for a in "${@:3}"; do cp "$a" "$d/${a##*/}"; done
+      echo "2 app files from the offline kit kept, 0 refused"; exit 0 ;;
     "#provision:whisper-download")
       d=$SHIM_ROOT$HOME/.cache/huggingface/hub/models--Systran--faster-whisper-small.en/snapshots/$4
       mkdir -p "$d"; cat "$SHIM_STATE/whisper-content" >"$d/model.bin"; echo "$d"; exit 0 ;;
@@ -1186,7 +1348,7 @@ new_case() {
     printf '%s %s\n' "$(sed -n "s/^tier_${t}_model=//p" "$ORIGIN/scripts/linux/provision-manifest.conf")" \
       "$(sed -n "s/^tier_${t}_digest=//p" "$ORIGIN/scripts/linux/provision-manifest.conf")" >>"$STATE/registry"
   done
-  export SHIM_STATE=$STATE SHIM_ROOT=$ROOT SHIM_WORK=$WORK SHIM_VENV_TEMPLATE=$WORK/venv-python
+  export SHIM_STATE=$STATE SHIM_ROOT=$ROOT SHIM_WORK=$WORK SHIM_VENV_TEMPLATE=$WORK/venv-python SHIM_REAL_PYTHON=$JSON_PY
 }
 
 # run_prov [ARGS...]: the script against the current case, with the
@@ -5716,6 +5878,199 @@ case_owner_snippet_follows_no_link() {
   end_case
 }
 
+# ─── the offline kit ─────────────────────────────────────────────────────
+
+# kit_case NAME [make_kit options...]: a bare-metal Ubuntu 26.04 case and a
+# kit for it in $KIT; skipped (status 1) without a Python to write it.
+kit_case() {
+  new_case "$1" --bare
+  if [ -z "$JSON_PY" ]; then SKIPPED=$((SKIPPED + 1)); echo "skip $1 (no python to write the kit)"; return 1; fi
+  KIT=$CASE/DOMOVOIKIT
+  make_kit "$KIT" "${@:2}" >"$CASE/make-kit.log" 2>&1 || { fail "make_kit: $(tail -n 3 "$CASE/make-kit.log")"; end_case; return 1; }
+}
+# Nothing reached for the internet: no curl but this machine's, no clone
+# but the bundle, no pull, no build.
+no_internet() {
+  ! grep -E '^curl https?://' "$STATE/calls.log" | grep -vE '^curl http://127\.0\.0\.1' \
+    && not_called "compose pull" && not_called "docker build" && not_called "#provision:piper-download" \
+    && not_called "#provision:whisper-download" && not_called "#provision:phone-app-download"
+}
+
+case_kit_full_install() {
+  kit_case kit_full_install || return 0
+  run_prov --offline-kit "$KIT" --internet never --timezone Etc/UTC
+  check "exit 0" eq "$RC" 0
+  check "progress format" progress_ok
+  check "result ok" eq "$(final_field result)" '"ok"'
+  check "said it installs from the kit" said "offline kit: Domovoi 9.9.9"
+  check "nothing reached for the internet" no_internet
+  check "HEAD is the kit's commit" eq "$(final_field head)" "\"$FIXTURE_A\""
+  check "on stable" eq "$(git -C "$CHECKOUT" rev-parse --abbrev-ref '@{u}')" origin/stable
+  check "origin is the repository URL, not the stick" eq "$(origin_url "$CHECKOUT")" "$ORIGIN"
+  check "apt used the kit's sources only" called "Dir::Etc::SourceParts="
+  check "  and its own lists" called "Dir::State::Lists="
+  check "  never the system's lists" not_called "apt-get -o Dpkg::Use-Pty=0 -o DPkg::Lock::Timeout=600 -q update"
+  check "Docker's key from the kit, by fingerprint" has_line "$ROOT/etc/apt/keyrings/docker.asc" "KEY 9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
+  check "pip with no index, the kit's wheels" called "-m pip --disable-pip-version-check --no-input install --no-index --find-links"
+  check "docker load of the database images" called "docker load -i"
+  check "the music player loaded, not built" eq "$(record_field by)" provision
+  check "Ollama from the kit" test -x "$ROOT/usr/local/bin/ollama"
+  check "the floor tier's models copied in" test -f "$ROOT/home/ollama/.ollama/models/manifests/registry.ollama.ai/library/llama3.2/3b-instruct-q4_K_M"
+  check "  their blobs too" eq "$(ls "$ROOT/home/ollama/.ollama/models/blobs" | grep -c '^sha256-')" 6
+  check "Whisper's snapshot" test -f "$ROOT/home/domovoi/.cache/huggingface/hub/models--Systran--faster-whisper-small.en/snapshots/$(sed -n 's/^whisper_revision=//p' "$ORIGIN/scripts/linux/provision-manifest.conf")/model.bin"
+  check "the voices" test -f "$ROOT/home/domovoi/.domovoi/piper_voices/en_US-kristin-medium.onnx"
+  check "voice ID's model" test -f "$ROOT/home/domovoi/.domovoi/piper_voices/speaker.onnx"
+  check "the wake word" test -f "$ROOT/home/domovoi/.domovoi/wake_models/domovoi_v1.onnx"
+  check "the phone app" eq "$(final_field phone_app)" true
+  check "the snippets get no internet" called "kit-env http_proxy=http://127.0.0.1:9 GIT_ALLOW_PROTOCOL=file PIP_NO_INDEX=1"
+  check "no search helper" absent "$STATE/searxng-running"
+  check "no GPU runtime, said so" said "an offline kit carries no GPU runtime"
+  check "the stage is gone" absent "$ROOT/var/cache/domovoi-provision/kit-stage"
+  end_case
+}
+
+case_kit_second_run_skips_everything() {
+  kit_case kit_second_run_skips_everything || return 0
+  run_prov --offline-kit "$KIT" --internet never --timezone Etc/UTC
+  check "first run ok" eq "$RC" 0
+  run_prov --offline-kit "$KIT" --internet never --timezone Etc/UTC
+  check "second run ok" eq "$(final_field result)" '"ok"'
+  local s
+  for s in apt checkout docker venv ollama models whisper piper images; do
+    check "step $s skipped" eq "$(state_of "$s")" skip
+  done
+  check "nothing loaded again" not_called "docker load"
+  end_case
+}
+
+case_kit_without_ai_models_says_how() {
+  kit_case kit_without_ai_models_says_how noai || return 0
+  run_prov --offline-kit "$KIT" --internet never
+  check "refused" eq "$RC" 1
+  check "in plain words" said "The kit has no AI models. Install with --no-ai-models"
+  check "before anything ran" not_called "apt-get"
+  run_prov --offline-kit "$KIT" --internet never --no-ai-models
+  check "with --no-ai-models it installs" eq "$(final_field result)" '"ok"'
+  check "no models" absent "$ROOT/home/ollama/.ollama/models/manifests"
+  end_case
+}
+
+case_kit_without_vision_goes_on() {
+  kit_case kit_without_vision_goes_on novision || return 0
+  run_prov --offline-kit "$KIT" --internet never
+  check "ok" eq "$(final_field result)" '"ok"'
+  check "said the vision model is not on the kit" said "has no qwen3-vl"
+  check "the others are in" test -f "$ROOT/home/ollama/.ollama/models/manifests/registry.ollama.ai/library/llama3.2/3b-instruct-q4_K_M"
+  end_case
+}
+
+case_kit_needs_ubuntu_26_04() {
+  kit_case kit_needs_ubuntu_26_04 || return 0
+  printf 'ID=debian\nVERSION_ID="13"\nPRETTY_NAME="Debian GNU/Linux 13 (trixie)"\n' >"$ROOT/etc/os-release"
+  run_prov --offline-kit "$KIT" --internet never
+  check "refused" eq "$RC" 1
+  check "says Ubuntu 26.04" said "An install from an offline kit needs Ubuntu 26.04; this is Debian GNU/Linux 13 (trixie)"
+  check "final line" eq "$(final_field result)" '"failed"'
+  check "nothing ran" not_called "apt-get"
+  end_case
+}
+
+case_kit_for_another_machine_is_refused() {
+  kit_case kit_for_another_machine_is_refused || return 0
+  echo aarch64 >"$STATE/arch"
+  run_prov --offline-kit "$KIT" --internet never
+  check "refused" eq "$RC" 1
+  check "says why" said "This kit is not for this computer: it was made for a Windows or Linux PC"
+  check "nothing ran" not_called "apt-get"
+  end_case
+}
+
+case_kit_from_a_newer_domovoi_is_refused() {
+  kit_case kit_from_a_newer_domovoi_is_refused || return 0
+  sed -i 's/"kit_format": 1/"kit_format": 2/' "$KIT/kit.json"
+  run_prov --offline-kit "$KIT" --internet never
+  check "refused" eq "$RC" 1
+  check "says use the stick's installer" said "This kit was made by a newer Domovoi (kit format 2"
+  check "nothing ran" not_called "apt-get"
+  end_case
+}
+
+case_kit_ref_must_be_the_kits_commit() {
+  kit_case kit_ref_must_be_the_kits_commit || return 0
+  run_prov --offline-kit "$KIT" --internet never --ref "$FIXTURE_B"
+  check "refused" eq "$RC" 1
+  check "says why" said "is not the kit's commit"
+  end_case
+}
+
+case_kit_over_another_install_is_refused() {
+  kit_case kit_over_another_install_is_refused || return 0
+  run_prov --internet never --no-ai-models
+  check "online install first" eq "$RC" 0
+  run_prov --offline-kit "$KIT" --internet never --no-ai-models
+  check "refused" eq "$RC" 1
+  check "says it already runs Domovoi" said "This computer already runs Domovoi (commit ${FIXTURE_B:0:12}); the kit is Domovoi 9.9.9"
+  end_case
+}
+
+case_kit_missing_a_part_is_refused() {
+  kit_case kit_missing_a_part_is_refused || return 0
+  "$JSON_PY" - "$KIT/kit.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p, encoding="utf-8"))
+d["components"] = [c for c in d["components"] if c["kind"] != "ollama-runtime"]
+open(p, "w", encoding="utf-8").write(json.dumps(d))
+PY
+  run_prov --offline-kit "$KIT" --internet never
+  check "refused" eq "$RC" 1
+  check "names what is missing" said "This kit is missing what every install needs: Ollama (ollama/)"
+  check "nothing ran" not_called "apt-get"
+  end_case
+}
+
+case_kit_model_not_the_pinned_build_stops() {
+  kit_case kit_model_not_the_pinned_build_stops tamper-model || return 0
+  run_prov --offline-kit "$KIT" --internet never --tier floor
+  check "stopped" eq "$RC" 1
+  check "at the models" eq "$(final_field failed_step)" '"models"'
+  check "says it is not the pinned build" said "is not the build this release pins"
+  check "nothing of it in Ollama" absent "$ROOT/home/ollama/.ollama/models/manifests/registry.ollama.ai/library/qwen3"
+  end_case
+}
+
+case_kit_damaged_file_stops() {
+  kit_case kit_damaged_file_stops || return 0
+  printf 'X' >>"$KIT/ollama/ollama-linux-amd64.tar.zst"
+  run_prov --offline-kit "$KIT" --internet never
+  check "stopped" eq "$RC" 1
+  check "at ollama" eq "$(final_field failed_step)" '"ollama"'
+  check "says the stick is damaged" said "on the stick is damaged"
+  check "nothing installed from it" absent "$ROOT/usr/local/bin/ollama"
+  end_case
+}
+
+case_kit_download_path_stops_loudly() {
+  # A box whose python3 is not the lock's would download a CPython: in kit
+  # mode that is a fault, and the run stops on it, saying so.
+  kit_case kit_download_path_stops_loudly || return 0
+  echo 3.13 >"$STATE/py-version"
+  run_prov --offline-kit "$KIT" --internet never
+  check "stopped" eq "$RC" 1
+  check "at the venv" eq "$(final_field failed_step)" '"venv"'
+  check "loudly" said "would use the internet, and this install is from an offline kit: nothing may"
+  check "nothing downloaded" no_internet
+  end_case
+}
+
+case_kit_without_the_wake_word_warns() {
+  kit_case kit_without_the_wake_word_warns no-wake || return 0
+  run_prov --offline-kit "$KIT" --internet never --no-ai-models
+  check "ok" eq "$(final_field result)" '"ok"'
+  check "said rooms wake on Hey Jarvis" said 'new rooms wake on "Hey Jarvis" until it is here'
+  end_case
+}
+
 CASES=(
   case_rerun_takes_nothing_from_the_working_tree
   case_rerun_refuses_an_unverified_head
@@ -5905,6 +6260,20 @@ CASES=(
   case_gpu_runtime_dry_run_plans_it
   case_gpu_runtime_puts_daemon_json_back_when_docker_will_not_start
   case_gpu_runtime_helper_interface
+  case_kit_full_install
+  case_kit_second_run_skips_everything
+  case_kit_without_ai_models_says_how
+  case_kit_without_vision_goes_on
+  case_kit_needs_ubuntu_26_04
+  case_kit_for_another_machine_is_refused
+  case_kit_from_a_newer_domovoi_is_refused
+  case_kit_ref_must_be_the_kits_commit
+  case_kit_over_another_install_is_refused
+  case_kit_missing_a_part_is_refused
+  case_kit_model_not_the_pinned_build_stops
+  case_kit_damaged_file_stops
+  case_kit_download_path_stops_loudly
+  case_kit_without_the_wake_word_warns
 )
 
 # --case / --list / ONLY=<regex> (case-filter.sh) pick what runs; the suite

@@ -1489,13 +1489,18 @@ kit_check() {
       mac-arm64) t="a Mac with an Apple chip" ;;
       *) t="$MACHINE_ARCH" ;;
     esac
-    refuse 1 failed "This kit is not for this computer: it was made for $(printf '%s' "$KIT_TARGETS" | sed 's/pc-x86_64/a Windows or Linux PC/; s/mac-arm64/a Mac with an Apple chip/; s/ / and /'), and this one needs a kit with \"$t\" ticked. Make the kit again with it ticked."
+    local made="" w
+    for w in $KIT_TARGETS; do
+      case $w in pc-x86_64) w="a Windows or Linux PC" ;; mac-arm64) w="a Mac with an Apple chip" ;; esac
+      made+="${made:+ and }$w"
+    done
+    refuse 1 failed "This kit is not for this computer: it was made for ${made:-no computer}, and this one needs a kit with \"$t\" ticked. Make the kit again with it ticked."
   fi
   if [ "$REF_GIVEN" = 1 ] && [ "$REF" != "$KIT_COMMIT" ]; then
     refuse 1 failed "--ref $REF is not the kit's commit ($KIT_COMMIT, Domovoi $KIT_VERSION): an offline kit installs its own release only; leave --ref out"
   fi
   REF=$KIT_COMMIT
-  if [ -d "$CHECKOUT/.git" ] && [ "$EUID" = 0 ]; then
+  if [ -d "$CHECKOUT/.git" ] && { [ "$EUID" = 0 ] || [ -n "$ROOT" ]; }; then
     t=$(g rev-parse -q --verify HEAD 2>/dev/null) || t=""
     if [ -n "$t" ] && [ "$t" != "$KIT_COMMIT" ]; then
       refuse 1 failed "This computer already runs Domovoi (commit ${t:0:12}); the kit is Domovoi $KIT_VERSION (commit ${KIT_COMMIT:0:12}). A kit sets up a new install; to update from a newer kit, use Settings > About & updates on the dashboard."

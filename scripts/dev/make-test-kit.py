@@ -191,7 +191,9 @@ def make_release(work: Path, key: Path, version: str, commit: str) -> list[Sourc
 APT_SCRIPT = r'''
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
-echo 'Acquire::GzipIndexes "false";' >/etc/apt/apt.conf.d/99-kit-plain-lists
+printf 'Acquire::GzipIndexes "false";
+Acquire::CompressionTypes::Order:: "xz";
+' >/etc/apt/apt.conf.d/zz-kit-plain-lists
 rm -f /etc/apt/apt.conf.d/docker-clean
 apt-get -qq update && apt-get -qq install -y --no-install-recommends ca-certificates curl gnupg >/dev/null
 install -d -m 0755 /etc/apt/keyrings
@@ -263,6 +265,10 @@ def make_apt(work: Path, pins: Pins, commit: str) -> Path:
            "-e", f"DOCKER_KEY_URL={m['docker_key_url']}", "-e", f"DOCKER_REPO_URL={m['docker_repo_url']}",
            "-e", f"DOCKER_SUITE={m['docker_suite']}", "-e", f"PACKAGES={' '.join(pkgs)}",
            UBUNTU, "bash", "-c", APT_SCRIPT)
+    for sub in ("ubuntu", "docker"):
+        if not list((out / "apt" / sub / "dists").glob("*/*/binary-amd64/Packages")):
+            shutil.rmtree(out)
+            raise SystemExit(f"make-test-kit: the {sub} mirror has no Packages index (apt kept its lists compressed?)")
     return out / "apt"
 
 
