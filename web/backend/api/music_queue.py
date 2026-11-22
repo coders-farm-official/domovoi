@@ -57,6 +57,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
+from domovoi.room_ids import require_room_id_path
 from domovoi import guest_bans
 from domovoi.library_cover_version import cover_url
 from domovoi.admin_auth import (
@@ -85,7 +86,10 @@ from web.backend.domovoi_client import (
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/music/queue", tags=["music"])
+router = APIRouter(
+    prefix="/api/music/queue", tags=["music"],
+    dependencies=[Depends(require_room_id_path)],
+)
 
 # Editing a room's queue is an ordinary household action (REV-1): the
 # household device token or an admin Bearer, matching the core routes

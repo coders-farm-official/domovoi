@@ -285,7 +285,7 @@ const DisplayApp = () => {
 
   // Room metadata (label + configured idle mode) — refreshed on display
   // config changes; tolerant of the room being offline (defaults apply).
-  const { data: sat } = useApiObject(`/api/satellites/${DP_ROOM}`, {
+  const { data: sat } = useApiObject(`/api/satellites/${encodeURIComponent(DP_ROOM)}`, {
     eventTypes: ['satellites.display.changed', 'satellites.presence.changed'],
   });
   const idleMode = sat?.display?.idle_mode || 'clock';
@@ -328,7 +328,7 @@ const DisplayApp = () => {
 
   const act = async (verb) => {
     setBusy(true);
-    try { await apiPost(`/api/music/${verb}/${DP_ROOM}`); }
+    try { await apiPost(`/api/music/${verb}/${encodeURIComponent(DP_ROOM)}`); }
     catch (e) { console.warn(`${verb} failed:`, e); }
     finally { setBusy(false); }
   };

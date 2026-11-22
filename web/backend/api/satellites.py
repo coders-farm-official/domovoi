@@ -43,6 +43,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import text
 
+from domovoi.room_ids import require_room_id_path
 from domovoi.admin_auth import (
     AuthCheckUnavailable,
     check_admin_request,
@@ -120,7 +121,10 @@ from web.backend.schemas import (
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/satellites", tags=["satellites"])
+router = APIRouter(
+    prefix="/api/satellites", tags=["satellites"],
+    dependencies=[Depends(require_room_id_path)],
+)
 
 # Every timer in the house, whatever room it was set in — including the
 # ones set with no room at all, which no per-room route can name. Beside

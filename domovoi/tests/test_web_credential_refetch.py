@@ -749,7 +749,7 @@ CREDENTIAL_DEPENDENT_READS = [
     # household credential only.
     ("home.jsx", "useApiObject('/api/timers'"),
     ("satellites.jsx", "useApiObject(`/api/timers/fires?room_id="),
-    ("satellites.jsx", "useApiList(`/api/satellites/${room}/timers`"),
+    ("satellites.jsx", "useApiList(`/api/satellites/${encodeURIComponent(room)}/timers`"),
 ]
 
 

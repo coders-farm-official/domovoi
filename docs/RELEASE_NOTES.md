@@ -89,6 +89,15 @@ before.
   deflate, always inflate it under the caller's byte cap, and refuse any
   other encoding; podcast episode downloads ask for an unencoded body.
 
+## 1.4.1 (unreleased) — Room names are checked more strictly when a satellite connects
+
+- **What changed.** Room names are checked more strictly when a satellite
+  connects: lowercase letters, digits, `_` and `-`, up to 32 characters,
+  starting with a letter or digit. The dashboard's room addresses take the
+  same rule.
+- **What to know.** Nothing to do. Every way of setting up a room already
+  makes names like these.
+
 ## 1.4.1 (unreleased) — A refused plugin install says which package clashes
 
 - **What changed.** When a plugin is refused because its requirements would

@@ -4,7 +4,6 @@ import asyncio
 import hashlib
 import json
 import logging
-import re
 import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -44,6 +43,7 @@ from domovoi import local_peer, windows_side  # noqa: E402
 from domovoi import voice_activity  # noqa: E402
 from domovoi import turn_watchdog  # noqa: E402
 from domovoi import join_problems, server_identity  # noqa: E402
+from domovoi import room_ids  # noqa: E402
 from domovoi import crypto_backend  # noqa: E402
 try:  # noqa: E402 — the satellite tree ships beside the core (it serves it to rooms)
     from satellite.pairing_proof import VERSION as PAIRING_PROOF_VERSION
@@ -5794,8 +5794,9 @@ async def admin_reset_satellite_pairing(room_id: str) -> dict[str, Any]:
 
 
 # Room ids are used as WS paths, MPD container-name components, and config
-# values — keep them boring. Mirrored client-side by the AdoptModal.
-_ROOM_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}\Z")
+# values — keep them boring (domovoi/room_ids.py). Mirrored client-side by
+# the AdoptModal.
+_ROOM_ID_RE = room_ids.ROOM_ID_RE
 
 
 class _PreseedPairingBody(BaseModel):
@@ -8991,6 +8992,9 @@ async def stream(ws: WebSocket, room_id: str) -> None:
             ws, "cross_origin",
             f"/v1/stream/{room_id} from Origin {ws.headers.get('origin')!r}",
         )
+        return
+    if not room_ids.is_room_id(room_id):
+        await _refuse_ws(ws, "bad_room_id", f"/v1/stream/{room_id!r} is not a room id")
         return
     session = StreamSession(ws, room_id)
     await session.run()
