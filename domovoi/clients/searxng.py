@@ -96,6 +96,7 @@ def _num(v: Any) -> float | None:
         return None
 
 
+_WEATHER_ENGINES = ("openmeteo", "wttr.in")
 _UNIT_WORDS = {"°C": "Celsius", "°F": "Fahrenheit", "K": "kelvin"}
 # Where people say Fahrenheit; the engines answer in Celsius everywhere.
 _FAHRENHEIT_COUNTRIES = {"US", "LR", "MM"}
@@ -261,12 +262,19 @@ class RealSearxNGClient:
         return SearchOutcome([], "no_results")
 
     async def weather(self, place: str) -> str | None:
-        """The spoken weather for ``place`` from SearXNG's Open-Meteo engine,
-        or None when it returned nothing usable. Only that engine is asked:
-        with ``categories=weather`` every weather engine runs at once and
-        they trip over SearXNG's shared weather cache ("database is
-        locked"), and the query must be the place alone, which Open-Meteo
-        geocodes (checked against the pinned image, 2026-11-22).
+        """The spoken weather for ``place`` from SearXNG's weather engines,
+        or None when they returned nothing usable.
+
+        One engine at a time, in ``_WEATHER_ENGINES`` order: with
+        ``categories=weather`` every weather engine runs at once and they
+        trip over SearXNG's shared weather cache ("database is locked"). The
+        query is the place alone, which the engines geocode. Both checked
+        against the pinned image, 2026-11-22.
+
+        Sources and terms: this is the household's own SearXNG asking for
+        its own weather. Open-Meteo's free API is for non-commercial use,
+        data CC BY 4.0 (open-meteo.com/en/terms); wttr.in is a free public
+        service and only asked when Open-Meteo has no answer.
         Never raises; the caller falls back to the general search."""
         if not place.strip():
             return None
@@ -276,16 +284,20 @@ class RealSearxNGClient:
             return None
         import httpx
 
-        params = {"q": place, "format": "json", "language": "en-US",
-                  "engines": "openmeteo"}
-        try:
-            async with httpx.AsyncClient(timeout=8.0) as client:
-                response = await client.get(f"{self._base_url}/search", params=params)
-                response.raise_for_status()
-                return spoken_weather(response.json(), place)
-        except Exception as e:
-            log.warning("SearxNG weather query failed: %s", type(e).__name__)
-            return None
+        for engine in _WEATHER_ENGINES:
+            params = {"q": place, "format": "json", "language": "en-US",
+                      "engines": engine}
+            try:
+                async with httpx.AsyncClient(timeout=8.0) as client:
+                    response = await client.get(f"{self._base_url}/search", params=params)
+                    response.raise_for_status()
+                    spoken = spoken_weather(response.json(), place)
+            except Exception as e:
+                log.warning("SearxNG weather query (%s) failed: %s", engine, type(e).__name__)
+                continue
+            if spoken:
+                return spoken
+        return None
 
     @property
     def base_url(self) -> str:

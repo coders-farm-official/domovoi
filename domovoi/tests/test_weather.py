@@ -70,9 +70,11 @@ async def test_weather_query_uses_weather_category_and_place_and_speaks_answer()
 
 
 @pytest.mark.asyncio
-async def test_empty_weather_result_is_none() -> None:
-    with patch.object(httpx, "AsyncClient", _fake_httpx({"answers": [], "results": []}, [])):
+async def test_empty_weather_result_is_none_after_trying_each_engine_alone() -> None:
+    seen: list = []
+    with patch.object(httpx, "AsyncClient", _fake_httpx({"answers": [], "results": []}, seen)):
         assert await RealSearxNGClient("http://searxng.test").weather("Springfield") is None
+    assert [p["engines"] for p in seen] == ["openmeteo", "wttr.in"]
 
 
 class _FakeSearx:
