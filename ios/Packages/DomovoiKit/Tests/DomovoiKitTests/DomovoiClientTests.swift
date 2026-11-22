@@ -757,6 +757,33 @@ final class DomovoiClientTests: XCTestCase {
         XCTAssertNil(token(at: 1))
     }
 
+    // ---- the claim key (security review 2026-11-22, L56) ----------------------
+
+    /// An unpaired phone's claim key waits for the same proof the token does:
+    /// a server that has not proved itself gets neither.
+    func testAnUnpairedPhonesClaimKeyWaitsForTheServerToProveItself() async throws {
+        let held = await failure {
+            try await self.makeClient(token: nil, gate: ClosedGate())
+                .raw(method: "POST", path: "/api/devices/me", headers: [claimKeyHeader: "claim-abc"])
+        }
+        XCTAssertEqual(held, .identityHeld("this server has not proved itself on this network"))
+        XCTAssertEqual(StubURLProtocol.requestCount, 0, "the request never left")
+
+        StubURLProtocol.enqueue(.json("{}"))
+        try await makeClient(token: nil)
+            .raw(method: "POST", path: "/api/devices/me", headers: [claimKeyHeader: "claim-abc"])
+        XCTAssertEqual(StubURLProtocol.header(claimKeyHeader, at: 0), "claim-abc")
+    }
+
+    /// And it never goes anywhere but the active server.
+    func testTheClaimKeyNeverLeavesForAnotherHost() async throws {
+        StubURLProtocol.enqueue(.json("{}"))
+        try await makeClient()
+            .raw(method: "POST", path: "http://10.0.0.10:6369/api/devices/me", headers: [claimKeyHeader: "claim-abc"])
+        XCTAssertEqual(StubURLProtocol.requestCount, 1)
+        XCTAssertNil(StubURLProtocol.header(claimKeyHeader, at: 0))
+    }
+
     func testAGateThatHasNotProvedItselfDoesNotInviteAPaste() {
         let client = makeClient(gate: ClosedGate(admitsPrompt: false))
         client.notePossiblePairingRefusal(status: 401, body: "X-Device-Token or admin session required")

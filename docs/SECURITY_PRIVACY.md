@@ -2413,6 +2413,22 @@ is `domovoi/command_captures.py`, `web/backend/api/captures.py` and V016.
 | **How it goes away** | Turning a room off deletes its row and then every recording it kept, in the same request (the core re-checks the opt-in after each write, and the pruner sweeps any room with files but no row, so a write that raced the opt-out does not survive it). Retiring a room does the same. An admin can delete one at a time. Deletion only ever touches capture-shaped names. Moving `COMMAND_CAPTURES_DIR` leaves the old directory to the operator. |
 | **What it sends anywhere** | Nothing. The files stay on the Domovoi server; the log line for a kept recording carries the room, the id, the length and the end reason, never the words. |
 
+## Microphone DSP presets (XVF3800, admin only)
+
+1.4.1: an admin can switch an XVF3800 satellite's on-chip AGC and noise
+suppression between a few fixed presets from the room's Settings tab, to
+compare them in a noisy room without SSH (`domovoi/mic_dsp.py`,
+`satellite/mic_dsp.py`).
+
+| | |
+|---|---|
+| **Who** | An admin: the change and the marker need the admin Bearer at both hops; reading the state takes the admin read tier. Not the household token. |
+| **Which satellites** | Only one whose hello sent `"mic_dsp": true` (an XVF3800 with `xvf_host` installed). The ability is never assumed, so an older satellite, a 2-Mic HAT, a spare computer or a phone never gets the frame or the control (409). |
+| **What crosses the socket** | A preset NAME. The core refuses a name not in its list (422); the satellite refuses one not in its own fixed table and writes nothing. No parameter name, value or command ever comes from the server: every value written is a literal in the satellite's table, or a value it read from the chip itself at start (`factory`). It runs the same `xvf_host` the LED ring uses, through the same `sudo -n` entry. |
+| **What it can't do** | Save to the chip's flash (`SAVE_CONFIGURATION` is never sent): unplugging the array restores its own settings. The worst a stolen admin session can do is pick one of four presets. |
+| **Test markers** | Plain text, control characters escaped, at most 120 characters, written to the satellite's log and the server's log with a timestamp. |
+| **What is kept** | On the satellite, `~/.domovoi/mic_dsp.json`: the chosen preset and the chip's start-up values. On the server, the last reported state, in memory only. |
+
 ## Timers and reminders (house-wide)
 
 Owner decision 2026-09-30: when a timer or a reminder goes off, **every**

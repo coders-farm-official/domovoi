@@ -55,7 +55,7 @@ loads the FM stations for your state.
 
 For your favorite stations, Radio notes the songs that are playing: from
 the station's own titles, and from short clips it identifies against your
-own music library first, then an online song-identification service (Shazam).
+own music library first, then an online song-identification service.
 That means a short clip of a favorite station can leave your home. Set
 the internet to No (Settings → Privacy → Internet) and nothing is sent; to keep the
 internet on but stop the clips, set `RADIO_SAMPLER_ENABLED=false` in

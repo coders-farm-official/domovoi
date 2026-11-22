@@ -749,6 +749,10 @@ class Satellite(BaseModel):
     # read-only probes, so the drawer offers its Diagnostics tab. False
     # offline and for a device that didn't declare it (every older one).
     diagnostics: bool = False
+    # Whether the CONNECTED satellite declared mic_dsp (an XVF3800 with
+    # xvf_host, 1.4.1): only then does its Settings tab offer the admin
+    # Microphone DSP presets (GET/POST /api/satellites/{room}/mic_dsp).
+    mic_dsp: bool = False
     # A code upgrade under way or just finished (SatelliteUpgrade), from the
     # Domovoi server snapshot; null when there is none. While ``state`` is
     # ``running`` the dashboard and the app keep the room's Upgrade button
@@ -1521,6 +1525,18 @@ class RoomVoiceRequest(BaseModel):
     # A registered voice's name; null: the server's own voice (a phone in
     # room mode only: a Pi keeps a named voice of its own).
     voice: str | None = Field(default=None, min_length=1, max_length=80)
+
+
+class MicDspRequest(BaseModel):
+    """An XVF3800 DSP preset, by NAME only (the Domovoi server checks it
+    against its list; the satellite against its fixed table)."""
+    preset: str = Field(..., min_length=1, max_length=32)
+
+
+class MicDspMarkRequest(BaseModel):
+    """A test marker for the satellite's and the server's logs. The Domovoi
+    server escapes control characters and cuts it to 120 characters."""
+    text: str = Field(..., min_length=1, max_length=1000)
 
 
 class ConfigUpdateRequest(BaseModel):

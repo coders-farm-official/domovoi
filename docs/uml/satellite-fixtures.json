@@ -130,6 +130,11 @@
       "unlocks": "the `room_display` frame (this room's music, timers and alarms, and one going off) and the `room_control` frame back; a paired room only; never assumed without `supports`",
       "assumed_without_supports": false,
       "hello_key": null
+    },
+    "mic_dsp": {
+      "unlocks": "`set_mic_dsp` / `mic_dsp_mark` (XVF3800 DSP presets, admin only); the Settings tab's Microphone DSP block",
+      "assumed_without_supports": false,
+      "hello_key": "mic_dsp"
     }
   },
   "always_sent": [
@@ -193,6 +198,12 @@
     ],
     "diag_request": [
       "diagnostics"
+    ],
+    "set_mic_dsp": [
+      "mic_dsp"
+    ],
+    "mic_dsp_mark": [
+      "mic_dsp"
     ]
   },
   "config_section_ability": {
@@ -228,7 +239,8 @@
         "capture_control": true,
         "announce_after_session_end": true,
         "dropin_ready": true,
-        "diagnostics": true
+        "diagnostics": true,
+        "mic_dsp": false
       },
       "ready": {
         "type": "ready",
@@ -274,6 +286,7 @@
         "not_allowed": [
           "full_duplex",
           "room_audio",
+          "mic_dsp",
           "room_display"
         ],
         "frames_sent": [
@@ -294,7 +307,9 @@
         "frames_never": [
           "chat_start",
           "dropin_start",
-          "room_display"
+          "room_display",
+          "set_mic_dsp",
+          "mic_dsp_mark"
         ],
         "upgrade_extra": {},
         "config_hidden_sections": [],
@@ -433,7 +448,8 @@
         "capture_control": true,
         "announce_after_session_end": true,
         "dropin_ready": true,
-        "diagnostics": true
+        "diagnostics": true,
+        "mic_dsp": true
       },
       "ready": {
         "type": "ready",
@@ -445,7 +461,8 @@
           "end_capture",
           "music_failed",
           "health",
-          "log_push"
+          "log_push",
+          "mic_dsp"
         ]
       },
       "expect": {
@@ -465,6 +482,7 @@
           "full_duplex",
           "leds",
           "logs",
+          "mic_dsp",
           "mic_gain",
           "plugin_payloads",
           "restart",
@@ -496,7 +514,9 @@
           "dropin_start",
           "end_capture",
           "announcement",
-          "diag_request"
+          "diag_request",
+          "set_mic_dsp",
+          "mic_dsp_mark"
         ],
         "frames_never": [
           "room_display"
@@ -650,7 +670,8 @@
           "sounds",
           "voice",
           "turn_progress"
-        ]
+        ],
+        "mic_dsp": false
       },
       "ready": {
         "type": "ready",
@@ -706,6 +727,7 @@
           "display",
           "full_duplex",
           "leds",
+          "mic_dsp",
           "mic_gain",
           "plugin_payloads",
           "room_audio",
@@ -731,7 +753,9 @@
           "set_display",
           "chat_start",
           "dropin_start",
-          "room_display"
+          "room_display",
+          "set_mic_dsp",
+          "mic_dsp_mark"
         ],
         "upgrade_extra": {
           "plugin_payloads": false
@@ -872,7 +896,8 @@
           "sounds",
           "voice",
           "turn_progress"
-        ]
+        ],
+        "mic_dsp": false
       },
       "ready": {
         "type": "ready",
@@ -928,6 +953,7 @@
           "display",
           "full_duplex",
           "leds",
+          "mic_dsp",
           "mic_gain",
           "plugin_payloads",
           "room_audio",
@@ -953,7 +979,9 @@
           "set_display",
           "chat_start",
           "dropin_start",
-          "room_display"
+          "room_display",
+          "set_mic_dsp",
+          "mic_dsp_mark"
         ],
         "upgrade_extra": {
           "plugin_payloads": false
@@ -1135,6 +1163,7 @@
           "display",
           "leds",
           "logs",
+          "mic_dsp",
           "mic_gain",
           "plugin_payloads",
           "restart",
@@ -1163,7 +1192,9 @@
           "stop_wake_recording",
           "set_display",
           "chat_start",
-          "diag_request"
+          "diag_request",
+          "set_mic_dsp",
+          "mic_dsp_mark"
         ],
         "upgrade_extra": null,
         "config_hidden_sections": null,

@@ -94,6 +94,34 @@ object RoomIdentity {
         return "$host:$port"
     }
 
+    /**
+     * The base this connection dials (security review 2026-11-22, L58): a
+     * plain-http room code that names its server (`http://domovoi.local:6370`)
+     * is resolved once, through [resolve], and dialled at that address, so
+     * the proof the core is asked for is bound to the address the phone
+     * actually reached rather than to the name. An IPv4 answer is preferred.
+     * An address literal is dialled as written, and an https code keeps its
+     * name: its certificate already binds the name. Throws
+     * [IdentityException] when the name resolves to nothing.
+     */
+    fun dialBase(httpBase: String, resolve: (host: String) -> List<String>): String {
+        val base = httpBase.trim().trimEnd('/')
+        if (!base.lowercase(java.util.Locale.ROOT).startsWith("http://")) return base
+        val hostPort = dialedAddress(base)
+        val host = hostPort.substringBeforeLast(':')
+        val port = hostPort.substringAfterLast(':')
+        if (host.startsWith("[") || IPV4.matches(host)) return base
+        val found = runCatching { resolve(host) }.getOrDefault(emptyList())
+            .map { it.substringBefore('%') }
+            .filter { it.isNotEmpty() }
+        val pick = found.firstOrNull { IPV4.matches(it) } ?: found.firstOrNull()
+            ?: throw IdentityException("could not find $host on this network")
+        val shown = if (':' in pick) "[${pick.lowercase(java.util.Locale.ROOT)}]" else pick
+        return "http://$shown:$port"
+    }
+
+    private val IPV4 = Regex("""^\d{1,3}(\.\d{1,3}){3}$""")
+
     /** The health URL with both query values (`fetch_health`). */
     fun healthUrl(httpBase: String, challenge: String, addr: String): String =
         httpBase.trimEnd('/') + "/v1/health?challenge=" + challenge + "&addr=" +

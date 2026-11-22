@@ -9540,6 +9540,147 @@
         }
       }
     },
+    "/api/satellites/{room_id}/mic_dsp": {
+      "get": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Get Mic Dsp",
+        "description": "An XVF3800 satellite's DSP preset and what the chip read back\n(1.4.1). Proxies to the core: {room_id, presets, state}; 404 offline,\n409 a satellite that didn't declare mic_dsp.",
+        "operationId": "get_mic_dsp_api_satellites__room_id__mic_dsp_get",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Set Mic Dsp",
+        "description": "Pick an XVF3800 DSP preset by name (factory, B, C, D). The satellite\napplies it at runtime and reports the read-back; GET shows it.",
+        "operationId": "set_mic_dsp_api_satellites__room_id__mic_dsp_post",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MicDspRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/{room_id}/mic_dsp/mark": {
+      "post": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Mark Mic Dsp",
+        "description": "Stamp a test marker (\"block 2, 1m\") into the satellite's log and the\nDomovoi server's, with a timestamp. {room_id, text, at}.",
+        "operationId": "mark_mic_dsp_api_satellites__room_id__mic_dsp_mark_post",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MicDspMarkRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/satellites/{room_id}/voice": {
       "post": {
         "tags": [
@@ -29776,6 +29917,38 @@
         "type": "object",
         "title": "MemoryPatch"
       },
+      "MicDspMarkRequest": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "title": "MicDspMarkRequest",
+        "description": "A test marker for the satellite's and the server's logs. The Domovoi\nserver escapes control characters and cuts it to 120 characters."
+      },
+      "MicDspRequest": {
+        "properties": {
+          "preset": {
+            "type": "string",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Preset"
+          }
+        },
+        "type": "object",
+        "required": [
+          "preset"
+        ],
+        "title": "MicDspRequest",
+        "description": "An XVF3800 DSP preset, by NAME only (the Domovoi server checks it\nagainst its list; the satellite against its fixed table)."
+      },
       "MixIn": {
         "properties": {
           "discovery_favorites": {
@@ -33599,6 +33772,11 @@
           "diagnostics": {
             "type": "boolean",
             "title": "Diagnostics",
+            "default": false
+          },
+          "mic_dsp": {
+            "type": "boolean",
+            "title": "Mic Dsp",
             "default": false
           },
           "upgrade": {

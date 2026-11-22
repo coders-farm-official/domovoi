@@ -98,6 +98,39 @@ public enum RoomIdentity {
         return "\(host):\(port)"
     }
 
+    /// The base this connection dials (security review 2026-11-22, L58;
+    /// Android's `RoomIdentity.dialBase`): a plain-http room code that names
+    /// its server is resolved once, through `resolve`, and dialled at that
+    /// address, so the proof the core is asked for is bound to the address
+    /// the phone reached rather than to the name. An IPv4 answer is
+    /// preferred. An address literal is dialled as written, and an https code
+    /// keeps its name: its certificate already binds the name.
+    public static func dialBase(_ httpBase: String, resolve: (String) -> [String]) throws -> String {
+        var base = httpBase.trimmingCharacters(in: .whitespacesAndNewlines)
+        while base.hasSuffix("/") { base.removeLast() }
+        guard base.lowercased().hasPrefix("http://") else { return base }
+        let hostPort = try dialedAddress(base)
+        guard let colon = hostPort.lastIndex(of: ":") else { return base }
+        let host = String(hostPort[..<colon])
+        let port = String(hostPort[hostPort.index(after: colon)...])
+        if host.hasPrefix("[") || isIPv4(host) { return base }
+        let found = resolve(host)
+            .map { String($0.split(separator: "%", maxSplits: 1, omittingEmptySubsequences: false).first ?? "") }
+            .filter { !$0.isEmpty }
+        guard let pick = found.first(where: isIPv4) ?? found.first else {
+            throw Failure("could not find \(host) on this network")
+        }
+        let shown = pick.contains(":") ? "[\(pick.lowercased())]" : pick
+        return "http://\(shown):\(port)"
+    }
+
+    static func isIPv4(_ text: String) -> Bool {
+        let parts = text.split(separator: ".", omittingEmptySubsequences: false)
+        return parts.count == 4 && parts.allSatisfy { p in
+            (1...3).contains(p.count) && p.allSatisfy { $0.isASCII && $0.isNumber }
+        }
+    }
+
     /// The health URL with both query values (`fetch_health`).
     public static func healthURL(httpBase: String, challenge: String, addr: String) -> String {
         var base = httpBase

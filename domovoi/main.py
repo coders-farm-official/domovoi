@@ -745,6 +745,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # ({on, kiosk_alive, brightness, idle_mode}) — drives the dashboard's
     # Display controls. Cleared on disconnect.
     app.state.satellite_display = {}
+    # Per-room XVF3800 DSP preset + read-back each satellite that declared
+    # mic_dsp reports via mic_dsp_state (domovoi/mic_dsp.py). Cleared on
+    # disconnect.
+    app.state.satellite_mic_dsp = {}
     # Per-room health telemetry (domovoi/satellite_health.py): the latest
     # `health` sample ({received_at, sample}) and the last outage report a
     # hello carried as `prev_health` ({reported_at, prev_boot_id, report}).
@@ -3004,6 +3008,14 @@ async def admin_snapshot() -> dict[str, Any]:
         # idle_mode}) video satellites report via display_status — drives
         # the dashboard's Display block and dead-kiosk warning.
         "satellite_display": dict(app.state.satellite_display),
+        # Rooms whose connected satellite declared mic_dsp (an XVF3800 with
+        # xvf_host), with the preset state it last reported ({} until it
+        # does). Only these get the Settings tab's Microphone DSP block.
+        "satellite_mic_dsp": {
+            room: (getattr(app.state, "satellite_mic_dsp", {}) or {}).get(room) or {}
+            for room, sess in app.state.active_sessions.items()
+            if "mic_dsp" in satellite_abilities.session_abilities(sess).names
+        },
         # Per-room active TTS voice (what each Pi reported via voice_status),
         # so the web UI can show which voice a device is actually speaking in.
         # None for a room means it's on the registry default.
@@ -5446,6 +5458,103 @@ async def admin_get_satellite_config(room_id: str) -> dict[str, Any]:
         if abilities.allows_config_key(spec.name)
     ]
     return {"room_id": room_id, "reported": bool(reported), "fields": fields}
+
+
+class _AdminMicDspBody(BaseModel):
+    # A preset NAME; checked against domovoi/mic_dsp.PRESETS below (and
+    # again on the satellite). Never parameters.
+    preset: str = Field(..., min_length=1, max_length=32)
+
+
+class _AdminMicDspMarkBody(BaseModel):
+    text: str = Field(..., min_length=1, max_length=1000)
+
+
+def _mic_dsp_target(room_id: str) -> Any:
+    target = app.state.active_sessions.get(room_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail=f"room {room_id!r} not connected")
+    # Declared only: an older satellite, a 2-Mic HAT or a spare computer
+    # never gets the control (its hello didn't name mic_dsp).
+    if "mic_dsp" not in satellite_abilities.session_abilities(target).names:
+        raise HTTPException(
+            status_code=409,
+            detail=satellite_abilities.unsupported_detail(
+                room_id, getattr(target, "board", None), "mic DSP presets", "mic_dsp"),
+        )
+    return target
+
+
+@app.get(
+    "/v1/admin/satellite/{room_id}/mic_dsp",
+    # Admin tier, like the rest of the room's settings.
+    dependencies=[Depends(require_admin_read)],
+)
+async def admin_get_satellite_mic_dsp(room_id: str) -> dict[str, Any]:
+    """The room's XVF3800 DSP preset as its satellite last reported it
+    (``state`` null until it has), and the presets it may be set to. 404
+    offline, 409 a satellite that didn't declare mic_dsp."""
+    from domovoi import mic_dsp
+
+    _mic_dsp_target(room_id)
+    state = (getattr(app.state, "satellite_mic_dsp", {}) or {}).get(room_id)
+    return {
+        "room_id": room_id,
+        "presets": [{"name": n, "label": mic_dsp.PRESET_LABELS[n]} for n in mic_dsp.PRESETS],
+        "state": state,
+    }
+
+
+@app.post(
+    "/v1/admin/satellite/{room_id}/mic_dsp",
+    # Admin tier: it changes how the room's microphone hears the house.
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def admin_set_satellite_mic_dsp(room_id: str, body: _AdminMicDspBody) -> dict[str, Any]:
+    """Send a DSP preset NAME to an XVF3800 satellite (set_mic_dsp). The
+    satellite applies it from its fixed table at runtime (never to the
+    chip's flash) and reports the read-back via mic_dsp_state; read it with
+    the GET. 422 an unknown preset (nothing sent), 404 offline, 409 a
+    satellite without mic_dsp, 502 a dead socket."""
+    from domovoi import mic_dsp
+
+    if body.preset not in mic_dsp.PRESETS:
+        raise HTTPException(status_code=422, detail=f"unknown preset; one of {', '.join(mic_dsp.PRESETS)}")
+    target = _mic_dsp_target(room_id)
+    try:
+        await target.send_mic_dsp(body.preset)
+    except Exception as e:
+        log.warning("admin set_mic_dsp room=%s failed: %s", room_id, e)
+        raise HTTPException(status_code=502, detail=f"couldn't reach the room device: {e}") from e
+    log.info("mic_dsp room=%s preset=%s sent", room_id, body.preset)
+    return {"room_id": room_id, "preset": body.preset, "sent": True}
+
+
+@app.post(
+    "/v1/admin/satellite/{room_id}/mic_dsp/mark",
+    # Admin tier: it writes into the satellite's and the server's logs.
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def admin_mark_satellite_mic_dsp(room_id: str, body: _AdminMicDspMarkBody) -> dict[str, Any]:
+    """Stamp a test marker ("block 2, 1m") into this server's log and the
+    satellite's, each with a timestamp. Plain text: control characters
+    escaped, at most 120 characters. 422 when nothing is left of it."""
+    from datetime import datetime, timezone
+
+    from domovoi import mic_dsp
+
+    text_ = mic_dsp.clean_mark(body.text)
+    if not text_:
+        raise HTTPException(status_code=422, detail="the marker is empty")
+    target = _mic_dsp_target(room_id)
+    at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    log.info("mic_dsp mark room=%s at=%s text=%s", room_id, at, text_)
+    try:
+        await target.send_mic_dsp_mark(text_)
+    except Exception as e:
+        log.warning("admin mic_dsp_mark room=%s failed: %s", room_id, e)
+        raise HTTPException(status_code=502, detail=f"couldn't reach the room device: {e}") from e
+    return {"room_id": room_id, "text": text_, "at": at}
 
 
 class _AdminSatelliteVoiceBody(BaseModel):
