@@ -120,7 +120,8 @@
 #      leaves the jobs alone.
 #  11b. Ubuntu packages a newer Domovoi needs that this box lacks
 #      (reconcile_added_packages: xorriso, for old computers' room sticks;
-#      tesseract-ocr and tesseract-ocr-eng, for reading scans)
+#      tesseract-ocr and tesseract-ocr-eng, for reading scans; dosfstools
+#      and mtools, for the offline kit's image, 1.5.0)
 #      are installed from Ubuntu's archive, --no-install-recommends, not
 #      held. Not under never; never fatal (a warn step); a step only when
 #      something was missing. A healthy plain restart ends with it too.
@@ -220,6 +221,15 @@
 # when missing or different, removed when the block is gone; systemctl
 # daemon-reload, never a Docker restart. provision.sh installs the same
 # file. Never fatal.
+#
+# Then the core's read access to Ollama's models (reconcile_ollama_access,
+# 1.5.0): the offline kit builder copies the models this server has
+# (domovoi/kit_builder/ollama_store.py), so the service user joins the
+# ollama group and the ollama account's home (0750 from useradd on Ubuntu)
+# gets g+rx, as provision.sh's ollama step does. Only when both exist and
+# only what is missing; before the services stop, so the core starts in
+# the group. A step only when something changed (ok) or failed (warn);
+# never fatal. DOMOVOI_MANAGE_OLLAMA_ACCESS=0 leaves it alone.
 #
 # Every run ends by writing last-result.json into DOMOVOI_UPDATE_DIR, which
 # the core serves as `last_update` from GET /v1/admin/version.
@@ -366,6 +376,8 @@ JOURNALD_SRC=$SCRIPT_DIR/units/journald-domovoi.conf
 # The file-cache trim (reconcile_cache_trim): the root-owned copy of the
 # script and its two units, under the harness's root in the tests.
 MANAGE_CACHE_TRIM=${DOMOVOI_MANAGE_CACHE_TRIM:-1}
+# The core reads Ollama's models folder (reconcile_ollama_access, 1.5.0).
+MANAGE_OLLAMA_ACCESS=${DOMOVOI_MANAGE_OLLAMA_ACCESS:-1}
 CACHE_TRIM_SRC=$SCRIPT_DIR/cache-trim.py
 # Docker after the media folders (reconcile_docker_media_order): read from
 # the box's /etc/fstab, the drop-in beside docker.service; the harness's
@@ -427,15 +439,16 @@ GPU_DOCKER_RESTARTED=0
 # DOMOVOI_MANAGE_PACKAGES=0 (or false/no/off) leaves them to the
 # administrator.
 MANAGE_PACKAGES=${DOMOVOI_MANAGE_PACKAGES:-1}
-ADDED_PACKAGES=(xorriso tesseract-ocr tesseract-ocr-eng)
+ADDED_PACKAGES=(xorriso tesseract-ocr tesseract-ocr-eng dosfstools mtools)
 
 # What each added package is for, said when it can't be installed.
 added_package_needs() {
-  local p out=() tess=0
+  local p out=() tess=0 kit=0
   for p in "$@"; do
     case "$p" in
       xorriso) out+=("USB sticks for old computers need xorriso") ;;
       tesseract-ocr*) [ "$tess" -eq 1 ] || out+=("reading scans needs tesseract-ocr"); tess=1 ;;
+      dosfstools|mtools) [ "$kit" -eq 1 ] || out+=("offline kits need dosfstools and mtools"); kit=1 ;;
     esac
   done
   local IFS=';'
@@ -3020,6 +3033,45 @@ reconcile_docker_media_order() {
   return 0
 }
 
+# See the header ("the core's read access to Ollama's models").
+reconcile_ollama_access() {
+  local t0 home mode done_=() why=""
+  case "$(printf '%s' "$MANAGE_OLLAMA_ACCESS" | tr '[:upper:]' '[:lower:]')" in
+    0|false|no|off) log "Ollama's models folder access left alone (DOMOVOI_MANAGE_OLLAMA_ACCESS=$MANAGE_OLLAMA_ACCESS)"; return 0 ;;
+  esac
+  if [ "$(id -u)" != 0 ] && [ -z "$TEST_ROOT" ]; then return 0; fi
+  [ -n "$SERVICE_USER" ] || return 0
+  getent group ollama >/dev/null 2>&1 || return 0
+  home=$(getent passwd ollama 2>/dev/null | cut -d: -f6)
+  t0=$(now_ms)
+  if ! id -nG "$SERVICE_USER" 2>/dev/null | tr ' ' '\n' | grep -qx ollama; then
+    if usermod -aG ollama "$SERVICE_USER"; then
+      done_+=("$SERVICE_USER joined the ollama group")
+    else
+      why="usermod -aG ollama $SERVICE_USER failed"
+    fi
+  fi
+  if [ -n "$home" ] && [ -d "$home" ] && [ ! -L "$home" ]; then
+    mode=$(stat -c %a "$home" 2>/dev/null || echo "")
+    if [ -n "$mode" ] && [ $(( (8#$mode >> 3) & 5 )) -ne 5 ]; then
+      if chmod g+rx "$home"; then
+        done_+=("$home lets the ollama group in")
+      else
+        why=${why:-"chmod g+rx $home failed"}
+      fi
+    fi
+  fi
+  if [ -n "$why" ]; then
+    add_step ollama-access warn "$t0" "$why: the offline kit downloads the models again instead of copying them"
+    log "step ollama-access failed; not fatal, the run goes on"
+  elif [ "${#done_[@]}" -gt 0 ]; then
+    local IFS=';'
+    add_step ollama-access ok "$t0" "$(printf '%s' "${done_[*]}" | sed 's/;/; /g'): the core reads Ollama's models for the offline kit"
+    log "step ollama-access: ${done_[*]}"
+  fi
+  return 0
+}
+
 # See the header. A step only when it installed the drop-in (ok) or could
 # not (warn); one already in place is nothing to do, whatever journald
 # made of it.
@@ -3664,6 +3716,7 @@ main() {
   reconcile_cache_trim
   reconcile_fh_firewall
   reconcile_docker_media_order
+  reconcile_ollama_access
 
   if [ "$PREV_SHA" = "$HEAD_SHA" ]; then
     plain_restart

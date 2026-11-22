@@ -284,7 +284,9 @@ def apt_parts(p: Pins) -> list[Part]:
                 ctx.say(f"Fetching the Ubuntu and Docker packages ({arch})")
                 d = apt_mirror.build(p, arch, run=ctx.run)
             r = apt_mirror.mirror_dir(arch) / "mirror"
-            return [Source(f"apt/{arch}/{f}", r / f) for f in d["files"]]
+            # The repositories' signing keys, which the install adds them with.
+            ks = [Source(path, apt_mirror.key_file(path, url, fpr)) for path, url, fpr in apt_mirror.keys(p, arch)]
+            return [Source(f"apt/{arch}/{f}", r / f) for f in d["files"]] + ks
 
         out.append(Part(id=f"apt:{arch}", group="base", targets=(target,), kind="apt",
                         name=f"Ubuntu 26.04 and Docker packages ({arch})", version=p.manifest["docker_ce"],
