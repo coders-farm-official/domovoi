@@ -138,9 +138,10 @@ Android phone in room mode can do some of that and not the rest, so a
   dashboard badges `linux_pc` and `android_room` (and any board of a
   device that declared a list); a Pi card has no badge, as before.
 * **The boolean keys still work.** `supports_full_duplex`, `speech_pause`,
-  `capture_control`, `announce_after_session_end` and `dropin_ready` set to
-  `true` count the same as listing `full_duplex`, `speech_pause`,
-  `capture_control`, `announce_after_session_end` and `dropin_ready`; the
+  `capture_control`, `announce_after_session_end`, `dropin_ready` and
+  `room_audio` set to `true` count the same as listing `full_duplex`,
+  `speech_pause`, `capture_control`, `announce_after_session_end`,
+  `dropin_ready` and `room_audio`; the
   core takes the union of the two. All but `announce_after_session_end` are
   behaviours negotiated per connection, so they are never *assumed*: for a
   Pi they come from the booleans exactly as before.
@@ -170,6 +171,7 @@ Android phone in room mode can do some of that and not the rest, so a
 | `capture_control` | no — `capture_control` | `end_capture` (early commit, which also needs `speech_pause`) |
 | `turn_progress` | yes | `working` (2026-11-09): every 30 s while a request is still being worked out, so the device's reply backstop doesn't give up on a slow but working server |
 | `room_display` | no, and no boolean key: only a device that lists it, on a socket paired with its token | 1.4.0: the `room_display` frame and the `room_control` frame back ([The room display](#the-room-display-room_display)); `ready.features` then lists `"room_display"` |
+| `room_audio` | no — `room_audio` | 1.5.0: the device plays the room's synced sound from `/v1/room-audio/{satellite_id}` ([docs/ROOM_AUDIO_PROTOCOL.md](../ROOM_AUDIO_PROTOCOL.md)); the room's music, replies and timers reach it there |
 | `dropin_ready` | no — `dropin_ready` | 2026-11-12: `dropin_start` marked `await_ready`: the device finishes the reply announcing the call before it opens it, and the server holds the call's audio to it until its `dropin_ready` (see the frame tables). Without it the call's audio follows `dropin_start` at once, which cut that reply off |
 
 Always sent, whatever the list: `ready`, `error`, `pong`, `transcript`,

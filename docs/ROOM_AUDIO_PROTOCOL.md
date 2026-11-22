@@ -25,7 +25,9 @@ GET ws://<server>:6370/v1/room-audio/{satellite_id}
   socket uses (today: the room id it paired with).
 * The socket is an addition to `/v1/stream`, not a replacement: the device
   keeps its stream socket for wake words, commands and control, and opens
-  this one when it declares `room_audio` in its stream hello `supports`.
+  this one when it declares `room_audio` in its stream hello: in its
+  `supports` list, or, from a Pi (whose hello carries no `supports`), as
+  the boolean key `"room_audio": true`.
 * Browser `Origin` headers are checked as on `/v1/stream`; devices send none.
 * Text frames carry JSON control messages (UTF-8, one object per frame,
   `type` names it). Binary frames carry audio.

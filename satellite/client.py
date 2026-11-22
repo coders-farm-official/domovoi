@@ -2787,6 +2787,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
             self._music_url = None
             self._music_run = None
             return False
+        self._room_yield()
         if attempt == 1:
             log.info("starting music: %s (alsa=%s)", url, self.cfg.music_alsa_device)
         else:
@@ -3020,7 +3021,62 @@ class Satellite(pc_engine.SpareDeviceEngine):
         abruptly following the music with a greeting clip (see
         `_acknowledge_wake`)."""
         with self._music_lock:
-            return self._music_proc is not None and self._music_proc.poll() is None
+            if self._music_proc is not None and self._music_proc.poll() is None:
+                return True
+        rp = getattr(self, "_room_player", None)
+        return rp is not None and rp.playing
+
+    # ── Room audio: the timed room player (1.5.0) ─────────────────────────
+
+    #: The room player (satellite/room_player.py) once a core accepted the
+    #: session; it keeps its own socket to /v1/room-audio and reconnects.
+    _room_player: Any = None
+
+    def _room_audio_enabled(self) -> bool:
+        """Whether this device plays room audio: everything but a test run
+        (``DOMOVOI_ROOM_AUDIO=0``, set by the satellite tests' conftest)."""
+        return os.environ.get("DOMOVOI_ROOM_AUDIO", "1") != "0"
+
+    def _room_device_free(self) -> bool:
+        """The speaker is not held by a reply, an acknowledgement or the
+        plain music stream. A Pi's ALSA card takes one stream at a time; a
+        PC's sound server (or WASAPI's shared mode) mixes, so it always is."""
+        if pc_engine.is_pc(self.cfg):
+            return True
+        if not self._playback_idle.is_set() or self._ack_proc is not None:
+            return False
+        with self._music_lock:
+            return self._music_proc is None or self._music_proc.poll() is not None
+
+    def _room_yield(self) -> None:
+        """A local sound is about to open the speaker: on a Pi the room
+        player gives it up first (it comes back once the speaker is free;
+        the server ducks the room for a turn, so little is lost)."""
+        rp = self._room_player
+        if rp is not None and not pc_engine.is_pc(self.cfg):
+            rp.release_output()
+
+    def _start_room_player(self) -> None:
+        """Once per process, after the first `ready`: the room player
+        connects to /v1/room-audio/{id} with the pairing token and plays the
+        room's synced sound. Imported here so an interrupted code sync that
+        lacks the module costs room audio, never the satellite."""
+        if self._room_player is not None or not self._room_audio_enabled():
+            return
+        url = self.cfg.domovoi_url.rstrip("/")
+        if not url.startswith(("ws://", "wss://")):
+            return
+        try:
+            from satellite import room_player
+        except Exception:  # noqa: BLE001
+            log.exception("room audio: player unavailable")
+            return
+        self._room_player = room_player.RoomPlayer(
+            f"{url}/v1/room-audio/{self.cfg.room_id}", self.cfg.room_id,
+            _effective_pairing_token, device=self.cfg.output_device,
+            device_free=self._room_device_free, stop_event=self.shutdown_event,
+        )
+        self._room_player.start()
 
     def _stop_music(self) -> None:
         with self._music_lock:
@@ -3234,6 +3290,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
         frames with a "wake-word predict is falling behind" warning that
         would be false here."""
         self._stop_ack()  # never two at once
+        self._room_yield()
         t0 = time.monotonic()
         # A platform whose player is slow to start plays the acknowledgement
         # in-process instead (Windows: engine_platform.WindowsAudioOut).
@@ -3432,6 +3489,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
             # latency=0.4 once made TTS chop worse). Server-side
             # sentence pipelining handles the inter-sentence gap.
             rate = src_sr if device_rate is None else device_rate
+            self._room_yield()
             try:
                 out_stream = debug_audio.output_stream(
                     sd,
@@ -7988,6 +8046,10 @@ class Satellite(pc_engine.SpareDeviceEngine):
                     else frozenset()
                 )
                 self._session_ready_seen = True
+                try:
+                    self._start_room_player()
+                except Exception:  # noqa: BLE001 — never keeps the mic shut
+                    log.exception("room audio: could not start the player")
                 # The last-breath record is delivered, the offline spool
                 # goes to a core that lists `log_push`, and live log pushes
                 # start. Guarded: nothing here may keep the mic shut.
@@ -8662,6 +8724,13 @@ class Satellite(pc_engine.SpareDeviceEngine):
         # A Pi sends neither key: that is what keeps it exactly as before.
         if pc_engine.is_pc(self.cfg):
             hello.update(pc_engine.hello_fields(self.cfg))
+        # It plays the room's synced sound from /v1/room-audio (1.5.0): a
+        # boolean for a Pi (whose hello has no `supports`), the name in a
+        # spare computer's list.
+        if self._room_audio_enabled():
+            hello["room_audio"] = True
+            if isinstance(hello.get("supports"), list):
+                hello["supports"].append("room_audio")
         # A stored setting a Pi could not use (it runs on its profile's
         # default instead): the dashboard's row says so from the hello on.
         if getattr(self.cfg, "settings_ignored", ()):
