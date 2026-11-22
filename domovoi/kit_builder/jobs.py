@@ -258,14 +258,14 @@ def _components(rel: Release, sel: plan.Selection, ps: list[Part], ctx: Ctx) -> 
     return comps, installers
 
 
-def _sizes(comps: list[Component]) -> list[tuple[str, int]]:
+def _sizes(comps: list[Component], part_size: int = fmt.PART_SIZE) -> list[tuple[str, int]]:
     files: dict[str, int] = {}
     for c in comps:
         for s in c.files:
             files[s.path] = len(s.src) if isinstance(s.src, bytes) else Path(s.src).stat().st_size
     out = []
     for path, size in files.items():
-        split = fmt.part_sizes(size, fmt.PART_SIZE)
+        split = fmt.part_sizes(size, part_size)
         out += list(zip(fmt.part_paths(path, len(split)), split)) if split else [(path, size)]
     n = len(out)
     out += [("kit.json", 4096 + 400 * n), ("SHA256SUMS", 160 * n)]
@@ -273,7 +273,7 @@ def _sizes(comps: list[Component]) -> list[tuple[str, int]]:
 
 
 def build(rel: Release, sel: plan.Selection, ps: list[Part], *, core: str = "",
-          run=None) -> dict[str, Any]:
+          run=None, part_size: int = fmt.PART_SIZE) -> dict[str, Any]:
     """Make one kit (blocking: minutes to an hour). Returns build.json.
     Raises on failure or Cancelled, leaving nothing half-made."""
     import subprocess
@@ -287,7 +287,7 @@ def build(rel: Release, sel: plan.Selection, ps: list[Part], *, core: str = "",
                                 targets=sel.targets, includes=sel.includes)
     if problems:
         raise RuntimeError("; ".join(problems))
-    files = _sizes(comps)
+    files = _sizes(comps, part_size)
     total = fatimage.image_size(files)
     free = plan.free_bytes(builds_root())
     if free < total + 256 * 1024 * 1024:
@@ -307,7 +307,7 @@ def build(rel: Release, sel: plan.Selection, ps: list[Part], *, core: str = "",
         img = fatimage.FatImage(img_path, total)
         doc = write_kit_to(img, version=rel.version, commit=rel.commit, components=comps,
                            targets=sel.targets, includes=sel.includes,
-                           android_version_code=_avc(comps), progress=_tick)
+                           android_version_code=_avc(comps), part_size=part_size, progress=_tick)
         _set(stage="check", bytes_done=0, bytes_todo=total, line="Checking the image")
         h = hashlib.sha256()
         with open(img_path, "rb") as f:

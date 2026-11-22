@@ -157,6 +157,23 @@ const OfflineKitCard = () => {
     catch (e) { setError(kitRefusalText(e)); }
   };
 
+  return (
+    <Card title="Offline kit"
+          sub="Set up Domovoi in a house with no internet. This copies the models, the phone app and the installers onto a USB stick.">
+      {toastNode}
+      <OfflineKitView st={st} sel={sel} error={error} busy={busy} onToggle={toggle}
+                      onStick={(g) => setSel((s) => ({ ...s, stick_gb: g }))}
+                      onMake={make} onStop={stop} onDelete={remove}/>
+    </Card>
+  );
+};
+
+/* The card's body for one server answer (st) and the boxes ticked (sel):
+ * no state of its own, so a test renders every case from props. */
+const OfflineKitView = ({ st, sel, error, busy, onToggle, onStick, onMake, onStop, onDelete }) => {
+  const toggle = onToggle, make = onMake, stop = onStop, remove = onDelete;
+  const job = (st && st.job) || {};
+  const running = !!job.running;
   const note = { fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 };
   const plan = st && st.plan;
   const refusal = st && st.refusal && st.refusal.reason !== 'busy' ? st.refusal : null;
@@ -167,9 +184,6 @@ const OfflineKitCard = () => {
   const about = plan && !plan.exact ? 'About ' : '';
 
   return (
-    <Card title="Offline kit"
-          sub="Set up Domovoi in a house with no internet. This copies the models, the phone app and the installers onto a USB stick.">
-      {toastNode}
       <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
         {!st && !error && <div style={note}>asking the server…</div>}
         {error && <div role="alert" style={{ fontSize: 12, color: 'var(--err-ink)' }}>{error}</div>}
@@ -217,7 +231,7 @@ const OfflineKitCard = () => {
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 13 }}>
               <label htmlFor="offline-kit-stick">My stick is</label>
               <select id="offline-kit-stick" value={sel.stick_gb || ''}
-                      onChange={(e) => setSel((s) => ({ ...s, stick_gb: Number(e.target.value) || null }))}
+                      onChange={(e) => onStick(Number(e.target.value) || null)}
                       style={{ font: 'inherit', height: 30, padding: '0 8px', borderRadius: 'var(--r-sm)',
                                border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--fg)' }}>
                 {plan.stick_sizes.map((g) => <option key={g} value={g}>{g} GB</option>)}
@@ -265,7 +279,6 @@ const OfflineKitCard = () => {
 
         {build && !running && <KitReady build={build} onDelete={remove}/>}
       </div>
-    </Card>
   );
 };
 

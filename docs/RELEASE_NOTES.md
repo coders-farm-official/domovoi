@@ -4,6 +4,29 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — A server can make an offline kit
+
+- **What changed.** Settings → System → **Offline kit** (admins): the
+  server writes a USB stick image with everything an install downloads
+  (the installers, Domovoi's source, the Ubuntu and Docker packages, the
+  Python packages, the database images, Ollama and the AI models, the
+  speech models, the wake words, the phone app, WSL and Ubuntu for
+  Windows, the Mac parts when ticked, what rooms need), for a house that
+  is never online. The household writes it with Raspberry Pi Imager, like
+  the room stick. Installing from the stick arrives with the installers'
+  part of 1.5.0; docs/OFFLINE_KIT.md says what works so far.
+- **What to know.** A kit is made only from a server on the stable
+  channel, at a release; a server behind the latest release is warned and
+  may go on. The server needs the `dosfstools` and `mtools` packages
+  (`sudo apt install dosfstools mtools` on a server you set up yourself)
+  and Docker's containerd image store (the default of the Docker that
+  provision.sh installs). A kit is about 12 GB for a PC with AI, pictures
+  and rooms (a 16 GB stick), about 3.3 GB without AI; the image is deleted
+  by itself after 3 days. On a Windows or Mac server, Domovoi's disk grows
+  by the image's size and doesn't shrink by itself: delete the kit once
+  the stick is written. Some files on a kit (the Domovoi wake word) may
+  only be shared for free: don't sell a stick.
+
 ## 1.4.1 (unreleased) — The wake-word trainer image moves to torch 2.14
 
 The trainer image's pinned packages had known security advisories (torch
