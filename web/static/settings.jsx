@@ -1606,6 +1606,11 @@ const VersionSection = () => {
     sig.status === 'verified'
       ? { tone: 'ok', label: 'signed',
           title: `the checked-out commit is signed by ${sig.signer || 'an allowed key'} (${sig.allowed_signers})` }
+      // On the main channel the checked-out commit is a merge on main, not a
+      // signed release: expected, so say so calmly unless signing is enforced.
+      : (channel === 'main' && !sig.enforced)
+      ? { tone: 'idle', label: 'main channel: not a signed release (expected)',
+          title: 'this server follows main, whose commits are not signed releases; switch to stable for signed releases' }
       : { tone: sig.enforced ? 'err' : 'warn',
           label: sig.status === 'unsigned' ? 'unsigned' : 'signature not verified',
           title: sig.enforced
