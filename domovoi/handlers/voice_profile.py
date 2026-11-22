@@ -2614,13 +2614,13 @@ class VoiceProfileHandler(Handler):
         embedding = _decode_b64_embedding(str(data.get("embedding_b64") or ""))
         if person_id is None or embedding is None or not name or not room_id:
             return self._say("Something went wrong storing that — your voice wasn't added.", ctx)
-        heard = await self._room_check_voice(data, person_id, room_id, ctx, session)
-        if heard != "theirs":
+        verdict = await self._room_check_voice(data, person_id, room_id, ctx, session)
+        if verdict != "theirs":
             log.info(
                 "room check: a yes for person_id=%d in room=%s refused (%s voice)",
-                person_id, room_id, heard,
+                person_id, room_id, verdict,
             )
-            if heard == "unheard":
+            if verdict == "unheard":
                 return self._say(
                     f"I couldn't hear enough to be sure that was you, so I won't save it. "
                     f"I'll ask {name} myself next time.", ctx,

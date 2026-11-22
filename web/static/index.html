@@ -282,7 +282,7 @@
           const u = new URL(probe, base);
           return u.origin === base && u.pathname === probe && u.pathname.startsWith(own);
         } catch { return false; }
-    };
+      };
     (manifest.plugins || []).forEach((p) => {
       (p.player_sources || []).forEach((src) => {
         const own = `/api/plugins/${p.slug}/`;
