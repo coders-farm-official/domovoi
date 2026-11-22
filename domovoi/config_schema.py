@@ -141,6 +141,10 @@ class FieldSpec:
     # ("more sensitive", "fewer false wakes"). None = a number box.
     widget: Literal["slider"] | None = None
     slider_labels: tuple[str, str] | None = None
+    # Extra words the dashboard's settings search finds this field by, when
+    # they aren't in its label ("town", "weather"). Optional; sent as
+    # ``keywords`` with every field the config reads return.
+    keywords: tuple[str, ...] = ()
 
     @property
     def secret(self) -> bool:
@@ -820,6 +824,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "general briefing skips the local block. Used to discover/select the "
         "local RSS feed.",
         "str", needs_internet=True,
+        keywords=("news", "location", "town", "city", "weather", "home", "place"),
     ),
     FieldSpec(
         "news_retention_days", "News retention", "News",
@@ -1322,6 +1327,7 @@ def widget_payload(spec: FieldSpec) -> dict[str, object]:
     )
     return {
         "step": effective_step(spec),
+        "keywords": list(spec.keywords),
         "widget": "slider" if slider else None,
         "slider_labels": list(spec.slider_labels) if slider and spec.slider_labels else None,
     }
