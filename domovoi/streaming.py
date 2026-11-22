@@ -256,6 +256,14 @@ Client → Server
                            it (or DROPIN_READY_WAIT_SEC) the server sends that
                            room nothing of the call — no start chime, no
                            relay from the peer.
+  text  mic_dsp_state      {"type":"mic_dsp_state","preset":str,"applied":{P:[v]},
+                            "factory":{P:[v]},"readback":{P:[v]},"ok":bool,
+                            "error":str|null,"at":iso}
+                           — an XVF3800 that declared mic_dsp: its DSP preset
+                           and what the chip read back after applying it.
+                           Sent after connect, after each set_mic_dsp and
+                           after a reopened (replugged) mic. Bounded by
+                           domovoi/mic_dsp.clean_state, cached per room.
   text  display_status     {"type":"display_status","on":bool,"kiosk_alive":bool,
                             "brightness":int|null,"idle_mode":"clock"|"blank"|"art"}
                            — video satellites only: reports screen power
@@ -355,6 +363,14 @@ Server → Client
                            changes into config.toml (preserving comments),
                            validates the result parses + writes a .bak, then
                            self-restarts to apply (see `restart` below).
+  text  set_mic_dsp        {"type":"set_mic_dsp","preset":"factory"|"B"|"C"|"D"}
+                           — admin only, and only to a hello that declared
+                           mic_dsp: a preset NAME from the satellite's fixed
+                           table (satellite/mic_dsp.py); never parameters.
+                           Runtime only, answered by mic_dsp_state.
+  text  mic_dsp_mark       {"type":"mic_dsp_mark","text":str} — admin only,
+                           mic_dsp: a test marker (escaped, <=120 chars) the
+                           satellite writes to its log with a timestamp.
   text  set_display        {"type":"set_display","action":"on"|"off"|"restart_kiosk"}
                            — video satellites only: switch the screen on/off
                            (wlopm / xset dpms / backlight sysfs, per the
@@ -2214,6 +2230,8 @@ class StreamSession:
                 # And the screen/kiosk state — re-reported via display_status
                 # on reconnect (video satellites only).
                 self.ws.app.state.satellite_display.pop(self.room_id, None)
+                # And the mic DSP state — re-reported via mic_dsp_state.
+                getattr(self.ws.app.state, "satellite_mic_dsp", {}).pop(self.room_id, None)
 
     async def _on_audio(self, data: bytes) -> None:
         # Before any early return: announce_block reads it to tell a live
@@ -4037,6 +4055,24 @@ class StreamSession:
             if isinstance(cfg, dict):
                 self.ws.app.state.satellite_config[self.room_id] = cfg
             return
+        if t == "mic_dsp_state":
+            # An XVF3800's DSP preset and its read-back (domovoi/mic_dsp.py).
+            # Only from a device that declared mic_dsp; bounded before it
+            # is kept or shown.
+            if self.abilities.allows("mic_dsp"):
+                from domovoi import mic_dsp
+
+                state = mic_dsp.clean_state(ctrl)
+                cache = getattr(self.ws.app.state, "satellite_mic_dsp", None)
+                if cache is None:
+                    cache = {}
+                    self.ws.app.state.satellite_mic_dsp = cache
+                cache[self.room_id] = state
+                log.info(
+                    "mic_dsp room=%s preset=%s ok=%s readback=%s",
+                    self.room_id, state["preset"], state["ok"], state["readback"],
+                )
+            return
         if t == "display_status":
             # Video satellite reporting its screen/kiosk state (on connect,
             # after each applied set_display, and on kiosk-alive changes).
@@ -4147,6 +4183,10 @@ class StreamSession:
         # The room display (1.4.0): a paired device that declared it.
         if room_display.wanted(self):
             features.append(room_display.ABILITY)
+        # Mic DSP presets (1.4.1): a device that declared them may report
+        # `mic_dsp_state` (an older core would answer it with `error`).
+        if self.abilities.allows("mic_dsp"):
+            features.append("mic_dsp")
         return features
 
     def _health_frame_allowed(self, kind: str) -> bool:
@@ -7871,6 +7911,20 @@ class StreamSession:
         await self.ws.send_text(
             json.dumps({"type": "set_config", "changes": changes})
         )
+
+    async def send_mic_dsp(self, preset: str) -> None:
+        """Ask this XVF3800 to apply DSP preset ``preset`` (a name the
+        caller checked against domovoi/mic_dsp.PRESETS; the satellite
+        checks it again against its own table). :class:`NotDeclared`
+        (nothing sent) for a device that didn't declare "mic_dsp"."""
+        self._require("mic_dsp", "set_mic_dsp")
+        await self.ws.send_text(json.dumps({"type": "set_mic_dsp", "preset": preset}))
+
+    async def send_mic_dsp_mark(self, text: str) -> None:
+        """Stamp a test marker into this satellite's log (already cleaned
+        by domovoi/mic_dsp.clean_mark). :class:`NotDeclared` as above."""
+        self._require("mic_dsp", "mic_dsp_mark")
+        await self.ws.send_text(json.dumps({"type": "mic_dsp_mark", "text": text}))
 
     # ── Two-way drop-in (Feature 4) ──────────────────────────────────────
 

@@ -101,6 +101,9 @@ ADMIN_TIER = [
     ("POST", "/v1/admin/satellite/display"),
     ("POST", "/v1/admin/satellite/{room_id}/config"),
     ("POST", "/v1/admin/satellite/{room_id}/voice"),
+    # XVF3800 DSP presets and test markers (1.4.1, domovoi/mic_dsp.py).
+    ("POST", "/v1/admin/satellite/{room_id}/mic_dsp"),
+    ("POST", "/v1/admin/satellite/{room_id}/mic_dsp/mark"),
     ("POST", "/v1/admin/wake/record/start"),
     ("POST", "/v1/admin/wake/record/stop"),
     ("POST", "/v1/admin/wake/push"),
@@ -133,6 +136,7 @@ SECURITY_TIER = [
 # ADD-1 — an admin READ: the dashboard cookie may render it, nothing less.
 ADMIN_READ_TIER = [
     ("GET", "/v1/admin/satellite/{room_id}/logs"),
+    ("GET", "/v1/admin/satellite/{room_id}/mic_dsp"),
 ]
 
 # The groups list (V060) is a household read: the cookie may render it.
@@ -316,6 +320,8 @@ BODIES: dict[str, dict[str, Any]] = {
     "/v1/admin/satellite/display": {"room_id": "kitchen", "action": "on"},
     "/v1/admin/satellite/{room_id}/config": {"changes": {"mic_gain": 1}},
     "/v1/admin/satellite/{room_id}/voice": {"voice": "Norman"},
+    "/v1/admin/satellite/{room_id}/mic_dsp": {"preset": "B"},
+    "/v1/admin/satellite/{room_id}/mic_dsp/mark": {"text": "block 2, 1m"},
     "/v1/admin/satellites/{room_id}/label": {"room_label": "Kitchen"},
     "/v1/admin/voices/sample": {"name": "aria"},
     "/v1/admin/wake/record/start": {"room_id": "kitchen", "wake_word_id": 1},

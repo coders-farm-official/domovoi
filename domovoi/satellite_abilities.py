@@ -72,6 +72,7 @@ ABILITIES: dict[str, str] = {
     "capture_control": "`end_capture` (early commit; also needs speech_pause)",
     "turn_progress": "the `working` frame every 30 s while a request is still being worked out (keeps the device's reply backstop from giving up on a slow but working server)",
     "dropin_ready": "a drop-in call's audio (its start chime and the peer's relay) waits for the device's `dropin_ready`: it finishes the reply it is still playing (\"Dropping in on the kitchen\") before it opens the call",
+    "mic_dsp": "`set_mic_dsp` and `mic_dsp_mark` (an XVF3800's DSP presets, picked by name from a fixed table; admin only, domovoi/mic_dsp.py)",
     "room_display": "the `room_display` frame (this room's music, timers and alarms, and one going off, for a screen in the room) and the `room_control` frame back (pause, resume, skip, previous, stop ringing); a paired room only (domovoi/room_display.py)",
 }
 
@@ -82,6 +83,7 @@ BOOLEAN_KEYS: dict[str, str] = {
     "capture_control": "capture_control",
     "announce_after_session_end": "announce_after_session_end",
     "dropin_ready": "dropin_ready",
+    "mic_dsp": "mic_dsp",
 }
 
 #: Behaviours negotiated per connection by their boolean key, with or
@@ -93,7 +95,9 @@ NEGOTIATED: frozenset[str] = frozenset(
 #: Abilities only a device that LISTS them gets (1.4.0): newer than every
 #: Pi, so never assumed for a hello without ``supports``, and with no
 #: boolean hello key either. ``room_display``: a Pi has no screen.
-DECLARED_ONLY: frozenset[str] = frozenset({"room_display"})
+#: ``mic_dsp`` (1.4.1) does have one (``"mic_dsp": true``), sent only by
+#: an XVF3800 with ``xvf_host``: never assumed, so an older Pi never sees it.
+DECLARED_ONLY: frozenset[str] = frozenset({"room_display", "mic_dsp"})
 
 #: What a hello WITHOUT ``supports`` (every Pi in the field) is taken to
 #: have: everything the core has always pushed to a satellite. Out-of-turn

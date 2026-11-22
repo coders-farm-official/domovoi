@@ -85,6 +85,8 @@ from web.backend.schemas import (
     AdoptRequest,
     AnnounceRequest,
     ConfigUpdateRequest,
+    MicDspMarkRequest,
+    MicDspRequest,
     ConversationTurn,
     DisplayRequest,
     DropInStartRequest,
@@ -2008,6 +2010,54 @@ async def patch_satellite_config(
     return bridge_response(status, payload)
 
 
+@router.get(
+    "/{room_id}/mic_dsp",
+    # Admin tier at both hops, as the room's other settings.
+    dependencies=[Depends(require_admin_read)],
+)
+async def get_mic_dsp(room_id: str, request: Request):
+    """An XVF3800 satellite's DSP preset and what the chip read back
+    (1.4.1). Proxies to the core: {room_id, presets, state}; 404 offline,
+    409 a satellite that didn't declare mic_dsp."""
+    status, payload = await get_admin(
+        f"/v1/admin/satellite/{room_id}/mic_dsp",
+        headers=auth_forward_headers(request),
+    )
+    return bridge_response(status, payload)
+
+
+@router.post(
+    "/{room_id}/mic_dsp",
+    # Admin tier at both hops: it changes how the room's microphone hears.
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def set_mic_dsp(room_id: str, body: MicDspRequest, request: Request):
+    """Pick an XVF3800 DSP preset by name (factory, B, C, D). The satellite
+    applies it at runtime and reports the read-back; GET shows it."""
+    status, payload = await post_admin(
+        f"/v1/admin/satellite/{room_id}/mic_dsp",
+        {"preset": body.preset},
+        headers=auth_forward_headers(request),
+    )
+    return bridge_response(status, payload)
+
+
+@router.post(
+    "/{room_id}/mic_dsp/mark",
+    # Admin tier at both hops: it writes into two logs.
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def mark_mic_dsp(room_id: str, body: MicDspMarkRequest, request: Request):
+    """Stamp a test marker ("block 2, 1m") into the satellite's log and the
+    Domovoi server's, with a timestamp. {room_id, text, at}."""
+    status, payload = await post_admin(
+        f"/v1/admin/satellite/{room_id}/mic_dsp/mark",
+        {"text": body.text},
+        headers=auth_forward_headers(request),
+    )
+    return bridge_response(status, payload)
+
+
 @router.post(
     "/{room_id}/voice",
     # Admin tier at both hops, as the room's other settings (/config).
@@ -2446,6 +2496,7 @@ async def _satellite_for(
         timers_own_only=room_id in (own_only or {}),
         board=board,
         supports=[str(x) for x in supports] if supports is not None else None,
+        mic_dsp=online and room_id in (snapshot.get("satellite_mic_dsp") or {}),
         upgrade=upgrade,
         settings_ignored=ignored,
         wake_word=wake_word,
