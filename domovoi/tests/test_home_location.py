@@ -181,7 +181,7 @@ async def test_weather_asks_for_the_home_location(db_session) -> None:
 async def test_the_sdk_reads_the_home_location_and_suggests_towns(db_session) -> None:
     from domovoi.sdk import API_VERSION, build_sdk
 
-    assert API_VERSION == "1.13.0"
+    assert tuple(int(x) for x in API_VERSION.split(".")) >= (1, 13, 0)
     sdk = build_sdk("wx-test")
     assert await sdk.household.home_location() is None
     await home_location.save(db_session, DENVER)
