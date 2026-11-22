@@ -46,6 +46,20 @@
 ; Domovoi keeps running as it was. The Ubuntu image isn't downloaded again
 ; when DomovoiHost's folder already holds the pinned one.
 ;
+; Offline kit mode (release 1.5.0; docs/WINDOWS_HOST.md, "Installing
+; without internet"): Setup finds kit.json beside itself (the stick's
+; release folder, or the kit's own), takes /kit=DIR, or the household picks
+; the kit's folder when the internet check fails. Before anything changes,
+; the helper's kit-check (windows\common\OfflineKit.cs) checks the stick's
+; SHA256SUMS, the signed release manifest against the release key, that the
+; kit is this Setup's own release (tag and commit), the parts and the disk.
+; Then nothing is downloaded: Ubuntu's image, WSL's MSI and provision.sh
+; come off the stick, each checked against this Setup's pins, the helper's
+; preflight skips the internet check, every helper call says --offline (its
+; network guard), AddDownload and RunDownloads refuse loudly, and DomovoiHost
+; mounts the kit in the distro for provision.sh --offline-kit. The kit's
+; folder rides across the restart as /kit=.
+;
 ; Build: windows\build.ps1 (Inno Setup 6). Docs: docs/WINDOWS_HOST.md.
 
 #include "pins.iss"
@@ -237,6 +251,14 @@ var
   { The Ubuntu image the job step hands DomovoiHost: the download, or (an
     update) the pinned copy DomovoiHost's folder already holds. }
   ImagePath: String;
+  { provision.sh as the job step hands it to DomovoiHost: the download (or
+    the copy packed in this Setup), or the kit's linux\provision.sh. }
+  ProvisionPath: String;
+
+  { The offline kit (the header): its folder ('' online), whether its check
+    passed this run, what it holds. }
+  KitRoot, KitVersion: String;
+  KitChecked, KitAi: Boolean;
 
   { The uninstaller: the helper's output lines as they come, and the list
     of steps under the progress bar. }
@@ -439,6 +461,108 @@ begin
   end;
 end;
 
+{ -- the offline kit (the header) ---------------------------------------- }
+
+function KitMode: Boolean;
+begin
+  Result := KitRoot <> '';
+end;
+
+{ ' --offline' on every helper call in kit mode: its network guard. }
+function OfflineArg: String;
+begin
+  Result := '';
+  if KitMode then
+    Result := ' --offline';
+end;
+
+{ A file on the stick, by its kit path with backslashes. }
+function KitFile(const Rel: String): String;
+begin
+  Result := AddBackslash(KitRoot) + Rel;
+end;
+
+{ The kit's folder: /kit=, else kit.json beside this Setup (the stick's
+  release folder, or the kit's own folder); '' when there is none. }
+function FindKit: String;
+var
+  Src: String;
+begin
+  Result := ExpandConstant('{param:kit|}');
+  if Result = '' then
+  begin
+    Src := RemoveBackslashUnlessRoot(ExpandConstant('{src}'));
+    if FileExists(AddBackslash(Src) + 'kit.json') then
+      Result := Src
+    else if (ExtractFileDir(Src) <> Src) and FileExists(AddBackslash(ExtractFileDir(Src)) + 'kit.json') then
+      Result := ExtractFileDir(Src);
+  end;
+  if Result <> '' then
+    Result := RemoveBackslashUnlessRoot(AddBackslash(Result));
+end;
+
+{ Lets the household pick the kit's folder. False: they didn't. }
+function ChooseKit: Boolean;
+var
+  Dir: String;
+begin
+  Dir := KitRoot;
+  Result := BrowseForFolder('Choose the offline kit: the USB stick''s top folder, the one with kit.json in it.', Dir, False);
+  if Result and (Dir <> '') then
+  begin
+    KitRoot := RemoveBackslashUnlessRoot(AddBackslash(Dir));
+    KitChecked := False;
+    Log('Offline kit chosen: ' + KitRoot);
+  end
+  else
+    Result := False;
+end;
+
+{ The helper's kit-check: fatal lines in Lines when the kit can't be used.
+  The folder goes without its trailing backslash ("E:"): a quoted "E:\"
+  would end in an escaped quote. }
+function RunKitCheck(var Lines: TArrayOfString): Boolean;
+var
+  Code: Integer;
+  Params, Err: String;
+begin
+  Params := 'kit-check' + OfflineArg + ' --kit ' + AddQuotes(RemoveBackslash(KitRoot)) +
+    ' --commit {#DomovoiCommit} --version {#AppVersion}' +
+    ' --ubuntu-name {#UbuntuName} --ubuntu-sha256 {#UbuntuSha256}' +
+    ' --wsl-msi-name {#WslMsiName} --wsl-msi-sha256 {#WslMsiSha256}';
+#ifndef ProvisionBundled
+  Params := Params + ' --provision-sha256 {#ProvisionSha256}';
+#endif
+  if (WslState = 'missing') or (WslState = 'old') then
+    Params := Params + ' --need-wsl';
+  CheckPage.SetText('Checking the offline kit at ' + KitRoot + '...', 'Setup reads every file on the stick once, to catch a bad copy. This takes a few minutes.');
+  CheckPage.Show;
+  try
+    CheckPage.Animate;
+    Result := RunHelper(TmpHelper, Params, Lines, Code) and (Code = 0);
+  finally
+    CheckPage.Hide;
+  end;
+  if not Result then
+  begin
+    Err := KvValue(Lines, 'error');
+    SetArrayLength(Lines, 1);
+    Lines[0] := 'fatal=Setup could not check the offline kit (' + Err + ').';
+  end;
+  KitVersion := KvValue(Lines, 'kit_version');
+  KitAi := KvValue(Lines, 'kit_ai') = 'yes';
+  Log('kit-check ' + KitRoot + ': version ' + KitVersion + ', AI ' + KvValue(Lines, 'kit_ai') + ', ' + KvValue(Lines, 'kit_gb') + ' GB, needs ' + KvValue(Lines, 'need_gb') + ' GB free');
+end;
+
+{ The one way a download starts. In kit mode nothing may be downloaded:
+  reaching this is a fault in Setup, and it stops, loudly. }
+procedure AddDownload(const Url, Name, Sha: String);
+begin
+  if KitRoot <> '' then
+    RaiseException('Setup tried to download ' + Name + ' while installing from the offline kit, and nothing may be downloaded. This is a fault in Domovoi Setup; please report it. Nothing was downloaded.');
+  DownloadPage.Add(Url, Name, Sha);
+end;
+
 { -- preflight (PLAN 4.1) ----------------------------------------------- }
 
 { One pop-up per program that holds a port Domovoi needs, with Retry and
@@ -545,22 +669,37 @@ begin
 #endif
 end;
 
+{ The preflight page's internet line. }
+function InternetLine: String;
+begin
+  if KitMode then
+    Result := 'Internet: not needed (installing from the offline kit at ' + KitRoot + ', Domovoi ' + KitVersion + ')' + #13#10
+  else
+    Result := 'Internet: ' + KvValue(Preflight, 'internet') + #13#10;
+end;
+
 function RunPreflight: Boolean;
 var
-  Fatal, Warn: TArrayOfString;
-  Code: Integer;
+  Fatal, Warn, KitLines: TArrayOfString;
+  Code, R: Integer;
   Ran: Boolean;
   Command: String;
 begin
   Result := False;
   { An update that reuses the Ubuntu image already here (wpReady) downloads
     nothing from the image's host, so the internet check skips it. }
-  Command := 'preflight';
-  if UpdateMode and FileExists(ExpandConstant('{commonappdata}\Domovoi\host\in\{#UbuntuName}')) then
-    Command := 'preflight --have-image';
   while True do
   begin
-    CheckPage.SetText('Checking Windows, memory, disk, ports and the internet...', '');
+    Command := 'preflight';
+    if UpdateMode and FileExists(ExpandConstant('{commonappdata}\Domovoi\host\in\{#UbuntuName}')) then
+      Command := 'preflight --have-image';
+    { From an offline kit: no internet check, and the helper's guard on. }
+    if KitMode then
+      Command := 'preflight --skip-internet --offline';
+    if KitMode then
+      CheckPage.SetText('Checking Windows, memory, disk and ports...', '')
+    else
+      CheckPage.SetText('Checking Windows, memory, disk, ports and the internet...', '');
     CheckPage.Show;
     try
       CheckPage.Animate;
@@ -589,10 +728,49 @@ begin
         FailureText := 'Domovoi can''t be updated on this PC now: ' + JoinLines(Fatal, '');
         Exit;
       end;
+      { No internet here: an offline kit made by an online Domovoi server
+        installs without it. }
+      if not KitMode and (KvValue(Preflight, 'internet') = 'fail') then
+      begin
+        R := TaskDialogMsgBox('Domovoi can''t be installed on this PC yet', JoinLines(Fatal, '') + #13#10 +
+          'No internet here? Install from an offline kit: a USB stick an online Domovoi server makes (Settings > System > Offline kit).',
+          mbCriticalError, MB_ABORTRETRYIGNORE, ['Check again', 'Use an offline kit...', 'Cancel Setup'], 0);
+        if R = IDIGNORE then
+          ChooseKit;
+        if (R = IDRETRY) or (R = IDIGNORE) then
+          Continue;
+        Exit;
+      end;
       if TaskDialogMsgBox('Domovoi can''t be installed on this PC yet', JoinLines(Fatal, ''), mbCriticalError,
         MB_RETRYCANCEL, ['Check again', 'Cancel Setup'], 0) = IDRETRY then
         Continue;
       Exit;
+    end;
+    { The kit, before anything changes (once per kit: Check again on a
+      port pop-up doesn't read the stick again). }
+    WslState := KvValue(Preflight, 'wsl');
+    if KitMode and not KitChecked then
+    begin
+      RunKitCheck(KitLines);
+      Fatal := KvValues(KitLines, 'fatal');
+#ifndef ProvisionAiChoice
+      if (GetArrayLength(Fatal) = 0) and not KitAi then
+      begin
+        SetArrayLength(Fatal, 1);
+        Fatal[0] := 'This kit has no AI models, and this Setup always installs them. Make a kit with AI chat ticked, or use the DomovoiSetup.exe on the stick.';
+      end;
+#endif
+      if GetArrayLength(Fatal) > 0 then
+      begin
+        R := TaskDialogMsgBox('This offline kit can''t be used', JoinLines(Fatal, ''), mbCriticalError,
+          MB_ABORTRETRYIGNORE, ['Check again', 'Choose another folder...', 'Cancel Setup'], 0);
+        if R = IDIGNORE then
+          ChooseKit;
+        if (R = IDRETRY) or (R = IDIGNORE) then
+          Continue;
+        Exit;
+      end;
+      KitChecked := True;
     end;
     if not ResolvePorts(Preflight, TmpHelper, 'preflight --ports-only', 'Cancel Setup') then
       Exit;
@@ -616,7 +794,7 @@ begin
     'WSL: ' + KvValue(Preflight, 'wsl_version') + ' (' + WslState + '); Virtual Machine Platform: ' + VmpState + #13#10 +
     'Network: ' + LanIp + ' on ' + KvValue(Preflight, 'lan_interface') + ' (' + KvValue(Preflight, 'lan_category') +
       ' network, subnet ' + LanSubnet + ')' + #13#10 +
-    'Internet: ' + KvValue(Preflight, 'internet') + #13#10 +
+    InternetLine +
     'Smart App Control: ' + KvValue(Preflight, 'smart_app_control') + #13#10 +
     'Ports Domovoi needs: free' + #13#10 + #13#10 +
     JoinLines(Warn, 'Note: ');
@@ -725,7 +903,9 @@ begin
   S := S + IntToStr(N) + '. Setup''s install record in the registry, HKLM\SOFTWARE\Domovoi: what Setup changed, so the uninstaller can undo it.' + #13#10#13#10;
   { Without the AI models: the 10.5-13.5 GB less the 6.4 or 9.1 GB of
     them (AiModels in windows\common\Provision.cs). }
-  if AiAnswer = 'no' then
+  if KitMode then
+    S := S + 'Nothing is downloaded: Setup installs from the offline kit at ' + KitRoot + ' (Domovoi ' + KitVersion + '). Ubuntu (and WSL, if this PC needs it) come off the stick now; then DomovoiHost opens the stick read-only inside the distro, and Domovoi''s code at commit {#Copy(DomovoiCommit, 1, 7)} (later updates follow the {#DomovoiChannel} channel{#ChannelWords}; you choose when, in Settings > About & updates), Docker Engine, Python packages, the speech recognition model and, if you include them, the AI models are copied from it, each checked against a pinned hash. Keep the stick plugged in until Setup finishes.' + #13#10#13#10
+  else if AiAnswer = 'no' then
     S := S + 'Downloads: about 4.5 GB (no AI models: you left out AI chat and questions). Ubuntu (418 MB) now; then, inside the distro, Domovoi''s code at commit {#Copy(DomovoiCommit, 1, 7)} (later updates follow the {#DomovoiChannel} channel{#ChannelWords}; you choose when, in Settings > About & updates), Docker Engine, Python packages and the speech recognition model, each checked against a pinned hash.' + #13#10#13#10
   else
     S := S + 'Downloads: about 10.5-13.5 GB (the AI models are most of it; the size depends on the models this PC''s memory gets). Ubuntu (418 MB) now; then, inside the distro, Domovoi''s code at commit {#Copy(DomovoiCommit, 1, 7)} (later updates follow the {#DomovoiChannel} channel{#ChannelWords}; you choose when, in Settings > About & updates), Docker Engine, Python packages and the AI models (one of them reads pictures in chat), each checked against a pinned hash.' + #13#10#13#10;
@@ -806,6 +986,25 @@ begin
   AiLaterText.Top := AiNoText.Top + AiNoText.Height + ScaleY(10);
 end;
 
+{ The words under Yes and No: the download, or the kit's copy. }
+function AiYesWords: String;
+begin
+  if KitMode and not KitAi then
+    Result := 'This offline kit has no AI models. Make a kit with AI chat ticked, or turn AI on later in the dashboard, with internet.'
+  else if KitMode then
+    Result := 'Ask Domovoi questions and chat with it. Setup copies the AI models from the offline kit.'
+  else
+    Result := 'Ask Domovoi questions and chat with it. Downloads ' + AiModelsText + '.';
+end;
+
+function AiNoWords: String;
+begin
+  if KitMode then
+    Result := 'Voice commands, music, timers and everything else still work.'
+  else
+    Result := 'Voice commands, music, timers and everything else still work. Setup downloads about 4.5 GB in all.';
+end;
+
 procedure CreateAiPage(AfterID: Integer);
 var
   T: TNewStaticText;
@@ -815,10 +1014,10 @@ begin
   T := AddText(AiPage, 'Domovoi''s AI models answer questions and chat with you. They run on this PC, like the rest of Domovoi, and they are most of the download.', 0, 0, False, False);
   Y := T.Top + T.Height + ScaleY(10);
   RadioAiYes := NewRadio(AiPage, 'Yes, include AI chat and questions (recommended).', Y);
-  AiYesText := AddText(AiPage, 'Ask Domovoi questions and chat with it. Downloads ' + AiModelsText + '.', RadioAiYes.Top + RadioAiYes.Height, ScaleX(18), True, False);
+  AiYesText := AddText(AiPage, AiYesWords, RadioAiYes.Top + RadioAiYes.Height, ScaleX(18), True, False);
   Y := AiYesText.Top + AiYesText.Height + ScaleY(8);
   RadioAiNo := NewRadio(AiPage, 'No, leave AI out.', Y);
-  AiNoText := AddText(AiPage, 'Voice commands, music, timers and everything else still work. Setup downloads about 4.5 GB in all.', RadioAiNo.Top + RadioAiNo.Height, ScaleX(18), True, False);
+  AiNoText := AddText(AiPage, AiNoWords, RadioAiNo.Top + RadioAiNo.Height, ScaleX(18), True, False);
   Y := AiNoText.Top + AiNoText.Height + ScaleY(10);
   AiLaterText := AddText(AiPage, 'You can turn AI on later in the dashboard: Settings > Models.', Y, 0, False, False);
   if CompareText(ExpandConstant('{param:ai|yes}'), 'no') = 0 then
@@ -833,7 +1032,9 @@ end;
   time the page shows: the AI page comes before it). }
 function InternetIntroText(WithAi: Boolean): String;
 begin
-  if not WithAi then
+  if KitMode then
+    Result := 'Setup installs from the offline kit and needs no internet. After that, Domovoi works with or without it. Your voice and recordings never leave this PC either way.'
+  else if not WithAi then
     Result := 'Setup needs the internet right now to download Domovoi (about 4.5 GB). After that, Domovoi works with or without it. Your voice and recordings never leave this PC either way.'
   else
     Result := 'Setup needs the internet right now to download Domovoi (about 10.5-13.5 GB). After that, Domovoi works with or without it. Your voice and recordings never leave this PC either way.';
@@ -1110,7 +1311,9 @@ begin
     LanText.Caption := LanText.Caption + ModelsText(GpuRaw, TierText);
     { provision.sh's phone-app step is never fatal: when it couldn't
       download the Android app, its warning, in its words. }
-    if PhoneAppReported = 'no' then
+    if (PhoneAppReported = 'no') and KitMode then
+      LanText.Caption := LanText.Caption + #13#10 + 'The phone app wasn''t on the offline kit: upload it in Settings, or let this server use the internet once.'
+    else if PhoneAppReported = 'no' then
       LanText.Caption := LanText.Caption + #13#10 + 'The phone app couldn''t be downloaded: this server needs the internet once, at some point, to put it here (or upload it in Settings).';
   end
   else
@@ -1341,6 +1544,14 @@ begin
   end;
 end;
 
+{ The job step's --kit, in kit mode. }
+function KitArg: String;
+begin
+  Result := '';
+  if KitMode then
+    Result := ' --kit ' + AddQuotes(RemoveBackslash(KitRoot));
+end;
+
 function MachineSetup: Boolean;
 var
   Lines: TArrayOfString;
@@ -1350,7 +1561,9 @@ begin
   StopRequested := False;
   ProgressPage.Show;
   StopButton.Visible := True;
-  if AiAnswer = 'no' then
+  if KitMode then
+    ProgressPage.Description := 'Most of this time is copying from the offline kit. Keep the stick plugged in; you can keep using the PC.'
+  else if AiAnswer = 'no' then
     ProgressPage.Description := 'Most of this time is downloading. You can keep using the PC.';
   try
     if not Step('Recording your answers', 'prepare --internet ' + InternetAnswer + ' --ai ' + AiPrepareArg + ' --media-root ' + AddQuotes(RemoveBackslashUnlessRoot(MediaPage.Values[0])) + ' --commit {#DomovoiCommit}', 2, Lines) then Exit;
@@ -1360,8 +1573,8 @@ begin
     if not Step('Creating the hidden account domovoi-svc and the DomovoiHost service', 'account --exe ' + AddQuotes(ExpandConstant('{app}\DomovoiHost.exe')) + Deny, 4, Lines) then Exit;
     if not Step('Setting up the media folders', 'media', 6, Lines) then Exit;
     if not Step('Adding the firewall rules', 'firewall', 8, Lines) then Exit;
-    if not Step('Handing the work to DomovoiHost', 'job --image ' + AddQuotes(ImagePath) +
-      ' --image-sha256 {#UbuntuSha256} --provision ' + AddQuotes(ExpandConstant('{tmp}\provision.sh')) +
+    if not Step('Handing the work to DomovoiHost', 'job' + OfflineArg + KitArg + ' --image ' + AddQuotes(ImagePath) +
+      ' --image-sha256 {#UbuntuSha256} --provision ' + AddQuotes(ProvisionPath) +
       ' --provision-sha256 {#ProvisionSha256} --repo-url {#DomovoiRepoUrl} --ref {#DomovoiCommit} --track-branch {#DomovoiChannel} --lan-ip auto', 12, Lines) then Exit;
     if not Step('Starting DomovoiHost', 'host-start', 14, Lines) then Exit;
     if not WaitForHost then Exit;
@@ -1580,6 +1793,9 @@ begin
     Exit;
   Data := AddQuotes(ResumeExe) + ' /resume=1 /internet=' + InternetAnswer + ' /ai=' + AiPrepareArg +
     ' /mediaroot=' + AddQuotes(RemoveBackslashUnlessRoot(MediaPage.Values[0]));
+  { The kit's folder (no trailing backslash: "E:" stays E:). }
+  if KitMode then
+    Data := Data + ' /kit=' + AddQuotes(RemoveBackslash(KitRoot));
   if NoDenyLogon then
     Data := Data + ' /nodenylogon=1';
   Result := RegWriteStringValue(HKLM, RunOnceKey, RunOnceName, Data);
@@ -1733,6 +1949,12 @@ begin
   end;
 #endif
   ExtractTemporaryFile('{#Helper}');
+  { An offline kit beside this Setup, or /kit= (never for an update: the
+    Windows update comes from the release, online). }
+  if not UpdateMode then
+    KitRoot := FindKit;
+  if KitRoot <> '' then
+    Log('Offline kit: ' + KitRoot);
   if UpdateMode then
   begin
     { Only silently, and only over an install: a repair, never a first
@@ -1792,6 +2014,8 @@ begin
   StopButton.OnClick := @StopClick;
   StopButton.Visible := False;
   CreateFinishControls;
+  if KitMode then
+    WizardForm.WelcomeLabel2.Caption := WizardForm.WelcomeLabel2.Caption + #13#10#13#10 + 'Installing from the offline kit. No internet needed.';
 end;
 
 function ShouldSkipPage(PageID: Integer): Boolean;
@@ -1818,7 +2042,12 @@ begin
 #ifdef ProvisionAiChoice
   if CurPageID = AiPage.ID then
   begin
-    AiYesText.Caption := 'Ask Domovoi questions and chat with it. Downloads ' + AiModelsText + '.';
+    AiYesText.Caption := AiYesWords;
+    AiNoText.Caption := AiNoWords;
+    { A kit without AI models: No, and Yes can't be picked. }
+    RadioAiYes.Enabled := not (KitMode and not KitAi);
+    if KitMode and not KitAi then
+      RadioAiNo.Checked := True;
     LayoutAiPage;
   end
   else
@@ -1828,10 +2057,95 @@ begin
   else if CurPageID = InternetPage.ID then
   begin
     InternetIntro.Caption := InternetIntroText(AiAnswer <> 'no');
+    { A house installing from a stick most likely has no internet (as
+      install.sh --kit): No is picked to begin with. }
+    if KitMode and not (RadioAlways.Checked or RadioSometimes.Checked or RadioNever.Checked) then
+      RadioNever.Checked := True;
     WizardForm.NextButton.Enabled := RadioAlways.Checked or RadioSometimes.Checked or RadioNever.Checked;
   end
   else if CurPageID = wpFinished then
     ShowFinish;
+end;
+
+{ Online: the pinned downloads (DownloadPage), each checked against its
+  SHA-256. Never in kit mode: reaching it there is a fault, and it stops. }
+function RunDownloads: Boolean;
+begin
+  Result := True;
+  if KitRoot <> '' then
+    RaiseException('Setup reached its downloads while installing from the offline kit, and nothing may be downloaded. This is a fault in Domovoi Setup; please report it. Nothing was downloaded.');
+  ProvisionPath := ExpandConstant('{tmp}\provision.sh');
+  DownloadPage.Clear;
+#ifdef ProvisionBundled
+  { Shipped inside Setup (pins.iss); the helper checks its SHA-256 when it
+    hands it to DomovoiHost, and the host again before it runs it. }
+  ExtractTemporaryFile('provision.sh');
+#else
+  AddDownload('{#ProvisionUrl}', 'provision.sh', '{#ProvisionSha256}');
+#endif
+  { An update over an install whose DomovoiHost folder holds the pinned
+    image (the helper's job step checks its SHA-256 and copies nothing
+    when it matches; DomovoiHost imports only a distro that isn't
+    registered): no 418 MB download again. }
+  ImagePath := ExpandConstant('{tmp}\{#UbuntuName}');
+  if UpdateMode and FileExists(ExpandConstant('{commonappdata}\Domovoi\host\in\{#UbuntuName}')) then
+  begin
+    ImagePath := ExpandConstant('{commonappdata}\Domovoi\host\in\{#UbuntuName}');
+    Log('Update mode: the Ubuntu image is already in ' + ImagePath + '; not downloading it');
+  end
+  else
+    AddDownload('{#UbuntuUrl}', '{#UbuntuName}', '{#UbuntuSha256}');
+  if (WslState = 'missing') or (WslState = 'old') then
+    AddDownload('{#WslMsiUrl}', '{#WslMsiName}', '{#WslMsiSha256}');
+  DownloadPage.Show;
+  try
+    try
+      DownloadPage.Download;
+    except
+      FailureText := 'A download did not work: ' + GetExceptionMessage;
+      if not DownloadPage.AbortedByUser then
+        SuppressibleMsgBox('A download did not work: ' + GetExceptionMessage, mbCriticalError, MB_OK, IDOK);
+      Result := False;
+    end;
+  finally
+    DownloadPage.Hide;
+  end;
+end;
+
+{ From the kit: Ubuntu's image and provision.sh are read off the stick by
+  the helper's job step, which copies each only when it matches its pin;
+  WSL's MSI is copied here and checked against its pin before msiexec
+  runs it. Nothing is downloaded. }
+function UseKitFiles: Boolean;
+var
+  Msi: String;
+begin
+  Result := True;
+  ImagePath := KitFile('windows\{#UbuntuName}');
+#ifdef ProvisionBundled
+  ExtractTemporaryFile('provision.sh');
+  ProvisionPath := ExpandConstant('{tmp}\provision.sh');
+#else
+  ProvisionPath := KitFile('linux\provision.sh');
+#endif
+  if (WslState = 'missing') or (WslState = 'old') then
+  begin
+    Msi := ExpandConstant('{tmp}\{#WslMsiName}');
+    if not FileCopy(KitFile('windows\{#WslMsiName}'), Msi, False) or (GetSHA256OfFile(Msi) <> '{#WslMsiSha256}') then
+    begin
+      FailureText := 'This stick has a damaged file: windows\{#WslMsiName}. Make the stick again.';
+      SuppressibleMsgBox(FailureText, mbCriticalError, MB_OK, IDOK);
+      Result := False;
+      Exit;
+    end;
+    Log('WSL''s MSI copied from the offline kit and checked against its pin');
+  end;
+  if not FileExists(ImagePath) or not FileExists(ProvisionPath) then
+  begin
+    FailureText := 'The offline kit at ' + KitRoot + ' isn''t there any more. Plug the stick in again and run Setup again.';
+    SuppressibleMsgBox(FailureText, mbCriticalError, MB_OK, IDOK);
+    Result := False;
+  end;
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
@@ -1873,41 +2187,10 @@ begin
   end
   else if CurPageID = wpReady then
   begin
-    DownloadPage.Clear;
-#ifdef ProvisionBundled
-    { Shipped inside Setup (pins.iss); the helper checks its SHA-256 when it
-      hands it to DomovoiHost, and the host again before it runs it. }
-    ExtractTemporaryFile('provision.sh');
-#else
-    DownloadPage.Add('{#ProvisionUrl}', 'provision.sh', '{#ProvisionSha256}');
-#endif
-    { An update over an install whose DomovoiHost folder holds the pinned
-      image (the helper's job step checks its SHA-256 and copies nothing
-      when it matches; DomovoiHost imports only a distro that isn't
-      registered): no 418 MB download again. }
-    ImagePath := ExpandConstant('{tmp}\{#UbuntuName}');
-    if UpdateMode and FileExists(ExpandConstant('{commonappdata}\Domovoi\host\in\{#UbuntuName}')) then
-    begin
-      ImagePath := ExpandConstant('{commonappdata}\Domovoi\host\in\{#UbuntuName}');
-      Log('Update mode: the Ubuntu image is already in ' + ImagePath + '; not downloading it');
-    end
+    if KitMode then
+      Result := UseKitFiles
     else
-      DownloadPage.Add('{#UbuntuUrl}', '{#UbuntuName}', '{#UbuntuSha256}');
-    if (WslState = 'missing') or (WslState = 'old') then
-      DownloadPage.Add('{#WslMsiUrl}', '{#WslMsiName}', '{#WslMsiSha256}');
-    DownloadPage.Show;
-    try
-      try
-        DownloadPage.Download;
-      except
-        FailureText := 'A download did not work: ' + GetExceptionMessage;
-        if not DownloadPage.AbortedByUser then
-          SuppressibleMsgBox('A download did not work: ' + GetExceptionMessage, mbCriticalError, MB_OK, IDOK);
-        Result := False;
-      end;
-    finally
-      DownloadPage.Hide;
-    end;
+      Result := RunDownloads;
   end;
 end;
 
@@ -1915,6 +2198,18 @@ procedure CancelButtonClick(CurPageID: Integer; var Cancel, Confirm: Boolean);
 begin
   if ForceCancel then
     Confirm := False;
+end;
+
+function NextWords: String;
+begin
+  if KitMode then
+    Result := 'Next, Setup installs from the offline kit at ' + KitRoot + ' (Domovoi ' + KitVersion + '). Nothing is downloaded. Keep the stick plugged in until Setup finishes.'
+  else
+#ifdef ProvisionBundled
+    Result := 'Next, Setup downloads Ubuntu''s WSL image (418 MB), then installs.';
+#else
+    Result := 'Next, Setup downloads Ubuntu''s WSL image (418 MB) and provision.sh, then installs.';
+#endif
 end;
 
 function UpdateReadyMemo(Space, NewLine, MemoUserInfoInfo, MemoDirInfo, MemoTypeInfo, MemoComponentsInfo, MemoGroupInfo, MemoTasksInfo: String): String;
@@ -1935,11 +2230,7 @@ begin
   Result := Result + 'Internet after setup:' + NewLine + Space + InternetAnswer + NewLine + NewLine +
     'Media folder:' + NewLine + Space + RemoveBackslashUnlessRoot(MediaPage.Values[0]) + NewLine + NewLine +
     'Domovoi:' + NewLine + Space + 'commit {#DomovoiCommit}' + NewLine + NewLine +
-#ifdef ProvisionBundled
-    'Next, Setup downloads Ubuntu''s WSL image (418 MB), then installs.';
-#else
-    'Next, Setup downloads Ubuntu''s WSL image (418 MB) and provision.sh, then installs.';
-#endif
+    NextWords;
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;

@@ -91,6 +91,10 @@ namespace Domovoi.Windows
         public string ProvisionSha256;
         public List<string> ProvisionArgs = new List<string>();
         public string WslConfig;
+        // The offline kit's folder on Windows (E:\, or a folder), which the
+        // host mounts in the distro at OfflineKit.MountPoint for each
+        // provision.sh run; null online.
+        public string Kit;
 
         public Dictionary<string, object> ToJson()
         {
@@ -106,6 +110,7 @@ namespace Domovoi.Windows
             d["provision_sha256"] = ProvisionSha256;
             d["provision_args"] = ProvisionArgs.ToArray();
             d["wslconfig"] = WslConfig;
+            if (Kit != null) d["kit"] = Kit;
             return d;
         }
 
@@ -121,6 +126,12 @@ namespace Domovoi.Windows
             j.ProvisionSha256 = Json.Str(d, "provision_sha256");
             j.ProvisionArgs = Json.StrList(d, "provision_args") ?? new List<string>();
             j.WslConfig = Json.Str(d, "wslconfig");
+            j.Kit = Json.Str(d, "kit");
+            if (j.Kit != null)
+            {
+                try { OfflineKit.DrvfsSource(j.Kit); }
+                catch (ArgumentException e) { throw new FormatException("job.json: " + e.Message); }
+            }
             if (string.IsNullOrEmpty(j.Image) || string.IsNullOrEmpty(j.Provision) || string.IsNullOrEmpty(j.WslConfig))
                 throw new FormatException("job.json: missing image, provision or wslconfig");
             if (!Sha256.IsHex(j.ImageSha256) || !Sha256.IsHex(j.ProvisionSha256))

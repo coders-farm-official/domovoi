@@ -251,6 +251,14 @@ namespace Domovoi.Windows
                 && scriptText.IndexOf("\n  --ai-models ", StringComparison.Ordinal) >= 0
                 && scriptText.IndexOf("\n  --no-ai-models ", StringComparison.Ordinal) >= 0;
         }
+
+        // --offline-kit DIR (provision.sh from 1.5.0, docs/OFFLINE_KIT.md):
+        // an older script would refuse it (exit 2), and can't install
+        // without internet anyway.
+        public static bool SupportsOfflineKit(string scriptText)
+        {
+            return scriptText != null && scriptText.IndexOf("\n  --offline-kit DIR ", StringComparison.Ordinal) >= 0;
+        }
     }
 
     // The AI models' download, for the question "Include AI chat and
@@ -475,6 +483,12 @@ namespace Domovoi.Windows
         // The pinned provision.sh has --ai-models / --no-ai-models
         // (ProvisionScript.SupportsAiChoice).
         public bool ScriptHasAiChoice;
+        // Installing from an offline kit: where DomovoiHost mounts it in the
+        // distro (OfflineKit.MountPoint), for provision.sh --offline-kit;
+        // null online.
+        public string OfflineKit;
+        // The pinned provision.sh takes --offline-kit (ProvisionScript).
+        public bool ScriptHasOfflineKit;
     }
 
     public static class ProvisionArgs
@@ -501,6 +515,14 @@ namespace Domovoi.Windows
             a.Add("--track-branch"); a.Add(o.TrackBranch);
             a.Add("--internet"); a.Add(o.Internet);
             a.Add("--tier"); a.Add("auto");
+            if (o.OfflineKit != null)
+            {
+                if (o.OfflineKit != global::Domovoi.Windows.OfflineKit.MountPoint)
+                    throw new ArgumentException("the offline kit is mounted at " + global::Domovoi.Windows.OfflineKit.MountPoint + ", not " + o.OfflineKit);
+                if (!o.ScriptHasOfflineKit)
+                    throw new ArgumentException("this Setup's provision.sh can't install from an offline kit (offline kits start with 1.5.0); use the DomovoiSetup.exe on the stick");
+                a.Add("--offline-kit"); a.Add(o.OfflineKit);
+            }
             // The household's answer, said out loud to a provision.sh that
             // takes it: with neither option, provision.sh keeps the answer
             // an earlier install left in domovoi/.env, so a Yes in a later

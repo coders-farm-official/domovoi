@@ -1501,6 +1501,48 @@ namespace Domovoi.Windows.Host
                 asked = InstalledHead.WithAsked(asked, InstalledHead.RefOf(job.ProvisionArgs));
                 UpdateState("install_commits", asked.ToArray());
             }
+            // From an offline kit: nothing beyond this PC, and the kit
+            // mounted in the distro for each run (a distro restart between
+            // runs takes the mount with it), unmounted when provisioning ends.
+            NetGuard.Offline = job.Kit != null;
+            if (job.Kit != null) log.Write("installing from the offline kit at " + job.Kit + " (mounted read-only at " + OfflineKit.MountPoint + " while provision.sh runs)");
+            try { return ProvisionRuns(job, checkHead, asked); }
+            finally { if (job.Kit != null) UnmountKit(); }
+        }
+
+        // The offline kit, mounted afresh in the distro (OfflineKit.MountScript).
+        bool MountKit(HostJob job)
+        {
+            WslResult r;
+            try
+            {
+                byte[] src = new UTF8Encoding(false).GetBytes(OfflineKit.DrvfsSource(job.Kit) + "\n");
+                r = Wsl.Run(new[] { "-d", Paths.DistroName, "-u", "root", "--cd", "/", "--exec", "/bin/sh", "-c", OfflineKit.MountScript() }, 120000, src, 4096);
+            }
+            catch (ArgumentException e) { Fail(e.Message, "offline-kit"); return false; }
+            catch (System.ComponentModel.Win32Exception e) { Fail("could not mount the offline kit: " + e.Message, "offline-kit"); return false; }
+            if (r.ExitCode == 0 && r.Stdout.Contains("mounted"))
+            {
+                log.Write("mounted the offline kit " + job.Kit + " at " + OfflineKit.MountPoint + " (read-only)");
+                return true;
+            }
+            log.Write("mounting the offline kit failed (exit " + Inv.S(r.ExitCode) + "): " + FirstLine(r.Stderr + r.Stdout));
+            Fail(OfflineKit.MountProblem(r.ExitCode, job.Kit), "offline-kit");
+            return false;
+        }
+
+        void UnmountKit()
+        {
+            try
+            {
+                WslResult r = Wsl.Run(new[] { "-d", Paths.DistroName, "-u", "root", "--cd", "/", "--exec", "/bin/sh", "-c", OfflineKit.UnmountScript() }, 60000, null, 4096);
+                log.Write("unmounted the offline kit (exit " + Inv.S(r.ExitCode) + ")");
+            }
+            catch (System.ComponentModel.Win32Exception e) { log.Write("could not unmount the offline kit: " + e.Message); }
+        }
+
+        bool ProvisionRuns(HostJob job, bool checkHead, List<string> asked)
+        {
             int restarts = 0, lost = 0, busy = 0;
             bool verifying = false;
             // The port check right before the start step (owner fixes
@@ -1510,6 +1552,7 @@ namespace Domovoi.Windows.Host
             while (!Stopping)
             {
                 ProvisionLine final;
+                if (job.Kit != null && !MountKit(job)) return false;
                 int code = RunProvision(job, verifying, gate.Args(ProvisionArgsFor(job)), out final);
                 if (Stopping) return false;
                 if (final != null)
@@ -1685,6 +1728,7 @@ namespace Domovoi.Windows.Host
 
         static bool Healthy(string url)
         {
+            NetGuard.Check(url);
             try
             {
                 var req = (HttpWebRequest)WebRequest.Create(url);

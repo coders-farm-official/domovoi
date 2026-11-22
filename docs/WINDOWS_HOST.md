@@ -43,7 +43,7 @@ house's other PCs with no internet needed.
 | Processor | Firmware virtualization on (Intel VT-x / AMD-V) | AVX2 is checked and only warned about. |
 | Disk | 40 GB free on the system drive | An SSD is strongly recommended; Setup warns on a spinning disk. Wake-word training, if you turn it on, takes about 32 GB more. |
 | GPU | Optional | Ollama uses an NVIDIA GPU that WSL passes through; without one it runs on the CPU. Wake-word training uses it too, through the NVIDIA Container Toolkit Setup adds to the distro. Whisper always runs on the CPU. |
-| Internet | Needed during setup (about 10.5-13.5 GB, most of it the AI models; about 4.5 GB if you leave out AI chat and questions) | Afterwards Domovoi works with or without it, as you answer in Setup. |
+| Internet | Needed during setup (about 10.5-13.5 GB, most of it the AI models; about 4.5 GB if you leave out AI chat and questions), or an offline kit instead ([Installing without internet](#installing-without-internet)) | Afterwards Domovoi works with or without it, as you answer in Setup. |
 | Docker Desktop, Ollama for Windows, your own WSL distros | Fine alongside | Setup checks the ports Domovoi needs, not which programs you run. A program holding one of them gets a pop-up naming it, with Retry and Cancel. |
 | Smart App Control | Must be off | It blocks unsigned programs, and this build is unsigned. See [Unsigned](#unsigned). |
 
@@ -201,6 +201,84 @@ signature, before it runs it.
    fetch it, or that you can upload it in Settings. Domovoi's icon appears
    beside the clock for the account that ran Setup, and starts at every
    account's sign-in from then on ([The tray icon](#the-tray-icon)).
+
+## Installing without internet
+
+A PC with no internet installs from an **offline kit**: a USB stick an
+online Domovoi server made ([OFFLINE_KIT.md](OFFLINE_KIT.md)). Nothing is
+downloaded.
+
+1. Plug in the stick and open it in Explorer.
+2. Double-click `release\DomovoiSetup.exe`. Its first page says
+   **Installing from the offline kit. No internet needed.**
+3. Answer the pages as above. The internet question starts at **No. Keep
+   everything in the house.**; the AI question can only be **No** when
+   the kit has no AI models.
+4. Leave the stick in until the last page. If Windows restarts to turn on
+   Virtual Machine Platform or WSL, Setup starts again after you sign in
+   and uses the same stick.
+
+Setup on a PC with no internet that wasn't started from a stick stops at
+its first check with **Use an offline kit...**: choose the stick's top
+folder, the one with `kit.json` in it. `DomovoiSetup.exe /kit=E:` does the
+same from a prompt. A kit copied to a folder on this PC works too, if
+every account on the PC can read that folder (the service's own account
+opens it); a network folder doesn't.
+
+**What Setup checks before it changes anything** (the helper's
+`kit-check`, `windows/common/OfflineKit.cs`), each step before the next:
+
+1. **Checksums.** `kit.json` and the release's signed manifest against the
+   stick's `SHA256SUMS`. They only catch a bad copy or a dying stick.
+2. **The kit.** A kit format this Setup reads, made for "A Windows or
+   Linux PC".
+3. **The release signature.** `release\DomovoiSetup.manifest.json` must be
+   signed with Domovoi's release key, the one this Setup already pins for
+   the Windows update ([The release key](#the-release-key)), name the
+   release and commit `kit.json` names, and that commit must be the one
+   this Setup installs: the kit and the Setup are the same release.
+4. **The parts.** Ubuntu's WSL image and `linux\provision.sh` (and WSL's
+   installer, when this PC needs it), each with the SHA-256 this Setup's
+   own pins name, and every part `provision.sh` needs from a kit (the
+   source, Ubuntu's and Docker's packages, the Python packages, the images,
+   Ollama, the speech models and voices).
+5. **The disk.** About twice what the kit holds for Domovoi's Linux system,
+   plus 10 GB, and never less than the 40 GB any install needs.
+6. **Every file on the stick**, against `SHA256SUMS` (a few minutes).
+
+Then the install goes as online, with the files off the stick instead of
+downloads: the helper copies Ubuntu's image and `provision.sh` into
+`C:\ProgramData\Domovoi\host\in` only when they match their pins, and
+Setup checks WSL's installer the same way before `msiexec` runs it.
+Before each `provision.sh` run DomovoiHost mounts the stick read-only in
+the distro at `/mnt/domovoi-kit` (`mount -t drvfs E: ... -o ro`; WSL's
+own mounting of Windows drives stays off), runs `provision.sh
+--offline-kit /mnt/domovoi-kit`, and unmounts it when provisioning ends.
+`provision.sh` checks every file it installs against the pins in the
+release's code, as on Linux ([LINUX_HOST.md, Installing without
+internet](LINUX_HOST.md#installing-without-internet)).
+
+**No internet, enforced.** In kit mode the helper skips its internet
+check and is run with `--offline`, DomovoiHost provisions with the same
+guard, and both refuse any connection that isn't to this PC; Setup's
+downloads refuse too. Reaching one is a fault in Setup: it stops and says
+so. Inside the distro `provision.sh --offline-kit` has its own guards.
+
+**Plain refusals.** Each says what to do, before anything changes:
+
+| Setup says | Why |
+|---|---|
+| This kit holds Domovoi 1.5.0, and this Setup installs Domovoi 1.5.1: they don't go together. | Another release's Setup. Run the `DomovoiSetup.exe` on the stick. |
+| This kit was made by a newer Domovoi (kit format 2...) | The same: the Setup on the stick reads it. |
+| This kit was made for a Mac only. | Make the kit again with "A Windows or Linux PC" ticked. |
+| This kit is missing what Setup needs: ... | A part isn't on it. Make the kit again. |
+| This stick has a damaged file: ... Make the stick again. | A checksum doesn't match. |
+| This kit is not a Domovoi release signed with Domovoi's release key ... | Nothing on it is used. Use a kit from a house you trust. |
+| Installing from this kit needs about N GB free on C:\ ... | Free some space, or make a kit without AI chat. |
+| Domovoi couldn't open the offline kit at E:\ (is the stick still plugged in ...) | During the install: plug it back in and **Retry**. |
+
+The kit is never needed again once Setup has finished: later updates come
+from the internet, if the house allows it, or from a newer kit.
 
 ## Every change on the PC, and how uninstall undoes it
 

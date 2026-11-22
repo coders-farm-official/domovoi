@@ -405,9 +405,18 @@ namespace Domovoi.Windows.Helper
             return opts;
         }
 
-        public static void WriteJob(Output o, string image, string imageSha, string provision, string provisionSha, string repoUrl, string commit, string trackBranch, string lanIp)
+        public static void WriteJob(Output o, string image, string imageSha, string provision, string provisionSha, string repoUrl, string commit, string trackBranch, string lanIp, string kit)
         {
             Ledger l = NeedLedger();
+            // From an offline kit: the image and provision.sh are read off
+            // the stick, each copied only when it matches its pin, and the
+            // host mounts the kit in the distro for provision.sh.
+            string kitRoot = null;
+            if (kit != null)
+            {
+                kitRoot = OfflineKit.NormalizeRoot(kit);
+                OfflineKit.DrvfsSource(kitRoot);
+            }
             if (!Sha256.IsHex(imageSha) || !Sha256.IsHex(provisionSha)) throw new ArgumentException("pins must be SHA-256 hex");
             string imageDest = Path.Combine(Paths.HostIn, ImageName);
             string provDest = Path.Combine(Paths.HostIn, ProvisionName);
@@ -415,7 +424,13 @@ namespace Domovoi.Windows.Helper
             CopyPinned(provision, provDest, provisionSha, o);
 
             // The copy just checked against its pin: what DomovoiHost runs.
-            ProvisionOptions opts = JobOptions(l, repoUrl, commit, trackBranch, File.ReadAllText(provDest, Encoding.UTF8));
+            string scriptText = File.ReadAllText(provDest, Encoding.UTF8);
+            ProvisionOptions opts = JobOptions(l, repoUrl, commit, trackBranch, scriptText);
+            if (kitRoot != null)
+            {
+                opts.OfflineKit = OfflineKit.MountPoint;
+                opts.ScriptHasOfflineKit = ProvisionScript.SupportsOfflineKit(scriptText);
+            }
             if (lanIp == "auto")
             {
                 Preflight.LanInfo lan = Preflight.Lan();
@@ -434,6 +449,7 @@ namespace Domovoi.Windows.Helper
             job.ProvisionSha256 = provisionSha;
             job.ProvisionArgs = ProvisionArgs.Build(opts);
             job.WslConfig = WslConfig.Render(w);
+            job.Kit = kitRoot;
 
             // Same inputs, same generation: the host then skips work it did.
             HostJob old = null;
@@ -442,13 +458,14 @@ namespace Domovoi.Windows.Helper
             bool same = old != null && old.ImageSha256 == job.ImageSha256 && old.ProvisionSha256 == job.ProvisionSha256
                 && old.Image == job.Image && old.Provision == job.Provision
                 && string.Join("\n", old.ProvisionArgs.ToArray()) == string.Join("\n", job.ProvisionArgs.ToArray())
-                && old.WslConfig == job.WslConfig;
+                && old.WslConfig == job.WslConfig && old.Kit == job.Kit;
             if (!same) l.JobGeneration++;
             if (l.JobGeneration == 0) l.JobGeneration = 1;
             job.Generation = l.JobGeneration;
             job.Attempt = l.JobAttempt;
             Json.WriteFile(Paths.Job, job.ToJson());
             SaveLedger(l);
+            if (kitRoot != null) o.Say("installing from the offline kit at " + kitRoot + "; DomovoiHost mounts it in the distro at " + OfflineKit.MountPoint);
             o.Say("wrote the host's job (generation " + Inv.S(job.Generation) + "): provision.sh " + string.Join(" ", job.ProvisionArgs.ToArray()));
             o.Say("the account's .wslconfig will cap its WSL VM at " + Inv.S(w.MemoryGb) + " GB, mirrored networking");
         }
