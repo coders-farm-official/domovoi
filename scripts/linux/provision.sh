@@ -3262,7 +3262,9 @@ docker_missing() {
     printf '%s\n' "$have" | grep -qxF -- "$p" || printf '%s=%s\n' "$p" "$(docker_pin "${p//[-.]/_}")"
   done
 }
-in_group() { id -nG "$SVC_USER" 2>/dev/null | tr ' ' '\n' | grep -qx "$1"; }
+# The groups are read whole first: under pipefail, grep -q quitting at the
+# first match would fail the writer (SIGPIPE) once there is more than one.
+in_group() { local g; g=$(id -nG "$SVC_USER" 2>/dev/null) || return 1; [[ " $g " == *" $1 "* ]]; }
 
 # This machine's Debian architecture (amd64, arm64): dpkg's own answer, or,
 # should dpkg not give one, the kernel's name for it translated.

@@ -1395,6 +1395,9 @@ gpu_bare() { printf 'GPU 0: %s (UUID: GPU-5e1a0c1e-1111-4111-9111-111111111111)\
 NVIDIA_PKGS="nvidia-container-toolkit=1.20.1-1 nvidia-container-toolkit-base=1.20.1-1 libnvidia-container-tools=1.20.1-1 libnvidia-container1=1.20.1-1"
 
 called() { grep -qF -- "$1" "$STATE/calls.log"; }
+# A pin of the fixture origin's manifest (its tier digests are the offline
+# kit fixture's, not the real ones).
+fixture_pin() { sed -n "s/^$1=//p" "$ORIGIN/scripts/linux/provision-manifest.conf"; }
 not_called() { ! grep -qF -- "$1" "$STATE/calls.log"; }
 # before A B: the first call matching A precedes the first matching B.
 before() {
@@ -2314,7 +2317,7 @@ case_model_digest_mismatch_stops() {
   run_prov "${wsl_args[@]}"
   check "exit 1" eq "$RC" 1
   check "models failed" eq "$(state_of models)" fail
-  check "says the digest differs" said "the manifest pins a80c4f17"
+  check "says the digest differs" said "the manifest pins $(fixture_pin tier_standard_qa_digest | cut -c1-8)"
   check "no marker" no_marker models
   end_case
 }
@@ -2338,7 +2341,7 @@ case_vision_digest_mismatch_installs_without_it() {
   check "then deleted" called "api/delete -d {\"model\":\"$vision\"}"
   check "not left in Ollama" eq "$(grep -c "^$vision " "$STATE/ollama-models")" 0
   check "the voice models kept" eq "$(grep -c '^llama3.2:3b-instruct-q4_K_M ' "$STATE/ollama-models")" 1
-  check "warned, with the digests" said "WARNING: $vision has digest 111111111111 after the pull, the manifest pins afc393e3572c"
+  check "warned, with the digests" said "WARNING: $vision has digest 111111111111 after the pull, the manifest pins $(fixture_pin tier_standard_vision_digest | cut -c1-12)"
   check "says chat can't read pictures" said "chat can't read pictures"
   check "says where to add it" said "Settings, Models"
   check "one warning more" eq "$(final_field warnings)" 3
@@ -2367,7 +2370,7 @@ case_router_digest_mismatch_stops() {
   run_prov "${wsl_args[@]}"
   check "exit 1" eq "$RC" 1
   check "models failed" eq "$(state_of models)" fail
-  check "says the digest differs" said "the manifest pins 500a1f067a9f"
+  check "says the digest differs" said "the manifest pins $(fixture_pin tier_standard_tool_digest | cut -c1-12)"
   check "the router is not removed" not_called "api/delete"
   check "no marker" no_marker models
   end_case
