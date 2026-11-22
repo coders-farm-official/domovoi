@@ -20,9 +20,11 @@ import PackageDescription
 // beside them; only its .github, .pipelines and .config folders left out) live
 // here unchanged. Its `onnxruntime` product is
 // the Objective-C API (`import OnnxRuntimeBindings`) over a binary target, the
-// CocoaPods "onnxruntime-c" archive, which SwiftPM fetches from
-// download.onnxruntime.ai and checks against the SHA-256 in that package's
-// manifest at this tag. The xcframework inside has an `ios-arm64` slice, an
+// CocoaPods "onnxruntime-c" archive, which SwiftPM fetches from Domovoi's
+// own copy (coders-farm-official/domovoi-models, release
+// onnxruntime-ios-1.24.2: download.onnxruntime.ai stopped serving it on
+// 2026-11-20) and checks against the SHA-256 in that package's manifest at
+// this tag, which is upstream's. The xcframework inside has an `ios-arm64` slice, an
 // `ios-arm64_x86_64-simulator` slice and a `macos-arm64_x86_64` slice, so the
 // same library runs here under `swift test` and in the app (read from the
 // archive on 2026-11-14). MIT; the licence card's row and the notices it
