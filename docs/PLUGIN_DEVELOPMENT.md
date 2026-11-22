@@ -490,6 +490,19 @@ system = [
   the lock's version is refused there until that environment matches the
   lock.
 
+  To avoid the refusal, compile your lock against the core release's pins,
+  so every package the core also has comes out at the core's version:
+
+  ```bash
+  pip-compile --generate-hashes -c requirements-linux-py314.lock \
+      --output-file=requirements.lock requirements.in
+  ```
+
+  (`requirements-linux-py314.lock` is in the Domovoi release you target.) The
+  dashboard names each clashing package when it refuses an install. Before a
+  release, `python scripts/release/check_plugin_locks.py <your zip>` run in
+  the Domovoi repo checks your lock the same way.
+
   An **upgrade** may move the plugin's own dists: the ones its installed
   version brought in or pins itself, less any the core requires or another
   installed plugin declares. So a new version that bumps its own tool's pin

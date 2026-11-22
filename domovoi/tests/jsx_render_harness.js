@@ -20,6 +20,7 @@
 //              the stubs below for that scenario
 //   theme    — 'dark' | 'light': what <html data-theme> reads (a minimal
 //              `document` with just that attribute; none without it)
+//   rawPreload — plain-JS files run unchanged before the page file (data.js)
 //   setup    — code run after `file` is evaluated, before the component renders
 //              (seed a page file's own cache, e.g. PLUGIN_ICON_LOOK.set(...))
 // Output: { <scenario name>: [ { type, props, text, on }, ... ] }  (on: function-prop names)
@@ -47,7 +48,7 @@ const STUBS = ['Stat', 'Empty', 'Card', 'Icon', 'Button', 'IconButton', 'Pill', 
                'PageHeader', 'StatusDot', 'Sidebar', 'Topbar', 'LoginModal'];
 
 const render = ({ file, component, props = {}, fnProps = [], apiObject = null, apiList = null, preload = [],
-                  theme = null, setup = null }) => {
+                  rawPreload = [], theme = null, setup = null }) => {
   const React = {
     createElement: (type, p, ...children) => ({ type, props: { ...(p || {}), children: children.flat(Infinity) } }),
     Fragment: 'Fragment',
@@ -83,6 +84,19 @@ const render = ({ file, component, props = {}, fnProps = [], apiObject = null, a
     sandbox.document = { documentElement: { getAttribute: (n) => (n === 'data-theme' ? theme : null) } };
   }
   vm.createContext(sandbox);
+  // rawPreload: plain-JS files (data.js) run as written, with the browser
+  // globals they read at load time stubbed out.
+  if (rawPreload.length) {
+    Object.assign(sandbox, {
+      fetch: async () => { throw new Error('no network here'); },
+      Auth: { headers: () => ({}) },
+      localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+      navigator: { userAgent: 'harness' },
+    });
+  }
+  for (const pre of rawPreload) {
+    vm.runInContext(fs.readFileSync(path.join(root, pre), 'utf8'), sandbox, { filename: pre });
+  }
   for (const pre of preload) vm.runInContext(compile(pre), sandbox, { filename: pre });
   vm.runInContext(compile(file) + `\n;window.__component = ${component};`, sandbox, { filename: file });
   if (setup) vm.runInContext(setup, sandbox, { filename: 'setup' });
