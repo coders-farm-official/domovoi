@@ -1258,7 +1258,12 @@ async def _answer(
     # resume, cover letter or letter, a revision of the thread's draft
     # ("shorter"), or "print it". Ahead of the documents' find-then-answer.
     dturn: Any = None
-    if not has_images and replace_id is None and not documents:
+    if replace_id is None and revise_draft is None:
+        # "print this" with an attachment: the print card, no model asked.
+        dturn = await _drafts.attachment_print_turn(thread_id, question, current=bool(has_images or documents))
+        if dturn is not None:
+            model_role = "draft"
+    if dturn is None and not has_images and replace_id is None and not documents:
         dturn = await _drafts.plan_turn(thread_id, question, revise_draft=revise_draft, device_id=device_id)
         if dturn is not None:
             model_role = "draft"
