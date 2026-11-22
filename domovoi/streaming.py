@@ -546,7 +546,7 @@ from domovoi.router import (
     is_request_for_a_story,
     route,
 )
-from domovoi import quiet_hours, room_battery, satellite_abilities, satellite_health, satellite_upgrades
+from domovoi import announce_chime, quiet_hours, room_battery, satellite_abilities, satellite_health, satellite_upgrades
 from domovoi.satellite_abilities import Abilities, NotDeclared
 from domovoi.satellite_media.overlay import APPROVAL_CODE_DIGITS
 from domovoi.timer_delivery import AnnounceInterrupted, AnnounceNotStarted
@@ -7079,6 +7079,9 @@ class StreamSession:
                     f"room {self.room_id} mid-response, announce skipped",
                     reason="responding",
                 )
+
+            if getattr(settings, "announce_chime_enabled", True):
+                first_pcm = announce_chime.chime_pcm(sr) + first_pcm
 
             task = asyncio.create_task(
                 self._send_announcement(

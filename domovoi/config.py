@@ -983,6 +983,9 @@ class Settings(BaseSettings):
     # not a clock time reads as the default, with a log line. Live: read at
     # each announcement.
     quiet_hours_enabled: bool = True
+    # A short chime before an announcement or a broadcast speaks in a room
+    # (domovoi/announce_chime.py), so people catch the first words.
+    announce_chime_enabled: bool = True
     quiet_hours_start: str = "22:00"
     quiet_hours_end: str = "07:00"
 

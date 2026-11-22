@@ -443,6 +443,14 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "bool", tier="hot",
     ),
     FieldSpec(
+        "announce_chime_enabled", "Chime before announcements", "Voice & speech",
+        "Play a short two-note chime before an announcement or a broadcast "
+        "speaks in a room (intercom, Broadcast, timers, plugin "
+        "announcements), so people catch the first words. Normal answers "
+        "never get it. Applies to the next announcement.",
+        "bool", tier="hot",
+    ),
+    FieldSpec(
         "quiet_hours_start", "Quiet hours start", "Voice & speech",
         "When quiet hours begin, on the server's clock (24-hour, e.g. 22:00). "
         "Applies immediately.",

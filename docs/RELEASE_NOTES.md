@@ -31,6 +31,16 @@ that message is printed, otherwise the newer of the two. The chat model is
 also told that printing is Domovoi's job. The phone apps show this card
 once they update.
 
+## 1.4.1 (unreleased) — A chime before announcements and broadcasts
+
+A room now plays a short two-note chime before an announcement or a
+broadcast speaks, so people catch the first words. That covers "tell the
+kitchen dinner is ready", Broadcast, timers and reminders, and plugin
+announcements; normal answers never get it. It plays on every kind of room
+(Raspberry Pi, spare PC, phone in room mode) with no update on the room.
+To turn it off, untick "Chime before announcements" in Settings, Voice &
+speech (`announce_chime_enabled`).
+
 ## 1.4.1 (unreleased) — A refused plugin install says which package clashes
 
 - **What changed.** When a plugin is refused because its requirements would
