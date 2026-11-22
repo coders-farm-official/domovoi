@@ -983,6 +983,15 @@ def satellite_music_silent(app: Any, room_id: str) -> bool:
     return room_id in _silent_music_rooms(app)
 
 
+def _sent_music_urls(app: Any) -> dict[str, str]:
+    """Per room, the stream URL its last music_start carried."""
+    sent = getattr(app.state, "music_sent_url", None)
+    if sent is None:
+        sent = {}
+        app.state.music_sent_url = sent
+    return sent
+
+
 def note_satellite_music_silent(app: Any, room_id: str, silent: bool) -> None:
     if app is None:
         return
@@ -1131,6 +1140,7 @@ async def send_music_start(
         return False
     url = lan_address.stream_url_for_peer(url, _dialed_host(session))
     await session._safe_send_text({"type": "music_start", "stream_url": url})
+    _sent_music_urls(app)[room_id] = url
     await schedule_music_resume_fallback(app, room_id, url)
     return True
 
@@ -1182,9 +1192,23 @@ async def consume_music_failed(app: Any, room_id: str, ctrl: dict[str, Any]) -> 
     pending: dict[str, dict[str, Any]] = app.state.pending_music_start
     entry = pending.get(room_id)
     resumable: dict[str, str] = app.state.resumable_music
+    if entry is not None and entry.get("url") != url:
+        return
+    if entry is None and (
+        room_id not in resumable
+        # The satellite names the URL it was sent: `send_music_start` swaps
+        # in the host it dialed, so `resumable_music`'s may differ.
+        or url not in (resumable[room_id], _sent_music_urls(app).get(room_id))
+    ):
+        return
+    from domovoi import music_groups
+
+    if music_groups.share_of(room_id) is not None:
+        # One room of a shared queue (a group) failing pauses nobody: the
+        # player is the host's and the other rooms are listening to it.
+        log.info("music: room=%s is in a shared queue; its player plays on", room_id)
+        return
     if entry is not None:
-        if entry.get("url") != url:
-            return
         # This start's own failure: its fallback must not resume MPD.
         pending.pop(room_id, None)
         task = entry.get("task")
@@ -1196,16 +1220,6 @@ async def consume_music_failed(app: Any, room_id: str, ctrl: dict[str, Any]) -> 
         )
         if room_id not in resumable:
             return
-    else:
-        if resumable.get(room_id) != url:
-            return
-    from domovoi import music_groups
-
-    if music_groups.share_of(room_id) is not None:
-        # One room of a shared queue (a group) failing pauses nobody: the
-        # player is the host's and the other rooms are listening to it.
-        log.info("music: room=%s is in a shared queue; its player plays on", room_id)
-        return
     note_satellite_music_silent(app, room_id, True)
     from domovoi.clients.mpd import get_mpd_client_for
 
@@ -1839,8 +1853,11 @@ class StreamSession:
         # listening, answering or asking (`music_block`). Any music frame
         # that goes out to the room supersedes it (`_safe_send_text`).
         self._music_hold_task: asyncio.Task[None] | None = None
-        # The stream that held start is for (None with no hold).
+        # The stream that held start is for, and when it gives up (None
+        # with no hold). Kept after the hold's task stepped aside for a
+        # newer socket, so the close can carry it (`_carry_held_music`).
         self._music_hold_url: str | None = None
+        self._music_hold_until = 0.0
         # `ready` has gone out: frames other than it may follow.
         self._ready_sent = False
         # ── Two-way drop-in (Feature 4) ──────────────────────────────
@@ -5656,8 +5673,13 @@ class StreamSession:
         # suppress/restore handled by _begin_dropin / _end_dropin. Letting
         # the auto-resume branch fire here would respawn mpg123 and collide
         # with the call audio on the single ALSA card.
+        # A stop is a stop even when talked over ("Stopped." cut off by a
+        # barge-in): left resumable, the barge-in turn's end restarted it.
+        stop_cut_off = (
+            interrupted and response is not None and response.music_action == "stop"
+        )
         if (
-            not interrupted
+            (not interrupted or stop_cut_off)
             and response is not None
             and self.dropin_peer is None
             and not getattr(response, "dropin_action", None)
@@ -6860,7 +6882,9 @@ class StreamSession:
         self.hold_music_start(url, reason)
         return False
 
-    def hold_music_start(self, url: str, reason: str = "busy") -> None:
+    def hold_music_start(
+        self, url: str, reason: str = "busy", *, until: float | None = None,
+    ) -> None:
         """Send ``url``'s music_start once this room is free (`music_block`)
         instead of now; replaces any start already held here.
 
@@ -6873,11 +6897,14 @@ class StreamSession:
         gone or changed (a stop), the socket is replaced or closed, or after
         `MUSIC_HOLD_MAX_SEC`."""
         self._drop_music_hold()
+        if until is None:
+            until = time.monotonic() + MUSIC_HOLD_MAX_SEC
         task = asyncio.create_task(
-            self._send_held_music(url, reason), name=f"music-hold-{self.room_id}",
+            self._send_held_music(url, reason, until), name=f"music-hold-{self.room_id}",
         )
         self._music_hold_task = task
         self._music_hold_url = url
+        self._music_hold_until = until
         _MUSIC_HOLDS.add(task)
         task.add_done_callback(_MUSIC_HOLDS.discard)
 
@@ -6903,8 +6930,10 @@ class StreamSession:
         for as long as a hold may last. Dropped with the socket, as it used
         to be, a reconnect between a question and its answer left the room
         silent with MPD playing (2026-11-22)."""
-        task, url = self._music_hold_task, self._music_hold_url
-        if task is None or task.done() or not url:
+        url, until = self._music_hold_url, self._music_hold_until
+        # On the url, not the task: in the usual order the reconnect has
+        # already replaced this session, and the hold's task stepped aside.
+        if not url or time.monotonic() >= until:
             return
         app = self.ws.app
         if getattr(app.state, "resumable_music", {}).get(self.room_id) != url:
@@ -6913,7 +6942,7 @@ class StreamSession:
         if carried is None:
             carried = {}
             app.state.music_held_for_reconnect = carried
-        carried[self.room_id] = (url, time.monotonic() + MUSIC_HOLD_MAX_SEC)
+        carried[self.room_id] = (url, until)
         newer = app.state.active_sessions.get(self.room_id)
         if newer is not None and newer is not self and getattr(newer, "_ready_sent", False):
             # The reconnect got here first and is already up.
@@ -6938,9 +6967,9 @@ class StreamSession:
             return
         log.info("music: room=%s reconnected; sending the music_start it was "
                  "waiting for", self.room_id)
-        self.hold_music_start(url, "reconnect")
+        self.hold_music_start(url, "reconnect", until=until)
 
-    async def _send_held_music(self, url: str, reason: str) -> None:
+    async def _send_held_music(self, url: str, reason: str, give_up: float) -> None:
         """The held start's task: wait until the room is free, then send it
         through `send_music_start`, which asks again last thing before the
         frame; busy again by then, it holds on."""
@@ -6958,7 +6987,6 @@ class StreamSession:
             "music: room=%s is busy (%s); its music_start waits until it is free",
             self.room_id, reason,
         )
-        give_up = time.monotonic() + MUSIC_HOLD_MAX_SEC
         bound = settings.music_stream_ready_timeout_sec + _ANNOUNCE_MUSIC_RESTART_MARGIN_SEC
         try:
             while True:

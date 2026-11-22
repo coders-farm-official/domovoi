@@ -235,6 +235,12 @@ class _Prefetch:
                 chunk = self._response.read(CHUNK)
                 if not chunk:
                     break
+                if not self.received:
+                    # Audio arrived: what the engine waits for before
+                    # music_ready, in the shape of the line mpg123 prints
+                    # (client.py `_MUSIC_AUDIO_RE`). Here, not at the first
+                    # decoded frame: that waits out `--buffer-sec` first.
+                    print("MPEG stream data arriving", file=sys.stderr, flush=True)
                 with self._cond:
                     while self._size >= PREFETCH_BYTES:
                         self._cond.wait(0.5)
@@ -314,14 +320,7 @@ def play_stream(url: str, *, device: Any = None, buffer_sec: float = 0.0) -> Non
         raise PlayerError(f"cannot decode the stream: {e}") from e
     stream = _open_output(device, STREAM_RATE, STREAM_CHANNELS, "music")
     try:
-        first = True
         for samples in frames:
-            if first:
-                # What the engine waits for before music_ready, in the shape
-                # of the line mpg123 prints after the first decoded frame
-                # (client.py `_MUSIC_AUDIO_RE`).
-                print("MPEG stream decoding", file=sys.stderr, flush=True)
-                first = False
             stream.write(samples.tobytes())
     finally:
         _finish(stream)

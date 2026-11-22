@@ -773,6 +773,38 @@ def test_a_music_ready_after_a_crossed_failure_resumes_mpd(monkeypatch, playing_
             streaming.note_satellite_music_silent(app, ROOM, False)
 
 
+async def test_a_late_failure_names_the_address_the_satellite_was_sent(playing_room) -> None:
+    """After the fallback popped the handshake, the report names the URL the
+    satellite got — its host swapped for the one it dialed — not the one in
+    `resumable_music`. It is still this room's music."""
+    lan, sent = "http://192.168.1.20:8051", "http://domovoi.local:8051"
+    fake_app = FakeApp()
+    fake_app.state.resumable_music = {ROOM: lan}
+    fake_app.state.music_sent_url = {ROOM: sent}
+    await streaming.consume_music_failed(
+        fake_app, ROOM, {"type": "music_failed", "stream_url": sent, "reason": "x"},
+    )
+    assert playing_room._state == "pause"
+    assert streaming.satellite_music_silent(fake_app, ROOM)
+
+
+async def test_a_grouped_rooms_failure_leaves_its_handshake_alone(
+    monkeypatch, playing_room,
+) -> None:
+    from domovoi import music_groups
+
+    url = "http://test.local:8051"
+    monkeypatch.setattr(music_groups, "share_of", lambda room: object())
+    fake_app = FakeApp()
+    fake_app.state.resumable_music = {ROOM: url}
+    fake_app.state.pending_music_start[ROOM] = {"url": url, "task": None}
+    await streaming.consume_music_failed(
+        fake_app, ROOM, {"type": "music_failed", "stream_url": url, "reason": "x"},
+    )
+    assert ROOM in fake_app.state.pending_music_start      # its fallback still runs
+    assert playing_room._state == "play"
+
+
 async def test_play_resends_music_start_when_the_satellite_stream_failed(
     monkeypatch, playing_room,
 ) -> None:

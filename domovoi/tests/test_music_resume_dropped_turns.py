@@ -225,21 +225,57 @@ async def test_a_dropped_answer_to_a_question_releases_the_held_start(room, hear
 async def test_a_start_held_when_the_socket_closed_is_sent_after_the_reconnect(room) -> None:
     """A Wi-Fi blip between the question and its answer: the closing
     socket used to drop the held start, and nothing sent music_start on
-    reconnect. The next session for the room sends it."""
+    reconnect. In the usual order — the new socket takes the room over, the
+    old hold steps aside, then the old socket's close runs — the next
+    session sends it, with the hold's original give-up time."""
     from domovoi.tests.test_music_under_capture import ROOM, _Socket
 
     room.reply = OFFER
     await room.turn()
-    assert room.sess._music_hold_task is not None
-    room.app.state.active_sessions.pop(ROOM)
-    room.sess._carry_held_music()                       # the closing socket
-    room.sess._drop_music_hold()
-
+    hold = room.sess._music_hold_task
+    until = room.sess._music_hold_until
     ws2 = _Socket(room.app)
     sess2 = streaming.StreamSession(ws2, ROOM)  # type: ignore[arg-type]
-    room.app.state.active_sessions[ROOM] = sess2
+    room.app.state.active_sessions[ROOM] = sess2       # the reconnect's hello
+    room.sess._followup_hold_until = 0.0
+    await hold                                          # stepped aside
+    room.sess._carry_held_music()                       # the old socket's close
+    room.sess._drop_music_hold()
+    sess2._ready_sent = True
     sess2._take_carried_music()                         # after its `ready`
+    assert sess2._music_hold_until == until
     await _until(lambda: any(k == "text" and f["type"] == "music_start"
                              for _t, k, f in ws2.sent))
     assert [f for _t, k, f in ws2.sent if k == "text"] == [START]
+    assert room.starts() == []
+
+
+async def test_a_stop_cut_off_by_a_barge_in_stays_stopped(room, heard, monkeypatch) -> None:
+    """"Stopped." talked over by a barge-in that is then dropped: the stop
+    still drops the room's music, so the dropped turn has nothing to bring
+    back."""
+    import asyncio
+
+    from domovoi.tests.test_music_under_capture import ROOM
+
+    class _SlowTTS:
+        async def synthesize(self, text, engine=None, voice=None):
+            await asyncio.sleep(5)
+
+    monkeypatch.setattr(streaming, "get_tts_client", lambda: _SlowTTS())
+    room.reply = Response(text="Stopped.", matched_handler="music", matched_path="fast",
+                          online=True, music_action="stop")
+    heard.text = "stop the music"
+    await room.start_capture("wake_word", 1)
+    await room.frames(20)
+    await room.end_capture(1)
+    stopped = room.sess._response_task
+    await _until(lambda: "transcript" in room.kinds())
+    await _settle(0.1)
+    heard.text = ""
+    await room.turn(trigger="barge_in", utt=2)          # cancels "Stopped."
+    await asyncio.gather(stopped, return_exceptions=True)
+    await _settle(0.1)
+    assert ROOM not in room.app.state.resumable_music
+    assert "music_stop" in room.kinds()
     assert room.starts() == []
