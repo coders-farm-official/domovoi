@@ -36,8 +36,9 @@ On a Domovoi server that is on the stable channel and runs a release:
    image and write it with Imager or USBImager). Everything on the stick
    is replaced. Then **delete the kit** on the server. It goes by itself
    after 3 days, and when the next kit starts. A kit with household items
-   ticked downloads only from the card, signed in as admin: save the
-   image, then choose it in Imager under **Use custom**.
+   ticked downloads only from the card, signed in as admin (its link
+   works once, for 5 minutes): save the image, then choose it in Imager
+   under **Use custom**.
 
 The card's reasons when it can't make a kit:
 

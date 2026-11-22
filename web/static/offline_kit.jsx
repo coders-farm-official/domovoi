@@ -64,18 +64,17 @@ const KitProgress = ({ job }) => {
 };
 
 /* A kit carrying household items downloads only with the admin's Bearer
- * (the core refuses a plain link), so the card fetches it through the
- * dashboard's own route and saves it. */
+ * (the core refuses a plain link), so the card asks for a single-use
+ * download ticket (5 minutes) and then lets the browser download the
+ * image through it, straight to disk: never into the page's memory. */
 const kitDownloadSignedIn = async (build) => {
-  const r = await apiFetchRaw(`/api/offline-kit/${build.id}/${build.image_name}`);
-  const url = URL.createObjectURL(await r.blob());
+  const t = await apiFetch(`/api/offline-kit/${build.id}/ticket`, { method: 'POST' });
   const a = document.createElement('a');
-  a.href = url;
+  a.href = t.url;
   a.download = build.image_name;
   document.body.appendChild(a);
   a.click();
   a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 60000);
 };
 
 const KitReady = ({ build, onDelete }) => {
@@ -104,7 +103,7 @@ const KitReady = ({ build, onDelete }) => {
       {locked ? (
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <Button variant="primary" icon="download" onClick={download} disabled={fetching}>
-            {fetching ? 'downloading…' : 'download the image'}
+            {fetching ? 'starting the download…' : 'download the image'}
           </Button>
         </div>
       ) : (

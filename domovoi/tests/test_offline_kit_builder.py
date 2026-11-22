@@ -929,6 +929,8 @@ def test_while_it_runs_one_bar_and_a_stop(rendered):
 def test_a_kit_with_household_items_downloads_only_signed_in(rendered):
     els = rendered["household"]
     t = _text(els)
+    src = (REPO / "web/static/offline_kit.jsx").read_text(encoding="utf-8")
+    assert "/ticket`, { method: 'POST' }" in src and "createObjectURL" not in src
     assert "downloads only here, signed in as admin" in t and "Use custom" in t
     assert not any(str(e["props"].get("href", "")).startswith("rpi-imager://") for e in els)
     assert "download the image" in t
@@ -966,7 +968,7 @@ def test_a_household_kit_needs_the_admin_bearer(kit_home, monkeypatch):
     name = jobs.image_name("1.5.0")
 
     def get(bid, n):
-        return asyncio.run(core_main.offline_kit_file(bid, n, None))
+        return asyncio.run(core_main.offline_kit_file(bid, n, None, ticket=None))
 
     assert get("P" * 32, name).status_code == 200
     for t in ("no-auth", "cookie-only", "invalid"):
@@ -977,6 +979,116 @@ def test_a_household_kit_needs_the_admin_bearer(kit_home, monkeypatch):
             assert e.value.status_code == 401 and "admin sign-in" in e.value.detail
     tier["value"] = "ok"
     assert get("H" * 32, name).status_code == 200
+
+
+def _two_kits(root: Path) -> None:
+    for bid, household in (("H" * 32, ["my-model:latest"]), ("G" * 32, ["other:latest"])):
+        (root / bid).mkdir(parents=True)
+        (root / bid / jobs.BUILD_JSON).write_text(json.dumps({
+            "format": 1, "id": bid, "made": time.time(), "size": 5, "sha256": "0" * 64,
+            "domovoi_version": "1.5.0", "tag": "v1.5.0", "targets": ["pc-x86_64"], "includes": [],
+            "household": household}))
+        (root / bid / jobs.image_name("1.5.0")).write_bytes(b"image")
+
+
+def test_a_download_ticket_works_once_for_its_own_kit_until_it_expires(kit_home, monkeypatch):
+    import asyncio
+
+    from fastapi import HTTPException
+    from fastapi.responses import FileResponse
+
+    import domovoi.main as core_main
+    from domovoi.container_guard import freeze as container_freeze
+
+    _two_kits(jobs.builds_root())
+
+    async def unfrozen(*a, **kw):
+        return None
+
+    async def no_admin(request, *a, **kw):
+        return "no-auth"
+
+    monkeypatch.setattr(container_freeze, "require_unfrozen", unfrozen)
+    monkeypatch.setattr(core_main, "check_admin_request", no_admin)
+    name = jobs.image_name("1.5.0")
+
+    def get(bid, ticket, n=name):
+        return asyncio.run(core_main.offline_kit_file(bid, n, None, ticket=ticket))
+
+    def refused(bid, ticket, n=name):
+        with pytest.raises(HTTPException) as e:
+            get(bid, ticket, n)
+        return e.value.status_code == 401
+
+    minted = asyncio.run(core_main.admin_offline_kit_ticket("H" * 32))
+    ticket = minted["ticket"]
+    assert minted["image_name"] == name and minted["expires"] > time.time()
+    assert ticket not in json.dumps(list(jobs._tickets)) and len(jobs._tickets) == 1  # kept as its hash
+    assert refused("G" * 32, ticket)                    # another kit: refused, and not used up
+    assert refused("H" * 32, ticket, jobs.OS_LIST)      # only the image
+    r = get("H" * 32, ticket)
+    assert isinstance(r, FileResponse) and r.status_code == 200   # streamed from the file
+    assert refused("H" * 32, ticket)                    # used once
+    assert refused("H" * 32, "made-up")
+
+    old, _ = jobs.mint_ticket("H" * 32, now=time.time() - jobs.TICKET_SEC - 1)
+    assert refused("H" * 32, old)                       # expired
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(core_main.admin_offline_kit_ticket("Z" * 32))
+    assert e.value.status_code == 404
+
+
+def test_minting_a_ticket_needs_the_admin_bearer():
+    from domovoi import admin_auth
+    from domovoi.main import app as core_app
+    from web.backend.api import offline_kit as web_kit
+
+    def gates(routes, path):
+        route = next(r for r in routes if getattr(r, "path", "") == path and "POST" in r.methods)
+        return {d.call for d in route.dependant.dependencies}
+
+    assert admin_auth.require_admin_mutation in gates(core_app.routes, "/v1/admin/offline-kit/builds/{build_id}/ticket")
+    assert admin_auth.require_admin_mutation in gates(web_kit.router.routes, "/api/offline-kit/{build_id}/ticket")
+
+
+def test_the_dashboard_streams_the_image_with_the_ticket(monkeypatch):
+    import asyncio
+
+    import httpx
+    from starlette.requests import Request
+    from starlette.responses import StreamingResponse
+
+    from web.backend.api import offline_kit as web_kit
+
+    seen = {}
+    chunks = [b"a" * 1000, b"b" * 1000, b"c" * 10]
+
+    class _Body(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            for c in chunks:
+                yield c
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen["url"] = str(req.url)
+        return httpx.Response(200, headers={"content-length": "2010"}, stream=_Body())
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(web_kit.httpx, "AsyncClient",
+                        lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+    req = Request({"type": "http", "method": "GET", "path": "/", "headers": [], "query_string": b"",
+                   "client": ("192.168.1.30", 5000)})
+    name = "domovoi-offline-kit-1.5.0.img"
+
+    async def run():
+        r = await web_kit.offline_kit_download("H" * 32, name, req, ticket="t0k")
+        assert isinstance(r, StreamingResponse)
+        got = [c async for c in r.body_iterator]
+        return r, got
+
+    r, got = asyncio.run(run())
+    assert got == chunks and r.headers["content-length"] == "2010"
+    assert 'filename="domovoi-offline-kit-1.5.0.img"' in r.headers["content-disposition"]
+    assert seen["url"].endswith(f"/v1/offline-kit/{'H' * 32}/{name}?ticket=t0k")
 
 
 def test_when_done_imager_download_and_delete(rendered):

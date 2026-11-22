@@ -9,7 +9,10 @@ a Raspberry Pi Imager list and manifest at ``/v1/offline-kit/<id>/…``
 without a login (Imager and a browser download can't send one; a plain
 kit is a public release and public models). A kit carrying household
 items (the house's own models, trained wake words) is served only to the
-admin's Bearer (:func:`needs_admin`), through the dashboard. Added here:
+admin's Bearer, or to a download ticket the admin's Bearer mints
+(:func:`needs_admin`, :func:`mint_ticket`): a random, single-use ticket
+for one kit, good for :data:`TICKET_SEC`, kept only as its SHA-256, so
+the browser downloads the image straight to disk. Added here:
 **cancel** (the job stops at the next chunk it copies or downloads, or
 within a second of a long command such as the package container, an
 image pull or the source bundle, and removes what it made, the
@@ -154,6 +157,46 @@ def prune(now: float | None = None, *, keep_newest: bool = True, mine: str | Non
                 if not owned:
                     shutil.rmtree(d, ignore_errors=True)
     return gone
+
+
+#: How long a download ticket is good for.
+TICKET_SEC = 5 * 60
+#: {SHA-256 of the ticket: (kit id, expiry)}. In memory: a restart voids them.
+_tickets: dict[str, tuple[str, float]] = {}
+_tickets_lock = threading.Lock()
+
+
+def _ticket_key(ticket: str) -> str:
+    return hashlib.sha256(ticket.encode("utf-8")).hexdigest()
+
+
+def mint_ticket(build_id: str, now: float | None = None) -> tuple[str, float]:
+    """A single-use download ticket for kit ``build_id``: (ticket, expiry).
+    Only its hash is kept."""
+    now = time.time() if now is None else now
+    ticket = secrets.token_urlsafe(32)
+    expires = now + TICKET_SEC
+    with _tickets_lock:
+        for k, (_, exp) in list(_tickets.items()):
+            if exp <= now:
+                del _tickets[k]
+        _tickets[_ticket_key(ticket)] = (build_id, expires)
+    return ticket, expires
+
+
+def use_ticket(ticket: str | None, build_id: str, now: float | None = None) -> bool:
+    """True once for a live ticket minted for ``build_id``; it is gone
+    after (a ticket for another kit is left alone)."""
+    if not ticket or len(ticket) > 128:
+        return False
+    now = time.time() if now is None else now
+    key = _ticket_key(ticket)
+    with _tickets_lock:
+        hit = _tickets.get(key)
+        if hit is None or hit[0] != build_id:
+            return False
+        del _tickets[key]
+    return hit[1] > now
 
 
 def needs_admin(doc: dict[str, Any]) -> bool:

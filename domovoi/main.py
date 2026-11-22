@@ -2569,8 +2569,9 @@ async def usb_stick_manifest(build_id: str) -> FastAPIResponse:
 # browser download can't send one, and a plain kit holds a public release
 # and public models (no household data, design section 7). A kit with
 # household items ticked (the house's own models, trained wake words) is
-# served only to the admin's Bearer; the card downloads it through the
-# dashboard (web/backend/api/offline_kit.py).
+# served only to the admin's Bearer, or to a single-use download ticket the
+# Bearer mints (5 minutes, one kit), so the card's download goes straight to
+# disk through the dashboard (web/backend/api/offline_kit.py).
 
 
 class _OfflineKitBody(BaseModel):
@@ -2647,6 +2648,18 @@ async def admin_offline_kit_delete(build_id: str) -> dict[str, Any]:
     return await asyncio.to_thread(service.status, None)
 
 
+@app.post("/v1/admin/offline-kit/builds/{build_id}/ticket", dependencies=[Depends(require_admin_mutation)])
+async def admin_offline_kit_ticket(build_id: str) -> dict[str, Any]:
+    """A single-use download ticket for this kit's image (5 minutes):
+    ``GET /v1/offline-kit/{build_id}/<image>?ticket=…`` then needs no
+    Bearer, so a browser can download it straight to disk."""
+    from domovoi.kit_builder import jobs as kit_jobs
+
+    doc = await asyncio.to_thread(_offline_kit_or_404, build_id)
+    ticket, expires = kit_jobs.mint_ticket(build_id)
+    return {"ticket": ticket, "expires": expires, "image_name": kit_jobs.image_name(doc["domovoi_version"])}
+
+
 def _offline_kit_or_404(build_id: str) -> dict[str, Any]:
     from domovoi.kit_builder import jobs as kit_jobs
 
@@ -2657,16 +2670,23 @@ def _offline_kit_or_404(build_id: str) -> dict[str, Any]:
 
 
 @app.get("/v1/offline-kit/{build_id}/{name}")
-async def offline_kit_file(build_id: str, name: str, request: Request) -> FastAPIResponse:
+async def offline_kit_file(
+    build_id: str, name: str, request: Request,
+    ticket: str | None = Query(default=None, max_length=128),
+) -> FastAPIResponse:
     """One kit's image, its Imager list (``os-list.json``) or its Imager
     manifest. Public by its random id (see above), but a kit carrying
-    household items needs the admin's Bearer (401 without). 423 while the
-    container guard's freeze is on."""
+    household items needs the admin's Bearer, or for the image a live
+    ``ticket`` minted for this kit (used up here); 401 without. 423 while
+    the container guard's freeze is on."""
     await container_freeze.require_unfrozen("offline_kit", public=True)
     from domovoi.kit_builder import jobs as kit_jobs
 
     doc = await asyncio.to_thread(_offline_kit_or_404, build_id)
-    if kit_jobs.needs_admin(doc) and await check_admin_request(request) not in ("ok", "pre-setup"):
+    allowed = not kit_jobs.needs_admin(doc) or (
+        name == kit_jobs.image_name(doc["domovoi_version"]) and kit_jobs.use_ticket(ticket, build_id)
+    ) or await check_admin_request(request) in ("ok", "pre-setup")
+    if not allowed:
         raise HTTPException(status_code=401, detail=(
             "This kit carries items this house added, so it downloads only with the admin "
             "sign-in, from the Offline kit card."))

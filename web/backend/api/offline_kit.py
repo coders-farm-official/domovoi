@@ -8,8 +8,10 @@ the core the address phones and Imager reach it at (the one the join
 page's QR code uses), so the Imager list it writes points at the image.
 All admin: a kit takes many gigabytes of the server's disk and downloads.
 A kit carrying household items downloads only with the admin's Bearer, so
-the card fetches it here (:func:`offline_kit_download`), the caller's
-credentials forwarded to the core, which checks them.
+the card asks for a single-use download ticket (:func:`offline_kit_ticket`,
+admin write tier) and the browser then downloads the image here
+(:func:`offline_kit_download`), streamed from the core to disk; the core
+checks the ticket.
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -102,17 +104,35 @@ async def offline_kit_cancel(request: Request):
     return bridge_response(status, doc) if status != 200 else doc
 
 
-@router.get("/{build_id}/{name}", dependencies=[Depends(require_admin_read)])
-async def offline_kit_download(build_id: str, name: str, request: Request):
-    """A finished kit's image, streamed from the core with the caller's
-    credentials: the way the card downloads a kit that carries household
-    items (the core asks for the admin's Bearer there)."""
+@router.post("/{build_id}/ticket", dependencies=[Depends(require_admin_mutation)])
+async def offline_kit_ticket(build_id: str, request: Request):
+    """A single-use download ticket for the kit's image (5 minutes), and
+    the dashboard link that uses it."""
+    if not _ID_RE.fullmatch(build_id):
+        raise HTTPException(status_code=404, detail="no such kit")
+    status, doc = await post_admin(f"/v1/admin/offline-kit/builds/{build_id}/ticket",
+                                   headers=auth_forward_headers(request))
+    if status != 200 or not isinstance(doc, dict):
+        return bridge_response(status, doc)
+    doc["url"] = f"/api/offline-kit/{build_id}/{doc['image_name']}?{urlencode({'ticket': doc['ticket']})}"
+    return doc
+
+
+@router.get("/{build_id}/{name}")
+async def offline_kit_download(build_id: str, name: str, request: Request,
+                               ticket: str | None = Query(default=None, max_length=128)):
+    """A finished kit's image, streamed from the core to the browser's
+    download: how the card downloads a kit that carries household items,
+    with the ``ticket`` the admin minted (or the caller's own Bearer). The
+    core checks either; this route adds no credential."""
     if not _ID_RE.fullmatch(build_id) or not _IMAGE_RE.fullmatch(name):
         raise HTTPException(status_code=404, detail="no such kit")
+    url = f"{domovoi_url().rstrip('/')}/v1/offline-kit/{build_id}/{name}"
+    if ticket:
+        url += "?" + urlencode({"ticket": ticket})
     client = httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=300.0))
     try:
-        req = client.build_request("GET", f"{domovoi_url().rstrip('/')}/v1/offline-kit/{build_id}/{name}",
-                                   headers=auth_forward_headers(request))
+        req = client.build_request("GET", url, headers=auth_forward_headers(request))
         r = await client.send(req, stream=True)
     except httpx.HTTPError:
         await client.aclose()
