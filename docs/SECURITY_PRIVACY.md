@@ -2110,7 +2110,11 @@ the other:
   - Sanitising runs in linear time, but a pathological 32 MB document
     (deeply nested, all markup) still takes about 20 seconds of the
     documents pool on load or save; a real document takes about a second.
-    Word copies run in their own time-limited process instead.
+    Word copies of a formatted document run in their own time-limited
+    process instead. A Word copy of a Markdown or text file, and a chat
+    draft's Word or PDF file, are built in the documents pool, and one
+    longer than 20,000 lines is refused (`413`): building one costs more
+    per line the longer it gets.
 - **Co-editing keeps the Documents tiers and its own state apart from the
   file.** The co-editing socket (`/api/collab/{doc_id}`,
   `web/backend/api/collab.py`) admits the same household devices the
