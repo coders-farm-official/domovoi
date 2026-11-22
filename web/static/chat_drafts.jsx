@@ -127,19 +127,19 @@ const ChatDrafts = (() => {
       <div className="chat-draft-card" role="group" aria-label={`draft: ${d.title}`}>
         <div className="chat-draft-card-head">
           <Icon name={isPrint ? 'printer' : 'file-text'} size={14}/>
-          <span className="chat-draft-kind">{KIND[d.kind] || 'draft'}</span>
+          <span className="chat-draft-kind">{d.attachment ? d.attachment.kind : (KIND[d.kind] || 'draft')}</span>
           <span className="chat-draft-title" title={d.title}>{d.title}</span>
-          <span className="chat-draft-chip mono">v{d.version}</span>
+          {d.version && <span className="chat-draft-chip mono">v{d.version}</span>}
           {newer && <span className="chat-draft-newer mono">latest v{newer}</span>}
         </div>
         {lines && <div className="chat-draft-lines">{lines}</div>}
         {m.content && <div className="chat-draft-line">{m.content}</div>}
         <div className="chat-draft-actions">
           {isPrint && canPrint && (
-            <Button variant="primary" icon="printer" onClick={() => onPrint(d.id, d.version)}>Print</Button>
+            <Button variant="primary" icon="printer" onClick={() => onPrint(d.id, d.version, d.attachment)}>Print</Button>
           )}
           {isPrint && !canPrint && <span className="chat-draft-note">no printer is set up on this home</span>}
-          <Button icon="panel-right-open" onClick={() => onOpen(d.id, d.version)}>open</Button>
+          {!d.attachment && <Button icon="panel-right-open" onClick={() => onOpen(d.id, d.version)}>open</Button>}
           {!isPrint && <Button icon="save" onClick={() => onSave(d.id, d.version)}>save</Button>}
           {!isPrint && (
             <Button icon="download" title="download this version"

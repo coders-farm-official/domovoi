@@ -4,6 +4,16 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.4.1 (unreleased) — "Print this" works on a picture or file in a chat
+
+Attach a picture or a document to a chat and say "print this" (or "print
+it", "can you print this please?"): Domovoi now opens the Print dialog on
+that attachment instead of the chat model answering that it can't print.
+With both a draft and an attachment in the chat, the one you attached with
+that message is printed, otherwise the newer of the two. The chat model is
+also told that printing is Domovoi's job. The phone apps show this card
+once they update.
+
 ## 1.4.1 (unreleased) — A refused plugin install says which package clashes
 
 - **What changed.** When a plugin is refused because its requirements would

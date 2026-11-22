@@ -534,7 +534,9 @@ CHAT_SYSTEM_PROMPT = (
     "where this chat is. When someone greets you or says your name{nick}, "
     "they are talking to you: greet them back and answer as {bot}, in the "
     "first person. You are {bot}, not the person writing to you, and never "
-    "talk about {bot} as if it were someone else."
+    "talk about {bot} as if it were someone else. Printing is handled by "
+    "{bot} itself when someone asks (\"print this\"): never say you "
+    "can't print."
 )
 
 # Added for a call that carries pictures (the vision model). The model has

@@ -755,8 +755,9 @@ const ChatPageMain = () => {
       send({ draftId: id, text });
       return true;
     },
-    print: (id, version) => setPrintDraft({ id, version,
-      title: ((draftLatest[id] || {}).title) || 'draft' }),
+    print: (id, version, attachment) => setPrintDraft(attachment
+      ? { attachment, title: attachment.name }
+      : { id, version, title: ((draftLatest[id] || {}).title) || 'draft' }),
     save: async (id, version) => {
       try {
         const r = await Drafts.api.save(id, version, null);
@@ -1306,9 +1307,13 @@ const ChatPageMain = () => {
       )}
       {printDraft && typeof PrintDialog === 'function' && (
         <PrintDialog name={printDraft.title} fire={fire}
-                     target={{ version: printDraft.version }}
-                     previewPath={`/api/chat/drafts/${printDraft.id}/print/preview`}
-                     submitPath={`/api/chat/drafts/${printDraft.id}/print/jobs`}
+                     target={printDraft.attachment ? {} : { version: printDraft.version }}
+                     previewPath={printDraft.attachment
+                       ? `/api/chat/attachments/${printDraft.attachment.token}/print/preview`
+                       : `/api/chat/drafts/${printDraft.id}/print/preview`}
+                     submitPath={printDraft.attachment
+                       ? `/api/chat/attachments/${printDraft.attachment.token}/print/jobs`
+                       : `/api/chat/drafts/${printDraft.id}/print/jobs`}
                      onClose={() => setPrintDraft(null)}/>
       )}
       {toastNode}
