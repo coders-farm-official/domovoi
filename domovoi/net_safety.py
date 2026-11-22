@@ -1024,6 +1024,15 @@ async def iter_capped(response: Any, max_bytes: int, chunk_size: int = 65536):
         raise UnsupportedContentEncoding(str(response.url), ", ".join(codings))
     if _declared_too_large(response, max_bytes):
         raise ResponseTooLarge(str(response.url), max_bytes)
+    if getattr(response, "is_stream_consumed", False):
+        # Already read in full (a response built from bytes, as in tests);
+        # the encoding was checked above, so its content is the raw body.
+        body = response.content
+        if len(body) > max_bytes:
+            raise ResponseTooLarge(str(response.url), max_bytes)
+        for i in range(0, len(body), chunk_size):
+            yield body[i : i + chunk_size]
+        return
     total = 0
     async for chunk in response.aiter_raw(chunk_size):
         total += len(chunk)
