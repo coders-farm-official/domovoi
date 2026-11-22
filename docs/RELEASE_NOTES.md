@@ -6,9 +6,10 @@ a way that would otherwise get reported as a bug.
 
 ## 1.4.1 (unreleased) — Weather answers are back
 
-- **What changed.** "What's the weather today?" now asks the search
-  service's weather sources (Open-Meteo and wttr.in) for your place and
-  answers with the current temperature and conditions. The place is the
+- **What changed.** "What's the weather today?" now has your server's own
+  search service look up your place with Open-Meteo, a free weather service
+  for personal, non-commercial use, and answers with the current
+  temperature and conditions (in Fahrenheit for a US place). The place is the
   **Local news location** in Settings (the `news_location` setting). With
   Settings > Privacy > Internet on "always", Domovoi no longer asks "want me
   to check?" first. If the weather sources return nothing, or no place is
