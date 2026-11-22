@@ -81,3 +81,9 @@ data class FileBrowse(
     /** Show this listing as an image grid (a phone photo album). */
     @Transient val grid: Boolean = false,
 )
+
+/** Where deleting from the home server is: it is admin on the server and a
+ *  phone has no admin session (the iPhone's FileStrings.deleteIsAnAdminJob,
+ *  word for word). */
+internal const val FILES_DELETE_ON_DASHBOARD =
+    "deleting is on the dashboard — a phone can't sign in as an admin"

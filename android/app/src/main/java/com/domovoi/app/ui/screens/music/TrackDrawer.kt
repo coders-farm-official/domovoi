@@ -14,20 +14,17 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.SubdirectoryArrowRight
 import androidx.compose.material3.Button
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -42,19 +39,25 @@ import androidx.compose.ui.unit.dp
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
 import com.domovoi.app.player.CoverArt
-import com.domovoi.app.ui.components.ConfirmDialog
 import com.domovoi.app.ui.components.CoverImage
 import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.SectionLabel
 import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.components.fmtDur
 import com.domovoi.app.ui.components.launchAction
-import com.domovoi.app.ui.components.rememberStillComposed
 import com.domovoi.app.ui.components.relTime
 import com.domovoi.app.ui.theme.Domovoi
 
-/** Track detail drawer — metadata, play-in-room chips, local play/queue,
- *  delete (optionally with the file on disk). Mirrors the web Drawer. */
+/** Where the library's upkeep is: rescanning, the tag fixer and deleting a
+ *  track are admin on the server (reindex, enrich, DELETE
+ *  /api/music/library/{id}), and a phone has no admin session, so the app
+ *  offers none of them (the phone admin audit, 22 Nov 2026). The web keeps
+ *  them on its admin-only Tools tab. */
+internal const val MUSIC_UPKEEP_ON_DASHBOARD =
+    "rescanning the library, fixing tags and deleting tracks are done on the dashboard"
+
+/** Track detail drawer — metadata, play-in-room chips, local play/queue.
+ *  Mirrors the web Drawer, without its admin delete. */
 @Composable
 internal fun TrackDrawer(
     track: LibraryTrack,
@@ -62,8 +65,6 @@ internal fun TrackDrawer(
     onClose: () -> Unit,
     onBrowserPlay: (LibraryTrack) -> Unit,
     onQueueTrack: (LibraryTrack) -> Unit,
-    refreshLib: () -> Unit,
-    refreshStats: () -> Unit,
     refreshNP: () -> Unit,
     /** The list the track was opened from, when there is one (a genre's
      *  songs): "play in <room>" then plays on through that list. */
@@ -73,17 +74,13 @@ internal fun TrackDrawer(
     val toast = LocalToast.current
     val context = LocalContext.current
     // The app's scope, not this drawer's: "play in room" closes the drawer
-    // before the server answers, and a delete can be answered after a back
-    // gesture closed it (ServerAction.kt says why).
+    // before the server answers (ServerAction.kt says why).
     val scope = app.scope
-    val open = rememberStillComposed()
 
     // The picked chip, else the first room the server reported; null with
     // no room online (never a made-up "kitchen").
     var picked by remember(track.id) { mutableStateOf<String?>(null) }
     val room = picked?.takeIf { it in rooms } ?: rooms.firstOrNull()
-    var alsoFile by remember(track.id) { mutableStateOf(false) }
-    var confirmDelete by remember(track.id) { mutableStateOf(false) }
 
     fun saveToDevice() = saveTrackToDevice(context, app, toast, track)
     // Play next / add to queue, in the picked room or on this phone (batch 2 §2).
@@ -278,71 +275,15 @@ internal fun TrackDrawer(
             }
         }
 
-        // Danger footer
         HorizontalDivider(color = Domovoi.colors.border)
-        Column(
-            Modifier
+        Text(
+            MUSIC_UPKEEP_ON_DASHBOARD,
+            style = MaterialTheme.typography.labelSmall,
+            color = Domovoi.colors.fgMuted,
+            modifier = Modifier
                 .fillMaxWidth()
                 .background(Domovoi.colors.sunken)
-                .padding(horizontal = 16.dp, vertical = 10.dp),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(checked = alsoFile, onCheckedChange = { alsoFile = it })
-                Text(
-                    "also delete file on disk",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Domovoi.colors.fgMuted,
-                )
-            }
-            TextButton(onClick = { confirmDelete = true }) {
-                Icon(
-                    Icons.Filled.Delete, contentDescription = null,
-                    tint = Domovoi.colors.err, modifier = Modifier.size(16.dp),
-                )
-                Spacer(Modifier.size(6.dp))
-                Text("delete track", color = Domovoi.colors.err)
-            }
-        }
-    }
-
-    if (confirmDelete) {
-        ConfirmDialog(
-            title = "delete track",
-            body = if (alsoFile) {
-                "Permanently delete the file for \"${track.title ?: "track"}\" from disk? " +
-                    "This can't be undone.\n\n${track.filePath ?: ""}"
-            } else {
-                "Remove \"${track.title ?: "track"}\" from the library? " +
-                    "The file stays on disk; a rescan will re-add it."
-            },
-            confirmLabel = "delete",
-            destructive = true,
-            onConfirm = {
-                scope.launchAction(
-                    action = {
-                        app.api.delete(
-                            "/api/music/library/${track.id}" +
-                                (if (alsoFile) "?also_file=true" else ""),
-                        )
-                    },
-                    onFailure = { toast("delete failed: ${it.message}") },
-                    onSuccess = {
-                        toast(
-                            if (alsoFile) {
-                                "deleted \"${track.title ?: "track"}\" · file removed from disk"
-                            } else {
-                                "removed \"${track.title ?: "track"}\" from library (file kept; rescan will re-add)"
-                            },
-                        )
-                        // Only this drawer: a back gesture may have closed it
-                        // and opened another track's since.
-                        if (open()) onClose()
-                        refreshLib()
-                        refreshStats()
-                    },
-                )
-            },
-            onDismiss = { confirmDelete = false },
+                .padding(horizontal = 16.dp, vertical = 12.dp),
         )
     }
 }

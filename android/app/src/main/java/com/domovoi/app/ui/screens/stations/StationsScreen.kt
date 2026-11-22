@@ -21,7 +21,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CellTower
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.DeleteOutline
-import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Headset
 import androidx.compose.material.icons.filled.History
@@ -189,22 +188,6 @@ fun StationsScreen() {
         }
     }
 
-    fun fccImport() {
-        // No state arg — the radio plugin uses its RADIO_MARKET_STATE setting.
-        toast("fcc import started…")
-        scope.launch {
-            runCatching {
-                app.api.post("/api/plugins/radio/fcc-import").decode<FccImportResult>()
-            }.onSuccess { out ->
-                if (out.state.isNullOrBlank()) {
-                    toast("fcc import: no market state configured (set RADIO_MARKET_STATE)")
-                } else {
-                    toast("fcc ${out.state}: ${out.inserted} new, ${out.updated} updated")
-                }
-            }.onFailure { toast("fcc import failed: ${it.message}") }
-        }
-    }
-
     LazyColumn(
         Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -215,13 +198,15 @@ fun StationsScreen() {
                 "Stations",
                 "${favTotal ?: favorites.size} favorited · ${recent.size} recent · " +
                     "tap a station to play it",
-            ) {
-                OutlinedButton(onClick = { fccImport() }) {
-                    Icon(Icons.Filled.Download, contentDescription = null, modifier = Modifier.size(14.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("import fcc fm")
-                }
-            }
+            )
+            // Where the "import fcc fm" button was: the import is admin in the
+            // radio plugin and a phone has no admin session, so the button
+            // 401'd from every phone (the phone admin audit, 22 Nov 2026).
+            Text(
+                FCC_IMPORT_IS_AN_ADMIN_JOB,
+                style = MaterialTheme.typography.labelSmall,
+                color = Domovoi.colors.fgMuted,
+            )
         }
 
         item { StationSearchCard(onFavorite, playStation) }
