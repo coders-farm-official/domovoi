@@ -203,10 +203,12 @@ The client estimates the server clock from four-timestamp exchanges.
 3. **Per sample**: `rtt = (t3 - t0) - (t2 - t1)`,
    `offset = ((t1 - t0) + (t2 - t3)) / 2`, `mid = (t0 + t3) / 2`.
 4. **Window**: samples whose `mid` is within the last 60 s.
-5. **Keep**: the lowest-`rtt` 10% of the window, at least 4 samples.
+5. **Keep**: the lowest-`rtt` 10% of the window (at least 4 samples), plus
+   every sample whose `rtt` is within 100 us of the window's lowest.
 6. **Rate**: when the kept samples span at least 10 s, fit
    `offset = a + b * (mid - tref)` by least squares (`tref` = the newest
-   `mid`), clamp `b` to ±500 ppm. Otherwise `b = 0`.
+   `mid`), clamp `b` to ±500 ppm. Otherwise `b = 0`, and step 7 uses only
+   the kept samples from the last 2 s (all kept samples if none are that new).
 7. **Offset**: `a` = the median over kept samples of
    `offset_i - b * (mid_i - tref)`.
 8. **Map**: `server(local) = local + a + b * (local - tref)`.
@@ -235,7 +237,9 @@ time `T(n) = t0_us + n * 1e6 / 48000`.
    * EMA `> +1` sample (ahead): repeat one sample in this buffer.
    * EMA `< -1` sample (behind): drop one sample in this buffer.
    * At most one correction per buffer.
-5. Missing samples play as silence and count as one `underrun` per buffer.
+5. Missing samples play as silence. Audio that resumes less than 500 ms
+   after it last played (since the last `flush` or `timeline`) counts one
+   `underrun`; a longer gap is the room going quiet between sounds.
 6. Apply the room gain (§5.3), then the device volume.
 
 The spike held two clients within 1.1 ms (p95) for 6 minutes with this

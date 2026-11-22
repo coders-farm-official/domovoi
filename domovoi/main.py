@@ -8985,6 +8985,24 @@ async def stream(ws: WebSocket, room_id: str) -> None:
     await session.run()
 
 
+@app.websocket("/v1/room-audio/{satellite_id}")
+async def room_audio(ws: WebSocket, satellite_id: str) -> None:
+    """Timed room audio for one speaker (1.5.0): the room's sound, stamped
+    with when each sample plays, plus the clock service. Wire protocol:
+    docs/ROOM_AUDIO_PROTOCOL.md. Auth: the device's pairing token in its
+    hello, checked as on ``/v1/stream`` (never pairs or parks here)."""
+    if not origin_allowed(ws.headers.get("origin")):
+        await _refuse_ws(
+            ws, "cross_origin",
+            f"/v1/room-audio/{satellite_id} from Origin {ws.headers.get('origin')!r}",
+        )
+        return
+    from domovoi.room_playout.service import get_playout
+    from domovoi.room_playout.session import RoomAudioSession
+
+    await RoomAudioSession(ws, satellite_id, get_playout(app)).run()
+
+
 @app.websocket("/v1/dropin/{room_id}")
 async def phone_dropin(ws: WebSocket, room_id: str) -> None:
     """Drop-in-only stream for phones — joins the existing intercom bridge
