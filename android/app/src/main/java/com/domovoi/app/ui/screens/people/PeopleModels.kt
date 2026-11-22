@@ -12,7 +12,6 @@ import com.domovoi.app.LocalToast
 import com.domovoi.app.net.ApiException
 import com.domovoi.app.net.DomovoiJson
 import com.domovoi.app.net.decode
-import com.domovoi.app.net.failureText
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
@@ -52,22 +51,15 @@ internal data class Person(
 
 // ---------------------------------------------------------------------------
 // One name, one person (server: handlers/voice_profile.py, 2026-10-15) — the
-// web People page's PersonNamesakes and rename, for the phone.
+// web People page's PersonNamesakes, for the phone.
 // ---------------------------------------------------------------------------
 
-/** The longest name the server takes (PersonRename, the enrolment limit). */
-internal const val PERSON_NAME_MAX = 60
-
-/** A typed name as the server keeps it: trimmed, whitespace runs as one space. */
-internal fun cleanPersonName(raw: String): String =
-    raw.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }.joinToString(" ")
-
-/** Whether "save" means something: a non-empty name within the limit that
- *  isn't the person's name already. */
-internal fun canRename(person: Person, raw: String): Boolean {
-    val name = cleanPersonName(raw)
-    return name.isNotEmpty() && name.length <= PERSON_NAME_MAX && name != person.name
-}
+/** Where renaming and forgetting someone are: both are admin on the server
+ *  and a phone has no admin session (the iPhone's
+ *  PeopleStrings.renamingIsOnTheDashboard, word for word). */
+internal const val PEOPLE_EDIT_ON_DASHBOARD =
+    "renaming and forgetting someone are done on the dashboard — " +
+        "they need an admin sign-in, which a phone doesn't have"
 
 /** Roster subtitle prefix that tells people with one name apart. */
 internal fun rosterNameTag(p: Person): String = if (p.namesakes > 0) "#${p.id} · same name · " else ""
@@ -79,20 +71,7 @@ internal fun namesakeNote(p: Person): String? {
     return "${p.namesakes + 1} people are called $n. When someone says “my name is $n”, " +
         "Domovoi won’t guess which one they are. If these are the same person, forget the " +
         "extra one; they can then say “my name is $n” wherever Domovoi doesn’t know their " +
-        "voice yet. If they are different people, rename one of them."
-}
-
-/** Toast for a refused rename: the server's own reason for a name someone else
- *  has (409), the usual failure text for anything else. */
-internal fun renameFailureText(e: Throwable): String {
-    if (e is ApiException && e.status == 409) {
-        val detail = runCatching {
-            ((DomovoiJson.parseToJsonElement(e.body) as? JsonObject)?.get("detail") as? JsonPrimitive)
-                ?.content
-        }.getOrNull()
-        if (!detail.isNullOrBlank()) return detail
-    }
-    return failureText("rename", e)
+        "voice yet. If they are different people, rename one of them on the dashboard."
 }
 
 // ---------------------------------------------------------------------------

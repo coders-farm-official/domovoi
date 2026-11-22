@@ -162,6 +162,9 @@ public enum DomovoiError: Error, Equatable, Sendable {
 public func failureText(_ action: String, _ error: DomovoiError) -> String {
     let detail = error.message.trimmingCharacters(in: .whitespacesAndNewlines)
     switch error {
+    case .refused(let f) where isAdminRefusal(status: f.status, body: f.body):
+        // Only an admin may do this, and a phone is never one: say that alone.
+        return adminOnly
     case .refused(let f), .rateLimited(let f, _), .serverTrouble(let f), .httpError(let f):
         return "\(action) failed: \(detail.isEmpty ? "HTTP \(f.status)" : detail)"
     case .notPermitted:

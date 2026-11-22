@@ -127,7 +127,8 @@ internal fun chatErrorView(error: String?, code: String?, model: String?): ChatE
 // ---------------------------------------------------------------------------
 
 /**
- * The dashboard's Settings page on the connected server, in a browser. The
+ * The dashboard's Settings → Models on the connected server, in a browser
+ * (it opened plain Settings until 22 Nov 2026, under a label naming Models). The
  * app has no admin session, so it can't tell an admin from anyone else: the
  * button shows for everyone, and the dashboard asks for the sign-in.
  */
@@ -137,7 +138,7 @@ internal fun OpenModelsButton() {
     val toast = LocalToast.current
     val context = LocalContext.current
     val serverUrl by app.prefs.serverUrl.collectAsState()
-    val url = dashboardSettingsUrl(serverUrl) ?: return
+    val url = dashboardSettingsUrl(serverUrl, "models") ?: return
     TextButton(onClick = { if (!openUrl(context, url)) toast("no browser found to open the dashboard") }) {
         Icon(
             Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null,

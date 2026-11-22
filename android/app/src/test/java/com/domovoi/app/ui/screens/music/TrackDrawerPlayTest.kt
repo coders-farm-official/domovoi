@@ -116,8 +116,6 @@ class TrackDrawerPlayTest {
                                         onClose = { open = false },
                                         onBrowserPlay = {},
                                         onQueueTrack = {},
-                                        refreshLib = {},
-                                        refreshStats = {},
                                         refreshNP = { refreshed++ },
                                     )
                                 }
