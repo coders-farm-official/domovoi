@@ -37,3 +37,5 @@ android/build-env/** text eol=lf
 web/static/manual-content.json text eol=lf
 domovoi/doc_qa/chat-weak-spots.json text eol=lf
 domovoi/drafts/templates/** text eol=lf
+# Offline kit fixture for the Windows tests (KitTests.cs): checked byte for byte.
+windows/tests/kit-fixture/** -text

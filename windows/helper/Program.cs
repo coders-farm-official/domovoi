@@ -21,7 +21,11 @@
 //   account --exe PATH [--no-deny-logon]
 //   media
 //   firewall [--subnet CIDR]
-//   job --image P --image-sha256 H --provision P --provision-sha256 H --repo-url U --ref SHA [--track-branch stable|main] [--lan-ip IP|auto|none]
+//   job --image P --image-sha256 H --provision P --provision-sha256 H --repo-url U --ref SHA [--track-branch stable|main] [--lan-ip IP|auto|none] [--kit DIR]
+//   kit-check --kit DIR --commit SHA --version V --ubuntu-name N --ubuntu-sha256 H
+//             --wsl-msi-name N --wsl-msi-sha256 H [--need-wsl] [--provision-sha256 H]   read-only (KitCheck.cs)
+//   Any verb with --offline: an install from an offline kit; nothing may
+//   reach beyond this PC (NetGuard throws).
 //   check-media --root DIR                          read-only
 //   host-start | host-retry | host-park | setup-code | record-ai
 //   run-update --from DIR --run NAME --tag T [--commit SHA] [--linuxfirst]   the Windows step, elevated (Update.cs)
@@ -66,7 +70,7 @@ namespace Domovoi.Windows.Helper
 
     static class Program
     {
-        static readonly HashSet<string> ReadOnly = new HashSet<string> { "preflight", "vmp-status", "wsl-status", "host-status", "plan", "check-media", "saved-answers", "help" };
+        static readonly HashSet<string> ReadOnly = new HashSet<string> { "preflight", "vmp-status", "wsl-status", "host-status", "plan", "check-media", "saved-answers", "kit-check", "help" };
 
         static int Main(string[] argv)
         {
@@ -82,6 +86,7 @@ namespace Domovoi.Windows.Helper
             catch (ArgumentException e) { Console.Out.WriteLine("error=" + e.Message); return 2; }
 
             bool dry = a.Flag("--dry-run");
+            NetGuard.Offline = a.Flag("--offline");
             bool elevated = new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator);
             if (!ReadOnly.Contains(verb) && !(verb == "uninstall" && dry) && !elevated)
             {
@@ -125,8 +130,9 @@ namespace Domovoi.Windows.Helper
                     case "firewall": Steps.FirewallRules(o, a.Opt("--subnet")); return 0;
                     case "job":
                         Steps.WriteJob(o, a.Req("--image"), a.Req("--image-sha256"), a.Req("--provision"), a.Req("--provision-sha256"),
-                            a.Req("--repo-url"), a.Req("--ref"), a.Opt("--track-branch") ?? "stable", a.Opt("--lan-ip") ?? "auto");
+                            a.Req("--repo-url"), a.Req("--ref"), a.Opt("--track-branch") ?? "stable", a.Opt("--lan-ip") ?? "auto", a.Opt("--kit"));
                         return 0;
+                    case "kit-check": KitCheck.Run(o, a); return 0;
                     case "host-start": Steps.HostStart(o); return 0;
                     case "host-status": Steps.HostStatusOut(o); return 0;
                     case "host-retry": Steps.HostRetry(o); return 0;
@@ -166,7 +172,7 @@ namespace Domovoi.Windows.Helper
             {
                 string k = argv[i];
                 if (!k.StartsWith("--", StringComparison.Ordinal)) throw new ArgumentException("unexpected argument: " + k);
-                if (k == "--dry-run" || k == "--ports-only" || k == "--skip-internet" || k == "--have-image" || k == "--no-deny-logon" || k == "--installing" || k == "--wait" || k == "--linuxfirst") { flags.Add(k); continue; }
+                if (k == "--dry-run" || k == "--ports-only" || k == "--skip-internet" || k == "--have-image" || k == "--no-deny-logon" || k == "--installing" || k == "--wait" || k == "--linuxfirst" || k == "--offline" || k == "--need-wsl") { flags.Add(k); continue; }
                 if (i + 1 >= argv.Length) throw new ArgumentException(k + " needs a value");
                 values[k] = argv[++i];
             }

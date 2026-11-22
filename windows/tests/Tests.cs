@@ -102,6 +102,7 @@ static partial class Tests
         MediaFolderTests();
         UpdateTests();
         LanNameTests();
+        KitTests();
         Console.WriteLine();
         Console.WriteLine(Inv.F("{0} passed, {1} failed", passed, failed));
         return failed == 0 ? 0 : 1;

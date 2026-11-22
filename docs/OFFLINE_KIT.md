@@ -8,8 +8,8 @@ packages.
 
 > **Coming in 1.5.0, being built.** This page describes the kit's format,
 > how to check a stick, how a server makes a kit and how a Linux computer
-> (Ubuntu 26.04) installs from one. Windows and Mac installing from a kit
-> arrive in later steps of 1.5.0; this page grows with them.
+> (Ubuntu 26.04) and a Windows 11 PC install from one. The Mac installing
+> from a kit arrives in a later step of 1.5.0; this page grows with it.
 
 ## Making a kit
 
@@ -141,8 +141,20 @@ commit, then every file with the checker from that commit) before it runs
 anything from it, and the install then checks every file against the same
 pins as an online install. Nothing is downloaded.
 [LINUX_HOST.md, Installing without internet](LINUX_HOST.md#installing-without-internet)
-has the steps and what each check proves. Other Linux systems, Windows and
-Mac follow in later steps of 1.5.0.
+has the steps and what each check proves. Other Linux systems install
+with internet.
+
+**Windows 11.** Open the stick and double-click `release\DomovoiSetup.exe`.
+Setup sees the kit beside it and installs from it, with no internet: it
+checks the stick (checksums, the release signature, that the kit is the
+Setup's own release, the parts and the disk) before it changes anything,
+takes WSL and Ubuntu's image from `windows\` and `provision.sh` from
+`linux\`, each against Setup's own pins, and opens the stick read-only
+inside Domovoi's Linux system for `provision.sh --offline-kit`. Keep the
+stick in until Setup finishes.
+[WINDOWS_HOST.md, Installing without internet](WINDOWS_HOST.md#installing-without-internet)
+has the steps, the checks and the refusals. The Mac follows in a later
+step of 1.5.0.
 
 ## Checking a stick
 
@@ -273,9 +285,13 @@ it goes.
   `silero_vad.onnx`; household words in `wake/household/`.
 - `phone/<apk>`s and `phone/release.json` (`android/release.json` of the
   release).
-- `linux/install.sh` (at the release commit), `source/domovoi.bundle`
+- `linux/install.sh` and `linux/provision.sh` (both at the release
+  commit; Windows Setup checks `provision.sh` against its own pin and runs
+  it in the distro), `source/domovoi.bundle`
   (refs: the release tag and HEAD, both at the release commit).
-- `windows/` (the WSL MSI, Ubuntu's WSL image), `mac/` (Ollama for macOS,
+- `windows/` (the WSL MSI and Ubuntu's WSL image, each under its name in
+  the release's `windows/installer/pins.iss`, which is where Windows Setup
+  looks), `mac/` (Ollama for macOS,
   Ubuntu's arm64 cloud image, whisper.cpp's model).
 - `rooms/`: `DomovoiSatelliteSetup.exe`, Debian's netinst, and the rooms'
   package cache as the server holds it under `rooms/satellite/`.

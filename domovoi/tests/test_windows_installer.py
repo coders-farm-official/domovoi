@@ -970,10 +970,11 @@ def test_the_update_mode_after_review_round_1():
     deinit = _pascal_block(s, "procedure DeinitializeSetup")
     assert "if HostStopped and not InstallOk and FileExists(AppHelper) then" in deinit
     assert deinit.index("RunHelper(AppHelper, 'host-start'") < deinit.index("WriteUpdateResult;")
-    nxt = _pascal_block(s, "function NextButtonClick")
+    # The downloads (RunDownloads, online only since the offline kit).
+    nxt = _pascal_block(s, "function RunDownloads")
     assert r"if UpdateMode and FileExists(ExpandConstant('{commonappdata}\Domovoi\host\in\{#UbuntuName}')) then" in nxt
-    assert nxt.index("ImagePath := ExpandConstant('{commonappdata}") < nxt.index("DownloadPage.Add('{#UbuntuUrl}'")
-    assert "'job --image ' + AddQuotes(ImagePath)" in s
+    assert nxt.index("ImagePath := ExpandConstant('{commonappdata}") < nxt.index("AddDownload('{#UbuntuUrl}'")
+    assert "'job' + OfflineArg + KitArg + ' --image ' + AddQuotes(ImagePath)" in s
     result = _pascal_block(s, "procedure WriteUpdateResult")
     assert r"ExpandConstant('{commonappdata}\Domovoi\updates')" in result and "Pos('..', Path) > 0" in result
 
