@@ -35,7 +35,7 @@ MEDIA_ACQUISITION_FULFILLER = "media-acquisition-fulfiller"
 NOW_PLAYING_MATCHER = "now-playing-matcher"
 # A plugin that answers weather questions itself: while one is registered,
 # core steps aside (no weather lookup, no "want me to check?" offer).
-WEATHER_PROVIDER = "weather-provider"
+WEATHER_PROVIDER = "weather"
 
 # Canonical graceful-absence voice/UI copy (design §4.8, locked 6).
 ACQUISITION_ABSENCE_MESSAGE = (
