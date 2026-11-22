@@ -226,9 +226,12 @@ writes exactly that table's rows:
 
 Before each preset the satellite writes the factory values back, so
 presets never stack. The factory values and the chosen preset are kept in
-`~/.domovoi/mic_dsp.json` on the satellite, and the preset is applied again
-after every `ready` (a reconnect or restart) and after the self-check
-reopens the microphone (a USB replug). After each change it reads the five
+`~/.domovoi/mic_dsp.json` on the satellite, written before the chip is
+touched (a preset that can't be saved is refused). A preset other than
+factory is applied again after every `ready` (a reconnect or restart) and
+after the self-check reopens the microphone (a USB replug); at factory
+nothing runs and `ready` only reports. Each `xvf_host` call has 5 s before
+its process group is killed. After each change the satellite reads the five
 parameters back and sends `mic_dsp_state`. Nothing is saved to the chip's
 flash: unplugging the array brings its own values back.
 
