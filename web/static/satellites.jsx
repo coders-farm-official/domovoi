@@ -22,6 +22,7 @@
  *   * POST /api/satellites/{room}/dropin/end                  — drawer · overview · Hang up
  *   * GET  /api/satellites/{room}/config                      — drawer · settings tab (load)
  *   * PATCH /api/satellites/{room}/config                     — drawer · settings tab (save → Pi rewrites config.toml + restarts)
+ *   * GET/POST /api/satellites/{room}/mic_dsp[/mark]           — drawer · settings tab · XVF3800 mic presets (admin, declared mic_dsp only)
  *   * GET  /api/satellites/{room}/logs                        — drawer · logs tab (lazy: fetched only when the tab is opened)
  *   * /ws/state · `satellites.presence.changed`               — refresh roster
  *   * /ws/state · `satellites.wifi.changed`                   — refresh roster
@@ -2241,6 +2242,89 @@ const RoomQuietHoursSettings = ({ room, fire }) => {
   );
 };
 
+/* ---- Microphone DSP presets (1.4.1, domovoi/mic_dsp.py) --------------
+ * An XVF3800 satellite that declared mic_dsp, admins only: pick a preset by
+ * name (the satellite applies it from its fixed table, at runtime only),
+ * see what the chip read back, and stamp a test marker into the
+ * satellite's and the server's logs. Nothing here for any other device. */
+const SAT_MIC_DSP_MARK_MAX = 120;
+const SatMicDspControl = ({ s, fire }) => {
+  const room = s.room_id;
+  const path = `/api/satellites/${encodeURIComponent(room)}/mic_dsp`;
+  const { data, error, refresh } = useApiObject(path, { quiet: true });
+  const [busy, setBusy] = React.useState(false);
+  const [mark, setMark] = React.useState('');
+  const state = data && data.state;
+  const presets = (data && data.presets) || [];
+  const fmt = (v) => (Array.isArray(v) ? v.join(', ') : '?');
+
+  // The satellite answers in a second or two: read again until it has.
+  const settle = () => { [1500, 4000, 8000].forEach((ms) => setTimeout(() => refresh && refresh(), ms)); };
+
+  const pick = async (preset) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await apiFetch(path, { method: 'POST', body: JSON.stringify({ preset }) });
+      fire(`${room}: mic preset ${preset} sent`);
+      settle();
+    } catch (err) {
+      reportMutationFailure(fire, 'change the mic preset', err);
+    } finally { setBusy(false); }
+  };
+
+  const stamp = async (e) => {
+    e && e.preventDefault();
+    const text = mark.trim();
+    if (!text || busy) return;
+    setBusy(true);
+    try {
+      const res = await apiFetch(`${path}/mark`, { method: 'POST', body: JSON.stringify({ text }) });
+      fire(`marked “${(res && res.text) || text}”`);
+      setMark('');
+    } catch (err) {
+      reportMutationFailure(fire, 'add the marker', err);
+    } finally { setBusy(false); }
+  };
+
+  const params = state ? Object.keys(state.readback || {}) : [];
+  return (
+    <div className="sat-mic-dsp" style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-soft)' }}>
+      <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--fg-muted)', fontWeight: 600, marginBottom: 6 }}>microphone dsp · admin</div>
+      {error && !data && <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginBottom: 6 }}>couldn’t read the mic preset: {error}</div>}
+      {presets.map((p) => (
+        <label key={p.name} className="sat-timer-scope" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13,
+                                                                 cursor: busy ? 'default' : 'pointer', padding: '3px 0' }}>
+          <input type="radio" name={`micdsp-${room}`} value={p.name}
+                 checked={!!state && state.preset === p.name} disabled={busy} onChange={() => pick(p.name)}/>
+          {p.label}
+        </label>
+      ))}
+      {state ? (
+        <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 6 }}>
+          {state.ok ? 'read back' : `not applied: ${state.error || 'unknown error'}`}
+          {state.at && <> · {relTime(state.at)}</>}
+          {params.map((k) => (
+            <div key={k}>{k} = {fmt(state.readback[k])}</div>
+          ))}
+        </div>
+      ) : data && (
+        <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 6 }}>waiting for the satellite to report its values…</div>
+      )}
+      <form onSubmit={stamp} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+        <input type="text" aria-label="test marker" placeholder="marker, e.g. block 2, 1m"
+               value={mark} maxLength={SAT_MIC_DSP_MARK_MAX} onChange={(e) => setMark(e.target.value)}
+               style={{ flex: '1 1 160px', font: 'inherit', fontSize: 13, padding: '4px 6px', borderRadius: 'var(--r-sm)',
+                        border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--fg)' }}/>
+        <Button type="submit" disabled={busy || !mark.trim()}>Mark</Button>
+      </form>
+      <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 6 }}>
+        runtime only · unplugging the array restores its own settings · the marker goes into this satellite’s log and the server’s
+      </div>
+    </div>
+  );
+};
+
 // Per-satellite config editor. Reuses the global ConfigField + _groupBy
 // from components.jsx (same field UI as the server gear). Saving
 // pushes edits to the Pi, which rewrites config.toml and restarts.
@@ -2452,6 +2536,8 @@ const RoomLogsBody = ({ room, online }) => {
 /* ---- Drawer ----------------------------------------------- */
 const SatDrawer = ({ s, sats, onClose, fire, refresh }) => {
   const [tab, setTab] = React.useState('overview');
+  // The mic DSP block is admin-only: hidden without the sign-in.
+  const adminSignedIn = useAdminSignedIn();
   React.useEffect(() => { setTab('overview'); }, [s?.room_id]);
   React.useEffect(() => {
     if (!s) return;
@@ -2505,6 +2591,7 @@ const SatDrawer = ({ s, sats, onClose, fire, refresh }) => {
           {tab === 'settings'      && <SatHealthCard room={s.room_id} online={s.status === 'online'}/>}
           {tab === 'settings'      && <RoomQuietHoursSettings room={s.room_id} fire={fire}/>}
           {tab === 'settings'      && s.board === 'android_room' && <RoomBatterySettings room={s.room_id} fire={fire}/>}
+          {tab === 'settings'      && s.mic_dsp && s.status === 'online' && adminSignedIn && <SatMicDspControl s={s} fire={fire}/>}
           {tab === 'settings'      && (satCan(s, 'config')
             ? <RoomSettingsBody room={s.room_id} fire={fire}/>
             : s.board === 'android_room'

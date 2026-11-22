@@ -5,6 +5,17 @@ needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
 
+## 1.4.1 (unreleased) — Microphone presets for XVF3800 satellites
+
+- **What changed.** Signed in as admin, an XVF3800 satellite's Settings tab
+  has a **Microphone DSP** block: factory settings or presets B, C and D for
+  noisy rooms, the values the array read back, and a **Mark** field that
+  stamps a note into the satellite's and the server's logs. Runtime only;
+  nothing is saved to the array.
+- **What to do.** Press **Upgrade satellite** on each XVF3800 satellite once
+  the server runs 1.4.1; the block appears after it reconnects. Other
+  satellites don't show it.
+
 ## 1.4.1 (unreleased) — Home location, in Settings → Household
 
 - **What changed.** The household's town has its own place: Settings →
