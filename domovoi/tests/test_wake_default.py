@@ -90,7 +90,7 @@ def _seed_statements() -> list[str]:
     sql = re.sub(r"--[^\n]*", "", MIGRATION.read_text(encoding="utf-8"))
     # V080 renamed the pairing's key: replay V054's seed on today's schema.
     sql = sql.replace("SELECT room_id FROM satellite_pairings",
-                      "SELECT satellite_id FROM satellite_pairings")
+                      "SELECT satellite_id AS room_id FROM satellite_pairings")
     return [st.strip() for st in sql.split(";") if st.strip().upper().startswith("INSERT")]
 
 
