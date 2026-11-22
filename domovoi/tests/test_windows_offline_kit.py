@@ -7,7 +7,9 @@ keeps that C# honest against the Python side it mirrors:
 
 * the fixture is exactly what the real writer (domovoi.offline_kit.write_kit)
   makes, and the real checker accepts it with the test release key, so the
-  C# reader is tested on a kit in the real format, split file included;
+  C# reader is tested on a kit in the real format (no file is big enough
+  to split at the format's 1 MiB floor, so KitTests.cs splits the bundle
+  itself, in a temp copy, the way the writer would);
 * Setup's list of the parts every install needs names what provision.sh's
   kit_check refuses without, in the same words;
 * the kit builder (P1) puts WSL and Ubuntu where Setup looks for them;
@@ -38,6 +40,9 @@ KIT_TESTS_CS = REPO / "windows" / "tests" / "KitTests.cs"
 SCRIPT = REPO / "windows" / "installer" / "DomovoiSetup.iss"
 PINS = REPO / "windows" / "installer" / "pins.iss"
 PROVISION = REPO / "scripts" / "linux" / "provision.sh"
+# The format's floor (domovoi/offline_kit/format.py MIN_PART_SIZE): the
+# fixture stays small, so nothing on it is split.
+PART_SIZE = 1024 * 1024
 COMMIT = "c0ffee0123456789abcdef0123456789abcdef01"   # release-sig/manifest-1.0.1.json's
 
 # The fixture's stand-in files. KitTests.cs pins the Windows ones by these
@@ -59,7 +64,6 @@ def _components() -> list[Component]:
         c("linux-installer", "install.sh", "MIT",
           ("linux/install.sh", b"#!/bin/bash\n# fixture\n"),
           ("linux/provision.sh", PROVISION_SH)),
-        # 5000 bytes with part_size 4000: stored as two parts.
         c("source", "Domovoi's source", "MIT", ("source/domovoi.bundle", bytes(range(250)) * 20)),
         c("apt", "Ubuntu's packages", "LicenseRef-distro-archive",
           ("apt/amd64/ubuntu/dists/resolute/InRelease", b"fixture\n")),
@@ -80,7 +84,7 @@ def _components() -> list[Component]:
 
 def build_fixture(dest: Path) -> None:
     write_kit(dest, version="1.0.1", commit=COMMIT, components=_components(), targets=["pc-x86_64"],
-              includes=[], created_at="2026-11-22T00:00:00Z", part_size=4000)
+              includes=[], created_at="2026-11-22T00:00:00Z", part_size=PART_SIZE)
 
 
 def _tree(root: Path) -> dict[str, bytes]:
@@ -93,8 +97,9 @@ def test_the_fixture_is_what_the_real_writer_makes(tmp_path):
     assert sorted(have) == sorted(want), "regenerate: python domovoi/tests/test_windows_offline_kit.py --write"
     for p in want:
         assert have[p] == want[p], f"{p} differs; regenerate: python domovoi/tests/test_windows_offline_kit.py --write"
-    # The C# tests read the split bundle and a real release signature.
-    assert "source/domovoi.bundle.part01" in have and "source/domovoi.bundle.part02" in have
+    # Small: nothing split (KitTests.cs splits a temp copy), a few KB in all.
+    assert "source/domovoi.bundle" in have and not any(".part" in p for p in have)
+    assert sum(map(len, have.values())) < 64 * 1024
 
 
 def test_the_real_checker_accepts_the_fixture_with_the_test_key():

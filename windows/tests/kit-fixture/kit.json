@@ -9,7 +9,7 @@
   ],
   "includes": [],
   "android_version_code": null,
-  "part_size": 4000,
+  "part_size": 1048576,
   "notices": [
     {
       "id": "do-not-sell",
@@ -73,19 +73,7 @@
         {
           "path": "source/domovoi.bundle",
           "size": 5000,
-          "sha256": "7d52d6495402c5dea9dfdac696deefcfa04f8d29e5371c6413c74fd9f63bf985",
-          "parts": [
-            {
-              "path": "source/domovoi.bundle.part01",
-              "size": 4000,
-              "sha256": "c19810230eab895d9d5514d8b5678fada5970ec602b1123fae41e0116eedea35"
-            },
-            {
-              "path": "source/domovoi.bundle.part02",
-              "size": 1000,
-              "sha256": "5d4b1b13f0daa86380d0ac6912a60a307cc9719115ecadb10a06d2d3603bd35c"
-            }
-          ]
+          "sha256": "7d52d6495402c5dea9dfdac696deefcfa04f8d29e5371c6413c74fd9f63bf985"
         }
       ]
     },
