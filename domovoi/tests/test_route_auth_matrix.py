@@ -291,6 +291,9 @@ SECURITY_TIER_ROUTES = [
     # CORE-14: an HTTP-opened drop-in is a live microphone; no pre-setup
     # grace for it (the phone socket's twin is in test_ws_gates).
     ("core", "POST", "/v1/admin/dropin/start"),
+    # A wake-word take opens the room's mic for a long capture run.
+    ("core", "POST", "/v1/admin/wake/record/start"),
+    ("web", "POST", "/api/wake-words/{wake_word_id}/record/start"),
     ("core", "POST", "/v1/admin/device-token"),
     ("core", "POST", "/v1/admin/device-token/rotate"),
     # REV-32 (2026-10-08): approving a parked satellite binds a room to a

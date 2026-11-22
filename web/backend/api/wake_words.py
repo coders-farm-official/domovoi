@@ -511,7 +511,7 @@ async def train_stop(wake_word_id: int, request: Request):
     return bridge_response(status, payload)
 
 
-@router.post("/{wake_word_id}/record/start", dependencies=[Depends(require_admin_mutation)])
+@router.post("/{wake_word_id}/record/start", dependencies=[Depends(require_admin_security)])
 async def record_start(wake_word_id: int, body: RoomBody, request: Request):
     """Tell a connected satellite to start recording positive clips for
     this wake word. Proxies the Domovoi server, which owns the live Pi

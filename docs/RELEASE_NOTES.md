@@ -5,6 +5,24 @@ needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
 
+## 1.4.1 (unreleased) — Tighter checks on recording, live state and satellite setup
+
+- **Recording wake-word clips needs the admin sign-in.** Starting a
+  wake-word recording take now needs an admin, also before setup and after
+  `--reset-admin` (it answers 501 until someone signs in), like a drop-in.
+- **The dashboard's live updates check where they come from, and keep
+  checking.** The live-state connection accepts the dashboard's sign-in
+  cookie only from the dashboard's own page, and it ends within about 30
+  seconds of a sign-out or a household-token rotation.
+- **Satellite hellos are bounded.** An oversized first message from a
+  device is closed unread, the hardware address and kind a waiting device
+  reports are stored only in their known shape, and at most 32 devices can
+  wait for approval at once (a new one past that is asked to try again).
+- **Satellites read a server's health answer within limits.** A room
+  device looking for its server reads at most 64 KiB of each answer under
+  one deadline, and a network search can no longer be held open by one
+  slow host. This ships with the satellite code update.
+
 ## 1.4.1 (unreleased) — Home location, in Settings → Household
 
 - **What changed.** The household's town has its own place: Settings →
