@@ -250,6 +250,10 @@ harness_setup() {
     TTY=${DOMOVOI_INSTALL_TTY:-none}
     SYS_ROOT=${DOMOVOI_INSTALL_ROOT:-}
     PYTHON=${DOMOVOI_INSTALL_PYTHON:-python3}
+    # Read; never handed on: provision.sh's helpers (install-update-unit.sh
+    # has DOMOVOI_INSTALL_* test variables of its own) would take them for
+    # their own harness's and refuse to run.
+    unset $(compgen -v DOMOVOI_INSTALL_)
     CURL_PROTO='=https,file'
   elif [ -n "$(compgen -v DOMOVOI_INSTALL_ || true)" ]; then
     die "the DOMOVOI_INSTALL_* variables are for this script's tests only; unset them and run it again"
