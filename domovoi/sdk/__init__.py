@@ -57,7 +57,11 @@ from __future__ import annotations
 # 1.12.0: core_config.news_location (the household's place); a plugin that
 #         registers the "weather" capability takes weather questions over
 #         from core's built-in lookup.
-API_VERSION = "1.12.0"
+# 1.13.0: sdk.household.home_location() (the Home location: name, lat, lon,
+#         country, or None) and sdk.places.suggest(text, limit=8) (the
+#         bundled town list); core_config.news_location is now the Home
+#         location's name.
+API_VERSION = "1.13.0"
 
 from domovoi.capabilities import (  # noqa: E402,F401
     CAPABILITIES,
@@ -93,6 +97,7 @@ from domovoi.sdk.facade import (  # noqa: E402,F401
     PluginSDK,
     build_sdk,
 )
+from domovoi.sdk.household import HouseholdAPI, PlacesAPI  # noqa: E402,F401
 from domovoi.sdk.http import HttpFactory  # noqa: E402,F401
 from domovoi.sdk.library import LibraryAPI, LibraryTrack  # noqa: E402,F401
 from domovoi.sdk.observability import get_logger  # noqa: E402,F401
@@ -150,6 +155,7 @@ __all__ = [
     "FastPath",
     "Handler",
     "HandlerDisplay",
+    "HouseholdAPI",
     "HttpFactory",
     "Intent",
     "LibraryAPI",
@@ -162,6 +168,7 @@ __all__ = [
     "NowPlayingView",
     "net_safety",
     "egress",
+    "PlacesAPI",
     "PlaybackAPI",
     "PluginDB",
     "PluginSDK",

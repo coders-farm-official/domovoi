@@ -1,0 +1,4 @@
+cities15000.tsv.gz is derived from GeoNames (https://www.geonames.org/):
+cities15000.zip and admin1CodesASCII.txt, trimmed by scripts/build_places.py.
+Licensed under Creative Commons Attribution 4.0 (CC BY 4.0),
+https://creativecommons.org/licenses/by/4.0/

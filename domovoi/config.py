@@ -1870,9 +1870,11 @@ class Settings(BaseSettings):
     # briefing, and per topics/subject query). Editable by voice ("give me
     # 5 stories") and in web settings.
     news_items_per_ask: int = 3
-    # Locale for LOCAL news (city / region). Needed to make "local"
-    # meaningful — used to build or SearxNG-discover the local-scope feed.
-    # Empty = no local scope (the general briefing drops the local block).
+    # Before 1.4.1, the household's place (city / region) for local news and
+    # weather. Read once, at the first 1.4.1 boot, to fill the Home location
+    # (Settings → Household; domovoi/home_location.py), which replaces it.
+    # No longer editable or read after that; plugins' core_config.news_location
+    # is the Home location's name.
     news_location: str = ""
     # Feed-discovery caps. When a free-form topic is added we query SearxNG,
     # probe the top result URLs for RSS autodiscovery, validate by parsing,

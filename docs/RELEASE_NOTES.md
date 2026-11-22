@@ -4,6 +4,27 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+
+## 1.4.1 (unreleased) — Home location, in Settings → Household
+
+- **What changed.** The household's town has its own place: Settings →
+  Household → **Home location**, one field where you start typing and pick
+  your town from a list ("Denver, Colorado, US"). Weather answers and local
+  news use it. The list comes with Domovoi (GeoNames, CC BY 4.0), so what
+  you type never leaves the house. It replaces **Local news location** in
+  Settings → System → Advanced → News, which is gone.
+- **Carried over once.** On the first start of 1.4.1, the text you had in
+  Local news location becomes your Home location. When it clearly names one
+  town, that town is picked for you. When it doesn't ("Springfield": there
+  are several), the text is kept and the field asks you to pick your town
+  from the list; until then weather and news use the text as before. With
+  nothing there, Home location starts empty.
+- **What to know.** Only an admin can change it; every household device can
+  see it. Plugins: `core_config.news_location` still works and is now the
+  Home location's name; the whole place, coordinates included, is
+  `sdk.household.home_location()` (SDK 1.13,
+  [PLUGIN_DEVELOPMENT.md](PLUGIN_DEVELOPMENT.md)).
+
 ## 1.4.1 (unreleased) — Weather answers are back
 
 - **What changed.** "What's the weather today?" now has your server's own
@@ -11,13 +32,13 @@ a way that would otherwise get reported as a bug.
   non-commercial use; data CC BY 4.0), or wttr.in when Open-Meteo has no
   answer, and answers with the current temperature and conditions (in
   Fahrenheit for a US place). The place is the
-  **Local news location** in Settings (the `news_location` setting). With
+  **Home location** in Settings → Household (below). With
   Settings > Privacy > Internet on "always", Domovoi no longer asks "want me
-  to check?" first. If the weather sources return nothing, or no place is
-  set, it falls back to a general web search as before. It used to find
-  encyclopedia pages and say it had no real-time information.
-- **What to know.** Set the news location to your city or region to get a
-  local answer. The bundled search service restarts once on update to pick
+  to check?" first. With no place set it says where to set it. If the
+  weather sources return nothing, it falls back to a general web search as
+  before. It used to find encyclopedia pages and say it had no real-time
+  information.
+- **What to know.** Set your Home location to get a local answer. The bundled search service restarts once on update to pick
   up the new weather source. An installed weather plugin takes over
   weather questions and core steps aside.
 
@@ -53,7 +74,7 @@ before.
 ## 1.4.1 (unreleased) — Settings search finds every setting
 
 - **What changed.** Searching Settings for a word like "news", "town" or
-  "weather" now finds "Local news location". The search also looks at each
+  "weather" now finds the Home location. The search also looks at each
   setting's group, its help text and a few extra words it can be known by,
   shows more results, and tries again if the list of settings was not ready
   the first time you typed.
