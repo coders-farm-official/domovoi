@@ -25,8 +25,13 @@ import java.io.IOException
  *
  * The password is worth more than the household token, so it goes only to a
  * server that has just proved the identity this phone pinned for it
- * ([admit], the identity gate's Verified verdict — the same admission the
- * audiobook "remove from server" uses).
+ * ([prove], the identity gate's Verified verdict — the same admission the
+ * audiobook "remove from server" uses). The session is bound to THAT
+ * identity, not to the address text: every admin call asks the gate again,
+ * and a server that proves a different key (a re-pin, another machine at the
+ * same address) never receives the Bearer, which is forgotten. Room mode
+ * forgets it too, and no admin call goes out while the phone is a room
+ * (security review 2026-11-22, L57).
  *
  * The session ends at the server: after an hour with no admin change (the
  * idle clock the login answer reports, which every admin write restarts), at
@@ -36,9 +41,11 @@ import java.io.IOException
  */
 class AdminSession(
     private val api: ApiClient,
-    /** Proves the server at a base address before the password goes to it;
-     *  throws an IOException saying why when it can't. */
-    private val admit: (HttpUrl) -> Unit,
+    /** Proves the server at a base address and returns the identity it
+     *  proved (its key's fingerprint); throws an IOException saying why when
+     *  it can't. Asked before the password goes out and before every admin
+     *  call ([IdentityAdmission.fingerprintOf]). */
+    private val prove: (HttpUrl) -> String,
     private val now: () -> Long = System::currentTimeMillis,
 ) {
     /** What the app shows. [idleUntilMs] is the phone's copy of the
@@ -57,7 +64,7 @@ class AdminSession(
     /** Thrown by [call] when there is no admin session for the active server. */
     class NotSignedIn : IOException(ADMIN_ONLY)
 
-    private data class Live(val server: String, val token: String, val idleMin: Long?)
+    private data class Live(val server: String, val token: String, val idleMin: Long?, val fingerprint: String)
 
     @Volatile private var live: Live? = null
     private val _state = MutableStateFlow<State>(State.SignedOut)
@@ -72,10 +79,11 @@ class AdminSession(
      */
     suspend fun signIn(password: String, label: String): SignIn = withContext(Dispatchers.IO) {
         if (password.isEmpty()) return@withContext SignIn.Refused("type the admin password")
+        if (HouseholdLock.roomModeActive) return@withContext SignIn.Refused(ROOM_MODE)
         val server = api.baseUrl.trim().trimEnd('/')
         val base = TokenScope.baseOf(api.baseUrl) ?: return@withContext SignIn.Refused("no server configured")
-        try {
-            admit(base)
+        val fingerprint = try {
+            prove(base)
         } catch (e: IOException) {
             return@withContext SignIn.Refused(e.message ?: "the server did not prove it is your Domovoi")
         }
@@ -103,7 +111,7 @@ class AdminSession(
             ?: return@withContext SignIn.Refused("the server's sign-in made no sense")
         val idleMin = (reply?.get("idle_timeout_min") as? JsonPrimitive)?.longOrNull?.takeIf { it > 0 }
         val idleSec = (reply?.get("idle_in_sec") as? JsonPrimitive)?.longOrNull?.takeIf { it > 0 }
-        live = Live(server, token, idleMin)
+        live = Live(server, token, idleMin, fingerprint)
         _state.value = State.SignedIn(server, idleSec?.let { now() + it * 1000 } ?: idleMin?.let { now() + it * 60_000 })
         SignIn.Ok
     }
@@ -117,6 +125,16 @@ class AdminSession(
     suspend fun <T> call(block: suspend (headers: Map<String, String>, server: String) -> T): T {
         val l = liveForActive() ?: run {
             forget()
+            throw NotSignedIn()
+        }
+        // The server proves itself again, and must be the one signed in to.
+        val base = TokenScope.baseOf(l.server) ?: run {
+            forget()
+            throw NotSignedIn()
+        }
+        val proved = withContext(Dispatchers.IO) { prove(base) }
+        if (proved != l.fingerprint || live != l) {
+            if (live == l) forget()
             throw NotSignedIn()
         }
         try {
@@ -150,6 +168,7 @@ class AdminSession(
     }
 
     private fun liveForActive(): Live? {
+        if (HouseholdLock.roomModeActive) return null
         val l = live ?: return null
         return l.takeIf { it.server == api.baseUrl.trim().trimEnd('/') }
     }
@@ -158,6 +177,9 @@ class AdminSession(
         /** The login's label limit (LoginRequest.label, max_length 120);
          *  the phone keeps it shorter. */
         const val LABEL_MAX = 60
+
+        /** Why there is no admin sign-in while the phone is a room. */
+        const val ROOM_MODE = "this phone is a room; admin sign-in is off while it is"
 
         /** A refused sign-in in plain words. */
         fun signInRefusal(e: ApiException): String {

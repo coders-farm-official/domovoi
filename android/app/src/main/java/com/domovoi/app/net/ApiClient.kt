@@ -337,6 +337,12 @@ class ApiClient(
             if (onlyTo != null && onlyTo.trim().trimEnd('/') != baseUrl.trim().trimEnd('/')) {
                 throw ServerChangedException()
             }
+            // A credential a caller set goes only to the server's own paths:
+            // an absolute URL with an admin Bearer is refused, as on the
+            // iPhone (security review 2026-11-22, L57).
+            if (headers.keys.any { it.equals("Authorization", ignoreCase = true) } && !path.startsWith("/")) {
+                throw IOException("an admin call goes only to this server's own paths")
+            }
             val req = Request.Builder()
                 .url(absolute(path))
                 // Makes every call a preflighted one: a multipart or body-less
