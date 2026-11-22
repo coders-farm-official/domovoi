@@ -4,6 +4,15 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.4.1 (unreleased) — Room names are checked more strictly when a satellite connects
+
+- **What changed.** Room names are checked more strictly when a satellite
+  connects: lowercase letters, digits, `_` and `-`, up to 32 characters,
+  starting with a letter or digit. The dashboard's room addresses take the
+  same rule.
+- **What to know.** Nothing to do. Every way of setting up a room already
+  makes names like these.
+
 ## 1.4.1 (unreleased) — A refused plugin install says which package clashes
 
 - **What changed.** When a plugin is refused because its requirements would
