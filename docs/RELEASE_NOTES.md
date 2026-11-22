@@ -41,6 +41,15 @@ announcements; normal answers never get it. It plays on every kind of room
 To turn it off, untick "Chime before announcements" in Settings, Voice &
 speech (`announce_chime_enabled`).
 
+## 1.4.1 (unreleased) — A new plugin's page shows up without a restart or reload
+
+Installing or enabling a plugin from the Plugins page now adds its page and
+menu item to the dashboard right away, in every open tab. Nothing needs a
+restart, and no reload either. Before, the menu stayed as it was until the
+page was reloaded. An upgrade of a plugin whose page a tab already runs
+still asks for a reload (and a restart when its server side changed), as
+before.
+
 ## 1.4.1 (unreleased) — A refused plugin install says which package clashes
 
 - **What changed.** When a plugin is refused because its requirements would
