@@ -129,7 +129,7 @@ def script(p: Pins, arch: str, owner: str | None = None) -> str:
         # Docker's key, by fingerprint (provision.sh's check).
         f"curl -fsSL {_q(m['docker_key_url'])} -o /tmp/docker.asc",
         "n=$(gpg --show-keys --with-colons /tmp/docker.asc | grep -c '^pub')",
-        f"fpr=$(gpg --show-keys --with-colons /tmp/docker.asc | awk -F: '/^fpr/{{print $10; exit}}')",
+        "fpr=$(gpg --show-keys --with-colons /tmp/docker.asc | awk -F: '/^fpr/{print $10; exit}')",
         f"[ \"$n\" = 1 ] && [ \"$fpr\" = {_q(m['docker_key_fpr'])} ] || {{ echo 'DOMOVOI_KEY: docker' >&2; exit 3; }}",
         "gpg --dearmor -o /etc/apt/keyrings/docker.gpg </tmp/docker.asc",
         f"echo 'deb [arch={arch} signed-by=/etc/apt/keyrings/docker.gpg] {_q(m['docker_repo_url'])} "
