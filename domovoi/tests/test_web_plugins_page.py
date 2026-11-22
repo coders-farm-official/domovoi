@@ -22,6 +22,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 HARNESS = Path(__file__).with_name("jsx_render_harness.js")
 PLUGINS = "web/static/plugins.jsx"
 COMPONENTS = "web/static/components.jsx"
+DATA = "web/static/data.js"
 
 RADIO_WAITING = [{"slug": "radio", "from_version": "1.1.0", "to_version": "1.2.0",
                   "since": "2026-09-28T10:00:00+00:00", "where": ["core", "web"]}]
@@ -54,7 +55,7 @@ def _controls(**over) -> dict:
 
 
 def _confirm_error(e: dict) -> dict:
-    return {"file": PLUGINS, "preload": [COMPONENTS], "props": {"e": e},
+    return {"file": PLUGINS, "preload": [COMPONENTS], "rawPreload": [DATA], "props": {"e": e},
             "component": "((p) => React.createElement(ConfirmError, { err: confirmErrorView(p.e) }))"}
 
 
@@ -68,7 +69,26 @@ FAILED_UPGRADE = {
     }}},
 }
 
+def _conflict(rows: list[dict]) -> dict:
+    return {
+        "message": '422 Unprocessable Entity: {"detail":{"error":{"code":"requirements_conflict"',
+        "status": 422,
+        "detail": {"detail": {"error": {
+            "code": "requirements_conflict",
+            "message": "install would change the version of already-installed distribution(s)",
+            "details": {"conflicts": rows},
+        }}},
+    }
+
+
+CERTIFI = {"package": "certifi", "installed": "2026.10.23", "requested": "2026.6.17",
+           "required_by": "requirements.lock"}
+MANY = [{"package": f"pkg{i}", "installed": "2.0", "requested": "1.0"} for i in range(8)]
+
 SCENARIOS = {
+    "confirm_error_conflict": _confirm_error(_conflict([CERTIFI])),
+    "confirm_error_conflict_many": _confirm_error(_conflict(MANY)),
+    "confirm_error_conflict_empty": _confirm_error(_conflict([])),
     "card": _card({"restart_capable": True, "restart_mode": "restart"}, RADIO_WAITING),
     "card_update_unit": _card({"restart_capable": True, "restart_mode": "update"}, RADIO_WAITING),
     "card_incapable": _card({"restart_capable": False, "restart_mode": "restart",
@@ -263,6 +283,14 @@ const coded = (code, message) => ({
   message: `422 Unprocessable Entity: {"detail":{"error":{"code":"${code}"`, status: 422,
   detail: { detail: { error: { code, message, details: { slug: 'radio' } } } },
 });
+const CERTIFI = { package: 'certifi', installed: '2026.10.23', requested: '2026.6.17' };
+const MANY = Array.from({ length: 8 }, (_, i) => ({ package: `pkg${i}`, installed: '2.0', requested: '1.0' }));
+const conflict = (rows) => ({
+  message: '422', status: 422,
+  detail: { detail: { error: { code: 'requirements_conflict',
+    message: 'install would change the version of already-installed distribution(s)',
+    details: { conflicts: rows } } } },
+});
 const out = {};
 const fired = [];
 w.reportMutationFailure((t) => fired.push(t), 'install',
@@ -270,6 +298,9 @@ w.reportMutationFailure((t) => fired.push(t), 'install',
 out.install = fired[0];
 out.enable = w.mutationErrorText(coded('migration_drift',
   'radio: applied migration V001__radio_schema.sql differs from the file on disk'), 'enable', { kept: false });
+out.conflict = w.mutationErrorText(conflict([CERTIFI]), 'install', { kept: false });
+out.conflictMany = w.mutationErrorText(conflict(MANY), 'upgrade', { kept: false });
+out.conflictEmpty = w.mutationErrorText(conflict([]), 'install', { kept: false });
 out.plain = w.apiErrorText({ message: 'x', detail: { detail: 'admin session required' } });
 process.stdout.write(JSON.stringify(out));
 """
@@ -303,3 +334,36 @@ def test_a_migration_refusal_on_enable_is_a_sentence(refusals) -> None:
 
 def test_a_plain_detail_still_reads_as_before(refusals) -> None:
     assert refusals["plain"] == "admin session required"
+
+
+def test_a_requirements_conflict_names_the_package_and_both_versions(refusals) -> None:
+    assert refusals["conflict"].splitlines() == [
+        "install failed: this plugin needs different package versions than Domovoi has.",
+        "certifi: the plugin wants 2026.6.17, Domovoi has 2026.10.23",
+        "Ask the plugin's publisher for a version built for this Domovoi.",
+    ]
+
+
+def test_many_conflicts_list_five_then_count_the_rest(refusals) -> None:
+    lines = refusals["conflictMany"].splitlines()
+    assert lines[0].startswith("upgrade failed:")
+    assert lines[1:6] == [f"pkg{i}: the plugin wants 1.0, Domovoi has 2.0" for i in range(5)]
+    assert lines[6] == "and 3 more"
+    assert lines[7].startswith("Ask the plugin's publisher")
+    assert len(lines) == 8
+
+
+def test_a_conflict_with_no_rows_keeps_the_generic_message(refusals) -> None:
+    said = refusals["conflictEmpty"]
+    assert said == ("install failed: install would change the version of "
+                    "already-installed distribution(s)"), said
+
+
+def test_the_confirm_modal_shows_the_conflict_too(rendered) -> None:
+    texts = _texts(rendered["confirm_error_conflict"])
+    assert any("certifi: the plugin wants 2026.6.17, Domovoi has 2026.10.23" in t
+               for t in texts), texts
+    many = " ".join(_texts(rendered["confirm_error_conflict_many"]))
+    assert "and 3 more" in many and "pkg5" not in many, many
+    assert _texts(rendered["confirm_error_conflict_empty"]) == [
+        "install would change the version of already-installed distribution(s)"]

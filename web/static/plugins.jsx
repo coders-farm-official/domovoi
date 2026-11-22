@@ -40,13 +40,15 @@ const confirmErrorView = (e) => {
     // A plain {detail: "…"} (the web process's own 502/503, a 403) is a
     // sentence too; only a request that got no answer at all falls back
     // to the bare error.
-    message: err.message || (typeof body === 'string' && body) || String((e && e.message) || e),
+    message: requirementsConflictText(
+      err, 'This plugin needs different package versions than Domovoi has.')
+      || err.message || (typeof body === 'string' && body) || String((e && e.message) || e),
     kept: Object.entries(kept).filter(([, files]) => Array.isArray(files) && files.length > 0),
   };
 };
 
 const ConfirmError = ({ err }) => (
-  <div className="err">
+  <div className="err" style={{ whiteSpace: 'pre-line' }}>
     {err.message}
     {err.kept.length > 0 && (
       <div style={{ marginTop: 6 }}>

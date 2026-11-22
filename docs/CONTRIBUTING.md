@@ -822,7 +822,14 @@ setup is [docs/release/ACTIONS-SETUP.md](release/ACTIONS-SETUP.md).
    **Later**, and name the next work). The docs gates fail on a stale
    version in either (`domovoi/tests/test_version_copies.py`); whether the
    wording is still true is for the person releasing to read.
-2. Wait for CI to go green on that commit.
+2. Wait for CI to go green on that commit. Also check the first-party
+   plugins' locks against the release's (the plugin repos aren't in this
+   one, so CI can't): `python scripts/release/check_plugin_locks.py
+   <each plugin's zip or requirements.lock>`. It fails with a table if a
+   plugin pins a package at a different version than the core's locks; a
+   household that installs that plugin would be refused
+   (`requirements_conflict`). Ask the plugin's publisher for a rebuilt
+   lock before releasing.
 3. **Actions → release → Run workflow**, branch `main` (leave *tag* empty:
    it is `v` + `pyproject.toml`'s version).
 4. The **plan** job (no secrets) checks the commit and says which path it
