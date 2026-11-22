@@ -421,6 +421,8 @@ def _msg_dict(r: Any) -> dict[str, Any]:
     for key in ("stats", "documents", "doc", "draft"):
         if isinstance(d.get(key), str):
             d[key] = json.loads(d[key])
+    if isinstance(d.get("stats"), dict) and d["stats"].get("print_attachment"):
+        d["print_attachment"] = d["stats"]["print_attachment"]
     if d.get("speaker_confidence") is not None:
         d["speaker_confidence"] = round(float(d["speaker_confidence"]), 4)
     # The same judgement the core made when the turn came in
@@ -1635,6 +1637,11 @@ async def _answer(
             async for event in _finish_retry(replace_id, content, error, code, stats):
                 yield event
             return
+        if draft is not None and draft.get("print_attachment"):
+            # An attachment's print card is its own key, never a draft's
+            # (apps from before it would draw a broken draft card).
+            stats["print_attachment"] = draft.pop("print_attachment")
+            draft = None
         async with session_scope() as s:
             row = (
                 await s.execute(

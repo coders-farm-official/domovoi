@@ -396,12 +396,14 @@ const ChatMessage = ({ m, threadId, onCopy, admin, onLookup, onHeadsUp, busy, st
           <span style={{ flexShrink: 0, marginTop: 3 }}><DomovoiGlyph size={14}/></span>
           <div {...bubbleEvents}
                style={{ fontSize: 13, lineHeight: 1.6, overflowWrap: 'break-word', minWidth: 0,
-                        flex: m.draft && !m.pending ? 1 : undefined }}>
+                        flex: (m.draft || m.print_attachment) && !m.pending ? 1 : undefined }}>
             {headsUp ? (
               // A heads-up card is the reply until an option is picked
               // (documents plan D3): its own sentence and buttons.
               <ChatDocs.HeadsUpCard card={headsUp} busy={busy}
                                     onPick={onHeadsUp ? (option) => onHeadsUp(m, option) : null}/>
+            ) : m.print_attachment && !m.pending && window.ChatDrafts && draftHooks ? (
+              <window.ChatDrafts.AttachmentCard m={m} onPrint={draftHooks.printAttachment} canPrint={draftHooks.canPrint}/>
             ) : m.draft && !m.pending && window.ChatDrafts && draftHooks ? (
               // A draft (chat_drafts.jsx): the card, not the text.
               <window.ChatDrafts.DraftCard m={m} latest={draftHooks.latest[m.draft.id] || null}
@@ -755,9 +757,9 @@ const ChatPageMain = () => {
       send({ draftId: id, text });
       return true;
     },
-    print: (id, version, attachment) => setPrintDraft(attachment
-      ? { attachment, title: attachment.name }
-      : { id, version, title: ((draftLatest[id] || {}).title) || 'draft' }),
+    print: (id, version) => setPrintDraft({ id, version,
+      title: ((draftLatest[id] || {}).title) || 'draft' }),
+    printAttachment: (attachment) => setPrintDraft({ attachment, title: attachment.name }),
     save: async (id, version) => {
       try {
         const r = await Drafts.api.save(id, version, null);

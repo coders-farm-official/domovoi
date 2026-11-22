@@ -21375,6 +21375,108 @@
         }
       }
     },
+    "/api/chat/attachments/{token}/print/preview": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Print Attachment Preview",
+        "description": "The Print dialog's preview of a chat attachment (a picture or document).",
+        "operationId": "print_attachment_preview_api_chat_attachments__token__print_preview_post",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrintDraftBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/attachments/{token}/print/jobs": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Print Attachment",
+        "description": "Prints a chat attachment on the home's printer (after its preview).",
+        "operationId": "print_attachment_api_chat_attachments__token__print_jobs_post",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrintDraftBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/chat/doc-jobs/speed": {
       "get": {
         "tags": [

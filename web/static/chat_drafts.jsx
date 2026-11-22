@@ -116,6 +116,26 @@ const ChatDrafts = (() => {
     else window.open(url, '_blank', 'noopener');
   };
 
+  /* The card for "print this" on a picture or document of the chat. */
+  const AttachmentCard = ({ m, onPrint, canPrint }) => {
+    const a = m.print_attachment || {};
+    return (
+      <div className="chat-draft-card" role="group" aria-label={`print: ${a.name}`}>
+        <div className="chat-draft-card-head">
+          <Icon name="printer" size={14}/>
+          <span className="chat-draft-kind">{a.kind}</span>
+          <span className="chat-draft-title" title={a.name}>{a.name}</span>
+        </div>
+        {m.content && <div className="chat-draft-line">{m.content}</div>}
+        <div className="chat-draft-actions">
+          {canPrint
+            ? <Button variant="primary" icon="printer" onClick={() => onPrint(a)}>Print</Button>
+            : <span className="chat-draft-note">no printer is set up on this home</span>}
+        </div>
+      </div>
+    );
+  };
+
   /* The draft card on the reply that made a version, or asked to print. */
   const DraftCard = ({ m, latest, onOpen, onSave, onPrint, canPrint, onRevise = null }) => {
     const d = m.draft || {};
@@ -127,19 +147,19 @@ const ChatDrafts = (() => {
       <div className="chat-draft-card" role="group" aria-label={`draft: ${d.title}`}>
         <div className="chat-draft-card-head">
           <Icon name={isPrint ? 'printer' : 'file-text'} size={14}/>
-          <span className="chat-draft-kind">{d.attachment ? d.attachment.kind : (KIND[d.kind] || 'draft')}</span>
+          <span className="chat-draft-kind">{KIND[d.kind] || 'draft'}</span>
           <span className="chat-draft-title" title={d.title}>{d.title}</span>
-          {d.version && <span className="chat-draft-chip mono">v{d.version}</span>}
+          <span className="chat-draft-chip mono">v{d.version}</span>
           {newer && <span className="chat-draft-newer mono">latest v{newer}</span>}
         </div>
         {lines && <div className="chat-draft-lines">{lines}</div>}
         {m.content && <div className="chat-draft-line">{m.content}</div>}
         <div className="chat-draft-actions">
           {isPrint && canPrint && (
-            <Button variant="primary" icon="printer" onClick={() => onPrint(d.id, d.version, d.attachment)}>Print</Button>
+            <Button variant="primary" icon="printer" onClick={() => onPrint(d.id, d.version)}>Print</Button>
           )}
           {isPrint && !canPrint && <span className="chat-draft-note">no printer is set up on this home</span>}
-          {!d.attachment && <Button icon="panel-right-open" onClick={() => onOpen(d.id, d.version)}>open</Button>}
+          <Button icon="panel-right-open" onClick={() => onOpen(d.id, d.version)}>open</Button>
           {!isPrint && <Button icon="save" onClick={() => onSave(d.id, d.version)}>save</Button>}
           {!isPrint && (
             <Button icon="download" title="download this version"
@@ -357,7 +377,7 @@ const ChatDrafts = (() => {
     );
   };
 
-  return { api, KIND, WIDE_MIN, DraftCard, Canvas, Changes, List, useWidthAtLeast, seen, markSeen, sourceLabel };
+  return { api, KIND, WIDE_MIN, DraftCard, AttachmentCard, Canvas, Changes, List, useWidthAtLeast, seen, markSeen, sourceLabel };
 })();
 
 window.ChatDrafts = ChatDrafts;
