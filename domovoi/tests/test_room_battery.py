@@ -139,8 +139,9 @@ async def _cleanup(*rooms: str) -> None:
     async with session_scope() as s:
         for r in rooms:
             await s.execute(text("DELETE FROM room_battery_warnings WHERE room_id = :r"), {"r": r})
-            await s.execute(text("DELETE FROM room_battery WHERE room_id = :r"), {"r": r})
-            await s.execute(text("DELETE FROM satellites WHERE room_id = :r"), {"r": r})
+            await s.execute(text("DELETE FROM room_battery WHERE satellite_id = :r"), {"r": r})
+            await s.execute(text("DELETE FROM satellites WHERE satellite_id = :r"), {"r": r})
+            await s.execute(text("DELETE FROM rooms WHERE room_id = :r"), {"r": r})
 
 
 async def _rows(room: str) -> list[dict]:

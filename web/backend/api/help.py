@@ -131,13 +131,13 @@ async def _room_records() -> tuple[dict[str, dict[str, Any]], dict[str, dict[str
     try:
         async with session_scope() as s:
             for r in (await s.execute(text(
-                "SELECT DISTINCT ON (room_id) room_id, received_at, sample FROM satellite_health "
-                "ORDER BY room_id, received_at DESC"
+                "SELECT DISTINCT ON (satellite_id) satellite_id, received_at, sample "
+                "FROM satellite_health ORDER BY satellite_id, received_at DESC"
             ))).all():
                 samples[r[0]] = {"received_at": r[1], "sample": r[2] or {}}
             for r in (await s.execute(text(
-                "SELECT DISTINCT ON (room_id) room_id, reported_at, report FROM satellite_outages "
-                "ORDER BY room_id, reported_at DESC"
+                "SELECT DISTINCT ON (satellite_id) satellite_id, reported_at, report "
+                "FROM satellite_outages ORDER BY satellite_id, reported_at DESC"
             ))).all():
                 outages[r[0]] = {"reported_at": r[1], "report": r[2] or {}}
     except Exception as e:  # noqa: BLE001 — V022 missing: no records yet

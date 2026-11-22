@@ -5,10 +5,9 @@ playing in Alex's office": a music command may end with a PLACE. This
 module answers two questions about it, without deciding anything about
 music:
 
-* :func:`household_rooms` — which rooms the house has: every room id a
-  satellite row (adopted, labelled, or seen by a hello), an MPD row (its
-  satellite connected and got a music player) or a pairing names, plus the
-  rooms connected right now. Room-mode phones and laptop satellites are
+* :func:`household_rooms` — which rooms the house has: its ``rooms`` rows
+  (V072: a room is the place, holding zero or more satellites), any room
+  with an MPD row (a music player), plus the rooms connected right now. Room-mode phones and laptop satellites are
   rooms like any other; the app's chat mic (``phone-…`` ids) is not.
 * :func:`read_place` — what the words after "in"/"on"/... name: this room
   ("in here"), every room ("everywhere", "the whole house"), one of the
@@ -152,16 +151,21 @@ class Room:
         return out
 
 
+# The house's rooms (V072 ``rooms``), plus any room a music player was
+# provisioned for that has no row yet. ``label``: the room's name when it
+# has one of its own (not just its id). ``sat_type``: its first device's.
+# ``seen``: it has a music player, or one of its devices has paired.
 _ROOMS_SQL = text(
-    "SELECT r.room_id, s.room_label, s.sat_type, "
-    "       (m.room_id IS NOT NULL OR p.room_id IS NOT NULL) AS seen "
-    "FROM (SELECT room_id FROM satellites "
-    "      UNION SELECT room_id FROM mpd_rooms "
-    "      UNION SELECT room_id FROM satellite_pairings) r "
-    "LEFT JOIN satellites s ON s.room_id = r.room_id "
-    "LEFT JOIN mpd_rooms m ON m.room_id = r.room_id "
-    "LEFT JOIN satellite_pairings p ON p.room_id = r.room_id "
-    "ORDER BY r.room_id"
+    "SELECT u.room_id, NULLIF(r.name, r.room_id) AS label, "
+    "       (SELECT s.sat_type FROM satellites s WHERE s.room_id = u.room_id "
+    "        ORDER BY s.satellite_id LIMIT 1) AS sat_type, "
+    "       (EXISTS (SELECT 1 FROM mpd_rooms m WHERE m.room_id = u.room_id) "
+    "        OR EXISTS (SELECT 1 FROM satellites s JOIN satellite_pairings p "
+    "                   ON p.satellite_id = s.satellite_id "
+    "                   WHERE s.room_id = u.room_id)) AS seen "
+    "FROM (SELECT room_id FROM rooms UNION SELECT room_id FROM mpd_rooms) u "
+    "LEFT JOIN rooms r ON r.room_id = u.room_id "
+    "ORDER BY u.room_id"
 )
 
 

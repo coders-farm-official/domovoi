@@ -116,7 +116,7 @@ def hours_for(choice: RoomChoice, settings: Any = None) -> tuple[str, str] | Non
 async def room_choice(s: Any, room_id: str) -> RoomChoice:
     """The room's stored choice; ``house`` for a room with no row."""
     row = (await s.execute(
-        text("SELECT quiet_mode, quiet_start, quiet_end FROM satellites WHERE room_id = :r"),
+        text("SELECT quiet_mode, quiet_start, quiet_end FROM rooms WHERE room_id = :r"),
         {"r": room_id},
     )).first()
     if row is None or row[0] not in MODES:
@@ -137,8 +137,8 @@ async def set_room_choice(s: Any, room_id: str, choice: RoomChoice) -> RoomChoic
         start, end = None, None
     await s.execute(
         text(
-            "INSERT INTO satellites (room_id, quiet_mode, quiet_start, quiet_end, adopted_via) "
-            "VALUES (:r, :m, :s, :e, 'manual') ON CONFLICT (room_id) DO UPDATE SET "
+            "INSERT INTO rooms (room_id, name, quiet_mode, quiet_start, quiet_end) "
+            "VALUES (:r, :r, :m, :s, :e) ON CONFLICT (room_id) DO UPDATE SET "
             "quiet_mode = EXCLUDED.quiet_mode, quiet_start = EXCLUDED.quiet_start, "
             "quiet_end = EXCLUDED.quiet_end, updated_at = now()"
         ),

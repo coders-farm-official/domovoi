@@ -217,8 +217,12 @@ async def rooms(_db):
     await _reset()
     async with engine.begin() as conn:
         await conn.execute(text(
-            "INSERT INTO satellites (room_id, adopted_via) VALUES "
-            "('kitchen', 'manual'), ('garage', 'manual')"
+            "INSERT INTO rooms (room_id, name) VALUES ('kitchen', 'kitchen'), ('garage', 'garage') "
+            "ON CONFLICT DO NOTHING"
+        ))
+        await conn.execute(text(
+            "INSERT INTO satellites (satellite_id, room_id, adopted_via) VALUES "
+            "('kitchen', 'kitchen', 'manual'), ('garage', 'garage', 'manual')"
         ))
     yield
     await _reset()

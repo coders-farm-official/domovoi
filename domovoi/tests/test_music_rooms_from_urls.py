@@ -250,31 +250,30 @@ async def test_the_device_tier_music_routes_cannot_mint_a_room_either(
 @requires_db
 @pytest.mark.asyncio
 async def test_room_is_known_reads_the_three_tables() -> None:
+    """A room is known by its ``rooms`` row (V072), its music player, or a
+    device's pairing."""
     from sqlalchemy import text
 
     from domovoi.db.repositories import SatellitesRepository
     from domovoi.db.session import session_scope
 
+    ids = "('zz-k1','zz-k2','zz-k3','zz-none')"
+
+    async def clean(s):
+        await s.execute(text(f"DELETE FROM mpd_rooms WHERE room_id IN {ids}"))
+        await s.execute(text(f"DELETE FROM satellite_pairings WHERE satellite_id IN {ids}"))
+        await s.execute(text(f"DELETE FROM rooms WHERE room_id IN {ids}"))
+
     async with session_scope() as s:
-        await s.execute(text(
-            "DELETE FROM mpd_rooms WHERE room_id IN ('zz-k1','zz-k2','zz-k3','zz-none')"
-        ))
-        await s.execute(text(
-            "DELETE FROM satellite_pairings WHERE room_id IN ('zz-k1','zz-k2','zz-k3','zz-none')"
-        ))
-        await s.execute(text(
-            "DELETE FROM satellites WHERE room_id IN ('zz-k1','zz-k2','zz-k3','zz-none')"
-        ))
+        await clean(s)
         await s.execute(text(
             "INSERT INTO mpd_rooms (room_id, control_port, http_port, container_name) "
             "VALUES ('zz-k1', 16600, 18001, 'domovoi-mpd-zz-k1')"
         ))
         await s.execute(text(
-            "INSERT INTO satellite_pairings (room_id, token_hash) VALUES ('zz-k2', 'h')"
+            "INSERT INTO satellite_pairings (satellite_id, token_hash) VALUES ('zz-k2', 'h')"
         ))
-        await s.execute(text(
-            "INSERT INTO satellites (room_id, adopted_via) VALUES ('zz-k3', 'manual')"
-        ))
+        await s.execute(text("INSERT INTO rooms (room_id, name) VALUES ('zz-k3', 'zz-k3')"))
     try:
         async with session_scope() as s:
             repo = SatellitesRepository(s)
@@ -284,7 +283,4 @@ async def test_room_is_known_reads_the_three_tables() -> None:
             assert await repo.room_is_known("zz-none") is False
     finally:
         async with session_scope() as s:
-            for table in ("mpd_rooms", "satellite_pairings", "satellites"):
-                await s.execute(text(
-                    f"DELETE FROM {table} WHERE room_id IN ('zz-k1','zz-k2','zz-k3')"
-                ))
+            await clean(s)

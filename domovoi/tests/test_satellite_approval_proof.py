@@ -170,7 +170,7 @@ async def _type_code(code: str) -> str:
 async def _row(room: str = ROOM):
     async with session_scope() as s:
         return (await s.execute(text(
-            "SELECT * FROM satellite_approvals WHERE room_id = :r"), {"r": room}
+            "SELECT * FROM satellite_approvals WHERE satellite_id = :r"), {"r": room}
         )).mappings().first()
 
 
