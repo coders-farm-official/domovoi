@@ -63,8 +63,6 @@ struct MusicTrackSheet: View {
     /// the same way.
     @Environment(\.dismiss) private var dismiss
 
-    @State private var alsoFile = false
-    @State private var confirmingDelete = false
 
     /// The clock the two relative times are measured against, read **once**
     /// when the sheet opens.
@@ -99,19 +97,6 @@ struct MusicTrackSheet: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(MusicStrings.close) { dismiss() }
                 }
-            }
-            .alert(MusicStrings.deleteTrack, isPresented: $confirmingDelete) {
-                Button(MusicStrings.delete, role: .destructive) {
-                    // Closed on the confirmation, as `play in room` is: the
-                    // request is the model's and outlives this sheet, and the
-                    // toast reports either outcome over whatever is on screen
-                    // then.
-                    music.deleteTrack(track, alsoFile: alsoFile)
-                    dismiss()
-                }
-                Button(MusicStrings.cancel, role: .cancel) {}
-            } message: {
-                Text(MusicModel.deleteQuestion(track, alsoFile: alsoFile))
             }
         }
     }
@@ -268,27 +253,19 @@ struct MusicTrackSheet: View {
         }
     }
 
-    // MARK: - getting rid of it
+    // MARK: - where its upkeep is
 
+    /// Where Android's `delete track` and its "also delete the file" switch
+    /// were, and where this sheet's own were until 22 Nov 2026: deleting a
+    /// track is admin (`DELETE /api/music/library/{id}`,
+    /// `require_admin_mutation`), as are the library's rescan and tag
+    /// fixer, and this app has no admin session, so all three 401'd from
+    /// every phone. One line says where they are (the phone admin audit).
     private var danger: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            // The switch is **above** the button it changes the meaning of,
-            // and the confirmation reads back whichever meaning is set — the
-            // two sentences are different acts, not one sentence with a word
-            // swapped (``MusicModel/deleteQuestion(_:alsoFile:)``).
-            Toggle(MusicStrings.alsoDeleteFile, isOn: $alsoFile)
-                .font(.footnote)
-            Button(role: .destructive) {
-                confirmingDelete = true
-            } label: {
-                Text(MusicStrings.deleteTrack)
-                    .font(.subheadline)
-                    .frame(minHeight: 44)
-                    .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Color.errInk)
-        }
+        Text(MusicStrings.upkeepOnDashboard)
+            .font(.footnote)
+            .foregroundStyle(Color.fgMuted)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 

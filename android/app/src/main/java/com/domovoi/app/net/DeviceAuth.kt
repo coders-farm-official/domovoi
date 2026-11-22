@@ -170,3 +170,27 @@ fun isServerDeviceRefusal(status: Int, body: String?): Boolean {
     }.getOrNull() ?: return false
     return detail in SERVER_DEVICE_REFUSALS
 }
+
+/** What the phone says when the server refuses an action because only an
+ *  admin may take it: the phone has no admin session, so the raw
+ *  `401 … {"detail":"admin session required"}` is never shown (the phone
+ *  admin audit, 22 Nov 2026). The same sentence as Friend Houses'. */
+const val ADMIN_ONLY = "Only an admin can do that, on the dashboard."
+
+/** The admin tiers' own refusals, word for word (domovoi/admin_auth.py
+ *  require_admin_mutation / _security / _security_read, and
+ *  domovoi/auth.py require_admin for plugins). Matched whole, never as a
+ *  substring: the device tier's "X-Device-Token or admin session required"
+ *  ends with the same words and means "pair this phone". */
+private const val ADMIN_SESSION_REQUIRED = "admin session required"
+private const val ADMIN_COOKIE_ONLY = "mutations require Authorization: Bearer"
+
+fun isAdminRefusal(status: Int, body: String?): Boolean {
+    if (status != 401 && status != 403) return false
+    val detail = runCatching {
+        (DomovoiJson.parseToJsonElement(body.orEmpty()) as? kotlinx.serialization.json.JsonObject)
+            ?.get("detail")?.let { it as? kotlinx.serialization.json.JsonPrimitive }
+            ?.takeIf { it.isString }?.content
+    }.getOrNull()?.trim() ?: return false
+    return detail == ADMIN_SESSION_REQUIRED || detail.startsWith(ADMIN_COOKIE_ONLY)
+}

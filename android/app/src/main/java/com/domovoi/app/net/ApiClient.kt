@@ -72,6 +72,12 @@ class ApiException(
     }
 }
 
+/** An [ApiException]'s message: "{status} {reason}: {body}", or, for an
+ *  admin-only refusal, [ADMIN_ONLY] alone, so a toast that shows the message
+ *  as it is never shows the raw 401 ([isAdminRefusal]). */
+fun apiErrorMessage(status: Int, reason: String, body: String): String =
+    if (isAdminRefusal(status, body)) ADMIN_ONLY else "$status $reason: ${body.take(200)}"
+
 /**
  * Toast text for a failed mutation (CONVENTIONS rule 4). A non-2xx response is
  * the backend's fault, not the network's, so it reports the server's own
@@ -81,6 +87,8 @@ class ApiException(
 fun failureText(action: String, e: Throwable): String {
     val detail = e.message?.trim()?.takeIf { it.isNotEmpty() }
     return when {
+        // Only an admin may do this, and a phone is never one: say that alone.
+        e is ApiException && isAdminRefusal(e.status, e.body) -> ADMIN_ONLY
         e is ApiException -> "$action failed: ${detail ?: "HTTP ${e.status}"}"
         // A cleartext refusal (CleartextPolicy or the platform) is not an
         // outage: say why, so the address can be corrected.
@@ -345,7 +353,7 @@ class ApiClient(
                     val pairing = isPairingRefusalFromOurServer(resp.code, text)
                     if (pairing && trackPairing) _pairingRequired.value = true
                     throw ApiException(
-                        resp.code, "${resp.code} ${resp.message}: ${text.take(200)}", pairing,
+                        resp.code, apiErrorMessage(resp.code, resp.message, text), pairing,
                         body = text.take(4096), refusal = resp.header(REFUSAL_HEADER),
                         retryAfterSec = resp.header("Retry-After")?.trim()?.toLongOrNull()?.takeIf { it >= 0 },
                     )

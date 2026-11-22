@@ -214,6 +214,25 @@ public func isServerDeviceRefusal(status: Int, body: String?) -> Bool {
     return serverDeviceRefusals.contains(detail)
 }
 
+/// What the phone says when the server refuses an action because only an
+/// admin may take it. A phone has no admin session, so the raw
+/// `401: {"detail":"admin session required"}` is never shown (the phone
+/// admin audit, 22 Nov 2026). Android's `ADMIN_ONLY`, word for word, and the
+/// same sentence as Friend Houses' ``fhAdminOnly``.
+public let adminOnly = "Only an admin can do that, on the dashboard."
+
+/// Whether a refusal is the admin tier's own: `admin_auth.py`'s
+/// `require_admin_*` and `auth.py`'s `require_admin` (plugins). Matched
+/// whole, never as a substring: the device tier's
+/// "X-Device-Token or admin session required" ends with the same words and
+/// means "pair this phone". Android's `isAdminRefusal`, branch for branch.
+public func isAdminRefusal(status: Int, body: String?) -> Bool {
+    guard status == 401 || status == 403 else { return false }
+    guard let detail = jsonDetail(of: body)?.trimmingCharacters(in: .whitespacesAndNewlines) else { return false }
+    return detail == "admin session required"
+        || detail.hasPrefix("mutations require Authorization: Bearer")
+}
+
 /// The `detail` string of a JSON error body, or nil when the body is not a
 /// JSON object, has no `detail`, or has one that is not a string.
 ///

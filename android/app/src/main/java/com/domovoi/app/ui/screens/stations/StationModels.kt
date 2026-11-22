@@ -62,12 +62,10 @@ data class RadioDetection(
     val library_track_id: Long? = null,
 )
 
-@Serializable
-data class FccImportResult(
-    val state: String? = null,
-    val inserted: Int = 0,
-    val updated: Int = 0,
-)
+/** Where the FCC FM import is (the iPhone's
+ *  StationsStrings.importIsAnAdminJob, word for word). */
+internal const val FCC_IMPORT_IS_AN_ADMIN_JOB =
+    "importing the FCC FM list is an admin job — do it on the dashboard"
 
 @Serializable
 data class SimulcastResult(

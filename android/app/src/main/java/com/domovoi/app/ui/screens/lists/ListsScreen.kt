@@ -175,7 +175,7 @@ fun ListsScreen() {
         when {
             !paired || listsRead is ListsRead.Refused -> EmptyState(
                 "paired devices only",
-                "pair this phone, or sign in, to read the household's lists",
+                "pair this phone to read the household's lists",
             )
             data.lists.loading && loaded == null -> LoadingState()
             data.lists.error != null && loaded == null ->
