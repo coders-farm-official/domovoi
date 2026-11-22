@@ -323,12 +323,20 @@ public final class PrintingJobModel {
             previewError = nil
         } catch let trouble as DomovoiError {
             guard !Task.isCancelled, mine(askedFor, askedWith) else { return }
-            previewError = printingFailureText(PrintingStrings.verbPreview, trouble)
+            previewError = targetFailureText(PrintingStrings.verbPreview, trouble)
         } catch {
             guard !Task.isCancelled, mine(askedFor, askedWith) else { return }
             previewError = failureText(PrintingStrings.verbPreview, .unreachable("\(error)"))
         }
         if mine(askedFor, askedWith) { previewing = false }
+    }
+
+    /// A failed preview or print in words: the target's own sentence for a
+    /// 404 when it has one (a chat attachment that is gone), else the
+    /// server's (``printingFailureText(_:_:)``).
+    private func targetFailureText(_ verb: String, _ trouble: DomovoiError) -> String {
+        if trouble.failure?.status == 404, let gone = target.goneText { return gone }
+        return printingFailureText(verb, trouble)
     }
 
     /// Whether an answer asked for with these keys is still the sheet's.
@@ -351,7 +359,7 @@ public final class PrintingJobModel {
                 self.job = started
                 self.follow(started)
             } catch let trouble as DomovoiError {
-                self.toast = printingFailureText(PrintingStrings.verbPrint, trouble)
+                self.toast = self.targetFailureText(PrintingStrings.verbPrint, trouble)
             } catch {
                 self.toast = failureText(PrintingStrings.verbPrint, .unreachable("\(error)"))
             }

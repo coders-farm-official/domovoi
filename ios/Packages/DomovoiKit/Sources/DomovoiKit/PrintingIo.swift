@@ -395,10 +395,15 @@ public enum PrintingTarget: Equatable, Sendable {
     /// draft's own (``ChatMoreDraftRef/id``), an `Int64` like every chat id.
     case chatDraft(draftID: Int64, version: Int)
 
+    /// A file attached in a home-server chat ("print this", 1.4.1). A 404
+    /// means the attachment is gone (``PrintingTarget/goneText``).
+    case chatAttachment(token: String)
+
     public var previewPath: String {
         switch self {
         case .file: return PrintingIo.Path.printPreview
         case .chatDraft(let draftID, _): return "/api/chat/drafts/\(draftID)/print/preview"
+        case .chatAttachment(let token): return "/api/chat/attachments/\(token)/print/preview"
         }
     }
 
@@ -406,6 +411,18 @@ public enum PrintingTarget: Equatable, Sendable {
         switch self {
         case .file: return PrintingIo.Path.printJobs
         case .chatDraft(let draftID, _): return "/api/chat/drafts/\(draftID)/print/jobs"
+        case .chatAttachment(let token): return "/api/chat/attachments/\(token)/print/jobs"
+        }
+    }
+
+    /// What a 404 from this target's preview or print means, in words; nil
+    /// for targets whose 404 is the server's own sentence.
+    public var goneText: String? {
+        switch self {
+        case .chatAttachment:
+            return "this attachment isn't on the server any more, so it can't be printed"
+        case .file, .chatDraft:
+            return nil
         }
     }
 
@@ -423,6 +440,13 @@ public enum PrintingTarget: Equatable, Sendable {
                 libraryID: nil,
                 path: nil,
                 version: version,
+                printerID: printerID,
+                options: options
+            )
+        case .chatAttachment:
+            return PrintingIo.printBody(
+                libraryID: nil,
+                path: nil,
                 printerID: printerID,
                 options: options
             )

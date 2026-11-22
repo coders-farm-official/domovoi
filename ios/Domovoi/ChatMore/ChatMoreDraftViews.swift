@@ -486,3 +486,61 @@ struct ChatMoreDraftPrintVersion: Identifiable {
 
     var id: String { "print:\(draftID):\(version)" }
 }
+
+/// The card on a reply that offers to print a file attached in the chat
+/// ("print this", 1.4.1; Android's `AttachmentPrintCard`): the file's kind
+/// and name, and Print, which opens the house's Print sheet for it. Nothing
+/// to open, save or share: the attachment is the chat's, not a draft. With
+/// no printer at the house the card says where to add one instead of a Print
+/// that can't work; while the printers are still being read it offers
+/// nothing yet.
+struct ChatMoreAttachmentPrintCardView: View {
+
+    let attachment: ChatPrintAttachment
+    /// Open the Print sheet; nil when the house has no printer (or the
+    /// printers aren't read yet).
+    var print: (() -> Void)? = nil
+    /// The printers were read and there are none.
+    var noPrinter: Bool = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "printer")
+                    .foregroundStyle(Color.fgMuted)
+                    .accessibilityHidden(true)
+                Text(attachment.kindWord)
+                    .font(.caption)
+                    .foregroundStyle(Color.fgMuted)
+                    .accessibilityHidden(true)
+            }
+            Text(attachment.shownName)
+                .font(.body.weight(.semibold))
+                .fixedSize(horizontal: false, vertical: true)
+                .multilineTextAlignment(.leading)
+                .accessibilityLabel(ChatMoreStrings.attachmentCard(attachment))
+            if let print {
+                Button(action: print) {
+                    Text(ChatMoreStrings.printPrimary)
+                        .font(.subheadline)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(minHeight: 44)
+                        .contentShape(.rect)
+                }
+                .accessibilityLabel(ChatMoreStrings.printPrimary)
+                .accessibilityValue(ChatMoreStrings.attachmentCard(attachment))
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.brandInk)
+            } else if noPrinter {
+                Text(ChatMoreStrings.attachmentNoPrinter)
+                    .font(.footnote)
+                    .foregroundStyle(Color.fgMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color.fgMuted.opacity(0.10)))
+        .accessibilityElement(children: .contain)
+    }
+}
