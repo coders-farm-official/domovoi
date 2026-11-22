@@ -1886,6 +1886,7 @@ async def api_upgrade(request: Request, slug: str) -> dict:
             raise _bundled_refusal(slug)
         data, source_ref, github_url, force = await _read_install_body(request)
         install_source = "zip"
+        download: dict[str, Any] | None = None
         if data is None:
             if not github_url:
                 raise InstallError(
@@ -1893,7 +1894,20 @@ async def api_upgrade(request: Request, slug: str) -> dict:
                     "send a multipart zip in field 'file' or JSON "
                     "{'github_url': ...}",
                 )
-            data, source_ref = await download_github_zip(github_url)
+            if await _wants_release_asset(request):
+                # An update from the Plugins page: the release's own zip,
+                # checked against its SHA256SUMS; the tag's source archive
+                # only when the release doesn't attach both. A mismatch
+                # stops here (update_check.download_release_asset).
+                from domovoi.plugins_runtime import update_check
+
+                try:
+                    data, source_ref, download = await update_check.download_release_asset(
+                        github_url, slug)
+                except update_check.NoReleaseAsset as e:
+                    download = {"from": "source", "reason": str(e)}
+            if data is None:
+                data, source_ref = await download_github_zip(github_url)
             install_source = "github"
         staged = await stage_zip(
             data, source_ref=source_ref, upgrade_of=slug, force_downgrade=force,
@@ -1901,4 +1915,15 @@ async def api_upgrade(request: Request, slug: str) -> dict:
         )
     except InstallError as e:
         raise _install_error_response(e)
-    return {"staged_id": staged.staged_id, "preview": staged.preview}
+    out: dict[str, Any] = {"staged_id": staged.staged_id, "preview": staged.preview}
+    if download is not None:
+        out["download"] = download
+    return out
+
+
+async def _wants_release_asset(request: Request) -> bool:
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 - a multipart upload has no JSON body
+        return False
+    return isinstance(body, dict) and body.get("release_asset") is True

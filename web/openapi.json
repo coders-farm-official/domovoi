@@ -643,6 +643,46 @@
         }
       }
     },
+    "/api/plugins/updates": {
+      "get": {
+        "tags": [
+          "plugins"
+        ],
+        "summary": "Updates",
+        "description": "Each GitHub-sourced plugin's update answer, from the core (open\nread, the list's tier): ``{plugins: {slug: {state, latest, notes, ...}}}``.\nRelease notes are plain text. A core that doesn't answer reads as an\nempty map, never as \"up to date\".",
+        "operationId": "updates_api_plugins_updates_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/plugins/updates/check": {
+      "post": {
+        "tags": [
+          "plugins"
+        ],
+        "summary": "Check Updates",
+        "description": "**Check now** \u2014 ``{}`` for every GitHub-installed plugin, or\n``{\"slug\": ...}`` for one. Admin-gated by the core.",
+        "operationId": "check_updates_api_plugins_updates_check_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/plugins/{slug}/purge-preview": {
       "get": {
         "tags": [

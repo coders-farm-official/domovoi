@@ -37,7 +37,7 @@ core = "domovoi_plugin_{slug}.core"
 # ─── reserved slugs ───────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("slug", ["install", "manifest", "status", "static", "api"])
+@pytest.mark.parametrize("slug", ["install", "manifest", "status", "static", "api", "updates"])
 def test_slugs_that_are_core_route_segments_are_reserved(slug: str) -> None:
     assert slug in RESERVED_SLUGS
     with pytest.raises(ManifestError, match="reserved"):

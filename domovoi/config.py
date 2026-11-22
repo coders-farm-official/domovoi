@@ -1418,6 +1418,10 @@ class Settings(BaseSettings):
     # every 30 min (every 2 h when the internet answer is "sometimes"),
     # backing off after failures; never under "never".
     calendar_feed_tick_sec: float = 300.0
+    # Plugin update checks (domovoi/plugins_runtime/update_check.py): how
+    # often the checker looks for a plugin that is due. Each GitHub-installed
+    # plugin's repo is asked once a day; never under "never".
+    plugin_update_check_tick_sec: float = 3600.0
     # Default newest-N episodes to keep downloaded per show. Per-subscription
     # keep_n overrides this; used only as the default when a subscription
     # doesn't set its own. LRU eviction removes downloaded episodes beyond

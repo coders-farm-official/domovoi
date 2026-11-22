@@ -1600,7 +1600,7 @@ admin tier is code execution and configuration, not day-to-day use.
 
 | Surface | Endpoints | Behavior before first-run setup |
 |---|---|---|
-| **Plugin management** (install pipeline = code execution) | `POST /v1/plugins/install`, `/v1/plugins/install/{staged_id}/confirm`, `/v1/plugins/{slug}/enable`, `/disable`, `/uninstall`, `/upgrade` | **Fails closed** — 501 until an admin password exists. Local development uses the `domovoi plugin dev` CLI, which never crosses HTTP. |
+| **Plugin management** (install pipeline = code execution) | `POST /v1/plugins/install`, `/v1/plugins/install/{staged_id}/confirm`, `/v1/plugins/{slug}/enable`, `/disable`, `/uninstall`, `/upgrade`, `/v1/plugins/updates/check` | **Fails closed** — 501 until an admin password exists. Local development uses the `domovoi plugin dev` CLI, which never crosses HTTP. |
 | **Configuration** (values include plugin secrets, so *reads* are gated too) | Core: `GET/POST /v1/admin/config`. Dashboard: `GET/PATCH /api/config/editable` (which forwards your credentials to the core — both processes enforce the gate independently). | **Writes fail closed** — 501 until an admin password exists (a write can point the core at another database or change what it runs). Reads keep the pre-setup grace so a fresh install can finish setup. |
 | **Service restart** (bounces `domovoi-core` + `domovoi-web`, or starts the root `domovoi-update.service` where it is installed) | Core: `POST /v1/admin/version/restart`. Dashboard: `POST /api/config/version/restart`. | **Fails closed** — 501 until setup. |
 | **Update channel** (stable or main: which branch every later pull, and so the update unit's root run, follows; never moves the code itself) | Core: `POST /v1/admin/version/channel`. Dashboard: `POST /api/config/version/channel`. | **Fails closed** — 501 until setup. Only `stable` and `main`, and only those `DOMOVOI_UPSTREAM_BRANCH` in root's `/etc/default/domovoi-update` allows (the update unit refuses any other branch itself). The pin binds the dashboard and catches mistakes; the service user can rewrite its own `.git` refs, so only signed updates bound what root runs. |
@@ -2043,6 +2043,25 @@ What the install flow *does* do (verified in
   plugin if one is missing from it: a marker set by hand, or applied by a
   call rather than a decorator, is a load error, never a route the screen
   did not show.
+- **Update checks never install anything.** For a plugin installed from
+  GitHub the core asks `api.github.com` once a day (and when an admin
+  presses **check for updates**) for the repo's newest `vX.Y.Z` release;
+  a zip install is asked about only when its manifest's homepage is a
+  GitHub repo and an admin asks. No token or credential is sent, no other
+  host is contacted (a redirect elsewhere is refused), nothing is asked
+  with the internet answered **No**, and a private or unreachable repo
+  reads "can't check for updates", never "up to date". **Update to
+  X.Y.Z** downloads the release's own `<slug>-X.Y.Z.zip` and refuses it
+  unless its SHA-256 matches the release's `SHA256SUMS` (only
+  `api.github.com`, `github.com` and GitHub's two storage hosts, every
+  redirect hop included); a release without both files falls back to the
+  tag's source archive, and the page and the trust screen say so. Either
+  way it is the ordinary GitHub upgrade: the same staging checks and trust
+  screen, and nothing runs until an admin confirms. The checksum proves the
+  zip is the one the release lists, not who wrote it: whoever controls the
+  repo controls both. Release notes are shown as plain text, never as HTML. The
+  check reads release metadata, which proves nothing about the code: the
+  trust screen is still where you decide.
 - **Downgrades require `force`** — installing an older version than what's
   present is refused by default, because it may reintroduce fixed
   vulnerabilities.
