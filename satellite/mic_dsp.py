@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -247,16 +248,18 @@ class XvfDsp:
             self._factory = {p: list(factory[p]) for p in PARAMS}
         if isinstance(preset, str) and preset in PRESETS and self._factory is not None:
             self._preset = preset
-            # A preset kept from an earlier run may still be on the chip.
-            self._dirty = preset != "factory"
+            # A preset kept from an earlier run, or a restore that never
+            # finished, may still be on the chip.
+            dirty = data.get("dirty")
+            self._dirty = dirty if isinstance(dirty, bool) else preset != "factory"
 
     def _save(self) -> bool:
         """Write the preset and the factory values; False when it failed."""
         try:
             self._state_file.parent.mkdir(parents=True, exist_ok=True)
             tmp = self._state_file.with_suffix(".tmp")
-            tmp.write_text(json.dumps({"preset": self._preset, "factory": self._factory}),
-                           encoding="utf-8")
+            tmp.write_text(json.dumps({"preset": self._preset, "factory": self._factory,
+                                       "dirty": self._dirty}), encoding="utf-8")
             os.replace(tmp, self._state_file)
         except OSError as e:
             log.warning("mic_dsp: could not save %s: %s", self._state_file, e)
@@ -266,9 +269,10 @@ class XvfDsp:
     # ── presets ──────────────────────────────────────────────────────
 
     def _capture_factory(self) -> None:
-        """Read the factory values, once: only while no preset of ours can
-        be on the chip, so a preset's values are never taken for them."""
-        if self._factory is not None and self._dirty:
+        """Read the factory values, once, before anything of ours was ever
+        written. Once known (or loaded from the saved file) they are never
+        read again: the chip may hold a preset's values by then."""
+        if self._factory is not None:
             return
         read = self._read_all()
         missing = [p for p, v in read.items() if not v]
@@ -306,24 +310,37 @@ class XvfDsp:
                 # the chip and keeps the saved factory values. A preset
                 # that can't be kept is refused, so the chip never holds
                 # values a restart could read in as factory.
-                previous, self._preset = self._preset, name
+                # Marked dirty while anything is written: a crash or a
+                # failed write mid-way leaves the file saying so, and the
+                # next ready or apply restores again.
+                previous, was_dirty = self._preset, self._dirty
+                self._preset = name
+                self._dirty = was_dirty or bool(PRESETS[name])
                 if not self._save() and name != "factory":
-                    self._preset = previous
+                    self._preset, self._dirty = previous, was_dirty
                     raise RuntimeError(
                         f"could not save {self._state_file.name}; not changing the array")
                 # Back to the factory values first, so presets don't stack.
-                if self._dirty:
+                restored = True
+                if was_dirty:
                     for p in PARAMS:
                         if not self._write(p, self._factory[p]):
                             error = f"xvf_host refused {p}"
-                    self._dirty = False
+                            restored = False
                 for param, values in PRESETS[name]:
-                    self._dirty = True
                     if self._write(param, values):
                         applied[param] = list(values)
                     else:
                         error = f"xvf_host refused {param}"
                 readback = self._read_all()
+                # Clean only once every restore write took and the chip
+                # reads back the factory values.
+                if name == "factory" and was_dirty:
+                    if restored and self._matches_factory(readback):
+                        self._dirty = False
+                        self._save()
+                    elif error is None:
+                        error = "the array did not read back its factory values"
             except RuntimeError as e:
                 error = str(e)
                 readback = {}
@@ -353,6 +370,16 @@ class XvfDsp:
         }
         self.last_state = state
         return state
+
+    def _matches_factory(self, readback: dict) -> bool:
+        assert self._factory is not None
+        for p in PARAMS:
+            got = readback.get(p)
+            want = [float(v) for v in self._factory[p]]
+            if not got or len(got) != len(want) or not all(
+                    math.isclose(g, w, rel_tol=1e-5, abs_tol=1e-6) for g, w in zip(got, want)):
+                return False
+        return True
 
     @property
     def active(self) -> bool:
