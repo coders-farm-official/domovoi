@@ -100,6 +100,8 @@ class State:
     _per_friend: dict[bytes, int] = field(default_factory=dict)
     _event_times: dict[bytes, deque] = field(default_factory=dict)
     _pairing_times: deque = field(default_factory=deque)
+    # invite id -> runs broken off after this house's nonce went out
+    _abandoned: dict[bytes, int] = field(default_factory=dict)
     _message_times: dict[bytes, deque] = field(default_factory=dict)
     # msg_id -> the future core's "stored"/"refused" line resolves
     _waiting: dict[bytes, asyncio.Future] = field(default_factory=dict)
@@ -158,6 +160,8 @@ class State:
         return {k: p.friend for k, p in self.peers().items() if not p.pending}
 
     def invite_open(self, invite_id: bytes) -> bool:
+        if self._abandoned.get(invite_id, 0) >= fp.ABANDONED_MAX:
+            return False  # closed here; core closes it for good
         expires = self._reload(INVITES_FILE, self._invites, _read_invites).get(invite_id)
         return expires is not None and expires > time.time()
 
@@ -315,13 +319,17 @@ async def handle_pairing(reader: asyncio.StreamReader, writer: asyncio.StreamWri
         writer.close()
         return
     state._open_pairing += 1
+    revealed: list[bytes] = []
+    done = False
     try:
         async def invite_open(invite_id: bytes) -> bool:
             return state.invite_open(invite_id) and state.pairing_allowed()
 
         req = await asyncio.wait_for(
-            fp.answer(reader, writer, keys=state.keys, invite_open=invite_open),
+            fp.answer(reader, writer, keys=state.keys, invite_open=invite_open,
+                      nonce_sent=revealed.append),
             PAIRING_DEADLINE_SEC)
+        done = True
         emit("request", invite=req.invite_id.hex(), statement=req.statement.to_bytes().hex(),
              reach_private=req.reach_private.hex(), name=req.name, code=req.code)
     except fp.PairingRefused as e:
@@ -332,6 +340,13 @@ async def handle_pairing(reader: asyncio.StreamReader, writer: asyncio.StreamWri
         log.exception("friend request failed")
     finally:
         state._open_pairing -= 1
+        if revealed and not done:
+            # A run broken off after the nonce went out is one try at the
+            # code: a file allows only a few, then it is closed.
+            invite_id = revealed[0]
+            state._abandoned[invite_id] = state._abandoned.get(invite_id, 0) + 1
+            if state._abandoned[invite_id] == fp.ABANDONED_MAX:
+                emit("invite_closed", invite=invite_id.hex())
         writer.close()
 
 

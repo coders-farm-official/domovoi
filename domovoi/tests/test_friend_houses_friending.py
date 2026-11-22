@@ -405,3 +405,30 @@ async def test_fh8_the_weeks_changes_name_new_friends(house) -> None:
     await _a_friend(v)
     changes = await fr.recent_changes()
     assert changes[0]["kind"] == "friend" and changes[0]["friend"] == "V"
+
+
+async def test_a_request_broken_off_partway_is_not_retried_and_closes_the_file(
+        house, monkeypatch) -> None:
+    # B: a run that failed after the nonces were out stops the retries.
+    _a, text_ = _their_file(house.tmp)
+    await fr.send_request(text_, local_name="Smiths")
+    tries: list[int] = []
+
+    async def open_stream(socks, *, onion, timeout=0):
+        return None, SimpleNamespace(close=lambda: None)
+
+    async def ask(r, w, **kw):
+        tries.append(1)
+        raise fp.PairingRefused("the other house didn't take the request", after_nonces=True)
+
+    monkeypatch.setattr(fc, "open_stream", open_stream)
+    monkeypatch.setattr(fp, "ask", ask)
+    await fr.deliver_pending()
+    await fr.deliver_pending()
+    req = (await fr.list_requests())[0]
+    assert tries == [1] and req["trying"] is False and req["last_error"] == fr.STOPPED_ERROR
+
+    # A: the listener's "closed" event closes the file for good.
+    made = await fr.make_invite()
+    await fr.on_event({"event": "invite_closed", "invite": made["id"]})
+    assert made["id"] not in [i["id"] for i in await fr.list_invites()]

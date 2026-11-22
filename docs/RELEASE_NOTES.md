@@ -5,6 +5,24 @@ needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
 
+## 1.4.1 (unreleased)
+
+- Room devices looking for every house count a server only when its
+  identity proof is bound to the address they dialled, and the server
+  signs the approval-proof form only bound to one.
+- Friend Houses: a friend request broken off partway counts as a try on
+  the friend file; the file closes after three, and the asking house stops
+  retrying on its own after one (the request says to withdraw it and try
+  again).
+- Friend Houses: the check that pings friends has one deadline per ping,
+  and each stage of the retry loop has a deadline, so one friend can't
+  hold up the others.
+- Friend Houses: wake phrases are taken out of a friend's text more
+  loosely, after the speech cleaner, and from the whole sentence read
+  aloud (messages and shared lists).
+- Friend Houses: a friend's messages and names read aloud stay out of the
+  chat model's history, and "double check that" declines such a reply.
+
 ## 1.4.1 (unreleased) — Home location, in Settings → Household
 
 - **What changed.** The household's town has its own place: Settings →

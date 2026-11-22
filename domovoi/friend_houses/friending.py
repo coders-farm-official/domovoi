@@ -279,9 +279,19 @@ async def deliver_request(row: dict[str, Any]) -> bool:
                             reach_private=row["reach_gift"], name=await house_name())
         w.close()
     except (fc.Unreachable, fp.PairingRefused) as e:
+        stop = isinstance(e, fp.PairingRefused) and e.after_nonces
         async with _db() as s:
-            await store.update_request(s, row["id"], attempts=row["attempts"] + 1,
-                                       last_error=str(e)[:200])
+            if stop:
+                # Broken off after the nonces were out: not retried on its
+                # own (each run is a try at the code). Dropping the file
+                # stops the retries; the person decides what next.
+                await store.update_request(s, row["id"], attempts=row["attempts"] + 1,
+                                           friend_file=None, last_error=STOPPED_ERROR)
+            else:
+                await store.update_request(s, row["id"], attempts=row["attempts"] + 1,
+                                           last_error=str(e)[:200])
+        if stop:
+            log.warning("Friend Houses: a friend request was broken off partway; not retrying it")
         return False
     async with _db() as s:
         # Sent: the file and our copy of the key we gave them are no longer needed.
@@ -290,6 +300,10 @@ async def deliver_request(row: dict[str, Any]) -> bool:
                                    attempts=row["attempts"] + 1)
     log.info("Friend Houses: friend request delivered (code shown on both houses)")
     return True
+
+
+STOPPED_ERROR = ("Stopped: the other house broke off partway through. Withdraw this "
+                 "request and import the friend file again, or ask for a new one.")
 
 
 # ─── 3. a request arrives (house A) ───────────────────────────────────────
@@ -331,6 +345,17 @@ async def on_request(event: dict[str, Any]) -> None:
             reach_private=reach_private, days=REQUEST_WAIT_DAYS)
     log.info("Friend Houses: a friend request arrived (%s)", fid.fingerprint(statement.house_key))
     await _service().reconcile()  # the invite is used: maybe no pairing onion now
+
+
+async def on_invite_closed(event: dict[str, Any]) -> None:
+    """The listener closed a friend file after several requests on it were
+    broken off partway (pairing.ABANDONED_MAX): close it for good."""
+    invite_id = str(event.get("invite", ""))
+    if len(invite_id) != 32:
+        return
+    if await cancel_invite(invite_id):
+        log.warning("Friend Houses: a friend file was closed after requests on it were "
+                    "broken off partway several times. Make a new one if it is still wanted.")
 
 
 # ─── 4. accepting (house A) ───────────────────────────────────────────────
@@ -562,7 +587,7 @@ async def list_requests() -> list[dict[str, Any]]:
              "their_name": r["their_name"], "name": r["local_name"],
              "fingerprint": fid.fingerprint(r["house_key"]), "code": r["code"],
              "created_at": r["created_at"].isoformat(), "expires_at": r["expires_at"].isoformat(),
-             "trying": r["direction"] == "out" and r["state"] == "unsent",
+             "trying": r["direction"] == "out" and r["state"] == "unsent" and bool(r["friend_file"]),
              "last_error": r["last_error"]} for r in rows]
 
 
@@ -601,7 +626,8 @@ async def deliver_pending() -> None:
         outgoing = await store.requests(s, direction="out", states=("unsent",))
         accepts = await store.requests(s, direction="in", states=("accepted",))
     for row in outgoing:
-        await deliver_request(row)
+        if row["friend_file"]:  # none: stopped (see deliver_request)
+            await deliver_request(row)
     for row in accepts:
         await deliver_accept(row)
     if dropped:
@@ -615,6 +641,8 @@ async def on_event(event: dict[str, Any]) -> None:
             await on_request(event)
         elif kind == "accepted":
             await on_accepted(event)
+        elif kind == "invite_closed":
+            await on_invite_closed(event)
     except Exception:  # noqa: BLE001 — one bad event never stops the others
         log.exception("Friend Houses: handling a %s event failed", kind)
 

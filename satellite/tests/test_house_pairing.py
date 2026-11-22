@@ -336,6 +336,24 @@ def test_a_stripped_or_changed_advert_breaks_the_signature(strip, tamper):
     assert h.proof is False and h.fingerprint is None and h.identity == "failed"
 
 
+def test_an_unbound_answer_holds_no_fingerprint_and_does_not_hide_the_real_house():
+    """An answer verified but not bound to the address dialled proves no
+    identity there: it takes no fingerprint, so the server it names, found
+    at its own address, is still the one asked."""
+    unbound, fp = _proof_opener(None, bind=None)
+    h = discovery.probe_house("192.168.1.31", opener=unbound)
+    assert h.fingerprint is None and h.proof is False and h.identity == "unbound"
+    real, _ = _proof_opener(1)
+    by_host = {"192.168.1.31": h, "192.168.1.20": discovery.probe_house("192.168.1.20", opener=real)}
+    out = discovery.locate_all(
+        names=("domovoi.local",), probe_fn=lambda host, **k: by_host.get(host),
+        resolver=lambda *a: [(None, None, None, None, ("192.168.1.31", 6370))],
+        sweeper=lambda **k: [by_host["192.168.1.20"]],
+    )
+    assert [x.url for x in out if x.proof] == ["ws://192.168.1.20:6370"]
+    assert out[0].fingerprint == fp
+
+
 # ─── parking with every house ──────────────────────────────────────────────
 
 

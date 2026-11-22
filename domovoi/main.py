@@ -1561,6 +1561,13 @@ async def health(
         identity = server_identity.load_or_create()
         if not challenge:
             doc["identity"] = identity.public_document()
+        elif addr is None and server_identity.asks_for_pairing_proof(challenge):
+            # Every device that asks this form also names the address it
+            # dialed: an unbound answer to it is only ever useful to
+            # something in between, so it is not signed.
+            block = identity.public_document()
+            block["challenge"] = challenge
+            doc["identity"] = block
         elif addr is None:
             if not _UNBOUND_CHALLENGE_SEEN:
                 _UNBOUND_CHALLENGE_SEEN = True

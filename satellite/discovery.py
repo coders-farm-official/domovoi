@@ -500,8 +500,10 @@ class House:
     via: str = ""                  # "name", "last-known", "scan" or "address"
     #: "proved" (fingerprint above), "absent" (it offered no identity at all:
     #: a server from before identities), "failed" (it offered one that did
-    #: not check out: a relay, a stripped answer, a forgery), or "" (not
-    #: recorded — a House built by hand).
+    #: not check out: a relay, a stripped answer, a forgery), "unbound" (it
+    #: signed, but not for the address dialled: a server from before the
+    #: address binding, or something relaying one), or "" (not recorded —
+    #: a House built by hand).
     identity: str = ""
 
 
@@ -552,7 +554,15 @@ def probe_house(host: str, *, port: int = CORE_PORT,
         )
         identity = doc.get("identity")
         bound = isinstance(identity, dict) and identity.get("addr") == addr
-        state = "proved"
+        if bound:
+            state = "proved"
+        else:
+            # Verified, but not for the address dialled: anything relaying
+            # a server can produce that, so it proves no identity here and
+            # holds no fingerprint (it must not stand in for the real one).
+            state = "unbound"
+            fingerprint = None
+            log.info("%s signed an identity proof that is not bound to %s", host, addr)
     except server_identity.IdentityUnavailable as e:
         state = "absent"
         log.info("%s answers as Domovoi with no identity: %s", host, e)
