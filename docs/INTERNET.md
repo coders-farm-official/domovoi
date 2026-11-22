@@ -4,10 +4,12 @@ Installing Domovoi needs the internet: Python packages, Docker images, the
 speech models and, unless you leave AI out of setup, the language models
 all download during setup, or an **offline kit**: a USB stick another
 Domovoi server made with all of that on it (1.5.0; Settings → System →
-Offline kit, see [OFFLINE_KIT.md](OFFLINE_KIT.md)). Making a kit uses the
-internet on the server that makes it, for what that server doesn't hold
-yet, through the same internet setting below. After that it is your
-choice, and Domovoi asks you once:
+Offline kit, see [OFFLINE_KIT.md](OFFLINE_KIT.md)). A Linux computer
+(Ubuntu 26.04) installs from one with no internet at all
+([LINUX_HOST.md, Installing without internet](LINUX_HOST.md#installing-without-internet)).
+Making a kit uses the internet on the server that makes it, for what that
+server doesn't hold yet, through the same internet setting below. After
+that it is your choice, and Domovoi asks you once:
 
 > **Will this Domovoi have internet?**
 > **Yes, always** · **Sometimes** · **No, keep everything in the house**

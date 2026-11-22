@@ -381,6 +381,77 @@ command installs only what it has checked, so for anything else run the
 script yourself, next. With no terminal to ask at and no `--internet`, it
 stops and says what to add.
 
+### Installing without internet
+
+A house with no internet installs from an **offline kit**: a USB stick an
+online Domovoi server made ([OFFLINE_KIT.md](OFFLINE_KIT.md)). It holds
+everything the install would otherwise download, and nothing is
+downloaded. **Ubuntu 26.04 only** (the kit carries Ubuntu 26.04's
+packages); Debian 13, Linux Mint and Pop!_OS install with internet.
+
+1. Install Ubuntu 26.04 on the computer, from Ubuntu's own installer
+   stick.
+2. Plug in the kit. Ubuntu Desktop opens it by itself (it shows up as
+   `DOMOVOIKIT`); on Ubuntu Server, mount it:
+   `sudo mkdir -p /mnt/kit && sudo mount /dev/sdX1 /mnt/kit` (`lsblk`
+   shows which `sdX` it is).
+3. Run the installer on the stick:
+
+   ```bash
+   sudo bash /media/alex/DOMOVOIKIT/linux/install.sh --kit
+   ```
+
+   (`/mnt/kit/linux/install.sh --kit` on a server.) It asks the same two
+   questions; the internet one defaults to **No, keep everything in the
+   house**. Leave the stick in until it is done. Without questions:
+   `sudo bash .../linux/install.sh --kit --timezone Europe/Berlin --yes`
+   (and any `provision.sh` option, as above).
+
+**What it checks before it runs anything from the stick**, each step
+before the next:
+
+1. **Checksums.** `kit.json`, the release's signed manifest and Domovoi's
+   source (`source/domovoi.bundle`) against the stick's `SHA256SUMS`, so a
+   bad copy is caught at once ("This stick has a damaged file: ... Make
+   the stick again."). Checksums only catch damage; they are not trust.
+2. **The release signature.** `release/DomovoiSetup.manifest.json` must be
+   signed with Domovoi's release key (the one the script carries, as for
+   the online install) and name the release and commit `kit.json` names.
+3. **That commit.** The source is cloned from the bundle (git checks
+   every object) and checked out at exactly that commit. The `install.sh`
+   you ran must be that release's own.
+4. **The whole stick,** with the checker from that commit
+   (`domovoi/offline_kit`), never with code that is loose on the stick:
+   every file and every part of a split file, and nothing extra.
+5. **Every pin.** `provision.sh` from that commit runs with
+   `--offline-kit`, and each step checks the file it installs against the
+   same pin as online: apt against Ubuntu's and Docker's signed indexes,
+   the Python packages against the lock's hashes, Ollama and each AI
+   model, Whisper, the voices, the wake word, the phone app (with the
+   release key) and the database images (by digest).
+
+A kit that doesn't fit is refused in plain words, before anything is
+changed: one made by a newer Domovoi, one for a Mac only, one missing a
+part the install needs ("The kit has no AI models. Install with
+--no-ai-models, or make a kit with AI chat ticked."), an `install.sh` from
+another release, or a system other than Ubuntu 26.04. A computer that
+already runs Domovoi updates from a newer kit on the dashboard, not here.
+
+**What is different afterwards.** The search helper is not on a kit (it
+needs internet anyway), and neither is Docker's GPU runtime for the
+wake-word trainer: training uses the CPU until an update with internet
+adds it. The checkout's `origin` is still GitHub, so a house that later
+gets internet updates as usual.
+
+**The first hop is trust in the stick.** A changed stick could carry a
+changed `install.sh`, and nothing on the stick can prove otherwise: use a
+kit from a house you trust, and compare `install.sh`'s SHA-256 with the
+release page if you can.
+
+By hand, `provision.sh --offline-kit DIR` does the install from a kit at
+`DIR` (below); it checks every file against the pins but not the release
+signature, which is `install.sh --kit`'s job.
+
 ### Or run the install script yourself
 
 On a fresh Ubuntu 26.04 box (or Debian 13, Mint 22, Pop!_OS 24.04:

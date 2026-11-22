@@ -7,8 +7,9 @@ would otherwise download: the installers, the models, the phone app, the
 packages.
 
 > **Coming in 1.5.0, being built.** This page describes the kit's format,
-> how to check a stick and how a server makes a kit. Installing from a kit
-> arrives in a later step of 1.5.0; this page grows with it.
+> how to check a stick, how a server makes a kit and how a Linux computer
+> (Ubuntu 26.04) installs from one. Windows and Mac installing from a kit
+> arrive in later steps of 1.5.0; this page grows with them.
 
 ## Making a kit
 
@@ -131,6 +132,18 @@ with an Apple chip** (unticked by default), or both.
 Nothing from your household is on it: no database, no passwords, no
 names, no media, no voice profiles. A kit is not a backup.
 
+## Installing from a kit
+
+**Linux (Ubuntu 26.04).** Install Ubuntu 26.04 first, plug in the kit and
+run `sudo bash /media/alex/DOMOVOIKIT/linux/install.sh --kit`. It checks
+the stick (checksums, the release signature, the source at the signed
+commit, then every file with the checker from that commit) before it runs
+anything from it, and the install then checks every file against the same
+pins as an online install. Nothing is downloaded.
+[LINUX_HOST.md, Installing without internet](LINUX_HOST.md#installing-without-internet)
+has the steps and what each check proves. Other Linux systems, Windows and
+Mac follow in later steps of 1.5.0.
+
 ## Checking a stick
 
 Every installer checks the stick before it uses it. To check one
@@ -237,7 +250,11 @@ it goes.
   works; apt warns once per index that it found no `.xz` and then uses the
   uncompressed file. Tried on 2026-11-22: an `ubuntu:26.04` container with
   no network installed `APT_PACKAGES`, the pinned docker-ce and the NVIDIA
-  toolkit from such a mirror.
+  toolkit from such a mirror. The install also needs Docker's key file as
+  Docker serves it (`docker_key_url`), at `apt/<arch>/docker/gpg`: it
+  checks its fingerprint against `provision-manifest.conf`, as online, and
+  only then lets apt trust Docker's `InRelease` (NVIDIA's likewise at
+  `apt/amd64/nvidia/gpg`, when the GPU runtime comes from a kit).
 - `python/cp314-x86_64/`, `python/cp314-aarch64/`: one file per locked
   package (both locks), for `pip install --no-index --find-links …
   --require-hashes`. A package with no wheel for that machine is its
@@ -290,3 +307,8 @@ So the server saves each image under its compose name, without
 `--platform`, checks that the archive's `index.json` names the pinned
 digest, and refuses to make a kit on a server whose Docker uses the older
 store.
+
+`scripts/dev/make_test_kit.py` makes a kit in this layout from the real
+pinned files, signed with a throwaway key, for testing the install
+(`scripts/dev/linux-install-vm.sh --offline-kit` runs one in a VM with no
+internet).

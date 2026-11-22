@@ -4,6 +4,33 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Install Domovoi on Linux with no internet, from an offline kit
+
+- **What changed.** A computer with Ubuntu 26.04 and no internet installs
+  Domovoi from an offline kit, a USB stick an online Domovoi server makes:
+  `sudo bash /media/alex/DOMOVOIKIT/linux/install.sh --kit`. Before it
+  runs anything from the stick it checks the stick's checksums, the
+  release signature on the kit's manifest (Domovoi's release key, as the
+  online install), the source at the signed commit, and every file with
+  the checker from that commit; the install then checks each file against
+  the same pins as online, and nothing reaches the internet.
+  `provision.sh --offline-kit DIR` is the step underneath.
+- **What to know.** Ubuntu 26.04 only; other Linux systems still install
+  with internet, and Windows and Mac follow. The internet question
+  defaults to "No" from a kit. Not on the kit: the search helper and the
+  wake-word trainer's GPU runtime (training uses the CPU until an update
+  with internet). A kit that doesn't fit (a newer Domovoi's, a Mac-only
+  one, one without AI models when AI is wanted, a damaged stick) is
+  refused in plain words before anything changes. LINUX_HOST.md,
+  "Installing without internet".
+- **Also.** provision.sh now installs `dosfstools` and `mtools` (the
+  server makes a kit's FAT32 image with them), and puts the service user
+  in the `ollama` group with the `ollama` account's home open to that
+  group (not to others), so the server can put the AI models it already
+  has on a kit instead of downloading them again. A box set up before
+  gets both when provision.sh runs again (Windows Setup's repair, or by
+  hand); the dashboard's update doesn't add them yet.
+
 ## 1.5.0 (unreleased) — A server can make an offline kit
 
 - **Plugins can add a card to Home (SDK 1.14).** A plugin declares
