@@ -446,15 +446,23 @@ const useInstallFlow = (fire, refresh, dismissToast) => {
     }
   };
 
-  const stageGithub = async (url, slug) => {
+  /* `extra`: {release_asset: true} for an update from the Plugins page —
+   * the release's zip checked against its SHA256SUMS, or the tag's source
+   * when the release doesn't attach both (the answer's `download` says
+   * which, and the trust screen's source line repeats it). */
+  const stageGithub = async (url, slug, extra = {}) => {
     const path = slug ? `/api/plugins/${slug}/upgrade` : '/api/plugins/install';
     try {
       fire('downloading + validating…', { key: STAGE_TOAST });
-      const res = await apiPost(path, { github_url: url });
+      const res = await apiPost(path, { github_url: url, ...extra });
       dismissToast(STAGE_TOAST);
+      const dl = res.download;
+      const how = !dl ? ''
+        : dl.from === 'release_asset' ? ` · release file ${dl.asset}, SHA-256 matches the release's SHA256SUMS`
+        : ` · the tag's source (no release zip + SHA256SUMS to check against)`;
       setStaged({
         stagedId: res.staged_id, preview: res.preview,
-        sourceLabel: url, verb: slug ? 'upgrade' : 'install',
+        sourceLabel: url + how, verb: slug ? 'upgrade' : 'install',
       });
     } catch (e) {
       if (_wasSignInDismissed(e)) return;
@@ -594,9 +602,81 @@ const PluginUpgradeControls = ({ p, onUpgradeZip, onUpgradeUrl, internetOff = fa
   );
 };
 
+/* ---- Update checks (GET /api/plugins/updates) ------------------ */
+/* The core asks each GitHub-installed plugin's repo for a newer vX.Y.Z
+ * once a day (api.github.com only, never with the internet off). A zip
+ * install whose homepage is a GitHub repo is checked only when asked.
+ * "Update to X.Y.Z" is the ordinary GitHub upgrade at that tag: the same
+ * download, checks and trust screen, nothing installs by itself.
+ * Release notes are plain text from the server, rendered as a text node
+ * (never as HTML). A repo that can't be read is never called up to date. */
+const checkedAgo = (sec) => (typeof sec === 'number' ? relTime(new Date(sec * 1000)) : null);
+
+const UpdateBadge = ({ u }) => {
+  if (!u || u.state !== 'update_available') return null;
+  return <Pill tone="warn">update {u.latest}</Pill>;
+};
+
+const PluginUpdatePanel = ({ p, u, onUpdate, onCheck, checking = false, internetOff = false }) => {
+  if (!u || p.status === 'uninstalled' || p.bundled || p.install_source === 'dev') return null;
+  const ago = checkedAgo(u.checked_at);
+  const line = (text, tone) => (
+    <div className="meta plugin-update-state" style={tone ? { color: `var(--${tone}-ink)` } : undefined}>{text}</div>
+  );
+  if (u.state === 'update_available') {
+    return (
+      <div className="plugin-update" style={{ display: 'flex', flexDirection: 'column', gap: 6, maxWidth: 640 }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <Button variant="primary" icon="arrow-up-circle" disabled={internetOff}
+                  title={internetOff ? NEEDS_INTERNET_TEXT : undefined}
+                  onClick={() => onUpdate(p.slug, u.github_url)}>
+            Update to {u.latest}
+          </Button>
+          <span className="meta mono">{u.repo} · {u.tag}{ago ? ` · checked ${ago}` : ''}</span>
+          {internetOff && <NeedsInternetNote compact/>}
+        </div>
+        <div className="meta plugin-update-source">
+          {u.install_from === 'release_asset'
+            ? `installs the release's ${u.asset}, checked against its SHA256SUMS · you confirm on the trust screen`
+            : "installs from the tag's source: this release has no zip and SHA256SUMS to check against · you confirm on the trust screen"}
+        </div>
+        {u.notes
+          ? <div className="plugin-release-notes" style={{
+                whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: 12, maxHeight: 220,
+                overflowY: 'auto', padding: '8px 10px', borderRadius: 'var(--r-sm)',
+                border: '1px solid var(--border-soft)', background: 'var(--raised)', color: 'var(--fg)' }}>
+              {String(u.notes)}
+            </div>
+          : line('no release notes')}
+      </div>
+    );
+  }
+  if (u.state === 'up_to_date') return line(`up to date · ${u.repo}${ago ? ` · checked ${ago}` : ''}`);
+  // Calm on purpose: a private repo is normal (the check sends no
+  // credentials), and nothing is offered that can't work.
+  if (u.state === 'unreachable') return line(`can't check for updates (private or unreachable) · ${u.repo}`);
+  if (u.state === 'rate_limited') return line("can't check for updates right now (GitHub's limit) · it tries again later", 'warn');
+  if (u.state === 'internet_off') return line(`can't check for updates · ${NEEDS_INTERNET_TEXT}`);
+  // not_checked: a GitHub install waits for the daily check; a zip install
+  // with a GitHub homepage is checked only when someone asks.
+  if (u.origin === 'homepage') {
+    return (
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <Button icon="github" disabled={internetOff || checking}
+                title={internetOff ? NEEDS_INTERNET_TEXT : undefined}
+                onClick={() => onCheck(p.slug)}>
+          {checking ? 'checking…' : 'check GitHub for updates'}
+        </Button>
+        <span className="meta mono">{u.repo}</span>
+      </div>
+    );
+  }
+  return line(`not checked for updates yet · ${u.repo}`);
+};
+
 /* ---- One installed-plugin row --------------------------------- */
 const PluginRow = ({ p, restartPending, onEnable, onDisable, onUninstall, onUpgradeZip, onUpgradeUrl, internetOff = false,
-                     focused = false }) => {
+                     focused = false, update = null, onCheckUpdate, onUpdateRelease, checking = false }) => {
   // `focused`: the address named this plugin (#plugins/<slug>, the plugin
   // frame's "manage" link): its row opens and scrolls into view.
   const [open, setOpen] = React.useState(focused);
@@ -625,6 +705,7 @@ const PluginRow = ({ p, restartPending, onEnable, onDisable, onUninstall, onUpgr
             <Pill tone={pill.tone}>{pill.label}</Pill>
             {!p.enabled && p.status !== 'uninstalled' && <Pill tone="idle">disabled</Pill>}
             {restartPending && <Pill tone="warn">restart to finish the upgrade</Pill>}
+            {!restartPending && <UpdateBadge u={update}/>}
             {p.containers_unwatched && p.status !== 'uninstalled' && (
               <span title="it runs Docker containers but declares none (SDK 1.5 [[containers]]), so the container guard can't watch them">
                 <Pill tone="idle">containers not watched</Pill>
@@ -720,6 +801,8 @@ const PluginRow = ({ p, restartPending, onEnable, onDisable, onUninstall, onUpgr
               ))}
             </div>
           )}
+          <PluginUpdatePanel p={p} u={update} onUpdate={onUpdateRelease} onCheck={onCheckUpdate}
+                             checking={checking} internetOff={internetOff}/>
           <PluginUpgradeControls p={p} onUpgradeZip={onUpgradeZip} onUpgradeUrl={onUpgradeUrl}
                                  internetOff={internetOff}/>
         </div>
@@ -740,8 +823,14 @@ const PluginsPage = () => {
     '/api/config/version', { eventTypes: ['plugins.changed'], quiet: true });
   const waiting = pendingRestart(version).plugins;
   const waitingSlugs = new Set(waiting.map((w) => w.slug));
+  // Update checks (open read; the core does the asking).
+  const { data: updData, refresh: refreshUpdates } = useApiObject(
+    '/api/plugins/updates', { eventTypes: ['plugins.changed'], quiet: true });
+  const updates = (updData && updData.plugins) || {};
+  const hasAutoChecked = Object.values(updates).some((u) => u && u.origin === 'github');
+  const [checking, setChecking] = React.useState(null);  // null | '*' | slug
   // Returns the re-reads, so the restart card can wait for them (onSettled).
-  const refresh = () => Promise.all([refreshList(), refreshVersion()]);
+  const refresh = () => Promise.all([refreshList(), refreshVersion(), refreshUpdates()]);
   const flow = useInstallFlow(fire, refresh, dismissToast);
   const [ghUrl, setGhUrl] = React.useState('');
   // Installing from GitHub downloads; a zip install stays available.
@@ -775,6 +864,18 @@ const PluginsPage = () => {
       refresh();
     }
     catch (e) { reportMutationFailure(fire, 'enable', e); }
+  };
+  // "check now" (admin, gated by the core): every GitHub install, or one plugin.
+  const onCheckUpdates = async (slug = null) => {
+    setChecking(slug || '*');
+    try {
+      const res = await apiPost('/api/plugins/updates/check', slug ? { slug } : {});
+      const found = Object.values((res && res.plugins) || {}).filter((u) => u.state === 'update_available');
+      fire(found.length ? `${found.length} update${found.length === 1 ? '' : 's'} available` : 'checked for updates');
+      refreshUpdates();
+    }
+    catch (e) { reportMutationFailure(fire, 'update check', e); }
+    finally { setChecking(null); }
   };
   const onDisable = async (p) => {
     try { await apiPost(`/api/plugins/${p.slug}/disable`); fire(`disabled ${p.name}`); refresh(); }
@@ -819,7 +920,14 @@ const PluginsPage = () => {
         </div>
       </Card>
 
-      <Card title="installed" sub={`${plugins.length} plugin${plugins.length === 1 ? '' : 's'} registered`}>
+      <Card title="installed" sub={`${plugins.length} plugin${plugins.length === 1 ? '' : 's'} registered`}
+            action={hasAutoChecked && (
+              <Button icon="refresh-cw" disabled={internetOff || checking !== null}
+                      title={internetOff ? NEEDS_INTERNET_TEXT : 'ask GitHub now (it also checks once a day)'}
+                      onClick={() => onCheckUpdates(null)}>
+                {checking === '*' ? 'checking…' : 'check for updates'}
+              </Button>
+            )}>
         {plugins.length === 0 ? (
           <Empty title="no plugins installed"
                  sub="install one from a zip or a GitHub URL — bundled plugins appear here automatically on first boot"/>
@@ -832,7 +940,11 @@ const PluginsPage = () => {
                          onUninstall={setUninstalling}
                          onUpgradeZip={(slug) => flow.pickZip(slug)}
                          onUpgradeUrl={(slug, url) => flow.stageGithub(url, slug)}
-                         internetOff={internetOff}/>
+                         internetOff={internetOff}
+                         update={updates[p.slug] || null}
+                         onCheckUpdate={onCheckUpdates}
+                         onUpdateRelease={(slug, url) => flow.stageGithub(url, slug, { release_asset: true })}
+                         checking={checking === p.slug}/>
             ))}
           </div>
         )}

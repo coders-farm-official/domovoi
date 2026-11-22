@@ -180,6 +180,7 @@ ALLOWLIST: dict[tuple[str, str, str], str] = {
     ("web", "POST", "/api/plugins/{slug}/disable"): "proxy — core require_admin gates it",
     ("web", "POST", "/api/plugins/{slug}/uninstall"): "proxy — core require_admin gates it",
     ("web", "POST", "/api/plugins/{slug}/upgrade"): "proxy — core require_admin gates it",
+    ("web", "POST", "/api/plugins/updates/check"): "proxy — core require_admin gates it",
     ("web", "POST", "/api/music/add-by-url"): "proxy — core check_outbound_fetch gates it",
     # The document editor's "Download → Word" (editors v1, 2026-10-27):
     # a POST only because the editor's content is the body; nothing is

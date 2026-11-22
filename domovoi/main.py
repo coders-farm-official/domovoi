@@ -824,7 +824,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     #   timer_watcher → playback_state_sweeper → media_plays_pruner →
     #   up_next_extender → music_listens_pruner →
     #   memory_extractor → lyrics_index → news_fetcher → wake_word_trainer →
-    #   podcast_feed_poller → calendar_feed_refresher → audiobook_indexer →
+    #   podcast_feed_poller → calendar_feed_refresher → plugin_update_check →
+    #   audiobook_indexer →
     #   room_book_positions →
     #   command_capture_pruner → acquisition_budget_sweeper → guests_seen_pruner →
     #   printer_status → print_jobs →
@@ -878,6 +879,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from domovoi.workers.calendar_feed_refresher import CalendarFeedRefresher
 
     WORKERS.add_worker(CalendarFeedRefresher(), owner="core")
+    # Plugin update checks: a GitHub-installed plugin's repo, once a day,
+    # api.github.com only, never under "never" (workers/plugin_update_check.py).
+    from domovoi.workers.plugin_update_check import PluginUpdateChecker
+
+    WORKERS.add_worker(PluginUpdateChecker(), owner="core")
     WORKERS.add_worker(AudiobookIndexer(), owner="core")
     # The place in the book of a room playing one, every 30 s
     # (domovoi/workers/room_book_positions.py).
@@ -1178,6 +1184,12 @@ app.add_middleware(BodyLimitMiddleware)
 from domovoi.plugins_runtime.installer import plugins_admin_router  # noqa: E402
 
 app.include_router(plugins_admin_router)
+
+# Plugin update checks (domovoi/plugins_runtime/update_check.py): the open
+# read of each GitHub-sourced plugin's answer, and the admin's "check now".
+from domovoi.plugins_runtime.update_check import update_check_router  # noqa: E402
+
+app.include_router(update_check_router)
 
 # Printers, printing and scanning (domovoi/printing/routes.py): device-read,
 # device and admin tiers on their own routes.

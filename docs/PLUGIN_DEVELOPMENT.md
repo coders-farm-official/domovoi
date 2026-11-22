@@ -375,7 +375,7 @@ runs in `domovoi plugin dev`, `pack`, and the install pipeline.
 
 | Field | Rules |
 |---|---|
-| `slug` | `^[a-z][a-z0-9_]{1,31}$`. Reserved: `core`, `domovoi`, `admin`, `test`, `public`, and the path segments the plugin HTTP surfaces already own — `install`, `manifest`, `status`, `static`, `api`. The slug names your package (`domovoi_plugin_<slug>`), schema (`plugin_<slug>`), routes, env prefix, log file — everything. |
+| `slug` | `^[a-z][a-z0-9_]{1,31}$`. Reserved: `core`, `domovoi`, `admin`, `test`, `public`, and the path segments the plugin HTTP surfaces already own — `install`, `manifest`, `status`, `static`, `api`, `updates`. The slug names your package (`domovoi_plugin_<slug>`), schema (`plugin_<slug>`), routes, env prefix, log file — everything. |
 | `name` | Display name, ≤ 64 chars. |
 | `version` | **Strict semver `X.Y.Z`** (no pre-release/build tags). Upgrades must be version-monotonic; downgrading requires `force` and is refused outright across an applied migration. |
 | `publisher` | Shown on the install preview. Bundled radio declares `"Coders Farm"`. |
@@ -2380,6 +2380,41 @@ The runtime forces most of this, but know the shapes:
   so a pull plus a restart is the whole upgrade. The zip/GitHub upgrade
   endpoint refuses a bundled plugin (`422 bundled_plugin`), and no install,
   upgrade or uninstall moves or deletes files under `plugins/`.
+
+#### Publishing so updates are found (1.5.0)
+
+The Plugins page tells a household when a plugin it installed from GitHub
+has a newer release, and offers **Update to X.Y.Z**. To be found:
+
+* **Tag every version `vX.Y.Z`**, the manifest's `version` with a `v`
+  (plain `X.Y.Z` is read too). Tags with build metadata (`+…`) are
+  ignored.
+* **Publish a GitHub release for the tag**, with notes. The notes are
+  shown as plain text (markdown is not rendered, HTML never), up to 8000
+  characters. A repo with no releases is read from its tags, without
+  notes.
+* **Mark pre-releases** (GitHub's pre-release flag, or a `-rc.1` style
+  tag). They are offered only to a household already running a
+  pre-release; drafts are never offered.
+* **Keep the repo public.** The check sends no credentials: a private
+  repo answers 404 and the page says "can't check for updates (private
+  or unreachable)".
+* **Attach `<slug>-X.Y.Z.zip` and `SHA256SUMS`** (the `domovoi plugin
+  pack` zip and `sha256sum` output naming it) to the release. **Update to
+  X.Y.Z** installs that zip after checking its SHA-256 against the file,
+  and refuses it on a mismatch. A release without both files is installed
+  from the tag's source archive (`codeload.github.com`) instead, and the
+  page says so, so `domovoi-plugin.toml` should be at the repo root at the
+  tag either way.
+* **Zip installs:** set `[plugin] homepage = "https://github.com/<owner>/<repo>"`
+  and the page offers **check GitHub for updates** for a zip-installed
+  copy (checked only when asked). Updating from there switches the
+  plugin to the GitHub source.
+
+The core checks once a day per plugin (and on **check for updates**),
+only `api.github.com`, honouring `ETag` and GitHub's rate-limit headers,
+and never under `INTERNET_ACCESS=never`. Bundled and dev-mode plugins are
+not checked. Nothing updates by itself.
 
 ### 6.8 Trust and permissions honesty
 

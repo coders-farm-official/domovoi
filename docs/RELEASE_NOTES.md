@@ -4,6 +4,27 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Plugin update checks on the Plugins page
+
+- **What changed.** A plugin installed from GitHub is checked once a day
+  for a newer `vX.Y.Z` release on its repo; the Plugins page shows
+  **update X.Y.Z** with the release notes (plain text) and an **Update to
+  X.Y.Z** button, plus **check for updates** to ask now. A zip install
+  whose manifest homepage is a GitHub repo gets **check GitHub for
+  updates**. New: `GET /v1/plugins/updates`, `POST
+  /v1/plugins/updates/check` (admin), and their `/api/plugins/updates`
+  twins.
+- **What to know.** Nothing updates by itself: the button runs the usual
+  GitHub upgrade at that tag, trust screen and confirm included. It
+  installs the release's `<slug>-X.Y.Z.zip` when its SHA-256 matches the
+  release's `SHA256SUMS` (a mismatch stops it), else the tag's source, and
+  says which. The
+  check reaches only `api.github.com`, with no credentials, and never
+  with the internet answered **No**. A private or unreachable repo reads
+  "can't check for updates", not "up to date". `updates` is now a
+  reserved plugin slug. INTERNET.md, and PLUGIN_DEVELOPMENT.md,
+  "Publishing so updates are found".
+
 ## 1.5.0 (unreleased) — Install Domovoi on Windows with no internet, from an offline kit
 
 - **What changed.** `DomovoiSetup.exe` installs from an offline kit: run
