@@ -58,7 +58,6 @@ from domovoi.tests.test_voice_id_namesakes import (  # noqa: F401 — the room f
 )
 from domovoi.voice_identifier import (
     OUTCOME_AMBIGUOUS,
-    OUTCOME_DENYLIST,
     OUTCOME_MATCH,
     OUTCOME_NO_MATCH,
     OUTCOME_NOISY,

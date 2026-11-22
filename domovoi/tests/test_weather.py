@@ -10,7 +10,6 @@ import pytest
 
 from domovoi import egress
 from domovoi.capabilities import CAPABILITIES, WEATHER_PROVIDER
-from domovoi.clients import searxng
 from domovoi.clients.searxng import RealSearxNGClient, SearchOutcome, SearchResult
 from domovoi.config import settings
 from domovoi.models import Context, Intent
