@@ -345,6 +345,50 @@ class DeviceAuthTest {
         assertEquals("household-abc", server.next().getHeader(DEVICE_TOKEN_HEADER))
     }
 
+    // ---- the claim key (security review 2026-11-22, L56) -----------------
+
+    @Test fun theClaimKeyNeverLeavesForAnotherHost() {
+        val other = MockWebServer().also { it.start() }
+        try {
+            other.enqueue(MockResponse().setBody("{}"))
+            runBlocking { api.get(otherHost(other, "/api/x")) }
+            other.enqueue(MockResponse().setBody("{}"))
+            val req = okhttp3.Request.Builder().url(otherHost(other, "/api/devices/me"))
+                .header(CLAIM_KEY_HEADER, "claim-abc").build()
+            api.http.newCall(req).execute().use { it.body?.string() }
+            other.next()
+            assertNull(other.next().getHeader(CLAIM_KEY_HEADER))
+        } finally {
+            other.shutdown()
+        }
+    }
+
+    @Test fun anUnpairedPhonesClaimKeyWaitsForTheServerToProveItself() = runBlocking {
+        token = null
+        var refuse = true
+        var asked = 0
+        val gated = ApiClient(
+            { server.url("/").toString().trimEnd('/') }, { token },
+            gate = { asked++; if (refuse) throw IOException("server identity mismatch") },
+        )
+        try {
+            gated.post("/api/devices/me", null, mapOf(CLAIM_KEY_HEADER to "claim-abc"))
+            fail("expected the gate's IOException")
+        } catch (e: IOException) {
+            assertEquals("server identity mismatch", e.message)
+        }
+        assertEquals("nothing left the phone", 0, server.requestCount)
+
+        refuse = false
+        server.enqueue(MockResponse().setBody("{}"))
+        gated.post("/api/devices/me", null, mapOf(CLAIM_KEY_HEADER to "claim-abc"))
+        assertEquals("claim-abc", server.next().getHeader(CLAIM_KEY_HEADER))
+        // Without a claim key an unpaired phone still asks nobody.
+        server.enqueue(MockResponse().setBody("{}"))
+        gated.get("/api/health")
+        assertEquals(2, asked)
+    }
+
     // ---- a refusal routes to the pairing screen ---------------------------
 
     @Test fun aDeviceTokenRefusalAsksThePhoneToPair() = runBlocking {

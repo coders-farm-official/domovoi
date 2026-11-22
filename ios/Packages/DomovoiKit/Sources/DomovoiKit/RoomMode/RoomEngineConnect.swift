@@ -26,8 +26,16 @@ extension RoomEngine {
                 default: s.link = .connecting
                 }
             }
+            // This round dials one address, and the proof is asked for that
+            // address (``RoomIdentity/dialBase(_:resolve:)``).
+            let round: RoomEnrolment
             do {
-                _ = try RoomIdentity.verifyServer(httpBase: enrol.coreURL, fingerprint: enrol.fingerprint) { url in
+                let dialed = try RoomIdentity.dialBase(enrol.coreURL, resolve: parts.resolve)
+                round = RoomEnrolment(
+                    coreURL: dialed, fingerprint: enrol.fingerprint,
+                    roomID: enrol.roomID, roomLabel: enrol.roomLabel
+                )
+                _ = try RoomIdentity.verifyServer(httpBase: round.coreURL, fingerprint: round.fingerprint) { url in
                     let body = try parts.http.get(url, limit: 64 * 1024)
                     return String(decoding: body, as: UTF8.self)
                 }
@@ -39,9 +47,9 @@ extension RoomEngine {
                 continue
             }
             guard isRunning(run) else { break }
-            syncModels(enrol)
+            syncModels(round)
             guard isRunning(run) else { break }
-            let result = session(enrol, run: run)
+            let result = session(round, run: run)
             guard isRunning(run) else { break }
             switch result {
             case "ready":
