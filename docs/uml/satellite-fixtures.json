@@ -285,8 +285,8 @@
         ],
         "not_allowed": [
           "full_duplex",
-          "room_audio",
           "mic_dsp",
+          "room_audio",
           "room_display"
         ],
         "frames_sent": [
