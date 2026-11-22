@@ -158,8 +158,9 @@ services:
       # running container whose compose entry is unchanged. Bump this when
       # searxng/settings.yml changes, so the next update recreates the
       # container with it (2: Wikipedia and Wikidata ranked first, W1; 3:
-      # the folder mounted read-only, FORCE_OWNERSHIP off).
-      DOMOVOI_SEARXNG_SETTINGS_REV: "3"
+      # the folder mounted read-only, FORCE_OWNERSHIP off; 4: the openmeteo
+      # weather engine).
+      DOMOVOI_SEARXNG_SETTINGS_REV: "4"
     restart: unless-stopped
 
   # ─── Letta — conversational chat mode (#8), OPT-IN ────────────────────

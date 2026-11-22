@@ -35,7 +35,9 @@ from domovoi.models import Context, Intent, Response
 from domovoi.profile_context import build_profile_prefix
 from domovoi.spoken_answer import SpokenAnswer, StreamedQA
 from domovoi.turn_timings import timings_for_row
+from domovoi import egress, weather
 from domovoi.uncertainty import (
+    CATEGORY_WEATHER,
     VOLATILE_CATEGORIES,
     answer_admits_staleness,
     answer_offers_lookup,
@@ -1052,22 +1054,36 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
     # answer may be stale; we either auto-search (known speaker has
     # opted in) or speak-then-offer.
     category = categorize_question(transcript)
+    if category == CATEGORY_WEATHER and weather.plugin_handles_weather():
+        # A weather plugin is installed: core's weather path (the offer and
+        # the lookup) steps aside and the plugin's handler answers.
+        category = None
+    # "Always" means the household already said yes to the internet: a
+    # weather question goes straight to the lookup, no "want me to check?".
+    always_weather = (
+        category == CATEGORY_WEATHER
+        and ctx.online
+        and not ctx.long_capture
+        and egress.policy() == "always"
+    )
 
     # Auto-search short-circuit: known speaker who's previously opted
     # in for this category. Skip the QA call entirely and answer from
     # SearxNG. Anonymous speakers and offline state both fall through
     # to the normal QA path.
-    if (
+    if always_weather or (
         category is not None
         and ctx.person_id is not None
         and ctx.online
     ):
-        prefs_repo = WebSearchPrefsRepository(session)
-        try:
-            auto = await prefs_repo.is_auto(ctx.person_id, category)
-        except Exception as e:
-            log.warning("web_search_prefs.is_auto failed: %s", e)
-            auto = False
+        auto = always_weather
+        if not auto:
+            prefs_repo = WebSearchPrefsRepository(session)
+            try:
+                auto = await prefs_repo.is_auto(ctx.person_id, category)
+            except Exception as e:
+                log.warning("web_search_prefs.is_auto failed: %s", e)
+                auto = False
         if auto:
             dc = HANDLER_BY_NAME.get("double_check")
             if dc is not None and hasattr(dc, "answer_question_from_web"):
@@ -1163,8 +1179,6 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
             # rather than emit a possibly-stale local answer. A box set to
             # stay off the internet (INTERNET_ACCESS=never) says that
             # instead of implying the line is down.
-            from domovoi import egress
-
             response = Response(
                 text=(
                     "I'd need the internet to answer that, and I'm set to "

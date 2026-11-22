@@ -4,6 +4,21 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.4.1 (unreleased) — Weather answers are back
+
+- **What changed.** "What's the weather today?" now asks the search
+  service's weather sources (Open-Meteo and wttr.in) for your place and
+  answers with the current temperature and conditions. The place is the
+  **Local news location** in Settings (the `news_location` setting). With
+  Settings > Privacy > Internet on "always", Domovoi no longer asks "want me
+  to check?" first. If the weather sources return nothing, or no place is
+  set, it falls back to a general web search as before. It used to find
+  encyclopedia pages and say it had no real-time information.
+- **What to know.** Set the news location to your city or region to get a
+  local answer. The bundled search service restarts once on update to pick
+  up the new weather source. An installed weather plugin takes over
+  weather questions and core steps aside.
+
 ## 1.4.1 (unreleased) — A refused plugin install says which package clashes
 
 - **What changed.** When a plugin is refused because its requirements would
