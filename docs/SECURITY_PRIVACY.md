@@ -4459,14 +4459,16 @@ internet ([OFFLINE_KIT.md](OFFLINE_KIT.md)). The builder is
 **Routes.** On the core: `GET /v1/admin/offline-kit` (the card; admin
 read tier), `POST /v1/admin/offline-kit/build` and
 `POST /v1/admin/offline-kit/cancel` (admin write tier),
-`DELETE /v1/admin/offline-kit/builds/<id>` (admin write tier), and
+`DELETE /v1/admin/offline-kit/builds/<id>` and
+`POST /v1/admin/offline-kit/builds/<id>/ticket` (admin write tier), and
 `GET /v1/offline-kit/<id>/<name>`: the image, its Raspberry Pi Imager list
 (`os-list.json`) and its Imager manifest. On the dashboard:
 `GET /api/offline-kit` (admin read tier), `POST /api/offline-kit`,
-`POST /api/offline-kit/cancel` and `DELETE /api/offline-kit/<id>` (admin
-write tier, forwarded to the core with the caller's credentials), and
+`POST /api/offline-kit/cancel`, `DELETE /api/offline-kit/<id>` and
+`POST /api/offline-kit/<id>/ticket` (admin write tier, forwarded to the
+core with the caller's credentials), and
 `GET /api/offline-kit/<id>/<image>`, which streams the image from the core
-with the caller's credentials.
+with the caller's credentials or its `ticket` and adds none of its own.
 
 **Who may download a kit.** A plain kit holds a public release and public
 models, nothing of the household's (design section 7; a test seeds a
@@ -4476,9 +4478,16 @@ shows, as the room stick's are: Imager and a browser download can't send
 one. A kit with **household items** ticked (models this house added, with
 their system prompts, and wake words it trained) is the house's own, so
 `GET /v1/offline-kit/<id>/…` answers it only to the **admin's Bearer**
-(401 otherwise, Imager included). The card says so and downloads it
-through the dashboard's route, signed in; the saved image is then written
-with Imager's **Use custom**. The id travels in plain HTTP on the LAN like
+or to a **download ticket** that Bearer minted (401 otherwise, Imager
+included). The card says so: its download button asks for a ticket
+(`POST …/ticket`, admin write tier) and the browser then downloads
+`/api/offline-kit/<id>/<image>?ticket=…` straight to disk, as any
+download. A ticket is 32 random bytes, good for 5 minutes, for that one
+kit's image, and for one download: the core keeps only its SHA-256, in
+memory (a restart voids them), and refuses it once used, once expired, or
+for another kit. It does travel in the URL, so the browser's download
+history holds it, used up. The saved image is then written with Imager's
+**Use custom**. The id travels in plain HTTP on the LAN like
 everything else ([no TLS](#1-no-tls-on-admin-flows-or-anything-else)).
 
 **What goes on it, and how it is held to its pin.** Every file comes from

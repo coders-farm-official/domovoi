@@ -17383,13 +17383,54 @@
         }
       }
     },
+    "/api/offline-kit/{build_id}/ticket": {
+      "post": {
+        "tags": [
+          "offline-kit"
+        ],
+        "summary": "Offline Kit Ticket",
+        "description": "A single-use download ticket for the kit's image (5 minutes), and\nthe dashboard link that uses it.",
+        "operationId": "offline_kit_ticket_api_offline_kit__build_id__ticket_post",
+        "parameters": [
+          {
+            "name": "build_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Build Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/offline-kit/{build_id}/{name}": {
       "get": {
         "tags": [
           "offline-kit"
         ],
         "summary": "Offline Kit Download",
-        "description": "A finished kit's image, streamed from the core with the caller's\ncredentials: the way the card downloads a kit that carries household\nitems (the core asks for the admin's Bearer there).",
+        "description": "A finished kit's image, streamed from the core to the browser's\ndownload: how the card downloads a kit that carries household items,\nwith the ``ticket`` the admin minted (or the caller's own Bearer). The\ncore checks either; this route adds no credential.",
         "operationId": "offline_kit_download_api_offline_kit__build_id___name__get",
         "parameters": [
           {
@@ -17408,6 +17449,23 @@
             "schema": {
               "type": "string",
               "title": "Name"
+            }
+          },
+          {
+            "name": "ticket",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 128
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Ticket"
             }
           }
         ],
