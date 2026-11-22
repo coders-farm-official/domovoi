@@ -209,6 +209,10 @@ Client → Server
                            chunked because a 10 MB frame is a bad bet at both
                            ends. `seq` starts at 0 and must arrive in order;
                            `stats` rides the frame marked `final`.
+  text  diag_result        {"type":"diag_result","probe":str,"ok":bool,"text":str,"at":float}
+                           - the answer to a `diag_request` (one read-only probe,
+                           satellite/diagnostics.py). Capped and scrubbed on the
+                           device, and again here (domovoi/satellite_diagnostics.py).
   text  config_status      {"type":"config_status","config":{"section.key":val,...}}
                            — Pi reports its current EFFECTIVE editable config
                            (flat, keyed by section.key) on connect. Server
@@ -350,6 +354,11 @@ Server → Client
                            - ask the satellite for the tail of its in-RAM log
                            ring. The ONLY request/response pair in this
                            protocol; answered by `logs_chunk` frames below.
+  text  diag_request       {"type":"diag_request","probe":NAME} - run one read-only
+                           diagnostics probe, a name from
+                           satellite_diagnostics.PROBES and nothing else; only
+                           to a device that declared `diagnostics`. Answered by
+                           `diag_result`.
   text  set_config         {"type":"set_config","changes":{"section.key":val,...}}
                            — push web-edited config to the Pi. It merges the
                            changes into config.toml (preserving comments),
@@ -552,6 +561,7 @@ from domovoi.router import (
     route,
 )
 from domovoi import announce_chime, quiet_hours, room_battery, satellite_abilities, satellite_health, satellite_upgrades
+from domovoi import satellite_diagnostics
 from domovoi.satellite_abilities import Abilities, NotDeclared
 from domovoi.satellite_media.overlay import APPROVAL_CODE_DIGITS
 from domovoi.timer_delivery import AnnounceInterrupted, AnnounceNotStarted
@@ -1923,6 +1933,9 @@ class StreamSession:
         # app.state) because the exchange is meaningless across a reconnect:
         # a new socket can't answer the old one's request.
         self._log_requests: dict[str, _LogRequest] = {}
+        # In-flight `diag_request` probes, keyed by probe name: a second
+        # ask for the same probe while one is out shares its answer.
+        self._diag_requests: dict[str, asyncio.Future[dict[str, Any]]] = {}
         # ── Speculative transcription (early endpointing, part A) ────
         # See the module docstring. `_utt_serial` numbers this socket's
         # utterances so a copy from an earlier one is never mistaken for
@@ -2179,6 +2192,11 @@ class StreamSession:
                         ConnectionError("satellite disconnected mid-log-transfer")
                     )
             self._log_requests.clear()
+            for fut in self._diag_requests.values():
+                if not fut.done():
+                    fut.set_exception(ConnectionError("satellite disconnected"))
+                    fut.exception()
+            self._diag_requests.clear()
             # Deregister, but only if we're still the active session for
             # this room. A reconnect that overwrote us shouldn't have its
             # entry yanked when the stale instance unwinds.
@@ -4023,6 +4041,13 @@ class StreamSession:
             from domovoi.speech_warmup import schedule_room_voice_warm_up
 
             schedule_room_voice_warm_up(str(voice) if voice else None)
+            return
+        if t == "diag_result":
+            # The answer to a probe we asked for; anything else is dropped.
+            probe = ctrl.get("probe")
+            fut = self._diag_requests.get(probe) if isinstance(probe, str) else None
+            if fut is not None and not fut.done():
+                fut.set_result(satellite_diagnostics.clean_result(probe, ctrl))
             return
         if t == "logs_chunk":
             # One slice of a log pull we asked for. Reassembly is sync and
@@ -7851,6 +7876,39 @@ class StreamSession:
             return await asyncio.wait_for(pending.future, timeout)
         finally:
             self._log_requests.pop(request_id, None)
+
+    async def request_diagnostic(
+        self, probe: str, *, timeout: float = satellite_diagnostics.PROBE_TIMEOUT_S
+    ) -> dict[str, Any]:
+        """Run one read-only probe on this satellite: send ``diag_request``
+        with the probe NAME and wait for its cleaned ``diag_result``.
+        ``ValueError`` (nothing sent) for a name not in the allowlist,
+        :class:`NotDeclared` for a device that didn't declare
+        "diagnostics", ``TimeoutError`` when it doesn't answer."""
+        if probe not in satellite_diagnostics.PROBES:
+            raise ValueError(f"unknown probe {probe!r}")
+        self._require("diagnostics", "diag_request")
+        fut = self._diag_requests.get(probe)
+        if fut is None or fut.done():
+            fut = asyncio.get_running_loop().create_future()
+            self._diag_requests[probe] = fut
+            try:
+                await self.ws.send_text(json.dumps({"type": "diag_request", "probe": probe}))
+            except Exception:
+                self._diag_requests.pop(probe, None)
+                raise
+        try:
+            return await asyncio.wait_for(asyncio.shield(fut), timeout)
+        except (TimeoutError, asyncio.TimeoutError):
+            # Give up on it for everyone waiting, so the next ask sends a
+            # fresh request instead of waiting on this one forever.
+            if not fut.done():
+                fut.set_exception(TimeoutError(f"no answer to probe {probe!r}"))
+                fut.exception()  # retrieved: no "never retrieved" warning
+            raise
+        finally:
+            if fut.done() and self._diag_requests.get(probe) is fut:
+                self._diag_requests.pop(probe, None)
 
     async def send_config(self, changes: dict[str, Any]) -> None:
         """Push web-edited config ({"section.key": value}) to this

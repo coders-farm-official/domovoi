@@ -101,6 +101,10 @@ ADMIN_TIER = [
     ("POST", "/v1/admin/satellite/display"),
     ("POST", "/v1/admin/satellite/{room_id}/config"),
     ("POST", "/v1/admin/satellite/{room_id}/voice"),
+    # Read-only diagnostics (1.5.0): the recent-logs probe carries what the
+    # room heard, so admin at both hops, like the log pull.
+    ("POST", "/v1/admin/satellite/{room_id}/diagnostics"),
+    ("POST", "/v1/admin/satellite/{room_id}/diagnostics/{probe}"),
     ("POST", "/v1/admin/wake/record/start"),
     ("POST", "/v1/admin/wake/record/stop"),
     ("POST", "/v1/admin/wake/push"),
@@ -301,7 +305,7 @@ def _client() -> AsyncClient:
 def _sample_path(path: str) -> str:
     return (
         path.replace("{room_id}", "kitchen").replace("{action}", "pause")
-        .replace("{incident_id}", "1")
+        .replace("{incident_id}", "1").replace("{probe}", "versions")
     )
 
 

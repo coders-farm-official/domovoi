@@ -2449,6 +2449,89 @@ const RoomLogsBody = ({ room, online }) => {
   );
 };
 
+/* ---- Diagnostics tab ---------------------------------------- */
+/* Read-only probes (1.5.0, owner decision 2026-11-22): what an admin would
+ * otherwise SSH in for, from a fixed list of named probes the room device
+ * runs as its own account — no command input of any kind. The tab is only
+ * there for a device that declared `diagnostics` in its hello (s.diagnostics).
+ * Each answer is capped and scrubbed on the device and again on the server. */
+const satDiagStamp = (at) => (typeof at === 'number' ? new Date(at * 1000).toLocaleString() : '');
+
+const RoomDiagnosticsBody = ({ room, fire }) => {
+  const [results, setResults] = React.useState({});   // probe -> result
+  const [order, setOrder] = React.useState([]);        // [[probe, label]]
+  const [busy, setBusy] = React.useState(null);        // 'all' | probe name
+  const [error, setError] = React.useState(null);
+  React.useEffect(() => { setResults({}); setOrder([]); setError(null); }, [room]);
+
+  const run = async (probe) => {
+    setBusy(probe || 'all'); setError(null);
+    try {
+      const path = `/api/satellites/${encodeURIComponent(room)}/diagnostics${probe ? `/${encodeURIComponent(probe)}` : ''}`;
+      const d = await apiPost(path);
+      if (d && d.probes) setOrder(Object.entries(d.probes));
+      setResults((prev) => {
+        const next = { ...prev };
+        for (const r of (d && d.results) || []) next[r.probe] = r;
+        return next;
+      });
+    } catch (e) {
+      setError(e.message || String(e));
+    } finally { setBusy(null); }
+  };
+
+  const copyAll = async () => {
+    const text = order.filter(([p]) => results[p]).map(([p, label]) => {
+      const r = results[p];
+      return `## ${label} (${p}) · ${r.ok ? 'ok' : 'failed'} · ${satDiagStamp(r.at)}\n${r.text}`;
+    }).join('\n\n');
+    const ok = await copyToClipboard(`Diagnostics for ${room}\n\n${text}`);
+    fire(ok ? 'diagnostics copied' : 'couldn’t copy: select the text instead');
+  };
+  const any = order.some(([p]) => results[p]);
+
+  return (
+    <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <Button variant="primary" icon="stethoscope" disabled={!!busy} onClick={() => run(null)}>
+          {busy === 'all' ? 'Running…' : 'Run all'}
+        </Button>
+        {any && <Button icon="copy" disabled={!!busy} onClick={copyAll}>Copy</Button>}
+        <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--fg-muted)' }}>
+          read-only checks · secrets taken out
+        </span>
+      </div>
+      {error && <div style={{ fontSize: 12, color: 'var(--err)' }}>{error}</div>}
+      {!any && !error && (
+        <Empty glyph="sleeping" title="nothing run yet"
+               sub="Run all checks the logs, network, disk and memory, audio devices, versions and restarts on the device itself"/>
+      )}
+      {order.map(([probe, label]) => {
+        const r = results[probe];
+        if (!r) return null;
+        return (
+          <div key={probe} style={{ border: '1px solid var(--border-soft)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
+                          borderBottom: '1px solid var(--border-soft)', flexWrap: 'wrap' }}>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>{label}</div>
+              <Pill tone={r.ok ? 'ok' : 'err'}>{r.ok ? 'ok' : 'failed'}</Pill>
+              <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>{satDiagStamp(r.at)}</span>
+              <div style={{ marginLeft: 'auto' }}>
+                <Button icon="rotate-cw" disabled={!!busy} onClick={() => run(probe)}>
+                  {busy === probe ? 'Running…' : 'Run again'}
+                </Button>
+              </div>
+            </div>
+            <pre className="mono" style={{ margin: 0, padding: '10px 12px', background: 'var(--sunken)',
+                                           color: 'var(--fg-muted)', fontSize: 11, lineHeight: 1.55,
+                                           whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 320, overflow: 'auto' }}>{r.text}</pre>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
 /* ---- Drawer ----------------------------------------------- */
 const SatDrawer = ({ s, sats, onClose, fire, refresh }) => {
   const [tab, setTab] = React.useState('overview');
@@ -2471,6 +2554,8 @@ const SatDrawer = ({ s, sats, onClose, fire, refresh }) => {
     { id: 'notes',         label: 'Notes',           icon: 'sticky-note' },
     { id: 'timers',        label: 'Timers',          icon: 'timer' },
     { id: 'logs',          label: 'Logs',            icon: 'terminal' },
+    // Only for a connected device that declared it (no misleading controls).
+    ...(s.diagnostics ? [{ id: 'diagnostics', label: 'Diagnostics', icon: 'stethoscope' }] : []),
     { id: 'settings',      label: 'Settings',        icon: 'settings' },
   ];
 
@@ -2502,6 +2587,7 @@ const SatDrawer = ({ s, sats, onClose, fire, refresh }) => {
           {tab === 'notes'         && <RoomNotesBody room={s.room_id}/>}
           {tab === 'timers'        && <RoomTimersBody room={s.room_id} fire={fire}/>}
           {tab === 'logs'          && <RoomLogsBody room={s.room_id} online={s.status === 'online'}/>}
+          {tab === 'diagnostics'   && s.diagnostics && <RoomDiagnosticsBody room={s.room_id} fire={fire}/>}
           {tab === 'settings'      && <SatHealthCard room={s.room_id} online={s.status === 'online'}/>}
           {tab === 'settings'      && <RoomQuietHoursSettings room={s.room_id} fire={fire}/>}
           {tab === 'settings'      && s.board === 'android_room' && <RoomBatterySettings room={s.room_id} fire={fire}/>}

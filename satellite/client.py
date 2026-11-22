@@ -54,6 +54,7 @@ from satellite import (
     config_writer,
     debug_audio,
     devices,
+    diagnostics,
     discovery,
     display_power,
     engine_platform,
@@ -194,6 +195,8 @@ LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 # handler BEFORE the client is constructed — a startup failure is exactly
 # the thing you want to be able to read back afterwards.
 LOG_RING = log_buffer.RingLogBuffer()
+# When this process started (wall clock), for the diagnostics probes.
+_PROCESS_STARTED_WALL = time.time()
 
 # Characters of log text per `logs_chunk` frame. Small on purpose: one 10 MB
 # frame is a bad bet at both ends (uvicorn caps inbound WS messages, and JSON
@@ -2524,6 +2527,27 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 self._offline_drops,
             )
             self._offline_drop_last_log = now
+
+    async def _answer_diag(self, probe: Any) -> None:
+        """Answer a `diag_request`: run the named probe on a worker thread
+        and send its `diag_result` (capped and scrubbed in
+        satellite/diagnostics.py). One probe at a time on this device."""
+        lock = getattr(self, "_diag_lock", None)
+        if lock is None:
+            lock = self._diag_lock = asyncio.Lock()
+        async with lock:
+            token = _effective_pairing_token()
+            ctx = diagnostics.Context(
+                server_url=self.cfg.domovoi_url,
+                log_tail=LOG_RING.tail,
+                synced_sha=_read_synced_sha(),
+                board=pc_engine.board_for(self.cfg) if pc_engine.is_pc(self.cfg) else "",
+                audio_devices=sd.query_devices,
+                started_at=_PROCESS_STARTED_WALL,
+                known_secrets=tuple(v for v in (token,) if v),
+            )
+            result = await asyncio.to_thread(diagnostics.run_probe, probe, ctx)
+        self._emit_text({"type": "diag_result", **result})
 
     async def _send_logs(self, request_id: str, max_bytes: int | None) -> None:
         """Answer a `get_logs` frame: stream the log ring back in chunks.
@@ -8711,6 +8735,12 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 daemon=True,
                 name="set-display",
             ).start()
+        elif t == "diag_request":
+            # The dashboard runs one read-only probe by NAME
+            # (satellite/diagnostics.py): an unknown name is refused there
+            # and nothing runs. Off the receiver loop: a probe may wait on
+            # a subprocess or a TCP connect.
+            asyncio.create_task(self._answer_diag(payload.get("probe")))
         elif t == "get_logs":
             # The dashboard is asking for this satellite's recent log output.
             # Answered on a task, not inline: a multi-MB transfer would
@@ -8810,6 +8840,9 @@ class Satellite(pc_engine.SpareDeviceEngine):
             # knows it holds the call's audio until then and marks the
             # dropin_start `await_ready`. An older core ignores the field.
             "dropin_ready": True,
+            # It answers `diag_request` (read-only named probes,
+            # satellite/diagnostics.py). An older core ignores the field.
+            "diagnostics": True,
         }
         # The previous life's last-health record, carried until a
         # core acknowledges it with `ready` (an older core ignores

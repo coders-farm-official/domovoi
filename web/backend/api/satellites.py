@@ -1988,6 +1988,41 @@ async def get_satellite_logs(
     return bridge_response(status, payload)
 
 
+@router.post(
+    "/{room_id}/diagnostics",
+    # Admin tier at both hops: the read-only probes (domovoi/
+    # satellite_diagnostics.py) include the satellite's recent log lines.
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def run_satellite_diagnostics(room_id: str, request: Request):
+    """Run every read-only diagnostics probe on a connected satellite that
+    declared ``diagnostics``. Passes the core's answer through (404 offline,
+    409 not declared, 429 rate-limited)."""
+    status, payload = await post_admin(
+        f"/v1/admin/satellite/{room_id}/diagnostics",
+        timeout=40.0,
+        headers=auth_forward_headers(request),
+    )
+    return bridge_response(status, payload)
+
+
+@router.post(
+    "/{room_id}/diagnostics/{probe}",
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def run_satellite_diagnostic(room_id: str, probe: str, request: Request):
+    """Run one probe by name (a name not in the core's allowlist is 404
+    there, and nothing reaches the satellite)."""
+    if not probe.replace("_", "").isalnum() or len(probe) > 32:
+        raise HTTPException(status_code=404, detail="unknown probe")
+    status, payload = await post_admin(
+        f"/v1/admin/satellite/{room_id}/diagnostics/{probe}",
+        timeout=40.0,
+        headers=auth_forward_headers(request),
+    )
+    return bridge_response(status, payload)
+
+
 @router.patch(
     "/{room_id}/config",
     # Admin tier at both hops: /v1/admin/satellite/{room}/config is
@@ -2449,6 +2484,7 @@ async def _satellite_for(
         timers_own_only=room_id in (own_only or {}),
         board=board,
         supports=[str(x) for x in supports] if supports is not None else None,
+        diagnostics=online and room_id in (snapshot.get("satellite_diagnostics") or ()),
         upgrade=upgrade,
         settings_ignored=ignored,
         wake_word=wake_word,

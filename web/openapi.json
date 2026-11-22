@@ -9449,6 +9449,97 @@
         }
       }
     },
+    "/api/satellites/{room_id}/diagnostics": {
+      "post": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Run Satellite Diagnostics",
+        "description": "Run every read-only diagnostics probe on a connected satellite that\ndeclared ``diagnostics``. Passes the core's answer through (404 offline,\n409 not declared, 429 rate-limited).",
+        "operationId": "run_satellite_diagnostics_api_satellites__room_id__diagnostics_post",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/{room_id}/diagnostics/{probe}": {
+      "post": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Run Satellite Diagnostic",
+        "description": "Run one probe by name (a name not in the core's allowlist is 404\nthere, and nothing reaches the satellite).",
+        "operationId": "run_satellite_diagnostic_api_satellites__room_id__diagnostics__probe__post",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          },
+          {
+            "name": "probe",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Probe"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/satellites/{room_id}/voice": {
       "post": {
         "tags": [
@@ -33504,6 +33595,11 @@
               }
             ],
             "title": "Supports"
+          },
+          "diagnostics": {
+            "type": "boolean",
+            "title": "Diagnostics",
+            "default": false
           },
           "upgrade": {
             "anyOf": [

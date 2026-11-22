@@ -401,7 +401,7 @@ music player, which the container guard would otherwise keep expecting.
 | It doesn't start: "no pinned Domovoi server identity" | A spare computer never trusts the first server that answers. Re-run the install command from the dashboard. |
 | It doesn't start: "its settings … don't load" (the tray, or `--status`) | A value in `~/.domovoi/config.toml` it refuses, named in the message (an audio device name that is not a plain ALSA one, say). Fix it, then `systemctl --user start domovoi-satellite`: it stays stopped until then rather than retrying every few seconds. |
 | No sound at the sign-in screen | See *Sound* above (automatic sign-in for its account). |
-| Anything else | `journalctl --user -u domovoi-satellite -e` (headless: `sudo journalctl -u domovoi-satellite -e`), and the live log in the dashboard's room drawer. |
+| Anything else | The room drawer's **Diagnostics** tab (1.5.0): **Run all** shows the device's recent log lines, network (signal, address, gateway, DNS and latency to the server), disk, memory, load and temperature, audio devices, versions and service restarts, read-only, with **Copy** for a bug report. Then `journalctl --user -u domovoi-satellite -e` (headless: `sudo journalctl -u domovoi-satellite -e`), and the live log in the drawer. |
 
 ## Phones and tablets (room mode)
 
