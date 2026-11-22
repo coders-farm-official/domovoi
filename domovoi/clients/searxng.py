@@ -97,6 +97,8 @@ def _num(v: Any) -> float | None:
 
 
 _UNIT_WORDS = {"°C": "Celsius", "°F": "Fahrenheit", "K": "kelvin"}
+# Where people say Fahrenheit; the engines answer in Celsius everywhere.
+_FAHRENHEIT_COUNTRIES = {"US", "LR", "MM"}
 
 
 def spoken_weather(payload: Any, place: str = "") -> str | None:
@@ -120,6 +122,9 @@ def spoken_weather(payload: Any, place: str = "") -> str | None:
                 continue
             unit = _UNIT_WORDS.get(str(temp.get("unit")), "")
             loc = cur.get("location")
+            country = loc.get("country_code") if isinstance(loc, dict) else None
+            if unit == "Celsius" and country in _FAHRENHEIT_COUNTRIES:
+                val, unit = val * 9 / 5 + 32, "Fahrenheit"
             name = (loc.get("name") if isinstance(loc, dict) else loc) or place
             cond = str(cur.get("condition") or "").strip().lower()
             text = f"Right now in {name}" if name else "Right now"
@@ -256,8 +261,12 @@ class RealSearxNGClient:
         return SearchOutcome([], "no_results")
 
     async def weather(self, place: str) -> str | None:
-        """The spoken weather for ``place`` from SearXNG's weather engines
-        (``categories=weather``), or None when they returned nothing usable.
+        """The spoken weather for ``place`` from SearXNG's Open-Meteo engine,
+        or None when it returned nothing usable. Only that engine is asked:
+        with ``categories=weather`` every weather engine runs at once and
+        they trip over SearXNG's shared weather cache ("database is
+        locked"), and the query must be the place alone, which Open-Meteo
+        geocodes (checked against the pinned image, 2026-11-22).
         Never raises; the caller falls back to the general search."""
         if not place.strip():
             return None
@@ -268,7 +277,7 @@ class RealSearxNGClient:
         import httpx
 
         params = {"q": place, "format": "json", "language": "en-US",
-                  "categories": "weather"}
+                  "engines": "openmeteo"}
         try:
             async with httpx.AsyncClient(timeout=8.0) as client:
                 response = await client.get(f"{self._base_url}/search", params=params)

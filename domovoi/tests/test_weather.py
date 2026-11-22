@@ -65,7 +65,7 @@ async def test_weather_query_uses_weather_category_and_place_and_speaks_answer()
     seen: list = []
     with patch.object(httpx, "AsyncClient", _fake_httpx(ANSWER, seen)):
         spoken = await RealSearxNGClient("http://searxng.test").weather("Springfield")
-    assert seen[0]["categories"] == "weather"
+    assert seen[0]["engines"] == "openmeteo" and "categories" not in seen[0]
     assert seen[0]["q"] == "Springfield"
     assert spoken == "Right now in Springfield it's 72 degrees Fahrenheit and partly cloudy."
 
@@ -164,3 +164,20 @@ async def test_weather_plugin_capability_steps_core_aside(db_session) -> None:
         CAPABILITIES.unregister(WEATHER_PROVIDER, slug="wx-test")
     assert fake.places == [] and fake.searched == []
     assert response.matched_path not in ("volatile_offer", "auto_search")
+
+
+def test_a_us_place_hears_fahrenheit_and_others_celsius():
+    """The weather engines answer in Celsius everywhere (seen on the pinned
+    SearXNG, 2026-11-22); a US household expects Fahrenheit."""
+    from domovoi.clients.searxng import spoken_weather
+
+    def payload(cc):
+        return {"answers": [{"current": {
+            "location": {"name": "Springfield", "country_code": cc},
+            "temperature": {"val": 7.0, "unit": "°C"},
+            "condition": "Light rain"}}]}
+
+    assert spoken_weather(payload("US")) == (
+        "Right now in Springfield it's 45 degrees Fahrenheit and light rain.")
+    assert spoken_weather(payload("GB")) == (
+        "Right now in Springfield it's 7 degrees Celsius and light rain.")
