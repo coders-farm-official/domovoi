@@ -11,6 +11,12 @@ behaviour as one implementation, byte for byte what it was:
   stops it as a process (its own process group); a platform without
   mpg123 supplies its own player program here — Windows:
   :class:`WindowsAudioOut`, ``python -m satellite.win_player``.
+  Room audio (1.5.0) is not one of these: the timed player
+  (``satellite/room_player.py``) plays the room's synced stream in-process
+  to ``[audio] output_device``. The music player here runs only for a
+  ``music_start``, the plain-stream path a core uses until it routes the
+  room's music through ``/v1/room-audio`` to a device declaring
+  ``room_audio``.
 * :class:`VolumeBackend` — the one output gain voice and music ride
   through. Pi: an ALSA mixer control (:class:`AmixerVolume`). Laptop: the
   sound server's default sink, ``wpctl`` (PipeWire) or ``pactl``

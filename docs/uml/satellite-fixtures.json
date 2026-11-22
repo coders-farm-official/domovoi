@@ -116,6 +116,11 @@
       "assumed_without_supports": false,
       "hello_key": "dropin_ready"
     },
+    "room_audio": {
+      "unlocks": "the device plays the room's synced sound from `/v1/room-audio/{satellite_id}` (1.5.0, docs/ROOM_AUDIO_PROTOCOL.md): the room's music, replies and timers go to it there",
+      "assumed_without_supports": false,
+      "hello_key": "room_audio"
+    },
     "room_display": {
       "unlocks": "the `room_display` frame (this room's music, timers and alarms, and one going off) and the `room_control` frame back; a paired room only; never assumed without `supports`",
       "assumed_without_supports": false,
@@ -258,6 +263,7 @@
         ],
         "not_allowed": [
           "full_duplex",
+          "room_audio",
           "room_display"
         ],
         "frames_sent": [
@@ -458,6 +464,7 @@
           "wifi"
         ],
         "not_allowed": [
+          "room_audio",
           "room_display"
         ],
         "frames_sent": [
@@ -682,6 +689,7 @@
           "leds",
           "mic_gain",
           "plugin_payloads",
+          "room_audio",
           "room_display",
           "time_sync",
           "wifi"
@@ -898,6 +906,7 @@
           "leds",
           "mic_gain",
           "plugin_payloads",
+          "room_audio",
           "room_display",
           "time_sync",
           "wifi"
@@ -1102,6 +1111,7 @@
           "mic_gain",
           "plugin_payloads",
           "restart",
+          "room_audio",
           "time_sync",
           "turn_progress",
           "voice",
