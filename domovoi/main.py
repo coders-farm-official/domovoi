@@ -807,7 +807,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     #   memory_extractor → lyrics_index → news_fetcher → wake_word_trainer →
     #   podcast_feed_poller → calendar_feed_refresher → audiobook_indexer →
     #   room_book_positions →
-    #   command_capture_pruner → guests_seen_pruner → printer_status → print_jobs →
+    #   command_capture_pruner → acquisition_budget_sweeper → guests_seen_pruner →
+    #   printer_status → print_jobs →
     #   print_history → voice_history_pruner → container_guard → chat_video → scan_reader →
     #   listenbrainz_fetch →
     #   library_alias_fetch → lyrics_scan → lyrics_fetch →
@@ -867,6 +868,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Opt-in command recordings: 14-day retention, the disk cap, and the
     # sweep of rooms no longer opted in (domovoi/command_captures.py).
     WORKERS.add_worker(CommandCapturePruner(), owner="core")
+    # The acquisition time budget: a claimed acquisition past
+    # acquisition_max_seconds fails for good (domovoi/acquisitions.py).
+    from domovoi.workers.acquisition_budget import AcquisitionBudgetSweeper
+
+    WORKERS.add_worker(AcquisitionBudgetSweeper(), owner="core")
     # Guests seen (V023): a guest's id, address and user agent, deleted 30
     # days after its last action (domovoi/workers/guests_seen_pruner.py).
     from domovoi.workers.guests_seen_pruner import GuestsSeenPruner
@@ -7310,6 +7316,28 @@ async def admin_music_add_by_url(
         )
 
     async with session_scope() as s:
+        if not decision.admin:
+            # Without an admin session this adds one song at a time, never
+            # a backlog: past the cap of link adds waiting, it is refused
+            # until some finish (each one also runs under the acquisition
+            # budget, domovoi/acquisitions.py).
+            waiting = (
+                await s.execute(
+                    text(
+                        "SELECT COUNT(*) FROM media_acquisitions "
+                        "WHERE kind = 'url' AND requested_by = 'web' "
+                        "AND status IN ('pending', 'claimed')"
+                    )
+                )
+            ).scalar_one()
+            if int(waiting) >= settings.acquisition_open_url_pending_cap:
+                raise HTTPException(
+                    status_code=429,
+                    detail=(
+                        "Too many links are waiting to download. Try again "
+                        "when some have finished."
+                    ),
+                )
         result = await ACQUISITIONS.enqueue(
             s,
             kind="url",

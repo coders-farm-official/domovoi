@@ -1466,6 +1466,19 @@ class Settings(BaseSettings):
     # flips the row to 'failed' once attempts reaches this. Fulfiller poll
     # cadence is each provider plugin's own setting, not core's.
     acquisition_max_attempts: int = 3
+    # Every acquisition's budget, whatever the fulfilling plugin's own
+    # limits are: a claimed row still running after acquisition_max_seconds
+    # is failed for good (swept every acquisition_budget_sweep_interval_sec),
+    # and a completion past that time, or whose file is bigger than
+    # acquisition_max_bytes, is refused and its file removed. 0 turns that
+    # limit off.
+    acquisition_max_seconds: float = 3600.0
+    acquisition_max_bytes: int = 1024 * 1024 * 1024
+    acquisition_budget_sweep_interval_sec: float = 60.0
+    # Add-by-URL without an admin session: at most this many link adds may
+    # wait in the queue at once (an admin's adds count; only the callers
+    # without an admin session are turned away).
+    acquisition_open_url_pending_cap: int = 10
     # Cadence of the core playback-state sweeper (stale now-playing stamps,
     # natural-end music_stop pushes to the Pi).
     playback_sweeper_interval_sec: float = 5.0
