@@ -5,6 +5,18 @@ needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
 
+## 1.4.1 (unreleased) — A slow start no longer switches a plugin off
+
+- **What changed.** A plugin that took a long time to load on a busy
+  start (right after installing several plugins and restarting, say) was
+  shown as "load error" and disabled, and you had to turn it on again by
+  hand. It now stays on and shows a small "loaded slowly" note on its
+  card. The wait is judged on the work the plugin itself did, not on how
+  busy the computer was. Real faults still switch a plugin off.
+- **Radio 1.5.1.** The Plugins page and Radio's own help no longer name
+  the online song-identification service; they just say "an online
+  song-identification service".
+
 ## 1.4.1 (unreleased) — Home location, in Settings → Household
 
 - **What changed.** The household's town has its own place: Settings →
