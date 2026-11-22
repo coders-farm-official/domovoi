@@ -7,7 +7,7 @@ import Foundation
 ///
 /// | Route | Tier (read in the server today) |
 /// |---|---|
-/// | `GET /api/podcasts/positions/{id}?device_id=…&person_id=…` | none — open (`podcasts.py:523-534`) |
+/// | `GET /api/podcasts/positions/{id}?device_id=…&person_id=…` | device read, as the audiobook one (1.4.1; it was open before) |
 /// | `POST /api/podcasts/positions/{id}` | device (`podcasts.py:537-553`) |
 /// | `GET /api/audiobooks/{id}/position?device_id=…&person_id=…` | device read (`audiobooks.py:599-615`) |
 /// | `POST /api/audiobooks/{id}/position` | device (`audiobooks.py:617-627`) |
