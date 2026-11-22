@@ -98,6 +98,32 @@ final class PhoneMediaListModelTests: XCTestCase {
         for _ in 0..<hops { await Task.yield() }
     }
 
+    /// Yield until [done] holds, for an assertion about where the model
+    /// ends up. A fixed number of hops ([settle]) is a guess: on a slow CI
+    /// runner the library read and its first page had not landed after
+    /// eight, and an empty-library note read nil (1.4.1 PR #28's `ios` job,
+    /// 2026-11-22).
+    private func settleUntil(
+        _ done: @MainActor () -> Bool,
+        _ what: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        for _ in 0..<10_000 {
+            if done() { return }
+            await Task.yield()
+        }
+        XCTFail("\(what) never settled", file: file, line: line)
+    }
+
+    private func note(_ list: PhoneMediaListModel) -> (title: String, detail: String)? {
+        list.emptyNote(
+            noMatch: PhoneMediaStrings.noTracksMatch,
+            nothingHere: PhoneMediaStrings.noMusicOnDevice,
+            nothingHereDetail: PhoneMediaStrings.downloadsLandHere
+        )
+    }
+
     // MARK: - the libraries
 
     func testTheFirstLibraryIsPickedAndListedWhenTheLibrariesLand() async {
@@ -272,32 +298,22 @@ final class PhoneMediaListModelTests: XCTestCase {
         list.start()
         await settle()
         list.typed("  grendalf  ")
-        await settle()
+        await settleUntil({ self.note(list)?.title == PhoneMediaStrings.noTracksMatch }, "the filtered list")
         // Trimmed before it is asked, and the trimmed form is what is named
         // back: a person reading `filter = "  grendalf  "` would think the
         // spaces were the problem.
         XCTAssertEqual(list.needle, "grendalf")
-        let note = list.emptyNote(
-            noMatch: PhoneMediaStrings.noTracksMatch,
-            nothingHere: PhoneMediaStrings.noMusicOnDevice,
-            nothingHereDetail: PhoneMediaStrings.downloadsLandHere
-        )
-        XCTAssertEqual(note?.title, PhoneMediaStrings.noTracksMatch)
-        XCTAssertEqual(note?.detail, PhoneMediaStrings.filterIs("grendalf"))
+        XCTAssertEqual(note(list)?.title, PhoneMediaStrings.noTracksMatch)
+        XCTAssertEqual(note(list)?.detail, PhoneMediaStrings.filterIs("grendalf"))
     }
 
     func testAnEmptyLibrarySaysNothingHereAndNotNoMatch() async {
         let source = ListSource(rows: [:], libs: [library("phone:folder:/a", "A")])
         let list = model(source)
         list.start()
-        await settle()
-        let note = list.emptyNote(
-            noMatch: PhoneMediaStrings.noTracksMatch,
-            nothingHere: PhoneMediaStrings.noMusicOnDevice,
-            nothingHereDetail: PhoneMediaStrings.downloadsLandHere
-        )
-        XCTAssertEqual(note?.title, PhoneMediaStrings.noMusicOnDevice)
-        XCTAssertEqual(note?.detail, PhoneMediaStrings.downloadsLandHere)
+        await settleUntil({ self.note(list) != nil }, "the empty library")
+        XCTAssertEqual(note(list)?.title, PhoneMediaStrings.noMusicOnDevice)
+        XCTAssertEqual(note(list)?.detail, PhoneMediaStrings.downloadsLandHere)
     }
 
     // MARK: - paging
