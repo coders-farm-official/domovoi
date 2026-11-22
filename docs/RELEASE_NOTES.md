@@ -4,6 +4,15 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.4.1 (unreleased) — Feed and download reads are bounded more tightly
+
+- The part of a podcast or news feed before its first item is read in one
+  pass and capped at 256 KiB; a feed with a longer head is reported as too
+  large, as an over-size feed already is.
+- Outbound fetches accept no Content-Encoding or exactly one of gzip or
+  deflate, always inflate it under the caller's byte cap, and refuse any
+  other encoding; podcast episode downloads ask for an unencoded body.
+
 ## 1.4.1 (unreleased) — A refused plugin install says which package clashes
 
 - **What changed.** When a plugin is refused because its requirements would
