@@ -229,6 +229,11 @@ def source_parts(rel: Release, repo_dir: str, run=subprocess.run) -> list[Part]:
 
     def make_bundle(ctx: Ctx) -> list[Source]:
         if not bundle.is_file():
+            head = git_run.run(["git", "rev-parse", "HEAD"], cwd=repo_dir, timeout=30)
+            if head.returncode != 0 or head.stdout.strip() != rel.commit:
+                # The bundle's HEAD must be the release: the checkout moved
+                # since the card was read (an update ran).
+                raise PartError(f"this server no longer runs {rel.tag}; open the card again")
             ctx.say("Packing Domovoi's source")
             part = bundle.with_name(bundle.name + ".part")
             r = git_run.run(["git", "bundle", "create", str(part), rel.tag, "HEAD"], cwd=repo_dir,

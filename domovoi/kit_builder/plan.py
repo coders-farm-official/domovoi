@@ -144,12 +144,13 @@ def catalogue(rel: Release, repo_dir: str, *, read: pins.Reader | None = None,
     problems: list[str] = []
     if not rel.assets:
         try:
-            if egress.internet_turned_off():
-                rel.assets = parts.release_assets(rel.tag)  # the cache only
-            else:
-                rel.assets = parts.release_assets(rel.tag, refresh=False)
+            # From the cache, else GitHub's release API (through the gate).
+            rel.assets = parts.release_assets(rel.tag)
+        except egress.InternetTurnedOff:
+            problems.append(f"This server has no internet, so it can't fetch: the list of "
+                            f"{rel.tag}'s files. Allow internet for a while.")
         except Exception as e:  # noqa: BLE001 — said on the card
-            problems.append(f"The release's file list can't be read ({e}).")
+            problems.append(f"The list of {rel.tag}'s files can't be read ({e}).")
     out: list[Part] = []
     out += parts.release_parts(rel)
     out += parts.source_parts(rel, repo_dir)
