@@ -499,6 +499,17 @@ def test_a_server_not_on_a_release_is_refused_and_one_behind_is_warned(monkeypat
 
 # ─── the build job ───────────────────────────────────────────────────────
 
+_MADE: list[Path] = []
+
+
+@pytest.fixture(autouse=True)
+def _tidy_folder_images():
+    yield
+    import shutil
+    while _MADE:
+        shutil.rmtree(_MADE.pop(), ignore_errors=True)
+
+
 class _FolderImage(FolderSink):
     """FatImage's place in tests: the same sink, into a folder (a short
     one: Windows' path limit and Ollama's 71-character blob names)."""
@@ -510,6 +521,7 @@ class _FolderImage(FolderSink):
         folder = Path(tempfile.mkdtemp(prefix="k"))
         super().__init__(folder)
         _FolderImage.last = folder
+        _MADE.append(folder)
         Path(path).write_bytes(b"image")   # the job hashes the image file
 
 
