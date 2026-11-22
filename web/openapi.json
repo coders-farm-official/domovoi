@@ -34847,7 +34847,7 @@
           "outcome"
         ],
         "title": "VoiceMatchInfo",
-        "description": "How voice identification scored a satellite turn (V049). ``outcome``:\n\"confident\" | \"match\" (somebody was named) | \"ambiguous\" (two people too\nclose to tell apart: nobody named) | \"no_match\" (the closest was under\nthe threshold) | \"too_short\" (the recording was too short to embed) |\n\"no_embedding\" (the embedder gave nothing) | \"no_samples\" (nobody\nenrolled yet) | \"timeout\" | \"denylist\" (an opted-out voice) | \"error\".\nThe closest person and the runner-up with their scores (cosine, 0..1;\nthe match threshold is ``voice_profile_match_threshold``, 0.75 by\ndefault) are set for the first four and \"noisy\" (music or\na TV under the voice: scored, nobody named; 1.3.0); a person since\nforgotten reads null. Names are the people's current names."
+        "description": "How voice identification scored a satellite turn (V049). ``outcome``:\n\"confident\" | \"match\" (somebody was named) | \"ambiguous\" (two people too\nclose to tell apart: nobody named) | \"no_match\" (the closest was under\nthe threshold) | \"too_short\" (the recording was too short to embed) |\n\"no_embedding\" (the embedder gave nothing) | \"no_samples\" (nobody\nenrolled yet) | \"timeout\" | \"denylist\" (an opted-out voice) | \"error\".\nThe closest person and the runner-up with their scores (cosine, 0..1;\nthe match threshold is ``voice_profile_match_threshold``,\n0.58 by default) are set for the first four\nand \"noisy\" (music or a TV under the voice: scored, nobody named;\n1.3.0); a person since forgotten reads null. Names are the people's current names."
       },
       "VoiceNote": {
         "properties": {
