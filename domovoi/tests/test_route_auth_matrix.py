@@ -160,6 +160,19 @@ ALLOWLIST: dict[tuple[str, str, str], str] = {
     ),
     ("web", "DELETE", "/api/auth/sessions/{token_hash}"): "checks the Bearer inside the handler",
     ("web", "POST", "/api/auth/password"): "checks the Bearer inside the handler",
+    ("web", "POST", "/api/auth/phone-grant"): (
+        "checks the household token, an admin Bearer and a password sign-in in the "
+        "last 5 minutes inside the handler (test_phone_grants.py)"
+    ),
+    ("web", "POST", "/api/auth/phone-grant/exchange"): (
+        "IS the auth surface — household token + the grant, behind the login backoff "
+        "(test_phone_grants.py)"
+    ),
+    ("web", "POST", "/api/auth/phone-grant/revoke"): (
+        "holding the grant IS the credential; it can only delete that grant, and the "
+        "answer is the same whether or not it existed (test_phone_grants.py)"
+    ),
+    ("web", "DELETE", "/api/auth/phone-grants/{grant_id}"): "checks the Bearer inside the handler",
     # ── web: proxies whose gate is applied by the core (auth forwarded) ─
     ("web", "POST", "/api/plugins/install"): "proxy — core require_admin (fail-closed) gates it",
     ("web", "POST", "/api/plugins/install/{staged_id}/confirm"): "proxy — core require_admin gates it",

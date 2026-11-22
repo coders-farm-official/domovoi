@@ -907,6 +907,86 @@ const AdminSection = ({ setupAsked = false }) => {
   );
 };
 
+/* ---- Phone grants (V085, 1.5.0) ------------------------------------- */
+/*
+ * A phone that signed in as admin with the password may keep a grant
+ * for the rest of the day behind its fingerprint (or Face ID), and swap it
+ * for a fresh admin sign-in when the idle hour has lapsed. Listed here
+ * beside the admin sign-in, each with a revoke: revoking ends the grant
+ * and any admin sign-in the phone made with it. A password change ends
+ * them all. Shown only while this tab is signed in (the list is admin).
+ */
+const fmtGrantWhen = (iso) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const sameDay = d.toDateString() === new Date().toDateString();
+  const clock = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  return sameDay ? clock : `${d.toLocaleDateString([], { weekday: 'short' })} ${clock}`;
+};
+
+const PhoneGrantsCard = () => {
+  const { items: grants, loading, refresh } =
+    useApiList('/api/auth/phone-grants', { quiet: true, pickItems: (x) => (x && x.grants) || [] });
+  const [busy, setBusy] = React.useState(null);   // grant id mid-revoke
+  const [error, setError] = React.useState(null);
+  const revoke = async (g) => {
+    setBusy(g.id); setError(null);
+    try {
+      await apiDelete(`/api/auth/phone-grants/${g.id}`);
+      refresh();
+    } catch (e) {
+      setError(`revoke failed: ${apiErrorText(e)}`);
+    } finally { setBusy(null); }
+  };
+  const live = grants.filter((g) => g.live);
+  return (
+    <Card title="Admin on phones"
+          sub="Phones that signed in as admin with the password and keep it for the rest of the day behind a fingerprint or Face ID. Revoking one signs that phone out; changing the password signs them all out.">
+      {error && (
+        <div className="phone-grants-error"
+             style={{ padding: '8px 16px', fontSize: 12, color: 'var(--err-ink)' }}>{error}</div>
+      )}
+      {loading && grants.length === 0 ? (
+        <div style={{ padding: '12px 16px', fontSize: 12, color: 'var(--fg-muted)' }}>loading…</div>
+      ) : live.length === 0 ? (
+        <div style={{ padding: '12px 16px', fontSize: 12, color: 'var(--fg-muted)' }}>
+          No phone is signed in as admin for the day.
+        </div>
+      ) : (
+        <table className="tbl phone-grants">
+          <thead><tr>
+            <th>phone</th><th>until</th><th>last used</th><th className="actions"></th>
+          </tr></thead>
+          <tbody>
+            {live.map((g) => (
+              <tr key={g.id}>
+                <td>
+                  <div style={{ fontWeight: 500 }}>{g.label}</div>
+                  <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>{g.device_id}</div>
+                </td>
+                <td className="mono">{fmtGrantWhen(g.expires_at)}</td>
+                <td className="mono">{g.last_used_at ? fmtGrantWhen(g.last_used_at) : 'not yet'}</td>
+                <td className="actions">
+                  <Button disabled={busy === g.id} onClick={() => revoke(g)}>
+                    revoke
+                  </Button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </Card>
+  );
+};
+
+// Only while this tab is signed in: the list is an admin read.
+const PhoneGrantsSlot = () => {
+  const reload = useAdminReloadState();
+  if (!reload.signedIn) return null;
+  return <div data-settings-mark="phone-grants"><PhoneGrantsCard/></div>;
+};
+
 // "running 2h 14m" — coarse on purpose: this answers "did it restart when I
 // thought it did?", not "how long exactly".
 const fmtUptime = (sec) => {
@@ -2187,6 +2267,7 @@ const ConfigPanel = ({ setupAsked = false, mark = null, startFolded = false }) =
   return (
     <React.Fragment>
     <div data-settings-mark="admin"><AdminSection setupAsked={setupAsked}/></div>
+    <PhoneGrantsSlot/>
     {/* The server's name on the home network: under Admin, above the
      * configuration (owner, 2026-11-12; it was in About & updates). */}
     <div data-settings-mark="network-name"><NetworkNameCard/></div>
