@@ -53,6 +53,18 @@ Per room:
 
 Buy one full kit first, get it working end-to-end, then provision the rest.
 
+**Microphone presets (XVF3800, 1.4.1).** Signed in as admin, a connected
+XVF3800 satellite's Settings tab has a **Microphone DSP** block: the array's
+own settings (*factory*) or three presets for noisy rooms (*B*: AGC maximum
+gain 31.6; *C*: B plus stronger noise suppression; *D*: C with the AGC off
+at a fixed gain of 10). It shows what the array read back after the change,
+and a **Mark** field that writes a note ("block 2, 1m") into the satellite's
+log and the server's, for timing a test. Changes are runtime only: nothing
+is saved to the array. The satellite keeps the chosen preset and applies it
+again after a restart, a reconnect or a USB replug; pick *factory* to go
+back. The block appears only for a satellite running 1.4.1 code (**Upgrade
+satellite**) with `xvf_host` installed.
+
 ### Video satellites (screen builds)
 
 A **video satellite** adds a screen: it plays music like any satellite and

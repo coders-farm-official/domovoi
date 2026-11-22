@@ -60,6 +60,13 @@ class RedirectPolicyTest {
         assertNull("the hop's own interceptor puts it back where it belongs", next.header(DEVICE_TOKEN_HEADER))
     }
 
+    @Test fun theClaimKeyNeverRidesAlongEvenOnHost() {
+        // Security review 2026-11-22, L56: as on the iPhone.
+        val req = request("http://10.0.0.9:6369/api/x") { header(CLAIM_KEY_HEADER, "claim-abc") }
+        val next = RedirectPolicy.followUp(req, redirect(req, 302, "/api/y"))!!
+        assertNull(next.header(CLAIM_KEY_HEADER))
+    }
+
     @Test fun anHttpsToHttpDowngradeIsNotFollowed() {
         val req = request("https://domovoi.example/api/x")
         assertNull(RedirectPolicy.followUp(req, redirect(req, 302, "http://domovoi.example/api/x")))

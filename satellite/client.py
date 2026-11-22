@@ -61,6 +61,7 @@ from satellite import (
     health,
     log_buffer,
     log_spool,
+    mic_dsp,
     net_settings,
     pc_engine,
     remote_config,
@@ -1713,6 +1714,10 @@ class Satellite(pc_engine.SpareDeviceEngine):
 
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
+        # The XVF3800's DSP presets (satellite/mic_dsp.py): None unless this
+        # is an XVF3800 with xvf_host installed; then the hello says
+        # `"mic_dsp": false` and the core never sends a preset.
+        self._mic_dsp = mic_dsp.XvfDsp.create(cfg)
 
         # Sanity-check the loaded threshold. If the user has 0.0 (or
         # anything tighter than ~-28 dBFS) in their config, no realistic
@@ -5111,6 +5116,9 @@ class Satellite(pc_engine.SpareDeviceEngine):
             self._health_exit(f"could not reopen the capture stream: {failed}")
             return
         log.warning("self-check: capture stream reopened (%s)", reason)
+        # The array may have been unplugged and come back with its firmware
+        # values: put the chosen preset back on it.
+        self._mic_dsp_reapply("mic reopened", only_active=True)
 
     def _health_reboot(self, reason: str) -> None:
         if not _reboot_helper_installed(self.cfg):
@@ -5259,6 +5267,43 @@ class Satellite(pc_engine.SpareDeviceEngine):
             "wifi.enabled": c.wifi_enabled,
             "wifi.min_healthy_mbits": c.wifi_min_healthy_mbits,
         }
+
+    def _mic_dsp_run(self, fn, *args) -> None:
+        """Run a preset change on a worker thread and report the state
+        (``mic_dsp_state``) when it is done."""
+        def work() -> None:
+            try:
+                state = fn(*args)
+            except ValueError as e:
+                log.warning("mic_dsp: refused: %s", e)
+                return
+            except Exception:  # noqa: BLE001 — never take the client down
+                log.exception("mic_dsp: preset change failed")
+                return
+            if state is None:
+                return  # skipped: another change held the array
+            # Only to a core that knows the frame (an older one answers
+            # an unknown frame with `error`).
+            if "mic_dsp" in getattr(self, "_core_features", frozenset()):
+                self._emit_text(state)
+        threading.Thread(target=work, daemon=True, name="mic-dsp").start()
+
+    def _mic_dsp_set(self, preset: object) -> None:
+        if getattr(self, "_mic_dsp", None) is None:
+            log.warning("set_mic_dsp: this satellite has no XVF3800 DSP control; ignoring")
+            return
+        if not isinstance(preset, str) or preset not in mic_dsp.PRESETS:
+            log.warning("set_mic_dsp: refusing unknown preset %r", str(preset)[:40])
+            return
+        self._mic_dsp_run(self._mic_dsp.apply, preset)
+
+    def _mic_dsp_reapply(self, reason: str, *, only_active: bool = False) -> None:
+        """Put the preset back (and report it). ``only_active``: only when
+        a preset of ours is on the chip (a replug at factory needs nothing)."""
+        dsp = getattr(self, "_mic_dsp", None)
+        if dsp is None or (only_active and not dsp.active):
+            return
+        self._mic_dsp_run(dsp.reapply, reason)
 
     def _emit_config_status(self) -> None:
         """Report current config to the server so the web dashboard's
@@ -8084,6 +8129,12 @@ class Satellite(pc_engine.SpareDeviceEngine):
                     else frozenset()
                 )
                 self._session_ready_seen = True
+                # The mic DSP preset again (a reconnect may follow a USB
+                # replug or a restart), and its read-back for the dashboard.
+                try:
+                    self._mic_dsp_reapply("reconnect")
+                except Exception:  # noqa: BLE001 — nothing here may keep the mic shut
+                    log.exception("mic_dsp: re-apply on ready failed")
                 # The last-breath record is delivered, the offline spool
                 # goes to a core that lists `log_push`, and live log pushes
                 # start. Guarded: nothing here may keep the mic shut.
@@ -8649,6 +8700,15 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 daemon=True,
                 name="set-display",
             ).start()
+        elif t == "set_mic_dsp":
+            # An admin picked a mic DSP preset: a NAME from the fixed table
+            # in satellite/mic_dsp.py, never parameters. Off the loop:
+            # each xvf_host call is a sudo subprocess.
+            self._mic_dsp_set(payload.get("preset"))
+        elif t == "mic_dsp_mark":
+            dsp = getattr(self, "_mic_dsp", None)
+            if dsp is not None:
+                dsp.mark(payload.get("text"))
         elif t == "get_logs":
             # The dashboard is asking for this satellite's recent log output.
             # Answered on a task, not inline: a multi-MB transfer would
@@ -8748,6 +8808,9 @@ class Satellite(pc_engine.SpareDeviceEngine):
             # knows it holds the call's audio until then and marks the
             # dropin_start `await_ready`. An older core ignores the field.
             "dropin_ready": True,
+            # An XVF3800 whose DSP presets can be switched from the
+            # dashboard (`set_mic_dsp`). An older core ignores the field.
+            "mic_dsp": getattr(self, "_mic_dsp", None) is not None,
         }
         # The previous life's last-health record, carried until a
         # core acknowledges it with `ready` (an older core ignores

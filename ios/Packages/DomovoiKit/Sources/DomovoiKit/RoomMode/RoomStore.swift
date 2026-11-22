@@ -113,6 +113,11 @@ public final class RoomStore: RoomKeeping, @unchecked Sendable {
 
     private let prefs: any RoomPreferences
     private let key: any RoomKeyVault
+    /// The seal's own copy beside the secrets (security review 2026-11-22,
+    /// M15): a Keychain item that, like the household token, outlives
+    /// deleting the app, where the preferences do not. Nil keeps only the
+    /// preference (tests, UI-test launches).
+    private let seal: (any RoomKeyVault)?
     private let onActiveChanged: @Sendable (Bool) -> Void
     private let writing = RoomLock(())
 
@@ -123,10 +128,12 @@ public final class RoomStore: RoomKeeping, @unchecked Sendable {
     public init(
         prefs: any RoomPreferences,
         key: any RoomKeyVault,
+        seal: (any RoomKeyVault)? = nil,
         onActiveChanged: @escaping @Sendable (Bool) -> Void
     ) {
         self.prefs = prefs
         self.key = key
+        self.seal = seal
         self.onActiveChanged = onActiveChanged
     }
 
@@ -135,6 +142,7 @@ public final class RoomStore: RoomKeeping, @unchecked Sendable {
         RoomStore(
             prefs: UserDefaultsRoomPreferences() ?? InMemoryRoomPreferences(),
             key: RoomKeychainKey(),
+            seal: RoomKeychainKey(service: RoomStore.sealService, account: RoomStore.sealAccount),
             onActiveChanged: onActiveChanged
         )
     }
@@ -164,9 +172,17 @@ public final class RoomStore: RoomKeeping, @unchecked Sendable {
         return RoomEnrolment(coreURL: core, fingerprint: fp, roomID: room, roomLabel: prefs.string(Keys.label) ?? room)
     }
 
+    /// The Keychain item that keeps the seal (``seal``).
+    public static let sealService = "org.codersfarm.domovoi.room-seal"
+    public static let sealAccount = "sealed"
+
     /// Room mode is on: the normal app is locked and the household token is
-    /// never put on a request.
-    public var active: Bool { prefs.bool(Keys.active) }
+    /// never put on a request. Either copy of the seal holds it: the
+    /// preference, or the Keychain item that survives the app being deleted
+    /// and installed again while the household token in the Keychain does
+    /// too. A phone that comes back that way opens as a room with nothing
+    /// enrolled, and leaving it needs the device owner, as ever.
+    public var active: Bool { prefs.bool(Keys.active) || seal?.read() != nil }
 
     /// The room was listening (not stopped by the person) — what a return
     /// to Domovoi resumes by itself.
@@ -208,6 +224,7 @@ public final class RoomStore: RoomKeeping, @unchecked Sendable {
         // anything else happens (`RoomStore.kt:89-92`).
         onActiveChanged(on)
         writing.withLock { _ in
+            seal?.write(on ? "1" : nil)
             prefs.setBool(on, Keys.active)
             if !on { prefs.setBool(false, Keys.running) }
         }
@@ -219,6 +236,7 @@ public final class RoomStore: RoomKeeping, @unchecked Sendable {
     public func forget() {
         writing.withLock { _ in
             key.write(nil)
+            seal?.write(nil)
             prefs.removeAll()
         }
     }

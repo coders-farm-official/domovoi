@@ -70,6 +70,7 @@ sequenceDiagram
 | `voice_status` | `voice` | Which registered voice this room speaks in, on connect and after `set_voice`. Ignored from a device whose `supports` leaves out `voice`: the server keeps that room's voice (see `ready.room_voice`). |
 | `config_status` | `config` (flat `section.key` map) | The Pi's effective editable config, on connect — feeds the dashboard's per-satellite Settings tab. Cleared on disconnect. |
 | `display_status` | `on`, `kiosk_alive`, `brightness` (0–100 \| null), `idle_mode` | **Video satellites only.** Screen power state, kiosk-browser liveness, backlight percent (null when the hardware exposes none), and the configured idle behavior. Sent after connect, after each applied `set_display`, and when the kiosk watcher observes a liveness flip. Cached per room; cleared on disconnect. |
+| `mic_dsp_state` | `preset`, `applied`, `factory`, `readback`, `ok`, `error`, `at` | **1.4.1; only when `ready.features` lists `"mic_dsp"`.** The DSP preset and what `xvf_host` read back from the chip afterwards (`{PARAM: [values]}`), after `ready`, after each `set_mic_dsp` and after the mic is reopened. Bounded by `domovoi/mic_dsp.clean_state` and cached per room for the dashboard. |
 | `music_ready` | — | The Pi's player subprocess has primed against MPD's always-on silence stream; the server resumes MPD so song frames land in a primed buffer (kills the first-second stutter) — unless a person paused that room's music (`domovoi/music_pause.py`: the player comes back on the paused stream, MPD stays paused until a person resumes, stops or starts something). Older satellites that never send it still get music via a fallback timer, which follows the same rule. |
 | `music_failed` | `stream_url`, `reason`, `attempts` | **Only when `ready.features` lists `"music_failed"`.** The Pi's stream player was refused or dropped and the Pi has stopped retrying (it retries a refused stream with a short backoff for ~8 s after the start); its music LEDs are back to idle. `reason` is mpg123's last stderr line, or `bad_url` (with `attempts: 0`) for a `music_start` whose `stream_url` was not an http(s) URL. The server logs these bounded and quoted. Never sent for an attempt a `music_stop`, a newer `music_start`, a wake or a response superseded. The server pauses the room's MPD so it doesn't play on to nobody, unless a newer `music_start` handshake is pending or the room has stopped or moved on; `resumable_music` is kept, so the next turn's auto-resume tries again. |
 | `dropin_end` | — | Pi-side end of an active drop-in call (hardware button / client hang-up). The *spoken* "hang up" instead routes as a normal utterance. |
@@ -100,6 +101,8 @@ sequenceDiagram
 | `get_logs` | `request_id`, `max_bytes` | Ask a device that declared `logs` for the tail of its in-memory log ring; answered by `logs_chunk` frames. The only request/response pair in the protocol. |
 | `set_config` | `changes` (flat `section.key` map) | Push dashboard-edited config: the Pi merges into `config.toml` (preserving comments), validates, writes a `.bak`, and self-restarts. Every satellite takes only the settings the dashboard's form lists, by exact key, and refuses an audio device name that is not a plain ALSA device (`satellite/remote_config.py`, `satellite/alsa_names.py`); a spare computer also refuses `wifi.`, `leds.`, `mic_gain.` and `display.`. |
 | `set_display` | `action: "on" \| "off" \| "restart_kiosk"` | **Video satellites only** (the admin endpoint refuses other rooms with `409`). Switch the panel's power via the configured `[display] power_method` (wlopm → xset → backlight under `auto`), or bounce `domovoi-kiosk.service`. The Pi applies and re-reports via `display_status`. |
+| `set_mic_dsp` | `preset: "factory" \| "B" \| "C" \| "D"` | **1.4.1; only to a device that declared `mic_dsp`, from an admin.** A preset NAME; the device writes that preset's rows from its own fixed table with `xvf_host` (runtime only, never the chip's flash) and answers with `mic_dsp_state`. An unknown name is refused, nothing written. |
+| `mic_dsp_mark` | `text` | **1.4.1; `mic_dsp`, admin.** A test marker (control characters escaped, at most 120 characters) the device writes to its log with a timestamp. Never answered. |
 | `restart` | — | Ask the satellite to restart its own systemd service (`domovoi-satellite.service`), draining TTS playback first. |
 | `upgrade` | `expected_sha`, `manifest_path`, `files_base`, `reconnect_timeout_sec` | Self-serve code sync: tarball the current tree (rollback backup), mirror the manifest (per-file sha256 verification), record `expected_sha`, restart. If the Pi doesn't reconnect within the timeout, its on-Pi watchdog rolls back to the tarball. |
 | `dropin_start` | `peer_room`, `peer_label`, `audio_sample_rate:16000`, `full_duplex`, `await_ready?` | Enter open-mic mode: stream every mic frame (unframed) for relay and play inbound binary PCM straight through at **16 kHz** (not the last TTS rate). The wake loop keeps running so "hang up" works. `await_ready: true` (2026-11-12, only to a client whose `hello` declared `dropin_ready`): finish the reply still playing first, then enter and send `dropin_ready`; the server sends this room nothing of the call (no start chime, no relay) until then. Without it a client enters at once, and the call's audio follows at once. |
@@ -171,6 +174,7 @@ Android phone in room mode can do some of that and not the rest, so a
 | `turn_progress` | yes | `working` (2026-11-09): every 30 s while a request is still being worked out, so the device's reply backstop doesn't give up on a slow but working server |
 | `room_display` | no, and no boolean key: only a device that lists it, on a socket paired with its token | 1.4.0: the `room_display` frame and the `room_control` frame back ([The room display](#the-room-display-room_display)); `ready.features` then lists `"room_display"` |
 | `dropin_ready` | no — `dropin_ready` | 2026-11-12: `dropin_start` marked `await_ready`: the device finishes the reply announcing the call before it opens it, and the server holds the call's audio to it until its `dropin_ready` (see the frame tables). Without it the call's audio follows `dropin_start` at once, which cut that reply off |
+| `mic_dsp` | no — `mic_dsp` (a Pi sends `true` only on an XVF3800 with `xvf_host` installed) | 1.4.1: `set_mic_dsp` and `mic_dsp_mark` (admin-only microphone DSP presets, [below](#microphone-dsp-presets-mic_dsp)); `ready.features` then lists `"mic_dsp"`, and only then does the device send `mic_dsp_state` |
 
 Always sent, whatever the list: `ready`, `error`, `pong`, `transcript`,
 `response_start` / PCM / `response_end` for the device's own turns,
@@ -203,6 +207,33 @@ A phone in room mode runs openWakeWord on ONNX Runtime with the same
 models as a Pi; it fetches the base models from the core's signed
 `/v1/wake-base` channel (docs/API_REFERENCE.md) and a pushed wake word from
 `/v1/wake-models`, as a Pi does.
+
+## Microphone DSP presets (`mic_dsp`)
+
+1.4.1, admin only. An XVF3800 satellite with `xvf_host` installed sends
+`"mic_dsp": true` in its hello; an admin then picks a preset for it in the
+room's Settings tab. The core sends only the preset's name
+(`set_mic_dsp`), checked against `domovoi/mic_dsp.PRESETS`; the satellite
+checks it again against its own table (`satellite/mic_dsp.PRESETS`) and
+writes exactly that table's rows:
+
+| Preset | Writes |
+|---|---|
+| `factory` | nothing, or the values read from the chip before the first change |
+| `B` | `PP_AGCMAXGAIN 31.6` |
+| `C` | B + `PP_MIN_NS 0.05`, `PP_MIN_NN 0.05` |
+| `D` | C + `PP_AGCONOFF 0`, `PP_AGCGAIN 10` |
+
+Before each preset the satellite writes the factory values back, so
+presets never stack. The factory values and the chosen preset are kept in
+`~/.domovoi/mic_dsp.json` on the satellite, written before the chip is
+touched (a preset that can't be saved is refused). A preset other than
+factory is applied again after every `ready` (a reconnect or restart) and
+after the self-check reopens the microphone (a USB replug); at factory
+nothing runs and `ready` only reports. Each `xvf_host` call has 5 s before
+its process group is killed. After each change the satellite reads the five
+parameters back and sends `mic_dsp_state`. Nothing is saved to the chip's
+flash: unplugging the array brings its own values back.
 
 ## The room display (`room_display`)
 

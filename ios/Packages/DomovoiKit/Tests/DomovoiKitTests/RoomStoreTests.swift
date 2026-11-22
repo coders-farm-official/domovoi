@@ -152,4 +152,34 @@ final class RoomStoreTests: XCTestCase {
         }
         XCTAssertTrue(TokenVault(items: Mute()).holdsAnyToken())
     }
+
+    // MARK: - the seal outlives the preferences (security review 2026-11-22, M15)
+
+    /// Deleting the app wipes its preferences but not the Keychain, where the
+    /// household token stays. The seal lives in both, so a reinstalled app
+    /// still opens as a room and the household token goes on no request.
+    func testTheSealSurvivesThePreferencesBeingWiped() {
+        let seal = InMemoryRoomKey()
+        let first = RoomStore(prefs: InMemoryRoomPreferences(), key: InMemoryRoomKey(), seal: seal) { _ in }
+        first.setActive(true)
+        XCTAssertNotNil(seal.read())
+
+        // The app deleted and installed again: fresh preferences, same Keychain.
+        let again = RoomStore(prefs: InMemoryRoomPreferences(), key: InMemoryRoomKey(), seal: seal) { _ in }
+        XCTAssertTrue(again.active)
+        XCTAssertNil(again.enrolment)
+    }
+
+    func testLeavingRoomModeLiftsBothCopiesOfTheSeal() {
+        let seal = InMemoryRoomKey()
+        let store = RoomStore(prefs: InMemoryRoomPreferences(), key: InMemoryRoomKey(), seal: seal) { _ in }
+        store.setActive(true)
+        store.setActive(false)
+        XCTAssertNil(seal.read())
+        XCTAssertFalse(store.active)
+
+        store.setActive(true)
+        store.forget()
+        XCTAssertNil(seal.read())
+    }
 }

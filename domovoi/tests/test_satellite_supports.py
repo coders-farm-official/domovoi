@@ -159,6 +159,7 @@ def test_the_core_s_ready_features_are_the_fixtures():
         # declared it, after the features every paired device gets.
         ab = sa.from_hello(device["hello"])
         extra = ["room_display"] if ab.allows("room_display") else []
+        extra += ["mic_dsp"] if ab.allows("mic_dsp") else []
         assert device["ready"]["features"] == list(CORE_FEATURES) + extra
         assert device["ready"]["protocol_version"] == streaming.PROTOCOL_VERSION == "0.1"
 
@@ -343,6 +344,10 @@ async def _trigger(session: StreamSession, ws: FakeWS, frame: str) -> Any:
             await session.notify_sounds_changed()
         elif frame == "set_display":
             await session.set_display("on")
+        elif frame == "set_mic_dsp":
+            await session.send_mic_dsp("B")
+        elif frame == "mic_dsp_mark":
+            await session.send_mic_dsp_mark("block 2, 1m")
         elif frame == "chat_start":
             await session.send_chat_start()
         elif frame == "announcement":

@@ -1,7 +1,7 @@
 [plugin]
 slug = "radio"
 name = "Radio"
-version = "1.5.0"
+version = "1.5.1"
 publisher = "Coders Farm"
 license = "MIT"
 description = "Internet radio + FM via RTL-SDR: station search, play-or-favorite, recents, live tuning, passive song detection."
@@ -86,7 +86,7 @@ network = true
 subprocess = true
 hardware = true
 warnings = [
-  "Samples short clips of whatever station is tuned and can send them to an online song-identification service (Shazam).",
+  "Samples short clips of whatever station is tuned and can send them to an online song-identification service.",
   "Notes which songs it heard, and whether you already own them. It never queues or downloads anything.",
   "Queries external station directories (radio-browser.info, FCC) over the network.",
   "Runs ffmpeg (and rtl_fm when SDR hardware is enabled) on your machine. SDR hardware is optional.",

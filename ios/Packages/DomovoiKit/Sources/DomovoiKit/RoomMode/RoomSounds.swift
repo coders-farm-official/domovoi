@@ -37,11 +37,10 @@ public final class RoomSounds: @unchecked Sendable {
         try RoomModels.makeFolder(dir)
         var downloaded = 0
         for (rel, sha) in accepted.manifest.sorted(by: { $0.key < $1.key }) {
-            guard Self.safeRel(rel) else { continue }
-            let dest = dir.appendingPathComponent(rel)
+            guard let dest = Self.inside(dir, rel) else { continue }
             if RoomModels.sha256(file: dest) == sha { continue }
-            let path = rel.split(separator: "/", omittingEmptySubsequences: false)
-                .map { RoomIdentity.formEncode(String($0)) }.joined(separator: "/")
+            let path = rel.unicodeScalars.split(separator: "/", omittingEmptySubsequences: false)
+                .map { RoomIdentity.formEncode(String(String.UnicodeScalarView($0))) }.joined(separator: "/")
             let bytes = try http.get("\(coreURL)/v1/sounds/\(path)\(query)", limit: Self.maxClipBytes)
             guard RoomModels.sha256(bytes) == sha else { continue }
             try FileManager.default.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -80,8 +79,7 @@ public final class RoomSounds: @unchecked Sendable {
 
     /// A canned clip by name (`network_issues.mp3`), if mirrored.
     public func clip(_ rel: String) -> URL? {
-        guard Self.safeRel(rel) else { return nil }
-        let file = dir.appendingPathComponent(rel)
+        guard let file = Self.inside(dir, rel) else { return nil }
         return RoomModels.size(of: file) != nil ? file : nil
     }
 
@@ -96,10 +94,31 @@ public final class RoomSounds: @unchecked Sendable {
         for rel in doomed { try? FileManager.default.removeItem(atPath: root + "/" + rel) }
     }
 
-    /// The Pi's `_safe_rel`: relative, no `..`, no backslash.
+    /// The Pi's `_safe_rel`: relative, no `..`, no backslash, no NUL.
+    ///
+    /// Read as **bytes**, never as Swift characters: a "/" followed by a
+    /// combining mark is one `Character` that is not "/", yet the file system
+    /// sees the separator (security review 2026-11-22, L55).
     public static func safeRel(_ rel: String) -> Bool {
-        if rel.isEmpty || rel.hasPrefix("/") || rel.contains("\\") { return false }
-        return rel.split(separator: "/", omittingEmptySubsequences: false).allSatisfy { !$0.isEmpty && $0 != ".." && $0 != "." }
+        let bytes = Array(rel.utf8)
+        let slash = UInt8(ascii: "/")
+        if bytes.isEmpty || bytes.first == slash || bytes.contains(UInt8(ascii: "\\")) || bytes.contains(0) {
+            return false
+        }
+        return bytes.split(separator: slash, omittingEmptySubsequences: false).allSatisfy { part in
+            !part.isEmpty && !part.elementsEqual("..".utf8) && !part.elementsEqual(".".utf8)
+        }
+    }
+
+    /// `rel` under `dir`, or nil when it is not a safe name (``safeRel(_:)``)
+    /// or would land anywhere but inside `dir` once the path is resolved.
+    public static func inside(_ dir: URL, _ rel: String) -> URL? {
+        guard safeRel(rel) else { return nil }
+        let root = dir.standardizedFileURL.path
+        let file = dir.appendingPathComponent(rel)
+        let resolved = file.standardizedFileURL.path
+        guard resolved.hasPrefix(root.hasSuffix("/") ? root : root + "/") else { return nil }
+        return file
     }
 
     /// Where the serial of `voice`'s list is kept (nil: the server's own voice).

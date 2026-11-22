@@ -612,6 +612,9 @@ public struct RoomEngineParts: Sendable {
     /// Wall seconds (the health frame's `ts`).
     public var wall: @Sendable () -> Double
     public var healthIntervalMS: Int64
+    /// A host name's addresses (``RoomResolver/system``): what a named
+    /// plain-http server is dialled at (``RoomIdentity/dialBase(_:resolve:)``).
+    public var resolve: @Sendable (String) -> [String]
 
     public init(
         store: any RoomKeeping,
@@ -633,7 +636,8 @@ public struct RoomEngineParts: Sendable {
         wakeWordsMax: Int = RoomWakeWords.deviceMax(),
         clock: @escaping @Sendable () -> Int64 = RoomClock.monotonicMS,
         wall: @escaping @Sendable () -> Double = RoomClock.wallSeconds,
-        healthIntervalMS: Int64 = RoomEngine.healthIntervalMS
+        healthIntervalMS: Int64 = RoomEngine.healthIntervalMS,
+        resolve: @escaping @Sendable (String) -> [String] = RoomResolver.system
     ) {
         self.store = store
         self.ears = ears
@@ -655,6 +659,31 @@ public struct RoomEngineParts: Sendable {
         self.clock = clock
         self.wall = wall
         self.healthIntervalMS = healthIntervalMS
+        self.resolve = resolve
+    }
+}
+
+/// A host name's numeric addresses, from the system resolver.
+public enum RoomResolver {
+    public static let system: @Sendable (String) -> [String] = { host in
+        var hints = addrinfo()
+        hints.ai_family = AF_UNSPEC
+        hints.ai_socktype = SOCK_STREAM
+        var list: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(host, nil, &hints, &list) == 0, let first = list else { return [] }
+        defer { freeaddrinfo(first) }
+        var out: [String] = []
+        var node: UnsafeMutablePointer<addrinfo>? = first
+        while let n = node {
+            var name = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            if let addr = n.pointee.ai_addr,
+               getnameinfo(addr, n.pointee.ai_addrlen, &name, socklen_t(name.count), nil, 0, NI_NUMERICHOST) == 0 {
+                let text = String(cString: name)
+                if !out.contains(text) { out.append(text) }
+            }
+            node = n.pointee.ai_next
+        }
+        return out
     }
 }
 
