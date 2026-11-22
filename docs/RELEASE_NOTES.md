@@ -26,6 +26,23 @@ touched. A room that already has a good (4 seconds or longer) sample of you
 still adds, as before. The API docs also gave the wrong default for the
 voice match threshold: it is 0.58, not 0.75.
 
+A short room sample no longer stands in for your whole voice in that room.
+Before, if a room had any sample of you, even a one-second clip, you were
+judged against that room's samples alone. Now that only happens when one of
+them holds at least 4 seconds of speech; otherwise all your samples count,
+so a good sample from another room still helps you be recognized. A room
+with only short samples of you also learns again: it may ask "By the way,
+was that you?" when it nearly recognized you, and after three clear
+recognitions in a row it replaces the short sample, but only with a
+recording that holds more of your voice. A good sample is never changed.
+
+"Was that you?" can now only be answered by that person. The voice that
+says yes must sound at least about as much like them as the voice the
+question was about, and not like anyone else in the house. Otherwise
+nothing is saved and Domovoi says it will ask them itself next time. A bare
+"yes" is often too short to tell whose voice it is, so say "yes, that was
+me" instead.
+
 ## 1.4.1 (unreleased) — The wake-word trainer image moves to torch 2.14
 
 The trainer image's pinned packages had known security advisories (torch
