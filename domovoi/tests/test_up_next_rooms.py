@@ -8,7 +8,8 @@
   the refill at five songs left, only while playing; Autoplay off takes the
   waiting picks out (a list keeps itself); picks removed or jumped past are
   noted; picks a "less like this" took out leave the queue but the song
-  playing now stays; trimming past 50 played songs; the session ends when
+  playing now stays; trimming past 50 played songs (never ones a jump
+  passed); the session ends when
   the queue is replaced, the room stops, or it sits idle; a cast's picks
   found by their files; the song that ended feeds the session; the
   extender's tick writes the listen with its session and origin;
@@ -345,6 +346,9 @@ async def test_old_played_songs_are_trimmed_past_fifty(clean, room) -> None:
     sid = await rooms.start(ROOM, mode="continue", seed=SeedRef(track_id=d["ids"][0], kind="ids",
                             track_ids=tuple(d["ids"][:60]), label="from this queue"), client=room)
     ids = await _ids(room)
+    for i in ids[:8]:                                      # the room plays its first eight
+        await room.play_id(i)
+        await _look(room)
     await room.play_id(ids[58])
     did = await _look(room)
     assert did["trimmed"] == 8
@@ -352,6 +356,21 @@ async def test_old_played_songs_are_trimmed_past_fifty(clean, room) -> None:
     assert left[0] == ids[8] and left.index(ids[58]) == rooms.TRIM_KEEP_BEHIND
     assert did["queued"] > 0                               # 1 left: the continue session drew
     assert (await _active()).sess.id == sid
+
+
+@requires_db
+async def test_a_jump_ahead_trims_nothing_it_passed(clean, room) -> None:
+    d = await _seed()
+    await _playing(room, [d["uri"][t] for t in d["ids"][:60]])
+    await rooms.start(ROOM, mode="continue", seed=SeedRef(track_id=d["ids"][0], kind="ids",
+                      track_ids=tuple(d["ids"][:60]), label="from this queue"), client=room)
+    ids = await _ids(room)
+    await _look(room)                                      # the first song is heard
+    await room.play_id(ids[59])                            # straight to the last
+    did = await _look(room)
+    assert did["trimmed"] == 1                            # the one it heard
+    left = await _ids(room)
+    assert all(i in left for i in ids[1:60])               # only songs heard may go
 
 
 @requires_db

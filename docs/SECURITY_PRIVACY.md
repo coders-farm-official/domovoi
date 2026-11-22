@@ -983,7 +983,9 @@ names the device token, the same answer for an idle room and for one that
 doesn't exist. That is softer than "never clear, never stop" sounds: a
 guest can still empty a queue one entry at a time and then skip off the
 last song, which ends the room's playing; the per-call caps and the
-throttle below bound how fast, not whether. Deciding "playing" never
+throttle below bound how fast, not whether. A jump ahead removes nothing
+by itself: Up next trims only songs the room was heard playing, never the
+entries a jump passed (`domovoi/up_next/rooms.py`). Deciding "playing" never
 starts anything: a room with no running player is simply not playing, and
 the queue routes skip their self-healing restart of a room's player for a
 guest.
