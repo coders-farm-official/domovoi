@@ -1,4 +1,4 @@
-"""``[[web.home_cards]]`` (SDK 1.13): a plugin card on the dashboard's Home.
+"""``[[web.home_cards]]`` (SDK 1.14): a plugin card on the dashboard's Home.
 
 Validation in the manifest loader (which ``domovoi plugin pack`` runs too),
 and the web host handing the cards to the browser. No DB.
@@ -24,7 +24,7 @@ BASE = textwrap.dedent(
     publisher = "tests"
     license = "MIT"
     description = "generated test plugin"
-    domovoi_api = ">=1.13,<2.0"
+    domovoi_api = ">=1.14,<2.0"
 
     [entry_points]
     core = "domovoi_plugin_cardy.core"

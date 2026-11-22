@@ -6,7 +6,7 @@ a way that would otherwise get reported as a bug.
 
 ## 1.5.0 (unreleased) — A server can make an offline kit
 
-- **Plugins can add a card to Home (SDK 1.13).** A plugin declares
+- **Plugins can add a card to Home (SDK 1.14).** A plugin declares
   `[[web.home_cards]]` in its manifest and registers the component from its
   panel bundle; Home shows it quietly (a card with nothing to show, or that
   fails, leaves no trace). Nothing changes for a house with no such plugin.
