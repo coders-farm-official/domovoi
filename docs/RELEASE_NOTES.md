@@ -4,6 +4,30 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Install Domovoi on Windows with no internet, from an offline kit
+
+- **What changed.** `DomovoiSetup.exe` installs from an offline kit: run
+  `release\DomovoiSetup.exe` on the stick and it says "Installing from the
+  offline kit. No internet needed." Setup on a PC with no internet also
+  offers **Use an offline kit...** to choose the stick's folder. Before it
+  changes anything, Setup checks the stick's checksums, the release
+  signature on the kit's manifest (the key Setup already pins for updates),
+  that the kit is the same release as the Setup (tag and commit), that the
+  parts are there, and the disk. It then takes WSL and Ubuntu's image from
+  the stick, each checked against Setup's pins, and DomovoiHost opens the
+  stick read-only inside Domovoi's Linux system for `provision.sh
+  --offline-kit`, which checks everything else as on Linux.
+- **What to know.** Use the Setup on the stick: another release's Setup
+  refuses the kit. Keep the stick plugged in until Setup finishes (it is
+  needed again after the restart for WSL too). The kit must be on the stick
+  or a folder on this PC every account can read, not a network folder. The
+  internet question starts at "No". Nothing on Windows reaches the internet
+  in kit mode: a download would be a fault, and Setup stops on it.
+  WINDOWS_HOST.md, "Installing without internet".
+- **Needs from the kit builder.** The kit has to carry `linux/provision.sh`
+  at the release commit (Setup checks it against its own pin); kits made
+  before that are refused with "missing Domovoi's install script".
+
 ## 1.5.0 (unreleased) — Install Domovoi on Linux with no internet, from an offline kit
 
 - **What changed.** A computer with Ubuntu 26.04 and no internet installs

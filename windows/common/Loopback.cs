@@ -28,6 +28,7 @@ namespace Domovoi.Windows
         // Null when nothing answered at all.
         public static JsonReply Send(string method, string url, string json, int timeoutMs)
         {
+            NetGuard.Check(url);
             try
             {
                 var req = (HttpWebRequest)WebRequest.Create(url);

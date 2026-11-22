@@ -257,9 +257,10 @@ if (-not $SkipTests) {
     # The tray's too (TrayTests.cs: its card goldens, tests\card-goldens.json,
     # and QrReference.cs, matrices from an independent QR encoder).
     # LanNameTests.cs: the network name (domovoi/lan_name/vectors.json).
+    # KitTests.cs: the offline kit, against tests\kit-fixture (signed like release-sig).
     # UpdateTests.cs: the Windows update, its signatures checked against
     # tests\release-sig (a throwaway key's; the test exe embeds no release key).
-    $testSrc = @('Tests.cs', 'TrayTests.cs', 'QrReference.cs', 'UpdateTests.cs', 'LanNameTests.cs') | ForEach-Object { Join-Path $here ('tests\' + $_) }
+    $testSrc = @('Tests.cs', 'TrayTests.cs', 'QrReference.cs', 'UpdateTests.cs', 'LanNameTests.cs', 'KitTests.cs') | ForEach-Object { Join-Path $here ('tests\' + $_) }
     Invoke-Csc $testExe ($common + $helperSrc + $hostSrc + $traySrc + $testSrc) (@("/r:$sma", '/main:Tests', $trayIcon) + $trayRefs)
     & $testExe
     if ($LASTEXITCODE -ne 0) { throw "unit tests failed" }
