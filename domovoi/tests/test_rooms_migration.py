@@ -1,10 +1,10 @@
-"""V080 on a house from before 1.5.0: a pure re-key.
+"""V072 on a house from before 1.5.0: a pure re-key.
 
 Builds a throwaway database next to the test lane, migrates it to the last
-version before V080, fills it the way a 1.4 house looks (several one-device
+version before V072, fills it the way a 1.4 house looks (several one-device
 rooms, two of them sharing a label, a room known only by its pairing, one
 only by its music player, one only by its wake-word row, a phone's chat
-mic, a parked approval), runs V080 and checks that every room, id, token
+mic, a parked approval), runs V072 and checks that every room, id, token
 and label survived, and that rooms sharing a label were NOT merged.
 """
 from __future__ import annotations
@@ -22,7 +22,7 @@ from domovoi.tests.conftest import requires_db
 pytestmark = requires_db
 
 MIGRATIONS = Path(__file__).resolve().parents[1] / "db" / "migrations"
-V080 = 80
+V072 = 72
 
 
 def _version(p: Path) -> int:
@@ -66,7 +66,7 @@ async def legacy_db():
     url = make_url(settings.database_url)
     kw = {"user": url.username, "password": url.password,
           "host": url.host or "127.0.0.1", "port": url.port or 5432}
-    name = f"{url.database}_v080_{uuid.uuid4().hex[:8]}"
+    name = f"{url.database}_v072_{uuid.uuid4().hex[:8]}"
     admin = await asyncpg.connect(database="postgres", **kw)
     try:
         await admin.execute(f'CREATE DATABASE "{name}"')
@@ -76,7 +76,7 @@ async def legacy_db():
     conn = await asyncpg.connect(database=name, **kw)
     try:
         for f in _files():
-            if _version(f) < V080:
+            if _version(f) < V072:
                 await conn.execute(f.read_text(encoding="utf-8"))
         yield conn
     finally:
@@ -85,16 +85,16 @@ async def legacy_db():
         await admin.close()
 
 
-async def _migrate_from_v080(conn) -> None:
+async def _migrate_from_v072(conn) -> None:
     for f in _files():
-        if _version(f) >= V080:
+        if _version(f) >= V072:
             await conn.execute(f.read_text(encoding="utf-8"))
 
 
 async def test_a_1_4_house_keeps_its_rooms_ids_and_tokens(legacy_db):
     conn = legacy_db
     await conn.execute(LEGACY)
-    await _migrate_from_v080(conn)
+    await _migrate_from_v072(conn)
 
     rooms = {r["room_id"]: r for r in await conn.fetch("SELECT * FROM rooms")}
     # Every room the house had, the phone's chat mic not among them.
@@ -141,5 +141,5 @@ async def test_a_1_4_house_keeps_its_rooms_ids_and_tokens(legacy_db):
 
 
 async def test_an_empty_house_migrates(legacy_db):
-    await _migrate_from_v080(legacy_db)
+    await _migrate_from_v072(legacy_db)
     assert await legacy_db.fetchval("SELECT count(*) FROM rooms") == 0

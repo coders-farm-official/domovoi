@@ -1,4 +1,4 @@
-"""Rooms with several satellites, slice 1: the data model (V080).
+"""Rooms with several satellites, slice 1: the data model (V072).
 
 A room is the place (``rooms``); a satellite is a device in one room
 (``satellites``, keyed by ``satellite_id``). The fixture here gives NO
@@ -70,7 +70,7 @@ async def test_devices_and_rooms_are_told_apart(house):
         assert (b["room_id"], b["name"], b["room_name"], b["room_label"]) == (
             h["kitchen"], "Kitchen phone", "Kitchen", "Kitchen")
         c = await sats.get(h["c"])
-        # A room with no name of its own reads as no label, as before V080.
+        # A room with no name of its own reads as no label, as before V072.
         assert (c["room_name"], c["room_label"]) == (h["den"], None)
         rooms = {r["room_id"]: r for r in await RoomsRepository(s).list()}
         assert rooms[h["kitchen"]]["satellites"] == 2
@@ -112,7 +112,7 @@ async def test_a_new_device_gets_a_room_of_its_own():
             assert await SatellitesRepository(s).room_is_known(sid)
         async with session_scope() as s:
             assert await SatellitesRepository(s).delete(sid)
-            # Its own one-device room goes with it, as before V080.
+            # Its own one-device room goes with it, as before V072.
             assert await RoomsRepository(s).get(sid) is None
     finally:
         async with session_scope() as s:

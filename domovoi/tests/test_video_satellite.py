@@ -203,7 +203,7 @@ async def test_repository_crud_roundtrip() -> None:
 @pytest.mark.asyncio
 async def test_set_room_label_creates_row_for_legacy_room() -> None:
     """Labeling a room known only by its music player (mpd_rooms only)
-    creates its ``rooms`` row (V080: the label is the room's name) rather
+    creates its ``rooms`` row (V072: the label is the room's name) rather
     than failing; no device row is made up."""
     from domovoi.db.repositories import RoomsRepository
 

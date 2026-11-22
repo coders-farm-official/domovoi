@@ -228,7 +228,7 @@ async def test_the_migration_keeps_every_room_s_word_as_its_first(rooms):
     async with session_scope() as s:
         for st in _statements(MIGRATION.read_text(encoding="utf-8")):
             if "device_max" in st:
-                continue   # moved to satellites.wake_max by V080
+                continue   # moved to satellites.wake_max by V072
             await s.execute(text(st))
     async with session_scope() as s:
         got = {r: (row["state"], row["slug"], row["slugs"], row["device_max"])

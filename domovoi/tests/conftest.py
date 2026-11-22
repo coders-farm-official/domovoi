@@ -239,7 +239,7 @@ TABLES_TO_TRUNCATE = [
     # Satellite inventory rows (V003) — adoption/type metadata written by
     # tests, never reference data.
     "satellites",
-    # The house's rooms (V080) and which hear each other.
+    # The house's rooms (V072) and which hear each other.
     "room_hear_links",
     "rooms",
     # Which rooms the household's default wake word still applies to (V054).

@@ -1148,7 +1148,7 @@ class VoiceProfilesRepository:
         claim_of: int | None = None,
         satellite_id: str | None = None,
     ) -> int:
-        """One sample. ``satellite_id``: the mic that heard it (V080;
+        """One sample. ``satellite_id``: the mic that heard it (V072;
         default: the device whose id is ``room_id``, as every device's
         was until rooms held several). ``claimed``: it is being added because the speaker
         said this person's name and "yes" (V029), in ``claim_room``, by a
@@ -2462,7 +2462,7 @@ class SatellitePairingRepository:
         (room_id, token_hash) pair: a re-pair with the SAME hash refreshes
         paired_at/last_seen_at rather than erroring; a DIFFERENT hash would
         only reach here after the row was reset, so ON CONFLICT overwrites.
-        The device gets an inventory row and, when new, a room (V080)."""
+        The device gets an inventory row and, when new, a room (V072)."""
         await ensure_satellite(self.s, room_id)
         await self.s.execute(
             text(
@@ -2764,7 +2764,7 @@ class SatelliteApprovalRepository:
     async def _bind(self, room_id: str, row: Any) -> None:
         """Write the pairing for a request just taken off the list (``row``:
         its token_hash, board and sat_type). The device gets an inventory
-        row and, when new, a room of its own (V080)."""
+        row and, when new, a room of its own (V072)."""
         fresh = await SatellitesRepository(self.s).room_of(room_id) is None
         await ensure_satellite(self.s, room_id)
         await self.s.execute(
@@ -2942,7 +2942,7 @@ class SatelliteApprovalRepository:
         return row is not None
 
 
-# ─── rooms and satellites (V080) ────────────────────────────────────────────
+# ─── rooms and satellites (V072) ────────────────────────────────────────────
 #
 # A room is the place (`rooms`); a satellite is a device in exactly one room
 # (`satellites`, keyed by `satellite_id`). Every device that existed before
@@ -2995,7 +2995,7 @@ async def ensure_satellite(
 
 
 class RoomsRepository:
-    """`rooms` (V080): the places of the house. A room keeps its id for
+    """`rooms` (V072): the places of the house. A room keeps its id for
     life; its ``name`` is what people call it. Empty rooms are kept until
     an admin deletes them. Room-level settings (voice, quiet hours,
     playout) live here; device facts live in :class:`SatellitesRepository`."""
@@ -3146,7 +3146,7 @@ class RoomsRepository:
 
 
 class SatellitesRepository:
-    """`satellites` (V003, re-keyed by V080): the device table. A row is a
+    """`satellites` (V003, re-keyed by V072): the device table. A row is a
     known device: preseeded by USB adoption, written by an accepted
     `hello`, or by a pairing. ``satellite_id`` is the device's identity
     (the WebSocket path); ``room_id`` the room it is in. sat_type /
@@ -3310,7 +3310,7 @@ class SatellitesRepository:
 
     async def set_wake_max(self, satellite_id: str, wake_max: int | None) -> None:
         """How many wake words the device can run at once (its hello's
-        ``wake_max``; was ``room_wake_words.device_max`` before V080)."""
+        ``wake_max``; was ``room_wake_words.device_max`` before V072)."""
         await self.s.execute(
             text(
                 "UPDATE satellites SET wake_max = :m "
@@ -3363,7 +3363,7 @@ class SatellitesRepository:
 
     async def room_voice(self, room_id: str) -> str | None:
         """The voice the server keeps for this room (V031, on `rooms` since
-        V080), or None (the server's own voice). See domovoi/room_voice.py."""
+        V072), or None (the server's own voice). See domovoi/room_voice.py."""
         return await RoomsRepository(self.s).voice(room_id)
 
     async def set_room_voice(self, room_id: str, voice: str | None) -> None:

@@ -1,4 +1,4 @@
--- V080: rooms with several satellites (1.5.0).
+-- V072: rooms with several satellites (1.5.0).
 --
 -- A room is the place; a satellite is a device in one room. Until now a
 -- room was one device: its id was the room, the pairing and every history

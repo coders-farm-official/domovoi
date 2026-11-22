@@ -67,7 +67,7 @@ async def test_approval_keeps_the_board_the_parked_hello_named():
 
 
 async def test_approving_a_pi_writes_a_bare_inventory_row_in_its_own_room():
-    # Since V080 every paired device has a row (and a room); a Pi's names
+    # Since V072 every paired device has a row (and a room); a Pi's names
     # no board and keeps the defaults.
     await _park(None)
     assert await _approve() == "approved"
