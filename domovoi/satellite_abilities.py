@@ -73,6 +73,7 @@ ABILITIES: dict[str, str] = {
     "turn_progress": "the `working` frame every 30 s while a request is still being worked out (keeps the device's reply backstop from giving up on a slow but working server)",
     "dropin_ready": "a drop-in call's audio (its start chime and the peer's relay) waits for the device's `dropin_ready`: it finishes the reply it is still playing (\"Dropping in on the kitchen\") before it opens the call",
     "room_audio": "the device plays the room's synced sound from `/v1/room-audio/{satellite_id}` (1.5.0, docs/ROOM_AUDIO_PROTOCOL.md), so the room's music, replies and timers go to it there",
+    "diagnostics": "the `diag_request` frame (one read-only probe by name, answered by `diag_result`) and the room drawer's Diagnostics tab (1.5.0, domovoi/satellite_diagnostics.py)",
     "room_display": "the `room_display` frame (this room's music, timers and alarms, and one going off, for a screen in the room) and the `room_control` frame back (pause, resume, skip, previous, stop ringing); a paired room only (domovoi/room_display.py)",
 }
 
@@ -84,12 +85,13 @@ BOOLEAN_KEYS: dict[str, str] = {
     "announce_after_session_end": "announce_after_session_end",
     "dropin_ready": "dropin_ready",
     "room_audio": "room_audio",
+    "diagnostics": "diagnostics",
 }
 
 #: Behaviours negotiated per connection by their boolean key, with or
 #: without ``supports``: never assumed.
 NEGOTIATED: frozenset[str] = frozenset(
-    {"full_duplex", "speech_pause", "capture_control", "dropin_ready", "room_audio"}
+    {"full_duplex", "speech_pause", "capture_control", "dropin_ready", "room_audio", "diagnostics"}
 )
 
 #: Abilities only a device that LISTS them gets (1.4.0): newer than every

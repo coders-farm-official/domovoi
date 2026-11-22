@@ -330,6 +330,11 @@ async def _trigger(session: StreamSession, ws: FakeWS, frame: str) -> Any:
                 await session.request_logs(max_bytes=4096, timeout=0.01)
             except (TimeoutError, asyncio.TimeoutError):
                 pass  # sent, and nobody answers in a test
+        elif frame == "diag_request":
+            try:
+                await session.request_diagnostic("versions", timeout=0.01)
+            except (TimeoutError, asyncio.TimeoutError):
+                pass  # sent, and nobody answers in a test
         elif frame == "start_wake_recording":
             await session.start_wake_recording(
                 wake_word_id=1, slug="hey_test", clip_seconds=2.0, target_count=3)

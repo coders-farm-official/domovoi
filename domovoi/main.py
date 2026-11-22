@@ -74,6 +74,7 @@ from domovoi.db.repositories import (  # noqa: E402
 )
 from domovoi.db.repositories import VoicesRepository  # noqa: E402
 from domovoi import satellite_abilities, satellite_health  # noqa: E402
+from domovoi import satellite_diagnostics  # noqa: E402
 from domovoi import satellite_upgrades  # noqa: E402
 from domovoi.guest_queue import (  # noqa: E402
     GUEST_ADD_MAX_TRACKS,
@@ -2981,6 +2982,12 @@ async def admin_snapshot() -> dict[str, Any]:
             for room, sess in app.state.active_sessions.items()
             if (declared := satellite_abilities.session_abilities(sess).declared_list()) is not None
         },
+        # Rooms whose connected device declared `diagnostics` (1.5.0): the
+        # dashboard offers the Diagnostics tab for these only.
+        "satellite_diagnostics": sorted(
+            room for room, sess in app.state.active_sessions.items()
+            if satellite_abilities.session_abilities(sess).allows("diagnostics")
+        ),
         "satellite_board": {
             room: board
             for room, sess in app.state.active_sessions.items()
@@ -5687,6 +5694,66 @@ async def admin_get_satellite_logs(
         "retained": retained,
         "last_outage": last_outage,
     }
+
+
+# Read-only diagnostics (owner decision 2026-11-22): one named probe or all
+# of them, from the allowlist in domovoi/satellite_diagnostics.py. Admin
+# tier: the recent-logs probe carries the satellite's log lines, which
+# hold what the room heard.
+DIAG_LIMITER = satellite_diagnostics.RateLimiter()
+
+
+def _diag_target(room_id: str, runs: int) -> Any:
+    target = app.state.active_sessions.get(room_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail=f"room {room_id!r} not connected")
+    _require_declared(target, "diagnostics", "diagnostics")
+    wait = DIAG_LIMITER.take(room_id, runs)
+    if wait:
+        raise HTTPException(
+            status_code=429,
+            detail=f"too many diagnostics runs for {room_id}; try again in {int(wait) + 1} s",
+            headers={"Retry-After": str(int(wait) + 1)},
+        )
+    return target
+
+
+async def _run_diag(target: Any, probe: str) -> dict[str, Any]:
+    try:
+        return await target.request_diagnostic(probe)
+    except (TimeoutError, asyncio.TimeoutError):
+        return satellite_diagnostics.failed_result(probe, "the satellite didn't answer in time")
+    except ConnectionError:
+        return satellite_diagnostics.failed_result(probe, "the satellite disconnected")
+
+
+@app.post(
+    "/v1/admin/satellite/{room_id}/diagnostics",
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def admin_run_satellite_diagnostics(room_id: str) -> dict[str, Any]:
+    """Run every probe on a connected satellite that declared
+    ``diagnostics``. 404 offline, 409 not declared, 429 over the
+    per-satellite rate limit. A probe that gets no answer is in the list
+    with ``ok: false``."""
+    probes = list(satellite_diagnostics.PROBES)
+    target = _diag_target(room_id, len(probes))
+    results = await asyncio.gather(*(_run_diag(target, p) for p in probes))
+    return {"room_id": room_id, "probes": satellite_diagnostics.PROBES, "results": list(results)}
+
+
+@app.post(
+    "/v1/admin/satellite/{room_id}/diagnostics/{probe}",
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def admin_run_satellite_diagnostic(room_id: str, probe: str) -> dict[str, Any]:
+    """Run one probe by name. 404 for a name not in the allowlist (nothing
+    is sent), otherwise as the run-all route."""
+    if probe not in satellite_diagnostics.PROBES:
+        raise HTTPException(status_code=404, detail="unknown probe")
+    target = _diag_target(room_id, 1)
+    result = await _run_diag(target, probe)
+    return {"room_id": room_id, "probes": satellite_diagnostics.PROBES, "results": [result]}
 
 
 @app.get(

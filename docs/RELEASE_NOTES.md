@@ -4,6 +4,26 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Diagnostics for a satellite, in its room drawer
+
+- **What changed.** A room's drawer has a **Diagnostics** tab: **Run all**
+  shows, from the device itself, its recent log lines, its network (Wi-Fi
+  signal, address, gateway, DNS and latency to the server; the network's
+  name only as a short hash), disk, memory, load, CPU temperature and
+  uptime, its audio devices, its versions, and its service restarts and
+  last exit. Each result has a time, can be run again on its own, and
+  **Copy** puts them all on the clipboard. New: `POST
+  /v1/admin/satellite/{room}/diagnostics` and `.../diagnostics/{probe}`
+  (admin), and their `/api/satellites/...` twins.
+- **What to know.** Read-only, from a fixed list of named probes: no
+  command can be typed or sent, and the device refuses a name it doesn't
+  know. Tokens, keys and passwords are taken out on the device and again
+  on the server. Admin only, and rate-limited per satellite. The tab shows
+  only for a connected satellite on code that declares it (a new
+  `diagnostics` hello key), so press **Upgrade satellite** on older ones;
+  phones in room mode don't offer it. SECURITY_PRIVACY.md,
+  "Satellite diagnostics".
+
 ## 1.5.0 (unreleased) — Plugin update checks on the Plugins page
 
 - **What changed.** A plugin installed from GitHub is checked once a day

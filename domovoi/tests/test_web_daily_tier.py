@@ -165,6 +165,8 @@ ADMIN_TIER = [
     ("POST", "/api/satellites/{room_id}/display"),
     ("PATCH", "/api/satellites/{room_id}/config"),
     ("POST", "/api/satellites/{room_id}/voice"),
+    ("POST", "/api/satellites/{room_id}/diagnostics"),
+    ("POST", "/api/satellites/{room_id}/diagnostics/{probe}"),
     # the verbs that destroy something, or hand back a whole library in
     # one response. Widening SAVE to the household did not widen these.
     ("POST", "/api/documents/delete"),

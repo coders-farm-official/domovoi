@@ -2378,6 +2378,21 @@ data) holds its key. Song attribution (a "listening as" pick, a room's
 starter) stays self-asserted: a household member can still file songs under
 someone else.
 
+## Satellite diagnostics (read-only, admin)
+
+Owner decision 2026-11-22: the safe alternative to a remote terminal. A
+room drawer's **Diagnostics** tab shows what an admin would otherwise SSH
+in for, and nothing more (`satellite/diagnostics.py`,
+`domovoi/satellite_diagnostics.py`).
+
+| | |
+|---|---|
+| **No command input** | The core sends `diag_request` with a probe NAME and no other field. The device looks the name up in a fixed allowlist (`recent_logs`, `network`, `system`, `audio`, `versions`, `service`) and refuses any other, running nothing. Nothing the core or the dashboard sends reaches a subprocess, a file path or a pattern. |
+| **What runs** | Only what the satellite's own account may: `/proc` and `/sys` reads, `ip route`, `iwgetid -r`, `systemctl show` for its own unit, a TCP connect to the server and the gateway, one DNS lookup of the server's name, the audio device list. No sudo rule was added for it, and none may be. |
+| **What leaves the device** | Each answer is cut to 4000 characters, control characters are taken out, the pairing token is replaced wherever it appears, and so is anything secret-looking: `Bearer …`, `token=` / `password:` / `api_key` / `psk` / `cookie` values, private-key blocks, long hex and base64 runs. The Wi-Fi network's name is never sent: the network probe shows the first 8 hex digits of its SHA-256. The core cleans every answer again with the same rules before serving it, and keeps none. |
+| **Who can run it** | An admin (Bearer, the admin tier at both hops; not the household token). The recent-logs probe carries the satellite's log lines, which include what the room heard, the same content the drawer's Logs tab already gates. Rate-limited per satellite (18 probe runs a minute). Nothing is kept: results live in the admin's browser tab. |
+| **Which devices** | Only a connected device whose hello declared `diagnostics`; the dashboard shows the tab for no other (and the core sends no frame to it). |
+
 ## Command recordings for tuning (opt-in per room)
 
 To decide how early Domovoi may stop listening after someone finishes a

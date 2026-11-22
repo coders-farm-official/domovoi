@@ -121,6 +121,11 @@
       "assumed_without_supports": false,
       "hello_key": "room_audio"
     },
+    "diagnostics": {
+      "unlocks": "the `diag_request` frame (one read-only probe by name, answered by `diag_result`) and the room drawer's Diagnostics tab (1.5.0); never assumed without the hello key or `supports`",
+      "assumed_without_supports": false,
+      "hello_key": "diagnostics"
+    },
     "room_display": {
       "unlocks": "the `room_display` frame (this room's music, timers and alarms, and one going off) and the `room_control` frame back; a paired room only; never assumed without `supports`",
       "assumed_without_supports": false,
@@ -185,6 +190,9 @@
     ],
     "room_display": [
       "room_display"
+    ],
+    "diag_request": [
+      "diagnostics"
     ]
   },
   "config_section_ability": {
@@ -219,7 +227,8 @@
         "speech_pause": true,
         "capture_control": true,
         "announce_after_session_end": true,
-        "dropin_ready": true
+        "dropin_ready": true,
+        "diagnostics": true
       },
       "ready": {
         "type": "ready",
@@ -245,6 +254,7 @@
           "chat_mode",
           "code_sync",
           "config",
+          "diagnostics",
           "display",
           "dropin_ready",
           "leds",
@@ -278,7 +288,8 @@
           "sounds_changed",
           "set_display",
           "end_capture",
-          "announcement"
+          "announcement",
+          "diag_request"
         ],
         "frames_never": [
           "chat_start",
@@ -301,7 +312,8 @@
           "announce": true,
           "drop_in": false,
           "wake_record": true,
-          "wake_push": true
+          "wake_push": true,
+          "diagnostics": true
         }
       },
       "health": {
@@ -420,7 +432,8 @@
         "speech_pause": true,
         "capture_control": true,
         "announce_after_session_end": true,
-        "dropin_ready": true
+        "dropin_ready": true,
+        "diagnostics": true
       },
       "ready": {
         "type": "ready",
@@ -446,6 +459,7 @@
           "chat_mode",
           "code_sync",
           "config",
+          "diagnostics",
           "display",
           "dropin_ready",
           "full_duplex",
@@ -481,7 +495,8 @@
           "chat_start",
           "dropin_start",
           "end_capture",
-          "announcement"
+          "announcement",
+          "diag_request"
         ],
         "frames_never": [
           "room_display"
@@ -502,7 +517,8 @@
           "announce": true,
           "drop_in": true,
           "wake_record": true,
-          "wake_push": true
+          "wake_push": true,
+          "diagnostics": true
         }
       },
       "health": {
@@ -622,6 +638,7 @@
         "capture_control": true,
         "announce_after_session_end": true,
         "dropin_ready": true,
+        "diagnostics": true,
         "board": "linux_pc",
         "supports": [
           "restart",
@@ -655,6 +672,7 @@
           "capture_control",
           "code_sync",
           "config",
+          "diagnostics",
           "dropin_ready",
           "logs",
           "restart",
@@ -672,6 +690,7 @@
           "capture_control",
           "code_sync",
           "config",
+          "diagnostics",
           "dropin_ready",
           "logs",
           "restart",
@@ -705,7 +724,8 @@
           "wake_models_changed",
           "sounds_changed",
           "end_capture",
-          "announcement"
+          "announcement",
+          "diag_request"
         ],
         "frames_never": [
           "set_display",
@@ -735,7 +755,8 @@
           "announce": true,
           "drop_in": false,
           "wake_record": true,
-          "wake_push": true
+          "wake_push": true,
+          "diagnostics": true
         }
       },
       "health": {
@@ -839,6 +860,7 @@
         "capture_control": true,
         "announce_after_session_end": true,
         "dropin_ready": true,
+        "diagnostics": true,
         "board": "windows_pc",
         "supports": [
           "restart",
@@ -872,6 +894,7 @@
           "capture_control",
           "code_sync",
           "config",
+          "diagnostics",
           "dropin_ready",
           "logs",
           "restart",
@@ -889,6 +912,7 @@
           "capture_control",
           "code_sync",
           "config",
+          "diagnostics",
           "dropin_ready",
           "logs",
           "restart",
@@ -922,7 +946,8 @@
           "wake_models_changed",
           "sounds_changed",
           "end_capture",
-          "announcement"
+          "announcement",
+          "diag_request"
         ],
         "frames_never": [
           "set_display",
@@ -952,7 +977,8 @@
           "announce": true,
           "drop_in": false,
           "wake_record": true,
-          "wake_push": true
+          "wake_push": true,
+          "diagnostics": true
         }
       },
       "health": {
@@ -1105,6 +1131,7 @@
           "chat_mode",
           "code_sync",
           "config",
+          "diagnostics",
           "display",
           "leds",
           "logs",
@@ -1135,7 +1162,8 @@
           "start_wake_recording",
           "stop_wake_recording",
           "set_display",
-          "chat_start"
+          "chat_start",
+          "diag_request"
         ],
         "upgrade_extra": null,
         "config_hidden_sections": null,
@@ -1149,7 +1177,8 @@
           "announce": true,
           "drop_in": true,
           "wake_record": false,
-          "wake_push": true
+          "wake_push": true,
+          "diagnostics": false
         }
       },
       "health": {

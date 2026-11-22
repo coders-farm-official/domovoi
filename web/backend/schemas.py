@@ -745,6 +745,10 @@ class Satellite(BaseModel):
     # before) and for an offline room.
     board: str | None = None
     supports: list[str] | None = None
+    # The CONNECTED device declared ``diagnostics`` (1.5.0): it answers the
+    # read-only probes, so the drawer offers its Diagnostics tab. False
+    # offline and for a device that didn't declare it (every older one).
+    diagnostics: bool = False
     # A code upgrade under way or just finished (SatelliteUpgrade), from the
     # Domovoi server snapshot; null when there is none. While ``state`` is
     # ``running`` the dashboard and the app keep the room's Upgrade button
