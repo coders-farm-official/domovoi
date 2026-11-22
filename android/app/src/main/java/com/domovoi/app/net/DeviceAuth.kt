@@ -101,19 +101,31 @@ class DeviceAuthInterceptor(
         val request = chain.request()
         // Whatever a caller set, the decision is made here.
         val bare = request.newBuilder().removeHeader(DEVICE_TOKEN_HEADER).build()
+        // The claim key a caller set (DeviceRegistry) goes only where the
+        // token would: to the active server, once it has proved who it is.
+        // A request the token skips (room mode, another host, no token, a
+        // refused one) carries it only after that same proof, and never off
+        // the active server (security review 2026-11-22, L56).
+        val claimed = request.header(CLAIM_KEY_HEADER) != null
+        val unclaimed = if (claimed) bare.newBuilder().removeHeader(CLAIM_KEY_HEADER).build() else bare
         // Room mode: the household token goes nowhere (net/HouseholdLock.kt).
-        if (HouseholdLock.roomModeActive) return chain.proceed(bare)
+        if (HouseholdLock.roomModeActive) return chain.proceed(unclaimed)
         val raw = baseUrlProvider()
         val base = TokenScope.baseOf(raw)
         val wsUpgrade = request.tag(TokenScope.WsUpgrade::class.java) != null
-        if (!TokenScope.admits(base, request.url, wsUpgrade)) return chain.proceed(bare)
-        val token = headerSafeToken(raw?.let(tokenFor)) ?: return chain.proceed(bare)
-        val server: String = raw ?: return chain.proceed(bare)
+        if (!TokenScope.admits(base, request.url, wsUpgrade)) return chain.proceed(unclaimed)
+        /** Sent without the token: the claim key only once the server proved itself. */
+        fun withoutToken(): Response {
+            if (claimed) gate?.requireAdmitted(base!!)
+            return chain.proceed(bare)
+        }
+        val token = headerSafeToken(raw?.let(tokenFor)) ?: return withoutToken()
+        val server: String = raw ?: return chain.proceed(unclaimed)
         if (health != null) {
             // Refused once: never again, until a new token (or the person)
             // says otherwise. Without it the request is an unpaired phone's,
             // which the server's wrong-token count never sees.
-            if (health.isRejected(server)) return chain.proceed(bare)
+            if (health.isRejected(server)) return withoutToken()
             val wait = health.waitMs(server)
             if (wait > 0) throw TokenThrottledException(wait)
         }

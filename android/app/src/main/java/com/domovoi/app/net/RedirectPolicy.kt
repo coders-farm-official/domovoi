@@ -83,6 +83,10 @@ object RedirectPolicy {
         }
         if (!sameConnection(request.url, url)) builder.removeHeader("Authorization")
         builder.removeHeader(DEVICE_TOKEN_HEADER)
+        // The claim key, always and for good, as on the iPhone: it goes to the
+        // server that minted it on the request made to it, and a redirect is
+        // not that request (security review 2026-11-22, L56).
+        builder.removeHeader(CLAIM_KEY_HEADER)
         return builder.url(url).build()
     }
 

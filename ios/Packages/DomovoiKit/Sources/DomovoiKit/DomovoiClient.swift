@@ -478,6 +478,13 @@ public final class DomovoiClient: Sendable {
         outgoing.setValue(nil, forHTTPHeaderField: deviceTokenHeader)
         var sentToken: String?
         var tokenServer: String?
+        // The claim key a caller set (``DeviceRegistry``) goes only where the
+        // token would: to the active server, once it has proved who it is.
+        // A request the token skips carries it only after that same proof
+        // (no token yet, a refused one), and otherwise not at all (security
+        // review 2026-11-22, L56).
+        let claimed = outgoing.value(forHTTPHeaderField: claimKeyHeader) != nil
+        var claimAdmitted = false
         switch mode {
         case .none:
             break
@@ -491,16 +498,24 @@ public final class DomovoiClient: Sendable {
             await prepareIdentity(for: parsed, wsUpgrade: wsUpgrade)
             switch tokenOutcome(for: parsed, wsUpgrade: wsUpgrade) {
             case .bare:
-                break
+                if claimed, case .unpaired(let base) = tokenDecision(for: parsed, wsUpgrade: wsUpgrade) {
+                    do { try gate.requireAdmitted(base) }
+                    catch { throw DomovoiError.identityHeld((error as? DomovoiError)?.message ?? "\(error)") }
+                    claimAdmitted = true
+                }
             case .send(let token, let server):
                 outgoing.setValue(token, forHTTPHeaderField: deviceTokenHeader)
                 sentToken = token
                 tokenServer = server
+                claimAdmitted = true
             case .wait(let ms):
                 throw DomovoiError.tokenThrottled(waitMs: ms)
             case .held(let reason):
                 throw DomovoiError.identityHeld(reason)
             }
+        }
+        if claimed && !claimAdmitted {
+            outgoing.setValue(nil, forHTTPHeaderField: claimKeyHeader)
         }
 
         // What a HOP may carry, which is **not always the scope rule**: it is
