@@ -396,12 +396,14 @@ const ChatMessage = ({ m, threadId, onCopy, admin, onLookup, onHeadsUp, busy, st
           <span style={{ flexShrink: 0, marginTop: 3 }}><DomovoiGlyph size={14}/></span>
           <div {...bubbleEvents}
                style={{ fontSize: 13, lineHeight: 1.6, overflowWrap: 'break-word', minWidth: 0,
-                        flex: m.draft && !m.pending ? 1 : undefined }}>
+                        flex: (m.draft || m.print_attachment) && !m.pending ? 1 : undefined }}>
             {headsUp ? (
               // A heads-up card is the reply until an option is picked
               // (documents plan D3): its own sentence and buttons.
               <ChatDocs.HeadsUpCard card={headsUp} busy={busy}
                                     onPick={onHeadsUp ? (option) => onHeadsUp(m, option) : null}/>
+            ) : m.print_attachment && !m.pending && window.ChatDrafts && draftHooks ? (
+              <window.ChatDrafts.AttachmentCard m={m} onPrint={draftHooks.printAttachment} canPrint={draftHooks.canPrint}/>
             ) : m.draft && !m.pending && window.ChatDrafts && draftHooks ? (
               // A draft (chat_drafts.jsx): the card, not the text.
               <window.ChatDrafts.DraftCard m={m} latest={draftHooks.latest[m.draft.id] || null}
@@ -757,6 +759,7 @@ const ChatPageMain = () => {
     },
     print: (id, version) => setPrintDraft({ id, version,
       title: ((draftLatest[id] || {}).title) || 'draft' }),
+    printAttachment: (attachment) => setPrintDraft({ attachment, title: attachment.name }),
     save: async (id, version) => {
       try {
         const r = await Drafts.api.save(id, version, null);
@@ -1306,9 +1309,13 @@ const ChatPageMain = () => {
       )}
       {printDraft && typeof PrintDialog === 'function' && (
         <PrintDialog name={printDraft.title} fire={fire}
-                     target={{ version: printDraft.version }}
-                     previewPath={`/api/chat/drafts/${printDraft.id}/print/preview`}
-                     submitPath={`/api/chat/drafts/${printDraft.id}/print/jobs`}
+                     target={printDraft.attachment ? {} : { version: printDraft.version }}
+                     previewPath={printDraft.attachment
+                       ? `/api/chat/attachments/${printDraft.attachment.token}/print/preview`
+                       : `/api/chat/drafts/${printDraft.id}/print/preview`}
+                     submitPath={printDraft.attachment
+                       ? `/api/chat/attachments/${printDraft.attachment.token}/print/jobs`
+                       : `/api/chat/drafts/${printDraft.id}/print/jobs`}
                      onClose={() => setPrintDraft(null)}/>
       )}
       {toastNode}

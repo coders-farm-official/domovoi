@@ -19,6 +19,8 @@ enum ChatMoreSheet: Identifiable {
     case draft(Int64, Int)
     /// A draft card's version, on the house's printer (the Print sheet).
     case printDraft(ChatMoreDraftPrintVersion)
+    /// A file attached in the chat, on the house's printer ("print this").
+    case printAttachment(ChatPrintAttachment)
     /// Hold to talk.
     case talk
 
@@ -31,6 +33,7 @@ enum ChatMoreSheet: Identifiable {
         case .report(let report): return "report:\(report.answeredAt.timeIntervalSince1970)"
         case .draft(let id, let version): return "draft:\(id):\(version)"
         case .printDraft(let asked): return asked.id
+        case .printAttachment(let attachment): return "print-attachment:\(attachment.token)"
         case .talk: return "talk"
         }
     }

@@ -184,10 +184,11 @@ def test_the_android_app_sends_it() -> None:
     app = REPO_ROOT / "android" / "app" / "src" / "main" / "java" / "com" / "domovoi" / "app"
     api_client = (app / "net" / "ApiClient.kt").read_text(encoding="utf-8")
     assert '.header("X-Requested-With", "DomovoiApp")' in api_client
-    # The two calls that stream and so build their own Request.
+    # The call that streams and so builds its own Request. (DocumentsIo.kt
+    # had one too, for the docs zip download; that path was removed in 1.4.1's
+    # phone admin controls.)
     for rel in (
         ("ui", "screens", "chat", "ChatScreen.kt"),
-        ("ui", "screens", "documents", "DocumentsIo.kt"),
     ):
         source = app.joinpath(*rel).read_text(encoding="utf-8")
         assert '.header("X-Requested-With", "DomovoiApp")' in source, rel

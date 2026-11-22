@@ -71,3 +71,11 @@ engines:
     categories: [general]
     base_url: "https://{language}.wikipedia.org/"
     search_type: text
+  # Weather answers: only asked for a "weather" category query (the core's
+  # weather lookup, domovoi/weather.py), never part of a general search.
+  # wttr.in is on by default; Open-Meteo is a keyless API with real terms.
+  - name: openmeteo
+    engine: open_meteo
+    shortcut: om
+    disabled: false
+    categories: [weather]

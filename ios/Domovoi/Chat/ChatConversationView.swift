@@ -327,6 +327,16 @@ struct ChatConversationView: View {
                     onClose: { sheet = nil }
                 )
             }
+        case .printAttachment(let attachment):
+            if let house = draftPrinting {
+                PrintSheetView(
+                    target: .chatAttachment(token: attachment.token),
+                    name: attachment.shownName,
+                    printers: house.printers,
+                    model: house.shell,
+                    onClose: { sheet = nil }
+                )
+            }
         case .talk:
             ChatMoreTalkView(chat: chat, more: more) { sheet = nil }
         }
@@ -351,7 +361,11 @@ struct ChatConversationView: View {
                 sheet = .printDraft(
                     ChatMoreDraftPrintVersion(draftID: ref.id, version: ref.version, title: ref.title)
                 )
-            }
+            },
+            printAttachment: draftPrinting == nil ? nil : { attachment in
+                sheet = .printAttachment(attachment)
+            },
+            noPrinter: printers?.data != nil && printers?.offersDraftPrint == false
         )
     }
 

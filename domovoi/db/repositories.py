@@ -1314,11 +1314,14 @@ class VoiceProfilesRepository:
 
     async def all_for_model(
         self, model: str
-    ) -> list[tuple[int, int, bytes, str | None]]:
-        """Return ``(profile_id, person_id, embedding_bytes, room_id)``
-        for every SATELLITE profile matching ``model`` — what a satellite's
-        turn is matched against. Phone samples are never in it, so they
-        cannot move a satellite centroid.
+    ) -> list[tuple[int, int, bytes, str | None, float | None]]:
+        """Return ``(profile_id, person_id, embedding_bytes, room_id,
+        sample_seconds)`` for every SATELLITE profile matching ``model`` —
+        what a satellite's turn is matched against. Phone samples are never
+        in it, so they cannot move a satellite centroid. ``sample_seconds``
+        (the speech the sample holds, None when unrecorded) decides whether
+        a room's samples are long enough to hold a person to them
+        (``voice_identifier.ROOM_SAMPLE_GOOD_SEC``).
 
         Pulls every row on every match call. At household scale (a few
         dozen samples max) this is microseconds; if it ever becomes hot
@@ -1327,7 +1330,7 @@ class VoiceProfilesRepository:
         result = await self.s.execute(
             text(
                 """
-                SELECT id, person_id, embedding, room_id
+                SELECT id, person_id, embedding, room_id, sample_seconds
                 FROM voice_profiles
                 WHERE model = :model AND source = 'satellite'
                 """
@@ -1335,7 +1338,8 @@ class VoiceProfilesRepository:
             {"model": model},
         )
         return [
-            (int(r[0]), int(r[1]), bytes(r[2]), r[3]) for r in result.all()
+            (int(r[0]), int(r[1]), bytes(r[2]), r[3], None if r[4] is None else float(r[4]))
+            for r in result.all()
         ]
 
     async def phone_matching_rows(

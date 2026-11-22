@@ -13,8 +13,15 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from domovoi.config import Settings as _CoreSettings
 from domovoi.models import MAX_CONFIG_CHANGES
 from domovoi.up_next.service import ContextIn as UpNextContext
+
+# The core default (not the live, possibly overridden, value): the OpenAPI
+# dump must not depend on the machine that ran it.
+_VOICE_MATCH_THRESHOLD_DEFAULT = _CoreSettings.model_fields[
+    "voice_profile_match_threshold"
+].default
 
 
 # ─── Music ────────────────────────────────────────────────────────────────
@@ -494,17 +501,19 @@ class Session(BaseModel):
 
 
 class VoiceMatchInfo(BaseModel):
-    """How voice identification scored a satellite turn (V049). ``outcome``:
+    # An f-string ``__doc__`` (pydantic reads it as the schema description)
+    # so the default threshold quoted here is the config's own, never a copy.
+    __doc__ = f"""How voice identification scored a satellite turn (V049). ``outcome``:
     "confident" | "match" (somebody was named) | "ambiguous" (two people too
     close to tell apart: nobody named) | "no_match" (the closest was under
     the threshold) | "too_short" (the recording was too short to embed) |
     "no_embedding" (the embedder gave nothing) | "no_samples" (nobody
     enrolled yet) | "timeout" | "denylist" (an opted-out voice) | "error".
     The closest person and the runner-up with their scores (cosine, 0..1;
-    the match threshold is ``voice_profile_match_threshold``, 0.75 by
-    default) are set for the first four and "noisy" (music or
-    a TV under the voice: scored, nobody named; 1.3.0); a person since
-    forgotten reads null. Names are the people's current names."""
+    the match threshold is ``voice_profile_match_threshold``,
+    {_VOICE_MATCH_THRESHOLD_DEFAULT} by default) are set for the first four
+    and "noisy" (music or a TV under the voice: scored, nobody named;
+    1.3.0); a person since forgotten reads null. Names are the people's current names."""
     outcome: str
     best_person_id: int | None = None
     best_name: str | None = None

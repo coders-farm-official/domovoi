@@ -2115,7 +2115,7 @@ a.home-att-row:hover { background: var(--brand-soft); }
   min-width: min(100%, 320px); padding: 12px 16px;
   display: flex; align-items: center; gap: 12px; cursor: pointer;
 }
-.toast-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.toast-text { flex: 1; min-width: 0; overflow-wrap: anywhere; white-space: pre-line; }
 /* A toast that stays (fire(msg, { stay: true })): an error to read,
    closed by its own button. */
 .toast-stay {
@@ -2125,7 +2125,7 @@ a.home-att-row:hover { background: var(--brand-soft); }
 .toast-stay-row { display: flex; align-items: flex-start; gap: 12px; }
 .toast-stay-dot { flex: none; padding-top: 12px; }
 .toast-stay-body { flex: 1; min-width: 0; padding-top: 4px; }
-.toast-stay-text { overflow-wrap: anywhere; user-select: text; }
+.toast-stay-text { overflow-wrap: anywhere; user-select: text; white-space: pre-line; }
 .toast-stay-detail { margin-top: 4px; font-size: var(--t-sm); color: var(--fg-muted); overflow-wrap: anywhere; white-space: pre-line; user-select: text; }
 .toast-stay-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 8px 0 18px; }
 .toast-stay-actions .btn { max-width: 100%; }

@@ -135,8 +135,11 @@ from domovoi.voice_identifier import (
     OUTCOME_DENYLIST,
     OUTCOME_NO_MATCH,
     OUTCOME_NOISY,
+    ROOM_SAMPLE_GOOD_SEC,
     claims_by_this_voice,
+    is_good_sample,
     is_own_voice,
+    scores_in_room,
     unheard_text,
 )
 
@@ -511,12 +514,12 @@ _WONT_SAVE_TEXT = "Okay, I won't save that."
 #: Seconds of speech the introduction collects before it stops asking.
 INTRO_SPEECH_TARGET_SEC = 8.0
 
-#: A room sample with less speech than this (1.3.0's relearn clips are
-#: about a second) is "short": "my name is X" in X's own recognized voice,
-#: in a room with no sample of X at least this long, goes on to learn the
-#: voice there (VoiceProfileHandler._offer_learn_here) instead of stopping
-#: at "I already know you".
-ROOM_SAMPLE_GOOD_SEC = 4.0
+# A room sample with less speech than ROOM_SAMPLE_GOOD_SEC (4 s, defined in
+# voice_identifier.py beside the room rule it also decides; 1.3.0's relearn
+# clips are about a second) is "short": "my name is X" in X's own
+# recognized voice, in a room with no sample of X at least this long, goes
+# on to learn the voice there (VoiceProfileHandler._offer_learn_here)
+# instead of stopping at "I already know you".
 #: The payload key of a room-learning collection's room.
 _LEARN_ROOM_KEY = "learn_room"
 
@@ -891,10 +894,14 @@ async def maybe_inject_third_party_ask(
 # ─── "Was that you?" — a room checks once (2026-11-16) ────────────────────
 #
 # A voice that scores just under the bar for one known person, clearly
-# ahead of everyone else, in a room that has no sample of them yet: after
-# the answer, "By the way, was that you, X?". Only the very next turn's
-# yes, in the same room within ROOM_CHECK_TTL_SEC, saves THAT turn's clip
-# as the room's sample for X. Nothing unconfirmed is ever saved: drift
+# ahead of everyone else, in a room that has no GOOD sample of them yet
+# (none at least ROOM_SAMPLE_GOOD_SEC long: a room with only short ones asks
+# too, owner decision 2026-11-22): after the answer, "By the way, was that
+# you, X?". Only the very next turn's yes, in the same room within
+# ROOM_CHECK_TTL_SEC, in a voice that could be X's (_room_check_voice),
+# saves THAT turn's clip as the room's sample for X — or, where X has only
+# short samples, starts the "count from one to ten" learning that replaces
+# them (_start_room_learning). Nothing unconfirmed is ever saved: drift
 # re-enrolment from borderline matches once filed one person's voice under
 # another (voice_identifier.py, job 4). A room asks a person at most once a
 # day, whatever the answer. Never from a phone, never inside an
@@ -908,6 +915,13 @@ ROOM_CHECK_TTL_SEC = 30.0
 ROOM_CHECK_QUIET_SEC = 24 * 3600.0
 #: At most this many samples a room keeps of one person from a yes here.
 ROOM_CHECK_CAP = 3
+#: How far under the asking turn's score for X the yes may score for X and
+#: still count as X answering (owner decision 2026-11-22: only the asked
+#: person's voice may confirm). A "yes, that was me" holds less speech than
+#: the command that prompted the question, so it embeds a little looser;
+#: someone else's voice scores far lower (in the case behind this rule,
+#: another household member scored 0.11 against X, X 0.53).
+ROOM_CHECK_YES_SLACK = 0.10
 #: When each (person_id, room_id) was last asked. In memory: a restart
 #: forgets it, and the room may ask once more.
 _ROOM_CHECK_ASKED: dict[tuple[int, str], float] = {}
@@ -966,9 +980,12 @@ async def maybe_ask_room_check(
         )
         if pending:
             return False
-        if await VoiceProfilesRepository(session).room_sample_count(
+        here = await VoiceProfilesRepository(session).room_samples(
             person_id, room, VoiceProfilesRepository.EMBEDDING_MODEL_TAG,
-        ):
+        )
+        if any(is_good_sample(secs) for _id, secs in here):
+            # The room knows them well. Only short samples (or none):
+            # it asks, and a yes learns the room again.
             return False
         person = await PeopleRepository(session).get(person_id)
         if person is None:
@@ -983,6 +1000,7 @@ async def maybe_ask_room_check(
                 "name": person[1],
                 "embedding_b64": _b64_embedding(np.asarray(ident.embedding, dtype=np.float32)),
                 "score": round(best, 3),
+                "speech_sec": getattr(ident, "speech_seconds", None),
                 "expires_at": time.time() + ROOM_CHECK_TTL_SEC,
                 **_origin(ctx),
             },
@@ -1796,7 +1814,12 @@ class VoiceProfileHandler(Handler):
         """The answer to "I already know someone called X. Is that you?"
         (owner decision 2026-10-15). Yes: it is that person — the clip from
         the question's turn goes into X's SATELLITE samples, tagged with the
-        room it was asked in. No: a different X — a new person with the
+        room it was asked in. When X already has samples there, all of them
+        short (under :data:`ROOM_SAMPLE_GOOD_SEC`), the yes instead starts
+        the room-learning collection a recognized X gets
+        (:meth:`_offer_learn_here`): its longer recording replaces X's
+        samples in that room, and only if it holds more speech than they
+        did. No: a different X — a new person with the
         name, enrolled from the same clip right away, and the People page
         flags the pair (``namesakes``). Only from a satellite: a chat mic
         never writes a satellite sample."""
@@ -1823,6 +1846,19 @@ class VoiceProfileHandler(Handler):
                 sample_seconds=_speech_of(clips) if clips is not None else None,
             )
             return await self._go_on(response, saved, clips, ctx, session, keep_text=True)
+        # X already has short samples here (a one-second clip, say): learn
+        # the room as X's own recognized voice would (_offer_learn_here), so
+        # the longer recording REPLACES them instead of sitting beside them.
+        here = await self._short_room_samples(person_id, room_id, ctx, session, clips)
+        if here:
+            if await self._is_denylisted(embedding, session):
+                return self._say("I wasn't able to save that voice profile.", ctx)
+            learn = await self._start_room_learning(
+                person_id, name, room_id, here, clips, ctx, session,
+                claimed_by=_claimed_by(data), lead=f"Thanks, {name}.",
+            )
+            if learn is not None:
+                return learn
         response = await self._add_room_sample(
             person_id, name, embedding, room_id, ctx, session, claimed_by=_claimed_by(data),
             saved=saved, sample_seconds=_speech_of(clips) if clips is not None else None,
@@ -2125,35 +2161,79 @@ class VoiceProfileHandler(Handler):
         the room's sample (claimed for the room), replacing the short ones
         there. None: the room has a good sample (today's "I already know
         you" stands), or this is not a satellite's introduction."""
-        if clips is None or not ctx.room_id or phone_chat_mic(ctx) or is_phone_room(ctx.room_id):
-            return None
         person_id, name = int(existing[0]), existing[1]
+        here = await self._short_room_samples(person_id, ctx.room_id, ctx, session, clips)
+        if here is None:
+            return None
+        return await self._start_room_learning(
+            person_id, name, ctx.room_id, here, clips, ctx, session,
+            claimed_by=person_id, lead=f"I already know you, {name}.",
+        )
+
+    async def _short_room_samples(
+        self,
+        person_id: int,
+        room_id: str | None,
+        ctx: Context,
+        session: AsyncSession,
+        clips: list | None,
+    ) -> list[tuple[int, float | None]] | None:
+        """``(id, sample_seconds)`` of ``person_id``'s SATELLITE samples in
+        ``room_id`` (oldest first, maybe none) when none of them holds
+        :data:`ROOM_SAMPLE_GOOD_SEC` of speech: the samples a room-learning
+        collection (:meth:`_start_room_learning`) may replace. Only that
+        person, only that room. None: the room has a good one, the read
+        failed, or this is not a satellite's collecting introduction."""
+        if clips is None or not room_id or phone_chat_mic(ctx) or is_phone_room(room_id):
+            return None
         try:
             here = await VoiceProfilesRepository(session).room_samples(
-                person_id, ctx.room_id, VoiceProfilesRepository.EMBEDDING_MODEL_TAG,
+                person_id, room_id, VoiceProfilesRepository.EMBEDDING_MODEL_TAG,
             )
         except Exception as e:
             log.warning("learning a room: reading its samples failed: %s", e)
             return None
         if any((secs or 0.0) >= ROOM_SAMPLE_GOOD_SEC for _id, secs in here):
             return None
+        return here
+
+    async def _start_room_learning(
+        self,
+        person_id: int,
+        name: str,
+        room_id: str,
+        here: list[tuple[int, float | None]],
+        clips: list,
+        ctx: Context,
+        session: AsyncSession,
+        *,
+        claimed_by: int | None,
+        lead: str,
+    ) -> Response | None:
+        """Park a room-learning collection for ``person_id`` in ``room_id``,
+        seeded with ``clips``: "<lead> Let me learn your voice better here:
+        count from one to ten …". Nothing is saved now. Its result becomes
+        the room's sample in place of ``here`` (:meth:`_save_learned_room`),
+        and only when it holds more speech than the best of them, so a
+        collection that ends early, short or not at all keeps them. None:
+        it couldn't be parked."""
         parked = await self._park_collect(
             _STAGE_COUNT, name, person_id, None, clips, ctx, session,
             extra={
-                _LEARN_ROOM_KEY: ctx.room_id,
+                _LEARN_ROOM_KEY: room_id,
                 "replace_ids": [int(i) for i, _s in here],
                 "have_secs": max([float(s or 0.0) for _i, s in here], default=0.0),
-                _CLAIMED_BY_KEY: person_id,
+                _CLAIMED_BY_KEY: claimed_by,
             },
         )
         if not parked:
             return None
         log.info(
             "learning person_id=%d's voice in room=%s (%d short sample(s) there)",
-            person_id, ctx.room_id, len(here),
+            person_id, room_id, len(here),
         )
         return Response(
-            text=f"I already know you, {name}. Let me learn your voice better here: "
+            text=f"{lead} Let me learn your voice better here: "
             "count from one to ten for me, at your normal voice.",
             session_id=ctx.session_id, matched_handler=self.name, expect_followup=True,
         )
@@ -2499,11 +2579,15 @@ class VoiceProfileHandler(Handler):
         self, data: dict, transcript: str, ctx: Context, session: AsyncSession,
     ) -> Response | None:
         """The turn after "By the way, was that you, X?" (maybe_ask_room_check).
-        Yes, in time and in the same room: the asking turn's clip becomes
-        this room's sample for X (marked as claimed, like every sample a
-        yes adds), unless X has :data:`ROOM_CHECK_CAP` here already. No:
-        nothing. Anything else isn't an answer (None: routed as usual), and
-        saves nothing either."""
+        Yes, in time, in the same room and in a voice that could be X's
+        (:meth:`_room_check_voice`): the asking turn's clip becomes this
+        room's sample for X (marked as claimed, like every sample a yes
+        adds), unless X has :data:`ROOM_CHECK_CAP` here already. Where X's
+        samples here are all short, the yes instead starts the room-learning
+        collection (:meth:`_start_room_learning`), which replaces them only
+        with more speech. A yes in somebody else's voice, or too short or
+        noisy to tell whose, saves nothing. No: nothing. Anything else
+        isn't an answer (None: routed as usual), and saves nothing either."""
         from domovoi.router import _parse_yes_no, normalize_transcript, strip_leading_filler
 
         said = normalize_transcript(transcript or "")
@@ -2531,6 +2615,41 @@ class VoiceProfileHandler(Handler):
         embedding = _decode_b64_embedding(str(data.get("embedding_b64") or ""))
         if person_id is None or embedding is None or not name or not room_id:
             return self._say("Something went wrong storing that — your voice wasn't added.", ctx)
+        verdict = await self._room_check_voice(data, person_id, room_id, ctx, session)
+        if verdict != "theirs":
+            log.info(
+                "room check: a yes for person_id=%d in room=%s refused (%s voice)",
+                person_id, room_id, verdict,
+            )
+            if verdict == "unheard":
+                return self._say(
+                    f"I couldn't hear enough to be sure that was you, so I won't save it. "
+                    f"I'll ask {name} myself next time.", ctx,
+                )
+            return self._say(
+                f"That didn't sound like {name}, so I won't save it. "
+                f"I'll ask {name} myself next time.", ctx,
+            )
+        secs = data.get("speech_sec")
+        try:
+            secs = None if secs is None else max(0.0, float(secs))
+        except (TypeError, ValueError):
+            secs = None
+        clips = [[str(data.get("embedding_b64")), secs or 0.0]]
+        # X has only short samples here (owner decision 2026-11-22): learn
+        # the room as "my name is X" does, so a longer recording REPLACES
+        # them instead of a fourth short clip sitting beside them.
+        short = await self._short_room_samples(person_id, room_id, ctx, session, clips)
+        if short:
+            if await self._is_denylisted(embedding, session):
+                return self._say("I wasn't able to save that voice profile.", ctx)
+            log.info("room check: person_id=%d confirmed in room=%s, learning it", person_id, room_id)
+            learn = await self._start_room_learning(
+                person_id, name, room_id, short, clips, ctx, session,
+                claimed_by=None, lead=f"Thanks, {name}.",
+            )
+            if learn is not None:
+                return learn
         try:
             here = await VoiceProfilesRepository(session).room_sample_count(
                 person_id, room_id, VoiceProfilesRepository.EMBEDDING_MODEL_TAG,
@@ -2541,7 +2660,57 @@ class VoiceProfileHandler(Handler):
         if here >= ROOM_CHECK_CAP:
             return self._say(f"Thanks, {name}. I already know your voice in this room.", ctx)
         log.info("room check: person_id=%d confirmed in room=%s", person_id, room_id)
-        return await self._add_room_sample(person_id, name, embedding, room_id, ctx, session)
+        return await self._add_room_sample(
+            person_id, name, embedding, room_id, ctx, session, sample_seconds=secs,
+        )
+
+    async def _room_check_voice(
+        self, data: dict, person_id: int, room_id: str, ctx: Context, session: AsyncSession,
+    ) -> str:
+        """Whose voice said yes to "was that you, X?" (owner decision
+        2026-11-22: only X's may). ``"theirs"``, ``"someone else"`` or
+        ``"unheard"`` (no voiceprint: too short, under music, or the scores
+        couldn't be read).
+
+        The rule. Requiring the yes to MATCH X (score over the bar) would
+        refuse exactly the person the question is for: their voice scored
+        under the bar in this room, which is why it asked. So the yes turn
+        is scored the way any turn here is (voice_identifier.scores_in_room:
+        the same samples, room rule and bars), and counts as X's when
+
+        * its score for X is at least the asking turn's score minus
+          :data:`ROOM_CHECK_YES_SLACK` — as much like X as the voice the
+          question was about, give or take the looser embedding of a short
+          "yes"; and
+        * nobody else is as close: no other enrolled person scores higher
+          than X, or over their own bar (the voice would be theirs, or too
+          close to call).
+
+        An opted-out voice is never X's answer."""
+        if ctx.voice_outcome == OUTCOME_DENYLIST:
+            return "someone else"
+        raw = ctx.embedding_bytes
+        if raw is None or len(raw) != EMBEDDING_DIM * 4 or ctx.voice_outcome == OUTCOME_NOISY:
+            return "unheard"
+        try:
+            scored = await scores_in_room(session, np.frombuffer(raw, dtype=np.float32), room_id)
+        except Exception as e:
+            log.warning("room check: scoring the yes failed: %s", e)
+            return "unheard"
+        mine = scored.scores.get(person_id)
+        if mine is None:
+            return "someone else"
+        try:
+            asked = float(data.get("score"))
+        except (TypeError, ValueError):
+            asked = ROOM_CHECK_FLOOR
+        if mine < asked - ROOM_CHECK_YES_SLACK:
+            return "someone else"
+        threshold = settings.voice_profile_match_threshold
+        for other, score in scored.scores.items():
+            if other != person_id and (score > mine or score >= scored.bars.get(other, threshold)):
+                return "someone else"
+        return "theirs"
 
     async def _handle_phone_voice_add(
         self,

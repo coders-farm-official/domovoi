@@ -36,6 +36,11 @@ CORE_CONFIG_WHITELIST: tuple[str, ...] = (
     # nothing may ask a language model, and sdk.http refuses requests that
     # would (SDK 1.7). Read it to skip a summary step up front.
     "ai_features",
+    # The household's place (SDK 1.12), the same one core's weather and
+    # local news use, so a weather plugin needn't ask for it again. Since
+    # SDK 1.13 it is the Home location's name (Settings → Household); the
+    # whole place is sdk.household.home_location().
+    "news_location",
 )
 
 
@@ -50,6 +55,10 @@ class CoreConfigView:
             # Always a usable URL prefix: the setting's default is the
             # literal "auto", which only the core knows how to resolve.
             return lan_address.mpd_http_base()
+        if name == "news_location":
+            from domovoi import home_location
+
+            return home_location.name()
         if name == "ai_features":
             from domovoi import ai_features
 

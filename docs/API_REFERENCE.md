@@ -1223,6 +1223,21 @@ as the core last did (null while it hasn't).
 | `GET /api/people/{id}/music-mix` | **Device read** | — | `{person_id, override: {discovery_favorites?, close_wander?} \| null, uses: {discovery_favorites, close_wander}}` (`null` = uses the household's). `404` for a person nobody has. |
 | `PUT /api/people/{id}/music-mix` | **Admin, or that person's own device** (`owner_person_id`; `403` for any other) | `{override: {discovery_favorites, close_wander} \| null}` | As `GET`; `null` goes back to the household's. |
 
+### 3.5c2 Home location (1.4.1)
+
+The household's town, Settings → Household → Home location
+(`domovoi/home_location.py`, stored in `household_settings` key
+`home_location`). Weather answers and local news use it; plugins read it
+with `sdk.household.home_location()`. Suggestions come from the town list
+bundled with Domovoi (GeoNames `cities15000`, CC BY 4.0,
+`domovoi/places/`); nothing is sent anywhere.
+
+| Method & path | Auth | Request | Response / purpose |
+|---|---|---|---|
+| `GET /api/household/home-location` | **Device read** | — | `{place: {name, lat, lon, country} \| null, needs_pick, carried_over, attribution}`. `needs_pick`: a name with no town (lat/lon null), e.g. carried over from the old `news_location`; the card asks to pick the town. |
+| `PUT /api/household/home-location` | **Admin** | `{name, lat?, lon?, country?}` (a suggestion as given); `{name: ""}` clears it | As `GET`. A name without coordinates that clearly names one town gets that town's. `422` a malformed place (lat/lon out of range or only one of them, a country that isn't two letters). |
+| `GET /api/places/suggest?q=&limit=8` | **Device read** | `q` up to 100 characters, `limit` 1–20 | `{places: [{name: "Denver, Colorado, US", lat, lon, country}], attribution}`: towns whose name starts with `q` (case and accents ignored; `"denver, co"` also narrows by state or country), biggest first. |
+
 ### 3.5d Music: the visualizer's presets
 
 `web/backend/api/visualizer.py`, `web/backend/visualizer_presets.py`. The

@@ -50,8 +50,8 @@ def pi_cfg(profile="xvf3800_usb", **kw):
 def test_the_music_player_argv_is_the_pi_s():
     # 3 s of 44.1 kHz stereo is 529200 bytes: half of the 1034 KiB buffer.
     assert ep.AlsaAudioOut().stream_argv("plughw:CARD=Array,DEV=0", "http://h:8051") == [
-        "mpg123", "-q", "-b", "1034", "--preload", "0.500", "--devbuffer", "1.0",
-        "-o", "alsa", "-a", "plughw:CARD=Array,DEV=0", "http://h:8051",
+        "mpg123", "-b", "1034", "--preload", "0.500", "--devbuffer", "1.0",
+        "--timeout", "5", "-o", "alsa", "-a", "plughw:CARD=Array,DEV=0", "http://h:8051",
     ]
 
 
@@ -68,7 +68,7 @@ def test_the_music_buffer_holds_buffer_sec_before_the_first_note(sec):
 
 def test_the_music_buffer_is_passed_through():
     argv = ep.AlsaAudioOut().stream_argv("default", "http://h:8051", 6.0)
-    assert argv[2:6] == ep.mpg123_buffer_args(6.0)
+    assert argv[1:5] == ep.mpg123_buffer_args(6.0)
 
 
 def test_the_clip_players_argv_are_the_pi_s():

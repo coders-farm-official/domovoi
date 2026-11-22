@@ -6154,7 +6154,7 @@ const CapturesPanel = () => {
 const SETTINGS_GROUPS = [
   // "Rooms & devices" until 2026-11-09: its old address still opens it.
   { id: 'household', label: 'Household', icon: 'house', aliases: ['rooms-and-devices'],
-    sections: ['rooms', 'people', 'phones-and-browsers', 'calendars', 'media-folders', 'music-mix', 'queue-history', 'printers', 'friend-houses'] },
+    sections: ['rooms', 'people', 'phones-and-browsers', 'home-location', 'calendars', 'media-folders', 'music-mix', 'queue-history', 'printers', 'friend-houses'] },
   { id: 'voice', label: 'Voice', icon: 'audio-lines', sections: ['wake-words', 'voices', 'greetings'] },
   { id: 'chat-and-ai', label: 'Chat & AI', icon: 'sparkles', sections: ['models', 'search', 'chat'] },
   { id: 'privacy', label: 'Privacy', icon: 'shield', sections: ['internet', 'voice-history', 'listening-history'] },
@@ -6175,6 +6175,12 @@ const SETTINGS_SECTIONS = [
   { id: 'phones-and-browsers', label: 'Phones & browsers', aliases: ['devices'],
     sub: 'Name this device, get the app, the household token, guests, and who may edit a room’s play queue.',
     words: 'device devices phone phones browser browsers name rename household token pair pairing guest guests queue files shared screen tablet app android' },
+  // home_location.jsx registers it (1.4.1): the household's town, for
+  // weather and local news; "Local news location" in Advanced → News until
+  // then, so its search words came with it.
+  { id: 'home-location', label: 'Home location', optional: true,
+    sub: 'The town weather answers and local news are for.',
+    words: 'news location town city weather home place local' },
   // calendar.jsx registers it (1.3.0): calendars by link and phones' shared
   // calendars, read-only.
   { id: 'calendars', label: 'Calendars', optional: true,
@@ -6351,11 +6357,15 @@ const settingsSearchIndex = (groups, fields) => {
       // The media paths are edited in Household → Media folders.
       if (f.group === 'Paths' && shown.has('media-folders')) {
         out.push({ key: `media-folders/${f.name}`, label: f.label, where: shown.get('media-folders'),
-                   route: 'settings/media-folders', words: `${f.name.replace(/_/g, ' ')} media folders` });
+                   route: 'settings/media-folders',
+                   words: `${f.name.replace(/_/g, ' ')} media folders ${(f.keywords || []).join(' ')}` });
         return;
       }
+      // Found by its name, group title, its own aliases (``keywords`` from
+      // the schema) and the words of its help, not only by its label.
       out.push({ key: `advanced/${f.name}`, label: f.label, where: shown.get('advanced'),
-                 route: `settings/advanced/${f.name}`, words: `${f.name.replace(/_/g, ' ')} ${f.group || ''}` });
+                 route: `settings/advanced/${f.name}`,
+                 words: `${f.name.replace(/_/g, ' ')} ${f.group || ''} ${(f.keywords || []).join(' ')} ${f.help || ''}` });
     });
   }
   return out;
@@ -6363,7 +6373,7 @@ const settingsSearchIndex = (groups, fields) => {
 
 /* The best matches for `query`: every word typed must start a word of
  * the entry; its own name beats its group and its keywords. */
-const settingsSearch = (index, query, limit = 8) => {
+const settingsSearch = (index, query, limit = 12) => {
   const q = settingsWords(query);
   if (!q.length) return [];
   const phrase = q.join(' ');
@@ -6388,13 +6398,17 @@ const SettingsSearch = ({ groups }) => {
   // Advanced's settings join the index the first time someone searches
   // (quiet: a browser that may not read them simply finds fewer).
   const [fields, setFields] = React.useState(null);
-  const asked = React.useRef(false);
+  // A read that failed (not signed in yet, the server busy) is tried again
+  // on the next keystroke after a few seconds, never latched as "no settings".
+  const asked = React.useRef(0);
+  const got = React.useRef(false);
   const askFields = () => {
-    if (asked.current) return;
-    asked.current = true;
+    const now = Date.now();
+    if (got.current || now - asked.current < 4000) return;
+    asked.current = now;
     apiGet('/api/config/editable', { quiet: true })
-      .then((r) => setFields((r && r.fields) || []))
-      .catch(() => setFields([]));
+      .then((r) => { got.current = !!(r && r.fields && r.fields.length); setFields((r && r.fields) || []); })
+      .catch(() => setFields((cur) => cur || []));
   };
   const index = React.useMemo(() => settingsSearchIndex(groups, fields), [groups, fields]);
   const hits = settingsSearch(index, q);

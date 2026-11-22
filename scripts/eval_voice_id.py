@@ -418,13 +418,27 @@ def run(data: dict, v: Variant) -> dict[str, dict[str, float]]:
     guests = list(range(n - n // 3, n))
     households = [(enrolled[i], enrolled[i + 1]) for i in range(0, len(enrolled) - 1, 2)]
 
-    def samples_for(person: int) -> list[tuple[int, bytes, str | None]]:
-        out = [(person, emb[person, li, enroll_ri].tobytes(), ENROLL_ROOM) for li in ENROLL_LINES]
+    secs = data.get("speech_sec")
+
+    def seconds(person: int, li: int, ri: int) -> float | None:
+        # The room rule holds a person to a room's samples only when one is
+        # long enough (voice_identifier.ROOM_SAMPLE_GOOD_SEC); an old cache
+        # without lengths reads every sample as short.
+        return None if secs is None else float(secs[person, li, ri])
+
+    def samples_for(person: int) -> list[tuple[int, bytes, str | None, float | None]]:
+        out = [
+            (person, emb[person, li, enroll_ri].tobytes(), ENROLL_ROOM, seconds(person, li, enroll_ri))
+            for li in ENROLL_LINES
+        ]
         if v.room_samples:
             for ri, room in enumerate(rooms):
                 base = room.split("+")[0]
                 if base != ENROLL_ROOM and "+" not in room:
-                    out.append((person, emb[person, ROOM_LINE, ri].tobytes(), base))
+                    out.append((
+                        person, emb[person, ROOM_LINE, ri].tobytes(), base,
+                        seconds(person, ROOM_LINE, ri),
+                    ))
         return out
 
     results: dict[str, dict[str, float]] = {}

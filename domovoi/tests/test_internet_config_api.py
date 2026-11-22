@@ -109,7 +109,7 @@ async def test_config_rows_carry_the_internet_flags(box, monkeypatch) -> None:
     # Every TTS engine is local since the Microsoft Edge voices were dropped.
     assert rows["tts_engine"]["choices"] == ["piper", "system"]
     assert rows["tts_engine"]["needs_internet_choices"] == []
-    for name in ("news_auto_fetch", "news_location", "news_enabled", "music_alias_fetch_enabled", "searxng_url"):
+    for name in ("news_auto_fetch", "news_enabled", "music_alias_fetch_enabled", "searxng_url"):
         assert rows[name]["needs_internet"] is True, name
     assert rows["bot_name"]["needs_internet"] is False
     assert rows["bot_name"]["set_in_environment"] is True

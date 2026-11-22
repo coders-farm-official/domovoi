@@ -54,6 +54,13 @@ from __future__ import annotations
 #         socket caps, message size and rate limits; open sockets closed
 #         on disable or reload). Any other plugin websocket is still
 #         refused at load, and the web process serves none.
+# 1.12.0: core_config.news_location (the household's place); a plugin that
+#         registers the "weather" capability takes weather questions over
+#         from core's built-in lookup.
+# 1.13.0: sdk.household.home_location() (the Home location: name, lat, lon,
+#         country, or None) and sdk.places.suggest(text, limit=8) (the
+#         bundled town list); core_config.news_location is now the Home
+#         location's name.
 # 1.14.0: [[web.home_cards]]: a plugin card on the dashboard's Home page
 #         (window.DomovoiPlugins.<slug>.homeCards.<Component>).
 API_VERSION = "1.14.0"
@@ -92,6 +99,7 @@ from domovoi.sdk.facade import (  # noqa: E402,F401
     PluginSDK,
     build_sdk,
 )
+from domovoi.sdk.household import HouseholdAPI, PlacesAPI  # noqa: E402,F401
 from domovoi.sdk.http import HttpFactory  # noqa: E402,F401
 from domovoi.sdk.library import LibraryAPI, LibraryTrack  # noqa: E402,F401
 from domovoi.sdk.observability import get_logger  # noqa: E402,F401
@@ -149,6 +157,7 @@ __all__ = [
     "FastPath",
     "Handler",
     "HandlerDisplay",
+    "HouseholdAPI",
     "HttpFactory",
     "Intent",
     "LibraryAPI",
@@ -161,6 +170,7 @@ __all__ = [
     "NowPlayingView",
     "net_safety",
     "egress",
+    "PlacesAPI",
     "PlaybackAPI",
     "PluginDB",
     "PluginSDK",

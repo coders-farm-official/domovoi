@@ -33,11 +33,10 @@ from sqlalchemy import text
 
 from domovoi import egress
 from domovoi import net_safety
-from domovoi import news_service
+from domovoi import home_location, news_service
 from domovoi.admin_auth import require_device
 from domovoi.clients import news_feeds as news_feeds_client
 from domovoi.clients.news_feeds import CATEGORY_KEYS
-from domovoi.config import settings as core_settings
 from web.backend.db import session_scope
 
 log = logging.getLogger(__name__)
@@ -456,7 +455,7 @@ async def poll_now(person_id: int | None = Query(default=None)) -> dict[str, Any
     async with session_scope() as s:
         await news_service.ensure_house_feeds(s)
         scopes = ["national", "global"]
-        if core_settings.news_location.strip():
+        if await home_location.load(s):
             scopes.insert(0, "local")
         for scope in scopes:
             house += await news_service.fetch_house_scope(s, scope)

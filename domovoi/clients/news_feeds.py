@@ -18,7 +18,7 @@ topic into articles":
 Plus a small curated ``CATEGORY_FEEDS`` / ``NATIONAL_FEEDS`` /
 ``GLOBAL_FEEDS`` map so curated categories + the national/global geographic
 scopes resolve to known-good feeds instantly and offline-defined. LOCAL
-scope is discovered from ``news_location`` (see ``local_feed_candidates``).
+scope is discovered from the Home location (see ``local_feed_candidates``).
 
 Network + parse both happen off the event loop (``asyncio.to_thread`` for
 the blocking feed fetch + parse, httpx async for the HTML probe).
@@ -89,7 +89,7 @@ CATEGORY_FEEDS: dict[str, list[str]] = {
 CATEGORY_KEYS: tuple[str, ...] = tuple(CATEGORY_FEEDS.keys())
 
 # House-scope geographic feeds. NATIONAL/GLOBAL are curated + stable; LOCAL
-# is discovered from news_location.
+# is discovered from the Home location.
 NATIONAL_FEEDS: list[str] = [
     "https://feeds.npr.org/1003/rss.xml",
     "http://feeds.bbci.co.uk/news/rss.xml",

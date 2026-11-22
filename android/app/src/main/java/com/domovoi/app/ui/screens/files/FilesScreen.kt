@@ -105,10 +105,10 @@ import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
 import com.domovoi.app.data.LocalMedia
 import com.domovoi.app.data.PhoneFolders
-import com.domovoi.app.net.ApiException
 import com.domovoi.app.net.Page
 import com.domovoi.app.net.PageRequest
 import com.domovoi.app.net.SERVER_MAX_PAGE
+import com.domovoi.app.net.failureText
 import com.domovoi.app.net.rememberApi
 import com.domovoi.app.ui.components.LibraryRefreshBox
 import com.domovoi.app.ui.components.LibraryRefreshButton
@@ -264,8 +264,10 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
     LoadMoreNearEnd(gridState, pager)
     // Two different "no": the LIBRARY is read-only (editable=false), or THIS
     // DEVICE has been blocked by an admin (writable=false). Upload / move /
-    // import need both. Delete is admin-gated server-side and this app can't
-    // sign in as admin, so its button stays but the failure says so.
+    // import need both. Deleting from the server is admin-gated and this app
+    // can't sign in as admin, so the home server's rows offer no Delete and
+    // the list says where it is ([FILES_DELETE_ON_DASHBOARD]; the phone
+    // admin audit, 22 Nov 2026). This phone's own files still delete.
     val blocked = data?.writable == false
     val canWrite = editable && !blocked && libraryTakesFiles(selectedId)
     // "Send to home" is offered only while the server can actually be used.
@@ -432,18 +434,7 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
                     )
                     pager.reload()
                 }
-                .onFailure {
-                    // Delete is the one Files verb behind the admin password,
-                    // and this app has no admin session to present.
-                    val status = (it as? ApiException)?.status
-                    toast(
-                        if (status == 401 || status == 403) {
-                            "delete needs admin — use the dashboard, or ask an admin"
-                        } else {
-                            "delete failed: ${it.message}"
-                        },
-                    )
-                }
+                .onFailure { toast(failureText("delete", it)) }
             busy = null
         }
     }
@@ -521,7 +512,7 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
                     if (r.reindexTriggered) parts.append(" · indexing…")
                     toast(parts.toString())
                 }
-                .onFailure { toast(com.domovoi.app.net.failureText("send", it)) }
+                .onFailure { toast(failureText("send", it)) }
             busy = null
         }
     }
@@ -778,7 +769,7 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
                                 // The web moves things by drag and drop; a phone
                                 // gets a destination picker instead (FilesMoveSheet).
                                 onMove = if (canWrite) ({ moveEntry = e }) else null,
-                                onDelete = if (editable) ({ confirmDelete = e }) else null,
+                                onDelete = if (editable && source.onPhone) ({ confirmDelete = e }) else null,
                                 // Other only downloads: no printing from it.
                                 print = if (selectedId == OTHER_LIBRARY_ID) PrintOffer.None
                                 else printOffer(e.name, e.isDir, printers),
@@ -787,6 +778,14 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
                         }
                         item(key = "files-footer") {
                             PagedFooter(listing, "items", onRetry = pager::retry, onLoadMore = pager::loadMore)
+                            if (editable && !source.onPhone) {
+                                Text(
+                                    FILES_DELETE_ON_DASHBOARD,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Domovoi.colors.fgMuted,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                                )
+                            }
                         }
                     }
                 }

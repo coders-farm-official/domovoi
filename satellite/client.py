@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import collections
 import itertools
 import json
 import logging
@@ -1609,6 +1610,15 @@ class _MusicRun:
     rc: int | None = None
     stderr_tail: str = ""
     supervised: bool = True
+    # Set by the watcher once the player says it decoded the stream's first
+    # frame (`_MUSIC_AUDIO_RE`): audio arrived, not just a connection.
+    audio: threading.Event = field(default_factory=threading.Event)
+
+
+# The line a stream player prints once audio has actually arrived: mpg123's
+# header for the first decoded frame ("MPEG 1.0 L III cbr192 44100 j-s"),
+# and the same word from the Windows player (satellite/win_player.py).
+_MUSIC_AUDIO_RE = re.compile(r"^MPEG\b")
 
 
 # What mpg123 prints when the stream is not up YET: the port refused (MPD's
@@ -2567,6 +2577,14 @@ class Satellite(pc_engine.SpareDeviceEngine):
     # newer start bumps it too, so two starts in a row would cancel each
     # other.
     _music_stop_gen: int = 0
+    # `_music_stop_gen` as the core's last music_stop left it: a start
+    # dropped by that stop was dropped because the core asked, and is not
+    # reported back to it (`_report_dropped_start`).
+    _music_core_stop_gen: int = 0
+    # Bumped by every music_start frame the receiver hands on. A dropped
+    # start is reported only while it is the newest one: a newer start has
+    # taken over, and its own music_ready or report is what the core needs.
+    _music_start_seq: int = 0
     # The run `_music_proc` belongs to (exit status, who reports its exit).
     _music_run: _MusicRun | None = None
 
@@ -2591,6 +2609,13 @@ class Satellite(pc_engine.SpareDeviceEngine):
     # with the wake-word model starts mpg123 slower, and a longer grace
     # costs nothing (a refusal inside it is retried, not reported).
     MUSIC_CONNECT_GRACE_SEC = 1.0
+    # How long a new player may take to decode the stream's first frame.
+    # Up for `music_prime_sec` used to count as playing, so a stream that
+    # connected and sent nothing got its music_ready, MPD resumed, and the
+    # room stayed silent (2026-11-22). Under the core's 5 s music_ready
+    # fallback, so the failure report cancels it. MPD's always-on stream
+    # sends silence frames while paused, so a working stream decodes at once.
+    MUSIC_AUDIO_TIMEOUT_SEC = 4.0
     # How long a music_start waits for the speaker once no turn holds it
     # (`_music_hold_reason`): the last sentence of an announcement still
     # playing. Past it the playback thread is taken to be stuck and the
@@ -2641,7 +2666,9 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 return what
         return None
 
-    def _start_music_when_idle(self, url: str, stop_gen: int | None = None) -> None:
+    def _start_music_when_idle(
+        self, url: str, stop_gen: int | None = None, start_seq: int | None = None,
+    ) -> None:
         """Wait until the turn is over and the playback thread releases the
         ALSA device, then spawn mpg123.
 
@@ -2679,6 +2706,14 @@ class Satellite(pc_engine.SpareDeviceEngine):
         gets a reply (the core decides the music again at its end) and plays
         when it gets none — a follow-up nobody answered. A newer music_start
         does not count; it takes over instead.
+
+        A start dropped here is reported to the core (`music_failed`, see
+        `_report_dropped_start`) unless the core's own music_stop dropped
+        it: the core arms a fallback that resumes the room's MPD 5 s after
+        every music_start, and a start that never played, unreported, left
+        MPD playing to a silent room with the dashboard reading "playing"
+        (office, 2026-11-22). ``start_seq`` is `_music_start_seq` as the
+        receiver set it for this frame (None: not checked).
         """
         if stop_gen is None:
             stop_gen = self._music_stop_gen
@@ -2690,6 +2725,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 return
             if stop_gen != self._music_stop_gen:
                 log.info("music: not starting %s; it was stopped while it waited", url)
+                self._report_dropped_start(url, stop_gen, start_seq, "stopped_while_waiting")
                 return
             reason = self._music_hold_reason()
             if reason is not None:
@@ -2704,6 +2740,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
                         "playback thread didn't release output stream in %.0fs; "
                         "skipping music", self.MUSIC_SPEAKER_WAIT_SEC,
                     )
+                    self._report_dropped_start(url, stop_gen, start_seq, "speaker_busy")
                     return
                 t0 = time.monotonic()
                 self._playback_idle.wait(timeout=self.MUSIC_HOLD_POLL_SEC)
@@ -2722,13 +2759,42 @@ class Satellite(pc_engine.SpareDeviceEngine):
             break
         # None: nothing was spawned — the music was stopped while this
         # start waited, or the subprocess could not be spawned at all
-        # (mpg123 not installed). Nothing to supervise, and no point
-        # unpausing MPD; after a spawn failure the server's fallback timer
-        # resumes it eventually anyway and the failure logged out of
-        # `_start_music` is the diagnostic signal.
+        # (mpg123 not installed). Nothing to supervise; the core is told,
+        # so its fallback does not resume MPD into a silent room.
         if gen is None:
+            self._report_dropped_start(
+                url, stop_gen, start_seq,
+                "stopped_while_waiting" if stop_gen != self._music_stop_gen
+                else "player could not be started",
+            )
             return
         self._supervise_music(url, gen)
+
+    def _report_dropped_start(
+        self, url: str, stop_gen: int, start_seq: int | None, reason: str,
+    ) -> None:
+        """Tell the core a music_start it sent will not play (``music_failed``,
+        attempts 0), when its `ready.features` lists the frame. Not when the
+        core's own music_stop dropped it (it knows), not when a newer
+        music_start has arrived since (that one is the room's music now),
+        and not at shutdown. Under `_music_lock`, as every music frame is
+        sent, so no newer request's frames can precede it."""
+        with self._music_lock:
+            if self.shutdown_event.is_set():
+                return
+            if self._music_core_stop_gen > stop_gen:
+                return
+            if start_seq is not None and start_seq != self._music_start_seq:
+                return
+            if "music_failed" not in getattr(self, "_core_features", frozenset()):
+                return
+            log.info("music: telling the server %s will not play (%s)", url, reason)
+            self._emit_text({
+                "type": "music_failed",
+                "stream_url": url,
+                "reason": reason,
+                "attempts": 0,
+            })
 
     def _start_music(self, url: str, stop_gen: int | None = None) -> int | None:
         """Spawn mpg123 to consume MPD's HTTP stream and play through the HAT.
@@ -2881,7 +2947,9 @@ class Satellite(pc_engine.SpareDeviceEngine):
 
         Two windows per mpg123 run, both counted from when this request
         starts watching it: `music_prime_sec`, at the end of which a run
-        still up gets the request's one `music_ready`; and the connect
+        still up gets the request's one `music_ready` — once its first
+        frame has decoded (`run.audio`); a run with no audio within
+        `MUSIC_AUDIO_TIMEOUT_SEC` is stopped and given up on; and the connect
         grace, the longer of the prime and `MUSIC_CONNECT_GRACE_SEC`, for
         which an exit still means the stream was not up yet (retry) rather
         than a stream that played and dropped (the watcher's report). With
@@ -2907,9 +2975,26 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 return
             watched_from = time.monotonic()
             if ready_due:
-                # Wait out the prime window — or less, if mpg123 exits
-                # inside it.
-                run.exited.wait(timeout=prime)
+                # Ready means audio arrived: wait for the player to decode the
+                # first frame (or exit), then out the rest of the prime window.
+                deadline = watched_from + self.MUSIC_AUDIO_TIMEOUT_SEC
+                while not (run.audio.is_set() or run.exited.is_set()):
+                    left = deadline - time.monotonic()
+                    if left <= 0 or self.shutdown_event.is_set():
+                        break
+                    run.audio.wait(timeout=min(left, 0.05))
+                if not (run.audio.is_set() or run.exited.is_set()):
+                    if self.shutdown_event.is_set():
+                        return
+                    with self._music_lock:
+                        if self._music_gen == gen and self._music_run is run:
+                            _signal_player(run.proc, kill=True)
+                            self._give_up_music_locked(
+                                run, f"no audio from the stream within "
+                                f"{self.MUSIC_AUDIO_TIMEOUT_SEC:g}s", attempts,
+                            )
+                    return
+                run.exited.wait(timeout=max(0.0, watched_from + prime - time.monotonic()))
                 if self.shutdown_event.is_set():
                     return
                 with self._music_lock:
@@ -2997,12 +3082,20 @@ class Satellite(pc_engine.SpareDeviceEngine):
         watching the connection (it retries or gives up), else — the stream
         had been playing and nothing asked it to stop — report it here."""
         proc = run.proc
+        lines: collections.deque[str] = collections.deque(maxlen=10)
         try:
-            stderr_bytes = proc.stderr.read() if proc.stderr is not None else b""
+            # Line by line, as it comes: the first decoded frame's header
+            # line marks audio arriving (`run.audio`, `_supervise_music`).
+            for raw in iter(proc.stderr.readline, b"") if proc.stderr is not None else ():
+                line = raw.decode(errors="replace").rstrip()
+                if not run.audio.is_set() and _MUSIC_AUDIO_RE.match(line):
+                    run.audio.set()
+                if line.strip():
+                    lines.append(line)
         except Exception:
-            stderr_bytes = b""
+            pass
         rc = proc.wait()
-        tail = stderr_bytes.decode(errors="replace").strip().splitlines()[-10:]
+        tail = list(lines)
         if rc != 0:
             log.warning("mpg123 exited rc=%s; stderr tail:\n%s", rc, "\n".join(tail))
         with self._music_lock:
@@ -3078,12 +3171,15 @@ class Satellite(pc_engine.SpareDeviceEngine):
         )
         self._room_player.start()
 
-    def _stop_music(self) -> None:
+    def _stop_music(self, *, by_core: bool = False) -> None:
         with self._music_lock:
             # A stop, not a replacement (`_start_music` calls the locked
             # half directly): a music_start still waiting for the speaker
             # is cancelled by this too (see `_music_stop_gen`).
             self._music_stop_gen += 1
+            if by_core:
+                # The core's music_stop: a start it drops is not reported.
+                self._music_core_stop_gen = self._music_stop_gen
             self._stop_music_locked()
 
     def _stop_music_locked(self) -> None:
@@ -8318,16 +8414,17 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 # lands during that wait cancels the start. Read without the
                 # lock (a plain int read) so a stop busy terminating mpg123
                 # never stalls the receiver.
+                self._music_start_seq += 1
                 threading.Thread(
                     target=self._start_music_when_idle,
-                    args=(str(stream_url), self._music_stop_gen),
+                    args=(str(stream_url), self._music_stop_gen, self._music_start_seq),
                     daemon=True,
                     name="music-defer",
                 ).start()
             else:
                 log.warning("music_start missing stream_url")
         elif t == "music_stop":
-            self._stop_music()
+            self._stop_music(by_core=True)
             # Music ended → drop the ring back to idle, unless a capture is
             # already in progress (don't clobber a "listening" the mic
             # thread just set).

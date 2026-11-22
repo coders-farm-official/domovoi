@@ -314,7 +314,7 @@ fun StationSearchCard(
                     else "nothing for $country"
                 } else {
                     if (q.isNotBlank()) "no FCC FM rows match “$q”"
-                    else "no FCC FM rows imported yet — try import fcc fm"
+                    else "no FCC FM rows imported yet — the import is an admin job"
                 },
             )
         }

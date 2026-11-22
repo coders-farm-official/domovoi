@@ -1204,8 +1204,8 @@ async def list_recently_played(
     ``POST /v1/acquisitions/url-allowed``, batched over the page's URLs,
     added for this decision — and a URL the installed provider does not
     recognise gets no button rather than a button whose press returns the
-    core's 403 ("adding by URL requires an admin session, or a URL
-    matching an installed media provider"). An admin session skips that
+    core's 403 ("This link can't be added here. No installed plugin
+    handles it, ..."). An admin session skips that
     question, because its add passes whatever the matchers say: gating it
     on the allowlist would have withdrawn the dashboard's add on a house
     whose fulfiller registered no matcher at all.

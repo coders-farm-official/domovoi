@@ -193,6 +193,16 @@ those voices shaped it; **Synthetic voices only** avoids that.
   (`pypdfium2-*.dist-info/licenses/`). The FreeType licence asks for this
   credit: *Portions of this software are copyright © The FreeType Project
   (www.freetype.org). All rights reserved.*
+- **The town list** behind Settings → Household → Home location
+  (`domovoi/places/data/cities15000.tsv.gz`): from
+  [GeoNames](https://www.geonames.org/) (`cities15000` and
+  `admin1CodesASCII`), under
+  [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/): free to use and
+  pass on, crediting GeoNames. Domovoi trims it to names, regions,
+  countries, coordinates and populations; `scripts/build_places.py`
+  rebuilds it from pinned copies (checked by SHA-256). The Home location
+  card credits GeoNames under the field, and a plugin that shows these
+  names (`sdk.places`) should too.
 - **RapidFuzz** (MIT), **anyascii** (ISC) and **Metaphone** (BSD): the
   library's name matching ("play suicide boys" finds a stylized artist
   name): close spellings, names turned into plain ASCII letters, and

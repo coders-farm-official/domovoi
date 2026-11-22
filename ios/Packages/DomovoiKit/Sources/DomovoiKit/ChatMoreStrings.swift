@@ -190,6 +190,18 @@ public enum ChatMoreStrings {
         "draft: \(title), version \(version)"
     }
 
+    // MARK: - a chat attachment to print ("print this", 1.4.1)
+
+    /// The attachment card's one spoken line: "image to print: cat.jpg".
+    public static func attachmentCard(_ attachment: ChatPrintAttachment) -> String {
+        "\(attachment.kindWord) to print: \(attachment.shownName)"
+    }
+
+    /// Under an attachment card when the house has no printer yet (Android's
+    /// `ATTACHMENT_NO_PRINTER`).
+    public static let attachmentNoPrinter =
+        "No printer is set up yet. Add one in Settings → Printers & scanners."
+
     /// `DraftUi.kt:258-262` and `:421` — the card's and the canvas's buttons.
     public static let open = "open"
     public static let save = "save"

@@ -229,7 +229,7 @@ public enum ListsStrings {
     public static let cancelDialog = "Cancel"
 
     public static let pairedOnlyTitle = "paired devices only"
-    public static let pairedOnlyBody = "pair this phone, or sign in, to read the household's lists"
+    public static let pairedOnlyBody = "pair this phone to read the household's lists"
     public static let noListsTitle = "no lists yet"
     public static let noListsBody = "make one here, or say \"make a list called camping\""
     public static let emptyListTitle = "nothing on this list"

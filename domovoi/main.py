@@ -539,6 +539,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.wake_default_task = asyncio.create_task(
         _wake_default_boot(), name="wake-default-boot")
 
+    # 1.4.1: the old news_location setting becomes the Home location, once
+    # (domovoi/home_location.py); later boots only read it into the cache.
+    try:
+        from domovoi import home_location
+
+        async with session_scope() as _s:
+            await home_location.carry_over(_s, settings.news_location)
+            await home_location.load(_s)
+    except Exception as e:  # noqa: BLE001 — never blocks startup
+        log.warning("home location carry-over failed: %s", e)
     # The offline kit's job state is in memory: a kit a restart cut short
     # leaves its half-made image and maybe its package container, removed
     # here (domovoi/kit_builder/jobs.py). In the background, off the loop.

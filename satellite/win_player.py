@@ -235,6 +235,12 @@ class _Prefetch:
                 chunk = self._response.read(CHUNK)
                 if not chunk:
                     break
+                if not self.received:
+                    # Audio arrived: what the engine waits for before
+                    # music_ready, in the shape of the line mpg123 prints
+                    # (client.py `_MUSIC_AUDIO_RE`). Here, not at the first
+                    # decoded frame: that waits out `--buffer-sec` first.
+                    print("MPEG stream data arriving", file=sys.stderr, flush=True)
                 with self._cond:
                     while self._size >= PREFETCH_BYTES:
                         self._cond.wait(0.5)

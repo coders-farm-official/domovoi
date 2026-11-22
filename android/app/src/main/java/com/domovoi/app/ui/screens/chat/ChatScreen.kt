@@ -177,6 +177,8 @@ internal data class MessageRow(
     val doc: ServerDocReply? = null,
     /** A draft reply (documents plan D4): the draft card's draft and version. */
     val draft: ServerDraftRef? = null,
+    /** A reply offering to print a file attached in the chat (1.4.1). */
+    val print_attachment: PrintAttachmentRef? = null,
 )
 
 @Serializable
@@ -230,6 +232,7 @@ internal fun LiveMessage.finishWith(row: MessageRow) {
     row.stats?.error_code?.let { errorCode = it }
     doc = row.doc
     draft = row.draft
+    printAttachment = row.print_attachment
     retryable = row.retryable
     if (row.error == null) content = row.content
 }
@@ -256,6 +259,7 @@ internal class LiveMessage(
     val documents: List<ServerDocument> = emptyList(),
     doc: ServerDocReply? = null,
     draft: ServerDraftRef? = null,
+    printAttachment: PrintAttachmentRef? = null,
     /** A video sent with this user message, until the thread is read
      *  back with its job (ChatVideo.kt). */
     val stagedVideo: StagedVideo? = null,
@@ -263,6 +267,8 @@ internal class LiveMessage(
     var content by mutableStateOf(content)
     /** A draft reply's draft (documents plan D4). */
     var draft by mutableStateOf(draft)
+    /** A reply offering to print a file attached in the chat (1.4.1). */
+    var printAttachment by mutableStateOf(printAttachment)
     /** A reply's sources and notes about the chat's documents. */
     var doc by mutableStateOf(doc)
     /** A long document read in parts for this pending reply: how far. */
@@ -526,6 +532,7 @@ internal fun ConversationPane(
     var canvasVersion by remember { mutableStateOf<Int?>(null) }
     var canvasKey by remember { mutableStateOf(0) }
     var printDraft by remember { mutableStateOf<Pair<Long, Int>?>(null) }
+    var printAttachment by remember { mutableStateOf<PrintAttachmentRef?>(null) }
     val draftPrinters = rememberApi("printers-for-drafts") {
         com.domovoi.app.ui.screens.printing.PrintIo(it.api).printers()
     }.data
@@ -568,6 +575,7 @@ internal fun ConversationPane(
                         documents = it.documents.orEmpty(),
                         doc = it.doc,
                         draft = it.draft,
+                        printAttachment = it.print_attachment,
                     ),
                 )
             }
@@ -1125,7 +1133,15 @@ internal fun ConversationPane(
                         // A card answers only while it ends the thread.
                         onHeadsUp = if (i == transcript.lastIndex && !sending) ({ option -> pickHeadsUp(m, option) }) else null,
                         busy = sending,
-                        draftCard = m.draft?.takeIf { !m.pending }?.let { ref ->
+                        draftCard = m.printAttachment?.takeIf { !m.pending && it.usable }?.let { att ->
+                            {
+                                AttachmentPrintCard(
+                                    att,
+                                    printers = draftPrinters,
+                                    onPrint = { printAttachment = att },
+                                )
+                            }
+                        } ?: m.draft?.takeIf { !m.pending }?.let { ref ->
                             {
                                 ServerDraftCard(
                                     ref, m.content, transcript, draftDoc(ref.id), canvasKey,
@@ -1225,6 +1241,14 @@ internal fun ConversationPane(
                 libraryId = "", path = "", fileName = "$title v${printing.second}",
                 printers = draftPrinters, onDismiss = { printDraft = null },
                 target = com.domovoi.app.ui.screens.printing.PrintTarget.ChatDraft(printing.first, printing.second),
+            )
+        }
+        val attaching = printAttachment
+        if (attaching != null && draftPrinters != null) {
+            com.domovoi.app.ui.screens.printing.PrintSheet(
+                libraryId = "", path = "", fileName = attaching.name.ifBlank { "attachment" },
+                printers = draftPrinters, onDismiss = { printAttachment = null },
+                target = com.domovoi.app.ui.screens.printing.PrintTarget.ChatAttachment(attaching.token),
             )
         }
         // A new chat with nothing said yet: the place can still change.

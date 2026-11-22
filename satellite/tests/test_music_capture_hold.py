@@ -132,9 +132,15 @@ class FakeMusic:
             self.ended = time.perf_counter()
             self._done.set()
 
-    def read(self) -> bytes:
+    def readline(self) -> bytes:
+        # A stream that plays prints the first frame's header line at once
+        # (the engine's "audio arrived"); the rest comes at EOF.
+        if self.plan == "plays" and not getattr(self, "_headed", False):
+            self._headed = True
+            return b"MPEG 1.0 L III cbr192 44100 j-s\n"
         self._done.wait()
-        return self._err
+        line, self._err = self._err, b""
+        return line
 
     def poll(self):
         return self.returncode

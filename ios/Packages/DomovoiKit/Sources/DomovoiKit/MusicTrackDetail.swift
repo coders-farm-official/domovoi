@@ -102,6 +102,8 @@ public extension MusicModel {
     /// behaviours are honest; this one does not need a
     /// "is this still the sheet I opened" check to be so, and that check is
     /// the kind of thing that silently stops holding.
+    /// Not offered in the app since 22 Nov 2026 (admin on the server; the
+    /// phone admin audit): kept, with its tests, for a phone admin sign-in.
     func deleteTrack(_ track: LibraryTrack, alsoFile: Bool) {
         let id = track.id
         let label = track.displayTitle

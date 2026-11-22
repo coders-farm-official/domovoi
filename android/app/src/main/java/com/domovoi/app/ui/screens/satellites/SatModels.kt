@@ -276,13 +276,6 @@ data class SatConfigResponse(
 )
 
 @Serializable
-data class SatConfigSaveResult(
-    val sent: List<String> = emptyList(),
-    val rejected: Map<String, String> = emptyMap(),
-    val restarting: Boolean = false,
-)
-
-@Serializable
 data class AnnounceResult(val announced_to: List<String> = emptyList())
 
 @Serializable

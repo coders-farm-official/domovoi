@@ -136,10 +136,11 @@ artist names from MusicBrainz, synced lyrics from LRCLIB and podcast
 downloads, and turns song recognition on as soon as it has a key. What
 stays yours to do:
 
-1. **Set your town for local news:** Settings → System → Advanced → News →
-   *Local news location* (`NEWS_LOCATION`). Applies at once.
+1. **Set your town:** Settings → Household → *Home location*: start
+   typing and pick it from the list. Applies at once.
 
-   *Why:* the morning briefing gets a local block. Empty skips it.
+   *Why:* weather answers are for that town, and the morning briefing gets
+   a local block. Empty skips it.
 
 2. **Song recognition for badly tagged music:** create a free AcoustID
    **application** at [acoustid.org/new-application](https://acoustid.org/new-application)

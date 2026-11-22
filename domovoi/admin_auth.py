@@ -2632,7 +2632,7 @@ async def check_outbound_fetch(
     source = request_source(request)
     if not URL_FETCH_LIMITER.allow(source):
         return OutboundFetchDecision(
-            False, 429, "too many URL requests — slow down or log in as admin"
+            False, 429, "Too many links at once. Try again in a minute."
         )
     try:
         matched = bool(url_allowed_by_fulfillers(url))
@@ -2645,8 +2645,8 @@ async def check_outbound_fetch(
         False,
         403,
         (
-            "adding by URL requires an admin session, or a URL matching an "
-            "installed media provider"
+            "This link can't be added here. No installed plugin handles "
+            "it, and only an admin can add other links, on the dashboard."
         ),
     )
 

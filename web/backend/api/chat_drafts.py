@@ -183,6 +183,8 @@ class DraftTurn:
     base: dict[str, Any] | None = None       # the version revised / printed
     #: The reply when no model is asked (the print card's line).
     immediate: str | None = None
+    #: A chat attachment to print instead of a draft: {token, name, kind}.
+    attachment: dict[str, str] | None = None
     #: One or more passes, each the messages for one model call.
     passes: list[list[dict[str, str]]] = field(default_factory=list)
     #: The section split of a long version (revise in parts).
@@ -201,6 +203,8 @@ class DraftTurn:
                 "based_on": based_on, "newer": newer}
 
     def immediate_card(self) -> dict[str, Any]:
+        if self.attachment is not None:
+            return {"print_attachment": self.attachment}
         b = self.base or {}
         return self.card(int(b.get("version") or 1), int(b.get("words") or 0))
 
@@ -355,6 +359,33 @@ async def draft_in_thread(thread_id: int, draft_id: int) -> bool:
     async with session_scope() as s:
         return (await s.execute(text("SELECT 1 FROM chat_drafts WHERE id = :d AND thread_id = :t"),
                                 {"d": draft_id, "t": thread_id})).first() is not None
+
+
+async def attachment_print_turn(thread_id: int, question: str, *, current: bool) -> DraftTurn | None:
+    """"print this" with an attachment to print, or None. The rule: an
+    attachment sent with the message is the one; otherwise the newer of the
+    thread's last attachment and its latest draft (a tie goes to the
+    draft). ``current``: this message carries an image or document."""
+    if not phrases.print_request(question):
+        return None
+    async with session_scope() as s:
+        row = (await s.execute(text(
+            "SELECT images, documents, created_at FROM chat_messages WHERE thread_id = :t AND role = 'user' "
+            "AND (images IS NOT NULL OR documents IS NOT NULL) ORDER BY id DESC LIMIT 1"), {"t": thread_id})).first()
+        if row is None:
+            return None
+        if not current:
+            newest = (await s.execute(text(
+                "SELECT updated_at FROM chat_drafts WHERE thread_id = :t ORDER BY updated_at DESC LIMIT 1"),
+                {"t": thread_id})).scalar()
+            if newest is not None and newest >= row[2]:
+                return None
+    images, docs = row[0] or [], row[1] or []
+    item, kind = (images[-1], "image") if images else (docs[-1], "document")
+    name = str(item.get("name") or ("picture" if kind == "image" else "document"))
+    return DraftTurn(action="print", thread_id=thread_id, kind="attachment", template="", title=name,
+                     request=question, attachment={"token": item["token"], "name": name, "kind": kind},
+                     immediate=f"Here's {name}, ready to print. Check the preview, then press Print.")
 
 
 async def plan_turn(thread_id: int, question: str, revise_draft: int | None = None,
@@ -658,3 +689,34 @@ async def print_draft_preview(draft_id: int, body: PrintDraftBody, request: Requ
 async def print_draft(draft_id: int, body: PrintDraftBody, request: Request):
     """Prints a version's PDF on the home's printer (after its preview)."""
     return await _print("/v1/print/jobs", draft_id, body, request)
+
+
+# ─── Printing a chat attachment ─────────────────────────────────────────
+def _attachment_file(token: str):
+    from web.backend.api import chat as _chat
+    from web.backend.api import chat_documents as _docs
+
+    return _chat._upload_path(token) or _docs.doc_path(token)
+
+
+async def _print_attachment(core_path: str, token: str, body: PrintDraftBody, request: Request):
+    from web.backend.api import printers
+
+    p = _attachment_file(token)
+    if p is None:
+        raise HTTPException(status_code=404, detail="that attachment is no longer on this Domovoi")
+    return await printers.forward_print_bytes(
+        core_path, request, p.read_bytes(), p.name, title=p.stem, printer_id=body.printer_id,
+        options=body.options, timeout=120.0)
+
+
+@router.post("/attachments/{token}/print/preview", dependencies=DEVICE)
+async def print_attachment_preview(token: str, body: PrintDraftBody, request: Request):
+    """The Print dialog's preview of a chat attachment (a picture or document)."""
+    return await _print_attachment("/v1/print/preview", token, body, request)
+
+
+@router.post("/attachments/{token}/print/jobs", dependencies=DEVICE, status_code=202)
+async def print_attachment(token: str, body: PrintDraftBody, request: Request):
+    """Prints a chat attachment on the home's printer (after its preview)."""
+    return await _print_attachment("/v1/print/jobs", token, body, request)
