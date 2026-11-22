@@ -430,5 +430,22 @@ async def test_a_request_broken_off_partway_is_not_retried_and_closes_the_file(
 
     # A: the listener's "closed" event closes the file for good.
     made = await fr.make_invite()
+    assert await fr.notice() is None
     await fr.on_event({"event": "invite_closed", "invite": made["id"]})
     assert made["id"] not in [i["id"] for i in await fr.list_invites()]
+
+
+async def test_a_closed_friend_file_leaves_a_notice_until_dismissed_or_replaced(house) -> None:
+    from domovoi import main
+
+    made = await fr.make_invite()
+    await fr.on_event({"event": "invite_closed", "invite": made["id"]})
+    shown = (await main.admin_friend_houses_status())["notice"]
+    assert shown["kind"] == "invite_closed" and shown["text"] == fr.INVITE_CLOSED_NOTICE
+    await fr.make_invite()  # a new file answers it
+    assert await fr.notice() is None
+    other = await fr.make_invite()
+    await fr.on_event({"event": "invite_closed", "invite": other["id"]})
+    assert await fr.notice() is not None
+    await main.admin_friend_houses_dismiss_notice()
+    assert (await main.admin_friend_houses_status())["notice"] is None

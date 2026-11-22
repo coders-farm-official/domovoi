@@ -191,6 +191,24 @@ const FhChangesNote = ({ status }) => {
   );
 };
 
+/* A notice from core (status.notice), e.g. a friend file it closed after
+   repeated failed tries. Stays until dismissed or a new file is made. */
+const FhNoticeNote = ({ status, fire, onDismissed }) => {
+  const n = status && status.notice;
+  const [busy, setBusy] = React.useState(false);
+  if (!n || !n.text) return null;
+  const dismiss = async () => {
+    setBusy(true);
+    try { await apiDelete(`${FH_API}/notice`); onDismissed(); } catch (e) { fhFail(fire, e); } finally { setBusy(false); }
+  };
+  return (
+    <div className="chat-note" role="note" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+      <span style={{ flex: 1 }}>{String(n.text)} <span style={fhMuted}>{fhDay(n.at)}</span></span>
+      <Button variant="ghost" disabled={busy} onClick={dismiss}>Dismiss</Button>
+    </div>
+  );
+};
+
 /* ---- off ------------------------------------------------------------ */
 
 const FhOffCard = ({ internetNever, detail, busy, onTurnOn, status }) => (
@@ -240,6 +258,7 @@ const FhHouseCard = ({ status, fire, onSaved, onTurnOff, busy }) => {
       <div style={{ ...fhStack, padding: '12px 16px' }}>
         <FhStatusLine status={status}/>
         <FhFirewallNote status={status}/>
+        <FhNoticeNote status={status} fire={fire} onDismissed={onSaved}/>
         <FhChangesNote status={status}/>
         <div style={fhRow}>
           <label htmlFor="fh-house-name" style={{ fontSize: 13 }}><strong>The name friends see</strong></label>

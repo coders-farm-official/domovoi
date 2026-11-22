@@ -4600,7 +4600,13 @@ instead of passing the server off as an older one. The core signs a
 `pairing-proof.` challenge only bound to the address dialled, and a device
 counts a server as found at an address only when its answer is bound to
 that address: an unbound answer holds no fingerprint, so it can't stand in
-for the real server when the device looks for every house. The request rides in the
+for the real server when the device looks for every house.
+
+*Known limit.* The setup portal still accepts an address the person types
+in and, on a device with no server key recorded, keeps the old approval
+flow with a server whose answer isn't bound to an address. That keeps
+servers from before the address binding working. This will be revisited
+once those servers are no longer in use. The request rides in the
 challenge, not in a query flag of its own, because a flag could be stripped
 too. A device whose one server was chosen for it (an address typed in the
 portal, a card's key) asks that server again before EVERY session that

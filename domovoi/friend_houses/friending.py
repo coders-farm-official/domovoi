@@ -36,6 +36,7 @@ from __future__ import annotations
 import logging
 import secrets
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import text
@@ -146,6 +147,7 @@ async def make_invite(*, days: int | None = None, label: str | None = None,
         invite_id = secrets.token_hex(16)
         await store.insert_invite(s, invite_id=invite_id, label=label, days=days,
                                   created_by=created_by)
+        await _set_notice(s, None)  # a new file answers a "file closed" notice
     await _service().reconcile_within(60.0)
     log.info("Friend Houses: made a friend file (%d days)", days)
     return await invite_with_file(invite_id)
@@ -347,15 +349,46 @@ async def on_request(event: dict[str, Any]) -> None:
     await _service().reconcile()  # the invite is used: maybe no pairing onion now
 
 
+INVITE_CLOSED_NOTICE = ("A friend file was closed after repeated failed tries. "
+                        "If you still want to connect, make a new one.")
+
+
+async def _set_notice(s, notice: dict[str, Any] | None) -> None:
+    current = await store.household_settings(s)
+    if current.get("notice") == notice:
+        return
+    if notice is None:
+        current.pop("notice", None)
+    else:
+        current["notice"] = notice
+    await store.save_household_settings(s, current)
+
+
+async def notice() -> dict[str, Any] | None:
+    """The one notice the dashboard's Friend Houses page shows until it is
+    dismissed (or a new friend file is made): ``{"kind", "text", "at"}``."""
+    async with _db() as s:
+        value = (await store.household_settings(s)).get("notice")
+    return value if isinstance(value, dict) else None
+
+
+async def dismiss_notice() -> None:
+    async with _db() as s:
+        await _set_notice(s, None)
+
+
 async def on_invite_closed(event: dict[str, Any]) -> None:
     """The listener closed a friend file after several requests on it were
-    broken off partway (pairing.ABANDONED_MAX): close it for good."""
+    broken off partway (pairing.ABANDONED_MAX): close it for good, and say
+    so on the dashboard."""
     invite_id = str(event.get("invite", ""))
     if len(invite_id) != 32:
         return
     if await cancel_invite(invite_id):
-        log.warning("Friend Houses: a friend file was closed after requests on it were "
-                    "broken off partway several times. Make a new one if it is still wanted.")
+        async with _db() as s:
+            await _set_notice(s, {"kind": "invite_closed", "text": INVITE_CLOSED_NOTICE,
+                                  "at": datetime.now(timezone.utc).isoformat()})
+        log.warning("Friend Houses: %s", INVITE_CLOSED_NOTICE)
 
 
 # ─── 4. accepting (house A) ───────────────────────────────────────────────

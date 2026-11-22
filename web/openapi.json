@@ -17056,6 +17056,26 @@
         }
       }
     },
+    "/api/friend-houses/notice": {
+      "delete": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Dismiss Notice",
+        "description": "Dismiss the page's notice (a friend file closed after failed tries).",
+        "operationId": "friend_houses_dismiss_notice_api_friend_houses_notice_delete",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/friend-houses/settings": {
       "put": {
         "tags": [
