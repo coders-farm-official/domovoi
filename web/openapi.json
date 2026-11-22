@@ -17261,6 +17261,56 @@
         }
       }
     },
+    "/api/offline-kit/{build_id}/{name}": {
+      "get": {
+        "tags": [
+          "offline-kit"
+        ],
+        "summary": "Offline Kit Download",
+        "description": "A finished kit's image, streamed from the core with the caller's\ncredentials: the way the card downloads a kit that carries household\nitems (the core asks for the admin's Bearer there).",
+        "operationId": "offline_kit_download_api_offline_kit__build_id___name__get",
+        "parameters": [
+          {
+            "name": "build_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Build Id"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/offline-kit/{build_id}": {
       "delete": {
         "tags": [

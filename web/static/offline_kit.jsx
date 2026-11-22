@@ -63,26 +63,70 @@ const KitProgress = ({ job }) => {
   );
 };
 
+/* A kit carrying household items downloads only with the admin's Bearer
+ * (the core refuses a plain link), so the card fetches it through the
+ * dashboard's own route and saves it. */
+const kitDownloadSignedIn = async (build) => {
+  const r = await apiFetchRaw(`/api/offline-kit/${build.id}/${build.image_name}`);
+  const url = URL.createObjectURL(await r.blob());
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = build.image_name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+};
+
 const KitReady = ({ build, onDelete }) => {
   const imager = `rpi-imager://?repo=${encodeURIComponent(build.os_list_url)}`;
   const days = Math.max(0, Math.round((build.expires * 1000 - Date.now()) / 86400000));
   const note = { fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 };
+  const locked = !!build.needs_admin;
+  const [fetching, setFetching] = React.useState(false);
+  const [failed, setFailed] = React.useState(null);
+  const download = async () => {
+    setFetching(true);
+    setFailed(null);
+    try {
+      await kitDownloadSignedIn(build);
+    } catch (e) {
+      setFailed(String((e && e.message) || e || 'the download failed'));
+    } finally {
+      setFetching(false);
+    }
+  };
   return (
     <div className="offline-kit-ready" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <div style={{ fontSize: 13 }}>
         <b>Your offline kit is ready.</b> Domovoi {build.domovoi_version}, {KIT_GB(build.size)}.
       </div>
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        <a className="btn btn-primary" href={imager} style={{ textDecoration: 'none' }}>
-          <Icon name="usb" size={14}/>open in Raspberry Pi Imager
-        </a>
-        <a className="btn btn-secondary" href={build.image_url} download style={{ textDecoration: 'none' }}>
-          <Icon name="download" size={14}/>download the image
-        </a>
-        <a className="btn btn-secondary" href={build.manifest_url} download style={{ textDecoration: 'none' }}>
-          <Icon name="file" size={14}/>Imager file
-        </a>
-      </div>
+      {locked ? (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <Button variant="primary" icon="download" onClick={download} disabled={fetching}>
+            {fetching ? 'downloading…' : 'download the image'}
+          </Button>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <a className="btn btn-primary" href={imager} style={{ textDecoration: 'none' }}>
+            <Icon name="usb" size={14}/>open in Raspberry Pi Imager
+          </a>
+          <a className="btn btn-secondary" href={build.image_url} download style={{ textDecoration: 'none' }}>
+            <Icon name="download" size={14}/>download the image
+          </a>
+          <a className="btn btn-secondary" href={build.manifest_url} download style={{ textDecoration: 'none' }}>
+            <Icon name="file" size={14}/>Imager file
+          </a>
+        </div>
+      )}
+      {locked && (
+        <div style={note}>
+          This kit carries items this house added, so it downloads only here, signed in as admin. A link or
+          Raspberry Pi Imager can’t fetch it: save the image, then choose it in Imager under “Use custom”.
+        </div>
+      )}
+      {failed && <div style={{ ...note, color: 'var(--danger)' }}>The download failed: {failed}</div>}
       <div style={note}>Everything on the stick will be replaced.</div>
       <div style={note}>Don’t sell this stick: some files on it may only be shared for free.</div>
       {build.household && build.household.length > 0 && (

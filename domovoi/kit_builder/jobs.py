@@ -6,10 +6,14 @@ time on a thread, its state in memory (it survives a page reload, not a
 restart), refusals with one plain reason each before anything starts
 (plan.plan), random 32-character ids for the finished images, served with
 a Raspberry Pi Imager list and manifest at ``/v1/offline-kit/<id>/…``
-without a login (Imager and a browser download can't send one; nothing on
-a kit is a secret: it is a public release and public models). Added here:
-**cancel** (the job stops at the next chunk it copies or downloads and
-removes what it made), and **auto-delete**: a kit image is kept for
+without a login (Imager and a browser download can't send one; a plain
+kit is a public release and public models). A kit carrying household
+items (the house's own models, trained wake words) is served only to the
+admin's Bearer (:func:`needs_admin`), through the dashboard. Added here:
+**cancel** (the job stops at the next chunk it copies or downloads, or
+within a second of a long command such as the package container, an
+image pull or the source bundle, and removes what it made, the
+container included), and **auto-delete**: a kit image is kept for
 :data:`KEEP_SEC` (3 days; the card says so) and only the newest one; the
 old one goes when a new kit starts, which also frees its space for it.
 
@@ -23,7 +27,9 @@ Stages, in the card's words:
 
 Layout: ``~/.domovoi/offline_kit/builds/<id>/`` holds
 ``domovoi-offline-kit-<version>.img`` and ``build.json``; a build in
-progress is ``builds/.<id>/``.
+progress is ``builds/.<id>/``. The job's state is in memory, so
+:func:`tidy_at_start` (the core's start) removes what a build cut short by
+a restart left: its ``builds/.<id>/`` and its named containers.
 """
 
 from __future__ import annotations
@@ -34,6 +40,7 @@ import logging
 import re
 import secrets
 import shutil
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -43,7 +50,7 @@ from domovoi.offline_kit import Component, Source
 from domovoi.offline_kit import format as fmt
 from domovoi.offline_kit.write import check_components, write_kit_to
 
-from . import fatimage, guide, host, plan
+from . import apt_mirror, fatimage, guide, host, plan
 from .parts import Ctx, Part, Release
 
 log = logging.getLogger(__name__)
@@ -149,9 +156,16 @@ def prune(now: float | None = None, *, keep_newest: bool = True, mine: str | Non
     return gone
 
 
+def needs_admin(doc: dict[str, Any]) -> bool:
+    """A kit with household items is downloaded only with the admin's
+    Bearer: those items are this house's own, not a public release."""
+    return bool(doc.get("household"))
+
+
 def public_build(doc: dict[str, Any]) -> dict[str, Any]:
     base = f"{str(doc.get('core') or '').rstrip('/')}{FILES_PATH}{doc['id']}/"
     return {
+        "image_name": image_name(doc["domovoi_version"]), "needs_admin": needs_admin(doc),
         "id": doc["id"], "made": doc["made"], "expires": doc["made"] + KEEP_SEC,
         "domovoi_version": doc["domovoi_version"], "tag": doc["tag"], "size": doc["size"],
         "sha256": doc["sha256"], "targets": doc["targets"], "includes": doc["includes"],
@@ -216,23 +230,104 @@ def cancel() -> bool:
         if not _job["running"]:
             return False
         _job["cancelling"] = True
-    _cancel.set()
+        _cancel.set()
     return True
 
 
-def _tick(n: int) -> None:
+def _check() -> None:
     if _cancel.is_set():
         raise Cancelled()
+
+
+def _tick(n: int) -> None:
+    _check()
     with _lock:
         _job["bytes_done"] += n
+
+
+#: How often a long command looks for a cancel.
+POLL_SEC = 0.5
+
+
+def _container_named(cmd: list[str]) -> str | None:
+    """The kit container a ``docker run --name <name>`` command starts."""
+    if "docker" in cmd and "--name" in cmd:
+        i = cmd.index("--name")
+        if i + 1 < len(cmd) and cmd[i + 1].startswith(apt_mirror.CONTAINER_PREFIX):
+            return cmd[i + 1]
+    return None
+
+
+def remove_container(name: str, run=subprocess.run) -> None:
+    try:
+        run(["docker", "rm", "-f", name], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as e:
+        log.warning("offline kit: container %s not removed: %s", name, e)
+
+
+def _run(cmd, *, timeout: float | None = None, capture_output: bool = False, **kw):
+    """``subprocess.run`` for the build's long commands (the package
+    container, image pulls and saves): it stops the command when the job is
+    cancelled or ``timeout`` passes, then removes the container the command
+    named (stopping the docker client alone leaves it running). Raises
+    Cancelled, or TimeoutExpired."""
+    cmd = list(cmd)
+    kw.pop("check", None)
+    if capture_output:
+        kw.setdefault("stdout", subprocess.PIPE)
+        kw.setdefault("stderr", subprocess.PIPE)
+    deadline = None if timeout is None else time.monotonic() + timeout
+    proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, **kw)
+    stopped = False
+    while True:
+        try:
+            out, err = proc.communicate(timeout=POLL_SEC)
+            return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+        except subprocess.TimeoutExpired:
+            stopped = _cancel.is_set()
+            if stopped or (deadline is not None and time.monotonic() >= deadline):
+                break
+    proc.kill()
+    try:
+        proc.communicate(timeout=10)
+    except (subprocess.TimeoutExpired, OSError, ValueError):
+        pass
+    name = _container_named(cmd)
+    if name:
+        remove_container(name)
+    if stopped:
+        raise Cancelled()
+    raise subprocess.TimeoutExpired(cmd, timeout or 0)
+
+
+def leftover_containers(run=subprocess.run) -> list[str]:
+    """Names of the kit builder's containers still on this server."""
+    try:
+        r = run(["docker", "ps", "-a", "--filter", f"name=^{apt_mirror.CONTAINER_PREFIX}",
+                 "--format", "{{.Names}}"], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if r.returncode != 0:
+        return []
+    return [n for n in (r.stdout or "").split() if n.startswith(apt_mirror.CONTAINER_PREFIX)]
+
+
+def tidy_at_start(run=subprocess.run) -> None:
+    """At the core's start no job runs: remove the half-made kit images
+    and the kit containers a build cut short by a restart left behind."""
+    try:
+        prune()
+    except OSError as e:
+        log.warning("offline kit: half-made kits not removed: %s", e)
+    for name in leftover_containers(run):
+        remove_container(name, run)
 
 
 def _components(rel: Release, sel: plan.Selection, ps: list[Part], ctx: Ctx) -> tuple[list[Component], dict]:
     comps: list[Component] = []
     installers: dict[str, str] = {}
     for p in ps:
-        if _cancel.is_set():
-            raise Cancelled()
+        _check()
         srcs = p.acquire(ctx)
         comps.append(Component(kind=p.kind, name=p.name, version=p.version, licence=p.licence,
                                files=tuple(srcs), household_added=p.household_added,
@@ -276,12 +371,11 @@ def build(rel: Release, sel: plan.Selection, ps: list[Part], *, core: str = "",
           run=None, part_size: int = fmt.PART_SIZE) -> dict[str, Any]:
     """Make one kit (blocking: minutes to an hour). Returns build.json.
     Raises on failure or Cancelled, leaving nothing half-made."""
-    import subprocess
-
     downloads = sum(p.download for p in ps)
     _set(stage="download", bytes_done=0, bytes_todo=downloads,
          line="Getting the parts ready")
-    ctx = Ctx(targets=sel.targets, progress=_tick, say=lambda s: _set(line=s), run=run or subprocess.run)
+    ctx = Ctx(targets=sel.targets, progress=_tick, say=lambda s: _set(line=s), run=run or _run,
+              check=_check, cancelled=_cancel.is_set)
     comps, installers = _components(rel, sel, ps, ctx)
     problems = check_components(version=rel.version, commit=rel.commit, components=comps,
                                 targets=sel.targets, includes=sel.includes)
@@ -354,7 +448,7 @@ def start(rel: Release, sel: plan.Selection, ps: list[Part], *, core: str = "",
         _job.update(running=True, stage="start", line=None, started_at=time.time(), finished_at=None,
                     ok=None, message=None, reason=None, bytes_done=0, bytes_todo=0, build=None,
                     cancelling=False)
-    _cancel.clear()
+        _cancel.clear()
     # The old kit goes first: one kit at a time, and its space is this one's.
     prune(keep_newest=False)
 
@@ -368,9 +462,10 @@ def start(rel: Release, sel: plan.Selection, ps: list[Part], *, core: str = "",
         except Exception as e:  # noqa: BLE001 — said on the card until the next try
             log.warning("offline kit: %s", e, exc_info=True)
             ok, msg, reason = False, str(e) or type(e).__name__, "failed"
-        _set(running=False, stage=None, line=None, finished_at=time.time(), ok=ok, message=msg,
-             reason=reason, build=doc["id"] if doc else None, cancelling=False)
-        _cancel.clear()
+        with _lock:
+            _job.update(running=False, stage=None, line=None, finished_at=time.time(), ok=ok, message=msg,
+                        reason=reason, build=doc["id"] if doc else None, cancelling=False)
+            _cancel.clear()
         if on_done:
             on_done(doc)
 

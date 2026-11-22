@@ -36,10 +36,13 @@ _CHUNK = 1024 * 1024
 class Source:
     """One file of a component: ``path`` on the stick, and where its bytes
     come from (a file on the server, or the bytes themselves for small
-    generated files such as START-HERE.txt)."""
+    generated files such as START-HERE.txt). ``sha256``, when given, is
+    what the bytes must hash to: the writer checks it as it copies and
+    refuses the kit when they don't (a pinned file, a model blob)."""
 
     path: str
     src: Path | bytes
+    sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -88,7 +91,8 @@ def _open(src: Path | bytes) -> BinaryIO:
 def _write_one(sink: Sink, source: Source, part_size: int,
                progress: Progress | None = None) -> dict[str, Any]:
     """Copy one source to the kit, split when it is bigger than part_size.
-    Its kit.json entry."""
+    Its kit.json entry. Raises ValueError when the source has an expected
+    SHA-256 and the bytes copied don't match it."""
     size = len(source.src) if isinstance(source.src, bytes) else os.stat(source.src).st_size
     sizes = fmt.part_sizes(size, part_size)
     whole = hashlib.sha256()
@@ -114,6 +118,10 @@ def _write_one(sink: Sink, source: Source, part_size: int,
         if f.read(1):
             raise ValueError(f"{source.path}: its source grew while it was copied")
     entry["sha256"] = whole.hexdigest()
+    if source.sha256 is not None and entry["sha256"] != source.sha256:
+        raise ValueError(f"{source.path} doesn't match its pinned SHA-256 (got {entry['sha256'][:12]}, "
+                         f"pinned {source.sha256[:12]}). Nothing was kept; the file on this server "
+                         "may be damaged.")
     if sizes:
         entry["parts"] = parts
     return entry

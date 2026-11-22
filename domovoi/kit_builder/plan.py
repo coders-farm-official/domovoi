@@ -140,7 +140,12 @@ def catalogue(rel: Release, repo_dir: str, *, read: pins.Reader | None = None,
             return _cat
     from domovoi import egress
 
-    p = pins.load(read or pins.git_reader(repo_dir, rel.commit), rel.commit)
+    try:
+        p = pins.load(read or pins.git_reader(repo_dir, rel.commit), rel.commit)
+    except pins.PinError as e:
+        # Said on the card; not cached, so a fixed checkout is read again.
+        return Catalogue(release=rel, parts=[], problems=[f"{rel.tag}'s pins can't be used: {e}"],
+                         made=time.time())
     problems: list[str] = []
     if not rel.assets:
         try:

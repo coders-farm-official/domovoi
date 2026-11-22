@@ -24,8 +24,9 @@ installers read):
 
 Sizes the pins don't carry (the Ollama tarball, the WSL MSI, Ubuntu's
 images) are in :data:`KNOWN_SIZES`, read from the upstream servers when
-the pin was set; the build still holds each file to its SHA-256, and a
-size that differs only makes the card's estimate wrong, never the kit.
+the pin was set. Every file pin must have a size: it caps the download
+and counts in the free-space check, so a pin without one stops
+:func:`load` (a pin bump adds its size here in the same commit).
 """
 
 from __future__ import annotations
@@ -67,6 +68,13 @@ KNOWN_SIZES = {
     "8eb876c2ccc4b6ff89e4a65d511815923b285e04503ba465809bf587f763da24": 940_373_504,
 }
 
+#: The image the package mirror is made in (apt_mirror.py), by its index
+#: digest so every platform resolves to the same build: Docker Hub's
+#: ``library/ubuntu:26.04`` as the registry listed it on 2026-11-22. A new
+#: pin is a new commit; the mirror's cache key includes it.
+APT_MIRROR_IMAGE = ("ubuntu:26.04@sha256:"
+                    "d66b366dac61b575bee2aef07e9c26e8070096fbe84a3d4d3eb0da069b5d76db")
+
 _SHA = re.compile(r"^[0-9a-f]{64}\Z")
 
 
@@ -81,7 +89,7 @@ class FilePin:
     name: str            # the file name on the stick
     url: str
     sha256: str
-    size: int | None     # None: not pinned and not in KNOWN_SIZES
+    size: int | None     # None: not pinned and not in KNOWN_SIZES (load refuses it)
     pinned_by: str
 
     @property
@@ -285,6 +293,11 @@ def load(read: Reader, commit: str) -> Pins:
                        size=int(mp["STT_MODEL_BYTES"]) if mp.get("STT_MODEL_BYTES", "").isdigit() else None,
                        pinned_by=f"{MAC_PINS}:STT_MODEL_SHA256")
         mac.append(ggml)
+
+    for fp in [ollama_linux, *windows, *mac]:
+        if not fp.size or fp.size < 0:
+            raise PinError(f"{fp.pinned_by} pins {fp.name} with no size; add it to KNOWN_SIZES "
+                           "(domovoi/kit_builder/pins.py)")
 
     mpd = re.search(r"^FROM\s+(\S+@sha256:[0-9a-f]{64})", read(MPD_DOCKERFILE), re.M)
     try:

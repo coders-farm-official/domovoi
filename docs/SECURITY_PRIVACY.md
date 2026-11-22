@@ -3429,6 +3429,7 @@ watch the server's traffic under **No**.
 | **Wake-word training** — the trainer image's build (Docker Hub's base image, two GitHub repositories, PyPI packages, GitHub release assets, Ubuntu's package archive) and its training data (Hugging Face `davidscripka/openwakeword_features` and `MIT_environmental_impulse_responses`, openWakeWord's background-clip zips on Backblaze B2): about 22 GB, once | Only after an admin turns training on in Settings → Voice → Wake words: the build and the data download then, a rebuild by the Linux update unit when `scripts/wake_word/docker` changes, and a training that finds its data missing. All of it from inside containers, outside the core's outbound-URL check ([details](#wake-word-training-the-gpu-runtime-the-trainer-image-and-what-it-downloads)) | Don't turn it on. Under `never` the card refuses, every training is refused before it starts, and the update unit doesn't rebuild; answering `never` stops a setup job's build or download and the update unit's rebuild that are already running. |
 | **NVIDIA Container Toolkit** — NVIDIA's apt repository (`nvidia.github.io`) | Only on a Linux server (or the Windows install's distro) where an NVIDIA GPU is visible: at install, and at an update or Restart while it is missing; `apt upgrade` afterwards, like any package | `DOMOVOI_MANAGE_GPU_RUNTIME=0` in `/etc/default/domovoi-update`. Under `never` the update unit downloads nothing (the install itself still does, as for every package it installs). |
 | **Debian's installer image** — the amd64 netinst (793 MB) from `cdimage.debian.org`, kept only if its size and SHA-256 are the pinned ones, for old computers' room sticks; and `xorriso` from Ubuntu's archive on a server installed before it (the update unit) | Only when an admin presses **Prepare the stick** and the image isn't on the server yet (it is kept for the next stick). The old computer itself then downloads Debian's packages and the satellite's libraries while it sets up, as a Linux laptop does | Don't prepare a stick. Under `never` it is refused unless the image is already here, and the update unit installs nothing. |
+| **The offline kit** — a USB stick image of everything an install would download (Settings → System → Offline kit): the release's files from GitHub, Ollama, the pinned AI models (Ollama's registry), Whisper and the voices (Hugging Face), the Python packages (PyPI), Ubuntu's and Docker's packages and images (a package-mirror container and Docker Hub), the WSL and Mac parts, each held to its pin ([below](#the-offline-kit)) | Only when an admin presses **Make the kit**, and only for what the server doesn't hold yet | Don't make a kit. Under `never` nothing is fetched: a kit is made only from what the server already holds, else the card says what is missing. |
 | **The Android app for phones** — the APKs `android/release.json` names, from this project's GitHub release, each held to its pinned size, SHA-256 and signing certificate (`domovoi/android_app.py`; [below](#the-app-from-your-own-server-the-join-page)) | At install, with the other install-time downloads (`scripts/linux/provision.sh`, the `phone-app` step, which the Windows installer runs in its distro too), whatever the internet answer; never fatal (owner decision 2026-11-15). Else when an admin presses **Download the app to this server**; afterwards, under **Yes, always** only, the newer release an update names, once per start | Installing needs the internet (an install without it finishes without the app and says so). After that, don't press it, or drop the APKs in by hand. Under `never` the dashboard's download and the refresh are refused. |
 | **Admin downloads** — Ollama model installs (the Ollama registry), plugin installs (GitHub, PyPI), **Refresh caches** for satellite media (PyPI, Docker Hub, Debian's mirrors, GitHub), and the spare-device card's **get the Windows files** (python.org, PyPI) and **get the Linux Python** (python-build-standalone's GitHub releases), each file held to its pinned SHA-256 | Only when an admin starts one | Don't start them. Under `never` they are refused. |
 | **Plugins** — a plugin's own requests | Whatever the plugin does; its install screen says | Requests made through the SDK's HTTP client (`sdk.http`, or the web host's `http()`) and streams played through `sdk.playback` are refused under `never`; a plugin that opens its own connections (raw HTTP, its own downloads, `docker pull`) is outside the switch. Settings → Privacy → Internet lists every enabled plugin whose manifest asks for the network. |
@@ -4446,6 +4447,69 @@ three stick images (about 800 MB each) under
 the QEMU kit and are never set on a household's server:
 `DOMOVOI_USB_STICK_REPACK` (run the repack step elsewhere, for a core with no
 xorriso) and `DOMOVOI_USB_STICK_DEBUG=1` (the kit's serial-port markers).
+
+### The offline kit
+
+Since 1.5.0 the server can make an **offline kit**: a FAT32 USB stick image
+holding everything an install would download, for a house with no
+internet ([OFFLINE_KIT.md](OFFLINE_KIT.md)). The builder is
+`domovoi/kit_builder/`; the stick's format and its checker are
+`domovoi/offline_kit/`.
+
+**Routes.** On the core: `GET /v1/admin/offline-kit` (the card; admin
+read tier), `POST /v1/admin/offline-kit/build` and
+`POST /v1/admin/offline-kit/cancel` (admin write tier),
+`DELETE /v1/admin/offline-kit/builds/<id>` (admin write tier), and
+`GET /v1/offline-kit/<id>/<name>`: the image, its Raspberry Pi Imager list
+(`os-list.json`) and its Imager manifest. On the dashboard:
+`GET /api/offline-kit` (admin read tier), `POST /api/offline-kit`,
+`POST /api/offline-kit/cancel` and `DELETE /api/offline-kit/<id>` (admin
+write tier, forwarded to the core with the caller's credentials), and
+`GET /api/offline-kit/<id>/<image>`, which streams the image from the core
+with the caller's credentials.
+
+**Who may download a kit.** A plain kit holds a public release and public
+models, nothing of the household's (design section 7; a test seeds a
+server's secrets and greps a built kit for them), so its files are served
+**without a login** under a random 32-character id only the admin's card
+shows, as the room stick's are: Imager and a browser download can't send
+one. A kit with **household items** ticked (models this house added, with
+their system prompts, and wake words it trained) is the house's own, so
+`GET /v1/offline-kit/<id>/…` answers it only to the **admin's Bearer**
+(401 otherwise, Imager included). The card says so and downloads it
+through the dashboard's route, signed in; the saved image is then written
+with Imager's **Use custom**. The id travels in plain HTTP on the LAN like
+everything else ([no TLS](#1-no-tls-on-admin-flows-or-anything-else)).
+
+**What goes on it, and how it is held to its pin.** Every file comes from
+a pin in the release commit (`domovoi/kit_builder/pins.py` names where
+each lives) or is the house's own household item, marked "not checked
+against a release" in kit.json and on the card. Downloads go through the
+outbound gate, each held to its pinned SHA-256 and size; a pin with no
+size stops the card (it caps the download and counts in the free-space
+check). Files copied from the server's own stores (Ollama's blobs, named
+by their digest; Whisper, the voices, voice ID's model, the wheels, the
+mirror's `.deb`s, every pinned upstream file) are hashed **as they are
+written** and the kit is refused, nothing kept, when one doesn't match:
+a damaged or changed file never reaches a stick under its pin's name.
+The package mirror is made in a container from Ubuntu's image pinned by
+digest (`APT_MIRROR_IMAGE`), unprivileged (`no-new-privileges`, no mount
+but its output folder); only regular files are taken from its output
+(a link or a device stops the build), and each `.deb` must match its
+signed index.
+
+**On the server.** One kit at a time, on a thread; its state is in
+memory. A cancel stops the next chunk, or within a second the running
+command (the package container, an image pull or save, the source
+bundle); the container has a known name and is removed on a cancel or a
+timeout, and at the core's start the kit containers and half-made images
+a restart left are removed. A kit image is kept three days, and only the
+newest.
+
+**The checker** (`python -m domovoi.offline_kit verify`, and the
+installers) reads kit.json of at most 64 MiB, with a `part_size` of at
+least 1 MiB and files of at most 1 TiB, and counts parts arithmetically,
+so a damaged or hostile kit.json can't make it build a huge list.
 
 ## Satellite pairing (WS auth)
 
