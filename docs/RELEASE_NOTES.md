@@ -88,6 +88,10 @@ before.
 - Outbound fetches accept no Content-Encoding or exactly one of gzip or
   deflate, always inflate it under the caller's byte cap, and refuse any
   other encoding; podcast episode downloads ask for an unencoded body.
+- Plugin acquisitions get a time and size budget (Settings: `acquisition_max_seconds`,
+  default 1 hour; `acquisition_max_bytes`, default 1 GiB; 0 turns one off). One over
+  the budget ends as failed and its file is not kept. Adding by link without an
+  admin session is limited to 10 waiting links at a time.
 
 ## 1.4.1 (unreleased) — Room names are checked more strictly when a satellite connects
 
