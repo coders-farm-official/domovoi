@@ -283,10 +283,17 @@ def image() -> str:
 @pytest.fixture
 def mounts(tmp_path):
     from domovoi.friend_houses import identity as fid
+    from domovoi.friend_houses import listener as fl
+    from domovoi.friend_houses import session as fs
 
-    fid.create(tmp_path / "keys" / "house-keys.json")
+    keys = fid.create(tmp_path / "keys" / "house-keys.json")
     (tmp_path / "listener").mkdir()
     (tmp_path / "listener" / "friends.json").write_text("{}")
+    # The house's Hello, as core writes it: without one the listener hangs
+    # up on every caller before reading a byte, so the junk test below
+    # never reached the handshake, and raced its own send (EPIPE in CI).
+    hello = fs.Hello(keys.address_statement(bytes(32), 1_800_000_000), b"\x02" * 8)
+    (tmp_path / "listener" / fl.HELLO_FILE).write_bytes(hello.to_bytes())
     sockets = tmp_path / "listen"
     sockets.mkdir(mode=0o700)
     return tmp_path / "keys" / "house-keys.json", tmp_path / "listener", sockets

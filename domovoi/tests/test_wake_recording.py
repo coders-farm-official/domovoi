@@ -16,6 +16,7 @@ clip_count bumps in the DB.
 from __future__ import annotations
 
 import json
+import types
 import wave
 from pathlib import Path
 
@@ -31,10 +32,13 @@ class _FakeWS:
     """Minimal WebSocket stand-in for a bare StreamSession.
 
     Records text frames the session sends (start/stop_wake_recording) and
-    swallows bytes. No app — the recording branch never touches
-    ``self.ws.app``, only ``self.ws.send_text``."""
+    swallows bytes. Its ``app`` is a bare state: since wake claims (1.5.0)
+    every ``utterance_start`` asks the app's claim arbiter first, as a real
+    socket's ``ws.app`` always allows; a lone device is never a duplicate,
+    so the recording branch runs exactly as before."""
 
     def __init__(self) -> None:
+        self.app = types.SimpleNamespace(state=types.SimpleNamespace())
         self.sent_text: list[dict] = []
         self.sent_bytes: list[bytes] = []
 

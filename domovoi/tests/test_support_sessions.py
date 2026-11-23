@@ -779,8 +779,8 @@ async def test_the_terminal_socket_needs_its_ticket_and_a_dashboard_origin(house
 
 # ═══ Rooms (V072): a satellite whose id is not its room's ═════════════════
 
-ROOM = "kitchen"
-SAT2 = "kitchen-pi-2"
+ROOM = "supportroom"
+SAT2 = "supportroom-pi-2"
 
 
 @requires_db
@@ -793,19 +793,21 @@ async def test_a_satellite_whose_id_is_not_its_rooms(_db, tmp_path, monkeypatch)
     monkeypatch.setattr(ss, "transcript_dir", lambda: tmp_path / "support-sessions")
     await sql("DELETE FROM support_sessions")
     await sql("DELETE FROM satellites WHERE satellite_id = :s", s=SAT2)
+    # No satellite row may share the room's id (another test may have made one).
+    await sql("DELETE FROM satellites WHERE satellite_id = :s", s=ROOM)
     await sql("INSERT INTO rooms (room_id, name) VALUES (:r, 'Kitchen') ON CONFLICT DO NOTHING", r=ROOM)
     await sql("INSERT INTO satellites (satellite_id, room_id) VALUES (:s, :r)", s=SAT2, r=ROOM)
     async with web_client() as c:
         await claim_admin(c)
     token = await login()
     # The room's speaker is ANOTHER device; ours is the second one in the room.
-    speaker = FakeSat(ROOM, satellite_id="kitchen-speaker")
+    speaker = FakeSat(ROOM, satellite_id="supportroom-speaker")
     ours = FakeSat(ROOM, satellite_id=SAT2)
     core_app.state.active_sessions = {ROOM: speaker}
-    core_app.state.active_satellites = {"kitchen-speaker": speaker, SAT2: ours}
+    core_app.state.active_satellites = {"supportroom-speaker": speaker, SAT2: ours}
     reg = room_devices.registry(core_app)
     reg.note(SAT2, ROOM)
-    reg.note("kitchen-speaker", ROOM)
+    reg.note("supportroom-speaker", ROOM)
     mgr = core_app.state.support_sessions = ss.SupportSessions(core_app)
     try:
         r = await core_post(f"/v1/admin/satellites/{SAT2}/support/allow", token)
@@ -852,6 +854,6 @@ async def test_a_satellite_whose_id_is_not_its_rooms(_db, tmp_path, monkeypatch)
         core_app.state.active_sessions = {}
         core_app.state.active_satellites = {}
         reg.note(SAT2, None)
-        reg.note("kitchen-speaker", None)
+        reg.note("supportroom-speaker", None)
         await sql("DELETE FROM support_sessions")
         await sql("DELETE FROM satellites WHERE satellite_id = :s", s=SAT2)

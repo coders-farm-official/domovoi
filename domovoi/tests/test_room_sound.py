@@ -155,6 +155,9 @@ def _quiet_mpd(monkeypatch):
 
     monkeypatch.setattr(mpd_client, "ensure_stream_serving", serving)
     saved = dict(mpd_client._clients)
+    # Every test gets its own stub players: a client another test left for
+    # "kitchen" may not tell the playout of a pause.
+    mpd_client._clients.clear()
     yield
     mpd_client._clients.clear()
     mpd_client._clients.update(saved)
