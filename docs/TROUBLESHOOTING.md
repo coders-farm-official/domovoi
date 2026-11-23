@@ -286,6 +286,30 @@ When the dashboard can't restart Domovoi ([Everything offline, dashboard up](#ev
 - **Over SSH** on a Linux server: `sudo systemctl restart domovoi-core`.
 - **On the Windows install:** `Restart-Service DomovoiHost` from an administrator PowerShell.
 
+### A support session (admins, a satellite the Diagnostics tab can't explain)
+
+When a satellite misbehaves and its drawer's **Diagnostics** tab doesn't
+say why, an admin can open a shell on it from the dashboard, without SSH:
+
+1. Settings → Household → Rooms, open the room, the **Settings** tab.
+2. Turn on **Allow support sessions** (sign in again first if your sign-in
+   is more than five minutes old). It stays on for that satellite only.
+3. Press **Open support session**, type the admin password, and use the
+   terminal. You are the satellite's service account, not root: restart
+   the service, read logs under `~/.domovoi`, check the network. For a root
+   task use what already exists (a satellite upgrade, Restart, a screen and
+   keyboard).
+
+It closes after 30 minutes (warnings at 5 and 1), or after 10 minutes
+without typing, and the satellite restarts its service afterwards. The
+room hears that it started and ended, its light breathes magenta, and every
+dashboard shows a banner with **End**; anyone in the house can end it, or
+say "end support session" in the room. Each session's transcript is in
+Settings → System → **Support sessions** for 30 days. Only a Raspberry Pi
+on a card prepared by Domovoi whose account can't use sudo offers it (press
+**Upgrade satellite** on an older one); turn the switch off again when you
+are done.
+
 ### Satellite won't connect: on the Pi
 
 First stop on the Pi: `systemctl status domovoi-satellite` and `journalctl -u domovoi-satellite -f`.

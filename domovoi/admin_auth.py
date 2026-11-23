@@ -1560,6 +1560,47 @@ async def signed_in_recently(session: AsyncSession, token: str | None) -> bool:
     return row is not None
 
 
+async def session_live_by_hash(session: AsyncSession, token_hash: str) -> bool:
+    """Whether the session stored as ``token_hash`` is still live (its idle
+    hour, the 90-day cap, its grant's end). Read-only. For a long-lived
+    socket that keeps only the hash of the Bearer that opened it (the
+    support session, domovoi/support_sessions.py)."""
+    row = (
+        await session.execute(
+            text(f"SELECT 1 FROM admin_sessions WHERE token_hash = :h AND {_SESSION_LIVE_SQL}"),
+            {"h": token_hash, **_clock_params()},
+        )
+    ).first()
+    return row is not None
+
+
+async def stamp_admin_activity_by_hash(token_hash: str) -> bool:
+    """:func:`stamp_admin_activity` for a caller that holds only the hash:
+    restart the idle hour of the live session ``token_hash`` names."""
+    async with session_scope() as s:
+        row = (
+            await s.execute(
+                text(
+                    "UPDATE admin_sessions SET last_used_at = now(), "
+                    f"expires_at = {_DEADLINE_FROM_NOW_SQL} "
+                    f"WHERE token_hash = :h AND {_SESSION_LIVE_SQL} RETURNING 1"
+                ),
+                {"h": token_hash, **_clock_params()},
+            )
+        ).first()
+    return row is not None
+
+
+async def session_label(session: AsyncSession, token_hash: str) -> str | None:
+    """The label of the session stored as ``token_hash`` (None if gone)."""
+    row = (
+        await session.execute(
+            text("SELECT label FROM admin_sessions WHERE token_hash = :h"), {"h": token_hash}
+        )
+    ).first()
+    return row.label if row is not None else None
+
+
 async def issue_phone_grant(
     session: AsyncSession, device_id: str, label: str
 ) -> tuple[str, datetime]:

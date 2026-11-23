@@ -8,6 +8,7 @@ core-before-plugin, then plugin slug, then handler name — see
 Condensed band map — core handlers occupy exactly the design §4.2 table:
 
     100 dismiss          brush-offs win before anything acts
+    101 support_session  "end support session": the room ends an admin's shell
     105 help             "what can you do" / "help": whole closed questions
     106 help_desk        "how do I …" about Domovoi, from its own help; declines otherwise
     110 voice_profile    "i'm Sarah" before any greedy capture
@@ -86,6 +87,7 @@ from domovoi.handlers.printing import PrintingHandler
 from domovoi.handlers.reminder import ReminderHandler
 from domovoi.handlers.repeat import RepeatHandler
 from domovoi.handlers.spoken_audio import SpokenAudioHandler
+from domovoi.handlers.support_session import SupportSessionHandler
 from domovoi.handlers.timer import TimerHandler
 from domovoi.handlers.voice import VoiceHandler
 from domovoi.handlers.voice_notes import VoiceNotesHandler
@@ -119,6 +121,7 @@ _CORE_HANDLERS: list[Handler] = [
     ReminderHandler(),
     RepeatHandler(),
     SpokenAudioHandler(),
+    SupportSessionHandler(),
     TimerHandler(),
     VoiceHandler(),
     VoiceNotesHandler(),
@@ -187,6 +190,7 @@ __all__ = [
     "ReminderHandler",
     "RepeatHandler",
     "SpokenAudioHandler",
+    "SupportSessionHandler",
     "TimerHandler",
     "unregister_handler",
     "VoiceHandler",

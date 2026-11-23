@@ -6159,7 +6159,7 @@ const SETTINGS_GROUPS = [
   { id: 'chat-and-ai', label: 'Chat & AI', icon: 'sparkles', sections: ['models', 'search', 'chat'] },
   { id: 'privacy', label: 'Privacy', icon: 'shield', sections: ['internet', 'voice-history', 'listening-history'] },
   { id: 'documents', label: 'Documents', icon: 'file-text', sections: ['fonts'] },
-  { id: 'system', label: 'System', icon: 'server', sections: ['about', 'offline-kit', 'health', 'app-layout', 'advanced'] },
+  { id: 'system', label: 'System', icon: 'server', sections: ['about', 'offline-kit', 'health', 'app-layout', 'advanced', 'support-sessions'] },
 ];
 
 const SETTINGS_SECTIONS = [
@@ -6256,6 +6256,11 @@ const SETTINGS_SECTIONS = [
   { id: 'advanced', label: 'Advanced', aliases: ['configuration', 'config'],
     sub: 'The admin account, and every setting of the Domovoi server — for when you know what you are changing.',
     words: 'advanced configuration config settings admin password sign in setup claim database port ports path acoustid' },
+  // support_session.jsx registers it (1.5.0): the audit list of satellite
+  // support sessions and their transcripts (admin).
+  { id: 'support-sessions', label: 'Support sessions', optional: true,
+    sub: 'Every shell an admin opened on a satellite, and its transcript — admins only.',
+    words: 'support session sessions shell terminal ssh satellite transcript audit admin remote' },
 ];
 
 // Cards inside a section the search can jump to (#settings/<section>/<mark>

@@ -247,6 +247,11 @@ those voices shaped it; **Synthetic voices only** avoids that.
   GPL-3.0, used under MIT; with pako under MIT and Zlib), lop, option and
   dingbat-to-unicode (BSD-2-Clause), and @xmldom/xmldom, underscore,
   xmlbuilder, base64-js, lie, immediate and setimmediate (MIT).
+- **The support-session terminal** (`web/static/vendor/xterm/`, 1.5.0):
+  xterm.js 5.5.0 (`@xterm/xterm`, MIT) and its fit add-on 0.10.0
+  (`@xterm/addon-fit`, MIT), copied from the npm packages, licence texts
+  in `licenses/` and versions in `THIRD-PARTY.json`. Loaded only by the
+  admin's terminal for a satellite support session.
 - **Co-editing** (several people editing one document at once): on the
   server, pycrdt 0.14.10 (MIT), installed with it; in the dashboard and
   the app's editors, the one Yjs bundle in `web/static/vendor/yjs/` listed

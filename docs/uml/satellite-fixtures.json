@@ -126,6 +126,11 @@
       "assumed_without_supports": false,
       "hello_key": "diagnostics"
     },
+    "support_shell": {
+      "unlocks": "`support_open` / `support_input` / `support_resize` / `support_close` (an admin's support session, 1.5.0); the satellite's Open support session",
+      "assumed_without_supports": false,
+      "hello_key": "support_shell"
+    },
     "room_display": {
       "unlocks": "the `room_display` frame (this room's music, timers and alarms, and one going off) and the `room_control` frame back; a paired room only; never assumed without `supports`",
       "assumed_without_supports": false,
@@ -204,6 +209,18 @@
     ],
     "mic_dsp_mark": [
       "mic_dsp"
+    ],
+    "support_open": [
+      "support_shell"
+    ],
+    "support_input": [
+      "support_shell"
+    ],
+    "support_resize": [
+      "support_shell"
+    ],
+    "support_close": [
+      "support_shell"
     ]
   },
   "config_section_ability": {
@@ -240,7 +257,8 @@
         "announce_after_session_end": true,
         "dropin_ready": true,
         "diagnostics": true,
-        "mic_dsp": false
+        "mic_dsp": false,
+        "support_shell": false
       },
       "ready": {
         "type": "ready",
@@ -287,7 +305,8 @@
           "full_duplex",
           "mic_dsp",
           "room_audio",
-          "room_display"
+          "room_display",
+          "support_shell"
         ],
         "frames_sent": [
           "restart",
@@ -309,7 +328,11 @@
           "dropin_start",
           "room_display",
           "set_mic_dsp",
-          "mic_dsp_mark"
+          "mic_dsp_mark",
+          "support_open",
+          "support_input",
+          "support_resize",
+          "support_close"
         ],
         "upgrade_extra": {},
         "config_hidden_sections": [],
@@ -449,7 +472,8 @@
         "announce_after_session_end": true,
         "dropin_ready": true,
         "diagnostics": true,
-        "mic_dsp": true
+        "mic_dsp": true,
+        "support_shell": true
       },
       "ready": {
         "type": "ready",
@@ -488,6 +512,7 @@
           "restart",
           "sounds",
           "speech_pause",
+          "support_shell",
           "time_sync",
           "turn_progress",
           "voice",
@@ -516,7 +541,11 @@
           "announcement",
           "diag_request",
           "set_mic_dsp",
-          "mic_dsp_mark"
+          "mic_dsp_mark",
+          "support_open",
+          "support_input",
+          "support_resize",
+          "support_close"
         ],
         "frames_never": [
           "room_display"
@@ -671,7 +700,8 @@
           "voice",
           "turn_progress"
         ],
-        "mic_dsp": false
+        "mic_dsp": false,
+        "support_shell": false
       },
       "ready": {
         "type": "ready",
@@ -732,6 +762,7 @@
           "plugin_payloads",
           "room_audio",
           "room_display",
+          "support_shell",
           "time_sync",
           "wifi"
         ],
@@ -755,7 +786,11 @@
           "dropin_start",
           "room_display",
           "set_mic_dsp",
-          "mic_dsp_mark"
+          "mic_dsp_mark",
+          "support_open",
+          "support_input",
+          "support_resize",
+          "support_close"
         ],
         "upgrade_extra": {
           "plugin_payloads": false
@@ -897,7 +932,8 @@
           "voice",
           "turn_progress"
         ],
-        "mic_dsp": false
+        "mic_dsp": false,
+        "support_shell": false
       },
       "ready": {
         "type": "ready",
@@ -958,6 +994,7 @@
           "plugin_payloads",
           "room_audio",
           "room_display",
+          "support_shell",
           "time_sync",
           "wifi"
         ],
@@ -981,7 +1018,11 @@
           "dropin_start",
           "room_display",
           "set_mic_dsp",
-          "mic_dsp_mark"
+          "mic_dsp_mark",
+          "support_open",
+          "support_input",
+          "support_resize",
+          "support_close"
         ],
         "upgrade_extra": {
           "plugin_payloads": false
@@ -1168,6 +1209,7 @@
           "plugin_payloads",
           "restart",
           "room_audio",
+          "support_shell",
           "time_sync",
           "turn_progress",
           "voice",
@@ -1194,7 +1236,11 @@
           "chat_start",
           "diag_request",
           "set_mic_dsp",
-          "mic_dsp_mark"
+          "mic_dsp_mark",
+          "support_open",
+          "support_input",
+          "support_resize",
+          "support_close"
         ],
         "upgrade_extra": null,
         "config_hidden_sections": null,

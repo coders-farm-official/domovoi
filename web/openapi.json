@@ -7534,6 +7534,356 @@
         }
       }
     },
+    "/api/satellites/{satellite_id}/support/allow": {
+      "post": {
+        "summary": "Allow",
+        "description": "Turn \"Allow support sessions\" on: security tier and a password\nsign-in within five minutes, here and at the core.",
+        "operationId": "allow_api_satellites__satellite_id__support_allow_post",
+        "parameters": [
+          {
+            "name": "satellite_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Satellite Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/{satellite_id}/support/disallow": {
+      "post": {
+        "summary": "Disallow",
+        "description": "Turn it off (any admin); an open session on it ends.",
+        "operationId": "disallow_api_satellites__satellite_id__support_disallow_post",
+        "parameters": [
+          {
+            "name": "satellite_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Satellite Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/{satellite_id}/support/open": {
+      "post": {
+        "summary": "Open Session",
+        "description": "Open a session: the core checks the password typed again (with the\nlogin backoff, keyed on the forwarded address), the switch, the\nsatellite's declared ability. Answers the socket's ticket.",
+        "operationId": "open_session_api_satellites__satellite_id__support_open_post",
+        "parameters": [
+          {
+            "name": "satellite_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Satellite Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/support-sessions/{session_id}/end": {
+      "post": {
+        "summary": "End",
+        "description": "End a session: the admin, or any paired household device.",
+        "operationId": "end_api_support_sessions__session_id__end_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/support-sessions/active": {
+      "get": {
+        "summary": "Active",
+        "description": "The open sessions, for the banner (every household viewer).",
+        "operationId": "active_api_support_sessions_active_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/support-sessions": {
+      "get": {
+        "summary": "List Sessions",
+        "operationId": "list_sessions_api_support_sessions_get",
+        "parameters": [
+          {
+            "name": "satellite_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Satellite Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete All",
+        "operationId": "delete_all_api_support_sessions_delete",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/support-sessions/{session_id}/transcript": {
+      "get": {
+        "summary": "Transcript",
+        "description": "The transcript as JSON (``text`` is plain text: the page sets it as\ntext, never as HTML).",
+        "operationId": "transcript_api_support_sessions__session_id__transcript_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/support-sessions/{session_id}/transcript.cast": {
+      "get": {
+        "summary": "Transcript Download",
+        "description": "The asciicast file as a download: ``text/plain``, an attachment,\n``nosniff`` and the ``sandbox`` CSP, so it never renders as a page.",
+        "operationId": "transcript_download_api_support_sessions__session_id__transcript_cast_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/support-sessions/{session_id}": {
+      "delete": {
+        "summary": "Delete One",
+        "operationId": "delete_one_api_support_sessions__session_id__delete",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/satellites": {
       "get": {
         "tags": [
@@ -30676,6 +31026,27 @@
         "type": "object",
         "title": "OfflineKitBuild"
       },
+      "OpenRequest": {
+        "properties": {
+          "password": {
+            "type": "string",
+            "title": "Password",
+            "default": ""
+          },
+          "cols": {
+            "type": "integer",
+            "title": "Cols",
+            "default": 100
+          },
+          "rows": {
+            "type": "integer",
+            "title": "Rows",
+            "default": 30
+          }
+        },
+        "type": "object",
+        "title": "OpenRequest"
+      },
       "OverrideIn": {
         "properties": {
           "discovery_favorites": {
@@ -33772,6 +34143,16 @@
           "diagnostics": {
             "type": "boolean",
             "title": "Diagnostics",
+            "default": false
+          },
+          "support_allowed": {
+            "type": "boolean",
+            "title": "Support Allowed",
+            "default": false
+          },
+          "support_shell": {
+            "type": "boolean",
+            "title": "Support Shell",
             "default": false
           },
           "mic_dsp": {

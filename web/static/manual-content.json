@@ -4673,6 +4673,25 @@
     {
      "type": "p",
      "text": "**show setup details** on the card lists the setup network and its page."
+    },
+    {
+     "type": "p",
+     "text": "**A support session** {admin}: for a fault the room's **Diagnostics** tab can't explain, turn on **Allow support sessions** in the room's **Settings** tab, then **Open support session** and type the admin password: a shell on the Pi, as its own account, for up to 30 minutes. The room says it started, its light breathes magenta, and every dashboard shows a banner with **End**. Anyone can end it."
+    },
+    {
+     "type": "label",
+     "role": "say",
+     "text": "Try saying"
+    },
+    {
+     "type": "say",
+     "phrases": [
+      {
+       "text": "end support session",
+       "handler": "support_session",
+       "path": "fast"
+      }
+     ]
     }
    ],
    "more": {

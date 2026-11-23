@@ -225,6 +225,9 @@ a.nav-item, a.nav-item:hover { text-decoration: none; }
 .guard-banner-warn { background: linear-gradient(var(--warn-soft), var(--warn-soft)), var(--surface); border-bottom-color: var(--warn); }
 .guard-banner-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .guard-banner-actions { display: flex; align-items: center; gap: 12px; flex: none; }
+/* A satellite support session is open (support_session.jsx): the magenta
+   of the room's light (#FF00C8), so the banner and the room agree. */
+.support-banner { background: linear-gradient(color-mix(in oklab, #FF00C8 14%, transparent), color-mix(in oklab, #FF00C8 14%, transparent)), var(--surface); border-bottom-color: #FF00C8; }
 .guard-banner-link { color: var(--fg); text-decoration: underline; text-underline-offset: 2px; }
 .guard-banner-ack { padding: 2px 8px; font-size: 12px; }
 /* What a page scrolls into view lands below the sticky banner, not under

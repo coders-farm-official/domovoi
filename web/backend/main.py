@@ -75,6 +75,7 @@ from web.backend.api import plugins as plugins_api
 from web.backend.api import satellite_media as satellite_media_api
 from web.backend.api import short_address as short_address_api
 from web.backend.api import satellites as satellites_api
+from web.backend.api import support_sessions as support_sessions_api
 from web.backend.api import stats as stats_api
 from web.backend.api import up_next as up_next_api
 from web.backend.api import up_next_history as up_next_history_api
@@ -477,6 +478,9 @@ app.include_router(satellite_media_api.router)
 app.include_router(satellite_media_api.claim_router)
 # The container guard: the banner's reads and the admin actions (docs/CONTAINER_GUARD.md).
 app.include_router(containers_api.router)
+# Satellite support sessions (1.5.0): literal /support paths and the
+# /api/support-sessions prefix, ahead of the /{room_id} matchers.
+app.include_router(support_sessions_api.router)
 app.include_router(satellites_api.router)
 app.include_router(satellites_api.timers_router)
 app.include_router(calendar_api.router)

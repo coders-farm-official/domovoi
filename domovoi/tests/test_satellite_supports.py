@@ -355,6 +355,10 @@ async def _trigger(session: StreamSession, ws: FakeWS, frame: str) -> Any:
             await session.send_mic_dsp_mark("block 2, 1m")
         elif frame == "chat_start":
             await session.send_chat_start()
+        elif frame.startswith("support_"):
+            # A support session's frames (domovoi/support_sessions.py), all
+            # through the one method that checks the ability.
+            await session.send_support({"type": frame, "session_id": "0" * 32})
         elif frame == "announcement":
             async def fake_announce(text, defer, *_extra):
                 await ws.send_text(json.dumps({"type": "announcement"}))

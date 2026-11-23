@@ -24,6 +24,7 @@ from domovoi.handlers.base import (
 # pinned as data, not derived.
 CORE_BANDS = {
     "dismiss": 100,
+    "support_session": 101,
     "help": 105,
     "help_desk": 106,
     "voice_profile": 110,

@@ -4,6 +4,32 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Support sessions: an admin's shell on one satellite
+
+- **What changed.** For the rare fault the Diagnostics tab can't explain,
+  an admin can open a shell on one satellite from its drawer's Settings tab
+  (**Open support session**), as the satellite's own service account,
+  never root. It is off for every satellite until an admin turns on
+  **Allow support sessions** for that one. New: the `support_shell` hello
+  key and the `support_*` frames (docs/uml/satellite-protocol.md), the
+  routes under `/v1/admin/satellites/{id}/support/*` and
+  `/v1/admin/support-sessions` with their `/api/...` twins, the state
+  socket's `support_sessions` channel, and migration V076.
+- **What to know.** Opening one needs a password sign-in in the last five
+  minutes AND the password typed again; a phone's day grant never opens
+  one. A session lasts at most 30 minutes, closes after 10 without typing,
+  and ends with any disconnect or restart; the satellite then restarts its
+  service. The room hears one line when it starts and ends, its light
+  breathes magenta, and every dashboard shows a banner with **End** that
+  anyone in the house can press; saying "end support session" in the room
+  works too. Everything is recorded (Settings → System → Support
+  sessions), with passwords typed at a hidden prompt and known secrets
+  blanked where Domovoi can tell; transcripts are kept 30 days. Only a
+  Raspberry Pi on a card prepared by Domovoi whose account can't use sudo
+  offers it, so press **Upgrade satellite** first; spare computers and
+  phones don't. The light's colour and pace still want a check on real
+  hardware. SECURITY_PRIVACY.md, "Support sessions".
+
 ## 1.5.0 (unreleased) — Diagnostics for a satellite, in its room drawer
 
 - **What changed.** A room's drawer has a **Diagnostics** tab: **Run all**

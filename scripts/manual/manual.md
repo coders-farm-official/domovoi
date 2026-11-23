@@ -1910,6 +1910,17 @@ About the price of a smart speaker. [Parts list](docs/SATELLITE_HARDWARE.md)
 **If something's wrong:** **show setup details** on the card lists the
 setup network and its page. [More detail](README.md#3-add-your-first-satellite)
 
+**A support session** *(admin)*: for a fault the room's **Diagnostics**
+tab can't explain, turn on **Allow support sessions** in the room's
+**Settings** tab, then **Open support session** and type the admin
+password: a shell on the Pi, as its own account, for up to 30 minutes.
+The room says it started, its light breathes magenta, and every dashboard
+shows a banner with **End**. Anyone can end it.
+
+**Try saying**
+
+- "end support session"
+
 ### A spare laptop or PC
 
 A Windows 10 or 11, or Linux, laptop or PC can be a room's satellite. Use one that
