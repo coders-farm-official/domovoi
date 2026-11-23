@@ -55,6 +55,10 @@ STOP_CHECK_SEC = 1.0
 #: longest it waits (then it goes ahead and is not stopped again).
 CALL_QUIET_SEC = 1.0
 CALL_WAIT_MAX_SEC = 60.0
+#: How many times one background call is stopped for voice; after that it
+#: runs to its end (a false wake or a follow-up window that nobody used
+#: counts as voice too, and a long passage on a CPU must finish some time).
+CALL_MAX_RESTARTS = 3
 
 
 def _quiet_for(quiet_sec: float) -> bool:
@@ -65,15 +69,18 @@ def _quiet_for(quiet_sec: float) -> bool:
     return since is None or since >= quiet_sec * 1000
 
 
-async def wait_for_voice(*, quiet_sec: float = CALL_QUIET_SEC, max_sec: float = CALL_WAIT_MAX_SEC,
-                         poll_sec: float = POLL_SEC) -> bool:
+async def wait_for_voice(*, quiet_sec: float | None = None, max_sec: float | None = None,
+                         poll_sec: float | None = None) -> bool:
     """Before a background model call: wait until no voice turn is under
     way (from the wake word to the end of the reply) and none ended in the
-    last ``quiet_sec``. True once quiet; False after ``max_sec`` of waiting.
-    A voice turn's own code never waits (:func:`voice_activity.in_turn`)."""
+    last ``quiet_sec`` (:data:`CALL_QUIET_SEC`). True once quiet; False
+    after ``max_sec`` (:data:`CALL_WAIT_MAX_SEC`) of waiting. A voice
+    turn's own code never waits (:func:`voice_activity.in_turn`)."""
     if voice_activity.in_turn():
         return True
-    deadline = time.monotonic() + max_sec
+    quiet_sec = CALL_QUIET_SEC if quiet_sec is None else quiet_sec
+    poll_sec = POLL_SEC if poll_sec is None else poll_sec
+    deadline = time.monotonic() + (CALL_WAIT_MAX_SEC if max_sec is None else max_sec)
     while not _quiet_for(quiet_sec):
         if time.monotonic() >= deadline:
             return False
@@ -81,26 +88,41 @@ async def wait_for_voice(*, quiet_sec: float = CALL_QUIET_SEC, max_sec: float = 
     return True
 
 
+async def _close_unread(result: Any) -> None:
+    """A response nobody will read (the caller was cancelled as it came):
+    closed, so its connection goes back."""
+    close = getattr(result, "aclose", None)
+    if close is not None:
+        try:
+            await close()
+        except Exception:  # noqa: BLE001 — best effort
+            pass
+
+
 async def ahead_of_voice(make: Callable[[], Awaitable[Any]], *, label: str = "background model call",
-                         poll_sec: float = POLL_SEC) -> Any:
+                         poll_sec: float | None = None) -> Any:
     """Run the background model call ``make()`` so that voice goes first:
     started once the house is quiet (:func:`wait_for_voice`), and if a voice
     turn starts before it has answered, stopped (closing the request makes
-    Ollama stop generating) and started again after the turn. Only for a
-    call whose partial work nobody has seen yet: a non-streamed answer, or
-    a stream until its first byte. Inside a voice turn it simply runs."""
-    if voice_activity.in_turn():
-        return await make()
+    Ollama stop generating) and started again after the turn, at most
+    :data:`CALL_MAX_RESTARTS` times. Only for a call whose partial work
+    nobody has seen yet: a non-streamed answer, or a stream until its first
+    byte. A voice turn's own call isn't stopped while that turn is open; one
+    that outlives its turn (a task the turn started) is background work."""
+    poll_sec = POLL_SEC if poll_sec is None else poll_sec
+    restarts = 0
     while True:
         quiet = await wait_for_voice(poll_sec=poll_sec)
         task = asyncio.ensure_future(make())
-        interrupted = False
+        interrupted = returned = False
         try:
             while True:
                 await asyncio.wait({task}, timeout=poll_sec)
                 if task.done():
+                    returned = True
                     return task.result()
-                if quiet and voice_activity.busy():
+                if (quiet and restarts < CALL_MAX_RESTARTS and not voice_activity.in_turn()
+                        and voice_activity.busy()):
                     interrupted = True
                     break
         finally:
@@ -108,10 +130,20 @@ async def ahead_of_voice(make: Callable[[], Awaitable[Any]], *, label: str = "ba
                 task.cancel()
                 try:
                     await task
-                except (asyncio.CancelledError, Exception):  # noqa: BLE001 — cancelled on purpose
+                except asyncio.CancelledError:
+                    # The step's own cancellation is swallowed; the caller's
+                    # (this task being cancelled) goes on up.
+                    me = asyncio.current_task()
+                    if me is not None and me.cancelling():
+                        raise
+                except Exception:  # noqa: BLE001 — cancelled on purpose
                     pass
+            elif not returned and not task.cancelled() and task.exception() is None:
+                await _close_unread(task.result())
         if interrupted:
-            log.info("%s: a voice turn started; it stops and runs again after the turn", label)
+            restarts += 1
+            log.info("%s: a voice turn started; it stops and runs again after the turn (%d of %d)",
+                     label, restarts, CALL_MAX_RESTARTS)
 
 
 class VoiceFirst:

@@ -162,3 +162,110 @@ async def test_a_plugins_story_request_yields_to_a_voice_turn():
         r = await asyncio.wait_for(call, 2)
     assert r.json() == {"response": "passage 3"}
     assert sent == ["/api/generate", "/api/tags", "/api/generate"]
+
+
+# ── review round 1 ─────────────────────────────────────────────────────
+
+
+async def test_a_task_a_turn_started_yields_to_a_later_turn():
+    """A voice "tell me a story" starts the writer in a task: once that turn
+    is over, the passage is background work and gives way to the next."""
+    attempts: list[str] = []
+    first_started = asyncio.Event()
+
+    async def make():
+        n = len(attempts)
+        attempts.append("started")
+        if n == 0:
+            first_started.set()
+            try:
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                attempts[n] = "cancelled"
+                raise
+        return f"passage {n}"
+
+    async with voice_activity.turn("story request"):
+        writer = asyncio.create_task(voice_first.ahead_of_voice(make, poll_sec=FAST))
+        await first_started.wait()
+        await asyncio.sleep(0.05)
+        assert attempts == ["started"]  # its own turn: not stopped
+    started, release = asyncio.Event(), asyncio.Event()
+    later = asyncio.create_task(_hold_turn(started, release))
+    await started.wait()
+    await asyncio.sleep(0.1)
+    assert attempts == ["cancelled"]
+    release.set()
+    await later
+    assert await asyncio.wait_for(writer, 2) == "passage 1"
+
+
+async def test_a_call_is_stopped_at_most_three_times_then_runs_to_its_end():
+    attempts = 0
+    running = asyncio.Event()
+
+    async def make():
+        nonlocal attempts
+        attempts += 1
+        running.set()
+        await asyncio.sleep(0.3)
+        return attempts
+
+    call = asyncio.create_task(voice_first.ahead_of_voice(make, poll_sec=FAST))
+    for _ in range(voice_first.CALL_MAX_RESTARTS):
+        await running.wait()
+        running.clear()
+        started, release = asyncio.Event(), asyncio.Event()
+        turn = asyncio.create_task(_hold_turn(started, release))
+        await started.wait()
+        await asyncio.sleep(0.05)
+        release.set()
+        await turn
+    await running.wait()
+    # A fourth turn while it runs: no longer stopped.
+    started, release = asyncio.Event(), asyncio.Event()
+    turn = asyncio.create_task(_hold_turn(started, release))
+    await started.wait()
+    assert await asyncio.wait_for(call, 2) == voice_first.CALL_MAX_RESTARTS + 1
+    release.set()
+    await turn
+
+
+async def test_a_chat_tool_working_for_a_turn_never_waits():
+    started, release = asyncio.Event(), asyncio.Event()
+    turn = asyncio.create_task(_hold_turn(started, release))
+    await started.wait()
+
+    async def make():
+        return "ok"
+
+    with voice_activity.exempt():
+        assert await asyncio.wait_for(voice_first.ahead_of_voice(make, poll_sec=FAST), 1) == "ok"
+    assert not voice_activity.in_turn()
+    release.set()
+    await turn
+
+
+async def test_the_callers_cancellation_goes_through():
+    async def make():
+        await asyncio.sleep(10)
+
+    call = asyncio.create_task(voice_first.ahead_of_voice(make, poll_sec=FAST))
+    await asyncio.sleep(0.05)
+    call.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(call, 1)
+
+
+async def test_the_web_wait_ends_at_its_deadline(monkeypatch):
+    from web.backend.api import chat_doc_jobs as jobs_api
+
+    async def _slow_busy():
+        await asyncio.sleep(0.05)  # asking the core takes time too
+        return True
+
+    monkeypatch.setattr(jobs_api, "voice_busy", _slow_busy)
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+    await jobs_api.wait_for_voice(max_sec=0.2, poll_sec=0.01)
+    assert loop.time() - t0 < 0.5
