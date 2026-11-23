@@ -9,7 +9,8 @@ import SwiftUI
 ///
 /// Reached only while the server says it is on (``FriendHousesGate``, read
 /// by ``RouteScreen``'s check). What the household token may do is a
-/// control; what only an admin may do is a line of words (``FhWords``).
+/// control. 1.4.1: the dashboard's order, Messages then Shared lists; its
+/// admin zone ("Friends and connections") is not on the phone at all.
 ///
 /// Every name, body, title and `last_error` came from another house: shown
 /// only through ``FhPlainText`` (no links, no markup, line breaks kept), and
@@ -52,6 +53,29 @@ struct FriendHousesScreenView: View {
             .onChange(of: model.inputs.serverURL) { _, _ in
                 guard visible else { return }
                 fh?.serverChanged()
+            }
+            // The shell's toast, as Calendar's: "added to Lists as …",
+            // "list declined", a refusal.
+            .onChange(of: fh?.toast) { _, said in
+                guard said != nil, let text = fh?.takeToast() else { return }
+                model.showToast(text)
+            }
+            .alert(
+                Text(verbatim: fh?.ask?.title ?? ""),
+                isPresented: Binding(
+                    get: { fh?.ask != nil },
+                    set: { shown in if !shown { fh?.cancelAsk() } }
+                ),
+                presenting: fh?.ask
+            ) { ask in
+                Button(FhWords.cancel, role: .cancel) { fh?.cancelAsk() }
+                Button(ask.confirm, role: .destructive) {
+                    Task { await fh?.confirmAsk(ask) }
+                }
+            } message: { ask in
+                // The list's title and the friend's name are another
+                // house's words: verbatim, never Markdown.
+                Text(verbatim: ask.body)
             }
             // The reads run while the app is on screen, as Android's
             // `repeatOnLifecycle(STARTED)`: off in the background, at once
@@ -230,10 +254,8 @@ struct FhTabContent: View {
         switch fh.tab {
         case .messages:
             FhInboxList(read: fh.inbox) { fh.openConversation($0) }
-        case .friends:
-            FhFriendsList(read: fh.friends) { fh.message($0) }
         case .shared:
-            FhSharedListsList(read: fh.shared) { shared in
+            FhSharedListsList(fh: fh) { shared in
                 if fh.openInLists(shared) { model.navigate(.lists) }
             }
         }

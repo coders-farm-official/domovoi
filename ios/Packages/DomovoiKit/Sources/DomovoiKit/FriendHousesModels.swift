@@ -4,9 +4,13 @@ import Foundation
 // The Friend houses screen's words and logic, apart from SwiftUI so the
 // package tests can pin them — Android's `ui/screens/friendhouses/
 // FriendHousesModels.kt` (394473e2), word for word. The words are the
-// dashboard's (web/static/friend_houses.jsx), at phone width. Everything an
-// admin does there is a line of words here, never a control: the household
-// token is refused it.
+// dashboard's (web/static/friend_houses.jsx), at phone width.
+//
+// 1.4.1: the page is the dashboard's top to bottom — Messages, then Shared
+// lists — and the dashboard's admin zone ("Friends and connections":
+// requests, friends, friend files, this house, blocked houses) is not on the
+// phone at all until phones can sign in as an admin. Accepting, declining
+// and stopping a shared list are the household's now, and are controls.
 // ---------------------------------------------------------------------------
 
 public enum FhWords {
@@ -14,10 +18,16 @@ public enum FhWords {
 
     /// Blocking joined the admin's list on 2026-11-17 (hand-off: blocking,
     /// unblocking and the blocked list answer 403 to a phone).
+    ///
+    /// **Not drawn in 1.4.1**: it belonged to the Friends tab, which the
+    /// phones hide with the rest of the admin zone. Kept for the admin
+    /// sign-in that brings that zone back.
     public static let friendsAdmin =
         "Only an admin can add, remove or block friends, compare the codes, or change what a new message does, on the dashboard."
+    /// Starting a share is still an admin's (`POST /shared-lists`); accepting,
+    /// declining and stopping are anyone's in the household (1.4.1).
     public static let listsAdmin =
-        "Only an admin can share a list, accept one or stop sharing, on the dashboard."
+        "Only an admin can share one of this house's lists with a friend house, on the dashboard."
     public static let conversationAdmin =
         "Only an admin can save a copy of these messages or delete them, on the dashboard."
     public static let formerFriend = "No longer a friend: messages can't be sent to this house."
@@ -32,16 +42,18 @@ public enum FhWords {
     public static let phoneOpenOnly = "On this iPhone, that happens while Domovoi is open."
 
     public static let noMessages = "no messages yet"
-    public static let noMessagesSub = "press message on a friend to write one"
+    /// The dashboard's Messages card's own line: its "press Message on a
+    /// friend" is for the admin zone's friends, which the phone hides.
+    public static let noMessagesSub = "Messages with your friend houses. New ones arrive here."
     public static let noFriends = "no friends yet"
     public static let noFriendsSub = "An admin can add friend houses on the dashboard."
-    public static let noShared = "no shared lists"
+    public static let noShared = "no shared lists yet"
     public static let notVerified = "not verified"
     public static let verified = "verified"
     public static let loadEarlier = "Load earlier"
     public static let noLongerAFriend = "no longer a friend"
     public static let message = "message"
-    public static let openInLists = "open in lists"
+    public static let openInLists = "open in Lists"
     public static let allConversations = "all conversations"
     public static let send = "Send"
     public static let sending = "Sending…"
@@ -52,10 +64,53 @@ public enum FhWords {
     public static let tabFriends = "friends"
     public static let tabShared = "shared lists"
 
-    /// A list a friend shared that an admin hasn't accepted yet.
+    /// A list a friend shared with this house, not accepted yet (the
+    /// dashboard's `FhListOffer`).
     public static func invited(_ friend: String, _ title: String) -> String {
-        "\(friend) shared a list: \(title). An admin can accept it in the dashboard."
+        "\(friend) shared a list: \u{201C}\(title)\u{201D}"
     }
+
+    // MARK: shared lists (the dashboard's `FhSharedListsCard`)
+
+    public static let shareExplain =
+        "Changes either house makes show up in both, usually within a minute. Each house keeps its own copy and its own name for it."
+    public static let offeredHeading = "offered to this house"
+    public static let sharedNowHeading = "shared now"
+    public static let accept = "Accept"
+    public static let decline = "Decline"
+    public static let stopSharing = "Stop sharing"
+    public static let cancel = "Cancel"
+    public static let rename = "give it another name here"
+    public static let callItHere = "Call it here"
+    public static let declineTitle = "Decline this list?"
+    public static let stopTitle = "Stop sharing?"
+    public static let waitingForThem = "waiting for them to accept"
+    public static let declined = "list declined"
+    public static let stopped = "stopped sharing \u{2014} you both keep your own copy"
+
+    /// "“Camping” won’t be added here. The Smiths isn’t told."
+    public static func declineBody(_ title: String?, _ friend: String) -> String {
+        let named = title.flatMap { fhBlank($0) ? nil : $0 } ?? "This list"
+        return "\u{201C}\(named)\u{201D} won\u{2019}t be added here. \(friend) isn\u{2019}t told."
+    }
+
+    public static func stopBody(_ list: String, _ friend: String) -> String {
+        "Stop sharing \(list) with \(friend)? You both keep your own copy."
+    }
+
+    /// The toast after an accept: the name the list has here.
+    public static func accepted(_ name: String?) -> String {
+        "added to Lists as \(name.flatMap { fhBlank($0) ? nil : $0 } ?? "a new list")"
+    }
+
+    /// A shared list's line: "Groceries — shared with The Smiths" (ours) or
+    /// "Camping — from The Smiths" (theirs).
+    public static func sharedLine(_ list: String, origin: String, friend: String) -> String {
+        origin == "us" ? "\(list) \u{2014} shared with \(friend)" : "\(list) \u{2014} from \(friend)"
+    }
+
+    /// Their name for a list of theirs, when it isn't the name here.
+    public static func theyCallIt(_ title: String) -> String { "they call it \u{201C}\(title)\u{201D}" }
 
     /// What a new message from this friend does, as words (the dashboard's
     /// three choices). The admin sets it; the phone only says it.
@@ -99,23 +154,72 @@ public enum FhWords {
     /// The counter under the composer: "n / 2000".
     public static func counter(_ length: Int) -> String { "\(length) / \(fhMessageMax)" }
 
-    public static func ourList(_ friend: String) -> String { "Our list, shared with \(friend)" }
-    public static func theirList(_ friend: String) -> String { "\(friend)'s list, shared with this house" }
+    // MARK: quiet hours (1.4.1)
+
+    public static let heldForQuietHours = "held for quiet hours"
+
+    /// "held for quiet hours · read out at 7:00am".
+    public static func heldThenReadOut(_ at: String) -> String { "\(heldForQuietHours) \u{00B7} read out at \(at)" }
 }
 
-/// The three tabs, in Android's order.
+/// The tabs, in the dashboard's order (1.4.1): Messages, then Shared lists.
+/// The Friends tab went with the admin zone, which the phones hide.
 public enum FhTab: String, CaseIterable, Sendable {
     case messages
-    case friends
     case shared
 
     public var label: String {
         switch self {
         case .messages: return FhWords.tabMessages
-        case .friends: return FhWords.tabFriends
         case .shared: return FhWords.tabShared
         }
     }
+}
+
+// MARK: - quiet hours (1.4.1)
+
+/// "07:00" (the house's clock, from the server) as the app writes a time
+/// elsewhere — "7:00am" (``homeClock(ms:timeZone:)``'s format, the
+/// dashboard's `fmtClock`). Nil for anything that isn't a time of day.
+public func fhClock(_ hhmm: String?) -> String? {
+    guard let hhmm else { return nil }
+    let parts = hhmm.split(separator: ":", omittingEmptySubsequences: false)
+    guard parts.count == 2, (1...2).contains(parts[0].count), parts[1].count == 2,
+          parts.allSatisfy({ $0.allSatisfy { ("0"..."9").contains($0) } }),
+          let hour = Int(parts[0]), let minute = Int(parts[1]), hour < 24, minute < 60
+    else { return nil }
+    let twelve = hour % 12 == 0 ? 12 : hour % 12
+    return "\(twelve):\(String(format: "%02d", minute))\(hour < 12 ? "am" : "pm")"
+}
+
+/// Why a friend's messages aren't being said right now (the dashboard's
+/// `fhQuietNote`): only for a choice that speaks in the rooms (`read`,
+/// `sender`) while quiet hours are on. Nil otherwise, and for an `until`
+/// that isn't a time.
+///
+/// **Ready, not drawn**: it belongs under a friend card's "when a message
+/// comes from them" choice, and the phones hide the friends with the admin
+/// zone in 1.4.1.
+public func fhQuietNote(_ quiet: FhQuietHours?, alert: String?) -> String? {
+    guard let quiet, alert == "read" || alert == "sender", let until = fhClock(quiet.until) else { return nil }
+    let said = alert == "read" ? "read out" : "announced"
+    if quiet.rooms == "some" {
+        return quiet.readLater
+            ? "Quiet hours in some rooms until \(until): new messages will be \(said) there at \(until)."
+            : "Quiet hours in some rooms until \(until): new messages aren\u{2019}t \(said) there, and won\u{2019}t be later."
+    }
+    return quiet.readLater
+        ? "Quiet hours until \(until): new messages will be \(said) at \(until)."
+        : "Quiet hours until \(until): new messages wait in the inbox and won\u{2019}t be \(said) later."
+}
+
+/// What an incoming message says about quiet hours (the dashboard's
+/// `fhHeldText`): "held for quiet hours", and "· read out at 7:00am" once a
+/// room said it afterwards. Nil for an outgoing message or one not held.
+public func fhHeldText(_ m: FhMessage, zone: TimeZone = .current) -> String? {
+    guard m.incoming, m.held == "quiet_hours" else { return nil }
+    guard let sec = fhIsoSeconds(m.readOutAt) else { return FhWords.heldForQuietHours }
+    return FhWords.heldThenReadOut(homeClock(ms: sec * 1000, timeZone: zone))
 }
 
 // MARK: - wire times, bounded (security review, Android 22b3b9c8)
@@ -272,9 +376,34 @@ public func fhOpenConversation(_ house: String?, inbox: [FhConversation], friend
     return FhConversation(house: friend.house, name: friend.name, friendId: friend.id)
 }
 
-/// The shared lists the screen shows: active first, then the offers.
-public func fhSharedOrder(_ lists: [FhSharedList]) -> [FhSharedList] {
-    lists.filter { $0.state == "active" } + lists.filter { $0.state == "invited" }
+/// Whether this is a friend's list offered to this house, not accepted yet:
+/// what Accept and Decline are for.
+public func fhIsOffer(_ shared: FhSharedList) -> Bool {
+    shared.origin == "them" && shared.state == "invited"
+}
+
+/// The Shared lists tab's two groups, as the dashboard draws them: the
+/// offers to this house, then everything shared now (ours waiting for them
+/// to accept included). Only lists a URL may name
+/// (``FhPaths/isSharedListId(_:)``), in the server's order.
+public func fhSharedSections(_ lists: [FhSharedList]) -> (offers: [FhSharedList], current: [FhSharedList]) {
+    let named = lists.filter { FhPaths.isSharedListId($0.id) }
+    return (named.filter(fhIsOffer), named.filter { !fhIsOffer($0) })
+}
+
+/// A shared list's name here: the list's own, else its title.
+public func fhListName(_ shared: FhSharedList) -> String {
+    for name in [shared.listName, shared.title] {
+        if let name, !fhBlank(name) { return name }
+    }
+    return "this list"
+}
+
+/// "they call it “…”" when their title for a list of theirs differs from
+/// the name here; else nil.
+public func fhTheirTitle(_ shared: FhSharedList) -> String? {
+    guard shared.origin == "them", let title = shared.title, !fhBlank(title), title != fhListName(shared) else { return nil }
+    return FhWords.theyCallIt(title)
 }
 
 /// What a read gives the screen: the data, or a sentence to show (a 403's

@@ -196,6 +196,10 @@ struct FhMessageMeta: View {
         // "—" for a time that is missing or out of range, never a trap.
         var parts = [fhRelTime(message.createdAt, nowMs: now)]
         if let theirs = fhTheirClock(message) { parts.append(theirs) }
+        // "held for quiet hours" (· "read out at 7:00am"), after the time as
+        // the dashboard writes it; an incoming message's only, so it never
+        // sits beside a state line.
+        if let held = fhHeldText(message) { parts.append(held) }
         return parts.joined(separator: " · ")
     }
 
