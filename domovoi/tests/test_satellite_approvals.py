@@ -96,6 +96,28 @@ def test_a_request_shows_up_waiting():
     assert rows[0]["attempts"] == 1
 
 
+def test_the_device_s_mac_and_type_are_bounded():
+    """Free text from an unpaired device is stored only in its known
+    shape: a MAC that is not one is dropped, an unknown type reads voice."""
+    _run(_request(code=CODE, mac="x" * 5000, sat_type="y" * 5000))
+    row = _run(_pending())[0]
+    assert row["mac"] is None and row["sat_type"] == "voice"
+    _run(_request(code=CODE, mac="B8:27:EB:AA:BB:CC", sat_type="video"))
+    row = _run(_pending())[0]
+    assert row["mac"] == "b8:27:eb:aa:bb:cc" and row["sat_type"] == "video"
+
+
+def test_the_waiting_list_is_capped_for_new_rooms_only():
+    from domovoi.db import repositories
+
+    for i in range(repositories.MAX_PENDING_APPROVALS):
+        assert _run(_request(room_id=f"room{i}", token_hash=f"{i:064x}"))[0] == "parked"
+    assert _run(_request(room_id="one-more", token_hash=HASH_B)) == ("full", None)
+    # A device already waiting still refreshes its own request.
+    assert _run(_request(room_id="room0", token_hash=f"{0:064x}"))[0] == "parked"
+    assert len(_run(_pending())) == repositories.MAX_PENDING_APPROVALS
+
+
 def test_neither_the_hash_nor_the_code_is_listed():
     """The operator types the code in from the device. Printing it next to
     the approve button would make it a label again, and the hash has never

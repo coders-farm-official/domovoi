@@ -102,7 +102,7 @@ from domovoi.models import (  # noqa: E402
     Intent,
     Response,
 )
-from domovoi.acquisitions import ACQUISITIONS  # noqa: E402
+from domovoi.acquisitions import ACQUISITIONS, redact_for_household  # noqa: E402
 from domovoi.capabilities import CAPABILITIES  # noqa: E402
 from domovoi.now_playing import NOW_PLAYING  # noqa: E402
 from domovoi.router import route  # noqa: E402
@@ -1586,6 +1586,13 @@ async def health(
         identity = server_identity.load_or_create()
         if not challenge:
             doc["identity"] = identity.public_document()
+        elif addr is None and server_identity.asks_for_pairing_proof(challenge):
+            # Every device that asks this form also names the address it
+            # dialed: an unbound answer to it is only ever useful to
+            # something in between, so it is not signed.
+            block = identity.public_document()
+            block["challenge"] = challenge
+            doc["identity"] = block
         elif addr is None:
             if not _UNBOUND_CHALLENGE_SEEN:
                 _UNBOUND_CHALLENGE_SEEN = True
@@ -4173,9 +4180,20 @@ async def admin_friend_houses_status() -> dict[str, Any]:
     out["unread"] = await messages.unread_total()
     out["invite_days"] = await friending.invite_days_default()
     out["changes"] = await friending.recent_changes()  # new friends, shared lists (R6 FH-8)
+    out["notice"] = await friending.notice()  # e.g. a friend file closed after failed tries
     out["limits"] = {"min_days": friending.MIN_DAYS, "max_days": friending.MAX_DAYS,
                      "max_open_files": friending.MAX_OPEN_INVITES}
     return out
+
+
+@app.delete("/v1/admin/friend-houses/notice", dependencies=_FH_WRITE)
+async def admin_friend_houses_dismiss_notice() -> dict[str, Any]:
+    """Dismiss the Friend Houses page's notice (making a friend file clears
+    it too)."""
+    from domovoi.friend_houses import friending
+
+    await friending.dismiss_notice()
+    return {"dismissed": True}
 
 
 @app.put("/v1/admin/friend-houses/settings", dependencies=_FH_WRITE)
@@ -4628,9 +4646,10 @@ async def admin_chat_resync() -> dict[str, Any]:
 
 @app.post(
     "/v1/admin/wake/record/start",
-    # Admin tier: opens the room's mic for a long capture run that adds
-    # clips to the word. The dashboard hop is admin-gated too.
-    dependencies=[Depends(require_admin_mutation)],
+    # Security tier: opens the room's mic for a long capture run that adds
+    # clips to the word, so no pre-setup grace (501 until an admin exists,
+    # as for a drop-in). The dashboard hop wears the same gate.
+    dependencies=[Depends(require_admin_security)],
 )
 async def admin_wake_record_start(
     body: _AdminWakeRecordStartBody,
@@ -7730,11 +7749,13 @@ async def admin_music_add_by_url(
 
 @app.get("/v1/acquisitions")
 async def list_acquisitions(
-    status: str | None = None, limit: int = 50
+    request: Request, status: str | None = None, limit: int = 50
 ) -> dict[str, Any]:
     """Generic read view of the acquisition queue (design §4.8) — the
     web "Downloads"-style page renders this; provider plugins layer
-    richer state on top from their own routers."""
+    richer state on top from their own routers. Open; a caller who is
+    not admin reads each row through
+    :func:`domovoi.acquisitions.redact_for_household`."""
     limit = max(1, min(int(limit), 200))
     where = "WHERE status = :status" if status else ""
     async with session_scope() as s:
@@ -7754,9 +7775,11 @@ async def list_acquisitions(
             )
         ).all()
     availability = ACQUISITIONS.availability()
+    admin = await admin_auth_mod.check_admin_request(request) in ("ok", "pre-setup", "cookie-only")
+    shown = (lambda row: row) if admin else redact_for_household
     return {
         "acquisitions": [
-            {
+            shown({
                 "id": int(r.id), "kind": r.kind, "text": r.text,
                 "metadata": dict(r.metadata or {}),
                 "requested_by": r.requested_by, "origin_ref": r.origin_ref,
@@ -7769,7 +7792,7 @@ async def list_acquisitions(
                 "completed_at": (
                     r.completed_at.isoformat() if r.completed_at else None
                 ),
-            }
+            })
             for r in rows
         ],
         "fulfillers": availability.fulfillers,

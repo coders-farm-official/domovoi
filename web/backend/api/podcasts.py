@@ -43,7 +43,7 @@ from sqlalchemy import text
 # Imported here, at the top, on purpose: the web process refuses new
 # domovoi.* imports once it has started (plugin_host's import guard).
 from domovoi import egress, net_safety, podcast_artwork
-from domovoi.admin_auth import require_device
+from domovoi.admin_auth import require_device, require_device_read
 from domovoi.config import settings as core_settings
 from domovoi import spoken_audio as sa
 from web.backend.api.audio_serve import safe_download_name, serve_audio_range
@@ -328,6 +328,7 @@ def _episode_row(r: Any) -> dict[str, Any]:
 
 @router.get("/subscriptions/{sub_id}/episodes")
 async def list_episodes(
+    request: Request,
     sub_id: int,
     q: Optional[str] = Query(None, max_length=200,
                              description="Case-insensitive substring of the episode title"),
@@ -346,9 +347,16 @@ async def list_episodes(
     """One show's episodes, newest first by default. Paged when ``limit`` /
     ``cursor`` / ``offset`` is sent (``{items, total, …}``, paging.py — a
     long back catalogue no longer arrives in one answer); the bare list, as
-    before, for a client that sends none of them."""
+    before, for a client that sends none of them. The list is open; a
+    listener's place (``device_id``/``person_id``) is the household's read,
+    so without a device-tier credential ``position_sec`` stays null."""
     keys = _EP_SORT_KEYS[sort]
     params: dict[str, Any] = {"sid": sub_id}
+    if device_id:
+        try:
+            await require_device_read(request)
+        except HTTPException:
+            device_id = None
     if device_id:
         cols = _EP_COLUMNS + _EP_POSITION_COLUMNS
         params.update({"pp_type": sa.ITEM_PODCAST, "pp_dev": device_id, "pp_pid": person_id})
@@ -564,12 +572,14 @@ async def episode_audio(
 
 
 # ─── Resume positions (per device × person × episode) ───────────────────
-@router.get("/positions/{episode_id}")
+@router.get("/positions/{episode_id}", dependencies=[Depends(require_device_read)])
 async def get_position(
     episode_id: int,
     device_id: str = Query(...),
     person_id: Optional[int] = Query(None),
 ) -> dict[str, Any]:
+    """A listener's place in an episode. Device tier: it names any person,
+    like the audiobook twin (audiobooks.py)."""
     async with session_scope() as s:
         pos = await sa.get_position(
             s, item_type=sa.ITEM_PODCAST, item_id=episode_id,

@@ -108,7 +108,6 @@ ADMIN_TIER = [
     # XVF3800 DSP presets and test markers (1.4.1, domovoi/mic_dsp.py).
     ("POST", "/v1/admin/satellite/{room_id}/mic_dsp"),
     ("POST", "/v1/admin/satellite/{room_id}/mic_dsp/mark"),
-    ("POST", "/v1/admin/wake/record/start"),
     ("POST", "/v1/admin/wake/record/stop"),
     ("POST", "/v1/admin/wake/push"),
     ("POST", "/v1/admin/wake/score"),
@@ -126,6 +125,8 @@ ADMIN_TIER = [
 # the security tier's gate, 501 until an admin exists.
 LIVE_MIC_TIER = [
     ("POST", "/v1/admin/dropin/start"),
+    # A wake-word take records the room for hours: the same rule.
+    ("POST", "/v1/admin/wake/record/start"),
 ]
 
 # Delta review N5 (2026-10-16): pulling new code (it moves an unclaimed

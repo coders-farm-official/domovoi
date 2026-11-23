@@ -182,17 +182,27 @@ class Session:
         return kind, body
 
     async def ping(self, *, timeout: float = 60.0) -> float:
-        """Round-trip a PING; returns seconds. For checks and the spike rig."""
+        """Round-trip a PING; returns seconds. For checks and the spike rig.
+
+        ``timeout`` bounds the whole round trip, not each frame: other
+        frames arriving meanwhile don't extend it."""
         loop = asyncio.get_running_loop()
         token = secrets.token_bytes(8)
         start = loop.time()
-        await self.send(Kind.PING, token)
-        while True:
-            kind, body = await self.recv(timeout=timeout)
-            if kind is Kind.PONG and body == token:
-                return loop.time() - start
-            if kind is Kind.PING:
-                await self.send(Kind.PONG, body)
+
+        async def _round_trip() -> float:
+            await self.send(Kind.PING, token)
+            while True:
+                kind, body = await self.recv(timeout=timeout)
+                if kind is Kind.PONG and body == token:
+                    return loop.time() - start
+                if kind is Kind.PING:
+                    await self.send(Kind.PONG, body)
+
+        try:
+            return await asyncio.wait_for(_round_trip(), timeout)
+        except asyncio.TimeoutError as exc:
+            raise SessionRefused("no answer to the ping in time") from exc
 
     async def close(self) -> None:
         try:

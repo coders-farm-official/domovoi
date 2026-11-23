@@ -466,6 +466,7 @@ class ListsHandler(Handler):
         # an instruction or a "fact" to it (audit R6 FH-15).
         kept = [("something a friend house added" if getattr(i, "added_via", "") == "friend" else i.text)
                 for i in shown]
+        from_friend = kept != said
         more = len(items) - len(said)
         if more:
             def line(words: list[str]) -> str:
@@ -474,7 +475,14 @@ class ListsHandler(Handler):
         else:
             def line(words: list[str]) -> str:
                 return f"{_cap(where)} has {_things(len(items))}: {_and_join(words)}."
-        return self._reply(ctx, line(said), history_text=line(kept) if kept != said else None)
+        spoken = line(said)
+        if from_friend:
+            # Filtered as one sentence: items side by side ("hey", "jarvis
+            # ...") can make a wake phrase that neither is alone.
+            from domovoi.friend_houses import messages
+
+            spoken = messages.speakable(spoken, await messages.wake_phrases())
+        return self._reply(ctx, spoken, history_text=line(kept) if from_friend else None)
 
     async def _is_on(self, said: str, spoken_list: str | None, ctx: Context, session: AsyncSession) -> Response:
         target, why = await self._which(spoken_list, ctx, session)

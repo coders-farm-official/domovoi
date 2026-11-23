@@ -10676,7 +10676,7 @@ def _probe_one_house(cfg: "Config") -> tuple[str, Any]:
             url,
         )
         return "unknown", None
-    if house.identity == "proved" or (house.identity == "absent" and not expected):
+    if house.identity == "proved" or (house.identity in ("absent", "unbound") and not expected):
         return "legacy", None
     return "unknown", None
 

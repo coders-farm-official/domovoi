@@ -265,9 +265,26 @@ class _Sat:
             clip_seconds=kw["clip_seconds"], target_count=kw["target_count"])
 
 
+def _as_admin(core_app, monkeypatch) -> None:
+    """record/start is on the security tier: drive it as a signed-in admin."""
+    from domovoi import admin_auth
+
+    monkeypatch.setitem(
+        core_app.dependency_overrides, admin_auth.require_admin_security, lambda: None)
+
+
 async def _record_start(sessions: dict, body: dict):
     from domovoi.main import app as core_app
 
+    mp = pytest.MonkeyPatch()
+    _as_admin(core_app, mp)
+    try:
+        return await _record_start_admitted(core_app, sessions, body)
+    finally:
+        mp.undo()
+
+
+async def _record_start_admitted(core_app, sessions: dict, body: dict):
     async with core_app.router.lifespan_context(core_app):
         core_app.state.active_sessions = sessions
         core_app.state.satellite_mic_enabled = {}
@@ -391,6 +408,7 @@ async def test_two_rooms_pressing_record_together_get_one_take(tmp_path, monkeyp
             await super().start_wake_recording(**kw)
 
     sats = {"kitchen": _SlowSat("kitchen"), "garage": _SlowSat("garage")}
+    _as_admin(core_app, monkeypatch)
     async with core_app.router.lifespan_context(core_app):
         core_app.state.active_sessions = sats
         core_app.state.satellite_mic_enabled = {}

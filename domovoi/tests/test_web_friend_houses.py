@@ -96,6 +96,7 @@ def test_the_section_is_registered_under_household() -> None:
 ROUTES: dict[str, tuple[str, str, dict | None]] = {
     "status": ("GET", "/api/friend-houses", None),
     "settings": ("PUT", "/api/friend-houses/settings", {"house_name": "The Alex house"}),
+    "notice": ("DELETE", "/api/friend-houses/notice", None),
     "invites": ("GET", "/api/friend-houses/invites", None),
     "make": ("POST", "/api/friend-houses/invites", {"days": 7, "label": "for the Smiths"}),
     "invite": ("GET", "/api/friend-houses/invites/0123abcd", None),

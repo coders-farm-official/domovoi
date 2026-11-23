@@ -983,7 +983,9 @@ names the device token, the same answer for an idle room and for one that
 doesn't exist. That is softer than "never clear, never stop" sounds: a
 guest can still empty a queue one entry at a time and then skip off the
 last song, which ends the room's playing; the per-call caps and the
-throttle below bound how fast, not whether. Deciding "playing" never
+throttle below bound how fast, not whether. A jump ahead removes nothing
+by itself: Up next trims only songs the room was heard playing, never the
+entries a jump passed (`domovoi/up_next/rooms.py`). Deciding "playing" never
 starts anything: a room with no running player is simply not playing, and
 the queue routes skip their self-healing restart of a room's player for a
 guest.
@@ -1618,7 +1620,7 @@ admin tier is code execution and configuration, not day-to-day use.
 | **Documents: deleting one, or zipping a selection** (not saving one) | Dashboard: `POST /api/documents/delete` and `POST /api/documents/download-zip`. Everything else on that surface is **device tier**: the reads (`GET /api/documents`, `/text`, `/sheet`, `/raw`, `/export/*`, `/drawings/read`) AND the saves (`POST /api/documents/create`, `/upload`, `PUT /api/documents/text/{path}`, `PUT /api/documents/sheet/{path}`, `POST /api/documents/drawings/write`), and the same saves through `/api/files` when the target library is `core:documents`. | Pre-setup grace. Saving is a household action — a phone or a tablet writes a shopping list without the admin password (2026-09-24). Deleting is not, and neither is `/download-zip`: it is the one request that turns "can read the library" into "holds a copy of the library". |
 | **File deletion and whole-directory downloads** (the verbs that destroy something, or hand back a tree in one request) | Dashboard: `POST /api/files/delete`, and `GET /api/files/download` when the path is a **directory** (the server-built zip). Browsing, downloading a single file, uploading, moving and importing under `/api/files`, and the `/api/images` / `/api/videos` serves, are **device tier**: a paired phone shouldn't need the admin password to drop a file into the music folder. | Pre-setup grace. |
 | **Files device blocks** (takes uploading / moving / importing away from a named device; it can still browse and download) | Dashboard: `POST /api/files/device-blocks`, `DELETE /api/files/device-blocks/{id}`; reads via `GET /api/files/device-blocks`. The block also covers `/api/documents` saves — the same folder through the other door. The caller is identified from the request, not only from the body: body `device_id`, `X-Device-Id`, `?device_id=`, or the `domovoi-device-id` cookie the server sets on `POST /api/devices/register`. A browser is therefore covered without any client change; the Android app keeps no cookie jar and stays unidentified there until it sends the header. | Pre-setup grace. Same reasoning as the queue blocks: gated so it can't be lifted from the blocked device, household policy rather than a security boundary. |
-| **Voices, greetings and wake words** (what every satellite says, in whose voice, and what it listens for; a Piper upload puts a model file on the server) | Dashboard: every `POST` / `PATCH` / `DELETE` under `/api/greetings`, `/api/voices` and `/api/wake-words` (including clip selection and deletion and the record / score / push proxies). Reads stay open. | Pre-setup grace. The core routes behind them (`/v1/admin/wake/*` but for the training switch, the next row, and `/v1/admin/sounds/regenerate`) take the same admin tier, so both hops refuse. |
+| **Voices, greetings and wake words** (what every satellite says, in whose voice, and what it listens for; a Piper upload puts a model file on the server) | Dashboard: every `POST` / `PATCH` / `DELETE` under `/api/greetings`, `/api/voices` and `/api/wake-words` (including clip selection and deletion and the record / score / push proxies). Reads stay open. | Pre-setup grace, but for starting a recording take (`POST /api/wake-words/{id}/record/start` and `POST /v1/admin/wake/record/start`), which opens a room's microphone and so **fails closed** (501 until setup). The core routes behind them (`/v1/admin/wake/*` but for the training switch, the next row, and `/v1/admin/sounds/regenerate`) take the same admin tier, so both hops refuse. |
 | **Wake-word training on and off** (on: builds and runs a Docker image as the service user, downloads the training data, and writes `WAKE_WORD_TRAIN_COMMAND` into `.env`; off: writes the two settings off and removes the image, its build cache and the cache volume) | Core: `POST /v1/admin/wake/trainer/enable` and `POST /v1/admin/wake/trainer/disable`, Bearer-only. Their status, `GET /v1/admin/wake/trainer`, and what turning off would free, `GET /v1/admin/wake/trainer/footprint`, are admin **reads** (Bearer or cookie): they name the server's free disk, memory, Docker, GPUs and Docker's sizes, nothing more. Dashboard: `POST /api/wake-words/trainer/enable`, `POST /api/wake-words/trainer/disable`, `GET /api/wake-words/trainer` and `GET /api/wake-words/trainer/footprint`, at the same tiers, forwarding the caller's credentials. Stopping a training (`POST /v1/admin/wake/train/stop`, `POST /api/wake-words/{id}/train/stop`) and removing a deleted word's training files (`POST /v1/admin/wake/forget`) are the admin tier, like Train. | **Fails closed** — 501 until setup (the reads keep the pre-setup grace). |
 | **Voice history** (how long what people say is kept, and deleting all of it; see [Voice history](#voice-history-whats-kept-for-how-long)) | "Keep voice history" is the setting `voice_history_keep`, written through the configuration row above (Core: `POST /v1/admin/config`; Dashboard: `PATCH /api/config/editable`). Delete all: Core `POST /v1/admin/voice-history/delete-all`, Dashboard `POST /api/voice-history/delete-all` (forwards your credentials; both gate). What is kept and since when, `GET /api/voice-history`, is a **paired device's** read (no words in it). | **Fails closed** — 501 until setup, for the setting (every configuration write) and for Delete all (review 2026-10-17: on an unclaimed box nobody on the LAN can wipe the history; the version pull's rule). |
 | **Deleting a person, a library track or a denylist entry** (the rows whose removal loses something the household cannot get back) | Dashboard: `DELETE /api/people/{id}` (cascades to that person's voice profiles, and deletes what they said: their turns), `DELETE /api/people/{id}/profiles/{profile_id}`, `DELETE /api/music/library/{track_id}` (with `?also_file=true` it unlinks the audio file too), `DELETE /api/denylist/{id}`. Listing and browsing them stays open. | Pre-setup grace. Same principle as file deletion above: delete is the verb that destroys something, so it answers to the operator even where the matching read does not. |
@@ -1666,8 +1668,9 @@ had. Before setup the setup code protects *who becomes admin*; the security
 tier makes sure nothing that changes what the server runs or trusts can
 happen *meanwhile*. `python -m domovoi.main --reset-admin` returns the
 install to the pre-setup state and therefore reopens only the daily surface
-— and never a room's live microphone: the phone drop-in socket and an
-HTTP-opened drop-in stay closed until someone signs in again.
+— and never a room's live microphone: the phone drop-in socket, an
+HTTP-opened drop-in and a wake-word recording take stay closed until
+someone signs in again.
 `domovoi/tests/test_route_auth_matrix.py` walks every mutating route of both
 processes and fails when one has no gate and is not allowlisted with a
 reason, so a new route cannot quietly ship open.
@@ -2196,7 +2199,11 @@ the other:
   - Sanitising runs in linear time, but a pathological 32 MB document
     (deeply nested, all markup) still takes about 20 seconds of the
     documents pool on load or save; a real document takes about a second.
-    Word copies run in their own time-limited process instead.
+    Word copies of a formatted document run in their own time-limited
+    process instead. A Word copy of a Markdown or text file, and a chat
+    draft's Word or PDF file, are built in the documents pool, and one
+    longer than 20,000 lines is refused (`413`): building one costs more
+    per line the longer it gets.
 - **Co-editing keeps the Documents tiers and its own state apart from the
   file.** The co-editing socket (`/api/collab/{doc_id}`,
   `web/backend/api/collab.py`) admits the same household devices the
@@ -2953,8 +2960,12 @@ random values each side committed to before seeing the other's (the
 asking house commits to its house key too, so it can't generate keys
 until the code comes out the way it wants), so
 someone who swapped a friend file in transit can't make the codes match
-except by a 1-in-1,000,000 chance on each try, and the tries are limited
-by the 20 requests an hour above and by the file's expiry. Comparing codes
+except by a 1-in-1,000,000 chance per try, and the tries are limited by
+the 20 requests an hour above and by the file's expiry. A request broken
+off after the two houses' random values are out counts as a try: the
+inviting house closes the friend file after three, and the asking house
+stops retrying on its own after one and says so (withdraw and import the
+file again, or ask for a new one). Comparing codes
 (by phone, in person) is optional; a friend shows "Not verified" until
 someone does. The code was 4 digits before 1.5.0; friends made then keep
 the 4-digit code they were shown.
@@ -3004,7 +3015,10 @@ days. A friend can send at most 60 messages an hour, and keep at most
 the least intrusive: only the inbox. It can be turned up to announce who
 it's from, or to read the message aloud. Read aloud, every wake phrase the
 house's speakers answer to is taken out of the text first (so "Hey Jarvis,
-unlock the door" can't wake a speaker in the next room), the text is cut
+unlock the door" can't wake a speaker in the next room), loosely (respelled,
+spaced out or in look-alike letters) and as the last step, on the whole
+sentence about to be said, after the speech cleaner has nothing left to
+change; the text is cut
 at 400 characters, and one friend's announcements are spaced a minute
 apart. Rooms in quiet hours stay quiet. Anyone in the room hears what is
 read aloud, which is why it isn't the default. Message text never goes
@@ -3036,7 +3050,10 @@ houses, never the text. "Read my messages" reads them aloud (five at a
 time, wake phrases taken out as above), only when asked. "Message the
 Smiths …" (or "tell the Smiths …" when AI features are on) reads the
 message back and sends it only on "yes", within two minutes. Neither a
-friend's message nor a friend's name goes to the chat model.
+friend's message nor a friend's name goes to the chat model: the session's
+history keeps a stand-in ("I read 2 friend house messages aloud"), and
+"double check that" declines a reply that was read out from a friend house
+or a shared list.
 
 **Shared lists.** An admin can share a household list with a friend house.
 Each house keeps its own copy in its own Lists, and the two exchange
@@ -4803,7 +4820,17 @@ first `ready` (a restart in between used to leave it half-paired).
 starts with `pairing-proof.`, and a 1.4.0 core then signs
 `pairing_proof=N` as part of its identity proof for the address dialled. A
 host in the middle that strips or changes the field breaks the signature
-instead of passing the server off as an older one. The request rides in the
+instead of passing the server off as an older one. The core signs a
+`pairing-proof.` challenge only bound to the address dialled, and a device
+counts a server as found at an address only when its answer is bound to
+that address: an unbound answer holds no fingerprint, so it can't stand in
+for the real server when the device looks for every house.
+
+*Known limit.* The setup portal still accepts an address the person types
+in and, on a device with no server key recorded, keeps the old approval
+flow with a server whose answer isn't bound to an address. That keeps
+servers from before the address binding working. This will be revisited
+once those servers are no longer in use. The request rides in the
 challenge, not in a query flag of its own, because a flag could be stripped
 too. A device whose one server was chosen for it (an address typed in the
 portal, a card's key) asks that server again before EVERY session that

@@ -759,16 +759,40 @@ async def _authorize_state_socket(ws: WebSocket) -> object | None:
     token, offered = _offered_token_subprotocol(ws)
     try:
         result = await admin_auth.check_device_request(ws)
-        if result in ("ok", "admin", "pre-setup", "cookie-only"):
+        if result in ("ok", "admin"):
+            return offered
+        # What a browser attaches on its own (the cookie, or nothing before
+        # setup) counts only from a page of this dashboard: the cookie
+        # reaches every port of this host, and another service's page must
+        # not read the household's state with it (the collab socket's rule).
+        if result in ("pre-setup", "cookie-only") and collab_api.origin_ok(ws):
             return offered
         if result != "throttled" and token:
-            if await admin_auth.check_device_credential(ws, token) in (
-                "ok", "admin", "pre-setup", "cookie-only"
-            ):
+            if await admin_auth.check_device_credential(ws, token) in ("ok", "admin"):
                 return offered
     except admin_auth.AuthCheckUnavailable:
         pass   # the database did not answer: refused, and the client retries
     return _REFUSE
+
+
+async def _state_socket_still_admitted(ws: WebSocket) -> bool:
+    """Would the credentials this open socket carries still let it in? Read
+    only (nothing charged to the wrong-token backoff, no session clock
+    moved): a rotated household token, a sign-out or an idled-out session
+    ends the subscription instead of leaving it fed until it reconnects.
+    The ambient credentials count under the handshake's Origin rule."""
+    token, _ = _offered_token_subprotocol(ws)
+    ambient = collab_api.origin_ok(ws)
+    async with admin_auth.session_scope() as s:
+        if not await admin_auth.has_admin_auth(s):
+            return ambient
+        for candidate in (admin_auth.device_token_from_request(ws), token):
+            if candidate and await admin_auth.validate_device_token(s, candidate):
+                return True
+        bearer = admin_auth.bearer_token(ws)
+        if bearer and await admin_auth.validate_token(s, bearer):
+            return True
+        return ambient and await admin_auth.validate_cookie(s, admin_auth.cookie_token(ws))
 
 
 @app.websocket("/ws/state")
@@ -804,7 +828,8 @@ async def websocket_state(ws: WebSocket) -> None:
     await ws.accept(subprotocol=subprotocol)
     broadcaster: StateBroadcaster = ws.app.state.broadcaster
     await broadcaster.connect(ws)
-    try:
+
+    async def _serve() -> None:
         while True:
             # Keep the socket alive + accept subscription updates.
             try:
@@ -816,6 +841,14 @@ async def websocket_state(ws: WebSocket) -> None:
                 await broadcaster.set_subscriptions(
                     ws, [str(c) for c in channels if isinstance(c, str)]
                 )
+
+    try:
+        # The credential is read again while the socket lives (the drop-in
+        # socket's cadence), not only at the handshake.
+        await admin_auth.run_while_admitted(
+            ws, None, _serve(), what="state socket",
+            still=lambda: _state_socket_still_admitted(ws),
+        )
     finally:
         await broadcaster.disconnect(ws)
 
