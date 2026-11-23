@@ -109,6 +109,10 @@ class NewsFetcher(Worker):
                 ).all()
                 for (person_id,) in people:
                     topics += await news_service.fetch_person_topics(session, int(person_id))
+                    # Committed before the briefing, which may wait out a
+                    # voice turn (voice_first.py): a turn that fetches this
+                    # person's topics itself must not wait on these rows.
+                    await session.commit()
                     if await news_service.summarize_person_briefing(session, int(person_id)):
                         briefings += 1
                 await session.commit()

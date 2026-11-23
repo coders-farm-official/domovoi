@@ -1487,6 +1487,8 @@ async def _answer(
         elif dturn is not None:
             # The draft streams as the model writes it; the done row is the
             # card (its one line, and the version it wrote).
+            async for ev in _voice_first_events():
+                yield ev
             yield f"event: status\ndata: {json.dumps({'state': 'drafting', 'action': dturn.action})}\n\n"
             try:
                 async for delta in dturn.stream(model=model, stats=ollama_stats):
@@ -1526,6 +1528,8 @@ async def _answer(
             # A document turn shows nothing until the app has checked the
             # reply (review round 1): the client gets "checking" now and
             # the checked text, once, at the end.
+            async for ev in _voice_first_events():
+                yield ev
             checking = plan is not None
             if checking:
                 yield f"event: status\ndata: {json.dumps({'state': 'checking'})}\n\n"
@@ -2135,6 +2139,8 @@ async def _answer_from(
     started = time.monotonic()
     first_token_ms: float | None = None
     error = code = None
+    async for ev in _voice_first_events():
+        yield ev
     try:
         async with contextlib.aclosing(ollama_client.chat_stream(
             [system, *[{"role": t["role"], "content": t["content"]} for t in turns]], model=model,
@@ -2331,6 +2337,8 @@ async def _declined_answer(thread_id: int, history: list[dict[str, Any]], model:
     ollama_stats: dict[str, Any] = {}
     started = time.monotonic()
     error = code = None
+    async for ev in _voice_first_events():
+        yield ev
     try:
         async with contextlib.aclosing(ollama_client.chat_stream(
             [system, *history], model=model, stats=ollama_stats, num_predict=_reply_cap(),
@@ -2434,8 +2442,9 @@ async def _title_loop() -> None:
         await asyncio.sleep(TITLE_DELAY_SEC)
         while _replies_busy > 0:
             await asyncio.sleep(0.2)
-        if not _title_queue:
-            return
+        await _jobs.wait_for_voice()
+        if not _title_queue or _replies_busy > 0:
+            continue
         thread_id = _title_queue.pop(0)
         _title_running = thread_id
         try:
@@ -2449,6 +2458,15 @@ def stop_title_jobs() -> None:
     """A message, try again or voice turn is coming: the title being
     written stops (and is written later); the queue waits for the reply."""
     _stop_worker()
+
+
+async def _voice_first_events() -> AsyncIterator[str]:
+    """Before a reply asks the model: while the core answers a voice turn,
+    a ``status`` of ``waiting_for_voice`` and a wait (at most 30 s), so the
+    spoken answer isn't held up behind this reply (S3-7)."""
+    if await _jobs.voice_busy():
+        yield f"event: status\ndata: {json.dumps({'state': 'waiting_for_voice'})}\n\n"
+        await _jobs.wait_for_voice()
 
 
 def _reply_started() -> None:

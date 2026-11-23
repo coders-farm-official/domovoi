@@ -4503,7 +4503,10 @@ async def admin_chat_tool(body: _AdminChatToolBody) -> dict[str, str]:
     """
     from domovoi.letta_tools import dispatch_tool
 
-    text = await dispatch_tool(body.tool, body.args or {}, app=app)
+    # The tool works for the chat-mode turn that called it back: its model
+    # calls don't wait for voice (that turn), voice_first.py.
+    with voice_activity.exempt():
+        text = await dispatch_tool(body.tool, body.args or {}, app=app)
     return {"text": text}
 
 
