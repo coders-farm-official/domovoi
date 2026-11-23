@@ -1156,9 +1156,11 @@ house, not which device it is. So the queue and files blocklists (see the
 table below) are
 *household policy*: they apply where the dashboard and the app ask, they
 reliably keep a known device out of a room's queue, and someone determined
-can claim a different id. What changed is that the core's own queue routes
-now want the household token too, so a blocked device can no longer simply
-call port 6370 and skip the surface that asked. And the queue block covers
+can claim a different id. The core's own queue routes now want the household
+token too, so a caller without it can't use them; but the blocks are checked
+only on the dashboard's routes (port 6369), not by the core, so a blocked
+device that holds the household token can still call port 6370 directly and
+skip them. And the queue block covers
 the routes that REPLACE a room's queue as well as those that edit it
 (2026-10-08, WEB-11): play, play-track, the browser player's cast
 (play-tracks) and play-playlist refuse a blocked device with the block's
@@ -1225,6 +1227,12 @@ sampler, the model pull):
   spellings resolvers accept (`127.1`, `0x7f000001`, `2130706433`) and the
   IPv6 forms that wrap an IPv4 (`::ffff:10.0.0.1`, 6to4, NAT64) are read as
   the address they denote, not as text.
+  **A limit:** a global IPv6 address is public by this rule, including the
+  server's own and its neighbours' on a home network that hands out global
+  IPv6. A feed or a redirect naming one of those (`http://[that address]:6370/`)
+  is fetched: a blind GET at a device in the house, which anything on the
+  home network can already reach. Nothing checks the prefixes on the
+  server's own network interfaces.
 - The connection is then opened to one of the addresses that check judged,
   **not to the name again**. Left to itself an HTTP client looks the name
   up a second time when it connects, and a name whose DNS answers
@@ -2235,7 +2243,7 @@ Privacy → **Listening history** and each person's People page.
 | | |
 |---|---|
 | **What is recorded** | One row per **library song** a player played (`music_listens`): the song (by id; no title is copied), the room or the phone/browser id, which kind of player, when it started, how many seconds really played, its length, and how it ended (`finished` at 90 % or more, `skipped`, `stopped`), plus the person it was for, or nobody (the household). Streams, podcasts, audiobooks, radio and files outside the library are never recorded. No words anybody said, no address. |
-| **Who writes it** | **Rooms**: the core watches each room's music player every few seconds and writes a song when it ends; a skip from any skip path (voice "next", the dashboard's and the app's skip) marks it skipped. **Browsers and phones**: the player posts its own songs (`POST /api/music/listens`, household token), in batches, up to 7 days late from a phone that was offline; a batch sent twice lands once. The server doesn't take the player's word for everything: it works the outcome out again from the seconds played and the length (only "skipped" is the player's), refuses a batch in which one device played longer in total than the time since its first song began, and drops a device's rows past 3,000 in a day. |
+| **Who writes it** | **Rooms**: the core watches each room's music player every few seconds and writes a song when it ends; a skip from any skip path (voice "next", the dashboard's and the app's skip) marks it skipped. **Browsers and phones**: the player posts its own songs (`POST /api/music/listens`, household token), in batches, up to 7 days late from a phone that was offline; a batch sent twice lands once. The server doesn't take the player's word for everything: it works the outcome out again from the seconds played and the length (only "skipped" is the player's), refuses a batch in which one device played longer in total than the time since its first song began, and drops a device's rows past 3,000 in a day, and all phones' and browsers' rows together past 20,000 (a device id is the client's own word, so a new one each batch would slip the first cap). |
 | **Whose a song is** | **A room's**: the person whose recognised voice last started music there (an unrecognised voice: the household), or the person the phone or browser that last replaced the room's queue is claimed by (`music_room_listeners`, one row per room). That record holds only for the music it started: once the room stops, a song played after it is the household's until someone starts music again, and a room stopped for 30 minutes forgets it. **A phone's or browser's**: the person picked in its "listening as", else the person the device is claimed by ("this is me", below), else the household. **A shared screen's** are always the household's: a "listening as" pick there is ignored by the server, and the browser forgets a saved pick when it is marked shared. The "listening as" pick and every device id are **self-asserted** within the household, exactly like the spoken-audio resume positions: the household tier trusts the household, so a family member can file a song under someone else. Room queues and their "added by" stay household-visible; nothing here shows a person on a guest's screen. |
 | **How long** | **Keep listening history**: **1 year (the default)**, 90 days, or **Don't keep** (`MUSIC_LISTENS_KEEP`: `365`, `90`, `off`). The core deletes what is older every 6 hours and at once when the setting is saved (the page asks first when the new choice keeps less). **Don't keep** records nothing new and deletes everything kept, and prunes once more a minute after the save (a batch a player had on its way when the setting changed); Up next then picks from the library alone. A value written in `.env` by hand never deletes more than asked: a number rounds up (30 keeps 90 days; 0 or more than a year keeps a year), and only `off` / `don't keep` / `none` / `no` turn it off; anything unreadable keeps a year, and the log says so once. |
 | **Each person clears their own** | People → a person → **listening history · clear** deletes that person's songs, everywhere (`DELETE /api/music/listens/people/{id}`). The server allows it to **an admin** (Bearer, or a box before setup), and to **a phone or browser claimed as that person** that is not a shared screen, **presents its claim key** (below), and said "this is me" **more than 10 minutes ago**. Anything else is refused (`403`, saying why and who may) and the dashboard offers the admin password. The household's songs and other people's stay. |

@@ -279,8 +279,39 @@ async def test_api_plugins_listing_carries_the_page_errors(monkeypatch):
 
     monkeypatch.setattr(plugins_api.HOST, "rows", {"w1b": _row("w1b", [
         {"route": "videos", "page": "W1bVideosPluginPage", "nav_label": "W1b Videos"}])})
-    (entry,) = (await plugins_api.list_installed())["plugins"]
+    monkeypatch.setattr(plugins_api, "check_admin_request", _not_admin)
+    (entry,) = (await plugins_api.list_installed(None))["plugins"]
     assert entry["page_errors"] and "'videos'" in entry["page_errors"][0]
+
+
+async def _not_admin(request):
+    return "missing"
+
+
+@pytest.mark.asyncio
+async def test_a_web_module_load_error_in_full_only_for_an_admin(monkeypatch):
+    """The exception text can carry install paths: the open manifest and a
+    non-admin's plugin list say only that the module failed to load."""
+    from web.backend.api import plugins as plugins_api
+
+    text = "ImportError: No module named 'x' (/home/alex/.domovoi/plugins/w1b/web.py)"
+    host = plugin_host.PluginHost()
+    host.rows = {"w1b": _row("w1b", [{"route": "w1b", "page": "W1bPage", "nav_label": "W1b"}])}
+    host.load_errors = {"w1b": text}
+    (entry,) = host.frontend_manifest()["plugins"]
+    assert entry["web_load_error"] == plugin_host.WEB_LOAD_ERROR_OPEN
+
+    monkeypatch.setattr(plugins_api, "HOST", host)
+    monkeypatch.setattr(plugins_api, "check_admin_request", _not_admin)
+    (entry,) = (await plugins_api.list_installed(None))["plugins"]
+    assert entry["web_load_error"] == plugin_host.WEB_LOAD_ERROR_OPEN
+
+    async def _admin(request):
+        return "ok"
+
+    monkeypatch.setattr(plugins_api, "check_admin_request", _admin)
+    (entry,) = (await plugins_api.list_installed(None))["plugins"]
+    assert entry["web_load_error"] == text
 
 
 # ── the Plugins page shows the refusal instead of "enabled" ──────────

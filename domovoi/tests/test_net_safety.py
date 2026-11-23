@@ -478,6 +478,43 @@ async def test_an_allowlisted_fixture_is_fetched_but_its_redirect_is_re_checked(
             )
 
 
+class _Clock:
+    """``time`` for net_safety whose clock moves a second per reading."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def monotonic(self) -> float:
+        self.now += 1.0
+        return self.now
+
+
+def _drip():
+    while True:
+        yield b"x"
+
+
+async def _adrip():
+    while True:
+        yield b"x"
+
+
+@pytest.mark.asyncio
+async def test_a_body_that_never_ends_hits_the_whole_fetch_deadline(dns, monkeypatch) -> None:
+    """A body that keeps arriving a little at a time beats every per-read
+    timeout; the whole fetch still has an end."""
+    monkeypatch.setattr(net_safety, "time", _Clock())
+    url = "http://feeds.example.com/show.rss"
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, content=_adrip()))
+    async with httpx.AsyncClient(transport=transport) as client:
+        with pytest.raises(httpx.TimeoutException):
+            await net_safety.fetch_bytes(url, max_bytes=1 << 30, timeout=1.0, client=client)
+    sync_transport = httpx.MockTransport(lambda request: httpx.Response(200, content=_drip()))
+    with httpx.Client(transport=sync_transport) as client:
+        with pytest.raises(httpx.TimeoutException):
+            net_safety.fetch_bytes_sync(url, max_bytes=1 << 30, timeout=1.0, client=client)
+
+
 @pytest.mark.asyncio
 async def test_a_redirect_chain_that_stays_public_is_followed(dns) -> None:
     dns.set({"feeds.example.com": [str(PUBLIC_V4)], "cdn.example.com": [str(PUBLIC_V4)]})
@@ -1006,3 +1043,14 @@ async def test_a_relay_on_its_own_client_streams_from_the_address_the_check_judg
     assert net_safety.connected_address(response) == VETTED_ADDR
     assert rebinding.inside_hits == []
     assert rebinding.lookups == [VETTED_ADDR]
+
+
+@pytest.mark.parametrize("url, shown", [
+    ("https://user:pw@feeds.example.com:8443/p/feed.xml?token=abc#x",
+     "https://feeds.example.com:8443/p/feed.xml"),
+    ("http://[2001:db8::1]/rss?k=v", "http://[2001:db8::1]/rss"),
+    ("https://feeds.example.com/show.rss", "https://feeds.example.com/show.rss"),
+    (None, ""),
+])
+def test_a_url_for_a_log_line_drops_user_info_query_and_fragment(url, shown) -> None:
+    assert net_safety.url_without_secrets(url) == shown

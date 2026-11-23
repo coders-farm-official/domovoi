@@ -88,6 +88,27 @@ a way that would otherwise get reported as a bug.
   aloud (messages and shared lists).
 - Friend Houses: a friend's messages and names read aloud stay out of the
   chat model's history, and "double check that" declines such a reply.
+- A guest's "play this one" on a room that stopped in the meantime is
+  refused, so a guest never starts a stopped room.
+- A room's queue looks up the songs it can't place by path in one query
+  instead of one per entry, and a guest's queue and Up next reads leave out
+  the "why this song?" text, which comes from a listener's history.
+- The privacy page no longer says the room-queue blocks stop a device that
+  calls the core directly: the dashboard checks them, the core doesn't.
+- Radio 1.5.2: a failed station-directory search no longer logs what was
+  searched, and the log scrub blanks those search words in the directory's
+  URLs; a now-playing poll has a whole-poll deadline, so a station that
+  sends a byte now and then can't stall polling for every station.
+- The open plugin list and manifest say only that a plugin's server web
+  module failed to load; the error text is shown to an admin.
+- Feed and page fetches have a deadline for the whole answer, not just per
+  read. The privacy page notes that a global IPv6 address of the server or
+  a neighbour counts as public for outbound fetches.
+- The podcast list shows a feed URL without its query or user info (where
+  a private feed keeps its token) to a caller without the household token,
+  and podcast log lines leave them out too.
+- Listens posted by phones and browsers have a house-wide daily cap beside
+  the per-device one.
 
 ## 1.4.1 (unreleased) — Queue, downloads, podcast and Word export hardening
 

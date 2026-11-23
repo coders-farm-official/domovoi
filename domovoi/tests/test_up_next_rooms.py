@@ -680,6 +680,62 @@ async def test_insert_end_appends_without_picks_and_the_room_jumps(_db, clean, r
 
 
 @requires_db
+async def test_the_why_text_is_left_out_for_a_guest(clean, room) -> None:
+    """Each pick's "why" comes from the listener's history: the queue view
+    and the session answer leave it null when asked to (a guest's read)."""
+    from domovoi.db.session import session_scope
+
+    d = await _seed()
+    sid = await _library_start(room, d)
+    async with engine.begin() as conn:
+        await conn.execute(text(
+            "UPDATE up_next_picks SET why = CAST(:w AS jsonb) WHERE session_id = :s"),
+            {"w": '[["wildcard", ""], ["plays_often", ""]]', "s": sid})
+    queue = await room.queue_list()
+
+    def items():
+        return [dict(song_id=e["id"], file=e["file"]) for e in queue]
+
+    full, bare = items(), items()
+    await rooms.queue_view(ROOM, full)
+    await rooms.queue_view(ROOM, bare, with_why=False)
+    assert all(it["why"] for it in full[1:])
+    assert all(it["why"] is None and it["origin"] == "auto" for it in bare[1:])
+    async with session_scope() as s:
+        st = await store.active_for(s, rooms.target_for(ROOM))
+        household = await service.session_json(s, st)
+        guest = await service.session_json(s, st, with_person=False)
+    assert all(p["why"] for p in household["picks"])
+    assert guest["picks"] and all(p["why"] is None for p in guest["picks"])
+
+
+@requires_db
+async def test_queue_files_outside_the_music_folder_resolve_in_one_query(clean) -> None:
+    """A library song stored under another folder still resolves by its path
+    under the music folder, and many unknown files cost one extra query."""
+    from domovoi.db.session import session_scope
+
+    async with engine.begin() as conn:
+        tid = (await conn.execute(text(
+            "INSERT INTO library_tracks (file_path, title, artist) "
+            "VALUES ('/srv/other/Nina/far.flac', 'Far', 'Nina') RETURNING id"))).scalar_one()
+    files = ["Nina/far.flac"] + [f"Book/{i:03d}.mp3" for i in range(40)]
+    async with session_scope() as s:
+        calls = 0
+        real = s.execute
+
+        async def counting(*a, **kw):
+            nonlocal calls
+            calls += 1
+            return await real(*a, **kw)
+
+        s.execute = counting
+        got = await rooms.tracks_for_files(s, files)
+    assert got == {"Nina/far.flac": tid}
+    assert calls == 2
+
+
+@requires_db
 async def test_clear_ends_the_session_and_the_room_read(_db, clean, room, dispatched) -> None:
     d = await _seed()
     await _library_start(room, d)

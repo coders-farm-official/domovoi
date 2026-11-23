@@ -6984,7 +6984,8 @@ async def admin_music_queue(room_id: str, request: Request) -> dict[str, Any]:
     items = [_queue_entry_dict(e) for e in entries]
     # Up next (P4): each entry's origin (``auto`` for a pick) and reason,
     # its library song, and the room's session. Never a person's name.
-    view = await up_next_rooms.queue_view(room_id, items)
+    guest = guest_activity(request) is not None
+    view = await up_next_rooms.queue_view(room_id, items, with_why=not guest)
     return {
         "room_id": room_id,
         "items": items,
@@ -6992,7 +6993,7 @@ async def admin_music_queue(room_id: str, request: Request) -> dict[str, Any]:
         # Who this answer was given to: the web hop shows a guest's view
         # whenever the core says so (review finding 2) — it cannot tell
         # from what it forwarded alone.
-        "guest": guest_activity(request) is not None,
+        "guest": guest,
         # The shared queue this room hears (a group, domovoi/music_groups.py):
         # {id, name, host_room, rooms, group_id, everywhere}, or null. A
         # member's queue IS its host's.
@@ -7188,6 +7189,14 @@ async def admin_music_queue_play(
     mpd = get_mpd_client_for(room_id)
     try:
         state_before = await mpd.state()
+    except Exception as e:
+        log.warning("admin queue play MPD raised: %s", e)
+        raise _music_player_down(room_id) from e
+    if guest and state_before == "stop":
+        # The gate saw the room playing; it stopped since. A guest never
+        # starts a stopped room, and MPD's playid would.
+        raise HTTPException(status_code=403, detail=admin_auth_mod.GUEST_ROOM_IDLE_DETAIL)
+    try:
         current = await _current_song_id(mpd)
         start = state_before == "stop" and not guest
         if current is not None and current != body.song_id and state_before != "stop":
