@@ -34,7 +34,7 @@ import contextvars
 import itertools
 import time
 import weakref
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Iterator
 
 #: A turn open longer than this is treated as finished (a cold model on an
 #: all-CPU box can take a minute; nothing real takes five).
@@ -45,9 +45,11 @@ _ids = itertools.count(1)
 _last_end: float | None = None
 #: Satellite streams that may be taking in a command (``_capturing(now)``).
 _captures: "weakref.WeakSet[Any]" = weakref.WeakSet()
-#: True inside a turn's own code (and the tasks it starts): the turn's own
-#: model calls never wait for voice (:func:`in_turn`).
-_in_turn: contextvars.ContextVar[bool] = contextvars.ContextVar("voice_turn", default=False)
+#: The key of the turn whose code this is (copied into the tasks it starts),
+#: or :data:`EXEMPT`: the turn's own model calls never wait for voice, for
+#: as long as that turn is open (:func:`in_turn`).
+EXEMPT = -1
+_in_turn: contextvars.ContextVar[int | None] = contextvars.ContextVar("voice_turn", default=None)
 
 
 def watch_capture(stream: Any) -> None:
@@ -74,19 +76,36 @@ async def turn(kind: str = "voice") -> AsyncIterator[None]:
     global _last_end
     key = next(_ids)
     _open[key] = (kind, time.monotonic())
-    token = _in_turn.set(True)
+    token = _in_turn.set(key)
+    try:
+        yield
+    finally:
+        _open.pop(key, None)
+        _last_end = time.monotonic()
+        try:
+            _in_turn.reset(token)
+        except ValueError:  # left in another context than it was entered in
+            pass
+
+
+@contextlib.contextmanager
+def exempt() -> Iterator[None]:
+    """Code that works for a voice turn from outside it (a chat-mode tool
+    the model calls back for): its model calls don't wait for voice."""
+    token = _in_turn.set(EXEMPT)
     try:
         yield
     finally:
         _in_turn.reset(token)
-        _open.pop(key, None)
-        _last_end = time.monotonic()
 
 
 def in_turn() -> bool:
-    """Whether the caller is a voice turn's own code (inside :func:`turn`),
-    so a "voice first" wait would only hold the turn up behind itself."""
-    return _in_turn.get()
+    """Whether the caller is a voice turn's own code (inside :func:`turn`,
+    or a task it started) while that turn is still open, or :func:`exempt`:
+    a "voice first" wait would only hold the turn up behind itself. A task
+    a turn started that outlives it is background work again."""
+    key = _in_turn.get()
+    return key == EXEMPT or (key is not None and key in _open)
 
 
 def snapshot(now: float | None = None) -> dict[str, object]:
