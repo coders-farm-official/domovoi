@@ -4514,6 +4514,13 @@ Pairing narrows the threat from "any LAN host, any time" to "an attacker who
 is already on your LAN at the exact moment a room first pairs." On a trusted
 home LAN that window is normally the moment you provision the Pi.
 
+A first-use token is refused (`pairing_rejected`) while another socket for
+that room is connected, so a device can't claim a room that is in use and
+hear it; the real device retries once its old socket has dropped. What
+stays open: **while a room's real device is offline** (switched off, or
+after "Reset pairing" before it reconnects), a first-use token can still
+take that room's id, as above.
+
 **Strict mode (the default).** `SATELLITE_PAIRING_STRICT` defaults to
 `true` in the code, is written as `true` into a FRESH `.env` (from
 `domovoi/.env.example`) so the file says so, and is editable from the
