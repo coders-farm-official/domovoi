@@ -1810,9 +1810,9 @@ chat can answer about a photo, in airplane mode too.
 [live slot: rooms]
 
 A room is a place in the house: its name, voice, music queue, wake
-words, timers and quiet hours. Each room has one satellite, the device
-that listens and plays there: a Raspberry Pi, a spare laptop, or a phone
-in room mode. [Settings → Household → Rooms](#settings/rooms) lists the
+words, timers and quiet hours. A room has one or more satellites, the
+devices that listen and play there: a Raspberry Pi, a spare laptop, or a
+phone in room mode. [Settings → Household → Rooms](#settings/rooms) lists the
 rooms. Each card shows:
 
 - online or offline;
@@ -1842,6 +1842,20 @@ played**, **Notes**, **Timers**, **Logs**, and **Settings** (the gear).
   room**, in the same place.
 - A room's satellite replaced with new hardware: **Reset pairing** (also
   under **maintenance**), then approve the new device.
+- A second satellite in a room: set it up as usual, and when you approve
+  it, answer **Which room is it in?** with that room. Later, open the
+  room and use the satellite's **Move to another room**.
+
+**Several satellites in one room**
+
+- One wake word is one turn: the first satellite to hear it answers, the
+  others stay quiet, and Domovoi transcribes the microphone that heard you
+  best.
+- Music, answers, timers, alarms and announcements play from every
+  speaker in the room at the same moment. If they sound slightly apart,
+  open the room and press **Tune the speakers** (nothing may be playing).
+- A satellite or app from before 1.5.0 can't join in: it plays only when
+  it is the room's only satellite.
 
 **Quiet hours**
 

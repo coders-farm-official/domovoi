@@ -17,6 +17,7 @@ Short answers to common questions. For a term you don't recognize, see the [Glos
 - [Is AI optional?](#is-ai-optional)
 - [Linux or Windows for the server?](#linux-or-windows-for-the-server)
 - [How do I add rooms?](#how-do-i-add-rooms)
+- [Can a room have more than one satellite?](#can-a-room-have-more-than-one-satellite)
 - [Can an old laptop or phone be a satellite?](#can-an-old-laptop-or-phone-be-a-satellite)
 - [Why does Windows or my antivirus warn about the Windows satellite?](#why-does-windows-or-my-antivirus-warn-about-the-windows-satellite)
 - [Can the PC that runs Domovoi also be a satellite?](#can-the-pc-that-runs-domovoi-also-be-a-satellite)
@@ -71,7 +72,7 @@ One answer turns them all off: **No, keep everything in the house** in Settings 
 - An NVIDIA GPU is **not required**. The installers (the Linux script and the Windows installer) set the server up for its processor: Whisper `small.en` on the CPU, Qwen3 8B for routing (Qwen3 4B on a server with less than 24 GB of memory), Llama 3.2 3B for answers and Qwen3-VL 2B for pictures; Ollama uses a GPU by itself when there is one. A server set up by hand starts from defaults that want an NVIDIA GPU (Whisper `large-v3` on CUDA, a 14B tool-routing model); on a CPU-only or non-NVIDIA box, four settings get you a system that's instant for everyday commands and slower only for open-ended questions — see [CPU_HOST.md](CPU_HOST.md).
 - **~20 GB of free disk** for the software and all default models (the two Ollama models alone are ~11 GB), **plus** room for your own media library on top (the Windows installer asks for 40 GB free on the system drive). The full breakdown and ways to shrink it are in the README's [Disk footprint](../README.md#disk-footprint) section.
 
-**Satellites** — one small box per room you want to talk to (a room has exactly one today):
+**Satellites** — one small box for each place you want to talk to (a room can have several satellites, one is enough):
 
 - Raspberry Pi Zero 2 W (or a Pi 4) with either:
   - **ReSpeaker 2-Mics Pi HAT** (V1 or V2.0 — they use different codecs, check yours), or
@@ -121,8 +122,8 @@ The dashboard's header shows the easiest of these that works on your network; cl
 
 ## How do I add rooms?
 
-A room *is* a satellite, and every room is added from the dashboard, as
-admin, in **Settings → Household → Rooms**:
+A room is a place and a satellite is the device in it. A satellite is added
+from the dashboard, as admin, in **Settings → Household → Rooms**:
 
 1. **A Raspberry Pi:** put Raspberry Pi OS Lite (64-bit) on a microSD card,
    put the card in the server's card reader, and use **prepare a room's
@@ -136,10 +137,33 @@ admin, in **Settings → Household → Rooms**:
    approval** and press **approve**.
 3. That's it — on first connection, the server provisions that room's own
    music daemon (an MPD container with its own queue and volume) and the
-   room appears in Settings → Household → Rooms. Today a room has exactly
-   one satellite; a second device needs a room of its own.
+   room appears in Settings → Household → Rooms. To put a second
+   satellite in the same room, set it up the same way and, when you approve
+   it, answer **Which room is it in?** with that room (see
+   [Several satellites in one room](#can-a-room-have-more-than-one-satellite)).
 
 Room names matter: intercom ("announce in the kitchen…") and drop-in ("drop in on the kitchen") address rooms by the name you gave. The by-hand route (installing the satellite client and pointing it at `ws://<server>:6370` yourself) is in the [Satellite hardware guide](SATELLITE_HARDWARE.md) and `satellite/PROVISIONING.md`.
+
+## Can a room have more than one satellite?
+
+Yes, since 1.5.0 (a Pi on the counter and a phone on the shelf, say). The
+room stays one place with one name, queue, voice and set of wake words;
+each satellite is a device in it. Approve the second one into the existing
+room (**Which room is it in?**), or move a satellite later from the room's
+drawer in **Settings → Rooms**.
+
+- **One wake word, one answer.** The first satellite to hear it takes the
+  turn; the others stay quiet, and Domovoi transcribes the microphone that
+  heard you best.
+- **Every speaker plays.** Music, answers, timers, alarms, announcements
+  and plugins' speech come out of every speaker in the room at the same
+  moment. If they sound a little apart, use **Tune the speakers** in the
+  room's drawer.
+- **Older satellites** (before 1.5.0) can't join in; they play only when
+  they are the room's only satellite.
+
+More in [Satellites on spare devices](SPARE_DEVICE_SATELLITES.md#rooms-and-their-satellites)
+and [Troubleshooting](TROUBLESHOOTING.md#rooms-with-several-satellites).
 
 ## Can an old laptop or phone be a satellite?
 

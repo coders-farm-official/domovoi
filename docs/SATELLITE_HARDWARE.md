@@ -558,6 +558,14 @@ same room history; the server side doesn't change at all.
 
 ## Multi-room tips
 
+- **A room can have several satellites (1.5.0).** Put a second one where
+  the first can't hear you or doesn't reach, and approve it into the same
+  room (**Which room is it in?**). They answer one wake word once and play
+  the room's sound together: see [Rooms and their
+  satellites](SPARE_DEVICE_SATELLITES.md#rooms-and-their-satellites). Give
+  each satellite a name of its own; the room keeps its name. Mixing
+  boards is fine; the XVF3800 (on-chip echo cancellation) is the one to
+  put where people talk over music.
 - **Name rooms once, well.** `room_id` is the identity everywhere: the
   WebSocket path, intent logs, music queues, and how intercom addresses a
   room ("tell the kitchen…"). Match it to the hostname suffix and keep it
