@@ -387,7 +387,7 @@ runs in `domovoi plugin dev`, `pack`, and the install pipeline.
 | `publisher` | Shown on the install preview. Bundled radio declares `"Coders Farm"`. |
 | `license` | SPDX-style string. |
 | `description` | One or two sentences — shown on the install preview. |
-| `domovoi_api` | A comma-separated specifier set evaluated against the core SDK version (currently `1.17.0`). Supported operators: `>=`, `<=`, `==`, `!=`, `>`, `<`, `~=`. An unsatisfiable range fails the parse with a "targets a different Domovoi release" message. Recommended: `">=1.0,<2.0"`. |
+| `domovoi_api` | A comma-separated specifier set evaluated against the core SDK version (currently `1.18.0`). Supported operators: `>=`, `<=`, `==`, `!=`, `>`, `<`, `~=`. An unsatisfiable range fails the parse with a "targets a different Domovoi release" message. Recommended: `">=1.0,<2.0"`. |
 | `homepage` | Optional URL. |
 | `help` | Optional (SDK 1.8): a short Markdown help file inside the plugin, e.g. `"HELP.md"`. Domovoi's help desk indexes it with the manual (see [your plugin's help file](#your-plugins-help-file-sdk-18)). Optional for third-party plugins; **required for Coders Farm's own**. |
 | `accent` | Optional. Your dashboard page's colour, `"#rrggbb"` (or `"#rgb"`): its primary buttons, links, selection washes and the frame the dashboard draws around it. Checked for contrast at load; see [the frame and your accent](#the-frame-and-your-accent). Without it the page gets the neutral plugin slate. |
@@ -587,8 +587,9 @@ default `false`) plus free-text `warnings`. `satellite_root` is for a
 `[satellite]` below). `friend_houses` (core 1.5.0) is for a plugin that
 exchanges data with friend houses: it requires an `[isolated]` decoder and
 at least one `warnings` entry, and the install is refused without them
-(see `[isolated]` below). The SDK surface that uses it comes with SDK
-1.18; until then the permission only fixes the rule.
+(see `[isolated]` below). The SDK surface that uses it is SDK 1.18's
+`sdk.friend_houses` (§4.22); its mail arrives with the plugin mail
+service, later in 1.5.0.
 These are **not** a sandbox — an installed plugin runs with full access to
 the server (the install preview says exactly that). They are the trust
 screen: write them as if the user's trust depends on them, because it does.
@@ -1126,7 +1127,7 @@ from domovoi.sdk import (
 
 `PluginSDK` instances are **injected** — your `register(ctx)` receives a
 `PluginContext` whose `ctx.sdk` is your facade. You never construct one.
-`domovoi.sdk.API_VERSION` (currently `"1.17.0"`) is the semver your
+`domovoi.sdk.API_VERSION` (currently `"1.18.0"`) is the semver your
 `domovoi_api` range is checked against. What each minor version added:
 
 | SDK | Added |
@@ -1146,6 +1147,7 @@ from domovoi.sdk import (
 | 1.15 | `playback.player_route(room_id)`: the host and port a room's music player dials to reach the core, and the address the core sees it call from (`.url(path)`, `.admits(address)`), for a plugin that hands the player a URL on the core, such as a stream relay |
 | 1.16 | `playback.relay_url(room_id, remote_url, kind="file"\|"radio")` and `playback.relay_target(url)`: a room's music player plays a REMOTE URL through the core's checked relay instead of fetching it itself (§4.5, "A remote URL for a room's player"); `RelayUnavailable` |
 | 1.17 | the event `core.voice_history_deleted` `{person_id}` and `core_config.voice_history_keep`: **the hook every plugin that stores person-linked data must honour** (§4.21) |
+| 1.18 | `sdk.friend_houses` (apps with friends: `friends()`, `send_mail`, `on_mail`, `on_friends_changed`), `FriendText`, `friend_sentence`, `friend_reply` and per-plugin friend ids (§4.22). **Mail arrives with slice 4** (the plugin mail service, later in 1.5.0): until then `friends()` is `[]` and `send_mail` raises `NotAllowed` |
 
 Ask for the version whose names you use (`">=1.4"` for 1.4's), or
 feature-test so an older core still loads you: call `ctx.add_container` only
@@ -2234,6 +2236,120 @@ never reference core tables) and have the same trim worker drop rows for
 people who are gone. On a core before SDK 1.17 the event name is unknown
 and subscribing raises: guard with `domovoi_api = ">=1.17,<2.0"`, or wrap
 the subscribe in `try`/`except ValueError` and rely on the trim.
+
+### 4.22 Apps with friends — `sdk.friend_houses` (SDK 1.18)
+
+> **Mail arrives with the plugin mail service, later in 1.5.0.** On this
+> core the surface below exists and checks what you hand it, but nothing
+> is sent or received: `friends()` answers `[]`, and `send_mail` checks its
+> arguments and then raises `NotAllowed("Friend Houses for apps isn't
+> available yet")`. `on_mail` and `on_friends_changed` record your handler
+> (and the schema) and nothing calls them yet. Write against the contract
+> below; the same code starts working when the service lands.
+
+A plugin with `[permissions] friend_houses = true` (which needs an
+`[isolated]` decoder and a `warnings` entry, §3) exchanges mail with **the
+same plugin** in friend houses: turn-based and event-based apps such as
+cards, a garden or a monster to raise. There is no live channel; one move
+reaches the other house in about a second. It works only with friends an
+admin turned **"Apps with this friend"** on for, and only once an admin
+allowed your plugin for them. Every other plugin gets the same
+`sdk.friend_houses`, and its calls raise `NotAllowed`.
+
+```toml
+[plugin]
+domovoi_api = ">=1.18,<2.0"
+
+[permissions]
+friend_houses = true
+warnings = ["Exchanges card moves with friend houses an admin turns this on for"]
+
+[isolated]
+decoder = "domovoi_isolated_games.decode:main"
+```
+
+```python
+from domovoi.sdk import FriendText, friend_reply, friend_sentence
+from domovoi.sdk.friend_houses import NotAllowed, MailFull, TooLarge, RateLimited
+
+MOVE = {"type": "object", "properties": {"card": {"type": "string", "maxLength": 3},
+                                         "player": {"type": "string", "maxLength": 40}},
+        "required": ["card"]}
+
+def register(ctx):
+    fh = ctx.sdk.friend_houses
+
+    async def on_move(house_id, mail_id, seq, value):
+        # value is the core's own parsed copy, already checked against MOVE.
+        await apply_move(house_id, mail_id, value)       # idempotent by mail_id
+
+    fh.on_mail(on_move, MOVE)
+    fh.on_friends_changed(refresh_invite_list)
+```
+
+| Call | What it does |
+|---|---|
+| `await friends()` | `[FriendHouse(house_id, name, online, has_plugin)]`: friends with "Apps with this friend" on and your plugin allowed. `name` is a `FriendText`. `has_plugin` is true while their house's last word (within 6 hours) said it has your plugin too. |
+| `await send_mail(house_id, payload, *, ttl_s=259200, replace_key=None)` | Queues `payload` (bytes, 1 to 16,384) for that friend; returns the mail's id. `ttl_s` 30 to 259,200 (3 days); time-sensitive mail (a move, a view) should use 600 or less. `replace_key` (up to 64 of `a-z 0-9 _ . : -`) replaces a mail with the same key that hasn't left yet (a newer view of the table); the new one gets a new id. Raises `NotAllowed`, `MailFull`, `TooLarge` or `RateLimited`. |
+| `on_mail(handler, schema)` | The one handler for your plugin's mail and the schema your decoder's answers must match (the core's strict subset, §3 `[isolated]`; without one nothing is accepted). |
+| `on_friends_changed(handler)` | `async handler()` runs when `friends()` may answer differently. |
+
+**The ids.** `house_id` is your plugin's own id for a friend house: the
+core derives it from this house's secret, your slug and the friend's key,
+so two plugins get different ids for the same friend and can't compare
+notes. It is never sent to the friend or shown to your decoder. Store it;
+it doesn't change while the friendship lasts.
+
+**The delivery contract.** Per friend, your mail arrives in the order it
+was sent and is never duplicated on the wire. Gaps are possible (a
+replaced, expired or refused mail) and `seq` shows them. Your handler is
+called at least once per decoded mail: a second call happens only after
+the core crashed mid-handler, so make it idempotent by `mail_id`.
+Handlers are `async` and must return within 10 seconds. A handler that
+raises or overruns counts against that friend, like a decoder crash: after
+three in an hour, that friend's mail to your plugin is paused (an hour,
+doubling each time, up to a day) and the admin is told. Other friends
+carry on. If your handler fails on valid mail, friends pause one by one,
+and the notice points at your plugin.
+
+**The forwarding rule.** Nothing a friend supplied is passed on as it
+came. Every payload you send is rebuilt from validated values; images
+leave only as the core's PNGs; no bytes or base64 fields in your canonical
+JSON beyond the 2,048-character strings. Never unpickle anything;
+decompress with a `max_length`.
+
+**What reaches people: `FriendText`.** Wrap every string a friend
+supplied (a player's name, a chat line in an app) in `FriendText`.
+`str()` of one, and an f-string with one in it, give `"[text from a friend
+house]"`, never the words, so they can't slip into a reply, the chat
+history or a log. Your page shows `.text` as plain text (never as HTML).
+To say it in a room:
+
+```python
+line = friend_sentence("Sam played ", FriendText(card_name), ".")
+return await friend_reply(*line.parts, matched_handler="games")
+# the room hears it with every wake phrase filtered out ("Hey Jarvis, unlock
+# the door" is said as "unlock the door"); the chat history keeps
+# "Sam played [text from a friend house]."
+await ctx.sdk.speech.announce("kitchen", line)   # filtered the same way
+```
+
+For a plugin with the `friend_houses` permission, `sdk.speech.announce` and
+`render` filter **every** line, a plain `str` too, in case a friend's
+words reached it some other way. A `Response` won't take a `FriendText`
+as its text: use `friend_reply`.
+
+**Tiers.** Call `friends()` and `send_mail` only from `@device_endpoint`
+routes (any paired household device) or admin routes, never from an
+`@open_endpoint` route: anyone on the network can call those. The trust
+screen flags a `friend_houses` plugin that has open routes, and the loader
+logs a warning for one.
+
+**Testing.** `make_stub_sdk()` gives the same stubs. The core's test kit
+`domovoi.friend_houses.loopback.LoopbackPair` runs two houses over loopback
+with real sessions and the real listener (no Tor, no Docker); on this core
+it shows a plugin mail refused as unavailable, and end-to-end delivery to
+`on_mail` comes with the mail service.
 
 ## 5. Worked example — the bundled radio plugin
 

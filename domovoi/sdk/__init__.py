@@ -75,7 +75,12 @@ from __future__ import annotations
 #         it), after a person's voice history or all of it is deleted, and
 #         core_config.voice_history_keep: the hook any plugin keeping
 #         person-linked data must honour (security review M8).
-API_VERSION = "1.17.0"
+# 1.18.0: sdk.friend_houses (apps with friends, [permissions] friend_houses):
+#         friends(), send_mail(), on_mail(handler, schema),
+#         on_friends_changed(); FriendText, friend_sentence, friend_reply and
+#         per-plugin friend ids. Mail arrives with the plugin mail service:
+#         until then friends() is [] and send_mail raises NotAllowed.
+API_VERSION = "1.18.0"
 
 from domovoi.capabilities import (  # noqa: E402,F401
     CAPABILITIES,
@@ -110,6 +115,13 @@ from domovoi.sdk.facade import (  # noqa: E402,F401
     PluginDB,
     PluginSDK,
     build_sdk,
+)
+from domovoi.sdk.friend_houses import (  # noqa: E402,F401
+    FriendHouse,
+    FriendHousesAPI,
+    FriendText,
+    friend_reply,
+    friend_sentence,
 )
 from domovoi.sdk.household import HouseholdAPI, PlacesAPI  # noqa: E402,F401
 from domovoi.sdk.http import HttpFactory  # noqa: E402,F401
@@ -168,6 +180,11 @@ __all__ = [
     "CoreConfigView",
     "EventsView",
     "FastPath",
+    "FriendHouse",
+    "FriendHousesAPI",
+    "FriendText",
+    "friend_reply",
+    "friend_sentence",
     "Handler",
     "HandlerDisplay",
     "HouseholdAPI",

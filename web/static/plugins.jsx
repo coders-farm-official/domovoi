@@ -18,7 +18,18 @@ const PERMISSION_LABELS = {
   subprocess: 'spawns external processes on your machine',
   hardware: 'touches USB / audio hardware',
   filesystem_outside_data: 'writes files outside its own data directory',
+  friend_houses: 'talks to friend houses (apps with friends)',
 };
+
+/* The trust screen's lines for a friend_houses plugin (SDK 1.18, design
+ * FRIEND-HOUSES-PLUGINS §9), and its flag for one with open routes
+ * (review D13). */
+const FRIEND_APPS_TRUST = [
+  'It talks only with friend houses an admin turns “Apps with this friend” on for, and only once an admin allows this app for them.',
+  'Those friends’ houses see that this app is installed here.',
+  'What a friend sends is decoded in a locked-down container first, and a friend’s words are filtered before a room says them; the chat history never keeps them.',
+];
+const FRIEND_APPS_OPEN_ROUTES = 'It also has endpoints anyone on your network can call without signing in. Those must never reach friend houses; check that you trust the publisher.';
 
 /* An update's trust screen against the plugin it replaces (M6, review
  * 2026-11-23): what the new package says that the installed one didn't.
@@ -251,6 +262,21 @@ const TrustConfirmModal = ({ stagedId, preview, sourceLabel, verb, installed = n
             <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
               This plugin runs Docker containers but doesn't declare them, so the container guard
               won't watch them.
+            </div>
+          )}
+
+          {perms.friend_houses && (
+            <div className="plugin-friend-apps" style={{ border: '1px solid var(--border)', borderRadius: 'var(--r-sm)',
+                          padding: '10px 12px', fontSize: 12, lineHeight: 1.5 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontWeight: 600, marginBottom: 4 }}>
+                <Icon name="users" size={13}/> apps with friends
+              </div>
+              {FRIEND_APPS_TRUST.map((line, i) => <div key={i}>{line}</div>)}
+              {p.friend_houses_open_routes && (
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', color: 'var(--warn-ink)', paddingTop: 4 }}>
+                  <Icon name="alert-triangle" size={13}/> {FRIEND_APPS_OPEN_ROUTES}
+                </div>
+              )}
             </div>
           )}
 

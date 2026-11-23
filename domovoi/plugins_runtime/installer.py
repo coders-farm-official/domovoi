@@ -43,7 +43,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from domovoi import egress, executors, net_safety
 from domovoi.auth import require_admin
 from domovoi.plugins_runtime import registry as reg
-from domovoi.plugins_runtime.contracts import ContractError
+from domovoi.plugins_runtime.contracts import ContractError, friend_houses_open_routes
 from domovoi.plugins_runtime import loader as _loader
 from domovoi.plugins_runtime.loader import LOADER, code_imported, installed_root
 from domovoi.plugins_runtime.lockfile import (
@@ -993,6 +993,9 @@ async def stage_zip(
             # device_endpoints to any paired household device.
             "open_endpoints": marked["open"],
             "device_endpoints": marked["device"],
+            # SDK 1.18 (review D13): a plugin that talks to friend houses
+            # and also answers with no sign-in gets its own flag.
+            "friend_houses_open_routes": friend_houses_open_routes(manifest, marked["open"]),
             # What lands on every satellite, as root, if the admin confirms
             # (§7.5): the package list, the script, the pinned pips and the
             # size of the file payload — its own panel on the trust screen,

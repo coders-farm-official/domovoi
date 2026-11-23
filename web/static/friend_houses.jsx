@@ -906,6 +906,9 @@ const FhFriend = ({ friend, quiet, fire, onChanged, onMessage, onShare }) => {
         </div>
       )}
       <FhAlertChoice friend={friend} quiet={quiet} fire={fire} onChanged={onChanged}/>
+      {/* Apps with this friend (friend_apps.jsx): hidden until the plugin
+          mail service wires it; fhAppsShown() is off in production. */}
+      {typeof fhAppsShown === 'function' && fhAppsShown() && <FhFriendApps friend={friend}/>}
       <div style={fhRow}>
         <span style={fhMuted}>fingerprint</span>
         <FhFingerprint value={friend.fingerprint} fire={fire}/>

@@ -786,3 +786,39 @@ async def test_an_unblock_needs_a_house_key(monkeypatch, forwarded) -> None:
             r = await c.delete(f"/api/friend-houses/blocked/{bad}")
             assert r.status_code == 404, (bad, r.status_code)
     assert forwarded == []
+
+
+# ─── apps with friends (SDK 1.18): admin only, once the routes exist ─────
+
+#: The dashboard mirrors slice 4 adds (design note §6.11).
+FRIEND_APPS_PLANNED = [
+    ("GET", "/api/friend-houses/friends/{friend_id}/apps"),
+    ("PUT", "/api/friend-houses/friends/{friend_id}/apps"),
+    ("PUT", "/api/friend-houses/friends/{friend_id}/apps/{slug}"),
+    ("POST", "/api/friend-houses/friends/{friend_id}/apps/{slug}/resume"),
+]
+
+
+def test_no_apps_route_is_on_the_household_tier() -> None:
+    assert not [r for r in HOUSEHOLD_ROUTES if "/apps" in r[1]]
+    assert not set(FRIEND_APPS_PLANNED) & HOUSEHOLD_ROUTES
+
+
+def _apps_routes() -> list[tuple[str, str]]:
+    return sorted({(m, r.path) for r in iter_route_contexts(web_app.routes)
+                   if getattr(r, "path", "").startswith("/api/friend-houses") and "/apps" in r.path
+                   for m in r.methods})
+
+
+@pytest.mark.asyncio
+async def test_the_household_token_is_refused_on_every_apps_route(monkeypatch, forwarded) -> None:
+    # None exist before the plugin mail service; each one it adds is tried
+    # here with a household phone's token, and must be refused unforwarded.
+    install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN}, device_token=HOUSEHOLD_TOKEN)
+    async with _client({admin_auth.DEVICE_TOKEN_HEADER: HOUSEHOLD_TOKEN}) as c:
+        for method, path in _apps_routes():
+            url = path.replace("{friend_id}", "f1").replace("{slug}", "games")
+            body = {} if method in ("PUT", "POST") else None
+            r = await (c.request(method, url, json=body) if body is not None else c.request(method, url))
+            assert r.status_code in (401, 403), (method, path, r.status_code)
+    assert forwarded == []
