@@ -9965,6 +9965,7 @@ def _reset_admin_cli() -> None:
         print(f"new setup code: {code}")
         print(f"(also written to {admin_auth_mod.setup_code_path()})")
         print("open the dashboard to choose a new admin password.")
+        admin_auth_mod._print_setup_qr(code)
     else:
         print("a new setup code was written (not shown: stdout is not a terminal).")
         print(admin_auth_mod.setup_code_whereabouts() + ".")

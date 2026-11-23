@@ -178,7 +178,10 @@ signature, before it runs it.
    way: passwords, tokens and setup codes are blanked as far as Setup can
    recognise them.
 9. **Shows your setup code** once, with a **Copy** button, **Open
-   Domovoi**, and the steps to the admin account in the dashboard's own
+   Domovoi**, **Set up from a phone** (1.5.0: a QR code of the dashboard's
+   address on your network with the code in its `#` part, which a phone's
+   camera opens with the code filled in; shown when Setup knows this PC's
+   network address), and the steps to the admin account in the dashboard's own
    words. The code works for 24 hours (a restart of the service writes a
    fresh one). **Open Domovoi** copies the code too and opens the
    dashboard, which greets you with **Welcome to Domovoi!**, its

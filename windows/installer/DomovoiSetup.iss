@@ -232,13 +232,19 @@ var
   FailureText: String;
   UndoOnExit: Boolean;
   SetupCodeText: String;
+  { The setup-code QR (1.5.0): the helper's qr_size= and qr= (one '1' or
+    '0' a module, row by row), for the dashboard's address on the network
+    with the code in the URL fragment (windows/helper/SetupQr.cs). Kept in
+    memory like the code; empty when the helper had no LAN address. }
+  SetupQrSize: Integer;
+  SetupQrBits: String;
   GpuRaw, TierText: String;
   { The network name DomovoiHost holds (domovoi.local, or domovoi2.local ...),
     from host-status's lan_name; empty when none (docs/WINDOWS_HOST.md). }
   LanName: String;
   CodeTitle, CodeHint, LanText: TNewStaticText;
   CodeEdit: TNewEdit;
-  CopyButton, OpenButton, CopyLogsButton: TNewButton;
+  CopyButton, OpenButton, CopyLogsButton, PhoneCodeButton: TNewButton;
   StopButton: TNewButton;
   StopRequested: Boolean;
 
@@ -1217,6 +1223,67 @@ begin
     Result := Result + ' Model size: ' + Tier + '.';
 end;
 
+{ The setup-code QR in a window of its own: the dashboard's address on
+  this network with the code in the fragment (never the path or query, so
+  it never reaches a log), which a phone's camera opens with the code
+  filled in. Drawn here from the helper's modules: no image file holds the
+  code. }
+procedure PhoneCodeClick(Sender: TObject);
+var
+  F: TSetupForm;
+  Img: TBitmapImage;
+  Lead: TNewStaticText;
+  CloseButton: TNewButton;
+  N, Cell, Quiet, Side, X, Y, W: Integer;
+begin
+  N := SetupQrSize;
+  if (N <= 0) or (Length(SetupQrBits) <> N * N) then
+    Exit;
+  Quiet := 4;
+  Cell := ScaleX(6);
+  Side := (N + 2 * Quiet) * Cell;
+  W := Side + ScaleX(40);
+  if W < ScaleX(360) then
+    W := ScaleX(360);
+  F := CreateCustomForm(W, Side + ScaleY(130), False, True);
+  try
+    F.Caption := 'Domovoi on your phone';
+    Lead := TNewStaticText.Create(F);
+    Lead.Parent := F;
+    Lead.WordWrap := True;
+    Lead.Caption := 'Point your phone''s camera at the code. It opens Domovoi with your setup code filled in: choose an admin password there. The phone must be on the same Wi-Fi as this PC.';
+    Lead.SetBounds(ScaleX(20), ScaleY(14), W - ScaleX(40), ScaleY(48));
+    Lead.AdjustHeight;
+    Img := TBitmapImage.Create(F);
+    Img.Parent := F;
+    Img.SetBounds((W - Side) div 2, Lead.Top + Lead.Height + ScaleY(12), Side, Side);
+    Img.Bitmap.Width := Side;
+    Img.Bitmap.Height := Side;
+    Img.Bitmap.Canvas.Brush.Color := clWhite;
+    Img.Bitmap.Canvas.Pen.Color := clWhite;
+    Img.Bitmap.Canvas.Rectangle(0, 0, Side, Side);
+    Img.Bitmap.Canvas.Brush.Color := clBlack;
+    Img.Bitmap.Canvas.Pen.Color := clBlack;
+    for Y := 0 to N - 1 do
+      for X := 0 to N - 1 do
+        if SetupQrBits[Y * N + X + 1] = '1' then
+          Img.Bitmap.Canvas.Rectangle((X + Quiet) * Cell, (Y + Quiet) * Cell, (X + Quiet + 1) * Cell, (Y + Quiet + 1) * Cell);
+    CloseButton := TNewButton.Create(F);
+    CloseButton.Parent := F;
+    CloseButton.Caption := 'Close';
+    CloseButton.ModalResult := mrOk;
+    CloseButton.Default := True;
+    CloseButton.Cancel := True;
+    CloseButton.SetBounds(W - ScaleX(95), Img.Top + Side + ScaleY(14), ScaleX(75), ScaleY(23));
+    F.ClientHeight := CloseButton.Top + CloseButton.Height + ScaleY(12);
+    F.ActiveControl := CloseButton;
+    F.FlipAndCenterIfNeeded(True, WizardForm, False);
+    F.ShowModal;
+  finally
+    F.Free;
+  end;
+end;
+
 procedure CopyLogsClick(Sender: TObject);
 begin
   CopyLogs(AppHelper, 'install', '');
@@ -1247,6 +1314,10 @@ begin
   OpenButton.Parent := P;
   OpenButton.Caption := 'Open Domovoi';
   OpenButton.OnClick := @OpenDomovoiClick;
+  PhoneCodeButton := TNewButton.Create(WizardForm);
+  PhoneCodeButton.Parent := P;
+  PhoneCodeButton.Caption := 'Set up from a phone';
+  PhoneCodeButton.OnClick := @PhoneCodeClick;
   CopyLogsButton := TNewButton.Create(WizardForm);
   CopyLogsButton.Parent := P;
   CopyLogsButton.Caption := 'Copy logs';
@@ -1275,6 +1346,7 @@ begin
   { One of the two shows: Open Domovoi after an install, Copy logs after a failure. }
   OpenButton.SetBounds(X, Y, ScaleX(120), ScaleY(25));
   CopyLogsButton.SetBounds(X, Y, ScaleX(120), ScaleY(25));
+  PhoneCodeButton.SetBounds(X + ScaleX(128), Y, ScaleX(150), ScaleY(25));
   Y := Y + ScaleY(32);
   LanText.SetBounds(X, Y, W, ScaleY(60));
   LanText.AdjustHeight;
@@ -1290,6 +1362,7 @@ begin
   CopyButton.Visible := HasCode;
   CodeHint.Visible := HasCode;
   OpenButton.Visible := InstallOk;
+  PhoneCodeButton.Visible := HasCode and (SetupQrSize > 0);
   CopyLogsButton.Visible := not InstallOk and FileExists(AppHelper);
   LanText.Visible := True;
   if InstallOk then
@@ -1523,6 +1596,16 @@ begin
   end;
 end;
 
+{ --lan-ip for the setup-code verb: this PC's address as the preflight
+  found it, for the QR a phone scans (the helper checks it is a usable
+  IPv4 address, and leaves the QR out otherwise). }
+function LanIpArg: String;
+begin
+  Result := '';
+  if LanIp <> '' then
+    Result := ' --lan-ip ' + AddQuotes(LanIp);
+end;
+
 function ReadSetupCode: String;
 var
   Lines: TArrayOfString;
@@ -1532,9 +1615,16 @@ begin
   for Tries := 1 to 5 do
   begin
     ProgressPage.SetText('Reading your setup code', '');
-    if RunHelper(AppHelper, 'setup-code', Lines, Code) and (Code = 0) then
+    if RunHelper(AppHelper, 'setup-code' + LanIpArg, Lines, Code) and (Code = 0) then
     begin
       Result := KvValue(Lines, 'code');
+      SetupQrSize := StrToIntDef(KvValue(Lines, 'qr_size'), 0);
+      SetupQrBits := KvValue(Lines, 'qr');
+      if (SetupQrSize < 21) or (SetupQrSize > 177) or (Length(SetupQrBits) <> SetupQrSize * SetupQrSize) then
+      begin
+        SetupQrSize := 0;
+        SetupQrBits := '';
+      end;
       SetArrayLength(Lines, 0);
       if Result <> '' then
         Exit;
@@ -2353,6 +2443,8 @@ var
 begin
   { The code was only ever in memory; drop it. }
   SetupCodeText := '';
+  SetupQrSize := 0;
+  SetupQrBits := '';
   if UpdateMode then
   begin
     UndoOnExit := False;

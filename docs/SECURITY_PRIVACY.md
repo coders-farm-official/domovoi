@@ -1708,6 +1708,42 @@ reason, so a new route cannot quietly ship open.
   that window re-uses the same code rather than invalidating the one you
   already wrote down; a restart after it writes a fresh one. The code file
   is deleted the moment setup completes.
+- **The setup-code QR (1.5.0).** Where the code is already on a screen,
+  a QR code of it is shown next to it, which a phone's camera opens:
+  `http://<server's LAN address>:6369/#setup-code=<code>`. The places are
+  the core's first-run banner and `--reset-admin` (only when stdout is a
+  terminal, the rule above), `python -m domovoi.setup_qr` run as the
+  core's user at a terminal (it reads the same 0600 file; redirected, it
+  prints only where the file is), and the Windows installer's last page
+  (**Set up from a phone**: the helper sends the modules over the same
+  stdout pipe as the code, and Setup draws them; no image file holds the
+  code). Nothing else shows it, and **no endpoint returns the code or its
+  QR**: the dashboard never has the code to show. The rules:
+  - **The fragment only.** The code is after the `#` and nowhere else:
+    never in the path or the query. A browser does not send the fragment
+    to the server, not in the request line and not in a `Referer`, so the
+    code does not reach the web process's access log, a proxy's log, or
+    another site. `domovoi/setup_qr.py` refuses a dashboard address that
+    has a path, query or fragment of its own.
+  - **Read in the page, then cleared.** `web/static/setup_fragment.js`, the
+    first script in `index.html` (before the hash router reads the
+    address), takes the code, puts the address back without the fragment
+    (`history.replaceState`, path and query kept; any other fragment, such
+    as a page route, is left alone), and keeps the code in the page's
+    memory only: no storage, no cookie, no request. The claim form (the
+    first-run welcome, which a scan opens even after "Not now", and the
+    admin setup dialog) starts with the code filled in and posts it exactly
+    as a typed one: `POST /api/auth/setup` with the code in the body, the
+    same backoff, the same checks.
+  - **Nothing else changes.** The code's 24-hour window, its single use
+    and the file it lives in are as above.
+  - **Residual.** The phone's browser may keep the opened address, with
+    its fragment, in its own history list (`replaceState` changes the
+    address bar and the Back entry, not every browser's history store).
+    The code is single-use and expires after 24 hours, so that copy is
+    useless once the house is claimed. Anyone who can see the screen can
+    scan the QR, as they could read the code; show it where you would show
+    the code.
 - **The password** is hashed with **argon2id**; only the hash is stored (a
   single row in Postgres). Minimum 10 characters. **Changing it revokes
   every other session** — only the session that made the change stays

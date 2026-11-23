@@ -18,6 +18,7 @@ using System.ServiceProcess;
 using System.Text;
 using System.Threading;
 using Microsoft.Win32;
+using Domovoi.Windows.Tray;
 
 namespace Domovoi.Windows.Helper
 {
@@ -559,7 +560,11 @@ namespace Domovoi.Windows.Helper
         // code=... for Setup's finish page, and nowhere else. The request
         // file (host\in, admin-only) is deleted here; the answer (host\out)
         // is the host's to delete once the request is gone.
-        public static int ReadSetupCode(Output o)
+        //
+        // With --lan-ip (this PC's address on the network, as Setup's
+        // preflight found it), also the setup-code QR (SetupQr.cs): qr_size=
+        // and qr= on stdout, right after code=, and likewise nowhere else.
+        public static int ReadSetupCode(Output o, string lanIp)
         {
             using (var key = new SetupCodeKey())
             {
@@ -584,7 +589,15 @@ namespace Domovoi.Windows.Helper
                     string code = key.Decrypt(Json.Str(resp, "ciphertext"));
                     if (!SetupCode.IsWellFormed(code)) throw new InvalidOperationException("the answer is not a setup code");
                     o.Kv("code", code);
-                    o.LogOnly("read the setup code through DomovoiHost (shown on Setup's last page only)");
+                    string url = SetupQr.ClaimUrl(lanIp, code);
+                    if (url != null)
+                    {
+                        QrCode q = SetupQr.Encode(url);
+                        o.Kv("qr_size", q.Size.ToString(CultureInfo.InvariantCulture));
+                        o.Kv("qr", SetupQr.Bits(q));
+                    }
+                    o.LogOnly("read the setup code through DomovoiHost (shown on Setup's last page only"
+                        + (url != null ? ", with its QR code)" : ")"));
                     return 0;
                 }
                 finally

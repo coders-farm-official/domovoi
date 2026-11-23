@@ -341,7 +341,9 @@ which asks one more question: whether to include AI chat. Expect half an
 hour or more, most of it downloads. At the end it prints the address to
 open from a phone or computer on your network, `http://<server>:6369`,
 and how to read the setup code to claim it with
-([SETUP_RUNBOOK.md, Step 3](SETUP_RUNBOOK.md#step-3--claim-admin-and-configure-for-your-hardware)).
+([SETUP_RUNBOOK.md, Step 3](SETUP_RUNBOOK.md#step-3--claim-admin-and-configure-for-your-hardware)),
+including the command that shows it as a QR code a phone can scan
+(`python -m domovoi.setup_qr`, as the service user, in a terminal).
 If it stops, run the same command again: finished steps are skipped.
 
 **How it checks the download, before running any of it.** The commit it

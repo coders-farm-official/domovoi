@@ -72,6 +72,8 @@ const SHELL_ASSETS = [
   '/index.html',
   '/colors_and_type.css',
   '/styles.css',
+  // Read first, in <head>: the setup-code QR's fragment (setup_fragment.js).
+  '/setup_fragment.js',
   '/auth.js',
   '/data.js',
   // The address to share in the header (components.jsx ShareAddressButton).

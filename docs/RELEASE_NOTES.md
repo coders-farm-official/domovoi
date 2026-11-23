@@ -47,6 +47,7 @@ a way that would otherwise get reported as a bug.
   model card doesn't name its training data (docs/LICENSES.md). There is
   no export of face data; database backups include it. A face-only person
   appears on the People page like any other.
+
 ## 1.5.0 (unreleased) — Videos: scenes, what is said, keyframes, a summary
 
 - **What changed.** With "Understand photos and videos" on, the background
@@ -87,6 +88,23 @@ a way that would otherwise get reported as a bug.
   and videos" **off** until an admin turns it on; a new install starts
   with it on. Faces and photo locations are off for everyone. Nothing is
   written into the media files.
+
+## 1.5.0 (unreleased) — A QR code for the setup code
+
+- **What changed.** Where the setup code is shown (the core's terminal
+  banner and `--reset-admin` in a terminal, the Windows installer's last
+  page under **Set up from a phone**, and the new
+  `python -m domovoi.setup_qr` the Linux installer now names), a QR code
+  is shown with it. A phone's camera opens the dashboard with the code
+  already in the claim form. The code rides in the address's `#` part
+  only (`http://<server>:6369/#setup-code=<code>`), which no request
+  carries, and the page clears it from the address bar at once.
+- **What to know.** No endpoint returns the code, and its 24-hour window
+  and single use are unchanged; the claim still posts it to
+  `POST /api/auth/setup` as typing does. A phone app that opens
+  dashboard links itself needs to pass the `#setup-code=` fragment through
+  unchanged (and never move it into a path or query) for the form to fill
+  in.
 
 ## 1.5.0 (unreleased) — Security: pairing proof v2, chat reads, music-mix claim key
 
@@ -2721,6 +2739,7 @@ Stand By Me"). When a media-provider plugin finds nothing that carries the
 words you asked for, the answer is "I couldn't find anything called …";
 the media-provider plugin's next release stops streaming an unrelated
 result in that case.
+
 ## 2026-11-12 — Music keeps going after a streamed song
 
 When a song you don't have is streamed into a room (say "play" a song
@@ -8832,6 +8851,7 @@ In this order (`curl -s http://<server>:6370/v1/stats/latency?since=<restart tim
   again (`voiced_after_end_ms`, `listened_after_end_ms`). Its
   `utterance_end` for such a capture comes that much later; nothing waits
   for it. An older core ignores the fields.
+
 ## 2026-09-30 — Timers and reminders reach the whole house
 
 ### Do this once, after upgrading
