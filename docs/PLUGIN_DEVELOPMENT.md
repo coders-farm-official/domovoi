@@ -381,7 +381,7 @@ runs in `domovoi plugin dev`, `pack`, and the install pipeline.
 | `publisher` | Shown on the install preview. Bundled radio declares `"Coders Farm"`. |
 | `license` | SPDX-style string. |
 | `description` | One or two sentences — shown on the install preview. |
-| `domovoi_api` | A comma-separated specifier set evaluated against the core SDK version (currently `1.15.0`). Supported operators: `>=`, `<=`, `==`, `!=`, `>`, `<`, `~=`. An unsatisfiable range fails the parse with a "targets a different Domovoi release" message. Recommended: `">=1.0,<2.0"`. |
+| `domovoi_api` | A comma-separated specifier set evaluated against the core SDK version (currently `1.16.0`). Supported operators: `>=`, `<=`, `==`, `!=`, `>`, `<`, `~=`. An unsatisfiable range fails the parse with a "targets a different Domovoi release" message. Recommended: `">=1.0,<2.0"`. |
 | `homepage` | Optional URL. |
 | `help` | Optional (SDK 1.8): a short Markdown help file inside the plugin, e.g. `"HELP.md"`. Domovoi's help desk indexes it with the manual (see [your plugin's help file](#your-plugins-help-file-sdk-18)). Optional for third-party plugins; **required for Coders Farm's own**. |
 | `accent` | Optional. Your dashboard page's colour, `"#rrggbb"` (or `"#rgb"`): its primary buttons, links, selection washes and the frame the dashboard draws around it. Checked for contrast at load; see [the frame and your accent](#the-frame-and-your-accent). Without it the page gets the neutral plugin slate. |
@@ -978,7 +978,7 @@ from domovoi.sdk import (
 
 `PluginSDK` instances are **injected** — your `register(ctx)` receives a
 `PluginContext` whose `ctx.sdk` is your facade. You never construct one.
-`domovoi.sdk.API_VERSION` (currently `"1.15.0"`) is the semver your
+`domovoi.sdk.API_VERSION` (currently `"1.16.0"`) is the semver your
 `domovoi_api` range is checked against. What each minor version added:
 
 | SDK | Added |
@@ -995,7 +995,8 @@ from domovoi.sdk import (
 | 1.12 | `core_config.news_location` (the household's place); a plugin registering the `"weather"` capability takes weather questions over from core |
 | 1.13 | `sdk.household.home_location()` (async: the Home location `{name, lat, lon, country}` or `None`; `lat`/`lon`/`country` are `None` for a name that matched no town) and `sdk.places.suggest(text, limit=8)` (the bundled GeoNames town list, offline, biggest first; same shape); `core_config.news_location` is now the Home location's name (§4.13) |
 | 1.14 | `[[web.home_cards]]`: a plugin card on the dashboard Home page (§3) |
-| 1.15 | `playback.player_route(room_id)`: the host and port a room's music player dials to reach the core, and the address the core sees it call from (`.url(path)`, `.admits(address)`), for a plugin that hands the player a URL on the core, such as the radio plugin's stream relay |
+| 1.15 | `playback.player_route(room_id)`: the host and port a room's music player dials to reach the core, and the address the core sees it call from (`.url(path)`, `.admits(address)`), for a plugin that hands the player a URL on the core, such as a stream relay |
+| 1.16 | `playback.relay_url(room_id, remote_url, kind="file"\|"radio")` and `playback.relay_target(url)`: a room's music player plays a REMOTE URL through the core's checked relay instead of fetching it itself (§4.5, "A remote URL for a room's player"); `RelayUnavailable` |
 
 Ask for the version whose names you use (`">=1.4"` for 1.4's), or
 feature-test so an older core still loads you: call `ctx.add_container` only
@@ -1219,6 +1220,60 @@ failure. A LAN stream (an SDR tuner, a NAS) still plays. Also: `stop(room_id)`, 
 `mpd_stream_url_for(room_id)`, and `update_library_all_rooms()` (each
 per-room MPD has its own database and Docker Desktop drops host inotify —
 after writing files you must tell every daemon to rescan).
+
+**A remote URL for a room's player** (SDK 1.16). A room's music player is
+a container that fetches whatever URL it is given, with its own DNS lookup
+and its own redirect following, where no check in the core can see it: a
+remote server that answers your look with audio can answer the player's
+request with a redirect into the house. So never hand `play_url` a remote
+`http(s)` URL. Ask the core for a relay URL and hand the player that:
+
+```python
+from domovoi.sdk import RelayUnavailable   # 1.16; guard the import on older cores
+
+relay_url = getattr(sdk.playback, "relay_url", None)     # None on a core before SDK 1.16
+if relay_url is None:
+    play = remote_url                                     # older core: the old, direct play
+else:
+    try:
+        play = await relay_url(room_id, remote_url, kind="file")   # or kind="radio"
+    except RelayUnavailable:
+        return Response(text="I couldn't reach the music player in there.")
+resp = await sdk.playback.play_url(room_id, play, title=t, source="mine")
+```
+
+The core then fetches `remote_url` itself (`GET /v1/player-relay/<token>`)
+through the outbound-URL check, every redirect hop checked and pinned,
+passes audio or other media only (never a playlist, a page or a script),
+and cuts it off when the internet answer turns to No (`play_url` already
+refuses a relay URL whose remote URL is off the house network under
+`never`). The URL is fixed when you mint it; the player can't choose
+another. Pick the kind by what you play:
+
+* `kind="radio"`: a live stream. One connection, opened within 30 s; ICY
+  titles pass through so "now playing" still names the song. A player
+  that resumes its queue after a restart gets nothing (play it again).
+* `kind="file"`: a finite media file (a song, an episode). Any number of
+  byte-range requests for 6 hours after minting (the player seeks, or
+  resumes after a pause), the first within 30 s. No ICY.
+
+Either way the token is bound to the room, the remote URL and the address
+the room's player calls from (a request from anywhere else ends it), and
+the room's next relay or `stop(room_id)` ends it. Each connection reads at
+most 512 KiB/s after an 8 MiB start and lasts at most 24 hours.
+`sdk.playback.relay_target(player_url)` gives back the remote URL a relay
+URL stands for while it is good (a now-playing matcher reading the
+player's file), else `None`. `RelayUnavailable` (a `RuntimeError`): the
+room's player can't be reached (no player yet, Docker didn't answer);
+`ValueError`: an unknown kind or a URL that isn't `http(s)`.
+
+**On a core before SDK 1.16** there is no `relay_url`: feature-test it as
+above (and import `RelayUnavailable` inside a `try`) and fall back to the
+direct play, which those cores still take, or declare
+`domovoi_api = ">=1.16,<2.0"` to load only where the relay exists (the
+bundled radio plugin does). `domovoi.sdk.testing`'s recording playback
+mints real relay tokens on loopback, so a test can open them against
+`domovoi.player_relay.router`.
 
 **Playing or stopping outside a voice turn** — your page's "play in the
 bedroom" route, a worker whose timer runs out — has no turn to carry the

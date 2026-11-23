@@ -86,7 +86,7 @@ def _fresh_client_singletons():
     icy_metadata._set_icy_client_for_tests(None)
     radio_browser._set_radio_browser_client_for_tests(None)
     shazam_stream._set_shazam_stream_client_for_tests(None)
-    from domovoi_plugin_radio import player_relay
+    from domovoi import player_relay
 
     player_relay.reset_for_tests()
 

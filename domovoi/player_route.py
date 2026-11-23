@@ -1,8 +1,8 @@
 """How a room's music player reaches this core, and how the core knows it.
 
 A room's player is an MPD container (``domovoi/mpd_provisioner.py``). When
-the core hands it a URL on the core itself (the radio plugin's stream
-relay), two things have to be right on every host:
+the core hands it a URL on the core itself (the player relay,
+``domovoi/player_relay.py``), two things have to be right on every host:
 
 * **the address the player dials.** The core listens on every interface
   (port 6370), and on a Linux server, inside the Windows installer's WSL

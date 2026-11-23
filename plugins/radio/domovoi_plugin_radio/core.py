@@ -26,13 +26,13 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-from domovoi.sdk import Context, PluginSDK, device_endpoint, egress, open_endpoint
+from domovoi.sdk import Context, PluginSDK, device_endpoint, egress
 
-from domovoi_plugin_radio import SCHEMA, player_relay
+from domovoi_plugin_radio import SCHEMA
 from domovoi_plugin_radio.clients.rtl_sdr import SdrTuner
 from domovoi_plugin_radio.handlers.radio import RadioHandler
 from domovoi_plugin_radio.settings import RADIO_FIELDSPECS, RadioSettings
@@ -176,9 +176,9 @@ def _make_matcher(sdk: PluginSDK):
         """
         row = None
         # A room's player plays an internet station through the core's
-        # relay (player_relay.py): its file is the relay URL, which stands
-        # for the station's own.
-        mpd_file = player_relay.station_url_for(mpd_file) or mpd_file
+        # relay (sdk.playback.relay_url): its file is the relay URL, which
+        # stands for the station's own.
+        mpd_file = sdk.playback.relay_target(mpd_file) or mpd_file
         if mpd_file:
             row = (
                 await session.execute(
@@ -324,16 +324,6 @@ def _build_core_router(sdk: PluginSDK) -> APIRouter:
         return {"ok": True, "room_id": room,
                 "station": {"id": station["id"], "name": station["name"]},
                 "text": resp.text}
-
-    @router.get("/player-relay/{token}")  # player_relay.ROUTE, literal for the install preview
-    @open_endpoint
-    async def player_relay_stream(token: str, request: Request):
-        """A room's music player streaming an internet station through the
-        core (player_relay.py). No credential: the player has none. The
-        one-use token in the path is the credential, and it is served only
-        to the address that room's player calls from; anything else is a
-        404."""
-        return await player_relay.serve(token, request)
 
     # NOTE: named /state, not /status — the core app already serves the
     # generic GET /v1/plugins/{slug}/status (worker/hook/handler health,
