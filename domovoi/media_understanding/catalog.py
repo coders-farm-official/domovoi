@@ -17,8 +17,18 @@
   ``new_arrival`` (the daytime trickle takes only those); the first walk's
   files are the backlog, done at night.
 
-Slice 1 walks the core Pictures library (images and videos) and the core
-Videos library (videos). Core-internal.
+**Which libraries** (:func:`libraries`, design §2: photos are "any image
+in any library the household leaves in", videos "each file the Videos tab
+lists"): the core Pictures library (images and videos) and Videos library
+(videos) first, then every other Files library
+(``web/backend/api/files_security.py``): the other core folders (Music,
+Audiobooks, Podcasts, Documents: their videos only, since album covers and
+scanned pages aren't photos), enabled plugins' media libraries and present
+removable drives (images and videos). A root inside one already listed,
+or holding one, is left out, so no file is catalogued twice. Any of them,
+or any folder in one, can be excluded (``media_excluded``).
+
+Core-internal; the web's settings routes read :func:`libraries` too.
 """
 
 from __future__ import annotations
@@ -53,6 +63,7 @@ class Library:
     id: str
     root: Path
     kinds: frozenset[str]
+    label: str = ""
 
     def kind_of(self, name: str) -> str | None:
         ext = os.path.splitext(name)[1].lower()
@@ -71,15 +82,93 @@ def core_libraries(settings: Any = None) -> list[Library]:
 
         settings = live
     out: list[Library] = []
-    for lib_id, attr, kinds in (("core:pictures", "pictures_dir", {"image", "video"}),
-                                ("core:videos", "videos_dir", {"video"})):
+    for lib_id, attr, kinds, label in (("core:pictures", "pictures_dir", {"image", "video"}, "Pictures"),
+                                       ("core:videos", "videos_dir", {"video"}, "Videos")):
         raw = getattr(settings, attr, None)
         if not raw:
             continue
         root = Path(str(raw)).expanduser().resolve(strict=False)
         if any(_within(root, o.root) for o in out):
             continue
-        out.append(Library(lib_id, root, frozenset(kinds)))
+        out.append(Library(lib_id, root, frozenset(kinds), label))
+    return out
+
+
+#: Core Files libraries whose images are not photos (album covers, scanned
+#: pages): only their videos are catalogued.
+VIDEO_ONLY_CORE = frozenset({"core:music", "core:audiobooks", "core:podcasts", "core:documents"})
+#: Files views that are not folders of their own.
+_NOT_FOLDERS = frozenset({"core:other"})
+#: How long the list of the other Files libraries is kept (it reads the
+#: plugins table and looks for removable drives).
+OTHER_LIBRARIES_TTL_S = 60.0
+_other_cache: tuple[float, list[Library]] | None = None
+
+
+async def _plugin_rows(s: Any) -> list[dict[str, Any]]:
+    import json
+
+    if s is None:
+        from domovoi.db.session import session_scope
+
+        async with session_scope() as own:
+            return await _plugin_rows(own)
+    try:
+        rows = (await s.execute(text(
+            "SELECT slug, name, enabled, status, install_dir, manifest FROM plugins ORDER BY slug"))).mappings().all()
+    except Exception as e:  # noqa: BLE001 — no plugins table: no plugin libraries
+        log.info("media catalogue: plugins unreadable: %s", type(e).__name__)
+        await s.rollback()
+        return []
+    out = []
+    for r in rows:
+        d = dict(r)
+        if isinstance(d.get("manifest"), str):
+            try:
+                d["manifest"] = json.loads(d["manifest"])
+            except ValueError:
+                d["manifest"] = {}
+        out.append(d)
+    return out
+
+
+async def other_libraries(s: Any = None) -> list[Library]:
+    """The Files libraries besides core Pictures and Videos (see the module
+    docstring), as the Files tab lists them. Empty when they can't be
+    listed (the core's own two still are)."""
+    try:
+        from web.backend.api import files_security as fs
+
+        allowed = fs._allowed_under_config()
+        found = fs.build_core_libraries(allowed)
+        found += fs.build_plugin_libraries(await _plugin_rows(s), allowed)
+        found += await asyncio.to_thread(fs.build_removable_libraries)
+    except Exception as e:  # noqa: BLE001 — Pictures and Videos still walk
+        log.warning("media catalogue: the other libraries could not be listed: %s", type(e).__name__)
+        return []
+    out = []
+    for m in found:
+        if m.id in ("core:pictures", "core:videos") or m.id in _NOT_FOLDERS:
+            continue
+        kinds = {"video"} if m.id in VIDEO_ONLY_CORE else {"image", "video"}
+        out.append(Library(m.id, Path(m.root_path), frozenset(kinds), m.label))
+    return out
+
+
+async def libraries(s: Any = None, *, fresh: bool = False) -> list[Library]:
+    """Every library the catalogue walks: :func:`core_libraries`, then
+    :func:`other_libraries` (kept for :data:`OTHER_LIBRARIES_TTL_S`). A root
+    inside one already listed, or holding one, is left out."""
+    global _other_cache
+    out = list(core_libraries())
+    now = time.monotonic()
+    if fresh or _other_cache is None or now - _other_cache[0] >= OTHER_LIBRARIES_TTL_S:
+        _other_cache = (now, await other_libraries(s))
+    for lib in _other_cache[1]:
+        root = lib.root.expanduser().resolve(strict=False)
+        if any(o.id == lib.id or _within(root, o.root) or _within(o.root, root) for o in out):
+            continue
+        out.append(Library(lib.id, root, lib.kinds, lib.label))
     return out
 
 
@@ -149,16 +238,36 @@ async def excluded_prefixes(s: Any, library_id: str) -> list[str]:
     return list(rows)
 
 
-async def delete_under(s: Any, library_id: str, prefix: str) -> int:
-    """Delete every catalogued file (and its results) in ``prefix``."""
+def _where_under(library_id: str, prefix: str) -> tuple[str, dict[str, Any]]:
+    """The ``media_items`` rows in folder ``prefix`` ('' is the whole library)."""
     prefix = prefix.strip("/")
     if not prefix:
-        r = await s.execute(text("DELETE FROM media_items WHERE library_id = :l"), {"l": library_id})
-    else:
-        like = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "/%"
-        r = await s.execute(text(
-            "DELETE FROM media_items WHERE library_id = :l AND (rel_path = :p OR rel_path LIKE :like)"),
+        return "library_id = :l", {"l": library_id}
+    like = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "/%"
+    return ("library_id = :l AND (rel_path = :p OR rel_path LIKE :like)",
             {"l": library_id, "p": prefix, "like": like})
+
+
+async def count_under(s: Any, library_id: str, prefix: str) -> int:
+    """How many catalogued files are in ``prefix`` (what excluding it deletes)."""
+    where, params = _where_under(library_id, prefix)
+    return int((await s.execute(text(f"SELECT count(*) FROM media_items WHERE {where}"), params)).scalar() or 0)
+
+
+async def delete_under(s: Any, library_id: str, prefix: str) -> int:
+    """Delete every catalogued file in ``prefix`` with all its results: the
+    captions, tags and text, transcripts and summaries, the place and the
+    search words (on the row), and its faces, whose groups are worked out
+    again from the faces left (a group left with none goes)."""
+    where, params = _where_under(library_id, prefix)
+    gids = (await s.execute(text(
+        "SELECT DISTINCT group_id FROM media_faces WHERE group_id IS NOT NULL "
+        f"AND item_id IN (SELECT id FROM media_items WHERE {where})"), params)).scalars().all()
+    r = await s.execute(text(f"DELETE FROM media_items WHERE {where}"), params)
+    if gids:
+        from domovoi.media_understanding import faces
+
+        await faces.refresh(s, gids)
     return int(r.rowcount or 0)
 
 
@@ -280,8 +389,8 @@ class Catalog:
         self._clock = clock
         self._last: float | None = None
 
-    def libraries(self) -> list[Library]:
-        return self._libraries if self._libraries is not None else core_libraries()
+    async def libraries(self, s: Any = None) -> list[Library]:
+        return self._libraries if self._libraries is not None else await libraries(s, fresh=True)
 
     async def due(self, s: Any) -> bool:
         if self._last is None or self._clock() - self._last >= self.every_s:
@@ -293,8 +402,9 @@ class Catalog:
         async with session_scope() as s:
             if not force and not await self.due(s):
                 return None
+            libs = await self.libraries(s)
         out: dict[str, dict[str, int]] = {}
-        for lib in self.libraries():
+        for lib in libs:
             try:
                 async with session_scope() as s:
                     out[lib.id] = await sync_library(s, lib)

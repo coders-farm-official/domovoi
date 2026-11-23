@@ -158,6 +158,13 @@ const MediaUnderstandingPanel = () => {
   // The shared confirm dialog (components.jsx useDeleteConfirm).
   const facesOff = useDeleteConfirm(() => save({ faces: false, confirm_delete_faces: true }, 'faces off: every face deleted'));
   const placesOff = useDeleteConfirm(() => save({ places: false, confirm_delete_places: true }, 'photo locations off: every location deleted'));
+  // Excluding a folder that has results deletes them: asked first, with
+  // the count the server gave (its 409), then sent again with the yes.
+  const excludeAsk = useDeleteConfirm(async (x) => {
+    const ok = await call(() => apiPost('/api/media-understanding/excluded', { ...x, confirm_delete: true }),
+                          'folder excluded: what was worked out about it deleted');
+    if (ok) setNewPrefix('');
+  });
   React.useEffect(() => {
     if (data && data.settings) setCap(data.settings.frame_cap == null ? '' : String(data.settings.frame_cap));
   }, [data && data.settings && data.settings.frame_cap]);
@@ -182,6 +189,34 @@ const MediaUnderstandingPanel = () => {
   const est = data.estimate || {};
   const libs = data.libraries || [];
   const libLabel = (id) => ((libs.find((l) => l.id === id) || {}).label || id);
+  const libOption = (l) => `${l.label}${l.present === false ? ' (not here now)' : ''}`;
+  const placeName = (x) => `${libLabel(x.library_id)}${x.prefix ? ` / ${x.prefix}` : ' (all of it)'}`;
+  const exclude = async () => {
+    const x = { library_id: newLib || libs[0].id, prefix: newPrefix.trim() };
+    setBusy(true);
+    try {
+      await apiPost('/api/media-understanding/excluded', x);
+      fire('folder excluded', { tone: 'ok' });
+      setNewPrefix('');
+      refresh();
+    } catch (e) {
+      const d = e && e.detail && e.detail.detail;
+      if (e && e.status === 409 && d && typeof d.files === 'number') {
+        excludeAsk.request(x, {
+          title: `Exclude ${placeName(x)}?`, confirmLabel: 'Exclude and delete',
+          body: (
+            <div>
+              Domovoi stops looking at it, and deletes what it worked out about {muCount(d.files)}
+              {d.files === 1 ? ' photo or video' : ' photos and videos'} in it: descriptions, tags, text found, what is
+              said, summaries, faces and places. Your files stay as they are. Including it again looks at it afresh.
+            </div>
+          ),
+        });
+      } else {
+        fire(`not saved: ${apiErrorText(e)}`, { tone: 'warn' });
+      }
+    } finally { setBusy(false); }
+  };
   const [capLo, capHi] = data.frame_cap_range || [3, 1000];
   const capN = Number(cap);
   const capOk = Number.isInteger(capN) && capN >= capLo && capN <= capHi;
@@ -217,6 +252,7 @@ const MediaUnderstandingPanel = () => {
       {toastNode}
       {facesOff.node}
       {placesOff.node}
+      {excludeAsk.node}
       <div style={{ fontSize: 13, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
         Domovoi can look at your photos and videos on this server, so you can find them by what is in them.
         {' '}Nothing leaves the house and nothing is written into your files. It works at night, and pauses whenever someone talks to Domovoi.
@@ -301,12 +337,12 @@ const MediaUnderstandingPanel = () => {
         </div>
       </Card>
 
-      <Card title="Excluded folders" sub="Never looked at. Excluding a folder deletes what was worked out about it.">
+      <Card title="Excluded folders" sub="Never looked at. Any library or a folder in one; excluding it deletes what was worked out about it.">
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 13 }}>
           {(data.excluded || []).length === 0 && <div style={{ color: 'var(--fg-muted)' }}>None.</div>}
           {(data.excluded || []).map((x) => (
             <div key={`${x.library_id}/${x.prefix}`} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <span style={{ flex: 1, overflowWrap: 'anywhere' }}>{libLabel(x.library_id)}{x.prefix ? ` / ${x.prefix}` : ' (all of it)'}</span>
+              <span style={{ flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>{placeName(x)}</span>
               {admin && (
                 <button type="button" className="btn" disabled={busy}
                         onClick={() => call(() => apiFetch(`/api/media-understanding/excluded?library_id=${encodeURIComponent(x.library_id)}&prefix=${encodeURIComponent(x.prefix)}`, { method: 'DELETE' }),
@@ -317,17 +353,12 @@ const MediaUnderstandingPanel = () => {
           {admin && libs.length > 0 && (
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
               <select aria-label="Library" className="cal-inp" value={newLib || libs[0].id} disabled={busy}
-                      onChange={(e) => setNewLib(e.target.value)}>
-                {libs.map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}
+                      style={{ maxWidth: '100%' }} onChange={(e) => setNewLib(e.target.value)}>
+                {libs.map((l) => <option key={l.id} value={l.id}>{libOption(l)}</option>)}
               </select>
               <input aria-label="Folder inside it (empty for all of it)" className="cal-inp" placeholder="folder, e.g. Work/Receipts"
                      value={newPrefix} disabled={busy} onChange={(e) => setNewPrefix(e.target.value)} style={{ flex: 1, minWidth: 160 }}/>
-              <button type="button" className="btn" disabled={busy}
-                      onClick={async () => {
-                        const ok = await call(() => apiPost('/api/media-understanding/excluded',
-                          { library_id: newLib || libs[0].id, prefix: newPrefix }), 'folder excluded');
-                        if (ok) setNewPrefix('');
-                      }}>Exclude</button>
+              <button type="button" className="btn" disabled={busy} onClick={exclude}>Exclude</button>
             </div>
           )}
         </div>

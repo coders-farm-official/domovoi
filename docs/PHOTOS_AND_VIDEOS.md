@@ -1,7 +1,7 @@
 # Photos and videos: what Domovoi learns from them
 
-New in 1.5.0. Domovoi can look through the photos in Pictures and the
-videos in Videos and work out what is in them, so you can find them by
+New in 1.5.0. Domovoi can look through the photos and videos in your
+libraries and work out what is in them, so you can find them by
 words ("dog at the beach", "Christmas 2023"), by who is in them, and by
 where they were taken. **All of it happens on your Domovoi server.** No
 photo, video, description or face is sent anywhere, and nothing is ever
@@ -20,7 +20,7 @@ kept and who sees it is in
 |---|---|
 | A photo | The date it was taken (from the photo's own data, else the file's time), one sentence of what it **might show**, up to 12 tags ("dog", "beach"), and the exact text in it when it has writing. |
 | A video | The scene changes, what is said (the first two hours), descriptions of frames picked at scene changes, any text in those frames, a short summary and a suggested title. A search can jump to the moment that matched. |
-| Faces (optional) | Who is in a photo or video, and when in a video. Off unless an admin turns it on. |
+| Faces (optional) | Who is in a photo or video, and when in a video (from when they appear to when they leave). Off unless an admin turns it on. |
 | Places (optional) | The town a photo was taken in. Off unless an admin turns it on. |
 
 Descriptions are written by the same small picture model chat uses.
@@ -35,7 +35,16 @@ from 1.4.x starts with it off until an admin turns it on. The same card
 shows progress (done, left, failed), an estimate in nights, and has
 **Pause**, **Run now**, **Rescan** and a list of excluded folders.
 
-Until something has been looked at, the Photos page says so.
+Until something has been looked at, the Photos page says so. While a
+backlog is left, Home shows a small chip, "Understanding your photos: 3,210
+of 20,000", that opens the same card.
+
+**Which folders.** Pictures (photos and videos), Videos, the other media
+folders (only their videos: album covers and scanned pages aren't photos),
+a plugin's media folders and a USB drive while it is plugged in (photos
+and videos). An admin can leave out a whole library or any folder in one
+under **Excluded folders**; Domovoi asks first when that deletes what it
+already worked out there.
 
 ## What runs when
 
@@ -89,7 +98,12 @@ More frames find more detail in a long video and cost more time.
   at yet is still found by its file and folder names.
 - **By voice**: "show me photos of the beach from last summer", "find the
   video where we sang happy birthday". Domovoi says how many it found and
-  that they are on the Photos page.
+  that they are on the Photos page. When it recognizes your voice and a
+  phone is marked as yours (Settings → Household → Phones & browsers, "This
+  phone belongs to"), it asks "Want them on your phone?"; say yes and the
+  results arrive on your phone as a chat, "Photos: …", with the same cards
+  as a chat search. It never asks a guest or a voice it doesn't know, and
+  sends only to the asker's own phones (a few times an hour at most).
 - **In a chat** (home server): the same questions, answered with cards: a
   thumbnail, "Might show: ...", the date and, for a video, a time badge.
 - **On a room's screen**: asked in a room with a screen (a phone or tablet
@@ -149,7 +163,7 @@ by default** and an admin turns on **Use photo locations**.
 | Understand photos and videos | Nothing. Domovoi stops looking, and the Photos page, voice and chat say it is off. |
 | Recognize faces | Every face, group and face pattern (it asks first). The forget list is kept. |
 | Use photo locations | Every saved position and town name (it asks first). The downloaded town list stays: it is public data. |
-| Exclude a folder | What was worked out about that folder. Removing the exclusion looks at it again. |
+| Exclude a library or folder | What was worked out about it: descriptions, tags, text, what is said, summaries, faces and places (it asks first). Removing the exclusion looks at it again. |
 
 Deleting a photo or video through Files deletes what was worked out about
 it at once. A file removed from a library that is present loses its results
@@ -162,6 +176,9 @@ comes back.
   misnames breeds and objects and sometimes sees things that aren't there.
   Tags are help for searching, not facts. Text found in a picture is read by
   a different program and is exact when it is clear.
+- **What you search for isn't logged.** The words of a search, typed or
+  said, never go into Domovoi's logs. A spoken request is kept in the voice
+  history like every other.
 - **Faces can be wrong.** A suggested face is only a suggestion until
   someone confirms it. Babies change quickly and are the hardest. Say "not
   this person" and it is never suggested for them again.

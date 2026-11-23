@@ -237,6 +237,10 @@ async def test_the_daytime_trickle_waits_ten_quiet_minutes_and_rests_one_to_one(
 
 # ─── the database ─────────────────────────────────────────────────────────
 
+#: The Files libraries besides Pictures and Videos a test hands the
+#: catalogue (``catalog.other_libraries``), cleared by ``house``.
+OTHER_LIBS: list[catalog.Library] = []
+
 
 @pytest.fixture
 async def house(tmp_path, monkeypatch):
@@ -254,9 +258,19 @@ async def house(tmp_path, monkeypatch):
             R.unregister(name)
     pics = tmp_path / "Pictures"
     pics.mkdir()
-    lib = catalog.Library("core:pictures", pics, frozenset({"image", "video"}))
+    lib = catalog.Library("core:pictures", pics, frozenset({"image", "video"}), "Pictures")
     monkeypatch.setattr(catalog, "core_libraries", lambda settings=None: [lib])
+    # The other Files libraries (plugins', removable drives') are a test's
+    # own choice (OTHER_LIBS): never this machine's real drives.
+    OTHER_LIBS.clear()
+
+    async def _others(s=None):
+        return list(OTHER_LIBS)
+
+    monkeypatch.setattr(catalog, "other_libraries", _others)
+    monkeypatch.setattr(catalog, "_other_cache", None)
     yield lib
+    OTHER_LIBS.clear()
     for name in list(R._ANALYSERS):
         if name != "fingerprint":
             R.unregister(name)
@@ -384,6 +398,103 @@ async def test_excluded_folders_are_never_walked_and_their_results_go(house) -> 
     assert await _count("media_frames") == 0
     assert set(catalog.walk(lib, ["Private"])) == {"Privateer.jpg", "keep.jpg"}
     assert catalog.walk(lib, [""]) == {}
+
+
+@requires_db
+async def test_the_catalogue_walks_every_files_library_videos_only_from_core_ones(house, tmp_path) -> None:
+    usb = tmp_path / "usb"
+    music = tmp_path / "Music"
+    inside = house.root / "Plugin"            # a root inside Pictures: left out
+    for d in (usb, music, inside):
+        d.mkdir()
+    OTHER_LIBS.extend([
+        catalog.Library("removable:abc", usb, frozenset({"image", "video"}), "USB (E:)"),
+        catalog.Library("core:music", music, frozenset({"video"}), "Music"),
+        catalog.Library("plugin:x:pics", inside, frozenset({"image", "video"}), "X · Pictures"),
+    ])
+    libs = await catalog.libraries(fresh=True)
+    assert [lib.id for lib in libs] == ["core:pictures", "removable:abc", "core:music"]
+    (usb / "a.jpg").write_bytes(b"x" * 10)
+    (usb / "b.mp4").write_bytes(b"x" * 10)
+    (music / "cover.jpg").write_bytes(b"x" * 10)
+    (music / "live.mp4").write_bytes(b"x" * 10)
+    out = await catalog.Catalog().tick(session_scope, force=True)
+    assert set(out) == {"core:pictures", "removable:abc", "core:music"}
+    async with session_scope() as s:
+        rows = (await s.execute(text("SELECT library_id, rel_path FROM media_items ORDER BY 1, 2"))).all()
+    assert [tuple(r) for r in rows] == [("core:music", "live.mp4"), ("removable:abc", "a.jpg"),
+                                        ("removable:abc", "b.mp4")]
+    # The runner finds a file in any of them.
+    item = R.Item.from_row({**(await _items())["a.jpg"]})
+    assert (await _runner()._with_path(item)).path == usb / "a.jpg"
+
+
+@requires_db
+async def test_any_library_can_be_excluded_with_a_confirm_and_its_results_go(house, tmp_path, monkeypatch) -> None:
+    import numpy as np
+
+    from domovoi.media_understanding import faces as F
+    from domovoi.tests.auth_testkit import bearer, install_fake_db, web_client
+
+    usb = tmp_path / "usb"
+    (usb / "Trip").mkdir(parents=True)
+    OTHER_LIBS.append(catalog.Library("removable:abc", usb, frozenset({"image", "video"}), "USB (E:)"))
+    for rel in ("Trip/a.jpg", "Trip/b.jpg", "c.jpg"):
+        (usb / rel).write_bytes(b"x" * 10)
+    _file(house, "d.jpg")
+    await catalog.Catalog().tick(session_scope, force=True)
+    items = await _items()
+    async with session_scope() as s:
+        await s.execute(text("UPDATE media_items SET search_doc = to_tsvector('english', 'beach'), "
+                             "place_name = 'Portland' WHERE library_id = 'removable:abc'"))
+        gid = (await s.execute(text("INSERT INTO face_groups (centroid) VALUES (NULL) RETURNING id"))).scalar()
+        for name in ("Trip/a.jpg", "d.jpg"):
+            emb = F.to_bytes(F.unit(np.ones(128, dtype=np.float32) * (1 if name == "d.jpg" else -1)))
+            await s.execute(text("INSERT INTO media_faces (item_id, box, embedding, model, group_id) "
+                                 "VALUES (:i, '{0,0,1,1}', :e, 'sface', :g)"),
+                            {"i": items[name]["id"], "e": emb, "g": gid})
+    await _add_results(items["Trip/a.jpg"]["id"])
+    install_fake_db(monkeypatch, admin=True, sessions={"adm"})
+    adm = bearer("adm")
+    async with web_client() as c:
+        h = {**c.headers, **adm}
+        body = (await c.get("/api/media-understanding", headers=h)).json()
+        assert {"id": "removable:abc", "label": "USB (E:)", "present": True,
+                "kinds": ["image", "video"]} in body["libraries"]
+        # A folder on the drive: asked first, then its results go, faces too
+        # (the group is worked out again from the face left).
+        r = await c.post("/api/media-understanding/excluded", headers=h,
+                         json={"library_id": "removable:abc", "prefix": "Trip"})
+        assert r.status_code == 409 and r.json()["detail"]["files"] == 2
+        r = await c.post("/api/media-understanding/excluded", headers=h,
+                         json={"library_id": "removable:abc", "prefix": "Trip", "confirm_delete": True})
+        assert r.status_code == 200 and r.json()["deleted"] == 2
+        assert set(await _items()) == {"c.jpg", "d.jpg"}
+        assert await _count("media_frames") == 0 and await _count("media_faces") == 1
+        async with session_scope() as s:
+            centroid = (await s.execute(text("SELECT centroid FROM face_groups WHERE id = :g"), {"g": gid})).scalar()
+        assert F.from_bytes(centroid)[0] > 0                         # d.jpg's face alone now
+        # The walker never brings it back.
+        await catalog.Catalog().tick(session_scope, force=True)
+        assert set(await _items()) == {"c.jpg", "d.jpg"}
+        # The drive unplugged: its rows stay, and it can still be excluded whole.
+        OTHER_LIBS.clear()
+        catalog._other_cache = None
+        body = (await c.get("/api/media-understanding", headers=h)).json()
+        assert {"id": "removable:abc", "label": "removable:abc", "present": False, "kinds": []} in body["libraries"]
+        r = await c.post("/api/media-understanding/excluded", headers=h,
+                         json={"library_id": "removable:abc", "prefix": "", "confirm_delete": True})
+        assert r.status_code == 200 and r.json()["deleted"] == 1
+        # Nothing to delete: no confirmation needed. An unknown library: 404.
+        r = await c.post("/api/media-understanding/excluded", headers=h,
+                         json={"library_id": "core:pictures", "prefix": "Empty"})
+        assert r.status_code == 200 and r.json()["deleted"] == 0
+        r = await c.post("/api/media-understanding/excluded", headers=h,
+                         json={"library_id": "plugin:nope:x", "prefix": ""})
+        assert r.status_code == 404
+        # Included again, even with its drive away.
+        r = await c.delete("/api/media-understanding/excluded?library_id=removable:abc&prefix=Trip", headers=h)
+        assert r.status_code == 200
 
 
 @requires_db
@@ -731,8 +842,13 @@ async def test_the_state_route_and_the_admin_writes(house, monkeypatch) -> None:
         assert body["progress"]["photos"] == {"total": 2, "done": 0, "left": 2, "failed": 0}
         assert body["settings"]["enabled"] is True and body["settings"]["faces"] is False
         assert body["libraries"][0]["id"] == "core:pictures"
+        # A folder with results: only with the confirmation (409 says how many).
         r = await c.post("/api/media-understanding/excluded", headers={**c.headers, **adm},
                          json={"library_id": "core:pictures", "prefix": "/Work/"})
+        assert r.status_code == 409 and r.json()["detail"]["files"] == 1
+        assert len(await _items()) == 2
+        r = await c.post("/api/media-understanding/excluded", headers={**c.headers, **adm},
+                         json={"library_id": "core:pictures", "prefix": "/Work/", "confirm_delete": True})
         assert r.json() == {"library_id": "core:pictures", "prefix": "Work", "deleted": 1}
         for bad in ({"library_id": "core:music", "prefix": ""},
                     {"library_id": "core:pictures", "prefix": "../etc"}):

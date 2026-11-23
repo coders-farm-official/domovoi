@@ -17,6 +17,12 @@ Owner decisions (2026-10-21), all enforced here and in the voice handler
   ``help_deliveries.changed``);
 * the limit: delivery needs the app to reach the server, so in practice
   it works at home.
+
+The same path sends a voice photo and video search's results to the
+asker's phone (1.5.0, design MEDIA-UNDERSTANDING §9 "Voice";
+``domovoi/handlers/media_search.py``): a chat titled "Photos: …" whose
+reply carries the result cards (``stats.media``), with the same phones,
+notification and limits (:func:`refusal`'s ``what``).
 """
 
 from __future__ import annotations
@@ -37,12 +43,12 @@ TITLE_PREFIX = "Help: "
 TITLE_MAX = 60
 
 
-def help_title(question: str) -> str:
+def help_title(question: str, prefix: str = TITLE_PREFIX) -> str:
     q = " ".join((question or "").split()).rstrip("?.! ")
     # A transcript is lower case: "how do i …" reads "How do I …".
     q = re.sub(r"\bi\b", "I", q)
     q = q[:1].upper() + q[1:] if q else "Domovoi"
-    title = TITLE_PREFIX + q
+    title = prefix + q
     return title if len(title) <= TITLE_MAX else title[: TITLE_MAX - 1].rstrip() + "…"
 
 
@@ -86,10 +92,11 @@ def note_sent(session_id: Any) -> None:
 
 
 async def refusal(session: AsyncSession, *, person_id: int, title: str, asker_session: Any = None,
-                  name: str = "", asker: bool = True) -> str | None:
-    """Why these steps may not be sent now, in words, or None. A few sends
-    an hour per person (each person's phones share it), per asking
-    session, and the same steps to the same person once an hour."""
+                  name: str = "", asker: bool = True, what: str = "help steps") -> str | None:
+    """Why these steps (or photos: ``what``) may not be sent now, in words,
+    or None. A few sends an hour per person (each person's phones share
+    it), per asking session, and the same thing to the same person once an
+    hour."""
     import time
 
     who = "your" if asker else f"{name}'s"
@@ -97,7 +104,7 @@ async def refusal(session: AsyncSession, *, person_id: int, title: str, asker_se
         now = time.monotonic()
         recent_here = [t for t in _SESSION_SENDS.get(str(asker_session), []) if now - t < 3600]
         if len(recent_here) >= PER_SESSION_HOUR:
-            return "I've sent enough help steps from here for now, so I haven't sent this one. Try again later."
+            return f"I've sent enough {what} from here for now, so I haven't sent this one. Try again later."
     try:
         row = (await session.execute(text(
             "SELECT count(*) AS n, count(*) FILTER (WHERE title = :t AND created_at > now() - make_interval(secs => :d)) AS same "
@@ -108,9 +115,10 @@ async def refusal(session: AsyncSession, *, person_id: int, title: str, asker_se
         await session.rollback()
         return None
     if row and row["same"]:
-        return f"I already sent those steps to {who} phone in the last hour; they're in Chat."
+        those = "those steps" if what == "help steps" else f"those {what}"
+        return f"I already sent {those} to {who} phone in the last hour; they're in Chat."
     if row and row["n"] >= PER_PERSON_HOUR:
-        return f"I've sent {who} phone enough help steps this hour, so I haven't sent this one. Try again later."
+        return f"I've sent {who} phone enough {what} this hour, so I haven't sent this one. Try again later."
     return None
 
 
@@ -179,13 +187,17 @@ async def deliver(
     question: str,
     steps: str,
     phones: list[Phone],
+    title: str | None = None,
+    stats: dict[str, Any] | None = None,
 ) -> Delivery:
     """Write the "Help: …" chat (the question, then the steps) and the
     delivery row, and queue the NOTIFYs; the caller commits. ``phones``
-    must be :func:`phones_of` for ``person_id`` and not empty."""
+    must be :func:`phones_of` for ``person_id`` and not empty. ``title``
+    and ``stats`` (the reply's, e.g. a photo search's ``media`` cards)
+    replace the help's own."""
     if not phones:
         raise ValueError("deliver needs the person's phones")
-    title = help_title(question)
+    title = title or help_title(question)
     thread_id = (await session.execute(
         text("INSERT INTO chat_threads (title, person_id) VALUES (:t, :p) RETURNING id"),
         {"t": title, "p": person_id},
@@ -201,7 +213,7 @@ async def deliver(
     await session.execute(
         text("INSERT INTO chat_messages (thread_id, role, content, model, stats) "
              "VALUES (:t, 'assistant', :c, NULL, CAST(:st AS JSONB))"),
-        {"t": thread_id, "c": steps, "st": json.dumps({"model_role": HELP_MODEL_ROLE})},
+        {"t": thread_id, "c": steps, "st": json.dumps(stats or {"model_role": HELP_MODEL_ROLE})},
     )
     delivery_id = (await session.execute(
         text("INSERT INTO help_deliveries (person_id, thread_id, title) VALUES (:p, :t, :ti) RETURNING id"),

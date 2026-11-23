@@ -4653,6 +4653,7 @@
             "required": true,
             "schema": {
               "type": "string",
+              "maxLength": 200,
               "title": "Library Id"
             }
           },

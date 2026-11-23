@@ -24,7 +24,12 @@ else who names such a person gets :data:`PEOPLE_REFUSED_TEXT`, no results.
 as text, never HTML, and given to a chat model only inside the fenced
 block of :func:`model_block`, which it is told never to obey.
 
-Asking never logs the words (``log_privacy``: as lookups and lyrics).
+Asking never logs the words (design §8: "query words are not logged", as
+for lookups and lyrics). Nothing here writes a log line, and a search that
+fails raises :class:`SearchFailed`, which names only the kind of error:
+a database error's text holds the query's parameters (the words), so it
+must never reach a traceback in the journal. The router still records the
+turn in ``intents_log`` and ``conversation_log``, as every turn.
 """
 
 from __future__ import annotations
@@ -151,6 +156,16 @@ def may_be_tool(prefix: str) -> bool:
 # ─── the search ──────────────────────────────────────────────────────────
 
 
+class SearchFailed(Exception):
+    """The search failed. Its message is only the error's kind, and the
+    cause is dropped (``from None``), so no log line or traceback carries
+    the words."""
+
+
+#: What a chat or voice answer says when the search failed.
+FAILED_TEXT = "I couldn't search your photos and videos just now."
+
+
 @dataclass
 class Answer:
     """What :func:`find` found. ``state``: ``off`` | ``empty`` |
@@ -225,7 +240,19 @@ def card(hit: dict[str, Any], moments: list[float] | None = None) -> dict[str, A
 
 async def find(s: Any, q: str, *, people: bool, cards_max: int = CARDS_MAX) -> Answer:
     """Search for ``q`` (what someone typed or said) as :mod:`.search` reads
-    it, with the person filter when faces are on and ``people`` allows."""
+    it, with the person filter when faces are on and ``people`` allows.
+    :class:`SearchFailed` (naming only the error's kind) when it fails."""
+    try:
+        return await _find(s, q, people=people, cards_max=cards_max)
+    except Exception as e:  # noqa: BLE001 — re-raised without its text
+        try:
+            await s.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        raise SearchFailed(type(e).__name__) from None
+
+
+async def _find(s: Any, q: str, *, people: bool, cards_max: int) -> Answer:
     sw = await switches.read(s)
     parsed = search.parse_query(q)
     if not sw["enabled"]:

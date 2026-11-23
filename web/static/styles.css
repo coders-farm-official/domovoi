@@ -1893,6 +1893,10 @@ a.home-att-row:hover { background: var(--brand-soft); }
   font-size: 11px; color: var(--fg-muted); font-variant-numeric: tabular-nums;
 }
 .home-room-actions { display: flex; align-items: center; gap: 4px; flex: none; }
+/* The photos-and-videos backlog chip (home.jsx HomeMediaChip): a link, so
+   it wraps on a phone rather than running off the edge. */
+.home-media-chip { height: auto; min-height: 22px; padding: 3px 10px; max-width: 100%; text-decoration: none; overflow-wrap: anywhere; }
+.home-media-chip:hover { color: var(--fg); border-color: var(--border-strong, var(--border)); }
 
 /* A chip is one line, always ("no room" used to break in two). */
 .home .room-chip { white-space: nowrap; }

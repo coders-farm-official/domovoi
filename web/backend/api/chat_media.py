@@ -33,6 +33,7 @@ round 6, DOC-10): words in a picture can't send a search out.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -43,6 +44,8 @@ from sqlalchemy import text
 from domovoi.chat_video.context import _fence
 from domovoi.media_understanding import ask
 from web.backend.db import session_scope
+
+log = logging.getLogger(__name__)
 
 #: How far back a chat's results stay in the model's view (messages).
 RECENT_MESSAGES = 6
@@ -83,8 +86,13 @@ class Turn:
 async def answer(q: str, request: Request | None, req: ask.Request | None = None) -> Turn:
     """Search for ``q`` and say what was found."""
     shared = await shared_screen(request)
-    async with session_scope() as s:
-        found = await ask.find(s, q, people=not shared)
+    try:
+        async with session_scope() as s:
+            found = await ask.find(s, q, people=not shared)
+    except ask.SearchFailed as e:
+        # The kind of error only: never the words (ask.py).
+        log.warning("chat: a photo and video search failed: %s", e)
+        return Turn(ask.FAILED_TEXT, {"state": "failed", "count": 0, "more": False, "items": []})
     said = ask.SHARED_SCREEN_TEXT if (found.state == "people_refused" and shared) else ask.answer_text(found, req)
     return Turn(said, found.as_json())
 

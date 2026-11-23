@@ -696,7 +696,7 @@ class Runner(VoiceFirst):
                 "RETURNING *"), {"new_s": TRICKLE_NEW_S})).mappings().first()
         if row is None and mode == "night" and await self.unpassed_videos() == 0:
             row = await self._claim_deepen()
-        return self._with_path(Item.from_row(row)) if row is not None else None
+        return await self._with_path(Item.from_row(row)) if row is not None else None
 
     async def _claim_deepen(self) -> Any:
         deep = [a.name for a in analysers() if getattr(a, "deepens", False)]
@@ -715,8 +715,8 @@ class Runner(VoiceFirst):
                     {"i": row["id"], "a": deep})
         return row
 
-    def _with_path(self, item: Item) -> Item:
-        for lib in catalog.core_libraries():
+    async def _with_path(self, item: Item) -> Item:
+        for lib in await catalog.libraries():
             if lib.id == item.library_id:
                 item.path = lib.root / item.rel_path
         return item

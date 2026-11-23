@@ -108,6 +108,15 @@ _STATION_DIR_URL_RE = re.compile(r"radio-browser\.info/[^\s\"'<>]*", re.IGNORECA
 _STATION_DIR_WORDS_RE = re.compile(
     r"(?P<lead>[?&](?:name|tag|language)=)(?P<value>[^&\s\"'#]+)", re.IGNORECASE,
 )
+#: Routes whose ``q`` is blanked at EVERY level, DEBUG included: the
+#: household's photo and video searches (design MEDIA-UNDERSTANDING §8,
+#: "query words are not logged"). The access log's request line for them
+#: never carries the words.
+ALWAYS_BLANK_PATHS = ("/api/media/search",)
+_ALWAYS_PATH_RE = re.compile(
+    r"(?:" + "|".join(re.escape(p) for p in ALWAYS_BLANK_PATHS) + r")\?[^\s\"'#]*"
+)
+_Q_RE = re.compile(r"(?P<lead>[?&]q=)(?P<value>[^&\s\"'#]*)", re.IGNORECASE)
 #: A page title in a Wikipedia API or page path, derived from the words.
 _TITLE_PATH_RE = re.compile(r"(?P<lead>/(?:page/summary|wiki)/)(?P<value>[^?#\s\"']+)")
 WORDS_MASK = "<words>"
@@ -127,6 +136,8 @@ def scrub(text: str) -> str:
     docstring). Unchanged text is returned as the same object."""
     if not text or not _may_hold(text):
         return text
+    if "/api/media/" in text:
+        text = _ALWAYS_PATH_RE.sub(lambda m: _Q_RE.sub(lambda q: f"{q.group('lead')}{WORDS_MASK}", m.group(0)), text)
     out = _QUERY_PARAM_RE.sub(lambda m: f"{m.group('lead')}{m.group('name')}={MASK}", text)
     out = _PARAM_RE.sub(lambda m: f"{m.group('lead')}{m.group('name')}={MASK}", out)
     if _words_hidden():

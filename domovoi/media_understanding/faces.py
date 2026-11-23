@@ -2,7 +2,8 @@
 2026-11-22). Off by default; an admin turns it on.
 
 **What is stored.** Per face (``media_faces``): the item, the time in a
-video (``at_s``, None for a photo), the box as fractions of the picture,
+video (``at_s`` to ``end_s``: one appearance, from the first sighting to
+the last; both None for a photo), the box as fractions of the picture,
 the detector's quality figure, the 128-number SFace embedding (512 bytes,
 float32, as voice profiles are kept) and where it is grouped. Groups
 (``face_groups``) link to the same ``people`` rows voice ID uses; an
@@ -85,7 +86,8 @@ DENY_MATCH = 0.363
 SHOWN_MIN_FACES = 3
 #: Video: at most one frame every 2 s gets the detector (design §2), and a
 #: face seen again within 30 s of its last sighting is the same appearance
-#: (one row, at its first moment, the best-quality look kept).
+#: (one row from its first moment, ``at_s``, to its last, ``end_s``, the
+#: best-quality look kept).
 VIDEO_MIN_GAP_S = 2.0
 APPEARANCE_GAP_S = 30.0
 APPEARANCE_MATCH = 0.5
@@ -302,8 +304,8 @@ async def store(s: Any, item_id: int, found: list[Found], *, at_s: float | None 
         if denied(deny, emb):
             continue
         fid = int((await s.execute(text(
-            "INSERT INTO media_faces (item_id, at_s, box, quality, embedding, model) "
-            "VALUES (:i, :t, :b, :q, :e, :m) RETURNING id"),
+            "INSERT INTO media_faces (item_id, at_s, end_s, box, quality, embedding, model) "
+            "VALUES (:i, :t, :t, :b, :q, :e, :m) RETURNING id"),
             {"i": item_id, "t": at_s, "b": [float(x) for x in f.box], "q": float(f.quality),
              "e": to_bytes(emb), "m": MODEL})).scalar())
         await assign(s, fid, emb, groups=groups)
@@ -658,7 +660,7 @@ async def unnamed_groups(s: Any, *, more: bool = False, hidden: bool = False) ->
     return [dict(r) for r in rows]
 
 
-FACE_COLUMNS = ("f.id AS face_id, f.item_id, i.library_id, i.rel_path, i.kind, f.at_s, f.box, f.quality, "
+FACE_COLUMNS = ("f.id AS face_id, f.item_id, i.library_id, i.rel_path, i.kind, f.at_s, f.end_s, f.box, f.quality, "
                 "f.group_id, f.person_id, f.confirmed")
 
 
@@ -685,11 +687,14 @@ async def group_faces(s: Any, gid: int, *, limit: int = 200, offset: int = 0) ->
 async def items_for_person(s: Any, person_id: int, *, confirmed_only: bool = False,
                            kind: str | None = None, limit: int = 200, offset: int = 0) -> list[dict[str, Any]]:
     """The search hook (slices 5-6): every photo and video ``person_id`` is
-    in, newest first, each with the moments (``at_s``) they appear in a
-    video and whether every sighting is confirmed."""
+    in, newest first, each with whether every sighting is confirmed and,
+    for a video, their appearances in time order: ``appearances``
+    (``[{"at_s", "end_s"}]``, first to last sighting) and ``moments`` (each
+    appearance's start, where a hit opens the player)."""
     rows = (await s.execute(text(
         "SELECT i.id AS item_id, i.library_id, i.rel_path, i.kind, i.taken_at, "
         "array_agg(f.at_s ORDER BY f.at_s) FILTER (WHERE f.at_s IS NOT NULL) AS moments, "
+        "array_agg(COALESCE(f.end_s, f.at_s) ORDER BY f.at_s) FILTER (WHERE f.at_s IS NOT NULL) AS ends, "
         "bool_and(f.confirmed) AS confirmed, count(f.id) AS faces "
         "FROM media_faces f JOIN media_items i ON i.id = f.item_id "
         "WHERE f.person_id = :p AND (NOT :c OR f.confirmed) AND (CAST(:k AS TEXT) IS NULL OR i.kind = :k) "
@@ -699,6 +704,8 @@ async def items_for_person(s: Any, person_id: int, *, confirmed_only: bool = Fal
     for r in rows:
         d = dict(r)
         d["moments"] = [float(x) for x in (d["moments"] or [])]
+        ends = [float(x) for x in (d.pop("ends") or [])]
+        d["appearances"] = [{"at_s": a, "end_s": max(a, e)} for a, e in zip(d["moments"], ends)]
         d["taken_at"] = d["taken_at"].isoformat() if d["taken_at"] else None
         out.append(d)
     return out
@@ -811,9 +818,10 @@ class VideoFaces:
     At most one frame per :data:`VIDEO_MIN_GAP_S` is looked at (call it on
     every candidate frame, before the caption cap: faces are cheap). One
     person's sightings within :data:`APPEARANCE_GAP_S` of each other are
-    one row, an *appearance*, at its first moment, keeping the best-looking
-    face, so a 10-minute clip makes a few rows, not hundreds. A restart
-    carries on after the last saved moment.
+    one row, an *appearance*, from its first moment (``at_s``) to its last
+    (``end_s``), keeping the best-looking face, so a 10-minute clip makes a
+    few rows, not hundreds. A restart carries on after the last saved
+    moment.
     """
 
     def __init__(self, item_id: int, resume_after: float | None) -> None:
@@ -831,7 +839,7 @@ class VideoFaces:
         async with session_scope() as s:
             if not (await switches.read(s))["faces"]:
                 return None
-            last = (await s.execute(text("SELECT max(at_s) FROM media_faces WHERE item_id = :i"),
+            last = (await s.execute(text("SELECT max(COALESCE(end_s, at_s)) FROM media_faces WHERE item_id = :i"),
                                     {"i": item_id})).scalar()
         return cls(item_id, float(last) if last is not None else None)
 
@@ -858,9 +866,13 @@ class VideoFaces:
                 same = max(self.open, key=lambda o: float(o.emb @ emb), default=None)
                 if same is not None and float(same.emb @ emb) >= APPEARANCE_MATCH:
                     same.last_s = at_s
+                    # The appearance now runs to this sighting (confirmed or not).
+                    await s.execute(text(
+                        "UPDATE media_faces SET end_s = GREATEST(COALESCE(end_s, at_s), :t) WHERE id = :f"),
+                        {"t": at_s, "f": same.face_id})
                     if f.quality > same.quality:
                         # A better look at the same appearance: keep it (the
-                        # moment stays the first one). Group it again only
+                        # start stays the first moment). Group it again only
                         # when nobody has confirmed it.
                         same.quality, same.emb = f.quality, emb
                         await s.execute(text(

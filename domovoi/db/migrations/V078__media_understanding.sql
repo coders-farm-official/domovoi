@@ -48,7 +48,11 @@
 -- media_frames, media_segments, media_summaries: the photo/frame captions,
 --   tags and OCR text; the video transcript; the video summary.
 -- media_faces, face_groups, face_denylist: faces (off by default; an admin
---   turns them on; turning them off deletes them all).
+--   turns them on; turning them off deletes them all). A photo's face has
+--   at_s and end_s NULL; a video's face row is one APPEARANCE: the person's
+--   sightings less than 30 s apart, from at_s (the first) to end_s (the
+--   last), with the best-quality look kept, so a 10-minute clip makes a
+--   few rows, not hundreds.
 -- media_excluded: the household's excluded folders (prefix '' = the whole
 --   library). Excluding deletes the results under it.
 -- media_runner_state: the one row the runner keeps for the dashboard
@@ -160,6 +164,7 @@ CREATE TABLE IF NOT EXISTS media_faces (
     id                   BIGSERIAL PRIMARY KEY,
     item_id              BIGINT NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
     at_s                 REAL,
+    end_s                REAL,
     box                  REAL[] NOT NULL,
     quality              REAL,
     embedding            BYTEA NOT NULL,
