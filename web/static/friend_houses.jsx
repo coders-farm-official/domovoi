@@ -702,7 +702,35 @@ const fhHouseOk = (h) => /^[0-9a-f]{64}$/.test(String(h || ''));
 
 /* ---- friends -------------------------------------------------------- */
 
-const FhAlertChoice = ({ friend, fire, onChanged }) => {
+// "07:00" (the house's clock, from the server) as the dashboard shows a
+// time elsewhere (calendar.jsx's fmtClock: "7:00am").
+const fhClock = (hhmm) => {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || ''));
+  if (!m) return null;
+  const d = new Date(2000, 0, 1, Number(m[1]), Number(m[2]));
+  if (window.fmtClock) return window.fmtClock(d);
+  return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }).toLowerCase().replace(/\s/g, '');
+};
+
+/* Why a friend's messages aren't being said right now: the friends
+   payload's quiet_hours ({rooms: all|some, until, read_later} or null).
+   Only for a choice that speaks in the rooms. */
+const fhQuietNote = (quiet, alert) => {
+  if (!quiet || (alert !== 'read' && alert !== 'sender')) return null;
+  const until = fhClock(quiet.until);
+  if (!until) return null;
+  const said = alert === 'read' ? 'read out' : 'announced';
+  if (quiet.rooms === 'some') {
+    return quiet.read_later
+      ? `Quiet hours in some rooms until ${until}: new messages will be ${said} there at ${until}.`
+      : `Quiet hours in some rooms until ${until}: new messages aren’t ${said} there, and won’t be later.`;
+  }
+  return quiet.read_later
+    ? `Quiet hours until ${until}: new messages will be ${said} at ${until}.`
+    : `Quiet hours until ${until}: new messages wait in the inbox and won’t be ${said} later.`;
+};
+
+const FhAlertChoice = ({ friend, quiet, fire, onChanged }) => {
   const [busy, setBusy] = React.useState(false);
   const current = FH_ALERTS.some((a) => a.id === friend.alert) ? friend.alert : 'inbox';
   const choose = async (alert) => {
@@ -728,6 +756,11 @@ const FhAlertChoice = ({ friend, fire, onChanged }) => {
         </label>
       ))}
       <span style={fhMuted}>Every choice keeps to each room’s quiet hours.</span>
+      {fhQuietNote(quiet, current) && (
+        <span className="fh-quiet-note" role="note" style={{ fontSize: 13, color: 'var(--warn-ink)' }}>
+          {fhQuietNote(quiet, current)}
+        </span>
+      )}
     </fieldset>
   );
 };
@@ -802,7 +835,7 @@ const FhBlockDialog = ({ friend, open, onCancel, onBlocked, fire }) => {
   );
 };
 
-const FhFriend = ({ friend, fire, onChanged, onMessage, onShare }) => {
+const FhFriend = ({ friend, quiet, fire, onChanged, onMessage, onShare }) => {
   const [editing, setEditing] = React.useState(false);
   const [name, setName] = React.useState(String(friend.name || ''));
   const [busy, setBusy] = React.useState(false);
@@ -855,7 +888,7 @@ const FhFriend = ({ friend, fire, onChanged, onMessage, onShare }) => {
           <Button icon="check" disabled={busy} onClick={verified}>We compared the codes</Button>
         </div>
       )}
-      <FhAlertChoice friend={friend} fire={fire} onChanged={onChanged}/>
+      <FhAlertChoice friend={friend} quiet={quiet} fire={fire} onChanged={onChanged}/>
       <div style={fhRow}>
         <span style={fhMuted}>fingerprint</span>
         <FhFingerprint value={friend.fingerprint} fire={fire}/>
@@ -881,7 +914,8 @@ const FhFriendsCard = ({ friends, fire, onChanged, onMessage, onShare }) => {
     <Card title="Friends" sub="Houses this house is friends with.">
       <div style={{ padding: '0 16px 4px' }}>
         {!list.length && <div style={{ ...fhMuted, padding: '12px 0' }}>no friends yet</div>}
-        {list.map((f) => <FhFriend key={f.id} friend={f} fire={fire} onChanged={onChanged} onMessage={onMessage} onShare={onShare}/>)}
+        {list.map((f) => <FhFriend key={f.id} friend={f} quiet={friends && friends.quiet_hours} fire={fire}
+                                   onChanged={onChanged} onMessage={onMessage} onShare={onShare}/>)}
       </div>
     </Card>
   );
@@ -966,6 +1000,7 @@ const FhMessage = ({ m }) => {
         <span>{fhWhen(here)}</span>
         {skewed && <span>· sent {fhWhen(theirs)} (their clock)</span>}
         {st && <span style={{ display: 'inline-flex', gap: 5, alignItems: 'center' }}>· <StatusDot tone={st.tone}/>{st.text}</span>}
+        {!out && m.held === 'quiet_hours' && <span className="fh-held">· held for quiet hours</span>}
       </div>
     </div>
   );

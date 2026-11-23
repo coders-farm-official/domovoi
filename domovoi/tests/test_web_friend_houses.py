@@ -375,6 +375,42 @@ def test_the_page_says_the_message_states_and_choices_plainly() -> None:
     assert "`Friend Houses - ${fhSafe(name) || 'friend'} - " in src
 
 
+def _quiet_notes(cases: list) -> list:
+    """fhQuietNote(quiet, alert) from the page, run in node for each case."""
+    import json
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    assert node, "node is required to run the page's quiet-hours note"
+    src = _page()
+    helpers = src[src.index("const fhClock = "):src.index("const FhAlertChoice = ")]
+    script = ("const window = {};\n" + helpers +
+              "\nconsole.log(JSON.stringify(JSON.parse(process.argv[1]).map(([q, a]) => fhQuietNote(q, a))));")
+    out = subprocess.run([node, "-e", script, json.dumps(cases)], capture_output=True, text=True, encoding="utf-8",
+                         timeout=60, check=True)
+    return json.loads(out.stdout)
+
+
+def test_the_quiet_hours_note_shows_only_when_the_friend_speaks_and_its_quiet_now() -> None:
+    all_ = {"rooms": "all", "until": "07:00", "read_later": False}
+    some = {"rooms": "some", "until": "07:00", "read_later": False}
+    assert _quiet_notes([[all_, "read"], [all_, "sender"], [all_, "inbox"], [None, "read"],
+                         [some, "read"], [{**all_, "read_later": True}, "read"]]) == [
+        "Quiet hours until 7:00am: new messages wait in the inbox and won’t be read out later.",
+        "Quiet hours until 7:00am: new messages wait in the inbox and won’t be announced later.",
+        None,
+        None,
+        "Quiet hours in some rooms until 7:00am: new messages aren’t read out there, and won’t be later.",
+        "Quiet hours until 7:00am: new messages will be read out at 7:00am.",
+    ]
+    src = _page()
+    # From the friends payload, next to the choices; and on a held message.
+    assert "quiet={friends && friends.quiet_hours}" in src
+    assert "{fhQuietNote(quiet, current) && (" in src
+    assert "{!out && m.held === 'quiet_hours' && <span className=\"fh-held\">· held for quiet hours</span>}" in src
+
+
 @pytest.mark.asyncio
 async def test_a_house_key_that_isnt_one_never_reaches_the_core(monkeypatch, forwarded) -> None:
     install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN})

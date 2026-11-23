@@ -147,6 +147,16 @@ a way that would otherwise get reported as a bug.
   anyone's; their remembered facts go in only when the question is about
   them.
 
+- Spoken suggestions (meals, restaurants, gifts, music, things to do) for
+  someone Domovoi recognizes use their remembered tastes and diet again;
+  plain fact questions still don't. Remembered allergies and diets are
+  never cut when a profile is long. After a food suggestion, when someone
+  in the house has a remembered allergy or diet, Domovoi adds one line: to
+  a voice it doesn't recognize, that nobody's allergies were taken into
+  account (naming no one and no allergy); to someone it knows, what the
+  others need ("Heads up: not all of these are peanut-free."), naming no
+  one.
+
 - A chat draft's changes view on the dashboard leaves a paragraph gap
   between a long removed passage and the added text after it, so the old
   last word no longer runs into the new first word.
@@ -175,6 +185,11 @@ a way that would otherwise get reported as a bug.
   aloud (messages and shared lists).
 - Friend Houses: a friend's messages and names read aloud stay out of the
   chat model's history, and "double check that" declines such a reply.
+- Friend Houses: a friend set to "say who it's from" or "read aloud" now
+  shows, during quiet hours, that new messages wait in the inbox until they
+  end and won't be said later (or that only some rooms are quiet), and a
+  message that wasn't said because of quiet hours is marked "held for
+  quiet hours" in Messages.
 - A guest's "play this one" on a room that stopped in the meantime is
   refused, so a guest never starts a stopped room.
 - A room's queue looks up the songs it can't place by path in one query

@@ -835,6 +835,15 @@ class MemoriesRepository:
         )
         return [(int(r[0]), r[1], r[2], r[3]) for r in row.all()]
 
+    async def list_active_household(self) -> list[tuple[int, str]]:
+        """``(person_id, body)`` for every active memory in the house: the
+        food-safety note after a meal suggestion reads everyone's
+        allergies and diets (domovoi/food_safety.py)."""
+        row = await self.s.execute(
+            text("SELECT person_id, body FROM memories WHERE status = 'active'")
+        )
+        return [(int(r[0]), r[1]) for r in row.all()]
+
     async def list_all(
         self, person_id: int, limit: int = 200
     ) -> list[tuple[int, str, str | None, str, str, datetime]]:
