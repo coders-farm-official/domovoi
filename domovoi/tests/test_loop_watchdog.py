@@ -9,6 +9,7 @@ at the end run the real thing (os._exit, faulthandler) in a child."""
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import os
 import socket
@@ -340,6 +341,20 @@ def test_a_database_that_refuses_is_not_a_stall(tmp_path) -> None:
     assert "ConnectionRefusedError" in out
 
 
+def _wait_for(cond, timeout: float = 15.0) -> bool:
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        if cond():
+            return True
+        time.sleep(0.05)
+    return False
+
+
+# The probe tests below: FAST, but a heartbeat stall only after 30 s, so
+# a loaded box (a slow-to-run loop) can't end them through the heartbeat.
+PROBES = dataclasses.replace(FAST, stall_sec=30.0)
+
+
 async def _hung_probe() -> None:
     await asyncio.Event().wait()
 
@@ -349,7 +364,7 @@ def test_no_answer_counts_when_a_separate_connection_answers(tmp_path) -> None:
     core's path to it is stuck, which a restart fixes."""
     controls: list[float] = []
 
-    with Harness(tmp_path, probe=_hung_probe, control_probe=controls.append) as h:
+    with Harness(tmp_path, probe=_hung_probe, control_probe=controls.append, limits=PROBES) as h:
         assert h.exited.wait(10)
         out = h.output()
     assert h.code == EXIT_CODE
@@ -376,8 +391,8 @@ def test_no_answer_is_not_counted_when_the_database_itself_is_slow(tmp_path, mon
         release.wait(30)
 
     try:
-        with Harness(tmp_path, probe=_hung_probe, control_probe=slow_control) as h:
-            time.sleep(4.0)
+        with Harness(tmp_path, probe=_hung_probe, control_probe=slow_control, limits=PROBES) as h:
+            assert _wait_for(lambda: len(controls) >= 4), f"only {len(controls)} control probes"
             assert not h.exited.is_set(), "a slow database must not restart the core"
             out = h.output()
             hung = h.wd._hung
@@ -390,13 +405,73 @@ def test_no_answer_is_not_counted_when_the_database_itself_is_slow(tmp_path, mon
     assert "in a row)" not in out          # nothing counted
 
 
+def test_a_control_probe_that_times_out_on_its_own_is_slow_not_failed(tmp_path) -> None:
+    """asyncpg's own timeout, raised before the watchdog's deadline: the
+    same verdict as no answer (review 2026-11-22, high)."""
+    calls: list[float] = []
+
+    def timed_out(timeout: float) -> None:
+        calls.append(timeout)
+        raise TimeoutError()
+
+    with Harness(tmp_path, probe=_hung_probe, control_probe=timed_out, limits=PROBES) as h:
+        assert _wait_for(lambda: len(calls) >= 4), f"only {len(calls)} control probes"
+        assert not h.exited.is_set(), "a control probe's own timeout must not restart the core"
+        out = h.output()
+    assert out.count("neither did a separate connection") == 1
+    assert "in a row)" not in out and "failed too" not in out
+
+
+def test_each_slow_spell_is_said_once_and_its_end_too(tmp_path) -> None:
+    """A slow spell that ends because ordinary probes answer again is over:
+    the next one is said again (review 2026-11-22, medium)."""
+    script = ["hang", "hang", "ok", "ok", "hang", "hang", "ok"]
+    seen: list[str] = []
+
+    async def probe() -> None:
+        step = script.pop(0) if script else "ok"
+        seen.append(step)
+        if step == "hang":
+            await asyncio.Event().wait()
+
+    def timed_out(timeout: float) -> None:
+        raise TimeoutError()
+
+    with Harness(tmp_path, probe=probe, control_probe=timed_out, limits=PROBES) as h:
+        assert _wait_for(lambda: len(seen) >= 8), f"probes stalled at {seen}"
+        assert not h.exited.is_set()
+        out = h.output()
+    assert out.count("neither did a separate connection") == 2
+    assert out.count("the database answers in time again") == 2
+
+
+def test_a_slow_spell_starts_the_no_answer_run_over(tmp_path) -> None:
+    """Counted, counted, slow, counted, counted: never three in a row (review
+    2026-11-22, low); the third after the slow one fires."""
+    plan = ["ok", "ok", "slow", "ok", "ok"]
+    controls: list[str] = []
+
+    def control(timeout: float) -> None:
+        step = plan.pop(0) if plan else "ok"
+        controls.append(step)
+        if step == "slow":
+            raise TimeoutError()
+
+    with Harness(tmp_path, probe=_hung_probe, control_probe=control, limits=PROBES) as h:
+        assert h.exited.wait(20)
+        out = h.output()
+    assert h.code == EXIT_CODE
+    assert len(controls) == 6, f"fired after {controls}: a slow spell must reset the run"
+    assert "3 database probes in a row got no answer" in out
+
+
 def test_a_failed_separate_check_counts_as_before(tmp_path) -> None:
     """The control probe can't tell (it raised): the no-answer counts, so a
     broken control probe never hides a stuck core."""
     def broken(timeout: float) -> None:
         raise RuntimeError("no driver")
 
-    with Harness(tmp_path, probe=_hung_probe, control_probe=broken) as h:
+    with Harness(tmp_path, probe=_hung_probe, control_probe=broken, limits=PROBES) as h:
         assert h.exited.wait(10)
         out = h.output()
     assert h.code == EXIT_CODE

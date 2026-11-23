@@ -612,6 +612,7 @@ class LoopWatchdog:
                     if self._db_error_said:
                         self._say("INFO", "loop watchdog: the database answers again")
                     self._db_error_said = False
+                    self._db_slow_over()
                 else:
                     # It answered, with an error: the database is down or
                     # refusing, not a frozen core. Said once per outage.
@@ -681,31 +682,42 @@ class LoopWatchdog:
             box["error"] = e
             box["done"].set()
 
+    def _db_slow_over(self) -> None:
+        """Something answered in time: a slow spell (if one was said) is over."""
+        if self._db_slow_said:
+            self._say("INFO", "loop watchdog: the database answers in time again")
+        self._db_slow_said = False
+
     def _check_control(self, now: float) -> str | None:
         """The control probe's verdict on the probe that got no answer.
         It answered: the core's own path is stuck, so it counts. It got no
-        answer in time either: the database itself is slow, so it doesn't.
-        It failed: unknown, so it counts, as before the control probe."""
+        answer in time either (or timed out on its own): the database
+        itself is slow, so it doesn't, and the run of no-answers starts
+        over. It failed any other way (a bad URL, no driver, refused):
+        unknown, so it counts, as before the control probe."""
         box = self._control
         assert box is not None
         if box["done"].is_set():
             self._control = None
             exc = box["error"]
             if exc is None:
-                if self._db_slow_said:
-                    self._say("INFO", "loop watchdog: the database answers a separate "
-                              "connection in time again")
-                self._db_slow_said = False
+                self._db_slow_over()
                 return self._count_no_answer("; a separate connection got an answer, so the "
                                              "core's own path to the database is stuck")
-            return self._count_no_answer(f"; the separate check failed too "
-                                         f"({type(exc).__name__}: {str(exc)[:200]})")
-        if now - box["started"] < self.limits.probe_timeout_sec:
+            # Its own timeout (asyncpg's, or the wait_for around it) is the
+            # same verdict as no answer by our deadline: slow, not broken.
+            if not isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
+                return self._count_no_answer(f"; the separate check failed too "
+                                             f"({type(exc).__name__}: {str(exc)[:200]})")
+        elif now - box["started"] < self.limits.probe_timeout_sec:
             return None
         # No answer on a connection that shares nothing with the core
-        # either: the database or the disk under it is slow. The thread is
-        # left (a daemon; asyncpg's own timeouts end it) and probing goes on.
+        # either: the database or the disk under it is slow. A thread still
+        # running is left (a daemon; asyncpg's own timeouts end it) and
+        # probing goes on. It breaks the run of no-answers: an old counted
+        # one must not add up with later ones across a slow spell.
         self._control = None
+        self._hung = 0
         if not self._db_slow_said:
             self._db_slow_said = True
             load = "; ".join(pressure())
