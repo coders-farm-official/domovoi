@@ -32,7 +32,7 @@ STATIC = REPO_ROOT / "web" / "static"
 # The one sentence the dashboard uses for this, verbatim.
 CONFIRM = "You have unsaved changes. Discard them and close?"
 GUARD = (
-    "if (dirty && !window.confirm('" + CONFIRM + "')) return;"
+    "if (dirty && !await askConfirm('" + CONFIRM + "')) return;"
 )
 
 
@@ -55,7 +55,7 @@ def test_the_document_editor_saves_on_close_and_asks_only_when_that_fails() -> N
     body = src[src.index("const requestClose = async () => {"):]
     body = body[:body.index("// The phone app's Back button closes through here too")]
     assert "const ok = await saveRef.current();" in body
-    assert ("if (!ok && !window.confirm(\"Your latest changes couldn't be saved. "
+    assert ("if (!ok && !await askConfirm(\"Your latest changes couldn't be saved. "
             "Close anyway and lose them?\")) return;") in body
 
 
@@ -68,7 +68,7 @@ def test_the_whiteboard_close_button_goes_through_the_guard() -> None:
     )
     assert 'icon="x" onClick={onClose}' not in src
     # requestClose is the only caller of onClose in the overlay.
-    assert "const requestClose = () => {" in src
+    assert "const requestClose = async () => {" in src
 
 
 def test_the_whiteboard_knows_when_the_scene_has_moved() -> None:

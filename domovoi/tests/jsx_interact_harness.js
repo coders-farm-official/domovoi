@@ -55,11 +55,22 @@ const scenarios = JSON.parse(scenarioArg.startsWith('@')
 const babelMod = require(path.join(root, 'web/static/vendor/babel/babel.min.js'));
 const Babel = babelMod.transform ? babelMod : (global.Babel || babelMod.default || babelMod);
 
+// The in-page askConfirm/askPrompt (components.jsx) wait on a click nobody
+// makes here. Answer at once through the scenario's own window.confirm /
+// window.prompt stubs, so those stubs still decide the answer. components.jsx
+// declares them with `const`; rewritten to `var` so the stubs can replace them.
+const DIALOG_STUBS = `
+var askConfirm = (msg) => Promise.resolve(typeof window.confirm === 'function' ? !!window.confirm(msg) : true);
+var askPrompt = (msg, o) => Promise.resolve(typeof window.prompt === 'function'
+  ? window.prompt(msg, o && o.value) : ((o && o.value) || ''));
+`;
+const dialogVar = (code) => code.replace(/const (askConfirm|askPrompt) =/g, 'var $1 =');
+
 const compiled = new Map();
 const compile = (file) => {
   if (!compiled.has(file)) {
     const src = fs.readFileSync(path.join(root, file), 'utf8');
-    compiled.set(file, Babel.transform(src, { presets: ['react'], filename: file }).code);
+    compiled.set(file, dialogVar(Babel.transform(src, { presets: ['react'], filename: file }).code));
   }
   return compiled.get(file);
 };
@@ -350,7 +361,9 @@ const run = async ({ files, component, props = {}, fnProps = [], api: table = {}
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
   if (setup) vm.runInContext(setup, sandbox, { filename: 'setup.js' });
+  vm.runInContext(DIALOG_STUBS, sandbox);
   for (const file of files) vm.runInContext(compile(file), sandbox, { filename: file });
+  vm.runInContext(DIALOG_STUBS, sandbox);
   vm.runInContext(`window.__component = ${component};`, sandbox);
   const Component = sandbox.window.__component;
   if (typeof Component !== 'function') throw new Error(`${component} is not a component`);

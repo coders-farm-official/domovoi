@@ -809,7 +809,7 @@ const InPageAsk = ({ ask, onDone }) => {
     return () => window.removeEventListener('keydown', h);
   });
   return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.45)',
+    <div style={{ position: 'fixed', inset: 0, zIndex: 110, background: 'rgba(0,0,0,0.45)',
                   display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
          onClick={() => done(false)}>
       <div role="dialog" aria-modal="true" aria-label={ask.title} onClick={(e) => e.stopPropagation()}
