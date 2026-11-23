@@ -198,6 +198,8 @@ class HelpDeskHandler(Handler):
     #   has a page for it: it poaches nothing, and nothing earlier can take
     #   a how-to question from it.
     priority_band = 106
+    # Reads only (a loud room answers it without asking first: loud_room).
+    read_only = True
     display = HandlerDisplay(label="Help desk", tone="info")
     example_phrases = ("how do I add a room", "how do I change the wake word")
     requires_network = "no"

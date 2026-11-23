@@ -499,6 +499,12 @@ class Settings(BaseSettings):
     # satellite when a voice turn needs a model that isn't loaded, rather
     # than leaving the room silent through the load.
     ollama_cold_start_notice: bool = True
+    # 1.5.0, noisy rooms (owner answer Q8): the XVF3800 DSP preset a
+    # satellite is put on when it reports the array's own settings
+    # ("factory"). EMPTY on purpose: whether a preset helps, and which,
+    # waits for the hour-long room test; until then nothing changes. A
+    # name from domovoi/mic_dsp.PRESETS; anything else counts as unset.
+    mic_dsp_default_preset: str = ""
     # The household's "AI features" switch (Settings → Models; both
     # installers ask "Include AI chat and questions?"). Off: nothing asks
     # a language model — no questions, no Chat, no news summary, no

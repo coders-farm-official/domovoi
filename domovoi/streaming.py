@@ -165,7 +165,8 @@ Client → Server
                            diverts the audio).
   text  utterance_end      {"type":"utterance_end","greeting_played":bool,
                             "greeting_clip":str,"ack_before_capture":true,"utt":N,
-                            "frames":N,"last_voiced_frame":N|null,"exit_reason":...,
+                            "frames":N,"last_voiced_frame":N|null,
+                            "first_voiced_frame":N|null,"exit_reason":...,
                             "voiced_frames":N,"trailing_silent_frames":N,
                             "silence_limit_frames":N,"sat_ms":N,"backlog_ms":N}
                            — `greeting_played` (optional) marks turns where
@@ -676,7 +677,7 @@ from domovoi.turn_timings import (
     whisper_block,
 )
 from domovoi.log_privacy import said
-from domovoi import overheard, room_devices, room_display, room_sound
+from domovoi import loud_room, overheard, room_devices, room_display, room_sound
 from domovoi import turn_history, turn_watchdog, wake_claims, wake_default
 from domovoi.turn_watchdog import (
     STAGE_IDENTIFY,
@@ -4371,6 +4372,15 @@ class StreamSession:
             # command recording (domovoi/command_captures.py). Old
             # satellites send none of the capture fields.
             capture_meta = command_captures.capture_meta(ctrl, in_call=in_call)
+            # 1.5.0, noisy rooms: a capture cut off at its cap is
+            # transcribed from where its speech began, a few seconds of it
+            # (domovoi/loud_room.py). Not for another device's stream.
+            stt_window = (
+                None if handover is not None or self.dropped_overflow
+                else loud_room.stt_window(ctrl, frames=self._utt_frames, trigger=trigger)
+            )
+            if stt_window is not None:
+                reuse, speculations = None, []
             self._response_task = asyncio.create_task(
                 self._process_utterance(
                     pcm, greeting_played=greeting_played, trigger=trigger,
@@ -4384,6 +4394,7 @@ class StreamSession:
                     capture_clock=clock,
                     wake_score=self._wake_score, wake_word=self._wake_fired,
                     handover=handover,
+                    stt_window=stt_window,
                 )
             )
             return
@@ -4525,6 +4536,13 @@ class StreamSession:
                     "mic_dsp room=%s preset=%s ok=%s readback=%s",
                     self.room_id, state["preset"], state["ok"], state["readback"],
                 )
+                # The household's boot default (owner answer Q8), when one
+                # is set; unset today, so nothing is sent.
+                default = mic_dsp.default_to_apply(state)
+                if default is not None:
+                    log.info("mic_dsp room=%s: applying the household default %s",
+                             self.room_id, default)
+                    await self.send_mic_dsp(default)
             return
         if t == "display_status":
             # Video satellite reporting its screen/kiosk state (on connect,
@@ -5692,14 +5710,26 @@ class StreamSession:
         wake_score: float | None = None,
         wake_word: str | None = None,
         mic_satellite_id: str | None = None,
+        stt_window: tuple[int, int] | None = None,
     ) -> None:
         interrupted = False
         response = None
         transcript = ""
+        # What speech recognition hears: the whole capture, or for one cut
+        # off at its cap in a loud room, from where its speech began
+        # (loud_room.stt_window). Everything else keeps the whole capture.
+        stt_pcm = pcm_bytes if stt_window is None else pcm_bytes[stt_window[0]:stt_window[1]]
+        if stt_window is not None:
+            log.info(
+                "stream %s: capped capture: transcribing %.1f-%.1f s of %.1f s "
+                "(from its first voiced frame)", self.room_id,
+                stt_window[0] / 32_000, stt_window[1] / 32_000, len(pcm_bytes) / 32_000,
+            )
         # A long capture (domovoi/overheard.py) opens no follow-up mic; a
         # capped one doesn't reach the tool model.
         long_capture = False
         capped_capture = False
+        loud_command = False
         # The turn watchdog (domovoi/turn_watchdog.py; incident 2026-11-09,
         # every room "thinking" for good behind a wedged speech recognition).
         # Speech recognition gets turn_watchdog.stt_cap() of the recording's
@@ -5741,7 +5771,7 @@ class StreamSession:
             async with reply_guard:
                 # ── Transcribe and clean ─────────────────────────────────────
                 heard = await self._transcribe_turn(
-                    pcm_bytes, timings=timings, trigger=trigger,
+                    stt_pcm, timings=timings, trigger=trigger,
                     reuse=reuse, speculations=speculations or [],
                     stt_deadline=stt_deadline,
                 )
@@ -5765,7 +5795,7 @@ class StreamSession:
                     return
                 transcript = await self._clean_transcript(
                     heard.text, greeting_played=greeting_played, trigger=trigger,
-                    audio_bytes=len(pcm_bytes), greeting_clip=greeting_clip,
+                    audio_bytes=len(stt_pcm), greeting_clip=greeting_clip,
                     ack_before_capture=ack_before_capture,
                 )
                 if transcript is None:
@@ -5775,7 +5805,7 @@ class StreamSession:
                 ):
                     stage = STAGE_SECOND_HEARING
                     heard, transcript = await self._hear_again(
-                        pcm_bytes, heard, transcript, timings=timings, trigger=trigger,
+                        stt_pcm, heard, transcript, timings=timings, trigger=trigger,
                         greeting_played=greeting_played, greeting_clip=greeting_clip,
                         ack_before_capture=ack_before_capture, stt_deadline=stt_deadline,
                     )
@@ -5793,6 +5823,9 @@ class StreamSession:
                 )
                 long_capture = verdict.long
                 capped_capture = verdict.capped
+                # The command at its start: said back, and asked about
+                # first when it would change the house (loud_room).
+                loud_command = verdict.capped and verdict.action == overheard.COMMAND
                 if verdict.action == overheard.IGNORE:
                     await self._ignore_overheard(
                         transcript, verdict=verdict, trigger=trigger,
@@ -5947,6 +5980,7 @@ class StreamSession:
                     # model either.
                     long_capture=long_capture,
                     capped_capture=capped_capture,
+                    loud_command=loud_command,
                     answerable=not long_capture,
                 )
                 intent = Intent(
@@ -6081,7 +6115,13 @@ class StreamSession:
         # (domovoi/overheard.py): the TV that kept the capture open would
         # answer it, and the room would talk to the TV in a loop. Cleared on
         # the response itself, so the music hold below agrees.
-        if long_capture and response is not None and getattr(response, "expect_followup", False):
+        if (
+            long_capture and response is not None and getattr(response, "expect_followup", False)
+            # Except "It's loud in here. Should I ...?" (loud_room): its
+            # answer is screened like any capture, so only a yes or a no
+            # said first counts.
+            and not (getattr(response, "data", None) or {}).get("loud_confirm")
+        ):
             log.info("stream %s: long capture: not listening for a follow-up", self.room_id)
             response.expect_followup = False
 

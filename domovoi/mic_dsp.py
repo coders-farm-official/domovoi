@@ -103,3 +103,29 @@ def clean_state(ctrl: dict[str, Any]) -> dict[str, Any]:
         "error": clean_mark(error)[:200] if isinstance(error, str) and error else None,
         "at": at if isinstance(at, str) and len(at) <= 40 and re.fullmatch(r"[0-9T:+.\-Z]+", at) else None,
     }
+
+
+def household_default() -> str | None:
+    """The household's boot-default preset for XVF3800 satellites
+    (``settings.mic_dsp_default_preset``; owner answer Q8: a preset becomes
+    the default only if the hour-long noisy-room test shows it helps). None
+    while unset, which it is: no value has been chosen."""
+    from domovoi.config import settings
+
+    name = (getattr(settings, "mic_dsp_default_preset", "") or "").strip()
+    return name if name in PRESETS and name != "factory" else None
+
+
+def default_to_apply(state: dict[str, Any]) -> str | None:
+    """The preset to send a satellite whose ``mic_dsp_state`` is ``state``
+    (from :func:`clean_state`): the household default, when one is set and
+    the array holds its factory settings. None otherwise — a satellite an
+    admin moved to another preset keeps it, and with no default set (today)
+    nothing is ever sent."""
+    preset = household_default()
+    if preset is None or state.get("preset") not in (None, "factory"):
+        return None
+    if state.get("error"):
+        # A write that failed is not retried on every report.
+        return None
+    return preset

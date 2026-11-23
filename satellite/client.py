@@ -6918,8 +6918,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
         # then the speaker's own level. None: the fixed gate, as before.
         pre_wake, self._pre_wake_dbfs = getattr(self, "_pre_wake_dbfs", None), None
         gate = self._capture_gate(pre_wake)
-        # The first frame the detector called speech (for the log: where a
-        # capped capture's command began).
+        # The first frame the detector called speech: where a capped
+        # capture's command began (the log, and `utterance_end`).
         first_voiced: int | None = 0 if prefix_frames else None
 
         # Tracks why the capture loop ended; surfaced in the stats log.
@@ -7118,6 +7118,11 @@ class Satellite(pc_engine.SpareDeviceEngine):
             "utt": utt,
             "frames": sent,
             "last_voiced_frame": last_voiced if last_voiced >= 0 else None,
+            # 1.5.0, noisy rooms: where speech began (0-based, null when the
+            # detector never heard any). For a capture cut off at its cap the
+            # core transcribes a few seconds from here: the command is said
+            # first, the room's chatter follows (domovoi/loud_room.py).
+            "first_voiced_frame": first_voiced,
             "exit_reason": exit_reason,
             "voiced_frames": voiced_count,
             "trailing_silent_frames": silent_frames,

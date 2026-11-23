@@ -218,6 +218,12 @@ Notes on the shape:
   routing model reads every word there, and example text pulls other turns
   towards the tool. (A handler without the field still gets the quoted
   phrases of a trailing `Example: '…'` in its description.)
+* `read_only = True` (1.5.0) says nothing the handler's fast paths do
+  changes the house: it only reads or says something. In a loud room a
+  command cut off at the recording cap is then answered at once; without
+  it Domovoi first asks "It's loud in here. Should I …?" and runs the
+  command only on a yes (a command phrased as a question is never asked
+  about). Leave it unset for anything that acts.
 * `requires_network = "no"` means this handler must work fully offline. If
   you declare `"yes"` or `"degraded"`, you must override
   `fallback_offline()` — also contract-checked.

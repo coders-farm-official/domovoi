@@ -569,6 +569,7 @@ def test_a_greeting_turn_reports_the_clip_and_that_it_came_first(monkeypatch):
     assert end == {
         "type": "utterance_end", **fields,
         "utt": 1, "frames": 10 + SILENCE_LIMIT, "last_voiced_frame": 9,
+        "first_voiced_frame": 0,
         "exit_reason": "vad_silence_after_speech", "voiced_frames": 10,
         "trailing_silent_frames": SILENCE_LIMIT, "silence_limit_frames": SILENCE_LIMIT,
     }

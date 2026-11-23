@@ -98,6 +98,8 @@ class RepeatHandler(Handler):
     #   against "say" / "again" / "what was that" phrasings. Tightly
     #   anchored regexes still won't poach "play that again" (music).
     priority_band = 180
+    # Reads only (a loud room answers it without asking first: loud_room).
+    read_only = True
     display = HandlerDisplay(label="Repeat", tone="info")
     example_phrases = ("say that again",)
     requires_network = "no"

@@ -105,6 +105,44 @@ async def test_the_reported_state_is_cached_only_from_a_declared_satellite(paire
     assert session.room_id not in getattr(ws.app.state, "satellite_mic_dsp", {})
 
 
+# ─── the household boot default (1.5.0, owner answer Q8: a seam only) ────
+
+
+def test_no_boot_default_is_chosen(monkeypatch):
+    from domovoi.config import settings
+
+    assert type(settings).model_fields["mic_dsp_default_preset"].default == ""
+    assert mic_dsp.household_default() is None
+    assert mic_dsp.default_to_apply({"preset": "factory", "error": None}) is None
+
+
+def test_a_set_default_applies_only_to_a_satellite_at_factory(monkeypatch):
+    from domovoi.config import settings
+
+    monkeypatch.setattr(settings, "mic_dsp_default_preset", "C")
+    assert mic_dsp.default_to_apply({"preset": "factory", "error": None}) == "C"
+    assert mic_dsp.default_to_apply({"preset": None, "error": None}) == "C"
+    # An admin's choice stands; a failed write is not retried on every report.
+    assert mic_dsp.default_to_apply({"preset": "B", "error": None}) is None
+    assert mic_dsp.default_to_apply({"preset": "factory", "error": "timeout"}) is None
+    for bad in ("factory", "Z", "c "):
+        monkeypatch.setattr(settings, "mic_dsp_default_preset", bad)
+        assert mic_dsp.default_to_apply({"preset": "factory"}) is None
+
+
+async def test_a_set_default_is_sent_when_the_satellite_reports_factory(paired, inventory, monkeypatch):
+    from domovoi.config import settings
+
+    report = {"type": "mic_dsp_state", "preset": "factory", "ok": True, "readback": {}}
+    session, ws = await _hello("pi_xvf3800")
+    ws.sent.clear()
+    await session._on_control(dict(report))
+    assert "set_mic_dsp" not in ws.types(), "unset: nothing is sent"
+    monkeypatch.setattr(settings, "mic_dsp_default_preset", "B")
+    await session._on_control(dict(report))
+    assert {"type": "set_mic_dsp", "preset": "B"} in ws.sent
+
+
 # ─── the admin endpoints ──────────────────────────────────────────────────
 
 

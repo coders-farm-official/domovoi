@@ -1493,5 +1493,41 @@
       "cooldown_ms": 1000,
       "level_percentile": 90
     }
+  },
+  "noisy_rooms": {
+    "about": [
+      "Noisy rooms (1.5.0), docs/uml/satellite-protocol.md 'Noisy rooms'. A capture cut off at its",
+      "cap names where its speech began; the core transcribes a few seconds from there",
+      "(domovoi/loud_room.py). Read by domovoi/tests/test_loud_room.py and",
+      "satellite/tests/test_utterance_end_capture_fields.py."
+    ],
+    "capped_utterance_end": {
+      "type": "utterance_end",
+      "greeting_played": false,
+      "utt": 3,
+      "frames": 1000,
+      "last_voiced_frame": 999,
+      "first_voiced_frame": 12,
+      "exit_reason": "max_record_seconds",
+      "voiced_frames": 960,
+      "trailing_silent_frames": 0,
+      "silence_limit_frames": 40
+    },
+    "capped_utterance_end_older_satellite": {
+      "type": "utterance_end",
+      "greeting_played": false,
+      "utt": 3,
+      "frames": 1000,
+      "last_voiced_frame": 999,
+      "exit_reason": "max_record_seconds",
+      "voiced_frames": 960,
+      "trailing_silent_frames": 0,
+      "silence_limit_frames": 40
+    },
+    "window_sec": 5.0,
+    "lead_sec": 0.3,
+    "heard_line_example": "It's loud in here. I heard: what time is it.",
+    "ask_line_example": "It's loud in here. Should I play some jazz in the kitchen?",
+    "no_line": "Okay, I won't."
   }
 }
