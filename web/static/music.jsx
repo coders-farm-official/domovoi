@@ -159,7 +159,7 @@ const NPCard = ({ np, tick, guest, onPlayRandom, onPause, onResume, onSkip, onSt
   const sourceHref = webHref(np.source_url);  // http(s) only, else no pill
   // A library file the room plays has a cover; now-playing maps MPD's
   // current file to its track id. A stream, or nothing, keeps the plain tile.
-  const coverSrc = (playing || paused) && np.track_id != null ? libraryCoverUrl(np.track_id) : null;
+  const coverSrc = (playing || paused) && np.track_id != null ? libraryCoverUrl(np.track_id, undefined, 52) : null;
   return (
     <div className="card" style={{ padding: 0 }}>
       <div style={{ padding: '14px 16px', display: 'grid', gridTemplateColumns: '52px 1fr', gap: 12, alignItems: 'center' }}>
@@ -538,7 +538,7 @@ const Drawer = ({ track, rooms, onClose, onDelete, onEdit, onPlayInRoom, onQueue
           <IconButton name="x" onClick={onClose}/>
         </div>
         <div style={{ padding: 16, display: 'flex', gap: 14, alignItems: 'center', borderBottom: '1px solid var(--border-soft)' }}>
-          <CoverArt src={libraryCoverUrl(track.id, track.cover_v)} size={72}/>
+          <CoverArt src={libraryCoverUrl(track.id, track.cover_v, 72)} size={72}/>
           {editing ? (
             <div style={{ minWidth: 0, flex: 1, display: 'grid', gap: 6 }}>
               {TRACK_TAG_FIELDS.map(tagInput)}
@@ -755,7 +755,7 @@ const LibraryTab = ({ lib, libraryTotal, sourceOptions, onSelect, onToggleFavori
                     "Library table"); the copy that isn't shown never loads. */}
                 <td onClick={e => e.stopPropagation()}>
                   <span className="lib-play">
-                    <span className="lib-cover-phone"><CoverArt src={libraryCoverUrl(t.id, t.cover_v)} size={32} icon={null}/></span>
+                    <span className="lib-cover-phone"><CoverArt src={libraryCoverUrl(t.id, t.cover_v, 32)} size={32} icon={null}/></span>
                     <IconButton name="play" onClick={() => onBrowserPlay(t, rowContext, items)} title="play in this browser"/>
                   </span>
                 </td>
@@ -765,7 +765,7 @@ const LibraryTab = ({ lib, libraryTotal, sourceOptions, onSelect, onToggleFavori
                     button). */}
                 <td style={{ paddingTop: 8, paddingBottom: 8 }}>
                   <div className="lib-track">
-                    <span className="lib-cover-desk"><CoverArt src={libraryCoverUrl(t.id, t.cover_v)} size={40}/></span>
+                    <span className="lib-cover-desk"><CoverArt src={libraryCoverUrl(t.id, t.cover_v, 40)} size={40}/></span>
                     <div className="lib-track-text">
                       <div style={{ fontWeight: 500 }}>{t.title || '—'}</div>
                       <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)' }}>
@@ -869,7 +869,7 @@ const ArtistsTab = ({ onOpen }) => {
                              width: '100%', padding: '8px 16px', font: 'inherit', textAlign: 'left',
                              background: 'transparent', color: 'var(--fg)', border: 0, cursor: 'pointer',
                              borderBottom: i === items.length - 1 ? 'none' : '1px solid var(--border-soft)' }}>
-              <CoverArt src={a.cover_track_id != null ? libraryCoverUrl(a.cover_track_id) : null} size={40}/>
+              <CoverArt src={a.cover_track_id != null ? libraryCoverUrl(a.cover_track_id, undefined, 40) : null} size={40}/>
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</div>
                 <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)' }}>
@@ -958,7 +958,7 @@ const ArtistDrawer = ({ artist, rooms, onClose, onPlayTracks, onQueueTracksInRoo
           <IconButton name="x" onClick={onClose} title="close"/>
         </div>
         <div style={{ padding: 16, display: 'flex', gap: 14, alignItems: 'center', borderBottom: '1px solid var(--border-soft)' }}>
-          <CoverArt src={artist.cover_track_id != null ? libraryCoverUrl(artist.cover_track_id) : null} size={56}/>
+          <CoverArt src={artist.cover_track_id != null ? libraryCoverUrl(artist.cover_track_id, undefined, 56) : null} size={56}/>
           <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: 16, fontWeight: 600 }}>{artist.name}</div>
             <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>

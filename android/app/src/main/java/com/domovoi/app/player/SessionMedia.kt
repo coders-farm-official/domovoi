@@ -56,9 +56,13 @@ internal object SessionMedia {
     /**
      * The artwork's address: a server path resolved against the server
      * ([absolute], ApiClient.absolute), a content:// or file:// address as it
-     * is ([CoverArt.model]); null when the item has none (a station).
+     * is ([CoverArt.model]); null when the item has none (a station). A
+     * library song's cover asks for the largest smaller copy ([CoverSize.XL],
+     * 768 px): the lock screen and the notification draw it big, and the
+     * size in the URL keeps it apart in the bitmap loader's cache.
      */
-    fun artwork(item: PlayItem, absolute: (String) -> String): String? = CoverArt.model(item.coverPath, absolute)
+    fun artwork(item: PlayItem, absolute: (String) -> String): String? =
+        CoverArt.sized(CoverArt.model(item.coverPath, absolute), CoverSize.XL)
 
     /** The metadata the item carries into the session. */
     fun metadata(item: PlayItem, absolute: (String) -> String): MediaMetadata =

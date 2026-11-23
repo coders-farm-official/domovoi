@@ -516,6 +516,26 @@ async def test_a_body_that_never_ends_hits_the_whole_fetch_deadline(dns, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_truncate_keeps_what_arrived_at_the_whole_fetch_deadline(dns, monkeypatch) -> None:
+    """A slow big feed with ``truncate=True`` returns the partial bytes,
+    marked truncated, instead of failing at the deadline."""
+    monkeypatch.setattr(net_safety, "time", _Clock())
+    url = "http://feeds.example.com/show.rss"
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, content=_adrip()))
+    async with httpx.AsyncClient(transport=transport) as client:
+        result = await net_safety.fetch_bytes(
+            url, max_bytes=1 << 30, timeout=1.0, client=client, truncate=True
+        )
+    assert result.truncated and 0 < len(result.content) < (1 << 30)
+    sync_transport = httpx.MockTransport(lambda request: httpx.Response(200, content=_drip()))
+    with httpx.Client(transport=sync_transport) as client:
+        result = net_safety.fetch_bytes_sync(
+            url, max_bytes=1 << 30, timeout=1.0, client=client, truncate=True
+        )
+    assert result.truncated and 0 < len(result.content) < (1 << 30)
+
+
+@pytest.mark.asyncio
 async def test_a_redirect_chain_that_stays_public_is_followed(dns) -> None:
     dns.set({"feeds.example.com": [str(PUBLIC_V4)], "cdn.example.com": [str(PUBLIC_V4)]})
     transport = _transport(

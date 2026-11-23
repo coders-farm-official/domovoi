@@ -82,7 +82,8 @@ class SessionMediaKindsTest {
         assertEquals("Kettle Band", m.artist)
         assertEquals("Cellar", m.albumTitle)
         assertEquals(MediaMetadata.MEDIA_TYPE_MUSIC, m.mediaType)
-        assertTrue(artwork().orEmpty().matches(Regex("http://.+/api/music/library/7/cover")))
+        // The largest smaller copy (CoverSize.XL), not the original picture.
+        assertTrue(artwork().orEmpty().matches(Regex("http://.+/api/music/library/7/cover\\?size=xl")))
     }
 
     @Test fun anAudiobookShowsItsTitleItsAuthorAndItsCover() {

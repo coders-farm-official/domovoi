@@ -211,12 +211,20 @@ public final class MusicCoverStore {
     /// The picture held for `trackID` at any version, the newest first: what
     /// a cover shows while its new version is fetched, so it swaps rather
     /// than flickering through the placeholder.
-    public func newestImage(trackID: Int64) -> MusicCover? {
-        var best: (version: Int, cover: MusicCover)?
+    ///
+    /// Of the copies held at that newest version, the one at `size` is
+    /// preferred; another size of the same version comes next.
+    public func newestImage(trackID: Int64, size: MusicCoverSize? = nil) -> MusicCover? {
+        var best: (version: Int, sameSize: Bool, cover: MusicCover)?
         for (key, held) in covers where key.trackID == trackID {
             guard case .image = held.cover else { continue }
             let version = key.version ?? -1
-            if best == nil || version > (best?.version ?? -1) { best = (version, held.cover) }
+            let sameSize = key.size == size
+            if let current = best {
+                if version < current.version { continue }
+                if version == current.version, !sameSize || current.sameSize { continue }
+            }
+            best = (version, sameSize, held.cover)
         }
         return best?.cover
     }
@@ -357,19 +365,28 @@ public final class MusicCoverStore {
 /// fresh — and a known one is shown without asking. From an older server
 /// `version` is nil, the path is the bare route, and the `ETag` is what
 /// tells an old picture from a new one.
+///
+/// **The size bucket is part of the key** (``MusicCoverSize``): a 160 px
+/// thumbnail and a 512 px copy of the same cover are different pictures with
+/// different `ETag`s, so a row's small copy never stands in for the player's
+/// large one, nor a revalidation of one confirm the other.
 public struct MusicCoverKey: Hashable, Sendable {
     public let trackID: Int64
     /// The cover's version (`cover_v`, V059), or nil from an older server.
     public let version: Int?
+    /// The size bucket asked for, or nil for the original picture.
+    public let size: MusicCoverSize?
 
-    public init(trackID: Int64, version: Int? = nil) {
+    public init(trackID: Int64, version: Int? = nil, size: MusicCoverSize? = nil) {
         self.trackID = trackID
         self.version = version
+        self.size = size
     }
 
     /// The path this cover is asked at: the server's `cover_url` shape,
-    /// `/api/music/library/{id}/cover?v={cover_v}`, or the bare route.
-    public var path: String { PlayerArtwork.libraryPath(trackID: trackID, coverV: version) }
+    /// `/api/music/library/{id}/cover?v={cover_v}`, or the bare route, with
+    /// `size=` added when a bucket is named.
+    public var path: String { PlayerArtwork.libraryPath(trackID: trackID, coverV: version, size: size) }
 }
 
 /// What the cover route answered.

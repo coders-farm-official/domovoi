@@ -383,7 +383,9 @@ async def _caller_is_admin(request: Request) -> bool:
     return await check_admin_request(request) in ("ok", "cookie-only", "pre-setup")
 
 
-@router.get("/{person_id}/profiles", response_model=list[VoiceProfile])
+@router.get(
+    "/{person_id}/profiles", response_model=list[VoiceProfile], dependencies=READ
+)
 async def list_profiles(person_id: int, request: Request) -> list[VoiceProfile]:
     """A person's voice samples (metadata only, never an embedding),
     newest first, each with its ``source``: ``satellite`` or ``phone``
@@ -392,7 +394,8 @@ async def list_profiles(person_id: int, request: Request) -> list[VoiceProfile]:
     deletes one with ``DELETE …/profiles/{profile_id}`` (a claim goes with
     what rooms learned through it).
 
-    Open, but trimmed for a caller who isn't an admin (N4): no ``room_id``
+    A household device's read, like the rest of the People page, and trimmed
+    for a caller who isn't an admin (N4): no ``room_id``
     on a phone sample (it is ``phone-<device id>``), and no claim details
     (where, by whom)."""
     admin = await _caller_is_admin(request)

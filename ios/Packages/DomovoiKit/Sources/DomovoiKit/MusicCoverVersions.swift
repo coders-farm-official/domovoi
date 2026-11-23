@@ -97,9 +97,9 @@ public final class MusicCoverVersions {
     /// comes back as it is. For the player's item, whose path was built when
     /// it was queued.
     public func versioned(_ path: String?) -> String? {
-        guard let path, let parsed = PlayerArtwork.coverPathParts(path),
+        guard let path, let parsed = PlayerArtwork.coverPathPieces(path),
               let heard = byTrack[parsed.trackID] else { return path }
         if let had = parsed.version, had >= heard { return path }
-        return PlayerArtwork.libraryPath(trackID: parsed.trackID, coverV: heard)
+        return PlayerArtwork.libraryPath(trackID: parsed.trackID, coverV: heard, size: parsed.size)
     }
 }

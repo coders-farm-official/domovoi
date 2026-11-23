@@ -7,6 +7,8 @@ a way that would otherwise get reported as a bug.
 
 ## 1.4.1 (unreleased) — Printing, videos, scans and Windows update hardening
 
+- **The list of a person's voice samples now needs a household device**, like the
+  rest of their People page.
 - **Printer discovery on a Mac install** counts only the Mac's own home
   network as home, and never dials the Mac itself through the VM's
   networks.

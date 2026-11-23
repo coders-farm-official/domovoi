@@ -676,3 +676,16 @@ def test_paging_links_in_the_head_are_kept_and_not_followed(monkeypatch, dns) ->
     assert parsed.feed.title == "Big Show"
     assert 10 < len(parsed.entries) < 200
     assert len(seen) == 1                       # one page, no archive walk
+
+
+def test_a_feed_cut_short_by_the_deadline_keeps_no_validators(monkeypatch) -> None:
+    """A read stopped by the fetch deadline (under the size cap) isn't the
+    whole feed, so no ETag is kept: the next poll reads it again instead of
+    getting 304 and never seeing the rest."""
+    body = b"<rss><channel><item><title>One</title></item>" + b" " * 64
+    cut = net_safety.FetchResult(url=FEED_URL, status_code=200, content=body,
+                                 truncated=True, etag='"e1"', last_modified=None)
+    monkeypatch.setattr(poller.net_safety, "fetch_bytes_sync", lambda *a, **k: cut)
+    poller._FETCHED.pop(FEED_URL, None)
+    poller.fetch_feed(FEED_URL, conditional=False)
+    assert FEED_URL not in poller._FETCHED
