@@ -7469,8 +7469,8 @@ async def admin_music_add_by_query(body: _AdminAddByQueryBody) -> dict[str, Any]
 class _AdminAddByUrlBody(BaseModel):
     room_id: str
     url: str = Field(..., min_length=1, max_length=2000)
-    title: str | None = None
-    dedup_key: str | None = None
+    title: str | None = Field(None, max_length=300)
+    dedup_key: str | None = Field(None, max_length=200)
     attach_to_playlist_id: int | None = Field(None, ge=1)
 
 
@@ -7524,6 +7524,17 @@ async def admin_music_add_by_url(
             status_code=400, detail=f"refusing this URL — {reason}"
         )
 
+    requested_by = "web"
+    dedup_key = body.dedup_key
+    if not decision.admin:
+        # A caller with no household credential is counted on its own, so
+        # it cannot fill the household's share of waiting link adds, and
+        # its dedup key is the link itself (a chosen key could claim
+        # another add's place in the queue).
+        if await admin_auth_mod.check_device_request(request) not in ("ok", "pre-setup"):
+            requested_by = "web:guest"
+            dedup_key = "url:" + hashlib.sha256(body.url.encode("utf-8")).hexdigest()
+
     async with session_scope() as s:
         if not decision.admin:
             # Without an admin session this adds one song at a time, never
@@ -7534,9 +7545,10 @@ async def admin_music_add_by_url(
                 await s.execute(
                     text(
                         "SELECT COUNT(*) FROM media_acquisitions "
-                        "WHERE kind = 'url' AND requested_by = 'web' "
+                        "WHERE kind = 'url' AND requested_by = :by "
                         "AND status IN ('pending', 'claimed')"
-                    )
+                    ),
+                    {"by": requested_by},
                 )
             ).scalar_one()
             if int(waiting) >= settings.acquisition_open_url_pending_cap:
@@ -7552,8 +7564,8 @@ async def admin_music_add_by_url(
             kind="url",
             text=body.url,
             metadata={"title": body.title} if body.title else {},
-            requested_by="web",
-            dedup_key=body.dedup_key,
+            requested_by=requested_by,
+            dedup_key=dedup_key,
             attach_to_playlist_id=body.attach_to_playlist_id,
             skip_library_dedup=True,
         )
