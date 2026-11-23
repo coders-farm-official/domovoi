@@ -239,6 +239,10 @@ a way that would otherwise get reported as a bug.
   room when its own quiet hours end, if they are still unread (once per
   room); Home's "needs attention" counts unread Friend Houses messages and
   links to them; and the Friend Houses page now starts with Messages.
+- Friend Houses: messages from a friend that arrive within a minute of
+  the last one read aloud are no longer left to the inbox: they are said
+  together when the minute is up ("Another message from …", or "3 more
+  messages from …" with up to three read aloud), still unread only.
 - Friend Houses: the page is open to everyone in the household. Messages
   and Shared lists (taking, declining and stopping a shared list with an
   existing friend) need only the household's paired browser or phone;
