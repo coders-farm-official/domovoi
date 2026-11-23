@@ -52,6 +52,9 @@ GET ws://<server>:6370/v1/room-audio/{satellite_id}
   `t0_us + n * 1 000 000 / 48 000`. Indices only grow; a gap (nothing to
   play) is simply indices with no chunk. Compute play times from `t0_us` and
   the index in floating point, not from `play_at_us` (which is rounded).
+  Every room's timeline on one server has the same `t0_us` (the server
+  picks it once), so index `n` is the same moment in every room; indices
+  can therefore be large from the first chunk (64-bit).
 
 ## 3. Handshake
 
@@ -323,6 +326,19 @@ Timing of the room's controls:
   song carries on, as it always did while a turn listened). It comes back
   with `gain` 1 timed at the first sample of a synced answer (the streamer
   mixes the music down under speech), or at the turn's end.
+* **Rooms sharing a queue, or a group**: the server decodes the host
+  room's stream once and every following room's timeline carries the same
+  samples at the same indices, so every speaker of every room in the group
+  plays the same sample at the same server time. Pause, skip and stop on
+  the host's player are one `flush` time in all of them; a resume starts
+  them at one index. A room joining mid-song starts at the song's current
+  place (about 40 ms after the join, not a full playout buffer later); a
+  room joining or leaving while its own music plays gets a `flush` and
+  carries on with the new music from there. Each room still has its own
+  timeline (`timeline_id`): an answer, a timer, a wake word's `gain` hold
+  in one room are mixed into or sent to that room's speakers only. A
+  grouped room whose devices don't play room audio keeps today's
+  `music_start` (its own stream player, not in step with the others).
 * **Volume**: the `/v1/stream` frame `set_volume` goes to every device of
   the room, with `at_us` (server clock) for devices that play room audio;
   they apply it when their clock model reads that time (at most one second

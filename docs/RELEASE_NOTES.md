@@ -19,7 +19,13 @@ a way that would otherwise get reported as a bug.
   satellite or phone app that can't play in sync plays the room's sound
   only when it is the room's only device. Satellites still install
   `mpg123`: it plays the greetings and the offline clip, and music from a
-  core older than 1.5.0.
+  core older than 1.5.0. Rooms sharing a queue, or grouped, play in
+  sync with each other too: the core decodes the host's music once and
+  every following room plays the same sample at the same moment; a room
+  joining mid-song comes in where the song is, and an answer or a wake
+  word in one room ducks only that room. A grouped room whose devices
+  can't play in sync keeps its own stream player, as before (not in step
+  with the others).
   [SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md#a-room-with-several-speakers).
 
 ## 1.5.0 (unreleased) — A command in a loud room is said back, and asked about first
