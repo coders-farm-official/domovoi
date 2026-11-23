@@ -435,7 +435,8 @@ GPU_DOCKER_RESTARTED=0
 # lacks (provision.sh's apt step puts them on a new one): xorriso, the
 # program the core runs to make old computers' room sticks (2026-10-16,
 # domovoi/usb_stick/); tesseract-ocr and its English data, what the core
-# runs to read scanned pages (1.4.0, domovoi/scan_reader/).
+# runs to read scanned pages (1.4.0, domovoi/scan_reader/) and the text in
+# photos (1.5.0, domovoi/media_understanding/photos.py).
 # DOMOVOI_MANAGE_PACKAGES=0 (or false/no/off) leaves them to the
 # administrator.
 MANAGE_PACKAGES=${DOMOVOI_MANAGE_PACKAGES:-1}
@@ -447,7 +448,7 @@ added_package_needs() {
   for p in "$@"; do
     case "$p" in
       xorriso) out+=("USB sticks for old computers need xorriso") ;;
-      tesseract-ocr*) [ "$tess" -eq 1 ] || out+=("reading scans needs tesseract-ocr"); tess=1 ;;
+      tesseract-ocr*) [ "$tess" -eq 1 ] || out+=("reading scans and text in photos needs tesseract-ocr"); tess=1 ;;
       dosfstools|mtools) [ "$kit" -eq 1 ] || out+=("offline kits need dosfstools and mtools"); kit=1 ;;
     esac
   done

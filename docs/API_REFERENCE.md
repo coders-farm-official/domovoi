@@ -1254,8 +1254,8 @@ window (the household's quiet hours) and, by day, only new arrivals after
 10 minutes without a voice turn, at a 1:1 duty cycle. Every model step
 gives way to a voice turn; reads go through a 20 MB/s bucket; helper
 programs run at `nice 19` and `ionice -c 3`. Slice 1 ships the catalogue
-and the runner (fingerprints only); captions, transcripts and faces come
-with later 1.5.0 slices.
+and the runner (fingerprints), slice 2 the photos (below); video
+transcripts and faces come with later 1.5.0 slices.
 
 The switches live in `household_settings` key `media_understanding`:
 `enabled` is on for a new install and off for a house that upgraded until
@@ -1274,6 +1274,22 @@ deleted through Files loses its results at once. Changes fire
 | `POST /api/media-understanding/rescan` | **Device** | — | `{ok: true}`: the core walks the libraries at its next look (within a minute). |
 | `POST /api/media-understanding/excluded` | **Admin** | `{library_id: "core:pictures"\|"core:videos", prefix: "Folder/Sub"}` (`""` = the whole library) | `{library_id, prefix, deleted}`: the rows (and results) deleted. `404` unknown library, `422` a path with `.`/`..`. |
 | `DELETE /api/media-understanding/excluded?library_id=&prefix=` | **Admin** | — | `{ok: true}`; the next walk catalogues the folder again. `404` when it wasn't excluded. |
+
+**Photos (slice 2).** Each photo gets two stages: `photo_date` (EXIF
+`DateTimeOriginal`, with `OffsetTimeOriginal` when present, else the
+household's wall clock; else the file's time; EXIF GPS saved only while
+`places` is on) and `photo_caption` (one call to the vision slot,
+`ollama_vision_model`, with Ollama structured output
+`{caption, tags, has_text}` on a 768 px copy; Tesseract reads the text
+only when `has_text` is true; with AI features off, Tesseract reads every
+photo and keeps a reading of 70 % confidence or more, and the stage is
+`skipped` with `ai-off`). Results are in `media_frames` (`idx` 0,
+`at_s` null) and the item's `search_doc` (tags A, captions B, text C,
+names D, `english`).
+
+| Method & path | Auth | Request | Response / purpose |
+|---|---|---|---|
+| `GET /api/media/search?q=&kind=&from=&to=&limit=&offset=` | **Device read** | `q` (≤ 300 chars): words, a kind ("photos", "videos") and a time ("last summer", "July 2024", "Christmas", "2023", "yesterday", "last month"; a month, season or holiday without a year means every year's); `kind` `image`\|`video`; `from`/`to` `YYYY-MM-DD` (household days, `to` included); `limit` 1–100 (40); `offset` | `{query: {words, kind, when}, items: [{id, library_id, path, name, kind, analysed, taken_at, date_from: "photo"\|"file", might_show, tags, has_text, text, score}], more}`. All words must match (`websearch_to_tsquery`: quotes for a phrase, `-word` to leave one out) in the captions, tags, text and names, or in the file and folder names by trigram (so a file not looked at yet is found by its name). Ranked by text score, then date taken, newest first. `might_show`, `tags` and `text` (≤ 500 chars) are untrusted text a model or OCR made: show them as text, never HTML, and a caption as "Might show: …". Thumbnails: `/api/images/thumb`. `422` for a bad `kind`, date, range or `limit`. |
 
 ### 3.5c2 Home location (1.4.1)
 

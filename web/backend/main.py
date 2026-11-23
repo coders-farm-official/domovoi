@@ -80,6 +80,7 @@ from web.backend.api import support_sessions as support_sessions_api
 from web.backend.api import stats as stats_api
 from web.backend.api import up_next as up_next_api
 from web.backend.api import up_next_history as up_next_history_api
+from web.backend.api import media_search as media_search_api
 from web.backend.api import media_understanding as media_understanding_api
 from web.backend.api import music_mix as music_mix_api
 from web.backend.api import home_location as home_location_api
@@ -454,6 +455,7 @@ app.include_router(up_next_api.router)
 app.include_router(up_next_history_api.router)
 app.include_router(music_mix_api.router)
 app.include_router(media_understanding_api.router)
+app.include_router(media_search_api.router)
 app.include_router(home_location_api.router)
 # Groups (V060): /api/music/groups — named sets of rooms and the shared
 # queues; its own literal prefix, proxied to the core.

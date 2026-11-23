@@ -4346,7 +4346,7 @@ case_added_packages_on_an_update_and_never_under_never() {
   check "never: status ok" eq "$(field status)" '"ok"'
   check "never: no step" eq "$(step_names)" "signature stop-services start-services health searxng"
   check "never: no apt" not_called "apt-get"
-  check "never: the journal says why" grep -qF "not installed while internet access is turned off: xorriso tesseract-ocr tesseract-ocr-eng dosfstools mtools (USB sticks for old computers need xorriso; reading scans needs tesseract-ocr; offline kits need dosfstools and mtools)" "$CASE/output.log"
+  check "never: the journal says why" grep -qF "not installed while internet access is turned off: xorriso tesseract-ocr tesseract-ocr-eng dosfstools mtools (USB sticks for old computers need xorriso; reading scans and text in photos needs tesseract-ocr; offline kits need dosfstools and mtools)" "$CASE/output.log"
   printf 'print("b")\n' >"$REPO/domovoi/app.py"
   local sha_b; sha_b=$(commit_all "B: code")
   echo sometimes >"$STATE/internet-policy"
@@ -4459,7 +4459,7 @@ case_added_packages_failure_is_a_warning_and_opt_out_is_honoured() {
   check "exit 0" eq "$RC" 0
   check "status ok" eq "$(field status)" '"ok"'
   check "a warn step" step_is added-packages warn
-  check "its detail is ours" grep -qF '"detail": "not installed: xorriso tesseract-ocr tesseract-ocr-eng dosfstools mtools (apt-get failed, exit 100, or another program was using apt; journalctl -u domovoi-update says why). The next update or Restart tries again. USB sticks for old computers need xorriso; reading scans needs tesseract-ocr; offline kits need dosfstools and mtools"' "$RESULT"
+  check "its detail is ours" grep -qF '"detail": "not installed: xorriso tesseract-ocr tesseract-ocr-eng dosfstools mtools (apt-get failed, exit 100, or another program was using apt; journalctl -u domovoi-update says why). The next update or Restart tries again. USB sticks for old computers need xorriso; reading scans and text in photos needs tesseract-ocr; offline kits need dosfstools and mtools"' "$RESULT"
   check "tried again with fresh lists" called "apt-get -o Dpkg::Use-Pty=0 -o DPkg::Lock::Timeout=20 -q update"
   check "no error on the run" eq "$(field error)" null
   check "no rollback" not_called "reset --keep"

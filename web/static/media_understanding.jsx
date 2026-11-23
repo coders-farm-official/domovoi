@@ -15,7 +15,15 @@
  *   POST /api/media-understanding/pause|run-now · (admin)
  *   POST /api/media-understanding/rescan        · (household)
  *   POST/DELETE /api/media-understanding/excluded (admin)
+ *   GET  /api/media/search?q=                    · search (household, 1.5.0 slice 2)
  * Live: `media_understanding.changed` on /ws/state.
+ *
+ * Search results carry words a model or OCR made from a picture (the
+ * caption, tags, the text found in it). They are untrusted text: rendered
+ * only as React text children (never HTML), and a caption is shown as
+ * "Might show: …" because a small model sometimes sees things that aren't
+ * there. The search box only shows once something has been understood
+ * (no misleading controls); the Photos page (slice 5) takes it over.
  */
 
 const MU_PHASES = {
@@ -59,6 +67,79 @@ const MuSwitch = ({ checked, disabled, onChange, label, sub }) => (
     </span>
   </label>
 );
+
+const muWhen = (iso) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+};
+
+const muThumb = (hit) => withDeviceToken(
+  `${API_BASE}/api/images/thumb?library_id=${encodeURIComponent(hit.library_id)}`
+  + `&path=${encodeURIComponent(hit.path)}&size=s`);
+
+/* One search hit. Every string from the server is a text child. */
+const MuHit = ({ hit }) => (
+  <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', fontSize: 13 }}>
+    {hit.kind === 'image'
+      ? <img src={muThumb(hit)} alt="" loading="lazy" width={64} height={64}
+             style={{ objectFit: 'cover', borderRadius: 6, background: 'var(--border-soft)', flex: '0 0 auto' }}/>
+      : <div aria-hidden="true" style={{ width: 64, height: 64, borderRadius: 6, background: 'var(--border-soft)', flex: '0 0 auto' }}/>}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+      <strong style={{ overflowWrap: 'anywhere' }}>{hit.name}</strong>
+      <span style={{ color: 'var(--fg-muted)', fontSize: 12 }}>
+        {muWhen(hit.taken_at)}{hit.date_from === 'file' ? ' (the file’s date)' : ''}
+      </span>
+      {hit.might_show && <span>Might show: {hit.might_show}</span>}
+      {hit.tags && hit.tags.length > 0 && (
+        <span style={{ color: 'var(--fg-muted)', fontSize: 12 }}>{hit.tags.join(', ')}</span>
+      )}
+      {hit.text && (
+        <span style={{ fontSize: 12, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+          Text in it: {hit.text}
+        </span>
+      )}
+      {!hit.analysed && <span style={{ color: 'var(--fg-muted)', fontSize: 12 }}>Not looked at yet: found by its name.</span>}
+    </div>
+  </div>
+);
+
+const MuSearch = () => {
+  const [q, setQ] = React.useState('');
+  const [res, setRes] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState('');
+  const run = async (e) => {
+    if (e) e.preventDefault();
+    if (!q.trim()) return;
+    setBusy(true); setErr('');
+    try {
+      setRes(await apiGet(`/api/media/search?q=${encodeURIComponent(q.trim())}&limit=20`, { quiet: true }));
+    } catch (x) {
+      setErr((x && x.message) || 'the search didn’t work');
+    } finally { setBusy(false); }
+  };
+  const items = (res && res.items) || [];
+  return (
+    <Card title="Search" sub="By what is in them and when: “dog at the beach”, “birthday cake 2023”, “snow last winter”.">
+      <form onSubmit={run} style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <input aria-label="Search photos and videos" className="cal-inp" value={q} maxLength={300}
+               onChange={(e) => setQ(e.target.value)} style={{ flex: 1, minWidth: 160 }}/>
+        <button type="submit" className="btn" disabled={busy || !q.trim()}>Search</button>
+      </form>
+      <div role="status" style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
+        {err && <div style={{ fontSize: 13, color: 'var(--danger, #b00)' }}>{err}</div>}
+        {res && items.length === 0 && <div style={{ fontSize: 13, color: 'var(--fg-muted)' }}>Nothing found.</div>}
+        {items.map((h) => <MuHit key={h.id} hit={h}/>)}
+        {items.length > 0 && (
+          <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+            Descriptions are a computer’s guess at what a picture shows, and are sometimes wrong.
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+};
 
 const MediaUnderstandingPanel = () => {
   const admin = useAdminSignedIn();
@@ -147,6 +228,8 @@ const MediaUnderstandingPanel = () => {
           {s.run_now && <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>Running now, day and night, until the backlog is done (still pausing for voice).</div>}
         </div>
       </Card>
+
+      {s.enabled && (((p.photos && p.photos.done) || 0) + ((p.videos && p.videos.done) || 0)) > 0 && <MuSearch/>}
 
       <Card title="Switches" sub={admin ? undefined : 'An admin can change these.'}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>

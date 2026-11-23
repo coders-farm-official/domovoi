@@ -967,3 +967,19 @@ def test_support_transcripts_are_security_tier_reads(label, path) -> None:
 @pytest.mark.parametrize(("label", "path"), SUPPORT_HOUSEHOLD_READS)
 def test_the_support_banner_is_a_household_read(label, path) -> None:
     assert admin_auth.require_device_read in _get_gates((label, path))
+
+
+# ─── Media understanding search (1.5.0, slice 2) ──────────────────────────
+# What is in the family's photos and videos (captions, the words on a
+# letter in a picture) is household content: paired devices only, like
+# the history, never an open page.
+
+MEDIA_HOUSEHOLD_READS = [
+    ("web", "/api/media/search"),
+    ("web", "/api/media-understanding"),
+]
+
+
+@pytest.mark.parametrize(("label", "path"), MEDIA_HOUSEHOLD_READS)
+def test_media_understanding_reads_are_household_reads(label, path) -> None:
+    assert admin_auth.require_device_read in _get_gates((label, path))

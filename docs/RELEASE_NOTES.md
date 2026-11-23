@@ -4,6 +4,27 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Photos: descriptions, text in pictures, dates, and search
+
+- **What changed.** The background runner now looks at each photo in
+  Pictures: the date it was taken (from the photo's own EXIF data, else
+  the file's time), one sentence of what it might show and up to 12 tags
+  (one call to the household's existing vision model, `qwen3-vl:2b` on a
+  CPU server or the larger one a GPU house picked in Settings → Models),
+  and, only when that model says the photo has writing in it, the exact
+  text, read by Tesseract. `GET /api/media/search` (paired devices) finds
+  photos and videos by those words, their file and folder names, and a
+  time said plainly ("dog at the beach last summer", "Christmas 2021",
+  "2023"). Settings → Chat & AI → Photos and videos has a search box once
+  something has been looked at.
+- **What to know.** Descriptions come from a small model and are shown as
+  "Might show: ..."; they are sometimes wrong. With the household's AI
+  features off there are no descriptions: Tesseract then reads every
+  photo and keeps only a confident reading. A photo's location is kept
+  only while "Use photo locations" is on. Tesseract is the package the
+  scan reader already installed (`tesseract-ocr`, `tesseract-ocr-eng`);
+  nothing new to install.
+
 ## 1.5.0 (unreleased) — Photos and videos: the catalogue and the background runner
 
 - **What changed.** The core keeps a catalogue of the image and video
