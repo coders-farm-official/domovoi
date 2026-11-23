@@ -83,8 +83,11 @@ class PlaybackAPI:
                 f"play_url: {source!r} is not a registered now-playing source"
             )
         # The room's MPD would fetch an internet stream itself, out of
-        # sight of every in-process gate: refuse it here under never.
-        if egress.check_destination(stream_url) is not None:
+        # sight of every in-process gate: refuse it here under never. A
+        # relay URL (relay_url) is judged by the remote URL it stands for.
+        from domovoi import player_relay
+
+        if egress.check_destination(player_relay.target_for(stream_url) or stream_url) is not None:
             egress.log_refusal(f"music stream {stream_url[:120]}")
             return Response(
                 text=(
@@ -185,8 +188,10 @@ class PlaybackAPI:
 
         A room that shares a queue (a group, domovoi/music_groups.py) stops
         alone: it leaves the group and the other rooms play on."""
-        from domovoi import music_groups
+        from domovoi import music_groups, player_relay
 
+        # A relay serving the room ends with the music (SDK 1.16).
+        player_relay.revoke_room(room_id)
         if music_groups.share_of(room_id) is not None:
             from domovoi.plugins_runtime.loader import LOADER
 
@@ -272,6 +277,39 @@ class PlaybackAPI:
         as a stream relay (domovoi/player_route.py). None when it can't be
         told (no player yet, Docker didn't answer)."""
         return await player_route(room_id)
+
+    async def relay_url(self, room_id: str, remote_url: str, *, kind: str = "file") -> str:
+        """SDK 1.16: a URL on the core for ``room_id``'s music player that
+        plays ``remote_url`` through the core's checked fetch
+        (domovoi/player_relay.py), to hand to :meth:`play_url` instead of
+        the remote URL itself. The player never fetches the remote URL, so
+        never follows a redirect of its own into the house.
+
+        ``kind="radio"``: a live stream, one connection, ICY titles passed
+        through. ``kind="file"``: a finite file, any number of byte-range
+        requests (seek, resume) for 6 hours. Either way the token is bound
+        to this room, this URL and the room's player's address, must be
+        opened within 30 s, and ends at the room's next relay or stop.
+
+        Raises ``RelayUnavailable`` when the room's player can't be told
+        (no player yet, Docker didn't answer), ``ValueError`` for an
+        unknown kind or a URL that isn't http(s)."""
+        from domovoi import player_relay
+
+        if kind not in player_relay.KINDS:
+            raise ValueError(f"relay kind must be one of {player_relay.KINDS}, not {kind!r}")
+        route = await player_route(room_id)
+        if route is None:
+            raise player_relay.RelayUnavailable(f"no route to room {room_id!r}'s player")
+        return player_relay.mint(room_id, remote_url, route, kind=kind)
+
+    def relay_target(self, player_url: str | None) -> str | None:
+        """SDK 1.16: the remote URL a :meth:`relay_url` stands for while it
+        is still good (a now-playing matcher reading the player's file),
+        else None."""
+        from domovoi import player_relay
+
+        return player_relay.target_for(player_url)
 
     async def mpd_client_for(self, room_id: str) -> MPDClient:
         """Escape hatch (search_only, seek, ...) — same client the core

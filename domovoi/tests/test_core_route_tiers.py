@@ -294,6 +294,44 @@ def test_the_chat_callback_wears_its_own_secret_gate() -> None:
     assert admin_auth.require_device not in gates
 
 
+#: Core reads open on purpose, each with why.
+OPEN_BY_DESIGN = {
+    ("GET", "/v1/player-relay/{token}"): (
+        "a room's music player (SDK 1.16 player relay) holds no credential; the token in "
+        "the path is it: minted by a play, bound to one room, one remote URL and that "
+        "room's player's address (domovoi/player_relay.py, test_player_relay.py)"
+    ),
+}
+
+
+@pytest.mark.parametrize(("method", "path"), sorted(OPEN_BY_DESIGN))
+def test_open_by_design_routes_wear_no_gate_and_are_marked_open(method, path) -> None:
+    from domovoi.tests.route_walk import iter_route_contexts
+    from domovoi.webkit import is_open_endpoint
+
+    assert OPEN_BY_DESIGN[(method, path)].strip()
+    gates = _gates_for(method, path)
+    assert not any(g in gates for g in (
+        admin_auth.require_device, admin_auth.require_admin_mutation,
+        admin_auth.require_admin_read, admin_auth.require_device_read,
+    ))
+    (endpoint,) = [
+        rc.dependant.call for rc in iter_route_contexts(core_app.routes)
+        if getattr(rc, "path", None) == path and method in (getattr(rc, "methods", None) or set())
+    ]
+    assert is_open_endpoint(endpoint)
+
+
+@pytest.mark.asyncio
+async def test_the_player_relay_answers_a_bad_token_404_not_401(monkeypatch) -> None:
+    """No credential is asked for; a token that isn't good is simply not
+    found."""
+    install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN}, device_token=DEVICE_TOKEN)
+    async with _client() as c:
+        r = await c.get("/v1/player-relay/not-a-token")
+    assert r.status_code == 404
+
+
 # ─── Behaviour: what an uncredentialed caller actually gets ───────────────
 
 

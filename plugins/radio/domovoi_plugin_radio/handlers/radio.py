@@ -86,12 +86,13 @@ from domovoi.sdk import (
     HandlerDisplay,
     Intent,
     PluginSDK,
+    RelayUnavailable,
     Response,
     egress,
     net_safety,
 )
 
-from domovoi_plugin_radio import SCHEMA, player_relay
+from domovoi_plugin_radio import SCHEMA
 
 log = logging.getLogger(__name__)
 
@@ -115,7 +116,7 @@ async def _final_stream_url(sdk: Any, url: str) -> Any:
     so a station that can't play is refused aloud before anything is
     queued (PLG-12). It decides nothing about what the room's player
     fetches: the player is handed a relay URL on the core, and the relay
-    makes its own checked fetch (``player_relay``, M11). :data:`_BLOCKED`
+    makes its own checked fetch (``sdk.playback.relay_url``, M11). :data:`_BLOCKED`
     when a hop is refused, None when the stream couldn't be reached."""
     if not _stream_hops_checked(sdk):
         return url
@@ -948,14 +949,16 @@ class RadioHandler(Handler):
             # from the look above, so the player never fetches the station.
             # It is handed a one-use relay URL on the core for this room and
             # this station, and the core fetches the station, every hop
-            # checked, and passes the audio on (player_relay.py).
-            route = await self.sdk.playback.player_route(ctx.room_id)
-            if route is None:
+            # checked, and passes the audio on (SDK 1.16, the core's
+            # domovoi/player_relay.py).
+            try:
+                url_to_play = await self.sdk.playback.relay_url(
+                    ctx.room_id, str(url_to_play), kind="radio"
+                )
+            except RelayUnavailable:
                 return self._reply(
                     ctx, f"I couldn't reach the music player for {station['name']}."
                 )
-            station_url = str(url_to_play)
-            url_to_play = player_relay.mint(ctx.room_id, station_url, route)
 
         elif source == "fm":
             tuner = self._tuner()
@@ -1026,8 +1029,6 @@ class RadioHandler(Handler):
         """Tear down playback in the originating room, SDR tuner FIRST
         (see module docstring — invariant 9), then MPD via the playback
         SDK. Idempotent."""
-        if ctx.room_id:
-            player_relay.revoke_room(ctx.room_id)
         tuner = self._tuner()
         if tuner is not None:
             try:

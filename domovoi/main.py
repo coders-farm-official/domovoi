@@ -1223,6 +1223,12 @@ from domovoi.music_groups_routes import router as music_groups_router  # noqa: E
 
 app.include_router(music_groups_router)
 
+# A room's player fetching a remote stream or file through the core (SDK
+# 1.16, domovoi/player_relay.py): open, the one-use token is the credential.
+from domovoi.player_relay import router as player_relay_router  # noqa: E402
+
+app.include_router(player_relay_router)
+
 
 @app.get("/v1/voice/activity", dependencies=[Depends(require_device)])
 async def get_voice_activity() -> dict[str, Any]:

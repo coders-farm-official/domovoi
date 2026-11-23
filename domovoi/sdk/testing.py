@@ -57,7 +57,23 @@ class RecordingPlayback:
 
         return PlayerRoute(host="127.0.0.1", peer="127.0.0.1")
 
+    async def relay_url(self, room_id: str, remote_url: str, *, kind: str = "file") -> str:
+        """SDK 1.16: a real relay token (domovoi/player_relay.py) on the
+        loopback route above, so a test can open it against the core's
+        router. Not recorded in ``calls``."""
+        from domovoi import player_relay
+
+        return player_relay.mint(room_id, remote_url, await self.player_route(room_id), kind=kind)
+
+    def relay_target(self, player_url: str | None) -> str | None:
+        from domovoi import player_relay
+
+        return player_relay.target_for(player_url)
+
     async def stop(self, room_id: str) -> Response:
+        from domovoi import player_relay
+
+        player_relay.revoke_room(room_id)
         self.calls.append({"action": "stop", "room_id": room_id})
         return Response(text="Stopped.", music_action="stop")
 

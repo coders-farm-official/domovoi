@@ -1,9 +1,9 @@
-"""Open a station's stream for relaying: the one upstream fetch both relays use.
+"""Open a station's stream for the dashboard's browser player (``web.py``).
 
-Two places relay a station's audio instead of letting someone else fetch
-it: the dashboard's browser player (``web.py``, the web process) and a
-room's music player (``player_relay.py``, the core process). Both open the
-station here, through ``net_safety.open_stream``: http(s) only, every
+The web process relays a station's audio to the browser instead of letting
+the browser fetch it. (A room's music player is relayed by the core itself,
+``sdk.playback.relay_url``, SDK 1.16, which makes the same checks.) The
+station is opened here, through ``net_safety.open_stream``: http(s) only, every
 redirect hop re-checked and each connection pinned to the address its
 check judged. Only an audio stream is relayed (``stream_types``): a page,
 a script or a playlist (which a player would open entry by entry on its

@@ -29,8 +29,8 @@ BRIDGE = json.loads(
 def test_same_system_hosts_dial_the_bridge_gateway(kind) -> None:
     route = pr.route_for_kind(kind, BRIDGE)
     assert route == PlayerRoute(host="172.17.0.1", peer="172.17.0.3")
-    assert route.url("/v1/plugins/radio/player-relay/t") == (
-        "http://172.17.0.1:6370/v1/plugins/radio/player-relay/t"
+    assert route.url("/v1/player-relay/t") == (
+        "http://172.17.0.1:6370/v1/player-relay/t"
     )
     assert route.admits("172.17.0.3")
     assert route.admits("::ffff:172.17.0.3")

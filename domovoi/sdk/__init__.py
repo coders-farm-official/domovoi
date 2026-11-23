@@ -65,7 +65,10 @@ from __future__ import annotations
 #         (window.DomovoiPlugins.<slug>.homeCards.<Component>).
 # 1.15.0: playback.player_route(room_id): how a room's music player reaches
 #         the core and the address it calls from (the radio relay).
-API_VERSION = "1.15.0"
+# 1.16.0: playback.relay_url(room_id, remote_url, kind="file"|"radio") and
+#         playback.relay_target(url): a room's player plays a remote URL
+#         through the core's checked relay (GET /v1/player-relay/<token>).
+API_VERSION = "1.16.0"
 
 from domovoi.capabilities import (  # noqa: E402,F401
     CAPABILITIES,
@@ -106,6 +109,7 @@ from domovoi.sdk.http import HttpFactory  # noqa: E402,F401
 from domovoi.sdk.library import LibraryAPI, LibraryTrack  # noqa: E402,F401
 from domovoi.sdk.observability import get_logger  # noqa: E402,F401
 from domovoi.sdk.playback import PlaybackAPI  # noqa: E402,F401
+from domovoi.player_relay import RelayUnavailable  # noqa: E402,F401
 from domovoi.sdk.realtime import RealtimeAPI  # noqa: E402,F401
 from domovoi.sdk.sessions import SessionAPI  # noqa: E402,F401
 from domovoi.plugin_http import device_endpoint, open_endpoint  # noqa: E402,F401

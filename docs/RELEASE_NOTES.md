@@ -20,6 +20,21 @@ a way that would otherwise get reported as a bug.
   plugin now needs SDK 1.15 (new: `playback.player_route`).
   SECURITY_PRIVACY.md, "Radio streams".
 
+## 1.5.0 (unreleased) — Any plugin can play a remote URL through the core (SDK 1.16)
+
+- **What changed.** The relay that plays internet radio in a room is now
+  the core's, for any plugin: `sdk.playback.relay_url(room_id, url,
+  kind="file"|"radio")` returns a URL on the core (`GET
+  /v1/player-relay/<token>`) to hand a room's player instead of the
+  remote URL. `kind="file"` serves byte ranges, so a player can seek in
+  and resume a file; `kind="radio"` is the one-connection stream with ICY
+  titles. The radio plugin (1.5.3, needs SDK 1.16) uses it and no longer
+  has its own `/v1/plugins/radio/player-relay/<token>` route.
+- **What to know.** A plugin from outside this repo that hands a room's
+  player a remote URL should use it: feature-test
+  `getattr(sdk.playback, "relay_url", None)` and fall back to the direct
+  play on older cores (PLUGIN_DEVELOPMENT.md §4.5).
+
 ## 1.5.0 (unreleased) — Diagnostics for a satellite, in its room drawer
 
 - **What changed.** A room's drawer has a **Diagnostics** tab: **Run all**
