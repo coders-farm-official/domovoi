@@ -146,6 +146,19 @@ async def test_writes_outside_the_api_are_not_the_backstop_s_business() -> None:
         assert (await c.post("/not-api")).status_code != 403
 
 
+@pytest.mark.asyncio
+async def test_the_refusal_log_line_quotes_the_path(caplog) -> None:
+    """The decoded path is caller text: a line break in it must not start
+    a new line in the log."""
+    caplog.set_level("INFO", logger=mw.log.name)
+    async with _client() as c:
+        r = await c.post("/api/x%0Aforged")
+    assert r.status_code == 403
+    lines = [rec.getMessage() for rec in caplog.records if rec.name == mw.log.name]
+    assert lines, "the refusal was not logged"
+    assert all("\n" not in line for line in lines)
+
+
 # ─── The clients all send it ──────────────────────────────────────────────
 
 

@@ -89,6 +89,37 @@ a way that would otherwise get reported as a bug.
 - Friend Houses: a friend's messages and names read aloud stay out of the
   chat model's history, and "double check that" declines such a reply.
 
+## 1.4.1 (unreleased) — Sign-in, room pairing and drop-in checks
+
+- **Changing the admin password** checks the old password under the same
+  backoff as the sign-in form: after a wrong old password, the next try
+  waits (`429` with `Retry-After`).
+- **The dashboard's log** quotes the request path in its "refused" lines,
+  so a path can't start a new log line.
+- **Security docs**: the admin idle hour is restarted by any successful
+  admin write, including one that answers `"ok": false`; the house-wide
+  sign-in ceiling and what it costs are described; the short address
+  switch is listed among the admin-gated controls; and a hostile server
+  that stays on the network can hold a device asking every house from
+  answering until the server's address is typed in its setup portal.
+- **Room approval** binds a room only to the device whose request the
+  code was checked against: if another device took the request over in
+  between, nothing is bound and the request stays waiting.
+- **Settings → Rooms** no longer advises trusting an address a room
+  dialled that isn't the server's own unless someone set a room up with
+  it; otherwise it may be a relay.
+- **Drop-in from a phone**: `phone_id` must be a device id (the shape the
+  chat mic's voice turns already take) and may not name a connected room;
+  anything else is closed with `bad_phone_id`. The open snapshot names a
+  phone in a call `phone`, not by its device id.
+- **Satellite hellos**: `synced_sha` is kept only when it is a short
+  version label; anything else reads as unknown.
+- **Satellites** (with the satellite code update): a device approved by
+  asking every house remembers that server proves approvals, so its later
+  hellos never carry its approval code; and a pushed wake word whose name
+  isn't a wake-word name is ignored, as is such a name saved earlier (the
+  configured word is used).
+
 ## 1.4.1 (unreleased) — Queue, downloads, podcast and Word export hardening
 
 - **Up next** trims only songs a room was heard playing. Jumping ahead in a

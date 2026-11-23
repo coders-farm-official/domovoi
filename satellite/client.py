@@ -559,6 +559,20 @@ def _effective_voice(cfg: "Config") -> str | None:
     return cfg.voice_name
 
 
+# A pushed wake word's slug, as a file name: the stem of `<slug>.onnx` in
+# WAKE_MODELS_DIR. The words-list rule (wake_words.clean_slug), with room
+# for the core's longest trained-model slug (wake_model_card: 80). No path
+# separator, so it never names a file outside the cache.
+_WAKE_FILE_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}\Z")
+
+
+def _safe_wake_slug(raw: object) -> str | None:
+    """``raw`` stripped when it is a wake-word slug, else None."""
+    if isinstance(raw, str) and _WAKE_FILE_SLUG_RE.match(raw.strip()):
+        return raw.strip()
+    return None
+
+
 def _effective_wake_word(cfg: "Config") -> str:
     """The wake word this satellite should listen for: the runtime sidecar
     slug if present (a model pushed from the dashboard), else the configured
@@ -568,10 +582,10 @@ def _effective_wake_word(cfg: "Config") -> str:
     slug. Mirrors `_effective_voice`."""
     try:
         if WAKE_SIDECAR.is_file():
-            slug = WAKE_SIDECAR.read_text(encoding="utf-8").strip()
+            slug = _safe_wake_slug(WAKE_SIDECAR.read_text(encoding="utf-8"))
             if slug:
                 return slug
-    except OSError:
+    except (OSError, ValueError):
         pass
     return cfg.wake_word
 
@@ -585,12 +599,12 @@ def _effective_wake_model_path(cfg: "Config") -> str | None:
     precedence: a dashboard-pushed model overrides the TOML."""
     try:
         if WAKE_SIDECAR.is_file():
-            slug = WAKE_SIDECAR.read_text(encoding="utf-8").strip()
+            slug = _safe_wake_slug(WAKE_SIDECAR.read_text(encoding="utf-8"))
             if slug:
                 model = WAKE_MODELS_DIR / f"{slug}.onnx"
                 if model.is_file():
                     return str(model)
-    except OSError:
+    except (OSError, ValueError):
         pass
     if cfg.wake_word_model_path and cfg.wake_word_model_path.exists():
         return str(cfg.wake_word_model_path)
@@ -8664,7 +8678,11 @@ class Satellite(pc_engine.SpareDeviceEngine):
             # mirror the model, and restart to load it. Run on a worker thread:
             # it does blocking HTTP + a service restart and must not stall the
             # asyncio receiver loop.
-            slug = payload.get("slug")
+            raw_slug = payload.get("slug")
+            slug = _safe_wake_slug(raw_slug)
+            if raw_slug and slug is None:
+                log.warning("set_wake_word: ignoring %r: not a wake-word slug", raw_slug)
+                return
             # `words` (1.4.0): the room's whole list, main word first, sent
             # only to a device whose hello gave `wake_words_max`.
             words = wake_words.parse_words(payload.get("words")) or None
@@ -10681,6 +10699,9 @@ def _adopt_approved_house(cfg: "Config", config_path: Path, house: Any, token: s
     # proof the core no longer runs (the room is bound), ignore its plain
     # `ready` as unproven, and stay half-paired until Reset pairing.
     _remember_approved()
+    # It just proved an approval, so it is a server that proves them: its
+    # hello never carries this device's code from here on (SAT-16).
+    _remember_proof_server(house.fingerprint)
     server_identity.clear_pending_server()
     log.info(
         "approved by the Domovoi server at %s (%s%s): it proved it knows this "

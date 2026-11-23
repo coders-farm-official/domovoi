@@ -619,3 +619,33 @@ async def test_spoken_start_in_ring_mode_says_it_is_asking(
     r = DropInHandler()._start("kitchen", ctx_for("office", app))
     assert r.dropin_action == "request"
     assert "asking" in r.text.lower()
+
+
+# ─── the open snapshot names a phone leg "phone" ──────────────────────────
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_admin_snapshot_names_a_phone_leg_phone() -> None:
+    """The snapshot is open: a phone in a drop-in call is shown as "phone",
+    never by its device id."""
+    from domovoi.main import app
+
+    transport = ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        app.state.active_sessions = {"kitchen": object()}
+        app.state.active_dropins = {
+            "phone-android-1a2b": {"peer": "kitchen", "initiator": True, "started_at": 1.0},
+            "kitchen": {"peer": "phone-android-1a2b", "initiator": False, "started_at": 1.0},
+        }
+        try:
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                r = await client.get("/v1/admin/snapshot")
+        finally:
+            app.state.active_dropins = {}
+            app.state.active_sessions = {}
+        assert r.status_code == 200, r.text
+        assert r.json()["active_dropins"] == [
+            {"initiator": "phone", "target": "kitchen", "started_at": 1.0}
+        ]
+        assert "android-1a2b" not in r.text

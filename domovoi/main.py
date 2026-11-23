@@ -1593,10 +1593,11 @@ async def health(
         else:
             log.warning(
                 "refused to sign the identity proof for %s: it is not an "
-                "address of this server. If satellites reach this server "
-                "through that address (a name, a NAT or a port-forward), list "
-                "it in TRUSTED_HOSTS; otherwise something between a "
-                "satellite and this server is relaying its questions.", addr,
+                "address of this server. Only if someone set a satellite up "
+                "with that address (a name, a NAT or a port-forward that "
+                "reaches this server) does it belong in TRUSTED_HOSTS; "
+                "otherwise something between a satellite and this server may "
+                "be relaying its questions, and it must not be listed.", addr,
             )
             # And where an admin looks: Settings → Rooms says it too.
             join_problems.addr_refused(addr)
@@ -2769,14 +2770,24 @@ async def admin_snapshot() -> dict[str, Any]:
     """
     import time
 
+    from domovoi.models import PHONE_ROOM_PREFIX
     from domovoi.workers.lyrics_index import lyrics_index_status
     # active_dropins is keyed by room_id in both directions; emit one row
     # per call (the initiator side) so the web UI can list live drop-ins
     # and offer a Hang-up button.
+    # This route is open: a phone leg is named "phone", never by the device
+    # id the app uses to recognise itself.
+    def _leg(name: Any) -> Any:
+        if isinstance(name, str) and name.startswith(PHONE_ROOM_PREFIX) and (
+            name not in app.state.active_sessions
+        ):
+            return "phone"
+        return name
+
     active_dropins = [
         {
-            "initiator": room,
-            "target": v["peer"],
+            "initiator": _leg(room),
+            "target": _leg(v["peer"]),
             "started_at": v.get("started_at"),
         }
         for room, v in app.state.active_dropins.items()
@@ -9208,11 +9219,22 @@ async def phone_dropin(ws: WebSocket, room_id: str) -> None:
         )
         return
 
-    phone_id = ws.query_params.get("phone_id") or "phone"
+    from domovoi.phone_voice import PHONE_ID_RE
+
+    raw_phone_id = ws.query_params.get("phone_id")
+    # The same device-id shape the phone's voice turns take: the id is a
+    # registry key and is spoken in ring mode.
+    if raw_phone_id is not None and raw_phone_id != "" and not PHONE_ID_RE.match(raw_phone_id):
+        await _refuse_ws(ws, "bad_phone_id", f"/v1/dropin/{room_id}: phone_id is not a device id")
+        return
+    phone_id = raw_phone_id or "phone"
     # Namespace the id so a phone can never collide with (or masquerade
     # as) a real room in the active_dropins registry.
     if not phone_id.startswith("phone-"):
         phone_id = f"phone-{phone_id}"
+    if phone_id in ws.app.state.active_sessions:
+        await _refuse_ws(ws, "bad_phone_id", f"/v1/dropin/{room_id}: phone_id names a room")
+        return
     session = PhoneDropinSession(ws, phone_id=phone_id, target_room=room_id)
     # CORE-44: the credential that opened the call is read again every 30 s;
     # a rotated token, a sign-out or an idled-out session ends it (1008).
