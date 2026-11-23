@@ -274,6 +274,37 @@ def test_dockers_created_time_parses() -> None:
     assert rt._parse_created("") is None
 
 
+@pytest.mark.parametrize("text", [
+    "2026-11-17T09:25:30.123456789-05:00",          # local time with an offset
+    "2026-11-17T14:25:30.123456789+00:00",
+    "2026-11-17T09:25:30-05:00",                    # no fraction
+    "2026-11-17 09:25:30.123456789 -0500 EST",      # Go's own form
+    "2026-11-17T14:25:30.123456",                   # no zone at all: taken as UTC
+])
+def test_every_created_form_parses_to_the_same_aware_instant(text) -> None:
+    # The offset's digits used to be counted into the fraction, which made
+    # an offset time naive, and every reconcile then failed with "can't
+    # subtract offset-naive and offset-aware datetimes" (a house,
+    # 2026-11-22).
+    parsed = rt._parse_created(text)
+    assert parsed is not None and parsed.tzinfo is not None
+    assert parsed.replace(microsecond=0) == datetime(2026, 11, 17, 14, 25, 30, tzinfo=timezone.utc)
+
+
+def test_an_offset_created_time_never_breaks_the_age_check() -> None:
+    now = datetime(2026, 12, 1, tzinfo=timezone.utc)
+    info = rt.ImageInfo("sha256:x", rt.dockerfile_sha(),
+                        rt._parse_created("2026-11-28T10:00:00.5-05:00"))
+    assert info.stale(now=now) is None
+    old = rt.ImageInfo("sha256:x", rt.dockerfile_sha(),
+                       rt._parse_created("2026-01-01T10:00:00.5-05:00"))
+    assert "days old" in old.stale(now=now)
+
+
+def test_an_unreadable_created_time_is_unknown_not_an_error() -> None:
+    assert rt._parse_created("yesterday") is None
+
+
 def test_the_dockerfile_pins_its_base_by_digest() -> None:
     text = rt.DOCKERFILE.read_text(encoding="utf-8")
     from_lines = [line for line in text.splitlines() if line.startswith("FROM ")]
