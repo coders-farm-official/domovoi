@@ -488,8 +488,10 @@ def test_move_checkout_refusals(checkout):
 # ─── Routes: admin only ──────────────────────────────────────────────────
 
 def _deps(app, path: str, method: str) -> set:
-    for r in app.routes:
-        if getattr(r, "path", None) == path and method in getattr(r, "methods", set()):
+    from domovoi.tests.route_walk import iter_route_contexts
+
+    for r in iter_route_contexts(app.routes):
+        if getattr(r, "path", None) == path and method in (getattr(r, "methods", None) or set()):
             return {d.call for d in r.dependant.dependencies}
     raise AssertionError(f"no route {method} {path}")
 
@@ -508,9 +510,10 @@ def test_routes_are_admin_tier():
 
 
 def test_the_web_update_routes_come_before_a_kits_id():
+    from domovoi.tests.route_walk import iter_route_contexts
     from web.backend.main import app as web
 
-    paths = [(r.path, sorted(getattr(r, "methods", []))) for r in web.routes
+    paths = [(r.path, sorted(getattr(r, "methods", None) or [])) for r in iter_route_contexts(web.routes)
              if getattr(r, "path", "").startswith("/api/offline-kit")]
     i_update = paths.index(("/api/offline-kit/update", ["DELETE"]))
     i_build = paths.index(("/api/offline-kit/{build_id}", ["DELETE"]))

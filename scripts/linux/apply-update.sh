@@ -3872,8 +3872,8 @@ full_update() {
     run_soft_step searxng reconcile_searxng
     reconcile_os_jobs
     reconcile_added_packages
-    reconcile_wake_trainer || true
     if [ -n "$OFFLINE_STAGE" ]; then run_soft_step rooms offline_rooms; fi
+    reconcile_wake_trainer || true
     prune_python
     finish ok
     return
