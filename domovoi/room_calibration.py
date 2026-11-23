@@ -11,8 +11,14 @@ device (``latency``), which plays that much earlier.
 * :func:`solve`: the least-squares solve of §11.3 (pure);
 * :class:`RoomCalibration`: one run per room over the room-audio sockets,
   the stored values, the last run's outcome for the room drawer, and the
-  automatic run when a satellite joins or moves into a shared room
-  (``room_calibration_auto``, off by default: it plays an audible chirp).
+  automatic run when a second (or later) speaker joins a room or is moved
+  into one (``room_calibration_auto``, on by default, owner decision
+  2026-11-22; an admin can turn it off). A join or move starts one run
+  once things settle (debounced: devices arriving together share it),
+  only while the room is idle (nothing playing, no turn) and never in the
+  room's quiet hours: a run due in quiet hours waits until they end. A
+  room that stays busy is retried a few times, then left to "Tune the
+  speakers".
 """
 
 from __future__ import annotations
@@ -43,6 +49,13 @@ MAX_LATENCY_US = 250_000
 #: The automatic run waits this long after a device joins (its clock fit
 #: settles, a second device arriving with it joins the same run).
 AUTO_DELAY_S = 15.0
+#: A room busy (playing, a turn) when its automatic run is due is looked at
+#: again this often, this many times, then left alone. Quiet hours don't
+#: count as a try: the run waits for them to end (looked at as often), for
+#: at most :data:`AUTO_QUIET_MAX_S`.
+AUTO_RETRY_S = 60.0
+AUTO_RETRIES = 10
+AUTO_QUIET_MAX_S = 24 * 3600.0
 
 
 # ─── the solve (§11.3) ────────────────────────────────────────────────────
@@ -189,7 +202,11 @@ class RoomCalibration:
                  lead_us: int = LEAD_US, listen_ms: int = LISTEN_MS,
                  answer_grace_s: float = ANSWER_GRACE_S,
                  auto: Callable[[], bool] | None = None,
-                 auto_delay_s: float = AUTO_DELAY_S) -> None:
+                 auto_delay_s: float = AUTO_DELAY_S,
+                 auto_retry_s: float = AUTO_RETRY_S,
+                 auto_retries: int = AUTO_RETRIES,
+                 quiet: Callable[[str], Awaitable[bool]] | None = None,
+                 turn_active: Callable[[str], bool] | None = None) -> None:
         self.playout = playout
         self.store = store
         self.clock = clock or playout.clock
@@ -198,6 +215,13 @@ class RoomCalibration:
         self.answer_grace_s = answer_grace_s
         self.auto = auto or _auto_setting
         self.auto_delay_s = auto_delay_s
+        self.auto_retry_s = auto_retry_s
+        self.auto_retries = auto_retries
+        self.quiet = quiet or _room_quiet
+        self.turn_active = turn_active or self._turn_active
+        #: rooms where a device joined while their automatic run was going:
+        #: one more run follows it.
+        self._again: set[str] = set()
         self.last: dict[str, dict[str, Any]] = {}       # room -> last run's outcome
         self._running: set[str] = set()
         self._auto_tasks: dict[str, asyncio.Task] = {}
@@ -211,6 +235,35 @@ class RoomCalibration:
     def room_busy(self, room_id: str) -> bool:
         st = self.playout.streamers.get(room_id)
         return st is not None and (st.active or st.music is not None)
+
+    def _turn_active(self, room_id: str) -> bool:
+        """A device of the room is capturing, answering or holding a
+        follow-up (``StreamSession.awaiting_reply``)."""
+        live_in = getattr(self.playout.registry, "live_in", None)
+        if live_in is None:
+            return False
+        for sess in live_in(room_id):
+            waiting = getattr(sess, "awaiting_reply", None)
+            try:
+                if waiting is not None and waiting():
+                    return True
+            except Exception:  # noqa: BLE001 — unreadable counts as busy
+                return True
+        return False
+
+    async def auto_blocker(self, room_id: str) -> str | None:
+        """Why the automatic run can't play its chirps now, or None."""
+        if self.room_busy(room_id):
+            return "playing"
+        if self.turn_active(room_id):
+            return "a turn"
+        try:
+            if await self.quiet(room_id):
+                return "quiet hours"
+        except Exception:  # noqa: BLE001 — unknown hours: don't chirp
+            log.exception("calibration: quiet hours for %s unreadable", room_id)
+            return "quiet hours"
+        return None
 
     # ── frames in ──────────────────────────────────────────────────────
     def on_result(self, satellite_id: str, msg: dict[str, Any]) -> None:
@@ -339,35 +392,72 @@ class RoomCalibration:
     # ── the automatic run ──────────────────────────────────────────────
     def on_joined(self, satellite_id: str, room_id: str, calibrated: bool) -> None:
         """A speaker subscribed to ``room_id`` (connected, or moved in).
-        With the setting on, an uncalibrated one in a shared room starts a
-        run once things settle, if the room is quiet then."""
+        With the setting on, an uncalibrated one starts a run once things
+        settle, if the room then has two speakers that can take part.
+        Debounced: another join before the run starts restarts the wait;
+        a join during the run queues one more run after it."""
         if calibrated or not self.auto():
-            return
-        if room_id in self._auto_tasks and not self._auto_tasks[room_id].done():
             return
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
+        task = self._auto_tasks.get(room_id)
+        if task is not None and not task.done():
+            if room_id in self._running:
+                self._again.add(room_id)
+                return
+            task.cancel()
         self._auto_tasks[room_id] = loop.create_task(self._auto(room_id))
 
     async def _auto(self, room_id: str) -> None:
         await asyncio.sleep(self.auto_delay_s)
-        if len(self.participants(room_id)) < 2 or self.room_busy(room_id):
-            log.info("calibration: automatic run for %s skipped (alone or playing)", room_id)
-            return
-        try:
-            await self.calibrate(room_id, reason="joined")
-        except CalibrationRefused as e:
-            log.info("calibration: automatic run for %s skipped (%s)", room_id, e.message)
-        except Exception:  # noqa: BLE001
-            log.exception("calibration: automatic run for %s failed", room_id)
+        tries = 0
+        quiet_waited = 0.0
+        while True:
+            if len(self.participants(room_id)) < 2:
+                log.info("calibration: automatic run for %s skipped (one speaker)", room_id)
+                return
+            why = await self.auto_blocker(room_id)
+            if why == "quiet hours":
+                # Waits for the hours to end; never chirps in them.
+                if quiet_waited >= AUTO_QUIET_MAX_S:
+                    log.info("calibration: automatic run for %s dropped (quiet hours)", room_id)
+                    return
+                quiet_waited += max(self.auto_retry_s, 1.0)
+                await asyncio.sleep(self.auto_retry_s)
+                continue
+            if why is not None:
+                if tries >= self.auto_retries:
+                    log.info("calibration: automatic run for %s skipped (%s)", room_id, why)
+                    return
+                tries += 1
+                await asyncio.sleep(self.auto_retry_s)
+                continue
+            self._again.discard(room_id)
+            try:
+                await self.calibrate(room_id, reason="joined")
+            except CalibrationRefused as e:
+                log.info("calibration: automatic run for %s skipped (%s)", room_id, e.message)
+            except Exception:  # noqa: BLE001
+                log.exception("calibration: automatic run for %s failed", room_id)
+            if room_id not in self._again:
+                return
+            self._again.discard(room_id)
+            tries = 0
+            await asyncio.sleep(self.auto_delay_s)
 
 
 def _auto_setting() -> bool:
     from domovoi.config import settings
 
-    return bool(getattr(settings, "room_calibration_auto", False))
+    return bool(getattr(settings, "room_calibration_auto", True))
+
+
+async def _room_quiet(room_id: str) -> bool:
+    from domovoi.quiet_hours import is_quiet
+
+    return await is_quiet(room_id)
 
 
 def get_calibration(app: Any) -> RoomCalibration:

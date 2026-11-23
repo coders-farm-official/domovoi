@@ -50,6 +50,10 @@ class RoomChoice(BaseModel):
     new_room_name: str | None = Field(default=None, max_length=120)
 
 
+class LinkRoom(BaseModel):
+    room_id: str = Field(..., min_length=1, max_length=120)
+
+
 class MergeRooms(BaseModel):
     rooms: list[str] = Field(..., min_length=1, max_length=50)
 
@@ -87,6 +91,29 @@ async def delete_room(room_id: str, request: Request) -> Any:
 async def merge_rooms(room_id: str, body: MergeRooms, request: Request) -> Any:
     return _bridge(await post_admin(
         f"/v1/admin/rooms/{room_id}/merge", body.model_dump(),
+        headers=auth_forward_headers(request)))
+
+
+@router.post("/rooms/{room_id}/links", dependencies=ADMIN)
+async def link_rooms(room_id: str, body: LinkRoom, request: Request) -> Any:
+    """"Rooms that can hear this one": link two rooms into one wake group."""
+    return _bridge(await post_admin(
+        f"/v1/admin/rooms/{room_id}/links", body.model_dump(),
+        headers=auth_forward_headers(request)))
+
+
+@router.delete("/rooms/{room_id}/links/{other_room_id}", dependencies=ADMIN)
+async def unlink_rooms(room_id: str, other_room_id: str, request: Request) -> Any:
+    return _bridge(await delete_admin(
+        f"/v1/admin/rooms/{room_id}/links/{other_room_id}",
+        headers=auth_forward_headers(request)))
+
+
+@router.post("/rooms/{room_id}/links/{other_room_id}/dismiss", dependencies=ADMIN)
+async def dismiss_link_suggestion(room_id: str, other_room_id: str, request: Request) -> Any:
+    """"Not now" on the Rooms page's suggestion; remembered."""
+    return _bridge(await post_admin(
+        f"/v1/admin/rooms/{room_id}/links/{other_room_id}/dismiss", {},
         headers=auth_forward_headers(request)))
 
 

@@ -2,7 +2,7 @@
 
 Every Domovoi term you'll meet in these docs, in the dashboard, or in the code — alphabetical, defined in plain English. Cross-references in *italics* point at other entries here.
 
-**Room or satellite?** Two different things. A **room** is a place in the house: its name, voice, music queue, wake words, timers and quiet hours ("the Kitchen room"). A **satellite** is a device that gives a room an ability ("a satellite in the Kitchen"). Today's satellites are *voice satellites*: a Raspberry Pi, a spare PC or laptop, or a phone or tablet in the app's *room mode*. Today a room has exactly one satellite. Some dashboard and app labels still name the device after its room ("prepare a room's SD card", "Use this device as a room", "room mode"); they mean the satellite. Spoken commands that say "satellite" or "room" both work.
+**Room or satellite?** Two different things. A **room** is a place in the house: its name, voice, music queue, wake words, timers and quiet hours ("the Kitchen room"). A **satellite** is a device that gives a room an ability ("a satellite in the Kitchen"). Today's satellites are *voice satellites*: a Raspberry Pi, a spare PC or laptop, or a phone or tablet in the app's *room mode*. A room can hold several satellites (1.5.0). Some dashboard and app labels still name the device after its room ("prepare a room's SD card", "Use this device as a room", "room mode"); they mean the satellite. Spoken commands that say "satellite" or "room" both work.
 
 ---
 
@@ -106,7 +106,7 @@ Every Domovoi term you'll meet in these docs, in the dashboard, or in the code �
 
 **Release channel** — which updates a server follows: `stable` (releases only, the default for new installs) or `main` (every change as it lands). Chosen in Settings → System → About & updates, which also names the release the server runs (`1.3.0`, or `1.3.0 + 14 (abc1234)` between releases). The Android app has its own version number. See [LINUX_HOST.md](LINUX_HOST.md#release-channels).
 
-**Room** — a place in the house: its name, voice, music queue, wake words, timers and quiet hours. Identified by the stable `room_id` in its satellite's config. Rooms are what the intercom, drop-in, music playback, and Settings → Household → Rooms address; today each room has exactly one *satellite* and one *MPD* instance.
+**Room** — a place in the house: its name, voice, music queue, wake words, timers and quiet hours. Identified by the stable `room_id` in its satellite's config. Rooms are what the intercom, drop-in, music playback, and Settings → Household → Rooms address; a room can hold several *satellites* and has one *MPD* instance; every satellite in it plays the room's sound in sync.
 
 **Room mode** — the Android app's feature that turns a phone or tablet into a *satellite* for a room (voice, plus the room screen, a display for that room): on its charger it listens for the *wake word*, answers, plays the room's music and takes announcements. See [Spare-device satellites](SPARE_DEVICE_SATELLITES.md#phones-and-tablets-room-mode).
 

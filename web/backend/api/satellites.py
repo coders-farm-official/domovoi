@@ -530,8 +530,24 @@ async def _enrolment_for(body: SpareDeviceEnrolRequest, request: Request):
     if status != 200 or not isinstance(digest, dict) or not digest.get("sha256"):
         return bridge_response(status if status != 200 else 503, digest)
     core = (body.core or "").strip() or _advertised_core_http()
+    name = (body.room or "").strip()
+    in_room: str | None = None
+    if body.in_room:
+        # One more satellite for an existing room: the core picks a device
+        # name no other device has ("Kitchen 2") and remembers the
+        # invitation, so even an app that ignores `in=` lands in the room
+        # on approval (domovoi/room_invites.py).
+        status, made = await post_admin(
+            f"/v1/admin/rooms/{body.in_room}/invite", {"name": name or None},
+            headers=auth_forward_headers(request))
+        if status != 200 or not isinstance(made, dict) or not made.get("name"):
+            return bridge_response(status if status != 200 else 503, made)
+        name, in_room = made["name"], body.in_room
+    if not name:
+        raise HTTPException(status_code=422, detail={"reason": "missing_room",
+                                                     "message": "name the room"})
     try:
-        payload = enrolment.build(core, fingerprint, body.room)
+        payload = enrolment.build(core, fingerprint, name, in_room=in_room)
         parsed = enrolment.parse(payload)
     except enrolment.EnrolmentError as e:
         raise HTTPException(status_code=422, detail={"reason": e.reason, "message": str(e)}) from None
@@ -570,6 +586,8 @@ async def spare_device_enrolment(body: SpareDeviceEnrolRequest, request: Request
         "join_url": enrolment.join_link(payload),
         "room": parsed.room,
         "room_id": parsed.room_id,
+        # The existing room it joins (`in=`), None for a room of its own.
+        "in_room": parsed.in_room,
         "core": parsed.core,
         "fingerprint": parsed.fp,
         "bundle_sha256": digest["sha256"],
@@ -581,7 +599,8 @@ async def spare_device_enrolment(body: SpareDeviceEnrolRequest, request: Request
         "android_app": await _android_app_for_a_phone(request),
         "linux_runtime": await _linux_runtime(request),
         "usb_stick": await _usb_stick_for_the_card(request),
-        "conflict": await _room_in_use(parsed.room_id),
+        # A fresh device name for an existing room is never in use.
+        "conflict": None if parsed.in_room else await _room_in_use(parsed.room_id),
     }
 
 
@@ -1019,6 +1038,7 @@ async def list_conversations(
         )
         out: list[ConversationTurn] = []
         rows = rows.all()
+        heard = await _turn_devices(s, room_id, [int(r[0]) for r in rows])
         names = (await wake_default.word_names(s)
                  if with_word and any(r[13 + int(with_score)] for r in rows) else {})
         for r in rows:
@@ -1053,8 +1073,53 @@ async def list_conversations(
                 wake_word_name=(wake_default.word_name(fired, names)
                                 if isinstance(fired, str) and fired else None),
                 voice_match=heard_as,
+                **heard.get(int(r[0]), {}),
             ))
         return out
+
+
+# Whether conversation_log has V073's satellite_id / mic_satellite_id.
+_HAS_TURN_DEVICES: bool | None = None
+
+
+async def _turn_devices(s: Any, room_id: str, ids: list[int]) -> dict[int, dict[str, Any]]:
+    """Per turn: which satellite owned it and whose mic was transcribed,
+    and, in a room with several satellites (or when the mic was another
+    device), the room's name and that mic's name for the drawer's
+    "Heard best by …" line."""
+    global _HAS_TURN_DEVICES
+    if not ids:
+        return {}
+    if _HAS_TURN_DEVICES is None:
+        row = (await s.execute(text(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = 'conversation_log' AND column_name = 'mic_satellite_id'"
+        ))).first()
+        _HAS_TURN_DEVICES = row is not None
+    if not _HAS_TURN_DEVICES:
+        return {}
+    turns = (await s.execute(text(
+        "SELECT id, satellite_id, mic_satellite_id FROM conversation_log WHERE id = ANY(:ids)"
+    ), {"ids": ids})).all()
+    if not any(t[2] for t in turns):
+        return {t[0]: {"satellite_id": t[1]} for t in turns if t[1]}
+    room = (await s.execute(text("SELECT name FROM rooms WHERE room_id = :r"),
+                            {"r": room_id})).first()
+    room_name = room[0] if room is not None else room_id
+    sats = {r[0]: r[1] for r in (await s.execute(text(
+        "SELECT satellite_id, name FROM satellites WHERE room_id = :r "
+        "OR satellite_id = ANY(:m)"
+    ), {"r": room_id, "m": list({t[2] for t in turns if t[2]})})).all()}
+    in_room = (await s.execute(text(
+        "SELECT count(*) FROM satellites WHERE room_id = :r"), {"r": room_id})).scalar() or 0
+    out: dict[int, dict[str, Any]] = {}
+    for tid, owner, mic in turns:
+        d: dict[str, Any] = {"satellite_id": owner, "mic_satellite_id": mic}
+        if mic and (in_room > 1 or (owner and mic != owner)):
+            d["room_name"] = room_name
+            d["heard_by"] = sats.get(mic) or f"Satellite for the {room_name}"
+        out[tid] = d
+    return out
 
 
 # A pending turn older than this has outlived every limit the core puts on

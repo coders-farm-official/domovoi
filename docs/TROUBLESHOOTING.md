@@ -13,6 +13,7 @@ Many rows below name a fix that came with a particular version. If your Domovoi 
 - [No TTS audio / Domovoi is silent](#no-tts-audio--domovoi-is-silent)
 - [Wake word not triggering](#wake-word-not-triggering)
 - [Wake-word training](#wake-word-training)
+- [Rooms with several satellites](#rooms-with-several-satellites)
 - [Music won't play](#music-wont-play)
 - [Acquisitions / downloads stuck](#acquisitions--downloads-stuck)
 - [Everything offline, dashboard up](#everything-offline-dashboard-up)
@@ -143,6 +144,24 @@ its model stays in use until the new one lands.
 | **Record** says "... is training" | A word records nothing while it trains: the run is reading its clips | Wait for it to finish (or **Stop training**), then record more and **Train again** |
 | A word was training when the server restarted | Working as intended | The training container is removed and the word stays queued; it trains again once the core is back |
 | Voice is slow while a word trains | A CPU-only server: training takes most of the processor for about 75 minutes a word | Expected, and the dashboard said so before the Train. Lower **CPUs for training** to leave voice more, at the cost of a longer training |
+
+### Rooms with several satellites
+
+A room can hold several satellites (1.5.0). Open the room in Settings →
+Rooms first: it lists each satellite with whether it is connected and
+which one **speaks for the room**.
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| Two satellites chime or answer for one wake word | One of them is older than 1.5.0, so it can't hand over the turn: it records on its own. The server drops its duplicate, but its chime still plays | Upgrade that satellite (its **Overview** tab, **Upgrade room**, or **Upgrade satellite**) |
+| Answers, music or alarms sound doubled, like an echo | The room's speakers are more than a few milliseconds apart, or two satellites are close enough to hear each other's speaker | In the room's drawer press **Tune the speakers** (nothing may be playing). If it says a speaker kept its old setting, move the satellites closer to each other for the run, or somewhere quieter, and try again. Setting **Tune speakers on their own** (Settings → Rooms) does it each time a satellite joins |
+| A speaker in the room plays nothing | It is an older satellite or phone app (they play only when the room has no other satellite), or it isn't connected | Check its row in the room's drawer, upgrade or update it. A Bluetooth speaker or headphones on a device is that device's own output: check it there |
+| **Tune the speakers** is missing, or says tuning needs two speakers | Fewer than two connected speakers in the room can take part (older ones can't) | Connect and update the satellites, stop anything playing in the room, then try again |
+| Music starts about half a second after you ask | Working as intended: the speakers play a moment later together | Nothing to fix |
+| A satellite never answers (wake word is heard, light fades, no chime) | Another satellite in the room took the turn (it heard the wake word first); this one is a quiet listener. The answer still plays from every speaker, this one included | Nothing is wrong. Say the wake word nearer the satellite you want to hear it first; Domovoi transcribes whichever microphone heard you best |
+| A satellite never answers and shows no response at all | Its microphone is muted, or it isn't connected or approved | Its row in the room's drawer, then [Satellite won't connect](#satellite-wont-connect) and [Wake word not triggering](#wake-word-not-triggering) |
+| A new satellite appeared as a room of its own | It was approved into **a new room** | Open the room, press **Move to another room** on the satellite and pick the right one; delete the empty room afterwards |
+| Two rooms with the same name | Rooms from before 1.5.0 that shared a label | Settings → Rooms offers a merge; nothing merges until you press **Merge into one** and confirm |
 
 ### Music won't play
 

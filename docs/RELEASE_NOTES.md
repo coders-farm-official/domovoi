@@ -151,6 +151,44 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
   unchanged (and never move it into a path or query) for the form to fill
   in.
 
+## 1.5.0 (unreleased) — A room can have several satellites
+
+- **What changed.** A room is a place; a satellite is a device in it, and
+  a room can now hold several (a Pi on the counter, a phone on the shelf).
+  Satellite ids and pairings are unchanged (migration V073: every existing
+  satellite keeps its id, and its room is the one it was). In a room with
+  several satellites, one wake word starts **one** turn: the first
+  satellite to hear it chimes and records, the others stay quiet and send
+  up to two seconds of the command, and the microphone that heard you best
+  is transcribed once. Music, answers, timers, alarms, announcements and
+  plugins' speech play from every speaker in the room in sync, and rooms
+  that share a queue or a group play in sync with each other. The room's
+  drawer (Settings → Rooms) lists its satellites, moves one to another
+  room, approves a new one into a room, and has **Tune the speakers**.
+- **What to know.** Nothing changes for a room with one satellite except
+  that its music starts about half a second after it's asked for. A
+  satellite or phone app from before 1.5.0 can't claim a wake word or
+  play in sync: a duplicate recording from it is dropped, and it plays the
+  room's sound only when it is the room's only satellite, and the drawer
+  says **Update the app on this phone.** under it. Speaker tuning plays a
+  short audible chirp; it runs on its own once when a satellite joins or
+  moves into a room, only while the room is idle and never in quiet hours
+  (it waits for them to end), and **Settings → Rooms → Tune speakers on
+  their own** turns that off. The phone apps say "the Kitchen", never
+  "satellite".
+- **Also in rooms.** **Add a satellite to the Kitchen** in a room's drawer
+  makes the setup code for one more satellite there ("Kitchen 2"), and
+  its approval card has the Kitchen pre-selected, older phone apps
+  included. **Rooms that can hear this one** links rooms whose satellites
+  hear the same wake word into one turn; the Rooms page suggests a link
+  after a few such wakes, and **Keep them separate** is remembered. Turns
+  say which satellite heard best ("Answered in the Kitchen. Heard best by
+  Kitchen phone.").
+  Steps and troubleshooting:
+  [SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md#rooms-and-their-satellites),
+  [TROUBLESHOOTING.md](TROUBLESHOOTING.md#rooms-with-several-satellites),
+  [ROOM_AUDIO_PROTOCOL.md](ROOM_AUDIO_PROTOCOL.md).
+
 ## 1.5.0 (unreleased) — Security: pairing proof v2, chat reads, music-mix claim key
 
 - **What changed.** Three items of the 2026-11-22 security review (L9,

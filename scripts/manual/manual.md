@@ -1829,9 +1829,9 @@ chat can answer about a photo, in airplane mode too.
 [live slot: rooms]
 
 A room is a place in the house: its name, voice, music queue, wake
-words, timers and quiet hours. Each room has one satellite, the device
-that listens and plays there: a Raspberry Pi, a spare laptop, or a phone
-in room mode. [Settings → Household → Rooms](#settings/rooms) lists the
+words, timers and quiet hours. A room has one or more satellites, the
+devices that listen and play there: a Raspberry Pi, a spare laptop, or a
+phone in room mode. [Settings → Household → Rooms](#settings/rooms) lists the
 rooms. Each card shows:
 
 - online or offline;
@@ -1861,6 +1861,28 @@ played**, **Notes**, **Timers**, **Logs**, and **Settings** (the gear).
   room**, in the same place.
 - A room's satellite replaced with new hardware: **Reset pairing** (also
   under **maintenance**), then approve the new device.
+- A second satellite in a room: open the room and press **Add a
+  satellite to the Kitchen** for its setup code; its approval then has
+  the room picked already. A device set up any other way: answer **Which
+  room is it in?** with that room when you approve it. Later, open the
+  room and use the satellite's **Move to another room**.
+
+**Several satellites in one room**
+
+- One wake word is one turn: the first satellite to hear it answers, the
+  others stay quiet, and Domovoi transcribes the microphone that heard you
+  best.
+- Music, answers, timers, alarms and announcements play from every
+  speaker in the room at the same moment. The speakers tune themselves
+  with a short chirp when a satellite joins the room (never in quiet
+  hours). If they sound slightly apart, open the room and press **Tune
+  the speakers** (nothing may be playing).
+- Two rooms that hear each other's wake word: open one and add the other
+  under **Rooms that can hear this one**, so it is one answer, not two.
+  The Rooms page suggests this when it notices.
+- A satellite or app from before 1.5.0 can't join in: it plays only when
+  it is the room's only satellite, and its room says **Update the app on
+  this phone.**
 
 **Quiet hours**
 

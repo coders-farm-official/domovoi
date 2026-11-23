@@ -815,9 +815,10 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     FieldSpec(
         "room_calibration_auto", "Tune speakers on their own", "Rooms",
         "When a satellite joins or moves into a room with other speakers, "
-        "measure its speaker delay right away (every speaker in the room "
-        "plays a short chirp), if nothing is playing there. Off = only when "
-        "you press Tune the speakers in the room.",
+        "measure its speaker delay on its own (every speaker in the room "
+        "plays a short chirp), once the room is idle; in quiet hours it "
+        "waits for them to end. Off = only when you press Tune the speakers "
+        "in the room.",
         "bool",
     ),
 

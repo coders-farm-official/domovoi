@@ -176,6 +176,11 @@ CORE_ROUTES = [
     ("PATCH", "/v1/admin/rooms/{room_id}", admin_auth.require_admin_mutation),
     ("DELETE", "/v1/admin/rooms/{room_id}", admin_auth.require_admin_mutation),
     ("POST", "/v1/admin/rooms/{room_id}/merge", admin_auth.require_admin_mutation),
+    ("POST", "/v1/admin/rooms/{room_id}/links", admin_auth.require_admin_mutation),
+    ("DELETE", "/v1/admin/rooms/{room_id}/links/{other_room_id}", admin_auth.require_admin_mutation),
+    ("POST", "/v1/admin/rooms/{room_id}/links/{other_room_id}/dismiss",
+     admin_auth.require_admin_mutation),
+    ("POST", "/v1/admin/rooms/{room_id}/invite", admin_auth.require_admin_mutation),
     ("POST", "/v1/admin/satellites/{satellite_id}/room", admin_auth.require_admin_mutation),
     ("PATCH", "/v1/admin/satellites/{satellite_id}/name", admin_auth.require_admin_mutation),
     ("GET", "/v1/admin/satellites/approvals", admin_auth.require_admin_read),
@@ -190,6 +195,10 @@ WEB_ROUTES = [
     ("PATCH", "/api/rooms/{room_id}", admin_auth.require_admin_mutation),
     ("DELETE", "/api/rooms/{room_id}", admin_auth.require_admin_mutation),
     ("POST", "/api/rooms/{room_id}/merge", admin_auth.require_admin_mutation),
+    ("POST", "/api/rooms/{room_id}/links", admin_auth.require_admin_mutation),
+    ("DELETE", "/api/rooms/{room_id}/links/{other_room_id}", admin_auth.require_admin_mutation),
+    ("POST", "/api/rooms/{room_id}/links/{other_room_id}/dismiss",
+     admin_auth.require_admin_mutation),
     ("POST", "/api/satellites/{satellite_id}/room", admin_auth.require_admin_mutation),
     ("PATCH", "/api/satellites/{satellite_id}/name", admin_auth.require_admin_mutation),
     ("GET", "/api/satellites/approvals", admin_auth.require_admin_read),
@@ -228,6 +237,7 @@ def test_web_route_wears_its_tier(method, path, gate) -> None:
 
 def _sample(path: str) -> str:
     return (path.replace("{room_id}", "kitchen")
+            .replace("{other_room_id}", "den")
             .replace("{satellite_id}", "sat_a"))
 
 
@@ -235,6 +245,7 @@ _BODIES = {
     "/v1/admin/rooms": {"name": "Den"},
     "/v1/admin/rooms/{room_id}": {"name": "Den"},
     "/v1/admin/rooms/{room_id}/merge": {"rooms": ["den"]},
+    "/v1/admin/rooms/{room_id}/links": {"room_id": "den"},
     "/v1/admin/satellites/{satellite_id}/room": {"room_id": "den"},
     "/v1/admin/satellites/{satellite_id}/name": {"name": "Kitchen phone"},
     "/v1/admin/satellites/approvals/{room_id}/approve": {"code": "123456"},
@@ -545,7 +556,7 @@ async def test_the_room_drawer(house, admin) -> None:
         assert k["satellites"][0] == {
             "satellite_id": h["a"], "name": None, "sat_type": "voice", "board": None,
             "paired": True, "connected": False, "speaks_for_room": False,
-            "output_latency_us": None, "calibrated_at": None}
+            "output_latency_us": None, "calibrated_at": None, "needs_update": False}
         assert h["a"] not in rooms
         # Two rooms called Kitchen: offered, never merged on their own.
         offer = [o for o in body["merge_offers"] if set(o["rooms"]) >= {h["kitchen"], twin}]

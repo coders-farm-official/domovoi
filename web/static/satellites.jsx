@@ -564,10 +564,22 @@ const SatConversationTurn = ({ c, showWake = false }) => {
           </button>
         )}</span>}
       </div>
+      {c.heard_by && <SatTurnHeardBy c={c}/>}
       <VoiceMatchLine vm={c.voice_match}/>
     </div>
   );
 };
+
+/* Rooms with several satellites (1.5.0): the room answered, and the turn was
+ * transcribed from the microphone that heard the person best. The server
+ * sets heard_by only when there was a choice (the room has several
+ * satellites, or another device's mic was used). */
+const satHeardByText = (c) => `Answered in the ${c.room_name || 'room'}. Heard best by ${c.heard_by}.`;
+const SatTurnHeardBy = ({ c }) => (
+  <div className="turn-heard-by" style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 4 }}>
+    {satHeardByText(c)}
+  </div>
+);
 
 /* ---- Health section + last outage (Settings tab) -------------- */
 // GET /api/satellites/{room}/health: the latest `health` sample the Pi
@@ -4000,22 +4012,25 @@ const SpareUsbStick = ({ res, body, fire }) => {
   );
 };
 
-const SpareDeviceCard = ({ fire }) => {
+const SpareDeviceCard = ({ fire, target = null }) => {
   const admin = useAdminSignedIn();
   const [open, setOpen] = React.useState(false);
   const [room, setRoom] = React.useState('');
+  // "Add a satellite to the Kitchen" (1.5.0): the room drawer hands over an
+  // existing room; the server names the device ("Kitchen 2") and the code
+  // carries `in=kitchen`, so its approval card pre-selects the Kitchen.
+  const [inRoom, setInRoom] = React.useState(null);   // {room_id, name}
+  const cardRef = React.useRef(null);
   const [core, setCore] = React.useState('');
   const [editCore, setEditCore] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const [res, setRes] = React.useState(null);
   const [err, setErr] = React.useState(null);
-  if (!admin) return null;
-
-  const make = async () => {
-    if (!room.trim() || busy) return;
+  const make = async (into = inRoom) => {
+    if ((!into && !room.trim()) || busy) return;
     setBusy(true); setErr(null);
     try {
-      const body = { room: room.trim() };
+      const body = into ? { in_room: into.room_id } : { room: room.trim() };
       if (editCore && core.trim()) body.core = core.trim();
       const r = await apiPost('/api/satellites/enrolment', body);
       setRes(r);
@@ -4027,6 +4042,18 @@ const SpareDeviceCard = ({ fire }) => {
       setBusy(false);
     }
   };
+  React.useEffect(() => {
+    if (!target || !admin) return;
+    const into = { room_id: target.room_id, name: target.name };
+    setInRoom(into); setRes(null); setOpen(true);
+    make(into);
+    const el = cardRef.current;
+    if (el && el.scrollIntoView) el.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target]);
+  if (!admin) return null;
+  const leaveRoom = () => { setInRoom(null); setRes(null); setErr(null); };
+
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(res.command);
@@ -4037,7 +4064,7 @@ const SpareDeviceCard = ({ fire }) => {
   };
 
   return (
-    <div className="spare-device-card"
+    <div className="spare-device-card" ref={cardRef}
          style={{ background: 'var(--card)', border: '1px solid var(--border)',
                   borderRadius: 'var(--r-md)', boxShadow: 'var(--inner-highlight)' }}>
       <button onClick={() => setOpen(o => !o)}
@@ -4059,12 +4086,20 @@ const SpareDeviceCard = ({ fire }) => {
             approval code, and nothing in this command or code is a password. Spare computers
             and phones work as rooms the same way. (The USB stick is a preview: see its column below.)
           </div>
+          {inRoom ? (
+            <div className="spare-in-room" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+              <div style={{ fontSize: 13, flex: 1, minWidth: 200 }}>
+                Adding a satellite to the {inRoom.name}.
+              </div>
+              <Button variant="ghost" disabled={busy} onClick={leaveRoom}>Make a new room instead</Button>
+            </div>
+          ) : (
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
             <input value={room} onChange={e => setRoom(e.target.value)} maxLength={64}
                    onKeyDown={e => { if (e.key === 'Enter') make(); }}
                    placeholder="room name, e.g. Kid's Room" aria-label="room name"
                    style={{ ...smInput, minWidth: 220 }}/>
-            <Button variant="primary" icon="qr-code" disabled={!room.trim() || busy} onClick={make}>
+            <Button variant="primary" icon="qr-code" disabled={!room.trim() || busy} onClick={() => make()}>
               {busy ? 'making…' : 'make the code'}
             </Button>
             <label style={{ fontSize: 12, color: 'var(--fg-muted)', display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -4077,6 +4112,7 @@ const SpareDeviceCard = ({ fire }) => {
                      style={{ ...smInput, minWidth: 220 }}/>
             )}
           </div>
+          )}
           {err && (
             <div role="alert" style={{ fontSize: 12, color: 'var(--err-ink)' }}>
               {err}{/home network/.test(err) && !editCore
@@ -4086,7 +4122,10 @@ const SpareDeviceCard = ({ fire }) => {
           {res && (
             <>
               <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
-                It connects as <span className="mono">{res.room_id}</span> to{' '}
+                {res.in_room && inRoom
+                  ? `It joins the ${inRoom.name} as ${res.room}. It connects as `
+                  : 'It connects as '}
+                <span className="mono">{res.room_id}</span> to{' '}
                 <span className="mono">{res.core}</span>.
               </div>
               {res.conflict && <div role="alert" style={{ fontSize: 12, color: 'var(--warn-ink)' }}>{res.conflict}</div>}
@@ -4117,7 +4156,9 @@ const SpareDeviceCard = ({ fire }) => {
               </div>
               {res.command_windows && <SpareWindows res={res} fire={fire}/>}
               <SpareUsbStick res={res} fire={fire}
-                             body={editCore && core.trim() ? { room: res.room, core: core.trim() } : { room: res.room }}/>
+                             body={{ room: res.room,
+                                     ...(res.in_room ? { in_room: res.in_room } : {}),
+                                     ...(editCore && core.trim() ? { core: core.trim() } : {}) }}/>
             </>
           )}
         </div>
@@ -4149,6 +4190,7 @@ const SAT_HEALTH_POLL_MS = 10000;
 const ROOM_NEW = '__new__';
 
 const roomSatName = (sat, room) => sat.name || `Satellite for the ${room.name}`;
+const roomSatIsPhone = (sat) => sat.board === 'android_room' || sat.board === 'ios_room';
 
 const roomsErrText = (e, what) => {
   if (e && e.status === 409) return `${what}: that conflicts with how the room is set up now.`;
@@ -4224,6 +4266,15 @@ const RoomSatelliteRow = ({ room, sat, rooms, admin, canOpen, onOpen, fire, refr
         {sat.paired === false ? ' · not paired' : ''}
         {sat.output_latency_us != null ? ` · speaker tuned (${(sat.output_latency_us / 1000).toFixed(1)} ms)` : ''}
       </div>
+      {sat.needs_update && (
+        /* Owner answer Q6: an older app (or image) still works here, but it
+         * can't share a wake word with the room's other satellites, so its
+         * duplicate turns are dropped. Words only: the update happens on
+         * the device. */
+        <div className="room-sat-update" style={{ fontSize: 12, color: 'var(--warn-ink)', margin: '4px 0 0 18px' }}>
+          {roomSatIsPhone(sat) ? 'Update the app on this phone.' : 'Update the software on this satellite.'}
+        </div>
+      )}
       {mode === 'rename' && admin && (
         <div style={{ display: 'flex', gap: 6, marginTop: 8, marginLeft: 18 }}>
           <input value={name} onChange={e => setName(e.target.value)} aria-label="satellite name"
@@ -4307,7 +4358,94 @@ const RoomTuning = ({ room, admin, refresh }) => {
   );
 };
 
-const RoomDrawer = ({ room, rooms, sats, admin, onClose, onOpenSatellite, fire, refresh }) => {
+/* "Rooms that can hear this one" (1.5.0, owner answer Q3): rooms linked
+ * here share one turn per wake word, answered by the satellite that heard
+ * it best, instead of each answering. Off unless an admin links them (the
+ * Rooms page suggests a link when two rooms keep waking together).
+ * POST /api/rooms/{room}/links, DELETE /api/rooms/{room}/links/{other}. */
+const RoomHearLinks = ({ room, rooms, admin, fire, refresh }) => {
+  const [adding, setAdding] = React.useState(false);
+  const [pick, setPick] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  React.useEffect(() => { setAdding(false); setPick(''); }, [room.room_id]);
+  const rid = encodeURIComponent(room.room_id);
+  const linked = room.linked_rooms || [];
+  const nameOf = (id) => (rooms.find(r => r.room_id === id) || {}).name || id;
+  const choices = rooms.filter(r => r.room_id !== room.room_id && !linked.includes(r.room_id));
+  const add = async () => {
+    if (!pick) return;
+    setBusy(true);
+    try {
+      await apiPost(`/api/rooms/${rid}/links`, { room_id: pick });
+      fire(`The ${room.name} and the ${nameOf(pick)} now share one answer`);
+      setAdding(false); setPick(''); refresh();
+    } catch (e) { const t = roomsErrText(e, 'link rooms'); if (t) fire(t); }
+    finally { setBusy(false); }
+  };
+  const remove = async (other) => {
+    if (!await askConfirm(
+      `Stop treating the ${nameOf(other)} as hearing the ${room.name}?\n\n` +
+      `A wake word heard in both rooms will be answered in each of them again.`)) return;
+    setBusy(true);
+    try {
+      await apiDelete(`/api/rooms/${rid}/links/${encodeURIComponent(other)}`);
+      fire('Rooms unlinked');
+      refresh();
+    } catch (e) { const t = roomsErrText(e, 'unlink rooms'); if (t) fire(t); }
+    finally { setBusy(false); }
+  };
+  if (!admin && linked.length === 0) return null;
+  return (
+    <div className="room-hear-links" style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-soft)',
+                                              display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <div style={{ fontWeight: 600, flex: 1, minWidth: 140 }}>Rooms that can hear this one</div>
+        {admin && !adding && choices.length > 0 && (
+          <Button variant="ghost" icon="plus" disabled={busy} onClick={() => setAdding(true)}>Add a room</Button>
+        )}
+      </div>
+      <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+        One wake word heard here and in a room listed here gets one answer, from the satellite that heard it best.
+      </div>
+      {linked.length === 0
+        ? <div style={{ fontSize: 12, color: 'var(--fg-faint)' }}>none</div>
+        : linked.map(other => (
+          <div key={other} className="room-hear-link" style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 32 }}>
+            <span style={{ flex: 1 }}>{nameOf(other)}</span>
+            {admin && <IconButton name="x" title={`Remove the ${nameOf(other)}`} onClick={() => remove(other)}/>}
+          </div>
+        ))}
+      {admin && adding && (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+          <select value={pick} aria-label="room that can hear this one" onChange={e => setPick(e.target.value)}
+                  style={{ ...adoptInputStyle, height: 34, width: 'auto', minWidth: 150, maxWidth: '100%' }}>
+            <option value="" disabled>choose a room</option>
+            {choices.map(r => <option key={r.room_id} value={r.room_id}>{r.name}</option>)}
+          </select>
+          <Button variant="primary" disabled={busy || !pick} onClick={add}>Link</Button>
+          <Button variant="ghost" disabled={busy} onClick={() => { setAdding(false); setPick(''); }}>Cancel</Button>
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* The room's latest turn, when it had a choice of microphones: "Answered in
+ * the Kitchen. Heard best by Kitchen phone." (design §3.2 item 10). */
+const RoomLastTurn = ({ room }) => {
+  const { items } = useApiList(`/api/satellites/${encodeURIComponent(room.room_id)}/conversations?limit=1`, { quiet: true });
+  const c = (items || [])[0];
+  if (!c || !c.heard_by) return null;
+  return (
+    <div className="room-last-turn" style={{ padding: '10px 16px', borderBottom: '1px solid var(--border-soft)',
+                                             fontSize: 12, color: 'var(--fg-muted)' }}>
+      <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)', marginRight: 8 }}>{relTime(c.at)}</span>
+      {satHeardByText(c)}
+    </div>
+  );
+};
+
+const RoomDrawer = ({ room, rooms, sats, admin, onClose, onOpenSatellite, onAddSatellite, fire, refresh }) => {
   const [renaming, setRenaming] = React.useState(false);
   const [name, setName] = React.useState('');
   const [busy, setBusy] = React.useState(false);
@@ -4380,7 +4518,16 @@ const RoomDrawer = ({ room, rooms, sats, admin, onClose, onOpenSatellite, fire, 
                               canOpen={known.has(sat.satellite_id)} onOpen={onOpenSatellite}
                               fire={fire} refresh={refresh}/>
           ))}
+          {admin && onAddSatellite && (
+            <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border-soft)' }}>
+              <Button variant="ghost" icon="plus" onClick={() => onAddSatellite(room)}>
+                Add a satellite to the {room.name}
+              </Button>
+            </div>
+          )}
+          {list.length > 1 && <RoomLastTurn room={room}/>}
           {list.length > 1 && <RoomTuning room={room} admin={admin} refresh={refresh}/>}
+          <RoomHearLinks room={room} rooms={rooms} admin={admin} fire={fire} refresh={refresh}/>
           {admin && list.length === 0 && (
             <div style={{ padding: 16 }}>
               <Button variant="ghost" icon="trash-2" disabled={busy} onClick={remove}>Delete this room</Button>
@@ -4397,7 +4544,49 @@ const RoomDrawer = ({ room, rooms, sats, admin, onClose, onOpenSatellite, fire, 
   );
 };
 
-const RoomsCard = ({ rooms, merge, admin, onOpenRoom, fire, refresh }) => {
+/* The suggestion to link two rooms (owner answer Q3): one "hey Domovoi"
+ * keeps waking satellites in both at once (the server counts these and
+ * offers the pair from a few in a fortnight). Linking makes it one turn,
+ * answered by the satellite that heard it best; "Keep them separate" is remembered and
+ * the pair is never offered again (it can still be linked in the drawer). */
+const RoomLinkOffer = ({ offer, rooms, fire, refresh }) => {
+  const [busy, setBusy] = React.useState(false);
+  const [a, b] = offer.rooms;
+  const nameOf = (id) => (rooms.find(r => r.room_id === id) || {}).name || id;
+  const link = async () => {
+    setBusy(true);
+    try {
+      await apiPost(`/api/rooms/${encodeURIComponent(a)}/links`, { room_id: b });
+      fire(`The ${nameOf(a)} and the ${nameOf(b)} now share one answer`);
+      refresh();
+    } catch (e) { const t = roomsErrText(e, 'link rooms'); if (t) fire(t); }
+    finally { setBusy(false); }
+  };
+  const dismiss = async () => {
+    setBusy(true);
+    try {
+      await apiPost(`/api/rooms/${encodeURIComponent(a)}/links/${encodeURIComponent(b)}/dismiss`, {});
+      fire('Suggestion dismissed');
+      refresh();
+    } catch (e) { const t = roomsErrText(e, 'dismiss'); if (t) fire(t); }
+    finally { setBusy(false); }
+  };
+  return (
+    <Card>
+      <div className="room-link-offer" style={{ display: 'flex', alignItems: 'center', gap: 10,
+                                                 padding: '10px 16px', flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, minWidth: 200, fontSize: 13, lineHeight: 1.5 }}>
+          The {nameOf(a)} and the {nameOf(b)} often both answer the same wake word.
+          Link them so one satellite answers?
+        </div>
+        <Button icon="link" disabled={busy} onClick={link}>Link them</Button>
+        <Button variant="ghost" disabled={busy} onClick={dismiss}>Keep them separate</Button>
+      </div>
+    </Card>
+  );
+};
+
+const RoomsCard = ({ rooms, merge, links = [], admin, onOpenRoom, fire, refresh }) => {
   const [adding, setAdding] = React.useState(false);
   const [name, setName] = React.useState('');
   const [busy, setBusy] = React.useState('');
@@ -4444,6 +4633,9 @@ const RoomsCard = ({ rooms, merge, admin, onOpenRoom, fire, refresh }) => {
           </div>
         </Card>
       )}
+      {admin && links.map(offer => (
+        <RoomLinkOffer key={offer.rooms.join(',')} offer={offer} rooms={rooms} fire={fire} refresh={refresh}/>
+      ))}
       {admin && merge.map(offer => (
         <Card key={offer.rooms.join(',')}>
           <div className="room-merge-offer" style={{ display: 'flex', alignItems: 'center', gap: 10,
@@ -4515,7 +4707,9 @@ const SatellitesPage = ({ embedded = false } = {}) => {
   const { data: roomsDoc, refresh: refreshRoomsDoc } = useApiObject('/api/rooms', { quiet: true });
   const roomList = (roomsDoc && Array.isArray(roomsDoc.rooms)) ? roomsDoc.rooms : [];
   const mergeOffers = (roomsDoc && Array.isArray(roomsDoc.merge_offers)) ? roomsDoc.merge_offers : [];
+  const linkOffers = (roomsDoc && Array.isArray(roomsDoc.link_suggestions)) ? roomsDoc.link_suggestions : [];
   const [openRoomId, setOpenRoomId] = React.useState(null);
+  const [spareTarget, setSpareTarget] = React.useState(null);
   const refreshRooms = React.useCallback(() => { refreshRoomsDoc(); refresh(); }, [refreshRoomsDoc, refresh]);
   React.useEffect(() => { refreshRoomsDoc(); }, [sats.length, approvals.length, refreshRoomsDoc]);
   // Why a room couldn't join, when only the server knows (a dialled
@@ -4717,7 +4911,7 @@ const SatellitesPage = ({ embedded = false } = {}) => {
       )}
 
       {roomList.length > 0 && (
-        <RoomsCard rooms={roomList} merge={mergeOffers} admin={adminIn}
+        <RoomsCard rooms={roomList} merge={mergeOffers} links={linkOffers} admin={adminIn}
                    onOpenRoom={setOpenRoomId} fire={fire} refresh={refreshRooms}/>
       )}
 
@@ -4727,11 +4921,12 @@ const SatellitesPage = ({ embedded = false } = {}) => {
 
       <PrepareMediaCard fire={fire}/>
 
-      <SpareDeviceCard fire={fire}/>
+      <SpareDeviceCard fire={fire} target={spareTarget}/>
 
       <RoomDrawer room={roomList.find(r => r.room_id === openRoomId) || null} rooms={roomList}
                   sats={sats} admin={adminIn} onClose={() => setOpenRoomId(null)}
                   onOpenSatellite={(id) => { setOpenRoomId(null); setOpenRoom(id); }}
+                  onAddSatellite={(r) => { setOpenRoomId(null); setSpareTarget({ room_id: r.room_id, name: r.name, at: Date.now() }); }}
                   fire={fire} refresh={refreshRooms}/>
       <SatDrawer s={open} sats={sats} onClose={() => setOpenRoom(null)} fire={fire} refresh={refresh}/>
       {adoptTarget && (

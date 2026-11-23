@@ -206,12 +206,13 @@ def registry(app: Any) -> RoomDevices:
 
 
 async def require_id_paths(request: Request) -> None:
-    """Route dependency: 422 when a ``{room_id}`` or ``{satellite_id}``
+    """Route dependency: 422 when a ``{room_id}``, ``{other_room_id}`` or ``{satellite_id}``
     path parameter is not an id the house can have."""
-    for key in ("room_id", "satellite_id"):
+    for key, what in (("room_id", "room"), ("satellite_id", "satellite"),
+                      ("other_room_id", "room")):
         value = request.path_params.get(key)
         if value is not None and not is_room_id(value):
-            raise HTTPException(status_code=422, detail=f"not a {key.split('_')[0]} id")
+            raise HTTPException(status_code=422, detail=f"not a {what} id")
 
 ROOM_ID_MAX = 32
 

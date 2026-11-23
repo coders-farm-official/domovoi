@@ -17,6 +17,15 @@ code for a phone. Both carry the same **enrolment payload**, a URI:
   (``SHA256:`` + 43 characters of unpadded standard base64).
 * ``room`` — the room name as the admin typed it (at most 64 characters).
   The device derives the room id it connects as with :func:`room_id_for`.
+* ``in`` (optional, 1.5.0) — the id of an existing room the device joins
+  as one more satellite ("Add a satellite to the Kitchen": ``room=Kitchen
+  2&in=kitchen``). ``room`` then names the device, and its id is the
+  device's id. The device sends it in its hello as ``requested_room``; the
+  approval card pre-selects that room. Optional and backward compatible:
+  a parser that predates it ignores it (unknown keys are ignored) and the
+  device joins as the room ``kitchen_2``, which the server still files
+  under the Kitchen on approval. A value that is not a room id
+  (``^[a-z][a-z0-9_]{0,31}$``) is ignored the same way.
 
 Every value is percent-encoded UTF-8. **The payload carries no secret**: a
 device enrolled with it still has to be approved through the strict
@@ -130,9 +139,14 @@ class Enrolment:
     fp: str
     room: str
     room_id: str
+    #: ``in=``: the existing room this device joins (None: a room of its own).
+    in_room: str | None = None
 
     def to_json(self) -> dict[str, str]:
-        return asdict(self)
+        d = asdict(self)
+        if d.get("in_room") is None:
+            d.pop("in_room", None)   # the shared fixture's shape, unchanged
+        return d
 
 
 # ─── the room id ──────────────────────────────────────────────────────────
@@ -424,10 +438,14 @@ def _parse_payload(text: str) -> Enrolment:
             "bad_fp", "the fingerprint must be SHA256: and 43 base64 characters"
         )
     room = check_room_name(fields["room"])
-    return Enrolment(core=core, ws_url=ws_url, fp=fp, room=room, room_id=room_id_for(room))
+    in_room = fields.get("in")
+    if in_room is not None and not ROOM_ID_RE.match(in_room):
+        in_room = None
+    return Enrolment(core=core, ws_url=ws_url, fp=fp, room=room, room_id=room_id_for(room),
+                     in_room=in_room)
 
 
-def build(core: str, fp: str, room: str) -> str:
+def build(core: str, fp: str, room: str, in_room: str | None = None) -> str:
     """The payload for these values, every value percent-encoded (RFC 3986
     unreserved characters only left as they are). Trims what a person
     typed (the room name, the address), then validates exactly what
@@ -437,9 +455,14 @@ def build(core: str, fp: str, room: str) -> str:
     if not _FP_RE.match(fp):
         raise EnrolmentError("bad_fp", "the fingerprint must be SHA256: and 43 base64 characters")
     name = check_room_name(room.strip())
+    tail = ""
+    if in_room is not None:
+        if not ROOM_ID_RE.match(in_room):
+            raise EnrolmentError("bad_room", f"{in_room!r} is not a room id")
+        tail = f"&in={in_room}"
     return (
         f"{SCHEME}:{VERSION}?core={_encode(core_norm)}"
-        f"&fp={_encode(fp)}&room={_encode(name)}"
+        f"&fp={_encode(fp)}&room={_encode(name)}{tail}"
     )
 
 
