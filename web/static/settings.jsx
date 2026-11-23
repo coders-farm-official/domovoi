@@ -6177,8 +6177,9 @@ const SETTINGS_SECTIONS = [
   { id: 'printers', label: 'Printers & scanners', optional: true,
     sub: 'Printers and scanners on your network.',
     words: 'printer printers print printing scanner scanners scan scanning ink toner paper' },
-  // friend_houses.jsx registers it (F2): friend files, requests, friends
-  // (admin; off by default).
+  // friend_houses.jsx registers it (F2): messages and shared lists for the
+  // household; friend files, requests, friends behind the admin sign-in
+  // (off by default).
   { id: 'friend-houses', label: 'Friend Houses', optional: true,
     sub: 'Message and share lists with friends’ houses, house to house, with no company server in between.',
     words: 'friend friends house houses household households friending friend file invite request requests tor fingerprint code verify' },

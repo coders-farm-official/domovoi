@@ -3999,9 +3999,11 @@ class _AdminChatToolBody(BaseModel):
 
 _FH_READ = [Depends(require_admin_security_read)]
 _FH_WRITE = [Depends(require_admin_security)]
-# What every household phone may do with existing friends (owner decision
-# 17, for the apps, which carry only the household token): read the house
-# inbox and send, see the friends and the shared lists. Header credentials
+# What everyone in the household may do with existing friends (owner
+# decision 17, for the apps, which carry only the household token; widened
+# 2026-11-23 to the dashboard's Friend Houses page): read the house inbox
+# and send, see the friends, and see, share, take, decline and stop
+# sharing lists with existing friends. Header credentials
 # only (the household token or an admin Bearer): no cookie, no query token,
 # since these carry message text. Trust and household settings stay above.
 # No pre-setup grace: after --reset-admin the friends and messages are still
@@ -4326,13 +4328,13 @@ class _FhAcceptListBody(BaseModel):
 @app.get("/v1/admin/friend-houses/shared-lists", dependencies=_FH_HOUSEHOLD)
 async def admin_friend_houses_shared_lists() -> dict[str, Any]:
     """Lists shared with friend houses: ours they have, theirs we have, and
-    theirs waiting for an admin here (``state`` invited)."""
+    theirs waiting here (``state`` invited)."""
     from domovoi.friend_houses import shared_lists
 
     return {"shared_lists": await shared_lists.overview()}
 
 
-@app.post("/v1/admin/friend-houses/shared-lists", dependencies=_FH_WRITE)
+@app.post("/v1/admin/friend-houses/shared-lists", dependencies=_FH_HOUSEHOLD)
 async def admin_friend_houses_share_list(body: _FhShareBody) -> dict[str, Any]:
     from domovoi.friend_houses import shared_lists
 
@@ -4342,7 +4344,7 @@ async def admin_friend_houses_share_list(body: _FhShareBody) -> dict[str, Any]:
         raise _fh_error(e) from e
 
 
-@app.post("/v1/admin/friend-houses/shared-lists/{space}/accept", dependencies=_FH_WRITE)
+@app.post("/v1/admin/friend-houses/shared-lists/{space}/accept", dependencies=_FH_HOUSEHOLD)
 async def admin_friend_houses_accept_list(space: str, body: _FhAcceptListBody) -> dict[str, Any]:
     from domovoi.friend_houses import shared_lists
 
@@ -4352,7 +4354,7 @@ async def admin_friend_houses_accept_list(space: str, body: _FhAcceptListBody) -
         raise _fh_error(e) from e
 
 
-@app.post("/v1/admin/friend-houses/shared-lists/{space}/decline", dependencies=_FH_WRITE)
+@app.post("/v1/admin/friend-houses/shared-lists/{space}/decline", dependencies=_FH_HOUSEHOLD)
 async def admin_friend_houses_decline_list(space: str) -> dict[str, Any]:
     from domovoi.friend_houses import shared_lists
 
@@ -4361,7 +4363,7 @@ async def admin_friend_houses_decline_list(space: str) -> dict[str, Any]:
     return {"declined": True}
 
 
-@app.delete("/v1/admin/friend-houses/shared-lists/{space}", dependencies=_FH_WRITE)
+@app.delete("/v1/admin/friend-houses/shared-lists/{space}", dependencies=_FH_HOUSEHOLD)
 async def admin_friend_houses_leave_list(space: str) -> dict[str, Any]:
     """Stop sharing. Both houses keep their copy as an ordinary list."""
     from domovoi.friend_houses import shared_lists
