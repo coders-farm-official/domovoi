@@ -357,6 +357,11 @@ SECURITY_TIER_ROUTES = [
     ("web", "POST", "/api/satellites/{satellite_id}/support/open"),
     ("web", "DELETE", "/api/support-sessions/{session_id}"),
     ("web", "DELETE", "/api/support-sessions"),
+    # The house identity backup (1.5.0, S3-4): this server's private key.
+    # Each hop also needs a password sign-in within 5 minutes, and the core
+    # the password typed again (checked inside).
+    ("core", "POST", "/v1/admin/server-identity/backup"),
+    ("web", "POST", "/api/config/server-identity/backup"),
 ]
 
 

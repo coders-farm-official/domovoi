@@ -12956,6 +12956,46 @@
         }
       }
     },
+    "/api/config/server-identity/backup": {
+      "post": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Download Identity Backup",
+        "description": "The house identity backup (1.5.0, S3-4): this server's private key,\nfor a reinstall to be given so the rooms keep trusting it. The security\ntier and a password sign-in within five minutes here, and both again\nat the core (``/v1/admin/server-identity/backup``), which also checks\nthe password typed again behind the login backoff. The file is relayed\nto the admin who asked, never kept, never logged.",
+        "operationId": "download_identity_backup_api_config_server_identity_backup_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IdentityBackupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/config/version/check": {
       "post": {
         "tags": [
@@ -30093,6 +30133,17 @@
           "updated_at"
         ],
         "title": "HouseholdListItem"
+      },
+      "IdentityBackupRequest": {
+        "properties": {
+          "password": {
+            "type": "string",
+            "title": "Password",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "title": "IdentityBackupRequest"
       },
       "ImportRequest": {
         "properties": {

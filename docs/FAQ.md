@@ -517,7 +517,7 @@ There's no one-button backup tool yet — but it's three pieces, all standard:
 2. **`~/.domovoi/`** on the server — copy the folder. Trained wake-word models and recorded training clips live here and are genuinely hard to recreate; the rest (rendered sounds, caches) regenerates itself.
 3. **Your media** — `MUSIC_DIR` and friends, which you're presumably backing up anyway.
 
-**On the Windows installer** there is no backup tool yet, and no shell in its private Linux to dump the database from. Uninstalling it deletes the database, the history, the voice profiles and the server's identity (satellites must be paired again after a reinstall); keep-data uninstall comes later ([Not in this build](WINDOWS_HOST.md#not-in-this-build)). Your media is in an ordinary Windows folder: back that up like any other.
+**On the Windows installer** there is no backup tool yet, and no shell in its private Linux to dump the database from. Since 1.5.0 uninstalling keeps them by default (the database, the history, the voice profiles and the house's identity, in an administrators-only `C:\ProgramData\Domovoi-kept-<time>`), and the next Setup offers to use them, so the rooms reconnect ([Reinstalling without losing your rooms](WINDOWS_HOST.md#reinstalling-without-losing-your-rooms)). The house identity backup (Settings → System → About & updates) keeps the rooms working on a new PC too. Your media is in an ordinary Windows folder: back that up like any other.
 
 On Linux with the update unit, the box keeps its own copies too: a dump of the database before every update in `/var/lib/domovoi-update/backups/` (newest 5, root only) and, after a rollback, the replaced database as `domovoi_failed_<time>` (newest one). They hold everything the database holds, so count them when you move, sell or wipe the machine ([SECURITY_PRIVACY.md → Data at rest](SECURITY_PRIVACY.md#data-at-rest)).
 
@@ -527,7 +527,7 @@ Restore on a new machine: install Domovoi, start Postgres, restore the dump (`do
 
 **Either. Pick by what the box is.** There are three ways in, and the README's [First install](../README.md#first-install) has all of them.
 
-**Windows 11, the installer.** One download, `DomovoiSetup.exe`, sets up the same server as a Linux box, inside a private Linux (WSL2) that Windows runs for it. It is the easy way onto the household PC, which for many homes already has the best GPU in the house. It is unsigned for now (Windows asks first), and it has no backup tool or keep-data uninstall yet. Setup and what it changes: [WINDOWS_HOST.md](WINDOWS_HOST.md).
+**Windows 11, the installer.** One download, `DomovoiSetup.exe`, sets up the same server as a Linux box, inside a private Linux (WSL2) that Windows runs for it. It is the easy way onto the household PC, which for many homes already has the best GPU in the house. It is unsigned for now (Windows asks first), and it has no backup tool yet (its uninstaller keeps your data unless you ask it not to). Setup and what it changes: [WINDOWS_HOST.md](WINDOWS_HOST.md).
 
 **Linux** is the better host for a dedicated always-on machine. A headless install leaves several GB more RAM for models, speech recognition can use an NVIDIA GPU, wake-word training runs on the box's own Docker Engine (turned on from the dashboard, the GPU runtime set up by the install), and autostart is a systemd unit. On Ubuntu 26.04, Debian 13, Linux Mint 22 or Pop!_OS 24.04, one command installs it all. Setup: [LINUX_HOST.md](LINUX_HOST.md).
 

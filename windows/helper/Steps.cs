@@ -406,7 +406,8 @@ namespace Domovoi.Windows.Helper
             return opts;
         }
 
-        public static void WriteJob(Output o, string image, string imageSha, string provision, string provisionSha, string repoUrl, string commit, string trackBranch, string lanIp, string kit)
+        public static void WriteJob(Output o, string image, string imageSha, string provision, string provisionSha, string repoUrl, string commit, string trackBranch, string lanIp, string kit,
+            string restoreIdentity, bool importInPlace)
         {
             Ledger l = NeedLedger();
             // From an offline kit: the image and provision.sh are read off
@@ -432,6 +433,22 @@ namespace Domovoi.Windows.Helper
                 opts.OfflineKit = OfflineKit.MountPoint;
                 opts.ScriptHasOfflineKit = ProvisionScript.SupportsOfflineKit(scriptText);
             }
+            // S3-4: a house identity backup, copied into host\in (the account
+            // reads, can't change it). Only its shape is looked at here; the
+            // service user's python in the distro checks the key pair before
+            // it is used (provision.sh --restore-identity). Never logged.
+            string restoreSha = null;
+            if (restoreIdentity != null)
+            {
+                byte[] doc = KeptData.ReadBackup(restoreIdentity);
+                File.WriteAllBytes(Paths.RestoreIdentityFile, doc);
+                restoreSha = Sha256.OfFile(Paths.RestoreIdentityFile);
+                opts.RestoreIdentity = ProvisionArgs.InDistroRestoreIdentity;
+                opts.ScriptHasRestoreIdentity = ProvisionScript.SupportsRestoreIdentity(scriptText);
+                o.Say("the house identity backup goes to the new install (checked inside before it is used)");
+            }
+            if (importInPlace && !File.Exists(Paths.DistroDisk))
+                throw new InvalidOperationException("--import-in-place: there is no kept disk in " + Paths.Distro + " (adopt-kept first)");
             if (lanIp == "auto")
             {
                 Preflight.LanInfo lan = Preflight.Lan();
@@ -451,6 +468,12 @@ namespace Domovoi.Windows.Helper
             job.ProvisionArgs = ProvisionArgs.Build(opts);
             job.WslConfig = WslConfig.Render(w);
             job.Kit = kitRoot;
+            if (restoreSha != null)
+            {
+                job.RestoreIdentity = Paths.RestoreIdentityFile;
+                job.RestoreIdentitySha256 = restoreSha;
+            }
+            job.ImportInPlace = importInPlace;
 
             // Same inputs, same generation: the host then skips work it did.
             HostJob old = null;
@@ -459,7 +482,8 @@ namespace Domovoi.Windows.Helper
             bool same = old != null && old.ImageSha256 == job.ImageSha256 && old.ProvisionSha256 == job.ProvisionSha256
                 && old.Image == job.Image && old.Provision == job.Provision
                 && string.Join("\n", old.ProvisionArgs.ToArray()) == string.Join("\n", job.ProvisionArgs.ToArray())
-                && old.WslConfig == job.WslConfig && old.Kit == job.Kit;
+                && old.WslConfig == job.WslConfig && old.Kit == job.Kit
+                && old.RestoreIdentitySha256 == job.RestoreIdentitySha256 && old.ImportInPlace == job.ImportInPlace;
             if (!same) l.JobGeneration++;
             if (l.JobGeneration == 0) l.JobGeneration = 1;
             job.Generation = l.JobGeneration;

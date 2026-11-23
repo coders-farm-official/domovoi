@@ -259,6 +259,12 @@ namespace Domovoi.Windows
         {
             return scriptText != null && scriptText.IndexOf("\n  --offline-kit DIR ", StringComparison.Ordinal) >= 0;
         }
+
+        // S3-4: provision.sh --restore-identity FILE (its usage line).
+        public static bool SupportsRestoreIdentity(string scriptText)
+        {
+            return scriptText != null && scriptText.IndexOf("\n  --restore-identity F ", StringComparison.Ordinal) >= 0;
+        }
     }
 
     // The AI models' download, for the question "Include AI chat and
@@ -489,11 +495,20 @@ namespace Domovoi.Windows
         public string OfflineKit;
         // The pinned provision.sh takes --offline-kit (ProvisionScript).
         public bool ScriptHasOfflineKit;
+        // S3-4: a house identity backup for provision.sh --restore-identity,
+        // at ProvisionArgs.InDistroRestoreIdentity (DomovoiHost copies it
+        // there); null: none.
+        public string RestoreIdentity;
+        // The pinned provision.sh takes --restore-identity (ProvisionScript).
+        public bool ScriptHasRestoreIdentity;
     }
 
     public static class ProvisionArgs
     {
         public static readonly string[] MediaNames = { "music", "pictures", "videos", "documents", "audiobooks", "podcasts" };
+        // Where DomovoiHost puts a house identity backup inside the distro
+        // (root-only, beside the copy of provision.sh).
+        public const string InDistroRestoreIdentity = "/var/lib/domovoi-installer/restore-identity.json";
 
         static readonly Regex Sha = new Regex(@"^[0-9a-f]{40}\z");
         static readonly Regex RepoUrl = new Regex(@"^https://[A-Za-z0-9.-]+(/[A-Za-z0-9._~+-]+)+\z");
@@ -551,6 +566,14 @@ namespace Domovoi.Windows
                 string why = MediaPaths.Problem(m.Value);
                 if (why != null) throw new ArgumentException("media folder " + m.Key + ": " + why);
                 a.Add("--media"); a.Add(m.Key + "=" + MediaPaths.Normalize(m.Value));
+            }
+            if (o.RestoreIdentity != null)
+            {
+                if (o.RestoreIdentity != InDistroRestoreIdentity)
+                    throw new ArgumentException("the house identity backup goes to " + InDistroRestoreIdentity + ", not " + o.RestoreIdentity);
+                if (!o.ScriptHasRestoreIdentity)
+                    throw new ArgumentException("this Setup's provision.sh can't restore a house identity (that starts with 1.5.0); use a newer Setup");
+                a.Add("--restore-identity"); a.Add(o.RestoreIdentity);
             }
             a.Add("--health-timeout"); a.Add(Inv.S(o.HealthTimeoutSec));
             return a;

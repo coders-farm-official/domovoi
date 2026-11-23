@@ -860,15 +860,232 @@ def rotate_identity(
     return result
 
 
+# ─── backup and restore (1.5.0, S3-4) ─────────────────────────────────────
+#
+# A reinstall used to mint a new key, and every room set up for the old one
+# then refused the house — rightly, and with no way back but setting each
+# room up again. The way to avoid that is to keep the key: a keep-data
+# uninstall leaves this file where it is, and a backup taken from the
+# dashboard (or this module's CLI) can be handed to the next install.
+#
+# The backup IS the private key. It goes to nobody but an admin who just
+# typed the password, is never logged, and is in no household export. A
+# restore validates it completely before it is written — the format, the
+# key pair (the public key and fingerprint must be the ones the private
+# half makes, and it must sign something that verifies) — and never
+# replaces a different key that is already here unless told to, in which
+# case that key is retired beside it, not deleted. Nothing about a restore
+# changes what a satellite checks: it holds the server to a fingerprint,
+# and a restored key either is that fingerprint or it is refused.
+
+BACKUP_KIND = "domovoi-server-identity-backup"
+#: A real backup is well under a kilobyte; anything far past that is not one.
+BACKUP_MAX_BYTES = 16 * 1024
+BACKUP_FILENAME = "domovoi-house-identity.json"
+
+
+class IdentityRestoreError(ValueError):
+    """A backup that can't be used, with a reason a person can act on. The
+    message never carries any of the file's contents."""
+
+
+def backup_document(identity: ServerIdentity, *, now: float | None = None) -> dict[str, Any]:
+    """The backup file's document: everything the key file holds, labelled
+    as a backup, with when it was made. A secret."""
+    stamp = time.strftime(
+        "%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() if now is None else now)
+    )
+    return {
+        "kind": BACKUP_KIND,
+        "schema": IDENTITY_SCHEMA,
+        "created_at": stamp,
+        "algorithm": ALGORITHM,
+        "private_key": b64(identity.seed),
+        "public_key": identity.public_key_b64,
+        "fingerprint": identity.fingerprint,
+        "note": (
+            "This file is the Domovoi server's private key. Anyone who has it "
+            "can pass for this house to its rooms. Keep it somewhere only you "
+            "can open, and never share it."
+        ),
+    }
+
+
+def backup_bytes(identity: ServerIdentity, *, now: float | None = None) -> bytes:
+    return (json.dumps(backup_document(identity, now=now), indent=2) + "\n").encode("utf-8")
+
+
+def validate_identity_document(doc: object) -> ServerIdentity:
+    """The identity a backup (or a core key file) holds, or
+    :class:`IdentityRestoreError`. Every check, none of them optional:
+
+    * a document of the right kind (a backup, or a core key file; never a
+      satellite's public record);
+    * the schema, the algorithm, a 32-byte private key and a public key;
+    * the key pair: the public key and the fingerprint are the ones the
+      private key makes;
+    * the key signs a fresh message and that signature verifies.
+    """
+    if not isinstance(doc, dict):
+        raise IdentityRestoreError("not a Domovoi house identity backup (not a JSON object)")
+    kind = doc.get("kind")
+    if kind == _SATELLITE_RECORD_KIND:
+        raise IdentityRestoreError(
+            "this is a room device's record of its server (public only), not a "
+            "house identity backup"
+        )
+    if kind is not None and kind != BACKUP_KIND:
+        raise IdentityRestoreError("not a Domovoi house identity backup (unknown kind)")
+    schema = doc.get("schema", IDENTITY_SCHEMA)
+    if not isinstance(schema, int) or isinstance(schema, bool) or schema != IDENTITY_SCHEMA:
+        raise IdentityRestoreError(
+            "this backup was made by a different Domovoi version (unknown schema)"
+        )
+    if doc.get("algorithm") != ALGORITHM:
+        raise IdentityRestoreError("not a Domovoi house identity backup (wrong algorithm)")
+    seed = unb64(doc.get("private_key") or "")
+    if seed is None or len(seed) != 32:
+        raise IdentityRestoreError("the backup's private key is missing or damaged")
+    public_claimed = unb64(doc.get("public_key") or "")
+    if public_claimed is None or len(public_claimed) != 32:
+        raise IdentityRestoreError("the backup's public key is missing or damaged")
+    fingerprint_claimed = doc.get("fingerprint")
+    if not isinstance(fingerprint_claimed, str) or not fingerprint_claimed:
+        raise IdentityRestoreError("the backup has no fingerprint")
+    try:
+        public = public_key_for(seed)
+    except ValueError as e:
+        raise IdentityRestoreError("the backup's private key is damaged") from e
+    if public != public_claimed:
+        raise IdentityRestoreError(
+            "the backup's keys don't belong together (its public key is not "
+            "the one its private key makes): the file was changed or damaged"
+        )
+    identity = ServerIdentity(seed=seed, public=public)
+    if fingerprint_claimed != identity.fingerprint:
+        raise IdentityRestoreError(
+            "the backup's fingerprint is not its key's: the file was changed or damaged"
+        )
+    probe = b"domovoi-identity-restore-check\x00" + secrets.token_bytes(16)
+    if not verify(public, probe, sign(seed, probe)):
+        raise IdentityRestoreError("the backup's key does not sign correctly")
+    return identity
+
+
+def read_backup(path: Path) -> ServerIdentity:
+    """Read and validate a backup file. :class:`IdentityRestoreError` for
+    anything that is not a usable one."""
+    try:
+        if path.is_symlink():
+            raise IdentityRestoreError(f"{path} is a link; give the file itself")
+        size = path.stat().st_size
+    except OSError as e:
+        raise IdentityRestoreError(f"can't read {path}: {e.strerror or e}") from e
+    if size > BACKUP_MAX_BYTES:
+        raise IdentityRestoreError("not a Domovoi house identity backup (far too large)")
+    try:
+        raw = path.read_bytes()
+    except OSError as e:
+        raise IdentityRestoreError(f"can't read {path}: {e.strerror or e}") from e
+    return read_backup_bytes(raw)
+
+
+def read_backup_bytes(raw: bytes) -> ServerIdentity:
+    """:func:`read_backup` for a backup already in memory (stdin)."""
+    if len(raw) > BACKUP_MAX_BYTES:
+        raise IdentityRestoreError("not a Domovoi house identity backup (far too large)")
+    try:
+        doc = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as e:
+        raise IdentityRestoreError("not a Domovoi house identity backup (not JSON)") from e
+    return validate_identity_document(doc)
+
+
+def restore_identity(
+    source: Path | bytes, path: Path | None = None, *, replace: bool = False,
+    now: float | None = None,
+) -> dict[str, Any]:
+    """Install the identity in the backup at ``source`` (a file, or its
+    bytes) as this install's.
+
+    Returns ``{restored, fingerprint, replaced, retired_path}``.
+    ``restored`` is False when the install already has exactly this key
+    (nothing to do). A DIFFERENT working key already here is refused
+    unless ``replace``; then it is retired beside the new one (mode 0600,
+    like :func:`rotate_identity`), never deleted. A damaged key file of our
+    own is replaced, as :func:`load_or_create` would regenerate it; a
+    satellite's record there is refused, as everywhere else."""
+    target = identity_path() if path is None else path
+    incoming = read_backup_bytes(source) if isinstance(source, bytes) else read_backup(source)
+    current = _read_identity(target)
+    result: dict[str, Any] = {
+        "restored": False, "fingerprint": incoming.fingerprint,
+        "replaced": None, "retired_path": None,
+    }
+    if current is not None and current.seed == incoming.seed:
+        return result
+    if current is None and target.exists():
+        try:
+            _refuse_a_foreign_document(target)
+        except IdentityFileConflict as e:
+            raise IdentityRestoreError(str(e)) from e
+    retired = None
+    if current is not None:
+        if not replace:
+            raise IdentityRestoreError(
+                f"this install already has a different identity ({current.fingerprint}) "
+                f"and the backup is {incoming.fingerprint}. Replacing it means rooms set "
+                "up for the current one stop trusting this server: say so explicitly "
+                "(--replace-existing) if that is what you want"
+            )
+        stamp = time.strftime(
+            "%Y%m%dT%H%M%SZ", time.gmtime(time.time() if now is None else now)
+        )
+        retired = target.with_name(target.name + RETIRED_SUFFIX + stamp)
+        os.replace(target, retired)
+        try:
+            os.chmod(retired, 0o600)
+        except OSError:      # pragma: no cover — Windows dev boxes
+            pass
+        result["replaced"] = current.fingerprint
+        result["retired_path"] = str(retired)
+    tmp = target.with_name(target.name + ".restoring")
+    try:
+        tmp.unlink()
+    except FileNotFoundError:
+        pass
+    _write_identity(tmp, ServerIdentity(seed=incoming.seed, public=incoming.public, path=target))
+    os.replace(tmp, target)
+    reset_cache()
+    result["restored"] = True
+    # The fingerprint is public; the key never reaches a log.
+    log.warning(
+        "restored this server's identity %s from a backup%s",
+        incoming.fingerprint,
+        f" (the previous {current.fingerprint} retired to {retired})" if retired else "",
+    )
+    return result
+
+
+def _stdin_backup() -> bytes:
+    import sys
+
+    return sys.stdin.buffer.read(BACKUP_MAX_BYTES + 1)
+
+
 def main(argv: list[str] | None = None) -> int:
     """``python -m domovoi.server_identity --rotate-identity
-    [--confirm-reprovision]`` — see :func:`rotate_identity`."""
+    [--confirm-reprovision]`` — see :func:`rotate_identity`; and the
+    backup verbs: ``--check-backup FILE``, ``--restore-identity FILE
+    [--replace-existing]`` (:func:`restore_identity`) and ``--write-backup
+    FILE``. Exit 0 done, 1 refused (the reason on stderr), 2 rotation not
+    confirmed."""
     import argparse
     import sys
 
     parser = argparse.ArgumentParser(
         prog="python -m domovoi.server_identity",
-        description="Show or rotate this install's server identity.",
+        description="Show, rotate, back up or restore this install's server identity.",
     )
     parser.add_argument(
         "--rotate-identity", action="store_true",
@@ -883,7 +1100,66 @@ def main(argv: list[str] | None = None) -> int:
         "--path", type=Path, default=None,
         help="the key file (default: the install's ~/.domovoi/server-identity.json)",
     )
+    parser.add_argument(
+        "--check-backup", type=Path, metavar="FILE",
+        help="check a house identity backup (format and key pair) and print "
+             "its fingerprint; changes nothing; - reads it from stdin",
+    )
+    parser.add_argument(
+        "--restore-identity", type=Path, metavar="FILE",
+        help="make the identity in this backup this install's (checked first); "
+             "- reads the backup from stdin",
+    )
+    parser.add_argument(
+        "--replace-existing", action="store_true",
+        help="with --restore-identity: replace a DIFFERENT identity this install "
+             "already has (it is retired beside the new one, not deleted)",
+    )
+    parser.add_argument(
+        "--write-backup", type=Path, metavar="FILE",
+        help="write a backup of this install's identity to FILE (a new file, "
+             "mode 0600). It is the private key: keep it safe",
+    )
     args = parser.parse_args(argv)
+    if args.check_backup is not None:
+        try:
+            identity = (read_backup_bytes(_stdin_backup()) if str(args.check_backup) == "-"
+                        else read_backup(args.check_backup))
+        except IdentityRestoreError as e:
+            print(f"not usable: {e}", file=sys.stderr)
+            return 1
+        print(f"fingerprint {identity.fingerprint}")
+        return 0
+    if args.restore_identity is not None:
+        try:
+            source = (_stdin_backup() if str(args.restore_identity) == "-"
+                      else args.restore_identity)
+            result = restore_identity(source, args.path, replace=args.replace_existing)
+        except IdentityRestoreError as e:
+            print(f"not restored: {e}", file=sys.stderr)
+            return 1
+        if not result["restored"]:
+            print(f"unchanged   this install already has {result['fingerprint']}")
+        else:
+            print(f"restored    {result['fingerprint']}")
+            if result["retired_path"]:
+                print(f"retired     {result['replaced']} -> {result['retired_path']}")
+        return 0
+    if args.write_backup is not None:
+        identity = load_or_create(args.path)
+        try:
+            fd = os.open(args.write_backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except OSError as e:
+            print(f"can't write {args.write_backup}: {e.strerror or e} "
+                  "(it must be a new file)", file=sys.stderr)
+            return 1
+        try:
+            os.write(fd, backup_bytes(identity))
+        finally:
+            os.close(fd)
+        print(f"wrote a backup of {identity.fingerprint} to {args.write_backup}")
+        print("It is this server's private key: keep it where only you can open it.")
+        return 0
     if not args.rotate_identity:
         identity = load_or_create(args.path)
         print(f"fingerprint {identity.fingerprint}")

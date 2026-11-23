@@ -643,8 +643,9 @@ remember why each one matters. The README's
 section covers restoring them onto a new machine.
 
 On the Windows installer all three live inside the distro's disk
-(`C:\ProgramData\Domovoi\distro\ext4.vhdx`), and its uninstaller deletes
-them: there is no keep-data uninstall yet
+(`C:\ProgramData\Domovoi\distro\ext4.vhdx`), and its uninstaller keeps
+them by default (in `C:\ProgramData\Domovoi-kept-<time>`, for the next
+Setup) unless you choose Remove everything
 ([WINDOWS_HOST.md](WINDOWS_HOST.md#uninstalling)). On a Linux box with the
 update unit, each update first dumps the database into
 `/var/lib/domovoi-update/backups/` (the newest five are kept); that is the

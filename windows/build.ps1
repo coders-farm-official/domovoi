@@ -261,7 +261,7 @@ if (-not $SkipTests) {
     # KitTests.cs: the offline kit, against tests\kit-fixture (signed like release-sig).
     # UpdateTests.cs: the Windows update, its signatures checked against
     # tests\release-sig (a throwaway key's; the test exe embeds no release key).
-    $testSrc = @('Tests.cs', 'TrayTests.cs', 'QrReference.cs', 'UpdateTests.cs', 'LanNameTests.cs', 'KitTests.cs') | ForEach-Object { Join-Path $here ('tests\' + $_) }
+    $testSrc = @('Tests.cs', 'TrayTests.cs', 'QrReference.cs', 'UpdateTests.cs', 'LanNameTests.cs', 'KitTests.cs', 'KeepIdentityTests.cs') | ForEach-Object { Join-Path $here ('tests\' + $_) }
     Invoke-Csc $testExe ($common + $helperSrc + $hostSrc + $traySrc + $testSrc) (@("/r:$sma", '/main:Tests', $trayIcon) + $trayRefs)
     & $testExe
     if ($LASTEXITCODE -ne 0) { throw "unit tests failed" }

@@ -516,6 +516,15 @@ namespace Domovoi.Windows.Host
             {
                 if (!Provision(job)) { RecordProvisioned(job, "failed"); return false; }
                 RecordProvisioned(job, "ok");
+                // The backup did its job once (S3-4): later runs (a repair,
+                // an update) must not restore it over whatever the house has
+                // by then.
+                if (job.RestoreIdentity != null && RestorePending(job))
+                {
+                    UpdateState("identity_restored", job.RestoreIdentitySha256);
+                    WslResult rm = Wsl.Run(new[] { "-d", Paths.DistroName, "-u", "root", "--cd", "/", "--exec", "/bin/rm", "-f", ProvisionArgs.InDistroRestoreIdentity }, 60000, null, 4096);
+                    log.Write("removed the distro's copy of the house identity backup (exit " + Inv.S(rm.ExitCode) + ")");
+                }
             }
             if (!WaitHealthy(240)) return false;
             Status("ready", HostProgress.PhaseReady, 100, "Domovoi is running");
@@ -1301,8 +1310,35 @@ namespace Domovoi.Windows.Host
             }
         }
 
+        // S3-4: the disk an earlier install's keep-data uninstall kept, which
+        // Setup moved back into Paths.Distro ("use the kept data"). Imported
+        // in place: the household's database, settings and the server's
+        // identity come back as they were, and provision.sh then repairs and
+        // updates the system on it as it does any existing install. Its
+        // checkout is the earlier install's, so it is not held to this
+        // job's commit (as a distro imported before that check existed).
+        bool ImportKept()
+        {
+            string vhd = Paths.DistroDisk;
+            Status("importing", HostProgress.PhaseImport, 10, "Bringing back the data kept from the last install");
+            if (!File.Exists(vhd)) { Fail("the kept disk is not in " + Paths.Distro + " (Setup moves it there first)", null); return false; }
+            log.Write("wsl --import-in-place " + Paths.DistroName + " " + vhd);
+            WslResult r = Wsl.Run(new[] { "--import-in-place", Paths.DistroName, vhd }, 10 * 60 * 1000, null, 64 * 1024);
+            log.Write("wsl --import-in-place exit " + Inv.S(r.ExitCode) + Trailer(r));
+            bool? reg = Wsl.Registered();
+            if (r.ExitCode != 0 || reg != true)
+            {
+                Fail("wsl --import-in-place of the kept disk failed (exit " + Inv.S(r.ExitCode) + "): " + FirstLine(r.Stdout + r.Stderr), null);
+                return false;
+            }
+            UpdateState("imported", true);
+            UpdateState("imported_kept", true);
+            return true;
+        }
+
         bool Import(HostJob job)
         {
+            if (job.ImportInPlace && !ImportedBefore()) return ImportKept();
             Status("importing", HostProgress.PhaseImport, 0, "Checking the Ubuntu image");
             if (!File.Exists(job.Image)) { Fail("the Ubuntu image is missing: " + job.Image, null); return false; }
             string sha = Sha256.OfFile(job.Image);
@@ -1485,10 +1521,56 @@ namespace Domovoi.Windows.Host
             return true;
         }
 
+        // provision.sh's arguments without --restore-identity once the backup
+        // was restored (RestorePending).
+        List<string> WithoutSpentRestore(HostJob job, List<string> args)
+        {
+            if (job.RestoreIdentity == null || RestorePending(job)) return args;
+            var outArgs = new List<string>();
+            for (int i = 0; i < args.Count; i++)
+            {
+                if (args[i] == "--restore-identity" && i + 1 < args.Count) { i++; continue; }
+                outArgs.Add(args[i]);
+            }
+            return outArgs;
+        }
+
+        // S3-4: the house identity backup Setup was given, into the distro
+        // (root-only, 0600) where provision.sh --restore-identity reads it.
+        // Checked against the SHA-256 Setup recorded; provision.sh checks
+        // the backup itself (format, key pair) before it is used.
+        // Whether this job still has a backup to restore: one, until a run
+        // with it succeeded.
+        bool RestorePending(HostJob job)
+        {
+            return job.RestoreIdentity != null && Json.Str(ReadState(), "identity_restored") != job.RestoreIdentitySha256;
+        }
+
+        bool CopyRestoreIdentityIn(HostJob job)
+        {
+            if (!RestorePending(job)) return true;
+            if (!File.Exists(job.RestoreIdentity)) { Fail("the house identity backup Setup was given is missing: " + job.RestoreIdentity, null); return false; }
+            byte[] doc = File.ReadAllBytes(job.RestoreIdentity);
+            string sha;
+            using (var h = System.Security.Cryptography.SHA256.Create()) sha = Sha256.Hex(h.ComputeHash(doc));
+            if (sha != job.RestoreIdentitySha256) { Fail("the house identity backup does not match what Setup recorded", null); return false; }
+            string target = ProvisionArgs.InDistroRestoreIdentity;
+            string sh = "umask 077 && mkdir -p " + InDistroDir + " && cat > " + target + ".new && mv -f " + target + ".new " + target;
+            WslResult r = Wsl.Run(new[] { "-d", Paths.DistroName, "-u", "root", "--cd", "/", "--exec", "/bin/sh", "-c", sh }, 60000, doc, 4096);
+            if (r.ExitCode != 0)
+            {
+                Fail("could not copy the house identity backup into the distro (exit " + Inv.S(r.ExitCode) + ")", null);
+                return false;
+            }
+            log.Write("copied the house identity backup into the distro for provision.sh --restore-identity (never logged)");
+            return true;
+        }
+
         bool Provision(HostJob job)
         {
             Status("provisioning", HostProgress.PhaseProvision, 0, "Preparing Domovoi's Linux system");
             if (!CopyScriptIn(job)) return false;
+            if (!CopyRestoreIdentityIn(job)) return false;
             // S3 (delta security review 2026-10-16): until the first install
             // is verified, the HEAD it reports must be a commit Setup pinned.
             // A distro imported before this check existed has no list: never
@@ -1553,7 +1635,7 @@ namespace Domovoi.Windows.Host
             {
                 ProvisionLine final;
                 if (job.Kit != null && !MountKit(job)) return false;
-                int code = RunProvision(job, verifying, gate.Args(ProvisionArgsFor(job)), out final);
+                int code = RunProvision(job, verifying, gate.Args(WithoutSpentRestore(job, ProvisionArgsFor(job))), out final);
                 if (Stopping) return false;
                 if (final != null)
                 {
@@ -1973,9 +2055,10 @@ namespace Domovoi.Windows.Host
             catch (UnauthorizedAccessException x) { log.Write("can't write unregister.json: " + x.Message); }
         }
 
-        public void Unregister()
+        public void Unregister(bool keep)
         {
             CheckAccount();
+            if (keep) { Release(); return; }
             log.Write("unregister requested (uninstall)");
             Status("unregistering", HostProgress.PhaseConfig, 0, "Removing Domovoi's Linux system");
             var result = new Dictionary<string, object>();
@@ -2006,6 +2089,46 @@ namespace Domovoi.Windows.Host
             try { Json.WriteFile(Paths.UnregisterResult, result); }
             catch (IOException e) { log.Write("can't write unregister.json: " + e.Message); }
             Status("unregistered", HostProgress.PhaseConfig, 0, "Removed");
+        }
+
+        // The keep-data uninstall (S3-4, Paths.KeepArg): Domovoi's units
+        // stopped, the distro terminated and this account's WSL session
+        // ended, and NOT unregistered: wsl --unregister deletes the disk,
+        // which here holds the household's database, settings and the
+        // server's identity. The uninstaller then moves the disk aside
+        // (Uninstall.KeepOrDropDisk) and the registration goes with the
+        // account's profile. The same unregister.json, with "kept": true.
+        void Release()
+        {
+            log.Write("keep-data uninstall: stopping the distro and keeping its disk");
+            Status("unregistering", HostProgress.PhaseConfig, 0, "Stopping Domovoi's Linux system and keeping its data");
+            var result = new Dictionary<string, object>();
+            bool? reg = Wsl.Registered();
+            if (reg == null)
+            {
+                result["ok"] = false;
+                result["error"] = "WSL did not answer";
+            }
+            else
+            {
+                if (reg.Value)
+                {
+                    WslResult s = Wsl.Run(new[] { "-d", Paths.DistroName, "-u", "root", "--cd", "/", "--exec", "/bin/systemctl", "stop",
+                        "domovoi-web.service", "domovoi-core.service", "domovoi-db.service" }, 120000, null, 8192);
+                    log.Write("systemctl stop exit " + Inv.S(s.ExitCode) + (s.TimedOut ? " (timed out)" : ""));
+                    WslResult t = Wsl.Run(new[] { "--terminate", Paths.DistroName }, 60000, null, 8192);
+                    log.Write("wsl --terminate exit " + Inv.S(t.ExitCode) + Trailer(t));
+                }
+                result["released"] = ReleaseWsl();
+                result["ok"] = (bool)result["released"];
+                if ((bool)result["ok"]) result["message"] = "stopped; the disk is kept";
+                else result["error"] = "wsl --shutdown failed, so WSL may still hold the disk";
+            }
+            result["kept"] = true;
+            result["at"] = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture);
+            try { Json.WriteFile(Paths.UnregisterResult, result); }
+            catch (IOException e) { log.Write("can't write unregister.json: " + e.Message); }
+            Status("unregistered", HostProgress.PhaseConfig, 0, "Stopped; the data is kept");
         }
 
         // With the distro gone, this account's WSL VM still holds files in

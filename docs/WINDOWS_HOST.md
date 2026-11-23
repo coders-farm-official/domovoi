@@ -12,8 +12,8 @@ Domovoi is running, and prepares satellite cards
 
 **Its programs are not code-signed yet, so Windows
 asks before it runs them ([Unsigned](#unsigned)), and a few things the
-finished installer will do are not in it yet, such as keeping your data
-through an uninstall ([Not in this build](#not-in-this-build)). It
+finished installer will do are not in it yet
+([Not in this build](#not-in-this-build)). It
 installs a release and then follows a release channel
 ([Updates and the release channel](#updates-and-the-release-channel)).
 Installing the server by hand on Windows, as in the
@@ -293,7 +293,7 @@ from the internet, if the house allows it, or from a newer kit.
 | Account rights through LSA: `SeServiceLogonRight`, and `SeDenyInteractiveLogonRight`, `SeDenyRemoteInteractiveLogonRight`, `SeDenyNetworkLogonRight`. Run `DomovoiSetup.exe /nodenylogon=1` to leave the three deny rights out, on a first install or over an existing one (it takes back ones granted before). | Every right of the account's SID is removed, with its entry in the policy. |
 | Its profile, made by Windows when the service first signs in: `C:\Users\domovoi-svc`, or `C:\Users\domovoi-svc.<PC name>` if a folder of that name is already there (the service writes its `.wslconfig` into whichever it is, and the uninstaller finds it by the account's SID); it holds the account's `.wslconfig` (mirrored networking, `instanceIdleTimeout=-1`, memory cap, swap in `C:\ProgramData\Domovoi\wsl`) and its WSL registration. | Deleted. Right after unregistering the distro the service ends that account's own WSL session (`wsl --shutdown` run as `domovoi-svc`, see below), then the uninstaller waits up to two minutes for Windows to let go of the profile. This comes after the account is deleted; if Windows still holds the profile then, a one-time startup task, **`DomovoiRemoveProfile`** (runs as SYSTEM), deletes it at the next restart and then deletes itself. It touches only that profile, only once its account is gone, and if it can't tell (or the profile is in use) it waits for the next boot. |
 | Service **`DomovoiHost`** (Automatic, runs as `.\domovoi-svc`, depends on no other service: it waits for WSL itself, see *Windows updated WSL* under [When something goes wrong](#when-something-goes-wrong); restarted by Windows after any failure, after 10 s, 30 s, then every 60 s), binary `C:\Program Files\Domovoi\DomovoiHost.exe`. | Stopped (it stops Domovoi's units in the distro first), then deleted. |
-| WSL distro **`domovoi`** of `domovoi-svc` (Ubuntu 26.04.1 plus everything `provision.sh` installs), disk in `C:\ProgramData\Domovoi\distro`. Once imported, the service never deletes or re-imports over that disk, even if WSL stops listing it. Your own distros and `.wslconfig` are not touched. | Unregistered by the service, as its owner, first. Until that has worked (or the disk is gone), nothing else that could strand it is touched: not the service, the account, its profile or rights, nor ProgramData. If it fails, the uninstaller stops, says why, and stays installed for another try. A disk WSL no longer lists is deleted or kept aside, see [Uninstalling](#uninstalling). |
+| WSL distro **`domovoi`** of `domovoi-svc` (Ubuntu 26.04.1 plus everything `provision.sh` installs), disk in `C:\ProgramData\Domovoi\distro`. Once imported, the service never deletes or re-imports over that disk, even if WSL stops listing it. Your own distros and `.wslconfig` are not touched. | **Keep my data** (the default): stopped by the service, not unregistered, and its disk moved to an administrators-only `C:\ProgramData\Domovoi-kept-<time>` for the next Setup ([Uninstalling](#uninstalling)). **Remove everything**: unregistered by the service, as its owner, first. Either way, until that has worked (or the disk is gone), nothing else that could strand it is touched: not the service, the account, its profile or rights, nor ProgramData. If it fails, the uninstaller stops, says why, and stays installed for another try. A disk WSL no longer lists is deleted or kept aside, see [Uninstalling](#uninstalling). |
 | Hyper-V firewall rules for WSL's VM creator (`{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}`), inbound TCP from your subnet only: `Domovoi-ShortAddress-80` (the short address, below), `Domovoi-Dashboard-6369`, `Domovoi-Core-6370`, `Domovoi-MPD-8050-8099`, `Domovoi-Jellyfin-8096`, `Domovoi-RomM-7676`, `Domovoi-Kiwix-9467`. They apply to **every WSL VM on the PC**, your own WSL distros and Docker Desktop's included: anything of yours that listens on those ports in a mirrored-mode distro becomes reachable from your home network too. None if the PC has no private (RFC 1918) address. | Every `Domovoi-` rule for WSL's VM creator is removed (and listing them again must work, or the uninstaller says so). |
 | Windows Defender Firewall rule **`Domovoi-mDNS-5353`**: inbound UDP 5353 for `C:\Program Files\Domovoi\DomovoiHost.exe` only, from the local subnet, on **Private and Domain** networks (not Public), so other devices on your home network find this PC as `domovoi.local` ([The network name](#the-network-name)). Not added when the PC has no private address. | Removed with the Hyper-V rules (`Remove-NetFirewallRule -Name 'Domovoi-mDNS-5353'`); DomovoiHost's goodbye went out when the service stopped. |
 | `C:\ProgramData\Domovoi` (`distro`, `wsl`, `backups`, `logs`, `state`, `host`): SYSTEM and Administrators only, with `domovoi-svc` allowed where it needs it. Household accounts can't open it. Setup only uses this folder if it made it. | Made administrators-only again, then deleted, only if Setup made it (files still in use are deleted at the next restart). |
@@ -370,12 +370,62 @@ what is already gone.
   (administrators only), the uninstall carries on, and its last message
   names that folder. Delete it when you no longer need it.
 
-This build has no "keep my data" uninstall: uninstalling deletes the
-database, history, voice profiles and the server's identity, so satellites
-must be paired again after a reinstall. Keep-data uninstall comes later.
+**Keep my data, or remove everything** (1.5.0). The uninstaller asks first:
+
+- **Keep my data (recommended)**, the default. DomovoiHost stops Domovoi's
+  Linux system without unregistering it (start parameter `release-keep`)
+  and ends its account's WSL session; the uninstaller then moves the
+  distro's disk, with the database, settings and the house's identity, to
+  `C:\ProgramData\Domovoi-kept-<date>-<time>\ext4.vhdx` (administrators
+  only), and its last message names that folder. Everything else in the
+  table goes as before; the distro's registration goes with the hidden
+  account's profile. Installing Domovoi again offers to use it
+  ([Reinstalling without losing your rooms](#reinstalling-without-losing-your-rooms)).
+  Delete the folder if you won't install Domovoi again.
+- **Remove everything** deletes the database, history, voice profiles and
+  the house's identity with the distro (`wsl --unregister`), after a second
+  confirmation; every room must then be set up again after a new install.
+  Setup's own undo of a failed first install removes everything
+  (`/KEEPDATA=0`); a silent uninstall otherwise keeps the data.
+
+To see what uninstall would do: add `--keep-data` to the dry run below for
+the default.
 
 To see what uninstall would do without doing it, from an administrator
 prompt: `"C:\Program Files\Domovoi\DomovoiSetupHelper.exe" uninstall --dry-run`.
+
+### Reinstalling without losing your rooms
+
+Every room is set up to trust this house's **identity**, a key the server
+makes on its first start and keeps inside Domovoi's Linux system. A plain
+new install makes a new one, and the rooms then refuse it: they show a
+teal light and say "my server has changed" instead of connecting. Setup's
+page **Your house's identity** (after the media folder; not shown when
+Setup repairs or updates an install) brings the old one back:
+
+- **Use the data kept from the last install (recommended)**, picked when
+  Setup finds a `C:\ProgramData\Domovoi-kept-<time>` a keep-data uninstall
+  left (administrators only, owned by Administrators, not a link; the newest
+  one). Setup moves its disk into `C:\ProgramData\Domovoi\distro` (its
+  access rules reset to that folder's, for the new hidden account), and
+  DomovoiHost imports it in place (`wsl --import-in-place`) instead of the
+  Ubuntu image; `provision.sh` then repairs and updates it like any
+  existing install. The database, settings and identity come back, and the
+  rooms reconnect by themselves. Its checkout is the earlier install's, so
+  it updates from there (Settings > System > About & updates).
+- **Restore the house identity from a backup file**: the file from Settings
+  > System > About & updates > **Download house identity backup** on the old
+  install. Setup checks its shape and shows its fingerprint; DomovoiHost
+  copies it into the distro, root-only, and `provision.sh --restore-identity`
+  checks the key pair and installs it before Domovoi first starts (a file
+  that isn't a working key stops the install). The rooms reconnect; the
+  database starts fresh. Setup keeps a copy in `C:\ProgramData\Domovoi\host\in`
+  (administrators and the hidden account only) until the install is
+  uninstalled; keep or delete your own copy as you would a private key.
+- **Start fresh**, the default when nothing was kept.
+
+After a restart in the middle of Setup the choice carries on (`/usekept=`,
+`/identity=`).
 
 ## The tray icon
 
@@ -458,8 +508,8 @@ An install made by a 1.0.0-rc1 or rc2 Setup has no icon. Either:
   runs it once. A later Setup with the icon takes over and removes these
   copies.
 
-Uninstalling and installing again also works, but deletes Domovoi's data
-(there is no keep-data uninstall yet).
+Uninstalling (keeping the data) and installing again also works: Setup
+offers the kept data, so nothing is lost.
 
 ### For developers
 
@@ -929,7 +979,6 @@ you share them.
 - Whether everything starts before anyone signs in after a reboot, and
   whether the GPU is used then, is still being proven.
 - Code signing (on hold): see [Unsigned](#unsigned).
-- Keep-data uninstall and reinstall onto kept data.
 - The optional details page after the internet question (town, state,
   AcoustID key); set them in the dashboard.
 
