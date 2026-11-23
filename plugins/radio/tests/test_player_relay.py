@@ -151,8 +151,13 @@ async def test_stopping_ends_the_rooms_relay(stub_sdk, station) -> None:
     station.plan["sly.example/live"] = [_audio()]
     handed = await _play(stub_sdk)
     assert player_relay.target_for(handed) == "http://sly.example/live"
+    token = player_relay.token_of(handed)
+    assert token in player_relay._GRANTS
     await RadioHandler(stub_sdk)._stop_stream(Context(room_id="kitchen"))
-    assert player_relay.target_for(handed) is None
+    # The room's grant (and any stream it serves) ends. Its record stays
+    # while the queue holds the entry, so target_for still names the
+    # station (L20: a queued relay entry renews when it plays again).
+    assert token not in player_relay._GRANTS
 
 
 async def test_the_now_playing_matcher_reads_a_relay_url_as_its_station(stub_sdk) -> None:
