@@ -1156,9 +1156,11 @@ house, not which device it is. So the queue and files blocklists (see the
 table below) are
 *household policy*: they apply where the dashboard and the app ask, they
 reliably keep a known device out of a room's queue, and someone determined
-can claim a different id. What changed is that the core's own queue routes
-now want the household token too, so a blocked device can no longer simply
-call port 6370 and skip the surface that asked. And the queue block covers
+can claim a different id. The core's own queue routes now want the household
+token too, so a caller without it can't use them; but the blocks are checked
+only on the dashboard's routes (port 6369), not by the core, so a blocked
+device that holds the household token can still call port 6370 directly and
+skip them. And the queue block covers
 the routes that REPLACE a room's queue as well as those that edit it
 (2026-10-08, WEB-11): play, play-track, the browser player's cast
 (play-tracks) and play-playlist refuse a blocked device with the block's
@@ -1225,6 +1227,12 @@ sampler, the model pull):
   spellings resolvers accept (`127.1`, `0x7f000001`, `2130706433`) and the
   IPv6 forms that wrap an IPv4 (`::ffff:10.0.0.1`, 6to4, NAT64) are read as
   the address they denote, not as text.
+  **A limit:** a global IPv6 address is public by this rule, including the
+  server's own and its neighbours' on a home network that hands out global
+  IPv6. A feed or a redirect naming one of those (`http://[that address]:6370/`)
+  is fetched: a blind GET at a device in the house, which anything on the
+  home network can already reach. Nothing checks the prefixes on the
+  server's own network interfaces.
 - The connection is then opened to one of the addresses that check judged,
   **not to the name again**. Left to itself an HTTP client looks the name
   up a second time when it connects, and a name whose DNS answers
@@ -1629,6 +1637,7 @@ admin tier is code execution and configuration, not day-to-day use.
 | **Pulling new code, and clearing a tamper incident** (the pull moves the code on disk that the core runs and serves to satellites, and on an install no one has claimed yet it would move a pinned Windows install to upstream's tip; clearing the last open tamper incident lifts the container guard's freeze) | Core: `POST /v1/admin/version/pull`, `POST /v1/admin/containers/incidents/{id}/clear`. Dashboard: `POST /api/config/version/pull`, `POST /api/containers/incidents/{id}/clear`. | **Fails closed** — 501 until setup (delta review N5, 2026-10-16; both had the pre-setup grace before). Acknowledging a failure and running a check now stay on the admin tier with the grace. |
 | **Library sweeps** (long server-side jobs) | Dashboard: `POST /api/music/library/reindex`, `POST /api/music/library/enrich`, `POST /api/music/library/enrich/repair`. The version *check* beside the code pull is device tier — it fetches and reports, it never moves HEAD — and so is the version *read* (`GET /v1/admin/version`, `GET /api/config/version`), because beside the running commit it carries the update unit's last run, its error text included, and whether this host can restart itself (CORE-21). | Pre-setup grace. |
 | **Plugin mutations on the default tier** (every non-GET plugin route its author did not mark `@device_endpoint` or `@open_endpoint`) | Core: `/v1/plugins/<slug>/…`. Dashboard: `/api/plugins/<slug>/…`. For the bundled radio plugin that is the FCC bulk import (`POST /api/plugins/radio/fcc-import` and the core route it forwards to) — a long server-side job, like the library sweeps; its everyday mutations are device tier (above). | Pre-setup grace. |
+| **Short address** (whether port `80` redirects to the dashboard; see [The short address](#the-short-address-port-80-a-redirect-and-nothing-else)) | Dashboard: `PUT /api/short-address`. The read (`GET /api/short-address`) is device tier. | Pre-setup grace. On or off, it only starts or stops a redirect to the same dashboard behind the same gates; it changes no setting, credential or code. |
 | **Auth/session management** | `POST /api/auth/logout`, `DELETE /api/auth/sessions/{token_hash}`, `POST /api/auth/password`; `POST /api/auth/resume` (the session cookie, same origin, inside the reload window — [Staying signed in across a reload](#staying-signed-in-across-a-reload)); every admin session signs out after an hour without an admin action ([Signing out after an hour idle](#signing-out-after-an-hour-idle)) | n/a — these only exist once setup is done. |
 
 The `admin` in a `/v1/admin/...` path means "used by the dashboard," not
@@ -1724,7 +1733,14 @@ reason, so a new route cannot quietly ship open.
   accepted: argon2id keeps offline guessing expensive, and the setup code is
   single-use). Dashboard callers are throttled by their own address: the
   core trusts `X-Forwarded-For` only from loopback, where the web process
-  runs.
+  runs. Behind the per-address backoff sits a **house-wide ceiling**: 50
+  failed attempts from any addresses within 5 minutes refuse every
+  sign-in (`429`) until the oldest of them is 5 minutes old, so spreading
+  guesses over many addresses buys nothing. **Residual:** the ceiling
+  counts everyone, so a LAN host with a handful of addresses can keep
+  sign-in refused for as long as it keeps failing; it gets no guesses
+  out of it. The remedy is finding that host and taking it off the
+  network.
 - **CSRF stance:** login also sets a `SameSite=Strict`, `HttpOnly` cookie —
   a random secret of its own, never the Bearer (see *What a service on the
   same box can do with the cookie*, below) — but the cookie by itself can
@@ -1764,7 +1780,10 @@ processes, plugin management, a plugin's admin routes, and the session
 and password routes. A write the server refuses (a body that fails
 validation, a 404, a 409, a wrong old password) changed nothing and does
 not count: the gate only notes the session, and the stamp is made after
-the route has answered (CORE-42, round 6). Nothing else
+the route has answered (CORE-42, round 6). The test is the status code,
+not what the route did: a few admin writes answer 2xx with `"ok": false`
+when there was nothing to do (`POST /api/config/core/restart` while the
+core answers is one), and those count as actions too. Nothing else
 moves the clock: no `GET` (status probes, health, the version check,
 admin reads), no WebSocket, no page load with the cookie, no reload
 taking its sign-in back (`POST /api/auth/resume`), and not the device
@@ -1775,8 +1794,9 @@ device tier. The alternative, a header the dashboard sets on calls a
 person caused, was rejected: every call site would have to remember it,
 and any script holding the Bearer could add it to a poll and keep the
 session alive for ever. Under this rule a script can keep a session
-alive only by *changing things as admin*, which is what an admin does,
-and the 90-day cap still ends it. A credential holder who deliberately
+alive only by making admin writes (most of which change things, which
+is what an admin does; the `"ok": false` answers above are the
+exception), and the 90-day cap still ends it. A credential holder who deliberately
 scripts admin changes is not something any timeout can tell from a
 person.
 
@@ -2235,7 +2255,7 @@ Privacy → **Listening history** and each person's People page.
 | | |
 |---|---|
 | **What is recorded** | One row per **library song** a player played (`music_listens`): the song (by id; no title is copied), the room or the phone/browser id, which kind of player, when it started, how many seconds really played, its length, and how it ended (`finished` at 90 % or more, `skipped`, `stopped`), plus the person it was for, or nobody (the household). Streams, podcasts, audiobooks, radio and files outside the library are never recorded. No words anybody said, no address. |
-| **Who writes it** | **Rooms**: the core watches each room's music player every few seconds and writes a song when it ends; a skip from any skip path (voice "next", the dashboard's and the app's skip) marks it skipped. **Browsers and phones**: the player posts its own songs (`POST /api/music/listens`, household token), in batches, up to 7 days late from a phone that was offline; a batch sent twice lands once. The server doesn't take the player's word for everything: it works the outcome out again from the seconds played and the length (only "skipped" is the player's), refuses a batch in which one device played longer in total than the time since its first song began, and drops a device's rows past 3,000 in a day. |
+| **Who writes it** | **Rooms**: the core watches each room's music player every few seconds and writes a song when it ends; a skip from any skip path (voice "next", the dashboard's and the app's skip) marks it skipped. **Browsers and phones**: the player posts its own songs (`POST /api/music/listens`, household token), in batches, up to 7 days late from a phone that was offline; a batch sent twice lands once. The server doesn't take the player's word for everything: it works the outcome out again from the seconds played and the length (only "skipped" is the player's), refuses a batch in which one device played longer in total than the time since its first song began, and drops a device's rows past 3,000 in a day, and all phones' and browsers' rows together past 20,000 (a device id is the client's own word, so a new one each batch would slip the first cap). |
 | **Whose a song is** | **A room's**: the person whose recognised voice last started music there (an unrecognised voice: the household), or the person the phone or browser that last replaced the room's queue is claimed by (`music_room_listeners`, one row per room). That record holds only for the music it started: once the room stops, a song played after it is the household's until someone starts music again, and a room stopped for 30 minutes forgets it. **A phone's or browser's**: the person picked in its "listening as", else the person the device is claimed by ("this is me", below), else the household. **A shared screen's** are always the household's: a "listening as" pick there is ignored by the server, and the browser forgets a saved pick when it is marked shared. The "listening as" pick and every device id are **self-asserted** within the household, exactly like the spoken-audio resume positions: the household tier trusts the household, so a family member can file a song under someone else. Room queues and their "added by" stay household-visible; nothing here shows a person on a guest's screen. |
 | **How long** | **Keep listening history**: **1 year (the default)**, 90 days, or **Don't keep** (`MUSIC_LISTENS_KEEP`: `365`, `90`, `off`). The core deletes what is older every 6 hours and at once when the setting is saved (the page asks first when the new choice keeps less). **Don't keep** records nothing new and deletes everything kept, and prunes once more a minute after the save (a batch a player had on its way when the setting changed); Up next then picks from the library alone. A value written in `.env` by hand never deletes more than asked: a number rounds up (30 keeps 90 days; 0 or more than a year keeps a year), and only `off` / `don't keep` / `none` / `no` turn it off; anything unreadable keeps a year, and the log says so once. |
 | **Each person clears their own** | People → a person → **listening history · clear** deletes that person's songs, everywhere (`DELETE /api/music/listens/people/{id}`). The server allows it to **an admin** (Bearer, or a box before setup), and to **a phone or browser claimed as that person** that is not a shared screen, **presents its claim key** (below), and said "this is me" **more than 10 minutes ago**. Anything else is refused (`403`, saying why and who may) and the dashboard offers the admin password. The household's songs and other people's stay. |
@@ -2845,12 +2865,15 @@ only for open files; it is deleted, and a new address made for the next
 file, as soon as none is left. The file's secret isn't stored: it is
 derived from the house key when needed, so a database dump can't be used
 to answer a file. Making, listing and cancelling files, and everything that changes who is
-trusted or what the house does (accepting, alert levels, verifying codes,
-renaming or removing a friend, sharing lists, deleting or exporting a
-conversation) is admin security tier, reads included. What makes sense
-with friends the house already has is open to every household phone (the
-household token): reading the house inbox, sending a message, marking a
-conversation read, and seeing the friend list and the shared lists.
+trusted or what the house does (accepting, alert levels, marking a code
+as verified, renaming or removing a friend, sharing lists, deleting or
+exporting a conversation) is admin security tier, reads included. What
+makes sense with friends the house already has is open to every household
+phone (the household token): reading the house inbox, sending a message,
+marking a conversation read, and seeing the friend list and the shared
+lists. The friend list includes each friend's 4-digit code: it is a value
+to compare, not a secret (a code read here can't make a swapped friend
+file match), and only an admin can mark it verified.
 
 **The 4-digit code.** Both houses compute the same 4-digit code from
 random values each side committed to before seeing the other's (the
@@ -3225,7 +3248,9 @@ parts:
   the subnets routed out of the interface that holds the default route
   (`/proc/net/route`), which leaves Docker's bridge networks (where
   Postgres, SearxNG and MPD live) out by construction; elsewhere, the /24
-  around the server's LAN address;
+  around the server's LAN address. In a Mac install's VM, only the /24
+  around the Mac's LAN address (from `lan.json`), and the VM's default
+  gateways (the Mac itself) count as the server's own addresses;
 - refused: public addresses, loopback, the server's own addresses, the
   subnet's network and broadcast addresses, link-local (169.254/16, cloud
   metadata included), CGNAT, multicast, private ranges that aren't the home
@@ -4672,7 +4697,7 @@ any other run, with any other key.
 | A rogue device parked under your room's name | answer the exchange for the code you typed | each typed code serves **one guess** (a confirmation that does not check out uses it up; gone after ten minutes), and the approve route takes five codes per room per five minutes; a failed run is shown on the card ("the room device didn't accept the last code"). Declining, staying silent or leaving is not a guess: the code is put back and nothing is counted |
 | Someone watching the network | nothing | no message can be tested against a code |
 | Someone relaying between the device and your server | relay the exchange — and win nothing | the device's key check binds the address dialled, port included; the core will not sign for a relay's address — nor for its own address at a port it does not listen on |
-| Hostile servers spending the device's budget | delay approval | they cannot approve. While the device may not answer it keeps visiting every server (so its requests do not expire) and DECLINES each challenge; the server it was approved on keeps the typed code (the device's decline puts it back) until the device can answer, within its ten minutes, or the code is typed again. The delay is bounded by the budget: 30 minutes of running time at most for the five-per-window cap, and up to a day if many different servers each spend a share and the daily cap is reached. The core caps the arithmetic too: the per-source limit is consulted before any modular exponentiation, which runs off the event loop, and withdrawals count against it |
+| Hostile servers spending the device's budget | delay approval | they cannot approve. While the device may not answer it keeps visiting every server (so its requests do not expire) and DECLINES each challenge; the server it was approved on keeps the typed code (the device's decline puts it back) until the device can answer, within its ten minutes, or the code is typed again. Servers that spend the budget once and leave delay approval by 30 minutes of running time at most for the five-per-window cap, and up to a day if many different servers each spend a share and the daily cap is reached. A hostile server that **stays** and keeps challenging is not bounded that way: answered again each time its hold runs out, it can keep the budget spent for as long as it is on the network. The remedy is to type your server's address in the device's setup portal: the device then asks only that server, and the budget refills. The core caps the arithmetic too: the per-source limit is consulted before any modular exponentiation, which runs off the event loop, and withdrawals count against it |
 
 What the proof does **not** do: it does not encrypt anything, it does not
 protect a room after pairing (the pairing token and the server key do that,

@@ -395,3 +395,17 @@ async def test_a_clock_no_date_can_show_is_stored_as_the_arrival_time(house, sen
     assert await fm.on_message(event)
     [msg] = await fm.conversation(house.them.house_key)
     assert before <= msg["sent_at"] <= int(time.time()) + 1
+
+
+@requires_db
+async def test_whats_queued_for_a_removed_house_never_goes(house, monkeypatch) -> None:
+    async def unreachable(*a, **k):
+        raise fc.Unreachable("onion descriptor not found")
+
+    monkeypatch.setattr(fc, "open_session", unreachable)
+    await fm.send("fthem", "Hello?")
+    await house.drain()
+    async with fm._db() as s:
+        await store.delete_friend(s, "fthem")
+    row = (await fm.conversation(house.them.house_key))[-1]
+    assert row["state"] == "failed" and "removed" in row["last_error"]

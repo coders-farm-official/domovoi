@@ -154,7 +154,7 @@ def test_every_route_wears_its_tier() -> None:
         method = next(iter(r.methods))
         if (method, r.path) in HOUSEHOLD_ROUTES:
             household.add((method, r.path))
-            assert admin_auth.require_device in deps, r.path
+            assert admin_auth.require_device_after_setup in deps, r.path
             assert admin_auth.require_admin_security not in deps, r.path
         elif r.methods & {"POST", "PUT", "PATCH", "DELETE"}:
             assert admin_auth.require_admin_security in deps, r.path
@@ -225,11 +225,8 @@ async def test_before_setup_everything_is_501(name, monkeypatch, forwarded) -> N
     install_fake_db(monkeypatch, admin=False)
     async with _client() as c:
         r = await _send(c, name)
-    if _is_household(name):
-        # The device tier keeps its pre-setup LAN grace; harmless here,
-        # since Friend Houses can't be turned on before an admin exists.
-        assert r.status_code != 501, r.text
-        return
+    # The household routes have no pre-setup grace either: after
+    # --reset-admin the friends and messages are still there.
     assert r.status_code == 501, r.text
     assert forwarded == []
 

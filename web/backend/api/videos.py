@@ -41,7 +41,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-import subprocess
 import threading
 from pathlib import Path
 from typing import Any, Literal, Optional
@@ -87,12 +86,24 @@ router = APIRouter(
 # bound it was built against: a 50,000-video library is not one JSON answer.
 LEGACY_UNPAGED_PER_LIBRARY = 2000
 
-# ffmpeg poster extraction: frame size + subprocess wall-clock cap.
-# CREATE_NO_WINDOW keeps ffprobe/ffmpeg from opening a console window per
-# call when the backend runs without a console on Windows; 0 elsewhere.
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+# ffmpeg poster extraction: frame size + subprocess wall-clock cap. The
+# programs run through the chat-video helper runner (lowest priority, a
+# memory cap, killed at the deadline, output capped), at most
+# _POSTER_SLOTS at once.
 _POSTER_WIDTH = 480
 _FFMPEG_TIMEOUT_SEC = 20.0
+_POSTER_SLOTS = 2
+_poster_gates: dict[int, asyncio.Semaphore] = {}
+
+
+def _poster_gate() -> asyncio.Semaphore:
+    """This event loop's poster semaphore (a test client runs its own loop)."""
+    loop = asyncio.get_running_loop()
+    gate = _poster_gates.get(id(loop))
+    if gate is None:
+        _poster_gates.clear()
+        gate = _poster_gates[id(loop)] = asyncio.Semaphore(_POSTER_SLOTS)
+    return gate
 
 
 # ─── Registry resolution (files.py pattern) ──────────────────────────────────
@@ -313,44 +324,52 @@ def _poster_cache_key(library_id: str, rel: str, st_size: int, st_mtime_ns: int)
     return h
 
 
+async def _helper(argv: list[str], *, stdout: bool = False) -> tuple[int, bytes] | None:
+    """``argv`` through the chat-video helper runner; (returncode, stdout),
+    or None when it couldn't run, timed out (killed) or wrote too much."""
+    from domovoi.chat_video import media
+
+    try:
+        rc, out, _err = await media.run_low(argv, timeout=_FFMPEG_TIMEOUT_SEC, stdout=stdout,
+                                            max_output=64 * 1024)
+    except (FileNotFoundError, asyncio.TimeoutError, OSError, media.OutputTooLarge):
+        return None
+    return rc, out
+
+
 async def _ffprobe_duration(path: Path) -> float | None:
     """Container duration in seconds via ffprobe. Best-effort → None."""
+    got = await _helper(["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+                         "-of", "default=noprint_wrappers=1:nokey=1", str(path)], stdout=True)
     try:
-        proc = await asyncio.create_subprocess_exec(
-            "ffprobe", "-v", "quiet", "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1", str(path),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            creationflags=_NO_WINDOW,
-        )
-        out, _ = await asyncio.wait_for(proc.communicate(), timeout=_FFMPEG_TIMEOUT_SEC)
-        return float(out.decode().strip())
-    except (FileNotFoundError, asyncio.TimeoutError, OSError, ValueError):
+        return float(got[1].decode().strip()) if got is not None else None
+    except ValueError:
         return None
 
 
 async def _extract_poster(src: Path, dest: Path) -> bool:
     """One scaled poster frame via ffmpeg. Seeks ~10% in (min 1 s, max 90 s)
-    so the frame isn't a black lead-in; retries at 0 s for very short files."""
+    so the frame isn't a black lead-in; retries at 0 s for very short files.
+    Written beside ``dest`` and moved into place only when whole."""
     duration = await _ffprobe_duration(src)
     seek = min(max((duration or 0.0) * 0.10, 1.0), 90.0)
-    for ss in (seek, 0.0):
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "ffmpeg", "-v", "quiet", "-ss", f"{ss:.2f}", "-i", str(src),
+    part = dest.with_name(dest.stem + ".part.jpg")
+    try:
+        for ss in (seek, 0.0):
+            got = await _helper([
+                "ffmpeg", "-nostdin", "-v", "quiet", "-threads", "1", "-ss", f"{ss:.2f}", "-i", str(src),
                 "-frames:v", "1", "-vf", f"scale={_POSTER_WIDTH}:-2",
-                "-q:v", "4", "-y", str(dest),
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-                creationflags=_NO_WINDOW,
-            )
-            await asyncio.wait_for(proc.wait(), timeout=_FFMPEG_TIMEOUT_SEC)
-        except (FileNotFoundError, asyncio.TimeoutError, OSError):
-            return False
-        if dest.is_file() and dest.stat().st_size > 0:
-            return True
-        dest.unlink(missing_ok=True)
-    return False
+                "-q:v", "4", "-y", str(part),
+            ])
+            if got is None:
+                return False
+            if got[0] == 0 and part.is_file() and part.stat().st_size > 0:
+                part.replace(dest)
+                return True
+            part.unlink(missing_ok=True)
+        return False
+    finally:
+        part.unlink(missing_ok=True)
 
 
 @router.get("/poster")
@@ -360,13 +379,16 @@ async def poster(
 ):
     """Cached poster frame for one video. 204 when extraction isn't possible
     (missing ffmpeg, unreadable file) — the client shows a placeholder tile.
-    Cache key includes size+mtime so an edited file re-extracts."""
+    Cache key includes size+mtime so an edited file re-extracts; it names
+    the file by its resolved place in the library, so every spelling of one
+    path shares one entry."""
     lib = await _resolve_library(library_id)
     target = _resolve_video(lib, path)
     st = target.stat()
     cache_dir = Path(core_settings.video_posters_dir).expanduser()
     cache_dir.mkdir(parents=True, exist_ok=True)
-    key = _poster_cache_key(library_id, path, st.st_size, st.st_mtime_ns)
+    rel = target.relative_to(lib.root_path).as_posix()
+    key = _poster_cache_key(library_id, rel, st.st_size, st.st_mtime_ns)
     jpg = cache_dir / f"{key}.jpg"
     sentinel = cache_dir / f"{key}.none"
 
@@ -376,9 +398,15 @@ async def poster(
     if sentinel.is_file():
         return Response(status_code=204, headers=headers)
 
-    if await _extract_poster(target, jpg):
-        return FileResponse(jpg, media_type="image/jpeg", headers=headers)
-    sentinel.touch()
+    async with _poster_gate():
+        # Another request may have made it while this one waited.
+        if jpg.is_file():
+            return FileResponse(jpg, media_type="image/jpeg", headers=headers)
+        if sentinel.is_file():
+            return Response(status_code=204, headers=headers)
+        if await _extract_poster(target, jpg):
+            return FileResponse(jpg, media_type="image/jpeg", headers=headers)
+        sentinel.touch()
     return Response(status_code=204, headers=headers)
 
 

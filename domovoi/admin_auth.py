@@ -2021,9 +2021,7 @@ async def require_device(request: Request) -> None:
 
 
 _DEVICE_AFTER_SETUP_DETAIL = (
-    "auth not configured — complete the first-run admin setup before "
-    "sending voice from a phone (a recording of someone in the house, "
-    "answered as any room would be)"
+    "auth not configured — complete the first-run admin setup first"
 )
 
 
@@ -2041,7 +2039,9 @@ async def require_device_after_setup(
     whole gate — the household token or an admin Bearer, 401 / 403 / 429
     as usual. Before setup it would let anyone on the LAN through; this
     answers 501 instead, the security tier's posture, so ``--reset-admin``
-    never turns every phone's mic into an open door."""
+    never turns every phone's mic into an open door. Friend Houses'
+    household routes wear it too: after ``--reset-admin`` the house still
+    has friends and messages, and the grace would open them to the LAN."""
     try:
         async with session_scope() as s:
             configured = await has_admin_auth(s)

@@ -432,7 +432,7 @@
           "plugins"
         ],
         "summary": "List Installed",
-        "description": "Installed plugins for the admin page: registry row + the fields\nthe list renders (permissions, capabilities, pages), and what the\nplugin's running workers say about themselves (``worker_notes``, from\nthe core). Open read \u2014 \u00a712 keeps the registry list open; errors show\nfor everyone.",
+        "description": "Installed plugins for the admin page: registry row + the fields\nthe list renders (permissions, capabilities, pages), and what the\nplugin's running workers say about themselves (``worker_notes``, from\nthe core). Open read \u2014 \u00a712 keeps the registry list open; errors show\nfor everyone, but a web module's load error in full only for an admin\n(it can carry install paths).",
         "operationId": "list_installed_api_plugins_get",
         "responses": {
           "200": {
@@ -3269,7 +3269,7 @@
           "music"
         ],
         "summary": "Post Listens",
-        "description": "Record a batch of a browser's or phone's listens. ``{accepted,\ndropped, recording}``: ``accepted`` the rows that were new, ``dropped``\nthe rest (too old, too far ahead, unknown song, already recorded, or\npast the device's daily cap), ``recording`` false while the household\nkeeps no listening history.\n\nChecked here, not taken on the player's word (review 2026-11-12): the\noutcome is worked out again from the seconds played and the length\n(only the player's \"skipped\" and \"finished\" are kept: a skip, and a\nsong running to its own end, are things only the player saw.\n``played_sec`` is the time really heard, pauses and seeks left out,\nso a natural end can be \"finished\" with little played: 2026-11-14);\na shared screen's rows are the household's whatever person\nthey name; a batch in which one device played longer in total than the\ntime since its first song began is refused (422); and a device adds at\nmost ``DEVICE_DAILY_CAP`` listens a day.",
+        "description": "Record a batch of a browser's or phone's listens. ``{accepted,\ndropped, recording}``: ``accepted`` the rows that were new, ``dropped``\nthe rest (too old, too far ahead, unknown song, already recorded, or\npast the device's daily cap), ``recording`` false while the household\nkeeps no listening history.\n\nChecked here, not taken on the player's word (review 2026-11-12): the\noutcome is worked out again from the seconds played and the length\n(only the player's \"skipped\" and \"finished\" are kept: a skip, and a\nsong running to its own end, are things only the player saw.\n``played_sec`` is the time really heard, pauses and seeks left out,\nso a natural end can be \"finished\" with little played: 2026-11-14);\na shared screen's rows are the household's whatever person\nthey name; a batch in which one device played longer in total than the\ntime since its first song began is refused (422); and a device adds at\nmost ``DEVICE_DAILY_CAP`` listens a day, all of them together\n``HOUSE_DAILY_CAP``.",
         "operationId": "post_listens_api_music_listens_post",
         "requestBody": {
           "content": {
@@ -18204,7 +18204,7 @@
           "podcasts"
         ],
         "summary": "List Subscriptions",
-        "description": "Subscribed shows with episode counts, sorted and searched here.\nPaged when ``limit`` / ``cursor`` / ``offset`` is sent (``{items, total,\nlimit, has_more, next_cursor}``, paging.py); the bare list, as before,\nfor a client that sends none of them.",
+        "description": "Subscribed shows with episode counts, sorted and searched here.\nPaged when ``limit`` / ``cursor`` / ``offset`` is sent (``{items, total,\nlimit, has_more, next_cursor}``, paging.py); the bare list, as before,\nfor a client that sends none of them.\n\nOpen, but a caller without a household credential gets each feed URL\nwithout its query or user info, and its search doesn't look in them.",
         "operationId": "list_subscriptions_api_podcasts_subscriptions_get",
         "parameters": [
           {
@@ -19845,7 +19845,7 @@
           "videos"
         ],
         "summary": "Poster",
-        "description": "Cached poster frame for one video. 204 when extraction isn't possible\n(missing ffmpeg, unreadable file) \u2014 the client shows a placeholder tile.\nCache key includes size+mtime so an edited file re-extracts.",
+        "description": "Cached poster frame for one video. 204 when extraction isn't possible\n(missing ffmpeg, unreadable file) \u2014 the client shows a placeholder tile.\nCache key includes size+mtime so an edited file re-extracts; it names\nthe file by its resolved place in the library, so every spelling of one\npath shares one entry.",
         "operationId": "poster_api_videos_poster_get",
         "parameters": [
           {

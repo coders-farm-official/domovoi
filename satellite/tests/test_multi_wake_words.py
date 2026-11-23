@@ -274,6 +274,31 @@ def test_the_set_wake_word_frame_carries_the_list(monkeypatch):
     ]
 
 
+def test_a_set_wake_word_slug_that_is_not_a_slug_is_ignored(monkeypatch):
+    sat, loop = _sat(monkeypatch, "none", [])
+    loop.close()
+    got = []
+    monkeypatch.setattr(sat, "_held", lambda *a, **k: False, raising=False)
+    monkeypatch.setattr(sat, "_apply_wake_switch",
+                        lambda slug, threshold=None, words=None: got.append(slug))
+    monkeypatch.setattr(client.threading, "Thread",
+                        lambda target, args=(), kwargs=None, **_: types.SimpleNamespace(
+                            start=lambda: target(*args, **(kwargs or {}))))
+    for bad in ("../outside", "a/b", "a\\b", "x" * 81, ".hidden"):
+        sat._handle_text_frame({"type": "set_wake_word", "slug": bad})
+    assert got == []
+
+
+def test_a_saved_slug_that_is_not_a_slug_falls_back_to_the_config(sidecars):
+    (sidecars / "wake").write_text("../../elsewhere\n", encoding="utf-8")
+    assert client._effective_wake_word(_cfg()) == "hey_jarvis"
+    assert client._effective_wake_model_path(_cfg()) is None
+    (sidecars / "wake").write_text("porch_cat\n", encoding="utf-8")
+    (sidecars / "wake_models" / "porch_cat.onnx").write_bytes(b"onnx")
+    assert client._effective_wake_word(_cfg()) == "porch_cat"
+    assert client._effective_wake_model_path(_cfg()).endswith("porch_cat.onnx")
+
+
 def test_extra_words_cost_little(monkeypatch):
     """The front end is shared: an extra word is one more small classifier
     (measured 2026-11-16: 1.79 ms front end vs 0.012-0.026 ms per word per

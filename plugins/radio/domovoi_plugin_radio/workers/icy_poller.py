@@ -56,6 +56,11 @@ log = logging.getLogger(__name__)
 # one flaky response without letting an unsupported station ping forever.
 MISSES_BEFORE_UNSUPPORTED = 3
 
+#: One poll's whole budget, in multiples of the per-read timeout: a stream
+#: that sends a byte now and then never trips the per-read timeout, and a
+#: poll that never returned would hold up the tick for every station.
+POLL_DEADLINE_READS = 3
+
 # "This StreamTitle is obviously not a song." Case-folded full-title
 # match. Keep it SMALL — long denylists swallow real songs ("News for
 # Lulu" is a Sonny Sharrock album).
@@ -179,7 +184,12 @@ class RadioIcyPoller(Worker):
             await self._do_poll(row)
 
     async def _do_poll(self, row: _StationRow) -> None:
-        result = await self._client().fetch(row.stream_url)
+        deadline = float(self._config.icy_request_timeout_sec) * POLL_DEADLINE_READS
+        try:
+            result = await asyncio.wait_for(self._client().fetch(row.stream_url), deadline)
+        except asyncio.TimeoutError:
+            # Counted as a miss, like a transport error.
+            result = icy_metadata.IcyPollResult(supported=False, error="poll deadline")
 
         if result.supported:
             self._misses.pop(row.id, None)

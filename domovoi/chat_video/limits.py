@@ -79,6 +79,9 @@ PASS_SLACK_SEC = 2.0
 #: Ceilings on what pass 0 keeps (each far above what 3 minutes can hold).
 MAX_SCENE_ROWS = 2000
 MAX_SPEECH_PIECES = 240
+#: The longest the candidate frame grabs of one job may take in all
+#: (seconds); past it the candidates not yet grabbed are skipped.
+FRAME_GRAB_BUDGET_SEC = 600.0
 #: How many times a job may be started (a restart in the middle counts);
 #: past this it fails cleanly rather than loop on a video that stops the
 #: server.

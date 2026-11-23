@@ -80,6 +80,40 @@ def test_the_folder_writes_tors_key_formats(tmp_path) -> None:
         folder.authorize("../escape", reach.public)
 
 
+def test_a_stray_key_file_name_is_ignored(tmp_path) -> None:
+    folder = tc.TorFolder(tmp_path)
+    folder.ensure()
+    (tmp_path / "data/hs-main/authorized_clients/x!.auth").write_text("junk")
+    (tmp_path / "data/clientauth/X Y.auth_private").write_text("junk")
+    assert folder.authorized() == set() and folder.held() == set()
+
+
+def test_key_files_are_written_through_a_fresh_temp_name(tmp_path, monkeypatch) -> None:
+    folder = tc.TorFolder(tmp_path)
+    folder.ensure()
+    target = tmp_path / "data/torrc"
+    # A file sitting at the old fixed temp name is neither used nor touched.
+    victim = tmp_path / "victim"
+    victim.write_text("keep")
+    fixed = target.with_name(".torrc.tmp")
+    fixed.write_text("planted")
+    opened: list[tuple[str, int]] = []
+    real_open = os.open
+
+    def spy(path, flags, mode=0o777):
+        opened.append((str(path), flags))
+        return real_open(path, flags, mode)
+
+    monkeypatch.setattr(tc.os, "open", spy)
+    folder.write_torrc(tc.Wanted(True, False, True))
+    (path, flags), = opened
+    assert path != str(fixed) and flags & os.O_EXCL
+    assert flags & getattr(os, "O_NOFOLLOW", 0) == getattr(os, "O_NOFOLLOW", 0)
+    assert fixed.read_text() == "planted" and victim.read_text() == "keep"
+    assert "HiddenServiceDir" in target.read_text()
+    assert not [p for p in target.parent.iterdir() if p.name.endswith(".tmp") and p != fixed]
+
+
 @pytest.mark.skipif(os.name != "posix", reason="POSIX permissions")
 def test_every_folder_tor_reads_is_private(tmp_path) -> None:
     # Tor refuses to start when an onion folder is group- or world-readable
@@ -236,3 +270,52 @@ async def test_one_friend_cant_hold_every_slot(tmp_path) -> None:
             await _call(port, a_keys, a_hello, b_view)
         for sess in held:
             await sess.close()
+
+
+async def test_silent_callers_cant_hold_every_slot(tmp_path) -> None:
+    b_keys, b_hello = _house(tmp_path, "b")
+    a_keys, a_hello = _house(tmp_path, "a")
+    server, port, folder, state = await _listener(tmp_path, b_keys, b_hello)
+    _write_friends(folder, a_keys)
+    async with server:
+        silent = [await asyncio.open_connection("127.0.0.1", port)
+                  for _ in range(fl.MAX_CONNECTIONS)]
+        # The oldest silent callers were closed to make room.
+        first_reader = silent[0][0]
+        assert await asyncio.wait_for(first_reader.read(), 2.0) == b""
+        assert len(state._handshaking) <= fl.MAX_HANDSHAKING
+        sess = await _call(port, a_keys, a_hello, fs.Friend(b_keys.house_key, b_keys.session_key))
+        assert await sess.ping() >= 0
+        await sess.close()
+        for _, w in silent:
+            w.close()
+
+
+async def test_a_ping_flood_closes_the_connection(tmp_path) -> None:
+    b_keys, b_hello = _house(tmp_path, "b")
+    a_keys, a_hello = _house(tmp_path, "a")
+    server, port, folder, _ = await _listener(tmp_path, b_keys, b_hello)
+    _write_friends(folder, a_keys)
+    async with server:
+        sess = await _call(port, a_keys, a_hello, fs.Friend(b_keys.house_key, b_keys.session_key))
+        for _ in range(fl.PINGS_PER_CONNECTION):
+            assert await sess.ping() >= 0
+        with pytest.raises(fs.SessionRefused):
+            await sess.ping(timeout=5)
+        await sess.close()
+
+
+def test_admitting_closes_the_oldest_unfinished_handshake_first() -> None:
+    from collections import deque
+
+    class W:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    a, b = W(), W()
+    waiting = deque([a, b])
+    assert fl._admit(1, 8, waiting, 2) and a.closed and not b.closed  # too many waiting
+    assert fl._admit(8, 8, waiting, 4) and b.closed                    # every slot taken
+    assert not fl._admit(8, 8, deque(), 4)                             # all past the handshake

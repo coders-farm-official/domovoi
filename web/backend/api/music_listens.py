@@ -125,9 +125,24 @@ def _player(platform: str | None) -> str:
 #: all day long logs a few hundred; past this a client is misbehaving or
 #: flooding, and the rest of the day's rows are dropped.
 DEVICE_DAILY_CAP = 3000
+#: How many listens all phones and browsers together may add in a day. A
+#: device id is the client's own word, so a new one each batch would slip
+#: the per-device cap; this one has no key to change.
+HOUSE_DAILY_CAP = 20000
 #: Slack on the "no more played time than time passed" rule (clock
 #: rounding, a song's last second).
 PLAYED_SLACK_SEC = 60
+
+
+async def _recent_house_count(s: Any) -> int:
+    return int((
+        await s.execute(
+            text(
+                "SELECT COUNT(*) FROM music_listens WHERE device_id IS NOT NULL "
+                "AND recorded_at > now() - interval '24 hours'"
+            ),
+        )
+    ).scalar_one() or 0)
 
 
 async def _recent_count(s: Any, device_id: str) -> int:
@@ -195,7 +210,8 @@ async def post_listens(body: ListensIn) -> dict[str, Any]:
     a shared screen's rows are the household's whatever person
     they name; a batch in which one device played longer in total than the
     time since its first song began is refused (422); and a device adds at
-    most ``DEVICE_DAILY_CAP`` listens a day."""
+    most ``DEVICE_DAILY_CAP`` listens a day, all of them together
+    ``HOUSE_DAILY_CAP``."""
     keep = live_keep()
     now = datetime.now(timezone.utc)
     bad = _impossible_device(body.listens, now)
@@ -214,9 +230,10 @@ async def post_listens(body: ListensIn) -> dict[str, Any]:
         room_left: dict[str, int] = {}
         for d in {item.device_id for item in body.listens}:
             room_left[d] = max(0, DEVICE_DAILY_CAP - await _recent_count(s, d))
+        house_left = max(0, HOUSE_DAILY_CAP - await _recent_house_count(s))
         rows = []
         for item in body.listens:
-            if room_left[item.device_id] <= 0:
+            if room_left[item.device_id] <= 0 or house_left <= 0:
                 continue
             owner, shared, platform = devices.get(item.device_id, (None, False, None))
             if shared or item.as_household:
@@ -247,6 +264,7 @@ async def post_listens(body: ListensIn) -> dict[str, Any]:
             if row is not None:
                 rows.append(row)
                 room_left[item.device_id] -= 1
+                house_left -= 1
         accepted = await music_listens.insert_listens(s, rows)
     return {"accepted": accepted, "dropped": len(body.listens) - accepted, "recording": True}
 

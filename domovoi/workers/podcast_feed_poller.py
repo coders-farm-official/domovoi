@@ -327,12 +327,12 @@ def _parse_feed_blocking(feed_url: str) -> Any:
             log.warning(
                 "podcast feed %s is larger than %d bytes and lists its oldest "
                 "episodes first: only its oldest %d were read, newer ones are missing",
-                feed_url, MAX_FEED_BYTES, len(entries),
+                net_safety.url_without_secrets(feed_url), MAX_FEED_BYTES, len(entries),
             )
         else:
             log.info(
                 "podcast feed %s is larger than %d bytes: read its newest %d episodes",
-                feed_url, MAX_FEED_BYTES, len(entries),
+                net_safety.url_without_secrets(feed_url), MAX_FEED_BYTES, len(entries),
             )
     return parsed
 
@@ -629,7 +629,8 @@ async def download_episode(session, episode: dict[str, Any]) -> bool | None:
         transient = is_transient_fetch_error(e)
         log.warning(
             "podcast download %s ep=%s url=%s: %s",
-            "deferred (no internet)" if transient else "failed", ep_id, url, e,
+            "deferred (no internet)" if transient else "failed", ep_id,
+            net_safety.url_without_secrets(url), e,
         )
         # A partial file from a refused or over-cap transfer must not be
         # left behind looking like an episode.

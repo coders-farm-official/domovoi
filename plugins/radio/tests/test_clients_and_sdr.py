@@ -40,6 +40,28 @@ async def test_radio_browser_stub_paginates() -> None:
     assert await stub.search(name="jazz", offset=3) == []
 
 
+async def test_a_failed_station_search_never_logs_what_was_searched(
+    monkeypatch, caplog
+) -> None:
+    import logging
+
+    from domovoi_plugin_radio.clients import radio_browser
+
+    def _down(**kw):
+        raise RuntimeError("directory unreachable")
+
+    monkeypatch.setattr(radio_browser.egress, "internet_turned_off", lambda: False)
+    monkeypatch.setattr(radio_browser.egress, "async_client", _down)
+    caplog.set_level(logging.WARNING, logger=radio_browser.__name__)
+    got = await radio_browser.RealRadioBrowserClient().search(
+        name="smooth jazz", tag="lounge", language="french"
+    )
+    assert got == []
+    text = caplog.text
+    assert "search failed" in text
+    assert "smooth" not in text and "lounge" not in text and "french" not in text
+
+
 async def test_fcc_stub_shape() -> None:
     stub = FccFmStubClient()
     rows = await stub.fetch_state("mi".upper())

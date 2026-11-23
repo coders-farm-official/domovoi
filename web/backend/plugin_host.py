@@ -821,7 +821,12 @@ class PluginHost:
                     "page_errors": self.page_route_errors(slug),
                     "player_sources": web.get("player_sources") or [],
                     "realtime_channels": realtime_channels,
-                    "web_load_error": self.load_errors.get(slug),
+                    # Open and cached for every caller: only THAT it failed.
+                    # The exception text (which can carry install paths)
+                    # is on /api/plugins, for an admin.
+                    "web_load_error": (
+                        WEB_LOAD_ERROR_OPEN if self.load_errors.get(slug) else None
+                    ),
                 }
             )
         self._manifest_cache = {
@@ -831,6 +836,9 @@ class PluginHost:
         }
         return self._manifest_cache
 
+
+#: What an open read says in place of a web module's load error.
+WEB_LOAD_ERROR_OPEN = "the plugin's server web module failed to load"
 
 HOST = PluginHost()
 

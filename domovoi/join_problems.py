@@ -73,9 +73,9 @@ def clear() -> None:
 def addr_refused(addr: str) -> None:
     note("addr_refused", addr,
          f"A room tried to join at {addr}, but this server couldn't prove it's "
-         "the one at that address. Add that address to the server's trusted "
-         "addresses (TRUSTED_HOSTS), or set the room up with the server's own "
-         "address.")
+         "the one at that address. If nobody set a room up with it, don't trust "
+         "it: something may be relaying a room's questions. If you did, add it "
+         "to TRUSTED_HOSTS, or use the server's own address.")
 
 
 def paired_elsewhere(room_id: str) -> None:

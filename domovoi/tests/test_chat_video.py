@@ -1112,3 +1112,62 @@ def test_doc13_the_videos_folder_has_a_ceiling(clips, video_dirs, monkeypatch) -
         assert not any(p for p in video_dirs.glob("*") if p.is_file())
         monkeypatch.setattr(limits, "MAX_STORED_BYTES", 3 * limits.MAX_BYTES)
         assert _upload(c, clips["short"]).status_code == 200, "an honest clip still goes"
+
+
+# ─── Helper output is read within limits ────────────────────────────────
+async def test_a_helper_writing_past_its_output_cap_is_stopped() -> None:
+    import sys
+
+    spew = [sys.executable, "-c", "import sys\nwhile True: sys.stderr.write('x' * 65536)"]
+    t0 = time.monotonic()
+    with pytest.raises(media.OutputTooLarge) as e:
+        await media._run(spew, timeout=60, max_output=256 * 1024)
+    assert len(e.value.err) <= 256 * 1024
+    assert time.monotonic() - t0 < 30, "stopped at the cap, not at the timeout"
+
+
+async def test_output_under_the_cap_is_read_whole() -> None:
+    import sys
+
+    rc, out, _err = await media._run([sys.executable, "-c", "print('y' * 200000)"], timeout=60,
+                                     stdout=True, max_output=256 * 1024)
+    assert rc == 0 and out.strip() == b"y" * 200000
+
+
+def test_the_probe_asks_only_for_the_fields_it_reads() -> None:
+    argv = media.probe_argv(Path("v.mp4"))
+    assert "-show_format" not in argv and "-show_streams" not in argv
+    entries = argv[argv.index("-show_entries") + 1]
+    assert "tags" not in entries
+
+
+@needs_ffmpeg
+async def test_the_narrow_probe_still_reads_a_clip(clips) -> None:
+    got = await media.probe(clips["short"])
+    assert got.video_codec == "h264" and got.has_audio and got.duration > 1
+    assert got.video_index is not None and got.sizes
+
+
+async def test_a_scene_log_over_its_cap_keeps_the_rows_read(monkeypatch) -> None:
+    lines = b"".join(b"[m] frame:%d pts:%d pts_time:%d.5\n[m] lavfi.scene_score=0.5\n" % (i, i, i)
+                     for i in range(3))
+
+    async def capped(*a, **k):
+        assert k["max_output"] == media.SCENE_LOG_CAP_BYTES
+        raise media.OutputTooLarge(b"", lines + b"[m] frame:9 pts_ti")
+
+    monkeypatch.setattr(media, "_run", capped)
+    assert await media.scene_changes(Path("v.mp4"), duration=10) == [(0.5, 0.5), (1.5, 0.5), (2.5, 0.5)]
+
+
+@requires_db
+@needs_ffmpeg
+async def test_frame_grabs_stop_at_their_budget(clips, no_other_jobs, monkeypatch) -> None:
+    monkeypatch.setattr(limits, "FRAME_GRAB_BUDGET_SEC", 0.0)
+    j = await _stage(clips["short"])
+    brains = FakeBrains()
+    assert await runner_mod.Runner(brains, quiet_sec=0.01, poll_sec=0.01).run_next() == j["job_id"]
+    row = await _job(j["job_id"])
+    assert row["state"] == "done"
+    assert row["plan"]["frames"] == []
+    assert "vision" not in [k for k, _ in brains.calls]
