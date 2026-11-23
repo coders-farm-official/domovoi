@@ -205,6 +205,10 @@ def _item_text(said: str) -> str:
     return _cap(t)
 
 
+# What the chat model's history says in place of an item a friend house added.
+_FRIEND_ITEM = "something a friend house added"
+
+
 def _said(item: str) -> str:
     """An item inside a sentence: as the person said it (lowercase)."""
     return item[:1].lower() + item[1:] if item[1:2].islower() or len(item) == 1 else item
@@ -271,6 +275,19 @@ class ListsHandler(Handler):
                history_text: str | None = None) -> Response:
         return Response(text=text_, session_id=ctx.session_id, matched_handler=self.name,
                         expect_followup=ask, data=data or {}, history_text=history_text)
+
+    async def _item_reply(self, ctx: Context, item: L.ItemRow, words: Any,
+                          data: dict | None = None) -> Response:
+        """A reply naming one item, ``words(item_text)``. An item a friend
+        house added is said through the whole-sentence filter, and the chat
+        model's history keeps a stand-in, as when a list is read."""
+        text_ = words(_said(item.text))
+        if getattr(item, "added_via", "") != "friend":
+            return self._reply(ctx, text_, data=data)
+        from domovoi.friend_houses import messages
+
+        spoken = messages.speakable(text_, await messages.wake_phrases())
+        return self._reply(ctx, spoken, data=data, history_text=words(_FRIEND_ITEM))
 
     async def _ask(self, ctx: Context, session: AsyncSession, kind: str, prompt: str,
                    data: dict[str, Any]) -> Response | None:
@@ -464,7 +481,7 @@ class ListsHandler(Handler):
         # A friend house's items (a shared list) are said, but the chat
         # model's history keeps a stand-in: a friend's words never become
         # an instruction or a "fact" to it (audit R6 FH-15).
-        kept = [("something a friend house added" if getattr(i, "added_via", "") == "friend" else i.text)
+        kept = [(_FRIEND_ITEM if getattr(i, "added_via", "") == "friend" else i.text)
                 for i in shown]
         from_friend = kept != said
         more = len(items) - len(said)
@@ -495,8 +512,8 @@ class ListsHandler(Handler):
             return self._reply(ctx, f"No, {_said(said)} isn't on {where}.")
         item = found[0]
         if item.done:
-            return self._reply(ctx, f"{_cap(item.text)} is on {where}, crossed off.")
-        return self._reply(ctx, f"Yes, {_said(item.text)} is on {where}.")
+            return await self._item_reply(ctx, item, lambda it: f"{_cap(it)} is on {where}, crossed off.")
+        return await self._item_reply(ctx, item, lambda it: f"Yes, {it} is on {where}.")
 
     async def _lists(self, ctx: Context, session: AsyncSession) -> Response:
         all_ = await L.all_lists(session)
@@ -542,9 +559,10 @@ class ListsHandler(Handler):
         assert target is not None and item is not None
         where = f"your {L.spoken_name(target.name)} list"
         if item.done:
-            return self._reply(ctx, f"{_cap(_said(item.text))} is already crossed off {where}.")
+            return await self._item_reply(ctx, item, lambda it: f"{_cap(it)} is already crossed off {where}.")
         await L.update_item(session, target.id, item.id, done=True)
-        return self._reply(ctx, f"Crossed {_said(item.text)} off {where}.", data={"list_id": target.id})
+        return await self._item_reply(ctx, item, lambda it: f"Crossed {it} off {where}.",
+                                      data={"list_id": target.id})
 
     async def _remove(self, said: str, spoken_list: str | None, ctx: Context, session: AsyncSession) -> Response:
         target, item, why = await self._locate(said, spoken_list, ctx, session)
@@ -552,8 +570,9 @@ class ListsHandler(Handler):
             return why
         assert target is not None and item is not None
         await L.delete_item(session, target.id, item.id)
-        return self._reply(ctx, f"Removed {_said(item.text)} from your {L.spoken_name(target.name)} list.",
-                           data={"list_id": target.id})
+        where = f"your {L.spoken_name(target.name)} list"
+        return await self._item_reply(ctx, item, lambda it: f"Removed {it} from {where}.",
+                                      data={"list_id": target.id})
 
     # ─── clearing ─────────────────────────────────────────────────────
     async def _clear_done(self, spoken_list: str | None, ctx: Context, session: AsyncSession) -> Response:

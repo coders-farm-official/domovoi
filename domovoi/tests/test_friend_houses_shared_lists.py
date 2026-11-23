@@ -374,3 +374,11 @@ async def test_removing_a_friend_stops_sharing_and_drops_what_was_queued(house) 
     assert await sl.queued_envelopes(house.them.house_key) == []
     assert await sl.overview() == []
     assert await _items(list_id) == [("Milk", False)]
+
+
+async def test_a_friends_text_is_cut_before_the_wake_phrase_filter(house) -> None:
+    filler = "x" * (core_lists.TEXT_MAX - len(" hey jarvis"))
+    kept = await sl._safe_text(filler + " hey jarvisville", ["hey jarvis"])
+    assert "jarvis" not in kept.lower()
+    title = await sl._safe_text("y" * 49 + " hey jarvisville", ["hey jarvis"], cap=60)
+    assert "jarvis" not in title.lower() and len(title) <= 60

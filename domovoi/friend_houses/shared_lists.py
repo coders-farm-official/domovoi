@@ -72,13 +72,17 @@ def _service():
     return service
 
 
-async def _safe_text(value: str, phrases: list[str] | None = None) -> str:
-    """A friend's item text as this house keeps it (see the module note)."""
+async def _safe_text(value: str, phrases: list[str] | None = None, *,
+                     cap: int = core_lists.TEXT_MAX) -> str:
+    """A friend's item text as this house keeps it (see the module note).
+    Cut to ``cap`` BEFORE the wake-phrase filter: a cut after it could end
+    the text on a phrase the filter had seen as part of a longer word."""
     from domovoi.friend_houses import messages
 
     phrases = phrases if phrases is not None else await messages.wake_phrases()
+    value = " ".join(str(value).split())[:cap]
     cleaned = messages.safe_to_say(value, phrases, limit=10_000)
-    return " ".join(cleaned.split())[: core_lists.TEXT_MAX].strip()
+    return " ".join(cleaned.split())[:cap].strip()
 
 
 # ─── storage helpers ──────────────────────────────────────────────────────
@@ -312,7 +316,7 @@ async def on_envelope(friend: Any, env: fe.Envelope) -> bool:
                 # Decline some first: one friend can't fill the page (R6 FH-4).
                 log.info("Friend Houses: %s offered more lists than can wait; dropped", friend.local_name)
                 return True
-            title = await _safe_text(share.value, phrases) or "A shared list"
+            title = await _safe_text(share.value, phrases, cap=60) or "A shared list"
             await s.execute(text(
                 "INSERT INTO friend_houses_spaces (id, kind, house_key, friend_id, state, origin, "
                 "title, clock) VALUES (:i, 'list', :h, :f, 'invited', 'them', :t, :c)"),

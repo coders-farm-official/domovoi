@@ -164,19 +164,26 @@ class FriendHousesHandler(Handler):
 
     async def _ask_to_send(self, friend: Any, body: str, ctx: Context,
                            session: AsyncSession) -> Response:
+        from domovoi.friend_houses import messages
+
+        # The friend house's name is its own words: filtered to be said,
+        # and a stand-in in the chat model's history.
+        name = messages.safe_name(friend.local_name, await messages.wake_phrases())
         if not body:
-            return self._reply(ctx, f"What should I tell {friend.local_name}?")
+            return self._reply(ctx, f"What should I tell {name}?",
+                               history_text="I asked what to tell a friend house.")
         if len(body) > 2000:
             return self._reply(ctx, "That's too long for one message. Try a shorter one.")
         if ctx.session_id is None:
             return self._reply(ctx, "I can't ask you to check it from here. Send it from the dashboard.")
-        prompt = f"Send \"{body}\" to {friend.local_name}?"
+        prompt = f"Send \"{body}\" to {name}?"
         await request_confirmation(
             session, ctx.session_id, kind=SEND_KIND, handler=self.name, prompt=prompt[:200],
             data={"friend_id": friend.id, "name": friend.local_name, "text": body,
                   "expires_at": time.time() + CONFIRM_TTL_SEC},
         )
-        return self._reply(ctx, prompt, ask=True)
+        return self._reply(ctx, prompt, ask=True,
+                           history_text=f"I asked whether to send \"{body}\" to a friend house.")
 
     async def handle_confirmation(self, kind: str, data: dict, affirmative: bool, ctx: Context,
                                   session: AsyncSession) -> Response:
@@ -191,7 +198,9 @@ class FriendHousesHandler(Handler):
             await messages.send(str(data.get("friend_id")), str(data.get("text") or ""))
         except messages.MessageError as e:
             return self._reply(ctx, str(e))
-        return self._reply(ctx, f"Sent to {data.get('name') or 'them'}.")
+        name = messages.safe_name(str(data.get("name") or ""), await messages.wake_phrases())
+        return self._reply(ctx, f"Sent to {name or 'them'}.",
+                           history_text="I sent it to the friend house.")
 
     # ─── check ────────────────────────────────────────────────────────
     async def _check(self, m: re.Match[str], ctx: Context, session: AsyncSession) -> Response:
