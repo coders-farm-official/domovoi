@@ -487,7 +487,7 @@ final class FriendHousesApiTests: XCTestCase {
             "The Smiths shared a list: Camping. An admin can accept it in the dashboard.",
             FhWords.invited("The Smiths", "Camping")
         )
-        XCTAssertEqual("Serverless messaging and friend system between households", fhDescription)
+        XCTAssertEqual("Message and share lists with friends’ houses, house to house, with no company server in between", fhDescription)
         let words = [
             fhDescription, fhAdminOnly, FhWords.friendsAdmin, FhWords.listsAdmin,
             FhWords.conversationAdmin, FhWords.phoneFollows, FhWords.phoneOpenOnly, FhWords.noFriendsSub,

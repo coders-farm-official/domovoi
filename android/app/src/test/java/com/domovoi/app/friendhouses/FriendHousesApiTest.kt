@@ -375,7 +375,7 @@ class FriendHousesApiTest {
             "The Smiths shared a list: Camping. An admin can accept it in the dashboard.",
             FhWords.invited("The Smiths", "Camping"),
         )
-        assertEquals("Serverless messaging and friend system between households", FH_DESCRIPTION)
+        assertEquals("Message and share lists with friends’ houses, house to house, with no company server in between", FH_DESCRIPTION)
         val words = listOf(FH_DESCRIPTION, FH_ADMIN_ONLY, FhWords.FRIENDS_ADMIN, FhWords.LISTS_ADMIN,
             FhWords.CONVERSATION_ADMIN, FhWords.PHONE_FOLLOWS, FhWords.NO_FRIENDS_SUB)
         assertTrue(words.none { it.contains("gam", ignoreCase = true) })

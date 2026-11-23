@@ -16,8 +16,8 @@ import kotlinx.serialization.json.put
 import java.io.IOException
 
 // ---------------------------------------------------------------------------
-// Friend Houses on the phone: "Serverless messaging and friend system
-// between households" (the server's domovoi/friend_houses/, proxied by the
+// Friend Houses on the phone: "Message and share lists with friends’
+// houses, house to house" (the server's domovoi/friend_houses/, proxied by the
 // dashboard's web/backend/api/friend_houses.py).
 //
 // What a household phone may do (owner decision 17): read the house inbox
@@ -39,7 +39,7 @@ import java.io.IOException
 // ---------------------------------------------------------------------------
 
 /** How the app describes the feature, word for word, wherever it does. */
-const val FH_DESCRIPTION = "Serverless messaging and friend system between households"
+const val FH_DESCRIPTION = "Message and share lists with friends’ houses, house to house, with no company server in between"
 
 /** The sentence a 403 shows, from any call: the household phone asked for
  *  something only an admin may do. */

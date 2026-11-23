@@ -50,11 +50,11 @@ import com.domovoi.app.ui.theme.Domovoi
 import kotlinx.coroutines.launch
 
 /** The chip's words for a phone chat (part 5, W1): "internet always on",
- *  "internet on for this chat" or "internet off" (it asks first). */
+ *  "internet on for this chat" or "internet: ask first". */
 internal fun phoneInternetChip(ui: AssistantUi, c: StoredConversation): Pair<String, Boolean> = when {
     ui.alwaysAllowInternet -> "internet always on" to true
     c.internetAllowed -> "internet on for this chat" to true
-    else -> "internet off" to false
+    else -> "internet: ask first" to false
 }
 
 internal const val CHIP_HINT_OFF = "Domovoi asks before it looks anything up online. Tap to allow it in this chat."

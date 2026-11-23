@@ -21,7 +21,7 @@ extension StubHouseUITests {
     enum FriendHousesUnderTest {
         static let tile = "Friend houses"
         static let toolsHeading = "tools"
-        static let description = "Serverless messaging and friend system between households"
+        static let description = "Message and share lists with friends’ houses, house to house, with no company server in between"
         static let smiths = "The Smiths"
         static let joneses = "The Joneses"
         static let patels = "The Patels"

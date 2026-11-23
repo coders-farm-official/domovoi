@@ -1,8 +1,8 @@
 import Foundation
 
 // ---------------------------------------------------------------------------
-// Friend Houses on the iPhone: "Serverless messaging and friend system
-// between households" (the server's domovoi/friend_houses/, proxied by the
+// Friend Houses on the iPhone: "Message and share lists with friends’
+// houses, house to house" (the server's domovoi/friend_houses/, proxied by the
 // dashboard's web/backend/api/friend_houses.py).
 //
 // The port of Android's `friendhouses/FriendHousesApi.kt` (394473e2 on
@@ -27,7 +27,7 @@ import Foundation
 // ---------------------------------------------------------------------------
 
 /// How the app describes the feature, word for word, wherever it does.
-public let fhDescription = "Serverless messaging and friend system between households"
+public let fhDescription = "Message and share lists with friends’ houses, house to house, with no company server in between"
 
 /// The sentence a 403 shows, from any call: the household phone asked for
 /// something only an admin may do.

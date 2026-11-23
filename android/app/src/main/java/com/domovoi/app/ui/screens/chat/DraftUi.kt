@@ -173,18 +173,49 @@ internal object DraftSeen {
     }
 }
 
+/** A removed run long enough to stand as its own block: a line break in
+ *  it, or [GAP_WORDS] words or more (the web's chat_drafts.jsx). */
+internal const val GAP_WORDS = 8
+
+internal fun longRun(t: String): Boolean =
+    '\n' in t || t.trim().split(Regex("\\s+")).count { it.isNotEmpty() } >= GAP_WORDS
+
+/** A paragraph gap after run [i]: a long removed run with an added run
+ *  straight after it (the server's over-budget diff puts everything between
+ *  the shared start and end there, old then new), unless the line already
+ *  breaks at the join. Inline, the old last word ran into the new first one. */
+internal fun gapAfter(ops: List<Pair<String, String>>, i: Int): Boolean {
+    val (op, t) = ops[i]
+    val next = ops.getOrNull(i + 1) ?: return false
+    return op == "-" && next.first == "+" && longRun(t) && !t.endsWith('\n') && !next.second.startsWith('\n')
+}
+
+/** What a screen reader says for the changes: every run, the removed and
+ *  added ones named as such (strike-through and the wash are not read out),
+ *  and no gap ([gapAfter] is for the eye only). */
+internal fun changesSpoken(ops: List<Pair<String, String>>): String = ops.mapNotNull { (op, t) ->
+    val s = t.trim().takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+    val end = if (s.last() in ".!?,;:") "" else "."
+    when (op) {
+        "+" -> "added: $s$end"
+        "-" -> "removed: $s$end"
+        else -> s
+    }
+}.joinToString(" ")
+
 /** The added and removed words, never green or red. */
 @Composable
 internal fun changesText(ops: List<Pair<String, String>>): AnnotatedString {
     val add = SpanStyle(background = Domovoi.colors.brandSoft, color = Domovoi.colors.fg)
     val del = SpanStyle(color = Domovoi.colors.fgSubtle, textDecoration = TextDecoration.LineThrough)
     return buildAnnotatedString {
-        for ((op, t) in ops) {
+        ops.forEachIndexed { i, (op, t) ->
             when (op) {
                 "+" -> withStyle(add) { append(t) }
                 "-" -> withStyle(del) { append(t) }
                 else -> append(t)
             }
+            if (gapAfter(ops, i)) append("\n\n")
         }
     }
 }
@@ -520,7 +551,8 @@ internal fun DraftCanvas(
                     v == null -> Text(if (error == null) "reading the draft…" else "", style = MaterialTheme.typography.bodySmall,
                         color = Domovoi.colors.fgMuted)
                     showChanges && v.changes != null -> Text(changesText(v.changes), style = MaterialTheme.typography.bodyMedium,
-                        color = Domovoi.colors.fg)
+                        color = Domovoi.colors.fg,
+                        modifier = Modifier.semantics { contentDescription = changesSpoken(v.changes) })
                     else -> MarkdownText(v.body)
                 }
                 v?.saved?.takeIf { it.isNotEmpty() }?.let { files ->

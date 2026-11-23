@@ -84,8 +84,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
- * Friend houses: "Serverless messaging and friend system between
- * households". The house inbox (one for the whole house), a conversation
+ * Friend houses: "Message and share lists with friends’
+ * houses, house to house". The house inbox (one for the whole house), a conversation
  * and its composer, the friends and the shared lists, mirroring the
  * dashboard's Settings → Household → Friend Houses at phone width.
  *
