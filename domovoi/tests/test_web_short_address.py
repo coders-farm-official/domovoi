@@ -400,6 +400,20 @@ def test_children_dont_inherit_the_capability_call_is_harmless() -> None:
     assert sa.keep_bind_capability_from_children() in (True, False)
 
 
+def test_a_failed_capability_clear_is_logged(monkeypatch, caplog) -> None:
+    import ctypes
+
+    class _Libc:
+        def prctl(self, *a):
+            return -1
+
+    monkeypatch.setattr(sa.sys, "platform", "linux")
+    monkeypatch.setattr(ctypes, "CDLL", lambda *a, **k: _Libc())
+    with caplog.at_level("WARNING", logger=sa.log.name):
+        assert sa.keep_bind_capability_from_children() is False
+    assert "ambient capability" in caplog.text
+
+
 # ─── the HTTP routes ──────────────────────────────────────────────────────
 
 

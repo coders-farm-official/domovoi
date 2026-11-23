@@ -778,7 +778,25 @@ static partial class Tests
             why = Domovoi.Windows.Helper.Update.CopyAndCheck(from, TempDir("helper-admin4"), Want(), out m, out code);
             True(why != null && code == SetupCheck.NoSignedSetup, "a missing signature: " + why);
         });
+        Run("helper: a source with a second name (a hard link to another file) is not copied", delegate
+        {
+            string from = TempDir("helper-from-link"), other = TempDir("helper-other"), dir = TempDir("helper-admin5");
+            File.WriteAllBytes(Path.Combine(from, ReleaseNames.SetupAsset), SigFile("setup.bin"));
+            File.WriteAllBytes(Path.Combine(from, ReleaseNames.SetupSig), SigFile("setup.bin.sig"));
+            File.WriteAllBytes(Path.Combine(other, "elsewhere.json"), SigFile("manifest-1.0.1.json"));
+            True(CreateHardLinkW(Path.Combine(from, ReleaseNames.Manifest), Path.Combine(other, "elsewhere.json"), IntPtr.Zero), "linked");
+            File.WriteAllBytes(Path.Combine(from, ReleaseNames.ManifestSig), SigFile("manifest-1.0.1.json.sig"));
+            SetupManifest m;
+            string code;
+            string why = Domovoi.Windows.Helper.Update.CopyAndCheck(from, dir, Want(), out m, out code);
+            True(why != null && code == "failed", "refused: " + why);
+            True(!File.Exists(Path.Combine(dir, ReleaseNames.Manifest)), "and not copied");
+        });
     }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    static extern bool CreateHardLinkW(string newName, string existing, IntPtr security);
 
     // -- the poll and the notification, against a pretend core -------------
 

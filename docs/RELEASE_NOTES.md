@@ -5,6 +5,32 @@ needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
 
+## 1.4.1 (unreleased) — Printing, videos, scans and Windows update hardening
+
+- **Printer discovery on a Mac install** counts only the Mac's own home
+  network as home, and never dials the Mac itself through the VM's
+  networks.
+- **Printer discovery reads network answers within limits**: a bounded
+  amount of work per answer, at most 32 answers kept from any one
+  address, and answers from outside the home network dropped.
+- **The Windows update copies the downloaded Setup more strictly**: each
+  file is opened without following a link and checked to be the file it
+  names, and a refused update removes every file it copied.
+- **The dashboard logs it** if it can't keep its port-80 permission away
+  from the programs it starts.
+- **Video poster frames**: every spelling of one file's path shares one
+  cached poster, and the frame is made at low priority, at most two at a
+  time, ended at its time limit.
+- **Video in chat reads the helper programs' output within limits**: the
+  upload check asks only for the fields it uses, the scene scan stops
+  reading its log at a cap, and a job's frame grabs have an overall time
+  budget.
+- **Scan reading**: a page is saved only while the scan still has the
+  bytes it was read from, the read, summary and text of a scan whose file
+  changed since answer 404 as the by-path lookup already did, and asking
+  for a read of a file over the 1 GB limit is refused before the file is
+  hashed (an unchanged file is not hashed again).
+
 ## 1.4.1 (unreleased) — Dashboard update fixes
 
 - **What changed.** Restarting the server for an update no longer makes

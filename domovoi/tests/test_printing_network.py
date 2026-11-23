@@ -68,6 +68,37 @@ def test_compressed_names_and_pointer_loops():
         mdns.parse_packet(bytes(loop))
 
 
+def test_a_name_pointer_must_point_backwards():
+    # A name whose pointer jumps forward (to a name later in the packet) is refused.
+    hdr = struct.pack("!HHHHHH", 0, 0x8400, 0, 2, 0, 0)
+    first = b"\xc0\x1c" + struct.pack("!HHIH", 1, 1, 1, 4) + socket.inet_aton("192.168.1.50")
+    assert len(hdr + first) == 0x1c   # the second record's name starts where the pointer points
+    second = _name("office.local") + struct.pack("!HHIH", 1, 1, 1, 4) + socket.inet_aton("192.168.1.50")
+    with pytest.raises(mdns.MdnsParseError):
+        mdns.parse_packet(hdr + first + second)
+
+
+def test_one_packet_reads_a_bounded_number_of_labels():
+    # Many records whose names each point back at one long name: every
+    # pointer re-reads its labels, so the packet's label budget runs out.
+    long_name = _name(".".join(["a"] * 60))
+    hdr = struct.pack("!HHHHHH", 0, 0x8400, 0, 150, 0, 0)
+    first = long_name + struct.pack("!HHIH", 1, 1, 1, 4) + socket.inet_aton("192.168.1.50")
+    rest = (b"\xc0\x0c" + struct.pack("!HHIH", 1, 1, 1, 4) + socket.inet_aton("192.168.1.50")) * 149
+    with pytest.raises(mdns.MdnsParseError, match="too many labels"):
+        mdns.parse_packet(hdr + first + rest)
+    # An ordinary answer is well inside the budget.
+    assert mdns.parse_packet(_answer())[0]
+
+
+def test_discovery_keeps_mdns_answers_from_the_home_network_only():
+    from domovoi.printing import discovery
+
+    accept = discovery.from_home([ipaddress.IPv4Network("192.168.1.0/24")])
+    assert accept("192.168.1.50")
+    assert not accept("192.168.64.1") and not accept("10.0.0.5") and not accept("not an address")
+
+
 @pytest.mark.parametrize("cut", [13, 30, 60])
 def test_truncated_packets_are_dropped_not_raised_through(cut):
     res = mdns.collect([(_answer()[:cut], "192.168.1.50", "unicast")])
@@ -561,6 +592,49 @@ def test_linux_routes_use_the_default_interface_only(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(lan_target, "PROC_ROUTE", route)
     assert lan_target._linux_routes() == [ipaddress.IPv4Network("192.168.1.0/24")]
+
+
+def _vm_routes(tmp_path):
+    # Two NAT interfaces, each with a default route (gateways 192.168.64.1, 192.168.5.2).
+    route = tmp_path / "route"
+    route.write_text(
+        "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n"
+        "eth0\t00000000\t0140A8C0\t0003\t0\t0\t100\t00000000\t0\t0\t0\n"
+        "eth0\t0040A8C0\t00000000\t0001\t0\t0\t0\t00FFFFFF\t0\t0\t0\n"
+        "lima0\t00000000\t0205A8C0\t0003\t0\t0\t200\t00000000\t0\t0\t0\n"
+        "lima0\t0005A8C0\t00000000\t0001\t0\t0\t0\t00FFFFFF\t0\t0\t0\n"
+    )
+    return route
+
+
+def test_a_mac_vm_takes_home_from_the_host_address_and_never_dials_the_mac(tmp_path, monkeypatch):
+    import psutil
+
+    class A:
+        def __init__(self, a):
+            self.family, self.address = socket.AF_INET, a
+
+    monkeypatch.setattr(lan_target, "PROC_ROUTE", _vm_routes(tmp_path))
+    monkeypatch.setattr(lan_target.sys, "platform", "linux")
+    monkeypatch.setattr(psutil, "net_if_addrs", lambda: {"eth0": [A("192.168.64.2")], "lima0": [A("192.168.5.15")]})
+    monkeypatch.setattr(lan_target, "server_lan_ipv4", lambda: "192.168.1.20")
+
+    def no_name(*a, **k):
+        raise OSError("no lookup in this test")
+
+    monkeypatch.setattr(lan_target.socket, "getaddrinfo", no_name)
+    # Without a host side: the routes decide, and the gateways aren't listed.
+    monkeypatch.setattr(lan_target, "_host_side_lan", lambda: None)
+    assert ipaddress.IPv4Network("192.168.64.0/24") in lan_target.home_networks()
+    assert "192.168.64.1" not in lan_target.own_addresses()
+    # A Mac install (lan.json): home is the Mac's LAN only; the Mac's VM-side addresses are the server's.
+    monkeypatch.setattr(lan_target, "_host_side_lan", lambda: "192.168.1.20")
+    assert lan_target.home_networks() == [ipaddress.IPv4Network("192.168.1.0/24")]
+    assert {"192.168.64.1", "192.168.5.2"} <= lan_target.own_addresses()
+    for addr in ("192.168.64.1", "192.168.64.7", "192.168.5.2"):
+        with pytest.raises(lan_target.NotOnLan):
+            lan_target.check_address(addr, 631)
+    lan_target.check_address("192.168.1.50", 631)
 
 
 # ─── HTTP/1.1 ────────────────────────────────────────────────────────────
