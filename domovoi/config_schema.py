@@ -74,6 +74,8 @@ from domovoi.config import (
     ADMIN_RELOAD_WINDOW_MAX_MIN,
     HOME_PROBLEMS_VISIBILITY_CHOICES,
     QA_THINK_CHOICES,
+    STT_DENOISE_LABELS,
+    STT_DENOISE_MODES,
     MUSIC_LISTENS_KEEP_CHOICES,
     MUSIC_LISTENS_KEEP_LABELS,
     VOICE_HISTORY_KEEP_CHOICES,
@@ -1115,6 +1117,21 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "joke or a story keep their speed. "
         "Off routes the short-window text as it is.",
         "bool", section="advanced", tier="hot",
+    ),
+    FieldSpec(
+        "stt_denoise", "Clean up noise before transcribing (experiment)",
+        "Speech-to-text",
+        "Off by default. An experiment for noisy rooms: the audio of a "
+        "spoken command is cleaned up before Whisper hears it. 'spectral' "
+        "is a built-in filter; 'rnnoise' needs the pyrnnoise package "
+        "(installed with pip install --no-deps pyrnnoise) and passes the "
+        "audio through unchanged without it. Wake words and voice "
+        "recognition always hear the room as it is, and any error uses the "
+        "raw audio. Cleanup can make clean speech harder to recognize and "
+        "costs CPU on every command, so leave it off unless you are "
+        "comparing. Applies on the next command.",
+        "choice", section="advanced", tier="hot",
+        choices=list(STT_DENOISE_MODES), choice_labels=dict(STT_DENOISE_LABELS),
     ),
     FieldSpec(
         "speculative_stt_enabled", "Start transcribing at the first pause",

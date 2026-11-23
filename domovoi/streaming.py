@@ -677,7 +677,7 @@ from domovoi.turn_timings import (
     whisper_block,
 )
 from domovoi.log_privacy import said
-from domovoi import loud_room, overheard, room_devices, room_display, room_sound
+from domovoi import loud_room, overheard, room_devices, room_display, room_sound, stt_denoise
 from domovoi import turn_history, turn_watchdog, wake_claims, wake_default
 from domovoi.turn_watchdog import (
     STAGE_IDENTIFY,
@@ -2824,9 +2824,20 @@ class StreamSession:
             if marks is not None:
                 marks["wait_ms"] = _elapsed_ms(waited) if queued else 0
                 marks["started"] = t0[0]
+            if stt_denoise.current_mode() != "off":
+                return _cleaned()
             if full_window:
                 return transcribe_full_window(whisper, pcm)
             return transcribe_with_window(whisper, pcm)
+
+        async def _cleaned() -> tuple[str, int | None]:
+            # The noise-cleanup experiment (domovoi/stt_denoise.py), off
+            # by default: only what Whisper hears changes, and any error
+            # falls back to the raw capture.
+            audio = await stt_denoise.for_stt(pcm)
+            if full_window:
+                return await transcribe_full_window(whisper, audio)
+            return await transcribe_with_window(whisper, audio)
 
         text, window = await self._one_at_a_time(_start)
         return text, _elapsed_ms(t0[0]), window

@@ -78,6 +78,14 @@ ADMIN_IDLE_TIMEOUT_MIN = 60
 ADMIN_RELOAD_WINDOW_DEFAULT_MIN = 60
 ADMIN_RELOAD_WINDOW_MAX_MIN = ADMIN_IDLE_TIMEOUT_MIN
 
+# The noise-cleanup experiment's modes (``stt_denoise``, domovoi/stt_denoise.py).
+STT_DENOISE_MODES = ("off", "spectral", "rnnoise")
+STT_DENOISE_LABELS = {
+    "off": "Off (as captured)",
+    "spectral": "Spectral filter (built in)",
+    "rnnoise": "RNNoise (needs pyrnnoise)",
+}
+
 # `voice_history_keep` (owner, 2026-10-17): how long what people say to
 # Domovoi is kept. The values are days, or "forever"; second = default.
 # The dashboard shows them with VOICE_HISTORY_KEEP_LABELS. See the field
@@ -854,6 +862,14 @@ class Settings(BaseSettings):
     # 191 for 10 s alone), at a second decode for 16-34% of command
     # captures. false = route the short-window text as it is.
     whisper_short_window_recheck: bool = True
+    # 1.5.0, noisy rooms (owner answer Q9): noise cleanup on a command's
+    # audio before Whisper hears it, an A/B experiment
+    # (domovoi/stt_denoise.py). "off" (the default) | "spectral" (a
+    # built-in Wiener filter) | "rnnoise" (needs pyrnnoise, installed with
+    # --no-deps). Never wake detection or voice ID. OFF until the offline
+    # A/B (scripts/dev/denoise_ab.py) and the XVF3800 room test say a mode
+    # helps. Applies on the next transcription.
+    stt_denoise: str = "off"
     # A speech-to-text service on another machine in the house, used
     # before this machine's own Whisper (domovoi/clients/whisper_remote.py):
     # on a Mac the core's VM has no GPU, and the Mac runs Whisper on its
