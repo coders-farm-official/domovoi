@@ -1593,12 +1593,19 @@ public final class PlayerModel {
         return true
     }
 
+    /// `/api/music/<action>/<room>`, the room escaped as ONE path segment
+    /// (``encodedRoomPathSegment(_:)``): a room id is a person's words, and a
+    /// `/`, `?`, `#` or `%` in it must not change which URL this is.
+    static func roomActionPath(_ action: String, _ room: String) -> String {
+        "/api/music/\(action)/\(encodedRoomPathSegment(room))"
+    }
+
     /// Fire and forget (`PlayerController.kt:654`).
     private func roomAction(_ action: String, _ room: String) {
         let client = self.client
         Task { @MainActor [weak self] in
             do throws(DomovoiError) {
-                try await client.send(method: "POST", path: "/api/music/\(action)/\(room)")
+                try await client.send(method: "POST", path: Self.roomActionPath(action, room))
                 if let fresh = await self?.readRoom(room) {
                     // Read after await: a reading for a room this phone is no
                     // longer pointed at is dropped, not shown.
@@ -1624,7 +1631,7 @@ public final class PlayerModel {
     private func roomActionNow(_ action: String, _ room: String) async -> Bool {
         do {
             let answer = try await client.post(
-                "/api/music/\(action)/\(room)", as: PlayerBridgeAnswer.self
+                Self.roomActionPath(action, room), as: PlayerBridgeAnswer.self
             )
             return answer.ok != false
         } catch {
@@ -1651,7 +1658,7 @@ public final class PlayerModel {
         let client = self.client
         Task { @MainActor [weak self] in
             let answer = try? await client.post(
-                "/api/music/pause/\(room)", as: PlayerBridgeAnswer.self
+                Self.roomActionPath("pause", room), as: PlayerBridgeAnswer.self
             )
             let paused = (answer?.ok != false) && answer != nil
             // **Said**, not only noted. This is the half of `playHereAndSay`
