@@ -39,10 +39,12 @@ def test_download_runs_otherwise(monkeypatch, tmp_path, answer) -> None:
     seen = []
 
     class FakeResp:
+        headers: dict = {}
+
         def raise_for_status(self):
             return None
 
-        def iter_bytes(self, _n):
+        def iter_raw(self, _n):
             yield b"abc"
 
         def __enter__(self):
@@ -52,6 +54,7 @@ def test_download_runs_otherwise(monkeypatch, tmp_path, answer) -> None:
             return False
 
     def fake_stream(method, url, **kw):
+        assert kw["headers"] == {"Accept-Encoding": "identity"}
         seen.append(url)
         return FakeResp()
 

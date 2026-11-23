@@ -351,12 +351,12 @@ def _piper_fetch_to_file(url: str, dest: Path, *, size: int) -> str:
     h = hashlib.sha256()
     written = 0
     with _piper_http_client() as client:
-        response = net_safety.open_stream_sync(client, url)
+        response = net_safety.open_raw_stream_sync(client, url)
         try:
             if response.status_code != 200:
                 raise PiperDownloadError(f"{url} answered HTTP {response.status_code}")
             with open(dest, "wb") as f:
-                for chunk in response.iter_bytes(_PIPER_CHUNK):
+                for chunk in net_safety.iter_raw_sync(response, _PIPER_CHUNK):
                     written += len(chunk)
                     if written > size:
                         raise PiperDownloadError(f"{url} is larger than the expected {size} bytes")

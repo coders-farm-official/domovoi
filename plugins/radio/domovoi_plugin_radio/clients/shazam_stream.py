@@ -17,7 +17,7 @@ shazamio handle well.
 
 The URL is a station row's, so ffmpeg never sees it (A2-03). The stream
 is opened HERE, through the shared outbound-URL fetcher
-(``net_safety.open_stream``: http(s) only, never an address inside the
+(``net_safety.open_raw_stream``: http(s) only, never an address inside the
 house or on the box, every redirect hop re-checked), and its bytes are fed
 to ffmpeg on stdin under ``-protocol_whitelist pipe``. Left to open the URL
 itself, ffmpeg would resolve the name on its own, follow redirects
@@ -148,9 +148,9 @@ async def grab_to_tempfile(
     tempfile ~10× smaller than 44.1 kHz stereo — that matters when the
     sampler is grabbing several streams at once.
 
-    The stream is opened here, through ``net_safety.open_stream`` (every
-    redirect hop re-checked), and fed to ffmpeg on stdin; ffmpeg may open
-    nothing but that pipe. The whole grab, fetch included, is bounded by
+    The stream is opened here, through ``net_safety.open_raw_stream`` (every
+    redirect hop re-checked, the body read as it came, never decoded), and
+    fed to ffmpeg on stdin; ffmpeg may open nothing but that pipe. The whole grab, fetch included, is bounded by
     ``timeout_sec``.
 
     Returns None without spawning anything when ``url`` (or any hop it
@@ -191,7 +191,7 @@ async def _grab(url: str, duration_sec: int) -> str | None:
     }
     async with httpx.AsyncClient(timeout=httpx.Timeout(_FETCH_TIMEOUT_SEC)) as client:
         try:
-            resp = await net_safety.open_stream(client, url, headers=headers)
+            resp = await net_safety.open_raw_stream(client, url, headers=headers)
         except net_safety.OutboundFetchError as e:
             # The first URL passed, but a redirect hop did not.
             log.warning("radio: refusing to sample %s — %s", url, e)
@@ -228,7 +228,7 @@ async def _feed_ffmpeg(resp: Any, url: str, duration_sec: int) -> str | None:
     up, or the byte budget is spent. Cleans up the process and the
     tempfile on every way out, cancellation by the caller's timeout
     included."""
-    chunks = resp.aiter_bytes(chunk_size=_FEED_CHUNK)
+    chunks = net_safety.iter_raw(resp, _FEED_CHUNK)
     head = b""
     async for chunk in chunks:
         if chunk:

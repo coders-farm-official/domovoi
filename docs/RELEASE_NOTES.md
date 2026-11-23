@@ -159,6 +159,12 @@ a way that would otherwise get reported as a bug.
 
 ## 1.4.1 (unreleased)
 
+- Radio 1.5.3 (SDK 1.13.1): station streams, for the song sampler and the
+  browser player alike, are asked for uncompressed and read exactly as
+  sent; a station that answers compressed is refused. Model, voice,
+  lyrics, font and plugin downloads read their bodies the same way. New
+  for plugins: `net_safety.open_raw_stream` and `iter_raw`.
+
 - Holiday questions work offline: "how many days until New Year's Day",
   "when is Thanksgiving", "what day is Easter next year" answer with the
   date and the day count. The built-in table covers the common public

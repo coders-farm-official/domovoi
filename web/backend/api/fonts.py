@@ -60,7 +60,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-from domovoi import egress
+from domovoi import egress, net_safety
 from domovoi.admin_auth import require_admin_mutation, require_device_read
 from web.backend import fonts_store as fs
 from web.backend.db import session_scope
@@ -143,7 +143,7 @@ async def _http_get(url: str, max_bytes: int, accept: str | None = None) -> tupl
     """(status, body) for a GET, read up to ``max_bytes`` (more is an
     error, not a truncation). Goes through the egress client: under
     ``never`` it refuses before connecting."""
-    headers = {"User-Agent": "Domovoi-fonts"}
+    headers = {"User-Agent": "Domovoi-fonts", **net_safety.IDENTITY_ENCODING}
     if accept:
         headers["Accept"] = accept
     async with _session():
@@ -155,10 +155,11 @@ async def _http_get(url: str, max_bytes: int, accept: str | None = None) -> tupl
             if declared and declared.isdigit() and int(declared) > max_bytes:
                 raise _TooLarge(int(declared))
             buf = bytearray()
-            async for chunk in r.aiter_bytes():
-                buf.extend(chunk)
-                if len(buf) > max_bytes:
-                    raise _TooLarge(len(buf))
+            try:
+                async for chunk in net_safety.iter_capped(r, max_bytes):
+                    buf.extend(chunk)
+            except net_safety.ResponseTooLarge:
+                raise _TooLarge(max_bytes + 1) from None
             return 200, bytes(buf)
 
 

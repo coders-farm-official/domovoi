@@ -822,6 +822,91 @@ def open_stream_sync(
     raise TooManyRedirects(f"more than {max_redirects} redirects: {url}")
 
 
+def _identity_headers(headers: dict[str, str] | None) -> dict[str, str]:
+    """The caller's headers with ``Accept-Encoding: identity`` in place of
+    whatever they asked for."""
+    out = {k: v for k, v in (headers or {}).items() if k.lower() != "accept-encoding"}
+    out.update(IDENTITY_ENCODING)
+    return out
+
+
+async def open_raw_stream(
+    client: Any,
+    url: str,
+    *,
+    method: str = "GET",
+    headers: dict[str, str] | None = None,
+    max_redirects: int = MAX_REDIRECTS,
+) -> Any:
+    """:func:`open_stream` for a body read as it comes, with no total cap
+    (a radio station never ends): asks for ``identity`` and refuses an
+    answer in any Content-Encoding (closed, then
+    :class:`UnsupportedContentEncoding`), so nothing ever inflates it.
+    Read it with :func:`iter_raw`; the caller owns the response."""
+    response = await open_stream(
+        client, url, method=method, headers=_identity_headers(headers),
+        max_redirects=max_redirects,
+    )
+    codings = _content_codings(response)
+    if codings:
+        await response.aclose()
+        raise UnsupportedContentEncoding(str(response.url), ", ".join(codings))
+    return response
+
+
+def open_raw_stream_sync(
+    client: Any,
+    url: str,
+    *,
+    method: str = "GET",
+    headers: dict[str, str] | None = None,
+    max_redirects: int = MAX_REDIRECTS,
+) -> Any:
+    """Blocking twin of :func:`open_raw_stream` for an ``httpx.Client``;
+    read with :func:`iter_raw_sync`."""
+    response = open_stream_sync(
+        client, url, method=method, headers=_identity_headers(headers),
+        max_redirects=max_redirects,
+    )
+    codings = _content_codings(response)
+    if codings:
+        response.close()
+        raise UnsupportedContentEncoding(str(response.url), ", ".join(codings))
+    return response
+
+
+def _raw_check(response: Any) -> None:
+    codings = _content_codings(response)
+    if codings:
+        raise UnsupportedContentEncoding(str(response.url), ", ".join(codings))
+
+
+async def iter_raw(response: Any, chunk_size: int = 65536):
+    """A response's body as it came over the wire, never decoded (an
+    encoded answer is :class:`UnsupportedContentEncoding`). A response
+    already read whole (as a mock transport answers; no network does) is
+    handed out from its content."""
+    _raw_check(response)
+    if getattr(response, "is_stream_consumed", False):
+        body = response.content
+        for i in range(0, len(body), chunk_size):
+            yield body[i : i + chunk_size]
+        return
+    async for chunk in response.aiter_raw(chunk_size):
+        yield chunk
+
+
+def iter_raw_sync(response: Any, chunk_size: int = 65536):
+    """Blocking twin of :func:`iter_raw`."""
+    _raw_check(response)
+    if getattr(response, "is_stream_consumed", False):
+        body = response.content
+        for i in range(0, len(body), chunk_size):
+            yield body[i : i + chunk_size]
+        return
+    yield from response.iter_raw(chunk_size)
+
+
 @dataclass(frozen=True)
 class FetchResult:
     url: str            # the URL that answered (after any redirects)
