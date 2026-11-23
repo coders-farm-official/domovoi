@@ -22,6 +22,11 @@ Parts, each testable on its own:
   backoff), the output opened only while there is room audio to play, and
   the stats.
 
+Speaker calibration (protocol §11, ``satellite/room_calibration.py``): the
+server's ``latency`` is this device's measured output delay, added to the
+output time so a slower path plays earlier; a ``calibrate`` step plays a
+chirp at a stamped time (``TimedPlayer.schedule_sound``) and records it.
+
 The output goes to ``[audio] output_device``, the device spoken answers
 already use. On an XVF3800 that is the array's own USB playback, which is
 what the chip's echo canceller takes as its reference: room audio played
@@ -34,9 +39,11 @@ dependencies; nothing new is installed.
 
 from __future__ import annotations
 
+import itertools
 import json
 import logging
 import math
+import queue
 import statistics
 import struct
 import sys
@@ -46,6 +53,8 @@ from collections import deque
 from typing import Any, Callable
 
 import numpy as np
+
+from satellite.room_calibration import Calibrator
 
 log = logging.getLogger("satellite.room_player")
 
@@ -186,6 +195,13 @@ class TimedPlayer:
         self.underruns = self.late = self.corrections = self.jumps = 0
         self._err_sum = 0.0
         self._err_n = 0
+        #: The server's calibrated output latency (protocol §5.5), us.
+        self.output_latency_us = 0.0
+        # Local sounds at a server time (a calibration chirp): token ->
+        # [pcm (n x 2 int16), at_us, next sample (None until it starts)].
+        self._sounds: dict[int, list[Any]] = {}
+        self._sound_ids = itertools.count(1)
+        self._started: set[int] = set()
 
     # ── clock ──────────────────────────────────────────────────────────
     def ping(self, local_us: float) -> dict[str, Any] | None:
@@ -222,6 +238,10 @@ class TimedPlayer:
                     g = float(self._gain_at(np.array([at]))[0])
                     self._gain = (g, min(1.0, max(0.0, float(m["gain"]))), at,
                                   max(0.0, float(m.get("ramp_ms", 0))) * 1000.0)
+                elif kind == "latency":
+                    us = float(m["output_latency_us"])
+                    if math.isfinite(us):
+                        self.output_latency_us = min(500_000.0, max(0.0, us))
             except (KeyError, TypeError, ValueError):
                 log.debug("room audio: malformed %s ignored", kind)
         return m
@@ -242,6 +262,8 @@ class TimedPlayer:
             self.fit = ClockFit()
             self.pings_sent = 0
             self._next_ping = 0.0
+            self.output_latency_us = 0.0
+            self._sounds.clear()
 
     def on_binary(self, data: bytes, local_us: float) -> None:
         f = decode_audio(data)
@@ -326,10 +348,57 @@ class TimedPlayer:
         return (self.fit.to_server(local_us) - self.t0_us) * RATE / 1e6
 
     def wants_output(self, local_us: float) -> bool:
-        """Something buffered is still to play."""
+        """Something buffered is still to play (the room's, or a local
+        sound such as a calibration chirp)."""
         with self.lock:
-            due = self.due_index(local_us)
+            if self._sounds and self.fit.converged:
+                now = self.fit.to_server(local_us)
+                for tok, (pcm, at, _nxt) in list(self._sounds.items()):
+                    if now > at + len(pcm) * 1e6 / RATE + 1e6:
+                        del self._sounds[tok]           # its time passed unplayed
+                if self._sounds:
+                    return True
+            due = self.due_index(local_us + self.output_latency_us)
             return due is not None and self._have > 0 and self._have > due
+
+    # ── local sounds ───────────────────────────────────────────────────
+    def schedule_sound(self, pcm: np.ndarray, at_us: float) -> int:
+        """Play ``pcm`` (n x 2 int16, 48 kHz) so its first sample reaches
+        the hardware at server time ``at_us`` by the audio API's own time:
+        the calibrated latency is NOT added (a calibration chirp measures
+        it). Mixed over the room's audio. Returns a token for
+        :meth:`sound_started`."""
+        tok = next(self._sound_ids)
+        with self.lock:
+            self._sounds[tok] = [np.asarray(pcm, dtype=np.int16).reshape(-1, 2), float(at_us), None]
+        return tok
+
+    def sound_started(self, token: int) -> bool:
+        with self.lock:
+            return token in self._started
+
+    def _mix_sounds(self, server_t: float, out: np.ndarray) -> np.ndarray:
+        frames = len(out)
+        mixed: np.ndarray | None = None
+        for tok, snd in list(self._sounds.items()):
+            pcm, at, nxt = snd
+            if nxt is None:
+                # Placed once by the clock, then played straight on.
+                nxt = round((server_t - at) * RATE / 1e6)
+                if nxt + frames <= 0:
+                    continue                            # not yet
+            a, b = max(nxt, 0), min(nxt + frames, len(pcm))
+            if a < b:
+                if mixed is None:
+                    mixed = out.astype(np.int32)
+                mixed[a - nxt:b - nxt] += pcm[a:b]
+                self._started.add(tok)
+            snd[2] = nxt + frames
+            if snd[2] >= len(pcm):
+                del self._sounds[tok]
+        if mixed is None:
+            return out
+        return np.clip(mixed, -32768, 32767).astype(np.int16)
 
     def restart_position(self) -> None:
         """The output (re)opened: place the next buffer by the clock."""
@@ -338,48 +407,56 @@ class TimedPlayer:
 
     def render(self, dac_local_us: float, frames: int) -> np.ndarray:
         """The ``frames`` x 2 int16 buffer (48 kHz) whose first frame
-        reaches the speaker at local time ``dac_local_us``."""
+        reaches the hardware at local time ``dac_local_us`` (by the audio
+        API). The room's audio is placed by when it leaves the speaker,
+        ``output_latency_us`` later; a local sound by the API's time."""
         with self.lock:
-            due = self.due_index(dac_local_us)
-            if due is None:
-                return np.zeros((frames, 2), dtype=np.int16)
-            server_t = self.fit.to_server(dac_local_us)
-            if self.pos is None:
-                self.pos, self.ema = round(due), 0.0
-            err = self.pos - due
-            self.ema += EMA_ALPHA * (err - self.ema)
-            n_src, action = frames, 0
-            if abs(err) > JUMP_SAMPLES:
-                self.pos, self.ema = round(due), 0.0
-                self.jumps += 1
-            elif self.ema > 1.0:
-                n_src, action = frames - 1, 1       # ahead: repeat one sample
-                self.ema -= 1.0
-            elif self.ema < -1.0:
-                n_src, action = frames + 1, -1      # behind: drop one sample
-                self.ema += 1.0
-            else:
-                self._err_sum += abs(err)
-                self._err_n += 1
-            src = self._get(self.pos, n_src)
-            m = n_src // 2
-            if action == 1:
-                src = np.insert(src, m, src[m], axis=0)
-                self.corrections += 1
-            elif action == -1:
-                src = np.delete(src, m, axis=0)
-                self.corrections += 1
-            self.pos += n_src
-            g0, g1, at, ramp = self._gain
-            end_t = server_t + frames * 1e6 / RATE
-            if g0 == g1 or server_t >= at + ramp:
-                g = g1
-            elif end_t <= at:
-                g = g0
-            else:
-                t = server_t + np.arange(frames) * (1e6 / RATE)
-                return (src * self._gain_at(t)[:, None]).astype(np.int16)
-            return src if g == 1.0 else (src * g).astype(np.int16)
+            out = self._render_timeline(dac_local_us + self.output_latency_us, frames)
+            if self._sounds and self.fit.converged:
+                out = self._mix_sounds(self.fit.to_server(dac_local_us), out)
+            return out
+
+    def _render_timeline(self, dac_local_us: float, frames: int) -> np.ndarray:
+        due = self.due_index(dac_local_us)
+        if due is None:
+            return np.zeros((frames, 2), dtype=np.int16)
+        server_t = self.fit.to_server(dac_local_us)
+        if self.pos is None:
+            self.pos, self.ema = round(due), 0.0
+        err = self.pos - due
+        self.ema += EMA_ALPHA * (err - self.ema)
+        n_src, action = frames, 0
+        if abs(err) > JUMP_SAMPLES:
+            self.pos, self.ema = round(due), 0.0
+            self.jumps += 1
+        elif self.ema > 1.0:
+            n_src, action = frames - 1, 1       # ahead: repeat one sample
+            self.ema -= 1.0
+        elif self.ema < -1.0:
+            n_src, action = frames + 1, -1      # behind: drop one sample
+            self.ema += 1.0
+        else:
+            self._err_sum += abs(err)
+            self._err_n += 1
+        src = self._get(self.pos, n_src)
+        m = n_src // 2
+        if action == 1:
+            src = np.insert(src, m, src[m], axis=0)
+            self.corrections += 1
+        elif action == -1:
+            src = np.delete(src, m, axis=0)
+            self.corrections += 1
+        self.pos += n_src
+        g0, g1, at, ramp = self._gain
+        end_t = server_t + frames * 1e6 / RATE
+        if g0 == g1 or server_t >= at + ramp:
+            g = g1
+        elif end_t <= at:
+            g = g0
+        else:
+            t = server_t + np.arange(frames) * (1e6 / RATE)
+            return (src * self._gain_at(t)[:, None]).astype(np.int16)
+        return src if g == 1.0 else (src * g).astype(np.int16)
 
     def stats(self) -> dict[str, Any]:
         with self.lock:
@@ -699,6 +776,7 @@ class RoomPlayer:
 
     def __init__(self, url: str, satellite_id: str, token: Callable[[], str | None], *,
                  device: Any = None, device_free: Callable[[], bool] = lambda: True,
+                 has_mic: Callable[[], bool] = lambda: True,
                  stop_event: threading.Event | None = None, sd: Any = None,
                  connect: Callable[..., Any] = _connect,
                  clock: Callable[[], float] = now_us) -> None:
@@ -717,6 +795,13 @@ class RoomPlayer:
         self._out_lock = threading.Lock()
         self._hold_until = 0.0
         self._threads: list[threading.Thread] = []
+        # Messages from other threads (calibration answers) for the socket
+        # thread to send: the sync connection is used from that one thread.
+        self._outbox: queue.SimpleQueue[dict[str, Any]] = queue.SimpleQueue()
+        #: Speaker calibration (§11); the capture callback feeds its mic tap
+        #: through :meth:`Calibrator.on_mic`.
+        self.calibrator = Calibrator(self.player, send=self._outbox.put, has_mic=has_mic,
+                                     clock=clock)
 
     # ── lifecycle ──────────────────────────────────────────────────────
     def start(self) -> None:
@@ -778,7 +863,7 @@ class RoomPlayer:
         return {"type": "hello", "proto": PROTO, "satellite_id": self.satellite_id,
                 "pairing_token": self.token(), "codecs": ["pcm_s16le"],
                 "channels": self.output.channels, "output_latency_us": 0,
-                "client": CLIENT_NAME}
+                "supports": ["calibrate"], "client": CLIENT_NAME}
 
     def _session(self) -> bool:
         """One connection, until it ends. True when the server accepted it."""
@@ -787,6 +872,8 @@ class RoomPlayer:
         stamps: deque[float] | None = getattr(ws, "rx_stamps", None)
         got_ready = False
         next_stats = time.monotonic() + STATS_EVERY_S
+        while not self._outbox.empty():      # answers meant for an earlier socket
+            self._outbox.get_nowait()
         with _TimerResolution():
             try:
                 ws.send(json.dumps(self._hello(), separators=(",", ":")))
@@ -796,6 +883,8 @@ class RoomPlayer:
                     if msg is not None and got_ready:
                         msg["t0"] = self.clock()
                         ws.send(json.dumps(msg, separators=(",", ":")))
+                    while got_ready and not self._outbox.empty():
+                        ws.send(json.dumps(self._outbox.get_nowait(), separators=(",", ":")))
                     if got_ready and time.monotonic() >= next_stats:
                         next_stats = time.monotonic() + STATS_EVERY_S
                         if self.output.is_open:
@@ -817,6 +906,8 @@ class RoomPlayer:
                         self.last_error = None
                         self.connected.set()
                         log.info("room audio: connected to room %s", m.get("room_id"))
+                    elif m["type"] == "calibrate":
+                        self.calibrator.on_calibrate(m)
                     elif m["type"] == "error":
                         self.last_error = str(m.get("reason"))
                         log.warning("room audio: refused (%s)", self.last_error)

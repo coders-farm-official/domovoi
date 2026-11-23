@@ -41,6 +41,7 @@ class TimedPlayer:
         self.pings_sent = 0
         self._next_ping = 0.0
         self.underruns = self.late = self.corrections = self.jumps = 0
+        self.output_latency_us = 0.0      # the server's `latency` (§5.5)
 
     # ── clock ──────────────────────────────────────────────────────────
     def ping(self, local_us: float) -> dict[str, Any] | None:
@@ -71,6 +72,8 @@ class TimedPlayer:
             self._gain = (1.0, 1.0, 0.0, 0.0)
         elif kind == "flush":
             self._flush(m["at_us"])
+        elif kind == "latency":
+            self.output_latency_us = float(m["output_latency_us"])
         elif kind == "gain":
             g = self._gain_at(np.array([float(m["at_us"])]))[0]
             self._gain = (float(g), float(m["gain"]), float(m["at_us"]), m["ramp_ms"] * 1000.0)
@@ -132,7 +135,8 @@ class TimedPlayer:
         speaker at local time ``dac_local_us``."""
         if self.timeline_id is None or not self.fit.converged:
             return np.zeros((frames, 2), dtype=np.int16)
-        server_t = self.fit.to_server(dac_local_us)
+        # The sound leaves the speaker output_latency_us after the API's time.
+        server_t = self.fit.to_server(dac_local_us + self.output_latency_us)
         due = (server_t - self.t0_us) * P.RATE / 1e6
         if self.pos is None:
             self.pos, self.ema = round(due), 0.0

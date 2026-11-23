@@ -35,6 +35,7 @@ STATS_KEYS = ("offset_us", "rate_ppm", "rtt_us", "err_us", "underruns", "late",
               "corrections", "jumps")
 
 Auth = Callable[[str, "str | None"], Awaitable[bool]]
+LatencyOf = Callable[[str], Awaitable["int | None"]]
 
 
 async def pairing_auth(satellite_id: str, token: str | None) -> bool:
@@ -49,13 +50,29 @@ async def pairing_auth(satellite_id: str, token: str | None) -> bool:
     return row is not None and secrets.compare_digest(row[0], token_sha256(token))
 
 
+async def stored_latency(satellite_id: str) -> int | None:
+    """The device's calibrated output latency in its room, None when it has
+    never been calibrated there (``satellites.output_latency_us``)."""
+    from sqlalchemy import text
+
+    from domovoi.db.session import session_scope
+
+    async with session_scope() as s:
+        row = (await s.execute(text(
+            "SELECT output_latency_us FROM satellites WHERE satellite_id = :s"),
+            {"s": satellite_id})).first()
+    return None if row is None or row[0] is None else int(row[0])
+
+
 class RoomAudioSession:
     def __init__(self, ws: WebSocket, satellite_id: str, playout: RoomPlayout, *,
-                 auth: Auth = pairing_auth, clock: Callable[[], int] = now_us) -> None:
+                 auth: Auth = pairing_auth, clock: Callable[[], int] = now_us,
+                 latency_of: LatencyOf = stored_latency) -> None:
         self.ws = ws
         self.satellite_id = satellite_id
         self.playout = playout
         self.auth = auth
+        self.latency_of = latency_of
         self.clock = clock
         self.room_id: str | None = None
         self._out: deque[tuple[str, Any]] = deque()
@@ -129,7 +146,17 @@ class RoomAudioSession:
         self.send_control(P.ready_msg(self.satellite_id, room, self.playout.playout_ms,
                                       self.clock()))
         self.room_id = self.playout.attach(self.satellite_id, self)
+        # After attach: re-subscribing (a reconnect) forgets the old socket's.
+        self.playout.declare(self.satellite_id, hello.get("supports"))
         log.info("room-audio: %s joined room %s", self.satellite_id, self.room_id)
+        try:
+            stored = await self.latency_of(self.satellite_id)
+        except Exception:  # noqa: BLE001 — play uncalibrated rather than not at all
+            log.exception("room-audio: reading %s's calibration failed", self.satellite_id)
+            stored = None
+        self.playout.set_latency(self.satellite_id, stored or 0)
+        if self.room_id is not None:
+            self.playout.joined(self.satellite_id, self.room_id, calibrated=stored is not None)
         sender = asyncio.create_task(self._send_loop())
         try:
             await self._recv_loop()
@@ -162,6 +189,8 @@ class RoomAudioSession:
                 if n <= MAX_PINGS_PER_S:
                     self._pongs.append((m["t0"], t1))
                     self._wake.set()
+            elif kind == "calibrate_result":
+                self.playout.calibration_result(self.satellite_id, m)
             elif kind == "stats":
                 self.playout.stats[self.satellite_id] = {
                     k: m[k] for k in STATS_KEYS if isinstance(m.get(k), (int, float))

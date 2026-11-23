@@ -1492,6 +1492,7 @@ ids.
 | `PATCH /api/rooms/{room_id}` | **Admin (Bearer)** | `{"name": "Back porch"}` | `{"room_id", "name"}`. `404` no such room, `422` blank name. |
 | `DELETE /api/rooms/{room_id}` | **Admin (Bearer)** | — | `{"room_id", "deleted": true}`. Only an EMPTY room: `409` while it has satellites (move them first), `404` no such room. History keeps the id. Empty rooms are otherwise kept. |
 | `POST /api/rooms/{room_id}/merge` | **Admin (Bearer)** | `{"rooms": ["kitchen_2"]}` | `{"room_id", "merged": [...], "moved_satellites": [...], "learned_samples_dropped": N}`. Moves every satellite of `rooms` into `room_id` (each as a move, below) and deletes those rooms. Never done on its own: `GET /api/rooms` only offers it. `404` for an unknown room, `409` when a tokenless satellite would end up sharing a room, `422` when no other room is named. |
+| `POST /api/rooms/{room_id}/calibrate` | **Admin (Bearer)** | — | `Calibration` (below). "Tune the speakers": each speaker that can take part plays a short chirp in turn while every device records, and each one's output latency is measured and sent to it (docs/ROOM_AUDIO_PROTOCOL.md §11). Takes a few seconds per speaker. `409` with a sentence in `detail` when it cannot run: fewer than two connected speakers that can take part, something playing in the room, or a run already going. `404` no such room. |
 | `POST /api/satellites/{satellite_id}/room` | **Admin (Bearer)** | `{"room_id": "den"}` or `{"new_room_name": "Den"}` (exactly one) | `{"satellite_id", "room_id", "from_room_id", "moved": bool, "learned_samples_dropped": N, "connected": bool}`. Moves the satellite. Its id never changes and its history stays with the old room; its learned voice samples go (enrolled ones stay); its speaker calibration is cleared. A connected 1.5.0 device gets a `room` frame on its stream; an older one is closed (1001) and reconnects into the new room. `moved: false` when it is already there. `404` no such satellite or room, `409` when a tokenless satellite would share a room, `422` neither or both choices. |
 | `PATCH /api/satellites/{satellite_id}/name` | **Admin (Bearer)** | `{"name": "Kitchen phone"}` (`null` or blank clears it) | `{"satellite_id", "name"}`. The device's display name. `404` no such satellite. |
 | `GET /api/satellites/approvals` | **Admin read** | — | `[Approval]` (below), oldest first. |
@@ -1508,12 +1509,15 @@ ids.
       "name": "Kitchen",
       "shared": true,
       "linked_rooms": [],
+      "tunable_speakers": 1,
+      "calibration": null,
       "satellites": [
         {"satellite_id": "kitchen", "name": null, "sat_type": "voice",
-         "board": null, "paired": true, "connected": true, "speaks_for_room": true},
+         "board": null, "paired": true, "connected": true, "speaks_for_room": true,
+         "output_latency_us": 0, "calibrated_at": "2026-11-22T15:00:00+00:00"},
         {"satellite_id": "kitchen_2", "name": "Kitchen phone", "sat_type": "voice",
          "board": "android_room", "paired": true, "connected": false,
-         "speaks_for_room": false}
+         "speaks_for_room": false, "output_latency_us": null, "calibrated_at": null}
       ]
     }
   ],
@@ -1527,7 +1531,29 @@ with strict pairing off, is `false` and may only be a room on its own).
 `speaks_for_room`: the live device that the room's timers, announcements and
 replies go to until synced playout lands. `merge_offers`: rooms with the same
 name (case-insensitive), offered for a merge. Nothing merges unless an admin
-asks for it.
+asks for it. `output_latency_us` / `calibrated_at`: the satellite's measured
+speaker delay in this room (relative: the room's lowest is 0) and when; `null`
+until it is tuned, and cleared by a move. `tunable_speakers`: connected
+speakers of the room that can take part in tuning (it needs two).
+`calibration`: the last run's `Calibration`, or `null` (kept until the core
+restarts).
+
+`Calibration`:
+
+```json
+{"room_id": "kitchen", "status": "partial", "reason": "admin",
+ "finished_at": "2026-11-22T15:00:00+00:00",
+ "message": "Tuned 2 of 3 speakers. Shelf speaker keeps its previous setting: the others could not hear it clearly.",
+ "satellites": [
+   {"satellite_id": "kitchen", "output_latency_us": 0, "tuned": true, "note": null},
+   {"satellite_id": "kitchen_3", "output_latency_us": null, "tuned": false,
+    "note": "No other satellite heard its chirp: too far apart, or too noisy."}]}
+```
+
+`status`: `done`, `partial` (some kept their previous value) or `failed`
+(nothing changed). `reason`: `admin` (the button) or `joined` (the automatic
+run when a satellite joins or moves into the room, setting
+`room_calibration_auto`, off by default because it plays an audible chirp).
 
 `Approval` (one row per waiting device):
 

@@ -102,3 +102,12 @@ async def name_satellite(satellite_id: str, body: SatelliteName, request: Reques
     return _bridge(await patch_admin(
         f"/v1/admin/satellites/{satellite_id}/name", body.model_dump(),
         headers=auth_forward_headers(request)))
+
+
+@router.post("/rooms/{room_id}/calibrate", dependencies=ADMIN)
+async def calibrate_room(room_id: str, request: Request) -> Any:
+    """"Tune the speakers": a chirp from each speaker in turn, a few seconds
+    per speaker; the answer says what was tuned and what kept its value."""
+    return _bridge(await post_admin(
+        f"/v1/admin/rooms/{room_id}/calibrate", {}, timeout=90.0,
+        headers=auth_forward_headers(request)))

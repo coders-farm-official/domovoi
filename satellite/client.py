@@ -2340,6 +2340,12 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 data = bytes(indata)
             else:
                 data = devices.select_channel_int16(indata, dev.capture_dtype, channels, select)
+            # Speaker calibration listens on this stream (a no-op unless a
+            # calibration step armed its window): the block as captured,
+            # with its capture time, before the rate corrector touches it.
+            rp = self._room_player
+            if rp is not None:
+                rp.calibrator.on_mic(data, time_info, len(data) // 2, SAMPLE_RATE)
             # Everything the consumer sees goes through the corrector, which
             # is a pass-through on a healthy stream and the only thing that
             # makes an 8x-fast one usable.
@@ -3237,6 +3243,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
             f"{url}/v1/room-audio/{self.cfg.room_id}", self.cfg.room_id,
             _effective_pairing_token, device=self.cfg.output_device,
             device_free=self._room_device_free, stop_event=self.shutdown_event,
+            has_mic=lambda: bool(self.cfg.mic_enabled),
         )
         self._room_player.start()
 

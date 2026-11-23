@@ -544,7 +544,8 @@ async def test_the_room_drawer(house, admin) -> None:
         assert k["shared"] and k["satellites"][1]["name"] == "Kitchen phone"
         assert k["satellites"][0] == {
             "satellite_id": h["a"], "name": None, "sat_type": "voice", "board": None,
-            "paired": True, "connected": False, "speaks_for_room": False}
+            "paired": True, "connected": False, "speaks_for_room": False,
+            "output_latency_us": None, "calibrated_at": None}
         assert h["a"] not in rooms
         # Two rooms called Kitchen: offered, never merged on their own.
         offer = [o for o in body["merge_offers"] if set(o["rooms"]) >= {h["kitchen"], twin}]

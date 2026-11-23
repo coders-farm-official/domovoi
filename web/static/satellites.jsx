@@ -4222,6 +4222,7 @@ const RoomSatelliteRow = ({ room, sat, rooms, admin, canOpen, onOpen, fire, refr
         {(sat.board && (SAT_BOARD_LABELS[sat.board] || sat.board)) || 'Raspberry Pi'}
         {' · '}{sat.sat_type || 'voice'}
         {sat.paired === false ? ' · not paired' : ''}
+        {sat.output_latency_us != null ? ` · speaker tuned (${(sat.output_latency_us / 1000).toFixed(1)} ms)` : ''}
       </div>
       {mode === 'rename' && admin && (
         <div style={{ display: 'flex', gap: 6, marginTop: 8, marginLeft: 18 }}>
@@ -4251,6 +4252,55 @@ const RoomSatelliteRow = ({ room, sat, rooms, admin, canOpen, onOpen, fire, refr
           {canOpen && <Button variant="ghost" icon="info" onClick={() => onOpen(sat.satellite_id)}>Details</Button>}
           {admin && <Button variant="ghost" icon="pencil" onClick={() => { setName(sat.name || ''); setMode('rename'); }}>Rename</Button>}
           {admin && <Button variant="ghost" icon="arrow-right" onClick={() => setMode('move')}>Move to another room</Button>}
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* "Tune the speakers" (1.5.0): each speaker of the room plays a chirp in
+ * turn while the others listen, so the room's speakers line up in the air,
+ * not just at the audio API. POST /api/rooms/{room}/calibrate (admin); the
+ * answer, and the last run's outcome from GET /api/rooms, say plainly what
+ * was tuned and what kept its old setting. A room with one speaker that can
+ * take part has nothing to tune against: no button, a line saying so. */
+const RoomTuning = ({ room, admin, refresh }) => {
+  const [busy, setBusy] = React.useState(false);
+  const [note, setNote] = React.useState(null);   // {tone, text}
+  React.useEffect(() => { setNote(null); }, [room.room_id]);
+  const last = room.calibration || null;
+  const able = (room.tunable_speakers || 0) >= 2;
+  const tune = async () => {
+    setBusy(true); setNote(null);
+    try {
+      const r = await apiPost(`/api/rooms/${encodeURIComponent(room.room_id)}/calibrate`, {});
+      setNote({ tone: r && r.status === 'done' ? 'ok' : 'warn', text: (r && r.message) || 'Done' });
+      refresh();
+    } catch (e) {
+      const d = e && e.detail && e.detail.detail;
+      setNote({ tone: 'warn', text: typeof d === 'string' ? d : (roomsErrText(e, 'tune the speakers') || 'Could not tune the speakers') });
+    } finally { setBusy(false); }
+  };
+  const shown = note || (last ? { tone: last.status === 'done' ? 'ok' : 'warn', text: last.message } : null);
+  return (
+    <div className="room-tuning" style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-soft)',
+                                          display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <div style={{ fontWeight: 600, flex: 1, minWidth: 140 }}>Speaker tuning</div>
+        {admin && able && (
+          <Button variant="ghost" icon="volume-2" disabled={busy} onClick={tune}>
+            {busy ? 'Tuning…' : 'Tune the speakers'}
+          </Button>
+        )}
+      </div>
+      <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+        {able
+          ? 'Each speaker plays a short chirp while the others listen, so they all sound at the same moment.'
+          : 'Tuning needs two connected speakers in this room that can take part.'}
+      </div>
+      {shown && (
+        <div role="status" style={{ fontSize: 13, color: shown.tone === 'ok' ? 'var(--fg)' : 'var(--warn-ink)' }}>
+          {shown.text}
         </div>
       )}
     </div>
@@ -4330,6 +4380,7 @@ const RoomDrawer = ({ room, rooms, sats, admin, onClose, onOpenSatellite, fire, 
                               canOpen={known.has(sat.satellite_id)} onOpen={onOpenSatellite}
                               fire={fire} refresh={refresh}/>
           ))}
+          {list.length > 1 && <RoomTuning room={room} admin={admin} refresh={refresh}/>}
           {admin && list.length === 0 && (
             <div style={{ padding: 16 }}>
               <Button variant="ghost" icon="trash-2" disabled={busy} onClick={remove}>Delete this room</Button>
