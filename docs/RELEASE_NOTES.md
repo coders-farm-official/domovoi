@@ -120,6 +120,36 @@ a way that would otherwise get reported as a bug.
   isn't a wake-word name is ignored, as is such a name saved earlier (the
   configured word is used).
 
+## 1.4.1 (unreleased) — Friend Houses: tighter limits
+
+- **Friend Houses waits for an admin after a reset.** If the admin
+  password is reset (`--reset-admin`), phones and the dashboard can't read
+  or send friend messages, see the friend list or use shared lists until
+  someone signs in as admin again.
+- Friend Houses writes Tor's config and key files through a fresh,
+  exclusively created temp file, and a key file with an unexpected name
+  is ignored instead of stopping the update.
+- The Friend Houses listener closes the oldest connection that hasn't
+  finished its handshake when its slots fill up, and closes a connection
+  that sends far more pings than a house ever does.
+- The Friend Houses firewall drops every IPv6 packet from its network
+  (the network has no IPv6), and its state file says `ipv6=absent` where
+  `ip6tables` isn't installed.
+- With the internet answer "never", Friend Houses stops Tor before it
+  reads the database, so a database outage can't keep it running.
+- Shared lists: an offer withdrawn before it was accepted is forgotten,
+  and old applied changes are pruned by count. When a friend's edit to an
+  item wins, the item shows as from a friend house, not as the household
+  member who first added it.
+- **Removing or blocking a friend stops sharing lists with that house.**
+  Each house keeps its own copy as an ordinary list, and messages or list
+  changes still waiting to go to that house are dropped, so nothing goes
+  out if you become friends again later.
+- New-friend and shared-list announcements that no room heard (no room
+  connected, or all quiet or busy) wait and are tried again.
+- Docs: the friend list's 4-digit code is readable by household phones;
+  only marking it verified needs an admin.
+
 ## 1.4.1 (unreleased) — Queue, downloads, podcast and Word export hardening
 
 - **Up next** trims only songs a room was heard playing. Jumping ahead in a

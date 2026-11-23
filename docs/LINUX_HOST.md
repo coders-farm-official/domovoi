@@ -1436,7 +1436,9 @@ else:
    the home network, other containers, and the Windows or Mac host behind
    a WSL or VM gateway. The jump is in `FORWARD` as well as `DOCKER-USER`,
    so it holds where Docker hooks no `DOCKER-USER` (its nftables backend).
-3. **IPv6:** the same rules, should the network ever get IPv6.
+3. **IPv6:** the network has no IPv6, so everything it sends over IPv6
+   is dropped, global addresses included. Without `ip6tables` there are
+   no IPv6 rules, and the state file says `ipv6=absent`.
 
 Tor relays have public addresses, so the internet still works. `apply`
 refills `DOMOVOI-FH` from scratch and inserts each jump only once, so

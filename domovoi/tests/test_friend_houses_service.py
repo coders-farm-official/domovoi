@@ -178,6 +178,22 @@ async def test_never_stops_the_container_and_the_listener(house) -> None:
 
 
 @linux_only
+async def test_never_stops_tor_even_when_the_database_is_down(house, monkeypatch) -> None:
+    house.enable()
+    house.friends.append(_friend(1))
+    await svc.reconcile()
+
+    async def db_down():
+        raise OSError("database unavailable")
+
+    monkeypatch.setattr(svc, "_inputs", db_down)
+    house.policy["value"] = "never"
+    await svc.reconcile()
+    assert house.docker.calls == ["start", "stop"]
+    assert not svc.tor_wanted()
+
+
+@linux_only
 async def test_turning_it_off_stops_everything_but_keeps_the_keys(house) -> None:
     house.enable()
     house.friends.append(_friend(1))

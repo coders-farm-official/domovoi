@@ -246,7 +246,9 @@ async def _reconcile() -> None:
     policy = egress.policy()
     peers: list[_Peer] = []
     invites: dict[str, float] = {}
-    if enabled:
+    # "never" is decided before the database is read, so an outage can't
+    # keep Tor running against the internet answer.
+    if enabled and policy != "never":
         peers, invites = await _inputs()
     w = tc.wanted(enabled=enabled, internet_policy=policy, friends=len(peers),
                   open_invites=len(invites))
@@ -433,10 +435,7 @@ async def _write_listener_files(keys: fid.HouseKeys, onion: bytes | None, peers:
         return
     hello = fs.Hello(keys.address_statement(onion, int(time.time())), await current_epoch())
     _STATE["hello"] = hello
-    tmp = path.with_name(".hello.tmp")
-    tmp.write_bytes(hello.to_bytes())
-    tc._chmod(tmp, 0o600)
-    tmp.replace(path)
+    tc._write_private(path, hello.to_bytes())
 
 
 async def my_hello() -> fs.Hello | None:
