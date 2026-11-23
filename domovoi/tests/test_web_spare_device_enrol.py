@@ -96,6 +96,11 @@ def core(monkeypatch):
             # A setup code downloads nothing: kept apart from the fetches.
             answers["code_bodies"].append(body)
             return answers[CODES]
+        if path.endswith("/invite"):
+            answers.setdefault("invites", []).append((path, body))
+            return 200, {"room_id": "kitchen", "room_name": "Kitchen",
+                         "name": (body or {}).get("name") or "Kitchen 2",
+                         "satellite_id": "kitchen_2"}
         posted.append(path)
         return 200, dict(answers["/v1/admin/android-app"][1], started=True,
                          fetch=dict(IDLE, running=True))
@@ -924,3 +929,30 @@ def test_the_card_says_older_linux_gets_its_own_python_and_offers_to_fetch_it(ca
     assert "get the Linux Python" in text and "from GitHub itself" in text
     assert any("linux-runtime/fetch" in json.dumps(c) for c in r["calls"]), "the button asks the server"
     assert "debian or ubuntu" not in r["text"]
+
+
+async def test_a_satellite_for_an_existing_room_carries_in(core):
+    """"Add a satellite to the Kitchen" (1.5.0): the core names the device,
+    the payload carries `in=kitchen`, and nothing reads as a conflict."""
+    got = await web_sats.spare_device_enrolment(SpareDeviceEnrolRequest(in_room="kitchen"), Req())
+    assert core["invites"] == [("/v1/admin/rooms/kitchen/invite", {"name": None})]
+    parsed = enrolment.parse(got["payload"])
+    assert (parsed.room, parsed.room_id, parsed.in_room) == ("Kitchen 2", "kitchen_2", "kitchen")
+    assert got["payload"].endswith("&room=Kitchen%202&in=kitchen")
+    assert got["in_room"] == "kitchen" and got["conflict"] is None
+    # Asked again for the same code (the USB stick's column): same name.
+    again = await web_sats.spare_device_enrolment(
+        SpareDeviceEnrolRequest(room="Kitchen 2", in_room="kitchen"), Req())
+    assert core["invites"][-1] == ("/v1/admin/rooms/kitchen/invite", {"name": "Kitchen 2"})
+    assert again["payload"] == got["payload"]
+
+
+async def test_no_room_and_no_in_room_is_refused(core):
+    with pytest.raises(HTTPException) as e:
+        await web_sats.spare_device_enrolment(SpareDeviceEnrolRequest(), Req())
+    assert e.value.status_code == 422
+
+
+def test_in_room_must_be_a_room_id():
+    with pytest.raises(ValueError):
+        SpareDeviceEnrolRequest(in_room="Kitchen!")

@@ -1529,10 +1529,12 @@ class Settings(BaseSettings):
 
     # Speaker tuning (domovoi/room_calibration.py): measure a satellite's
     # real output delay on its own when it joins or moves into a room with
-    # other speakers, if nothing is playing there. Off by default: the run
-    # plays an audible chirp from every speaker in the room, unasked. The
-    # room drawer's "Tune the speakers" runs it on demand either way.
-    room_calibration_auto: bool = False
+    # other speakers, once (debounced), only while the room is idle (nothing
+    # playing, no turn) and never in its quiet hours (it waits for them to
+    # end). On by default (owner decision 2026-11-22): the run plays a short
+    # chirp from every speaker in the room. Off: only the room drawer's
+    # "Tune the speakers" runs it.
+    room_calibration_auto: bool = True
 
     # ─── Media-play history ─────────────────────────
     # The Satellites "Recently played" tab records one row per play.

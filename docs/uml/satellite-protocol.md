@@ -471,6 +471,16 @@ ringing alarm. Volume stays where it was: `volume_status` / `set_volume`.
 
 ## Enrolling a spare device (`domovoi-room:1`)
 
+Since 1.5.0 the payload may carry an optional `in=<room id>`: "Add a
+satellite to the Kitchen" makes `room=Kitchen%202&in=kitchen`, where `room`
+names the device and `in` the existing room it joins. A device that reads it
+(`satellite/enrolment.py` `Enrolment.in_room`; the Pi and PC installers
+write it as `[satellite] requested_room`) sends it in its hello as
+`requested_room`. A parser from before ignores it (unknown keys are
+ignored) and connects as `kitchen_2`; the server remembered the invitation
+and pre-selects the Kitchen on the approval card either way. A value that
+is not a room id is ignored like an unknown key.
+
 Spare-device satellites (S1, 2026-10-13). A Linux laptop or a phone in
 room mode is told which core it belongs to by an **enrolment payload**, a
 URI the dashboard shows under Settings → Rooms → **Add a spare

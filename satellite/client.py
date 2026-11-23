@@ -1020,6 +1020,10 @@ class Config:
     # [satellite] room_name: the name it was enrolled with (the tray shows
     # it; room_id is what it connects as).
     room_name: str = ""
+    # [satellite] requested_room (1.5.0): the existing room it was enrolled
+    # into ("Add a satellite to the Kitchen", the payload's `in=`); sent in
+    # the hello so the approval card pre-selects that room.
+    requested_room: str = ""
     # [pc] permissions: "automatic" (updates and restarts from the core run
     # on arrival, like a Pi) or "ask" (they wait for the person's OK).
     permissions: str = "automatic"
@@ -1364,6 +1368,7 @@ class Config:
             health_heartbeat_stale_sec=float(healthc.get("heartbeat_stale_sec", 60.0)),
             health_wake_stall_sec=max(30.0, float(healthc.get("wake_stall_sec", 120.0))),
             room_name=str(sat.get("room_name", "") or ""),
+            requested_room=str(sat.get("requested_room", "") or ""),
             permissions=permissions,
             settings_ignored=tuple(ignored),
             volume_backend=volume_backend,
@@ -9319,6 +9324,10 @@ class Satellite(pc_engine.SpareDeviceEngine):
         # default instead): the dashboard's row says so from the hello on.
         if getattr(self.cfg, "settings_ignored", ()):
             hello["settings_ignored"] = list(self.cfg.settings_ignored)
+        # The room it was enrolled into (`in=`), until it is approved: an
+        # older core ignores the key.
+        if getattr(self.cfg, "requested_room", ""):
+            hello["requested_room"] = self.cfg.requested_room
         return hello
 
     async def _run_session(self) -> None:

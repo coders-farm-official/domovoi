@@ -22,9 +22,21 @@ a way that would otherwise get reported as a bug.
   that its music starts about half a second after it's asked for. A
   satellite or phone app from before 1.5.0 can't claim a wake word or
   play in sync: a duplicate recording from it is dropped, and it plays the
-  room's sound only when it is the room's only satellite. **Tune the
-  speakers** plays an audible chirp, so **Tune speakers on their own** is
-  off by default. The phone apps say "the Kitchen", never "satellite".
+  room's sound only when it is the room's only satellite, and the drawer
+  says **Update the app on this phone.** under it. Speaker tuning plays a
+  short audible chirp; it runs on its own once when a satellite joins or
+  moves into a room, only while the room is idle and never in quiet hours
+  (it waits for them to end), and **Settings → Rooms → Tune speakers on
+  their own** turns that off. The phone apps say "the Kitchen", never
+  "satellite".
+- **Also in rooms.** **Add a satellite to the Kitchen** in a room's drawer
+  makes the setup code for one more satellite there ("Kitchen 2"), and
+  its approval card has the Kitchen pre-selected, older phone apps
+  included. **Rooms that can hear this one** links rooms whose satellites
+  hear the same wake word into one turn; the Rooms page suggests a link
+  after a few such wakes, and **Keep them separate** is remembered. Turns
+  say which satellite heard best ("Answered in the Kitchen. Heard best by
+  Kitchen phone.").
   Steps and troubleshooting:
   [SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md#rooms-and-their-satellites),
   [TROUBLESHOOTING.md](TROUBLESHOOTING.md#rooms-with-several-satellites),

@@ -197,6 +197,11 @@ def _cal(pl: RoomPlayout, room: Room, stored: dict[str, int], **kw: Any) -> Room
     async def store(values: dict[str, int]) -> None:
         stored.update(values)
 
+    async def not_quiet(_room: str) -> bool:
+        return False
+
+    kw.setdefault("quiet", not_quiet)
+    kw.setdefault("auto_retries", 0)
     cal = RoomCalibration(pl, store=store, lead_us=0, answer_grace_s=0.5,
                           auto=kw.pop("auto", lambda: False), **kw)
     room.cal = cal
@@ -297,8 +302,9 @@ async def test_refusals_one_speaker_old_software_playing_and_twice() -> None:
 # ─── when it runs on its own ──────────────────────────────────────────────
 
 
-def test_the_automatic_run_is_off_by_default() -> None:
-    assert type(settings).model_fields["room_calibration_auto"].default is False
+def test_the_automatic_run_is_on_by_default() -> None:
+    # Owner decision 2026-11-22: on by default, an admin can turn it off.
+    assert type(settings).model_fields["room_calibration_auto"].default is True
     from domovoi.config_schema import EDITABLE_FIELDS as FIELDS
 
     assert any(f.name == "room_calibration_auto" for f in FIELDS)
@@ -335,6 +341,123 @@ async def test_an_automatic_run_skips_a_playing_room() -> None:
     pl.joined("sat_b", "kitchen", calibrated=False)
     await cal._auto_tasks["kitchen"]
     assert stored == {} and "kitchen" not in cal.last
+
+
+def _two(**kw: Any) -> tuple[RoomPlayout, Room, dict[str, int], RoomCalibration, list]:
+    L = {"sat_a": 0.0, "sat_b": 4_000.0}
+    room = Room(L, dict.fromkeys(L, 0.0), {frozenset(("sat_a", "sat_b")): 1_000.0})
+    pl, _ = _playout(room, ["sat_a", "sat_b"])
+    stored: dict[str, int] = {}
+    kw.setdefault("auto", lambda: True)
+    kw.setdefault("auto_delay_s", 0)
+    cal = _cal(pl, room, stored, **kw)
+    runs: list[str] = []
+    real = cal.calibrate
+
+    async def counted(room_id: str, **k: Any) -> dict[str, Any]:
+        runs.append(room_id)
+        return await real(room_id, **k)
+
+    cal.calibrate = counted  # type: ignore[method-assign]
+    return pl, room, stored, cal, runs
+
+
+async def test_with_the_default_setting_a_join_runs_once(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "room_calibration_auto",
+                        type(settings).model_fields["room_calibration_auto"].default)
+    L = {"sat_a": 0.0, "sat_b": 3_000.0}
+    room = Room(L, dict.fromkeys(L, 0.0), {frozenset(("sat_a", "sat_b")): 1_000.0})
+    pl, _ = _playout(room, ["sat_a", "sat_b"])
+    stored: dict[str, int] = {}
+    cal = _cal(pl, room, stored, auto=None, auto_delay_s=0)   # the real setting
+    pl.joined("sat_b", "kitchen", calibrated=False)
+    await cal._auto_tasks["kitchen"]
+    assert stored == {"sat_a": 0, "sat_b": 3_000}
+    # Its value is stored now: a reconnect is no join to tune for.
+    pl.joined("sat_b", "kitchen", calibrated=True)
+    assert cal._auto_tasks["kitchen"].done()
+
+
+async def test_turned_off_a_join_plays_nothing(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "room_calibration_auto", False)
+    room = Room({"sat_a": 0.0, "sat_b": 0.0}, {"sat_a": 0.0, "sat_b": 0.0},
+                {frozenset(("sat_a", "sat_b")): 1_000.0})
+    pl, _ = _playout(room, ["sat_a", "sat_b"])
+    cal = _cal(pl, room, {}, auto=None, auto_delay_s=0)
+    pl.joined("sat_b", "kitchen", calibrated=False)
+    assert cal._auto_tasks == {}
+
+
+async def test_a_join_runs_once_when_the_room_is_idle() -> None:
+    pl, _, stored, cal, runs = _two()
+    pl.joined("sat_b", "kitchen", calibrated=False)
+    await cal._auto_tasks["kitchen"]
+    assert runs == ["kitchen"] and stored == {"sat_a": 0, "sat_b": 4_000}
+
+
+async def test_a_move_into_the_room_starts_a_run() -> None:
+    pl, _, stored, cal, runs = _two()
+    pl.registry.assign("sat_b", "den")
+    pl.rebind("sat_b")
+    pl.registry.assign("sat_b", "kitchen")
+    assert pl.rebind("sat_b") == "kitchen"               # moved back in: a join
+    await cal._auto_tasks["kitchen"]
+    assert runs == ["kitchen"]
+
+
+async def test_joins_close_together_share_one_run() -> None:
+    pl, _, _, cal, runs = _two(auto_delay_s=0.05)
+    pl.joined("sat_a", "kitchen", calibrated=False)
+    first = cal._auto_tasks["kitchen"]
+    pl.joined("sat_b", "kitchen", calibrated=False)
+    await asyncio.sleep(0)
+    assert first.cancelled()
+    await cal._auto_tasks["kitchen"]
+    assert runs == ["kitchen"]
+
+
+async def test_a_turn_in_the_room_skips_the_run() -> None:
+    pl, _, stored, cal, runs = _two(turn_active=lambda r: True)
+    pl.joined("sat_b", "kitchen", calibrated=False)
+    await cal._auto_tasks["kitchen"]
+    assert runs == [] and stored == {}
+
+
+async def test_quiet_hours_defer_the_run_until_they_end() -> None:
+    checks = {"n": 0}
+
+    async def quiet(_room: str) -> bool:
+        checks["n"] += 1
+        return checks["n"] <= 3                 # quiet for three looks, then not
+
+    pl, _, stored, cal, runs = _two(quiet=quiet, auto_retry_s=0)   # no busy retries
+    pl.joined("sat_b", "kitchen", calibrated=False)
+    await cal._auto_tasks["kitchen"]
+    assert runs == ["kitchen"] and checks["n"] == 4 and stored
+
+
+async def test_a_busy_room_is_retried_and_runs_once_idle() -> None:
+    busy = {"n": 2}
+
+    def turn(_room: str) -> bool:
+        busy["n"] -= 1
+        return busy["n"] >= 0
+
+    pl, _, _, cal, runs = _two(turn_active=turn, auto_retries=5, auto_retry_s=0)
+    pl.joined("sat_b", "kitchen", calibrated=False)
+    await cal._auto_tasks["kitchen"]
+    assert runs == ["kitchen"]
+
+
+def test_the_turn_check_reads_the_live_sessions() -> None:
+    room = Room({}, {}, {})
+    pl, _ = _playout(room, [])
+    sessions = [SimpleNamespace(awaiting_reply=lambda: False),
+                SimpleNamespace(awaiting_reply=lambda: True)]
+    pl.registry.live_in = lambda r: sessions if r == "kitchen" else []  # type: ignore[attr-defined]
+    cal = _cal(pl, room, {})
+    assert cal._turn_active("kitchen") is True
+    assert cal._turn_active("den") is False
 
 
 def test_a_move_clears_the_sent_latency_and_counts_as_a_join() -> None:

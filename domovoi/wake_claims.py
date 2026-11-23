@@ -151,13 +151,19 @@ async def _send(session: Any, frame: dict[str, Any]) -> None:
 class Arbiter:
     def __init__(self, registry: Any, *, clock: Callable[[], float] = time.monotonic,
                  send: Sender = _send,
-                 cut_room_speech: Callable[[str], None] | None = None) -> None:
+                 cut_room_speech: Callable[[str], None] | None = None,
+                 near_wake: Callable[[str, str], None] | None = None) -> None:
         self.registry = registry
         self.clock = clock
         self.send = send
         #: Stops the synced answer in a room (room playout), set by the app.
         self.cut_room_speech = cut_room_speech
         self.links: dict[str, set[str]] = {}
+        #: Wakes heard in two unlinked rooms at once feed the Rooms page's
+        #: "can hear each other" suggestion (domovoi/room_hear_suggestions.py).
+        from domovoi.room_hear_suggestions import NearWakes
+
+        self.near = NearWakes(near_wake or (lambda a, b: None))
         self.turns: list[Turn] = []
         self._ids = itertools.count(1)
 
@@ -181,6 +187,11 @@ class Arbiter:
     def group(self, room_id: str) -> frozenset[str]:
         """The room and the rooms marked as hearing it."""
         return frozenset({room_id, *self.links.get(room_id, ())})
+
+    def heard_wake(self, room_id: str) -> None:
+        """A wake word in ``room_id`` (claimed or not): another room's wake
+        moments before, outside this group, counts toward a link suggestion."""
+        self.near.heard(room_id, self.group(room_id), self.clock())
 
     def claim_flag(self, room_id: str) -> bool:
         """``room.claim``: another satellite is in the room or a linked one."""
@@ -273,6 +284,7 @@ class Arbiter:
         """A ``wake_claim``: answered at once. Returns the grant sent."""
         claim = clean_claim_id(ctrl.get("claim"))
         floor = clean_floor(ctrl.get("floor_dbfs"))
+        self.heard_wake(session.room_id)
         t = self.turn_of(session.room_id)
         if t is not None and t.capturing and t.owner is not session:
             stream_ms = 0
@@ -315,6 +327,8 @@ class Arbiter:
         turn another device owns (an older device, or a claim answered
         quiet after the device failed open)."""
         trigger = ctrl.get("trigger")
+        if trigger == "wake_word" and clean_claim_id(ctrl.get("claim")) is None:
+            self.heard_wake(session.room_id)  # a device that doesn't claim
         t = self.turn_of(session.room_id)
         if t is not None and t.owner is session:
             if t.capturing or trigger not in ("wake_word", "barge_in"):
@@ -487,8 +501,11 @@ def arbiter(app: Any) -> Arbiter:
     if not isinstance(arb, Arbiter):
         from domovoi import room_devices
 
+        from domovoi.room_hear_suggestions import persist_in_background
+
         arb = Arbiter(room_devices.registry(app),
-                      cut_room_speech=lambda room: _cut_playout_speech(app, room))
+                      cut_room_speech=lambda room: _cut_playout_speech(app, room),
+                      near_wake=persist_in_background)
         app.state.wake_claims = arb
     return arb
 

@@ -6602,7 +6602,26 @@ def _satellite_view(row: dict[str, Any]) -> dict[str, Any]:
         "output_latency_us": row.get("output_latency_us"),
         "calibrated_at": (row["calibrated_at"].isoformat()
                           if row.get("calibrated_at") is not None else None),
+        # A live listener in a room that takes one turn per wake word, on
+        # software that can't claim (an older phone app or image): it still
+        # works, its duplicate turns are dropped, and the drawer nudges
+        # "Update the app on this phone." (owner answer Q6).
+        "needs_update": _cannot_claim(live, row["room_id"]),
     }
+
+
+def _cannot_claim(live: Any, room_id: str) -> bool:
+    from domovoi import wake_claims
+
+    if live is None or not getattr(live, "mic_enabled", True):
+        return False
+    abilities = getattr(live, "abilities", None)
+    if abilities is None or abilities.allows(wake_claims.ABILITY):
+        return False
+    try:
+        return wake_claims.arbiter(app).claim_flag(room_id)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 async def _rooms_payload(s: Any) -> dict[str, Any]:
@@ -6644,7 +6663,16 @@ async def _rooms_payload(s: Any) -> dict[str, Any]:
     # merge, never merged on their own (owner answer Q11).
     offers = [{"name": rs[0]["name"], "rooms": [r["room_id"] for r in rs]}
               for rs in names.values() if len(rs) > 1]
-    return {"rooms": out, "merge_offers": offers}
+    # Rooms whose satellites keep waking on the same "hey Domovoi": offered
+    # as "can hear each other" until linked or dismissed (owner answer Q3).
+    from domovoi import room_hear_suggestions
+
+    try:
+        suggest = await room_hear_suggestions.suggestions(s)
+    except Exception as e:  # noqa: BLE001 — the list never fails on this
+        log.warning("rooms: link suggestions unreadable: %s", e)
+        suggest = []
+    return {"rooms": out, "merge_offers": offers, "link_suggestions": suggest}
 
 
 @app.get("/v1/admin/rooms", dependencies=[Depends(require_device_read)])
@@ -6749,6 +6777,108 @@ async def admin_merge_rooms(room_id: str, body: _MergeRoomsBody) -> dict[str, An
     log.info("rooms: merged %s into %s (moved %s)", others, room_id, moved)
     return {"room_id": room_id, "merged": others, "moved_satellites": moved,
             "learned_samples_dropped": dropped}
+
+
+class _LinkRoomBody(BaseModel):
+    room_id: str = Field(..., min_length=1, max_length=120)
+
+
+async def _after_link_change() -> None:
+    """The wake groups changed: the arbiter reads the links again, and
+    every live 1.5.0 device whose ``room.claim`` flag changed hears its
+    ``room`` frame again."""
+    from domovoi import room_devices, wake_claims
+
+    claims = wake_claims.arbiter(app)
+    try:
+        await claims.refresh_links()
+    except Exception as e:  # noqa: BLE001 — read again on the next hello
+        log.warning("rooms: re-reading hear-links failed: %s", e)
+        return
+    for sess in list(room_devices.registry(app).satellites.values()):
+        if not getattr(sess, "knows_rooms", False):
+            continue
+        told = getattr(sess, "_claim_flag_sent", None)
+        if told is None or told == claims.claim_flag(sess.room_id):
+            continue
+        try:
+            await sess._safe_send_text({"type": "room", "room": await sess._room_info()})
+        except Exception as e:  # noqa: BLE001
+            log.warning("rooms: telling %s its claim flag failed: %s", sess.satellite_id, e)
+
+
+async def _two_rooms(s: Any, room_id: str, other: str) -> None:
+    if other == room_id:
+        raise HTTPException(status_code=422, detail="a room always hears itself")
+    if not room_ids.is_room_id(other):
+        raise HTTPException(status_code=422, detail="not a room id")
+    rooms = RoomsRepository(s)
+    for r in (room_id, other):
+        if await rooms.get(r) is None:
+            raise HTTPException(status_code=404, detail=f"no room {r!r}")
+
+
+@app.post("/v1/admin/rooms/{room_id}/links", dependencies=_ROOM_ADMIN)
+async def admin_link_rooms(room_id: str, body: _LinkRoomBody) -> dict[str, Any]:
+    """"Rooms that can hear this one": mark two rooms as hearing each other.
+    One "hey Domovoi" heard in both is then one turn (domovoi/wake_claims.py)."""
+    from domovoi import room_hear_suggestions
+
+    other = body.room_id
+    async with session_scope() as s:
+        await _two_rooms(s, room_id, other)
+        added = await RoomsRepository(s).link(room_id, other)
+        await room_hear_suggestions.forget(s, room_id, other)
+        linked = await RoomsRepository(s).linked(room_id)
+    await _after_link_change()
+    log.info("rooms: %s and %s hear each other (%s)", room_id, other,
+             "new" if added else "already")
+    return {"room_id": room_id, "linked_rooms": linked, "added": added}
+
+
+@app.delete("/v1/admin/rooms/{room_id}/links/{other_room_id}", dependencies=_ROOM_ADMIN)
+async def admin_unlink_rooms(room_id: str, other_room_id: str) -> dict[str, Any]:
+    """Two rooms no longer count as hearing each other."""
+    async with session_scope() as s:
+        await _two_rooms(s, room_id, other_room_id)
+        removed = await RoomsRepository(s).unlink(room_id, other_room_id)
+        linked = await RoomsRepository(s).linked(room_id)
+    await _after_link_change()
+    return {"room_id": room_id, "linked_rooms": linked, "removed": removed}
+
+
+@app.post("/v1/admin/rooms/{room_id}/links/{other_room_id}/dismiss",
+          dependencies=_ROOM_ADMIN)
+async def admin_dismiss_link_suggestion(room_id: str, other_room_id: str) -> dict[str, Any]:
+    """"Not now" on a link suggestion: that pair is never suggested again
+    (linking it by hand still works)."""
+    from domovoi import room_hear_suggestions
+
+    async with session_scope() as s:
+        await _two_rooms(s, room_id, other_room_id)
+        await room_hear_suggestions.dismiss(s, room_id, other_room_id)
+    return {"rooms": sorted((room_id, other_room_id)), "dismissed": True}
+
+
+class _InviteBody(BaseModel):
+    # The name a code made before used (asking again for the same code).
+    name: str | None = Field(default=None, max_length=64)
+
+
+@app.post("/v1/admin/rooms/{room_id}/invite", dependencies=_ROOM_ADMIN)
+async def admin_invite_satellite(room_id: str, body: _InviteBody) -> dict[str, Any]:
+    """"Add a satellite to the Kitchen": a unique device name for the
+    enrolment payload's ``room=`` ("Kitchen 2") and the id a device makes
+    of it, remembered so the approval card pre-selects this room even for
+    a device that never reads ``in=`` (domovoi/room_invites.py)."""
+    from domovoi import room_invites
+
+    async with session_scope() as s:
+        room = await RoomsRepository(s).get(room_id)
+        if room is None:
+            raise HTTPException(status_code=404, detail=f"no room {room_id!r}")
+        made = await room_invites.invite(s, room_id, room["name"], name=body.name)
+    return {"room_id": room_id, "room_name": room["name"], **made}
 
 
 @app.post("/v1/admin/rooms/{room_id}/calibrate", dependencies=_ROOM_ADMIN)

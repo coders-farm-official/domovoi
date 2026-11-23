@@ -677,7 +677,7 @@ from domovoi.turn_timings import (
     whisper_block,
 )
 from domovoi.log_privacy import said
-from domovoi import loud_room, overheard, room_devices, room_display, room_sound
+from domovoi import loud_room, overheard, room_devices, room_display, room_invites, room_sound
 from domovoi import turn_history, turn_watchdog, wake_claims, wake_default
 from domovoi.turn_watchdog import (
     STAGE_IDENTIFY,
@@ -1937,9 +1937,19 @@ async def _send_dropin_start_chime(sess: Any) -> None:
 def _requested_room(ctrl: dict[str, Any]) -> str | None:
     """The room a parked device asks to join (hello ``requested_room``,
     from an enrolment's ``in=``; 1.5.0): a room id, else nothing. It only
-    pre-selects the approval card's room; a person still decides."""
+    pre-selects the approval card's room; a person still decides. A device
+    that sends none (an older app) may still have been invited into a room
+    by "Add a satellite" (domovoi/room_invites.py)."""
     raw = ctrl.get("requested_room")
     return raw if room_ids.is_room_id(raw) else None
+
+
+async def _invited_room(s: Any, satellite_id: str) -> str | None:
+    try:
+        return await room_invites.room_for(s, satellite_id)
+    except Exception as e:  # noqa: BLE001 — parks without a pre-selected room
+        log.debug("rooms: invitation for %s unreadable: %s", satellite_id, e)
+        return None
 
 
 class StreamSession:
@@ -3332,7 +3342,8 @@ class StreamSession:
             board=satellite_abilities.clean_board(ctrl.get("board")),
             sat_type=ctrl.get("sat_type") or "voice",
             takeover_after_sec=APPROVAL_TAKEOVER_SEC,
-            requested_room=_requested_room(ctrl),
+            requested_room=(_requested_room(ctrl)
+                                or await _invited_room(s, self.satellite_id)),
         )
         if outcome == "full":
             await self._approvals_full()
@@ -3495,7 +3506,8 @@ class StreamSession:
                     sat_type=ctrl.get("sat_type") or "voice",
                     takeover_after_sec=APPROVAL_TAKEOVER_SEC,
                     proof=True,
-                    requested_room=_requested_room(ctrl),
+                    requested_room=(_requested_room(ctrl)
+                                or await _invited_room(s, self.satellite_id)),
                 )
                 if outcome == "full":
                     await self._approvals_full()

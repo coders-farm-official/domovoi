@@ -564,6 +564,17 @@ class ConversationTurn(BaseModel):
     # 2026-11-11). Admins only (web/backend/voice_match.py): null for every
     # other caller, for older rows and for turns not from a satellite.
     voice_match: VoiceMatchInfo | None = None
+    # Rooms with several satellites (V073, 1.5.0): the device that owned
+    # the turn and the one whose microphone was transcribed (the one that
+    # heard the person best). None for older rows.
+    satellite_id: str | None = None
+    mic_satellite_id: str | None = None
+    # The room's name and the transcribed mic's display name ("Kitchen
+    # phone"): set when the room has several satellites or the mic was
+    # not the turn's owner, for "Answered in the Kitchen. Heard best by
+    # Kitchen phone." None otherwise.
+    room_name: str | None = None
+    heard_by: str | None = None
 
 
 class RecentlyPlayed(BaseModel):
@@ -1284,8 +1295,12 @@ class SpareDeviceEnrolRequest(BaseModel):
     second network card). The answer is the enrolment payload, the Linux
     install command and what the QR code carries."""
 
-    room: str = Field(..., min_length=1, max_length=64)
+    room: str | None = Field(default=None, max_length=64)
     core: str | None = Field(default=None, max_length=256)
+    # "Add a satellite to the Kitchen" (1.5.0): the existing room's id. The
+    # server then names the device itself ("Kitchen 2", or `room` again
+    # when it names a code made before) and the payload carries `in=`.
+    in_room: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_]{0,31}$")
 
 
 class SatelliteApproveRequest(BaseModel):

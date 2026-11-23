@@ -1492,6 +1492,9 @@ ids.
 | `PATCH /api/rooms/{room_id}` | **Admin (Bearer)** | `{"name": "Back porch"}` | `{"room_id", "name"}`. `404` no such room, `422` blank name. |
 | `DELETE /api/rooms/{room_id}` | **Admin (Bearer)** | — | `{"room_id", "deleted": true}`. Only an EMPTY room: `409` while it has satellites (move them first), `404` no such room. History keeps the id. Empty rooms are otherwise kept. |
 | `POST /api/rooms/{room_id}/merge` | **Admin (Bearer)** | `{"rooms": ["kitchen_2"]}` | `{"room_id", "merged": [...], "moved_satellites": [...], "learned_samples_dropped": N}`. Moves every satellite of `rooms` into `room_id` (each as a move, below) and deletes those rooms. Never done on its own: `GET /api/rooms` only offers it. `404` for an unknown room, `409` when a tokenless satellite would end up sharing a room, `422` when no other room is named. |
+| `POST /api/rooms/{room_id}/links` | **Admin (Bearer)** | `{"room_id": "den"}` | `{"room_id", "linked_rooms": [...], "added": bool}`. "Rooms that can hear this one": the two rooms form one wake group, so one wake word heard in both is one turn (docs/uml/satellite-protocol.md, "One turn per wake word"). Live 1.5.0 devices whose `room.claim` changes get a `room` frame. `added: false` when already linked. Clears the pair's suggestion count. `404` unknown room, `422` the same room or a bad id. |
+| `DELETE /api/rooms/{room_id}/links/{other_room_id}` | **Admin (Bearer)** | — | `{"room_id", "linked_rooms": [...], "removed": bool}`. The rooms answer separately again. |
+| `POST /api/rooms/{room_id}/links/{other_room_id}/dismiss` | **Admin (Bearer)** | — | `{"rooms": [a, b], "dismissed": true}`. "Keep them separate" on a `link_suggestions` entry: that pair is never suggested again (linking it by hand still works). Kept in `household_settings` (`room_hear_suggest`). |
 | `POST /api/rooms/{room_id}/calibrate` | **Admin (Bearer)** | — | `Calibration` (below). "Tune the speakers": each speaker that can take part plays a short chirp in turn while every device records, and each one's output latency is measured and sent to it (docs/ROOM_AUDIO_PROTOCOL.md §11). Takes a few seconds per speaker. `409` with a sentence in `detail` when it cannot run: fewer than two connected speakers that can take part, something playing in the room, or a run already going. `404` no such room. |
 | `POST /api/satellites/{satellite_id}/room` | **Admin (Bearer)** | `{"room_id": "den"}` or `{"new_room_name": "Den"}` (exactly one) | `{"satellite_id", "room_id", "from_room_id", "moved": bool, "learned_samples_dropped": N, "connected": bool}`. Moves the satellite. Its id never changes and its history stays with the old room; its learned voice samples go (enrolled ones stay); its speaker calibration is cleared. A connected 1.5.0 device gets a `room` frame on its stream; an older one is closed (1001) and reconnects into the new room. `moved: false` when it is already there. `404` no such satellite or room, `409` when a tokenless satellite would share a room, `422` neither or both choices. |
 | `PATCH /api/satellites/{satellite_id}/name` | **Admin (Bearer)** | `{"name": "Kitchen phone"}` (`null` or blank clears it) | `{"satellite_id", "name"}`. The device's display name. `404` no such satellite. |
@@ -1514,16 +1517,27 @@ ids.
       "satellites": [
         {"satellite_id": "kitchen", "name": null, "sat_type": "voice",
          "board": null, "paired": true, "connected": true, "speaks_for_room": true,
-         "output_latency_us": 0, "calibrated_at": "2026-11-22T15:00:00+00:00"},
+         "output_latency_us": 0, "calibrated_at": "2026-11-22T15:00:00+00:00",
+         "needs_update": false},
         {"satellite_id": "kitchen_2", "name": "Kitchen phone", "sat_type": "voice",
          "board": "android_room", "paired": true, "connected": false,
-         "speaks_for_room": false, "output_latency_us": null, "calibrated_at": null}
+         "speaks_for_room": false, "output_latency_us": null, "calibrated_at": null,
+         "needs_update": true}
       ]
     }
   ],
-  "merge_offers": [{"name": "Kitchen", "rooms": ["kitchen", "kitchen_3"]}]
+  "merge_offers": [{"name": "Kitchen", "rooms": ["kitchen", "kitchen_3"]}],
+  "link_suggestions": [{"rooms": ["den", "kitchen"], "count": 3}]
 }
 ```
+
+`link_suggestions` (1.5.0): pairs of unlinked rooms whose satellites woke on
+the same wake word within a second of each other at least three times in
+the last 14 days (`domovoi/room_hear_suggestions.py`), not linked and not
+dismissed. A satellite's `needs_update` is true for a connected listener
+that can't claim a wake word (a phone app or image from before 1.5.0) in a
+room that takes one turn per wake word: the drawer reads "Update the app on
+this phone." (owner answer Q6).
 
 Rooms come sorted by `room_id`, satellites by `satellite_id`. `shared`: more
 than one satellite. `paired`: the device holds a pairing key (a tokenless one,
@@ -1553,7 +1567,8 @@ restarts).
 `status`: `done`, `partial` (some kept their previous value) or `failed`
 (nothing changed). `reason`: `admin` (the button) or `joined` (the automatic
 run when a satellite joins or moves into the room, setting
-`room_calibration_auto`, off by default because it plays an audible chirp).
+`room_calibration_auto`, on by default: once per join or move, only while the
+room is idle, and in quiet hours it waits until they end).
 
 `Approval` (one row per waiting device):
 
@@ -1692,7 +1707,7 @@ text, or one holding control characters, is `422`.
 | `GET /api/short-address` | **Device read** | — | The short address (1.4.0, `web/backend/short_address.py`; Settings → System → Advanced, under the network name; the header reads it to choose the address it shows): `{enabled, state, port, dashboard_port, message}`. `state`: `on` (port 80 answers with a redirect to the same host on `dashboard_port`), `off` (switched off), `taken` (something else on the computer uses port 80; on a Mac install also when the Mac's helper reports that another program on the Mac itself serves port 80, so the Mac doesn't redirect it: `/var/lib/domovoi-mac/short_address.json`, believed only while root's alone; the message then names that program), `no_permission` (the dashboard may not bind a low port: a service unit from before 1.4.0, until the next update), `failed`, or `unsupported` (not a Linux server). `message` is the line Settings shows, e.g. "Short address off: something else on this computer uses port 80." Answered by the web process itself, no core hop. |
 | `PUT /api/short-address` | **Admin** | `{enabled: bool}` | Switch it off (frees port 80 at once) or on (binds port 80 again if it's free). Saved in `~/.domovoi/short_address.json`; the answer is the read above. `422` for anything but a boolean. |
 | `GET\|HEAD http://<server>/<path>` (port 80) | Open | — | Not an API: the short address. `302` to `http://<same host>:6369/<path>` (query kept, `Cache-Control: no-store`) when the `Host` is the server's own address or name (its host name, its network name with or without `.local`, the claimed name, an exact `TRUSTED_HOSTS` name; `localhost` only from the server itself); `400` for any other host, no host, two hosts, a port other than 80, or a target that isn't `/path?query` in printable ASCII; `405` (`Allow: GET, HEAD`) for every other method; `431` for a head over 8 KB. Never serves anything else. |
-| `POST /api/satellites/enrolment` | **Admin** | `{room, core?}` | Settings → Rooms → add a spare device (2026-10-13): `{payload, join_url, room, room_id, core, fingerprint, bundle_sha256, bundle_size, command, command_windows, windows_runtime, linux_runtime, android_app, usb_stick, conflict}`; `join_url` is what the QR code carries, `<core>/join#<payload>` (the server's join page, which hands the phone the app; the app's scanner reads the payload out of it), `android_app` the core's `GET /v1/admin/android-app` answer or `null` (read only: making a code never downloads the app); `command_windows` is the one-line Windows PowerShell command (the same digest check, then `satellite/scripts/install-windows.ps1`), `windows_runtime` the core's `GET /v1/admin/satellite-windows` answer or `null`, `linux_runtime` the core's `GET /v1/admin/satellite-linux` answer or `null` — the enrolment payload (`domovoi-room:1?…`, docs/uml/satellite-protocol.md "Enrolling a spare device"), the room id it connects as, the core it pins (`core` overrides the address this server finds for itself), the one-line Linux install command, and why the room is taken when it is. Writes nothing. `422 {reason, message}` for a room name or address the payload can't carry (`not_home_network` included); `503` when the core gives no identity; the core's `423` passes through while frozen. |
+| `POST /api/satellites/enrolment` | **Admin** | `{room, core?}` or `{in_room, room?, core?}` | Settings → Rooms → add a spare device (2026-10-13). With `in_room` (1.5.0, a room id: "Add a satellite to the Kitchen") the core names the device (`POST /v1/admin/rooms/{in_room}/invite`: "Kitchen 2", or `room` again when it names a code made before), the payload carries `in=<in_room>`, the answer's `in_room` says so and `conflict` is `null`; the core remembers the invitation (30 days), so the approval card pre-selects the room even for an app that ignores `in=`. Answer: `{payload, join_url, room, room_id, in_room, core, fingerprint, bundle_sha256, bundle_size, command, command_windows, windows_runtime, linux_runtime, android_app, usb_stick, conflict}`; `join_url` is what the QR code carries, `<core>/join#<payload>` (the server's join page, which hands the phone the app; the app's scanner reads the payload out of it), `android_app` the core's `GET /v1/admin/android-app` answer or `null` (read only: making a code never downloads the app); `command_windows` is the one-line Windows PowerShell command (the same digest check, then `satellite/scripts/install-windows.ps1`), `windows_runtime` the core's `GET /v1/admin/satellite-windows` answer or `null`, `linux_runtime` the core's `GET /v1/admin/satellite-linux` answer or `null` — the enrolment payload (`domovoi-room:1?…`, docs/uml/satellite-protocol.md "Enrolling a spare device"), the room id it connects as, the core it pins (`core` overrides the address this server finds for itself), the one-line Linux install command, and why the room is taken when it is. Writes nothing. `422 {reason, message}` for a room name or address the payload can't carry (`not_home_network` included); `503` when the core gives no identity; the core's `423` passes through while frozen. |
 | `GET /api/satellites/usb-stick` | **Admin read** | — | Proxy → core `GET /v1/admin/usb-stick` (the old-computer card). The enrolment answer carries the same status as `usb_stick`. |
 | `POST /api/satellites/usb-stick` | **Admin** | `{room, core?}` | **Prepare the stick**: the enrolment payload for `room` (as `POST /api/satellites/enrolment` makes it) handed to core `POST /v1/admin/usb-stick/build`; its answer plus `{room, room_id, core, conflict}`, or the core's `409 {reason, message}` verbatim. `422` for a room the code can't carry, before the core is asked. |
 | `DELETE /api/satellites/usb-stick/{build_id}` | **Admin** | — | Proxy → core `DELETE /v1/admin/usb-stick/builds/{build_id}` (**remove it from this server**); `404` for an id that isn't one. |
