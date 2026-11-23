@@ -21,6 +21,11 @@ installers read):
 * ``mac/installer/pins.conf``: Ollama for macOS, Ubuntu's arm64 cloud
   image, whisper.cpp's model.
 * ``requirements-linux-py314.lock`` and ``...-no-deps.lock``: the wheels.
+* ``satellite/windows-runtime.json``, ``satellite/locks/linux-python.txt``
+  and ``satellite/locks/pc-*.txt``: what a new room installs (a Windows
+  laptop's Python and wheels, a Linux computer's own Python, a Linux
+  computer's wheels by hash). Optional: a release without them puts no
+  such part on a kit.
 
 Sizes the pins don't carry (the Ollama tarball, the WSL MSI, Ubuntu's
 images) are in :data:`KNOWN_SIZES`, read from the upstream servers when
@@ -33,7 +38,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
 Reader = Callable[[str], str]
@@ -48,6 +53,13 @@ MAC_PINS = "mac/installer/pins.conf"
 LOCK = "requirements-linux-py314.lock"
 NODEPS_LOCK = "requirements-linux-py314-no-deps.lock"
 INSTALL_SH = "scripts/linux/install.sh"
+WINDOWS_RUNTIME = "satellite/windows-runtime.json"
+LINUX_PYTHON = "satellite/locks/linux-python.txt"
+#: The spare-computer locks install-pc.sh picks from
+#: (``satellite/locks/pc-<cpXY>-<machine>.txt``); a test holds this list to
+#: the folder.
+PC_LOCKS = ("pc-cp311-x86_64", "pc-cp312-x86_64", "pc-cp313-x86_64", "pc-cp314-x86_64",
+            "pc-cp311-aarch64", "pc-cp312-aarch64", "pc-cp313-aarch64")
 
 #: Images on the stick: every compose image but SearXNG (AGPL, and off
 #: under "never"; design section 7).
@@ -132,6 +144,12 @@ class Pins:
     lock_text: str
     nodeps_lock_text: str
     apt_packages: list[str]
+    #: What rooms install (satellite/): the Windows runtime lock (parsed
+    #: JSON, or None), the Linux Python lock's text ("" when absent), and
+    #: each spare-computer lock's text by name (absent ones left out).
+    windows_runtime: dict[str, Any] | None = None
+    linux_python: str = ""
+    pc_locks: dict[str, str] = field(default_factory=dict)
 
 
 def parse_conf(text: str) -> dict[str, str]:
@@ -304,13 +322,29 @@ def load(read: Reader, commit: str) -> Pins:
         nodeps = read(NODEPS_LOCK)
     except (PinError, OSError):
         nodeps = ""
+    windows_runtime = None
+    try:
+        doc = json.loads(read(WINDOWS_RUNTIME))
+        windows_runtime = doc if isinstance(doc, dict) else None
+    except (ValueError, PinError, OSError):
+        pass
+    linux_python = _optional(read, LINUX_PYTHON)
+    pc_locks = {n: t for n in PC_LOCKS if (t := _optional(read, f"satellite/locks/{n}.txt"))}
     return Pins(
         commit=commit, manifest=m, ollama_linux=ollama_linux, ollama_darwin=ollama_darwin,
         models=model_pins(m), whisper=whisper, ggml_stt=ggml, images=compose_images(read(COMPOSE)),
         mpd_base=mpd.group(1) if mpd else None, android=rel, windows=windows, mac=mac,
         lock_text=read(LOCK), nodeps_lock_text=nodeps,
         apt_packages=_apt_packages(read("scripts/linux/provision.sh")),
+        windows_runtime=windows_runtime, linux_python=linux_python, pc_locks=pc_locks,
     )
+
+
+def _optional(read: Reader, path: str) -> str:
+    try:
+        return read(path)
+    except (PinError, OSError):
+        return ""
 
 
 def git_reader(repo_dir: str, commit: str) -> Reader:

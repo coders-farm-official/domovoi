@@ -473,6 +473,38 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
   `apply-update.sh` also takes `DOMOVOI_OFFLINE_SOURCE=<kit folder>` for an
   administrator's own run. OFFLINE_KIT.md, "Updating from a kit".
 
+## 1.5.0 (unreleased) — Add rooms with no internet, from an offline kit
+
+- **What changed.** A kit made with **Rooms** ticked carries what a new
+  room installs, under `rooms/`: the Windows room Setup
+  (`DomovoiSatelliteSetup.exe`) with the Windows laptop's Python and
+  packages, a Linux computer's own Python and its packages (one wheel per
+  package for every `satellite/locks/pc-*.txt`), the Raspberry Pi card's
+  packages and every pinned openWakeWord model, and Debian's installer for
+  the room stick. Each is held to its pin in the release (`kit.json`
+  names it); the Pi's packages have none and are marked "from the house
+  that made this kit". The kit builder fetches what the server lacks
+  first, as "get the Windows files" and preparing a Pi's card would.
+  Installing from the kit puts them where the server serves them (in the
+  phone-app step, each checked again against this release's pins), so
+  Settings → Household → Rooms adds a Windows PC, a Linux computer and a
+  Raspberry Pi with no internet, under internet access "No". New open
+  routes `GET /v1/satellite-linux/wheels/{lock}/` (pip's `--find-links`
+  page, offered only when every package of that lock is here) and
+  `GET /v1/satellite-linux/wheels/{lock}/{name}`; `install-pc.sh` uses
+  them when the server offers them, else PyPI, `--require-hashes` either
+  way.
+- **What to know.** The room stick for an old computer still needs
+  internet in that room: Debian installs over the network. A Linux
+  computer needs its own sound packages (PortAudio, mpg123, the ALSA
+  utilities), which most desktops already have. A server installed from a
+  kit made without Rooms says so where it used to say only "internet
+  access is off" (the add-a-room cards, the room stick, the Pi card),
+  with what brings them: a kit with Rooms ticked, or internet for a
+  while. Rooms now also brings the Windows runtime (about 96 MB), the
+  Linux Python (about 66 MB) and the Linux packages; the card's size is
+  an estimate until the server has looked those packages up once.
+
 ## 1.5.0 (unreleased) — Install Domovoi on Windows with no internet, from an offline kit
 
 - **What changed.** `DomovoiSetup.exe` installs from an offline kit: run

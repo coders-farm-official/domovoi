@@ -3403,7 +3403,7 @@ const SpareWindowsSetupOffer = ({ st, running, fetching, onGet }) => {
   if (!st.fetchable) {
     return (
       <div className="spare-windows-setup-offer" style={note}>
-        {st.internet_off
+        {st.kit_note ? st.kit_note : st.internet_off
           ? 'Internet access is off (Settings → Privacy → Internet), so this server can’t get the double-click Setup; the command above does the same.'
           : 'A double-click Setup will be offered here once a Domovoi release carries it; until then, the command above does the same.'}
       </div>
@@ -3518,6 +3518,7 @@ const SpareWindows = ({ res, fire }) => {
                 itself.{' '}
                 {rt.fetch && rt.fetch.ok === false && rt.fetch.message
                   ? <span style={{ color: 'var(--err-ink)' }}>Last try: {rt.fetch.message}</span> : null}</>}
+          {!rt.ready && rt.kit_note && <div className="spare-kit-note" style={{ marginTop: 6 }}>{rt.kit_note}</div>}
           {!rt.ready && (
             <div style={{ marginTop: 6 }}>
               <Button icon="download" disabled={running || fetching} onClick={getFiles}>
@@ -3821,6 +3822,7 @@ const SpareLinuxPython = ({ res, fire }) => {
             Get it now, or the laptop downloads the same pinned file from GitHub itself.{' '}
             {rt.fetch && rt.fetch.ok === false && rt.fetch.message
               ? <span style={{ color: 'var(--err-ink)' }}>Last try: {rt.fetch.message}</span> : null}</>}
+      {!rt.ready && rt.kit_note && <div className="spare-kit-note" style={{ marginTop: 6 }}>{rt.kit_note}</div>}
       {!rt.ready && (
         <div style={{ marginTop: 6 }}>
           <Button icon="download" disabled={running || fetching} onClick={getIt}>

@@ -63,7 +63,13 @@ def _sections(g: GuideInfo) -> list[tuple[str, list[str]]]:
     if "rooms" in g.includes:
         out.append(("Rooms", [
             "rooms/ holds what the server needs to add rooms without the internet: the Windows "
-            "satellite setup, Debian's installer image for the room stick, and the rooms' packages.",
+            "satellite setup with its Python, a Linux computer's Python and packages, the Raspberry Pi "
+            "card's packages and wake-word models, and Debian's installer image for the room stick. "
+            "The server takes them in while it installs; nothing to do here.",
+            "Add rooms as usual (Settings, Household, Rooms). A Raspberry Pi (from its card), a "
+            "Windows PC and a Linux computer set up with no internet (a Linux computer needs its own "
+            "sound packages, which most desktops have). The room stick for an old "
+            "computer still needs internet in that room: Debian installs over the network.",
         ]))
     check = ["Every installer checks this stick before it uses it. To check it yourself on Linux:",
              "  cd /media/<you>/DOMOVOIKIT && sha256sum -c SHA256SUMS",

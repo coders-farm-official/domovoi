@@ -1258,7 +1258,9 @@ fstab_source() {
 #                git blob and size), voice ID's model (MODEL_SHA256), and
 #                Domovoi's wake word (wake_default.PUBLISHED's pin)
 #   phone-app    each APK through domovoi.android_app.accept_upload, as an
-#                admin's upload: size, SHA-256 and the release key's signature
+#                admin's upload: size, SHA-256 and the release key's signature;
+#                and the rooms' files (rooms/, wake/'s openWakeWord models)
+#                through domovoi.kit_rooms, each held to its pin
 #   images       docker load, then every image the compose file pins must be
 #                there by its digest; the music player image is loaded
 #                instead of built (the house that made the kit built it)
@@ -1559,7 +1561,7 @@ kit_check() {
   STEP_TITLE[models]="Copying the AI models from the offline kit"
   STEP_TITLE[whisper]="Copying the speech recognition model from the offline kit"
   STEP_TITLE[piper]="Copying the voices from the offline kit"
-  STEP_TITLE[phone-app]="Copying the phone app from the offline kit"
+  STEP_TITLE[phone-app]="Copying the phone app and the rooms' files from the offline kit"
   STEP_TITLE[images]="Loading the container images from the offline kit"
   log "offline kit: Domovoi $KIT_VERSION ($KIT_TAG, commit ${KIT_COMMIT:0:12}) at $OFFLINE_KIT, for ${KIT_TARGETS// /, }; includes: ${KIT_INCLUDES:-nothing optional}; nothing is downloaded"
 }
@@ -5245,6 +5247,8 @@ inputs_phone_app() { file_sig "$CHECKOUT/android/release.json"; echo "$SVC_HOME"
 # Already here (a re-run, or an install over an earlier one), or no release
 # to fetch: skipped. Missing: fetched again, every run, until it is here.
 check_phone_app() {
+  # Kit mode: the rooms' files from the kit too (kit_rooms), once per kit.
+  if kit && ! kit_rooms_done; then return 1; fi
   phone_app_info || return 1
   case $PHONE_APP_STATE in
     here) PHONE_APP=yes; return 0 ;;
@@ -5289,8 +5293,38 @@ kit_phone_app() {
   kit_stage_clear
   return 1
 }
+# ─── rooms from the kit (offline kit P6) ─────────────────────────────────
+# What an offline server needs to add rooms (docs/OFFLINE_KIT.md, "Adding
+# rooms with no internet"): every file the kit has under rooms/ and the
+# openWakeWord models in wake/, staged off the stick by root (checked
+# against kit.json), handed to the service user, then put where the core
+# serves them by domovoi.kit_rooms, each held to its pin in this checkout
+# (a file that isn't is refused and named). Never fatal: a kit made without
+# Rooms ticked installs a server that can't add rooms until it is updated
+# from one that has them, or gets internet; the dashboard says so.
+kit_rooms_done() { svc_py -m domovoi.kit_rooms done "$KIT_VERSION" >/dev/null 2>&1; }
+kit_rooms() {
+  local p out=$TMP_DIR/kit-rooms.out
+  kit_stage_clear
+  while IFS= read -r p; do
+    case $p in
+      rooms/*|release/SHA256SUMS|wake/embedding_model.onnx|wake/melspectrogram.onnx|wake/silero_vad.onnx|wake/hey_jarvis_v0.1.onnx)
+        kit_stage "$p" >/dev/null ;;
+    esac
+  done < <(kit_py list "")
+  install -d -m 0755 "$KIT_STAGE"
+  chown -R "$SVC_USER" "$KIT_STAGE"
+  if svc_py -m domovoi.kit_rooms install "$KIT_STAGE" --version "$KIT_VERSION" --includes "$KIT_INCLUDES" >"$out" 2>&1; then
+    log "rooms: $(tail -n 1 "$out" | scrub_log | cut -c1-400)"
+    kit_includes rooms || warn "the offline kit was made without Rooms ticked: this server can't add rooms (Raspberry Pis, spare computers) until it is updated from a kit with Rooms, or has internet for a while"
+  else
+    warn "the rooms' files from the offline kit couldn't be put on this server ($(grep -v '^[[:space:]]*$' "$out" 2>/dev/null | tail -n 1 | scrub_log | cut -c1-300)); adding a room needs internet until it is updated from a kit"
+  fi
+  kit_stage_clear
+}
 do_phone_app() {
   local out=$TMP_DIR/phone-app.out why
+  if kit; then kit_rooms; fi
   if ! phone_app_info; then
     PHONE_APP=no
     warn "$PHONE_APP_MISSING_MSG (android/release.json could not be read)"

@@ -2120,9 +2120,11 @@ async def satellite_windows_file(name: str) -> FileResponse:
 @app.get("/v1/admin/satellite-windows", dependencies=[Depends(require_admin_read)])
 async def admin_satellite_windows() -> dict[str, Any]:
     """Whether this server holds every Windows runtime file, and the fetch's state."""
-    from domovoi import satellite_windows
+    from domovoi import kit_rooms, satellite_windows
 
-    return await asyncio.to_thread(satellite_windows.status, _windows_lock())
+    st = await asyncio.to_thread(satellite_windows.status, _windows_lock())
+    st["kit_note"] = kit_rooms.note("the Windows room's Python and packages", ready=st.get("ready", False))
+    return st
 
 
 @app.post("/v1/admin/satellite-windows/fetch", dependencies=[Depends(require_admin_mutation)])
@@ -2479,12 +2481,46 @@ async def satellite_linux_file(name: str) -> FileResponse:
     return FileResponse(path, media_type="application/octet-stream")
 
 
-@app.get("/v1/admin/satellite-linux", dependencies=[Depends(require_admin_read)])
-async def admin_satellite_linux() -> dict[str, Any]:
-    """Whether this server holds the Linux satellite's Python, and the fetch's state."""
+@app.get("/v1/satellite-linux/wheels/{lock}/")
+async def satellite_linux_wheel_index(lock: str) -> FastAPIResponse:
+    """A Linux room's Python packages from this server (offline kit, P6):
+    pip's ``--find-links`` page for ``satellite/locks/<lock>.txt``, only
+    when this server holds a wheel the lock allows for every package; 404
+    otherwise (install-pc.sh then uses PyPI). Open on the LAN like the
+    Python itself: public files pip checks against the lock's hashes."""
+    await container_freeze.require_unfrozen("satellite_channel", public=True)
     from domovoi import satellite_linux
 
-    return await asyncio.to_thread(satellite_linux.status, _linux_lock())
+    parsed = satellite_linux.pc_lock(SATELLITE_CODE_DIR / "locks", lock)
+    page = None if parsed is None else await asyncio.to_thread(satellite_linux.wheel_index, parsed)
+    if page is None:
+        raise HTTPException(status_code=404, detail="this server holds no packages for that lock")
+    return FastAPIResponse(content=page, media_type="text/html")
+
+
+@app.get("/v1/satellite-linux/wheels/{lock}/{name}")
+async def satellite_linux_wheel(lock: str, name: str) -> FileResponse:
+    """One wheel of that page: only a file the lock allows for its package."""
+    await container_freeze.require_unfrozen("satellite_channel", public=True)
+    from domovoi import satellite_linux
+
+    parsed = satellite_linux.pc_lock(SATELLITE_CODE_DIR / "locks", lock)
+    path = None if parsed is None else await asyncio.to_thread(satellite_linux.cached_wheel, parsed, name)
+    if path is None:
+        raise HTTPException(status_code=404, detail="not cached on this server")
+    return FileResponse(path, media_type="application/octet-stream")
+
+
+@app.get("/v1/admin/satellite-linux", dependencies=[Depends(require_admin_read)])
+async def admin_satellite_linux() -> dict[str, Any]:
+    """Whether this server holds the Linux satellite's Python (and, from an
+    offline kit, its packages for each lock), and the fetch's state."""
+    from domovoi import kit_rooms, satellite_linux
+
+    st = await asyncio.to_thread(satellite_linux.status, _linux_lock())
+    st["wheels"] = await asyncio.to_thread(satellite_linux.wheels_status, SATELLITE_CODE_DIR / "locks")
+    st["kit_note"] = kit_rooms.note("a Linux room's Python", ready=st.get("ready", False))
+    return st
 
 
 @app.post("/v1/admin/satellite-linux/fetch", dependencies=[Depends(require_admin_mutation)])
