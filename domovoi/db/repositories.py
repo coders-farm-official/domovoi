@@ -318,19 +318,20 @@ class ConversationLogRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.s = session
 
-    async def latest_assistant_text_in_room(
+    async def latest_assistant_turn_in_room(
         self, *, room_id: str | None, within_seconds: int
-    ) -> str | None:
+    ) -> tuple[str, str | None] | None:
         """Most recent non-empty assistant_text spoken in ``room_id`` within
-        the trailing ``within_seconds`` window. Used by RepeatHandler as a
-        fallback when ``sessions.context.last_assistant_response`` is empty
-        (typically because the prior session aged out between turns).
-        Returns None if no qualifying row exists.
+        the trailing ``within_seconds`` window, with the handler that said
+        it. Used by RepeatHandler as a fallback when
+        ``sessions.context.last_assistant_response`` is empty (typically
+        because the prior session aged out between turns). Returns None if
+        no qualifying row exists.
         """
         result = await self.s.execute(
             text(
                 """
-                SELECT assistant_text
+                SELECT assistant_text, matched_handler
                 FROM conversation_log
                 WHERE room_id IS NOT DISTINCT FROM :room_id
                   AND assistant_text IS NOT NULL
@@ -348,7 +349,7 @@ class ConversationLogRepository:
         value = row[0]
         if not isinstance(value, str) or not value.strip():
             return None
-        return value
+        return value, row[1]
 
     async def record_turn(
         self,
@@ -1003,8 +1004,9 @@ class MemoriesRepository:
                 SELECT user_text,
                        -- Answers that read out words from outside the
                        -- house (a friend house's messages or list items)
-                       -- never feed the memory extractor (R6 FH-15).
-                       CASE WHEN matched_handler IN ('friend_houses', 'lists')
+                       -- never feed the memory extractor (R6 FH-15), nor
+                       -- does a repeat (it only says an earlier answer again).
+                       CASE WHEN matched_handler IN ('friend_houses', 'lists', 'repeat')
                             THEN NULL ELSE assistant_text END
                 FROM conversation_log
                 WHERE person_id = :pid

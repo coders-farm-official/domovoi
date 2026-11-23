@@ -54,6 +54,12 @@ log = logging.getLogger(__name__)
 # response. Tunable later if real-world use shows it's too tight.
 _FALLBACK_WINDOW_SEC = 600
 
+# Replies whose words came from outside the house (a friend house's
+# messages, a shared list's items) and a repeat of one: their text never
+# goes into the chat model's history (Response.history_text).
+KEPT_OUT_HANDLERS = frozenset({"friend_houses", "lists", "repeat"})
+_KEPT_OUT_STAND_IN = "I repeated what I'd read aloud."
+
 
 # ─── Fast-path regex ──────────────────────────────────────────────────────
 # Router lower-cases + strips trailing punctuation before dispatching, so
@@ -137,50 +143,65 @@ class RepeatHandler(Handler):
 
     # ─── Core flow ────────────────────────────────────────────────────
     async def _repeat(self, ctx: Context, session: AsyncSession) -> Response:
-        last = await self._read_session_last_response(ctx, session)
+        last, stand_in = await self._read_session_last_response(ctx, session)
         if not last:
-            last = await self._read_room_recent_response(ctx, session)
+            last, stand_in = await self._read_room_recent_response(ctx, session)
         if not last:
             return Response(
                 text="I don't have anything recent to repeat.",
                 session_id=ctx.session_id,
                 matched_handler=self.name,
             )
+        # A kept-out reply stays kept out: the history gets a stand-in
+        # again, so "double check that" still refuses it.
         return Response(
             text=last,
             session_id=ctx.session_id,
             matched_handler=self.name,
+            history_text=stand_in,
         )
 
     # ─── Helpers ──────────────────────────────────────────────────────
     async def _read_session_last_response(
         self, ctx: Context, session: AsyncSession
-    ) -> str | None:
+    ) -> tuple[str | None, str | None]:
+        """(what was said last, the history's stand-in for it when it was
+        kept out of the model, else None)."""
         if ctx.session_id is None:
-            return None
+            return None, None
         try:
             ctx_data = await SessionRepository(session).get_context(ctx.session_id)
         except Exception as e:
             log.warning("Repeat: get_context failed: %s", e)
-            return None
+            return None, None
         if not isinstance(ctx_data, dict):
-            return None
+            return None, None
         last = ctx_data.get("last_assistant_response")
         if not isinstance(last, str) or not last.strip():
-            return None
-        return last.strip()
+            return None, None
+        if not ctx_data.get("last_response_kept_out"):
+            return last.strip(), None
+        # The stand-in the history already holds for it.
+        turns = ctx_data.get("recent_turns") or []
+        prior = next((t.get("text") for t in reversed(turns)
+                      if isinstance(t, dict) and t.get("role") == "assistant"), None)
+        return last.strip(), prior if isinstance(prior, str) and prior else _KEPT_OUT_STAND_IN
 
     async def _read_room_recent_response(
         self, ctx: Context, session: AsyncSession
-    ) -> str | None:
+    ) -> tuple[str | None, str | None]:
         if not ctx.room_id:
-            return None
+            return None, None
         try:
-            return await ConversationLogRepository(
+            found = await ConversationLogRepository(
                 session
-            ).latest_assistant_text_in_room(
+            ).latest_assistant_turn_in_room(
                 room_id=ctx.room_id, within_seconds=_FALLBACK_WINDOW_SEC
             )
         except Exception as e:
             log.warning("Repeat: conversation_log fallback failed: %s", e)
-            return None
+            return None, None
+        if found is None:
+            return None, None
+        said, handler = found
+        return said, _KEPT_OUT_STAND_IN if handler in KEPT_OUT_HANDLERS else None

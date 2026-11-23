@@ -1992,9 +1992,10 @@ async def get_satellite_logs(
 
 @router.patch(
     "/{room_id}/config",
-    # Admin tier at both hops: /v1/admin/satellite/{room}/config is
-    # admin-gated — it rewrites the Pi's config.toml and restarts it.
-    dependencies=[Depends(require_admin_mutation)],
+    # Security tier at both hops: /v1/admin/satellite/{room}/config
+    # rewrites the Pi's config.toml (how its microphone listens) and
+    # restarts it; 501 until an admin exists.
+    dependencies=[Depends(require_admin_security)],
 )
 async def patch_satellite_config(
     room_id: str, body: ConfigUpdateRequest, request: Request

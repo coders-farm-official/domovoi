@@ -45,6 +45,22 @@ a way that would otherwise get reported as a bug.
 - **The Windows update copies the downloaded Setup more strictly**: each
   file is opened without following a link and checked to be the file it
   names, and a refused update removes every file it copied.
+- **Installing a plugin from GitHub** refuses a branch or tag name with
+  empty or `.`/`..` parts, so the download always comes from the
+  repository shown on the install screen.
+- **News feed discovery** reads only the first 256 KB of a page, scans
+  it in a worker thread and in time that grows only with its length.
+- **A room's satellite settings** (how its microphone listens, among
+  others) can be changed only once an admin password exists, like
+  recording a wake word; before setup and after `--reset-admin` saving
+  them asks for the admin setup first.
+- **Friend Houses read-outs** also leave out words that sound like a wake
+  word when the house says them, not only ones spelled like it, and the
+  stock wake words' names on their own.
+- **"Say that again" after a friend house's message or a shared list's
+  items** repeats them without adding them to the conversation the AI
+  model reads or to what the memory pass looks at; "double check that"
+  still declines them.
 - **The dashboard logs it** if it can't keep its port-80 permission away
   from the programs it starts.
 - **Video poster frames**: every spelling of one file's path shares one
