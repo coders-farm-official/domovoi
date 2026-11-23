@@ -2,9 +2,17 @@
 
 Chunk ``n`` (timeline index ``n * 960``) is sent ``playout_ms`` before it
 plays, to every speaker subscribed to the room. Music comes from a
-``PcmSource`` (the room's MPD stream, decoded); speech and other sounds are
-mixed in with :meth:`RoomStreamer.say`, music ducked under them. Nothing is
-sent while there is nothing to play: the timeline just has a gap.
+``MusicFeed`` (the room's MPD stream, or its shared queue's host's, decoded
+once); speech and other sounds are mixed in with :meth:`RoomStreamer.say`,
+music ducked under them. Nothing is sent while there is nothing to play:
+the timeline just has a gap.
+
+Rooms that hear one host (a shared queue, a group) each keep their own
+streamer, so an answer, a duck or a speaker of one room stays in that room,
+but read their music from the host's ONE feed, by timeline index. Every
+streamer of a playout service shares one ``t0_us``, so index ``n`` is the
+same server moment in every room: the same sample of the song plays at the
+same time on every speaker of every room following the host.
 
 The streamer never awaits: :meth:`tick` does all the work for "now", so the
 tests drive it with a fake clock and the core runs it from :meth:`run`.
@@ -47,6 +55,92 @@ class PcmSource(Protocol):
     def close(self) -> None: ...
 
 
+#: Decoded chunks a feed keeps for the rooms reading it (4 s): enough for
+#: a room joining mid-song, and for rooms with different playout buffers.
+FEED_KEEP_CHUNKS = 200
+
+
+class MusicFeed:
+    """One host's music, decoded once and addressed by timeline index: the
+    first room to ask for chunk ``n`` pulls it from the source, every other
+    room following the host gets the same samples for ``n``.
+
+    Readers are the room streamers playing it; the source closes when the
+    last one leaves."""
+
+    def __init__(self, host: str, source: PcmSource) -> None:
+        self.host = host
+        self.source = source
+        self.readers: set["RoomStreamer"] = set()
+        self.closed = False
+        self._chunks: dict[int, tuple[bytes, str]] = {}
+        self._next: int | None = None        # first index not yet pulled
+        self._ended_at: int | None = None
+
+    @property
+    def alive(self) -> bool:
+        return not self.closed and self._ended_at is None
+
+    def chunk(self, index: int) -> tuple[bytes, str]:
+        """The music for chunk ``index`` and how it went: ``ok``; ``short``
+        (an underrun), ``wait`` (not started yet) or ``gap`` (this room
+        asked after the others moved past it): silence, still playing;
+        ``end``: the source ended for good."""
+        got = self._chunks.get(index)
+        if got is not None:
+            return got
+        if self._ended_at is not None and index >= self._ended_at:
+            return b"", "end"
+        if self._next is not None and index < self._next:
+            return b"", "gap"
+        data = self.source.read(P.CHUNK_BYTES)
+        status = "ok"
+        if len(data) < P.CHUNK_BYTES:
+            if not self.source.active:
+                status = "end"
+                self._ended_at = index
+            else:
+                status = "short" if self.source.started else "wait"
+        self._chunks[index] = (data, status)
+        self._next = index + P.CHUNK_FRAMES
+        while len(self._chunks) > FEED_KEEP_CHUNKS:
+            del self._chunks[next(iter(self._chunks))]
+        return data, status
+
+    def first_cached_from(self, index: int) -> int | None:
+        """The earliest chunk already decoded at or after ``index`` (a
+        joining room starts there: where the song is now)."""
+        ok = [i for i, (_, st) in self._chunks.items() if i >= index and st != "end"]
+        return min(ok) if ok else None
+
+    def drop_from(self, index: int) -> None:
+        """Forget what was decoded for ``index`` on (a pause or a skip at
+        that moment): the next ask pulls the source again."""
+        for i in [i for i in self._chunks if i >= index]:
+            del self._chunks[i]
+        if self._next is not None:
+            self._next = min(self._next, index)
+
+    def drain(self) -> None:
+        """Forget what the decoder holds (decoded before a pause or a skip:
+        no longer the music)."""
+        self.source.read(1 << 24)
+
+    def keep_drained(self) -> None:
+        self.source.read(1 << 20)
+
+    def shared_with(self, streamer: "RoomStreamer") -> bool:
+        """Another room is playing this feed now."""
+        return any(r is not streamer and r.next_index is not None and not r.paused
+                   for r in self.readers)
+
+    def leave(self, streamer: "RoomStreamer") -> None:
+        self.readers.discard(streamer)
+        if not self.readers and not self.closed:
+            self.closed = True
+            self.source.close()
+
+
 def to_room_pcm(pcm: bytes, rate: int, channels: int) -> np.ndarray:
     """Any s16le PCM as 48 kHz stereo, shape (frames, 2), int16."""
     a = np.frombuffer(pcm, dtype="<i2")
@@ -65,14 +159,17 @@ def to_room_pcm(pcm: bytes, rate: int, channels: int) -> np.ndarray:
 
 class RoomStreamer:
     def __init__(self, room_id: str, timeline_id: int, *,
-                 clock: Callable[[], int] = now_us, playout_ms: int = 500) -> None:
+                 clock: Callable[[], int] = now_us, playout_ms: int = 500,
+                 t0_us: int | None = None) -> None:
         self.room_id = room_id
         self.timeline_id = timeline_id
         self.clock = clock
         self.playout_ms = playout_ms
-        self.t0_us = clock()
+        # The playout service gives every room the same t0: one index is
+        # one moment in every room (rooms following one host stay in step).
+        self.t0_us = clock() if t0_us is None else int(t0_us)
         self.next_index: int | None = None      # first index not yet sent
-        self.music: PcmSource | None = None
+        self.feed: MusicFeed | None = None
         self.paused = False
         self._speech: list[tuple[int, np.ndarray]] = []   # (start index, frames x 2)
         self._sinks: set[Sink] = set()
@@ -92,26 +189,64 @@ class RoomStreamer:
 
     def index_at(self, t_us: float) -> int:
         """The first chunk-aligned index playing at or after ``t_us``."""
-        raw = (t_us - self.t0_us) * P.RATE / 1_000_000
+        return self.index_at_from(self.t0_us, t_us)
+
+    @staticmethod
+    def index_at_from(t0_us: float, t_us: float) -> int:
+        raw = (t_us - t0_us) * P.RATE / 1_000_000
         k = -(-int(np.ceil(raw)) // P.CHUNK_FRAMES)
         return k * P.CHUNK_FRAMES
 
-    def _start(self) -> None:
+    @property
+    def music(self) -> PcmSource | None:
+        """The source of the room's music (its feed's), None when none."""
+        return self.feed.source if self.feed is not None else None
+
+    def _start(self, index: int | None = None, *, after_us: float | None = None) -> None:
         if self.next_index is None:
-            self.next_index = self.index_at(self.clock() + self.playout_us)
+            if index is None:
+                now = self.clock()
+                index = self.index_at(now + self.playout_us)
+                f = self.feed
+                if f is not None and not self.paused and f.shared_with(self):
+                    # Joining rooms already playing this host: start where
+                    # the song is now, with the samples they were sent.
+                    floor = max(now + MIN_LEAD_US + P.CHUNK_FRAMES * 1e6 / P.RATE,
+                                after_us or 0)
+                    early = f.first_cached_from(self.index_at(floor))
+                    if early is not None and early < index:
+                        index = early
+            self.next_index = index
         self._wake.set()
+
+    def _leave_feed(self) -> None:
+        if self.feed is not None:
+            self.feed.leave(self)
+        self.feed = None
 
     @property
     def active(self) -> bool:
         return self.next_index is not None
 
     # ── what plays ─────────────────────────────────────────────────────
-    def play_stream(self, source: PcmSource) -> None:
-        if self.music is not None and self.music is not source:
-            self.music.close()
-        self.music = source
+    def play_stream(self, source: "PcmSource | MusicFeed") -> None:
+        """Play a source (the room's own feed) or a host's shared feed. A
+        room switching feeds while it plays (joining or leaving a group)
+        cuts over at one timed moment on every speaker."""
+        feed = source if isinstance(source, MusicFeed) else MusicFeed(self.room_id, source)
+        after: int | None = None
+        if self.feed is not feed:
+            if self.feed is not None and self.next_index is not None:
+                after = self._at(None)
+                self._flush(after)
+                self.next_index = None
+                for msg in self._speech_spans(after):
+                    self._broadcast(msg)
+            self._leave_feed()
+            self.feed = feed
+            feed.readers.add(self)
         self.paused = False
-        self._start()
+        self._start(after_us=after)
 
     def say(self, pcm: bytes, rate: int, channels: int = 1) -> tuple[float, float]:
         """Mix a sound into the timeline at the earliest free moment (after
@@ -140,9 +275,7 @@ class RoomStreamer:
     def stop(self, at_us: float | None = None) -> int:
         """Silence the room at ``at_us``: music detached, sounds dropped."""
         at = self._at(at_us)
-        if self.music is not None:
-            self.music.close()
-        self.music = None
+        self._leave_feed()
         self._speech.clear()
         self.next_index = None
         self._flush(at)
@@ -170,6 +303,8 @@ class RoomStreamer:
         self._speech.clear()
         self.next_index = None
         self._flush(at)
+        if self.feed is not None:
+            self.feed.drop_from(max(0, self.index_at(at)))
         return at
 
     def resume(self) -> None:
@@ -204,19 +339,11 @@ class RoomStreamer:
         for msg in self._speech_spans(at):
             self._broadcast(msg)
 
-    def _drop_buffered_music(self) -> None:
-        """Forget what the decoder holds: it was decoded before a pause or
-        a skip and is no longer the room's music."""
-        if self.music is not None:
-            self.music.read(1 << 24)
-
     def stop_music(self, at_us: float | None = None) -> int:
         """The room's music ends at ``at_us`` on every speaker; a sound
         mixed over it plays on."""
         at = self._at(at_us)
-        if self.music is not None:
-            self.music.close()
-        self.music = None
+        self._leave_feed()      # other rooms on the same host play on
         self.paused = False
         self._flush(at)
         self._rerender_from(at)
@@ -228,18 +355,21 @@ class RoomStreamer:
         at = self._at(at_us)
         self.paused = True
         self._flush(at)
+        if self.feed is not None:
+            self.feed.drop_from(max(0, self.index_at(at)))
         self._rerender_from(at)
         return at
 
-    def resume_music(self) -> bool:
-        """Play the attached source again from what it decodes now. False
-        when there is nothing attached."""
-        if self.music is None:
+    def resume_music(self, start_index: int | None = None) -> bool:
+        """Play the attached source again from what it decodes now (from
+        ``start_index`` when given: the one start of every room of a
+        group). False when there is nothing attached."""
+        if self.feed is None:
             return False
         if self.paused:
-            self._drop_buffered_music()
+            self.feed.drain()
         self.paused = False
-        self._start()
+        self._start(start_index)
         return True
 
     def skip_music(self, at_us: float | None = None) -> int:
@@ -248,7 +378,9 @@ class RoomStreamer:
         timeline carries on from there with the new one."""
         at = self._at(at_us)
         self._flush(at)
-        self._drop_buffered_music()
+        if self.feed is not None:
+            self.feed.drain()
+            self.feed.drop_from(max(0, self.index_at(at)))
         self._rerender_from(at)
         return at
 
@@ -283,22 +415,21 @@ class RoomStreamer:
     def _render(self, index: int) -> bytes | None:
         out = np.zeros((P.CHUNK_FRAMES, 2), dtype=np.float32)
         playing = False
-        if self.music is not None:
+        if self.feed is not None:
             if self.paused:
-                self.music.read(1 << 20)  # keep the decoder drained
+                self.feed.keep_drained()
             else:
-                data = self.music.read(P.CHUNK_BYTES)
+                data, status = self.feed.chunk(index)
                 if data:
                     m = np.frombuffer(data, dtype="<i2").reshape(-1, 2)
                     out[: len(m)] = m
                     playing = True
-                if len(data) < P.CHUNK_BYTES:
-                    if not self.music.active:
-                        self.music = None
-                    else:
-                        playing = True
-                        if self.music.started:
-                            self.underruns += 1
+                if status == "end":
+                    self._leave_feed()
+                elif status != "ok":
+                    playing = True
+                    if status == "short":
+                        self.underruns += 1
         end = index + P.CHUNK_FRAMES
         # Kept until it has PLAYED (not just been sent): a flush can ask
         # for the chunks after it again (`_rerender_from`).

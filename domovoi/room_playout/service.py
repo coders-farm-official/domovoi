@@ -9,7 +9,10 @@ test assigns it elsewhere.
 
 The calls slice 5b routes room sound through:
 
-* ``play_stream(room)``: the room's music, decoded from its MPD stream;
+* ``play_stream(room, host=...)``: the room's music, decoded from its MPD
+  stream: ONE decoder (a ``MusicFeed``) per host, read by every room
+  following that host (a shared queue, a group), so they play the same
+  sample at the same server time (owner decision 2026-11-22);
 * ``say(room, pcm, rate, channels)``: a reply, chime, timer or announcement,
   mixed in (music ducked); returns when it plays;
 * ``stop / pause / resume / duck(room, ...)``: timed, every speaker at once;
@@ -36,7 +39,13 @@ from typing import Any, Callable, Protocol
 
 from domovoi.room_playout.clock import now_us
 from domovoi.room_playout.sources import FfmpegStreamSource, loopback_stream_url
-from domovoi.room_playout.streamer import CONTROL_LEAD_US, PcmSource, RoomStreamer, Sink
+from domovoi.room_playout.streamer import (
+    CONTROL_LEAD_US,
+    MusicFeed,
+    PcmSource,
+    RoomStreamer,
+    Sink,
+)
 
 log = logging.getLogger(__name__)
 
@@ -96,6 +105,11 @@ class RoomPlayout:
         self._run_tasks = run_tasks
         self._timeline_ids = itertools.count(1)
         self.streamers: dict[str, RoomStreamer] = {}
+        #: host room -> its decoded music, read by every room following it.
+        self.feeds: dict[str, MusicFeed] = {}
+        #: Every room's timeline starts here: index n is one moment in
+        #: every room, so rooms following one host play in step.
+        self.epoch_us = clock()
         self._tasks: dict[str, asyncio.Task] = {}
         self._subs: dict[str, tuple[str, Sink]] = {}     # satellite -> (room, sink)
         self.stats: dict[str, dict[str, Any]] = {}       # satellite -> latest stats
@@ -115,7 +129,7 @@ class RoomPlayout:
         if st is None:
             self.reap_idle()
             st = RoomStreamer(room_id, next(self._timeline_ids), clock=self.clock,
-                              playout_ms=self.playout_ms)
+                              playout_ms=self.playout_ms, t0_us=self.epoch_us)
             self.streamers[room_id] = st
             if self._run_tasks:
                 self._tasks[room_id] = asyncio.get_running_loop().create_task(st.run())
@@ -125,13 +139,45 @@ class RoomPlayout:
                           host: str | None = None) -> bool:
         """Start the room's music on every speaker. False when the room has
         no stream to play. ``host``: the room whose player the stream is
-        (a shared queue's host), for :meth:`music_transport`."""
-        src = source if source is not None else await self._source_for_room(room_id)
-        if src is None:
-            return False
-        self.streamer(room_id).play_stream(src)
-        self.music_host[room_id] = host or room_id
+        (a shared queue's host), for :meth:`music_transport`.
+
+        Every room following one host reads the host's one ``MusicFeed``:
+        a room joining while others play comes in where the song is now,
+        with the same samples at the same times. A room's own speech,
+        ducks and speakers stay its own (one streamer per room)."""
+        host = host or room_id
+        feed = self.live_feed(host)
+        if feed is None:
+            src = source if source is not None else await self._source_for_room(room_id)
+            if src is None:
+                return False
+            feed = self.live_feed(host)        # another room made it meanwhile
+            if feed is None:
+                feed = MusicFeed(host, src)
+                self.feeds[host] = feed
+            else:
+                src.close()
+        elif source is not None:
+            source.close()
+        self.streamer(room_id).play_stream(feed)
+        self.music_host[room_id] = host
         return True
+
+    def live_feed(self, host: str) -> MusicFeed | None:
+        """``host``'s music feed while it still plays (a reader, a source)."""
+        feed = self.feeds.get(host)
+        if feed is not None and (not feed.alive or not feed.readers):
+            if not feed.closed and not feed.readers:
+                feed.closed = True
+                feed.source.close()
+            del self.feeds[host]
+            feed = None
+        return feed
+
+    def following(self, host: str) -> list[str]:
+        """The rooms playing ``host``'s feed now."""
+        feed = self.feeds.get(host)
+        return sorted(st.room_id for st in feed.readers) if feed is not None else []
 
     def playing_music(self, room_id: str) -> bool:
         """The room's music is on the playout (playing or paused)."""
@@ -149,6 +195,8 @@ class RoomPlayout:
 
     def resume_music(self, room_id: str) -> bool:
         st = self.streamers.get(room_id)
+        # (A room of a group whose others play on resumes where they are:
+        # the streamer's start finds their place in the shared feed.)
         return st.resume_music() if st is not None else False
 
     def skip_music(self, room_id: str, at_us: float | None = None) -> int | None:
@@ -160,16 +208,20 @@ class RoomPlayout:
         ``resume``, ``skip``): every room playing that player's stream on
         the playout follows at one timed moment. Returns those rooms."""
         rooms = [r for r, h in self.music_host.items() if h == host and self.playing_music(r)]
-        at = self.clock() + CONTROL_LEAD_US
+        now = self.clock()
+        at = now + CONTROL_LEAD_US
+        # One start for every room that resumes: the same index, the same
+        # moment (every timeline shares the epoch).
+        start = RoomStreamer.index_at_from(self.epoch_us, now + self.playout_ms * 1000)
         for room_id in rooms:
             st = self.streamers[room_id]
             if action in ("pause", "stop"):
                 st.pause_music(at)
             elif action == "resume":
-                st.resume_music()
+                st.resume_music(start if st.next_index is None else None)
             elif action == "skip":
                 if st.paused:
-                    st.resume_music()
+                    st.resume_music(start if st.next_index is None else None)
                 else:
                     st.skip_music(at)
         return rooms
@@ -223,6 +275,8 @@ class RoomPlayout:
         rooms dropped; the next call for one makes it a new timeline."""
         gone = [r for r, st in self.streamers.items()
                 if not st.sinks and not st.active and st.music is None]
+        for host in list(self.feeds):
+            self.live_feed(host)
         for room_id in gone:
             del self.streamers[room_id]
             task = self._tasks.pop(room_id, None)
