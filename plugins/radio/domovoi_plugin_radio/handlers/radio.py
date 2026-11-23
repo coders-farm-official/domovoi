@@ -112,9 +112,11 @@ async def _final_stream_url(sdk: Any, url: str) -> Any:
     """The URL that answers for a station's stream once its redirects are
     followed, each hop through the outbound check and pinned to the
     address it judged (``net_safety.resolve_final_target``): what the
-    room's player is handed, so it has no redirect of its own to follow
-    into the house (PLG-12). :data:`_BLOCKED` when a hop is refused, None
-    when the stream couldn't be reached."""
+    room's player is handed (PLG-12). This judges the answers the server
+    saw; the player makes its own request and follows its own redirects,
+    so a host that answers the two differently is not covered here (see
+    docs/SECURITY_PRIVACY.md, "Radio streams"). :data:`_BLOCKED` when a
+    hop is refused, None when the stream couldn't be reached."""
     if not _stream_hops_checked(sdk):
         return url
     try:
@@ -934,7 +936,8 @@ class RadioHandler(Handler):
             # the house. A public-directory station whose stream answers 302
             # to an address inside the house got the player to GET it. The
             # chain is followed here, every hop checked, and the player is
-            # handed the URL that answered.
+            # handed the URL that answered. The player's own request is not
+            # covered by this (it can be answered differently).
             final = await _final_stream_url(self.sdk, str(url_to_play))
             if final is _BLOCKED:
                 return self._reply(

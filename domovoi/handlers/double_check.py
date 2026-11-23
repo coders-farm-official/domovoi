@@ -827,6 +827,13 @@ class DoubleCheckHandler(Handler):
         off = self._ai_off(ctx)
         if off is not None:
             return off
+        if await self._last_response_kept_out(ctx, session):
+            return Response(
+                text=("I can't double-check that one: it was read out from a friend "
+                      "house or a shared list, not something I said."),
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
         last = await self._read_last_assistant_response(ctx, session)
         if not last:
             return Response(
@@ -890,6 +897,18 @@ class DoubleCheckHandler(Handler):
         )
 
     # ─── Helpers ──────────────────────────────────────────────────────
+    async def _last_response_kept_out(self, ctx: Context, session: AsyncSession) -> bool:
+        """Whether the last reply's text is kept out of the model (a friend
+        house's message or a shared list's items: Response.history_text)."""
+        if ctx.session_id is None:
+            return False
+        try:
+            ctx_data = await SessionRepository(session).get_context(ctx.session_id)
+        except Exception as e:
+            log.warning("DoubleCheck: get_context failed: %s", e)
+            return True  # can't tell: don't send it
+        return isinstance(ctx_data, dict) and bool(ctx_data.get("last_response_kept_out"))
+
     async def _read_last_assistant_response(
         self, ctx: Context, session: AsyncSession
     ) -> str | None:

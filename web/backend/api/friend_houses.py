@@ -133,6 +133,14 @@ async def friend_houses_status(request: Request):
     return bridge_response(*await get_admin(CORE, headers=auth_forward_headers(request)))
 
 
+@router.delete("/notice", dependencies=WRITE)
+async def friend_houses_dismiss_notice(request: Request):
+    """Dismiss the page's notice (a friend file closed after failed tries)."""
+    return bridge_response(
+        *await delete_admin(f"{CORE}/notice", headers=auth_forward_headers(request))
+    )
+
+
 @router.put("/settings", dependencies=WRITE)
 async def friend_houses_settings(request: Request):
     body = await _body(request, SettingsBody)

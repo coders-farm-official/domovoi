@@ -456,6 +456,36 @@ async def test_the_conflict_says_when_the_newcomer_gets_its_turn(fake_park) -> N
     assert "3 minutes" in frame["message"]
 
 
+@pytest.mark.asyncio
+async def test_a_full_waiting_list_asks_the_device_to_try_later(fake_park) -> None:
+    fake_park.outcome = "full"
+    fake_park.parked_code = None
+    sess = _session()
+    assert await sess._park_for_approval(object(), {}, token_hash="c" * 64, code=CODE) is False
+    assert _last_frame(sess)["reason"] == "approval_throttled"
+
+
+@pytest.mark.asyncio
+async def test_an_oversized_first_frame_is_closed_unread(monkeypatch) -> None:
+    """A first frame past HELLO_MAX_CHARS never reaches the hello handler."""
+    sess = _session()
+    big = json.dumps({"type": "hello", "sat_type": "x" * streaming_mod.HELLO_MAX_CHARS})
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "websocket.receive", "text": big}
+
+    sess.ws.receive = receive  # type: ignore[attr-defined]
+    handled: list[Any] = []
+
+    async def on_control(ctrl: Any) -> None:  # pragma: no cover - must not run
+        handled.append(ctrl)
+
+    monkeypatch.setattr(sess, "_on_control", on_control)
+    assert await sess._await_hello() is False
+    assert handled == []
+    assert _last_frame(sess)["reason"] == "hello_required"
+
+
 def test_the_code_shape_is_the_one_the_core_mints() -> None:
     from domovoi.satellite_media.overlay import generate_approval_code
 

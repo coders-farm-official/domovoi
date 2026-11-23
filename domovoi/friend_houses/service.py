@@ -603,7 +603,7 @@ def handle_event(event: dict) -> None:
             house_key, statement = b"", None
         if len(house_key) == 32:
             _event(presence.saw(house_key, statement), "friend-houses-presence")
-    elif kind in ("request", "accepted"):
+    elif kind in ("request", "accepted", "invite_closed"):
         from domovoi.friend_houses import friending
 
         _event(friending.on_event(event), "friend-houses-event")
@@ -691,11 +691,19 @@ def schedule_deliveries() -> None:
     spawn(_after_reconcile(friending.deliver_pending), "friend-houses-deliver")
 
 
+# The longest one stage of the retry loop may run. Each stage bounds its
+# own steps too; this keeps any one of them from holding up the others.
+STAGE_DEADLINE_SEC = 600.0
+
+
 async def _after_reconcile(fn) -> None:
     async with _LOCK:  # wait for a reconcile in flight: the onion must exist
         pass
     try:
-        await fn()
+        await asyncio.wait_for(fn(), STAGE_DEADLINE_SEC)
+    except asyncio.TimeoutError:
+        log.warning("Friend Houses: %s took too long; next round",
+                    getattr(fn, "__name__", "a retry stage"))
     except Exception:  # noqa: BLE001 — retried on the next pass
         log.exception("Friend Houses: delivering pending requests failed")
 

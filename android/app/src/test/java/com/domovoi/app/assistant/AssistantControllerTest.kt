@@ -4,6 +4,7 @@ import android.content.ComponentCallbacks2
 import androidx.work.WorkInfo
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -82,7 +83,7 @@ class AssistantControllerTest {
         clockStyle = { style },
         helpIndex = { helpIndex },
         drafts = drafts,
-    ).also { c -> scope.launch { c.messages.collect { said += it } } }
+    ).also { c -> scope.launch(start = CoroutineStart.UNDISPATCHED) { c.messages.collect { said += it } } }
 
     private fun install(m: CatalogModel = llm) {
         m.files.forEach { f -> store.fileFor(m, f).apply { parentFile!!.mkdirs(); writeBytes(ByteArray(f.size.toInt())) } }

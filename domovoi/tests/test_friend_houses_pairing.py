@@ -244,3 +244,68 @@ async def test_a_house_key_chosen_after_seeing_the_nonce_is_refused(tmp_path) ->
         w.close()
     assert isinstance(results[0], fp.PairingRefused)
     assert "commitment" in str(results[0])
+
+
+async def test_runs_broken_off_after_the_nonce_close_the_friend_file(tmp_path, capsys) -> None:
+    # Each run broken off after the inviter's nonce is one try at the code:
+    # the listener closes the file after a few, and the asker doesn't
+    # retry on its own after one.
+    import json
+    import secrets as _s
+    import time
+
+    from domovoi.friend_houses import listener as fl
+    from domovoi.friend_houses import session as fs
+    from domovoi.friend_houses.noise import Handshake
+
+    a_keys, f = _file(tmp_path)
+    b_keys, b_statement = _asker(tmp_path)
+    folder = tmp_path / "listener"
+    folder.mkdir()
+    (folder / fl.INVITES_FILE).write_text(
+        json.dumps({f.invite_id.hex(): time.time() + 86400}), encoding="utf-8")
+    state = fl.State(folder, a_keys)
+    server = await asyncio.start_server(lambda r, w: fl.handle_pairing(r, w, state), "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+
+    async def run_to_the_nonce() -> bool:
+        r, w = await asyncio.open_connection("127.0.0.1", port)
+        hs = Handshake("IKpsk2", initiator=True, prologue=fp.PROLOGUE, static=b_keys.session,
+                       remote_static=f.session_key, psk=f.invite_secret)
+        w.write(fp.PREFACE + fs.frame(hs.write_message(
+            f.invite_id + fp.commitment(_s.token_bytes(32), b_keys.house_key))))
+        await w.drain()
+        try:
+            hs.read_message(await fs.read_frame(r, max_size=fp._MSG2_SIZE, timeout=5))
+            got = True
+        except (fs.SessionRefused, ConnectionError):
+            got = False
+        w.close()
+        await asyncio.sleep(0.05)
+        return got
+
+    async with server:
+        for _ in range(fp.ABANDONED_MAX):
+            assert await run_to_the_nonce()
+        assert not await run_to_the_nonce()  # closed: no nonce any more
+        events = [json.loads(x) for x in capsys.readouterr().out.splitlines() if x.startswith("{")]
+        assert events == [{"event": "invite_closed", "invite": f.invite_id.hex()}]
+
+        # The asking side: an inviter that sends its nonce and then hangs up
+        # leaves a refusal marked as past the nonces.
+        async def hang_up(reader, writer):
+            hs = Handshake("IKpsk2", initiator=False, prologue=fp.PROLOGUE, static=a_keys.session)
+            await reader.readexactly(len(fp.PREFACE))
+            hs.read_message(await fs.read_frame(reader, max_size=fp._MSG1_SIZE, timeout=5))
+            hs.provide_psk(a_keys.invite_secret(f.invite_id))
+            writer.write(fs.frame(hs.write_message(b"\x07" * 32)))
+            await writer.drain()
+            writer.close()
+
+        other = await asyncio.start_server(hang_up, "127.0.0.1", 0)
+        async with other:
+            r, w = await asyncio.open_connection("127.0.0.1", other.sockets[0].getsockname()[1])
+            with pytest.raises(fp.PairingRefused) as caught:
+                await fp.ask(r, w, file=f, keys=b_keys, statement=b_statement,
+                             reach_private=b"\x00" * 32, name="B")
+    assert caught.value.after_nonces is True

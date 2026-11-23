@@ -1498,6 +1498,9 @@ class SessionRepository:
 
         ctx["recent_turns"] = recent
         ctx["last_assistant_response"] = last_response if last_response is not None else assistant_text
+        # A reply the history keeps a stand-in for carries text that must not
+        # reach a model (a friend house's words): "double check that" asks.
+        ctx["last_response_kept_out"] = last_response is not None
 
         await self.s.execute(
             text(
@@ -2506,6 +2509,9 @@ _CODE_DECOY = "\x00no-code-on-file"
 #: elsewhere, or approved by another house and could not withdraw here
 #: expires — and with it the room name it was holding.
 APPROVAL_EXPIRY_SEC = 900.0
+#: The most requests that may wait on a human at once. A new room name past
+#: it is told to try again later; a device already waiting still refreshes.
+MAX_PENDING_APPROVALS = 32
 #: How long a code typed for a proof request waits for its device to come
 #: back and run the exchange (V062).
 ENTERED_CODE_TTL_SEC = 600.0
@@ -2570,8 +2576,28 @@ class SatelliteApprovalRepository:
 
         A request nobody refreshed for :data:`APPROVAL_EXPIRY_SEC` is
         deleted first, so it holds its room name against nobody.
+
+        ``mac`` and ``sat_type`` are the device's own words and are bounded
+        here. Returns ``("full", None)`` when :data:`MAX_PENDING_APPROVALS`
+        requests already wait and none of them is this room's.
         """
+        from domovoi.satellite_abilities import clean_mac, clean_sat_type
+
         await self.purge_expired()
+        mac = clean_mac(mac)
+        sat_type = clean_sat_type(sat_type)
+        waiting = (
+            await self.s.execute(
+                text(
+                    "SELECT count(*) AS n, "
+                    "count(*) FILTER (WHERE room_id = :r) AS mine "
+                    "FROM satellite_approvals"
+                ),
+                {"r": room_id},
+            )
+        ).one()
+        if not waiting.mine and waiting.n >= MAX_PENDING_APPROVALS:
+            return "full", None
         # Every SET expression reads the row as it was before this
         # statement, so "same device" below is the parked device's hash.
         same = "satellite_approvals.token_hash = EXCLUDED.token_hash"
