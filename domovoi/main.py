@@ -1590,6 +1590,11 @@ async def health(
             doc["identity"] = identity.health_answer(
                 challenge, addr=addr, pairing_proof=signed_proof,
             )
+            if signed_proof is None and getattr(request, "client", None) is not None:
+                # A room device checking the server it is pinned to before
+                # it connects. One that never connects afterwards was set
+                # up for a different server (S3-4): said in Settings → Rooms.
+                join_problems.identity_checked(admin_auth_mod.request_source(request))
         else:
             log.warning(
                 "refused to sign the identity proof for %s: it is not an "

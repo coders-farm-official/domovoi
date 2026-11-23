@@ -2028,6 +2028,16 @@ class StreamSession:
         self._fastlane: fast_lane.LaneCapture | None = None
 
     async def run(self) -> None:
+        # Whatever opens a room socket talks to this server: it is not a
+        # device set up for a different one (join_problems.identity_checked).
+        source = self._hello_source()
+        join_problems.stream_opened(source)
+        try:
+            await self._run()
+        finally:
+            join_problems.stream_closed(source)
+
+    async def _run(self) -> None:
         await self.ws.accept()
         # ── Hello gate ───────────────────────────────────────────────────
         # NOTHING about this room exists until a `hello` frame has arrived

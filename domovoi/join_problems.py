@@ -66,6 +66,83 @@ def recent() -> list[dict[str, Any]]:
 def clear() -> None:
     with _lock:
         _items.clear()
+        _probes.clear()
+        _streams.clear()
+
+
+# ─── a room set up for a different server (S3-4) ──────────────────────────
+#
+# A room device holds its server to the key it was set up with, and checks
+# it before every connect (GET /v1/health?challenge=…&addr=…). Pinned to
+# another house, or to this one before it was reinstalled with a new key,
+# it gets a valid answer from THIS server, sees a different key, and never
+# opens a session: the server never hears its room's name, so it can't be
+# listed with the rooms. What the server does see is the pattern: an
+# address that keeps asking for the proof and never opens a stream. That
+# is said here as one more line. Nothing is decided on it — it is text for
+# an admin, and the device trusts this server no more than before.
+
+#: An address that asked for the proof and opened no stream for this long.
+#: A device whose server this is connects within seconds of its check; a
+#: refusing one asks again about once a minute (its reconnect backoff).
+OTHER_SERVER_AFTER_SEC = 150.0
+#: An address that has not asked for this long starts over.
+_PROBE_FORGET_SEC = 900.0
+_PROBES_MAX = 64
+_probes: dict[str, tuple[float, float]] = {}   # address -> (first, last)
+_streams: dict[str, int] = {}                   # address -> open room sockets
+
+
+def identity_checked(source: str) -> None:
+    """A room device at ``source`` had this server prove its identity for
+    the address it dialled. Never raises."""
+    try:
+        now = _clock()
+        source = str(source)[:120]
+        with _lock:
+            if _streams.get(source):
+                # A device already talking to this server (the clock helper,
+                # a second check): not one that refuses it.
+                _probes.pop(source, None)
+                return
+            first, last = _probes.get(source, (now, now))
+            if now - last > _PROBE_FORGET_SEC:
+                first = now
+            if source not in _probes and len(_probes) >= _PROBES_MAX:
+                del _probes[min(_probes, key=lambda k: _probes[k][1])]
+            _probes[source] = (first, now)
+            if now - first < OTHER_SERVER_AFTER_SEC:
+                return
+        set_up_for_another_server(source)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def stream_opened(source: str) -> None:
+    """A room socket opened from ``source``: whatever is there talks to this
+    server, so it is not one that refuses it. Never raises."""
+    try:
+        source = str(source)[:120]
+        with _lock:
+            _streams[source] = _streams.get(source, 0) + 1
+            _probes.pop(source, None)
+            _items[:] = [i for i in _items
+                         if (i["kind"], i["subject"]) != ("other_server", source)]
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def stream_closed(source: str) -> None:
+    try:
+        source = str(source)[:120]
+        with _lock:
+            left = _streams.get(source, 0) - 1
+            if left > 0:
+                _streams[source] = left
+            else:
+                _streams.pop(source, None)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 # ─── the lines themselves: one wording, used everywhere ───────────────────
@@ -108,3 +185,11 @@ def bad_code(room_id: str) -> None:
     note("bad_code", room_id,
          f"A device asked to join as {room_id} with a code no Domovoi room "
          "device uses. Set it up again to get a new one.")
+
+
+def set_up_for_another_server(source: str) -> None:
+    note("other_server", source,
+         f"A room device at {source} checks this server's identity but never "
+         "joins: it was set up for a different Domovoi server (another house, "
+         "or this one before a reinstall) and trusts only that one. If it's "
+         "yours, set it up again for this server.")

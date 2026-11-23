@@ -3650,6 +3650,13 @@ day's age drops a line, a restart clears them. The address in a line is the
 one the device SAID it dialled (validated to `host:port` characters) — text
 for an admin to read, never anything the core acts on.
 
+One line is the server's own inference (1.4.1): an address that has this
+server sign its identity for the address it dialled, and then opens no room
+socket for two and a half minutes, is a room set up for a different server
+(another house, or this one before a reinstall gave it a new key). It is
+text only: the device's pin is untouched, nothing the server says can move
+it, and the only way to bring it over is setting it up again.
+
 **A signed list says when, not only who.** Every `manifest.sig` envelope
 carries `issued_at` and a per-channel `serial` that only grows when the
 list changes, under a second signature (`signature_v2`), and a satellite

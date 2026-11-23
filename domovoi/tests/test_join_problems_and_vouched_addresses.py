@@ -326,3 +326,105 @@ async def test_an_ordinary_challenge_is_signed_as_it_always_was(healthy_core, id
         doc, challenge=challenge, expected_fingerprint=identity_in_tmp.fingerprint,
         addr="127.0.0.1:6370",
     ) == identity_in_tmp.fingerprint
+
+
+# ─── S3-4: a room set up for a different server ───────────────────────────
+
+
+class _Peer:
+    """A /v1/health request from a room device at ``host``, arriving at
+    the core's own port."""
+
+    def __init__(self, host, port=6370):
+        self.scope = {"server": ("192.168.1.20", port)}
+        self.client = type("C", (), {"host": host})()
+        self.headers = {}
+
+
+@pytest.mark.asyncio
+async def test_a_room_pinned_to_another_server_is_said_where_an_admin_looks(
+    healthy_core, monkeypatch,
+):
+    """S3-4: a room set up for this house before it was reinstalled checks
+    the new key, refuses it and never opens a stream. The server says so in
+    Settings → Rooms once the address has kept asking for a while."""
+    monkeypatch.setattr(server_identity, "VOUCHED_ADDRESS_SOURCES", [lambda: ["192.168.1.20"]])
+    now = [1000.0]
+    monkeypatch.setattr(join_problems, "_clock", lambda: now[0])
+    stranded = _Peer("192.168.1.41")
+
+    async def check(peer):
+        await main.health(challenge=sat_identity.new_challenge(),
+                          addr="192.168.1.20:6370", request=peer)
+
+    await check(stranded)
+    assert join_problems.recent() == []          # one check is just a check
+    now[0] += 60
+    await check(stranded)
+    assert join_problems.recent() == []
+    now[0] += join_problems.OTHER_SERVER_AFTER_SEC
+    await check(stranded)
+    [line] = join_problems.recent()
+    assert line["kind"] == "other_server" and line["subject"] == "192.168.1.41"
+    assert "set it up again for this server" in line["text"]
+
+    # A device that does open a stream is this server's: no line, and the
+    # one above goes once that address joins.
+    joined = _Peer("192.168.1.42")
+    await check(joined)
+    join_problems.stream_opened("192.168.1.42")
+    now[0] += join_problems.OTHER_SERVER_AFTER_SEC + 60
+    await check(joined)                          # e.g. its clock helper
+    assert [p["subject"] for p in join_problems.recent()] == ["192.168.1.41"]
+    join_problems.stream_opened("192.168.1.41")
+    assert join_problems.recent() == []
+
+
+@pytest.mark.asyncio
+async def test_approval_proof_checks_and_plain_health_are_not_counted(
+    healthy_core, monkeypatch,
+):
+    """An unpaired device asking every house (``pairing-proof.`` challenge)
+    parks through a stream anyway, and a check without an address is a
+    phone's or the dashboard's: neither is a room refusing this server."""
+    monkeypatch.setattr(server_identity, "VOUCHED_ADDRESS_SOURCES", [lambda: ["192.168.1.20"]])
+    now = [1000.0]
+    monkeypatch.setattr(join_problems, "_clock", lambda: now[0])
+    peer = _Peer("192.168.1.43")
+    for _ in range(5):
+        await main.health(challenge=sat_identity.new_challenge(pairing_proof=True),
+                          addr="192.168.1.20:6370", request=peer)
+        await main.health(challenge=sat_identity.new_challenge(), request=peer)
+        now[0] += 120
+    assert join_problems.recent() == []
+
+
+def test_a_probe_not_repeated_starts_over(monkeypatch):
+    now = [1000.0]
+    monkeypatch.setattr(join_problems, "_clock", lambda: now[0])
+    join_problems.identity_checked("192.168.1.44")
+    now[0] += join_problems._PROBE_FORGET_SEC + 1
+    join_problems.identity_checked("192.168.1.44")
+    assert join_problems.recent() == []
+    join_problems.stream_closed("192.168.1.99")  # never opened: no error
+
+
+@pytest.mark.asyncio
+async def test_a_room_socket_counts_as_joined_while_it_is_open(monkeypatch):
+    """The stream route marks its address as talking to this server for as
+    long as the socket lives, even when the session ends in an error."""
+    from domovoi import streaming
+
+    seen = []
+
+    class _S:
+        _hello_source = lambda self: "192.168.1.45"  # noqa: E731
+
+        async def _run(self):
+            seen.append(dict(join_problems._streams))
+            raise RuntimeError("socket dropped")
+
+    with pytest.raises(RuntimeError):
+        await streaming.StreamSession.run(_S())
+    assert seen == [{"192.168.1.45": 1}]
+    assert join_problems._streams == {}
