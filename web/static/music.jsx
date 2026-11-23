@@ -1670,7 +1670,7 @@ const QueueTab = ({ rooms, nowPlaying, npError, npLoading = false, fire, room: p
   };
 
   const clearQueue = async () => {
-    if (!window.confirm(`Clear ${room}'s queue and stop playback?`)) return;
+    if (!await askConfirm(`Clear ${room}'s queue and stop playback?`)) return;
     setBusy(true);
     try {
       await apiPost(`/api/music/queue/${encodeURIComponent(room)}/clear`,
@@ -1686,7 +1686,7 @@ const QueueTab = ({ rooms, nowPlaying, npError, npLoading = false, fire, room: p
   // queue and transport (by the id it sent and its address; household
   // policy, not a lock — Settings → Phones & browsers lists and lifts bans).
   const banGuest = async (item) => {
-    if (!window.confirm('Ban the guest that added this? They can no longer change '
+    if (!await askConfirm('Ban the guest that added this? They can no longer change '
       + 'the music in any room, as a guest, until you lift it in Settings → Phones & browsers.')) return;
     try {
       await apiPost('/api/music/guest-bans', {
@@ -2827,7 +2827,7 @@ const MusicPage = () => {
     // the next library indexer sweep will resurrect the row), so
     // we don't bother gating that with a confirm.
     if (alsoFile) {
-      const ok = window.confirm(
+      const ok = await askConfirm(
         `Permanently delete the file for "${track.title || 'track'}" `
         + `from disk? This can't be undone.\n\n${track.file_path || ''}`,
       );
@@ -2896,7 +2896,7 @@ const MusicPage = () => {
     }
   };
   const onDeletePlaylist = async (playlist) => {
-    if (!window.confirm(`Delete playlist "${playlist.name}"?`)) return;
+    if (!await askConfirm(`Delete playlist "${playlist.name}"?`)) return;
     try {
       await apiDelete(`/api/playlists/${playlist.id}`);
       fire(`deleted ${playlist.name}`);

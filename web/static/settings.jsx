@@ -1270,11 +1270,12 @@ const VersionSection = () => {
     onSettled: () => { setStatus(null); return refreshCore(); },
   });
 
-  const check = async () => {
+  const check = async ({ quiet = false } = {}) => {
     setChecking(true); setStatus(null);
     try {
       const res = await apiPost('/api/config/version/check', {});
       setStatus(res);
+      if (quiet) return;
       if (res && res.error) {
         fire(`update check failed: ${res.error}`);
       } else if (!res || !res.upstream) {
@@ -1285,11 +1286,34 @@ const VersionSection = () => {
         fire(versionCheckWords(res));
       }
     } catch (e) {
-      reportMutationFailure(fire, 'update check', e);
+      if (!quiet) reportMutationFailure(fire, 'update check', e);
     } finally {
       setChecking(false);
     }
   };
+
+  // The core restarted under this open card (an update started in another
+  // browser, a restart by hand, or this tab's own whose follow it missed):
+  // what the card holds (the old version, "12 commits behind" from a check
+  // against the old code) is stale. The core's start moving (or the commit
+  // it runs) is the signal: drop the old check and ask again. While the
+  // core is away the card asks every few seconds, so it notices the
+  // return without a reload.
+  const bootKey = core ? `${core.started_at == null ? '' : core.started_at}|${core.sha || ''}` : null;
+  const seenBoot = React.useRef(null);
+  React.useEffect(() => {
+    if (bootKey == null) return;
+    const had = seenBoot.current;
+    seenBoot.current = bootKey;
+    if (had == null || had === bootKey) return;
+    setStatus(null);
+    if (!internetOff) check({ quiet: true });
+  }, [bootKey]);
+  React.useEffect(() => {
+    if (!coreDown) return undefined;
+    const t = setInterval(() => { refreshCore(); }, 4000);
+    return () => clearInterval(t);
+  }, [coreDown]);
 
   // Follow the other channel. Nothing moves now: the server makes the
   // local branch at the code it runs and tracks origin/<channel>; the
@@ -1297,7 +1321,7 @@ const VersionSection = () => {
   const [switching, setSwitching] = React.useState(false);
   const switchChannel = async (to) => {
     if (!to || !core || to === core.channel) return;
-    if (!window.confirm(to === 'stable'
+    if (!await askConfirm(to === 'stable'
       ? 'Follow the stable channel: Domovoi releases only?\n\nNothing changes now. ' +
         'The update check then offers each new release. If this server already ' +
         'runs newer code than the latest release, updates resume with the next ' +
@@ -1437,7 +1461,7 @@ const VersionSection = () => {
   // update unit (backup, migrations, roll back); elsewhere the pull and the
   // restart stay two steps (pull, below).
   const updateOnePress = async () => {
-    if (!window.confirm(macStep
+    if (!await askConfirm(macStep
       ? 'Update Domovoi?\n\n' +
         'First the Linux part: Domovoi pulls the latest code, then backs up, applies it and restarts ' +
         '(the rooms, phones and this dashboard lose Domovoi for a minute or two; it rolls back if it ' +
@@ -1509,7 +1533,7 @@ const VersionSection = () => {
   };
 
   const pull = async () => {
-    if (!window.confirm(
+    if (!await askConfirm(
       'Update Domovoi?\n\n' +
       'This puts the newest version on the Domovoi server but does not start it yet — ' +
       'this panel will then offer the restart that does. Rooms can be ' +
