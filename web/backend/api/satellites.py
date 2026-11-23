@@ -2498,7 +2498,7 @@ async def _satellite_for(
         timers_own_only=room_id in (own_only or {}),
         board=board,
         supports=[str(x) for x in supports] if supports is not None else None,
-        mic_dsp=online and room_id in (snapshot.get("satellite_mic_dsp") or {}),
+        mic_dsp=online and room_id in (snapshot.get("satellite_mic_dsp") or ()),
         upgrade=upgrade,
         settings_ignored=ignored,
         wake_word=wake_word,

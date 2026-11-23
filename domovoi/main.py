@@ -2882,13 +2882,13 @@ async def admin_snapshot() -> dict[str, Any]:
         # the dashboard's Display block and dead-kiosk warning.
         "satellite_display": dict(app.state.satellite_display),
         # Rooms whose connected satellite declared mic_dsp (an XVF3800 with
-        # xvf_host), with the preset state it last reported ({} until it
-        # does). Only these get the Settings tab's Microphone DSP block.
-        "satellite_mic_dsp": {
-            room: (getattr(app.state, "satellite_mic_dsp", {}) or {}).get(room) or {}
-            for room, sess in app.state.active_sessions.items()
+        # xvf_host). Only these get the Settings tab's Microphone DSP block.
+        # The preset state itself is read on the admin tier
+        # (GET /v1/admin/satellite/{room}/mic_dsp), not here.
+        "satellite_mic_dsp": sorted(
+            room for room, sess in app.state.active_sessions.items()
             if "mic_dsp" in satellite_abilities.session_abilities(sess).names
-        },
+        ),
         # Per-room active TTS voice (what each Pi reported via voice_status),
         # so the web UI can show which voice a device is actually speaking in.
         # None for a room means it's on the registry default.

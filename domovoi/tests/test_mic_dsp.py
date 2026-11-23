@@ -208,3 +208,28 @@ def test_every_hop_is_admin_only(method, path, gate):
     assert gate in gates
     assert admin_auth.require_device not in gates
     assert admin_auth.require_device_read not in gates
+
+
+async def test_the_open_snapshot_lists_the_rooms_but_not_their_presets(monkeypatch):
+    async def sha():
+        return "abc1234"
+
+    monkeypatch.setattr(core_main.git_version, "cached_current_sha", sha)
+    state = core_main.app.state
+    saved = {n: getattr(state, n) for n in ("active_sessions", "satellite_mic_dsp") if hasattr(state, n)}
+    try:
+        for name in ("resumable_music", "wifi_status", "current_playlist",
+                     "active_dropins", "satellite_full_duplex", "satellite_display", "satellite_voice",
+                     "satellite_volume", "satellite_synced_sha", "satellite_sat_type",
+                     "satellite_mic_enabled", "satellite_upgrades", "satellite_health",
+                     "satellite_last_outage", "satellite_wake_word"):
+            if not hasattr(state, name):
+                setattr(state, name, {})
+        state.active_sessions = {"office": _Target(True), "den": _Target(False)}
+        state.satellite_mic_dsp = {"office": {"preset": "B", "error": "secret words"}}
+        snap = await core_main.admin_snapshot()
+    finally:
+        for n, v in saved.items():
+            setattr(state, n, v)
+    assert snap["satellite_mic_dsp"] == ["office"]
+    assert "secret words" not in str(snap)
