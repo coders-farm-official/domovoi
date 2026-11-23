@@ -75,6 +75,11 @@ public final class ServerPickerModel {
     /// (`ServerScanTest.aSecondRunWhileOneIsGoingDoesNothing`).
     private var sweeping: Task<Void, Never>?
 
+    /// The app came back to the foreground while a sweep was running that
+    /// may have been probing under the Local Network alert
+    /// (``appBecameActive()``): sweep once more when it ends empty.
+    private var sweepAgainWhenDone = false
+
     public init(
         store: any ShellStore,
         sweep: @escaping Sweep,
@@ -198,6 +203,7 @@ public final class ServerPickerModel {
         progress.start(total: 0)
         found = []
         outcome = nil
+        sweepAgainWhenDone = false
         let sweep = self.sweep
         sweeping = Task { @MainActor [weak self] in
             // A strong reference for the sweep's lifetime, and it has to be a
@@ -231,6 +237,53 @@ public final class ServerPickerModel {
             // produces is already the right one.
             if !result.servers.isEmpty { model.store.noteLocalNetworkAnswered() }
             model.progress.finish()
+            // The Local Network alert was answered while this sweep was still
+            // probing under it, so its empty answer is not to be believed.
+            if model.sweepAgainWhenDone {
+                model.sweepAgainWhenDone = false
+                if model.sweptUnderTheAlert(result) { model.rescan() }
+            }
+        }
+    }
+
+    /// The app is in the foreground again: **the way out of the Local Network
+    /// alert**, which the person met on screen without anything here being
+    /// told.
+    ///
+    /// iOS raises that alert on the first local connection, which is usually
+    /// this panel's own opening sweep, and every probe fails while it is up.
+    /// The sweep ends `.swept` with nothing found, and there is no callback
+    /// for "Allow" (TN3179). What there is: the alert takes the app out of
+    /// the active state, and answering it brings the app back. So on the way
+    /// back, a sweep that heard nothing **on an install where nothing has
+    /// ever answered** is run again, rather than leaving the person to find
+    /// the rescan button after granting the permission they were asked for.
+    /// Returning from Settings after a refusal is the same moment, and a
+    /// `.localNetworkDenied` sweep is run again on any install.
+    ///
+    /// A sweep still running then is marked to run once more when it ends
+    /// empty, since some of its probes went out under the alert. Nothing
+    /// sweeps again for a sweep that found something, or that is about the
+    /// house rather than the permission (`.notOnLan`, `.noLocalNetwork`).
+    public func appBecameActive() {
+        if progress.running {
+            if !store.localNetworkHasAnswered { sweepAgainWhenDone = true }
+            return
+        }
+        guard let outcome, sweptUnderTheAlert(outcome) else { return }
+        rescan()
+    }
+
+    /// Whether `outcome` may only be the Local Network permission talking:
+    /// refused outright, or empty on an install where nothing has answered.
+    private func sweptUnderTheAlert(_ outcome: SweepOutcome) -> Bool {
+        switch outcome {
+        case .localNetworkDenied:
+            return true
+        case .swept(let servers):
+            return servers.isEmpty && !store.localNetworkHasAnswered
+        case .notOnLan, .noLocalNetwork:
+            return false
         }
     }
 
