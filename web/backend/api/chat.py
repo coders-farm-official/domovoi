@@ -1455,6 +1455,8 @@ async def _answer(
         # The model is the reply's while it streams: no title job runs.
         _reply_started()
         try:
+            # A voice turn being answered goes first (S3-7).
+            await _jobs.wait_for_voice()
             async for event in _reply_events():
                 yield event
         finally:
@@ -2219,6 +2221,7 @@ async def decide_lookup(
         # The model is this answer's while it streams: no title job runs.
         _reply_started()
         try:
+            await _jobs.wait_for_voice()
             if body.decision == "no":
                 async for ev in _declined_answer(thread_id, history, model):
                     yield ev
@@ -2348,8 +2351,9 @@ async def _title_loop() -> None:
         await asyncio.sleep(TITLE_DELAY_SEC)
         while _replies_busy > 0:
             await asyncio.sleep(0.2)
-        if not _title_queue:
-            return
+        await _jobs.wait_for_voice()
+        if not _title_queue or _replies_busy > 0:
+            continue
         thread_id = _title_queue.pop(0)
         _title_running = thread_id
         try:

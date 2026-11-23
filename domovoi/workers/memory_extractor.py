@@ -31,7 +31,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 
-from domovoi import ai_features
+from domovoi import ai_features, voice_first
 from domovoi.clients.ollama import get_ollama_client
 from domovoi.config import settings
 from domovoi.db.repositories import MemoriesRepository, PeopleRepository
@@ -117,7 +117,11 @@ class MemoryExtractor(Worker):
 
         client = get_ollama_client()
         try:
-            candidates = await client.extract_memories(transcript_block)
+            # Voice goes first (domovoi/voice_first.py): the pass waits out
+            # a turn rather than holding the next spoken answer up.
+            candidates = await voice_first.ahead_of_voice(
+                lambda: client.extract_memories(transcript_block), label="memory pass",
+            )
         except Exception as e:
             log.warning(
                 "extract_memories Ollama call failed for person %s: %s",

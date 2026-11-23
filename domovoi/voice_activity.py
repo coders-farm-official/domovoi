@@ -30,6 +30,7 @@ Process-local, no I/O: a counter of open turns and a weak set of streams.
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import itertools
 import time
 import weakref
@@ -44,6 +45,9 @@ _ids = itertools.count(1)
 _last_end: float | None = None
 #: Satellite streams that may be taking in a command (``_capturing(now)``).
 _captures: "weakref.WeakSet[Any]" = weakref.WeakSet()
+#: True inside a turn's own code (and the tasks it starts): the turn's own
+#: model calls never wait for voice (:func:`in_turn`).
+_in_turn: contextvars.ContextVar[bool] = contextvars.ContextVar("voice_turn", default=False)
 
 
 def watch_capture(stream: Any) -> None:
@@ -70,11 +74,19 @@ async def turn(kind: str = "voice") -> AsyncIterator[None]:
     global _last_end
     key = next(_ids)
     _open[key] = (kind, time.monotonic())
+    token = _in_turn.set(True)
     try:
         yield
     finally:
+        _in_turn.reset(token)
         _open.pop(key, None)
         _last_end = time.monotonic()
+
+
+def in_turn() -> bool:
+    """Whether the caller is a voice turn's own code (inside :func:`turn`),
+    so a "voice first" wait would only hold the turn up behind itself."""
+    return _in_turn.get()
 
 
 def snapshot(now: float | None = None) -> dict[str, object]:

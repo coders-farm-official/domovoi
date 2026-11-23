@@ -30,6 +30,11 @@ a way that would otherwise get reported as a bug.
   changed since answer 404 as the by-path lookup already did, and asking
   for a read of a file over the 1 GB limit is refused before the file is
   hashed (an unchanged file is not hashed again).
+- **Voice goes first with the house's AI model**: a bedtime story being
+  written, a memory pass or a news briefing stops when a room hears its
+  wake word and carries on after the answer, and a typed chat reply or a
+  chat title waits for a spoken answer in progress, so a question asked
+  out loud no longer waits behind them.
 
 ## 1.4.1 (unreleased) — Dashboard update fixes
 

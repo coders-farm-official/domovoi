@@ -409,13 +409,13 @@ def _with_hook(kwargs: dict[str, Any], hook: Any) -> dict[str, Any]:
     return kwargs
 
 
-def async_client(**kwargs: Any) -> "httpx.AsyncClient":
-    """An ``httpx.AsyncClient`` that refuses non-local URLs under
-    ``never``: :func:`async_request_hook` runs FIRST; the caller's own
-    request hooks are kept after it."""
+def async_client(*, client_class: Any = None, **kwargs: Any) -> "httpx.AsyncClient":
+    """An ``httpx.AsyncClient`` (or ``client_class``, a subclass) that
+    refuses non-local URLs under ``never``: :func:`async_request_hook` runs
+    FIRST; the caller's own request hooks are kept after it."""
     import httpx
 
-    return httpx.AsyncClient(**_with_hook(kwargs, async_request_hook))
+    return (client_class or httpx.AsyncClient)(**_with_hook(kwargs, async_request_hook))
 
 
 def sync_client(**kwargs: Any) -> "httpx.Client":

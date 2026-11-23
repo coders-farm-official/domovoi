@@ -25,7 +25,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from domovoi.clients import news_feeds
-from domovoi import ai_features
+from domovoi import ai_features, voice_first
 from domovoi.clients.ollama import get_ollama_client
 
 log = logging.getLogger(__name__)
@@ -589,7 +589,11 @@ async def summarize_person_briefing(session: AsyncSession, person_id: int) -> st
         f"Headlines:\n{article_block}\n\nSpoken briefing:"
     )
     try:
-        briefing = await get_ollama_client().qa(prompt)
+        # Voice goes first (domovoi/voice_first.py); asked for in a turn,
+        # it simply runs.
+        briefing = await voice_first.ahead_of_voice(
+            lambda: get_ollama_client().qa(prompt), label="news briefing",
+        )
     except Exception as e:  # noqa: BLE001
         log.warning("news: briefing summarize failed for person %s: %s", person_id, e)
         return None
