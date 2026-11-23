@@ -148,6 +148,41 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
   iPhone room modes and chats draw it in their own release. Captions are a
   picture model's words and every screen draws them as text.
 
+## 1.5.0 (unreleased) — Security: photos, faces and room screens
+
+- **What changed.** Findings of the 2026-11-23 security review on the photo
+  and video work (H1, H4, M9, M10, M11 and the media lows).
+- **Room screens.** The open status snapshot now says only which rooms
+  show photo results (`{room: results id}`); what was said, captions,
+  names, dates and paths come from the device-read
+  `GET /v1/admin/room-media/{room_id}`. A room screen's thumbnail token
+  works only while its results are on the screen, is answered `no-store`
+  and is blanked in the log.
+- **Nightly face re-group** runs in a worker thread with the maths library
+  on one thread, a blocked neighbour search, at most 20,000 faces a night,
+  pausing for voice; the night is marked done before it starts.
+- **Forget my face.** A phone's claim must be older than the person's
+  oldest confirmed face (else admin); moving someone's face to another
+  person, and naming, merging, splitting or confirming in a hidden group,
+  are admin. Admins can list and undo forgotten faces
+  (`GET` / `DELETE /api/faces/denylist`). Forgetting a face, and faces
+  off, strip chat replies' person results; deleting a person un-names
+  their faces.
+- **Missing is not deleted.** A file the hourly look doesn't see is marked
+  missing (V079) and deleted only after three complete looks and a day
+  (two weeks for a mass loss). An empty mount point, an unreadable folder
+  or the file cap never deletes analysis, face confirmations or names. A
+  file only touched keeps its results; a move across libraries is matched.
+- **Smaller.** The face stage skips photos over 80 MiB and HEIC/HEIF/TIFF;
+  library reads run in a worker thread; only regular files are
+  catalogued; library videos keep to a container and codec allow-list;
+  a video's faces pass and transcript have their own time budget; a cloud
+  or off-network vision model skips library work; "Rescan" is admin; an
+  unrecognized voice gets the same refusal for any household name; an
+  edge-of-calendar EXIF date or a non-UTF-8 file name no longer fails.
+- SECURITY_PRIVACY.md ("Photos and videos", "Faces and people", "The room
+  display"), API_REFERENCE.md, PHOTOS_AND_VIDEOS.md.
+
 ## 1.5.0 (unreleased) — A QR code for the setup code
 
 - **What changed.** Where the setup code is shown (the core's terminal

@@ -195,12 +195,17 @@ def _name_re(name: str) -> re.Pattern[str]:
     return re.compile(r"(?<![\w'])" + re.escape(name.lower()) + r"(?:'s|s')?(?![\w])")
 
 
-async def person_in(s: Any, q: str) -> tuple[str, list[int], str] | None:
-    """A person with confirmed faces named in ``q``: (name as stored, their
-    ids, ``q`` without the name), the longest name first. None: nobody."""
+async def person_in(s: Any, q: str, *, with_faces: bool = True) -> tuple[str, list[int], str] | None:
+    """A person with confirmed faces (``with_faces=False``: any named
+    person) named in ``q``: (name as stored, their ids, ``q`` without the
+    name), the longest name first. None: nobody."""
     from domovoi.media_understanding import faces
 
-    rows = await faces.named_people_with_faces(s)
+    if with_faces:
+        rows = await faces.named_people_with_faces(s)
+    else:
+        rows = [(int(r[0]), str(r[1])) for r in (await s.execute(text(
+            "SELECT id, name FROM people WHERE name IS NOT NULL AND btrim(name) <> ''"))).all()]
     by_name: dict[str, tuple[str, list[int]]] = {}
     for pid, name in rows:
         key = " ".join(str(name).lower().split())
@@ -263,11 +268,16 @@ async def _find(s: Any, q: str, *, people: bool, cards_max: int) -> Answer:
     moments: dict[int, list[float]] = {}
     person: str | None = None
     if sw["faces"]:
-        named = await person_in(s, q)
+        if not people:
+            # Refused for ANY household name, whether or not it has faces
+            # (security review 2026-11-23, L49): the refusal must not say
+            # who has photos.
+            anyone = await person_in(s, q, with_faces=False)
+            if anyone is not None:
+                return Answer("people_refused", parsed, person=anyone[0])
+        named = await person_in(s, q) if people else None
         if named is not None:
             person, ids, rest = named
-            if not people:
-                return Answer("people_refused", parsed, person=person)
             parsed = search.parse_query(rest)
             only = []
             for pid in ids:

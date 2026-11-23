@@ -5,12 +5,23 @@
   modified time; it never opens a file. (A renamed file's fingerprint is
   the one read, and it goes through the 20 MB/s bucket.)
 * **New, changed, gone.** A file is new or changed when its size or
-  modified time differ; a change re-queues it and drops the old results.
-  A file gone from a library that is **present** is deleted with all its
-  results (``ON DELETE CASCADE``). A library whose root is not there (a
-  drive unplugged) keeps its rows: it may come back.
-* **Moved or renamed.** A new path whose size matches a vanished row with a
-  fingerprint is fingerprinted; a match moves the row, results and all.
+  modified time differ; a change re-queues it and drops the old results
+  (unless only the modified time moved and the fingerprint is the same:
+  then the results, confirmed faces included, stay).
+* **Missing is not deleted** (security review 2026-11-23, M10). A file
+  not seen is first marked missing (``missing_since``, ``missed_walks``,
+  V079) and its row, results, face confirmations and names stay. It is
+  deleted only after :data:`MISSING_GRACE_WALKS` complete walks and
+  :data:`MISSING_GRACE_S` (:data:`MASS_LOSS_GRACE_S` when one walk lost more
+  than :data:`MASS_LOSS_SHARE` of the library). Nothing is even counted
+  as missing when the walk was not complete: a folder that could not be
+  listed, or the :data:`MAX_FILES` cap reached. A library whose root is
+  not there, or cannot be listed, or walks EMPTY while it has rows (an
+  empty mount point: a USB drive or a NAS not up yet) is marked not
+  present and keeps every row: it may come back.
+* **Moved or renamed.** A new path whose size matches a vanished or
+  missing row with a fingerprint (in this library or, for a missing row,
+  any other) is fingerprinted; a match moves the row, results and all.
 * **Excluded folders** (``media_excluded``): never catalogued, and their
   rows (with every result) are deleted.
 * **New arrivals.** Files found after a library's first complete walk are
@@ -56,6 +67,15 @@ VIDEO_EXTENSIONS = frozenset({".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi", "
 MAX_FILES = 500_000
 #: How often a full walk is due without a "Rescan".
 WALK_EVERY_S = 3600.0
+#: A file not seen is deleted only after this many complete walks...
+MISSING_GRACE_WALKS = 3
+#: ...and this long since it was first missed.
+MISSING_GRACE_S = 24 * 3600.0
+#: When one walk loses more than this share of a library's rows (and at
+#: least :data:`MASS_LOSS_MIN` of them), the grace is :data:`MASS_LOSS_GRACE_S`.
+MASS_LOSS_SHARE = 0.25
+MASS_LOSS_MIN = 20
+MASS_LOSS_GRACE_S = 14 * 24 * 3600.0
 
 
 @dataclass(frozen=True)
@@ -194,24 +214,58 @@ def under(rel_path: str, prefix: str) -> bool:
     return not prefix or rel_path == prefix or rel_path.startswith(prefix + "/")
 
 
+@dataclass
+class Walk:
+    """One walk's result. ``complete`` is False when a folder could not be
+    listed or the cap stopped it: then what wasn't found may still be
+    there, and nothing is counted as missing. ``root_ok`` is False when
+    the library's own root could not be listed."""
+
+    found: dict[str, tuple[int, float, str]]
+    complete: bool = True
+    root_ok: bool = True
+    unreadable: int = 0
+
+
 def walk(lib: Library, excluded: Iterable[str] = (), *, limit: int = MAX_FILES) -> dict[str, tuple[int, float, str]]:
     """``{rel_path: (size, mtime, kind)}`` for the library's image/video
-    files, by ``os.scandir`` + ``stat`` (no file is opened). Hidden
-    entries and symlinks are skipped; excluded folders are not entered."""
+    files (:func:`walk_full`'s ``found``)."""
+    return walk_full(lib, excluded, limit=limit).found
+
+
+def walk_full(lib: Library, excluded: Iterable[str] = (), *, limit: int = MAX_FILES) -> Walk:
+    """The library's image/video files, by ``os.scandir`` + ``stat`` (no
+    file is opened), and whether the walk saw everything. Hidden entries,
+    symlinks and anything that is not a regular file are skipped; excluded
+    folders are not entered."""
+    import stat as stat_mod
+
     prefixes = [p.strip("/") for p in excluded]
     if "" in prefixes:
-        return {}
+        return Walk({})
     found: dict[str, tuple[int, float, str]] = {}
+    out = Walk(found)
     stack = [(lib.root, "")]
-    while stack and len(found) < limit:
+    while stack:
+        if len(found) >= limit:
+            out.complete = False
+            break
         folder, rel_dir = stack.pop()
         try:
             entries = list(os.scandir(folder))
         except OSError:
+            out.complete = False
+            out.unreadable += 1
+            if not rel_dir:
+                out.root_ok = False
             continue
         for e in entries:
             if e.name.startswith("."):
                 continue
+            try:
+                e.name.encode("utf-8")
+            except UnicodeEncodeError:
+                continue                          # a name that isn't UTF-8 can't be stored: skipped
             rel = f"{rel_dir}/{e.name}" if rel_dir else e.name
             try:
                 if e.is_symlink():
@@ -224,12 +278,17 @@ def walk(lib: Library, excluded: Iterable[str] = (), *, limit: int = MAX_FILES) 
                 if kind is None or any(under(rel, p) for p in prefixes):
                     continue
                 st = e.stat(follow_symlinks=False)
+                if not stat_mod.S_ISREG(st.st_mode):
+                    continue                      # a pipe or a device named .jpg: never read
             except OSError:
+                out.complete = False
                 continue
             found[rel] = (int(st.st_size), float(st.st_mtime), kind)
             if len(found) >= limit:
                 break
-    return found
+    if stack and len(found) >= limit:
+        out.complete = False
+    return out
 
 
 async def excluded_prefixes(s: Any, library_id: str) -> list[str]:
@@ -279,38 +338,70 @@ async def _forget_results(s: Any, ids: list[int]) -> None:
         await s.execute(text(f"DELETE FROM {t} WHERE item_id = ANY(:ids)"), {"ids": ids})
 
 
+async def _mark_absent(s: Any, lib: Library) -> None:
+    await s.execute(text(
+        "INSERT INTO media_libraries (library_id, present, updated_at) VALUES (:l, false, now()) "
+        "ON CONFLICT (library_id) DO UPDATE SET present = false, updated_at = now()"), {"l": lib.id})
+
+
 async def sync_library(s: Any, lib: Library, *, bucket: ratelimit.TokenBucket | None = None,
-                       found: dict[str, tuple[int, float, str]] | None = None) -> dict[str, int]:
+                       found: dict[str, tuple[int, float, str]] | Walk | None = None) -> dict[str, int]:
     """Bring ``media_items`` in line with one library; the counts of what
-    changed. ``found`` is the walk (made here when not given)."""
-    stats = {"added": 0, "changed": 0, "deleted": 0, "moved": 0, "excluded": 0, "files": 0}
+    changed. ``found`` is the walk (made here when not given; a plain dict
+    counts as a complete walk). A file not seen is only marked missing; it
+    is deleted after the grace (module docstring, "Missing is not
+    deleted")."""
+    stats = {"added": 0, "changed": 0, "deleted": 0, "moved": 0, "excluded": 0, "files": 0,
+             "missing": 0, "held": 0}
     excluded = await excluded_prefixes(s, lib.id)
     for p in excluded:
         stats["excluded"] += await delete_under(s, lib.id, p)
     present = is_present(lib)
     if not present:
-        await s.execute(text(
-            "INSERT INTO media_libraries (library_id, present, updated_at) VALUES (:l, false, now()) "
-            "ON CONFLICT (library_id) DO UPDATE SET present = false, updated_at = now()"), {"l": lib.id})
+        await _mark_absent(s, lib)
         return stats
     if found is None:
-        found = await asyncio.to_thread(walk, lib, excluded)
+        w = await asyncio.to_thread(walk_full, lib, excluded)
+    elif isinstance(found, Walk):
+        w = found
+    else:
+        w = Walk(found)
+    found = w.found
+    if not w.root_ok:
+        await _mark_absent(s, lib)
+        return stats
     stats["files"] = len(found)
     walked_before = (await s.execute(text(
         "SELECT walked_at IS NOT NULL FROM media_libraries WHERE library_id = :l"), {"l": lib.id})).scalar()
     rows = (await s.execute(text(
-        "SELECT id, rel_path, size_bytes, mtime, fingerprint FROM media_items WHERE library_id = :l"),
-        {"l": lib.id})).mappings().all()
+        "SELECT id, rel_path, size_bytes, mtime, fingerprint, missing_since FROM media_items "
+        "WHERE library_id = :l"), {"l": lib.id})).mappings().all()
     existing = {r["rel_path"]: r for r in rows}
+    if existing and not found:
+        # An empty mount point looks exactly like this: keep every row.
+        log.warning("media catalogue: %s walked empty but has %d files catalogued; "
+                    "treated as not mounted, nothing deleted", lib.id, len(existing))
+        await _mark_absent(s, lib)
+        stats["held"] = len(existing)
+        return stats
 
     gone = {rel: r for rel, r in existing.items() if rel not in found}
     new = {rel: v for rel, v in found.items() if rel not in existing}
 
-    # Moved or renamed: same size, same fingerprint.
+    # Moved or renamed: same size, same fingerprint; a row of this library
+    # not seen now, or a row of any library already marked missing.
     by_size: dict[int, list[Any]] = {}
     for r in gone.values():
         if r["fingerprint"]:
-            by_size.setdefault(int(r["size_bytes"]), []).append(r)
+            by_size.setdefault(int(r["size_bytes"]), []).append(dict(r, library_id=lib.id))
+    if new:
+        sizes = sorted({v[0] for v in new.values()})
+        elsewhere = (await s.execute(text(
+            "SELECT id, library_id, rel_path, size_bytes, fingerprint FROM media_items "
+            "WHERE library_id <> :l AND missing_since IS NOT NULL AND fingerprint IS NOT NULL "
+            "AND size_bytes = ANY(:sz)"), {"l": lib.id, "sz": sizes})).mappings().all()
+        for r in elsewhere:
+            by_size.setdefault(int(r["size_bytes"]), []).append(dict(r))
     for rel, (size, mtime, _kind) in list(new.items()):
         cands = by_size.get(size)
         if not cands:
@@ -323,21 +414,64 @@ async def sync_library(s: Any, lib: Library, *, bucket: ratelimit.TokenBucket | 
         if match is None:
             continue
         cands.remove(match)
-        gone.pop(match["rel_path"], None)
+        if match["library_id"] == lib.id:
+            gone.pop(match["rel_path"], None)
         new.pop(rel)
         await s.execute(text(
-            "UPDATE media_items SET rel_path = :r, mtime = :m, updated_at = now() WHERE id = :id"),
-            {"r": rel, "m": mtime, "id": match["id"]})
+            "UPDATE media_items SET library_id = :l, rel_path = :r, mtime = :m, missing_since = NULL, "
+            "missed_walks = 0, updated_at = now() WHERE id = :id"),
+            {"l": lib.id, "r": rel, "m": mtime, "id": match["id"]})
         stats["moved"] += 1
 
-    if gone:
-        await s.execute(text("DELETE FROM media_items WHERE id = ANY(:ids)"),
-                        {"ids": [int(r["id"]) for r in gone.values()]})
-        stats["deleted"] = len(gone)
+    # Seen again: no longer missing.
+    back = [int(r["id"]) for rel, r in existing.items() if rel in found and r["missing_since"] is not None]
+    if back:
+        await s.execute(text(
+            "UPDATE media_items SET missing_since = NULL, missed_walks = 0 WHERE id = ANY(:ids)"), {"ids": back})
+
+    if gone and not w.complete:
+        log.warning("media catalogue: %s walk incomplete (%d unreadable folder(s)%s); "
+                    "%d unseen file(s) kept, not counted as missing", lib.id, w.unreadable,
+                    ", file cap reached" if len(found) >= MAX_FILES else "", len(gone))
+        stats["held"] = len(gone)
+    elif gone:
+        mass = len(gone) >= MASS_LOSS_MIN and len(gone) > MASS_LOSS_SHARE * len(existing)
+        grace = MASS_LOSS_GRACE_S if mass else MISSING_GRACE_S
+        if mass:
+            log.warning("media catalogue: %s lost %d of %d files in one walk; held for %d days "
+                        "before anything is deleted", lib.id, len(gone), len(existing), int(grace // 86400))
+        ids = [int(r["id"]) for r in gone.values()]
+        await s.execute(text(
+            "UPDATE media_items SET missing_since = COALESCE(missing_since, now()), "
+            "missed_walks = missed_walks + 1 WHERE id = ANY(:ids)"), {"ids": ids})
+        stats["missing"] = len(ids)
+        r = await s.execute(text(
+            "DELETE FROM media_items WHERE id = ANY(:ids) AND missed_walks >= :w "
+            "AND missing_since <= now() - make_interval(secs => :g)"),
+            {"ids": ids, "w": MISSING_GRACE_WALKS, "g": float(grace)})
+        stats["deleted"] = int(r.rowcount or 0)
 
     changed = [(existing[rel]["id"], size, mtime) for rel, (size, mtime, _k) in found.items()
                if rel in existing and (int(existing[rel]["size_bytes"]) != size
                                        or abs(float(existing[rel]["mtime"]) - mtime) > 1e-6)]
+    # Only the modified time moved and the content's fingerprint is the
+    # same (a copy-back, a tag tool touching the date): keep the results.
+    same = []
+    by_id = {r["id"]: r for r in existing.values()}
+    for c in list(changed):
+        row = by_id[c[0]]
+        if not row["fingerprint"] or int(row["size_bytes"]) != c[1]:
+            continue
+        try:
+            fp = await ratelimit.fingerprint(lib.root / row["rel_path"], bucket=bucket)
+        except OSError:
+            continue
+        if fp == row["fingerprint"]:
+            changed.remove(c)
+            same.append(c)
+    for item_id, _size, mtime in same:
+        await s.execute(text("UPDATE media_items SET mtime = :m, updated_at = now() WHERE id = :id"),
+                        {"m": mtime, "id": item_id})
     if changed:
         ids = [int(c[0]) for c in changed]
         await _forget_results(s, ids)

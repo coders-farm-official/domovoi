@@ -406,3 +406,50 @@ async def test_an_unreadable_video_is_skipped_with_a_code(house, fakes) -> None:
     assert (await _stage(item["id"], videos.SCAN))["error_code"] == videos.CODE_UNREADABLE
     assert (await _stage(item["id"], videos.FRAMES))["state"] == "skipped"
     assert fakes.vision_calls == 0 and not fakes.heard
+
+
+# ─── security review 2026-11-23: L51, L53 ────────────────────────────────
+
+
+def test_library_videos_keep_to_an_allow_list_of_containers_and_codecs() -> None:
+    from types import SimpleNamespace
+
+    from domovoi.media_understanding import videos as V
+
+    ok = SimpleNamespace(container="mov,mp4,m4a,3gp,3g2,mj2", video_codec="h264")
+    old = SimpleNamespace(container="avi", video_codec="mpeg4")
+    assert V.library_format_ok(ok) and V.library_format_ok(old)
+    for bad in (SimpleNamespace(container="concat", video_codec="h264"),
+                SimpleNamespace(container="hls", video_codec="h264"),
+                SimpleNamespace(container="image2", video_codec="png"),
+                SimpleNamespace(container="mov,mp4", video_codec="prores_raw_exotic")):
+        assert not V.library_format_ok(bad)
+
+
+def test_library_pictures_go_only_to_a_local_vision_model(monkeypatch) -> None:
+    from domovoi.config import settings
+    from domovoi.media_understanding import photos as P
+
+    monkeypatch.setattr(settings, "ollama_url", "http://localhost:11434")
+    assert P.vision_is_local("qwen2.5vl:7b")
+    assert not P.vision_is_local("qwen3-vl:235b-cloud") and not P.vision_is_local("x:cloud")
+    for url in ("http://ollama:11434", "http://192.168.1.20:11434", "http://nas.local:11434"):
+        monkeypatch.setattr(settings, "ollama_url", url)
+        assert P.vision_is_local("llava"), url
+    for url in ("https://ollama.example.com", "http://8.8.8.8:11434"):
+        monkeypatch.setattr(settings, "ollama_url", url)
+        assert not P.vision_is_local("llava"), url
+
+
+async def test_a_remote_vision_model_skips_the_photo(monkeypatch) -> None:
+    from domovoi.config import settings
+    from domovoi.media_understanding import photos as P
+    from domovoi.media_understanding import videos as V
+    from domovoi.media_understanding.runner import Skip
+
+    monkeypatch.setattr(settings, "ollama_vision_model", "llava")
+    monkeypatch.setattr(settings, "ollama_url", "https://ollama.example.com")
+    for fn in (P.ollama_vision, V.ollama_frame):
+        with pytest.raises(Skip) as e:
+            await fn(b"jpeg")
+        assert e.value.code == P.CODE_VISION_NOT_LOCAL

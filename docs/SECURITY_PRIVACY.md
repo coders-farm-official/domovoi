@@ -2917,7 +2917,10 @@ Faces and places have their own sections below.
 * **Everything stays on the server.** Descriptions come from the house's
   own vision model through its Ollama, transcripts from its own speech
   model, text in pictures from Tesseract. No photo, video, description or
-  search is sent anywhere. The only downloads are the pinned face models
+  search is sent anywhere: when the vision model is an Ollama cloud model,
+  or `OLLAMA_URL` names a host that is not on this network, the library
+  work that needs it is skipped (`vision-model-not-local`) rather than
+  sending the library out at night (`photos.vision_is_local`). The only downloads are the pinned face models
   and the GeoNames town list, each only after an admin's switch and never
   under internet access "No" (`domovoi/egress.py`).
 * **What is kept** (`media_items`, `media_frames`, `media_segments`,
@@ -2932,7 +2935,12 @@ Faces and places have their own sections below.
 * **Who sees it.** Search and the Photos page are the household tier (a
   paired phone or browser), the same tier that can already open the files.
   A guest gets nothing (401). A device marked as a shared screen gets no
-  places and no person filters.
+  person filters. A place's name is one of the searchable words of a
+  photo (with locations on), so a place word still narrows a search on a
+  shared screen, as a caption word does. An unrecognized voice or a shared
+  screen that names anyone in the household gets the same refusal whether
+  or not that person has faces, so the refusal doesn't say who does.
+  "Rescan" is admin.
 * **Text from a model or a file is data, never instructions.** A caption,
   tag, transcript or text found in a picture is drawn as text only (never
   HTML). It reaches a chat model only inside a fenced block the model is
@@ -2940,13 +2948,29 @@ Faces and places have their own sections below.
   lookups, so words in a photo can't send a search out.
 * **Caps.** One step at a time across the house, voice always first;
   helper programs at the lowest priority with a memory cap; file reads at
-  most 20 MB/s; a time budget per video; three attempts per file
-  ([ARCHITECTURE.md](ARCHITECTURE.md#media-understanding-150)).
-* **Deleting.** Deleting a file through Files deletes its results at once;
-  the hourly look deletes the results of a file that has gone from a
-  library that is present (an unplugged drive keeps its rows). Excluding a
-  folder deletes its results. Turning faces or places off deletes theirs
-  (below).
+  most 20 MB/s, each read in a worker thread (a sleeping disk or a hung
+  mount stalls that file, not voice); a time budget per video, and its
+  own budget for a video's faces pass and its transcript; three attempts
+  per file ([ARCHITECTURE.md](ARCHITECTURE.md#media-understanding-150)).
+  Only regular files are catalogued. A library video's container and
+  picture codec must be on an allow-list (chat's, plus the older camera
+  and TV formats) before ffmpeg reads it, so a playlist or a concat
+  script named `.mp4` is skipped. A photo over 80 MiB is not read by the
+  caption or the face stage, and HEIC, HEIF and TIFF are skipped by the
+  face stage rather than failed.
+* **Deleting.** Deleting a file through Files deletes its results at once.
+  The hourly look only marks a file it doesn't see as missing; its row,
+  results, face confirmations and names are deleted after 3 complete looks
+  and a day (14 days when one look lost more than a quarter of the
+  library). A look that couldn't list a folder or stopped at its file cap
+  counts nothing as missing, and a library whose root is absent,
+  unreadable or **empty while it has rows** (a drive not mounted, or a
+  NAS not up yet: the Windows install mounts each folder with `nofail`)
+  keeps every row (security review 2026-11-23, M10; V079). A file whose
+  only change is its modified time, with the same fingerprint, keeps its
+  results; a file moved to another library is matched by fingerprint and
+  keeps them too. Excluding a folder deletes its results. Turning faces
+  or places off deletes theirs (below).
 
 ## Faces and people
 
@@ -2970,7 +2994,12 @@ and videos → Recognize faces). The code is
   person within 30 s), not one per frame.
 * **Where it is worked out.** On the server only, by two small models on
   ONNX Runtime (one thread, voice first, like all background
-  understanding). The models are fetched once, after the admin's switch,
+  understanding). The nightly re-group runs in a worker thread with the
+  maths library on one thread, a blocked neighbour search (memory bounded
+  by the block, not the library), pausing while a voice turn runs, for at
+  most 20,000 unconfirmed faces a night; the night is marked done before
+  it starts, so a re-group that dies is not retried in a loop (security
+  review 2026-11-23, H4). The models are fetched once, after the admin's switch,
   pinned by SHA-256 ([LICENSES.md](LICENSES.md#the-server)); InsightFace's
   non-commercial weights are never used. No photo, face or embedding ever
   leaves the house.
@@ -2987,8 +3016,10 @@ and videos → Recognize faces). The code is
     hides a stranger's group, and merges or splits groups nobody is named
     in;
   * **admins** also merge or split a named person's faces (it changes
-    whose faces are whose), move a named group to someone else, list and
-    unhide hidden groups, and own every switch.
+    whose faces are whose), move a named group or a face that is already
+    someone's to someone else, list, unhide, name, merge, split or confirm
+    in hidden groups, list and undo forgotten faces, and own every
+    switch.
 * **Strangers.** Faces nobody names stay in unnamed groups; small groups
   (fewer than 3 faces) and hidden groups are left off the People page, and
   the household is never asked "who is this?".
@@ -2996,11 +3027,21 @@ and videos → Recognize faces). The code is
   leaves the house. An admin can forget a child's face at any time.
 * **Forget my face.** An admin, or the person themselves from a phone or
   browser claimed as theirs ("this is me": its claim key, not a shared
-  screen, claimed more than 10 minutes ago), can forget one person's face:
-  every face row and group of theirs is deleted, and one averaged
-  embedding tied to nobody goes on `face_denylist`, so new photos of them
-  are neither stored nor grouped (any other stored face that matches it
-  is deleted too). Their photos and their `people` row stay.
+  screen, claimed more than 10 minutes ago **and before the person's
+  oldest confirmed face**), can forget one person's face. A claim newer
+  than the faces, or a person with no confirmed face, needs an admin, so
+  a household token can't claim someone (or a person it just made and
+  confirmed someone's faces onto) and erase them (security review
+  2026-11-23, M9). Every face row and group of theirs is deleted, and one
+  averaged embedding tied to nobody goes on `face_denylist`, so new photos
+  of them are neither stored nor grouped (any other stored face that
+  matches it is deleted too, a sibling's look-alike included). Chat
+  replies that showed their photos lose the result cards and the words.
+  Their photos and their `people` row stay. It is best effort: one
+  averaged signature, and a new group can be named with the kept name.
+  An admin can list the forgotten faces and undo one
+  (`DELETE /api/faces/denylist/{id}`); the photos with no face left are
+  then looked at again.
 * **Turning faces off** deletes every face, group and embedding at once
   (the switch asks to confirm when there are any); turning it on again
   starts from zero. The forget list (`face_denylist`) is **kept** (owner
@@ -3008,17 +3049,20 @@ and videos → Recognize faces). The code is
   "forget my face" permanent. Deleting it with the rest would quietly
   undo every forget the next time faces are turned on, and a person who
   asked to be forgotten would be learned again from the same photos. The
-  confirm says so, and the "Forget my face" confirm says the forget is
-  permanent even across faces off and on. A face being
+  confirm says so, and the "Forget my face" confirm says the forget holds
+  across faces off and on (only an admin's undo lifts it). Faces off also
+  strips every chat reply's person-filtered results. A face being
   stored at the moment faces go off is deleted with the rest (the store
   and the switch take the same row lock).
 * **No export.** No route answers with an embedding or a group centroid,
   and there is no export of face data: it leaves the server only inside a
   database backup, like every table (`domovoi/tests/test_media_faces.py`
   holds the face tables to the faces code).
-* **Deleting a photo** (through Files, or from the folder) deletes its
-  faces with its other results; deleting a person deletes their groups,
-  and their faces become unnamed.
+* **Deleting a photo** (through Files, or from the folder, after the
+  missing grace above) deletes its faces with its other results; deleting
+  a person (the admin's delete, or voice "forget me") deletes their
+  groups, and their faces become unnamed: no confirmation is kept on a
+  face of nobody.
 
 ## Photo locations
 
@@ -5589,7 +5633,14 @@ carry photo and video results asked for by voice in that room, for 90
 seconds (`domovoi/room_media.py`): never filtered by a person's face for a
 guest's voice, captions drawn as text only, and thumbnails from the open
 `GET /v1/room-media/{token}`, where a random token kept only in the core's
-memory names one shown item and expires after 10 minutes.
+memory names one shown item, works only while those results are on the
+screen (10 minutes at most), is answered `no-store` and is blanked in the
+access log. A recognized voice's "photos of Sarah" does show on the
+room's screen for those 90 seconds, to whoever is in the room: the person
+who asked is in that room. The video satellite's kiosk reads the same
+results from the device-read `GET /v1/admin/room-media/{room_id}`
+through the dashboard; the open `GET /v1/admin/snapshot` carries only
+`{room: results id}` (security review 2026-11-23, H1).
 
 **One microphone owner:** room mode, the phone drop-in call, the chat mic
 and phone chats (Domovoi on this phone) ask `audio/MicArbiter` first; while room mode

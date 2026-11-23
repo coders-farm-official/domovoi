@@ -59,6 +59,7 @@ import base64
 import json
 import logging
 import re
+import time
 import unicodedata
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -110,6 +111,28 @@ CODE_TOO_BIG = "video-too-big"
 CODE_STT_OFF = "stt-off"
 CODE_VISION_MISSING = "vision-model-missing"
 CODE_FACES_OFF = "faces-off"
+CODE_UNSUPPORTED = "video-format-unsupported"
+
+#: The containers and picture codecs a library video may be (security
+#: review 2026-11-23, L51): chat's allow-list (domovoi/chat_video/limits.py)
+#: plus the older camera and TV formats the catalogue's extensions name.
+#: Anything else, a concat script or a playlist named ``.mp4`` included,
+#: is skipped before ffmpeg ever reads it.
+LIBRARY_CONTAINERS = frozenset({"avi", "mpeg", "mpegts", "asf"})
+LIBRARY_VIDEO_CODECS = frozenset({"mpeg4", "mpeg2video", "mpeg1video", "mjpeg", "wmv2", "wmv3", "vc1",
+                                  "msmpeg4v3", "h263"})
+#: Work time (not waits for voice) one video's faces pass may take, and the
+#: transcript's, per second of sound it covers (at least TRANSCRIPT_BUDGET_MIN_S).
+FACES_BUDGET_S = 900.0
+TRANSCRIPT_BUDGET_PER_S = 1.0
+TRANSCRIPT_BUDGET_MIN_S = 600.0
+
+
+def library_format_ok(probed: Any) -> bool:
+    from domovoi.chat_video import limits
+
+    containers = set(str(probed.container or "").split(","))
+    return bool(containers & (limits.CONTAINERS | LIBRARY_CONTAINERS)) and         probed.video_codec in (limits.VIDEO_CODECS | LIBRARY_VIDEO_CODECS)
 
 SCAN = "video_scan"
 FACES = "video_faces"
@@ -343,6 +366,10 @@ async def ollama_frame(jpeg: bytes) -> str:
     model = vision_model()
     if not model:
         raise Skip(CODE_VISION_MISSING)
+    from domovoi.media_understanding.photos import CODE_VISION_NOT_LOCAL, vision_is_local
+
+    if not vision_is_local(model):
+        raise Skip(CODE_VISION_NOT_LOCAL)
     msgs = [{"role": "user", "content": FRAME_PROMPT, "images": [base64.b64encode(jpeg).decode("ascii")]}]
     out: list[str] = []
     try:
@@ -385,6 +412,8 @@ class VideoScanAnalyser:
             code = None
             if probed.video_codec is None or probed.duration <= 0:
                 code = CODE_NO_PICTURE
+            elif not library_format_ok(probed):
+                code = CODE_UNSUPPORTED
             elif not all(media.picture_fits(sz) for sz in sizes):
                 code = CODE_TOO_BIG
             if code:
@@ -444,16 +473,24 @@ class VideoFacesAnalyser:
         done_to = ctx.progress.get("done_to")
         free = _Uncharged(ctx)
         looked = int(ctx.progress.get("frames") or 0)
+        spent = float(ctx.progress.get("work_s") or 0.0)
         for t in times:
             if done_to is not None and t <= float(done_to):
                 continue
+            if spent >= FACES_BUDGET_S:
+                # Its own time cap (security review 2026-11-23, L52): the
+                # rest of a very long or very slow video goes without faces.
+                await ctx.save({"done_to": t, "frames": looked, "work_s": spent, "capped": True})
+                return
             dest = ctx.work_dir / f"face-{t:.2f}.jpg"
+            t0 = time.monotonic()
             jpeg = await _grab(ctx, scan, t, dest, charge=False)
             if jpeg is not None:
                 await vf.frame(t, jpeg, ctx=free)
                 looked += 1
             dest.unlink(missing_ok=True)
-            await ctx.save({"done_to": t, "frames": looked})
+            spent += time.monotonic() - t0
+            await ctx.save({"done_to": t, "frames": looked, "work_s": round(spent, 2)})
 
 
 class VideoTranscriptAnalyser:
@@ -484,7 +521,15 @@ class VideoTranscriptAnalyser:
         idx = int(p.get("next_idx") or 0)
         transcribe = self.transcribe or ctx.runner.brains.transcribe
         free = _Uncharged(ctx)
+        allowed = max(TRANSCRIPT_BUDGET_MIN_S, end * TRANSCRIPT_BUDGET_PER_S)
+        spent = float(p.get("work_s") or 0.0)
         while a < end:
+            if spent >= allowed:
+                # Its own time cap (security review 2026-11-23, L52).
+                await ctx.save({"chunk_from": a, "pieces_done": 0, "next_idx": idx, "lines": idx,
+                                "work_s": spent, "capped_at_s": round(a, 2)})
+                return
+            t0 = time.monotonic()
             b = min(end, a + AUDIO_CHUNK_S)
             pcm_file = ctx.work_dir / "sound.pcm"
             ctx.work_dir.mkdir(parents=True, exist_ok=True)
@@ -520,11 +565,13 @@ class VideoTranscriptAnalyser:
                             "start_s = EXCLUDED.start_s, end_s = EXCLUDED.end_s, text = EXCLUDED.text"),
                             {"i": item.id, "n": idx, "a": round(a + s0, 2), "b": round(a + s1, 2), "t": words})
                     idx += 1
-                await ctx.save({"chunk_from": a, "pieces_done": j + 1, "next_idx": idx})
+                await ctx.save({"chunk_from": a, "pieces_done": j + 1, "next_idx": idx,
+                                "work_s": round(spent + time.monotonic() - t0, 2)})
             async with session_scope() as s:
                 await _refresh_doc(s, item.id)
             a, skip = b, 0
-            await ctx.save({"chunk_from": a, "pieces_done": 0, "next_idx": idx})
+            spent += time.monotonic() - t0
+            await ctx.save({"chunk_from": a, "pieces_done": 0, "next_idx": idx, "work_s": round(spent, 2)})
         out = {"chunk_from": a, "pieces_done": 0, "next_idx": idx, "lines": idx}
         if duration > budget.TRANSCRIPT_MAX_S:
             out["capped_at_s"] = budget.TRANSCRIPT_MAX_S

@@ -33,7 +33,12 @@ An admin turns on **Understand photos and videos** in Settings → Chat & AI →
 Photos and videos. A new install starts with it on; a house that upgraded
 from 1.4.x starts with it off until an admin turns it on. The same card
 shows progress (done, left, failed), an estimate in nights, and has
-**Pause**, **Run now**, **Rescan** and a list of excluded folders.
+**Pause**, **Run now**, **Rescan** (all three for an admin) and a list of
+excluded folders.
+
+Descriptions need the house's own vision model. If the vision model is an
+Ollama cloud model, or the model server is not on your network, Domovoi
+skips that part rather than sending your photos out.
 
 Until something has been looked at, the Photos page says so. While a
 backlog is left, Home shows a small chip, "Understanding your photos: 3,210
@@ -108,7 +113,8 @@ More frames find more detail in a long video and cost more time.
   thumbnail, "Might show: ...", the date and, for a video, a time badge.
 - **On a room's screen**: asked in a room with a screen (a phone or tablet
   in room mode, or a video satellite), the results show there for 90
-  seconds. A room without a screen gets nothing new.
+  seconds. A room without a screen gets nothing new. A recognized voice's
+  "photos of Sarah" shows there too, to whoever is in the room.
 - With understanding off, Domovoi says photo understanding is off.
 
 ## Faces
@@ -123,22 +129,31 @@ and video already looked at.
   the Faces page, names a group, says "yes, this is Sarah" or "not this
   person", hides a stranger's group, and merges or splits groups nobody is
   named in. An admin also merges or splits a named person's faces, moves a
-  group to someone else, shows hidden groups and owns every switch.
+  group or a face that is someone's to someone else, works with hidden
+  groups and owns every switch.
 - **Strangers.** Faces nobody names stay in unnamed groups. Groups of one or
   two faces stay behind "show more", and Domovoi never asks who someone is.
 - **A name searches people.** With faces on, "photos of Sarah" works, by
   voice only for a voice Domovoi recognizes (or a phone's chat mic), never
   for a guest and never on a shared screen.
 - **Forget my face.** On your own Faces page, from the phone or browser
-  that is yours ("this is me"), or by an admin: every saved face of that
-  person is deleted and one pattern tied to nobody is kept, so new photos of
-  them aren't grouped again. The photos, their voice and their memories
-  stay.
+  that has been yours ("this is me") since before your faces were named,
+  or by an admin: every saved face of that person is deleted and one
+  pattern tied to nobody is kept, so new photos of them aren't grouped
+  again. Chat replies that showed their photos lose those results. The
+  photos, their voice and their memories stay. An admin can see the
+  forgotten faces and undo one.
+- **Deleting a person** makes their faces unnamed; they are grouped again
+  that night.
 - **The kept forget list.** Turning faces off deletes every face, group and
   face pattern, **but keeps the forget list**. It is tied to nobody, and it
-  is what makes a forget permanent: without it, turning faces on again
-  would learn a forgotten person again from the same photos. The
-  confirmation says so.
+  is what makes a forget last: without it, turning faces on again would
+  learn a forgotten person again from the same photos. The confirmation
+  says so.
+- **Photos the face step skips.** HEIC, HEIF and TIFF photos (many iPhone
+  photos among them), and photos over 80 MB, are not looked at for faces.
+  Faces are re-grouped each night, a capped number at a time, and the work
+  pauses whenever someone speaks.
 - Domovoi never exports face data; it is only in a database backup.
 
 ## Places
@@ -166,9 +181,13 @@ by default** and an admin turns on **Use photo locations**.
 | Exclude a library or folder | What was worked out about it: descriptions, tags, text, what is said, summaries, faces and places (it asks first). Removing the exclusion looks at it again. |
 
 Deleting a photo or video through Files deletes what was worked out about
-it at once. A file removed from a library that is present loses its results
-at the next hourly look. An unplugged drive keeps its results in case it
-comes back.
+it at once. A file removed from a library outside Files is first marked
+missing; its results, and the faces people named in it, go after three
+hourly looks and a day (two weeks when a quarter or more of a library
+vanishes at once). A drive that isn't plugged in, or whose folder is
+empty because it isn't mounted yet, keeps everything in case it comes
+back, and so does a folder Domovoi can't read. A file moved to another
+library keeps its results.
 
 ## Honest about mistakes
 

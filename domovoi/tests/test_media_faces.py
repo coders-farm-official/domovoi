@@ -1033,3 +1033,107 @@ def test_no_route_answers_with_an_embedding() -> None:
         assert "embedding" not in body and "centroid" not in body, fn
     assert "FACE_COLUMNS" in fsrc and "embedding" not in fsrc.split("FACE_COLUMNS = ")[1].split("\n\n")[0]
     assert "embedding" not in src.replace("embedding or a centroid", "")
+
+
+# ─── security review 2026-11-23: M11, L47, L48 ───────────────────────────
+
+
+class _ReadCtx:
+    def __init__(self) -> None:
+        self.reads: list[tuple[int, int]] = []
+
+    def charge(self):
+        return _Async()
+
+    async def read(self, offset: int, length: int) -> bytes:
+        self.reads.append((offset, length))
+        return b"not a picture"
+
+
+class _Async:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+
+async def test_the_face_stage_never_reads_a_huge_or_unsupported_file(tmp_path) -> None:
+    """M11: a multi-gigabyte "x.jpg" is skipped from its size (the file's
+    real size, not only the catalogue's), never read into memory; HEIC,
+    HEIF and TIFF are skipped, not failed; an undecodable picture is a
+    skip too."""
+    from types import SimpleNamespace
+
+    from domovoi.media_understanding.runner import Skip
+
+    big = tmp_path / "x.jpg"
+    with open(big, "wb") as f:
+        f.truncate(F.MAX_FACE_PHOTO_BYTES + 1)              # sparse: no disk used
+    ctx = _ReadCtx()
+    item = SimpleNamespace(id=1, rel_path="x.jpg", size_bytes=10, path=big)    # the catalogue says small
+    with pytest.raises(Skip) as e:
+        await F.FaceAnalyser().run(item, ctx)
+    assert e.value.code == F.CODE_TOO_LARGE and ctx.reads == []
+    for name in ("a.heic", "b.HEIF", "c.tiff", "d.tif"):
+        with pytest.raises(Skip) as e:
+            await F.FaceAnalyser().run(SimpleNamespace(id=1, rel_path=name, size_bytes=10, path=None), ctx)
+        assert e.value.code == F.CODE_FORMAT
+    assert ctx.reads == []
+    small = tmp_path / "y.jpg"
+    small.write_bytes(b"not a picture")
+    with pytest.raises(Skip) as e:
+        await F.FaceAnalyser().run(SimpleNamespace(id=1, rel_path="y.jpg", size_bytes=13, path=small), ctx)
+    assert e.value.code == F.CODE_UNREADABLE and ctx.reads == [(0, 13)]
+
+
+@requires_db
+async def test_deleting_a_person_leaves_their_faces_unnamed(fh) -> None:
+    """L47: the admin's delete (and voice "forget me", the same
+    repository delete) un-name the person's faces instead of leaving
+    confirmed faces of nobody."""
+    from domovoi.db.repositories import PeopleRepository
+
+    a = _base()
+    await _photos(fh, {"1.png": [_near(a)], "2.png": [_near(a)]})
+    pid = await _person("FT Gone")
+    async with session_scope() as s:
+        await F.name_group(s, (await _faces())[0]["group_id"], pid)
+    assert all(r["confirmed"] for r in await _faces())
+    async with session_scope() as s:
+        await PeopleRepository(s).delete(pid)
+    rows = await _faces()
+    assert rows and all(not r["confirmed"] and r["person_id"] is None and r["group_id"] is None for r in rows)
+    assert await _count("face_groups") == 0
+
+
+@requires_db
+async def test_forget_and_faces_off_strip_person_results_from_chats(fh) -> None:
+    """L48: a chat reply that showed a forgotten person's photos keeps
+    neither the cards nor the words."""
+    import json as _json
+
+    a = _base()
+    await _photos(fh, {"1.png": [_near(a)]})
+    pid = await _person("FT Ann")
+    async with session_scope() as s:
+        await F.name_group(s, (await _faces())[0]["group_id"], pid)
+        tid = (await s.execute(text("INSERT INTO chat_threads (title) VALUES ('t') RETURNING id"))).scalar()
+        for person in ("FT Ann", "FT Bob", None):
+            await s.execute(text(
+                "INSERT INTO chat_messages (thread_id, role, content, stats) "
+                "VALUES (:t, 'assistant', :c, CAST(:st AS JSONB))"),
+                {"t": tid, "c": f"I found 2 photos of {person}",
+                 "st": _json.dumps({"media": {"person": person, "items": [{"path": "1.png"}]}})})
+        await F.forget_person(s, pid)
+        rows = (await s.execute(text(
+            "SELECT content, stats FROM chat_messages WHERE thread_id = :t ORDER BY id"), {"t": tid})).all()
+        assert rows[0][0] == F.CHAT_RESULTS_GONE and "media" not in rows[0][1]
+        assert "FT Bob" in rows[1][0] and "media" in rows[1][1]
+        assert "media" in rows[2][1]
+        await F.delete_all(s)
+        rows = (await s.execute(text(
+            "SELECT content, stats FROM chat_messages WHERE thread_id = :t ORDER BY id"), {"t": tid})).all()
+        assert rows[1][0] == F.CHAT_RESULTS_GONE and "media" not in rows[1][1]
+        assert "media" in rows[2][1]                                 # not person-filtered: kept
+        await s.execute(text("DELETE FROM chat_threads WHERE id = :t"), {"t": tid})

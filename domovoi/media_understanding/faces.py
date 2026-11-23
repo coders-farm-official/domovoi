@@ -63,9 +63,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from collections import Counter
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 from typing import Any, Iterable
 
 import numpy as np
@@ -102,6 +104,14 @@ STATE_KEY = "media_faces_state"
 
 ANALYSER = "faces"
 CODE_MODELS = "faces-models-missing"
+CODE_TOO_LARGE = "faces-photo-too-large"
+CODE_UNREADABLE = "faces-photo-unreadable"
+CODE_FORMAT = "faces-format-unsupported"
+#: The largest photo the face stage reads (the caption stage's cap,
+#: domovoi/media_understanding/photos.py ``MAX_PHOTO_BYTES``).
+MAX_FACE_PHOTO_BYTES = 80 * 1024 * 1024
+#: Photo extensions the face stage decodes (``image_safety.LIBRARY_FORMATS``).
+FACE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".avif"})
 
 
 class FacesOff(Exception):
@@ -753,6 +763,9 @@ async def forget_person(s: Any, person_id: int) -> dict[str, int]:
     rows = (await s.execute(text(
         "SELECT embedding, confirmed FROM media_faces WHERE person_id = :p AND model = :m"),
         {"p": person_id, "m": MODEL})).all()
+    name = (await s.execute(text("SELECT name FROM people WHERE id = :p"), {"p": person_id})).scalar()
+    if name:
+        await strip_chat_results(s, str(name))
     confirmed = [from_bytes(r[0]) for r in rows if r[1]]
     sig = mean_unit(confirmed) if any(v is not None for v in confirmed) else \
         mean_unit(from_bytes(r[0]) for r in rows)
@@ -775,6 +788,19 @@ async def forget_person(s: Any, person_id: int) -> dict[str, int]:
     return {"faces": deleted + look_alikes, "groups": groups, "denylisted": int(sig is not None)}
 
 
+async def unname_faces(s: Any, person_id: int) -> int:
+    """Before a person is deleted (voice "forget me", the admin's delete):
+    their faces become unnamed faces, grouped again by the nightly pass,
+    and their face groups go. Without this the confirmations would stay
+    on rows tied to nobody (V078's ``ON DELETE SET NULL``; security
+    review 2026-11-23, L47)."""
+    r = await s.execute(text(
+        "UPDATE media_faces SET person_id = NULL, group_id = NULL, confirmed = false, "
+        "rejected_person_ids = array_remove(rejected_person_ids, :p) WHERE person_id = :p"), {"p": person_id})
+    await s.execute(text("DELETE FROM face_groups WHERE person_id = :p"), {"p": person_id})
+    return int(r.rowcount or 0)
+
+
 async def delete_all(s: Any) -> dict[str, int]:
     """Faces off: every face, group and faces stage goes (the denylist
     stays; see the module note). Call it after writing the switch, in the
@@ -783,7 +809,28 @@ async def delete_all(s: Any) -> dict[str, int]:
     g = int((await s.execute(text("DELETE FROM face_groups"))).rowcount or 0)
     await s.execute(text(f"DELETE FROM media_item_stages WHERE analyser = '{ANALYSER}'"))
     await s.execute(text("DELETE FROM household_settings WHERE key = :k"), {"k": STATE_KEY})
+    await strip_chat_results(s)
     return {"faces": n, "groups": g}
+
+
+#: What a chat reply that showed a person's photos says once those results
+#: are stripped (forget my face, faces off).
+CHAT_RESULTS_GONE = "These photo results were removed when faces were forgotten."
+
+
+async def strip_chat_results(s: Any, name: str | None = None) -> int:
+    """Chat replies that showed photos filtered by a person (``stats.media
+    .person``): their result cards and words are replaced by
+    :data:`CHAT_RESULTS_GONE`. ``name``: only that person's (forget my
+    face); None: everyone's (faces off). Security review 2026-11-23, L48."""
+    where = "stats -> 'media' ->> 'person' IS NOT NULL"
+    params: dict[str, Any] = {"gone": CHAT_RESULTS_GONE}
+    if name is not None:
+        where += " AND lower(btrim(stats -> 'media' ->> 'person')) = lower(btrim(:n))"
+        params["n"] = name
+    r = await s.execute(text(
+        f"UPDATE chat_messages SET stats = stats - 'media', content = :gone WHERE {where}"), params)
+    return int(r.rowcount or 0)
 
 
 # ─── reads (the People pages, and the search hook for slices 5-6) ────────
@@ -922,11 +969,29 @@ class FaceAnalyser:
         return bool(sw.get("faces")) and face_models.ready()
 
     async def run(self, item: Any, ctx: Any) -> None:
-        from domovoi import executors
+        from domovoi import executors, image_safety
+        from domovoi.media_understanding.runner import Skip
 
+        # Formats the face stage can decode (HEIC, HEIF and TIFF are not:
+        # skipped, not failed three times).
+        if Path(str(item.rel_path)).suffix.lower() not in FACE_EXTENSIONS:
+            raise Skip(CODE_FORMAT)
+        # The photo stage's cap, on the file as it is now (security review
+        # 2026-11-23, M11): never a whole multi-gigabyte "x.jpg" in memory.
+        try:
+            size = (await asyncio.to_thread(os.stat, item.path)).st_size if item.path is not None                 else int(item.size_bytes)
+        except OSError:
+            size = int(item.size_bytes)
+        if max(size, int(item.size_bytes)) > MAX_FACE_PHOTO_BYTES:
+            raise Skip(CODE_TOO_LARGE)
         async with ctx.charge():
-            data = await ctx.read(0, int(item.size_bytes))
-        image = await executors.run("pictures", load_picture, data)
+            data = await ctx.read(0, min(size, MAX_FACE_PHOTO_BYTES))
+        try:
+            image = await executors.run("pictures", load_picture, data)
+        except image_safety.PictureRefused:
+            raise Skip(CODE_UNREADABLE) from None
+        finally:
+            data = b""
         found = await _detect(ctx, image)
         from domovoi.db.session import session_scope
 

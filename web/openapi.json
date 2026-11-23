@@ -5217,6 +5217,7 @@
           "faces"
         ],
         "summary": "Confirm",
+        "description": "Confirm a face (its suggestion, or ``person_id``). Moving a face that\nis already someone's (suggested or confirmed, or in a named group) to a\ndifferent person, or confirming a face in a hidden group, is admin.",
         "operationId": "confirm_api_faces_face__face_id__confirm_post",
         "parameters": [
           {
@@ -5435,6 +5436,75 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Forget Api Faces People  Person Id  Forget Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/faces/denylist": {
+      "get": {
+        "tags": [
+          "faces"
+        ],
+        "summary": "Denylist",
+        "description": "The \"forget my face\" entries (admin): ids and dates only, never the\nsignature. Each entry is one forgotten face, tied to nobody.",
+        "operationId": "denylist_api_faces_denylist_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Denylist Api Faces Denylist Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/faces/denylist/{entry_id}": {
+      "delete": {
+        "tags": [
+          "faces"
+        ],
+        "summary": "Delete Denylist Entry",
+        "description": "Undo a \"forget my face\" (admin): the face may be learned again from\nphotos analysed from now on (the photos it was forgotten from are\nlooked at again for faces).",
+        "operationId": "delete_denylist_entry_api_faces_denylist__entry_id__delete",
+        "parameters": [
+          {
+            "name": "entry_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Entry Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Delete Denylist Entry Api Faces Denylist  Entry Id  Delete"
                 }
               }
             }
@@ -10153,7 +10223,7 @@
           "satellites"
         ],
         "summary": "Get Room Media",
-        "description": "Photo and video results asked for by voice in this room, while its\nscreen shows them (1.5.0, domovoi/room_media.py): ``{\"media\": null |\n{id, said, count, more, expires_in_ms, items: [{kind, thumb, caption,\ndate, at_s}]}}``. For the video satellite's kiosk page\n(web/static/display.html); ``thumb`` is this dashboard's thumbnail or\nposter route. From the Domovoi server's snapshot (at most a poll old);\nnull when the room shows none or the server isn't answering. A caption\nis a picture model's words: draw it as text.",
+        "description": "Photo and video results asked for by voice in this room, while its\nscreen shows them (1.5.0, domovoi/room_media.py): ``{\"media\": null |\n{id, said, count, more, expires_in_ms, items: [{kind, thumb, caption,\ndate, at_s}]}}``. For the video satellite's kiosk page\n(web/static/display.html); ``thumb`` is this dashboard's thumbnail or\nposter route. Read from the Domovoi server's device-read\n``GET /v1/admin/room-media/{room_id}`` with the caller's credentials\n(the open snapshot carries only which results are up); null when the\nroom shows none or the server isn't answering. A caption is a picture\nmodel's words: draw it as text.",
         "operationId": "get_room_media_api_satellites__room_id__media_get",
         "parameters": [
           {

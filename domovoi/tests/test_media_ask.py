@@ -390,3 +390,21 @@ async def test_chat_honest_answers_and_no_people_on_a_shared_screen(house, chat,
         done, _ = await _say(c, h, tid, "show me photos of the beach")
         assert done["media"]["count"] == 1
     assert chat["seen"] == []
+
+
+@requires_db
+async def test_an_unrecognized_voice_gets_the_same_refusal_for_any_household_name(house, people_cleanup) -> None:  # noqa: F811
+    """L49 (security review 2026-11-23): the refusal doesn't say whether a
+    name has faces. A household name with no faces is refused the same way
+    as one with faces; a word that names nobody is only a word."""
+    a = await _seed_item("a.jpg", taken=_utc(2025, 1, 1), caption="A beach.", tags=["beach"])
+    await _person_with_face("FT Sarah", a)
+    async with session_scope() as s:
+        await s.execute(text("INSERT INTO people (name) VALUES ('FT Nofaces')"))
+    await _set(faces=True)
+    with_faces = await _find("photos of ft sarah", people=False)
+    without = await _find("photos of ft nofaces", people=False)
+    assert with_faces.state == without.state == "people_refused"
+    assert (await _find("photos of ft nobody at the beach", people=False)).state != "people_refused"
+    # A recognized voice naming someone with no faces gets an ordinary search.
+    assert (await _find("photos of ft nofaces")).state != "people_refused"

@@ -13,7 +13,7 @@
  *   GET  /api/media-understanding               · state (household)
  *   PUT  /api/media-understanding/settings      · switches (admin)
  *   POST /api/media-understanding/pause|run-now · (admin)
- *   POST /api/media-understanding/rescan        · (household)
+ *   POST /api/media-understanding/rescan        · (admin)
  *   POST/DELETE /api/media-understanding/excluded (admin)
  *   GET  /api/media/search?q=                    · search (household, 1.5.0 slice 2)
  * Live: `media_understanding.changed` on /ws/state.
@@ -280,7 +280,7 @@ const MediaUnderstandingPanel = () => {
               <button type="button" className="btn" disabled={busy}
                       onClick={() => call(() => apiPost('/api/media-understanding/run-now', {}), 'running now, until the backlog is done')}>Run now</button>
             )}
-            {s.enabled && (
+            {admin && s.enabled && (
               <button type="button" className="btn" disabled={busy || p.rescan_requested}
                       onClick={() => call(() => apiPost('/api/media-understanding/rescan', {}), 'looking for new photos and videos')}>
                 {p.rescan_requested ? 'Rescan asked' : 'Rescan'}

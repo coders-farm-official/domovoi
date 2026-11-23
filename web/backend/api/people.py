@@ -492,8 +492,11 @@ async def delete_person(person_id: int) -> None:
       message's speaker mark, an alias they taught, a phone or browser
       claimed as theirs, a room's music being for them) lapses to NULL.
     """
+    from domovoi.media_understanding.faces import unname_faces
+
     async with session_scope() as s:
         await voice_history.delete_person_history(s, person_id)
+        await unname_faces(s, person_id)            # their faces become unnamed
         result = await s.execute(
             text("DELETE FROM people WHERE id = :id"), {"id": person_id}
         )

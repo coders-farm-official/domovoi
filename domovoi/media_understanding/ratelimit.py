@@ -64,29 +64,37 @@ class TokenBucket:
 BUCKET = TokenBucket()
 
 
-async def read_range(path: Path, offset: int, length: int, *, bucket: TokenBucket | None = None) -> bytes:
+async def read_range(path: Path, offset: int, length: int, *, bucket: TokenBucket | None = None) -> bytearray:
     """``length`` bytes of ``path`` from ``offset``, in :data:`CHUNK`
     pieces, each paid for in the bucket first."""
     bucket = bucket or BUCKET
-    out = bytearray()
-    with open(path, "rb") as f:
-        f.seek(offset)
-        left = length
-        while left > 0:
-            n = min(CHUNK, left)
+    out = bytearray(max(0, length))
+    view = memoryview(out)
+    got = 0
+    # The open and every read run in a worker thread: a sleeping disk or a
+    # hung mount stalls this item, never the event loop (voice).
+    f = await asyncio.to_thread(open, path, "rb")
+    try:
+        await asyncio.to_thread(f.seek, offset)
+        while got < length:
+            n = min(CHUNK, length - got)
             await bucket.take(n)
-            piece = f.read(n)
-            if not piece:
+            k = await asyncio.to_thread(f.readinto, view[got:got + n])
+            if not k:
                 break
-            out += piece
-            left -= len(piece)
-    return bytes(out)
+            got += k
+    finally:
+        view.release()
+        await asyncio.to_thread(f.close)
+    if got < length:
+        del out[got:]
+    return out          # a bytearray: one copy of the file in memory, not two
 
 
 async def fingerprint(path: Path, *, bucket: TokenBucket | None = None) -> str:
     """Size + SHA-256 of the first and last 1 MB (design §5): enough to
     match a moved or renamed file, at most 2 MB read."""
-    size = os.stat(path).st_size
+    size = (await asyncio.to_thread(os.stat, path)).st_size
     h = hashlib.sha256()
     h.update(str(size).encode())
     h.update(await read_range(path, 0, min(size, FINGERPRINT_EDGE), bucket=bucket))

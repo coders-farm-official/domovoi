@@ -341,12 +341,123 @@ async def test_the_walker_adds_changes_and_deletes_with_the_results(house) -> No
     assert (await _items())["a.jpg"]["state"] == "pending"
     assert await _count("media_frames") == 0 and await _count("media_item_stages") == 0
 
-    # Deleted: the row and every result go with the file.
+    # Deleted: missing first (results kept), then after the grace the row
+    # and every result go with the file.
     await _add_results(a)
     (lib.root / "a.jpg").unlink()
+    st = await _sync(lib)
+    assert st["deleted"] == 0 and st["missing"] == 1
+    assert (await _items())["a.jpg"]["missing_since"] is not None
+    await _past_grace()
     assert (await _sync(lib))["deleted"] == 1
     assert "a.jpg" not in await _items()
     assert await _count("media_frames") == 0 and await _count("media_item_stages") == 0
+
+
+async def _past_grace() -> None:
+    async with session_scope() as s:
+        await s.execute(text(
+            "UPDATE media_items SET missed_walks = :w, missing_since = now() - interval '30 days' "
+            "WHERE missing_since IS NOT NULL"), {"w": catalog.MISSING_GRACE_WALKS})
+
+
+@requires_db
+async def test_an_empty_mount_an_unreadable_folder_or_the_cap_never_deletes(house) -> None:
+    """M10 (security review 2026-11-23)."""
+    lib = house
+    for i in range(6):
+        _file(lib, f"trip/{i}.jpg", os.urandom(100 + i))
+    _file(lib, "top.jpg")
+    await _sync(lib)
+    ids = {k: v["id"] for k, v in (await _items()).items()}
+    await _add_results(ids["trip/0.jpg"])
+    await _past_grace()
+    # An unreadable folder: the walk is incomplete, nothing counts as missing.
+    st = await _sync_walk(lib, catalog.Walk({"top.jpg": _stat(lib, "top.jpg")}, complete=False, unreadable=1))
+    assert st["deleted"] == 0 and st["missing"] == 0 and st["held"] == 6
+    # The cap: the same.
+    st = await _sync_walk(lib, catalog.Walk({"trip/0.jpg": _stat(lib, "trip/0.jpg")}, complete=False))
+    assert st["deleted"] == 0 and st["missing"] == 0
+    # The root can't be listed: not present, nothing touched.
+    st = await _sync_walk(lib, catalog.Walk({}, complete=False, root_ok=False, unreadable=1))
+    assert st["deleted"] == 0
+    # An empty mount point (the root is there, nothing in it): not present.
+    for f in list(lib.root.rglob("*.jpg")):
+        f.unlink()
+    st = await _sync(lib)
+    assert st["deleted"] == 0 and st["held"] == 7
+    assert {k: v["id"] for k, v in (await _items()).items()} == ids
+    assert all(v["missing_since"] is None for v in (await _items()).values())
+    assert await _count("media_frames") == 1
+    async with session_scope() as s:
+        assert (await s.execute(text(
+            "SELECT present FROM media_libraries WHERE library_id = 'core:pictures'"))).scalar() is False
+    # The real walker flags an unreadable folder and the cap.
+    for i in range(3):
+        _file(lib, f"x/{i}.jpg")
+    w = catalog.walk_full(lib, limit=2)
+    assert not w.complete and len(w.found) == 2
+    assert catalog.walk_full(lib).complete
+
+
+@requires_db
+async def test_a_big_loss_in_one_walk_waits_longer(house) -> None:
+    lib = house
+    for i in range(30):
+        _file(lib, f"{i}.jpg", os.urandom(50 + i))
+    await _sync(lib)
+    for i in range(25):
+        (lib.root / f"{i}.jpg").unlink()
+    assert (await _sync(lib))["missing"] == 25
+    async with session_scope() as s:
+        await s.execute(text(
+            "UPDATE media_items SET missed_walks = :w, missing_since = now() - interval '2 days' "
+            "WHERE missing_since IS NOT NULL"), {"w": catalog.MISSING_GRACE_WALKS})
+    assert (await _sync(lib))["deleted"] == 0                 # 2 days < the mass-loss grace
+    await _past_grace()
+    assert (await _sync(lib))["deleted"] == 25
+
+
+@requires_db
+async def test_a_touched_file_keeps_its_results_and_a_move_across_libraries_is_matched(house, tmp_path) -> None:
+    lib = house
+    p = _file(lib, "a.jpg", os.urandom(4000))
+    await _sync(lib)
+    item = (await _items())["a.jpg"]
+    async with session_scope() as s:
+        await s.execute(text("UPDATE media_items SET fingerprint = :f, state = 'done' WHERE id = :i"),
+                        {"f": await ratelimit.fingerprint(p), "i": item["id"]})
+    await _add_results(item["id"])
+    os.utime(p, (p.stat().st_atime, p.stat().st_mtime + 100))
+    st = await _sync(lib)
+    assert st["changed"] == 0 and await _count("media_frames") == 1
+    assert (await _items())["a.jpg"]["state"] == "done"
+    # Moved to another library: the first walk marks it missing, the other
+    # library's walk finds it by fingerprint and the row moves, results and all.
+    other_root = tmp_path / "drive"
+    other_root.mkdir()
+    other = catalog.Library("drive:usb", other_root, lib.kinds)
+    _file(lib, "keep.jpg")
+    await _sync(lib)
+    p.rename(other_root / "a.jpg")
+    assert (await _sync(lib))["missing"] == 1
+    st = await _sync(other)
+    assert st["moved"] == 1 and st["added"] == 0
+    async with session_scope() as s:
+        row = (await s.execute(text("SELECT library_id, rel_path, missing_since FROM media_items WHERE id = :i"),
+                               {"i": item["id"]})).mappings().first()
+    assert row["library_id"] == "drive:usb" and row["missing_since"] is None
+    assert await _count("media_frames") == 1
+
+
+def _stat(lib, rel: str) -> tuple[int, float, str]:
+    st = (lib.root / rel).stat()
+    return (int(st.st_size), float(st.st_mtime), "image")
+
+
+async def _sync_walk(lib, w) -> dict[str, int]:
+    async with session_scope() as s:
+        return await catalog.sync_library(s, lib, found=w)
 
 
 @requires_db
@@ -799,7 +910,7 @@ async def test_a_new_install_starts_on_and_an_upgraded_house_off(house, db_sessi
 
 ROUTES = [
     ("GET", "/api/media-understanding", None, "household"),
-    ("POST", "/api/media-understanding/rescan", {}, "household"),
+    ("POST", "/api/media-understanding/rescan", {}, "admin"),
     ("PUT", "/api/media-understanding/settings", {"places": True}, "admin"),
     ("POST", "/api/media-understanding/pause", {"paused": True}, "admin"),
     ("POST", "/api/media-understanding/run-now", {}, "admin"),
@@ -868,3 +979,52 @@ async def test_the_state_route_and_the_admin_writes(house, monkeypatch) -> None:
         r = await c.put("/api/media-understanding/settings", headers={**c.headers, **adm},
                         json={"faces": False, "confirm_delete_faces": True})
         assert r.status_code == 200 and await _count("media_faces") == 0
+
+
+async def test_library_reads_run_off_the_event_loop(tmp_path, monkeypatch) -> None:
+    """L50: the open and every read of a library file run in a worker
+    thread, so a sleeping disk stalls the item, not voice."""
+    import asyncio as _asyncio
+    import threading
+
+    p = tmp_path / "a.jpg"
+    p.write_bytes(b"abcdef" * 1000)
+    loop_thread = threading.get_ident()
+    seen: list[int] = []
+    real = _asyncio.to_thread
+
+    async def spy(fn, *a, **k):
+        def wrapped():
+            seen.append(threading.get_ident())
+            return fn(*a, **k)
+        return await real(wrapped)
+
+    monkeypatch.setattr(ratelimit.asyncio, "to_thread", spy)
+    data = await ratelimit.read_range(p, 6, 12)
+    assert bytes(data) == b"abcdefabcdef"
+    assert seen and loop_thread not in seen
+    assert len(seen) >= 3                                          # open, seek, read (and close)
+
+
+def test_the_walker_skips_names_that_are_not_utf8(tmp_path, monkeypatch) -> None:
+    """L55: a file name with undecodable bytes (a surrogate on Linux) is
+    skipped instead of stopping the library's catalogue."""
+    lib = catalog.Library("core:pictures", tmp_path, frozenset({"image"}))
+    (tmp_path / "ok.jpg").write_bytes(b"x")
+
+    class _E:
+        def __init__(self, name):
+            self.name = name
+            self.path = str(tmp_path / "ok.jpg")
+
+        def is_symlink(self):
+            return False
+
+        def is_dir(self, follow_symlinks=False):
+            return False
+
+        def stat(self, follow_symlinks=False):
+            return (tmp_path / "ok.jpg").stat()
+
+    monkeypatch.setattr(catalog.os, "scandir", lambda folder: [_E("ok.jpg"), _E("bad\udcff.jpg")])
+    assert set(catalog.walk(lib)) == {"ok.jpg"}

@@ -268,19 +268,26 @@ def exif_facts(exif: dict[int, Any], exif_ifd: dict[int, Any], gps_ifd: dict[int
     from domovoi import household_time
 
     now_utc = now_utc or household_time.utc_now()
+
+    def to_utc(local: datetime, zone: Any) -> datetime | None:
+        # A date at the very edge of the calendar (year 1 or 9999 with an
+        # offset) overflows: no date, rather than a photo failed three times.
+        try:
+            return local.replace(tzinfo=zone).astimezone(timezone.utc) if zone else household_time.to_utc(local)
+        except (OverflowError, ValueError):
+            return None
+
     taken = None
     for tag, off_tag in ((TAG_DATETIME_ORIGINAL, TAG_OFFSET_ORIGINAL),
                          (TAG_DATETIME_DIGITIZED, TAG_OFFSET_DIGITIZED)):
         local = _exif_datetime(exif_ifd.get(tag))
         if local is not None:
-            zone = _exif_offset(exif_ifd.get(off_tag))
-            taken = local.replace(tzinfo=zone).astimezone(timezone.utc) if zone else household_time.to_utc(local)
+            taken = to_utc(local, _exif_offset(exif_ifd.get(off_tag)))
             break
     if taken is None:
         local = _exif_datetime(exif.get(TAG_DATETIME))
         if local is not None:
-            zone = _exif_offset(exif_ifd.get(TAG_OFFSET))
-            taken = local.replace(tzinfo=zone).astimezone(timezone.utc) if zone else household_time.to_utc(local)
+            taken = to_utc(local, _exif_offset(exif_ifd.get(TAG_OFFSET)))
     if taken is not None and taken > now_utc + timedelta(days=2):
         taken = None      # a camera clock set in the future: the file's time is better
     gps = None
@@ -351,6 +358,31 @@ def vision_model() -> str:
     return (settings.ollama_vision_model or "").strip()
 
 
+#: The library's pictures are never sent off this network (security review
+#: 2026-11-23, L53): a cloud vision model, or a model server not on this
+#: network, skips the photo and video understanding that needs it.
+CODE_VISION_NOT_LOCAL = "vision-model-not-local"
+
+
+def vision_is_local(model: str | None = None) -> bool:
+    """Whether the vision slot (``model``, default the configured one) runs
+    on this network: not an Ollama cloud model, and ``OLLAMA_URL`` names a
+    local host (:func:`domovoi.egress.is_local_host`, never resolved)."""
+    from urllib.parse import urlsplit
+
+    from domovoi import egress
+    from domovoi.config import settings
+
+    name = str(model if model is not None else (settings.ollama_vision_model or "")).strip().lower()
+    if name.endswith("-cloud") or name.endswith(":cloud"):
+        return False
+    try:
+        host = urlsplit(str(settings.ollama_url or "")).hostname or ""
+    except ValueError:
+        return False
+    return egress.is_local_host(host)
+
+
 async def ollama_vision(jpeg: bytes) -> str:
     """The household's vision slot, asked for :data:`PHOTO_SCHEMA`."""
     from domovoi.clients import ollama
@@ -359,6 +391,8 @@ async def ollama_vision(jpeg: bytes) -> str:
     model = vision_model()
     if not model:
         raise Skip(CODE_VISION_MISSING)
+    if not vision_is_local(model):
+        raise Skip(CODE_VISION_NOT_LOCAL)
     msgs = [{"role": "user", "content": PHOTO_PROMPT, "images": [base64.b64encode(jpeg).decode("ascii")]}]
     out: list[str] = []
     try:

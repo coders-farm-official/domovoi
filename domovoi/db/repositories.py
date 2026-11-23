@@ -593,7 +593,12 @@ class PeopleRepository:
         """Cascades through voice_profiles via FK; intents_log.person_id
         becomes NULL via the FK's ON DELETE SET NULL. Forgetting a person
         deletes their turns FIRST (voice_history.delete_person_history):
-        after this, they can no longer be found."""
+        after this, they can no longer be found. Their faces become
+        unnamed (``faces.unname_faces``), not kept as confirmed faces of
+        nobody."""
+        from domovoi.media_understanding.faces import unname_faces
+
+        await unname_faces(self.s, person_id)
         result = await self.s.execute(
             text("DELETE FROM people WHERE id = :id"),
             {"id": person_id},
