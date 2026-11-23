@@ -1504,6 +1504,11 @@ async def _uninstall_plugin_locked(slug: str, *, data: str) -> dict[str, Any]:
     LOADER.pending_restart.pop(slug, None)
 
     manifest = row.manifest or {}
+    if isinstance(manifest.get("isolated"), dict):
+        # Its decode-only container and image are the core's: they go too.
+        from domovoi.plugins_runtime import isolated
+
+        await isolated.forget(slug)
     migrations_dir = (manifest.get("assets") or {}).get("migrations_dir", "migrations")
     runner = PluginMigrationRunner(slug, Path(row.install_dir) / migrations_dir)
 

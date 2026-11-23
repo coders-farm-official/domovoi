@@ -252,6 +252,40 @@ def listener_expectation(*, image_id: str | None, hold: str | None = None) -> Ex
     )
 
 
+# ─── plugins' decode-only containers ──────────────────────────────────────
+
+def decoder_expectations(rows: Iterable[Any], baselines: dict[str, str | None]) -> list[Expected]:
+    """One per installed plugin with an ``[isolated]`` decoder
+    (domovoi/plugins_runtime/isolated.py). The core starts and stops it
+    with the plugin, so, like the listener, there is no running rule:
+    STOPPED, meaning whenever it runs it must run the exact image the core
+    built (``baselines``: slug -> image ID,
+    :func:`domovoi.container_guard.engine.note_decoder_image`), and nothing
+    else may wear its name. An installer hold on the plugin holds it too."""
+    from domovoi.container_guard.model import DECODER_CONTAINER_PREFIX
+
+    out: list[Expected] = []
+    for row in rows:
+        manifest = getattr(row, "manifest", None) or {}
+        if not isinstance(manifest.get("isolated"), dict) or getattr(row, "status", "") == "uninstalled":
+            continue
+        slug = row.slug
+        out.append(
+            Expected(
+                name=f"{DECODER_CONTAINER_PREFIX}{slug}",
+                owner="core",
+                role="plugin-decoder",
+                label=f"the {getattr(row, 'name', slug)} plugin's decoder",
+                state=STOPPED,
+                required=False,
+                image_ref=f"{DECODER_CONTAINER_PREFIX}{slug}:latest",
+                image_id=baselines.get(slug) or None,
+                hold=holds.held(f"plugin:{slug}"),
+            )
+        )
+    return out
+
+
 # ─── the music players ────────────────────────────────────────────────────
 
 def mpd_expectations(

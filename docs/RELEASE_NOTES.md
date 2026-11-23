@@ -4,6 +4,23 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Plugins: decode-only containers
+
+- **What changed.** A plugin can declare an `[isolated]` decoder: a
+  function that runs outside the core, in a container the core builds from
+  the plugin's decoder files on its own pinned Debian base (no network,
+  read-only, no capabilities, user `nobody`, memory, process and CPU caps)
+  and talks to over stdin and stdout only. The core checks and
+  re-serializes every answer. A plugin with the new `friend_houses`
+  permission must declare one (its install is refused otherwise); the
+  Friend Houses features for plugins come later.
+- **What to know.** The container is named `domovoi-plugin-dec-<slug>`;
+  the container guard watches it and expects exactly the image the core
+  built. Its image is built (with Docker, downloading Debian packages) the
+  first time the plugin loads and again after an upgrade or when 30 days
+  old; it is removed with the plugin. Plugins without the table are
+  unchanged.
+
 ## 1.5.0 (unreleased) — Photos: descriptions, text in pictures, dates, and search
 
 - **What changed.** The background runner now looks at each photo in

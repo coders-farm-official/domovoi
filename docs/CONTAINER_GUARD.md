@@ -255,6 +255,17 @@ but whenever it runs it must run the core's image. The image is rebuilt
 when the listener's code or its Dockerfile changes (an update of
 Domovoi) and when it is 30 days old.
 
+`domovoi-plugin-dec-<slug>` is a plugin's decode-only container (core
+1.5.0, the manifest's `[isolated]` table; docs/PLUGIN_DEVELOPMENT.md). The
+core builds its image from its own Dockerfile and the plugin's decoder
+files, and runs it; the guard pins it like the listener's, under
+`plugin_decoder_image_id:<slug>` (`engine.note_decoder_image`), for every
+installed plugin with the table. The core starts and stops it with the
+plugin, so the guard expects it **stopped**: no failure when it is gone,
+but whenever it runs it must run the core's image. An installer hold on
+the plugin (`plugin:<slug>`) holds it too. No plugin may declare a
+container whose name starts with `domovoi-plugin-dec-`.
+
 ### Plugins
 
 Every **loaded** plugin's declared containers (`[[containers]]` in its

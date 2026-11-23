@@ -413,6 +413,12 @@ class PluginLoader:
             degraded_reasons=degraded,
         )
         self.loaded[slug] = lp
+        if getattr(manifest, "isolated", None) is not None:
+            # Its decode-only container (core 1.5.0): built when needed and
+            # started in the background; never fails the load.
+            from domovoi.plugins_runtime import isolated
+
+            isolated.start_for(slug, install_dir, manifest)
         status = "degraded" if degraded else "ok"
         # A slow import rides along as a soft note (the plugin stays
         # enabled and loaded); the card shows it without an error pill.
@@ -457,6 +463,10 @@ class PluginLoader:
                 log.warning("plugin %s on_disable callback failed: %s", slug, e)
         await WORKERS.stop_owner(slug, timeout=worker_timeout)
         WORKERS.remove_owner(slug)
+        if getattr(lp.manifest, "isolated", None) is not None:
+            from domovoi.plugins_runtime import isolated
+
+            await isolated.stop_for(slug)
         for handler in lp.context.handlers:
             unregister_handler(handler)
         lp.sdk.teardown()
