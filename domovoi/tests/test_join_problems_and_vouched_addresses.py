@@ -204,14 +204,18 @@ async def test_approving_a_device_that_checks_the_code_says_so(monkeypatch):
         def __init__(self, _s):
             pass
 
-        async def approve(self, room_id, code):
+        async def get(self, room_id):
+            return None  # 1.5.0: no room asked for
+
+        async def approve(self, room_id, code, *, into=None):
             return "entered"
 
     monkeypatch.setattr(main, "session_scope", fake_scope)
     monkeypatch.setattr(main, "SatelliteApprovalRepository", _Repo)
     main.APPROVAL_CODE_LIMITER.reset()
     out = await main.admin_satellite_approve("kitchen", main._ApproveSatelliteBody(code="481502"))
-    assert out == {"approved": False, "waiting_for_device": True, "room_id": "kitchen"}
+    assert out == {"approved": False, "waiting_for_device": True, "room_id": "kitchen",
+                   "satellite_id": "kitchen", "into_room_id": None}
 
 
 # ─── SAT-13: the port is part of the address ──────────────────────────────

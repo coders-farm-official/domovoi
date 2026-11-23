@@ -1,6 +1,16 @@
 """WebSocket streaming endpoint for Pi satellites.
 
-Wire protocol v0.1 — `/v1/stream/{room_id}`. Bidirectional, mixed text+binary.
+Wire protocol v0.1 — `/v1/stream/{satellite_id}`. Bidirectional, mixed text+binary.
+
+Rooms with several satellites (1.5.0): the path segment is the DEVICE's
+id; the server decides which room it is in (`satellites.room_id`,
+domovoi/room_devices.py). Every device from before 1.5.0 has an id equal
+to its room's, so an old client that sends its old room id keeps working
+and its pairing token is unchanged. A device that is new to the house
+gets a room of its own named by its id, unless the approval puts it in
+another. A tokenless device (strict pairing off) may be a room on its own
+but never joins a room that already has a device: refused with
+`error {reason:"tokenless_shared_room"}`.
 
 Audio format on both directions: 16 kHz mono int16 little-endian PCM.
 Server declares the actual TTS sample rate per response in the
@@ -86,7 +96,16 @@ Client → Server
                            more words than that, and a device without the
                            key is sent its main word only
                            (domovoi/wake_default.py). Kept in
-                           `room_wake_words.device_max` (V063).
+                           `satellites.wake_max` (V072).
+                           `satellite_id` (optional, 1.5.0): the device's id;
+                           when present it must equal the path's
+                           (`error {reason:"satellite_id_mismatch"}` and 1008
+                           otherwise). A hello with it marks a client that
+                           takes the `room` frame on a move.
+                           `requested_room` (optional, 1.5.0, a room id from
+                           an enrolment's `in=`): the room a device that parks
+                           for approval asks to join. It pre-selects the
+                           approval card's room; a person still decides.
   text  utterance_start    {"type":"utterance_start","trigger":"wake_word"|"barge_in"|"push_to_talk"|"followup"|"wake_clip",
                             "utt":N,"backlog_ms":N,"wake_ms":N,"wake_score":F,"wake_word":...}
                            — `wake_word` (optional, 1.4.0, after a wake word
@@ -309,6 +328,17 @@ Server → Client
                            renders its speech in (null: the server's own), so
                            the device mirrors that voice's clips
                            (GET /v1/sounds/manifest.sig?voice=NAME).
+                           1.5.0: `satellite_id` (the device) and `room`
+                           {"room_id":...,"name":...,"shared":bool}: the room
+                           the device is in, its name, and whether other
+                           devices share it. `room_id` stays the room's id.
+  text  room               {"type":"room","room":{"room_id":...,"name":...,"shared":bool}}
+                           — 1.5.0: an admin moved this device to another
+                           room (POST /v1/admin/satellites/{id}/room). Sent
+                           only to a device whose hello carried
+                           `satellite_id`; it carries on in the new room. An
+                           older device is closed 1001 instead and comes back
+                           into its new room on reconnect.
   text  end_capture        {"type":"end_capture","utt":N}
                            — stop capturing now: the server has heard a whole
                            command (early commit, see below) and is answering.
@@ -551,6 +581,7 @@ from domovoi.clients.whisper import (
 from domovoi.config import settings
 from domovoi.connectivity import ConnectivityProbe
 from domovoi.db.repositories import (
+    RoomsRepository,
     SatelliteApprovalRepository,
     SatelliteHealthRepository,
     SatelliteOutageRepository,
@@ -588,7 +619,8 @@ from domovoi.turn_timings import (
     whisper_block,
 )
 from domovoi.log_privacy import said
-from domovoi import overheard, room_display, turn_history, turn_watchdog, wake_default
+from domovoi import overheard, room_devices, room_display
+from domovoi import turn_history, turn_watchdog, wake_default
 from domovoi.turn_watchdog import (
     STAGE_IDENTIFY,
     STAGE_REPLY,
@@ -1813,6 +1845,15 @@ async def _send_dropin_start_chime(sess: Any) -> None:
         note(len(START_CHIME_PCM), PCM_INPUT_SAMPLE_RATE)
 
 
+
+def _requested_room(ctrl: dict[str, Any]) -> str | None:
+    """The room a parked device asks to join (hello ``requested_room``,
+    from an enrolment's ``in=``; 1.5.0): a room id, else nothing. It only
+    pre-selects the approval card's room; a person still decides."""
+    raw = ctrl.get("requested_room")
+    return raw if room_ids.is_room_id(raw) else None
+
+
 class StreamSession:
     """Per-connection state machine.
 
@@ -1824,7 +1865,19 @@ class StreamSession:
 
     def __init__(self, ws: WebSocket, room_id: str) -> None:
         self.ws = ws
+        # The WebSocket path segment is the DEVICE's id (1.5.0). Its room
+        # is the server's assignment (``satellites.room_id``), read once
+        # pairing passes (`_bind_room`); until then the two are the same,
+        # as they are for every device from before rooms held several.
+        self.satellite_id = room_id
         self.room_id = room_id
+        # Whether the hello named its `satellite_id` (a 1.5.0 client): such
+        # a device takes a `room` frame on a move; an older one is closed
+        # 1001 and comes back into its new room.
+        self.knows_rooms = False
+        self.mic_enabled = True
+        # The room's row as `_bind_room` read it (name, device count).
+        self._room_row: dict[str, Any] | None = None
         self.session_id: UUID | None = None
         self.audio_buf = bytearray()
         self.utterance_active = False
@@ -2060,13 +2113,15 @@ class StreamSession:
         # find `sessions.get(room_id) is not self_prev` and skip
         # eviction, but it's still useful for ops to see "kitchen
         # reconnected" in the log rather than silently swapping.
-        existing = self.ws.app.state.active_sessions.get(self.room_id)
         # Registered from here on, so a timer delivery can see this session
         # before `ready` goes out: count the handshake as `connecting` too,
         # never as an idle room an announcement may start in. Set again
-        # when `ready` is sent.
+        # when `ready` is sent. 1.5.0: registered as its DEVICE
+        # (`active_satellites`); it speaks for the room (`active_sessions`)
+        # unless another device of the room already does
+        # (domovoi/room_devices.py).
         self._connected_at = time.monotonic()
-        self.ws.app.state.active_sessions[self.room_id] = self
+        existing = room_devices.registry(self.ws.app).register(self)
         # CORE-43: the address of a room that passed pairing may fetch the
         # household's own wake models (domovoi/wake_model_access.py).
         from domovoi import wake_model_access
@@ -2094,6 +2149,10 @@ class StreamSession:
             "type": "ready",
             "protocol_version": PROTOCOL_VERSION,
             "room_id": self.room_id,
+            # 1.5.0: the device's own id and the room it is in. An older
+            # client ignores both.
+            "satellite_id": self.satellite_id,
+            "room": await self._room_info(),
             "bot_name": settings.bot_name,
             "audio_sample_rate_in": PCM_INPUT_SAMPLE_RATE,
             "features": self._ready_features(),
@@ -2216,40 +2275,41 @@ class StreamSession:
             # Deregister, but only if we're still the active session for
             # this room. A reconnect that overwrote us shouldn't have its
             # entry yanked when the stale instance unwinds.
-            sessions = self.ws.app.state.active_sessions
-            were_active = sessions.get(self.room_id) is self
+            was_room_speaker = self.ws.app.state.active_sessions.get(self.room_id) is self
+            were_active = room_devices.registry(self.ws.app).unregister(self)
+            if was_room_speaker and self.room_id not in self.ws.app.state.active_sessions:
+                # Nobody is left speaking for the room: its reported voice
+                # goes too (re-reported via voice_status on connect; until
+                # then the room falls back to the default).
+                self.ws.app.state.satellite_voice.pop(self.room_id, None)
             if were_active:
-                sessions.pop(self.room_id, None)
-                log.info("ws %s disconnected; evicted from active_sessions", self.room_id)
+                log.info("ws %s disconnected; evicted from active_sessions", self.satellite_id)
                 # Drop the cached WiFi reading too — a Pi that's been gone
                 # for any length of time is not authoritative on its
                 # current rate. Skip when we were already overwritten by
                 # a newer session, which has its own (fresher) data.
-                self.ws.app.state.wifi_status.pop(self.room_id, None)
+                self.ws.app.state.wifi_status.pop(self.satellite_id, None)
                 # Same for the cached output volume — a reconnecting Pi
                 # re-reports its real level via volume_status on connect.
-                self.ws.app.state.satellite_volume.pop(self.room_id, None)
-                # And the reported voice — re-reported via voice_status on
-                # connect; until then the room falls back to the default.
-                self.ws.app.state.satellite_voice.pop(self.room_id, None)
+                self.ws.app.state.satellite_volume.pop(self.satellite_id, None)
                 # And the reported config — re-reported via config_status on
                 # connect (so the Settings tab shows "satellite offline"
                 # rather than stale values for a disconnected Pi).
-                self.ws.app.state.satellite_config.pop(self.room_id, None)
-                self.ws.app.state.satellite_full_duplex.pop(self.room_id, None)
+                self.ws.app.state.satellite_config.pop(self.satellite_id, None)
+                self.ws.app.state.satellite_full_duplex.pop(self.satellite_id, None)
                 # And the reported code version — re-reported in the hello
                 # frame on reconnect.
-                self.ws.app.state.satellite_synced_sha.pop(self.room_id, None)
+                self.ws.app.state.satellite_synced_sha.pop(self.satellite_id, None)
                 # And the reported satellite type / mic state — re-reported in
                 # the hello frame on reconnect (the persistent copy lives in
                 # the `satellites` table for offline display).
-                self.ws.app.state.satellite_sat_type.pop(self.room_id, None)
-                self.ws.app.state.satellite_mic_enabled.pop(self.room_id, None)
+                self.ws.app.state.satellite_sat_type.pop(self.satellite_id, None)
+                self.ws.app.state.satellite_mic_enabled.pop(self.satellite_id, None)
                 # And the screen/kiosk state — re-reported via display_status
                 # on reconnect (video satellites only).
-                self.ws.app.state.satellite_display.pop(self.room_id, None)
+                self.ws.app.state.satellite_display.pop(self.satellite_id, None)
                 # And the mic DSP state — re-reported via mic_dsp_state.
-                getattr(self.ws.app.state, "satellite_mic_dsp", {}).pop(self.room_id, None)
+                getattr(self.ws.app.state, "satellite_mic_dsp", {}).pop(self.satellite_id, None)
 
     async def _on_audio(self, data: bytes) -> None:
         # Before any early return: announce_block reads it to tell a live
@@ -2327,7 +2387,7 @@ class StreamSession:
             return False
         if self._speech_hints:
             return True
-        cfg = self.ws.app.state.satellite_config.get(self.room_id) or {}
+        cfg = self.ws.app.state.satellite_config.get(self.satellite_id) or {}
         try:
             return float(cfg.get("listen.silence_timeout")) > 0
         except (TypeError, ValueError):
@@ -2683,7 +2743,7 @@ class StreamSession:
             ):
                 return last
             return None
-        cfg = self.ws.app.state.satellite_config.get(self.room_id) or {}
+        cfg = self.ws.app.state.satellite_config.get(self.satellite_id) or {}
         timeout = cfg.get("listen.silence_timeout")
         if timeout is None:
             return None
@@ -3078,7 +3138,7 @@ class StreamSession:
         * a code minted here when the device brought none, so there is
           always something for the operator to match.
         """
-        if not room_ids.is_room_id(self.room_id):
+        if not room_ids.is_room_id(self.satellite_id):
             # The socket route refuses these already; never park one.
             log.warning("pairing: approval request refused — not a room id")
             await self._safe_send_text({"type": "error", "reason": "bad_room_id"})
@@ -3090,11 +3150,11 @@ class StreamSession:
             # digits only), and no device says one of any other length — so
             # parking it would only take the room name away from the device
             # that IS there.
-            join_problems.bad_code(self.room_id)
+            join_problems.bad_code(self.satellite_id)
             log.warning(
                 "pairing: room=%s approval request refused — the code it "
                 "brought is not %d digits (or the %d of an older satellite)",
-                self.room_id, APPROVAL_CODE_DIGITS, LEGACY_APPROVAL_CODE_DIGITS,
+                self.satellite_id, APPROVAL_CODE_DIGITS, LEGACY_APPROVAL_CODE_DIGITS,
             )
             await self._safe_send_text({
                 "type": "error",
@@ -3109,7 +3169,7 @@ class StreamSession:
             join_problems.throttled(self._hello_source())
             log.warning(
                 "pairing: room=%s approval request throttled for this source",
-                self.room_id,
+                self.satellite_id,
             )
             await self._safe_send_text({
                 "type": "error",
@@ -3123,7 +3183,7 @@ class StreamSession:
             code = generate_approval_code()
         approvals = SatelliteApprovalRepository(s)
         outcome, parked_code = await approvals.request(
-            self.room_id,
+            self.satellite_id,
             token_hash=token_hash,
             code=code,
             mac=ctrl.get("mac"),
@@ -3132,13 +3192,14 @@ class StreamSession:
             board=satellite_abilities.clean_board(ctrl.get("board")),
             sat_type=ctrl.get("sat_type") or "voice",
             takeover_after_sec=APPROVAL_TAKEOVER_SEC,
+            requested_room=_requested_room(ctrl),
         )
         if outcome == "conflict":
-            join_problems.name_taken(self.room_id)
+            join_problems.name_taken(self.satellite_id)
             log.warning(
                 "pairing: room=%s REFUSED — a different device is already "
                 "waiting for approval under that room name",
-                self.room_id,
+                self.satellite_id,
             )
             await self._safe_send_text({
                 "type": "error",
@@ -3153,7 +3214,7 @@ class StreamSession:
             return False
         log.info(
             "pairing: room=%s awaiting approval (code shown to the operator)",
-            self.room_id,
+            self.satellite_id,
         )
         # The code on FILE rides back, not the one just offered: on a retry
         # the row keeps the code the customer was already shown, and the
@@ -3198,7 +3259,7 @@ class StreamSession:
         source = self._hello_source()
         try:
             async with session_scope() as s:
-                row = await SatellitePairingRepository(s).get_pairing(self.room_id)
+                row = await SatellitePairingRepository(s).get_pairing(self.satellite_id)
                 if row is not None:
                     if withdraw:
                         await self._safe_send_text({
@@ -3208,7 +3269,7 @@ class StreamSession:
                         return False
                     return None
                 existing = None if withdraw else await SatelliteApprovalRepository(s).get(
-                    self.room_id
+                    self.satellite_id
                 )
         except Exception as e:  # noqa: BLE001 — fail CLOSED, whatever the posture
             return await self._proof_unavailable(e)
@@ -3219,7 +3280,7 @@ class StreamSession:
         if not limiter.allow(source):
             join_problems.throttled(source)
             log.warning(
-                "pairing: room=%s approval %s throttled for this source", self.room_id,
+                "pairing: room=%s approval %s throttled for this source", self.satellite_id,
                 "withdrawal" if withdraw else "request",
             )
             await self._safe_send_text({
@@ -3230,12 +3291,12 @@ class StreamSession:
         if withdraw:
             try:
                 async with session_scope() as s:
-                    gone = await SatelliteApprovalRepository(s).withdraw(self.room_id, token_hash)
+                    gone = await SatelliteApprovalRepository(s).withdraw(self.satellite_id, token_hash)
             except Exception as e:  # noqa: BLE001
                 return await self._proof_unavailable(e)
             log.info(
                 "pairing: room=%s request %s by its device (another server approved it)",
-                self.room_id, "withdrawn" if gone else "already gone",
+                self.satellite_id, "withdrawn" if gone else "already gone",
             )
             await self._safe_send_text({
                 "type": "error", "reason": "approval_withdrawn", "withdrawn": gone,
@@ -3246,7 +3307,7 @@ class StreamSession:
         if await asyncio.to_thread(pairing_proof.decode, pake) is None:
             log.warning(
                 "pairing: room=%s approval request refused — its approval_pake "
-                "is not a valid exchange message", self.room_id,
+                "is not a valid exchange message", self.satellite_id,
             )
             await self._safe_send_text({
                 "type": "error", "reason": "approval_pake_invalid",
@@ -3258,7 +3319,7 @@ class StreamSession:
             async with session_scope() as s:
                 approvals = SatelliteApprovalRepository(s)
                 outcome, _code = await approvals.request(
-                    self.room_id,
+                    self.satellite_id,
                     token_hash=token_hash,
                     code=None,
                     mac=ctrl.get("mac"),
@@ -3266,12 +3327,13 @@ class StreamSession:
                     sat_type=ctrl.get("sat_type") or "voice",
                     takeover_after_sec=APPROVAL_TAKEOVER_SEC,
                     proof=True,
+                    requested_room=_requested_room(ctrl),
                 )
                 if outcome == "conflict":
-                    join_problems.name_taken(self.room_id)
+                    join_problems.name_taken(self.satellite_id)
                     log.warning(
                         "pairing: room=%s REFUSED — a different device is already "
-                        "waiting for approval under that room name", self.room_id,
+                        "waiting for approval under that room name", self.satellite_id,
                     )
                     await self._safe_send_text({
                         "type": "error", "reason": "approval_conflict",
@@ -3283,13 +3345,13 @@ class StreamSession:
                         ),
                     })
                     return False
-                entered = await approvals.take_entered(self.room_id, token_hash)
+                entered = await approvals.take_entered(self.satellite_id, token_hash)
         except Exception as e:  # noqa: BLE001 — fail CLOSED, whatever the posture
             return await self._proof_unavailable(e)
         if entered is None:
             log.info(
                 "pairing: room=%s awaiting approval (the device proves the code)",
-                self.room_id,
+                self.satellite_id,
             )
             await self._safe_send_text({
                 "type": "error",
@@ -3301,7 +3363,7 @@ class StreamSession:
         return await self._prove_approval(token_hash, entered[0], pake, entered_at=entered[1])
 
     async def _proof_unavailable(self, e: BaseException) -> bool:
-        log.warning("pairing: room=%s proof request failed: %s", self.room_id, e)
+        log.warning("pairing: room=%s proof request failed: %s", self.satellite_id, e)
         await self._safe_send_text({
             "type": "error", "reason": "approval_unavailable",
             "message": "the server could not record the approval request",
@@ -3330,7 +3392,7 @@ class StreamSession:
         try:
             async with session_scope() as s:
                 await SatelliteApprovalRepository(s).restore_entered_code(
-                    self.room_id, token_hash, code, entered_at,
+                    self.satellite_id, token_hash, code, entered_at,
                 )
         except Exception as e:  # noqa: BLE001
             log.debug("pairing: could not keep the typed code: %s", e)
@@ -3361,12 +3423,12 @@ class StreamSession:
             # Four 2048-bit exponentiations: off the event loop.
             exchange = await asyncio.to_thread(
                 pairing_proof.ServerExchange, code, pake,
-                room_id=self.room_id, fingerprint=fingerprint,
+                room_id=self.satellite_id, fingerprint=fingerprint,
             )
         except (OSError, ValueError) as e:
             await self._put_code_back(token_hash, code, entered_at)
             log.warning("pairing: room=%s cannot run the approval exchange: %s",
-                        self.room_id, e)
+                        self.satellite_id, e)
             await self._safe_send_text({
                 "type": "error", "reason": "approval_unavailable",
                 "message": "the server could not run the approval exchange",
@@ -3379,7 +3441,7 @@ class StreamSession:
             await self._put_code_back(token_hash, code, entered_at)
             log.info(
                 "pairing: room=%s the device %s — the typed code waits for its next visit",
-                self.room_id,
+                self.satellite_id,
                 "declined the exchange for now" if kind == "approval_decline"
                 else "did not answer the exchange",
             )
@@ -3390,13 +3452,13 @@ class StreamSession:
             try:
                 async with session_scope() as s:
                     await SatelliteApprovalRepository(s).note_proof_failure(
-                        self.room_id, token_hash
+                        self.satellite_id, token_hash
                     )
             except Exception as e:  # noqa: BLE001
                 log.debug("pairing: could not count the failed exchange: %s", e)
             log.warning(
                 "pairing: room=%s the device did not confirm the code typed on "
-                "the dashboard — the request stays parked", self.room_id,
+                "the dashboard — the request stays parked", self.satellite_id,
             )
             await self._safe_send_text({
                 "type": "error", "reason": "approval_code_mismatch",
@@ -3409,10 +3471,10 @@ class StreamSession:
         try:
             async with session_scope() as s:
                 result = await SatelliteApprovalRepository(s).promote_proven(
-                    self.room_id, token_hash
+                    self.satellite_id, token_hash
                 )
         except Exception as e:  # noqa: BLE001 — fail closed
-            log.warning("pairing: room=%s could not record the approval: %s", self.room_id, e)
+            log.warning("pairing: room=%s could not record the approval: %s", self.satellite_id, e)
             result = "error"
         if result != "approved":
             await self._safe_send_text({
@@ -3425,7 +3487,7 @@ class StreamSession:
         log.info(
             "pairing: room=%s APPROVED — the device confirmed the code an "
             "operator typed, and the server proved it to the device",
-            self.room_id,
+            self.satellite_id,
         )
         return True
 
@@ -3463,7 +3525,7 @@ class StreamSession:
         presented = raw.strip() if isinstance(raw, str) and raw.strip() else None
 
         async def _reject(reason_log: str) -> bool:
-            log.warning("pairing: REFUSED room=%s — %s", self.room_id, reason_log)
+            log.warning("pairing: REFUSED room=%s — %s", self.satellite_id, reason_log)
             await self._safe_send_text(
                 {"type": "error", "reason": "pairing_rejected",
                  "message": "pairing rejected"}
@@ -3484,7 +3546,7 @@ class StreamSession:
         try:
             async with session_scope() as s:
                 repo = SatellitePairingRepository(s)
-                row = await repo.get_pairing(self.room_id)
+                row = await repo.get_pairing(self.satellite_id)
                 if presented is not None:
                     token_hash = token_sha256(presented)
                     if row is None:
@@ -3518,33 +3580,33 @@ class StreamSession:
                             return await self._park_for_approval(
                                 s, ctrl, token_hash=token_hash, code=code
                             )
-                        await repo.pair(self.room_id, token_hash)
+                        await repo.pair(self.satellite_id, token_hash)
                         log.info(
                             "pairing: room=%s paired (trust-on-first-use)",
-                            self.room_id,
+                            self.satellite_id,
                         )
                         self.token_authenticated = True
                         return True
                     if secrets.compare_digest(row[0], token_hash):
                         # Case 2 — token matches the paired hash.
-                        await repo.touch_last_seen(self.room_id)
+                        await repo.touch_last_seen(self.satellite_id)
                         self.token_authenticated = True
                         return True
                     # Case 3 — a token, but the WRONG one.
-                    join_problems.paired_elsewhere(self.room_id)
+                    join_problems.paired_elsewhere(self.satellite_id)
                     return await _reject("pairing_token mismatch (possible impostor)")
                 # No token presented.
                 if row is not None:
                     # Case 4 — a paired room must present its token; a
                     # tokenless impostor must not take over.
-                    join_problems.paired_elsewhere(self.room_id)
+                    join_problems.paired_elsewhere(self.satellite_id)
                     return await _reject(
                         "paired room connected without a pairing_token "
                         "(possible impostor)"
                     )
                 # Case 5 — no token, no row.
                 if settings.satellite_pairing_strict:
-                    join_problems.no_key(self.room_id)
+                    join_problems.no_key(self.satellite_id)
                     return await _reject(
                         "no pairing_token and strict pairing is enabled"
                     )
@@ -3553,7 +3615,7 @@ class StreamSession:
                 log.info(
                     "pairing: room=%s connected without a token "
                     "(older/unpaired; strict pairing off)",
-                    self.room_id,
+                    self.satellite_id,
                 )
                 return True
         except Exception as e:
@@ -3577,9 +3639,90 @@ class StreamSession:
                     )
             else:
                 log.warning(
-                    "pairing: validation error for room=%s: %s", self.room_id, e
+                    "pairing: validation error for room=%s: %s", self.satellite_id, e
                 )
             return not settings.satellite_pairing_strict
+
+    async def _bind_room(self) -> bool:
+        """Put this device in its room (1.5.0): ``satellites.room_id`` as
+        the server assigned it. A device the house has no row for yet (a
+        tokenless one, strict pairing off) is in the room of its own id, as
+        before rooms held several devices. A tokenless device may be a room
+        on its own but never join a room that already has a device
+        (owner answer Q13): any LAN host can open a socket under a name.
+        False refuses the connection (the error frame is sent here)."""
+        reg = room_devices.registry(self.ws.app)
+        room: str | None = None
+        try:
+            async with session_scope() as s:
+                room = await SatellitesRepository(s).room_of(self.satellite_id)
+                row = await RoomsRepository(s).get(room or self.satellite_id)
+            # Read here, before `ready` waits on it: `ready.room` costs the
+            # handshake no further round trip.
+            self._room_row = row
+        except Exception as e:  # noqa: BLE001 — fall back to the device's own room
+            log.warning("rooms: could not read %s's room: %s", self.satellite_id, e)
+            room = reg.room_of(self.satellite_id)
+        self.room_id = room or self.satellite_id
+        if not self.token_authenticated:
+            others = [d for d in reg.devices_in(self.room_id) if d != self.satellite_id]
+            if not others:
+                try:
+                    async with session_scope() as s:
+                        others = [
+                            d["satellite_id"]
+                            for d in await SatellitesRepository(s).in_room(self.room_id)
+                            if d["satellite_id"] != self.satellite_id
+                        ]
+                except Exception as e:  # noqa: BLE001
+                    log.debug("rooms: room check for %s failed: %s", self.satellite_id, e)
+            if others:
+                log.warning(
+                    "rooms: REFUSED tokenless %s — room %s already has a device",
+                    self.satellite_id, self.room_id,
+                )
+                await self._safe_send_text({
+                    "type": "error", "reason": "tokenless_shared_room",
+                    "message": "a device without a pairing key can't join a room "
+                               "that already has one",
+                })
+                return False
+        reg.note(self.satellite_id, self.room_id)
+        return True
+
+    async def _room_info(self, *, reread: bool = False) -> dict[str, Any]:
+        """``ready.room`` and the ``room`` frame: the room this device is
+        in, its name, and whether other devices share it. ``reread``: look
+        again (after a move) rather than use what `_bind_room` read."""
+        row = self._room_row
+        if reread or row is None or row.get("room_id") != self.room_id:
+            row = None
+            try:
+                async with session_scope() as s:
+                    row = await RoomsRepository(s).get(self.room_id)
+            except Exception as e:  # noqa: BLE001
+                log.debug("rooms: name of %s unreadable: %s", self.room_id, e)
+            self._room_row = row
+        shared = room_devices.registry(self.ws.app).is_shared(self.room_id)
+        if row is not None:
+            shared = shared or int(row["satellites"]) > 1
+        name = row["name"] if row is not None else self.room_id
+        return {"room_id": self.room_id, "name": name, "shared": shared}
+
+    async def moved_to(self, room_id: str) -> None:
+        """The admin moved this device (the registry already rebound it).
+        A 1.5.0 client hears a ``room`` frame and carries on; an older one
+        is closed 1001 and comes back into its new room on reconnect."""
+        if self.knows_rooms:
+            if not settings.use_stubs:
+                try:
+                    from domovoi.mpd_provisioner import ensure_room
+                    await ensure_room(self.room_id)
+                except Exception as e:  # noqa: BLE001 — music only
+                    log.warning("MPD provisioning failed for room=%s: %s", self.room_id, e)
+            await self._safe_send_text({"type": "room", "room": await self._room_info(reread=True)})
+            return
+        await self._close_quietly(1001)
 
     async def _persist_sat_type(self, sat_type: str) -> None:
         """Best-effort upsert of an EXPLICIT hello ``sat_type`` into the
@@ -3588,7 +3731,7 @@ class StreamSession:
         not-yet-applied migration must not break the connect."""
         try:
             async with session_scope() as s:
-                await SatellitesRepository(s).upsert_type(self.room_id, sat_type)
+                await SatellitesRepository(s).upsert_type(self.satellite_id, sat_type)
         except Exception as e:
             if _is_missing_satellites_table(e):
                 global _satellites_table_warned
@@ -3602,7 +3745,7 @@ class StreamSession:
             else:
                 log.warning(
                     "satellites: sat_type persist failed for room=%s: %s",
-                    self.room_id, e,
+                    self.satellite_id, e,
                 )
 
     async def _persist_board(self, board: str) -> None:
@@ -3612,7 +3755,7 @@ class StreamSession:
         dashboard names the device kind while it is offline. Never raises."""
         try:
             async with session_scope() as s:
-                await SatellitesRepository(s).upsert_board(self.room_id, board)
+                await SatellitesRepository(s).upsert_board(self.satellite_id, board)
         except Exception as e:
             if _is_missing_satellites_table(e):
                 global _satellites_table_warned
@@ -3626,7 +3769,7 @@ class StreamSession:
             else:
                 log.warning(
                     "satellites: board persist failed for room=%s: %s",
-                    self.room_id, e,
+                    self.satellite_id, e,
                 )
 
     async def _restore_room_voice(self) -> str | None:
@@ -3707,10 +3850,25 @@ class StreamSession:
             # pairing before we cache anything or treat the socket as this
             # room's satellite. A refusal closes the connection and skips all
             # provisioning/caching below — an impostor gets nothing.
-            if not await self._validate_pairing(ctrl):
+            named = ctrl.get("satellite_id")
+            if named is not None and named != self.satellite_id:
+                # 1.5.0: the hello may name the device; it is the path's id
+                # or nothing. A device never speaks for another one.
+                log.warning("hello: path %s named satellite_id %r; refused",
+                            self.satellite_id, named)
+                await self._safe_send_text({
+                    "type": "error", "reason": "satellite_id_mismatch",
+                    "message": "the hello's satellite_id is not the one in the path",
+                })
                 self._pairing_refused = True
                 await self._close_quietly(1008)
                 return
+            self.knows_rooms = named is not None
+            if not await self._validate_pairing(ctrl) or not await self._bind_room():
+                self._pairing_refused = True
+                await self._close_quietly(1008)
+                return
+            self.mic_enabled = bool(ctrl.get("mic_enabled", True))
             # What this device can do (S0, 2026-10-12): `supports`, unioned
             # with the boolean keys below. Without `supports` (every Pi) the
             # result allows exactly what the core has always sent, and the
@@ -3739,14 +3897,14 @@ class StreamSession:
             # Cache whether this room's board has on-chip AEC (full duplex),
             # so drop-in / open-mic gating can refuse a no-AEC board rather
             # than let it howl. Cleared on disconnect.
-            self.ws.app.state.satellite_full_duplex[self.room_id] = (
+            self.ws.app.state.satellite_full_duplex[self.satellite_id] = (
                 self.abilities.allows("full_duplex")
             )
             # Cache the code version the Pi recorded after its last
             # satellite-code sync (None if never synced), so the dashboard can
             # flag satellites behind the core's SHA. Cleared on
             # disconnect.
-            self.ws.app.state.satellite_synced_sha[self.room_id] = ctrl.get(
+            self.ws.app.state.satellite_synced_sha[self.satellite_id] = ctrl.get(
                 "synced_sha"
             )
             # The wake word this room answers to (its effective slug: a word
@@ -3787,7 +3945,7 @@ class StreamSession:
             upgrades = getattr(self.ws.app.state, "satellite_upgrades", None)
             if upgrades:
                 satellite_upgrades.on_hello(
-                    upgrades, self.room_id, ctrl.get("synced_sha"), time.time()
+                    upgrades, self.satellite_id, ctrl.get("synced_sha"), time.time()
                 )
             # Cache the satellite type and whether voice input is running.
             # Both are OPTIONAL hello fields (absent on older clients) and
@@ -3800,10 +3958,10 @@ class StreamSession:
                     "'voice'", self.room_id, raw_sat_type,
                 )
                 raw_sat_type = None
-            self.ws.app.state.satellite_sat_type[self.room_id] = (
+            self.ws.app.state.satellite_sat_type[self.satellite_id] = (
                 raw_sat_type or "voice"
             )
-            self.ws.app.state.satellite_mic_enabled[self.room_id] = bool(
+            self.ws.app.state.satellite_mic_enabled[self.satellite_id] = bool(
                 ctrl.get("mic_enabled", True)
             )
             # Optional, absent on older clients: this satellite reports its
@@ -4013,7 +4171,7 @@ class StreamSession:
                 rx = ctrl.get("rx_mbits")
                 tx = ctrl.get("tx_mbits")
                 ssid = ctrl.get("ssid")
-                self.ws.app.state.wifi_status[self.room_id] = {
+                self.ws.app.state.wifi_status[self.satellite_id] = {
                     "rx_mbits": float(rx) if rx is not None else None,
                     "tx_mbits": float(tx) if tx is not None else None,
                     "ssid": str(ssid) if ssid else None,
@@ -4035,7 +4193,7 @@ class StreamSession:
             # the real level. Best-effort — a malformed frame is ignored.
             try:
                 level = int(ctrl.get("level"))
-                self.ws.app.state.satellite_volume[self.room_id] = max(0, min(100, level))
+                self.ws.app.state.satellite_volume[self.satellite_id] = max(0, min(100, level))
             except (TypeError, ValueError) as e:
                 log.debug("ignoring malformed volume_status from %s: %s", self.room_id, e)
             return
@@ -4078,7 +4236,7 @@ class StreamSession:
             # values. Cached by room; cleared on disconnect.
             cfg = ctrl.get("config")
             if isinstance(cfg, dict):
-                self.ws.app.state.satellite_config[self.room_id] = cfg
+                self.ws.app.state.satellite_config[self.satellite_id] = cfg
             return
         if t == "mic_dsp_state":
             # An XVF3800's DSP preset and its read-back (domovoi/mic_dsp.py).
@@ -4092,7 +4250,7 @@ class StreamSession:
                 if cache is None:
                     cache = {}
                     self.ws.app.state.satellite_mic_dsp = cache
-                cache[self.room_id] = state
+                cache[self.satellite_id] = state
                 log.info(
                     "mic_dsp room=%s preset=%s ok=%s readback=%s",
                     self.room_id, state["preset"], state["ok"], state["readback"],
@@ -4105,7 +4263,7 @@ class StreamSession:
             # on disconnect. Best-effort — a malformed frame is ignored.
             try:
                 brightness = ctrl.get("brightness")
-                self.ws.app.state.satellite_display[self.room_id] = {
+                self.ws.app.state.satellite_display[self.satellite_id] = {
                     "on": bool(ctrl.get("on", True)),
                     "kiosk_alive": bool(ctrl.get("kiosk_alive", False)),
                     "brightness": (
@@ -4237,22 +4395,22 @@ class StreamSession:
                 "(Flyway) to keep 24 h of samples and the outage reports"
             )
         elif not missing:
-            log.debug("satellite health persistence for %s failed: %s", self.room_id, exc)
+            log.debug("satellite health persistence for %s failed: %s", self.satellite_id, exc)
 
     async def _on_health(self, ctrl: dict[str, Any]) -> None:
         if not self._health_frame_allowed("health"):
             return
         sample = satellite_health.validate_sample(ctrl)
         if sample is None:
-            log.debug("ignoring malformed health frame from %s", self.room_id)
+            log.debug("ignoring malformed health frame from %s", self.satellite_id)
             return
         now = datetime.now(timezone.utc).isoformat()
-        satellite_health.state_dict(self.ws.app.state, "satellite_health")[self.room_id] = {
+        satellite_health.state_dict(self.ws.app.state, "satellite_health")[self.satellite_id] = {
             "received_at": now, "sample": sample,
         }
         self._health_samples += 1
         if self._health_samples % satellite_health.LOG_EVERY_SAMPLES == 1:
-            log.info("%s", satellite_health.format_health_line(self.room_id, sample))
+            log.info("%s", satellite_health.format_health_line(self.satellite_id, sample))
         # A phone room's battery (domovoi/room_battery.py): its last report
         # and the 20 % / 10 % warnings. Every report counts, the extra ones
         # a phone sends when its level moves included; never raises.
@@ -4262,7 +4420,7 @@ class StreamSession:
                 app.state, "room_battery",
                 lambda: room_battery.BatteryWatch(speaker=room_battery.session_speaker(app)),
             )
-            await watch.observe(self.room_id, self.board, sample.get("battery"))
+            await watch.observe(self.satellite_id, self.board, sample.get("battery"))
         # One row per HEALTH_MIN_PERSIST_SEC per session at most: a device
         # that floods the frame costs memory updates, not database writes.
         mono = time.monotonic()
@@ -4273,7 +4431,7 @@ class StreamSession:
         try:
             async with session_scope() as s:
                 repo = SatelliteHealthRepository(s)
-                await repo.insert(self.room_id, sample)
+                await repo.insert(self.satellite_id, sample)
                 # Pruned on a session's first sample and every PRUNE_EVERY
                 # after, across ALL rooms: a satellite that reconnects more
                 # often than hourly (or a room that is gone) used to never
@@ -4286,7 +4444,7 @@ class StreamSession:
     async def _accept_outage_report(self, raw: Any) -> None:
         report = satellite_health.validate_outage(raw)
         if report is None:
-            log.debug("ignoring malformed prev_health from %s", self.room_id)
+            log.debug("ignoring malformed prev_health from %s", self.satellite_id)
             return
         prev_boot = report.get("prev_boot_id")
         prev_boot = prev_boot if isinstance(prev_boot, str) else None
@@ -4294,27 +4452,27 @@ class StreamSession:
         # The satellite carries the same record in every hello until a
         # `ready` listing `health` reaches it; a session that dropped
         # between the two (a flapping link) must not store it twice.
-        held = outages.get(self.room_id)
+        held = outages.get(self.satellite_id)
         if isinstance(held, dict) and satellite_health.same_outage(held.get("report"), report):
-            log.debug("prev_health from %s already recorded", self.room_id)
+            log.debug("prev_health from %s already recorded", self.satellite_id)
             return
         entry = {
             "reported_at": datetime.now(timezone.utc).isoformat(),
             "prev_boot_id": prev_boot,
             "report": report,
         }
-        outages[self.room_id] = entry
+        outages[self.satellite_id] = entry
         summary = satellite_health.outage_summary(report)
         if satellite_health.is_quiet_exit(report.get("last_exit_reason")):
             log.info("satellite %s reports its previous life ended on request: %s",
-                     self.room_id, summary)
+                     self.satellite_id, summary)
         else:
             log.warning("satellite %s reports an outage from its previous life: %s",
-                        self.room_id, summary)
+                        self.satellite_id, summary)
         try:
             async with session_scope() as s:
                 await SatelliteOutageRepository(s).insert(
-                    self.room_id, prev_boot, report,
+                    self.satellite_id, prev_boot, report,
                     keep=satellite_health.OUTAGES_KEPT_PER_ROOM,
                 )
         except Exception as e:  # noqa: BLE001
@@ -4329,12 +4487,12 @@ class StreamSession:
         nbytes = len(lines.encode("utf-8", errors="replace"))
         if nbytes > satellite_health.LOG_PUSH_MAX_BYTES:
             log.debug("log_push from %s over the frame cap (%d bytes); dropped",
-                      self.room_id, nbytes)
+                      self.satellite_id, nbytes)
             return
         state = self.ws.app.state
         limiter = satellite_health.state_obj(state, "log_push_limiter", satellite_health.LogPushLimiter)
-        if not limiter.allow(self.room_id, nbytes):
-            log.debug("log_push from %s over its budget; dropped %d bytes", self.room_id, nbytes)
+        if not limiter.allow(self.satellite_id, nbytes):
+            log.debug("log_push from %s over its budget; dropped %d bytes", self.satellite_id, nbytes)
             return
         retained = satellite_health.state_obj(
             state, "satellite_retained_log", satellite_health.default_retained_log,
@@ -4342,15 +4500,15 @@ class StreamSession:
         offline = bool(ctrl.get("offline"))
         dropped = ctrl.get("dropped")
         try:
-            await asyncio.to_thread(retained.append, self.room_id, lines, offline=offline)
+            await asyncio.to_thread(retained.append, self.satellite_id, lines, offline=offline)
             if isinstance(dropped, int) and not isinstance(dropped, bool) and dropped > 0:
                 await asyncio.to_thread(
-                    retained.append, self.room_id,
+                    retained.append, self.satellite_id,
                     f"[core] the satellite dropped {dropped} line(s) over its push budget",
                     offline=False,
                 )
         except Exception as e:  # noqa: BLE001
-            log.warning("retained log for %s could not be written: %s", self.room_id, e)
+            log.warning("retained log for %s could not be written: %s", self.satellite_id, e)
 
     async def _respond_noisy_capture(self) -> None:
         """Stock-apology TTS path for the Pi-side noisy-capture trigger.
@@ -5406,9 +5564,13 @@ class StreamSession:
                         if heard.embedded:
                             ident = await identify(
                                 pcm_bytes, embedding=heard.embedding, room_id=self.room_id,
+                                satellite_id=self.satellite_id,
                             )
                         else:
-                            ident = await identify(pcm_bytes, room_id=self.room_id)
+                            ident = await identify(
+                                pcm_bytes, room_id=self.room_id,
+                                satellite_id=self.satellite_id,
+                            )
                 except TimeoutError as e:
                     if not id_budget.expired():
                         log.warning("voice identification failed: %s", e)
@@ -5461,11 +5623,11 @@ class StreamSession:
                 # into the Context so WifiHandler's diagnostic path can
                 # answer "how's your wifi" without another round-trip. Empty
                 # dict when the Pi hasn't pushed yet (first 60 s after connect).
-                wifi_status = self.ws.app.state.wifi_status.get(self.room_id, {})
+                wifi_status = self.ws.app.state.wifi_status.get(self.satellite_id, {})
                 # Same for the satellite's current output volume, so a relative
                 # "turn it up" bumps against the real level (None until the Pi
                 # reports via volume_status on connect).
-                satellite_volume = self.ws.app.state.satellite_volume.get(self.room_id)
+                satellite_volume = self.ws.app.state.satellite_volume.get(self.satellite_id)
                 # The voice this room reports speaking in (None until the Pi
                 # pushes voice_status, or if it never sets one → registry
                 # default). VoiceHandler reads it via Context.voice to answer
@@ -6204,7 +6366,7 @@ class StreamSession:
         if not command_captures.eligible(trigger, in_call=in_call):
             return None
         meta = meta or command_captures.capture_meta({}, in_call=in_call)
-        config = getattr(self.ws.app.state, "satellite_config", {}).get(self.room_id)
+        config = getattr(self.ws.app.state, "satellite_config", {}).get(self.satellite_id)
         sidecar = command_captures.build_sidecar(
             room_id=self.room_id,
             pcm_len=len(pcm),
@@ -7382,9 +7544,7 @@ class StreamSession:
                 # try to send to a corpse. The receiver loop's finally
                 # block also evicts, but if the loop is stuck (e.g.,
                 # awaiting on an already-dead recv()), we may beat it.
-                sessions: dict[str, "StreamSession"] = self.ws.app.state.active_sessions
-                if sessions.get(self.room_id) is self:
-                    sessions.pop(self.room_id, None)
+                room_devices.registry(self.ws.app).evict(self)
                 raise
             finally:
                 if self._announce_task is task:
@@ -7801,7 +7961,7 @@ class StreamSession:
         arrives. Raises on a dead socket so the admin endpoint can report it."""
         clamped = max(0, min(100, int(level)))
         await self.ws.send_text(json.dumps({"type": "set_volume", "level": clamped}))
-        self.ws.app.state.satellite_volume[self.room_id] = clamped
+        self.ws.app.state.satellite_volume[self.satellite_id] = clamped
 
     async def set_display(self, action: str) -> None:
         """Drive a video satellite's screen: "on" / "off" switch the panel's
@@ -7818,10 +7978,10 @@ class StreamSession:
         )
         if action in ("on", "off"):
             cached = dict(
-                self.ws.app.state.satellite_display.get(self.room_id) or {}
+                self.ws.app.state.satellite_display.get(self.satellite_id) or {}
             )
             cached["on"] = action == "on"
-            self.ws.app.state.satellite_display[self.room_id] = cached
+            self.ws.app.state.satellite_display[self.satellite_id] = cached
 
     async def request_upgrade(
         self, *, expected_sha: str, reconnect_timeout: int

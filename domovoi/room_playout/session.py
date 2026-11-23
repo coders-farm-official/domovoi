@@ -96,7 +96,7 @@ class RoomAudioSession:
 
     async def run(self) -> None:
         await self.ws.accept()
-        if not P.SATELLITE_ID_RE.fullmatch(self.satellite_id):
+        if not P.is_satellite_id(self.satellite_id):
             log.warning("room-audio: refused a malformed satellite id")
             self.satellite_id = "?"
             await self._refuse("bad_hello")

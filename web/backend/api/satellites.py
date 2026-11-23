@@ -830,7 +830,8 @@ async def approve_satellite(
     return bridge_response(
         *await post_admin(
             f"/v1/admin/satellites/approvals/{room_id}/approve",
-            {"code": body.code},
+            {"code": body.code, "room_id": body.room_id,
+             "new_room_name": body.new_room_name},
             headers=auth_forward_headers(request),
         )
     )

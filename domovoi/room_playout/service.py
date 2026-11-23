@@ -1,10 +1,11 @@
 """The playout service: one streamer per playing room, and the speakers
 subscribed to it.
 
-Room membership comes from a ``RoomRegistry``. Slice 2 owns the real one
-(``domovoi/room_devices.py``); until it lands, ``InMemoryRoomRegistry``
-says what the house is today: every satellite is its own room (id = room
-id), unless a test or a caller assigns it elsewhere.
+Room membership comes from a ``RoomRegistry``: the app's live registry
+(``domovoi/room_devices.py``), which also calls :meth:`RoomPlayout.rebind`
+after a satellite moves. ``InMemoryRoomRegistry`` stands in for it in
+unit tests: every satellite is its own room (id = room id), unless the
+test assigns it elsewhere.
 
 The calls slice 5b routes room sound through:
 
@@ -31,7 +32,7 @@ DEFAULT_PLAYOUT_MS = 500
 
 
 class RoomRegistry(Protocol):
-    """What playout needs to know about rooms (slice 2 provides it)."""
+    """What playout needs to know about rooms (``room_devices.RoomDevices``)."""
 
     def room_of(self, satellite_id: str) -> str | None: ...
     def devices_in(self, room_id: str) -> list[str]: ...
@@ -151,7 +152,7 @@ class RoomPlayout:
         return gone
 
     def rebind(self, satellite_id: str) -> str | None:
-        """After a move (slice 2 calls this): re-subscribe the device to its
+        """After a move (the registry calls this): re-subscribe the device to its
         new room's timeline; the new ``timeline`` message replaces the old."""
         cur = self._subs.get(satellite_id)
         if cur is None:
@@ -173,6 +174,10 @@ def get_playout(app: Any) -> RoomPlayout:
     """The app's playout service, created on first use."""
     pl = getattr(app.state, "room_playout", None)
     if pl is None:
-        pl = RoomPlayout()
+        from domovoi import room_devices
+
+        reg = room_devices.registry(app)
+        pl = RoomPlayout(reg)
+        reg.on_move(pl.rebind)
         app.state.room_playout = pl
     return pl

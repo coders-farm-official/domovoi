@@ -7534,6 +7534,315 @@
         }
       }
     },
+    "/api/rooms": {
+      "get": {
+        "tags": [
+          "rooms"
+        ],
+        "summary": "List Rooms",
+        "description": "Every room with its satellites, and the merges on offer.",
+        "operationId": "list_rooms_api_rooms_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response List Rooms Api Rooms Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "rooms"
+        ],
+        "summary": "Create Room",
+        "operationId": "create_room_api_rooms_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoomName"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Create Room Api Rooms Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/rooms/{room_id}": {
+      "patch": {
+        "tags": [
+          "rooms"
+        ],
+        "summary": "Rename Room",
+        "operationId": "rename_room_api_rooms__room_id__patch",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoomName"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Rename Room Api Rooms  Room Id  Patch"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "rooms"
+        ],
+        "summary": "Delete Room",
+        "operationId": "delete_room_api_rooms__room_id__delete",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Delete Room Api Rooms  Room Id  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/rooms/{room_id}/merge": {
+      "post": {
+        "tags": [
+          "rooms"
+        ],
+        "summary": "Merge Rooms",
+        "operationId": "merge_rooms_api_rooms__room_id__merge_post",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MergeRooms"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Merge Rooms Api Rooms  Room Id  Merge Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/{satellite_id}/room": {
+      "post": {
+        "tags": [
+          "rooms"
+        ],
+        "summary": "Move Satellite",
+        "operationId": "move_satellite_api_satellites__satellite_id__room_post",
+        "parameters": [
+          {
+            "name": "satellite_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Satellite Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoomChoice"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Move Satellite Api Satellites  Satellite Id  Room Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/{satellite_id}/name": {
+      "patch": {
+        "tags": [
+          "rooms"
+        ],
+        "summary": "Name Satellite",
+        "operationId": "name_satellite_api_satellites__satellite_id__name_patch",
+        "parameters": [
+          {
+            "name": "satellite_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Satellite Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SatelliteName"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Name Satellite Api Satellites  Satellite Id  Name Patch"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/satellites": {
       "get": {
         "tags": [
@@ -29917,6 +30226,24 @@
         "type": "object",
         "title": "MemoryPatch"
       },
+      "MergeRooms": {
+        "properties": {
+          "rooms": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "minItems": 1,
+            "title": "Rooms"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rooms"
+        ],
+        "title": "MergeRooms"
+      },
       "MicDspMarkRequest": {
         "properties": {
           "text": {
@@ -33037,6 +33364,37 @@
         ],
         "title": "RoomBody"
       },
+      "RoomChoice": {
+        "properties": {
+          "room_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Room Id"
+          },
+          "new_room_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "New Room Name"
+          }
+        },
+        "type": "object",
+        "title": "RoomChoice",
+        "description": "An existing room's id OR a name for a new room."
+      },
       "RoomLabelRequest": {
         "properties": {
           "room_label": {
@@ -33139,6 +33497,21 @@
         ],
         "title": "RoomLyrics",
         "description": "``GET /api/music/now-playing/{room_id}/lyrics`` \u2014 the room's song,\nwhere it is, and its lyrics in one read. ``read_at`` is the server's\nclock right after the MPD read (informational: a client anchors its own\ninterpolation on when IT received the answer). ``line_index`` is the\nlast timed line at ``elapsed_sec`` (-1 before the first), only for\n``synced`` lyrics. ``track_id`` / ``lyrics`` are null when nothing plays\nor the song is not a library track."
+      },
+      "RoomName": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "RoomName"
       },
       "RoomQueue": {
         "properties": {
@@ -33861,6 +34234,30 @@
             "minLength": 1,
             "pattern": "^[0-9]+$",
             "title": "Code"
+          },
+          "room_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Room Id"
+          },
+          "new_room_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "New Room Name"
           }
         },
         "type": "object",
@@ -33920,6 +34317,24 @@
         "type": "object",
         "title": "SatelliteDisplay",
         "description": "Screen/kiosk state a video satellite reports via display_status:\npanel power, kiosk-browser liveness, backlight percent (null when the\nhardware exposes none \u2014 HDMI monitors typically don't), and the\nconfigured idle behavior. Null field-wise until the device reports."
+      },
+      "SatelliteName": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "title": "SatelliteName"
       },
       "SatellitePairing": {
         "properties": {

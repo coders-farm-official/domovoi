@@ -771,6 +771,7 @@ async def _learn_room(
     voice: VoicePrint | np.ndarray,
     rooms_with_good_sample: set[str],
     decision: _Decision,
+    satellite_id: str | None = None,
 ) -> None:
     """Job 4: count a match towards learning ``person_id``'s voice in
     ``room_id``, and save the clip once the count is reached.
@@ -829,6 +830,10 @@ async def _learn_room(
                 room_id=room_id,
                 sample_seconds=voice.speech_sec,
                 claim_of=claim_of,
+                # The mic that learned it (V072), and marked learned
+                # (V075): a device moved to another room drops it.
+                satellite_id=satellite_id,
+                learned=True,
             )
     except Exception as e:
         log.warning("voice sample for a new room: DB write failed: %s", e)
@@ -915,6 +920,7 @@ async def identify(
     embedding: Any = _EMBED_HERE,
     room_id: str | None = None,
     samples: str = SATELLITE_SAMPLES,
+    satellite_id: str | None = None,
 ) -> IdentificationResult:
     """Embed + match + compute presence. Best-effort — failures degrade
     to ``person_id=None, presence_tier="high"`` so the core
@@ -927,7 +933,9 @@ async def identify(
     counter.
 
     ``room_id``: the room the audio came from. Without one, nothing is
-    learned (job 4).
+    learned (job 4). ``satellite_id``: the device whose mic heard it (a
+    learned sample is that mic's; default: the device whose id is the
+    room's).
 
     ``samples``: :data:`SATELLITE_SAMPLES` (a satellite's turn: satellite
     samples only) or :data:`PHONE_SAMPLES` (the app's chat mic: a person's
@@ -1055,6 +1063,7 @@ async def identify(
                     voice,
                     scored.good_rooms.get(matched_person, set()),
                     decision,
+                    satellite_id,
                 )
         elif decision.best_person is not None and room_id is not None and not phone:
             # Top candidate but not named: a run of confident matches

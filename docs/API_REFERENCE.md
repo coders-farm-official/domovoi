@@ -498,9 +498,9 @@ posture; the specifically dangerous ones carry the Bearer gate.
 | `POST /v1/admin/version/check` | **Device (`X-Device-Token` or Bearer)** | — | `git fetch --no-tags`, then the tags on their own (never forced), then report `{behind, ahead, upstream, upstream_sha, error, channel, upstream_version, latest_release, tag_warning}`. `tag_warning` is set when the tags could not be fetched, a published tag that moved upstream included (git keeps this server's copy): the labels may be off, the counts and the pull are not affected. `upstream_sha` is the full SHA a pull would move to, for comparing with `bad_sha`; `upstream_version` its release label (on `stable`, the release that is available); `latest_release` the label of `origin/stable`, `null` before the first release. Read-only, best-effort. Under `never` no git runs: `upstream: false` with the turned-off reason as `error` (§1.6). |
 | `POST /v1/admin/version/pull` | **Admin, security tier** (`501` before setup); `423` while the container guard's freeze is on | — | `git fetch --no-tags` and the tags on their own (a tag that could not be fetched is `tag_warning` in a successful answer, never a refusal), then the fetched tip's signature is checked, then `git merge --ff-only` to that exact SHA; a dirty/diverged tree returns `pulled: false` + stderr. The answer carries the same `signature` object as `GET /v1/admin/version`; while the allowed-signers file exists, a tip that does not verify answers `pulled: false` with the reason in `error` and the tree does not move (without the file the pull goes ahead and the core logs a warning). A checkout with no upstream branch answers `pulled: false` saying so. Admin-tier: it changes the code on disk that this process and `/v1/satellite-code` serve from. Never restarts the process — that's the separate restart below. A successful pull also returns `prev_sha` and records it in `UPDATE_STATE_DIR/prev_sha`: the SHA the update unit rolls back to before it has a record of its own (the running SHA while an earlier pull is still waiting for its restart, else the pre-pull HEAD). Under `never`: `pulled: false` with the turned-off reason, and no git runs. While a restart or update is under way (`restart_in_progress`): `pulled: false`, "a restart or update is under way; pull again once it has finished", and no git runs (the update unit applies the HEAD it read when it started). |
 | `POST /v1/admin/version/channel` | **Admin, security tier**; `423` while the container guard's freeze is on | `{"channel": "stable"\|"main"}` | Follow that channel from now on: the local branch of that name is made at HEAD and set to track `origin/<channel>`. HEAD never moves and no file changes; the next check says what is new there, and the pull stays its own action. `{ok, changed, channel, error}`; `changed: false` when it already follows that channel. Refused with `ok: false`, nothing changed: another channel name; under `never` (it fetches); while a restart or update is under way; when `DOMOVOI_UPSTREAM_BRANCH` in `/etc/default/domovoi-update` pins other branches (the dashboard can't edit that file); when origin has no such branch (`stable` before the first release); when HEAD is not on that branch's line (a pull could never fast-forward there); when a local branch of that name holds commits nothing else has. `501` before first-run setup. |
-| `GET /v1/admin/satellites/approvals` | **Admin read** | — | Satellites waiting for a human (portal onboarding). A request is parked by the satellite's hello: a code it brings must be six ASCII digits, or the four a satellite set up before 2026-09-22 still carries (`error{reason:"approval_code_invalid"}` otherwise, nothing parked); a different device asking for the same room is `approval_conflict` for three minutes after the first one parked, and then replaces it with its own token and code. Returns `room_id`, `has_code`, `mac`, `board`, `sat_type`, `attempts`, timestamps, and (since 1.4.0) `proof` (the device checks the code itself and sent none: see the approve row), `waiting_for_device` (a code was typed for such a request and waits for the device's next visit, ten minutes at most), `code_rejected` (the last code typed for it was not the device's) and `proof_failures`. Neither the pairing token hash nor the code is returned: the operator reads the code off the device. A request nobody has refreshed for 15 minutes (`APPROVAL_EXPIRY_SEC`) is deleted, freeing its room name; a waiting device re-asks far more often. |
+| `GET /v1/admin/satellites/approvals` | **Admin read** | — | Satellites waiting for a human (portal onboarding). A request is parked by the satellite's hello: a code it brings must be six ASCII digits, or the four a satellite set up before 2026-09-22 still carries (`error{reason:"approval_code_invalid"}` otherwise, nothing parked); a different device asking for the same room is `approval_conflict` for three minutes after the first one parked, and then replaces it with its own token and code. Returns `room_id`, `has_code`, `mac`, `board`, `sat_type`, `attempts`, timestamps, and (since 1.4.0) `proof` (the device checks the code itself and sent none: see the approve row), `waiting_for_device` (a code was typed for such a request and waits for the device's next visit, ten minutes at most), `code_rejected` (the last code typed for it was not the device's) and `proof_failures`. Neither the pairing token hash nor the code is returned: the operator reads the code off the device. A request nobody has refreshed for 15 minutes (`APPROVAL_EXPIRY_SEC`) is deleted, freeing its room name; a waiting device re-asks far more often. Since 1.5.0 also `satellite_id`, `requested_room` and `requested_room_name` (§3.7a). |
 | `GET /v1/admin/satellites/join-problems` | **Admin read** | — | Why room devices could not join lately, for reasons only the server knows (1.3.0, `domovoi/join_problems.py`): `{problems: [{kind, subject, text, count, at}]}`, newest first. `kind` is `addr_refused` (it would not sign its identity for the address a device dialled), `paired_elsewhere`, `no_key`, `name_taken`, `throttled` or `bad_code`; `text` is the plain line Settings → Rooms shows. At most five lines, one per kind and subject (a repeat bumps `count`), each kept a day, in memory (a restart clears them). |
-| `POST /v1/admin/satellites/approvals/{room_id}/approve` | **Admin, security tier** | `{code}` | `501` before first-run setup (2026-10-08): approving binds a room to a device for good, so a LAN host cannot park its own satellite on an unclaimed core and approve it. Promote a pending satellite into a real pairing, copying the token hash it presented — approval binds a device, not just a room name. `code` is the six digits the satellite is showing and saying; it is compared in constant time. `400` without a numeric code, `422` when it does not match (the request stays parked), `409` when nothing is pending or the pending row carries no code, `429` after five attempts for that room in five minutes. A wrong code is never `401`/`403`: those two mean the CALLER is not admitted, and the dashboard turns them into the admin-password prompt, so a mistyped digit answered with `403` cost the operator a re-login. For a `proof` request (1.4.0) the core holds no code to compare: the typed code (six digits, `422` otherwise) is kept for ONE exchange with the device on its next visit and the answer is `{approved: false, waiting_for_device: true, room_id}`; the room is bound only if the device confirms the code, and a code it did not confirm shows on the list as `code_rejected`. |
+| `POST /v1/admin/satellites/approvals/{room_id}/approve` | **Admin, security tier** | `{code}` | `501` before first-run setup (2026-10-08): approving binds a room to a device for good, so a LAN host cannot park its own satellite on an unclaimed core and approve it. Promote a pending satellite into a real pairing, copying the token hash it presented — approval binds a device, not just a room name. `code` is the six digits the satellite is showing and saying; it is compared in constant time. `400` without a numeric code, `422` when it does not match (the request stays parked), `409` when nothing is pending or the pending row carries no code, `429` after five attempts for that room in five minutes. A wrong code is never `401`/`403`: those two mean the CALLER is not admitted, and the dashboard turns them into the admin-password prompt, so a mistyped digit answered with `403` cost the operator a re-login. For a `proof` request (1.4.0) the core holds no code to compare: the typed code (six digits, `422` otherwise) is kept for ONE exchange with the device on its next visit and the answer is `{approved: false, waiting_for_device: true, room_id}`; the room is bound only if the device confirms the code, and a code it did not confirm shows on the list as `code_rejected`. Since 1.5.0 the body may also carry `room_id` or `new_room_name`: the room the device goes in (§3.7a). |
 | `POST /v1/admin/satellites/approvals/{room_id}/reject` | **Admin, security tier** | — | `501` before first-run setup, like approve. Drop a pending request. Not a ban: the device keeps retrying until approved or powered off. |
 | `POST /v1/admin/windows/request` | **Admin, security tier** (`501` before setup); `423` while the container guard's freeze is on | `{"on_this_pc": bool}` | A Windows install: ask the tray on the PC for the Windows step (download the target release's `DomovoiSetup.exe`, check its release-key signatures, run it as a silent repair behind one Windows permission prompt). `on_this_pc` (the web sets it from the browser's own address, by the loopback rule below): the tray starts at once; otherwise it shows a notification and a click starts it. `after_linux`: this press updated the Linux side first (the card words a declined prompt by it). A press while a request waits joins it (`joined: true`, the same request): never a second run; a new request forgets the last `result`. `{ok, request: {id, on_this_pc, after_linux, at, claimed, seen_at}, joined, tray: {running, seen_at, version}}` (`tray` is remembered across core restarts, in `tray.json`); `409` with the reason as `detail` when `windows_side.step_needed` is false (not a Windows install, internet `never`, no release, up to date, no signed Setup for that release). |
 | `POST /v1/admin/windows/request/cancel` | **Admin, security tier** | — | Withdraw the request. A tray that already started the step carries on. `{ok}`. |
@@ -1452,6 +1452,93 @@ down (rule F1): `deliveries: []`, `acked_at` / `acked_by` / `settled_at` null.
 | `POST /api/satellites/{room_id}/mic_dsp` | **Admin (Bearer)** | `{"preset": "<name>"}` | Proxy → core preset change. |
 | `POST /api/satellites/{room_id}/mic_dsp/mark` | **Admin (Bearer)** | `{"text": "<marker>"}` | Proxy → core test marker. |
 | `POST /api/satellites/{room_id}/voice` | **Admin (Bearer)** | `{"voice": "<name>" \| null}` | Proxy → core room voice (`POST /v1/admin/satellite/{room_id}/voice`): the drawer's voice picker. The room rows' `voice_on_server` says which kind of room it is (true: a phone in room mode, whose voice the server keeps; its `voice` is then the kept one, offline too). |
+
+### 3.7a Rooms and satellites (1.5.0)
+
+A **room** is a place; a **satellite** is a device in one room. A room may
+hold several satellites (`rooms` and `satellites`, V072). A device keeps its
+`satellite_id` for life; which room it is in is the server's assignment. Every
+device from before 1.5.0 has `satellite_id` equal to its room's `room_id`.
+Each route below proxies the core route of the same name under `/v1/admin`
+(`/api/rooms` → `/v1/admin/rooms`, `/api/satellites/{id}/room` →
+`/v1/admin/satellites/{id}/room`) at the same tier on both hops, forwarding
+the caller's credential. Errors use the usual `{"detail": "..."}` shape.
+Satellite ids and room ids follow one rule (`domovoi/room_ids.py`: lowercase
+letters, digits, `_` and `-`, starting with a letter or digit, at most 32
+characters); a path or body id that breaks it is `422` before anything is
+read. Phones show household words ("This phone is in the Kitchen") and never show
+ids.
+
+| Method + path | Tier | Body | Answer |
+|---|---|---|---|
+| `GET /api/rooms` | **Device read** | — | `RoomList` (below) |
+| `POST /api/rooms` | **Admin (Bearer)** | `{"name": "Porch"}` | `{"room_id": "porch", "name": "Porch"}`: an empty room. Its id comes from the name (lowercase, `_`, unique: `porch_2` when taken) and never changes. |
+| `PATCH /api/rooms/{room_id}` | **Admin (Bearer)** | `{"name": "Back porch"}` | `{"room_id", "name"}`. `404` no such room, `422` blank name. |
+| `DELETE /api/rooms/{room_id}` | **Admin (Bearer)** | — | `{"room_id", "deleted": true}`. Only an EMPTY room: `409` while it has satellites (move them first), `404` no such room. History keeps the id. Empty rooms are otherwise kept. |
+| `POST /api/rooms/{room_id}/merge` | **Admin (Bearer)** | `{"rooms": ["kitchen_2"]}` | `{"room_id", "merged": [...], "moved_satellites": [...], "learned_samples_dropped": N}`. Moves every satellite of `rooms` into `room_id` (each as a move, below) and deletes those rooms. Never done on its own: `GET /api/rooms` only offers it. `404` for an unknown room, `409` when a tokenless satellite would end up sharing a room, `422` when no other room is named. |
+| `POST /api/satellites/{satellite_id}/room` | **Admin (Bearer)** | `{"room_id": "den"}` or `{"new_room_name": "Den"}` (exactly one) | `{"satellite_id", "room_id", "from_room_id", "moved": bool, "learned_samples_dropped": N, "connected": bool}`. Moves the satellite. Its id never changes and its history stays with the old room; its learned voice samples go (enrolled ones stay); its speaker calibration is cleared. A connected 1.5.0 device gets a `room` frame on its stream; an older one is closed (1001) and reconnects into the new room. `moved: false` when it is already there. `404` no such satellite or room, `409` when a tokenless satellite would share a room, `422` neither or both choices. |
+| `PATCH /api/satellites/{satellite_id}/name` | **Admin (Bearer)** | `{"name": "Kitchen phone"}` (`null` or blank clears it) | `{"satellite_id", "name"}`. The device's display name. `404` no such satellite. |
+| `GET /api/satellites/approvals` | **Admin read** | — | `[Approval]` (below), oldest first. |
+| `POST /api/satellites/approvals/{satellite_id}/approve` | **Admin, security tier** | `{"code": "123456", "room_id": "kitchen"}` or `{"code": "123456", "new_room_name": "Kitchen 2"}` or `{"code": "123456"}` | `{"approved": true, "room_id": <satellite id>, "satellite_id", "into_room_id"}`, or for a device that checks the code itself `{"approved": false, "waiting_for_device": true, "room_id", "satellite_id", "into_room_id"}` (it lands in that room once it confirms). With no room sent the device goes to its `requested_room` when that room exists, else to a room of its own named by its id (as before 1.5.0). `404` unknown `room_id`, `409` when the room holds a tokenless satellite, `422` both choices sent or a wrong code (nothing is bound and no room is made); otherwise as in §2.5. |
+| `POST /api/satellites/approvals/{satellite_id}/reject` | **Admin, security tier** | — | `{"rejected": bool, "room_id"}` as before. |
+
+`RoomList`:
+
+```json
+{
+  "rooms": [
+    {
+      "room_id": "kitchen",
+      "name": "Kitchen",
+      "shared": true,
+      "linked_rooms": [],
+      "satellites": [
+        {"satellite_id": "kitchen", "name": null, "sat_type": "voice",
+         "board": null, "paired": true, "connected": true, "speaks_for_room": true},
+        {"satellite_id": "kitchen_2", "name": "Kitchen phone", "sat_type": "voice",
+         "board": "android_room", "paired": true, "connected": false,
+         "speaks_for_room": false}
+      ]
+    }
+  ],
+  "merge_offers": [{"name": "Kitchen", "rooms": ["kitchen", "kitchen_3"]}]
+}
+```
+
+Rooms come sorted by `room_id`, satellites by `satellite_id`. `shared`: more
+than one satellite. `paired`: the device holds a pairing key (a tokenless one,
+with strict pairing off, is `false` and may only be a room on its own).
+`speaks_for_room`: the live device that the room's timers, announcements and
+replies go to until synced playout lands. `merge_offers`: rooms with the same
+name (case-insensitive), offered for a merge. Nothing merges unless an admin
+asks for it.
+
+`Approval` (one row per waiting device):
+
+```json
+{
+  "satellite_id": "kitchen_2", "room_id": "kitchen_2",
+  "requested_room": "kitchen", "requested_room_name": "Kitchen",
+  "has_code": true, "proof": false, "waiting_for_device": false,
+  "code_rejected": false, "proof_failures": 0,
+  "mac": null, "board": "android_room", "sat_type": "voice",
+  "first_seen_at": "2026-11-22T18:00:00Z", "last_seen_at": "2026-11-22T18:02:10Z",
+  "attempts": 3
+}
+```
+
+`room_id` repeats `satellite_id` for older readers. `requested_room` is the
+room the device asked to join (its hello's `requested_room`, from an
+enrolment's `in=`) or the room an operator already chose for a device that
+checks its own code. `requested_room_name` is that room's name, `null` when
+no such room exists. The approval card asks "Which room is it in?": preselect
+`requested_room` when it has a name, else offer a new room named after the
+device.
+
+The stream protocol side (hello `satellite_id` / `requested_room`,
+`ready.satellite_id` / `ready.room`, the `room` frame, the
+`tokenless_shared_room` refusal) is in `domovoi/streaming.py`'s protocol
+header.
 
 ### 3.8 Calendar
 
