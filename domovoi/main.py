@@ -3965,7 +3965,9 @@ _FH_WRITE = [Depends(require_admin_security)]
 # inbox and send, see the friends and the shared lists. Header credentials
 # only (the household token or an admin Bearer): no cookie, no query token,
 # since these carry message text. Trust and household settings stay above.
-_FH_HOUSEHOLD = [Depends(require_device)]
+# No pre-setup grace: after --reset-admin the friends and messages are still
+# there, so the routes answer 501 until an admin exists again.
+_FH_HOUSEHOLD = [Depends(admin_auth_mod.require_device_after_setup)]
 
 
 def _fh_error(e: Exception) -> HTTPException:

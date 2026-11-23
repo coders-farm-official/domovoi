@@ -382,12 +382,17 @@ async def update_item(
     *,
     item_text: str | None = None,
     done: bool | None = None,
+    friend_text: bool = False,
 ) -> ItemRow | None:
+    """``friend_text``: the new text is a friend house's (a shared list), so
+    the item no longer shows as said by anyone in this house."""
     sets: list[str] = []
     params: dict[str, Any] = {"l": list_id, "id": item_id}
     if item_text is not None:
         sets.append("text = :t")
         params["t"] = _valid_text(item_text)
+        if friend_text:
+            sets += ["added_via = 'friend'", "added_by_person_id = NULL", "added_by_room = NULL"]
     if done is not None:
         sets.append("done = CAST(:d AS BOOLEAN)")
         sets.append("done_at = CASE WHEN CAST(:d AS BOOLEAN) THEN COALESCE(done_at, now()) ELSE NULL END")

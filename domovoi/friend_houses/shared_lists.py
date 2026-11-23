@@ -188,10 +188,13 @@ async def _reflect(s, space: dict[str, Any], items: dict[bytes, sp.Item],
                 existing[lid] = added
             elif visible and row is not None:
                 if row.text != item.text or row.done != item.done:
+                    # A friend's wording is shown as the friend's, never
+                    # as the household member who first added the item.
                     await core_lists.update_item(
                         s, list_id, row.id,
                         item_text=item.text if row.text != item.text else None,
-                        done=item.done if row.done != item.done else None)
+                        done=item.done if row.done != item.done else None,
+                        friend_text=item.text_at[1] == space["house_key"])
             elif not visible and row is not None and row.id not in visible_locals:
                 await core_lists.delete_item(s, list_id, row.id)
                 lid = None
@@ -365,7 +368,14 @@ async def on_envelope(friend: Any, env: fe.Envelope) -> bool:
                 # so 600 removes froze a list for good (R6 FH-15).
                 sp.merge(items, clean, friend.house_key)
         if state == "left":
-            await _set_space(s, space["id"], state="left", local_list_id=None, clock=clock)
+            if space["state"] == "invited":
+                # Withdrawn before anyone here accepted it: nothing local to
+                # keep, so the offer and what it held are forgotten, as a
+                # decline would.
+                await s.execute(text("DELETE FROM friend_houses_spaces WHERE id = :i"),
+                                {"i": space["id"]})
+            else:
+                await _set_space(s, space["id"], state="left", local_list_id=None, clock=clock)
             log.info("Friend Houses: %s stopped sharing a list", friend.local_name)
             return True
         await _set_space(s, space["id"], clock=clock)
@@ -382,12 +392,13 @@ def _visible(items: dict[bytes, sp.Item]) -> int:
 
 async def _prune_ops(s, space_id: bytes) -> None:
     """Keep the newest :data:`OPS_KEPT` applied changes from a friend (for
-    spotting a batch sent twice); older ones are already in the items."""
+    spotting a batch sent twice); older ones are already in the items.
+    Counted by rows, so changes sharing one clock value are pruned too."""
     await s.execute(text(
         "DELETE FROM friend_houses_space_ops WHERE space_id = :s AND direction = 'in' "
-        "AND state = 'applied' AND lamport < (SELECT lamport FROM friend_houses_space_ops "
+        "AND state = 'applied' AND id NOT IN (SELECT id FROM friend_houses_space_ops "
         "WHERE space_id = :s AND direction = 'in' AND state = 'applied' "
-        "ORDER BY lamport DESC OFFSET :k LIMIT 1)"), {"s": space_id, "k": OPS_KEPT})
+        "ORDER BY lamport DESC, id DESC LIMIT :k)"), {"s": space_id, "k": OPS_KEPT})
 
 
 async def accept(space_hex: str, *, name: str | None = None) -> dict[str, Any]:

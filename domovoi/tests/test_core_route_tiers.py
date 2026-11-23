@@ -637,6 +637,33 @@ def test_device_reads_are_on_the_device_tier(method, path) -> None:
     assert admin_auth.require_admin_mutation not in gates
 
 
+FRIEND_HOUSES_HOUSEHOLD = [mp for mp in DEVICE_READS if "/friend-houses" in mp[1]]
+
+
+@pytest.mark.parametrize(("method", "path"), FRIEND_HOUSES_HOUSEHOLD,
+                         ids=[f"{m} {p}" for m, p in FRIEND_HOUSES_HOUSEHOLD])
+def test_friend_houses_household_routes_have_no_pre_setup_grace_gate(method, path) -> None:
+    assert admin_auth.require_device_after_setup in _gates_for(method, path)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("method", "path"), FRIEND_HOUSES_HOUSEHOLD,
+                         ids=[f"{m} {p}" for m, p in FRIEND_HOUSES_HOUSEHOLD])
+async def test_friend_houses_household_routes_are_closed_before_setup(
+    method, path, monkeypatch
+) -> None:
+    """After --reset-admin the friends and messages are still there, so the
+    household routes answer 501, whatever is presented, until an admin
+    exists again."""
+    install_fake_db(monkeypatch, admin=False, device_token=DEVICE_TOKEN)
+    url = path.replace("{house}", "a" * 56)
+    async with _client() as c:
+        for headers in ({}, {HEADER: DEVICE_TOKEN}):
+            r = await c.request(method, url, json={} if method == "POST" else None,
+                                headers=headers)
+            assert r.status_code == 501, (path, r.status_code, r.text)
+
+
 @pytest.mark.asyncio
 async def test_voice_activity_says_busy_and_nothing_else_to_the_household_token(monkeypatch) -> None:
     """Documents plan D2, review round 1: refused with no credential after

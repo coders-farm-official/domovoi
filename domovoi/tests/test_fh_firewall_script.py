@@ -181,3 +181,26 @@ def test_the_subnet_and_bridge_agree_everywhere() -> None:
     assert "ExecStart=/usr/local/lib/domovoi-fh-firewall/fh-firewall.sh watch" in unit
     assert "Before=docker.service" in unit and "After=docker.service" not in unit  # R6 FH-14
     assert "PartOf=docker.service" in unit and "WantedBy=docker.service" in unit
+
+
+@posix_bash
+def test_ipv6_drops_everything_from_the_bridge(fake, tmp_path) -> None:
+    # The network is IPv4 only: no IPv6 destination is allowed, global
+    # addresses included. A missing ip6tables is recorded, not silent.
+    run, _rules, state, db = fake
+    assert run("apply").returncode == 0
+    assert "ipv6=absent" in (state / "applied").read_text()
+    ip6 = tmp_path / "bin" / "ip6tables"
+    ip6.write_text('#!/usr/bin/env bash\nFAKE_IPT_DB="$FAKE_IPT_DB.v6" exec iptables "$@"\n',
+                   encoding="utf-8", newline="\n")
+    ip6.chmod(0o755)
+    env_run = subprocess.run(["bash", str(SCRIPT), "apply"], capture_output=True, text=True,
+                             env={**os.environ,
+                                  "PATH": f"{tmp_path / 'bin'}:{os.environ.get('PATH', '')}",
+                                  "FAKE_IPT_DB": str(db), "FH_FIREWALL_STATE_DIR": str(state),
+                                  "IP6TABLES": "ip6tables"})
+    assert env_run.returncode == 0, env_run.stderr
+    v6 = Path(f"{db}.v6").read_text(encoding="utf-8").splitlines()
+    chain = [line for line in v6 if line.startswith("DOMOVOI-FH\t")]
+    assert chain == ["DOMOVOI-FH\t-d ::/0 -j DROP", "DOMOVOI-FH\t-j RETURN"]
+    assert "ipv6=fenced" in (state / "applied").read_text()

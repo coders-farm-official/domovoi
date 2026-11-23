@@ -2845,12 +2845,15 @@ only for open files; it is deleted, and a new address made for the next
 file, as soon as none is left. The file's secret isn't stored: it is
 derived from the house key when needed, so a database dump can't be used
 to answer a file. Making, listing and cancelling files, and everything that changes who is
-trusted or what the house does (accepting, alert levels, verifying codes,
-renaming or removing a friend, sharing lists, deleting or exporting a
-conversation) is admin security tier, reads included. What makes sense
-with friends the house already has is open to every household phone (the
-household token): reading the house inbox, sending a message, marking a
-conversation read, and seeing the friend list and the shared lists.
+trusted or what the house does (accepting, alert levels, marking a code
+as verified, renaming or removing a friend, sharing lists, deleting or
+exporting a conversation) is admin security tier, reads included. What
+makes sense with friends the house already has is open to every household
+phone (the household token): reading the house inbox, sending a message,
+marking a conversation read, and seeing the friend list and the shared
+lists. The friend list includes each friend's 4-digit code: it is a value
+to compare, not a secret (a code read here can't make a swapped friend
+file match), and only an admin can mark it verified.
 
 **The 4-digit code.** Both houses compute the same 4-digit code from
 random values each side committed to before seeing the other's (the
