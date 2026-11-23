@@ -55,6 +55,95 @@ def test_names_match_how_people_say_them() -> None:
     assert fhv.split_friend("the smiths", friends) == (smiths, "")
 
 
+# ─── more ways to say "send" (owner report: "Send Bassett House a message
+# saying, How Now, Brown Cow." went to Q&A) ──────────────────────────────
+
+BASSETT = SimpleNamespace(local_name="Bassett House", id="fb")
+
+
+@pytest.fixture(autouse=True)
+def _names_of_our_own(monkeypatch):
+    """Each test starts with the patterns knowing no friend names, and
+    leaves none behind for other modules."""
+    monkeypatch.setattr(fhv, "_NAMES", {"forms": frozenset(), "at": float("-inf"), "task": None})
+
+
+@pytest.fixture
+def bassett_known(monkeypatch):
+    """The voice patterns know one friend house, Bassett House."""
+    forms = frozenset(f.replace("'", "") for f in fhv.spoken_forms(BASSETT.local_name))
+    monkeypatch.setitem(fhv._NAMES, "forms", forms)
+    monkeypatch.setitem(fhv._NAMES, "at", time.monotonic() + 1e9)
+
+
+def _said(raw: str) -> str:
+    from domovoi.router import normalize_transcript
+
+    return normalize_transcript(raw)
+
+
+@pytest.mark.parametrize("raw,regex,body", [
+    ("Send Bassett House a message saying, How Now, Brown Cow.", "_SEND_NAMED_RE", "how now, brown cow"),
+    ("Send the Bassetts a note that, dinner's at six.", "_SEND_NAMED_RE", "dinner's at six"),
+    ("Send Bassett a message: see you soon.", "_SEND_NAMED_RE", "see you soon"),
+    ("Let the Bassetts know that we're on our way.", "_LET_KNOW_RE", "we're on our way"),
+    ("Let Bassett House know, the gate is open.", "_LET_KNOW_RE", "the gate is open"),
+])
+def test_the_name_then_the_message(bassett_known, raw, regex, body) -> None:
+    said = _said(raw)
+    assert fast_path_winner(raw) == "friend_houses"
+    m = getattr(fhv, regex).match(said)
+    assert m and fhv.split_friend(m.group("rest"), [BASSETT]) == (BASSETT, "")
+    assert fhv._body(m.group("body")) == body
+
+
+@pytest.mark.parametrize("raw,regex,body", [
+    ("Send a message to Bassett House, saying, See you soon.", "_MESSAGE_RE", "see you soon"),
+    ("Message the Bassetts saying, Dinner's at six.", "_MESSAGE_RE", "dinner's at six"),
+    ("Text Bassett House, running late.", "_TEXT_ASK_RE", "running late"),
+    ("Ask the Bassetts if they're coming on Sunday.", "_TEXT_ASK_RE", "if they're coming on sunday"),
+])
+def test_the_verb_then_the_name_and_message(bassett_known, raw, regex, body) -> None:
+    said = _said(raw)
+    assert fast_path_winner(raw) == "friend_houses"
+    m = getattr(fhv, regex).match(said)
+    assert m and fhv.split_friend(m.group("rest"), [BASSETT]) == (BASSETT, body)
+
+
+@pytest.mark.parametrize("raw", [
+    "Ask Google what time it is.",
+    "Let me know when the timer is done.",
+    "Let us know.",
+    "Text Mom I'm running late.",
+    "Ask the Joneses if they're coming.",
+    "Send the kids a message saying dinner's ready.",
+    "Let the Joneses know that we're late.",
+])
+def test_everyday_words_are_not_poached(bassett_known, raw) -> None:
+    assert fast_path_winner(raw) != "friend_houses"
+
+
+def test_no_friends_no_ask_or_text(monkeypatch) -> None:
+    monkeypatch.setitem(fhv._NAMES, "forms", frozenset())
+    monkeypatch.setitem(fhv._NAMES, "at", time.monotonic() + 1e9)
+    for raw in ("Ask Bassett House if they're coming.", "Text Bassett House hi.",
+                "Send Bassett House a message saying hi.", "Let Bassett House know hi."):
+        assert fast_path_winner(raw) != "friend_houses", raw
+
+
+def test_the_read_back_is_its_own_sentence_then_the_question() -> None:
+    assert fhv.read_back("The Smiths", "are you coming?") == (
+        "Your message to The Smiths says: are you coming? Should I send it?")
+    long = fhv.read_back("The Smiths", "word " * 400)
+    assert long.endswith("… Should I send it?") and len(long) <= fhv.PROMPT_MAX
+    assert '"' not in long
+
+
+def test_the_send_forms_are_documented() -> None:
+    for example in fhv.FriendHousesHandler.friend_send_examples:
+        assert "bassett" in example.lower()
+
+
 # ─── the flows ────────────────────────────────────────────────────────────
 
 
@@ -107,7 +196,7 @@ def _m(regex, said):
 async def test_message_reads_it_back_and_sends_only_on_yes(house) -> None:
     h = fhv.FriendHousesHandler()
     r = await h._send(_m(fhv._MESSAGE_RE, "message the smiths dinners at six"), house.ctx, house.session)
-    assert r.text == 'Send "dinners at six" to The Smiths?' and r.expect_followup
+    assert r.text == "Your message to The Smiths says: dinners at six. Should I send it?" and r.expect_followup
     parked = house.parked[0]
     no = await h.handle_confirmation(fhv.SEND_KIND, parked, False, house.ctx, house.session)
     assert "won't" in no.text and await fm.conversations() == []
@@ -115,6 +204,21 @@ async def test_message_reads_it_back_and_sends_only_on_yes(house) -> None:
     assert yes.text == "Sent to The Smiths."
     msgs = await fm.conversation(house.them.house_key)
     assert msgs[0]["body"] == "dinners at six" and msgs[0]["direction"] == "out"
+
+
+@requires_db
+async def test_send_the_name_a_message_saying_reads_it_back(house) -> None:
+    h = fhv.FriendHousesHandler()
+    await fhv.refresh_names()  # what the service does at start
+    assert "the smiths" in fhv._NAMES["forms"]
+    said = "send the smiths a message saying, how now, brown cow"
+    r = await h._send_named(_m(fhv._SEND_NAMED_RE, said), house.ctx, house.session)
+    assert r.text == "Your message to The Smiths says: how now, brown cow. Should I send it?"
+    assert r.expect_followup
+    r = await h._send(_m(fhv._TEXT_ASK_RE, "ask the smiths if theyre coming"), house.ctx, house.session)
+    assert r.text == "Your message to The Smiths says: if theyre coming. Should I send it?"
+    yes = await h.handle_confirmation(fhv.SEND_KIND, house.parked[0], True, house.ctx, house.session)
+    assert yes.text == "Sent to The Smiths."
 
 
 @requires_db
@@ -130,7 +234,7 @@ async def test_intercom_hands_a_friend_house_to_friend_houses(house) -> None:
 
     r = await IntercomHandler().execute_from_tool(
         {"room": "the Smiths", "message": "Dinner's at six"}, house.ctx, house.session)
-    assert r.text == "Send \"Dinner's at six\" to The Smiths?"
+    assert r.text == "Your message to The Smiths says: Dinner's at six. Should I send it?"
     assert house.parked and house.parked[0]["text"] == "Dinner's at six"
     other = await IntercomHandler().execute_from_tool(
         {"room": "the Joneses", "message": "Hi"}, house.ctx, house.session)
