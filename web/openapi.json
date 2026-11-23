@@ -5994,7 +5994,7 @@
           "people"
         ],
         "summary": "List Profiles",
-        "description": "A person's voice samples (metadata only, never an embedding),\nnewest first, each with its ``source``: ``satellite`` or ``phone``\n(V026), and whether it came from a name claim (V029). The dashboard's\nPeople page lists the two sets apart and marks the claims; an admin\ndeletes one with ``DELETE \u2026/profiles/{profile_id}`` (a claim goes with\nwhat rooms learned through it).\n\nOpen, but trimmed for a caller who isn't an admin (N4): no ``room_id``\non a phone sample (it is ``phone-<device id>``), and no claim details\n(where, by whom).",
+        "description": "A person's voice samples (metadata only, never an embedding),\nnewest first, each with its ``source``: ``satellite`` or ``phone``\n(V026), and whether it came from a name claim (V029). The dashboard's\nPeople page lists the two sets apart and marks the claims; an admin\ndeletes one with ``DELETE \u2026/profiles/{profile_id}`` (a claim goes with\nwhat rooms learned through it).\n\nA household device's read, like the rest of the People page, and trimmed\nfor a caller who isn't an admin (N4): no ``room_id``\non a phone sample (it is ``phone-<device id>``), and no claim details\n(where, by whom).",
         "operationId": "list_profiles_api_people__person_id__profiles_get",
         "parameters": [
           {
