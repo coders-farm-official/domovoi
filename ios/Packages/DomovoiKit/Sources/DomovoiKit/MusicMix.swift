@@ -402,12 +402,16 @@ public func readPersonMix(client: DomovoiClient, server: String, personID: Int) 
     return try DomovoiClient.decode(data, as: PersonMix.self)
 }
 
-/// `PUT /api/people/{id}/music-mix` to `server` only, naming this phone
-/// (`X-Device-Id`: the server matches its owner against `personID`).
+/// `PUT /api/people/{id}/music-mix` to `server` only, as this phone's
+/// person: `X-Device-Id` and the claim key (``claimHeaders(deviceID:claimKey:)``),
+/// as for clearing that person's listening history. The server matches the
+/// phone's owner against `personID` and, from 1.5.0, checks the key
+/// (security review 2026-11-22, L40).
 public func savePersonMix(
     client: DomovoiClient,
     server: String,
     deviceID: String,
+    claimKey: String? = nil,
     personID: Int,
     override: MixSliders?
 ) async throws(DomovoiError) -> PersonMix {
@@ -415,7 +419,7 @@ public func savePersonMix(
         method: "PUT",
         path: MusicMixPath.person(personID),
         body: MusicMixRules.personBody(override),
-        headers: [deviceIDHeader: deviceID],
+        headers: claimHeaders(deviceID: deviceID, claimKey: claimKey),
         onlyTo: server
     )
     return try DomovoiClient.decode(data, as: PersonMix.self)
@@ -509,17 +513,21 @@ public final class PersonMixModel {
     @ObservationIgnored private let client: DomovoiClient
     @ObservationIgnored private let server: @MainActor () -> String
     @ObservationIgnored private let deviceID: @MainActor () -> String?
+    /// The claim key this phone holds for a server (``ClaimBook``).
+    @ObservationIgnored private let claimKey: @MainActor (String) -> String?
     @ObservationIgnored private let say: @MainActor (String) -> Void
 
     public init(
         client: DomovoiClient,
         server: @escaping @MainActor () -> String,
         deviceID: @escaping @MainActor () -> String?,
+        claimKey: @escaping @MainActor (String) -> String? = { _ in nil },
         say: @escaping @MainActor (String) -> Void
     ) {
         self.client = client
         self.server = server
         self.deviceID = deviceID
+        self.claimKey = claimKey
         self.say = say
     }
 
@@ -595,7 +603,8 @@ public final class PersonMixModel {
         defer { busy = false }
         do throws(DomovoiError) {
             let answered = try await savePersonMix(
-                client: client, server: at, deviceID: device, personID: person, override: override
+                client: client, server: at, deviceID: device, claimKey: claimKey(at),
+                personID: person, override: override
             )
             guard current(at, person) else { return }
             answer = Answer(server: at, personID: person, mix: answered, problem: nil)
