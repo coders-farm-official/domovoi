@@ -38,7 +38,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from domovoi import egress, executors
+from domovoi import egress, executors, net_safety
 from domovoi.auth import require_admin
 from domovoi.plugins_runtime import registry as reg
 from domovoi.plugins_runtime.contracts import ContractError
@@ -1146,19 +1146,27 @@ async def download_github_zip(github_url: str) -> tuple[bytes, str]:
             ref = r.json().get("default_branch") or "main"
         url = f"https://codeload.github.com/{owner}/{repo}/zip/{ref}"
         buf = bytearray()
-        async with client.stream("GET", url, headers=headers) as resp:
+        async with client.stream(
+            "GET", url, headers={**headers, **net_safety.IDENTITY_ENCODING}
+        ) as resp:
             if resp.status_code != 200:
                 raise InstallError(
                     "github_download_failed",
                     f"codeload returned {resp.status_code} for {url}",
                 )
-            async for chunk in resp.aiter_bytes():
-                buf.extend(chunk)
-                if len(buf) > MAX_ZIP_BYTES:
-                    raise InstallError(
-                        "zip_too_large",
-                        f"download exceeded {MAX_ZIP_BYTES} bytes — aborted",
-                    )
+            try:
+                async for chunk in net_safety.iter_capped(resp, MAX_ZIP_BYTES):
+                    buf.extend(chunk)
+            except net_safety.ResponseTooLarge:
+                raise InstallError(
+                    "zip_too_large",
+                    f"download exceeded {MAX_ZIP_BYTES} bytes — aborted",
+                ) from None
+            except net_safety.UnsupportedContentEncoding:
+                raise InstallError(
+                    "github_download_failed",
+                    f"codeload sent a compressed body for {url}",
+                ) from None
     return bytes(buf), f"{github_url}@{ref}"
 
 

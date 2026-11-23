@@ -61,7 +61,10 @@ from __future__ import annotations
 #         country, or None) and sdk.places.suggest(text, limit=8) (the
 #         bundled town list); core_config.news_location is now the Home
 #         location's name.
-API_VERSION = "1.13.0"
+# 1.13.1: net_safety.open_raw_stream / iter_raw (and _sync twins):
+#         open_stream that asks for identity and refuses an encoded
+#         answer, read raw with no total cap (a live stream).
+API_VERSION = "1.13.1"
 
 from domovoi.capabilities import (  # noqa: E402,F401
     CAPABILITIES,

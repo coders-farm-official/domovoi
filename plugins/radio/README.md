@@ -222,8 +222,8 @@ apps that their own, built-in Stations screen has a server to talk to; no
 plugin can add a screen to the apps
 ([what a plugin does not get](../../docs/PLUGIN_DEVELOPMENT.md#1-concepts--what-a-plugin-can-do)).
 
-This version of the plugin (1.5.2) declares `domovoi_api = ">=1.10,<2.0"`,
-so it loads only on a Domovoi with SDK 1.10 or later (Domovoi 1.4.0).
+This version of the plugin (1.5.3) declares `domovoi_api = ">=1.13.1,<2.0"`,
+so it loads only on a Domovoi with SDK 1.13.1 or later (Domovoi 1.4.1).
 
 Layout, manifest spec, and test-harness docs:
 [`docs/PLUGIN_DEVELOPMENT.md`](../../docs/PLUGIN_DEVELOPMENT.md) in the

@@ -44,7 +44,7 @@ import weakref
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Mapping, Protocol
 
-from domovoi import egress
+from domovoi import egress, net_safety
 from domovoi.lyrics import LoopLocalLock, domovoi_version
 
 log = logging.getLogger(__name__)
@@ -323,7 +323,9 @@ class HttpLrclibClient:
             egress.require_destination(url)             # the answer may have changed meanwhile
             client = self._client()
             try:
-                async with client.stream("GET", url, params=params) as resp:
+                async with client.stream(
+                    "GET", url, params=params, headers=net_safety.IDENTITY_ENCODING
+                ) as resp:
                     status = resp.status_code
                     if status == 200:
                         body = await _read_capped(resp)
@@ -366,13 +368,15 @@ async def _read_capped(resp: Any) -> bytes:
         except ValueError:
             pass
     chunks: list[bytes] = []
-    total = 0
-    async for chunk in resp.aiter_bytes():
-        total += len(chunk)
-        if total > MAX_BODY_BYTES:
-            log.debug("LRCLIB: body over %d bytes, not read", MAX_BODY_BYTES)
-            raise LrclibUnavailable("too_large")
-        chunks.append(chunk)
+    try:
+        async for chunk in net_safety.iter_capped(resp, MAX_BODY_BYTES):
+            chunks.append(chunk)
+    except net_safety.ResponseTooLarge:
+        log.debug("LRCLIB: body over %d bytes, not read", MAX_BODY_BYTES)
+        raise LrclibUnavailable("too_large") from None
+    except net_safety.UnsupportedContentEncoding:
+        log.debug("LRCLIB: a compressed body is not read")
+        raise LrclibUnavailable("encoded") from None
     return b"".join(chunks)
 
 

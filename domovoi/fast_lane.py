@@ -78,7 +78,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from domovoi import egress
+from domovoi import egress, net_safety
 from domovoi.config import settings
 from domovoi.log_privacy import said
 
@@ -248,10 +248,16 @@ def _download(url: str, dest: Path, *, size: int) -> str:
     h = hashlib.sha256()
     written = 0
     timeout = httpx.Timeout(30.0, read=120.0)
-    with httpx.stream("GET", url, follow_redirects=True, timeout=timeout) as r:
+    with httpx.stream(
+        "GET", url, follow_redirects=True, timeout=timeout,
+        headers=net_safety.IDENTITY_ENCODING,
+    ) as r:
         r.raise_for_status()
+        # Read as it came: a compressed answer is refused, never inflated.
+        if net_safety._content_codings(r):
+            raise ModelError(f"{url} answered with a compressed body")
         with open(dest, "wb") as f:
-            for chunk in r.iter_bytes(_DOWNLOAD_CHUNK):
+            for chunk in r.iter_raw(_DOWNLOAD_CHUNK):
                 written += len(chunk)
                 if written > size:
                     raise ModelError(f"{url} is larger than the pinned {size} bytes")
