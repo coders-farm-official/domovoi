@@ -27,7 +27,7 @@ core keeps it going:
     oldest the room was heard playing go (a jump ahead leaves the songs it
     passed), so a day-long session keeps a small queue and "previous"
     still works. Never more than :data:`TRIM_MAX_BEHIND` songs stay behind,
-    heard or not.
+    heard or not, apart from the songs a jump or a move passed in one go.
 
 * **After a stream** — a song from an external source (a streaming-search
   provider's ``sdk.playback.play_url``) arms the room's session as it is
@@ -72,6 +72,9 @@ TRIM_KEEP_BEHIND = 50
 #: never heard (skipped fast, behind at a restart, queued before the session),
 #: so the behind-queue cannot grow without bound. A jump only moves the pointer.
 TRIM_MAX_BEHIND = 4 * TRIM_KEEP_BEHIND
+#: More unheard songs than this passed between two looks is a jump or a move,
+#: not playing: the songs it passed are kept, outside the hard ceiling.
+JUMP_PASSED = 3
 #: A session whose room has been paused or stopped this long ends (§5).
 IDLE_END_SEC = 2 * 3600.0
 #: After a refill that found nothing to add, wait this long before the next.
@@ -103,6 +106,11 @@ class _Seen:
     #: songids this extender saw as the current song while playing. Only
     #: these are trimmed: a jump forward leaves the entries it passed.
     heard: set[int] = field(default_factory=set)
+    #: songids at or after the current song at the last look.
+    ahead: set[int] = field(default_factory=set)
+    #: songids a jump or a move carried behind the current song unheard; the
+    #: hard ceiling never takes these (a jump removes nothing by itself).
+    kept: set[int] = field(default_factory=set)
 
 
 #: session id -> what the extender knows of it. :func:`start` writes the
@@ -581,15 +589,21 @@ async def look(room_id: str, client: Any, snap: dict[str, Any], *,
         cur = ids.index(int(songid))
     seen.heard.add(int(songid))
     seen.heard &= set(ids)
+    passed = [i for i in ids[:cur] if i in seen.ahead and i not in seen.heard]
+    if len(passed) > JUMP_PASSED:
+        seen.kept.update(passed)
+    seen.kept &= set(ids)
     if cur > TRIM_KEEP_BEHIND:
         # "Behind" is not "played": only songs the room was heard playing go,
-        # plus whatever sits beyond the hard cap behind the current song.
+        # plus whatever sits beyond the hard cap behind the current song and
+        # was not carried there by a jump or a move.
         old = [i for n, i in enumerate(ids[: cur - TRIM_KEEP_BEHIND])
-               if i in seen.heard or n < cur - TRIM_MAX_BEHIND]
+               if i in seen.heard or (n < cur - TRIM_MAX_BEHIND and i not in seen.kept)]
         trimmed = await client.queue_remove(old) if old else []
         did["trimmed"] = len(trimmed)
         ids = [i for i in ids if i not in set(trimmed)]
         cur = ids.index(int(songid))
+    seen.ahead = set(ids[cur:])
     left = len(ids) - cur - 1
     may_draw = not st.sess.ended and (st.sess.autoplay or st.sess.mode == "list")
     if left == 0 and "://" in files.get(ids[cur], "") and not stream_nearly_over(snap):

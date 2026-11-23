@@ -34,6 +34,18 @@ a way that would otherwise get reported as a bug.
 
 ## 1.4.1 (unreleased) — Printing, videos, scans and Windows update hardening
 
+- **"Download as Word" for Markdown and text files** is built in the same
+  short-lived, time-limited process as the Word copy of a formatted
+  document, and its line limit counts every kind of line break.
+- **The sheet editor's grid read and the sheet export** run in the sheets
+  worker, not on the dashboard's main loop, and a .csv's grid is read from
+  its first 8 MB.
+- **A satellite's check of a server has one deadline for the whole answer**,
+  status line and headers included, and at most 8 addresses of a server
+  name are tried. This ships with the satellite code update.
+- **Up next keeps the songs a jump or a move passed**: on a long room queue
+  only songs the room was heard playing are trimmed after a jump, and the
+  200-song ceiling behind the current song no longer takes them.
 - **The list of a person's voice samples now needs a household device**, like the
   rest of their People page.
 - **Printer discovery on a Mac install** counts only the Mac's own home

@@ -818,6 +818,14 @@ def _typed(monkeypatch, tmp_path, fp):
                                       _one_house_said=None)
 
 
+def _as_get(opener):
+    """``opener`` as the bounded GET a probe makes when it is given none."""
+    def get(url, *, timeout, limit=server_identity.HEALTH_BODY_MAX_BYTES):
+        with opener(url, timeout=timeout) as r:
+            return r.read()
+    return get
+
+
 def test_a_stripped_advert_never_sends_the_code_the_old_way(monkeypatch, tmp_path):
     """SAT-16 PoC: a device whose server was chosen for it (a typed address,
     a pinned key) asked that server ONCE per boot whether it proves
@@ -825,10 +833,8 @@ def test_a_stripped_advert_never_sends_the_code_the_old_way(monkeypatch, tmp_pat
     that one answer made it ask the old way — its code in the hello, a
     bare ``ready`` believed. Now the stripped answer does not verify, and
     the device sends nothing until it gets one that does."""
-    import urllib.request
-
     opener, fp = _proof_opener(1, strip=True)
-    monkeypatch.setattr(urllib.request, "urlopen", opener)
+    monkeypatch.setattr(server_identity, "get_bounded", _as_get(opener))
     _cfg, sat = _typed(monkeypatch, tmp_path, fp)
     _run(client.Satellite._start_house_pairing(sat))
     assert sat._house_pairing is None
@@ -836,26 +842,22 @@ def test_a_stripped_advert_never_sends_the_code_the_old_way(monkeypatch, tmp_pat
 
 
 def test_a_server_seen_proving_is_never_asked_the_old_way_again(monkeypatch, tmp_path):
-    import urllib.request
-
     opener, fp = _proof_opener(1)
-    monkeypatch.setattr(urllib.request, "urlopen", opener)
+    monkeypatch.setattr(server_identity, "get_bounded", _as_get(opener))
     cfg, _sat = _typed(monkeypatch, tmp_path, fp)
     status, house = client._probe_one_house(cfg)
     assert status == "proof" and house.fingerprint == fp
     # Later the same key answers WITHOUT the advert (signed that way, so it
     # verifies): a downgrade — never the old way for it again.
     older, _ = _proof_opener(None)
-    monkeypatch.setattr(urllib.request, "urlopen", older)
+    monkeypatch.setattr(server_identity, "get_bounded", _as_get(older))
     assert client._probe_one_house(cfg)[0] == "unknown"
     assert client._legacy_approval_code(cfg) is None
 
 
 def test_an_older_server_that_proves_its_key_keeps_the_old_flow(monkeypatch, tmp_path):
-    import urllib.request
-
     older, fp = _proof_opener(None)
-    monkeypatch.setattr(urllib.request, "urlopen", older)
+    monkeypatch.setattr(server_identity, "get_bounded", _as_get(older))
     cfg, _sat = _typed(monkeypatch, tmp_path, fp)
     assert client._probe_one_house(cfg) == ("legacy", None)
     assert client._legacy_approval_code(cfg) == CODE
