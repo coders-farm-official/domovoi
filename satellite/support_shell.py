@@ -27,9 +27,10 @@ docs/SECURITY_PRIVACY.md, "Support sessions". This side:
   nonce, the session id and a sequence number that rises on every frame of
   the connection. The key is the device's support key
   (``~/.domovoi/support_key``, made once); the server pins its public half
-  when an admin turns the switch on, and every server frame names the key
-  it pinned: a frame naming another key is refused here, so a key swapped
-  in the hello never reaches the shell.
+  when an admin approves this device's pairing (the approval exchange
+  binds it: satellite/pairing_proof.py, version 3), and every server frame
+  names the key it pinned: a frame naming another key is refused here, so
+  a key swapped in the hello never reaches the shell.
 * **The shell.** A PTY running the account's login shell as this process's
   own user (not root, on a device that declares it), inside a sandbox of
   its own (satellite/support_sandbox.py): user, mount, PID and IPC

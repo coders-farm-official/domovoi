@@ -9443,8 +9443,9 @@ class Satellite(pc_engine.SpareDeviceEngine):
         if support is not None and support.declared:
             hello["support_nonce"] = support.new_connection()
             # The public half of this device's support key: the core pins it
-            # when an admin turns the switch on and checks every support
-            # frame this device sends against it.
+            # when an admin approves this device's pairing (a proof run binds
+            # it into the exchange, satellite/house_pairing.py) and checks
+            # every support frame this device sends against it.
             hello["support_key"] = support.support_key
         # A spare computer says what it is and what it can do (its board and
         # its `supports` list), so the core never sends it a Pi-only frame.

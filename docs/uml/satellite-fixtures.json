@@ -1531,14 +1531,18 @@
     "no_line": "Okay, I won't."
   },
   "pairing_proof": {
-    "about": "The approval exchange (satellite/pairing_proof.py, docs/uml/satellite-protocol.md). Version 2 (1.5.0) binds SHA-256(pairing_token) into the transcript: transcript = 'domovoi-pairing-proof-v2' || lp(sha256(token), 32 bytes) || lp(room_id) || lp(fingerprint) || lp(X) || lp(Y) || lp(Z) || lp(w); lp = 8-byte little-endian length, then the bytes; X, Y, Z, w as 256-byte big-endian; K = SHA-256(transcript); device tag = HMAC-SHA256(K, 'device confirms'), server tag = HMAC-SHA256(K, 'server confirms'). Version 1 is the same without the token field, under 'domovoi-pairing-proof-v1'. A device adds hello_v2_adds only for a server whose /v1/health SIGNED pairing_proof >= 2. The vector's elements are placeholders for the transcript only (hex, no leading zeros).",
-    "version": 2,
+    "about": "The approval exchange (satellite/pairing_proof.py, docs/uml/satellite-protocol.md). Version 2 (1.5.0) binds SHA-256(pairing_token) into the transcript: transcript = 'domovoi-pairing-proof-v2' || lp(sha256(token), 32 bytes) || lp(room_id) || lp(fingerprint) || lp(X) || lp(Y) || lp(Z) || lp(w); lp = 8-byte little-endian length, then the bytes; X, Y, Z, w as 256-byte big-endian; K = SHA-256(transcript); device tag = HMAC-SHA256(K, 'device confirms'), server tag = HMAC-SHA256(K, 'server confirms'). Version 1 is the same without the token field, under 'domovoi-pairing-proof-v1'. Version 3 (1.5.0) also binds the hello's support_key string (UTF-8, as sent; empty for a device that sends none) right after the token hash, under 'domovoi-pairing-proof-v3': transcript = 'domovoi-pairing-proof-v3' || lp(sha256(token)) || lp(support_key) || lp(room_id) || ...; the core pins that key when the run approves the device. A device adds hello_v2_adds only for a server whose /v1/health SIGNED pairing_proof >= 2, hello_v3_adds (instead) only for one that signed >= 3. The vector's elements are placeholders for the transcript only (hex, no leading zeros).",
+    "version": 3,
     "supported": [
       1,
-      2
+      2,
+      3
     ],
     "hello_v2_adds": {
       "pairing_proof": 2
+    },
+    "hello_v3_adds": {
+      "pairing_proof": 3
     },
     "v2_tag_vector": {
       "room_id": "kitchen",
@@ -1551,6 +1555,21 @@
       "w": "75bcd15",
       "device_tag": "8f79d661cb5c3ac00b310d5721c99338aef7f51bb158bab31305e6d5e0a3b1d1",
       "server_tag": "669d77f82ec6ff9aa75ffedc245e220c44d67b406809079cc61b68b91106e95e"
+    },
+    "v3_tag_vector": {
+      "room_id": "kitchen",
+      "fingerprint": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "token": "placeholder-pairing-token",
+      "token_hash": "d4e709efcb626cc9210675e65456f481cc18126d65a6ff44224cf733d601e240",
+      "x": "20",
+      "y": "80",
+      "z": "800",
+      "w": "75bcd15",
+      "support_key": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+      "device_tag": "b4ed3ed91dbac18a7ba254212601ccc0e134d9dc8115a82fb38153c690aa8299",
+      "server_tag": "83b75b9dcb11ce2c2d0f828085d9ef0585aa0d40eae192f6a97d938f0d7018b9",
+      "no_key_device_tag": "4703028b45f9581c5d97f603e38be819fd18bb11ad8fc2e207231a68557600a1",
+      "no_key_server_tag": "9544010d9011bec7e9fbf6e486ee43812eeea28892b9b7e88da574663c08478e"
     }
   },
   "room_display_frames": {

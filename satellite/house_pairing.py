@@ -455,10 +455,23 @@ async def _visit(
     # server that SIGNED it speaks version 2 (an older core would compute
     # the version-1 transcript, and the run would fail as a wrong code).
     token_bound = house.proof_version >= pairing_proof.TOKEN_BOUND
+    # Version 3 binds this hello's support key as well (as sent, "" for
+    # none): the server pins it when this run approves the device, so the
+    # key a person approved is the one this device holds.
+    key_bound = house.proof_version >= pairing_proof.KEY_BOUND
     frame_out.pop("pairing_proof", None)
-    if token_bound:
+    if key_bound:
+        frame_out["pairing_proof"] = pairing_proof.KEY_BOUND
+    elif token_bound:
         frame_out["pairing_proof"] = pairing_proof.TOKEN_BOUND
     token_hash = pairing_proof.token_digest(token) if token_bound else None
+    support_key: str | None = None
+    if key_bound:
+        sent = frame_out.get("support_key")
+        if not isinstance(sent, str):
+            frame_out.pop("support_key", None)
+            sent = ""
+        support_key = sent
     async with connect(_stream_url(house, room_id)) as ws:
         await ws.send(json.dumps(frame_out))
         while True:
@@ -487,6 +500,7 @@ async def _visit(
                 tag = await asyncio.to_thread(
                     exchange.answer, frame.get("pake"),
                     room_id=room_id, fingerprint=house.fingerprint, token_hash=token_hash,
+                    support_key=support_key,
                 )
                 if tag is None:
                     return Visit("refused", "the challenge was not a valid exchange message")

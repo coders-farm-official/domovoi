@@ -40,9 +40,14 @@ docs/uml/satellite-protocol.md has the frames. In short:
   under the same context with the ``satellite-to-server`` label, over its
   id, the connection's nonce, the session id and a sequence number that
   rises on every frame of the connection; only the signed values are used.
-  The key is pinned (``satellites.support_key``, V082) when an admin turns
-  the switch on, from the key the connected satellite presents; a
-  satellite presenting any other key is not offered sessions. A frame
+  The key is pinned (``satellites.support_key``, V082/V083) when an admin
+  APPROVES the satellite's pairing: a device that proves its approval
+  binds the key into that exchange (satellite/pairing_proof.py, version
+  3), one approved by its code had it in the parked hello. A re-pair
+  re-pins. A satellite presenting any other key is not offered sessions,
+  and the dashboard's room drawer says its key changed. A satellite
+  paired before this has none pinned: turning the switch on pins the key
+  it presents then (trust at that moment, which the confirm dialog says). A frame
   that fails the check is dropped and logged without its content, and
   counts for nothing: a forged close or a run of forged frames ends no
   session (a missing close runs into the session's own limits).
@@ -79,6 +84,12 @@ from domovoi.db.session import session_scope
 log = logging.getLogger(__name__)
 
 ABILITY = "support_shell"
+
+#: What an admin is told when the connected satellite's key is not the
+#: pinned one (the route's 409; the drawer shows the same words).
+KEY_CHANGED_DETAIL = (
+    "this satellite's support key changed; re-pair it to use support sessions"
+)
 
 # ─── Limits (module constants; tests monkeypatch these) ───────────────────
 
@@ -549,6 +560,19 @@ def key_is_pinned(sat: Any, pinned: str | None) -> bool:
     return bool(pinned) and isinstance(key, str) and hmac.compare_digest(key, str(pinned))
 
 
+def note_key_changed(sat: Any, pinned: str | None) -> bool:
+    """Mark the connection (``support_key_changed``) when a key is pinned
+    and it presents a different one; clear it otherwise. Only the support
+    side reads it: the room drawer's note and nothing about voice use."""
+    key = getattr(sat, "support_key", None)
+    changed = bool(pinned) and bool(key) and not key_is_pinned(sat, pinned)
+    try:
+        sat.support_key_changed = changed
+    except AttributeError:  # pragma: no cover - a frozen stand-in
+        pass
+    return changed
+
+
 class FrameRefused(Exception):
     """A satellite's support frame failed its signature check."""
 
@@ -619,12 +643,17 @@ async def send_allow_state(app: Any, sat: Any, allowed: bool | None = None) -> b
         return False
     if allowed is None:
         allowed = bool(row and row.support_allowed)
-    if allowed and not key_is_pinned(sat, row.support_key if row is not None else None):
-        # Only the key pinned when the switch went on is trusted: another
-        # one (a reflashed card, or one put in the hello by a host in the
-        # middle) is not armed. Turning the switch off and on pins anew.
+    pinned = row.support_key if row is not None else None
+    # The room drawer's note (main.py's snapshot): a key is pinned and this
+    # connection presents a different one. Voice use is not affected.
+    note_key_changed(sat, pinned)
+    if allowed and not key_is_pinned(sat, pinned):
+        # Only the pinned key is trusted (pinned at the pairing's approval,
+        # or by the switch for a satellite paired before that): another one
+        # (a reflashed card, or one put in the hello by a host in the
+        # middle) is not armed. A re-pair is what pins a new one.
         log.warning("support: %s presented a support key other than the pinned one; "
-                    "not allowing sessions (turn the switch off and on to trust it)",
+                    "not allowing sessions (re-pair it to pin its key)",
                     satellite_of(sat))
         allowed = False
     try:

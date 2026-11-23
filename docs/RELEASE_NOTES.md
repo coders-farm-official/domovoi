@@ -578,6 +578,21 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
   shell can read the satellite's settings but no longer change them; use
   the dashboard. Both the sandbox and the signing want a check on real
   hardware.
+- **The support key is pinned when the pairing is approved (2026-11-23).**
+  The satellite's support key now rides its pairing request: a device that
+  proves its approval binds the key into that exchange (`/v1/health` now
+  says `pairing_proof: 3`; a 1.5.0 core still approves devices running
+  versions 1 and 2), and the core pins it when the admin approves, so a
+  key swapped on the way fails the approval instead of being trusted. A
+  request approved by its code pins the key its hello carried (migration
+  V083). A re-pair pins the key again. A satellite that later presents
+  another key gets no support session, the switch won't turn on for it,
+  its voice use is unchanged, and its room drawer says "this satellite's
+  support key changed; re-pair it to use support sessions". Turning the
+  switch off no longer forgets the key. A satellite paired before this has
+  no key pinned until it is re-paired; turning its switch on still trusts
+  the key it presents at that moment, and the dashboard asks first and
+  says so.
 
 ## 1.5.0 (unreleased) — Diagnostics for a satellite, in its room drawer
 

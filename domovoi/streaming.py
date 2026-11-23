@@ -746,6 +746,19 @@ HELLO_MAX_CHARS = 64 * 1024
 LEGACY_APPROVAL_CODE_DIGITS = 4
 
 
+def _clean_support_key(value: Any) -> str | None:
+    """A support key in canonical form (domovoi/support_sessions.py), or
+    None."""
+    from domovoi import support_sessions
+
+    return support_sessions.clean_key(value)
+
+
+def _hello_support_key(ctrl: dict[str, Any]) -> str | None:
+    """The support key a hello presents (canonical), or None."""
+    return _clean_support_key(ctrl.get("support_key"))
+
+
 def _is_approval_code(code: str) -> bool:
     """:data:`APPROVAL_CODE_DIGITS` ASCII digits, or the
     :data:`LEGACY_APPROVAL_CODE_DIGITS` an older satellite still carries:
@@ -3361,6 +3374,9 @@ class StreamSession:
             takeover_after_sec=APPROVAL_TAKEOVER_SEC,
             requested_room=(_requested_room(ctrl)
                                 or await _invited_room(s, self.satellite_id)),
+            # Pinned when the operator approves (support sessions, 1.5.0):
+            # it rides the same hello as the token this approval binds.
+            support_key=_hello_support_key(ctrl),
         )
         if outcome == "full":
             await self._approvals_full()
@@ -3561,7 +3577,8 @@ class StreamSession:
             })
             return False
         return await self._prove_approval(token_hash, entered[0], pake, entered_at=entered[1],
-                                          proof_version=proof_version)
+                                          proof_version=proof_version,
+                                          support_key=ctrl.get("support_key"))
 
     async def _proof_unavailable(self, e: BaseException) -> bool:
         log.warning("pairing: room=%s proof request failed: %s", self.satellite_id, e)
@@ -3599,7 +3616,8 @@ class StreamSession:
             log.debug("pairing: could not keep the typed code: %s", e)
 
     async def _prove_approval(self, token_hash: str, code: str, pake: Any,
-                              *, entered_at: Any = None, proof_version: int = 1) -> bool:
+                              *, entered_at: Any = None, proof_version: int = 1,
+                              support_key: Any = None) -> bool:
         """Run the exchange for a code an operator typed (taken off the row
         for this run).
 
@@ -3620,10 +3638,18 @@ class StreamSession:
         ``proof_version`` 2 (the hello said ``pairing_proof: 2``) binds the
         token this room is about to be bound to into the transcript: a hello
         whose token was swapped on the way makes the device's confirmation
-        fail here, so nothing is bound."""
+        fail here, so nothing is bound.
+
+        ``proof_version`` 3 binds the hello's ``support_key`` as well (the
+        string exactly as received, ``""`` for none), and an approval pins
+        that key for the device (``satellites.support_key``): the key the
+        operator approved is the one the device holds. An approval by an
+        older exchange pins none (and drops a pin left from before)."""
         from domovoi import server_identity as core_identity
         from satellite import pairing_proof
 
+        key_bound = proof_version >= pairing_proof.KEY_BOUND
+        bound_key = (support_key if isinstance(support_key, str) else "") if key_bound else None
         try:
             fingerprint = core_identity.load_or_create().fingerprint
             # Four 2048-bit exponentiations: off the event loop.
@@ -3631,6 +3657,7 @@ class StreamSession:
                 pairing_proof.ServerExchange, code, pake,
                 room_id=self.satellite_id, fingerprint=fingerprint,
                 token_hash=token_hash if proof_version >= pairing_proof.TOKEN_BOUND else None,
+                support_key=bound_key,
             )
         except (OSError, ValueError) as e:
             await self._put_code_back(token_hash, code, entered_at)
@@ -3678,7 +3705,8 @@ class StreamSession:
         try:
             async with session_scope() as s:
                 result = await SatelliteApprovalRepository(s).promote_proven(
-                    self.satellite_id, token_hash
+                    self.satellite_id, token_hash,
+                    support_key=_clean_support_key(bound_key),
                 )
         except Exception as e:  # noqa: BLE001 — fail closed
             log.warning("pairing: room=%s could not record the approval: %s", self.satellite_id, e)

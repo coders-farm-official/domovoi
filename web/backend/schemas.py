@@ -765,6 +765,14 @@ class Satellite(BaseModel):
     # Pi on a prepared card whose account can't use sudo).
     support_allowed: bool = False
     support_shell: bool = False
+    # Whether a support key is pinned for the device (at its pairing's
+    # approval, or by the switch for one paired before that): when not,
+    # turning the switch on trusts the key it presents then, and the
+    # dashboard's confirm dialog says so. ``support_key_changed``: the
+    # CONNECTED device presents a key other than the pinned one (no
+    # support sessions until it is re-paired; voice use is unaffected).
+    support_key_pinned: bool = False
+    support_key_changed: bool = False
     # Whether the CONNECTED satellite declared mic_dsp (an XVF3800 with
     # xvf_host, 1.4.1): only then does its Settings tab offer the admin
     # Microphone DSP presets (GET/POST /api/satellites/{room}/mic_dsp).

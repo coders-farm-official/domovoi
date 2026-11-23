@@ -36188,6 +36188,16 @@
             "title": "Support Shell",
             "default": false
           },
+          "support_key_pinned": {
+            "type": "boolean",
+            "title": "Support Key Pinned",
+            "default": false
+          },
+          "support_key_changed": {
+            "type": "boolean",
+            "title": "Support Key Changed",
+            "default": false
+          },
           "mic_dsp": {
             "type": "boolean",
             "title": "Mic Dsp",

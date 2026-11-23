@@ -69,7 +69,7 @@ async def _require_fresh(request: Request) -> str:
 async def _satellite_row(satellite_id: str) -> Any:
     async with session_scope() as s:
         row = (await s.execute(
-            text("SELECT satellite_id, room_id, support_allowed FROM satellites "
+            text("SELECT satellite_id, room_id, support_allowed, support_key FROM satellites "
                  "WHERE satellite_id = :id"),
             {"id": satellite_id},
         )).first()
@@ -85,29 +85,46 @@ async def _satellite_row(satellite_id: str) -> Any:
 async def support_allow(satellite_id: str, request: Request) -> dict[str, Any]:
     """Turn "Allow support sessions" ON for one satellite: the security
     tier, and a password sign-in within the last five minutes. The
-    satellite must be connected: this pins the support key it presents
-    (``satellites.support_key``), the only key its session frames are
-    accepted under from then on."""
+    satellite must be connected and present a support key.
+
+    The key it must present is the one pinned when its pairing was
+    approved (``satellites.support_key``, V083): a different one is
+    refused (409: re-pair it). A satellite paired before keys were pinned
+    at approval has none pinned, and then — only then — this pins the key
+    it presents now (``key_trusted_now`` in the answer), as the switch did
+    before; the dashboard's confirm dialog says so first."""
     await _require_fresh(request)
-    await _satellite_row(satellite_id)
+    row = await _satellite_row(satellite_id)
     target = support_sessions.live_satellite(request.app, satellite_id)
     key = getattr(target, "support_key", None) if target is not None else None
     if target is None or not key:
         raise HTTPException(
             status_code=409,
-            detail=("connect the satellite first: turning this on trusts the support key it "
+            detail=("connect the satellite first: support sessions need the support key it "
                     "presents (a satellite without one doesn't offer support sessions)"),
         )
+    pinned = row.support_key or None
+    if pinned and not support_sessions.key_is_pinned(target, pinned):
+        log.warning("support: %s presents a support key other than the one pinned at "
+                    "its approval; not allowing sessions", satellite_id)
+        raise HTTPException(status_code=409, detail=support_sessions.KEY_CHANGED_DETAIL)
     async with session_scope() as s:
         await s.execute(
-            text("UPDATE satellites SET support_allowed = true, support_key = :key, "
+            text("UPDATE satellites SET support_allowed = true, "
+                 "support_key = COALESCE(support_key, :key), "
                  "updated_at = now() WHERE satellite_id = :id"),
             {"id": satellite_id, "key": key})
-    log.info("support sessions allowed on %s (support key pinned)", satellite_id)
+    if pinned:
+        log.info("support sessions allowed on %s (its key was pinned at approval)", satellite_id)
+    else:
+        log.warning("support sessions allowed on %s, which was paired before support keys "
+                    "were pinned at approval: the key it presents now is trusted from "
+                    "here on (re-pair it to pin one at approval)", satellite_id)
     # The satellite holds its own copy of the switch, set only by a signed
     # frame (satellite/support_shell.py): until it has one, it refuses.
     await support_sessions.send_allow_state(request.app, target, True)
-    return {"satellite_id": satellite_id, "support_allowed": True}
+    return {"satellite_id": satellite_id, "support_allowed": True,
+            "key_trusted_now": not pinned}
 
 
 @router.post(
@@ -115,11 +132,13 @@ async def support_allow(satellite_id: str, request: Request) -> dict[str, Any]:
     dependencies=[Depends(require_admin_mutation)],
 )
 async def support_disallow(satellite_id: str, request: Request) -> dict[str, Any]:
-    """Turn it OFF (any admin): an open session on it ends."""
+    """Turn it OFF (any admin): an open session on it ends. The pinned
+    support key stays: it belongs to the device's pairing, not the switch
+    (a re-pair is what changes it)."""
     await _satellite_row(satellite_id)
     async with session_scope() as s:
         await s.execute(
-            text("UPDATE satellites SET support_allowed = false, support_key = NULL, "
+            text("UPDATE satellites SET support_allowed = false, "
                  "updated_at = now() WHERE satellite_id = :id"), {"id": satellite_id})
     ended = await support_sessions.get_manager(request.app).end_for_satellite(
         satellite_id, "switch_off")
@@ -173,11 +192,7 @@ async def support_open(satellite_id: str, body: OpenBody, request: Request) -> d
                 support_sessions.ABILITY),
         )
     if not support_sessions.key_is_pinned(target, await support_sessions.pinned_key(satellite_id)):
-        raise HTTPException(
-            status_code=409,
-            detail=("this satellite presents a support key other than the one pinned when "
-                    "support sessions were allowed: turn Allow support sessions off and on again"),
-        )
+        raise HTTPException(status_code=409, detail=support_sessions.KEY_CHANGED_DETAIL)
     if getattr(target, "dropin_peer", None) is not None:
         raise HTTPException(status_code=409, detail="the room is in a drop-in call")
     if getattr(target, "wake_recording", None) is not None:

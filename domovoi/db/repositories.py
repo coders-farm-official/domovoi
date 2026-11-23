@@ -2588,6 +2588,7 @@ class SatelliteApprovalRepository:
         takeover_after_sec: float | None = None,
         proof: bool = False,
         requested_room: str | None = None,
+        support_key: str | None = None,
     ) -> tuple[str, str | None]:
         """Record (or refresh) a pending approval.
 
@@ -2631,8 +2632,16 @@ class SatelliteApprovalRepository:
         ``mac`` and ``sat_type`` are the device's own words and are bounded
         here. Returns ``("full", None)`` when :data:`MAX_PENDING_APPROVALS`
         requests already wait and none of them is this room's.
+
+        ``support_key`` (V083): the support key the parked hello presented
+        (canonical, or None), pinned for the device when an operator
+        approves this request by its code (:meth:`approve`). The latest
+        hello's key is kept, like its other metadata. A proof request
+        keeps none: its key is bound into the exchange that approves it
+        and passed to :meth:`promote_proven` from that run's hello.
         """
         from domovoi.satellite_abilities import clean_mac, clean_sat_type
+        from domovoi.support_sessions import clean_key
 
         await self.purge_expired()
         mac = clean_mac(mac)
@@ -2657,8 +2666,8 @@ class SatelliteApprovalRepository:
                 text(
                     "INSERT INTO satellite_approvals "
                     "(satellite_id, token_hash, code, mac, board, sat_type, proof, "
-                    "requested_room) "
-                    "VALUES (:r, :h, :c, :m, :b, :t, :p, :room) "
+                    "requested_room, support_key) "
+                    "VALUES (:r, :h, :c, :m, :b, :t, :p, :room, :k) "
                     "ON CONFLICT (satellite_id) DO UPDATE SET "
                     "code = CASE WHEN EXCLUDED.proof THEN NULL "
                     f"WHEN {same} "
@@ -2682,7 +2691,8 @@ class SatelliteApprovalRepository:
                     "ELSE EXCLUDED.requested_room END, "
                     "token_hash = EXCLUDED.token_hash, "
                     "mac = EXCLUDED.mac, board = EXCLUDED.board, "
-                    "sat_type = EXCLUDED.sat_type, last_seen_at = now() "
+                    "sat_type = EXCLUDED.sat_type, support_key = EXCLUDED.support_key, "
+                    "last_seen_at = now() "
                     f"WHERE {same} "
                     "OR (CAST(:takeover AS double precision) IS NOT NULL "
                     "AND satellite_approvals.first_seen_at <= now() - "
@@ -2694,6 +2704,7 @@ class SatelliteApprovalRepository:
                     "c": None if proof else code,
                     "m": mac, "b": board, "t": sat_type, "p": bool(proof),
                     "room": requested_room,
+                    "k": None if proof else clean_key(support_key),
                     "takeover": (
                         None if takeover_after_sec is None
                         else float(takeover_after_sec)
@@ -2850,7 +2861,7 @@ class SatelliteApprovalRepository:
                 text(
                     "DELETE FROM satellite_approvals WHERE satellite_id = :r "
                     "AND token_hash = :h AND code = :c "
-                    "RETURNING token_hash, board, sat_type, requested_room"
+                    "RETURNING token_hash, board, sat_type, requested_room, support_key"
                 ),
                 {"r": room_id, "h": pending.token_hash, "c": stored},
             )
@@ -2860,15 +2871,22 @@ class SatelliteApprovalRepository:
             # parked another device under the name: the code checked was
             # not that device's, so nothing is bound.
             return "not_pending"
-        await self._bind(room_id, row)
+        await self._bind(room_id, row, support_key=row.support_key)
         return "approved"
 
-    async def _bind(self, room_id: str, row: Any) -> None:
+    async def _bind(self, room_id: str, row: Any, *, support_key: str | None) -> None:
         """Write the pairing for a request just taken off the list (``row``:
         its token_hash, board, sat_type and requested_room). The device gets
         an inventory row and, when new, a room of its own (V073), unless
         the request names an existing room: then it goes there (1.5.0), and
-        a room of its own made a moment ago for it is not kept."""
+        a room of its own made a moment ago for it is not kept.
+
+        ``support_key`` (1.5.0): the support key the approved device
+        presented, pinned now (``satellites.support_key``) — or None, which
+        drops a pin left by an earlier pairing: an approval is a new
+        decision about which device this is, and an old device's key must
+        not outlive it. The "Allow support sessions" switch is left as it
+        was; only the pinned key is ever trusted under it."""
         sats = SatellitesRepository(self.s)
         fresh = await sats.room_of(room_id) is None
         made_own = fresh and await RoomsRepository(self.s).get(room_id) is None
@@ -2892,6 +2910,13 @@ class SatelliteApprovalRepository:
                 "last_seen_at = now()"
             ),
             {"r": room_id, "h": row.token_hash},
+        )
+        await self.s.execute(
+            text(
+                "UPDATE satellites SET support_key = :k, updated_at = now() "
+                "WHERE satellite_id = :r"
+            ),
+            {"r": room_id, "k": support_key},
         )
         if row.board:
             # The board the parked hello named (S0): kept on approval, so the
@@ -2985,11 +3010,16 @@ class SatelliteApprovalRepository:
             {"r": room_id, "h": token_hash},
         )
 
-    async def promote_proven(self, room_id: str, token_hash: str) -> str:
+    async def promote_proven(self, room_id: str, token_hash: str, *,
+                             support_key: str | None = None) -> str:
         """Bind the room to the device whose proof request this is, once
         the device has confirmed the code the operator typed (the exchange
         in domovoi/streaming.py). ``"approved"`` or ``"not_pending"`` (the
-        request was rejected, expired or taken over meanwhile)."""
+        request was rejected, expired or taken over meanwhile).
+
+        ``support_key``: the key that run's transcript bound (version 3),
+        pinned for the device; None for an older exchange, which binds
+        none."""
         row = (
             await self.s.execute(
                 text(
@@ -3002,7 +3032,7 @@ class SatelliteApprovalRepository:
         ).first()
         if row is None:
             return "not_pending"
-        await self._bind(room_id, row)
+        await self._bind(room_id, row, support_key=support_key)
         return "approved"
 
     async def withdraw(self, room_id: str, token_hash: str) -> bool:
