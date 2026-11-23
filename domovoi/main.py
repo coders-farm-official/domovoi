@@ -4179,9 +4179,14 @@ async def admin_friend_houses_withdraw(request_id: str) -> dict[str, Any]:
 
 @app.get("/v1/admin/friend-houses/friends", dependencies=_FH_HOUSEHOLD)
 async def admin_friend_houses_friends() -> dict[str, Any]:
-    from domovoi.friend_houses import friending
+    """The friends, and ``quiet_hours``: null, or which connected rooms are
+    in quiet hours now (``rooms``: all | some), ``until`` ("HH:MM", the
+    house's clock) and ``read_later`` (false: a message that comes meanwhile
+    is never said in those rooms; it waits in the inbox)."""
+    from domovoi.friend_houses import friending, messages
 
-    return {"friends": await friending.list_friends()}
+    return {"friends": await friending.list_friends(),
+            "quiet_hours": await messages.quiet_hours_now()}
 
 
 @app.post("/v1/admin/friend-houses/friends/{friend_id}/verified", dependencies=_FH_WRITE)

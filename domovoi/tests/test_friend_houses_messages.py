@@ -293,6 +293,66 @@ async def test_sender_and_read_aloud_levels(house) -> None:
         await fm.set_alert("fthem", "shout")
 
 
+def _quiet_night(monkeypatch) -> None:
+    """The house's quiet hours on (22:00-07:00) and the clock at 23:34."""
+    from datetime import datetime
+
+    from domovoi import quiet_hours
+    from domovoi.config import settings
+
+    monkeypatch.setattr(settings, "quiet_hours_enabled", True)
+    monkeypatch.setattr(settings, "quiet_hours_start", "22:00")
+    monkeypatch.setattr(settings, "quiet_hours_end", "07:00")
+    monkeypatch.setattr(quiet_hours, "_local_now", lambda: datetime(2026, 11, 22, 23, 34))
+
+
+@requires_db
+async def test_a_message_in_quiet_hours_is_held_and_marked(house, monkeypatch) -> None:
+    _quiet_night(monkeypatch)
+    assert await fm.quiet_hours_now() == {"rooms": "all", "until": "07:00", "read_later": False}
+    await fm.set_alert("fthem", "read")
+    _, event = _incoming(house, body="Still up?")
+    await fm.on_message(event)
+    await house.drain()
+    assert house.spoken == []
+    [row] = await fm.conversation(house.them.house_key)
+    assert row["held"] == "quiet_hours" and row["last_error"] is None and row["state"] == "unread"
+    # Not said later either: nothing waits to be read out.
+    assert fm.QUIET_READ_LATER is False
+
+
+@requires_db
+async def test_an_inbox_only_or_daytime_message_is_not_marked_held(house, monkeypatch) -> None:
+    _quiet_night(monkeypatch)
+    _, event = _incoming(house)  # the default: inbox only
+    await fm.on_message(event)
+    await house.drain()
+    from domovoi.config import settings
+
+    monkeypatch.setattr(settings, "quiet_hours_enabled", False)
+    assert await fm.quiet_hours_now() is None
+    await fm.set_alert("fthem", "sender")
+    _, event = _incoming(house, seq=2)
+    await fm.on_message(event)
+    await house.drain()
+    assert house.spoken == ["A message from The Smiths."]
+    assert [r["held"] for r in await fm.conversation(house.them.house_key)] == [None, None]
+
+
+@requires_db
+async def test_the_friends_route_says_whether_quiet_hours_are_on(house, monkeypatch) -> None:
+    from domovoi import main
+
+    _quiet_night(monkeypatch)
+    out = await main.admin_friend_houses_friends()
+    assert out["quiet_hours"] == {"rooms": "all", "until": "07:00", "read_later": False}
+    assert [f["name"] for f in out["friends"]] == ["The Smiths"]
+    from domovoi.config import settings
+
+    monkeypatch.setattr(settings, "quiet_hours_enabled", False)
+    assert (await main.admin_friend_houses_friends())["quiet_hours"] is None
+
+
 @requires_db
 async def test_announcements_from_one_friend_are_spaced_out(house) -> None:
     await fm.set_alert("fthem", "sender")

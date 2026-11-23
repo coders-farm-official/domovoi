@@ -175,6 +175,11 @@ a way that would otherwise get reported as a bug.
   aloud (messages and shared lists).
 - Friend Houses: a friend's messages and names read aloud stay out of the
   chat model's history, and "double check that" declines such a reply.
+- Friend Houses: a friend set to "say who it's from" or "read aloud" now
+  shows, during quiet hours, that new messages wait in the inbox until they
+  end and won't be said later (or that only some rooms are quiet), and a
+  message that wasn't said because of quiet hours is marked "held for
+  quiet hours" in Messages.
 - A guest's "play this one" on a room that stopped in the meantime is
   refused, so a guest never starts a stopped room.
 - A room's queue looks up the songs it can't place by path in one query
