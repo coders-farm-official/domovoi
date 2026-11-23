@@ -360,7 +360,7 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
 - **What changed.** For the rare fault the Diagnostics tab can't explain,
   an admin can open a shell on one satellite from its drawer's Settings tab
   (**Open support session**), as the satellite's own service account,
-  never root. It is off for every satellite until an admin turns on
+  not root. It is off for every satellite until an admin turns on
   **Allow support sessions** for that one. New: the `support_shell` hello
   key and the `support_*` frames (docs/uml/satellite-protocol.md), the
   routes under `/v1/admin/satellites/{id}/support/*` and
@@ -380,6 +380,26 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
   offers it, so press **Upgrade satellite** first; spare computers and
   phones don't. The light's colour and pace still want a check on real
   hardware. SECURITY_PRIVACY.md, "Support sessions".
+- **Security review fixes (2026-11-23).** Every frame that arms, opens or
+  types into a shell is now signed by the server's identity key for that
+  satellite and that connection, and the satellite refuses anything else
+  (an unsigned, replayed, stale or other-satellite frame); the satellite
+  keeps its own copy of the switch, set only by a signed frame; and while
+  it offers sessions its light can't be turned off from the network. A
+  device offers sessions only with the root-owned server pin and no known
+  way from its account to root, so **cards prepared before 1.5.0 don't
+  offer them** (their provisioning unit and their `xvf_host` sudoers line
+  are such ways; the card-side fix isn't built yet). The transcript can't
+  be stopped by a printed key marker or by turning echo off, and what it
+  blanks still counts toward its 8 MB. The shell's user can no longer hold
+  the end off: typed input can't freeze the satellite, a systemd watchdog
+  restarts a frozen or stopped client with everything in its unit, and a
+  failed restart exits so systemd clears it. Also: the terminal socket
+  needs the opener's own sign-in as well as the ticket, a terminal's
+  automatic answers don't count as activity, satellite output can't open
+  links, the opening line is said before any input reaches the shell, no
+  drop-in call starts during a session, and removing a satellite ends its
+  session. `domovoi-satellite.service` gains `NotifyAccess=main`.
 
 ## 1.5.0 (unreleased) — Diagnostics for a satellite, in its room drawer
 
@@ -401,6 +421,13 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
   `diagnostics` hello key), so press **Upgrade satellite** on older ones;
   phones in room mode don't offer it. SECURITY_PRIVACY.md,
   "Satellite diagnostics".
+- **Security review fixes (2026-11-23).** A satellite's answer can no
+  longer stall the server: the cleaning rules are bounded, answers are cut
+  to size before they run, and the cleaning runs off the event loop with a
+  deadline. The Wi-Fi network's name is also taken out of the recent-logs
+  probe and hashed with a key of the house's; multi-word secrets are
+  blanked to the end of the line; and the satellite limits probe requests
+  itself.
 
 ## 1.5.0 (unreleased) — Friend Houses: the friend code is 6 digits
 

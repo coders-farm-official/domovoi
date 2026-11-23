@@ -47,6 +47,7 @@ router = APIRouter()
 
 SUBPROTOCOL = "domovoi-support"
 TICKET_PREFIX = "ticket."
+BEARER_PREFIX = "bearer."
 #: A relayed browser frame is at most this long (4 KB of input as base64 in JSON).
 MAX_FRAME_CHARS = 8 * 1024
 
@@ -125,6 +126,19 @@ async def open_session(satellite_id: str, body: OpenRequest, request: Request):
     return response
 
 
+def _offered_bearer(ws: WebSocket) -> str | None:
+    """The admin Bearer the browser offers as ``bearer.<token>`` (a
+    WebSocket can't carry an Authorization header). Forwarded to the core,
+    which compares its hash with the session's opener."""
+    offered = [p.strip() for p in (ws.headers.get("sec-websocket-protocol") or "").split(",")]
+    for p in offered:
+        if p.startswith(BEARER_PREFIX):
+            token = p[len(BEARER_PREFIX):]
+            if 16 <= len(token) <= 256 and all(c.isalnum() or c in "-_" for c in token):
+                return token
+    return None
+
+
 def _offered_ticket(ws: WebSocket) -> str | None:
     offered = [p.strip() for p in (ws.headers.get("sec-websocket-protocol") or "").split(",")]
     if SUBPROTOCOL not in offered:
@@ -147,7 +161,8 @@ async def terminal(ws: WebSocket, session_id: str) -> None:
         await ws.close(code=1008)
         return
     ticket = _offered_ticket(ws)
-    if ticket is None or len(session_id) != 32:
+    bearer = _offered_bearer(ws)
+    if ticket is None or bearer is None or len(session_id) != 32:
         await ws.close(code=1008)
         return
     from websockets.asyncio.client import connect
@@ -155,7 +170,8 @@ async def terminal(ws: WebSocket, session_id: str) -> None:
     url = domovoi_url().rstrip("/").replace("http", "ws", 1) + \
         f"/v1/admin/support-sessions/{session_id}/terminal"
     try:
-        upstream = await connect(url, additional_headers={"X-Support-Ticket": ticket},
+        upstream = await connect(url, additional_headers={"X-Support-Ticket": ticket,
+                                                          "Authorization": f"Bearer {bearer}"},
                                  max_size=64 * 1024, open_timeout=10)
     except Exception as e:  # noqa: BLE001 - refused (bad ticket) or the core is down
         log.info("support terminal: the core refused or is away: %s", e)

@@ -23,10 +23,17 @@ docs/uml/satellite-protocol.md has the frames. In short:
   admin session ending.
 * **Transcript.** asciicast v2 under ``~/.domovoi/support-sessions/<id>.cast``
   (0600), written here: input as received from the browser (typed while
-  the PTY's echo was off: ``[hidden input]``), output as the satellite sent
-  it, with known secrets and secret-looking lines blanked. Best effort;
-  the transcript is an admin-only read for that reason. Kept 30 days and
-  200 MB in all, oldest first.
+  the PTY's echo was off: ``[hidden input: N bytes]`` for each frame),
+  output as the satellite sent it, with known secrets and secret-looking
+  lines blanked, matched a whole line at a time with escape codes taken
+  out. What is blanked always leaves a marker and its bytes count against
+  the 8 MB cap, so no string the shell prints can stop the log. Best
+  effort; the transcript is an admin-only read for that reason. Kept 30
+  days and 200 MB in all, oldest first.
+* **Signed.** The satellite acts on ``support_allow``, ``support_open`` and
+  each ``support_input`` only with this server's identity signature
+  (domovoi/server_identity.py, ``SUPPORT_CONTEXT``) over the satellite's
+  id, its connection's nonce and the issue time (satellite/support_shell.py).
 
 The satellite never gets new power over the server: its ``support_*``
 frames are accepted only for the session open on that same connection,
@@ -115,10 +122,14 @@ REASONS: dict[str, str] = {
     "never_attached": "the terminal never connected",
     "limits_broken": "the satellite broke the output limits",
     "satellite_ended": "the satellite ended it",
+    "input_stalled": "the shell stopped reading its input",
+    "not_signed": "the server couldn't sign the open",
+    "removed": "the satellite was removed",
 }
 
 #: The satellite's own end reasons it may report in `support_closed`.
-SATELLITE_REASONS = frozenset({"exit", "time_limit", "idle", "satellite_ended"})
+SATELLITE_REASONS = frozenset({"exit", "time_limit", "idle", "satellite_ended",
+                               "input_stalled"})
 
 _ID_RE = re.compile(r"^[0-9a-f]{32}\Z")
 
@@ -188,65 +199,134 @@ class TicketBook:
 
 REMOVED = "[removed]"
 HIDDEN_INPUT = "[hidden input]"
+KEY_REMOVED = "[private key removed]"
+#: A line is matched whole; one longer than this is matched in pieces.
+LINE_MAX = 4096
+#: Inside a private key, at most this much is held back before the
+#: redactor gives the key up (and says so): a BEGIN line with no END can't
+#: silence the transcript.
+PEM_MAX = 16 * 1024
 
-_PEM_BEGIN = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----")
-_PEM_END = re.compile(r"-----END [A-Z0-9 ]*PRIVATE KEY-----")
-_LINE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+_PEM_BEGIN = re.compile(r"-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY-----")
+_PEM_END = re.compile(r"-----END [A-Z0-9 ]{0,40}PRIVATE KEY-----")
+#: What a line inside a key looks like: base64, or a ``Name: value`` header
+#: (old encrypted PEM). Any other line ends the key early, and is logged.
+_PEM_BODY = re.compile(r"[A-Za-z0-9+/=]{0,128}|[A-Za-z][A-Za-z-]{0,40}: [^\r\n]{0,128}")
+_EOL = re.compile(r"\r\n?|\n")
+_SECRET_NAME = re.compile(r"(?i)password|passwd|token|secret|key")
+#: ``name = value`` / ``export NAME=value`` / ``name: value``. The name is
+#: one bounded run that starts at a word, so the work is linear in the
+#: line (the unbounded form took about a second per 16 KB frame).
+_ASSIGNMENT = re.compile(
+    r"(?<![\w.\-])((?:export[ \t]{1,8})?)([\w.\-]{1,128})([ \t]{0,8}[=:][ \t]{0,8})([^\r\n]+)")
+_LINE_PATTERNS: tuple[tuple[re.Pattern[str], Any], ...] = (
     # wpa_supplicant / NetworkManager: psk=..., psk: ...
-    (re.compile(r"(?i)(\bpsk\s*[=:]\s*)[^\s\r\n]+"), r"\1" + REMOVED),
+    (re.compile(r"(?i)(\bpsk[ \t]{0,8}[=:][ \t]{0,8})[^\s]+"), r"\1" + REMOVED),
     # A pairing token printed anywhere: any 32+ character token after it.
     (re.compile(r"(?i)(pairing_token\W{0,12})[A-Za-z0-9_\-]{32,}"), r"\1" + REMOVED),
-    # .toml / .env style assignments of anything secret-looking.
-    (
-        re.compile(
-            r"(?im)^([ \t]*(?:export[ \t]+)?[\w.\-]*(?:password|passwd|token|secret|key)[\w.\-]*"
-            r"[ \t]*[=:][ \t]*)[^\r\n]+"
-        ),
-        r"\1" + REMOVED,
-    ),
 )
 
 
+def _assignment(m: re.Match[str]) -> str:
+    if not _SECRET_NAME.search(m.group(2)) or m.group(4).startswith(REMOVED):
+        return m.group(0)
+    return m.group(1) + m.group(2) + m.group(3) + REMOVED
+
+
+def _patterns(line: str) -> str:
+    out = line
+    for pattern, repl in _LINE_PATTERNS:
+        out = pattern.sub(repl, out)
+    return _ASSIGNMENT.sub(_assignment, out)
+
+
 class Redactor:
-    """Blanks what the core knows is secret and what looks like a secret.
-    Keeps PEM state across chunks so a private key split over frames is
-    blanked whole."""
+    """Blanks what the core knows is secret and what looks like a secret,
+    for one direction of one session.
+
+    It works a whole line at a time: bytes wait in a per-direction buffer
+    until their line ends (or :data:`LINE_MAX`), so a secret typed one key
+    per frame, or split over two output frames, is still one line here.
+    Each line is also matched with its escape codes taken out; when only
+    that copy shows a secret, the plain copy is what gets written.
+
+    Nothing it holds back goes silently: a private key leaves
+    :data:`KEY_REMOVED`, and :attr:`dropped` counts every character held
+    back, which the transcript charges against its cap. A key with no END
+    line within :data:`PEM_MAX` is given up, with a marker, and logging
+    resumes."""
 
     def __init__(self, known: tuple[str, ...] = ()) -> None:
         self._known = tuple(k for k in known if k and len(k) >= 6)
         self._in_pem = False
+        self._pem_bytes = 0
+        self._buf = ""
+        self.dropped = 0
 
     def __call__(self, chunk: str) -> str:
-        out = chunk
-        for secret in self._known:
-            out = out.replace(secret, REMOVED)
-        out = self._pem(out)
-        for pattern, repl in _LINE_PATTERNS:
-            out = pattern.sub(repl, out)
-        return out
-
-    def _pem(self, chunk: str) -> str:
-        result: list[str] = []
-        rest = chunk
-        while rest:
-            if self._in_pem:
-                end = _PEM_END.search(rest)
-                if end is None:
-                    return "".join(result)
-                self._in_pem = False
-                result.append("[private key removed]")
-                rest = rest[end.end():]
-                continue
-            begin = _PEM_BEGIN.search(rest)
-            if begin is None:
-                result.append(rest)
+        """The redacted text of every line ``chunk`` completes."""
+        self._buf += chunk
+        out: list[str] = []
+        while True:
+            m = _EOL.search(self._buf)
+            if m is None:
                 break
-            result.append(rest[: begin.start()])
-            self._in_pem = True
-            rest = rest[begin.end():]
-            if not rest:
-                result.append("[private key removed]")
-        return "".join(result)
+            line, self._buf = self._buf[: m.end()], self._buf[m.end():]
+            out.append(self._line(line))
+        while len(self._buf) > LINE_MAX:
+            line, self._buf = self._buf[:LINE_MAX], self._buf[LINE_MAX:]
+            out.append(self._line(line))
+        return "".join(out)
+
+    def flush(self) -> str:
+        """Whatever is left in the buffer (the session ended mid-line)."""
+        line, self._buf = self._buf, ""
+        return self._line(line) if line else ""
+
+    def _line(self, line: str) -> str:
+        plain = _ANSI_RE.sub("", line)
+        if self._in_pem:
+            if _PEM_END.search(plain) is not None:
+                self._in_pem = False
+                self.dropped += len(line)
+                return ""
+            self._pem_bytes += len(line)
+            if not _PEM_BODY.fullmatch(plain.strip()):
+                # Not a key's line (a command, a prompt): the "key" was a
+                # marker, and this line and the rest are logged.
+                self._in_pem = False
+                return ("[private key: ended without its END line; logging resumed]\r\n"
+                        + self._clean(line, plain))
+            if self._pem_bytes > PEM_MAX:
+                self._in_pem = False
+                return ("[private key: no END line within 16 KB; logging resumed]\r\n"
+                        + self._clean(line, plain))
+            self.dropped += len(line)
+            return ""
+        begin = _PEM_BEGIN.search(plain)
+        if begin is not None:
+            head = plain[: begin.start()]
+            before = self._clean(head, head)
+            rest = plain[begin.end():]
+            self.dropped += len(line) - len(head)
+            if _PEM_END.search(rest) is None:
+                self._in_pem = True
+                self._pem_bytes = len(rest)
+            return before + KEY_REMOVED + "\r\n"
+        return self._clean(line, plain)
+
+    def _clean(self, line: str, plain: str) -> str:
+        raw = line
+        stripped = plain
+        for secret in self._known:
+            raw = raw.replace(secret, REMOVED)
+            stripped = stripped.replace(secret, REMOVED)
+        raw = _patterns(raw)
+        stripped = _patterns(stripped)
+        if stripped == plain or _ANSI_RE.sub("", raw) == stripped:
+            return raw
+        # Only the copy without escape codes shows the secret: write that.
+        return stripped
 
 
 # ─── The transcript: asciicast v2 ─────────────────────────────────────────
@@ -280,7 +360,7 @@ class Transcript:
         self._redact_out = Redactor(known_secrets)
         self._dec_in = codecs.getincrementaldecoder("utf-8")(errors="replace")
         self._dec_out = codecs.getincrementaldecoder("utf-8")(errors="replace")
-        self._hidden_logged = False
+        self._hidden_lines = 0
         header = {
             "version": 2, "width": cols, "height": rows,
             "timestamp": int(time.time()), "title": title[:120],
@@ -293,37 +373,73 @@ class Transcript:
         os.write(self._fd, data)
         self.bytes += len(data)
 
+    def _charge(self, redactor: Redactor) -> None:
+        """What the redactor held back counts against the cap as if it had
+        been written: a flood of blanked text still fills the log."""
+        if redactor.dropped:
+            self.bytes += redactor.dropped
+            redactor.dropped = 0
+            if self.bytes > TRANSCRIPT_MAX_BYTES - 256:
+                self._full()
+
+    def _full(self) -> None:
+        self.truncated = True
+        self._append(json.dumps([round(time.monotonic() - self._start, 3), "o",
+                                 "\r\n[log full: the session ended]\r\n"]))
+        self.close()
+        raise LogFull()
+
     def _event(self, kind: str, value: str) -> None:
         if self._closed:
             raise LogFull()
         line = json.dumps([round(time.monotonic() - self._start, 3), kind, value])
         # Room for the closing marker is kept back.
         if self.bytes + len(line) + 1 > TRANSCRIPT_MAX_BYTES - 256:
-            self.truncated = True
-            self._append(json.dumps([round(time.monotonic() - self._start, 3), "o",
-                                     "\r\n[log full: the session ended]\r\n"]))
-            self.close()
-            raise LogFull()
+            self._full()
         self._append(line)
 
     def input(self, data: bytes, *, echo_on: bool) -> None:
-        if not echo_on:
-            if not self._hidden_logged:
-                self._event("i", HIDDEN_INPUT)
-                self._hidden_logged = True
+        """Input as the browser sent it. While the PTY's echo is off (a
+        password prompt) each frame is logged as a count, never dropped;
+        echo-off past the first line (Enter) is no longer a password
+        prompt, so input after it is logged as typed."""
+        if self._closed:
+            raise LogFull()
+        if not echo_on and self._hidden_lines < 1:
+            self._event("i", f"[hidden input: {len(data)} bytes]")
+            if b"\r" in data or b"\n" in data:
+                self._hidden_lines += 1
             return
-        self._hidden_logged = False
+        if echo_on:
+            self._hidden_lines = 0
         value = self._redact_in(self._dec_in.decode(data))
+        self._charge(self._redact_in)
         if value:
             self._event("i", value)
 
     def output(self, data: bytes) -> None:
+        if self._closed:
+            raise LogFull()
         value = self._redact_out(self._dec_out.decode(data))
+        self._charge(self._redact_out)
         if value:
             self._event("o", value)
 
+    def flush(self) -> None:
+        """Write what the line buffers still hold (the session is ending)."""
+        for kind, redactor in (("i", self._redact_in), ("o", self._redact_out)):
+            try:
+                value = redactor.flush()
+                self._charge(redactor)
+                if value:
+                    self._event(kind, value)
+            except LogFull:
+                return
+
     def note(self, words: str) -> None:
         """A line of the session's own (its end), never typed or shown."""
+        if not self._closed:
+            self.flush()
         if not self._closed:
             try:
                 self._event("o", f"\r\n[{words}]\r\n")
@@ -363,10 +479,58 @@ def plain_text(cast: str) -> str:
             continue
         if kind == "o" and isinstance(value, str):
             parts.append(value)
-        elif kind == "i" and value == HIDDEN_INPUT:
+        elif kind == "i" and isinstance(value, str) and value.startswith(HIDDEN_INPUT[:-1]):
             parts.append(HIDDEN_INPUT)
     joined = _ANSI_RE.sub("", "".join(parts)).replace("\r\n", "\n").replace("\r", "")
     return _CTRL_RE.sub("", joined)
+
+
+# ─── Signed control frames ────────────────────────────────────────────────
+
+
+def signed_doc(sat: Any, kind: str, **fields: Any) -> dict[str, Any]:
+    """The document the satellite checks: the frame's kind, the satellite's
+    id, the nonce its hello sent on THIS connection, the issue time and the
+    frame's own fields. ValueError when the connection sent no nonce."""
+    nonce = getattr(sat, "support_nonce", None)
+    if not isinstance(nonce, str) or not nonce:
+        raise ValueError("the satellite sent no support nonce on this connection")
+    return {"kind": kind, "satellite_id": satellite_of(sat), "nonce": nonce,
+            "issued_at": int(time.time()), **fields}
+
+
+def sign(doc: dict[str, Any]) -> dict[str, Any]:
+    """``doc`` signed with the server identity under its support context
+    (domovoi/server_identity.py :data:`SUPPORT_CONTEXT`)."""
+    from domovoi import server_identity
+
+    return server_identity.load_or_create().signed_support(doc)
+
+
+async def send_allow_state(app: Any, sat: Any, allowed: bool | None = None) -> bool:
+    """Tell a connected satellite, signed, whether support sessions are
+    allowed on it (``satellites.support_allowed`` unless ``allowed`` is
+    given). The satellite refuses every open until it holds a signed
+    "allowed" for its current connection. False when nothing was sent."""
+    if allowed is None:
+        try:
+            async with session_scope() as s:
+                row = (await s.execute(
+                    text("SELECT support_allowed FROM satellites WHERE satellite_id = :id"),
+                    {"id": satellite_of(sat)},
+                )).first()
+            allowed = bool(row and row.support_allowed)
+        except Exception as e:  # noqa: BLE001 - the satellite stays disarmed
+            log.info("support: couldn't read the allow switch for %s: %s", satellite_of(sat), e)
+            return False
+    try:
+        frame = {"type": "support_allow",
+                 "signed": sign(signed_doc(sat, "support_allow", allowed=bool(allowed)))}
+        await sat.send_support(frame)
+    except Exception as e:  # noqa: BLE001 - undeclared, no nonce, no key, a dead socket
+        log.info("support: couldn't send the allow state to %s: %s", satellite_of(sat) or "?", e)
+        return False
+    return True
 
 
 # ─── A live session ───────────────────────────────────────────────────────
@@ -398,6 +562,7 @@ class Session:
     out_window_bytes: int = 0
     last_admin_check: float = 0.0
     last_stamp: float = 0.0
+    in_seq: int = 0                 # the last signed input frame's number
     ack: asyncio.Future[Any] | None = None
     outbox: asyncio.Queue[dict[str, Any] | None] = field(default_factory=asyncio.Queue)
     ended: asyncio.Event = field(default_factory=asyncio.Event)
@@ -508,10 +673,16 @@ class SupportSessions:
             )
             sess.ack = asyncio.get_running_loop().create_future()
             try:
-                await sat.send_support({
-                    "type": "support_open", "session_id": sess.id, "cols": sess.cols,
-                    "rows": sess.rows, "max_sec": sess.max_sec, "idle_sec": sess.idle_sec,
-                })
+                opening = sign(signed_doc(
+                    sat, "support_open", session_id=sess.id, cols=sess.cols, rows=sess.rows,
+                    max_sec=sess.max_sec, idle_sec=sess.idle_sec))
+            except Exception as e:  # noqa: BLE001 - no nonce, no key: nothing is sent
+                log.warning("support session %s: couldn't sign the open: %s", sess.id[:8], e)
+                await self.end(sess, "not_signed", announce=False)
+                return
+            try:
+                await sat.send_support({"type": "support_open", "session_id": sess.id,
+                                        "signed": opening})
                 answer = await asyncio.wait_for(asyncio.shield(sess.ack), OPEN_ANSWER_SEC)
             except (TimeoutError, asyncio.TimeoutError):
                 await self.end(sess, "no_answer", announce=False)
@@ -532,7 +703,10 @@ class SupportSessions:
                                     "idle_sec": sess.idle_sec, "ends_in_sec": sess.max_sec})
             log.info("support session %s opened on %s by %r", sess.id[:8], sess.satellite_id,
                      sess.opener_label)
-            asyncio.create_task(_say(sat, START_LINE))
+            # The room hears it before the first byte of input reaches the
+            # shell (the browser's frames are read only after), retried: a
+            # reply may be playing.
+            await _say(sat, START_LINE, attempts=3)
             receiver = asyncio.create_task(self._receive_loop(ws, sess))
             ticker = asyncio.create_task(self._tick_loop(sess))
             try:
@@ -573,8 +747,11 @@ class SupportSessions:
             await self.end(sess, "browser_closed")
 
     async def browser_message(self, sess: Session, raw: Any) -> None:
-        """One frame from the browser: ``{"t":"in","d":b64}`` or
-        ``{"t":"resize","cols":n,"rows":n}``. Anything else is ignored."""
+        """One frame from the browser: ``{"t":"in","d":b64,"k":bool}`` or
+        ``{"t":"resize","cols":n,"rows":n}``. Anything else is ignored.
+        ``k`` says the bytes came from a key press or a paste: only those
+        count as activity for the idle limit, so a terminal's automatic
+        answers to a program's queries can't keep a session alive."""
         if sess.state != "open" or not isinstance(raw, str) or len(raw) > INPUT_FRAME_MAX * 2:
             return
         try:
@@ -599,11 +776,22 @@ class SupportSessions:
                 await self.end(sess, "log_full")
                 return
             sess.bytes_in += len(data)
-            sess.last_input = time.monotonic()
-            sess.warned.discard("idle")
+            active = msg.get("k") is True
+            if active:
+                sess.last_input = time.monotonic()
+                sess.warned.discard("idle")
+            sess.in_seq += 1
+            try:
+                signed = sign(signed_doc(
+                    sess.sat, "support_input", session_id=sess.id, seq=sess.in_seq,
+                    active=active, data=base64.b64encode(data).decode("ascii")))
+            except Exception as e:  # noqa: BLE001
+                log.warning("support session %s: couldn't sign input: %s", sess.id[:8], e)
+                await self.end(sess, "not_signed")
+                return
             await self._to_sat(sess, {"type": "support_input", "session_id": sess.id,
-                                      "data": base64.b64encode(data).decode("ascii")})
-            if time.monotonic() - sess.last_stamp >= ACTIVITY_STAMP_EVERY_SEC:
+                                      "signed": signed})
+            if active and time.monotonic() - sess.last_stamp >= ACTIVITY_STAMP_EVERY_SEC:
                 sess.last_stamp = time.monotonic()
                 try:
                     await admin_auth.stamp_admin_activity_by_hash(sess.admin_hash)
@@ -754,12 +942,6 @@ class SupportSessions:
         if self.by_satellite.get(sess.satellite_id) is sess:
             self.by_satellite.pop(sess.satellite_id, None)
         words = REASONS.get(reason, reason)
-        if sess.sat is not None and reason not in ("satellite_disconnected",):
-            try:
-                await sess.sat.send_support({"type": "support_close", "session_id": sess.id,
-                                             "reason": reason})
-            except Exception:  # noqa: BLE001
-                pass
         if sess.writer is not None:
             sess.writer.note(f"session ended: {words}")
             sess.writer.close()
@@ -777,6 +959,15 @@ class SupportSessions:
                 )
         except Exception as e:  # noqa: BLE001 - startup cleanup catches what is left
             log.warning("support session %s: couldn't record its end: %s", sess.id[:8], e)
+        # Recorded first, then the satellite is told: a send that hangs on
+        # a stalled socket can't keep the session looking open. Bounded.
+        if sess.sat is not None and reason not in ("satellite_disconnected",):
+            try:
+                await asyncio.wait_for(
+                    sess.sat.send_support({"type": "support_close", "session_id": sess.id,
+                                           "reason": reason}), 5.0)
+            except Exception:  # noqa: BLE001
+                pass
         log.info("support session %s on %s ended: %s%s", sess.id[:8], sess.satellite_id, reason,
                  f" ({detail})" if detail else "")
         if was_open and announce and sess.sat is not None and reason != "satellite_disconnected":
@@ -825,6 +1016,15 @@ class SupportSessions:
         sess = self.by_satellite.get(satellite_of(sat) or "")
         if sess is not None and (sess.sat is sat or sess.sat is None):
             await self.end(sess, "satellite_disconnected", announce=False)
+
+    def open_on(self, *sats: Any) -> bool:
+        """Whether a session is open (or opening) on any of these live
+        satellite connections (a drop-in call is refused then)."""
+        for sat in sats:
+            sess = self.by_satellite.get(satellite_of(sat) or "")
+            if sess is not None and sess.state in ("pending", "opening", "open"):
+                return True
+        return False
 
     def active(self) -> list[dict[str, Any]]:
         return [s.as_active() for s in self.by_id.values() if s.state in ("opening", "open")]
@@ -894,12 +1094,18 @@ async def _known_secrets() -> tuple[str, ...]:
     return tuple(found)
 
 
-async def _say(sat: Any, words: str) -> None:
-    """One short line in the room; best effort (a reply may be playing)."""
-    try:
-        await sat.announce(words, kind="user")
-    except Exception as e:  # noqa: BLE001
-        log.info("support: couldn't say %r in %s: %s", words, satellite_of(sat) or "?", e)
+async def _say(sat: Any, words: str, attempts: int = 1) -> bool:
+    """One short line in the room, tried up to ``attempts`` times a second
+    apart; best effort (a reply may be playing)."""
+    for attempt in range(max(1, attempts)):
+        try:
+            await sat.announce(words, kind="user")
+            return True
+        except Exception as e:  # noqa: BLE001
+            log.info("support: couldn't say %r in %s: %s", words, satellite_of(sat) or "?", e)
+            if attempt + 1 < attempts:
+                await asyncio.sleep(1.0)
+    return False
 
 
 # ─── the audit list and the files ─────────────────────────────────────────
@@ -971,8 +1177,10 @@ async def delete_session(session_id: str) -> bool:
         r = (await s.execute(text(
             "DELETE FROM support_sessions WHERE id = :id AND closed_at IS NOT NULL RETURNING id"),
             {"id": session_id})).first()
+    if r is None:
+        return False    # open (its live transcript stays) or no such row
     _unlink(transcript_path(session_id))
-    return r is not None
+    return True
 
 
 async def delete_all() -> int:

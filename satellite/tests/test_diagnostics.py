@@ -231,3 +231,49 @@ def test_mic_dsp_is_not_available_without_an_xvf3800(tmp_path):
     r = d.run_probe("mic_dsp", _ctx(tmp_path))
     assert r == {"probe": "mic_dsp", "ok": False,
                  "text": "no XVF3800 DSP control on this satellite", "at": 4600.0}
+
+
+# --- the 1.5.0 security round: bounded rules, the network name, the bucket --
+
+
+def test_a_hostile_text_is_scrubbed_in_bounded_time():
+    import time
+
+    for text in ("psk" * 20_000, "token-" * 20_000 + ":", ("a=" * 20_000)):
+        started = time.monotonic()
+        d.scrub(text)
+        assert time.monotonic() - started < 1.0, text[:12]
+
+
+def test_a_multi_word_secret_goes_to_the_end_of_the_line():
+    out = d.scrub("password correct horse battery\nwifi psk: two words here\nnext line")
+    assert "horse" not in out and "battery" not in out and "two words" not in out
+    assert "next line" in out
+
+
+def test_the_network_name_never_leaves_in_the_logs(tmp_path):
+    ctx = _ctx(tmp_path, log_tail=lambda n: "joined HomeNetwork5G at 12:00\nok\n")
+    r = d.run_probe("recent_logs", ctx)
+    assert "HomeNetwork5G" not in r["text"] and "[wifi network]" in r["text"]
+
+
+def test_the_network_name_hash_is_keyed_by_the_house(tmp_path):
+    a = d.ssid_hash("HomeNetwork5G", "SHA256:house-a")
+    assert a != d.ssid_hash("HomeNetwork5G", "SHA256:house-b")
+    assert a == d.ssid_hash("HomeNetwork5G", "SHA256:house-a")
+    r = d.run_probe("network", _ctx(tmp_path, hash_salt="SHA256:house-a"))
+    assert a in r["text"]
+
+
+def test_the_device_limits_probe_requests_itself():
+    t = [0.0]
+    bucket = d.RequestBucket(burst=3, per_sec=1.0, clock=lambda: t[0])
+    assert [bucket.take() for _ in range(5)] == [True, True, True, False, False]
+    t[0] += 1.0
+    assert bucket.take() and not bucket.take()
+    import inspect
+
+    from satellite import client
+
+    src = inspect.getsource(client.Satellite._handle_text_frame)
+    assert "bucket.take()" in src

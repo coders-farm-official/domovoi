@@ -6531,6 +6531,10 @@ async def admin_delete_satellite(
         from domovoi import room_devices
 
         room_devices.registry(app).note(room_id, None)
+    # A removed satellite's support session ends with it.
+    from domovoi import support_sessions
+
+    await support_sessions.get_manager(app).end_for_satellite(room_id, "removed")
     removed_mpd = {}
     if purge and provisioned is not None:
         from domovoi import mpd_provisioner

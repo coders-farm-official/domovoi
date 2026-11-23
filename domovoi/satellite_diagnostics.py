@@ -57,14 +57,31 @@ RATE_WINDOW_S = 60.0
 RATE_MAX_RUNS = 18
 
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f​-‏ -‮⁦-⁩]")
-_SECRET_RULES: list[tuple[re.Pattern[str], str]] = [
+# Every run below is bounded and the assignment rule starts only at a
+# word's start, so the work is linear in the text. The unbounded form took
+# a hostile answer (one keyword repeated to the cap) about 18 minutes on
+# the event loop. The satellite runs the same rules (satellite/diagnostics.py).
+_SECRET_KEY = re.compile(
+    r"(?i)token|password|passwd|passphrase|secret|api[_-]?key|apikey|psk|cookie|"
+    r"auth|credential|private[_-]?key")
+_ASSIGNMENT = re.compile(
+    r"(?<![\w-])([\w-]{1,80}[\"']?)([ \t]{0,8}[=:][ \t]{0,8})(?!\[redacted\])"
+    r"(\"[^\"\n]{0,512}\"|'[^'\n]{0,512}'|[^\n]{1,512})"
+)
+
+
+def _assignment(m: re.Match[str]) -> str:
+    """key=value / key: value / "key": "value" whose key names a secret:
+    the value goes to the end of the line (all of a multi-word secret)."""
+    if not _SECRET_KEY.search(m.group(1)):
+        return m.group(0)
+    return m.group(1) + m.group(2) + "[redacted]"
+
+
+_SECRET_RULES: list[tuple[re.Pattern[str], Any]] = [
     (re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}"), "Bearer [redacted]"),
-    (re.compile(
-        r"(?i)([\w-]*(?:token|password|passwd|passphrase|secret|api[_-]?key|apikey|psk|cookie|"
-        r"auth|credential|private[_-]?key)[\w-]*[\"']?)(\s*[=:]\s*)(?!\[redacted\])"
-        r"(\"[^\"\n]*\"|'[^'\n]*'|[^\s,;}]+)"
-    ), r"\1\2[redacted]"),
-    (re.compile(r"(?i)\b(password|passwd|passphrase|secret|psk)(\s+)(?!\[redacted\])([^\s,;]+)"),
+    (_ASSIGNMENT, _assignment),
+    (re.compile(r"(?i)\b(password|passwd|passphrase|secret|psk)([ \t]{1,8})(?!\[redacted\])([^\n]{1,512})"),
      r"\1\2[redacted]"),
     (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)"),
      "[redacted private key]"),
@@ -74,8 +91,11 @@ _SECRET_RULES: list[tuple[re.Pattern[str], str]] = [
 
 
 def clean_text(raw: Any, limit: int = MAX_TEXT_CHARS) -> str:
-    """A probe's text as the core keeps and serves it."""
-    out = _CONTROL.sub("", str(raw or "")).replace("\r", "")
+    """A probe's text as the core keeps and serves it. Cut before any rule
+    runs (the raw text first, so even the control-character pass is
+    bounded); call it off the event loop (:func:`clean_result_off_loop`)."""
+    raw_text = raw if isinstance(raw, str) else str(raw or "")
+    out = _CONTROL.sub("", raw_text[: limit * 8]).replace("\r", "")
     if len(out) > limit * 2:
         out = out[: limit * 2]  # bound the regex work before the rules run
     for pattern, repl in _SECRET_RULES:
@@ -100,6 +120,36 @@ def clean_result(probe: str, ctrl: dict[str, Any]) -> dict[str, Any]:
         "text": clean_text(ctrl.get("text")),
         "at": round(at_f, 3),
     }
+
+
+#: The most characters of a device's raw answer the core holds on to before
+#: cleaning (the rest is never looked at).
+RAW_TEXT_MAX_CHARS = MAX_TEXT_CHARS * 8
+#: The most a cleaning may take before the probe answers "couldn't clean".
+CLEAN_DEADLINE_S = 5.0
+
+
+def raw_result(ctrl: dict[str, Any]) -> dict[str, Any]:
+    """The few fields of a ``diag_result`` the core keeps, cut to size. Cheap
+    enough for the socket's receive loop: no rule runs here."""
+    text = ctrl.get("text")
+    return {
+        "ok": ctrl.get("ok") is True,
+        "at": ctrl.get("at") if isinstance(ctrl.get("at"), (int, float)) else None,
+        "text": (text if isinstance(text, str) else str(text or ""))[:RAW_TEXT_MAX_CHARS],
+    }
+
+
+async def clean_result_off_loop(probe: str, raw: dict[str, Any]) -> dict[str, Any]:
+    """:func:`clean_result` on a worker thread, within
+    :data:`CLEAN_DEADLINE_S`: a hostile answer never holds the event loop."""
+    import asyncio
+
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(clean_result, probe, raw), CLEAN_DEADLINE_S)
+    except (TimeoutError, asyncio.TimeoutError):
+        return failed_result(probe, "the satellite's answer couldn't be cleaned in time")
 
 
 def failed_result(probe: str, text: str) -> dict[str, Any]:

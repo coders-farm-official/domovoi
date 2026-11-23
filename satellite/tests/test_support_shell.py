@@ -1,12 +1,17 @@
 """The satellite's half of a support session (satellite/support_shell.py).
 
-Pins: only a Pi on a prepared card whose account can't use sudo declares
-it (no spare PCs or phones in 1.5.0); the device's own limits (60-minute
+Pins: only a Pi on a prepared card with the root-owned server pin, a
+watchdog, no root unit running code its account can write, no sudo and no
+free-argument sudo rule declares it (no spare PCs or phones in 1.5.0);
+every open, input and allow must carry the pinned server's signature for
+this satellite and this connection (H3); the device's own limits (60-minute
 cap, the session's time and idle limits, 16 KB frames, 64 KB/s, 4 KB
-input, one at a time, busy refusals); echo reporting; the end (the shell's
-group hung up, `support_closed` only when the device ended it, the
-service restart through the client's `on_end`). A fake PTY everywhere,
-and the real one on Linux (skipped elsewhere, run in CI).
+input, one at a time, busy refusals); input never blocks the caller (M3);
+only key presses count as activity; echo reporting; the end (the shell's
+group hung up, `support_closed` only when the device ended it, the service
+restart through the client's `on_end`, an exit when the restart can't be
+asked for). A fake PTY everywhere, and the real one on Linux (skipped
+elsewhere, run in CI).
 """
 
 from __future__ import annotations
@@ -15,15 +20,18 @@ import base64
 import inspect
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from satellite import client  # the audio stand-ins hold during collection (conftest)
+from satellite import server_identity as si
 from satellite import support_shell as sh
-
 
 # ─── who declares it ──────────────────────────────────────────────────────
 
@@ -37,62 +45,140 @@ def _pi(tmp_path: Path, model: str = "Raspberry Pi Zero 2 W Rev 1.0", prepared: 
     return m, state
 
 
-def _run(rc: int | None = None, exc: Exception | None = None):
+SUDO_LIST = """Matching Defaults entries for domovoi on sat:
+    env_reset
+
+User domovoi may run the following commands on sat:
+    (root) NOPASSWD: /usr/bin/systemctl --no-block restart domovoi-satellite.service
+    (root) NOPASSWD: /usr/local/sbin/domovoi-apply-payload
+    (root) NOPASSWD: /usr/local/sbin/domovoi-reboot ""
+"""
+
+
+def _run(rc: int | None = None, exc: Exception | None = None, listing: str = SUDO_LIST,
+         list_rc: int = 0):
     calls = []
 
     def run(argv, **kw):
         calls.append(argv)
         if exc is not None:
             raise exc
+        if argv == ["sudo", "-n", "-l"]:
+            return SimpleNamespace(returncode=list_rc, stdout=listing)
         return SimpleNamespace(returncode=rc)
 
     return run, calls
 
 
+def declare(model, state, run, **kw):
+    kw.setdefault("root_pin", lambda: True)
+    kw.setdefault("root_path", lambda: None)
+    kw.setdefault("watchdog", lambda: "/run/systemd/notify")
+    return sh.should_declare(is_pc=kw.pop("is_pc", False), platform=kw.pop("platform", "linux"),
+                             model_path=model, state_dir=state, run=run, **kw)
+
+
 def test_a_prepared_pi_without_sudo_declares_it(tmp_path) -> None:
     model, state = _pi(tmp_path)
     run, calls = _run(rc=1)
-    assert sh.should_declare(is_pc=False, platform="linux", model_path=model,
-                             state_dir=state, run=run)
-    assert calls == [["sudo", "-n", "true"]]
+    assert declare(model, state, run)
+    assert calls == [["sudo", "-n", "true"], ["sudo", "-n", "-l"]]
 
 
 def test_a_pi_whose_account_can_sudo_never_declares_it(tmp_path) -> None:
     model, state = _pi(tmp_path)
     run, _ = _run(rc=0)
-    assert not sh.should_declare(is_pc=False, platform="linux", model_path=model,
-                                 state_dir=state, run=run)
+    assert not declare(model, state, run)
     run, _ = _run(exc=subprocess.TimeoutExpired("sudo", 5))
-    assert not sh.should_declare(is_pc=False, platform="linux", model_path=model,
-                                 state_dir=state, run=run)
+    assert not declare(model, state, run)
+
+
+def test_no_root_pin_no_watchdog_or_a_root_path_never_declares_it(tmp_path) -> None:
+    """H3/M1/M3: the support frames are checked against the ROOT-owned pin;
+    the ability needs the watchdog; any known way from this account to root
+    keeps it off."""
+    model, state = _pi(tmp_path)
+    run, calls = _run(rc=1)
+    assert not declare(model, state, run, root_pin=lambda: False)
+    assert not declare(model, state, run, watchdog=lambda: None)
+    assert not declare(model, state, run,
+                       root_path=lambda: "domovoi-provisioning.service (/home/alex/domovoi)")
+    assert calls == []
+    for loose in ("    (root) NOPASSWD: /opt/xvf3800/xvf_host\n",
+                  "    (root) NOPASSWD: /opt/xvf3800/xvf_host *\n",
+                  "    (ALL : ALL) ALL\n"):
+        run, _ = _run(rc=1, listing=SUDO_LIST + loose)
+        assert not declare(model, state, run), loose
+    run, _ = _run(rc=1, list_rc=1)            # can't list the rules: don't offer it
+    assert not declare(model, state, run)
+
+
+def test_a_root_unit_running_the_accounts_code_is_found(tmp_path) -> None:
+    units = tmp_path / "units"
+    units.mkdir()
+    (units / "domovoi-provisioning.service").write_text(
+        "[Service]\nUser=root\nExecStart=/home/alex/satellite-venv/bin/python -m x\n"
+        "WorkingDirectory=/home/alex/domovoi\n")
+    (units / "domovoi-satellite.service").write_text(
+        "[Service]\nUser=alex\nExecStart=/home/alex/satellite-venv/bin/python -m satellite.client\n")
+    mine = lambda p: str(p).replace("\\", "/").startswith("/home/alex")  # noqa: E731
+    found = sh.root_unit_runs_my_code((units,), writable=mine)
+    assert found and found.startswith("domovoi-provisioning.service")
+    (units / "domovoi-provisioning.service").write_text(
+        "[Service]\nExecStart=/usr/local/lib/domovoi/provision\n")
+    assert sh.root_unit_runs_my_code((units,), writable=mine) is None
 
 
 def test_only_a_pi_on_a_prepared_card(tmp_path) -> None:
     run, calls = _run(rc=1)
     model, state = _pi(tmp_path)
-    assert not sh.should_declare(is_pc=True, platform="linux", model_path=model, state_dir=state, run=run)
-    assert not sh.should_declare(is_pc=False, platform="win32", model_path=model, state_dir=state, run=run)
-    assert not sh.should_declare(is_pc=False, platform="darwin", model_path=model, state_dir=state, run=run)
+    assert not declare(model, state, run, is_pc=True)
+    assert not declare(model, state, run, platform="win32")
+    assert not declare(model, state, run, platform="darwin")
     other = tmp_path / "other-model"
     other.write_text("Generic x86 board")
-    assert not sh.should_declare(is_pc=False, platform="linux", model_path=other, state_dir=state, run=run)
-    assert not sh.should_declare(is_pc=False, platform="linux", model_path=tmp_path / "none",
-                                 state_dir=state, run=run)
-    assert not sh.should_declare(is_pc=False, platform="linux", model_path=model,
-                                 state_dir=tmp_path / "not-prepared", run=run)
+    assert not declare(other, state, run)
+    assert not declare(tmp_path / "none", state, run)
+    assert not declare(model, tmp_path / "not-prepared", run)
     assert calls == []          # sudo is never even asked off a prepared Pi
 
 
 def test_the_client_says_it_in_its_hello_only_when_declared() -> None:
     hello = inspect.getsource(client.Satellite._hello_frame)
     assert '"support_shell": bool(getattr(self, "_support", None) and self._support.declared)' in hello
+    assert 'hello["support_nonce"] = support.new_connection()' in hello
     init = inspect.getsource(client.Satellite.__init__)
     assert "support_shell.should_declare(is_pc=pc_engine.is_pc(cfg))" in init
+    assert "satellite_id=lambda: self.cfg.room_id" in init
 
 
 def test_a_spare_pc_never_declares_it() -> None:
     src = Path(sh.__file__).read_text(encoding="utf-8")
     assert "if is_pc or not platform.startswith(\"linux\")" in src
+
+
+def test_the_unit_gives_the_client_a_watchdog_socket() -> None:
+    unit = (Path(sh.__file__).parent / "domovoi-satellite.service").read_text(encoding="utf-8")
+    assert "\nNotifyAccess=main\n" in unit
+
+
+# ─── the light can't be turned off remotely ──────────────────────────────
+
+
+def test_a_remote_set_config_cannot_darken_the_light_while_offered() -> None:
+    changes = {"leds.enabled": False, "leds.brightness": 0, "leds.num_leds": 0,
+               "wake.threshold": 0.5}
+    kept, refused = sh.screen_led_changes(dict(changes), declared=True)
+    assert kept == {"wake.threshold": 0.5}
+    assert sorted(refused) == ["leds.brightness", "leds.enabled", "leds.num_leds"]
+    kept, _ = sh.screen_led_changes({"leds.enabled": True, "leds.brightness": 16}, declared=True)
+    assert kept == {"leds.enabled": True, "leds.brightness": 16}
+    kept, refused = sh.screen_led_changes(dict(changes), declared=False)
+    assert kept == changes and refused == []
+    src = inspect.getsource(client.Satellite._handle_text_frame)
+    assert "self._screen_support_leds(changes)" in src
+    assert "self._screen_support_leds(changes)" in inspect.getsource(
+        client.Satellite._apply_config_changes)
 
 
 # ─── the session, on a fake PTY ───────────────────────────────────────────
@@ -123,7 +209,7 @@ class FakePty:
             chunk = chunk[:max_bytes]
         return chunk
 
-    def write(self, data):
+    def write(self, data, still_open=lambda: True):
         self.written.append(data)
 
     def resize(self, cols, rows):
@@ -145,7 +231,25 @@ class Clock:
         return self.t
 
 
-def make(declared: bool = True, busy=None):
+KEY = Ed25519PrivateKey.generate()
+OTHER_KEY = Ed25519PrivateKey.generate()
+WALL = 1_800_000_000.0
+SAT = "kitchen"
+
+
+def _pub(key) -> bytes:
+    return key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+
+
+FP = si.fingerprint_for(_pub(KEY))
+
+
+def signed(doc: dict, key=KEY) -> dict:
+    return {"algorithm": "ed25519", "public_key": base64.b64encode(_pub(key)).decode(),
+            "doc": doc, "signature": base64.b64encode(key.sign(si.support_message(doc))).decode()}
+
+
+def make(declared: bool = True, busy=None, allow: bool = True):
     sent: list[dict] = []
     ends: list[tuple[str, bool]] = []
     opened: list[bool] = []
@@ -155,38 +259,174 @@ def make(declared: bool = True, busy=None):
         declared=declared, emit=sent.append, on_open=lambda: opened.append(True),
         on_end=lambda reason, by_server: ends.append((reason, by_server)),
         busy=busy or (lambda: None), backend_factory=lambda: pty, clock=clock,
+        satellite_id=lambda: SAT, pinned=lambda: FP, wall=lambda: WALL,
     )
-    # The tests drive step() themselves.
+    # The tests drive step() and the input pump themselves.
     shell._thread = None
-    return SimpleNamespace(shell=shell, sent=sent, ends=ends, opened=opened, pty=pty, clock=clock)
+    w = SimpleNamespace(shell=shell, sent=sent, ends=ends, opened=opened, pty=pty, clock=clock)
+    shell.new_connection()
+    if allow and declared:
+        shell.handle(allow_frame(w, True))
+        assert shell.allowed
+    return w
 
 
-OPEN = {"type": "support_open", "session_id": "s1", "cols": 100, "rows": 30,
-        "max_sec": 1800, "idle_sec": 600}
+def doc(w, kind: str, **fields) -> dict:
+    return {"kind": kind, "satellite_id": SAT, "nonce": w.shell.nonce,
+            "issued_at": int(WALL), **fields}
+
+
+def allow_frame(w, allowed: bool, **over) -> dict:
+    return {"type": "support_allow", "signed": signed({**doc(w, "support_allow", allowed=allowed), **over})}
+
+
+def open_frame(w, sid: str = "s1", key=KEY, **over) -> dict:
+    fields = {"session_id": sid, "cols": 100, "rows": 30, "max_sec": 1800, "idle_sec": 600}
+    d = {**doc(w, "support_open", **fields), **over}
+    return {"type": "support_open", "session_id": sid, "signed": signed(d, key)}
+
+
+def input_frame(w, data: bytes, seq: int, sid: str = "s1", active: bool = True, **over) -> dict:
+    d = {**doc(w, "support_input", session_id=sid, seq=seq, active=active,
+               data=base64.b64encode(data).decode()), **over}
+    return {"type": "support_input", "session_id": sid, "signed": signed(d)}
 
 
 def opened(w, monkeypatch):
     monkeypatch.setattr(sh.threading.Thread, "start", lambda self: None)
-    w.shell.handle(dict(OPEN))
+    w.shell.handle(open_frame(w))
     assert w.sent[-1] == {"type": "support_opened", "session_id": "s1"}
     return w
+
+
+def typed(w, data: bytes, seq: int, **kw) -> None:
+    w.shell.handle(input_frame(w, data, seq, **kw))
+    w.shell.pump_input("s1")
+
+
+# ─── H3: only the pinned server, for this satellite and connection ───────
+
+
+def _refused(w) -> str:
+    assert w.sent[-1]["type"] == "support_refused", w.sent[-1]
+    assert w.pty.spawned is None
+    return w.sent[-1]["reason"]
+
+
+def test_an_unsigned_open_is_refused(monkeypatch) -> None:
+    monkeypatch.setattr(sh.threading.Thread, "start", lambda self: None)
+    w = make()
+    w.shell.handle({"type": "support_open", "session_id": "x", "cols": 80, "rows": 24,
+                    "max_sec": 3600, "idle_sec": 3600})
+    assert "not signed" in _refused(w)
+
+
+def test_a_forged_open_is_refused(monkeypatch) -> None:
+    monkeypatch.setattr(sh.threading.Thread, "start", lambda self: None)
+    w = make()
+    w.shell.handle(open_frame(w, key=OTHER_KEY))            # another key
+    _refused(w)
+    frame = open_frame(w)
+    frame["signed"]["doc"]["max_sec"] = 3600                # changed under the signature
+    w.shell.handle(frame)
+    _refused(w)
+    frame = open_frame(w)
+    frame["signed"]["signature"] = base64.b64encode(b"\0" * 64).decode()
+    w.shell.handle(frame)
+    _refused(w)
+    w.shell.handle(open_frame(w, kind="support_allow"))     # signed for another kind
+    _refused(w)
+
+
+def test_a_wrong_satellite_stale_or_other_connection_open_is_refused(monkeypatch) -> None:
+    monkeypatch.setattr(sh.threading.Thread, "start", lambda self: None)
+    w = make()
+    w.shell.handle(open_frame(w, satellite_id="bedroom"))
+    _refused(w)
+    w.shell.handle(open_frame(w, issued_at=int(WALL) - si.SUPPORT_MAX_SKEW_SEC - 1))
+    _refused(w)
+    w.shell.handle(open_frame(w, nonce="0" * 32))
+    _refused(w)
+
+
+def test_a_replayed_open_is_refused(monkeypatch) -> None:
+    w = opened(make(), monkeypatch)
+    frame = open_frame(w)
+    w.shell.handle({"type": "support_close", "session_id": "s1", "reason": "admin_ended"})
+    w.pty.spawned = None
+    w.shell.handle(frame)                                    # same connection, same open
+    assert _refused(w) == "that open was already used"
+    old_nonce = w.shell.nonce
+    w.shell.new_connection()                                 # a new connection
+    assert w.shell.nonce != old_nonce
+    w.shell.handle(allow_frame(w, True))
+    w.shell.handle(frame)                                    # signed for the old one
+    _refused(w)
+
+
+def test_no_open_before_a_signed_allow_on_this_connection(monkeypatch) -> None:
+    monkeypatch.setattr(sh.threading.Thread, "start", lambda self: None)
+    w = make(allow=False)
+    w.shell.handle(open_frame(w))
+    assert _refused(w) == "support sessions are off for this satellite"
+    w.shell.handle({"type": "support_allow", "allowed": True})            # unsigned
+    w.shell.handle(allow_frame(w, True, nonce="1" * 32))                   # other connection
+    assert not w.shell.allowed
+    w.shell.handle(allow_frame(w, True))
+    assert w.shell.allowed
+    w.shell.new_connection()                                 # disarmed on every connect
+    assert not w.shell.allowed
+
+
+def test_a_signed_disallow_ends_an_open_session(monkeypatch) -> None:
+    w = opened(make(), monkeypatch)
+    w.shell.handle(allow_frame(w, False))
+    assert not w.shell.allowed and not w.shell.active
+    assert w.ends == [("switch_off", True)]
+
+
+def test_no_pinned_key_refuses_everything(monkeypatch) -> None:
+    monkeypatch.setattr(sh.threading.Thread, "start", lambda self: None)
+    w = make(allow=False)
+    w.shell._verify = sh._verifier_for(lambda: SAT, lambda: None, lambda: WALL)
+    w.shell.handle(allow_frame(w, True))
+    assert not w.shell.allowed
+
+
+def test_input_must_be_signed_in_sequence_for_this_session(monkeypatch) -> None:
+    w = opened(make(), monkeypatch)
+    w.shell.handle({"type": "support_input", "session_id": "s1",
+                    "data": base64.b64encode(b"id\r").decode()})          # unsigned
+    typed(w, b"ls\r", 1)
+    typed(w, b"again\r", 1)                                  # replayed number
+    typed(w, b"x\r", 2, sid="other")                         # another session
+    frame = input_frame(w, b"y\r", 3)
+    frame["signed"]["doc"]["data"] = base64.b64encode(b"rm -rf ~\r").decode()
+    w.shell.handle(frame)
+    w.shell.pump_input("s1")
+    assert w.pty.written == [b"ls\r"]
+    typed(w, b"pwd\r", 7)
+    assert w.pty.written == [b"ls\r", b"pwd\r"]
+
+
+# ─── the session's own rules ─────────────────────────────────────────────
 
 
 def test_refusals(monkeypatch) -> None:
     monkeypatch.setattr(sh.threading.Thread, "start", lambda self: None)
     w = make(declared=False)
-    w.shell.handle(dict(OPEN))
+    w.shell.handle(open_frame(w))
     assert w.sent[-1]["type"] == "support_refused" and w.pty.spawned is None
     w = make(busy=lambda: "the room is in a drop-in call")
-    w.shell.handle(dict(OPEN))
+    w.shell.handle(open_frame(w))
     assert w.sent[-1] == {"type": "support_refused", "session_id": "s1",
                           "reason": "the room is in a drop-in call"}
     w = make()
-    w.shell.handle({**OPEN, "max_sec": 3601})                 # over 60 minutes
+    w.shell.handle(open_frame(w, sid="s0", max_sec=3601))   # over 60 minutes
     assert w.sent[-1]["type"] == "support_refused" and w.pty.spawned is None
-    w.shell.handle(dict(OPEN))
+    w.shell.handle(open_frame(w))
     assert w.sent[-1]["type"] == "support_opened" and w.opened == [True]
-    w.shell.handle({**OPEN, "session_id": "s2"})              # one at a time
+    w.shell.handle(open_frame(w, sid="s2"))                 # one at a time
     assert w.sent[-1] == {"type": "support_refused", "session_id": "s2",
                           "reason": "a support session is already open"}
 
@@ -194,17 +434,43 @@ def test_refusals(monkeypatch) -> None:
 def test_input_and_resize(monkeypatch) -> None:
     w = opened(make(), monkeypatch)
     assert w.pty.spawned == (100, 30)
-    w.shell.handle({"type": "support_input", "session_id": "s1",
-                    "data": base64.b64encode(b"ls\r").decode()})
+    typed(w, b"ls\r", 1)
     assert w.pty.written == [b"ls\r"]
-    w.shell.handle({"type": "support_input", "session_id": "s1",
-                    "data": base64.b64encode(b"x" * (sh.INPUT_FRAME_MAX + 1)).decode()})
-    w.shell.handle({"type": "support_input", "session_id": "other",
-                    "data": base64.b64encode(b"y").decode()})
-    w.shell.handle({"type": "support_input", "session_id": "s1", "data": "not base64!"})
+    typed(w, b"x" * (sh.INPUT_FRAME_MAX + 1), 2)
     assert w.pty.written == [b"ls\r"]
     w.shell.handle({"type": "support_resize", "session_id": "s1", "cols": 9999, "rows": 1})
     assert w.pty.sizes == [(sh.COLS_RANGE[1], sh.ROWS_RANGE[0])]
+
+
+def test_input_never_blocks_the_caller_and_a_stalled_shell_ends_it(monkeypatch) -> None:
+    """M3: a shell that stops reading can't freeze the event loop. The
+    caller only queues; a full queue ends the session."""
+    w = opened(make(), monkeypatch)
+    monkeypatch.undo()          # real threads from here (the writer never started)
+    gate = threading.Event()
+    w.pty.write = lambda data, still_open=lambda: True: gate.wait(5)   # a PTY that never drains
+    started = time.monotonic()
+    for i in range(sh.INPUT_QUEUE_MAX + 5):
+        w.shell.handle(input_frame(w, b"y" * 4000, i + 1))
+    assert time.monotonic() - started < 2.0
+    deadline = time.monotonic() + 5
+    while w.shell.active and time.monotonic() < deadline:
+        time.sleep(0.01)
+    gate.set()
+    assert not w.shell.active
+    assert w.ends == [("input_stalled", False)]
+    assert w.sent[-1]["reason"] == "input_stalled"
+
+
+def test_only_key_presses_count_as_activity(monkeypatch) -> None:
+    """L29: a terminal's automatic answer (active false) keeps nothing alive."""
+    w = opened(make(), monkeypatch)
+    w.clock.t += 500
+    typed(w, b"\x1b[1;1R", 1, active=False)
+    assert w.pty.written == [b"\x1b[1;1R"]
+    w.clock.t += 101
+    assert not w.shell.step()
+    assert w.ends == [("idle", False)]
 
 
 def test_output_frames_and_the_rate(monkeypatch) -> None:
@@ -231,8 +497,7 @@ def test_echo_changes_are_reported(monkeypatch) -> None:
     w.shell.step()
     assert {"type": "support_echo", "session_id": "s1", "on": False} in w.sent
     w.pty.echo = True
-    w.shell.handle({"type": "support_input", "session_id": "s1",
-                    "data": base64.b64encode(b"\r").decode()})
+    typed(w, b"\r", 1)
     assert w.sent[-1] == {"type": "support_echo", "session_id": "s1", "on": True}
 
 
@@ -248,10 +513,9 @@ def test_its_own_time_and_idle_limits(monkeypatch) -> None:
     assert w.ends == [("idle", False)] and w.pty.ended
 
     w = opened(make(), monkeypatch)
-    for _ in range(4):
+    for i in range(4):
         w.clock.t += 500
-        w.shell.handle({"type": "support_input", "session_id": "s1",
-                        "data": base64.b64encode(b"\r").decode()})
+        typed(w, b"\r", i + 1)
     assert not w.shell.step()
     assert w.ends == [("time_limit", False)]
 
@@ -273,28 +537,58 @@ def test_the_server_ending_it_and_a_dropped_socket(monkeypatch) -> None:
     w = opened(make(), monkeypatch)
     w.shell.connection_lost()
     assert w.ends == [("connection_lost", True)] and w.pty.ended
+    assert not w.shell.allowed
 
 
-def test_the_client_restarts_its_service_when_a_session_ends(monkeypatch) -> None:
+def _restart_harness(monkeypatch, restarted: bool):
     sat = object.__new__(client.Satellite)
     calls: list[str] = []
     sat._leds = SimpleNamespace(set_support=lambda on: calls.append(f"leds {on}"), state="idle")
     sat.playback_active = SimpleNamespace(is_set=lambda: False)
-    sat._restart_service = lambda: calls.append("restart") or True
+    sat._restart_service = lambda: calls.append("restart") or restarted
     monkeypatch.setattr(client.time, "sleep", lambda s: None)
-    started = []
+    monkeypatch.setattr(client.os, "_exit", lambda code: calls.append(f"exit {code}"))
 
     class NowThread:
         def __init__(self, target, **kw):
             self.target = target
 
         def start(self):
-            started.append(True)
             self.target()
 
     monkeypatch.setattr(client.threading, "Thread", NowThread)
     sat._support_ended("idle", False)
-    assert calls == ["leds False", "restart"] and started == [True]
+    return calls
+
+
+def test_the_client_restarts_its_service_when_a_session_ends(monkeypatch) -> None:
+    assert _restart_harness(monkeypatch, True) == ["leds False", "restart"]
+
+
+def test_a_failed_restart_exits_non_zero_so_systemd_clears_the_unit(monkeypatch) -> None:
+    """M3: a restart that can't be asked for must not leave the shell's
+    leftovers running."""
+    assert _restart_harness(monkeypatch, False) == ["leds False", "restart", "exit 1"]
+
+
+def test_opening_arms_the_watchdog_and_drops_dumpability(monkeypatch) -> None:
+    sat = object.__new__(client.Satellite)
+    calls: list[str] = []
+    sat._leds = SimpleNamespace(set_support=lambda on: calls.append(f"leds {on}"))
+    monkeypatch.setattr(sh, "make_undumpable", lambda: calls.append("undumpable") or True)
+    monkeypatch.setattr(sh, "sd_notify", lambda msg, path=None: calls.append(msg) or True)
+    sat.loop = None
+    sat._support_opened()
+    assert calls == ["leds True", "undumpable",
+                     f"WATCHDOG_USEC={sh.WATCHDOG_SEC * 1_000_000}\nWATCHDOG=1"]
+    src = inspect.getsource(client.Satellite._feed_support_watchdog)
+    assert 'sd_notify("WATCHDOG=1")' in src and "while self._support.active" in src
+
+
+def test_sd_notify_without_a_socket_is_a_quiet_no(monkeypatch) -> None:
+    monkeypatch.delenv("NOTIFY_SOCKET", raising=False)
+    assert sh.notify_socket() is None
+    assert sh.sd_notify("WATCHDOG=1") is False
 
 
 def test_the_client_refuses_while_busy() -> None:
@@ -342,3 +636,23 @@ def test_a_real_pty_runs_a_shell_as_this_user() -> None:
     finally:
         code = pty.terminate()
     assert code is not None
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="a PTY needs Linux")
+def test_a_real_pty_write_gives_up_when_the_session_ends() -> None:
+    """M3 on the real PTY: a program that never reads its input fills the
+    PTY; the write waits with a timeout and stops once the session is over,
+    instead of blocking forever."""
+    pty = sh.PtyBackend()
+    pty.spawn(80, 24)
+    try:
+        pty.write(b"sleep 30\n")
+        time.sleep(0.3)
+        over = threading.Event()
+        threading.Timer(1.5, over.set).start()
+        started = time.monotonic()
+        with pytest.raises(OSError):
+            pty.write(b"z" * (1024 * 1024), lambda: not over.is_set())
+        assert time.monotonic() - started < 10
+    finally:
+        pty.terminate()

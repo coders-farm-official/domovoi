@@ -2294,6 +2294,12 @@ class StreamSession:
         await self._safe_send_text(ready)
         self._connected_at = time.monotonic()
         self._ready_sent = True
+        # A satellite that offers support sessions is told, signed for this
+        # connection, whether its switch is on (domovoi/support_sessions.py).
+        if getattr(self, "support_nonce", None) and self.abilities.allows("support_shell"):
+            from domovoi import support_sessions
+
+            asyncio.create_task(support_sessions.send_allow_state(self.ws.app, self))
         # 1.5.0: a device joining a room may make its neighbours claim.
         try:
             await self.push_claim_flags()
@@ -4146,6 +4152,12 @@ class StreamSession:
             # three negotiated behaviours (full duplex, speech pause,
             # capture control) come from their booleans as before.
             self.abilities = satellite_abilities.from_hello(ctrl, room_id=self.room_id)
+            # The nonce a support-session satellite sends with every hello:
+            # the core signs it into each support frame for this connection
+            # (domovoi/support_sessions.py), so none replays onto another.
+            nonce = ctrl.get("support_nonce")
+            self.support_nonce = (
+                nonce if isinstance(nonce, str) and re.fullmatch(r"[0-9a-f]{32}", nonce) else None)
             raw_board = ctrl.get("board")
             self.board = satellite_abilities.clean_board(raw_board)
             # Stored settings the satellite could not use (it runs on its
@@ -4560,7 +4572,9 @@ class StreamSession:
             probe = ctrl.get("probe")
             fut = self._diag_requests.get(probe) if isinstance(probe, str) else None
             if fut is not None and not fut.done():
-                fut.set_result(satellite_diagnostics.clean_result(probe, ctrl))
+                # Only cut to size here: the cleaning runs on a worker
+                # thread in request_diagnostic, never on this loop.
+                fut.set_result(satellite_diagnostics.raw_result(ctrl))
             return
         if t == "logs_chunk":
             # One slice of a log pull we asked for. Reassembly is sync and
@@ -8515,7 +8529,8 @@ class StreamSession:
                 self._diag_requests.pop(probe, None)
                 raise
         try:
-            return await asyncio.wait_for(asyncio.shield(fut), timeout)
+            raw = await asyncio.wait_for(asyncio.shield(fut), timeout)
+            return await satellite_diagnostics.clean_result_off_loop(probe, raw)
         except (TimeoutError, asyncio.TimeoutError):
             # Give up on it for everyone waiting, so the next ask sends a
             # fresh request instead of waiting on this one forever.
@@ -8580,6 +8595,16 @@ class StreamSession:
             if self.dropin_peer is not None or peer.dropin_peer is not None:
                 log.warning(
                     "drop-in: begin refused — %s or %s already in a call",
+                    self.room_id, peer.room_id,
+                )
+                return
+            # A call's red light would hide a support session's magenta
+            # one: no call while either side has a session open.
+            from domovoi import support_sessions
+
+            if support_sessions.get_manager(app).open_on(self, peer):
+                log.warning(
+                    "drop-in: begin refused — a support session is open on %s or %s",
                     self.room_id, peer.room_id,
                 )
                 return

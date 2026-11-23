@@ -2095,13 +2095,16 @@ class Satellite(pc_engine.SpareDeviceEngine):
 
         # Support sessions (1.5.0, satellite/support_shell.py): an admin's
         # shell as this account, declared only by a Pi on a prepared card
-        # whose account can't use sudo. Decided once, at start.
+        # whose account can't use sudo. Decided once, at start. Every open,
+        # input and allow frame must carry the server's signature for this
+        # satellite id and this connection.
         self._support = support_shell.SupportShell(
             declared=support_shell.should_declare(is_pc=pc_engine.is_pc(cfg)),
             emit=self._emit_text,
-            on_open=lambda: self._leds.set_support(True),
+            on_open=self._support_opened,
             on_end=self._support_ended,
             busy=self._support_busy,
+            satellite_id=lambda: self.cfg.room_id,
         )
 
         # WiFi self-heal state. The watcher thread polls
@@ -2633,11 +2636,42 @@ class Satellite(pc_engine.SpareDeviceEngine):
             return "the room is recording wake-word clips"
         return None
 
+    def _screen_support_leds(self, changes: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+        """A device that offers support sessions keeps its light: a remote
+        set_config can't turn it off or down to nothing
+        (support_shell.screen_led_changes)."""
+        support = getattr(self, "_support", None)
+        return support_shell.screen_led_changes(changes, bool(support and support.declared))
+
+    def _support_opened(self) -> None:
+        """A support session opened: the light, then the process is made
+        non-dumpable (the shell runs as this account and must not attach to
+        it) and the systemd watchdog is armed and fed from the event loop,
+        so a client stopped or frozen from inside the shell is killed with
+        its whole unit (satellite/support_shell.py)."""
+        self._leds.set_support(True)
+        support_shell.make_undumpable()
+        support_shell.sd_notify(
+            f"WATCHDOG_USEC={support_shell.WATCHDOG_SEC * 1_000_000}\nWATCHDOG=1")
+        loop = getattr(self, "loop", None)
+        if loop is not None and not loop.is_closed():
+            asyncio.run_coroutine_threadsafe(self._feed_support_watchdog(), loop)
+
+    async def _feed_support_watchdog(self) -> None:
+        """While a session is open, tell systemd the event loop is alive.
+        After the session it stops: the restart that follows replaces the
+        process, and if it doesn't come the watchdog restarts the unit."""
+        while self._support.active:
+            support_shell.sd_notify("WATCHDOG=1")
+            await asyncio.sleep(support_shell.WATCHDOG_FEED_SEC)
+
     def _support_ended(self, reason: str, by_server: bool) -> None:
         """A support session ended: the light goes back, then the service
         restarts so nothing the shell started lives on (the unit's cgroup
         kill takes every child). It waits up to 15 s for the room's end
-        line to be said first."""
+        line to be said first. If the restart can't be asked for, the
+        process exits non-zero, so systemd restarts the unit and clears
+        every process in it."""
         self._leds.set_support(False)
 
         def _restart() -> None:
@@ -2648,7 +2682,10 @@ class Satellite(pc_engine.SpareDeviceEngine):
             ):
                 time.sleep(0.25)
             log.info("support session ended (%s): restarting the service", reason)
-            self._restart_service()
+            if not self._restart_service():
+                log.error("support session ended: the restart could not be asked for; "
+                          "exiting so systemd restarts the unit")
+                os._exit(1)
 
         threading.Thread(target=_restart, daemon=True, name="support-restart").start()
 
@@ -2670,6 +2707,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 started_at=_PROCESS_STARTED_WALL,
                 known_secrets=tuple(v for v in (token,) if v),
                 mic_dsp=getattr(self, "_mic_dsp", None),
+                hash_salt=_pinned_fingerprint(self.cfg)[0] or "",
             )
             result = await asyncio.to_thread(diagnostics.run_probe, probe, ctx)
         self._emit_text({"type": "diag_result", **result})
@@ -5642,6 +5680,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
         changes, refused = remote_config.screen(
             changes, pc=pc_engine.is_pc(getattr(self, "cfg", None)),
             windows=engine_platform.is_windows_pc(getattr(self, "cfg", None)))
+        changes, dark = self._screen_support_leds(changes)
+        refused = refused + dark
         if refused:
             log.warning("set_config: refusing %s (not a setting the dashboard may change here)",
                         ", ".join(sorted(refused)))
@@ -8978,6 +9018,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
             if isinstance(changes, dict) and changes:
                 changes, refused = remote_config.screen(
                     changes, pc=pc_engine.is_pc(self.cfg), windows=engine_platform.is_windows_pc(self.cfg))
+                changes, dark = self._screen_support_leds(changes)
+                refused = refused + dark
                 if refused:
                     log.warning("set_config: refusing %s (not a setting the dashboard may "
                                 "change here)", ", ".join(sorted(refused)))
@@ -9227,7 +9269,15 @@ class Satellite(pc_engine.SpareDeviceEngine):
             # (satellite/diagnostics.py): an unknown name is refused there
             # and nothing runs. Off the receiver loop: a probe may wait on
             # a subprocess or a TCP connect.
-            asyncio.create_task(self._answer_diag(payload.get("probe")))
+            # The device's own limit too: a forged or runaway server can't
+            # queue probes without end.
+            bucket = getattr(self, "_diag_bucket", None)
+            if bucket is None:
+                bucket = self._diag_bucket = diagnostics.RequestBucket()
+            if bucket.take():
+                asyncio.create_task(self._answer_diag(payload.get("probe")))
+            else:
+                log.warning("diagnostics: too many probe requests; dropped one")
         elif t == "set_mic_dsp":
             # An admin picked a mic DSP preset: a NAME from the fixed table
             # in satellite/mic_dsp.py, never parameters. Off the loop:
@@ -9294,9 +9344,11 @@ class Satellite(pc_engine.SpareDeviceEngine):
             log.debug("ignoring end_capture for utt=%r (capturing %r)", utt, self._capture_utt)
         elif t == "support_open" or t == "support_input" or t == "support_resize":
             # A support session (satellite/support_shell.py): refused unless
-            # this device declared it; its own limits hold whatever is asked.
+            # this device declared it and the server signed it for this
+            # satellite and this connection; its own limits hold whatever is
+            # asked. Input is only queued here: a worker checks and writes it.
             self._support.handle(payload)
-        elif t == "support_close":
+        elif t == "support_close" or t == "support_allow":
             # Hanging up the shell waits for its process group: off the loop.
             threading.Thread(target=self._support.handle, args=(payload,), daemon=True,
                              name="support-close").start()
@@ -9385,6 +9437,11 @@ class Satellite(pc_engine.SpareDeviceEngine):
         # the field: it is a new key on an existing message).
         if self._prev_health is not None:
             hello["prev_health"] = self._prev_health
+        # A fresh nonce per connection: the core signs it into every
+        # support frame, so none can be replayed onto another connection.
+        support = getattr(self, "_support", None)
+        if support is not None and support.declared:
+            hello["support_nonce"] = support.new_connection()
         # A spare computer says what it is and what it can do (its board and
         # its `supports` list), so the core never sends it a Pi-only frame.
         # A Pi sends no board. Since 1.5.0 it does send a list: `wake_claim`
