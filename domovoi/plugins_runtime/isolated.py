@@ -44,6 +44,17 @@ a wrong id is a refused item and a restart of the container with backoff;
 bad JSON in a well-formed frame is a refused item. Nothing a decoder does
 raises into the caller.
 
+**Images** (slice 2): a decoder may return ``domovoi_isolated.Image``
+(:mod:`domovoi.plugins_runtime.isolated_helper`, copied into the image).
+The helper re-encodes it inside the container (format, pixel and size
+caps, metadata stripped by copying only pixels) and the reply is status
+2; :func:`check_image` re-reads the PNG or WebP container here without
+decoding it and refuses anything but the pixels.
+
+**The build is memory-capped** (:data:`BUILD_CAPS`) on Docker's classic
+builder: BuildKit accepts ``--memory`` and ignores it, so a Docker without
+the classic builder gets no build at all (:func:`builder_caps_honoured`).
+
 **Lifecycle:** :func:`start_for` when the plugin loads (enable, install,
 boot), :func:`stop_for` when it unloads (disable, uninstall, upgrade,
 shutdown), :func:`forget` on uninstall (the image goes too). An upgrade
@@ -92,13 +103,22 @@ BUILD_TIMEOUT_SEC = 900.0
 APP_DIR = "/opt/domovoi-isolated"
 RUNNER_NAME = "domovoi_isolated_runner.py"
 RUNNER_SOURCE = Path(__file__).resolve().parent / "isolated_runner.py"
+# The core's helper a decoder may import as ``domovoi_isolated`` (Image,
+# reencode: slice 2, image re-encode).
+HELPER_NAME = "domovoi_isolated.py"
+HELPER_SOURCE = Path(__file__).resolve().parent / "isolated_helper.py"
 # Nobody: owns nothing in the image, and the container mounts nothing.
 CONTAINER_USER = "65534:65534"
 
 # Caps on the IPC (the runner keeps the same numbers).
-PAYLOAD_MAX = 64 * 1024
+PAYLOAD_MAX = 256 * 1024
 META_MAX = 1024
 REPLY_MAX = 64 * 1024
+# A re-encoded image (status 2): PNG or WebP, at most this many bytes and
+# IMAGE_MAX_SIDE pixels a side (the helper's OUTPUT_MAX and MAX_SIDE).
+IMAGE_MAX = 512 * 1024
+IMAGE_MAX_SIDE = 1024
+FRAME_MAX = max(REPLY_MAX, IMAGE_MAX) + 5
 REASON_MAX = 200
 DEPTH_MAX = 16
 INT_MAX = 2**63 - 1
@@ -140,9 +160,30 @@ def image_tag(slug: str) -> str:
     return f"{DECODER_CONTAINER_PREFIX}{slug}:latest"
 
 
-async def _docker(*args: str, timeout: float = 60.0, stdin: bytes | None = None) -> tuple[int, str, str]:
-    """The docker CLI (a seam the tests replace)."""
-    return await tor_runtime._docker(*args, timeout=timeout, stdin=stdin)
+async def _docker(*args: str, timeout: float = 60.0, stdin: bytes | None = None,
+                  env: dict[str, str] | None = None) -> tuple[int, str, str]:
+    """The docker CLI (a seam the tests replace). ``env`` replaces the
+    environment of the CLI process (the build sets DOCKER_BUILDKIT=0)."""
+    if env is None:
+        return await tor_runtime._docker(*args, timeout=timeout, stdin=stdin)
+    kwargs: dict[str, Any] = {}
+    if sys.platform == "win32":  # pragma: no cover
+        import subprocess
+
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    proc = await asyncio.create_subprocess_exec(
+        "docker", *args, env=env,
+        stdin=asyncio.subprocess.PIPE if stdin is not None else asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, **kwargs,
+    )
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(stdin), timeout=timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise DockerFailed(f"docker {args[0]} took longer than {int(timeout)} s") from None
+    rc = proc.returncode if proc.returncode is not None else -1
+    return rc, out.decode(errors="replace"), err.decode(errors="replace")
 
 
 # ─── the image ────────────────────────────────────────────────────────────
@@ -184,6 +225,7 @@ def context_tar(install_dir: Path, manifest: PluginManifest) -> bytes:
 
         add("Dockerfile", dockerfile(manifest).encode())
         add(f"app/{RUNNER_NAME}", RUNNER_SOURCE.read_bytes())
+        add(f"app/{HELPER_NAME}", HELPER_SOURCE.read_bytes())
         add("app/decoder.json", spec)
         add(f"app/{manifest.package_name}/__init__.py", b"")
         for rel, path in files:
@@ -195,13 +237,46 @@ def build_sha(context: bytes) -> str:
     return hashlib.sha256(context).hexdigest()
 
 
+# The build's caps. Docker 29 (what the installers pin) runs ``docker
+# build`` through BuildKit (buildx), which ACCEPTS ``--memory`` and the CPU
+# flags for compatibility and IGNORES them: the build would run uncapped.
+# The classic builder (``DOCKER_BUILDKIT=0``, deprecated but still shipped)
+# runs each RUN step in a container with exactly these limits, so the
+# decoder image is built with it; :func:`builder_caps_honoured` checks
+# first that this Docker still has it, and the build is refused (never run
+# uncapped) when it doesn't. The Dockerfile uses nothing BuildKit-only.
+BUILD_MEMORY = "1g"
+BUILD_CAPS = (
+    "--memory", BUILD_MEMORY, "--memory-swap", BUILD_MEMORY,
+    # Low priority: a quarter of the default CPU weight, and at most one CPU.
+    "--cpu-shares", "256", "--cpu-period", "100000", "--cpu-quota", "100000",
+)
+BUILD_ENV_EXTRA = {"DOCKER_BUILDKIT": "0"}
+UNCAPPED_BUILD = ("this Docker can't cap the memory of an image build (its classic builder is "
+                  "gone), so the decoder image isn't built")
+
+
 def build_args(slug: str, sha: str, version: str) -> list[str]:
-    """``docker build`` with the context piped in. ``--pull --no-cache``:
+    """``docker build`` with the context piped in, for the classic builder
+    (:data:`BUILD_ENV_EXTRA`) with :data:`BUILD_CAPS`. ``--pull --no-cache``:
     a rebuild runs apt again, so Debian's fixes get in."""
-    return ["build", "--pull", "--no-cache", "-t", image_tag(slug),
+    return ["build", "--pull", "--no-cache", *BUILD_CAPS, "-t", image_tag(slug),
             "--label", f"{BUILD_LABEL}={sha}",
             "--label", f"org.domovoi.plugin={slug}",
             "--label", f"org.domovoi.plugin-version={version}", "-"]
+
+
+def build_env() -> dict[str, str]:
+    return {**docker_env(), **BUILD_ENV_EXTRA}
+
+
+async def builder_caps_honoured() -> bool:
+    """Whether ``docker build`` (classic builder) still takes ``--memory``.
+    BuildKit hides the flag from its help because it ignores it, so its
+    presence there means the classic builder answered."""
+    rc, out, err = await _docker("build", "--help", timeout=30.0, env=build_env())
+    text = out + err
+    return rc == 0 and "--memory-swap" in text and "docker buildx build" not in text
 
 
 @dataclass(frozen=True)
@@ -244,9 +319,11 @@ async def ensure_image(slug: str, install_dir: Path, manifest: PluginManifest) -
     if reason is None:
         assert info is not None
         return info.image_id
+    if not await builder_caps_honoured():
+        raise DockerFailed(UNCAPPED_BUILD)
     log.info("plugin %s: building its decoder image: %s", slug, reason)
     rc, _, err = await _docker(*build_args(slug, want, manifest.version),
-                               timeout=BUILD_TIMEOUT_SEC, stdin=context)
+                               timeout=BUILD_TIMEOUT_SEC, stdin=context, env=build_env())
     if rc != 0:
         last = err.strip().splitlines()[-1:] if err.strip() else []
         raise DockerFailed(f"building the {slug} decoder failed" + (": " + last[0][:200] if last else ""))
@@ -371,6 +448,115 @@ def canonical(data: bytes) -> tuple[Any, bytes]:
     return json.loads(out), out
 
 
+# ─── the image re-check ───────────────────────────────────────────────────
+#
+# The helper inside the container re-encodes images; the core never
+# decodes one. It reads only the container format around the pixels, and
+# accepts exactly what a fresh PNG or WebP encode holds: no metadata chunk
+# of any kind, no animation, nothing after the end.
+
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+_PNG_CHUNKS = frozenset({b"IHDR", b"PLTE", b"tRNS", b"IDAT", b"IEND"})
+_WEBP_CHUNKS = frozenset({b"VP8 ", b"VP8L", b"VP8X", b"ALPH"})
+# VP8X flags that mean metadata or animation: ICC profile, EXIF, XMP, animation.
+_VP8X_REFUSED = 0x20 | 0x08 | 0x04 | 0x02
+
+
+def _dims_ok(width: int, height: int) -> tuple[int, int]:
+    if not (1 <= width <= IMAGE_MAX_SIDE and 1 <= height <= IMAGE_MAX_SIDE):
+        raise ValueError(f"{width}x{height} is outside 1..{IMAGE_MAX_SIDE} a side")
+    return width, height
+
+
+def _check_png(data: bytes) -> tuple[int, int]:
+    import zlib
+
+    pos, dims, seen_idat = len(PNG_MAGIC), None, False
+    while True:
+        if pos + 12 > len(data):
+            raise ValueError("a truncated PNG")
+        length, ctype = struct.unpack(">I4s", data[pos:pos + 8])
+        end = pos + 8 + length
+        if end + 4 > len(data):
+            raise ValueError("a truncated PNG")
+        if ctype not in _PNG_CHUNKS:
+            raise ValueError(f"a PNG {ctype.decode('latin-1')!r} chunk (only pixels may leave the decoder)")
+        body = data[pos + 8:end]
+        (crc,) = struct.unpack(">I", data[end:end + 4])
+        if zlib.crc32(ctype + body) & 0xFFFFFFFF != crc:
+            raise ValueError("a PNG chunk with a bad checksum")
+        if dims is None:
+            if ctype != b"IHDR" or length != 13:
+                raise ValueError("a PNG that doesn't start with its header")
+            dims = _dims_ok(*struct.unpack(">II", body[:8]))
+        elif ctype == b"IHDR":
+            raise ValueError("a PNG with two headers")
+        seen_idat = seen_idat or ctype == b"IDAT"
+        pos = end + 4
+        if ctype == b"IEND":
+            break
+    if pos != len(data):
+        raise ValueError("bytes after the PNG's end")
+    if not seen_idat:
+        raise ValueError("a PNG without pixels")
+    return dims
+
+
+def _check_webp(data: bytes) -> tuple[int, int]:
+    (riff_size,) = struct.unpack("<I", data[4:8])
+    if riff_size + 8 != len(data) or riff_size % 2:
+        raise ValueError("a WebP whose size doesn't match")
+    pos, dims, frames, canvas = 12, None, 0, None
+    while pos < len(data):
+        if pos + 8 > len(data):
+            raise ValueError("a truncated WebP")
+        fourcc = data[pos:pos + 4]
+        (size,) = struct.unpack("<I", data[pos + 4:pos + 8])
+        body = data[pos + 8:pos + 8 + size]
+        if len(body) != size:
+            raise ValueError("a truncated WebP")
+        if fourcc not in _WEBP_CHUNKS:
+            raise ValueError(f"a WebP {fourcc.decode('latin-1')!r} chunk (only pixels may leave the decoder)")
+        if fourcc == b"VP8X":
+            if pos != 12 or size < 10:
+                raise ValueError("a misplaced WebP extended header")
+            if body[0] & _VP8X_REFUSED:
+                raise ValueError("a WebP that declares metadata or animation")
+            canvas = _dims_ok(1 + int.from_bytes(body[4:7], "little"),
+                              1 + int.from_bytes(body[7:10], "little"))
+        elif fourcc == b"VP8L":
+            if size < 5 or body[0] != 0x2F:
+                raise ValueError("a bad lossless WebP header")
+            bits = int.from_bytes(body[1:5], "little")
+            dims = _dims_ok((bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1)
+            frames += 1
+        elif fourcc == b"VP8 ":
+            if size < 10 or body[3:6] != b"\x9d\x01\x2a":
+                raise ValueError("a bad WebP frame header")
+            w, h = struct.unpack("<HH", body[6:10])
+            dims = _dims_ok(w & 0x3FFF, h & 0x3FFF)
+            frames += 1
+        pos += 8 + size + (size & 1)
+    if frames != 1 or dims is None:
+        raise ValueError("a WebP without exactly one image")
+    if canvas is not None and canvas != dims:
+        raise ValueError("a WebP whose canvas and image disagree")
+    return dims
+
+
+def check_image(data: bytes) -> tuple[str, int, int]:
+    """``(format, width, height)`` of a re-encoded image the decoder sent,
+    or ValueError: PNG or WebP only, at most :data:`IMAGE_MAX` bytes and
+    :data:`IMAGE_MAX_SIDE` a side, and nothing but the pixels."""
+    if len(data) > IMAGE_MAX:
+        raise ValueError("the image is too large")
+    if data.startswith(PNG_MAGIC):
+        return ("png", *_check_png(data))
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return ("webp", *_check_webp(data))
+    raise ValueError("not a PNG or WebP image")
+
+
 # ─── the decoder process ──────────────────────────────────────────────────
 
 @dataclass(frozen=True)
@@ -382,6 +568,10 @@ class DecodeResult:
     value: Any = None
     canonical: bytes = b""
     reason: str = ""
+    # A re-encoded image (status 2): its bytes and media type; ``value`` is
+    # then ``{"image": {"format", "width", "height", "bytes"}}``.
+    image: bytes | None = None
+    media_type: str = ""
 
 
 class _Broken(Exception):
@@ -554,9 +744,18 @@ class IsolatedDecoder:
             except (ConnectionError, OSError, asyncio.IncompleteReadError):
                 await self._fail("the decoder stopped")
                 return DecodeResult(False, reason="the decoder stopped")
-        if status != 0:
+        if status == 1:
             return DecodeResult(False, reason="refused by the decoder: "
                                 + data[:REASON_MAX].decode("utf-8", "replace"))
+        if status == 2:
+            try:
+                fmt, width, height = check_image(data)
+            except ValueError as e:
+                return DecodeResult(False, reason=f"bad image: {e}"[:REASON_MAX])
+            self._backoff = BACKOFF_FIRST_SEC
+            info = {"format": fmt, "width": width, "height": height, "bytes": len(data)}
+            return DecodeResult(True, value={"image": info}, image=bytes(data),
+                                media_type=f"image/{fmt}")
         try:
             value, out = canonical(data)
         except (ValueError, RecursionError) as e:
@@ -570,14 +769,16 @@ class IsolatedDecoder:
         await proc.stdin.drain()
         head = await proc.stdout.readexactly(4)
         (size,) = struct.unpack(">I", head)
-        if size < 5 or size > REPLY_MAX + 5:
+        if size < 5 or size > FRAME_MAX:
             raise _Broken("the decoder's reply has a bad size")
         reply = await proc.stdout.readexactly(size)
         got, status = struct.unpack(">IB", reply[:5])
         if got != rid:
             raise _Broken("the decoder answered another request")
-        if status not in (0, 1):
+        if status not in (0, 1, 2):
             raise _Broken("the decoder's reply has a bad status")
+        if status != 2 and size > REPLY_MAX + 5:
+            raise _Broken("the decoder's reply has a bad size")
         return status, reply[5:]
 
     async def _fail(self, why: str) -> None:

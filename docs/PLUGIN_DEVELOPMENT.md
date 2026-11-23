@@ -982,8 +982,9 @@ mounts, no environment and no logs. It talks to the core over stdin and
 stdout only.
 
 **The contract.** `main(payload: bytes, meta: dict) -> value`. The core
-sends one item at a time (payload up to 64 KiB, `meta` a small JSON object
-it chooses). Return anything JSON can carry; raise to refuse the item.
+sends one item at a time (payload up to 256 KiB, `meta` a small JSON object
+it chooses). Return anything JSON can carry, or an image (below); raise to
+refuse the item.
 `print()` is safe (it goes to stderr). The core checks every answer before
 your in-process code sees it: at most 64 KiB, UTF-8, nesting at most 16
 deep, no NaN or infinity, integers within 64 bits, no duplicate keys, and
@@ -993,6 +994,20 @@ that hangs (5 s), crashes, or writes anything but a well-formed reply is
 killed and restarted, with a backoff from 1 s doubling to 60 s; items
 meanwhile are refused.
 
+**Images.** Return `domovoi_isolated.Image(data, format="png"|"webp",
+lossless=True)` (or plain `bytes`, meaning a PNG) and the core's helper,
+inside the container, re-encodes it: the input must be PNG, JPEG or WebP
+(by its first bytes, and Pillow must agree), at most 12 million pixels by
+its header (a decompression bomb is refused before anything is decoded),
+one frame, not truncated. The EXIF orientation is applied, then only the
+pixels are copied into a fresh image, so EXIF (GPS included), XMP, ICC
+profiles and text chunks are all gone; it is scaled to at most 1024 pixels
+a side and must come out at most 512 KiB. Images need `debian =
+["python3-pil"]`; `import domovoi_isolated` is always allowed. The core
+reads the result's container format again without decoding it (PNG or
+WebP only, the size and dimensions, and no chunk but the pixels') and
+hands your in-process code the new bytes, never the ones a friend sent.
+
 Inside the decoder: never unpickle anything; decompress with a
 `max_length`; validate against your own schema before returning.
 
@@ -1001,7 +1016,10 @@ container when the plugin loads (install, enable, boot); stops and
 removes it when the plugin is disabled, upgraded or uninstalled; and
 removes the image on uninstall. The image is rebuilt whenever your
 decoder's files change (an upgrade) and when it is 30 days old, so
-Debian's fixes get in. The build runs in the background: until it is up,
+Debian's fixes get in. The build is capped at 1 GB of memory and a low CPU
+weight; Docker's BuildKit ignores those caps, so the core builds this
+image with Docker's classic builder, and refuses to build it at all on a
+Docker that no longer has one. The build runs in the background: until it is up,
 items are refused. The container is named `domovoi-plugin-dec-<slug>`, a
 name the container guard watches: it must run exactly the image the core
 built.

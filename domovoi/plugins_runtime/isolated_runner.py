@@ -11,11 +11,16 @@ each a frame: a 4-byte big-endian length, then the body.
 
 * request body: ``id u32 ‖ meta_len u16 ‖ meta (JSON object) ‖ payload``;
 * reply body: ``id u32 ‖ status u8 ‖ data``: status 0 with the decoder's
-  answer as JSON, or status 1 with a short reason (UTF-8).
+  answer as JSON, status 1 with a short reason (UTF-8), or status 2 with a
+  re-encoded image (PNG or WebP bytes).
 
-The decoder is ``function(payload: bytes, meta: dict) -> JSON value``. What
-it prints goes to stderr, never into the reply stream. The core checks and
-re-serializes every reply itself: nothing here is trusted.
+The decoder is ``function(payload: bytes, meta: dict) -> value``: a JSON
+value, or an image (``domovoi_isolated.Image``, or ``bytes``), which is
+decoded and encoded anew here by the core's helper
+(``domovoi_isolated.reencode``: pixel and size caps, metadata stripped)
+before anything leaves the container. What the decoder prints goes to
+stderr, never into the reply stream. The core checks every reply itself:
+nothing here is trusted.
 """
 
 from __future__ import annotations
@@ -28,11 +33,11 @@ import sys
 
 # Kept equal to the core's (isolated.py): a request or reply past these is
 # never sent or accepted.
-REQUEST_MAX = 64 * 1024 + 1024 + 6
+REQUEST_MAX = 256 * 1024 + 1024 + 6
 REPLY_MAX = 64 * 1024
 REASON_MAX = 200
 
-OK, REFUSED = 0, 1
+OK, REFUSED, IMAGE = 0, 1, 2
 
 
 def _read_exactly(stream, n: int) -> bytes | None:
@@ -78,6 +83,13 @@ def serve(decode, stdin, out) -> None:
         payload = body[6 + meta_len:]
         try:
             value = decode(payload, meta)
+            if isinstance(value, (bytes, bytearray)) or type(value).__name__ == "Image":
+                import domovoi_isolated as helper
+
+                image = value if isinstance(value, helper.Image) else helper.Image(bytes(value))
+                _, data = helper.reencode(image)
+                _write(out, rid, IMAGE, data)
+                continue
             data = json.dumps(value, allow_nan=False, ensure_ascii=False,
                               separators=(",", ":")).encode("utf-8")
         except Exception as e:  # noqa: BLE001 — a refusal, never the end of the runner

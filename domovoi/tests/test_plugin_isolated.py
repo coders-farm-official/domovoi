@@ -74,8 +74,14 @@ DECODER_OK = """\
 import json
 import zlib
 
+import domovoi_isolated
+
 
 def main(payload, meta):
+    if meta.get("img"):
+        return domovoi_isolated.Image(payload, meta["img"], lossless=meta.get("lossless", True))
+    if meta.get("raw"):
+        return payload
     data = json.loads(zlib.decompress(payload, 0) if meta.get("z") else payload)
     if data == "boom":
         raise ValueError("no booms")
@@ -217,7 +223,7 @@ def test_the_context_is_the_core_dockerfile_runner_and_decoder_files_only(tmp_pa
     (root / "domovoi_plugin_ctx" / "link" / "notes.txt").write_text("not code", encoding="utf-8")
     ctx = iso.context_tar(root, manifest_of(root))
     assert _names(ctx) == [
-        "Dockerfile", "app/domovoi_isolated_runner.py", "app/decoder.json",
+        "Dockerfile", "app/domovoi_isolated_runner.py", "app/domovoi_isolated.py", "app/decoder.json",
         "app/domovoi_plugin_ctx/__init__.py",
         "app/domovoi_plugin_ctx/link/__init__.py", "app/domovoi_plugin_ctx/link/decode.py",
     ]
@@ -226,6 +232,7 @@ def test_the_context_is_the_core_dockerfile_runner_and_decoder_files_only(tmp_pa
     assert json.loads(_member(ctx, "app/decoder.json")) == {
         "module": "domovoi_plugin_ctx.link.decode", "function": "main"}
     assert _member(ctx, "app/domovoi_isolated_runner.py") == iso.RUNNER_SOURCE.read_bytes()
+    assert _member(ctx, "app/domovoi_isolated.py") == iso.HELPER_SOURCE.read_bytes()
 
 
 def test_the_context_is_reproducible_and_its_hash_follows_the_files(tmp_path) -> None:
@@ -312,15 +319,24 @@ class FakeDocker:
     def __init__(self) -> None:
         self.images: dict[str, tuple[str, str, str]] = {}   # tag -> (id, sha, created)
         self.calls: list[tuple[str, ...]] = []
+        self.envs: dict[str, dict | None] = {}
         self.fail_build = False
+        self.classic_builder = True
         self._n = 0
 
-    async def __call__(self, *args: str, timeout: float = 60.0, stdin: bytes | None = None):
+    async def __call__(self, *args: str, timeout: float = 60.0, stdin: bytes | None = None,
+                       env: dict | None = None):
         self.calls.append(args)
+        if args[:2] == ("build", "--help"):
+            self.envs["help"] = env
+            if self.classic_builder and (env or {}).get("DOCKER_BUILDKIT") == "0":
+                return 0, "Usage:  docker build [OPTIONS] PATH | URL | -\n  -m, --memory bytes\n      --memory-swap bytes\n", ""
+            return 0, "Usage:  docker buildx build [OPTIONS] PATH | URL | -\n", ""
         if args[:2] == ("image", "inspect"):
             img = self.images.get(args[-1])
             return (0, "|".join(img) + "\n", "") if img else (1, "", "No such image")
         if args[0] == "build":
+            self.envs["build"] = env
             if self.fail_build:
                 return 1, "", "step 3 failed\nE: Unable to locate package"
             assert stdin is not None and tarfile.open(fileobj=io.BytesIO(stdin)).getnames()[0] == "Dockerfile"
@@ -362,7 +378,7 @@ async def test_ensure_image_builds_once_and_tells_the_guard(tmp_path, docker) ->
     first = await iso.ensure_image("img", root, m)
     assert docker.noted == [("img", first)]
     assert await iso.ensure_image("img", root, m) == first   # current: no rebuild
-    assert sum(1 for c in docker.calls if c[0] == "build") == 1
+    assert sum(1 for c in docker.calls if c[0] == "build" and c[1] != "--help") == 1
 
 
 async def test_an_upgrade_rebuilds_and_drops_the_old_image(tmp_path, docker) -> None:
@@ -381,6 +397,32 @@ async def test_a_failed_build_says_so(tmp_path, docker) -> None:
     docker.fail_build = True
     with pytest.raises(DockerFailed, match="Unable to locate package"):
         await iso.ensure_image("bad", root, manifest_of(root))
+
+
+def test_the_build_is_memory_capped_and_low_priority() -> None:
+    args = iso.build_args("fh", "abc", "1.2.3")
+    assert _pairs(args, "--memory") == ["1g"] and _pairs(args, "--memory-swap") == ["1g"]
+    assert _pairs(args, "--cpu-shares") == ["256"]   # a quarter of the default weight
+    assert _pairs(args, "--cpu-quota") == ["100000"] and _pairs(args, "--cpu-period") == ["100000"]
+    # BuildKit accepts and ignores those flags: the build runs on the classic builder.
+    assert iso.build_env()["DOCKER_BUILDKIT"] == "0"
+
+
+async def test_the_build_runs_capped_on_the_classic_builder(tmp_path, docker) -> None:
+    root = make_plugin(tmp_path, "capped")
+    await iso.ensure_image("capped", root, manifest_of(root))
+    assert docker.envs["build"]["DOCKER_BUILDKIT"] == "0"
+    assert docker.envs["help"]["DOCKER_BUILDKIT"] == "0"
+    build = next(c for c in docker.calls if c[0] == "build" and c[1] != "--help")
+    assert "--memory" in build and "--memory-swap" in build
+
+
+async def test_no_uncapped_build_when_the_classic_builder_is_gone(tmp_path, docker) -> None:
+    root = make_plugin(tmp_path, "nocap")
+    docker.classic_builder = False
+    with pytest.raises(DockerFailed, match="can't cap the memory"):
+        await iso.ensure_image("nocap", root, manifest_of(root))
+    assert not any(c[0] == "build" and c[1] != "--help" for c in docker.calls)
 
 
 # ─── the IPC under a hostile decoder ─────────────────────────────────────
@@ -512,12 +554,12 @@ async def test_sixteen_levels_are_fine() -> None:
 @pytest.mark.parametrize("answer, why", [
     (lambda rid, m, p: None, "timed out"),                                     # hangs
     (lambda rid, m, p: "crash", "stopped"),                                    # crashes
-    (lambda rid, m, p: struct.pack(">I", iso.REPLY_MAX + 6) + b"x" * 10, "bad size"),   # oversize frame
+    (lambda rid, m, p: struct.pack(">I", iso.FRAME_MAX + 1) + b"x" * 10, "bad size"),    # oversize frame
     (lambda rid, m, p: struct.pack(">I", 2) + b"xx", "bad size"),              # undersize frame
     (lambda rid, m, p: _frame(rid + 7, 0, b"1"), "another request"),           # wrong id
     (lambda rid, m, p: _frame(rid, 9, b"1"), "bad status"),
     (lambda rid, m, p: b"\x00\x00", "timed out"),                              # a torn header
-])
+], ids=["hang", "crash", "oversize-frame", "undersize-frame", "wrong-id", "bad-status", "torn"])
 async def test_transport_faults_refuse_the_item_and_restart_with_backoff(docker, answer, why) -> None:
     clock = Clock()
     dec, procs = await _decoder(answer, docker=docker, timeout=0.2, clock=clock)
@@ -744,3 +786,238 @@ def test_an_installer_hold_holds_the_decoder() -> None:
         assert gx.decoder_expectations([_row("games")], {})[0].hold == "upgrading"
     finally:
         holds.clear()
+
+
+# ─── slice 2: images re-encoded in the container ─────────────────────────
+
+PIL = pytest.importorskip("PIL")
+from PIL import Image as PILImage  # noqa: E402
+from PIL import PngImagePlugin  # noqa: E402
+
+from domovoi.plugins_runtime import isolated_helper as helper  # noqa: E402
+
+
+def _img(fmt: str, size=(64, 48), mode="RGB", **save) -> bytes:
+    color = {"RGB": (200, 30, 40), "RGBA": (200, 30, 40, 120), "L": 90}[mode]
+    im = PILImage.new(mode, size, color)
+    for x in range(0, size[0], 4):  # some detail, so a re-encode isn't trivially equal
+        im.putpixel((x, x % size[1]), (0, 0, 0) if mode == "RGB" else ((0, 0, 0, 255) if mode == "RGBA" else 0))
+    buf = io.BytesIO()
+    im.save(buf, fmt, **save)
+    return buf.getvalue()
+
+
+def _gps_exif() -> bytes:
+    exif = PILImage.Exif()
+    exif[0x010F] = "SecretCam"            # Make
+    exif[0x0131] = "SecretSoftware"       # Software
+    gps = exif.get_ifd(0x8825)
+    gps[1], gps[2] = "N", (52.0, 31.0, 12.5)
+    gps[3], gps[4] = "E", (13.0, 24.0, 1.5)
+    return exif.tobytes()
+
+
+def _png_chunk(ctype: bytes, body: bytes) -> bytes:
+    import zlib
+
+    return struct.pack(">I", len(body)) + ctype + body + struct.pack(">I", zlib.crc32(ctype + body) & 0xFFFFFFFF)
+
+
+def _bomb_png(width: int, height: int) -> bytes:
+    """A small file that declares a huge image (the pixels are never read)."""
+    import zlib
+
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    idat = zlib.compress(b"\x00" * 4096, 9)
+    return iso.PNG_MAGIC + _png_chunk(b"IHDR", ihdr) + _png_chunk(b"IDAT", idat) + _png_chunk(b"IEND", b"")
+
+
+def _open(data: bytes):
+    return PILImage.open(io.BytesIO(data))
+
+
+# The helper (it runs inside the container; here, in process).
+
+@pytest.mark.parametrize("fmt", ["JPEG", "PNG", "WEBP"])
+def test_exif_and_gps_are_gone_and_the_bytes_are_new(fmt) -> None:
+    src = _img(fmt, exif=_gps_exif())
+    assert b"SecretCam" in src
+    for out_fmt in ("png", "webp"):
+        _, out = helper.reencode(helper.Image(src, out_fmt))
+        assert out != src and b"SecretCam" not in out and b"SecretSoftware" not in out
+        assert b"Exif" not in out and b"GPS" not in out
+        with _open(out) as im:
+            assert dict(im.getexif()) == {} and "exif" not in im.info and "icc_profile" not in im.info
+        iso.check_image(out)
+
+
+def test_png_text_and_icc_are_stripped() -> None:
+    info = PngImagePlugin.PngInfo()
+    info.add_text("Comment", "SecretText")
+    info.add_itxt("XML:com.adobe.xmp", "<x:xmpmeta>SecretXmp</x:xmpmeta>")
+    src = _img("PNG", pnginfo=info, icc_profile=b"SecretIcc" * 20)
+    _, out = helper.reencode(helper.Image(src))
+    assert src.count(b"SecretText") and src.count(b"iCCP")
+    for marker in (b"SecretText", b"SecretXmp", b"SecretIcc", b"tEXt", b"iTXt", b"zTXt", b"iCCP"):
+        assert marker not in out, marker
+    with _open(out) as im:
+        assert "Comment" not in im.info and "icc_profile" not in im.info
+
+
+def test_the_orientation_is_applied_before_the_metadata_goes() -> None:
+    exif = PILImage.Exif()
+    exif[0x0112] = 6                     # rotate 90 on display
+    src = _img("JPEG", size=(40, 20), exif=exif.tobytes())
+    _, out = helper.reencode(helper.Image(src))
+    with _open(out) as im:
+        assert im.size == (20, 40) and dict(im.getexif()) == {}
+
+
+def test_a_big_image_is_scaled_to_1024_a_side() -> None:
+    _, out = helper.reencode(helper.Image(_img("PNG", size=(3000, 1200))))
+    assert iso.check_image(out)[1:] == (1024, 410)
+
+
+@pytest.mark.parametrize("data, why", [
+    (_bomb_png(20000, 20000), "too large"),          # a decompression bomb: refused before decoding
+    (_bomb_png(4000, 3001), "too large"),            # just over MAX_PIXELS
+    (b"GIF89a" + b"\x00" * 40, "not a PNG, JPEG or WebP"),
+    (b"<svg xmlns='http://www.w3.org/2000/svg'/>", "not a PNG, JPEG or WebP"),
+    (b"", "not a PNG, JPEG or WebP"),
+    (iso.PNG_MAGIC + b"\xff\xd8\xff" + b"\x00" * 40, "doesn't decode"),
+], ids=["bomb", "over-max-pixels", "gif", "svg", "empty", "png-magic-garbage"])
+def test_hostile_images_are_refused(data, why) -> None:
+    with pytest.raises(helper.ImageRefused, match=why):
+        helper.reencode(helper.Image(data))
+
+
+@pytest.mark.parametrize("fmt", ["JPEG", "PNG", "WEBP"])
+def test_truncated_images_are_refused(fmt) -> None:
+    data = _img(fmt, size=(300, 200))
+    with pytest.raises(helper.ImageRefused):
+        helper.reencode(helper.Image(data[: len(data) // 2]))
+
+
+def test_an_animation_is_refused() -> None:
+    frames = [PILImage.new("RGB", (16, 16), c) for c in ((255, 0, 0), (0, 255, 0))]
+    buf = io.BytesIO()
+    frames[0].save(buf, "WEBP", save_all=True, append_images=frames[1:])
+    with pytest.raises(helper.ImageRefused, match="animated"):
+        helper.reencode(helper.Image(buf.getvalue()))
+
+
+def test_the_helper_s_caps_match_the_core_s() -> None:
+    assert helper.MAX_SIDE == iso.IMAGE_MAX_SIDE and helper.OUTPUT_MAX == iso.IMAGE_MAX
+    import domovoi.plugins_runtime.isolated_runner as runner
+
+    assert runner.REQUEST_MAX == iso.PAYLOAD_MAX + iso.META_MAX + 6 and runner.REPLY_MAX == iso.REPLY_MAX
+
+
+# The core's re-check (what a decoder that skips the helper would meet).
+
+def test_the_core_accepts_fresh_encodes() -> None:
+    for fmt, save in (("PNG", {}), ("WEBP", {"lossless": True}), ("WEBP", {"quality": 80})):
+        for mode in ("RGB", "RGBA"):
+            got = iso.check_image(_img(fmt, mode=mode, **save))
+            assert got == (fmt.lower(), 64, 48)
+
+
+def test_the_core_refuses_metadata_and_anything_but_pixels() -> None:
+    info = PngImagePlugin.PngInfo()
+    info.add_text("Comment", "x")
+    clean_png = _img("PNG")
+    frames = [PILImage.new("RGB", (16, 16), c) for c in ((255, 0, 0), (0, 255, 0))]
+    anim = io.BytesIO()
+    frames[0].save(anim, "WEBP", save_all=True, append_images=frames[1:])
+    bad = {
+        "png text": _img("PNG", pnginfo=info),
+        "png exif": _img("PNG", exif=_gps_exif()),
+        "png icc": _img("PNG", icc_profile=b"x" * 64),
+        "webp exif": _img("WEBP", exif=_gps_exif()),
+        "webp icc": _img("WEBP", icc_profile=b"x" * 64),
+        "webp animated": anim.getvalue(),
+        "jpeg": _img("JPEG"),
+        "too wide": _img("PNG", size=(1025, 10)),
+        "trailing bytes": clean_png + b"MORE",
+        "bad crc": clean_png[:-5] + bytes([clean_png[-5] ^ 1]) + clean_png[-4:],
+        "truncated png": clean_png[:-12],
+        "truncated webp": _img("WEBP")[:-7],
+        "bomb header": _bomb_png(20000, 20000),
+        "too big": iso.PNG_MAGIC + b"\x00" * iso.IMAGE_MAX,
+        "garbage": b"RIFF\x00\x00\x00\x00WEBPjunk",
+    }
+    for name, data in bad.items():
+        with pytest.raises(ValueError):
+            iso.check_image(data)
+            pytest.fail(name)
+
+
+# Through the IPC (fake container) and the real runner (subprocess).
+
+async def test_an_image_reply_reaches_the_caller_as_checked_bytes(docker) -> None:
+    png = _img("PNG")
+    dec, _ = await _decoder(lambda rid, m, p: _frame(rid, 2, png), docker=docker)
+    r = await dec.decode(b"x")
+    assert r.ok and r.image == png and r.media_type == "image/png"
+    assert r.value == {"image": {"format": "png", "width": 64, "height": 48, "bytes": len(png)}}
+
+
+async def test_an_image_reply_with_metadata_is_refused_and_the_stream_stays_up(docker) -> None:
+    dirty = _img("JPEG", exif=_gps_exif())
+    dec, procs = await _decoder(lambda rid, m, p: _frame(rid, 2, dirty), docker=docker)
+    r = await dec.decode(b"x")
+    assert not r.ok and r.reason.startswith("bad image") and r.image is None
+    assert dec.state == "ready" and len(procs) == 1
+
+
+async def test_frame_caps_follow_the_reply_kind(docker) -> None:
+    # A JSON reply may not use the image allowance.
+    dec, _ = await _decoder(lambda rid, m, p: _frame(rid, 0, b" " * (iso.REPLY_MAX + 10)), docker=docker)
+    r = await dec.decode(b"x")
+    assert not r.ok and dec.state == "backoff"
+    # An image past the frame cap breaks the stream too.
+    dec, _ = await _decoder(lambda rid, m, p: struct.pack(">I", iso.FRAME_MAX + 1) + b"x", docker=docker)
+    r = await dec.decode(b"x")
+    assert not r.ok and "bad size" in r.reason
+
+
+async def test_the_real_runner_re_encodes_images(tmp_path, docker) -> None:
+    root = make_plugin(tmp_path, "realimg")
+    assert validate_plugin_dir(root, manifest_of(root)) == []
+    app = tmp_path / "unpacked"
+    with tarfile.open(fileobj=io.BytesIO(iso.context_tar(root, manifest_of(root)))) as tar:
+        for member in tar.getmembers():
+            target = app / member.name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(tar.extractfile(member).read())
+
+    async def spawn(argv):
+        return await asyncio.create_subprocess_exec(
+            sys.executable, "-I", "-B", str(app / "app" / iso.RUNNER_NAME),
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            cwd=tmp_path,
+        )
+
+    async def prepare() -> str:
+        return "sha256:img"
+
+    dec = iso.IsolatedDecoder("realimg", install_dir=root, manifest=manifest_of(root), spawn=spawn,
+                              prepare=prepare, timeout=30.0)
+    await dec.start()
+    try:
+        src = _img("JPEG", size=(2000, 1500), exif=_gps_exif())
+        r = await dec.decode(src, {"img": "webp", "lossless": False})
+        assert r.ok and r.media_type == "image/webp", r
+        assert r.value["image"]["width"] == 1024 and r.value["image"]["height"] == 768
+        assert b"SecretCam" not in r.image and r.image != src
+        r = await dec.decode(_img("PNG"), {"raw": True})          # plain bytes: PNG out
+        assert r.ok and r.media_type == "image/png"
+        r = await dec.decode(_bomb_png(20000, 20000), {"img": "png"})
+        assert not r.ok and "too large" in r.reason
+        r = await dec.decode(b"GIF89a....", {"raw": True})
+        assert not r.ok and "not a PNG" in r.reason
+        r = await dec.decode(b'{"still": "json"}')
+        assert r.ok and r.value == {"got": {"still": "json"}, "house": None}
+        assert dec.state == "ready"
+    finally:
+        await dec.stop()

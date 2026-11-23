@@ -9,6 +9,12 @@ the core's run flags, and checks from inside it that the wall holds:
 * the decoder runs as nobody, can't write its root, has no network
   (no interface but loopback, a connect fails), sees no host files and no
   environment from the core;
+* the image build runs on the classic builder with ``--memory 1g
+  --memory-swap 1g`` and a low CPU weight (BuildKit ignores those flags; the
+  core refuses to build when the classic builder is gone);
+* images come back re-encoded in the container (slice 2): EXIF and GPS
+  gone, scaled to 1024 a side, a decompression bomb and a truncated file
+  refused;
 * a hostile decoder (a hang, a crash, garbage on stdout, a memory bomb, a
   fork bomb) refuses the item, and the next good item works after the
   restart.
@@ -43,6 +49,8 @@ import json
 import os
 import socket
 
+import domovoi_isolated
+
 
 def _facts():
     facts = {"uid": os.getuid(), "gid": os.getgid(), "env": sorted(os.environ)}
@@ -74,6 +82,8 @@ def _facts():
 
 
 def main(payload, meta):
+    if meta.get("img"):
+        return domovoi_isolated.Image(payload, meta["img"])
     if payload == b"facts":
         return _facts()
     if payload == b"hang":
@@ -139,6 +149,7 @@ def _plugin(parent: Path) -> Path:
 
         [isolated]
         decoder = "domovoi_plugin_{SLUG}.link.decode:main"
+        debian = ["python3-pil"]
         """), encoding="utf-8")
     return root
 
@@ -159,6 +170,11 @@ async def _check() -> list[str]:
         expect(errors == [], f"the probe plugin validates {errors}")
         args = iso.run_args(SLUG, "sha256:x")
         expect("--memory" in args and "--pids-limit" in args, "the run flags carry --memory and --pids-limit")
+        bargs = iso.build_args(SLUG, "x", "0.0.1")
+        expect(bargs[bargs.index("--memory") + 1] == iso.BUILD_MEMORY and "--memory-swap" in bargs
+               and "--cpu-shares" in bargs, "the build flags carry the memory cap and a low CPU weight")
+        expect(await iso.builder_caps_honoured(),
+               "this Docker's classic builder takes --memory (else the core refuses to build)")
         dec = iso.IsolatedDecoder(SLUG, install_dir=root, manifest=manifest, timeout=10.0)
         await dec.start()
         expect(dec.state == "ready", f"the image builds and the container starts ({dec.problem})")
@@ -184,6 +200,7 @@ async def _check() -> list[str]:
                 dec._retry_at = 0.0  # skip the backoff wait
                 r = await dec.decode(b"1")
                 expect(r.ok and r.value == {"echo": 1, "house": None}, f"a good item works after {bad.decode()}")
+            await _images(dec, expect)
             r = await dec.decode(b"forkbomb")
             expect((not r.ok) or (r.value or {}).get("forked", 999) < 32,
                    f"the pids cap holds ({r.value or r.reason})")
@@ -191,6 +208,39 @@ async def _check() -> list[str]:
             await dec.stop()
             await iso.forget(SLUG)
     return problems
+
+
+async def _images(dec, expect) -> None:
+    import io
+    import struct
+    import zlib
+
+    from PIL import Image
+
+    exif = Image.Exif()
+    exif[0x010F] = "SecretCam"
+    gps = exif.get_ifd(0x8825)
+    gps[1], gps[2] = "N", (52.0, 31.0, 12.5)
+    buf = io.BytesIO()
+    Image.new("RGB", (2000, 1500), (200, 30, 40)).save(buf, "JPEG", exif=exif.tobytes())
+    src = buf.getvalue()
+    for fmt in ("png", "webp"):
+        r = await dec.decode(src, {"img": fmt})
+        expect(r.ok and r.media_type == f"image/{fmt}" and b"SecretCam" not in (r.image or b"")
+               and (r.value or {}).get("image", {}).get("width") == 1024,
+               f"a JPEG with EXIF/GPS comes back as clean {fmt} ({r.reason or r.value})")
+
+    def chunk(t: bytes, b: bytes) -> bytes:
+        return struct.pack(">I", len(b)) + t + b + struct.pack(">I", zlib.crc32(t + b) & 0xFFFFFFFF)
+
+    bomb = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 30000, 30000, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(b"\x00" * 1_000_000, 9)) + chunk(b"IEND", b""))
+    r = await dec.decode(bomb, {"img": "png"})
+    expect(not r.ok and "too large" in r.reason, f"a decompression bomb is refused ({r.reason})")
+    r = await dec.decode(src[: len(src) // 2], {"img": "png"})
+    expect(not r.ok, f"a truncated JPEG is refused ({r.reason})")
+    r = await dec.decode(b"1")
+    expect(r.ok, "a good item works after the image refusals")
 
 
 def main() -> int:

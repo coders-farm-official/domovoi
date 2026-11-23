@@ -1314,7 +1314,8 @@ def isolated_dir_problems(root: Path, manifest: PluginManifest) -> list[str]:
     assert manifest.isolated is not None
     files, problems = isolated_sources(root, manifest)
     own = f"{manifest.package_name}.{manifest.isolated.subpackage}"
-    allowed = set(sys.stdlib_module_names)
+    # The core's helper in the image (Image, reencode).
+    allowed = set(sys.stdlib_module_names) | {"domovoi_isolated"}
     for pkg_name in manifest.isolated.debian:
         allowed.update(ISOLATED_DEBIAN_ALLOWLIST.get(pkg_name, ()))
     for rel, path in files:
@@ -1344,7 +1345,7 @@ def isolated_dir_problems(root: Path, manifest: PluginManifest) -> list[str]:
                     continue
                 problems.append(
                     f"isolated: {rel} imports {name!r}; the decoder may import only the "
-                    f"standard library, its own subpackage and isolated.debian packages"
+                    f"standard library, domovoi_isolated, its own subpackage and isolated.debian packages"
                 )
     return problems
 
