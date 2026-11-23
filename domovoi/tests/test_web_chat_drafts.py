@@ -34,6 +34,9 @@ def _setup(width: int) -> str:
     src = DATA_JS.read_text(encoding="utf-8")
     m = re.search(r"^const useRetryAfterCredential = .*?^};$", src, re.M | re.S)
     assert m
+    # The chat's reads send this browser's id as X-Device-Id (their `mine`).
+    caller = re.search(r"^const callerDeviceHeaders = .*?^};$", src, re.M | re.S)
+    assert caller
     return (f"window.innerWidth = {width};\nglobalThis.API_BASE = '';\n"
             "globalThis.withDeviceToken = (u) => u + (u.includes('?') ? '&' : '?') + 'device_token=t';\n"
             "globalThis.useDebouncedValue = (v) => v;\n"
@@ -42,7 +45,8 @@ def _setup(width: int) -> str:
             # The chat's send streams through apiFetchRaw: what it sent, kept.
             "globalThis.__sent = []; globalThis.apiFetchRaw = (u, o) => { globalThis.__sent.push({ url: String(u), "
             "body: o && o.body }); return new Promise(() => {}); };\n"
-            + m.group(0))
+            + m.group(0) + "\n" + caller.group(0)
+            + "\nglobalThis.__readHeaders = () => callerDeviceHeaders();\n")
 
 
 V1 = "Dear Ms. Lee,\n\nI am writing to apply for the warehouse lead job.\n\nI would welcome a chat.\n\nSincerely,\n\nJordan"
@@ -104,6 +108,7 @@ if (h.find((el) => el.type === 'button' && textOf(el).includes('your chats'))) {
 await h.click((el) => el.type === 'div' && typeof el.props.onClick === 'function'
                       && textOf(el).includes('Cover letter'));
 await h.settle(); h.rerender();
+const readHeaders = h.global('__readHeaders')();
 const cards = h.findAll((el) => el.props && el.props.className === 'chat-draft-card').map((el) => textOf(el));
 // Review round 1: the first card's Revise box sends its words as a revision of that draft.
 await h.change((el) => el.type === 'input' && el.props['aria-label'] === 'revise Cover letter for Acme', 'less stiff');
@@ -117,8 +122,10 @@ h.findAll((el) => el.type === 'form' && el.props.className === 'chat-draft-revis
 await h.settle(); h.rerender();
 const keptWords = reviseInputs()[1].props.value;
 const S = h.global('window').ChatDrafts.sourceLabel;
-const labels = [S({ version: 3, source: 'edited', device_id: 'dev-1' }),
-                S({ version: 3, source: 'edited', device_id: 'android-b', device_name: "Sam's phone" }),
+// Draft reads carry `mine` (the server matched X-Device-Id), never the stored device ids.
+const labels = [S({ version: 3, source: 'edited', mine: true }),
+                S({ version: 3, source: 'edited', mine: false, device_name: "Sam's phone" }),
+                S({ version: 3, source: 'edited', device_id: 'dev-1' }),
                 S({ version: 4, source: 'revision', instruction: 'shorter', based_on: 2 }),
                 S({ version: 3, source: 'revision', instruction: 'shorter', based_on: 2 })];
 // Open v2 from its card.
@@ -146,7 +153,7 @@ await h.settle(); h.rerender();
 // The print card's Print opens the dialog on the draft's routes.
 await h.click((el) => el.type === 'button' && textOf(el).trim() === 'Print');
 await h.settle(); h.rerender(); await h.settle();
-return { cards, labels, keptWords, sent: h.global('__sent'), canvas, wide, tabs, del: del ? (del.text || textOf(del)) : null, threadHidden, composer, v1Text, savedLine,
+return { readHeaders, cards, labels, keptWords, sent: h.global('__sent'), canvas, wide, tabs, del: del ? (del.text || textOf(del)) : null, threadHidden, composer, v1Text, savedLine,
          calls: h.calls.filter((c) => c.method !== 'GET') };
 """
 
@@ -210,7 +217,10 @@ def test_the_cards_revise_box_sends_a_revision_of_that_draft(wide):
 
 
 def test_edited_by_you_only_on_the_device_that_made_the_edit(wide):
-    assert wide["labels"] == ["edited by you", "edited on Sam's phone", "“shorter” · based on v2", "“shorter”"]
+    """L39: the reads send this browser's id; "by you" comes from the server's `mine` alone."""
+    assert wide["readHeaders"] == {"X-Device-Id": "dev-1"}
+    assert wide["labels"] == ["edited by you", "edited on Sam's phone", "edited on another device",
+                              "“shorter” · based on v2", "“shorter”"]
 
 
 def test_a_refused_revise_keeps_its_words(wide):
