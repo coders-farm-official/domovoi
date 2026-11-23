@@ -19,6 +19,17 @@ a way that would otherwise get reported as a bug.
   the server again after it restarts, so it shows the new version and a
   fresh update check without a manual reload.
 
+## 1.4.1 (unreleased) — A busy machine no longer restarts the core
+
+- **What changed.** The core no longer restarts itself when the database
+  is slow to answer because the machine is busy; it still restarts when
+  the core itself is stuck. When the database probe gets no answer, the
+  core now asks again on a separate connection of its own: only if that
+  one answers does the miss count toward a restart. The core log says
+  when the database itself was slow, and a stall report now includes the
+  machine's I/O and memory pressure and load average on Linux.
+
+
 ## 1.4.1 (unreleased) — A slow start no longer switches a plugin off
 
 - **What changed.** A plugin that took a long time to load on a busy
