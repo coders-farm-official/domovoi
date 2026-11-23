@@ -1243,6 +1243,96 @@ as the core last did (null while it hasn't).
 | `GET /api/people/{id}/music-mix` | **Device read** | — | `{person_id, override: {discovery_favorites?, close_wander?} \| null, uses: {discovery_favorites, close_wander}}` (`null` = uses the household's). `404` for a person nobody has. |
 | `PUT /api/people/{id}/music-mix` | **Admin, or that person's own device** (`owner_person_id`, not a shared screen; `403` for any other) **with its claim key** in `X-Domovoi-Claim-Key` (since 1.5.0; an admin needs none) | `{override: {discovery_favorites, close_wander} \| null}` | As `GET`; `null` goes back to the household's. The person's device without a matching key (none sent, an old one, or a claim from before keys): `403` `{detail, code: "claim_key_required"}`. |
 
+### 3.5c1b Photos and videos: media understanding (1.5.0)
+
+Settings → Chat & AI → Photos and videos (`web/backend/api/media_understanding.py`,
+`domovoi/media_understanding/`, V078). The core catalogues the image and
+video files of Pictures and Videos by `stat()` alone (`media_catalog`, a
+walk an hour or after a rescan) and works through them in the background
+(`media_understanding`): chat videos first, then the backlog in the night
+window (the household's quiet hours) and, by day, only new arrivals after
+10 minutes without a voice turn, at a 1:1 duty cycle. Every model step
+gives way to a voice turn; reads go through a 20 MB/s bucket; helper
+programs run at `nice 19` and `ionice -c 3`. Slice 1 ships the catalogue
+and the runner (fingerprints), slice 2 the photos (below); video
+transcripts and faces come with later 1.5.0 slices.
+
+The switches live in `household_settings` key `media_understanding`:
+`enabled` is on for a new install and off for a house that upgraded until
+an admin turns it on; `faces` and `places` are off by default. Turning
+faces off deletes every face and group (`confirm_delete_faces: true` when
+there are any; the denylist of forgotten faces stays); turning it on
+starts the one-time pinned model fetch (§3.5c1c). Excluding a folder deletes what was worked out about it; a file
+deleted through Files loses its results at once. Changes fire
+`media_understanding.changed` on `/ws/state`.
+
+| Method & path | Auth | Request | Response / purpose |
+|---|---|---|---|
+| `GET /api/media-understanding` | **Device read** | — | `{settings: {enabled, faces, places, paused, run_now, frame_cap_mode: "auto"\|"manual", frame_cap}, frame_cap_range: [3, 1000], ai_on, progress: {photos: {total, done, left, failed}, videos: {…}, phase: "off"\|"paused"\|"idle"\|"working"\|"waiting_for_window"\|"waiting_for_memory", waiting_for_voice, rescan_requested, benchmark: {model, s_per_frame, frames_per_s, tier: "cpu"\|"gpu", vram_bytes, measured_at} \| null, updated_at}, estimate: {seconds, nights}, face_count, libraries: [{id, label, present}], excluded: [{library_id, prefix}]}` |
+| `PUT /api/media-understanding/settings` | **Admin** | any of `{enabled, faces, places, frame_cap_mode, frame_cap}`, plus `confirm_delete_faces` | `{settings}`. `422` malformed (a manual cap is 3–1000); `409` turning faces off while faces are saved, without `confirm_delete_faces`. |
+| `POST /api/media-understanding/pause` | **Admin** | `{paused: bool}` | `{settings}`. Pausing also ends Run now; the item under way stops at its next step and carries on later. |
+| `POST /api/media-understanding/run-now` | **Admin** | — | `{settings}`: ignore the night window until the backlog is done (still voice first, still capped). `409` while understanding is off. |
+| `POST /api/media-understanding/rescan` | **Device** | — | `{ok: true}`: the core walks the libraries at its next look (within a minute). |
+| `POST /api/media-understanding/excluded` | **Admin** | `{library_id: "core:pictures"\|"core:videos", prefix: "Folder/Sub"}` (`""` = the whole library) | `{library_id, prefix, deleted}`: the rows (and results) deleted. `404` unknown library, `422` a path with `.`/`..`. |
+| `DELETE /api/media-understanding/excluded?library_id=&prefix=` | **Admin** | — | `{ok: true}`; the next walk catalogues the folder again. `404` when it wasn't excluded. |
+
+**Photos (slice 2).** Each photo gets two stages: `photo_date` (EXIF
+`DateTimeOriginal`, with `OffsetTimeOriginal` when present, else the
+household's wall clock; else the file's time; EXIF GPS saved only while
+`places` is on) and `photo_caption` (one call to the vision slot,
+`ollama_vision_model`, with Ollama structured output
+`{caption, tags, has_text}` on a 768 px copy; Tesseract reads the text
+only when `has_text` is true; with AI features off, Tesseract reads every
+photo and keeps a reading of 70 % confidence or more, and the stage is
+`skipped` with `ai-off`). Results are in `media_frames` (`idx` 0,
+`at_s` null) and the item's `search_doc` (tags A, captions B, text C,
+names D, `english`). Captions out of date go back in the backlog (night
+window only): when AI is turned on, the photos done with it off; when the
+vision model changes, those whose caption (`media_items.vision_model`)
+another model made. Only the caption stage reruns; Tesseract's text is
+kept.
+
+| Method & path | Auth | Request | Response / purpose |
+|---|---|---|---|
+| `GET /api/media/search?q=&kind=&from=&to=&limit=&offset=` | **Device read** | `q` (≤ 300 chars): words, a kind ("photos", "videos") and a time ("last summer", "July 2024", "Christmas", "2023", "yesterday", "last month"; a month, season or holiday without a year means every year's); `kind` `image`\|`video`; `from`/`to` `YYYY-MM-DD` (household days, `to` included); `limit` 1–100 (40); `offset` | `{query: {words, kind, when}, items: [{id, library_id, path, name, kind, analysed, taken_at, date_from: "photo"\|"file", might_show, tags, has_text, text, score}], more}`. All words must match (`websearch_to_tsquery`: quotes for a phrase, `-word` to leave one out) in the captions, tags, text and names, or in the file and folder names by trigram (so a file not looked at yet is found by its name). Ranked by text score, then date taken, newest first. `might_show`, `tags` and `text` (≤ 500 chars) are untrusted text a model or OCR made: show them as text, never HTML, and a caption as "Might show: …". Thumbnails: `/api/images/thumb`. `422` for a bad `kind`, date, range or `limit`. |
+### 3.5c1c Faces and people (1.5.0)
+
+`web/backend/api/faces.py`; the data and the grouping in
+`domovoi/media_understanding/faces.py` (tables `media_faces`,
+`face_groups`, `face_denylist`, V078). Faces are found only while the
+`faces` switch is on (§3.5c1b; off by default, admin); turning it on makes
+the core fetch the two pinned models once and queue the photos again.
+Every route below answers `409` while faces are off (except `/status`),
+`401` to a guest, and `403` to a device marked as a shared screen (an
+admin's Bearer included). No answer carries an embedding or a centroid;
+there is no export route.
+
+A face row: `{face_id, item_id, library_id, rel_path, kind: "image"|"video",
+at_s (null for a photo), box: [x, y, w, h] (fractions of the picture),
+quality, group_id, person_id, confirmed, suggested}`. `suggested` = put
+under a person by the grouping, not yet confirmed.
+
+| Method & path | Auth | Request | Response / purpose |
+|---|---|---|---|
+| `GET /api/faces/status` | **Device read** | — | `{enabled, models_ready, fetch_error, faces, people}` |
+| `GET /api/faces/people?more=` | **Device read** | — | `{people: [{id, name, faces, confirmed, group_id}], groups: [{group_id, hidden: false, faces}], shown_min_faces: 3}`: named people, and unnamed groups of 3 or more faces (`more=true`: all of them). Never hidden groups. |
+| `GET /api/faces/hidden` | **Admin** (on the device tier) | — | `{groups}`: the hidden groups. |
+| `GET /api/faces/groups/{group_id}?limit=&offset=` | **Device read**; a hidden group **admin** | — | `{group_id, person_id, hidden, faces: [face row]}`, confirmed first then by quality. `404` unknown. |
+| `GET /api/faces/people/{person_id}/items?confirmed=&kind=&limit=&offset=` | **Device read** | — | `{person_id, items: [{item_id, library_id, rel_path, kind, taken_at, moments: [at_s…], confirmed, faces}]}`: every photo and video the person is in, newest first; `moments` are the video times they appear (the search hook for "photos of Sarah"). |
+| `POST /api/faces/groups/{group_id}/name` | **Device**; a group that already has another person **admin** | `{person_id}` or `{name}` (a new name makes a face-only person; an existing one, case aside, is that person) | `{group_id, person_id, faces}`: the group's faces become the person's, confirmed (except faces already said not to be them); a person who already has a group gets them in it. `409` a name two people share. |
+| `POST /api/faces/face/{face_id}/confirm` | **Device** | optional `{person_id}` | `{face_id, person_id, group_id}`: "yes, this is them". Without `person_id`, the face's suggested person; `409` when it has none. |
+| `POST /api/faces/face/{face_id}/not-this-person` | **Device** | — | `{face_id, rejected_person_id, group_id}`: the face leaves the person, is never suggested for them again, and is grouped again. `409` a face that is nobody's. |
+| `POST /api/faces/groups/{group_id}/hide` | **Device** to hide; **admin** to unhide | `{hidden: bool}` | `{group_id, hidden}`. `409` hiding a named person's group. |
+| `POST /api/faces/merge` | **Device**; **admin** when any group is a named person's | `{into: group_id, groups: [group_id…]}` (≤ 50) | `{group_id, person_id, merged}`: one group; two named people become `into`'s person (faces only: voice and memories untouched). |
+| `POST /api/faces/split` | **Device**; **admin** when the faces are a named person's | `{face_ids: [id…]}` (≤ 500, one group) | `{group_id, from_group_id, faces}`: a new unnamed group; the faces are pinned there, and never suggested again for the person they left. |
+| `POST /api/faces/people/{person_id}/forget` | **Admin**, or **that person's own device** (`owner_person_id`, not a shared screen, claimed over 10 minutes ago) **with its claim key** in `X-Domovoi-Claim-Key` | — | `{person_id, faces, groups, denylisted}`: their faces and groups deleted, one averaged embedding (tied to nobody) added to the denylist so they aren't learned again. Photos and the `people` row stay. `404` unknown person; `403` anyone else. |
+
+The nightly re-group (in the night window, once a night) never moves a
+confirmed face. For slice 3 the core exposes
+`faces.VideoFaces.start(item_id)` / `.frame(at_s, image, ctx=)` per
+keyframe; for search, `faces.items_for_person` and
+`faces.person_ids_with_faces(name)`.
+
 ### 3.5c2 Home location (1.4.1)
 
 The household's town, Settings → Household → Home location

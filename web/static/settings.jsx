@@ -6211,7 +6211,7 @@ const SETTINGS_GROUPS = [
   { id: 'household', label: 'Household', icon: 'house', aliases: ['rooms-and-devices'],
     sections: ['rooms', 'people', 'phones-and-browsers', 'home-location', 'calendars', 'media-folders', 'music-mix', 'queue-history', 'printers', 'friend-houses'] },
   { id: 'voice', label: 'Voice', icon: 'audio-lines', sections: ['wake-words', 'voices', 'greetings'] },
-  { id: 'chat-and-ai', label: 'Chat & AI', icon: 'sparkles', sections: ['models', 'search', 'chat'] },
+  { id: 'chat-and-ai', label: 'Chat & AI', icon: 'sparkles', sections: ['models', 'search', 'chat', 'photos-and-videos'] },
   { id: 'privacy', label: 'Privacy', icon: 'shield', sections: ['internet', 'voice-history', 'listening-history'] },
   { id: 'documents', label: 'Documents', icon: 'file-text', sections: ['fonts'] },
   { id: 'system', label: 'System', icon: 'server', sections: ['about', 'offline-kit', 'health', 'app-layout', 'advanced', 'support-sessions'] },
@@ -6284,6 +6284,11 @@ const SETTINGS_SECTIONS = [
   { id: 'chat', label: 'Chat', optional: true,
     sub: 'A heads-up before shaky results, in this browser.',
     words: 'chat conversation heads-up heads up warning warn warnings trust shaky calculate exactly reliable' },
+  // media_understanding.jsx registers it (1.5.0): what the house works
+  // out about its photos and videos, in the background.
+  { id: 'photos-and-videos', label: 'Photos and videos', optional: true,
+    sub: 'Find photos and videos by what is in them: switches, progress, faces, locations and excluded folders.',
+    words: 'photos photo pictures picture videos video understand understanding captions describe faces face recognize recognise people locations places gps exclude folders backlog night rescan frames' },
   { id: 'internet', label: 'Internet',
     sub: 'Will this Domovoi have internet? It sets the defaults of the online extras.',
     words: 'internet online offline network web connection search helper' },

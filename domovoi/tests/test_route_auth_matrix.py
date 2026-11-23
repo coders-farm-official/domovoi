@@ -558,7 +558,52 @@ HOUSEHOLD_STATE_READS: dict[tuple[str, str], str] = {
         "a device's Up next: the songs it will play next and the person whose "
         "taste the mix follows"
     ),
+    # Faces and people (1.5.0, owner 2026-11-22): who is in which photo is
+    # the most sensitive thing the house keeps; guests get nothing (and
+    # shared screens are refused inside, test_media_faces.py).
+    ("web", "/api/faces/status"): "whether faces are on, and how many faces and people",
+    ("web", "/api/faces/people"): "the people with faces, and the unnamed groups",
+    ("web", "/api/faces/hidden"): "the hidden (strangers') groups; admin inside",
+    ("web", "/api/faces/groups/{group_id}"): "one group's faces: which photos, where in them",
+    ("web", "/api/faces/people/{person_id}/items"): "every photo and video a person is in",
 }
+
+# Faces training (1.5.0): every write is the device tier at the gate, with
+# the admin-only cases (named people's merge and split, unhide, forget for
+# anyone but yourself) checked inside; guests never get past the gate.
+FACES_DEVICE_WRITES = [
+    ("POST", "/api/faces/groups/{group_id}/name"),
+    ("POST", "/api/faces/groups/{group_id}/hide"),
+    ("POST", "/api/faces/face/{face_id}/confirm"),
+    ("POST", "/api/faces/face/{face_id}/not-this-person"),
+    ("POST", "/api/faces/merge"),
+    ("POST", "/api/faces/split"),
+    ("POST", "/api/faces/people/{person_id}/forget"),
+]
+
+
+@pytest.mark.parametrize(("method", "path"), FACES_DEVICE_WRITES,
+                         ids=[f"web {m} {p}" for m, p in FACES_DEVICE_WRITES])
+def test_faces_writes_are_the_device_tier_and_refuse_shared_screens(method, path) -> None:
+    from web.backend.api import faces as faces_api
+
+    by_key = {(a, m, p): d for a, m, p, d in ROUTES}
+    assert ("web", method, path) in by_key, f"web {method} {path} is missing"
+    calls = list(_dependency_calls(by_key[("web", method, path)]))
+    assert admin_auth.require_device in calls, f"web {method} {path} must wear require_device"
+    assert faces_api.refuse_shared_screen in calls
+
+
+def test_every_faces_route_is_on_a_faces_list() -> None:
+    from web.backend.api import faces as faces_api
+
+    reads = {p for (a, p) in HOUSEHOLD_STATE_READS if p.startswith("/api/faces")}
+    writes = {p for _m, p in FACES_DEVICE_WRITES}
+    for app_label, method, path, dep in ROUTES:
+        if app_label != "web" or not path.startswith("/api/faces"):
+            continue
+        assert path in (reads if method == "GET" else writes), f"{method} {path} is on no faces list"
+        assert faces_api.refuse_shared_screen in list(_dependency_calls(dep)), path
 
 # Up next's writes (V053, phase P3): the household device tier, never the
 # guest gate (a guest has no Up next) nor an admin-only one.
@@ -966,4 +1011,20 @@ def test_support_transcripts_are_security_tier_reads(label, path) -> None:
 
 @pytest.mark.parametrize(("label", "path"), SUPPORT_HOUSEHOLD_READS)
 def test_the_support_banner_is_a_household_read(label, path) -> None:
+    assert admin_auth.require_device_read in _get_gates((label, path))
+
+
+# ─── Media understanding search (1.5.0, slice 2) ──────────────────────────
+# What is in the family's photos and videos (captions, the words on a
+# letter in a picture) is household content: paired devices only, like
+# the history, never an open page.
+
+MEDIA_HOUSEHOLD_READS = [
+    ("web", "/api/media/search"),
+    ("web", "/api/media-understanding"),
+]
+
+
+@pytest.mark.parametrize(("label", "path"), MEDIA_HOUSEHOLD_READS)
+def test_media_understanding_reads_are_household_reads(label, path) -> None:
     assert admin_auth.require_device_read in _get_gates((label, path))

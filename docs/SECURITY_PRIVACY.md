@@ -2871,6 +2871,73 @@ and what can't happen:
   is always shown as what a frame "might show"; no face is recognised and
   nobody is named.
 
+## Faces and people
+
+Recognizing faces in the house's photos and videos (1.5.0) is the most
+sensitive thing Domovoi keeps: a face embedding identifies a person,
+including guests and children who never agreed. So it is **off by
+default**, and only an admin turns it on (Settings → Chat & AI → Photos
+and videos → Recognize faces). The code is
+`domovoi/media_understanding/faces.py` (the data and the grouping),
+`face_engine.py` (the models), `face_models.py` (the fetch) and
+`web/backend/api/faces.py` (who may do what).
+
+* **What is stored.** For each face found: which photo or video it is in,
+  the moment in a video, the box around it (as fractions of the picture),
+  a quality figure and its 128-number SFace embedding (512 bytes), in
+  `media_faces`. Faces the household hasn't named are put in unnamed
+  groups (`face_groups`); a named group is linked to a `people` row, the
+  same people voice ID knows (naming a group can create a face-only
+  person). No face picture is saved: the People pages cut faces out of the
+  ordinary thumbnails. A video keeps one row per *appearance* (the same
+  person within 30 s), not one per frame.
+* **Where it is worked out.** On the server only, by two small models on
+  ONNX Runtime (one thread, voice first, like all background
+  understanding). The models are fetched once, after the admin's switch,
+  pinned by SHA-256 ([LICENSES.md](LICENSES.md#the-server)); InsightFace's
+  non-commercial weights are never used. No photo, face or embedding ever
+  leaves the house.
+* **Who sees and trains it** (owner answers, 2026-11-22):
+  * **guests** (no household credential) get nothing: every face route
+    is the household tier, so 401;
+  * **shared screens** (a device an admin marked shared) get nothing
+    either, an admin signed in on one included: 403. The mark is the
+    self-asserted one described under [the device tier](#device-tier-the-household-token), so
+    it keeps faces off the kitchen tablet's screen rather than being a
+    wall;
+  * **the household** (a paired phone or browser) sees the People and
+    face pages, names a group, confirms a face, says "not this person",
+    hides a stranger's group, and merges or splits groups nobody is named
+    in;
+  * **admins** also merge or split a named person's faces (it changes
+    whose faces are whose), move a named group to someone else, list and
+    unhide hidden groups, and own every switch.
+* **Strangers.** Faces nobody names stay in unnamed groups; small groups
+  (fewer than 3 faces) and hidden groups are left off the People page, and
+  the household is never asked "who is this?".
+* **Children** have no special rule: the household opted in and nothing
+  leaves the house. An admin can forget a child's face at any time.
+* **Forget my face.** An admin, or the person themselves from a phone or
+  browser claimed as theirs ("this is me": its claim key, not a shared
+  screen, claimed more than 10 minutes ago), can forget one person's face:
+  every face row and group of theirs is deleted, and one averaged
+  embedding tied to nobody goes on `face_denylist`, so new photos of them
+  are neither stored nor grouped (any other stored face that matches it
+  is deleted too). Their photos and their `people` row stay.
+* **Turning faces off** deletes every face and group at once (the switch
+  asks to confirm when there are any); turning it on again starts from
+  zero. The denylist stays: it is tied to no one, and it is what keeps a
+  "forget my face" holding if faces are turned on again. A face being
+  stored at the moment faces go off is deleted with the rest (the store
+  and the switch take the same row lock).
+* **No export.** No route answers with an embedding or a group centroid,
+  and there is no export of face data: it leaves the server only inside a
+  database backup, like every table (`domovoi/tests/test_media_faces.py`
+  holds the face tables to the faces code).
+* **Deleting a photo** (through Files, or from the folder) deletes its
+  faces with its other results; deleting a person deletes their groups,
+  and their faces become unnamed.
+
 ## Looking things up (chat lookups)
 
 A chat may look things up. Who decides, what goes where, and what can't
@@ -3582,6 +3649,7 @@ watch the server's traffic under **No**.
 | **ListenBrainz similar artists and song popularity (Up next)** — the **MusicBrainz ids** of the library's artists (similar artists: `GET labs.api.listenbrainz.org/similar-artists/json`) and of its songs that have one (popularity: `POST api.listenbrainz.org/1/popularity/recording`, a read with no account or key, 100 ids a request) go to ListenBrainz, with a User-Agent naming the project. No title, name, file, play history or person. The answers (similar artists with a score, listen and listener counts) are stored in `artist_similarity` / `recording_popularity` (V056) and read by the Up next picker from the database: **building or extending a queue never makes a network call**, cache miss included (`domovoi/workers/listenbrainz_fetch.py`, `domovoi/clients/listenbrainz.py`; `tests/test_up_next_offline.py`) | Two switches, each its own. Similar artists: on when the internet answer is **Yes**, off for **Sometimes**, **No** and while unanswered. Popularity: on for **Yes** and **Sometimes**, off for **No** and while unanswered. Then a background job only, at most one request a second, a small batch a minute, only while the connectivity probe reports online; each artist again after 90 days, each song after 30; a 429/503 pauses it | Settings → Household → Music mix (or Settings → Advanced → Library): `music_similar_artists_enabled`, `music_popularity_enabled`. Switching one off stops it before its next request and deletes what it fetched; Up next then works from the library alone. |
 | **LRCLIB synced lyrics** — for library songs with no timed lyrics of their own (no `.lrc` next to them, none in their tags), the song's **title, artist credit and primary performer, album and length in seconds** go to lrclib.net, which answers with its lyrics, timed when it has them (`domovoi/workers/lyrics_fetch.py`, `domovoi/clients/lrclib.py`; [Lyrics](#lyrics-household-tier-only) above) | **Only if you opt in** — on when the internet answer is **Yes** or **Sometimes**, off for **No** and while unanswered. Then about one request a second (several hours the first time for 5,000 songs, about a night, longer when LRCLIB asks it to slow down), only while the connectivity probe reports online; a song LRCLIB didn't have is asked about again after 4, 8 and then 16 weeks | Set `lyrics_lrclib_enabled` off (Settings → Advanced → Library → "Synced lyrics from LRCLIB") to keep it off anyway; switching it off stops the lookup before its next request. Lyrics in `.lrc` files and in the songs' own tags never need it. |
 | **Cover Art Archive** — for an identified library song (song recognition's checked match, a "Needs review" choice, or the file's own MusicBrainz id), the album's MusicBrainz release or release-group id goes to coverartarchive.org, which redirects to archive.org's storage; the front cover that comes back is written into MP3 and FLAC files (with Undo) or kept in Domovoi's own copy (`domovoi/workers/library_cover_art.py`; [Music files Domovoi changes](#music-files-domovoi-changes-cover-art-and-the-duplicates-trash)) | **Only if you opt in** — on when the internet answer is **Yes** or **Sometimes**, off for **No** and while unanswered. About one request a second, only while the connectivity probe reports online; a song the archive has no cover for is asked again after 30 days or after **Rescan library** | Set `library_cover_art_enabled` off (Settings → Advanced → Library → "Cover art from the Cover Art Archive"); switching it off stops it before its next request. |
+| **Face models** — one-time fetch of OpenCV Zoo's YuNet (face detection, MIT) and SFace (face embedding, Apache-2.0) from `media.githubusercontent.com`, each pinned to one commit, its size and its SHA-256; a file that doesn't match is never used ([Faces and people](#faces-and-people)) | Only after an admin turns on **Recognize faces** (off by default), and only while the files aren't on the server | Leave faces off. Under `never` nothing is fetched and faces stay unavailable; or place the two pinned files in `~/.domovoi/face_models/` yourself. |
 | **Satellite setup AP** — a portal-onboarded satellite hosts a WPA2 network with a per-device key until it is provisioned | Only while unprovisioned; it drops the moment credentials are accepted | The key is printed on the device. Plain HTTP over WPA2 is deliberate: a self-signed certificate would train customers through a security warning while typing their Wi-Fi password. The house PSK goes phone→device and never transits the server. The portal's server-address field takes a `ws://`/`wss://` address on an RFC 1918 range or a `.local` name only (the satellite hands its pairing token to whatever it dials), its form body is capped at 8 KB and refused with a 413 before it is read, and the confirmation page shows the resolved address. The network name is checked on both join paths (1-32 bytes, no control characters, no quote or brace) before it touches a root-owned configuration; the wpa_supplicant fallback (used only where NetworkManager is absent) writes `ssid=` as hex and `psk=` as the derived key, and never the passphrase. |
 | **Satellite approval** — a portal-onboarded satellite waits for a human before it is paired | Every first connection from a device presenting a setup code | Type the satellite's six-digit code into the approval card. The dashboard never shows you the code — it is on the device, which is what ties the request on screen to the unit in the room. The server compares it and allows five attempts per room per five minutes. A device that brings a code must bring six digits (or the four that satellites set up before 2026-09-22 were given and still say), or nothing is parked (a request no code could ever approve would only take the name away from the real device). The first device to park holds that room name for three minutes, or until someone approves or rejects it; a different device asking for the same name inside that window is refused as a conflict (`approval_conflict`), and after it the newcomer's request **replaces** the parked one — its token and its own code together, so the code the operator hears from the device in the room is still the only one that approves anything. Being first with an unapprovable request therefore delays onboarding by minutes; it no longer blocks it until someone presses Reject (CORE-22). This is what replaces trust-on-first-use for that path; `SATELLITE_PAIRING_STRICT` still governs tokenless connects. A device set up with the server address left blank never sends its code at all: it checks the approval itself ([Asking every house](#asking-every-house-an-approval-the-device-can-check-140)). |
 | **Version check / pull** — `git fetch`/`pull` against the GitHub repo | Only when an admin clicks check/update in the dashboard | Don't click it. Nothing runs automatically. Under `never` both buttons are greyed and the core answers with the turned-off reason without running git. The follow-up **restart** is admin-gated and can only work if you granted the sudoers line in [LINUX_HOST.md](LINUX_HOST.md). A plain restart bounces systemd units and reaches no network. With the update unit installed it also re-syncs Python dependencies from PyPI (and the PyTorch CPU index) when the pull changed them, and rebuilds the MPD image (Debian's package mirrors) when that changed; it rebuilds the wake-word trainer image when that changed (on a box that built one) and, on an NVIDIA box, installs the NVIDIA Container Toolkit while it is missing (rows below). |

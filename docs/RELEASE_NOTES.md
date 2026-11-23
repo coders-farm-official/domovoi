@@ -4,6 +4,90 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Photos: descriptions, text in pictures, dates, and search
+
+- **What changed.** The background runner now looks at each photo in
+  Pictures: the date it was taken (from the photo's own EXIF data, else
+  the file's time), one sentence of what it might show and up to 12 tags
+  (one call to the household's existing vision model, `qwen3-vl:2b` on a
+  CPU server or the larger one a GPU house picked in Settings → Models),
+  and, only when that model says the photo has writing in it, the exact
+  text, read by Tesseract. `GET /api/media/search` (paired devices) finds
+  photos and videos by those words, their file and folder names, and a
+  time said plainly ("dog at the beach last summer", "Christmas 2021",
+  "2023"). Settings → Chat & AI → Photos and videos has a search box once
+  something has been looked at.
+- **What to know.** Descriptions come from a small model and are shown as
+  "Might show: ..."; they are sometimes wrong. With the household's AI
+  features off there are no descriptions: Tesseract then reads every
+  photo and keeps only a confident reading; turning AI on later, or
+  changing the vision model, queues the descriptions again for the next
+  nights. A photo's location is kept
+  only while "Use photo locations" is on. Tesseract is the package the
+  scan reader already installed (`tesseract-ocr`, `tesseract-ocr-eng`);
+  nothing new to install.
+
+## 1.5.0 (unreleased) — Faces and people (server side)
+
+- **What changed.** With **Recognize faces** on (Settings → Chat & AI →
+  Photos and videos; off by default, admin only), the server finds faces
+  in the Pictures library (and, once video understanding lands, in video
+  keyframes, one row per appearance), and groups the same person's faces
+  as they arrive and again each night. Groups are named with the same
+  people voice ID knows. New routes under `/api/faces` (API_REFERENCE
+  §3.5c1c): the household views, names, confirms, says "not this person"
+  and hides; merging or splitting a named person's faces is admin; guests
+  and shared screens get nothing. "Forget my face" (admin, or the person's
+  own claimed phone) deletes their faces and keeps them from being learned
+  again. Turning faces off deletes every face and group.
+- **What to know.** Turning faces on makes the server download two models
+  once, about 39 MB, from GitHub (OpenCV Zoo's YuNet, MIT, and SFace,
+  Apache-2.0; pinned by SHA-256; never under internet access "No"); then
+  every photo already analysed is queued again for faces only. SFace's
+  model card doesn't name its training data (docs/LICENSES.md). There is
+  no export of face data; database backups include it. A face-only person
+  appears on the People page like any other.
+## 1.5.0 (unreleased) — Videos: scenes, what is said, keyframes, a summary
+
+- **What changed.** With "Understand photos and videos" on, the background
+  runner now works through the library's videos: it finds the scene
+  changes, transcribes what is said (the first two hours of a video), has
+  the vision model describe keyframes picked at scene changes (how many
+  depends on the server's measured speed, the video's length and its
+  scenes: up to 120 on a CPU-only server), and writes a short summary and a
+  suggested title. With a big backlog (25 or more videos waiting) each
+  video first gets a quick pass with about a quarter of the frames, and a
+  later pass adds the rest. All of it is searchable, and a search can tell
+  the moment in the video that matched. Nothing is written into the video
+  files.
+- **What to know.** Transcripts run even with AI features off (captions
+  and summaries don't). A caption is a small model's guess and is shown as
+  "might show". A video ffmpeg can't read is skipped and marked with a code
+  (`video-unreadable`, `video-no-picture`, `video-too-big` past 8K). On a
+  CPU-only server a long video's first look takes minutes and its full
+  pass tens of minutes, all in the night window, pausing for every voice
+  turn. When faces are turned on, videos already looked at are queued
+  again for faces only (at night).
+
+## 1.5.0 (unreleased) — Photos and videos: the catalogue and the background runner
+
+- **What changed.** The core keeps a catalogue of the image and video
+  files in Pictures and Videos (migration V078), walked by `stat()` once an
+  hour, and one background runner for everything it works out about them,
+  which also runs the videos attached in chat (first, as before; the
+  `chat_video` worker is now `media_understanding`). The runner works at
+  night (the household's quiet hours) and, by day, only on new files,
+  after 10 quiet minutes; it gives way to every voice turn, waits for
+  memory before using the vision model, reads at most 20 MB/s, and caps
+  the time it spends on one video. Settings → Chat & AI → Photos and
+  videos shows the progress and the switches. This release's first part
+  only catalogues and fingerprints; descriptions, transcripts and faces
+  follow in later 1.5.0 work.
+- **What to know.** A house that upgrades starts with "Understand photos
+  and videos" **off** until an admin turns it on; a new install starts
+  with it on. Faces and photo locations are off for everyone. Nothing is
+  written into the media files.
+
 ## 1.5.0 (unreleased) — Security: pairing proof v2, chat reads, music-mix claim key
 
 - **What changed.** Three items of the 2026-11-22 security review (L9,

@@ -1268,6 +1268,14 @@ class Settings(BaseSettings):
     # How often the core deletes support-session transcripts past 30 days
     # and over 200 MB in all (domovoi/support_sessions.py).
     support_session_pruner_interval_sec: float = 3600.0
+    # How often the media catalogue (domovoi/media_understanding/catalog.py)
+    # looks whether a walk is due: a full stat()-only walk of Pictures and
+    # Videos once an hour, sooner after "Rescan" or an upload.
+    media_catalog_interval_sec: float = 60.0
+    # Where the two face models (YuNet, SFace; domovoi/media_understanding/
+    # face_models.py) are fetched, pinned by SHA-256, when an admin turns
+    # faces on. Never shipped; server-private, never served.
+    face_models_dir: str = str(Path.home() / ".domovoi" / "face_models")
 
     # ─── MPD (lazy per-room provisioning) ──────────────────────────────
     # An MPD daemon per voice-satellite room keeps playback queues / current

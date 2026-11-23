@@ -1901,7 +1901,10 @@ do_preflight() {
 # install from before it gets the same package from apply-update.sh
 # (ADDED_PACKAGES, reconcile_added_packages).
 # tesseract-ocr and its English data tesseract-ocr-eng read scanned pages
-# (domovoi/scan_reader, 1.4.0): run as a separate program, never bundled.
+# (domovoi/scan_reader, 1.4.0) and the text in photos (1.5.0,
+# domovoi/media_understanding/photos.py): run as a separate program, never
+# bundled. The Windows host (the WSL2 distro) and the Mac host (the Lima
+# VM) run this same script, so every server has it.
 # Licences as Ubuntu 26.04's packages state them (/usr/share/doc/*/copyright,
 # read 2026-11-16 on tesseract-ocr 5.5.0-1build1 and tesseract-ocr-eng
 # 1:4.1.0-2build1): tesseract-ocr and libtesseract5 Apache-2.0 (a few files
