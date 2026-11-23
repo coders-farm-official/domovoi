@@ -1299,6 +1299,9 @@ class _LookupBody(BaseModel):
     # the person allowed the internet for this lookup.
     internet: bool = True
     limit: int = Field(3, ge=1, le=3)
+    # With internet: the web sources only (a second round when the first
+    # found nothing that answers).
+    web_only: bool = False
 
 
 @app.post(
@@ -1347,7 +1350,8 @@ async def phone_lookup(body: _LookupBody, request: Request) -> Any:
         if url:
             outcome = await lookup_web.read_page(url, query=query)
         else:
-            outcome = await lookup_web.run_lookup(query, internet=body.internet, limit=body.limit)
+            outcome = await lookup_web.run_lookup(query, internet=body.internet, limit=body.limit,
+                                                   web_only=body.web_only and body.internet)
     except egress.InternetTurnedOff:
         raise egress.http_exception("a lookup")
     except lookup_web.LookupRefused as e:

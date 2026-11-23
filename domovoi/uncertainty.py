@@ -214,3 +214,50 @@ def categorize_question(transcript: str) -> str | None:
     if _GENERAL_RECENT_RE.search(t) and not _SUBJECTIVE_RE.search(t):
         return CATEGORY_GENERAL_RECENT
     return None
+
+
+# ─── Questions an offline library can't answer ──────────────────────────
+# Not categories (those are PK'd with web_search_prefs): what the chat's
+# lookups read to send a question to the web first, or to say plainly
+# that it needs the internet, instead of searching the offline library.
+
+# "Near me" and the like: the household's Home location is the place.
+_NEAR_ME = (
+    r"near me|nearby|near here|around here|close to me|close by|"
+    r"in my area|in (?:my|this|our) (?:town|city|neighbou?rhood|area)"
+)
+_NEAR_ME_RE = re.compile(rf"\b({_NEAR_ME})\b")
+# "local" names the place too ("local restaurants"), but alone it doesn't
+# make a question local ("a local variable").
+_NEAR_HERE_RE = re.compile(rf"\b({_NEAR_ME}|local)\b")
+
+# A business, its hours, or something on in a place.
+_LOCAL_BUSINESS_RE = re.compile(
+    r"\b("
+    r"restaurants?|cafes?|caf\u00e9s?|coffee shops?|diners?|bars|pubs|bakery|bakeries|"
+    r"takeout|take-out|food delivery|grocery stores?|supermarkets?|pharmac(?:y|ies)|"
+    r"gas stations?|stores|shops|businesses|hotels?|"
+    r"open (?:now|today|tonight|late|on \w+)|opening hours|business hours|hours of operation|"
+    r"what time does .{1,40} (?:open|close)|things to do|events (?:near|in|this)"
+    r")\b"
+)
+
+
+def is_near_here(text: str) -> bool:
+    """True for "near me", "local", "in my area" and the like."""
+    return bool(text) and bool(_NEAR_HERE_RE.search(text.lower()))
+
+
+def strip_near_here(text: str) -> str:
+    """``text`` without its "near me" words ("local restaurants" -> "restaurants")."""
+    return " ".join(_NEAR_HERE_RE.sub(" ", (text or "").lower()).split())
+
+
+def needs_internet(text: str) -> bool:
+    """True when only the live web can answer: the time-sensitive
+    categories above, or something local (a business, its hours, "near
+    me"). An offline library has nothing current or local to say."""
+    if not text:
+        return False
+    t = text.lower()
+    return categorize_question(t) is not None or bool(_NEAR_ME_RE.search(t) or _LOCAL_BUSINESS_RE.search(t))
