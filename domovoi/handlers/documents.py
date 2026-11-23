@@ -17,7 +17,7 @@ What it owns, all anchored:
   "read the book Dune" keep their handlers). Two documents that fit → "I
   found two: … Which one?". Over about a page →
   "It's 2 pages, about 3 minutes. The whole thing, or just the start?".
-  The whole thing is read a page or so at a time, "Shall I go on?" between
+  The whole thing is read a page or so at a time, "Should I go on?" between
   parts; "stop", "pause", "start again" and "read that again" answer it,
   and "continue reading" picks up later. Anything said over a part (the
   wake word, then "stop") cuts it off like any reply.
@@ -406,7 +406,7 @@ class DocumentsHandler(Handler):
             # Nobody can answer a question here (the dashboard's play box):
             # the start, said as the start.
             return await self._read_from(sp, 0, reading.START_WORDS, "start", ctx, session)
-        line = "%s. %s The whole thing, or just the start?" % (_title(sp.title), reading.length_line(sp))
+        line = "%s. %s Do you want the whole thing, or just the start?" % (_title(sp.title), reading.length_line(sp))
         await self._set(session, ctx, READING_KEY, {"rel": sp.rel, "title": sp.title, "mtime": sp.mtime,
                                                     "pos": 0, "last": 0, "size": reading.PART_WORDS})
         await self._park(ctx, session, DOC_LENGTH, line)
@@ -438,7 +438,7 @@ class DocumentsHandler(Handler):
             if ctx.session_id is not None and ctx.answerable:
                 await self._park(ctx, session, DOC_PAUSED, tail, ttl=_play_sec(words) + CHOICE_TTL_SEC)
             return self._reply(ctx, text + tail)
-        tail = " There's about %s more. Shall I go on?" % _minutes(left)
+        tail = " There's about %s more. Should I go on?" % _minutes(left)
         # The question comes at the end of the part: its window opens once
         # the part has played.
         await self._park(ctx, session, DOC_MORE, tail, ttl=_play_sec(words) + CHOICE_TTL_SEC)
@@ -512,7 +512,7 @@ class DocumentsHandler(Handler):
         expired = time.time() > float((data or {}).get("expires_at") or float("inf"))
         if kind != LETTER_DICTATION and (expired or ctx.trigger == "wake_word"):
             # Asked too long ago, or a fresh wake word: a new request, routed
-            # as one. (A barge-in over a part still answers "Shall I go on?";
+            # as one. (A barge-in over a part still answers "Should I go on?";
             # dictation has its own rules, in _letter_reply.)
             if kind == LETTER_AUTHOR:
                 await self._set(session, ctx, LETTER_KEY, None)
@@ -555,7 +555,7 @@ class DocumentsHandler(Handler):
             if start and not re.search(r"\b(?:whole|all|everything|entire)\b", said):
                 return await self._read_from(sp, 0, reading.START_WORDS, "start", ctx, session)
             return await self._read_from(sp, 0, reading.PART_WORDS, "whole", ctx, session)
-        # DOC_MORE ("Shall I go on?") and DOC_PAUSED (after "just the start"
+        # DOC_MORE ("Should I go on?") and DOC_PAUSED (after "just the start"
         # or "pause"). A reply that talked over the part means the part was
         # cut off: picking up again starts it over.
         interrupted = ctx.trigger == "barge_in"

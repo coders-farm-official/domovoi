@@ -214,7 +214,7 @@ async def _pick(printer_id: int | None, room_id: str | None) -> dict[str, Any]:
 
 async def count_pages(src: Path, *, filename: str, title: str, row: dict[str, Any],
                       wanted: dict[str, Any]) -> tuple[int, options.Resolved]:
-    """Pages that would print, for voice's "That's 2 pages … Print it?"."""
+    """Pages that would print, for voice's "That's 2 pages … Should I print it?"."""
     kind = kind_of(filename)
     lim = await store.get_limits()
     r = await _resolve(row, wanted, max_copies=lim["max_copies"])

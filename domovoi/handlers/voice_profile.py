@@ -1746,7 +1746,7 @@ class VoiceProfileHandler(Handler):
                 matched_handler=self.name,
             )
         return Response(
-            text=f"Add this phone's voice to {name}?",
+            text=f"Should I add this phone's voice to {name}?",
             session_id=ctx.session_id,
             matched_handler=self.name,
             expect_followup=True,

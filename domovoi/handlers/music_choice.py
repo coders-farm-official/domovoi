@@ -103,7 +103,7 @@ CORRECTION_MARGIN = 0.05
 #: conversation), in seconds.
 DECLINED_TTL_SEC = 300.0
 
-_LOST_TRACK_TEXT = "I've lost track of that one — what would you like to hear?"
+_LOST_TRACK_TEXT = "I've lost track of that one. What would you like to hear?"
 _GONE_TEXT = "That one isn't in your library anymore."
 
 
