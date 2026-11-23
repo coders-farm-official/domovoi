@@ -260,23 +260,36 @@ final class ChatMoreRulesTests: XCTestCase {
         XCTAssertEqual(ChatMoreStrings.goesTo("Wikipedia"), "goes to Wikipedia")
     }
 
+    /// The whole table, row for row with Android's `serverInternetChip`:
+    /// words and whether the chip reads as on.
     func testTheChipReadsTheHouseholdAndTheThread() {
-        XCTAssertEqual(
-            ChatMoreInternetChip.words(policy: "never", alwaysAllow: false, chatAllowed: true).label,
-            "internet off"
-        )
+        let never = ChatMoreInternetChip.words(policy: "never", alwaysAllow: false, chatAllowed: true)
+        XCTAssertEqual(never.label, "internet off")
+        XCTAssertFalse(never.on)
         XCTAssertFalse(ChatMoreInternetChip.words(policy: "never", alwaysAllow: true, chatAllowed: true).on)
+
+        let always = ChatMoreInternetChip.words(policy: "ask", alwaysAllow: true, chatAllowed: false)
+        XCTAssertEqual(always.label, "internet always on")
+        XCTAssertTrue(always.on)
+
+        let allowed = ChatMoreInternetChip.words(policy: "ask", alwaysAllow: false, chatAllowed: true)
+        XCTAssertEqual(allowed.label, "internet on for this chat")
+        XCTAssertTrue(allowed.on)
+
+        // A house that asks first, and a chat nobody has allowed yet: not
+        // "internet off", because a yes still lets it look things up.
+        let asks = ChatMoreInternetChip.words(policy: "ask", alwaysAllow: false, chatAllowed: false)
+        XCTAssertEqual(asks.label, "internet: ask first")
+        XCTAssertFalse(asks.on)
+        XCTAssertTrue(ChatMoreInternetChip.tappable(policy: "ask", alwaysAllow: false), "a tap still allows it")
         XCTAssertEqual(
-            ChatMoreInternetChip.words(policy: "ask", alwaysAllow: true, chatAllowed: false).label,
-            "internet always on"
+            ChatMoreInternetChip.hint(policy: "ask", alwaysAllow: false, on: false),
+            ChatMoreStrings.chipHintOff
         )
-        XCTAssertEqual(
-            ChatMoreInternetChip.words(policy: "ask", alwaysAllow: false, chatAllowed: true).label,
-            "internet on for this chat"
-        )
+        // An unknown or empty policy is not `never`, so it reads the same.
         XCTAssertEqual(
             ChatMoreInternetChip.words(policy: "", alwaysAllow: false, chatAllowed: false).label,
-            "internet off"
+            "internet: ask first"
         )
     }
 

@@ -292,6 +292,21 @@ internal class LiveMessage(
     var firstWordsAtMs: Long? = null
     var doneAtMs: Long? = null
 
+    /** A streamed `delta`: more of the reply. The first one marks when the
+     *  first words came. */
+    fun appendStreamed(text: String, now: Long = System.currentTimeMillis()) {
+        if (firstWordsAtMs == null) firstWordsAtMs = now
+        content += text
+    }
+
+    /** A streamed `replace`: the reply is [text] from now on. An empty one
+     *  starts over (a web answer follows as new deltas), so the first words
+     *  are the next delta's; a non-empty one is words shown now. */
+    fun replaceStreamed(text: String, now: Long = System.currentTimeMillis()) {
+        content = text
+        firstWordsAtMs = if (text.isEmpty()) null else firstWordsAtMs ?: now
+    }
+
     fun facts(threadId: Long) = MessageFacts(
         id = id, threadId = threadId, role = role, content = content,
         createdAt = createdAt, model = model, error = error,
@@ -349,6 +364,8 @@ private suspend fun sendStreaming(
     images: List<ImageRef>,
     documents: List<ServerDocument>,
     onDelta: (String) -> Unit,
+    /** The reply streamed so far becomes exactly this text (`replace`). */
+    onReplace: (String) -> Unit,
     /** (detail, code, model): the server's plain sentence and its code. */
     onError: (String, String?, String?) -> Unit,
     onDone: (MessageRow) -> Unit = {},
@@ -400,40 +417,68 @@ private suspend fun sendStreaming(
             return@use
         }
         val source = resp.body?.source() ?: return@use
-        var event = "message"
-        val data = StringBuilder()
-        while (true) {
-            val line = source.readUtf8Line() ?: break
-            when {
-                line.startsWith("event: ") -> event = line.removePrefix("event: ").trim()
-                line.startsWith("data: ") -> data.append(line.removePrefix("data: "))
-                line.isEmpty() && data.isNotEmpty() -> {
-                    runCatching {
-                        val payload = Json.parseToJsonElement(data.toString()).jsonObject
-                        when (event) {
-                            "delta" -> payload["text"]?.jsonPrimitive?.content?.let {
-                                withContext(Dispatchers.Main) { onDelta(it) }
-                            }
-                            // A lookup answer that became the honest line: the
-                            // done row carries the kept text (finishWith).
-                            "replace" -> Unit
-                            "error" -> payload["detail"]?.jsonPrimitive?.content?.let { detail ->
-                                val code = payload["code"]?.jsonPrimitive?.contentOrNull
-                                val model = payload["model"]?.jsonPrimitive?.contentOrNull
-                                withContext(Dispatchers.Main) { onError(detail, code, model) }
-                            }
-                            // The persisted row: its id, timestamp and model.
-                            "done" -> payload.decode<MessageRow>().let {
-                                withContext(Dispatchers.Main) { onDone(it) }
-                            }
-                            "job", "progress" -> payload.decode<ServerJobView>().let {
-                                withContext(Dispatchers.Main) { onJob(it) }
-                            }
-                        }
-                    }
-                    event = "message"
-                    data.setLength(0)
+        readChatStream(source) { ev ->
+            withContext(Dispatchers.Main) {
+                when (ev) {
+                    is ChatStreamEvent.Delta -> onDelta(ev.text)
+                    is ChatStreamEvent.Replace -> onReplace(ev.text)
+                    is ChatStreamEvent.Failed -> onError(ev.detail, ev.code, ev.model)
+                    is ChatStreamEvent.Done -> onDone(ev.row)
+                    is ChatStreamEvent.Job -> onJob(ev.view)
                 }
+            }
+        }
+    }
+}
+
+/** One event of a chat answer's stream (`POST .../messages` and the others
+ *  sendStreaming reads), as the app reads it. */
+internal sealed interface ChatStreamEvent {
+    /** More of the reply: appended to what streamed. */
+    data class Delta(val text: String) : ChatStreamEvent
+    /** The reply is [text] from now on, and later deltas append to it
+     *  (1.4.1). Empty: start over, a web answer follows as new deltas;
+     *  otherwise the corrected reply. Older servers never send it. */
+    data class Replace(val text: String) : ChatStreamEvent
+    /** The server's plain sentence, its code and model. */
+    data class Failed(val detail: String, val code: String?, val model: String?) : ChatStreamEvent
+    /** The persisted row: its id, timestamp, model and kept text. */
+    data class Done(val row: MessageRow) : ChatStreamEvent
+    /** A long document's job, `job` or `progress` (documents plan D2). */
+    data class Job(val view: ServerJobView) : ChatStreamEvent
+}
+
+/** A chat stream frame's event, or null for one this app doesn't read (an
+ *  unknown event, or one whose data doesn't parse). */
+internal fun chatStreamEvent(event: String, data: String): ChatStreamEvent? = runCatching {
+    val payload = Json.parseToJsonElement(data).jsonObject
+    when (event) {
+        "delta" -> payload["text"]?.jsonPrimitive?.content?.let { ChatStreamEvent.Delta(it) }
+        "replace" -> payload["text"]?.jsonPrimitive?.content?.let { ChatStreamEvent.Replace(it) }
+        "error" -> payload["detail"]?.jsonPrimitive?.content?.let { detail ->
+            ChatStreamEvent.Failed(detail, payload["code"]?.jsonPrimitive?.contentOrNull, payload["model"]?.jsonPrimitive?.contentOrNull)
+        }
+        "done" -> ChatStreamEvent.Done(payload.decode<MessageRow>())
+        "job", "progress" -> ChatStreamEvent.Job(payload.decode<ServerJobView>())
+        else -> null
+    }
+}.getOrNull()
+
+/** Reads a chat answer's SSE body to its end, handing [onEvent] each event
+ *  it reads (chatStreamEvent); the rest are skipped. */
+internal suspend fun readChatStream(source: okio.BufferedSource, onEvent: suspend (ChatStreamEvent) -> Unit) {
+    var event = "message"
+    val data = StringBuilder()
+    while (true) {
+        val line = source.readUtf8Line() ?: break
+        when {
+            line.startsWith("event: ") -> event = line.removePrefix("event: ").trim()
+            line.startsWith("data: ") -> data.append(line.removePrefix("data: "))
+            line.isEmpty() && data.isNotEmpty() -> {
+                val ev = chatStreamEvent(event, data.toString())
+                event = "message"
+                data.setLength(0)
+                ev?.let { onEvent(it) }
             }
         }
     }
@@ -871,10 +916,8 @@ internal fun ConversationPane(
                 val target = ensureThread()
                 sendStreaming(
                     app, target.id, content, images, docs,
-                    onDelta = {
-                        if (live.firstWordsAtMs == null) live.firstWordsAtMs = System.currentTimeMillis()
-                        live.content += it
-                    },
+                    onDelta = { live.appendStreamed(it) },
+                    onReplace = { live.replaceStreamed(it) },
                     onError = { detail, code, model ->
                         live.error = detail
                         live.errorCode = code
@@ -937,10 +980,8 @@ internal fun ConversationPane(
             runCatching {
                 sendStreaming(
                     app, target.id, "", emptyList(), emptyList(),
-                    onDelta = {
-                        if (live.firstWordsAtMs == null) live.firstWordsAtMs = System.currentTimeMillis()
-                        live.content += it
-                    },
+                    onDelta = { live.appendStreamed(it) },
+                    onReplace = { live.replaceStreamed(it) },
                     onError = { detail, code, model ->
                         live.error = detail
                         live.errorCode = code
@@ -976,10 +1017,8 @@ internal fun ConversationPane(
             runCatching {
                 sendStreaming(
                     app, target.id, "", emptyList(), emptyList(),
-                    onDelta = {
-                        if (live.firstWordsAtMs == null) live.firstWordsAtMs = System.currentTimeMillis()
-                        live.content += it
-                    },
+                    onDelta = { live.appendStreamed(it) },
+                    onReplace = { live.replaceStreamed(it) },
                     onError = { detail, code, model ->
                         live.error = detail
                         live.errorCode = code
@@ -1017,10 +1056,8 @@ internal fun ConversationPane(
             runCatching {
                 sendStreaming(
                     app, target.id, "", emptyList(), emptyList(),
-                    onDelta = {
-                        if (live.firstWordsAtMs == null) live.firstWordsAtMs = System.currentTimeMillis()
-                        live.content += it
-                    },
+                    onDelta = { live.appendStreamed(it) },
+                    onReplace = { live.replaceStreamed(it) },
                     onError = { detail, code, model ->
                         live.error = detail
                         live.errorCode = code
@@ -1444,12 +1481,15 @@ private fun ServerInternetChip(thread: ThreadRow, onToggle: (Boolean) -> Unit) {
     }
 }
 
-/** The server chat chip's words: (label, on). */
+/** The server chat chip's words: (label, on), as the dashboard says them.
+ *  A chat the house asks first in, not allowed yet, says so ("internet:
+ *  ask first"), not "internet off": it can still look things up once
+ *  someone says yes, and a tap allows it in this chat. */
 internal fun serverInternetChip(policy: String, alwaysAllow: Boolean, chatAllowed: Boolean): Pair<String, Boolean> = when {
     policy == "never" -> "internet off" to false
     alwaysAllow -> "internet always on" to true
     chatAllowed -> "internet on for this chat" to true
-    else -> "internet off" to false
+    else -> "internet: ask first" to false
 }
 
 /** A message as the share text reads it. */
