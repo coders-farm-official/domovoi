@@ -753,6 +753,16 @@ class RoomPlayer:
     def playing(self) -> bool:
         return self.output.is_open
 
+    def seconds_until(self, server_us: float) -> float | None:
+        """How long from now until the server clock reads ``server_us``
+        (a timed room control outside the stream, such as the room's
+        ``set_volume``). None before the clock fit has converged."""
+        fit = self.player.fit
+        if not fit.converged:
+            return None
+        local = self.clock()
+        return (server_us - fit.to_server(local)) / 1e6
+
     # ── the socket thread ──────────────────────────────────────────────
     def _run(self) -> None:
         backoff = BACKOFF_START_S

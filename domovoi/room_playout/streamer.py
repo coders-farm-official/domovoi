@@ -175,6 +175,68 @@ class RoomStreamer:
         if self.music is not None:
             self._start()
 
+    # ── music-only controls (slice 5b): sounds mixed in play on ──────
+    def _rerender_from(self, at: int) -> None:
+        """After a flush at ``at``: send the timeline again from there, so
+        a sound that was mixed into the flushed chunks (an answer, a timer)
+        plays on without the music it was mixed with."""
+        if self.next_index is None:
+            return
+        from_index = max(0, self.index_at(at))
+        speech_left = any(s + len(a) > from_index for s, a in self._speech)
+        if speech_left or (self.music is not None and not self.paused):
+            self.next_index = min(self.next_index, from_index)
+        else:
+            self.next_index = None
+
+    def _drop_buffered_music(self) -> None:
+        """Forget what the decoder holds: it was decoded before a pause or
+        a skip and is no longer the room's music."""
+        if self.music is not None:
+            self.music.read(1 << 24)
+
+    def stop_music(self, at_us: float | None = None) -> int:
+        """The room's music ends at ``at_us`` on every speaker; a sound
+        mixed over it plays on."""
+        at = self._at(at_us)
+        if self.music is not None:
+            self.music.close()
+        self.music = None
+        self.paused = False
+        self._flush(at)
+        self._rerender_from(at)
+        return at
+
+    def pause_music(self, at_us: float | None = None) -> int:
+        """Like :meth:`stop_music`, but the source stays attached (drained,
+        not played) until :meth:`resume_music`."""
+        at = self._at(at_us)
+        self.paused = True
+        self._flush(at)
+        self._rerender_from(at)
+        return at
+
+    def resume_music(self) -> bool:
+        """Play the attached source again from what it decodes now. False
+        when there is nothing attached."""
+        if self.music is None:
+            return False
+        if self.paused:
+            self._drop_buffered_music()
+        self.paused = False
+        self._start()
+        return True
+
+    def skip_music(self, at_us: float | None = None) -> int:
+        """The song changed (a skip, a jump in the queue): what is already
+        sent of the old one stops at ``at_us`` on every speaker, and the
+        timeline carries on from there with the new one."""
+        at = self._at(at_us)
+        self._flush(at)
+        self._drop_buffered_music()
+        self._rerender_from(at)
+        return at
+
     def duck(self, gain: float, at_us: float | None = None, ramp_ms: int = 50) -> int:
         at = self._at(at_us)
         self._broadcast(P.gain_msg(at, max(0.0, min(1.0, gain)), ramp_ms))
@@ -221,7 +283,10 @@ class RoomStreamer:
                         if self.music.started:
                             self.underruns += 1
         end = index + P.CHUNK_FRAMES
-        self._speech = [(s, a) for s, a in self._speech if s + len(a) > index]
+        # Kept until it has PLAYED (not just been sent): a flush can ask
+        # for the chunks after it again (`_rerender_from`).
+        played = self.index_at(self.clock()) - P.CHUNK_FRAMES
+        self._speech = [(s, a) for s, a in self._speech if s + len(a) > played]
         mixed = False
         for start, a in self._speech:
             lo, hi = max(start, index), min(start + len(a), end)
@@ -231,7 +296,7 @@ class RoomStreamer:
                 out *= MUSIC_UNDER_SPEECH
                 mixed = True
             out[lo - index: hi - index] += a[lo - start: hi - start]
-        if not playing and not self._speech:
+        if not playing and not any(s + len(a) > index for s, a in self._speech):
             return None
         return np.clip(out, -32768, 32767).astype("<i2").tobytes()
 

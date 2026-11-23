@@ -672,7 +672,7 @@ from domovoi.turn_timings import (
     whisper_block,
 )
 from domovoi.log_privacy import said
-from domovoi import overheard, room_devices, room_display
+from domovoi import overheard, room_devices, room_display, room_sound
 from domovoi import turn_history, turn_watchdog, wake_claims, wake_default
 from domovoi.turn_watchdog import (
     STAGE_IDENTIFY,
@@ -1255,8 +1255,18 @@ async def send_music_start(
             "no music_start", room_id,
         )
         return False
+    # 1.5.0: a room whose device plays room audio gets its music on the
+    # synced playout, every speaker at once (domovoi/room_sound.py); the
+    # frame below is for devices that can't.
+    if await room_sound.start_music(app, session, room_id, url):
+        _sent_music_urls(app)[room_id] = url
+        for dev in room_sound.unsynced_music_devices(app, room_id):
+            peer_url = lan_address.stream_url_for_peer(url, _dialed_host(dev))
+            await dev._safe_send_text({"type": "music_start", "stream_url": peer_url})
+        return True
     url = lan_address.stream_url_for_peer(url, _dialed_host(session))
     await session._safe_send_text({"type": "music_start", "stream_url": url})
+    session.plain_music_url = url
     _sent_music_urls(app)[room_id] = url
     await schedule_music_resume_fallback(app, room_id, url)
     return True
@@ -2146,6 +2156,13 @@ class StreamSession:
         self._room_reply = False
         self._room_reply_rate = 0
         self._room_play_end_us = 0.0
+        # The stream URL of the plain `music_start` this device was last
+        # sent and still plays with its own player (None: none, or the
+        # room's music moved to the playout; domovoi/room_sound.py).
+        self.plain_music_url: str | None = None
+        # A device that can't play in sync but takes the room's music
+        # anyway (a bridged device's opt-in; nothing sets it yet).
+        self.unsynced_music_opt_in = False
         # The `room.claim` this device was last told.
         self._claim_flag_sent: bool | None = None
 
@@ -3869,12 +3886,13 @@ class StreamSession:
 
     def _reply_via_room(self) -> bool:
         """Whether this device's answer plays on the room's synced playout:
-        the room holds another live device, and this one plays room audio.
-        A device that can't (an older one) keeps its own speaker."""
+        the room holds another live device, and a device of the room plays
+        room audio. A device that can't (an older one) then stays silent:
+        it plays the room's sound only when it is the room's only device.
+        A room with one device keeps the direct path (no playout delay)."""
         if self.conversational_mode or self.dropin_peer is not None:
             return False
-        pl = getattr(self.ws.app.state, "room_playout", None)
-        if pl is None or self.satellite_id not in pl.speakers(self.room_id):
+        if not room_sound.synced_speakers(self.ws.app, self.room_id):
             return False
         return len(room_devices.registry(self.ws.app).speakers(self.room_id)) > 1
 
@@ -3883,8 +3901,10 @@ class StreamSession:
         response says `room_audio`, else down this socket."""
         if self._room_reply:
             pl = self.ws.app.state.room_playout
-            _, end = pl.say(self.room_id, chunk, self._room_reply_rate or 16_000)
+            start, end = pl.say(self.room_id, chunk, self._room_reply_rate or 16_000)
             self._room_play_end_us = end
+            # Music held for the turn comes back under the first word.
+            room_sound.speech_starts(self.ws.app, self.room_id, start)
             return
         await self.ws.send_bytes(chunk)
 
@@ -4202,7 +4222,10 @@ class StreamSession:
             # that never declared the ability is ignored quietly (an
             # `error` would end its turn).
             if self.abilities.allows(wake_claims.ABILITY) and self.mic_enabled:
-                await wake_claims.arbiter(self.ws.app).on_claim(self, ctrl)
+                grant = await wake_claims.arbiter(self.ws.app).on_claim(self, ctrl)
+                if grant.get("role") == "owner":
+                    # The room's synced music falls silent for the turn.
+                    room_sound.turn_started(self.ws.app, self.room_id)
             return
         if t == "quiet_end":
             wake_claims.arbiter(self.ws.app).on_quiet_end(self, ctrl)
@@ -4221,6 +4244,9 @@ class StreamSession:
                 return
             if self._response_task and not self._response_task.done():
                 self._cut_room_speech()
+            # The room's synced music falls silent for the turn (a device
+            # that claimed nothing, or a lone room's).
+            room_sound.turn_started(self.ws.app, self.room_id)
             self._clock = _CaptureClock(
                 start_rx=time.perf_counter(),
                 sat_start=_sat_clock(ctrl, "backlog_ms", "wake_ms"),
@@ -6245,6 +6271,10 @@ class StreamSession:
                 # The turn asked a question: the same resume, held until
                 # its follow-up window has closed (see above).
                 self.hold_music_start(resumable[self.room_id], "followup")
+            if self.room_id not in resumable and not suppress_music_start:
+                # Nothing to resume: music the turn held silent on the
+                # playout (one with no resume entry) comes back now.
+                room_sound.unduck(self.ws.app, self.room_id)
 
         # Intercom fan-out — synthesize the announcement once and inject
         # it into every target room's WebSocket. The originating Pi
@@ -6346,10 +6376,10 @@ class StreamSession:
         # percent.") is itself heard at the new level. The satellite
         # drives its hardware mixer, which scales both TTS and music.
         if response.satellite_volume is not None:
-            await self._safe_send_text({
-                "type": "set_volume",
-                "level": max(0, min(100, int(response.satellite_volume))),
-            })
+            # The room's volume: every device of the room, together.
+            await room_sound.set_room_volume(
+                self.ws.app, self, max(0, min(100, int(response.satellite_volume))),
+            )
 
         if interim.started:
             # An interim line (the cold-start notice) already opened
@@ -8029,6 +8059,10 @@ class StreamSession:
                 # No music is meant to play here now: a silence reported
                 # before is moot (`satellite_music_silent`).
                 note_satellite_music_silent(self.ws.app, self.room_id, False)
+                self.plain_music_url = None
+                # The room's music on the synced playout stops on every
+                # speaker at one time (domovoi/room_sound.py).
+                room_sound.stop_music(self.ws.app, self.room_id)
             # The music changed: every room display looks again (a group's
             # other rooms show it too).
             room_display.poke_all(self.ws.app)

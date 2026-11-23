@@ -141,8 +141,26 @@ class MPDClient(Protocol):
     async def prime_stream_output(self) -> str: ...
 
 
+def _tell_playout(room_id: str | None, action: str) -> None:
+    """A player's pause, resume, stop or song change, for the rooms that
+    play its stream on the synced playout (domovoi/room_sound.py): they
+    follow at one timed moment on every speaker. Never raises."""
+    if not room_id:
+        return
+    try:
+        from domovoi import room_sound
+
+        room_sound.music_transport(room_id, action)
+    except Exception as e:  # noqa: BLE001 — the player's command already ran
+        log.debug("room playout: %s for %s not applied: %s", action, room_id, e)
+
+
 class MPDStubClient:
     """In-memory fake for tests and USE_STUBS mode."""
+
+    #: The room whose daemon this stands in for (set by ``own_mpd_client``),
+    #: for the playout's transport hook as on the real client.
+    room_id: str | None = None
 
     def __init__(self) -> None:
         self._state = "stop"
@@ -331,6 +349,7 @@ class MPDStubClient:
                 self._song = entry
                 self._song.pop("_elapsed", None)
                 self._state = "pause" if paused else "play"
+                _tell_playout(self.room_id, "pause" if paused else "skip")
                 return True
         return False
 
@@ -368,13 +387,16 @@ class MPDStubClient:
     async def pause(self) -> None:
         if self._state == "play":
             self._state = "pause"
+        _tell_playout(self.room_id, "pause")
 
     async def resume(self) -> None:
         if self._state == "pause":
             self._state = "play"
+        _tell_playout(self.room_id, "resume")
 
     async def stop(self) -> None:
         self._state = "stop"
+        _tell_playout(self.room_id, "stop")
 
     # The real daemon refuses these while stopped (ACK 55). The stub
     # refuses too, or stub-mode tests would prove a behaviour the
@@ -403,8 +425,10 @@ class MPDStubClient:
             self._song = self._queue[i + 1]
             self._song.pop("_elapsed", None)
             self._state = "play"
+            _tell_playout(self.room_id, "skip")
         else:
             self._state = "stop"
+            _tell_playout(self.room_id, "stop")
 
     async def previous(self) -> None:
         if self._state == "stop":
@@ -415,6 +439,7 @@ class MPDStubClient:
         self._song = self._queue[max(0, i - 1)]
         self._song.pop("_elapsed", None)
         self._state = "play"
+        _tell_playout(self.room_id, "skip")
 
     async def current_song(self) -> dict[str, Any] | None:
         if self._state == "stop":
@@ -1027,6 +1052,7 @@ class RealMPDClient:
                 raise
             if paused:
                 await c.pause(1)
+        _tell_playout(self.room_id, "pause" if paused else "skip")
         return True
 
     async def queue_remove(self, song_ids: list[int]) -> list[int]:
@@ -1077,14 +1103,17 @@ class RealMPDClient:
     async def pause(self) -> None:
         async with self._connect() as c:
             await c.pause(1)
+        _tell_playout(self.room_id, "pause")
 
     async def resume(self) -> None:
         async with self._connect() as c:
             await c.pause(0)
+        _tell_playout(self.room_id, "resume")
 
     async def stop(self) -> None:
         async with self._connect() as c:
             await c.stop()
+        _tell_playout(self.room_id, "stop")
 
     @staticmethod
     async def _unpause_before_moving(c: Any) -> None:
@@ -1115,6 +1144,7 @@ class RealMPDClient:
                 if _is_not_playing(e):
                     raise MPDNotPlaying("next: nothing is playing") from e
                 raise
+        _tell_playout(self.room_id, "skip")
 
     async def previous(self) -> None:
         async with self._connect() as c:
@@ -1125,6 +1155,7 @@ class RealMPDClient:
                 if _is_not_playing(e):
                     raise MPDNotPlaying("previous: nothing is playing") from e
                 raise
+        _tell_playout(self.room_id, "skip")
 
     async def current_song(self) -> dict[str, Any] | None:
         async with self._connect() as c:
@@ -1371,7 +1402,9 @@ def own_mpd_client(room_id: str | None) -> MPDClient:
         if is_phone_room(room_id):
             # As in production (_resolve_room): a phone has no player here.
             raise MPDNotProvisioned(f"{room_id} is a phone, not a room with a music player")
-        client: MPDClient = MPDStubClient()
+        stub = MPDStubClient()
+        stub.room_id = room_id
+        client: MPDClient = stub
         _clients[key] = client
         return client
 

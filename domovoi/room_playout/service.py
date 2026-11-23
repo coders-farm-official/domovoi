@@ -13,7 +13,14 @@ The calls slice 5b routes room sound through:
 * ``say(room, pcm, rate, channels)``: a reply, chime, timer or announcement,
   mixed in (music ducked); returns when it plays;
 * ``stop / pause / resume / duck(room, ...)``: timed, every speaker at once;
-* ``cut_speech(room)``: a barge-in stops the room's answer, music plays on.
+* ``cut_speech(room)``: a barge-in stops the room's answer, music plays on;
+* ``stop_music / pause_music / resume_music / skip_music(room)``: the
+  music only, timed, every speaker at once; a sound mixed over it plays on.
+  ``music_transport(host, action)`` applies one to every room playing
+  ``host``'s player (the MPD clients call it, ``domovoi/room_sound.py``).
+
+Which sound takes which path (playout or a device's own socket) is decided
+in ``domovoi/room_sound.py``.
 """
 
 from __future__ import annotations
@@ -25,11 +32,19 @@ from typing import Any, Callable, Protocol
 
 from domovoi.room_playout.clock import now_us
 from domovoi.room_playout.sources import FfmpegStreamSource, loopback_stream_url
-from domovoi.room_playout.streamer import PcmSource, RoomStreamer, Sink
+from domovoi.room_playout.streamer import CONTROL_LEAD_US, PcmSource, RoomStreamer, Sink
 
 log = logging.getLogger(__name__)
 
 DEFAULT_PLAYOUT_MS = 500
+
+#: The newest playout service (the app's): what the MPD clients tell about
+#: a pause or a skip (``music_transport``), as they have no app to ask.
+_CURRENT: "RoomPlayout | None" = None
+
+
+def current() -> "RoomPlayout | None":
+    return _CURRENT
 
 
 class RoomRegistry(Protocol):
@@ -80,6 +95,11 @@ class RoomPlayout:
         self._tasks: dict[str, asyncio.Task] = {}
         self._subs: dict[str, tuple[str, Sink]] = {}     # satellite -> (room, sink)
         self.stats: dict[str, dict[str, Any]] = {}       # satellite -> latest stats
+        # room -> the room whose MPD player its music comes from (itself,
+        # or its shared queue's host): a pause there pauses it here.
+        self.music_host: dict[str, str] = {}
+        global _CURRENT
+        _CURRENT = self
 
     # ── rooms ──────────────────────────────────────────────────────────
     def streamer(self, room_id: str) -> RoomStreamer:
@@ -93,14 +113,58 @@ class RoomPlayout:
                 self._tasks[room_id] = asyncio.get_running_loop().create_task(st.run())
         return st
 
-    async def play_stream(self, room_id: str, source: PcmSource | None = None) -> bool:
+    async def play_stream(self, room_id: str, source: PcmSource | None = None, *,
+                          host: str | None = None) -> bool:
         """Start the room's music on every speaker. False when the room has
-        no stream to play."""
+        no stream to play. ``host``: the room whose player the stream is
+        (a shared queue's host), for :meth:`music_transport`."""
         src = source if source is not None else await self._source_for_room(room_id)
         if src is None:
             return False
         self.streamer(room_id).play_stream(src)
+        self.music_host[room_id] = host or room_id
         return True
+
+    def playing_music(self, room_id: str) -> bool:
+        """The room's music is on the playout (playing or paused)."""
+        st = self.streamers.get(room_id)
+        return st is not None and st.music is not None
+
+    def stop_music(self, room_id: str, at_us: float | None = None) -> int | None:
+        st = self.streamers.get(room_id)
+        self.music_host.pop(room_id, None)
+        return st.stop_music(at_us) if st is not None else None
+
+    def pause_music(self, room_id: str, at_us: float | None = None) -> int | None:
+        st = self.streamers.get(room_id)
+        return st.pause_music(at_us) if st is not None and st.music is not None else None
+
+    def resume_music(self, room_id: str) -> bool:
+        st = self.streamers.get(room_id)
+        return st.resume_music() if st is not None else False
+
+    def skip_music(self, room_id: str, at_us: float | None = None) -> int | None:
+        st = self.streamers.get(room_id)
+        return st.skip_music(at_us) if st is not None and st.music is not None else None
+
+    def music_transport(self, host: str, action: str) -> list[str]:
+        """``host``'s MPD player did ``action`` (``pause``, ``stop``,
+        ``resume``, ``skip``): every room playing that player's stream on
+        the playout follows at one timed moment. Returns those rooms."""
+        rooms = [r for r, h in self.music_host.items() if h == host and self.playing_music(r)]
+        at = self.clock() + CONTROL_LEAD_US
+        for room_id in rooms:
+            st = self.streamers[room_id]
+            if action in ("pause", "stop"):
+                st.pause_music(at)
+            elif action == "resume":
+                st.resume_music()
+            elif action == "skip":
+                if st.paused:
+                    st.resume_music()
+                else:
+                    st.skip_music(at)
+        return rooms
 
     def say(self, room_id: str, pcm: bytes, rate: int, channels: int = 1) -> tuple[float, float]:
         return self.streamer(room_id).say(pcm, rate, channels)
