@@ -91,10 +91,10 @@ a way that would otherwise get reported as a bug.
 
 ## 1.4.1 (unreleased) — Friend Houses: tighter limits
 
-- **Friend Houses needs an admin to exist.** The household routes (inbox,
-  sending, the friend list, shared lists) answer 501 after
-  `--reset-admin` until someone signs in again, on the core and the
-  dashboard, like the phone's voice turn.
+- **Friend Houses waits for an admin after a reset.** If the admin
+  password is reset (`--reset-admin`), phones and the dashboard can't read
+  or send friend messages, see the friend list or use shared lists until
+  someone signs in as admin again.
 - Friend Houses writes Tor's config and key files through a fresh,
   exclusively created temp file, and a key file with an unexpected name
   is ignored instead of stopping the update.
@@ -110,9 +110,10 @@ a way that would otherwise get reported as a bug.
   and old applied changes are pruned by count. When a friend's edit to an
   item wins, the item shows as from a friend house, not as the household
   member who first added it.
-- Removing or blocking a friend marks messages still waiting for it as
-  not delivered and stops sharing lists with it, so nothing queued goes
-  out if the house is friended again.
+- **Removing or blocking a friend stops sharing lists with that house.**
+  Each house keeps its own copy as an ordinary list, and messages or list
+  changes still waiting to go to that house are dropped, so nothing goes
+  out if you become friends again later.
 - New-friend and shared-list announcements that no room heard (no room
   connected, or all quiet or busy) wait and are tried again.
 - Docs: the friend list's 4-digit code is readable by household phones;
