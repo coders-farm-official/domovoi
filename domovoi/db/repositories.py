@@ -2523,6 +2523,12 @@ APPROVAL_EXPIRY_SEC = 900.0
 #: The most requests that may wait on a human at once. A new room name past
 #: it is told to try again later; a device already waiting still refreshes.
 MAX_PENDING_APPROVALS = 32
+#: The most of those one network address may hold, so one host cannot fill
+#: the list and keep a real new device out. Which address parked which room
+#: is kept in memory (:data:`_APPROVAL_SOURCES`): a restart forgets it, and
+#: the requests expire on their own.
+MAX_PENDING_APPROVALS_PER_SOURCE = 8
+_APPROVAL_SOURCES: dict[str, str] = {}
 #: How long a code typed for a proof request waits for its device to come
 #: back and run the exchange (V062).
 ENTERED_CODE_TTL_SEC = 600.0
@@ -2551,6 +2557,7 @@ class SatelliteApprovalRepository:
         sat_type: str = "voice",
         takeover_after_sec: float | None = None,
         proof: bool = False,
+        source: str | None = None,
     ) -> tuple[str, str | None]:
         """Record (or refresh) a pending approval.
 
@@ -2590,7 +2597,9 @@ class SatelliteApprovalRepository:
 
         ``mac`` and ``sat_type`` are the device's own words and are bounded
         here. Returns ``("full", None)`` when :data:`MAX_PENDING_APPROVALS`
-        requests already wait and none of them is this room's.
+        requests already wait and none of them is this room's, or when
+        ``source`` (the caller's address) already holds
+        :data:`MAX_PENDING_APPROVALS_PER_SOURCE` other rooms' requests.
         """
         from domovoi.satellite_abilities import clean_mac, clean_sat_type
 
@@ -2609,6 +2618,15 @@ class SatelliteApprovalRepository:
         ).one()
         if not waiting.mine and waiting.n >= MAX_PENDING_APPROVALS:
             return "full", None
+        if source is not None and not waiting.mine:
+            pending = (
+                await self.s.execute(text("SELECT room_id FROM satellite_approvals"))
+            ).scalars().all()
+            for gone in set(_APPROVAL_SOURCES) - set(pending):
+                del _APPROVAL_SOURCES[gone]
+            held = sum(1 for r in pending if _APPROVAL_SOURCES.get(r) == source)
+            if held >= MAX_PENDING_APPROVALS_PER_SOURCE:
+                return "full", None
         # Every SET expression reads the row as it was before this
         # statement, so "same device" below is the parked device's hash.
         same = "satellite_approvals.token_hash = EXCLUDED.token_hash"
@@ -2658,6 +2676,8 @@ class SatelliteApprovalRepository:
         ).first()
         if row is None:
             return "conflict", None
+        if source is not None:
+            _APPROVAL_SOURCES[room_id] = source
         return "parked", row.code
 
     async def list_pending(self) -> list[dict]:
