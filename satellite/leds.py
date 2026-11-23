@@ -51,6 +51,14 @@ COLOR_OFF = (0, 0, 0)
 # off between clips), so each clip is visible, unlike the sound-following
 # listening look (2026-11-10).
 COLOR_RECORDING = (200, 200, 200)
+# Magenta while a support session (an admin's shell, satellite/support_shell.py)
+# is open: a slow breath, clearly not violet's "awaiting approval" (#A855F7,
+# pinker AND at least twice as slow), and solid on one LED over the other
+# states. NEEDS A CHECK ON REAL HARDWARE (both boards): the colour against
+# violet and red, and the pace against violet's breath.
+COLOR_SUPPORT = (255, 0, 200)    # #FF00C8
+SUPPORT_BREATH_SEC = 4.0         # 2 s up, 2 s down, eased
+SUPPORT_BREATH_MIN = 0.10        # 10% .. full
 
 # ── XVF3800 WS2812 ring palette (whole-ring effects via xvf_host) ──────────
 # The XVF chip only does whole-ring effects (off/breath/rainbow/single/DoA) —
@@ -79,6 +87,23 @@ XVF_THINK = (255, 255, 0)
 # is firmware-defined — tune these if breath/rainbow feel too fast or slow.
 XVF_SPEED_BREATH = 1             # slow pulse while thinking / speaking
 XVF_SPEED_RAINBOW = 3            # rotating rainbow while music plays
+# A support session: the chip owns the breath, so its slowest speed. The
+# setup indicator's violet breathes at speed 2; if speed 1 is not clearly
+# slower on the hardware, stretch it (alternate the breath with a held dim
+# magenta, two xvf_host calls per cycle). NEEDS A CHECK ON REAL HARDWARE.
+XVF_SPEED_SUPPORT = 1
+# The base colour under the magenta dot (DoA mode) for each non-idle state
+# while a support session is open: the chip draws whole-ring effects only,
+# and DoA (a base colour plus a dot) is the one way to show both. No pulse or
+# rainbow while a session is open. NEEDS A CHECK ON REAL HARDWARE.
+XVF_SUPPORT_BASE = {
+    "listening": XVF_LISTEN_BASE,
+    "thinking": (170, 170, 0),
+    "speaking": (0, 40, 170),
+    "music": (40, 40, 40),
+    "error": (170, 0, 0),
+    "recording": (120, 120, 120),
+}
 
 
 def _hex(color: tuple[int, int, int]) -> str:
@@ -102,7 +127,7 @@ class _Driver(Protocol):
     #         software animation loop via set_pixel/show.
     native_states: bool
 
-    def render_state(self, state: str) -> None: ...  # native_states=True path
+    def render_state(self, state: str, support: bool = False) -> None: ...  # native_states=True path
     def set_pixel(self, idx: int, r: int, g: int, b: int) -> None: ...  # pixel path
     def show(self) -> None: ...
     def clear(self) -> None: ...
@@ -112,7 +137,7 @@ class _Driver(Protocol):
 class _NoOpDriver:
     native_states = False
 
-    def render_state(self, state: str) -> None: pass
+    def render_state(self, state: str, support: bool = False) -> None: pass
     def set_pixel(self, idx: int, r: int, g: int, b: int) -> None: pass
     def show(self) -> None: pass
     def clear(self) -> None: pass
@@ -145,7 +170,7 @@ class _APA102Driver:
         # pins so signal integrity isn't a concern.
         self._spi.max_speed_hz = 8_000_000
 
-    def render_state(self, state: str) -> None:  # pragma: no cover - unused (pixel path)
+    def render_state(self, state: str, support: bool = False) -> None:  # pragma: no cover - unused (pixel path)
         pass
 
     def set_pixel(self, idx: int, r: int, g: int, b: int) -> None:
@@ -257,7 +282,21 @@ class _WS2812XvfDriver:
         except (FileNotFoundError, subprocess.TimeoutExpired) as e:
             log.debug("xvf_host %s failed: %s", args, e)
 
-    def render_state(self, state: str) -> None:
+    def render_state(self, state: str, support: bool = False) -> None:
+        if support and state != "dropin":
+            # A support session: idle breathes magenta; any other state is
+            # DoA mode, that state's colour as the base and a magenta dot.
+            # A drop-in call keeps its solid red (a call and a shell at once
+            # are refused anyway).
+            if state == "idle":
+                self._run("led_color", _hex(COLOR_SUPPORT))
+                self._run("led_speed", str(XVF_SPEED_SUPPORT))
+                self._run("led_effect", "1")
+            else:
+                base = XVF_SUPPORT_BASE.get(state, XVF_LISTEN_BASE)
+                self._run("led_doa_color", _hex(base), _hex(COLOR_SUPPORT))
+                self._run("led_effect", "4")
+            return
         spec = self._STATES.get(state, self._STATES["idle"])
         effect = spec["effect"]
         if effect == 0:
@@ -343,6 +382,9 @@ class LEDController:
         self._driver: _Driver = _NoOpDriver()
         self._thread: threading.Thread | None = None
         self._listeners: list = []
+        # A support session is open: an overlay, not a state, so resync()
+        # and every state change (the approval colours included) keep it.
+        self._support = False
 
     @property
     def state(self) -> str:
@@ -390,6 +432,20 @@ class LEDController:
                 return
             log.debug("[leds] %s -> %s", self._state, state)
             self._state = state
+            self._changed.set()
+        self._fire()
+
+    @property
+    def support(self) -> bool:
+        with self._lock:
+            return self._support
+
+    def set_support(self, on: bool) -> None:
+        """Turn the support-session overlay (magenta) on or off."""
+        with self._lock:
+            if self._support == bool(on):
+                return
+            self._support = bool(on)
             self._changed.set()
         self._fire()
 
@@ -470,7 +526,12 @@ class LEDController:
         """Set-once rendering for hardware that animates its own effects."""
         while not self._stop.is_set():
             self._changed.clear()
-            self._driver.render_state(self._current_state())
+            with self._lock:
+                state, support = self._state, self._support
+            if support:
+                self._driver.render_state(state, support=True)
+            else:
+                self._driver.render_state(state)
             self._changed.wait()
 
     def _run_pixel(self) -> None:
@@ -478,6 +539,9 @@ class LEDController:
         while not self._stop.is_set():
             self._changed.clear()
             state = self._current_state()
+            if self.support and state not in ("dropin", "error"):
+                self._tick_support(state)
+                continue
             if state == "idle":
                 self._solid(COLOR_OFF)
                 self._changed.wait()
@@ -501,6 +565,38 @@ class LEDController:
             else:
                 self._solid(COLOR_OFF)
                 self._changed.wait()
+
+    def support_pixels(self, state: str, t: float) -> list[tuple[int, int, int]]:
+        """The APA102 frame at time ``t`` while a support session is open:
+        idle breathes the whole ring magenta (a 4 s eased sine, 10% to
+        full); any other state holds LED 0 solid magenta and shows the
+        state on the rest."""
+        import math
+
+        n = self._cfg.num_leds
+        if state == "idle":
+            phase = (t % SUPPORT_BREATH_SEC) / SUPPORT_BREATH_SEC
+            eased = (1 - math.cos(2 * math.pi * phase)) / 2   # 0 → 1 → 0
+            level = SUPPORT_BREATH_MIN + (1 - SUPPORT_BREATH_MIN) * eased
+            r, g, b = COLOR_SUPPORT
+            return [(int(r * level), int(g * level), int(b * level))] * n
+        color = {
+            "listening": COLOR_LISTENING, "thinking": COLOR_THINKING,
+            "speaking": COLOR_SPEAKING, "error": COLOR_ERROR,
+            "recording": COLOR_RECORDING, "music": (40, 40, 40),
+        }.get(state, COLOR_OFF)
+        return [COLOR_SUPPORT] + [color] * max(0, n - 1)
+
+    def _tick_support(self, state: str) -> None:
+        import time as _time
+
+        while not self._stop.is_set() and self.support and self._current_state() == state:
+            for i, (r, g, b) in enumerate(self.support_pixels(state, _time.monotonic())):
+                self._driver.set_pixel(i, r, g, b)
+            self._driver.show()
+            # ~25 frames a second for the breath; a held frame needs none.
+            if self._changed.wait(timeout=0.04 if state == "idle" else None):
+                return
 
     def _tick_thinking(self) -> None:
         n = self._cfg.num_leds

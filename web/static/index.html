@@ -99,6 +99,7 @@
   <script type="text/babel" data-presets="react" src="chat.jsx"></script>
   <script type="text/babel" data-presets="react" src="people.jsx"></script>
   <script type="text/babel" data-presets="react" src="satellite_media.jsx"></script>
+  <script type="text/babel" data-presets="react" src="support_session.jsx"></script>
   <script type="text/babel" data-presets="react" src="satellites.jsx"></script>
   <script type="text/babel" data-presets="react" src="calendar.jsx"></script>
   <script type="text/babel" data-presets="react" src="lists.jsx"></script>
@@ -526,6 +527,9 @@
               {/* The container guard's banner, on every page while an
                   incident is open (components.jsx). */}
               <ContainerGuardBanner/>
+              {/* A satellite support session is open: every viewer sees
+                  it, and any paired device may end it (support_session.jsx). */}
+              <SupportSessionBanner/>
               {/* A household token this server refused, or its "wait"
                   after wrong ones: said once, here (components.jsx). */}
               <DeviceTokenNotice/>

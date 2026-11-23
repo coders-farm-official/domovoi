@@ -749,6 +749,11 @@ class Satellite(BaseModel):
     # read-only probes, so the drawer offers its Diagnostics tab. False
     # offline and for a device that didn't declare it (every older one).
     diagnostics: bool = False
+    # Support sessions (1.5.0): the "Allow support sessions" switch (off by
+    # default) and whether the CONNECTED device declared support_shell (a
+    # Pi on a prepared card whose account can't use sudo).
+    support_allowed: bool = False
+    support_shell: bool = False
     # Whether the CONNECTED satellite declared mic_dsp (an XVF3800 with
     # xvf_host, 1.4.1): only then does its Settings tab offer the admin
     # Microphone DSP presets (GET/POST /api/satellites/{room}/mic_dsp).

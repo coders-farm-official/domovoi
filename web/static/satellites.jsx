@@ -2687,6 +2687,8 @@ const SatDrawer = ({ s, sats, onClose, fire, refresh }) => {
               : <Empty glyph="sleeping" title="settings stay on the device"
                        sub={`${satBoardLabel(s) ? `this ${satBoardLabel(s)}` : 'this device'} didn't offer remote settings — change them on the device itself`}/>)}
           {tab === 'settings'      && <SatCaptureControl s={s} fire={fire} refresh={refresh}/>}
+          {/* support_session.jsx (1.5.0); a page that didn't load it has no control. */}
+          {tab === 'settings'      && typeof SatSupportControl !== 'undefined' && <SatSupportControl s={s} fire={fire} refresh={refresh}/>}
         </div>
       </aside>
     </>

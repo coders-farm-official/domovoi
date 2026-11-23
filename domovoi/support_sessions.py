@@ -1,0 +1,1011 @@
+"""Satellite support sessions (1.5.0): an admin's shell on one satellite.
+
+docs/SECURITY_PRIVACY.md, "Support sessions", is the plain-words version;
+docs/uml/satellite-protocol.md has the frames. In short:
+
+* **Who.** An admin on the web dashboard, at the security tier, whose
+  session proved the password within five minutes AND who types the
+  password again in the Open dialog. A session minted from a phone grant
+  is never "freshly signed in", so it can never open one.
+* **Where.** A satellite whose hello declared ``support_shell`` (a Pi on a
+  prepared card whose service account is not in sudo) and whose "Allow
+  support sessions" switch (``satellites.support_allowed``, off by
+  default) is on. One session per satellite.
+* **How.** The browser opens the dashboard's socket with a single-use
+  30-second ticket (this module's :class:`TicketBook`); the dashboard
+  relays it to the core's socket; the core sends ``support_*`` text frames
+  over the satellite's existing WebSocket. The satellite runs a PTY as its
+  own service account.
+* **Limits** (both ends): 30 minutes (warnings at 5 and 1 left), 10 minutes
+  without input (warning at 9), 16 KB per output frame and 64 KB/s, 4 KB
+  per input frame, an 8 MB transcript (then "log full"). It ends on any
+  disconnect or restart and within :data:`ADMIN_RECHECK_SEC` of the
+  admin session ending.
+* **Transcript.** asciicast v2 under ``~/.domovoi/support-sessions/<id>.cast``
+  (0600), written here: input as received from the browser (typed while
+  the PTY's echo was off: ``[hidden input]``), output as the satellite sent
+  it, with known secrets and secret-looking lines blanked. Best effort;
+  the transcript is an admin-only read for that reason. Kept 30 days and
+  200 MB in all, oldest first.
+
+The satellite never gets new power over the server: its ``support_*``
+frames are accepted only for the session open on that same connection,
+capped, stored as data and never run. A run of frames for no open session
+closes its socket.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+import binascii
+import codecs
+import hashlib
+import hmac
+import json
+import logging
+import os
+import re
+import secrets
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from sqlalchemy import text
+
+from domovoi import admin_auth
+from domovoi.db.session import session_scope
+
+log = logging.getLogger(__name__)
+
+ABILITY = "support_shell"
+
+# ─── Limits (module constants; tests monkeypatch these) ───────────────────
+
+MAX_SEC = 30 * 60
+#: The satellite refuses a `support_open` asking for more than this.
+SATELLITE_MAX_SEC = 60 * 60
+WARN_LEFT_SEC = (300, 60)
+IDLE_SEC = 10 * 60
+IDLE_WARN_SEC = 9 * 60
+OUTPUT_FRAME_MAX = 16 * 1024
+OUTPUT_RATE_MAX = 64 * 1024
+#: A satellite may run this far over the rate in one second (frame timing
+#: on a busy link) before its frames are dropped.
+OUTPUT_RATE_SLACK = 2.0
+INPUT_FRAME_MAX = 4 * 1024
+TRANSCRIPT_MAX_BYTES = 8 * 1024 * 1024
+TRANSCRIPTS_TOTAL_MAX_BYTES = 200 * 1024 * 1024
+KEEP_DAYS = 30
+TICKET_TTL_SEC = 30.0
+ADMIN_RECHECK_SEC = 5.0
+OPEN_ANSWER_SEC = 10.0
+#: Frames for no open session (or over the caps) before the satellite's
+#: socket is closed.
+STRAY_FRAME_LIMIT = 20
+#: Shell input is an admin action for the idle hour, stamped at most this often.
+ACTIVITY_STAMP_EVERY_SEC = 60.0
+TICK_SEC = 1.0
+COLS_RANGE = (20, 400)
+ROWS_RANGE = (5, 200)
+
+START_LINE = "A support session has started in this room."
+END_LINE = "The support session has ended."
+VOICE_END_REPLY = "Support session ended."
+
+#: End reasons: the code stored in ``support_sessions.end_reason`` and
+#: the words the dashboard shows.
+REASONS: dict[str, str] = {
+    "time_limit": "the 30-minute limit was reached",
+    "idle": "10 minutes without input",
+    "admin_ended": "ended by the admin",
+    "household_ended": "ended from a household device",
+    "voice": "ended by voice in the room",
+    "switch_off": "support sessions were turned off for this satellite",
+    "unpaired": "the satellite was unpaired",
+    "exit": "the shell exited",
+    "log_full": "log full",
+    "admin_session_ended": "the admin sign-in ended",
+    "browser_closed": "the terminal was closed",
+    "satellite_disconnected": "the satellite disconnected",
+    "server_restarted": "server restarted",
+    "refused": "the satellite refused",
+    "no_answer": "the satellite didn't answer",
+    "never_attached": "the terminal never connected",
+    "limits_broken": "the satellite broke the output limits",
+    "satellite_ended": "the satellite ended it",
+}
+
+#: The satellite's own end reasons it may report in `support_closed`.
+SATELLITE_REASONS = frozenset({"exit", "time_limit", "idle", "satellite_ended"})
+
+_ID_RE = re.compile(r"^[0-9a-f]{32}\Z")
+
+
+def valid_id(value: Any) -> bool:
+    return isinstance(value, str) and bool(_ID_RE.match(value))
+
+
+def transcript_dir() -> Path:
+    return Path.home() / ".domovoi" / "support-sessions"
+
+
+def transcript_path(session_id: str) -> Path:
+    if not valid_id(session_id):
+        raise ValueError("bad session id")
+    return transcript_dir() / f"{session_id}.cast"
+
+
+def _sha256(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
+# ─── Tickets: single use, 30 seconds, bound to the admin and the satellite ─
+
+
+@dataclass
+class Ticket:
+    session_id: str
+    admin_hash: str
+    satellite_id: str
+    expires: float
+
+
+class TicketBook:
+    """Browser socket tickets. Only the sha256 is kept; a ticket is removed
+    the moment it is presented, whether or not it was good, so it can be
+    used once at most."""
+
+    def __init__(self) -> None:
+        self._by_hash: dict[str, Ticket] = {}
+
+    def issue(self, session_id: str, admin_hash: str, satellite_id: str) -> str:
+        self._prune()
+        raw = secrets.token_hex(32)
+        self._by_hash[_sha256(raw)] = Ticket(
+            session_id, admin_hash, satellite_id, time.monotonic() + TICKET_TTL_SEC
+        )
+        return raw
+
+    def redeem(self, raw: Any, session_id: str) -> Ticket | None:
+        if not isinstance(raw, str) or not 16 <= len(raw) <= 128:
+            return None
+        ticket = self._by_hash.pop(_sha256(raw), None)
+        if ticket is None or ticket.expires < time.monotonic():
+            return None
+        if not hmac.compare_digest(ticket.session_id, session_id):
+            return None
+        return ticket
+
+    def _prune(self) -> None:
+        now = time.monotonic()
+        for k in [k for k, t in self._by_hash.items() if t.expires < now]:
+            self._by_hash.pop(k, None)
+
+
+# ─── Redaction (best effort, at write time) ───────────────────────────────
+
+REMOVED = "[removed]"
+HIDDEN_INPUT = "[hidden input]"
+
+_PEM_BEGIN = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----")
+_PEM_END = re.compile(r"-----END [A-Z0-9 ]*PRIVATE KEY-----")
+_LINE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    # wpa_supplicant / NetworkManager: psk=..., psk: ...
+    (re.compile(r"(?i)(\bpsk\s*[=:]\s*)[^\s\r\n]+"), r"\1" + REMOVED),
+    # A pairing token printed anywhere: any 32+ character token after it.
+    (re.compile(r"(?i)(pairing_token\W{0,12})[A-Za-z0-9_\-]{32,}"), r"\1" + REMOVED),
+    # .toml / .env style assignments of anything secret-looking.
+    (
+        re.compile(
+            r"(?im)^([ \t]*(?:export[ \t]+)?[\w.\-]*(?:password|passwd|token|secret|key)[\w.\-]*"
+            r"[ \t]*[=:][ \t]*)[^\r\n]+"
+        ),
+        r"\1" + REMOVED,
+    ),
+)
+
+
+class Redactor:
+    """Blanks what the core knows is secret and what looks like a secret.
+    Keeps PEM state across chunks so a private key split over frames is
+    blanked whole."""
+
+    def __init__(self, known: tuple[str, ...] = ()) -> None:
+        self._known = tuple(k for k in known if k and len(k) >= 6)
+        self._in_pem = False
+
+    def __call__(self, chunk: str) -> str:
+        out = chunk
+        for secret in self._known:
+            out = out.replace(secret, REMOVED)
+        out = self._pem(out)
+        for pattern, repl in _LINE_PATTERNS:
+            out = pattern.sub(repl, out)
+        return out
+
+    def _pem(self, chunk: str) -> str:
+        result: list[str] = []
+        rest = chunk
+        while rest:
+            if self._in_pem:
+                end = _PEM_END.search(rest)
+                if end is None:
+                    return "".join(result)
+                self._in_pem = False
+                result.append("[private key removed]")
+                rest = rest[end.end():]
+                continue
+            begin = _PEM_BEGIN.search(rest)
+            if begin is None:
+                result.append(rest)
+                break
+            result.append(rest[: begin.start()])
+            self._in_pem = True
+            rest = rest[begin.end():]
+            if not rest:
+                result.append("[private key removed]")
+        return "".join(result)
+
+
+# ─── The transcript: asciicast v2 ─────────────────────────────────────────
+
+
+class LogFull(Exception):
+    """The transcript reached its cap; the session must end."""
+
+
+class Transcript:
+    """One session's asciicast v2 file. Every event goes through
+    :meth:`write` BEFORE its bytes go anywhere, so nothing reaches the
+    satellite or the browser unlogged; past the cap :class:`LogFull`."""
+
+    def __init__(self, session_id: str, *, cols: int, rows: int, title: str,
+                 known_secrets: tuple[str, ...] = ()) -> None:
+        directory = transcript_dir()
+        directory.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(directory, 0o700)
+        except OSError:
+            pass
+        self.path = transcript_path(session_id)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+        self._fd = os.open(self.path, flags, 0o600)
+        self._start = time.monotonic()
+        self.bytes = 0
+        self.truncated = False
+        self._closed = False
+        self._redact_in = Redactor(known_secrets)
+        self._redact_out = Redactor(known_secrets)
+        self._dec_in = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        self._dec_out = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        self._hidden_logged = False
+        header = {
+            "version": 2, "width": cols, "height": rows,
+            "timestamp": int(time.time()), "title": title[:120],
+            "env": {"TERM": "xterm-256color"},
+        }
+        self._append(json.dumps(header))
+
+    def _append(self, line: str) -> None:
+        data = (line + "\n").encode("utf-8")
+        os.write(self._fd, data)
+        self.bytes += len(data)
+
+    def _event(self, kind: str, value: str) -> None:
+        if self._closed:
+            raise LogFull()
+        line = json.dumps([round(time.monotonic() - self._start, 3), kind, value])
+        # Room for the closing marker is kept back.
+        if self.bytes + len(line) + 1 > TRANSCRIPT_MAX_BYTES - 256:
+            self.truncated = True
+            self._append(json.dumps([round(time.monotonic() - self._start, 3), "o",
+                                     "\r\n[log full: the session ended]\r\n"]))
+            self.close()
+            raise LogFull()
+        self._append(line)
+
+    def input(self, data: bytes, *, echo_on: bool) -> None:
+        if not echo_on:
+            if not self._hidden_logged:
+                self._event("i", HIDDEN_INPUT)
+                self._hidden_logged = True
+            return
+        self._hidden_logged = False
+        value = self._redact_in(self._dec_in.decode(data))
+        if value:
+            self._event("i", value)
+
+    def output(self, data: bytes) -> None:
+        value = self._redact_out(self._dec_out.decode(data))
+        if value:
+            self._event("o", value)
+
+    def note(self, words: str) -> None:
+        """A line of the session's own (its end), never typed or shown."""
+        if not self._closed:
+            try:
+                self._event("o", f"\r\n[{words}]\r\n")
+            except LogFull:
+                pass
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            os.close(self._fd)
+        except OSError:
+            pass
+
+
+_ANSI_RE = re.compile(
+    r"\x1b\[[0-?]*[ -/]*[@-~]"            # CSI
+    r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"  # OSC
+    r"|\x1b[PX^_][^\x1b]*\x1b\\"           # DCS / SOS / PM / APC
+    r"|\x1b[@-Z\\-_]"                      # other two-byte escapes
+    r"|\x1b[()][0-9A-Za-z]"
+)
+_CTRL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+
+def plain_text(cast: str) -> str:
+    """The transcript's output as plain text: escape codes and control
+    characters taken out. For a viewer that sets it as ``textContent``."""
+    parts: list[str] = []
+    for i, line in enumerate(cast.splitlines()):
+        if i == 0 or not line.strip():
+            continue
+        try:
+            t, kind, value = json.loads(line)
+        except (ValueError, TypeError):
+            continue
+        if kind == "o" and isinstance(value, str):
+            parts.append(value)
+        elif kind == "i" and value == HIDDEN_INPUT:
+            parts.append(HIDDEN_INPUT)
+    joined = _ANSI_RE.sub("", "".join(parts)).replace("\r\n", "\n").replace("\r", "")
+    return _CTRL_RE.sub("", joined)
+
+
+# ─── A live session ───────────────────────────────────────────────────────
+
+
+@dataclass
+class Session:
+    id: str
+    satellite_id: str
+    room_id: str | None
+    admin_hash: str
+    opener_label: str | None
+    cols: int
+    rows: int
+    max_sec: int = MAX_SEC
+    idle_sec: int = IDLE_SEC
+    state: str = "pending"          # pending | opening | open | ended
+    sat: Any = None                 # the StreamSession it runs on
+    writer: Transcript | None = None
+    deadline: float = 0.0           # monotonic
+    ends_at: float = 0.0            # wall clock, for the banner
+    last_input: float = 0.0
+    echo_on: bool = True
+    bytes_in: int = 0
+    bytes_out: int = 0
+    reason: str | None = None
+    warned: set[str] = field(default_factory=set)
+    out_window: float = 0.0
+    out_window_bytes: int = 0
+    last_admin_check: float = 0.0
+    last_stamp: float = 0.0
+    ack: asyncio.Future[Any] | None = None
+    outbox: asyncio.Queue[dict[str, Any] | None] = field(default_factory=asyncio.Queue)
+    ended: asyncio.Event = field(default_factory=asyncio.Event)
+    expiry_task: asyncio.Task[None] | None = None
+
+    def as_active(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "satellite_id": self.satellite_id,
+            "room_id": self.room_id,
+            "ends_at": self.ends_at or None,
+            "state": self.state,
+        }
+
+
+class Refused(Exception):
+    """Opening was refused: ``status`` and ``detail`` for the HTTP answer."""
+
+    def __init__(self, status: int, detail: str) -> None:
+        super().__init__(detail)
+        self.status = status
+        self.detail = detail
+
+
+class SupportSessions:
+    """Every support session this core has open (at most one per satellite)."""
+
+    def __init__(self, app: Any = None) -> None:
+        self.app = app
+        self.tickets = TicketBook()
+        self.by_id: dict[str, Session] = {}
+        self.by_satellite: dict[str, Session] = {}
+
+    # ── opening ──────────────────────────────────────────────────────
+
+    async def create(self, *, satellite_id: str, room_id: str | None, admin_hash: str,
+                     cols: int, rows: int) -> tuple[Session, str]:
+        """Record a pending session and issue its browser ticket. The
+        satellite hears nothing until the browser's socket attaches."""
+        if satellite_id in self.by_satellite:
+            raise Refused(409, "a support session is already open on this satellite")
+        await prune()
+        sid = secrets.token_hex(16)
+        async with session_scope() as s:
+            label = await admin_auth.session_label(s, admin_hash)
+            try:
+                await s.execute(
+                    text(
+                        "INSERT INTO support_sessions (id, satellite_id, room_id, opener_label, "
+                        "opener_hash_prefix) VALUES (:id, :sat, :room, :label, :prefix)"
+                    ),
+                    {"id": sid, "sat": satellite_id, "room": room_id,
+                     "label": (label or "")[:120] or None, "prefix": admin_hash[:12]},
+                )
+            except Exception as e:  # the one-open index
+                if "support_sessions_one_open" in str(e):
+                    raise Refused(409, "a support session is already open on this satellite") from None
+                raise
+        sess = Session(
+            id=sid, satellite_id=satellite_id, room_id=room_id, admin_hash=admin_hash,
+            opener_label=label, cols=_clamp(cols, COLS_RANGE), rows=_clamp(rows, ROWS_RANGE),
+            max_sec=MAX_SEC, idle_sec=IDLE_SEC,
+        )
+        self.by_id[sid] = sess
+        self.by_satellite[satellite_id] = sess
+        ticket = self.tickets.issue(sid, admin_hash, satellite_id)
+        sess.expiry_task = asyncio.create_task(self._expire_pending(sess))
+        log.info("support session %s created for %s by %r", sid[:8], satellite_id, label)
+        return sess, ticket
+
+    async def _expire_pending(self, sess: Session) -> None:
+        await asyncio.sleep(TICKET_TTL_SEC + 5.0)
+        if sess.state == "pending":
+            await self.end(sess, "never_attached", announce=False)
+
+    def redeem(self, raw_ticket: Any, session_id: str) -> Session | None:
+        ticket = self.tickets.redeem(raw_ticket, session_id)
+        if ticket is None:
+            return None
+        sess = self.by_id.get(session_id)
+        if sess is None or sess.state != "pending" or sess.admin_hash != ticket.admin_hash \
+                or sess.satellite_id != ticket.satellite_id:
+            return None
+        return sess
+
+    # ── the terminal ─────────────────────────────────────────────────
+
+    async def run(self, ws: Any, sess: Session) -> None:
+        """Serve the relayed browser socket ``ws`` (accepted) for ``sess``
+        until the session ends."""
+        sess.state = "opening"
+        if sess.expiry_task is not None:
+            sess.expiry_task.cancel()
+        sender = asyncio.create_task(self._send_loop(ws, sess))
+        try:
+            if not await self._admin_live(sess, force=True):
+                await self.end(sess, "admin_session_ended", announce=False)
+                return
+            sat = (getattr(getattr(self.app, "state", None), "active_sessions", None) or {}).get(
+                sess.satellite_id)
+            if sat is None:
+                await self.end(sess, "satellite_disconnected", announce=False)
+                return
+            sess.sat = sat
+            known = await _known_secrets()
+            sess.writer = Transcript(
+                sess.id, cols=sess.cols, rows=sess.rows,
+                title=f"Domovoi support session on {sess.satellite_id}", known_secrets=known,
+            )
+            sess.ack = asyncio.get_running_loop().create_future()
+            try:
+                await sat.send_support({
+                    "type": "support_open", "session_id": sess.id, "cols": sess.cols,
+                    "rows": sess.rows, "max_sec": sess.max_sec, "idle_sec": sess.idle_sec,
+                })
+                answer = await asyncio.wait_for(asyncio.shield(sess.ack), OPEN_ANSWER_SEC)
+            except (TimeoutError, asyncio.TimeoutError):
+                await self.end(sess, "no_answer", announce=False)
+                return
+            except Exception as e:  # noqa: BLE001 - a dead socket, an undeclared ability
+                log.info("support session %s: open failed: %s", sess.id[:8], e)
+                await self.end(sess, "satellite_disconnected", announce=False)
+                return
+            if answer is not True:
+                await self.end(sess, "refused", announce=False, detail=str(answer or "")[:120])
+                return
+            now = time.monotonic()
+            sess.state = "open"
+            sess.deadline = now + sess.max_sec
+            sess.ends_at = time.time() + sess.max_sec
+            sess.last_input = now
+            sess.outbox.put_nowait({"t": "opened", "max_sec": sess.max_sec,
+                                    "idle_sec": sess.idle_sec, "ends_in_sec": sess.max_sec})
+            log.info("support session %s opened on %s by %r", sess.id[:8], sess.satellite_id,
+                     sess.opener_label)
+            asyncio.create_task(_say(sat, START_LINE))
+            receiver = asyncio.create_task(self._receive_loop(ws, sess))
+            ticker = asyncio.create_task(self._tick_loop(sess))
+            try:
+                await sess.ended.wait()
+            finally:
+                for task in (receiver, ticker):
+                    task.cancel()
+        finally:
+            if sess.state != "ended":
+                await self.end(sess, "browser_closed")
+            try:
+                await asyncio.wait_for(sender, 2.0)
+            except (TimeoutError, asyncio.TimeoutError, asyncio.CancelledError):
+                sender.cancel()
+
+    async def _send_loop(self, ws: Any, sess: Session) -> None:
+        while True:
+            msg = await sess.outbox.get()
+            if msg is None:
+                return
+            try:
+                await ws.send_text(json.dumps(msg))
+            except Exception:  # noqa: BLE001 - the browser left
+                if sess.state != "ended":
+                    asyncio.create_task(self.end(sess, "browser_closed"))
+                return
+
+    async def _receive_loop(self, ws: Any, sess: Session) -> None:
+        try:
+            while sess.state == "open":
+                raw = await ws.receive_text()
+                await self.browser_message(sess, raw)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - disconnect
+            pass
+        if sess.state != "ended":
+            await self.end(sess, "browser_closed")
+
+    async def browser_message(self, sess: Session, raw: Any) -> None:
+        """One frame from the browser: ``{"t":"in","d":b64}`` or
+        ``{"t":"resize","cols":n,"rows":n}``. Anything else is ignored."""
+        if sess.state != "open" or not isinstance(raw, str) or len(raw) > INPUT_FRAME_MAX * 2:
+            return
+        try:
+            msg = json.loads(raw)
+        except ValueError:
+            return
+        if not isinstance(msg, dict):
+            return
+        kind = msg.get("t")
+        if kind == "in":
+            data = _b64(msg.get("d"), INPUT_FRAME_MAX)
+            if not data:
+                return
+            # Before each input: the admin sign-in must still be live.
+            if not await self._admin_live(sess, force=True):
+                await self.end(sess, "admin_session_ended")
+                return
+            try:
+                assert sess.writer is not None
+                sess.writer.input(data, echo_on=sess.echo_on)
+            except LogFull:
+                await self.end(sess, "log_full")
+                return
+            sess.bytes_in += len(data)
+            sess.last_input = time.monotonic()
+            sess.warned.discard("idle")
+            await self._to_sat(sess, {"type": "support_input", "session_id": sess.id,
+                                      "data": base64.b64encode(data).decode("ascii")})
+            if time.monotonic() - sess.last_stamp >= ACTIVITY_STAMP_EVERY_SEC:
+                sess.last_stamp = time.monotonic()
+                try:
+                    await admin_auth.stamp_admin_activity_by_hash(sess.admin_hash)
+                except Exception as e:  # noqa: BLE001
+                    log.debug("support session: activity stamp failed: %s", e)
+        elif kind == "resize":
+            cols, rows = msg.get("cols"), msg.get("rows")
+            if isinstance(cols, int) and isinstance(rows, int):
+                sess.cols, sess.rows = _clamp(cols, COLS_RANGE), _clamp(rows, ROWS_RANGE)
+                await self._to_sat(sess, {"type": "support_resize", "session_id": sess.id,
+                                          "cols": sess.cols, "rows": sess.rows})
+
+    async def _to_sat(self, sess: Session, frame: dict[str, Any]) -> None:
+        try:
+            await sess.sat.send_support(frame)
+        except Exception as e:  # noqa: BLE001
+            log.info("support session %s: satellite send failed: %s", sess.id[:8], e)
+            await self.end(sess, "satellite_disconnected", announce=False)
+
+    async def _tick_loop(self, sess: Session) -> None:
+        while sess.state == "open":
+            await asyncio.sleep(TICK_SEC)
+            await self.tick(sess)
+
+    async def tick(self, sess: Session, now: float | None = None) -> None:
+        """The session's clocks: the time limit and its warnings, the idle
+        limit and its warning, the admin re-check."""
+        if sess.state != "open":
+            return
+        now = time.monotonic() if now is None else now
+        left = sess.deadline - now
+        if left <= 0:
+            await self.end(sess, "time_limit")
+            return
+        for mark in WARN_LEFT_SEC:
+            key = f"left{mark}"
+            if left <= mark and key not in sess.warned:
+                sess.warned.add(key)
+                minutes = max(1, round(mark / 60))
+                sess.outbox.put_nowait({"t": "warn", "text": (
+                    f"{minutes} minute{'s' if minutes != 1 else ''} left in this support session")})
+        idle = now - sess.last_input
+        if idle >= sess.idle_sec:
+            await self.end(sess, "idle")
+            return
+        if idle >= IDLE_WARN_SEC and "idle" not in sess.warned:
+            sess.warned.add("idle")
+            sess.outbox.put_nowait({"t": "warn", "text": (
+                "No input for 9 minutes: the session closes after 10")})
+        if not await self._admin_live(sess, now=now):
+            await self.end(sess, "admin_session_ended")
+
+    async def _admin_live(self, sess: Session, *, force: bool = False, now: float | None = None) -> bool:
+        now = time.monotonic() if now is None else now
+        if not force and now - sess.last_admin_check < ADMIN_RECHECK_SEC:
+            return True
+        sess.last_admin_check = now
+        try:
+            async with session_scope() as s:
+                return await admin_auth.session_live_by_hash(s, sess.admin_hash)
+        except Exception as e:  # noqa: BLE001 - fail closed
+            log.warning("support session %s: admin check failed: %s", sess.id[:8], e)
+            return False
+
+    # ── frames from the satellite ────────────────────────────────────
+
+    async def satellite_frame(self, sat: Any, ctrl: dict[str, Any]) -> None:
+        """A ``support_*`` frame from a satellite connection. Accepted only
+        for the session open on THAT connection; anything else is dropped
+        and counted, and a run of them closes the socket."""
+        sid = ctrl.get("session_id")
+        sess = self.by_id.get(sid) if isinstance(sid, str) else None
+        if sess is None or sess.sat is not sat or sess.state not in ("opening", "open"):
+            await self._stray(sat, ctrl.get("type"))
+            return
+        kind = ctrl.get("type")
+        if kind == "support_opened":
+            if sess.ack is not None and not sess.ack.done():
+                sess.ack.set_result(True)
+            return
+        if kind == "support_refused":
+            if sess.ack is not None and not sess.ack.done():
+                sess.ack.set_result(str(ctrl.get("reason") or "refused"))
+            return
+        if sess.state != "open":
+            await self._stray(sat, kind)
+            return
+        if kind == "support_output":
+            data = _b64(ctrl.get("data"), OUTPUT_FRAME_MAX)
+            if data is None or not self._within_rate(sess, len(data)):
+                await self._stray(sat, kind)
+                return
+            try:
+                assert sess.writer is not None
+                sess.writer.output(data)
+            except LogFull:
+                await self.end(sess, "log_full")
+                return
+            sess.bytes_out += len(data)
+            sess.outbox.put_nowait({"t": "out", "d": base64.b64encode(data).decode("ascii")})
+        elif kind == "support_echo":
+            sess.echo_on = bool(ctrl.get("on"))
+        elif kind == "support_closed":
+            reason = ctrl.get("reason")
+            await self.end(sess, reason if reason in SATELLITE_REASONS else "satellite_ended")
+        else:
+            await self._stray(sat, kind)
+
+    def _within_rate(self, sess: Session, size: int) -> bool:
+        now = time.monotonic()
+        if now - sess.out_window >= 1.0:
+            sess.out_window, sess.out_window_bytes = now, 0
+        sess.out_window_bytes += size
+        return sess.out_window_bytes <= OUTPUT_RATE_MAX * OUTPUT_RATE_SLACK
+
+    async def _stray(self, sat: Any, kind: Any) -> None:
+        count = getattr(sat, "support_strays", 0) + 1
+        try:
+            sat.support_strays = count
+        except AttributeError:
+            pass
+        log.info("support: dropped %r from %s (%d)", kind, getattr(sat, "room_id", "?"), count)
+        if count >= STRAY_FRAME_LIMIT:
+            sess = self.by_satellite.get(getattr(sat, "room_id", None) or "")
+            if sess is not None and sess.sat is sat:
+                await self.end(sess, "limits_broken", announce=False)
+            try:
+                await sat.ws.close(code=1008)
+            except Exception:  # noqa: BLE001
+                pass
+
+    # ── ending ───────────────────────────────────────────────────────
+
+    async def end(self, sess: Session, reason: str, *, announce: bool = True,
+                  detail: str | None = None) -> None:
+        """End ``sess`` (idempotent): tell the satellite, close the
+        transcript, record the row, say the end line in the room."""
+        if sess.state == "ended":
+            return
+        was_open = sess.state == "open"
+        sess.state = "ended"
+        sess.reason = reason
+        if sess.expiry_task is not None and sess.expiry_task is not asyncio.current_task():
+            sess.expiry_task.cancel()
+        if sess.ack is not None and not sess.ack.done():
+            sess.ack.set_result("ended")
+        self.by_id.pop(sess.id, None)
+        if self.by_satellite.get(sess.satellite_id) is sess:
+            self.by_satellite.pop(sess.satellite_id, None)
+        words = REASONS.get(reason, reason)
+        if sess.sat is not None and reason not in ("satellite_disconnected",):
+            try:
+                await sess.sat.send_support({"type": "support_close", "session_id": sess.id,
+                                             "reason": reason})
+            except Exception:  # noqa: BLE001
+                pass
+        if sess.writer is not None:
+            sess.writer.note(f"session ended: {words}")
+            sess.writer.close()
+        try:
+            async with session_scope() as s:
+                await s.execute(
+                    text(
+                        "UPDATE support_sessions SET closed_at = now(), end_reason = :r, "
+                        "bytes_in = :bi, bytes_out = :bo, truncated = :tr, transcript_bytes = :tb "
+                        "WHERE id = :id AND closed_at IS NULL"
+                    ),
+                    {"r": reason, "bi": sess.bytes_in, "bo": sess.bytes_out, "id": sess.id,
+                     "tr": bool(sess.writer and sess.writer.truncated),
+                     "tb": sess.writer.bytes if sess.writer else 0},
+                )
+        except Exception as e:  # noqa: BLE001 - startup cleanup catches what is left
+            log.warning("support session %s: couldn't record its end: %s", sess.id[:8], e)
+        log.info("support session %s on %s ended: %s%s", sess.id[:8], sess.satellite_id, reason,
+                 f" ({detail})" if detail else "")
+        if was_open and announce and sess.sat is not None and reason != "satellite_disconnected":
+            asyncio.create_task(_say(sess.sat, END_LINE))
+        sess.outbox.put_nowait({"t": "end", "reason": reason, "text": words,
+                                **({"detail": detail} if detail else {})})
+        sess.outbox.put_nowait(None)
+        sess.ended.set()
+
+    async def end_by_id(self, session_id: str, reason: str) -> bool:
+        sess = self.by_id.get(session_id)
+        if sess is None:
+            return False
+        await self.end(sess, reason)
+        return True
+
+    async def end_for_satellite(self, satellite_id: str, reason: str, *, announce: bool = True) -> bool:
+        sess = self.by_satellite.get(satellite_id)
+        if sess is None:
+            return False
+        await self.end(sess, reason, announce=announce)
+        return True
+
+    async def end_in_room(self, room_id: str | None, reason: str, *, announce: bool = True) -> int:
+        """End every session on a satellite in ``room_id`` (by voice)."""
+        if not room_id:
+            return 0
+        hits = [s for s in list(self.by_id.values())
+                if s.room_id == room_id or s.satellite_id == room_id]
+        for sess in hits:
+            await self.end(sess, reason, announce=announce)
+        return len(hits)
+
+    async def connection_dropped(self, sat: Any) -> None:
+        """The satellite's socket closed: its session ends, never resumes."""
+        sess = self.by_satellite.get(getattr(sat, "room_id", None) or "")
+        if sess is not None and (sess.sat is sat or sess.sat is None):
+            await self.end(sess, "satellite_disconnected", announce=False)
+
+    def active(self) -> list[dict[str, Any]]:
+        return [s.as_active() for s in self.by_id.values() if s.state in ("opening", "open")]
+
+
+def get_manager(app: Any) -> SupportSessions:
+    state = app.state
+    mgr = getattr(state, "support_sessions", None)
+    if not isinstance(mgr, SupportSessions):
+        mgr = SupportSessions(app)
+        state.support_sessions = mgr
+    return mgr
+
+
+# ─── helpers ──────────────────────────────────────────────────────────────
+
+
+def _clamp(value: Any, bounds: tuple[int, int]) -> int:
+    try:
+        v = int(value)
+    except (TypeError, ValueError):
+        v = bounds[0]
+    return max(bounds[0], min(bounds[1], v))
+
+
+def _b64(value: Any, max_bytes: int) -> bytes | None:
+    if not isinstance(value, str) or len(value) > (max_bytes * 4) // 3 + 8:
+        return None
+    try:
+        data = base64.b64decode(value, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    if not data or len(data) > max_bytes:
+        return None
+    return data
+
+
+async def _known_secrets() -> tuple[str, ...]:
+    found: list[str] = []
+    try:
+        async with session_scope() as s:
+            token = await admin_auth.get_device_token(s)
+        if token:
+            found.append(token)
+    except Exception as e:  # noqa: BLE001
+        log.debug("support: couldn't read the device token for redaction: %s", e)
+    code = admin_auth.read_setup_code()
+    if code:
+        found.append(code)
+    return tuple(found)
+
+
+async def _say(sat: Any, words: str) -> None:
+    """One short line in the room; best effort (a reply may be playing)."""
+    try:
+        await sat.announce(words, kind="user")
+    except Exception as e:  # noqa: BLE001
+        log.info("support: couldn't say %r in %s: %s", words, getattr(sat, "room_id", "?"), e)
+
+
+# ─── the audit list and the files ─────────────────────────────────────────
+
+
+async def mark_left_open() -> int:
+    """At core start: a row still open belongs to a session this process
+    never ran, so it ends as "server restarted"."""
+    async with session_scope() as s:
+        rows = (await s.execute(text(
+            "UPDATE support_sessions SET closed_at = now(), end_reason = 'server_restarted' "
+            "WHERE closed_at IS NULL RETURNING id"
+        ))).all()
+    if rows:
+        log.info("support sessions: %d left open by the last run marked 'server restarted'", len(rows))
+    return len(rows)
+
+
+def _row(r: Any) -> dict[str, Any]:
+    return {
+        "id": r.id, "satellite_id": r.satellite_id, "room_id": r.room_id,
+        "opener_label": r.opener_label, "opener_hash_prefix": r.opener_hash_prefix,
+        "opened_at": r.opened_at.isoformat() if r.opened_at else None,
+        "closed_at": r.closed_at.isoformat() if r.closed_at else None,
+        "end_reason": r.end_reason,
+        "end_text": REASONS.get(r.end_reason or "", r.end_reason) if r.end_reason else None,
+        "bytes_in": int(r.bytes_in or 0), "bytes_out": int(r.bytes_out or 0),
+        "truncated": bool(r.truncated), "transcript_bytes": int(r.transcript_bytes or 0),
+        "has_transcript": transcript_path(r.id).exists(),
+    }
+
+
+async def list_sessions(satellite_id: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+    async with session_scope() as s:
+        rows = (await s.execute(
+            text(
+                "SELECT * FROM support_sessions "
+                "WHERE (CAST(:sat AS text) IS NULL OR satellite_id = :sat) "
+                "ORDER BY opened_at DESC LIMIT :lim"
+            ),
+            {"sat": satellite_id, "lim": int(limit)},
+        )).all()
+    return [_row(r) for r in rows]
+
+
+async def get_session(session_id: str) -> dict[str, Any] | None:
+    if not valid_id(session_id):
+        return None
+    async with session_scope() as s:
+        r = (await s.execute(text("SELECT * FROM support_sessions WHERE id = :id"),
+                             {"id": session_id})).first()
+    return _row(r) if r is not None else None
+
+
+def read_transcript(session_id: str) -> str | None:
+    path = transcript_path(session_id)
+    try:
+        with open(path, "rb") as f:
+            return f.read(TRANSCRIPT_MAX_BYTES + 1024).decode("utf-8", errors="replace")
+    except OSError:
+        return None
+
+
+async def delete_session(session_id: str) -> bool:
+    """Delete a CLOSED session's row and transcript."""
+    if not valid_id(session_id):
+        return False
+    async with session_scope() as s:
+        r = (await s.execute(text(
+            "DELETE FROM support_sessions WHERE id = :id AND closed_at IS NOT NULL RETURNING id"),
+            {"id": session_id})).first()
+    _unlink(transcript_path(session_id))
+    return r is not None
+
+
+async def delete_all() -> int:
+    async with session_scope() as s:
+        rows = (await s.execute(text(
+            "DELETE FROM support_sessions WHERE closed_at IS NOT NULL RETURNING id"))).all()
+    for r in rows:
+        _unlink(transcript_path(r.id))
+    return len(rows)
+
+
+def _unlink(path: Path) -> None:
+    try:
+        path.unlink()
+    except OSError:
+        pass
+
+
+async def prune(now: float | None = None) -> dict[str, int]:
+    """30 days, then 200 MB in all (oldest first, with room for one more
+    session). Rows older than the 30 days go too; a newer row whose file
+    went for the space keeps its row (the audit list outlives the file)."""
+    now = time.time() if now is None else now
+    removed_age = removed_space = 0
+    directory = transcript_dir()
+    files: list[tuple[float, int, Path]] = []
+    if directory.is_dir():
+        for p in directory.glob("*.cast"):
+            try:
+                st = p.stat()
+            except OSError:
+                continue
+            files.append((st.st_mtime, st.st_size, p))
+    open_ids: set[str] = set()
+    try:
+        async with session_scope() as s:
+            await s.execute(text(
+                "DELETE FROM support_sessions WHERE closed_at IS NOT NULL "
+                "AND opened_at < now() - make_interval(days => :d)"), {"d": int(KEEP_DAYS)})
+            open_ids = {r.id for r in (await s.execute(text(
+                "SELECT id FROM support_sessions WHERE closed_at IS NULL"))).all()}
+    except Exception as e:  # noqa: BLE001 - the files are still pruned by age
+        log.debug("support prune: database not reachable: %s", e)
+    keep: list[tuple[float, int, Path]] = []
+    for mtime, size, p in files:
+        if p.stem in open_ids:
+            continue
+        if now - mtime > KEEP_DAYS * 86400:
+            _unlink(p)
+            removed_age += 1
+        else:
+            keep.append((mtime, size, p))
+    total = sum(size for _, size, _ in keep) + sum(
+        size for _, size, p in files if p.stem in open_ids)
+    budget = TRANSCRIPTS_TOTAL_MAX_BYTES - TRANSCRIPT_MAX_BYTES
+    for mtime, size, p in sorted(keep):
+        if total <= budget:
+            break
+        _unlink(p)
+        total -= size
+        removed_space += 1
+    return {"removed_age": removed_age, "removed_space": removed_space}

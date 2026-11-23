@@ -1259,6 +1259,9 @@ class Settings(BaseSettings):
     # How often the core deletes guests (V023 guests_seen: a guest's
     # self-asserted id, address and user agent) not seen for 30 days.
     guests_seen_pruner_interval_sec: float = 3600.0
+    # How often the core deletes support-session transcripts past 30 days
+    # and over 200 MB in all (domovoi/support_sessions.py).
+    support_session_pruner_interval_sec: float = 3600.0
 
     # ─── MPD (lazy per-room provisioning) ──────────────────────────────
     # An MPD daemon per voice-satellite room keeps playback queues / current

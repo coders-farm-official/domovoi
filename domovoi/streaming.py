@@ -232,6 +232,15 @@ Client → Server
                            - the answer to a `diag_request` (one read-only probe,
                            satellite/diagnostics.py). Capped and scrubbed on the
                            device, and again here (domovoi/satellite_diagnostics.py).
+  text  support_opened     {"type":"support_opened","session_id":ID}
+  text  support_refused    {"type":"support_refused","session_id":ID,"reason":str}
+  text  support_output     {"type":"support_output","session_id":ID,"seq":N,"data":b64}
+                           - at most 16 KB a frame and 64 KB/s
+  text  support_echo       {"type":"support_echo","session_id":ID,"on":bool}
+  text  support_closed     {"type":"support_closed","session_id":ID,"reason":str,"exit_code":N?}
+                           - a support session's answers (domovoi/support_sessions.py),
+                           only from a device that declared support_shell and only
+                           for the session open on this connection.
   text  config_status      {"type":"config_status","config":{"section.key":val,...}}
                            — Pi reports its current EFFECTIVE editable config
                            (flat, keyed by section.key) on connect. Server
@@ -397,6 +406,13 @@ Server → Client
                            satellite_diagnostics.PROBES and nothing else; only
                            to a device that declared `diagnostics`. Answered by
                            `diag_result`.
+  text  support_open       {"type":"support_open","session_id":ID,"cols":N,"rows":N,
+                            "max_sec":N,"idle_sec":N}
+  text  support_input      {"type":"support_input","session_id":ID,"data":b64} (<= 4 KB)
+  text  support_resize     {"type":"support_resize","session_id":ID,"cols":N,"rows":N}
+  text  support_close      {"type":"support_close","session_id":ID,"reason":str}
+                           - an admin's support session (a PTY as the service
+                           account), only to a device that declared support_shell.
   text  set_config         {"type":"set_config","changes":{"section.key":val,...}}
                            — push web-edited config to the Pi. It merges the
                            changes into config.toml (preserving comments),
@@ -2277,6 +2293,14 @@ class StreamSession:
                     fut.set_exception(ConnectionError("satellite disconnected"))
                     fut.exception()
             self._diag_requests.clear()
+            # A support session on this connection ends now and never
+            # resumes on a reconnect (domovoi/support_sessions.py).
+            try:
+                from domovoi import support_sessions
+
+                await support_sessions.get_manager(self.ws.app).connection_dropped(self)
+            except Exception as e:  # noqa: BLE001
+                log.warning("support session teardown failed for %s: %s", self.room_id, e)
             # Deregister, but only if we're still the active session for
             # this room. A reconnect that overwrote us shouldn't have its
             # entry yanked when the stale instance unwinds.
@@ -4243,6 +4267,14 @@ class StreamSession:
             from domovoi.speech_warmup import schedule_room_voice_warm_up
 
             schedule_room_voice_warm_up(str(voice) if voice else None)
+            return
+        if isinstance(t, str) and t.startswith("support_"):
+            # A support session's frames (domovoi/support_sessions.py):
+            # accepted only for the session open on THIS connection; the
+            # rest are dropped and counted there, never run.
+            from domovoi import support_sessions
+
+            await support_sessions.get_manager(self.ws.app).satellite_frame(self, ctrl)
             return
         if t == "diag_result":
             # The answer to a probe we asked for; anything else is dropped.
@@ -8102,6 +8134,13 @@ class StreamSession:
             return await asyncio.wait_for(pending.future, timeout)
         finally:
             self._log_requests.pop(request_id, None)
+
+    async def send_support(self, frame: dict[str, Any]) -> None:
+        """Send one ``support_*`` frame (domovoi/support_sessions.py).
+        :class:`NotDeclared` (nothing sent) for a device whose hello didn't
+        declare ``support_shell``: never assumed, not even for a Pi."""
+        self._require("support_shell", str(frame.get("type")))
+        await self.ws.send_text(json.dumps(frame))
 
     async def request_diagnostic(
         self, probe: str, *, timeout: float = satellite_diagnostics.PROBE_TIMEOUT_S

@@ -67,6 +67,7 @@ from satellite import (
     pc_engine,
     remote_config,
     sound_sync,
+    support_shell,
     wake_gate,
     wake_model_sync,
     wake_words,
@@ -2024,6 +2025,17 @@ class Satellite(pc_engine.SpareDeviceEngine):
             xvf_host_path=cfg.leds_xvf_host_path,
         ))
 
+        # Support sessions (1.5.0, satellite/support_shell.py): an admin's
+        # shell as this account, declared only by a Pi on a prepared card
+        # whose account can't use sudo. Decided once, at start.
+        self._support = support_shell.SupportShell(
+            declared=support_shell.should_declare(is_pc=pc_engine.is_pc(cfg)),
+            emit=self._emit_text,
+            on_open=lambda: self._leds.set_support(True),
+            on_end=self._support_ended,
+            busy=self._support_busy,
+        )
+
         # WiFi self-heal state. The watcher thread polls
         # `iw dev wlan0 link` every `wifi_poll_interval_sec` and, ONLY
         # while the WS is down and the core does not answer a TCP
@@ -2532,6 +2544,33 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 self._offline_drops,
             )
             self._offline_drop_last_log = now
+
+    def _support_busy(self) -> str | None:
+        """Why a support session can't open now, or None."""
+        if self.dropin_active.is_set():
+            return "the room is in a drop-in call"
+        if self.wake_recording.is_set():
+            return "the room is recording wake-word clips"
+        return None
+
+    def _support_ended(self, reason: str, by_server: bool) -> None:
+        """A support session ended: the light goes back, then the service
+        restarts so nothing the shell started lives on (the unit's cgroup
+        kill takes every child). It waits up to 15 s for the room's end
+        line to be said first."""
+        self._leds.set_support(False)
+
+        def _restart() -> None:
+            time.sleep(2.0)
+            until = time.monotonic() + 15.0
+            while time.monotonic() < until and (
+                self.playback_active.is_set() or self._leds.state in ("speaking", "thinking")
+            ):
+                time.sleep(0.25)
+            log.info("support session ended (%s): restarting the service", reason)
+            self._restart_service()
+
+        threading.Thread(target=_restart, daemon=True, name="support-restart").start()
 
     async def _answer_diag(self, probe: Any) -> None:
         """Answer a `diag_request`: run the named probe on a worker thread
@@ -8831,6 +8870,14 @@ class Satellite(pc_engine.SpareDeviceEngine):
                     self._end_capture.set()
                     return
             log.debug("ignoring end_capture for utt=%r (capturing %r)", utt, self._capture_utt)
+        elif t == "support_open" or t == "support_input" or t == "support_resize":
+            # A support session (satellite/support_shell.py): refused unless
+            # this device declared it; its own limits hold whatever is asked.
+            self._support.handle(payload)
+        elif t == "support_close":
+            # Hanging up the shell waits for its process group: off the loop.
+            threading.Thread(target=self._support.handle, args=(payload,), daemon=True,
+                             name="support-close").start()
         elif t == "pong":
             pass
         else:
@@ -8907,6 +8954,9 @@ class Satellite(pc_engine.SpareDeviceEngine):
             # An XVF3800 whose DSP presets can be switched from the
             # dashboard (`set_mic_dsp`). An older core ignores the field.
             "mic_dsp": getattr(self, "_mic_dsp", None) is not None,
+            # Support sessions (1.5.0): only a Pi on a prepared card whose
+            # account can't use sudo says so. An older core ignores it.
+            "support_shell": bool(getattr(self, "_support", None) and self._support.declared),
         }
         # The previous life's last-health record, carried until a
         # core acknowledges it with `ready` (an older core ignores
@@ -9148,6 +9198,12 @@ class Satellite(pc_engine.SpareDeviceEngine):
         if self.wake_recording.is_set():
             self.wake_recording.clear()
             self._wake_rec_params = None
+        # A support session ends with its socket and never resumes; the
+        # service restarts (satellite/support_shell.py).
+        support = getattr(self, "_support", None)
+        if support is not None and support.active:
+            threading.Thread(target=support.connection_lost, daemon=True,
+                             name="support-close").start()
         # A dropped WS ends any open-mic sub-mode. The server re-derives mode on
         # reconnect (a fresh session has no conversational_mode), so a Pi that
         # kept chat_active / dropin_active would be stuck streaming a

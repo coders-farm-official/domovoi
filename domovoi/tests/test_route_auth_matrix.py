@@ -346,6 +346,17 @@ SECURITY_TIER_ROUTES = [
     # "Delete all listening history" (V051, Up next P1, 2026-11-12):
     # everyone's songs, the household's too, like "Delete all voice history".
     ("web", "POST", "/api/music/listens/delete-all"),
+    # Satellite support sessions (1.5.0): opening a shell and turning the
+    # per-satellite switch ON (each also needs a password sign-in within
+    # 5 minutes, checked inside), and deleting transcripts.
+    ("core", "POST", "/v1/admin/satellites/{satellite_id}/support/allow"),
+    ("core", "POST", "/v1/admin/satellites/{satellite_id}/support/open"),
+    ("core", "DELETE", "/v1/admin/support-sessions/{session_id}"),
+    ("core", "DELETE", "/v1/admin/support-sessions"),
+    ("web", "POST", "/api/satellites/{satellite_id}/support/allow"),
+    ("web", "POST", "/api/satellites/{satellite_id}/support/open"),
+    ("web", "DELETE", "/api/support-sessions/{session_id}"),
+    ("web", "DELETE", "/api/support-sessions"),
 ]
 
 
@@ -899,3 +910,60 @@ def test_radio_opens_nothing_to_the_whole_lan() -> None:
 
     opened = [k for k, fn in _radio_mutations().items() if is_open_endpoint(fn)]
     assert opened == []
+
+
+# ─── Satellite support sessions (1.5.0) ───────────────────────────────────
+# Opening and turning the switch on are security tier (above). Turning it
+# OFF only removes power: any admin. Ending one only removes power too:
+# any paired household device (owner answer 6, 22 Nov). The banner's read
+# is the household tier (owner answer 8); the audit list and transcripts
+# are security-tier reads, Bearer only, like the command recordings.
+
+SUPPORT_ADMIN_WRITES = [
+    ("core", "POST", "/v1/admin/satellites/{satellite_id}/support/disallow"),
+    ("web", "POST", "/api/satellites/{satellite_id}/support/disallow"),
+]
+SUPPORT_DEVICE_WRITES = [
+    ("core", "POST", "/v1/admin/support-sessions/{session_id}/end"),
+    ("web", "POST", "/api/support-sessions/{session_id}/end"),
+]
+SUPPORT_SECURITY_READS = [
+    ("core", "/v1/admin/support-sessions"),
+    ("core", "/v1/admin/support-sessions/{session_id}/transcript"),
+    ("web", "/api/support-sessions"),
+    ("web", "/api/support-sessions/{session_id}/transcript"),
+    ("web", "/api/support-sessions/{session_id}/transcript.cast"),
+]
+SUPPORT_HOUSEHOLD_READS = [
+    ("core", "/v1/admin/support-sessions/active"),
+    ("web", "/api/support-sessions/active"),
+]
+
+
+@pytest.mark.parametrize(("label", "method", "path"), SUPPORT_ADMIN_WRITES)
+def test_turning_support_sessions_off_takes_any_admin(label, method, path) -> None:
+    by_key = {(a, m, p): d for a, m, p, d in ROUTES}
+    calls = list(_dependency_calls(by_key[(label, method, path)]))
+    assert admin_auth.require_admin_mutation in calls
+    assert admin_auth.require_device not in calls
+
+
+@pytest.mark.parametrize(("label", "method", "path"), SUPPORT_DEVICE_WRITES)
+def test_any_household_device_may_end_a_support_session(label, method, path) -> None:
+    by_key = {(a, m, p): d for a, m, p, d in ROUTES}
+    calls = list(_dependency_calls(by_key[(label, method, path)]))
+    assert admin_auth.require_device in calls
+
+
+@pytest.mark.parametrize(("label", "path"), SUPPORT_SECURITY_READS)
+def test_support_transcripts_are_security_tier_reads(label, path) -> None:
+    calls = _get_gates((label, path))
+    assert admin_auth.require_admin_security_read in calls
+    for weaker in (admin_auth.require_device_read, admin_auth.require_device,
+                   admin_auth.require_admin_read):
+        assert weaker not in calls
+
+
+@pytest.mark.parametrize(("label", "path"), SUPPORT_HOUSEHOLD_READS)
+def test_the_support_banner_is_a_household_read(label, path) -> None:
+    assert admin_auth.require_device_read in _get_gates((label, path))

@@ -2215,7 +2215,7 @@ async def _list_satellite_meta() -> dict[str, dict[str, Any]]:
             rows = await s.execute(
                 text(
                     "SELECT s.satellite_id, s.sat_type, NULLIF(r.name, r.room_id), "
-                    "s.hardware, s.board, s.mac, s.adopted_at, r.voice "
+                    "s.hardware, s.board, s.mac, s.adopted_at, r.voice, s.support_allowed "
                     "FROM satellites s JOIN rooms r ON r.room_id = s.room_id"
                 )
             )
@@ -2228,6 +2228,7 @@ async def _list_satellite_meta() -> dict[str, dict[str, Any]]:
                 "mac": r[5],
                 "adopted_at": r[6],
                 "voice": r[7],
+                "support_allowed": bool(r[8]),
             }
             for r in rows.all()
         }
@@ -2537,6 +2538,8 @@ async def _satellite_for(
         supports=[str(x) for x in supports] if supports is not None else None,
         diagnostics=online and room_id in (snapshot.get("satellite_diagnostics") or ()),
         mic_dsp=online and room_id in (snapshot.get("satellite_mic_dsp") or {}),
+        support_allowed=bool(meta_row.get("support_allowed")),
+        support_shell=online and room_id in (snapshot.get("satellite_support_shell") or ()),
         upgrade=upgrade,
         settings_ignored=ignored,
         wake_word=wake_word,

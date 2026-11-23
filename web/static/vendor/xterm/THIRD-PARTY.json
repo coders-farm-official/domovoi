@@ -1,0 +1,14 @@
+[
+  {
+    "name": "@xterm/addon-fit",
+    "version": "0.10.0",
+    "license": "MIT",
+    "declared": "MIT"
+  },
+  {
+    "name": "@xterm/xterm",
+    "version": "5.5.0",
+    "license": "MIT",
+    "declared": "MIT"
+  }
+]

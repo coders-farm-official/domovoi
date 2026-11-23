@@ -65,6 +65,9 @@ Channels emitted (core; enabled plugins add their own via manifest
   digest (counts, id sums, the newest ``updated_at`` of lists and items),
   never a name or an item; fires on every list or item write, by voice or
   from any screen, and an open Lists page reads the lists again
+* ``support_sessions`` — the satellite support sessions open now (1.5.0:
+  ``{id, satellite_id, room_id, ends_at, state}``), from the admin
+  snapshot; every page's "Support session open" banner rides it
 * ``nav_layout`` — the household's web menu (V045, Settings → App layout):
   the layout ``GET /api/nav-layout`` returns, null for the default; fires
   when an admin saves or resets it, and every open dashboard redraws its
@@ -461,6 +464,10 @@ class StatePollLoop:
                 # kiosk-death/recovery; the satellites page (and the kiosk
                 # display page itself) refetch on it.
                 ("satellites.display", snapshot.get("satellite_display") or {}),
+                # Support sessions open now (1.5.0, domovoi/support_sessions.py):
+                # ids, the satellite and when it ends. Every page's banner
+                # rides `support_sessions.changed`.
+                ("support_sessions", snapshot.get("support_sessions") or []),
             ):
                 async with self._diff_lock:
                     old_value = self._previous.get(key)

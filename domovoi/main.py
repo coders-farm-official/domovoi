@@ -908,6 +908,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Opt-in command recordings: 14-day retention, the disk cap, and the
     # sweep of rooms no longer opted in (domovoi/command_captures.py).
     WORKERS.add_worker(CommandCapturePruner(), owner="core")
+    # Support sessions (1.5.0): a row left open by the last run ends as
+    # "server restarted"; transcripts kept 30 days and 200 MB in all
+    # (domovoi/support_sessions.py).
+    from domovoi import support_sessions as _support_sessions
+    from domovoi.workers.support_session_pruner import SupportSessionPruner
+
+    try:
+        await _support_sessions.mark_left_open()
+    except Exception as e:  # noqa: BLE001
+        log.warning("support sessions: startup cleanup failed: %s", e)
+    WORKERS.add_worker(SupportSessionPruner(), owner="core")
     # The acquisition time budget: a claimed acquisition past
     # acquisition_max_seconds fails for good (domovoi/acquisitions.py).
     from domovoi.workers.acquisition_budget import AcquisitionBudgetSweeper
@@ -1228,6 +1239,12 @@ app.include_router(music_groups_router)
 from domovoi.player_relay import router as player_relay_router  # noqa: E402
 
 app.include_router(player_relay_router)
+
+# Satellite support sessions (1.5.0): an admin's shell on one satellite
+# (domovoi/support_sessions.py, domovoi/support_routes.py).
+from domovoi.support_routes import router as support_router  # noqa: E402
+
+app.include_router(support_router)
 
 
 @app.get("/v1/voice/activity", dependencies=[Depends(require_device)])
@@ -3015,6 +3032,14 @@ async def admin_snapshot() -> dict[str, Any]:
             room for room, sess in app.state.active_sessions.items()
             if satellite_abilities.session_abilities(sess).allows("diagnostics")
         ),
+        # Rooms whose connected device declared `support_shell` (1.5.0),
+        # and the support sessions open now (the banner every dashboard
+        # shows; domovoi/support_sessions.py). Ids and times only.
+        "satellite_support_shell": sorted(
+            room for room, sess in app.state.active_sessions.items()
+            if satellite_abilities.session_abilities(sess).allows("support_shell")
+        ),
+        "support_sessions": _support_active(),
         "satellite_board": {
             room: board
             for room, sess in app.state.active_sessions.items()
@@ -3258,6 +3283,12 @@ def _live_devices() -> list[Any]:
     for sess in [*reg.satellites.values(), *reg.sessions.values()]:
         seen.setdefault(id(sess), sess)
     return list(seen.values())
+
+
+def _support_active() -> list[dict[str, Any]]:
+    from domovoi import support_sessions
+
+    return support_sessions.get_manager(app).active()
 
 
 def _require_declared(target: Any, ability: str, what: str) -> None:
@@ -6277,6 +6308,10 @@ async def admin_reset_satellite_pairing(room_id: str) -> dict[str, Any]:
     log.info(
         "pairing: admin reset room=%s (row_existed=%s)", room_id, removed
     )
+    # An unpaired satellite's support session ends with its pairing.
+    from domovoi import support_sessions
+
+    await support_sessions.get_manager(app).end_for_satellite(room_id, "unpaired")
     return {"room_id": room_id, "reset": removed}
 
 

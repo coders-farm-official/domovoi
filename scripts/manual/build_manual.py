@@ -312,6 +312,7 @@ PHRASES: dict[str, tuple] = {
     "how do I change the wake word": ("help_desk", "fast", {}),
     "say that again": ("repeat", "fast", {}),
     "never mind": ("dismiss", "fast", {}),
+    "end support session": ("support_session", "fast", {}),
     "what voices are there": ("voice", "fast", {}),
     "let me hear Norman's voice": ("voice", "fast", {}),
     "switch to Norman's voice": ("voice", "fast", {}),
