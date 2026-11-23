@@ -622,9 +622,9 @@ const ScanSheet = ({ onClose, onDone, onRead, fire }) => {
   const cancel = () => act(() => apiPost(`/api/scan/jobs/${encodeURIComponent(scan.id)}/cancel`, {}));
 
   const open = !!scan && !['done', 'failed', 'canceled'].includes(state);
-  const close = () => {
+  const close = async () => {
     if (open && scan.pages > 0
-        && !window.confirm('Throw away the pages scanned so far? Nothing is saved until you press Done.')) return;
+        && !await askConfirm('Throw away the pages scanned so far? Nothing is saved until you press Done.')) return;
     if (open) apiPost(`/api/scan/jobs/${encodeURIComponent(scan.id)}/cancel`, {}).catch(() => {});
     onClose();
   };

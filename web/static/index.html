@@ -300,16 +300,30 @@
     // this tab has not run yet, and hand back whether anything needs a
     // reload: only a plugin this tab already runs that was upgraded (its
     // code can't be swapped in a running page). A new plugin's page and nav
-    // item appear with no reload. Never throws: a failed refresh answers true (reload).
+    // item appear with no reload. Never throws. A read that fails (the web
+    // process or the core is restarting, which is exactly when this push
+    // arrives) is retried a few times and then dropped quietly: it proves
+    // nothing about the plugins, and a real upgrade shows up on the next
+    // successful read, so a restart never raises the reload toast.
     let pluginRefresh = null;
     const refreshPlugins = () => {
       if (pluginRefresh) { pluginRefresh.again = true; return pluginRefresh.done; }
       const state = { again: false };
+      const waits = window.DomovoiPluginRefreshRetryMs || [1500, 4000, 10000];
+      const readManifest = async () => {
+        for (let i = 0; ; i++) {
+          try { return await apiGet('/api/plugins/manifest'); }
+          catch (e) {
+            if (i >= waits.length) throw e;
+            await new Promise((resolve) => setTimeout(resolve, waits[i]));
+          }
+        }
+      };
       state.done = (async () => {
         let needsReload = false;
         do {
           state.again = false;
-          const manifest = await apiGet('/api/plugins/manifest');
+          const manifest = await readManifest();
           const loaded = window.DomovoiLoadedPlugins || {};
           (manifest.plugins || []).forEach((p) => {
             if ((p.slug in loaded) && (loaded[p.slug] || '') !== (p.version || '')) needsReload = true;
@@ -319,8 +333,8 @@
         } while (state.again);
         return needsReload;
       })().catch((e) => {
-        console.warn('plugin refresh failed — reload needed:', e);
-        return true;
+        console.warn('plugin refresh failed — will retry on the next change:', e);
+        return false;
       }).finally(() => { pluginRefresh = null; });
       pluginRefresh = state;
       return state.done;

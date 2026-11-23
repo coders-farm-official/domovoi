@@ -790,6 +790,75 @@ const DeleteConfirmDialog = ({ open = true, title = 'Delete?', busy = false, con
   );
 };
 
+/* ---- In-page confirm / prompt -------------------------------- */
+/* The dashboard's own answer to window.confirm and window.prompt, which an
+ * embedded browser (and some phone webviews) dismisses without ever showing,
+ * so the press that asked did nothing. Both return a promise:
+ *
+ *   if (!await askConfirm('Restart now?', { confirmLabel: 'Restart' })) return;
+ *   const name = await askPrompt('Rename chat', { value: title });   // null = cancelled
+ *
+ * One dialog at a time; a second ask waits for the first. Escape and the
+ * backdrop cancel. `message` keeps its line breaks. */
+const InPageAsk = ({ ask, onDone }) => {
+  const [text, setText] = React.useState(ask.value || '');
+  const done = (ok) => onDone(ask.input ? (ok ? text : null) : !!ok);
+  React.useEffect(() => {
+    const h = (e) => { if (e.key === 'Escape') done(false); };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  });
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 110, background: 'rgba(0,0,0,0.45)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
+         onClick={() => done(false)}>
+      <div role="dialog" aria-modal="true" aria-label={ask.title} onClick={(e) => e.stopPropagation()}
+           style={{ width: 'min(480px, 100%)', background: 'var(--card)',
+                    border: '1px solid var(--border)', borderRadius: 'var(--r-lg)',
+                    boxShadow: 'var(--shadow-md), var(--inner-highlight)', overflow: 'hidden' }}>
+        <div style={{ padding: '13px 16px', borderBottom: '1px solid var(--border-soft)' }}>
+          <strong style={{ fontSize: 14 }}>{ask.title}</strong>
+        </div>
+        <div style={{ padding: '14px 16px', fontSize: 13, color: 'var(--fg-muted)',
+                      whiteSpace: 'pre-wrap', display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div>{ask.message}</div>
+          {ask.input && (
+            <input autoFocus value={text} onChange={(e) => setText(e.target.value)}
+                   onKeyDown={(e) => { if (e.key === 'Enter') done(true); }}
+                   style={{ font: 'inherit', padding: '6px 8px', borderRadius: 'var(--r-md)',
+                            border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--fg)' }}/>
+          )}
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '12px 16px',
+                      borderTop: '1px solid var(--border-soft)' }}>
+          <Button onClick={() => done(false)}>Cancel</Button>
+          <Button variant="primary" onClick={() => done(true)}>{ask.confirmLabel}</Button>
+        </div>
+      </div>
+    </div>
+  );
+};
+const inPageAsks = { queue: [], root: null, host: null, busy: false };
+const inPageNext = () => {
+  const st = inPageAsks;
+  if (st.busy || !st.queue.length) return;
+  const ask = st.queue.shift();
+  st.busy = true;
+  if (!st.host) {
+    st.host = document.createElement('div');
+    document.body.appendChild(st.host);
+    st.root = ReactDOM.createRoot(st.host);
+  }
+  const finish = (v) => { st.root.render(null); st.busy = false; ask.resolve(v); inPageNext(); };
+  st.root.render(<InPageAsk ask={ask} onDone={finish}/>);
+};
+const inPageAsk = (message, o) => new Promise((resolve) => {
+  inPageAsks.queue.push({ message: String(message), title: 'Are you sure?', confirmLabel: 'OK', ...o, resolve });
+  inPageNext();
+});
+const askConfirm = (message, o = {}) => inPageAsk(message, o);
+const askPrompt = (message, o = {}) => inPageAsk(message, { title: message, confirmLabel: 'OK', ...o, input: true });
+
 /* The pending-delete state a list panel needs to put DeleteConfirmDialog
  * in front of its delete handler:
  *
@@ -1313,7 +1382,7 @@ const restartDomovoiServer = async ({ core, fire, question, plain = false, confi
   });
   // What the confirm asks, from the panel's copy.
   const asked = fullBy(core);
-  if (!confirmed && !window.confirm(asked
+  if (!confirmed && !await askConfirm(asked
     ? fullUpdateText(asked, false)
     : plain
     ? `${question || 'Restart Domovoi now?'}\n\n` +
@@ -1350,7 +1419,7 @@ const restartDomovoiServer = async ({ core, fire, question, plain = false, confi
     // Asked as a quick restart, and the server as it is now says the unit
     // would run its full update (a pull landed after the panel read the
     // version, say): ask again, as that, before anything happens.
-    if (!window.confirm(fullUpdateText(full, true))) {
+    if (!await askConfirm(fullUpdateText(full, true))) {
       // Nothing was asked for, and the panel's copy is out of date.
       try { await onSettled(); } catch { /* the caller's re-read reports itself */ }
       return false;
@@ -1675,7 +1744,7 @@ const CoreRestart = ({ onBack, style }) => {
   }, [silent, busy, refresh]);
   if (!admin || !st || st.answering) return null;
   const press = async () => {
-    if (!window.confirm(
+    if (!await askConfirm(
       'Restart the Domovoi core?\n\n' +
       'It isn’t answering. The dashboard first makes sure it is really stuck ' +
       '(no answer at all for about a minute, longer than the core waits before ' +
@@ -5274,7 +5343,7 @@ Object.assign(window, {
   FirstRun, welcomeShows, FirstRunWelcome, FirstRunAllSet, copyToClipboard,
   ConnectAsk, connectShows, ConnectPrompt,
   satCan, satBoardLabel, SAT_BOARD_LABELS,
-  DeleteConfirmDialog, useDeleteConfirm, TrustServerPrompt, WriteBlockedNotice,
+  DeleteConfirmDialog, useDeleteConfirm, askConfirm, askPrompt, TrustServerPrompt, WriteBlockedNotice,
   CaptureChip, useAdminSignedIn, adminReloadState, useAdminReloadState, AdminSignedOutNotice,
   TimerFireAlerts,
   CoverArt, libraryCoverUrl, coverMisses, coverVersions, creditedWith,

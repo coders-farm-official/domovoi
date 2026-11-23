@@ -5,6 +5,20 @@ needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
 
+## 1.4.1 (unreleased) — Dashboard update fixes
+
+- **What changed.** Restarting the server for an update no longer makes
+  open dashboard tabs say "plugins changed — reload to get the new pages"
+  when no plugin changed; only a real upgrade of a plugin the tab already
+  runs asks for a reload.
+- **What changed.** Every confirmation and name prompt in the dashboard
+  (update, restart, delete, remove, rename and the rest) is now a dialog
+  inside the page. Some embedded browsers and phone web views dismissed the
+  browser's own pop-ups unseen, so pressing "Update Domovoi" did nothing.
+- **What changed.** The Version card in Settings → About & updates reads
+  the server again after it restarts, so it shows the new version and a
+  fresh update check without a manual reload.
+
 ## 1.4.1 (unreleased) — A slow start no longer switches a plugin off
 
 - **What changed.** A plugin that took a long time to load on a busy
