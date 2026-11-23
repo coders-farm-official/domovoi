@@ -381,7 +381,7 @@ runs in `domovoi plugin dev`, `pack`, and the install pipeline.
 | `publisher` | Shown on the install preview. Bundled radio declares `"Coders Farm"`. |
 | `license` | SPDX-style string. |
 | `description` | One or two sentences — shown on the install preview. |
-| `domovoi_api` | A comma-separated specifier set evaluated against the core SDK version (currently `1.13.0`). Supported operators: `>=`, `<=`, `==`, `!=`, `>`, `<`, `~=`. An unsatisfiable range fails the parse with a "targets a different Domovoi release" message. Recommended: `">=1.0,<2.0"`. |
+| `domovoi_api` | A comma-separated specifier set evaluated against the core SDK version (currently `1.15.0`). Supported operators: `>=`, `<=`, `==`, `!=`, `>`, `<`, `~=`. An unsatisfiable range fails the parse with a "targets a different Domovoi release" message. Recommended: `">=1.0,<2.0"`. |
 | `homepage` | Optional URL. |
 | `help` | Optional (SDK 1.8): a short Markdown help file inside the plugin, e.g. `"HELP.md"`. Domovoi's help desk indexes it with the manual (see [your plugin's help file](#your-plugins-help-file-sdk-18)). Optional for third-party plugins; **required for Coders Farm's own**. |
 | `accent` | Optional. Your dashboard page's colour, `"#rrggbb"` (or `"#rgb"`): its primary buttons, links, selection washes and the frame the dashboard draws around it. Checked for contrast at load; see [the frame and your accent](#the-frame-and-your-accent). Without it the page gets the neutral plugin slate. |
@@ -978,7 +978,7 @@ from domovoi.sdk import (
 
 `PluginSDK` instances are **injected** — your `register(ctx)` receives a
 `PluginContext` whose `ctx.sdk` is your facade. You never construct one.
-`domovoi.sdk.API_VERSION` (currently `"1.13.0"`) is the semver your
+`domovoi.sdk.API_VERSION` (currently `"1.15.0"`) is the semver your
 `domovoi_api` range is checked against. What each minor version added:
 
 | SDK | Added |
@@ -995,6 +995,7 @@ from domovoi.sdk import (
 | 1.12 | `core_config.news_location` (the household's place); a plugin registering the `"weather"` capability takes weather questions over from core |
 | 1.13 | `sdk.household.home_location()` (async: the Home location `{name, lat, lon, country}` or `None`; `lat`/`lon`/`country` are `None` for a name that matched no town) and `sdk.places.suggest(text, limit=8)` (the bundled GeoNames town list, offline, biggest first; same shape); `core_config.news_location` is now the Home location's name (§4.13) |
 | 1.14 | `[[web.home_cards]]`: a plugin card on the dashboard Home page (§3) |
+| 1.15 | `playback.player_route(room_id)`: the host and port a room's music player dials to reach the core, and the address the core sees it call from (`.url(path)`, `.admits(address)`), for a plugin that hands the player a URL on the core, such as the radio plugin's stream relay |
 
 Ask for the version whose names you use (`">=1.4"` for 1.4's), or
 feature-test so an older core still loads you: call `ctx.add_container` only

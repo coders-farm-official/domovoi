@@ -63,7 +63,9 @@ from __future__ import annotations
 #         location's name.
 # 1.14.0: [[web.home_cards]]: a plugin card on the dashboard's Home page
 #         (window.DomovoiPlugins.<slug>.homeCards.<Component>).
-API_VERSION = "1.14.0"
+# 1.15.0: playback.player_route(room_id): how a room's music player reaches
+#         the core and the address it calls from (the radio relay).
+API_VERSION = "1.15.0"
 
 from domovoi.capabilities import (  # noqa: E402,F401
     CAPABILITIES,

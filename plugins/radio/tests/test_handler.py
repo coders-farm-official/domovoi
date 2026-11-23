@@ -9,6 +9,7 @@ from sqlalchemy import text
 from domovoi.models import Context
 from domovoi.tests.conftest import requires_db
 
+from domovoi_plugin_radio import player_relay
 from domovoi_plugin_radio.handlers.radio import (
     _PLAY_FREQUENCY_RE,
     _STOP_STREAM_RE,
@@ -95,7 +96,7 @@ async def test_stream_by_name_single_hit_plays(stub_sdk, db_session) -> None:
     assert resp.text == "Streaming KEXP."
     assert resp.music_action == "start"
     (call,) = stub_sdk.playback.calls
-    assert call["stream_url"] == "http://kexp.example/stream.mp3"
+    assert player_relay.station_url_for(call["stream_url"]) == "http://kexp.example/stream.mp3"
     assert call["source"] == "radio"
     # Station-name-as-title stamping convention (favorites depends on it).
     assert call["title"] == "KEXP"
@@ -161,7 +162,7 @@ async def test_handle_confirmation_affirmative_streams_first(
     )
     assert resp.text == "Streaming KEXP."
     (call,) = stub_sdk.playback.calls
-    assert call["stream_url"] == "http://a/x.mp3"
+    assert player_relay.station_url_for(call["stream_url"]) == "http://a/x.mp3"
 
 
 async def test_handle_confirmation_negative_drops(stub_sdk, db_session) -> None:

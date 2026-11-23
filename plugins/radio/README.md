@@ -222,8 +222,12 @@ apps that their own, built-in Stations screen has a server to talk to; no
 plugin can add a screen to the apps
 ([what a plugin does not get](../../docs/PLUGIN_DEVELOPMENT.md#1-concepts--what-a-plugin-can-do)).
 
-This version of the plugin (1.5.1) declares `domovoi_api = ">=1.10,<2.0"`,
-so it loads only on a Domovoi with SDK 1.10 or later (Domovoi 1.4.0).
+This version of the plugin (1.5.2) declares `domovoi_api = ">=1.15,<2.0"`,
+so it loads only on a Domovoi with SDK 1.15 or later (Domovoi 1.5.0): a
+room's music player plays an internet station through the core's relay
+(`player_relay.py`, `playback.player_route`), never by fetching the
+station itself. FM is not relayed: the player reads the tuner's own
+listener on this machine.
 
 Layout, manifest spec, and test-harness docs:
 [`docs/PLUGIN_DEVELOPMENT.md`](../../docs/PLUGIN_DEVELOPMENT.md) in the
