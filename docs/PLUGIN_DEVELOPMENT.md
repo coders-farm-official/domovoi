@@ -1472,6 +1472,14 @@ is `auto`, which the core resolves to its current LAN address.
   Better still, read `sdk.core_config.ai_features` first and don't offer
   the step at all. A plugin that calls Ollama through its own client is
   outside this check — read the flag yourself.
+  **Voice goes first** (1.4.1): in the core, a POST to one of the house
+  Ollama's generate paths (`/api/chat`, `/api/generate`,
+  `/v1/chat/completions`, `/v1/completions`; port 11434 or the core's
+  `OLLAMA_URL`) waits while a voice turn is under way, up to 60 s, and if a
+  turn starts before Ollama has answered it is stopped and sent again after
+  the turn (at most three times; a streamed answer only before its first
+  byte). Expect such a request to take longer while people are talking;
+  your voice handler's own requests, made inside the turn, never wait.
 * `egress` (`from domovoi.sdk import egress`; `domovoi.webkit.egress` in
   `web.py`; SDK 1.4) — the one place the internet answer
   (`INTERNET_ACCESS`: `always` \| `sometimes` \| `never`, `""` while
