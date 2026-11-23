@@ -69,18 +69,26 @@ jobs:
       - name: NDK r29 (the pinned zip, checked by SHA-256)
         run: |
           source android/native/sherpa-onnx/build-native.sh --pins
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$NDK_ZIP" "https://dl.google.com/android/repository/$NDK_ZIP"
+          curl -fsSL --retry 8 --retry-all-errors --retry-delay 15 -o "$RUNNER_TEMP/$NDK_ZIP" "https://dl.google.com/android/repository/$NDK_ZIP"
           echo "$NDK_SHA256  $RUNNER_TEMP/$NDK_ZIP" | sha256sum -c -
           unzip -q "$RUNNER_TEMP/$NDK_ZIP" -d "$RUNNER_TEMP/ndk"
           rm "$RUNNER_TEMP/$NDK_ZIP"
           echo "NDK_DIR=$(echo "$RUNNER_TEMP"/ndk/android-ndk-*)" >>"$GITHUB_ENV"
+      - name: ONNX Runtime AAR (fetched here with patient retries)
+        run: |
+          # The four ABI jobs fetch the same AAR at once and Maven Central
+          # answers some of them 429, which curl's plain --retry skips.
+          # Fetched where build-native.sh would put it; it checks the SHA-256.
+          source android/native/sherpa-onnx/build-native.sh --pins
+          curl -fsSL --retry 8 --retry-all-errors --retry-delay 15 -o "/work/$ORT_AAR_NAME" "$ORT_URL"
+          echo "ORT_AAR=/work/$ORT_AAR_NAME" >>"$GITHUB_ENV"
       - name: Build ${{ matrix.abi }} with build-native.sh
         env:
           ABI: ${{ matrix.abi }}
         run: |
           mkdir -p "$RUNNER_TEMP/out"
           PATH=/usr/bin:$PATH ABIS="$ABI" ANDROID_NDK="$NDK_DIR" WORK=/work \
-            OUT="$RUNNER_TEMP/out" bash android/native/sherpa-onnx/build-native.sh
+            OUT="$RUNNER_TEMP/out" ORT_AAR="$ORT_AAR" bash android/native/sherpa-onnx/build-native.sh
       - name: Hash what it built
         env:
           ABI: ${{ matrix.abi }}
