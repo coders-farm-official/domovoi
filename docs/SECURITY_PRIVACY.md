@@ -2952,8 +2952,9 @@ history keeps a stand-in ("I read 2 friend house messages aloud"), and
 "double check that" declines a reply that was read out from a friend house
 or a shared list.
 
-**Shared lists.** Anyone in the household (the household token or an
-admin) can share a household list with an existing friend house; making
+**Shared lists.** An admin can share a household list with a friend house.
+Anyone in the household (the household token or an admin) can then use
+it, accept or decline a list a friend offers, and stop sharing; making
 and removing friends stays with the admin.
 Each house keeps its own copy in its own Lists, and the two exchange
 signed changes (items added, edited, ticked off, removed; not its order

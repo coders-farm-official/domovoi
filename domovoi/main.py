@@ -4002,8 +4002,8 @@ _FH_WRITE = [Depends(require_admin_security)]
 # What everyone in the household may do with existing friends (owner
 # decision 17, for the apps, which carry only the household token; widened
 # 2026-11-23 to the dashboard's Friend Houses page): read the house inbox
-# and send, see the friends, and see, share, take, decline and stop
-# sharing lists with existing friends. Header credentials
+# and send, see the friends, and see, take, decline and stop sharing
+# lists with existing friends. Starting a share stays admin. Header credentials
 # only (the household token or an admin Bearer): no cookie, no query token,
 # since these carry message text. Trust and household settings stay above.
 # No pre-setup grace: after --reset-admin the friends and messages are still
@@ -4334,7 +4334,7 @@ async def admin_friend_houses_shared_lists() -> dict[str, Any]:
     return {"shared_lists": await shared_lists.overview()}
 
 
-@app.post("/v1/admin/friend-houses/shared-lists", dependencies=_FH_HOUSEHOLD)
+@app.post("/v1/admin/friend-houses/shared-lists", dependencies=_FH_WRITE)
 async def admin_friend_houses_share_list(body: _FhShareBody) -> dict[str, Any]:
     from domovoi.friend_houses import shared_lists
 

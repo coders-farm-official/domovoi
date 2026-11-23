@@ -1347,7 +1347,7 @@ const FhShareList = ({ lists, friends, shares, shareFor, fire, onChanged }) => {
   );
 };
 
-const FhSharedListsCard = ({ shared, lists, friends, shareFor, fire, onChanged }) => {
+const FhSharedListsCard = ({ shared, lists, friends, shareFor, fire, admin, onChanged }) => {
   const all = ((shared && shared.shared_lists) || []).filter((s) => fhSpaceOk(s.id));
   const offers = all.filter((s) => s.origin === 'them' && s.state === 'invited');
   const current = all.filter((s) => !(s.origin === 'them' && s.state === 'invited'));
@@ -1368,7 +1368,9 @@ const FhSharedListsCard = ({ shared, lists, friends, shareFor, fire, onChanged }
           </div>
         )}
         {!all.length && <div style={fhMuted}>no shared lists yet</div>}
-        <FhShareList lists={lists} friends={friends} shares={all} shareFor={shareFor} fire={fire} onChanged={onChanged}/>
+        {/* Starting a share stays admin (the security tier): shown only to
+            the admin sign-in in this tab, with nothing in its place. */}
+        {admin && <FhShareList lists={lists} friends={friends} shares={all} shareFor={shareFor} fire={fire} onChanged={onChanged}/>}
       </div>
     </Card>
   );
@@ -1541,6 +1543,7 @@ const FriendHousesPanel = ({ marks = [] }) => {
       </div>
       <div ref={listsRef}>
         <FhSharedListsCard shared={shared.data} lists={lists.data} friends={fr.data} shareFor={shareFor} fire={fire}
+                           admin={live}
                            onChanged={() => { shared.refresh(); lists.refresh(); }}/>
       </div>
       <FhAdminZone open={zone} onOpen={() => setZoneOpen(true)} onClose={() => setZoneOpen(false)}>

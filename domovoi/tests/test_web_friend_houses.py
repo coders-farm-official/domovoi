@@ -147,8 +147,8 @@ HOUSEHOLD_ROUTES = {
     ("GET", "/api/friend-houses/unread"),
     ("POST", "/api/friend-houses/conversations/{house}/read"), ("POST", "/api/friend-houses/messages"),
     ("GET", "/api/friend-houses/shared-lists"),
-    # Moved from the security tier on 2026-11-23.
-    ("POST", "/api/friend-houses/shared-lists"), ("POST", "/api/friend-houses/shared-lists/{space_id}/accept"),
+    # Moved from the security tier on 2026-11-23 (starting a share stays admin).
+    ("POST", "/api/friend-houses/shared-lists/{space_id}/accept"),
     ("POST", "/api/friend-houses/shared-lists/{space_id}/decline"),
     ("DELETE", "/api/friend-houses/shared-lists/{space_id}"),
 }
@@ -164,6 +164,7 @@ ADMIN_ROUTES = {
     ("POST", "/api/friend-houses/friends/{friend_id}/verified"), ("PATCH", "/api/friend-houses/friends/{friend_id}"),
     ("DELETE", "/api/friend-houses/friends/{friend_id}"), ("PUT", "/api/friend-houses/friends/{friend_id}/alert"),
     ("GET", "/api/friend-houses/conversations/{house}/export"), ("DELETE", "/api/friend-houses/conversations/{house}"),
+    ("POST", "/api/friend-houses/shared-lists"),
     ("POST", "/api/friend-houses/friends/{friend_id}/block"), ("GET", "/api/friend-houses/blocked"),
     ("DELETE", "/api/friend-houses/blocked/{house}"),
 }
@@ -492,7 +493,7 @@ FH_API_TABLE = {
         {"id": "fr0123abcd", "name": "The Smiths", "house": HOUSE, "alert": "inbox", "verified": True}],
         "quiet_hours": None},
     "GET /api/friend-houses/shared-lists": {"shared_lists": []},
-    "GET /api/lists": [],
+    "GET /api/lists": [{"id": 7, "name": "Groceries"}],
     "GET /api/friend-houses/requests": {"requests": []},
     "GET /api/friend-houses/invites": {"invites": []},
     "GET /api/friend-houses/blocked": {"blocked": [{"house": "cd" * 32, "name": "Pests"}]},
@@ -503,6 +504,7 @@ FH_ADMIN_PATHS = ("/api/friend-houses/requests", "/api/friend-houses/invites", "
 FH_SCRIPT = """
 const zone = () => h.find((e) => e.type === 'button' && String((e.props || {}).className || '') === 'fh-zone-toggle');
 const snap = () => ({ texts: h.text(), expanded: !!zone().props['aria-expanded'],
+                      share: h.findAll((e) => e.type === 'select' || (e.type === 'button' && /^Share/.test(e.text))).length,
                       asked: h.global('__asked'), fetched: h.hookCalls.slice() });
 h.render(); await h.settle(); h.rerender();
 const before = snap();
@@ -547,8 +549,15 @@ def test_a_household_member_gets_messages_and_shared_lists_and_a_closed_zone() -
     assert "Friends and connections" in before["texts"]
     assert before["expanded"] is False and before["asked"] == 0
     _no_admin_content(before)
-    # Saving a copy and deleting a conversation stay admin: not offered.
+    # Saving a copy, deleting a conversation and starting a share stay
+    # admin: not offered, and nothing in their place.
     assert not any("Save a copy" in t for t in before["texts"])
+    assert not before["share"]
+    assert not any("sign in" in t.lower() for t in before["texts"])
+
+
+def test_an_admin_gets_the_share_action_in_shared_lists() -> None:
+    assert _drive_panel(signed_in=True, answer=False)["before"]["share"]
 
 
 def test_the_zone_stays_closed_when_the_sign_in_is_cancelled_or_refused() -> None:

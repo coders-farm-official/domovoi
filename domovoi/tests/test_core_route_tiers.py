@@ -165,8 +165,8 @@ DEVICE_READS = [
 
 # Shared lists with existing friends, open to the household since
 # 2026-11-23 (the dashboard's Friend Houses page is no longer admin-only).
+# Starting a share stays admin (FRIEND_HOUSES_SECURITY).
 FRIEND_HOUSES_DEVICE_WRITES = [
-    ("POST", "/v1/admin/friend-houses/shared-lists"),
     ("POST", "/v1/admin/friend-houses/shared-lists/{space}/accept"),
     ("POST", "/v1/admin/friend-houses/shared-lists/{space}/decline"),
     ("DELETE", "/v1/admin/friend-houses/shared-lists/{space}"),
@@ -198,6 +198,7 @@ FRIEND_HOUSES_SECURITY = [
     ("PUT", "/v1/admin/friend-houses/friends/{friend_id}/alert"),
     ("GET", "/v1/admin/friend-houses/conversations/{house}/export"),
     ("DELETE", "/v1/admin/friend-houses/conversations/{house}"),
+    ("POST", "/v1/admin/friend-houses/shared-lists"),
     ("POST", "/v1/admin/friend-houses/friends/{friend_id}/block"),
     ("GET", "/v1/admin/friend-houses/blocked"),
     ("DELETE", "/v1/admin/friend-houses/blocked/{house}"),

@@ -10,10 +10,10 @@ refused before anything is forwarded. Most routes wear the security
 tier at both hops, reads included (a friend file is a bearer secret, and
 who this house's friends are is the household's business). What every
 household member may do with existing friends (owner decision 17: the
-inbox, sending, the friends; and, since 2026-11-23, sharing, taking,
-declining and stopping shared lists) wears the device tier. The page's
-"Friends and connections" zone (requests, friend files, this house,
-renaming, alerts, removing, blocking) and saving or deleting a
+inbox, sending, the friends; and, since 2026-11-23, taking, declining
+and stopping shared lists) wears the device tier. Starting a share, the
+page's "Friends and connections" zone (requests, friend files, this
+house, renaming, alerts, removing, blocking) and saving or deleting a
 conversation stay on the security tier.
 
 A friend file or a message only ever travels in a POST body (preview,
@@ -69,7 +69,7 @@ READ = [Depends(require_admin_security_read)]
 WRITE = [Depends(require_requested_with), Depends(require_admin_security)]
 # What everyone in the household may do with existing friends (owner
 # decision 17, widened 2026-11-23): read the inbox and send, see friends,
-# see and share lists with them. The household
+# see, take, decline and stop shared lists (starting one stays admin). The household
 # token or an admin Bearer, header only, as the Lists API takes writes (the
 # cookie never authorises a write, so no CSRF guard is needed here). No
 # pre-setup grace: 501 until an admin exists, as at the core.
@@ -420,7 +420,7 @@ async def friend_houses_shared_lists(request: Request):
     )
 
 
-@router.post("/shared-lists", dependencies=HOUSEHOLD)
+@router.post("/shared-lists", dependencies=WRITE)
 async def friend_houses_share_list(request: Request):
     """Share one of this house's lists with a friend."""
     body = await _body(request, ShareListBody)
