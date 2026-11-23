@@ -27,6 +27,7 @@ import re
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from domovoi.food_safety import is_recommendation, is_safety_fact
 from domovoi.db.repositories import (
     FavoritesRepository,
     MemoriesRepository,
@@ -75,6 +76,14 @@ def about_the_speaker(transcript: str) -> bool:
     return _FIRST_PERSON_RE.search(text) is not None
 
 
+def wants_profile(transcript: str) -> bool:
+    """Whether a recognised speaker's profile goes into the Q&A prompt: a
+    question about them, or a request for suggestions (restaurants, meals,
+    gifts, music, things to do) their tastes and allergies bear on. A plain
+    fact question gets the same prompt as anyone's."""
+    return about_the_speaker(transcript) or is_recommendation(transcript)
+
+
 async def build_profile_prefix(
     person_id: int | None,
     session: AsyncSession,
@@ -110,11 +119,20 @@ async def build_profile_prefix(
         return ""
 
     lines: list[str] = ["User context (the person speaking to you):"]
+    safety_line = ""
     if person_name:
         lines.append(f"  Name: {person_name}")
     if memory_rows:
         bodies = [b for _id, b, _t, _s in memory_rows]
-        lines.append("  Memories: " + "; ".join(bodies))
+        # Allergies and diets first, on a line of their own: the soft cap
+        # below cuts from the end, so they are never the facts it drops.
+        safety = [b for b in bodies if is_safety_fact(b)]
+        plain = [b for b in bodies if not is_safety_fact(b)]
+        if safety:
+            safety_line = "  Allergies and diet: " + "; ".join(safety)
+            lines.append(safety_line)
+        if plain:
+            lines.append("  Memories: " + "; ".join(plain))
     if favorite_rows:
         by_kind: dict[str, list[str]] = {}
         for _i, kind, value, _r in favorite_rows:
@@ -145,6 +163,9 @@ async def build_profile_prefix(
             PROFILE_PREFIX_SOFT_CAP,
         )
         blob = blob[: PROFILE_PREFIX_SOFT_CAP].rstrip() + "..."
+        # A very long allergy line still reaches the model whole.
+        if safety_line and safety_line not in blob:
+            blob = blob + "\n" + safety_line
     return blob
 
 
