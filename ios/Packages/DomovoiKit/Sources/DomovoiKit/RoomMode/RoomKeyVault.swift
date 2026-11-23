@@ -14,6 +14,28 @@ public protocol RoomKeyVault: AnyObject, Sendable {
     func read() -> String?
     /// Writes the key, or removes it (`nil`). False when the Keychain refused.
     @discardableResult func write(_ key: String?) -> Bool
+    /// What a read found, telling "no item" apart from "the Keychain would
+    /// not say" — which ``read()`` folds into one nil. The room seal needs
+    /// the difference (``RoomStore/active``).
+    func lookup() -> RoomVaultLookup
+}
+
+/// One look in the vault.
+public enum RoomVaultLookup: Equatable, Sendable {
+    /// The item is there, with this value.
+    case found(String)
+    /// The vault answered cleanly: there is no item.
+    case absent
+    /// The vault would not say (locked, refused, or an item it could not
+    /// decode): whether there is an item is unknown.
+    case unreadable
+}
+
+extension RoomKeyVault {
+    /// A vault that cannot fail (the in-memory ones): ``read()`` is the answer.
+    public func lookup() -> RoomVaultLookup {
+        read().map { .found($0) } ?? .absent
+    }
 }
 
 /// The real one: a generic-password item, this device only, readable after
@@ -44,16 +66,23 @@ public final class RoomKeychainKey: RoomKeyVault {
     }
 
     public func read() -> String? {
+        if case .found(let text) = lookup() { return text }
+        return nil
+    }
+
+    public func lookup() -> RoomVaultLookup {
         var q = query
         q[kSecReturnData as String] = true
         q[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
-        guard SecItemCopyMatching(q as CFDictionary, &result) == errSecSuccess,
+        let status = SecItemCopyMatching(q as CFDictionary, &result)
+        if status == errSecItemNotFound { return .absent }
+        guard status == errSecSuccess,
               let data = result as? Data,
               let text = String(data: data, encoding: .utf8),
               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        else { return nil }
-        return text
+        else { return .unreadable }
+        return .found(text)
     }
 
     @discardableResult
