@@ -11,7 +11,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from domovoi import ai_features, registered_values
+from domovoi import ai_features, loud_room, registered_values
 from domovoi.clients.mpd import MPDNotProvisioned
 from domovoi.clients.ollama import QAWithUncertainty, SearchSubject, get_ollama_client
 from domovoi.config import settings
@@ -350,6 +350,14 @@ def dispatchable_confirmation(
     return None
 
 
+def loud_confirmation_target(pending: Any) -> Handler | None:
+    """The handler of a loud command parked for a yes (domovoi/loud_room.py)
+    that a yes may still run, or None."""
+    if not loud_room.is_loud_pending(pending) or not loud_room.still_fresh(pending):
+        return None
+    return HANDLER_BY_NAME.get(str(pending.get("handler", "")))
+
+
 def dispatchable_choice(pending: Any) -> tuple[Handler, str] | None:
     """Like :func:`dispatchable_confirmation`, but only for a parked CHOICE
     — a kind its handler also lists in ``choice_kinds``, whose reply may be
@@ -428,6 +436,13 @@ def plan_route(raw_transcript: str, *, pending: Any = None) -> RoutePlan | None:
     """
     transcript = normalize_transcript(raw_transcript)
     if pending is not None and _parse_yes_no(transcript) is not None:
+        loud = loud_confirmation_target(pending)
+        if loud is not None:
+            # A yes/no to "It's loud in here. Should I ...?" (loud_room).
+            return RoutePlan(
+                path="confirmation", handler=loud, transcript=transcript,
+                kind=loud_room.LOUD_KIND,
+            )
         target = dispatchable_confirmation(pending)
         if target is not None:
             return RoutePlan(
@@ -723,6 +738,54 @@ def offered_tool_schemas(transcript: str) -> list[dict]:
     return [h.tool_schema for h in offered]
 
 
+async def _ask_loud(
+    handler: Handler, command: str, ctx: Context, session: AsyncSession, session_id: Any,
+) -> Response:
+    """Park ``command`` for a yes and ask about it (domovoi/loud_room.py).
+    The follow-up mic opens for the answer, though the capture was long
+    (streaming keeps ``expect_followup`` for ``data["loud_confirm"]``)."""
+    payload = loud_room.pending_payload(handler.name, command)
+    await SessionRepository(session).set_context_key(
+        session_id, PENDING_CONFIRMATION_KEY, payload,
+    )
+    return Response(
+        text=payload["prompt"],
+        session_id=session_id,
+        matched_handler=handler.name,
+        matched_path="fast",
+        online=ctx.online,
+        expect_followup=True,
+        data={"loud_confirm": True},
+    )
+
+
+async def _answer_loud(
+    handler: Handler, pending: dict[str, Any], affirmative: bool,
+    ctx: Context, session: AsyncSession,
+) -> Response:
+    """A yes or a no to a parked loud command. Yes runs the command on
+    the fast path it was asked about, as an ordinary turn (no longer
+    "capped"); no, or a command no fast path takes any more, runs nothing."""
+    if not affirmative:
+        return Response(text=loud_room.NO_LINE, matched_handler=handler.name,
+                        matched_path="confirmation")
+    command = str(pending.get("command") or "")
+    hit = first_fast_path(command)
+    if hit is None or hit[0] is not handler:
+        log.info("loud command %r no longer takes %s's fast path; not run",
+                 said(command), handler.name)
+        return Response(text=loud_room.GONE_LINE, matched_handler=handler.name,
+                        matched_path="confirmation")
+    _, fp, m = hit
+    run_ctx = ctx.model_copy(update={"loud_command": False, "capped_capture": False})
+    response = await run_fast_path(handler, fp, m, run_ctx, session)
+    if response is None:
+        response = Response(text=loud_room.GONE_LINE)
+    response.matched_handler = handler.name
+    response.matched_path = "confirmation"
+    return response
+
+
 async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response:
     # Conversational chat mode (Feature 8) is bypassed UPSTREAM of this
     # function. When a session is in ``conversational_mode`` (set by
@@ -820,6 +883,28 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
     if affirmative is not None:
         ctx_data = await session_repo.get_context(session_id) or {}
         pending = ctx_data.get("pending_confirmation")
+        if loud_room.is_loud_pending(pending):
+            # "It's loud in here. Should I ...?" (domovoi/loud_room.py). One
+            # shot: cleared whatever the answer; a stale one is just dropped
+            # and the turn routed as usual.
+            await session_repo.set_context_key(session_id, PENDING_CONFIRMATION_KEY, None)
+            loud = loud_confirmation_target(pending)
+            if loud is not None:
+                response = await _answer_loud(loud, pending, affirmative, ctx, session)
+                response.session_id = session_id
+                response.online = ctx.online
+                await _persist_turn(
+                    session=session,
+                    session_id=session_id,
+                    intent=intent,
+                    ctx=ctx,
+                    response=response,
+                    matched_handler=response.matched_handler,
+                    matched_path="confirmation",
+                    latency_ms=_elapsed_ms(),
+                )
+                return response
+            pending = None
         target = dispatchable_confirmation(pending, warn=True)
         if target is not None and target[1] in target[0].choice_kinds:
             # A choice CHOICE_PARKED didn't know about (the core restarted
@@ -916,12 +1001,31 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
             )
             return response
 
+        if ctx.loud_command and loud_room.changes_house(handler, transcript):
+            # A command at the start of a capture cut off at its cap in a
+            # loud room that would change the house: asked about first,
+            # run only on a yes (domovoi/loud_room.py; owner answer Q7).
+            response = await _ask_loud(handler, transcript, ctx, session, session_id)
+            await _persist_turn(
+                session=session,
+                session_id=session_id,
+                intent=intent,
+                ctx=ctx,
+                response=response,
+                matched_handler=handler.name,
+                matched_path="fast",
+                latency_ms=_elapsed_ms(),
+            )
+            return response
         try:
             response = phone_refusal(handler, ctx)
             if response is None:
                 response = await fp.method(handler, m, ctx, session)
         except MPDNotProvisioned:
             response = _no_speakers_yet(session_id, ctx)
+        if response is not None and ctx.loud_command:
+            # Read-only: answered, after what was heard.
+            response.text = loud_room.with_heard_line(transcript, response.text)
         if response is not None:
             response.matched_handler = handler.name
             response.matched_path = "fast"

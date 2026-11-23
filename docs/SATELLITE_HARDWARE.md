@@ -445,6 +445,31 @@ it buys and costs).
 An older satellite that doesn't have this setting shows **needs a
 satellite upgrade** in its place on the dashboard.
 
+### A command in a loud room
+
+At a party the room never goes quiet, so the capture runs to its
+recording cap (`[listen] max_record_seconds`, 30 s). Domovoi then
+listens only to how the capture **started**: a satellite from 1.5.0 says
+where your speech began, and the server transcribes the few seconds from
+there, where the command is. The chatter after it is not answered.
+
+- A command that only reads something ("what time is it", "what's on the
+  shopping list") is answered after "It's loud in here. I heard: what
+  time is it."
+- A command that would change something in the house (music, lists,
+  timers, messages, anything a plugin does) is asked about first: "It's
+  loud in here. Should I play some jazz in the kitchen?" The satellite
+  listens for your answer. **Yes** (within a minute) does it; **no**, or
+  no answer, doesn't.
+- When the start isn't a clear command or a question to Domovoi, nothing
+  happens, as before: the turn shows "ignored" in the room's history.
+
+An older satellite doesn't say where speech began; its whole capture is
+transcribed and the command at its start is found as before, then said
+back or asked about the same way. Saying the wake word close to the
+satellite, then the command right away, works best. Details:
+[uml/satellite-protocol.md](uml/satellite-protocol.md#noisy-rooms-first_voiced_frame-150).
+
 ## Custom wake words
 
 A new satellite boots on `hey_jarvis`, and its server then gives it the

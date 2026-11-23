@@ -465,6 +465,8 @@ class CalculatorHandler(Handler):
     #   poach it — but slotting calculator early keeps anything future-added
     #   in the media neighborhood from grabbing math queries first.
     priority_band = 150
+    # Reads only (a loud room answers it without asking first: loud_room).
+    read_only = True
     display = HandlerDisplay(label="Calculator", tone="info")
     example_phrases = (
         "what's 15 percent of 80",

@@ -4,6 +4,24 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — A command in a loud room is said back, and asked about first
+
+- **What changed.** When a room is too loud for the capture to end (it
+  runs to the 30 s cap), a 1.5.0 satellite says where your speech began
+  and the server transcribes only the few seconds from there. A command
+  at the start that only reads something is answered after "It's loud in
+  here. I heard: ...". One that would change the house (music, lists,
+  timers, messages, plugins) is asked about first: "It's loud in here.
+  Should I ...?", and runs only on a yes within a minute.
+- **What to know.** Before 1.5.0 such a command ran at once; it now
+  waits for the yes. True background talk is still ignored. An older
+  satellite is transcribed whole, as before. New `utterance_end` field
+  `first_voiced_frame`; new `Handler.read_only` (plugins: set it on a
+  handler whose fast paths only read, or the loud-room question is asked
+  first). The XVF3800 DSP boot default (`MIC_DSP_DEFAULT_PRESET`) exists
+  but is empty until the noisy-room test decides it; denoising is not on.
+  [SATELLITE_HARDWARE.md](SATELLITE_HARDWARE.md#a-command-in-a-loud-room).
+
 ## 1.5.0 (unreleased) — Several satellites in one room, managed from Settings → Rooms
 
 - **What changed.** Settings → Rooms now lists each room with the

@@ -221,6 +221,13 @@ class Handler(ABC):
     # towards the tool (the router-bait fixes took it out). Each core
     # phrase lands on its handler (domovoi/tests/test_example_phrases.py).
     example_phrases: tuple[str, ...] = ()
+    # Nothing this handler's fast paths do changes the house: it only reads
+    # or says something (the clock, the calculator, help). A command at the
+    # start of a capture cut off at its cap in a loud room
+    # (domovoi/loud_room.py) is answered at once for such a handler; for
+    # every other one (plugins included, unless they say so) the room asks
+    # "Should I ...?" first, unless the command is phrased as a question.
+    read_only: bool = False
 
     @abstractmethod
     async def execute(self, intent: Intent, ctx: Context, session: AsyncSession) -> Response:
