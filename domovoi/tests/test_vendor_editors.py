@@ -47,7 +47,7 @@ def test_the_versions_named_in_the_licences_doc_are_the_bundled_ones():
     doc = (REPO / "docs" / "LICENSES.md").read_text(encoding="utf-8")
     versions = {r["name"]: r["version"] for b in BUNDLES
                 for r in json.loads((VENDOR / b / "THIRD-PARTY.json").read_text(encoding="utf-8"))}
-    for name, label in (("@tiptap/core", "Tiptap"), ("yjs", "Yjs"), ("y-prosemirror", "y-prosemirror"),
+    for name, label in (("@tiptap/core", "Tiptap"), ("yjs", "Yjs"), ("@tiptap/y-tiptap", "y-tiptap"),
                         ("mammoth", "mammoth"), ("markdown-it", "markdown-it")):
         assert f"{label} {versions[name]}" in doc, f"docs/LICENSES.md should name {label} {versions[name]}"
 
@@ -55,7 +55,7 @@ def test_the_versions_named_in_the_licences_doc_are_the_bundled_ones():
 def test_one_yjs_for_the_page():
     tiptap = json.loads((VENDOR / "tiptap" / "THIRD-PARTY.json").read_text(encoding="utf-8"))
     assert "yjs" not in {r["name"] for r in tiptap}, "the editor bundle must borrow window.Y, not carry Yjs"
-    assert "y-prosemirror" in {r["name"] for r in tiptap}
+    assert "@tiptap/y-tiptap" in {r["name"] for r in tiptap}
     yjs = {r["name"]: r["version"] for r in json.loads((VENDOR / "yjs" / "THIRD-PARTY.json").read_text(encoding="utf-8"))}
     assert yjs["yjs"] == "13.6.33"
     assert "window.Y" in (VENDOR / "tiptap" / "tiptap.min.js").read_text(encoding="utf-8")[:2_000_000]
@@ -66,3 +66,14 @@ def test_the_editor_loads_the_bundles_from_this_server():
     for b, f in BUNDLES.items():
         assert f"/vendor/{b}/{f}" in jsx
     assert "http://" not in re.sub(r"//.*|/\*[\s\S]*?\*/", "", jsx.split("const VENDOR")[1].split("};")[0])
+
+
+def test_every_tiptap_name_the_editor_uses_is_in_the_bundle():
+    """doc_editor.jsx reads the bundle as ``T.<Name>``; a name the entry no
+    longer exports (Tiptap 3 renamed CollaborationCursor) is undefined at
+    runtime and the editor never opens."""
+    jsx = (REPO / "web" / "static" / "doc_editor.jsx").read_text(encoding="utf-8")
+    entry = (BUILD / "tiptap-entry.js").read_text(encoding="utf-8")
+    exported = set(re.findall(r"\w+", entry.split("window.DomovoiTiptap = {")[1].split("};")[0]))
+    used = set(re.findall(r"\bT\.([A-Za-z]\w*)", jsx))
+    assert used and used <= exported, sorted(used - exported)
