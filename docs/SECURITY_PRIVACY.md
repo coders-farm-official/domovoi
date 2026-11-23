@@ -2795,7 +2795,8 @@ happen:
 
 ## Friend Houses (house to house, off by default)
 
-"Serverless messaging and friend system between households"
+Messages and shared lists with friends’ houses, house to house, with no
+company server in between
 (`domovoi/friend_houses/`). It is **off** until an admin turns it on
 (Settings, `friend_houses_enabled`). While it's off, nothing runs and
 nothing connects: no keys are made, no image is built, no daemon starts.

@@ -1409,8 +1409,8 @@ Linux server has no such ceiling in Domovoi.
 
 ### Friend Houses' firewall
 
-Friend Houses ("serverless messaging and friend system between
-households") is off until an admin turns it on. When it runs, the core
+Friend Houses (messages and shared lists with friends’ houses, house
+to house, with no company server in between) is off until an admin turns it on. When it runs, the core
 starts C tor in a container of its own, `domovoi-tor`, on a Docker network
 of its own: `domovoi-fh`, subnet `172.31.254.0/24`, bridge interface
 `domovoi-fh0`. Tor needs the internet, so that container can't go without

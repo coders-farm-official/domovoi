@@ -911,7 +911,8 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     # which starts or stops the private connection.
     FieldSpec(
         "friend_houses_enabled", "Friend Houses", "Friend Houses",
-        "Serverless messaging and friend system between households. Off: "
+        "Message and share lists with friends’ houses, house to house, with "
+        "no company server in between. Off: "
         "nothing runs and nothing connects. On: this house can be friended "
         "by other Domovoi houses and reached only by them, through the Tor "
         "network (a private connection; no Coders Farm server is involved). "
