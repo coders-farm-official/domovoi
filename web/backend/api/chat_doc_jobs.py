@@ -149,6 +149,16 @@ async def voice_busy() -> bool:
         return False
 
 
+async def wait_for_voice(max_sec: float = 30.0, poll_sec: float = 0.5) -> None:
+    """Before a chat asks the model: wait while the core answers a voice
+    turn, at most ``max_sec`` (S3-7). The house's Ollama answers one
+    request at a time, so a chat reply started mid-turn would hold the
+    turn's spoken answer up for as long as the reply takes."""
+    deadline = time.monotonic() + max_sec
+    while time.monotonic() < deadline and await voice_busy():
+        await asyncio.sleep(poll_sec)
+
+
 # ─── Measured speed ─────────────────────────────────────────────────────
 async def measured_speed(model: str | None = None) -> longdoc.Speed | None:
     """The QA model's measured speed on this server: the last 50 replies'

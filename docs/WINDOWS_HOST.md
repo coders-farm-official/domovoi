@@ -565,6 +565,12 @@ is over a few GB every 2 minutes ([LINUX_HOST.md, The file-cache
 trim](LINUX_HOST.md#the-file-cache-trim)). A household that wants more
 raises it on the card.
 
+**How many answers at once.** The share also sets how many requests the
+AI models answer at once, so a spoken question needn't wait behind a chat
+reply: one under 24 GB, two from 24 GB, three from 48 GB, and four when
+the PC's NVIDIA GPUs have room. Each extra one costs about 1.2 GB of the
+share ([CPU_HOST.md, "Answers at once"](CPU_HOST.md#answers-at-once)).
+
 **How it reaches the PC.** The dashboard can't write a Windows file, and
 nothing inside the distro can either. The core writes the admin's choice
 to `~/.domovoi/hardware_limits/request.json` in the distro; DomovoiHost

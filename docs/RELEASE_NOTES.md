@@ -63,6 +63,18 @@ a way that would otherwise get reported as a bug.
   their recorded recipe, weekly and whenever they change, and must match
   their committed checksums byte for byte.
 
+- **Voice goes first with the house's AI model**: a bedtime story being
+  written, a memory pass or a news briefing stops when a room hears its
+  wake word and carries on after the answer, and a typed chat reply or a
+  chat title waits for a spoken answer in progress, so a question asked
+  out loud no longer waits behind them.
+- **The AI models answer more than one request at once on bigger
+  servers**: two with 24 GB of memory, three with 48 GB, four with NVIDIA
+  GPUs that have room, one below 24 GB as before. Each extra one takes
+  about 1.2 GB of memory (about twice that with an 8192-token routing
+  window; a server without the room stays a step lower). It takes effect
+  at the next update, which restarts the model service once.
+
 ## 1.4.1 (unreleased) — Dashboard update fixes
 
 - **What changed.** Restarting the server for an update no longer makes
@@ -186,10 +198,13 @@ a way that would otherwise get reported as a bug.
 - Friend Houses: a friend's messages and names read aloud stay out of the
   chat model's history, and "double check that" declines such a reply.
 - Friend Houses: a friend set to "say who it's from" or "read aloud" now
-  shows, during quiet hours, that new messages wait in the inbox until they
-  end and won't be said later (or that only some rooms are quiet), and a
-  message that wasn't said because of quiet hours is marked "held for
-  quiet hours" in Messages.
+  shows, during quiet hours, when new messages will be said (or that only
+  some rooms are quiet), and a message that wasn't said because of quiet
+  hours is marked "held for quiet hours" in Messages.
+- Friend Houses: messages that came during quiet hours are said in each
+  room when its own quiet hours end, if they are still unread (once per
+  room); Home's "needs attention" counts unread Friend Houses messages and
+  links to them; and the Friend Houses page now starts with Messages.
 - A guest's "play this one" on a room that stopped in the meantime is
   refused, so a guest never starts a stopped room.
 - A room's queue looks up the songs it can't place by path in one query

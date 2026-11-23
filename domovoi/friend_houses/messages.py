@@ -31,17 +31,23 @@ commanded, it is length-capped (finding 30), control and bidi characters
 are gone, and announcements from one friend are spaced out. Friend text is
 never handed to a model with tools: nothing in F3 puts it in chat at all.
 
-**Quiet hours** (domovoi/quiet_hours.py) hold an alert back like any other
-notice: a room in its quiet hours says nothing, then or later; the message
-waits in the inbox. When every room that would hear it is quiet, the
-message is marked held (``held: "quiet_hours"`` in a conversation; the
-row's otherwise unused ``last_error`` keeps the mark for an incoming one),
-and :func:`quiet_hours_now` tells the friends page so it can say why.
+**Quiet hours** (domovoi/quiet_hours.py): a room in its quiet hours says
+nothing when the message comes. The rooms that aren't quiet say it then;
+each quiet room says it once its own quiet hours end (:func:`say_held`,
+run with the held new-friend announcements on the service's retry pass),
+if the message is still unread, the friend still wants it said and it
+came in the last :data:`HELD_SAY_HOURS` hours. The incoming row's
+otherwise unused ``last_error`` keeps which rooms said it
+(``quiet_hours:{json}``), so no room says it twice, across restarts too.
+A conversation shows ``held: "quiet_hours"`` when no room said it on
+arrival, and ``read_out_at`` once one said it afterwards;
+:func:`quiet_hours_now` tells the friends page.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import time
@@ -62,10 +68,12 @@ OUTBOX_DAYS = 7
 OUTBOX_MAX_PER_FRIEND = 200
 INBOX_MAX_PER_FRIEND = 5000
 READ_ALOUD_MAX_CHARS = 400
-#: An incoming row's mark: its alert waited out quiet hours (never said).
+#: An incoming row's mark (``last_error``): quiet hours held its alert back.
 HELD_QUIET = "quiet_hours"
-#: Whether an alert held for quiet hours is said once they end. It isn't.
-QUIET_READ_LATER = False
+#: Whether an alert held for quiet hours is said once they end. It is.
+QUIET_READ_LATER = True
+#: A held alert older than this is left to the inbox.
+HELD_SAY_HOURS = 24
 ANNOUNCE_GAP_SEC = 60.0
 _FLUSHING: dict[bytes, asyncio.Lock] = {}
 _LAST_ANNOUNCED: dict[bytes, float] = {}
@@ -533,44 +541,138 @@ async def quiet_hours_now() -> dict[str, Any] | None:
     """For the friends page: None, or which rooms are quiet now (``all``
     or ``some`` of the connected ones, the house's hours when none is),
     ``until`` when ("HH:MM", the house's clock) and ``read_later``
-    (whether a held alert is said afterwards: no)."""
+    (whether a held alert is said afterwards: yes, see :func:`say_held`)."""
     from domovoi import quiet_hours
 
     now = await quiet_hours.quiet_now(_connected_rooms())
     return None if now is None else {**now, "read_later": QUIET_READ_LATER}
 
 
+def held_state(mark: Any) -> dict[str, Any] | None:
+    """An incoming row's quiet-hours mark: ``held`` (no room said it on
+    arrival), ``said`` (the rooms that have) and ``read_out_at`` (when a
+    held one was first said afterwards). None: no mark."""
+    if not isinstance(mark, str) or not mark.startswith(HELD_QUIET):
+        return None
+    state: dict[str, Any] = {"held": True, "said": [], "read_out_at": None}
+    rest = mark[len(HELD_QUIET):].lstrip(":")
+    if rest:
+        try:
+            got = json.loads(rest)
+        except ValueError:
+            got = {}
+        if isinstance(got, dict):
+            state["held"] = bool(got.get("held", True))
+            state["said"] = sorted({r for r in got.get("said") or [] if isinstance(r, str)})
+            at = got.get("read_out_at")
+            state["read_out_at"] = at if isinstance(at, str) else None
+    return state
+
+
+async def _mark_held(row_id: int, state: dict[str, Any]) -> None:
+    async with _db() as s:
+        await s.execute(text(
+            "UPDATE friend_houses_messages SET last_error = :q WHERE id = :i AND direction = 'in'"),
+            {"q": HELD_QUIET + ":" + json.dumps(state, separators=(",", ":")), "i": row_id})
+
+
+def _alert_text(alert: str, name: str, bodies: list[str], phrases: list[str]) -> str:
+    """What the rooms hear: the name (and, for ``read``, the one text)."""
+    from domovoi.speech_sanitize import sanitize_for_speech
+
+    name = safe_name(name, phrases)
+    if alert == "read" and len(bodies) == 1:
+        spoken = f"A message from {name}: {safe_to_say(bodies[0], phrases)}"
+    elif len(bodies) > 1:
+        spoken = f"{len(bodies)} messages from {name}."
+    else:
+        spoken = f"A message from {name}."
+    return speakable(sanitize_for_speech(spoken), phrases)
+
+
+async def _announce(room: str | None, said: str) -> list[str]:
+    try:
+        from domovoi.sdk.speech import SpeechAPI
+
+        return list(await SpeechAPI("core").announce(room, said) or [])
+    except Exception as e:  # noqa: BLE001 — the inbox has it regardless
+        log.info("Friend Houses: announcing a message failed: %s", e)
+        return []
+
+
 async def _alert(house: bytes, name: str, alert: str, body: str, row_id: int | None = None) -> None:
     if alert == "inbox":
-        return
-    quiet = await quiet_hours_now()
-    if quiet is not None and quiet["rooms"] == "all":
-        # No room would say it: mark it so the inbox can say why.
-        if row_id is not None:
-            async with _db() as s:
-                await s.execute(text(
-                    "UPDATE friend_houses_messages SET last_error = :q WHERE id = :i "
-                    "AND direction = 'in'"), {"q": HELD_QUIET, "i": row_id})
-        log.info("Friend Houses: quiet hours; a message waits in the inbox")
         return
     now = time.monotonic()
     if now - _LAST_ANNOUNCED.get(house, 0.0) < ANNOUNCE_GAP_SEC:
         return  # spaced out: the inbox has the rest (finding 30)
     _LAST_ANNOUNCED[house] = now
-    from domovoi.speech_sanitize import sanitize_for_speech
+    from domovoi import quiet_hours
 
+    rooms = _connected_rooms()
+    if rooms:
+        quiet = await quiet_hours.quiet_rooms(rooms)
+    else:  # no room to say it in: the house's hours say whether it waits
+        quiet = ["(house)"] if await quiet_hours.quiet_now([]) else []
+    reached: list[str] = []
+    if len(quiet) < max(len(rooms), 1):
+        # A quiet room refuses it (StreamSession.announce); the others say it.
+        reached = await _announce(None, _alert_text(alert, name, [body], await wake_phrases()))
+    if quiet and row_id is not None:
+        # Kept for the quiet rooms, said when their quiet hours end.
+        await _mark_held(row_id, {"held": not reached, "said": sorted(reached), "read_out_at": None})
+        log.info("Friend Houses: quiet hours; a message waits for %s",
+                 "them to end" if not reached else "the quiet rooms' hours to end")
+
+
+async def say_held() -> int:
+    """Say the messages quiet hours held back, in each connected room that
+    isn't quiet now and hasn't said them: still unread, the friend's alert
+    still on, at most :data:`HELD_SAY_HOURS` old. One friend's messages go
+    together per room ("3 messages from ..." for more than one). Returns
+    how many times a room said something."""
+    from datetime import datetime, timezone
+
+    from domovoi import quiet_hours
+
+    rooms = _connected_rooms()
+    if not rooms:
+        return 0
+    quiet = set(await quiet_hours.quiet_rooms(rooms))
+    awake = [r for r in rooms if r not in quiet]
+    if not awake:
+        return 0
+    async with _db() as s:
+        rows = (await s.execute(text(
+            "SELECT m.id, m.house_key, m.body, m.last_error, f.local_name, f.alert "
+            "FROM friend_houses_messages m JOIN friend_houses_friends f ON f.id = m.friend_id "
+            "WHERE m.direction = 'in' AND m.state = 'unread' AND m.last_error LIKE :q "
+            "AND f.state = 'active' AND f.alert IN ('sender', 'read') "
+            "AND m.created_at > now() - make_interval(hours => :h) ORDER BY m.id"),
+            {"q": HELD_QUIET + "%", "h": HELD_SAY_HOURS})).all()
+    by_friend: dict[bytes, list] = {}
+    for r in rows:
+        st = held_state(r[3])
+        if st is not None:
+            by_friend.setdefault(bytes(r[1]), []).append((r, st))
+    if not by_friend:
+        return 0
     phrases = await wake_phrases()
-    name = safe_name(name, phrases)
-    if alert == "read":
-        spoken = f"A message from {name}: {safe_to_say(body, phrases)}"
-    else:
-        spoken = f"A message from {name}."
-    try:
-        from domovoi.sdk.speech import SpeechAPI
-
-        await SpeechAPI("core").announce(None, speakable(sanitize_for_speech(spoken), phrases))
-    except Exception as e:  # noqa: BLE001 — the inbox has it regardless
-        log.info("Friend Houses: announcing a message failed: %s", e)
+    spoke = 0
+    for group in by_friend.values():
+        name, alert = group[0][0][4], group[0][0][5]
+        for room in awake:
+            due = [(r, st) for r, st in group if room not in st["said"]]
+            if not due or not await _announce(room, _alert_text(alert, name, [r[2] for r, _ in due], phrases)):
+                continue
+            spoke += 1
+            at = datetime.now(timezone.utc).isoformat()
+            for r, st in due:
+                st["said"] = sorted(set(st["said"]) | {room})
+                if st["held"] and not st["read_out_at"]:
+                    st["read_out_at"] = at
+                await _mark_held(int(r[0]), st)
+    return spoke
 
 
 async def set_alert(friend_id: str, alert: str) -> bool:
@@ -592,7 +694,14 @@ def _view(r: Any) -> dict[str, Any]:
             "sent_at": int(r[4]), "created_at": r[5].isoformat(),
             "delivered_at": r[6].isoformat() if r[6] else None,
             "last_error": None if incoming else r[7],
-            "held": HELD_QUIET if incoming and r[7] == HELD_QUIET else None}
+            **_held_view(r[7] if incoming else None)}
+
+
+def _held_view(mark: Any) -> dict[str, Any]:
+    st = held_state(mark)
+    if st is None or not st["held"]:
+        return {"held": None, "read_out_at": None}
+    return {"held": HELD_QUIET, "read_out_at": st["read_out_at"]}
 
 
 async def conversation(house_key: bytes, *, before: int | None = None,
@@ -665,6 +774,7 @@ async def export(house_key: bytes) -> dict[str, Any]:
 
 
 __all__ = ["ALERTS", "MessageError", "conversation", "conversations", "delete_conversation",
-           "export", "flush", "flush_all", "mark_read", "on_message", "quiet_hours_now", "safe_to_say",
-           "say_im_back", "send", "set_alert", "speakable", "unread_total", "wake_phrases"]
+           "export", "flush", "flush_all", "held_state", "mark_read", "on_message",
+           "quiet_hours_now", "safe_to_say", "say_held", "say_im_back", "send", "set_alert",
+           "speakable", "unread_total", "wake_phrases"]
 

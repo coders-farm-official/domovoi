@@ -716,6 +716,14 @@ RestartSec=3
 WantedBy=default.target
 ```
 
+On a box with 24 GB of memory or more, or NVIDIA GPUs with room to
+spare, the installer adds one line under `ExecStart=` so Ollama answers
+more than one request at once (a voice turn needn't wait behind a chat
+reply): `Environment=OLLAMA_NUM_PARALLEL=2` (3 from 48 GB, 4 with room
+on the GPUs). Each extra request costs about 1.2 GB of memory; see
+[CPU_HOST.md, "Answers at once"](CPU_HOST.md#answers-at-once) for the
+tiers and their cost.
+
 ```bash
 sudo systemctl daemon-reload && sudo systemctl enable --now ollama
 ```

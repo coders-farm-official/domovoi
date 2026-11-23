@@ -310,6 +310,12 @@ async def friend_houses_conversations(request: Request):
     )
 
 
+@router.get("/unread", dependencies=HOUSEHOLD)
+async def friend_houses_unread(request: Request):
+    """The house inbox's unread count only (Home's "needs attention")."""
+    return bridge_response(*await get_admin(f"{CORE}/unread", headers=auth_forward_headers(request)))
+
+
 @router.get("/conversations/{house}", dependencies=HOUSEHOLD)
 async def friend_houses_conversation(
     house: str,
