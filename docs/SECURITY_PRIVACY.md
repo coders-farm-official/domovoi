@@ -2177,6 +2177,68 @@ What the install flow *does* do (verified in
   hostile plugin could build a `RegisteredSource(core=True)` itself and
   register it directly, or patch the module; nothing in-process can stop
   that. Same boundary as above: install plugins from publishers you trust.
+- **A plugin's decode-only containers are the one place plugin code runs
+  outside the core (core 1.5.0).** A plugin that declares an `[isolated]`
+  decoder gets containers the core builds and runs
+  (`domovoi/plugins_runtime/isolated.py`), for decoding input it doesn't
+  trust; a plugin with the `friend_houses` permission must have one, and
+  its install is refused otherwise. Reworked after the 2026-11-23 design
+  review:
+  - *The image is the core's.* The core writes it, never from a plugin's
+    Dockerfile: the same digest-pinned Debian base as the Friend Houses
+    listener, Python and up to three allowlisted Debian packages (no pip,
+    installed before any plugin file is in), the core's runner and image
+    helper, and only the `.py` files of the decoder's own top-level
+    package (`domovoi_isolated_<slug>`, Python only, imports checked at
+    install), copied and byte-compiled, never run, at build. It is built
+    only for a loaded (admin-confirmed) plugin, only when the internet
+    answer isn't "never" and, for a `friend_houses` plugin, Friend Houses
+    is on and a friend has "Apps with this friend" on; rebuilt on a
+    content hash and at 30 days with `--pull --no-cache`; capped at 1 GB
+    and a low CPU weight on Docker's classic builder (on a Docker without
+    it the core refuses to build). The container guard is told the image
+    ID before any container runs it; an image it has no record of is
+    rebuilt, never run; any container under the `domovoi-plugin-dec-`
+    prefix but outside the plugin's slots is reported as tampering.
+  - *One container per friend.* A friend's bytes are decoded only in that
+    friend's own container, started on demand and stopped after 2 minutes
+    idle (at most 4 per plugin, 8 in all), so a friend who exploits a
+    decoder never sees, or answers for, another friend's mail. The friend
+    is never named to the container; the core keeps the request id and the
+    friend on its own side, one request at a time, and any byte the
+    container writes unasked kills it.
+  - *The wall.* No network, read-only root, no tmpfs, no mounts, no
+    capabilities, no new privileges, a fixed unprivileged uid, 128 MB with
+    no extra swap, 16 processes, a quarter of a CPU, 64 files, no
+    environment, no logs; stderr goes nowhere. It talks over stdin and
+    stdout only.
+  - *Hostile answers.* Every answer is held to size, UTF-8, depth, total
+    values, keys per object, key and string length, integer size, no NaN
+    or infinity, no duplicate keys and no NUL, control characters or lone
+    surrogates, re-serialized by the core and checked in the core's
+    process against the plugin's registered schema (none: nothing is
+    accepted). A hang, crash or broken stream kills that friend's
+    container and backs off that friend only; an item that faults twice is
+    dropped; three faults from one friend in an hour pause that friend
+    for that plugin, while every other friend carries on.
+  - *Images.* The container only decodes: the core's helper opens the
+    bytes with the core's `open_image` (PNG, JPEG or WebP; at most 4
+    megapixels by the header; first frame; at most 768 pixels a side out)
+    and answers raw pixels. The core checks that the pixel count matches
+    and writes the PNG itself (header, pixels, end), so no byte the
+    container chose reaches a browser in a file format, and EXIF, GPS, XMP,
+    ICC profiles and text can't exist in it. It is served as `image/png`
+    with `nosniff`. Pieces of an image are reassembled by the core as
+    opaque bytes, with bounds and an expiry; the plugin never holds them.
+
+  What this buys: a parser bug reachable by hostile bytes (a decompression
+  bomb, a native image decoder flaw) lands in a box that can't reach the
+  network, the database, the house keys or another friend's mail, and
+  whatever it answers is checked and rebuilt by the core. What it doesn't:
+  the plugin's own in-process code is still unsandboxed, and a decoder's
+  checked answers are still the friend's data. The boundary against a
+  hostile *plugin* remains the publisher you trust. Without Docker the
+  decoder is inert (nothing is decoded); there is no in-process fallback.
 - **Plugin HTTP routes are admin-gated by default in both processes.** A
   plugin's routers on the core (`/v1/plugins/<slug>/…`) and on the web
   dashboard (`/api/plugins/<slug>/…`) sit behind the same rule
