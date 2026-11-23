@@ -75,6 +75,7 @@ ABILITIES: dict[str, str] = {
     "room_audio": "the device plays the room's synced sound from `/v1/room-audio/{satellite_id}` (1.5.0, docs/ROOM_AUDIO_PROTOCOL.md), so the room's music, replies and timers go to it there",
     "diagnostics": "the `diag_request` frame (one read-only probe by name, answered by `diag_result`) and the room drawer's Diagnostics tab (1.5.0, domovoi/satellite_diagnostics.py)",
     "mic_dsp": "`set_mic_dsp` and `mic_dsp_mark` (an XVF3800's DSP presets, picked by name from a fixed table; admin only, domovoi/mic_dsp.py)",
+    "wake_claim": "1.5.0: the device claims each wake in a room whose `claim` is true (`wake_claim`), and takes `wake_grant`, `capture_keep` and the `claim` form of `end_capture` (one turn per wake word, domovoi/wake_claims.py)",
     "room_display": "the `room_display` frame (this room's music, timers and alarms, and one going off, for a screen in the room) and the `room_control` frame back (pause, resume, skip, previous, stop ringing); a paired room only (domovoi/room_display.py)",
 }
 
@@ -101,7 +102,7 @@ NEGOTIATED: frozenset[str] = frozenset(
 #: boolean hello key either. ``room_display``: a Pi has no screen.
 #: ``mic_dsp`` (1.4.1) does have one (``"mic_dsp": true``), sent only by
 #: an XVF3800 with ``xvf_host``: never assumed, so an older Pi never sees it.
-DECLARED_ONLY: frozenset[str] = frozenset({"room_display", "mic_dsp"})
+DECLARED_ONLY: frozenset[str] = frozenset({"room_display", "mic_dsp", "wake_claim"})
 
 #: What a hello WITHOUT ``supports`` (every Pi in the field) is taken to
 #: have: everything the core has always pushed to a satellite. Out-of-turn

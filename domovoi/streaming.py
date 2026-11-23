@@ -106,8 +106,31 @@ Client → Server
                            an enrolment's `in=`): the room a device that parks
                            for approval asks to join. It pre-selects the
                            approval card's room; a person still decides.
+  text  wake_claim         {"type":"wake_claim","claim":N,"word":...,"score":F,"floor_dbfs":F|null,"barge_in":bool}
+                           — 1.5.0, one turn per wake word: ONLY from a
+                           device that listed `wake_claim` in `supports`
+                           (then `ready.features` lists it) and only while
+                           its `room.claim` is true. The first claim of the
+                           room's group owns the turn at once (`wake_grant`
+                           role owner); later ones are quiet and stream up
+                           to 2 s of the command (binary frames, no
+                           utterance_start) until `quiet_end`
+                           {"claim","frames","reason"}. The core scores each
+                           stream (level over the device's own floor), keeps
+                           one (`capture_keep` to a quiet winner) and drops
+                           the rest (`end_capture` {"claim"}). A claim while
+                           the room's answer plays is a barge-in.
+                           Full contract: docs/uml/satellite-protocol.md,
+                           "One turn per wake word"; domovoi/wake_claims.py.
+  text  quiet_end          see wake_claim.
   text  utterance_start    {"type":"utterance_start","trigger":"wake_word"|"barge_in"|"push_to_talk"|"followup"|"wake_clip",
-                            "utt":N,"backlog_ms":N,"wake_ms":N,"wake_score":F,"wake_word":...}
+                            "utt":N,"backlog_ms":N,"wake_ms":N,"wake_score":F,"wake_word":...,"claim":N}
+                           — `claim` (1.5.0): the claim this owner capture
+                           answers (see wake_claim). A capture from an older
+                           device while another device's turn in the group
+                           is capturing is dropped: `end_capture` (with
+                           capture_control), then `response_end`
+                           {"ignored":true,"duplicate":true}.
                            — `wake_word` (optional, 1.4.0, after a wake word
                            only): which of the room's words fired, kept on
                            the turn's history row (conversation_log.wake_word,
@@ -339,6 +362,20 @@ Server → Client
                            `satellite_id`; it carries on in the new room. An
                            older device is closed 1001 instead and comes back
                            into its new room on reconnect.
+                           `room.claim` (1.5.0, also in `ready.room`): claim
+                           every wake (`wake_claim`): another satellite is
+                           in the room or a linked one. The `room` frame is
+                           sent again, same room, when it changes.
+  text  wake_grant         {"type":"wake_grant","claim":N,"turn":...,"role":"owner"|"quiet","stream_ms":N}
+                           — 1.5.0, the answer to `wake_claim` (sent at once).
+  text  capture_keep       {"type":"capture_keep","claim":N,"turn":...}
+                           — 1.5.0: this quiet stream was picked; keep
+                           capturing to the end of the command.
+                           `end_capture` {"claim":N}: a quiet stream not
+                           picked; stop and discard.
+                           `response_start` `room_audio:true` /
+                           `response_end` `play_end_us`: the answer plays on
+                           the room's synced playout, not this socket.
   text  end_capture        {"type":"end_capture","utt":N}
                            — stop capturing now: the server has heard a whole
                            command (early commit, see below) and is answering.

@@ -78,6 +78,8 @@ sequenceDiagram
 | `dropin_ready` | — | **Since 2026-11-12; only in answer to a `dropin_start` marked `await_ready`.** The reply that was still playing when the call started ("Dropping in on the kitchen.", or the target's "Okay, connecting you with the office.") has played out and the call is open here; the server now sends this room the start chime and the peer's audio. A satellite waits at most 8 s for its playback; the server opens the call there anyway after `DROPIN_READY_WAIT_SEC` (10 s). A stray one is ignored. |
 | `chat_end` | — | Pi-side exit of conversational chat mode (e.g. a non-AEC board refusing `chat_start`). Clears the mode server-side. |
 | `room_control` | `action: "pause" \| "resume" \| "skip" \| "previous" \| "stop_ringing"`, `fire_id` (with `stop_ringing` only) | **1.4.0; only when `ready.features` lists `"room_display"`.** A button on the room's screen ([The room display](#the-room-display-room_display)). No room in it: the socket is the authority. Never answered; the next `room_display` shows the result. Anything else, an action the last `room_display` did not offer, or more than 5 at once (then one per 0.5 s) is ignored. |
+| `wake_claim` | `claim`, `word`, `score`, `floor_dbfs`, `barge_in?` | **1.5.0; only when `ready.features` lists `"wake_claim"` and `room.claim` is true.** See [One turn per wake word](#one-turn-per-wake-word-wake_claim-150). |
+| `quiet_end` | `claim`, `frames`, `reason` | **1.5.0.** A quiet stream is over (same section). |
 | `ping` | — | Keep-alive probe; answered with `pong`. |
 | *binary* | raw PCM | Normally meaningful only between `utterance_start`/`utterance_end`. **During a drop-in** the Pi streams every mic frame continuously (no framing) and the server relays each frame verbatim to the peer room — except while an utterance is active (a mid-call wake command like "hang up"), which is captured for STT instead. |
 
@@ -113,6 +115,8 @@ sequenceDiagram
 | `chat_end` | `reason` | Exit chat mode; restore the wake loop. |
 | `error` | `message`, `reason?` | Something went wrong; paired with a terminal `response_end` when a response task fails so the Pi's mic never stays parked. Carries `reason:"pairing_rejected"` when the `hello` pairing check refuses the connection, or `reason:"hello_required"` when the first frame was not a `hello` (the socket is then closed either way). |
 | `pong` | — | Reply to `ping`. |
+| `wake_grant` | `claim`, `turn`, `role`, `stream_ms?` | **1.5.0; only to a device that declared `wake_claim`.** The answer to a claim (same section). |
+| `capture_keep` | `claim`, `turn` | **1.5.0; `wake_claim`.** This quiet stream was picked: keep capturing (same section). |
 | `room_display` | `sent_at_ms`, `now_playing`, `timers`, `ringing` | **1.4.0; only to a paired device that declared `room_display`.** What the room's screen shows: its music, its timers and alarms, one going off. Once after `ready`, then on change, at most one a second ([The room display](#the-room-display-room_display)). |
 | *binary* | raw PCM | TTS audio at `audio_sample_rate`. During a drop-in: live 16 kHz relay audio from the peer room. |
 
@@ -180,6 +184,7 @@ Android phone in room mode can do some of that and not the rest, so a
 | `diagnostics` | no — `diagnostics` | 1.5.0: `diag_request` (one read-only probe by name, answered by `diag_result`) and the drawer's **Diagnostics** tab. The Pi and spare-computer client sends the key from 1.5.0 on; a phone in room mode doesn't |
 | `dropin_ready` | no — `dropin_ready` | 2026-11-12: `dropin_start` marked `await_ready`: the device finishes the reply announcing the call before it opens it, and the server holds the call's audio to it until its `dropin_ready` (see the frame tables). Without it the call's audio follows `dropin_start` at once, which cut that reply off |
 | `mic_dsp` | no — `mic_dsp` (a Pi sends `true` only on an XVF3800 with `xvf_host` installed) | 1.4.1: `set_mic_dsp` and `mic_dsp_mark` (admin-only microphone DSP presets, [below](#microphone-dsp-presets-mic_dsp)); `ready.features` then lists `"mic_dsp"`, and only then does the device send `mic_dsp_state` |
+| `wake_claim` | no, and no boolean key: only a device that lists it | 1.5.0: the device claims each wake in a room whose `claim` is true and takes `wake_grant`, `capture_keep` and the `claim` form of `end_capture` ([One turn per wake word](#one-turn-per-wake-word-wake_claim-150)) |
 
 Always sent, whatever the list: `ready`, `error`, `pong`, `transcript`,
 `response_start` / PCM / `response_end` for the device's own turns,
@@ -212,6 +217,115 @@ A phone in room mode runs openWakeWord on ONNX Runtime with the same
 models as a Pi; it fetches the base models from the core's signed
 `/v1/wake-base` channel (docs/API_REFERENCE.md) and a pushed wake word from
 `/v1/wake-models`, as a Pi does.
+
+## One turn per wake word (`wake_claim`, 1.5.0)
+
+A room may hold several satellites, and rooms marked as hearing each other
+(`room_hear_links`) count as one group. One "hey Domovoi" heard by several of
+them is ONE turn: one acknowledgement, one answer, transcribed once from the
+microphone that heard the person best. Code: `domovoi/wake_claims.py`
+(arbitration and the mic score), `domovoi/streaming.py` (the frames).
+
+**Who claims.** A device that lists `wake_claim` in its hello `supports`
+(never assumed, no boolean key) gets `"wake_claim"` in `ready.features`,
+and claims at a wake only while its room says `claim: true`. `ready.room`
+and the `room` frame carry it:
+
+```json
+{"room_id": "kitchen", "name": "Kitchen", "shared": true, "claim": true}
+```
+
+`claim` is true when the device's room, or a room linked to it, holds
+another satellite. The server re-sends the `room` frame (same room) to a
+device that named its `satellite_id` in its hello whenever `claim` changes
+for it (a satellite connected into its group, or moved). With `claim`
+false the device wakes exactly as before: chime, `utterance_start`, no
+claim, **zero added delay**.
+
+**The frames.**
+
+| Direction | Frame | Payload | Meaning |
+|---|---|---|---|
+| device → core | `wake_claim` | `claim` (int, the device's own counter, increasing per connection), `word` (the slug that fired), `score` (0..1, the wake's peak score), `floor_dbfs` (number or null), `barge_in` (bool, optional) | Sent the moment the wake word fires; the device HOLDS its chime and its music stop until the answer. `floor_dbfs`: the room's level just before the wake phrase — the median 30 ms frame level (dBFS) of the ~2 s before it, the last ~0.9 s (the phrase itself) left out (`pre_wake_floor` in the noise spike's `satellite/adaptive_gate.py`); null when the device has too little of it. `barge_in`: the wake fired while the room's answer was playing (informational; the core decides from its own state). |
+| core → device | `wake_grant` | `claim`, `turn` (string), `role`: `"owner"` or `"quiet"`, `stream_ms` (quiet only) | The answer, sent AT ONCE: the first claim of a group owns the turn — no window, no wait. **Owner**: chime (or greet) and capture exactly as today; its `utterance_start` carries `claim`. **Quiet**: no chime, no greeting, no music stop, the LED fades; stream the command as heard, at most `stream_ms` (2000) of it. `stream_ms: 0`: stand down and stream nothing. |
+| device → core | *binary* (quiet) | 30 ms frames, 16 kHz mono int16 LE | A quiet device streams its mic from the grant on, with no `utterance_start`: the core knows the socket is in its quiet stream. |
+| core → device | `capture_keep` | `claim`, `turn` | This quiet stream was picked: keep capturing past `stream_ms` until the device's own end of speech (its normal capture-end rules, the 30 s cap included), still with no chime. |
+| core → device | `end_capture` | `claim` | This quiet stream was NOT picked (or its turn ended): stop streaming now and throw the audio away. (The `utt` form of `end_capture`, early commit, is unchanged.) |
+| device → core | `quiet_end` | `claim`, `frames` (frames streamed), `reason`: `"limit"` (`stream_ms` reached) \| `"stopped"` (`end_capture`) \| `"vad_silence_after_speech"` \| `"max_record_seconds"` (after `capture_keep`) | The quiet stream is over. The device listens for its wake word again after a 1 s cooldown. |
+| core → owner | `response_start` | adds `room_audio: true` | The answer plays from every speaker of the room on the synced playout ([ROOM_AUDIO_PROTOCOL.md](../ROOM_AUDIO_PROTOCOL.md)); no PCM follows on this socket. Only when the owner itself plays room audio in a room with another live device. Announcements (timers, alarms, intercom) use the same two fields. |
+| core → owner | `response_end` | adds `play_end_us` (with `room_audio`) | When the answer's last sample leaves the speakers, on the room-audio server clock (µs): open a follow-up mic, and end the LED's speaking state, then. |
+
+**Fail open.** No `wake_grant` within 150 ms: the device acts as owner. A
+`quiet` grant that arrives after that: the device stops capturing and goes
+idle; the core drops that capture anyway (as for older devices, below).
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as Kitchen (near)
+    participant B as Kitchen phone (far)
+    participant S as Core
+    A->>S: wake_claim {claim:7, word, score:0.91, floor_dbfs:-52.0}
+    S-->>A: wake_grant {claim:7, turn:"t12", role:"owner"}
+    B->>S: wake_claim {claim:3, word, score:0.88, floor_dbfs:-47.5}
+    S-->>B: wake_grant {claim:3, turn:"t12", role:"quiet", stream_ms:2000}
+    Note over A: chime, then capture as today
+    A->>S: utterance_start {trigger:"wake_word", claim:7, utt:41, ...}
+    B->>S: (PCM, quiet stream)
+    A->>S: (PCM)
+    Note over S: first stream with 1.5 s (or the owner's end):<br/>score = p90 level minus own floor, pick one
+    S-->>B: end_capture {claim:3}
+    B->>S: quiet_end {claim:3, frames:52, reason:"stopped"}
+    A->>S: utterance_end {...}
+    Note over S: STT once, on the picked stream
+    S-->>A: response_start {..., room_audio:true}
+    S-->>A: response_end {..., play_end_us}
+```
+
+**The pick.** Each stream is scored on its first 1.5 s (50 frames): the
+90th-percentile frame level (dBFS) minus that device's own `floor_dbfs` —
+the command's loudness over that device's background, so a phone's or an
+XVF3800's gain doesn't decide. The core decides as soon as any stream has
+1.5 s, or at the owner's `utterance_end`, whichever is first; a stream with
+under 0.3 s by then, or no floor, is not scored; ties and an unscorable
+field go to the owner. The owner keeps capturing whichever stream is picked
+(the turn's LED and follow-ups are its own); when a quiet stream wins, the
+owner's speculative transcript and early commit are dropped and the turn
+waits (at most 15 s) for that stream's `quiet_end`. **Streams not picked
+are never kept or transcribed**: their frames live in memory only until
+the pick, and nothing of them is written anywhere. The turn's history row
+names the owner (`conversation_log.satellite_id`) and the picked mic
+(`mic_satellite_id`).
+
+**Which claims join a turn.** A claim from the group while its turn is
+capturing joins it: quiet and streaming within 1.5 s of the turn's first
+claim, `stream_ms: 0` after that. A claim while the group's answer is
+playing is a **barge-in**: the answer stops on every speaker (a timed
+`flush` on room audio, the owner's reply cancelled) and the claim owns a
+new turn; its `utterance_start` says `trigger: "barge_in"`. Otherwise the
+claim owns a new turn.
+
+**Barge-in.** In a room with `claim` true every listener keeps its wake
+detector running while the room speaks and barges in with a `wake_claim`
+(not `barge_in`), so ANY satellite of the room can interrupt the answer. An
+XVF3800's echo canceller takes the other speakers' synced copies of the
+answer as part of its own echo, so the owner's mic still hears the wake
+word over it. A `barge_in` frame from any device of the room (an older one)
+also stops the room's answer on every speaker.
+
+**Older devices** (no `wake_claim`): they wake, chime and capture as
+before. When another device's turn is already capturing in the group, the
+core drops the duplicate: `end_capture {utt}` when the device has
+`capture_control`, then at its `utterance_end` a `response_end
+{interrupted:true, expect_followup:false, ignored:true, duplicate:true}`
+(no `response_start`); nothing is transcribed or stored. An older device
+that wakes first owns the turn as before; claims during it get
+`stream_ms: 0` (it sends no floor, so there is nothing to compare). Its
+answer comes from its own speaker.
+
+**Single rooms.** A room with one satellite and no links: `claim` false,
+nothing above happens, the answer plays on the device's own socket as
+today.
 
 ## Microphone DSP presets (`mic_dsp`)
 
