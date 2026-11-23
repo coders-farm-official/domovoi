@@ -1324,6 +1324,27 @@ const VersionSection = () => {
     }
   };
 
+  // "Keep following main": the server records main as the household's
+  // choice (git config domovoi.intendedChannel; switch_channel to the
+  // channel it already follows does only that), so the stable nudge below
+  // doesn't come back for a house that is on main on purpose.
+  const keepMain = async () => {
+    setSwitching(true);
+    try {
+      const res = await apiPost('/api/config/version/channel', { channel: 'main' });
+      if (res && res.ok) {
+        fire('staying on main');
+        await refreshCore();
+      } else {
+        fire(`not saved: ${(res && res.error) || 'unknown'}`);
+      }
+    } catch (e) {
+      reportMutationFailure(fire, 'channel choice', e);
+    } finally {
+      setSwitching(false);
+    }
+  };
+
   // A Windows install's second half (windows_side, domovoi/windows_side.py).
   // A Mac install (kind "mac") has a host side too: with the updater
   // ("updates") it has the Windows flow, worded for a Mac (macStep); one
@@ -1884,6 +1905,11 @@ const VersionSection = () => {
           Domovoi {releaseOut} is out:{' '}
           {canSwitch ? 'switch to stable above to follow releases from now on.'
                      : 'an admin can switch it to stable here.'}
+          {canSwitch && (
+            <>{' '}Or <Button variant="ghost" disabled={mode === 'busy' || switching}
+                             onClick={keepMain}>Keep following main</Button>{' '}
+              if this server is meant to get every change.</>
+          )}
         </div>
       )}
       {aheadOfRelease && mode === 'check' && (
