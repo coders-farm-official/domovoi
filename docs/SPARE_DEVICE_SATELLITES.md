@@ -1226,3 +1226,25 @@ the refusals, the "already a room" page, the Wi-Fi switch),
 never for a household: `DOMOVOI_USB_STICK_REPACK` (run repack.py
 elsewhere, for a core with no xorriso) and `DOMOVOI_USB_STICK_DEBUG=1` (the
 kit's serial markers).
+
+## Rooms and their satellites
+
+A *room* is a place; a *satellite* is a device in one room. Since 1.5.0 a
+room can hold several (a Pi on the counter and a phone on the shelf).
+Manage them in **Settings → Rooms**, as a signed-in admin:
+
+- **Open a room** to see its satellites: name, what it is, whether it is
+  connected, and which one currently speaks for the room.
+- **Rename** a satellite (an unnamed one reads "Satellite for the
+  Kitchen"), or **move** it to another room or a brand-new one. Its
+  history stays with the old room, voices it learned there are forgotten
+  (enrolled voices stay), and its speaker tuning is cleared.
+- **Add a room**, **rename** it, or **delete** it once it is empty.
+- **Merge**: when two rooms share a name, the page offers to merge them.
+  Nothing merges until you press **Merge into one** and confirm.
+- **Approving a new satellite** asks "Which room is it in?": an existing
+  room, a new one, or a room of its own. A device that asked for a room
+  (from its setup link) has it pre-selected.
+
+Everyone else, and the phone apps, see only rooms ("the Kitchen"); the
+word "satellite" stays on the admin screens.
