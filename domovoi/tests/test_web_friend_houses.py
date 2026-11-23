@@ -137,14 +137,36 @@ ROUTES: dict[str, tuple[str, str, dict | None]] = {
 _IDS = sorted(ROUTES)
 
 
-# Owner decision 17: what every household phone may do with existing
-# friends wears the device tier; everything else the security tier.
+# Owner decision 17 (widened 2026-11-23): what everyone in the household
+# may do with existing friends wears the device tier; everything else, the
+# page's "Friends and connections" zone and saving or deleting a
+# conversation, the security tier.
 HOUSEHOLD_ROUTES = {
     ("GET", "/api/friend-houses"), ("GET", "/api/friend-houses/friends"),
     ("GET", "/api/friend-houses/conversations"), ("GET", "/api/friend-houses/conversations/{house}"),
     ("GET", "/api/friend-houses/unread"),
     ("POST", "/api/friend-houses/conversations/{house}/read"), ("POST", "/api/friend-houses/messages"),
     ("GET", "/api/friend-houses/shared-lists"),
+    # Moved from the security tier on 2026-11-23 (starting a share stays admin).
+    ("POST", "/api/friend-houses/shared-lists/{space_id}/accept"),
+    ("POST", "/api/friend-houses/shared-lists/{space_id}/decline"),
+    ("DELETE", "/api/friend-houses/shared-lists/{space_id}"),
+}
+# What stays admin, named so a move is a decision, not a slip.
+ADMIN_ROUTES = {
+    ("DELETE", "/api/friend-houses/notice"), ("PUT", "/api/friend-houses/settings"),
+    ("GET", "/api/friend-houses/invites"), ("POST", "/api/friend-houses/invites"),
+    ("GET", "/api/friend-houses/invites/{invite_id}"), ("DELETE", "/api/friend-houses/invites/{invite_id}"),
+    ("POST", "/api/friend-houses/preview"), ("POST", "/api/friend-houses/requests"),
+    ("GET", "/api/friend-houses/requests"), ("POST", "/api/friend-houses/requests/{request_id}/accept"),
+    ("POST", "/api/friend-houses/requests/{request_id}/decline"),
+    ("DELETE", "/api/friend-houses/requests/{request_id}"),
+    ("POST", "/api/friend-houses/friends/{friend_id}/verified"), ("PATCH", "/api/friend-houses/friends/{friend_id}"),
+    ("DELETE", "/api/friend-houses/friends/{friend_id}"), ("PUT", "/api/friend-houses/friends/{friend_id}/alert"),
+    ("GET", "/api/friend-houses/conversations/{house}/export"), ("DELETE", "/api/friend-houses/conversations/{house}"),
+    ("POST", "/api/friend-houses/shared-lists"),
+    ("POST", "/api/friend-houses/friends/{friend_id}/block"), ("GET", "/api/friend-houses/blocked"),
+    ("DELETE", "/api/friend-houses/blocked/{house}"),
 }
 
 
@@ -166,6 +188,9 @@ def test_every_route_wears_its_tier() -> None:
             assert admin_auth.require_admin_security_read in deps, r.path
     assert seen == len(ROUTES)
     assert household == HOUSEHOLD_ROUTES
+    every = {(next(iter(r.methods)), r.path) for r in iter_route_contexts(web_app.routes)
+             if getattr(r, "path", "").startswith("/api/friend-houses")}
+    assert every == HOUSEHOLD_ROUTES | ADMIN_ROUTES
 
 
 @pytest.fixture
@@ -237,7 +262,7 @@ async def test_before_setup_everything_is_501(name, monkeypatch, forwarded) -> N
 
 def _is_household(name: str) -> bool:
     method, path, _ = ROUTES[name]
-    pattern = path.replace(HOUSE, "{house}")
+    pattern = path.replace(HOUSE, "{house}").replace(SPACE, "{space_id}")
     return (method, pattern) in HOUSEHOLD_ROUTES
 
 
@@ -429,17 +454,134 @@ def test_a_held_message_says_so_and_when_it_was_read_out() -> None:
     assert '{fhHeldText(m) && <span className="fh-held">· {fhHeldText(m)}</span>}' in _page()
 
 
-def test_the_sections_run_messages_first_and_this_house_after_adding() -> None:
+def test_the_sections_run_messages_then_shared_lists_then_the_admin_zone() -> None:
     src = _page()
     body = src[src.index("const FriendHousesPanel = "):]
     body = body[body.rindex("{head}"):]
-    order = ["<FhInboxCard", "<FhSharedListsCard", "<FhRequestsCard", "<FhInvitesCard", "<FhAddCard",
-             "<FhHouseCard", "<FhFriendsCard", "<FhBlockedCard"]
+    order = ["<FhInboxCard", "<FhSharedListsCard", "<FhAdminZone", "<FhRequestsCard", "<FhFriendsCard",
+             "<FhInvitesCard", "<FhAddCard", "<FhHouseCard", "<FhBlockedCard", "</FhAdminZone>"]
     at = [body.index(tag) for tag in order]
     assert at == sorted(at)
     # Home's unread row lands on the Messages section.
     assert "const FriendHousesPanel = ({ marks = [] }) => {" in src
     assert "if (mark !== 'messages')" in src
+    # No "Admins only" page any more: the zone asks instead.
+    assert "Admins only." not in src
+
+
+# ─── the page, driven: what a household member and an admin get ──────────
+
+FH_HARNESS = Path(__file__).with_name("jsx_interact_harness.js")
+FH_FILES = ["web/static/components.jsx", "web/static/friend_houses.jsx"]
+# Auth, scripted: `__signedIn` is this tab's admin sign-in; ensureLoggedIn
+# (the prompt) answers `__answer` and counts the asks.
+FH_AUTH = """
+globalThis.__signedIn = %s; globalThis.__answer = %s; globalThis.__asked = 0;
+globalThis.Auth = { status: {}, subscribe: () => () => {}, headers: () => ({}), modalOpen: false,
+  isLoggedIn: () => globalThis.__signedIn, canResume: () => false,
+  ensureLoggedIn: () => { globalThis.__asked += 1;
+    if (globalThis.__signedIn) return Promise.resolve(true);
+    if (globalThis.__answer) globalThis.__signedIn = true;
+    return Promise.resolve(!!globalThis.__answer); } };
+"""
+FH_API_TABLE = {
+    "GET /api/friend-houses": {"status": "on", "unread": 1, "fingerprint": "abcd"},
+    "GET /api/friend-houses/conversations": {"conversations": [
+        {"house": HOUSE, "name": "The Smiths", "friend_id": "fr0123abcd", "unread": 1, "last_id": 3,
+         "not_delivered": 0}], "unread": 1},
+    "GET /api/friend-houses/friends": {"friends": [
+        {"id": "fr0123abcd", "name": "The Smiths", "house": HOUSE, "alert": "inbox", "verified": True}],
+        "quiet_hours": None},
+    "GET /api/friend-houses/shared-lists": {"shared_lists": []},
+    "GET /api/lists": [{"id": 7, "name": "Groceries"}],
+    "GET /api/friend-houses/requests": {"requests": []},
+    "GET /api/friend-houses/invites": {"invites": []},
+    "GET /api/friend-houses/blocked": {"blocked": [{"house": "cd" * 32, "name": "Pests"}]},
+    "GET /api/config": {"internet_access": "allowed"},
+}
+FH_ADMIN_PATHS = ("/api/friend-houses/requests", "/api/friend-houses/invites", "/api/friend-houses/blocked",
+                  "/api/config/editable")
+FH_SCRIPT = """
+const zone = () => h.find((e) => e.type === 'button' && String((e.props || {}).className || '') === 'fh-zone-toggle');
+const snap = () => ({ texts: h.text(), expanded: !!zone().props['aria-expanded'],
+                      share: h.findAll((e) => e.type === 'select' || (e.type === 'button' && /^Share/.test(e.text))).length,
+                      asked: h.global('__asked'), fetched: h.hookCalls.slice() });
+h.render(); await h.settle(); h.rerender();
+const before = snap();
+await h.click((e) => e === zone());
+const after = snap();
+return { before, after };
+"""
+
+
+def _drive_panel(signed_in: bool, answer: bool) -> dict:
+    import json
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    assert node, "node is required to drive the page"
+    sc = {"files": FH_FILES, "component": "FriendHousesPanel", "props": {"marks": []},
+          "api": FH_API_TABLE, "setup": FH_AUTH % (json.dumps(signed_in), json.dumps(answer)),
+          "script": FH_SCRIPT}
+    out = subprocess.run([node, str(FH_HARNESS), str(REPO_ROOT), json.dumps({"s": sc})], capture_output=True,
+                         text=True, encoding="utf-8", timeout=120, check=True)
+    got = json.loads(out.stdout)["s"]
+    assert "__harness_error" not in got, got
+    return got
+
+
+ZONE_ORDER = ["Requests", "Friends", "Make a friend file", "Add a friend from their file", "This house",
+              "Blocked houses"]
+
+
+def _no_admin_content(snap: dict) -> None:
+    for title in ZONE_ORDER:
+        assert title not in snap["texts"], title
+    assert not [p for p in snap["fetched"] if p.startswith(FH_ADMIN_PATHS)], snap["fetched"]
+    assert not any("Admins only" in t for t in snap["texts"])
+
+
+def test_a_household_member_gets_messages_and_shared_lists_and_a_closed_zone() -> None:
+    got = _drive_panel(signed_in=False, answer=False)
+    before = got["before"]
+    assert "Messages" in before["texts"] and "Shared lists" in before["texts"]
+    assert "Friends and connections" in before["texts"]
+    assert before["expanded"] is False and before["asked"] == 0
+    _no_admin_content(before)
+    # Saving a copy, deleting a conversation and starting a share stay
+    # admin: not offered, and nothing in their place.
+    assert not any("Save a copy" in t for t in before["texts"])
+    assert not before["share"]
+    assert not any("sign in" in t.lower() for t in before["texts"])
+
+
+def test_an_admin_gets_the_share_action_in_shared_lists() -> None:
+    assert _drive_panel(signed_in=True, answer=False)["before"]["share"]
+
+
+def test_the_zone_stays_closed_when_the_sign_in_is_cancelled_or_refused() -> None:
+    # A wrong password keeps the prompt open; closing it answers false,
+    # exactly like a cancel.
+    after = _drive_panel(signed_in=False, answer=False)["after"]
+    assert after["asked"] == 1 and after["expanded"] is False
+    _no_admin_content(after)
+
+
+def test_the_zone_opens_after_a_sign_in_in_the_owners_order() -> None:
+    after = _drive_panel(signed_in=False, answer=True)["after"]
+    assert after["asked"] == 1 and after["expanded"] is True
+    at = [after["texts"].index(t) for t in ZONE_ORDER]
+    assert at == sorted(at)
+    assert after["texts"].index("Shared lists") < at[0]
+    assert {"/api/friend-houses/requests", "/api/friend-houses/invites", "/api/friend-houses/blocked"} <= set(
+        after["fetched"])
+
+
+def test_an_admin_opens_the_zone_at_once_and_it_starts_closed() -> None:
+    got = _drive_panel(signed_in=True, answer=False)
+    assert got["before"]["expanded"] is False  # collapsed on every visit
+    assert got["after"]["expanded"] is True and got["after"]["asked"] == 1
 
 
 def _home() -> str:

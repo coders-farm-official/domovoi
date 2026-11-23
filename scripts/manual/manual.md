@@ -329,8 +329,9 @@ two-way call into a room.
 - "read my messages"
 
 **Friend Houses** (message and share lists with friends’ houses, house
-to house, with no company server in between): friends are other Domovoi houses, made on the dashboard
-*(admin)*: [Settings → Household → Friend Houses](#settings/friend-houses).
+to house, with no company server in between): friends are other Domovoi houses. On the dashboard,
+[Settings → Household → Friend Houses](#settings/friend-houses) shows the messages and shared lists to
+everyone in the household; making and managing friends is under **Friends and connections** *(admin)*.
 To send one a message, say "message" and its name with the message, like
 "message the Smiths dinner's at six" (or "tell the Smiths …" when AI
 features are on): Domovoi reads it back and sends it when you say yes. Messages are read aloud only when you ask, and anyone in the
