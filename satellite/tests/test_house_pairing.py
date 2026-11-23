@@ -892,3 +892,26 @@ def test_an_unverified_answer_still_connects_but_without_the_code(monkeypatch, t
     monkeypatch.setattr(client, "_probe_one_house", lambda cfg: ("legacy", None))
     assert _run(client.Satellite._before_legacy_session(sat)) == "legacy"
     assert sat._legacy_allowed is True
+
+
+def test_only_a_server_with_a_bound_identity_is_named_with_the_address_advice(caplog):
+    """A host that answers as Domovoi with no identity for its address could
+    be anyone: the log counts it, never suggests typing its address."""
+    import types
+
+    proved = House("ws://192.168.1.20:6370", FP1, False, identity="proved")
+    absent = House("ws://192.168.1.41:6370", None, False, identity="absent")
+    rnd = types.SimpleNamespace(approved=None, legacy=[proved, absent], budget_spent=False,
+                                visits={}, parked=[])
+
+    class _Coord:
+        async def round(self):
+            return rnd
+
+    sat = types.SimpleNamespace(_house_pairing=_Coord(), _legacy_reported=frozenset(),
+                                _budget_reported=False, _house_status="none")
+    with caplog.at_level("WARNING"):
+        assert _run(client.Satellite._house_pairing_round(sat)) is False
+    text = caplog.text
+    assert "192.168.1.20" in text and "192.168.1.41" not in text
+    assert "1 other host(s) answer as a Domovoi server" in text
