@@ -458,3 +458,37 @@ async def test_reset_endpoint_noop_for_unpaired_room() -> None:
         )
     assert r.status_code == 200
     assert r.json() == {"room_id": "nowhere", "reset": False}
+
+
+class _LiveWS:
+    def __init__(self) -> None:
+        self.closed_with: int | None = None
+
+    async def close(self, code: int = 1000) -> None:
+        self.closed_with = code
+
+
+@pytest.mark.asyncio
+async def test_resetting_or_removing_a_room_closes_its_live_socket(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    await _seed_pairing("kitchen", TOKEN)
+    token = await _claim_admin()
+    live = _LiveWS()
+    monkeypatch.setattr(core_app.state, "active_sessions",
+                        {"kitchen": SimpleNamespace(ws=live)}, raising=False)
+    async with _core() as client:
+        r = await client.delete(
+            "/v1/admin/satellites/kitchen/pairing",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200
+        assert live.closed_with == 1008
+        other = _LiveWS()
+        core_app.state.active_sessions["den"] = SimpleNamespace(ws=other)
+        r = await client.delete(
+            "/v1/admin/satellites/den",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200, r.text
+        assert other.closed_with == 1008

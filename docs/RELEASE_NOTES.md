@@ -301,6 +301,14 @@ a way that would otherwise get reported as a bug.
   filtered as a whole sentence and kept as a stand-in in the chat history,
   and shared text is cut before it is filtered.
 
+- A plugin installed from GitHub is downloaded from `api.github.com` and
+  `codeload.github.com` only, redirects included. The install screen's
+  trust statement from the server now also says that a plugin's dashboard
+  pages run in every household browser that opens them.
+- Resetting a room's pairing, or removing the room, closes its satellite's
+  live connection; a device that is still wanted reconnects and is checked
+  again.
+
 ## 1.4.1 (unreleased) — Sign-in, room pairing and drop-in checks
 
 - **Changing the admin password** checks the old password under the same
