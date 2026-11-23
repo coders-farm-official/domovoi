@@ -340,7 +340,7 @@ async def test_a_device_binds_to_its_room_not_its_id(house) -> None:
     assert (sess.satellite_id, sess.room_id) == (h["b"], h["kitchen"])
     room_devices.registry(sess.ws.app).register(sess)
     info = await sess._room_info()
-    assert info == {"room_id": h["kitchen"], "name": "Kitchen", "shared": True}
+    assert info == {"room_id": h["kitchen"], "name": "Kitchen", "shared": True, "claim": True}
     assert sess.ws.app.state.active_sessions[h["kitchen"]] is sess
 
 
@@ -419,7 +419,7 @@ async def test_moving_a_live_satellite(house, admin) -> None:
                                 "learned_samples_dropped": 1, "connected": True}
             # The new client hears where it is now; the socket stays open.
             assert new_client.ws.sent[-1] == {
-                "type": "room", "room": {"room_id": h["den"], "name": "Den", "shared": True}}
+                "type": "room", "room": {"room_id": h["den"], "name": "Den", "shared": True, "claim": True}}
             assert new_client.ws.closed is None
             assert new_client.room_id == h["den"] and reg.room_of(h["a"]) == h["den"]
             assert core_app.state.active_sessions[h["kitchen"]] is old_client

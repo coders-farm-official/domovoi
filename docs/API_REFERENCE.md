@@ -1556,6 +1556,16 @@ The stream protocol side (hello `satellite_id` / `requested_room`,
 `tokenless_shared_room` refusal) is in `domovoi/streaming.py`'s protocol
 header.
 
+One turn per wake word (1.5.0, slice 3): in a room with several satellites,
+or rooms linked as hearing each other (`linked_rooms`), the first device to
+claim a wake owns the turn and the server transcribes the command once,
+from the microphone that heard it best; the answer, timers and
+announcements play from every room-audio speaker of the room. The frames
+(`wake_claim`, `wake_grant`, `capture_keep`, `quiet_end`, `ready.room.claim`)
+are in docs/uml/satellite-protocol.md, "One turn per wake word". A turn's
+history row names its owner (`satellite_id`) and the microphone it was
+transcribed from (`mic_satellite_id`).
+
 ### 3.8 Calendar
 
 Reads are **Device read** (titles, places and

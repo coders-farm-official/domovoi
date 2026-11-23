@@ -382,6 +382,11 @@ async def _trigger(session: StreamSession, ws: FakeWS, frame: str) -> Any:
                         break
                     await asyncio.sleep(0.01)
                 await feed.stop()
+        elif frame in ("wake_grant", "capture_keep"):
+            # Both answer a device's own claim (1.5.0, wake_claims.py): a
+            # device that never declared `wake_claim` is not answered.
+            await session._on_control({"type": "wake_claim", "claim": 1, "word": "hey_test",
+                                       "score": 0.9, "floor_dbfs": -50.0})
         else:  # pragma: no cover
             raise AssertionError(frame)
     except Exception as e:  # noqa: BLE001

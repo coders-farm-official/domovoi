@@ -12,7 +12,8 @@ The calls slice 5b routes room sound through:
 * ``play_stream(room)``: the room's music, decoded from its MPD stream;
 * ``say(room, pcm, rate, channels)``: a reply, chime, timer or announcement,
   mixed in (music ducked); returns when it plays;
-* ``stop / pause / resume / duck(room, ...)``: timed, every speaker at once.
+* ``stop / pause / resume / duck(room, ...)``: timed, every speaker at once;
+* ``cut_speech(room)``: a barge-in stops the room's answer, music plays on.
 """
 
 from __future__ import annotations
@@ -106,6 +107,10 @@ class RoomPlayout:
 
     def stop(self, room_id: str, at_us: float | None = None) -> int:
         return self.streamer(room_id).stop(at_us)
+
+    def cut_speech(self, room_id: str, at_us: float | None = None) -> int:
+        """Stop the room's speech on every speaker (a barge-in, slice 3)."""
+        return self.streamer(room_id).cut_speech(at_us)
 
     def pause(self, room_id: str, at_us: float | None = None) -> int:
         return self.streamer(room_id).pause(at_us)

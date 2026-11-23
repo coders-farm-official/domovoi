@@ -140,6 +140,11 @@
       "unlocks": "`set_mic_dsp` / `mic_dsp_mark` (XVF3800 DSP presets, admin only); the Settings tab's Microphone DSP block",
       "assumed_without_supports": false,
       "hello_key": "mic_dsp"
+    },
+    "wake_claim": {
+      "unlocks": "1.5.0: the device claims each wake in a room whose `claim` is true (`wake_claim`), and takes `wake_grant`, `capture_keep` and the `claim` form of `end_capture` (one turn per wake word, domovoi/wake_claims.py)",
+      "assumed_without_supports": false,
+      "hello_key": null
     }
   },
   "always_sent": [
@@ -221,6 +226,12 @@
     ],
     "support_close": [
       "support_shell"
+    ],
+    "wake_grant": [
+      "wake_claim"
+    ],
+    "capture_keep": [
+      "wake_claim"
     ]
   },
   "config_section_ability": {
@@ -265,7 +276,12 @@
         "protocol_version": "0.1",
         "room_id": "kitchen",
         "satellite_id": "kitchen",
-        "room": {"room_id": "kitchen", "name": "kitchen", "shared": false},
+        "room": {
+          "room_id": "kitchen",
+          "name": "kitchen",
+          "shared": false,
+          "claim": false
+        },
         "audio_sample_rate_in": 16000,
         "features": [
           "speech_pause",
@@ -308,7 +324,8 @@
           "mic_dsp",
           "room_audio",
           "room_display",
-          "support_shell"
+          "support_shell",
+          "wake_claim"
         ],
         "frames_sent": [
           "restart",
@@ -334,7 +351,9 @@
           "support_open",
           "support_input",
           "support_resize",
-          "support_close"
+          "support_close",
+          "wake_grant",
+          "capture_keep"
         ],
         "upgrade_extra": {},
         "config_hidden_sections": [],
@@ -482,7 +501,12 @@
         "protocol_version": "0.1",
         "room_id": "living-room",
         "satellite_id": "living-room",
-        "room": {"room_id": "living-room", "name": "living-room", "shared": false},
+        "room": {
+          "room_id": "living-room",
+          "name": "living-room",
+          "shared": false,
+          "claim": false
+        },
         "audio_sample_rate_in": 16000,
         "features": [
           "speech_pause",
@@ -526,7 +550,8 @@
         ],
         "not_allowed": [
           "room_audio",
-          "room_display"
+          "room_display",
+          "wake_claim"
         ],
         "frames_sent": [
           "restart",
@@ -552,7 +577,9 @@
           "support_close"
         ],
         "frames_never": [
-          "room_display"
+          "room_display",
+          "wake_grant",
+          "capture_keep"
         ],
         "upgrade_extra": {},
         "config_hidden_sections": [],
@@ -712,7 +739,12 @@
         "protocol_version": "0.1",
         "room_id": "study",
         "satellite_id": "study",
-        "room": {"room_id": "study", "name": "study", "shared": false},
+        "room": {
+          "room_id": "study",
+          "name": "study",
+          "shared": false,
+          "claim": false
+        },
         "audio_sample_rate_in": 16000,
         "features": [
           "speech_pause",
@@ -770,6 +802,7 @@
           "room_display",
           "support_shell",
           "time_sync",
+          "wake_claim",
           "wifi"
         ],
         "frames_sent": [
@@ -796,7 +829,9 @@
           "support_open",
           "support_input",
           "support_resize",
-          "support_close"
+          "support_close",
+          "wake_grant",
+          "capture_keep"
         ],
         "upgrade_extra": {
           "plugin_payloads": false
@@ -946,7 +981,12 @@
         "protocol_version": "0.1",
         "room_id": "den",
         "satellite_id": "den",
-        "room": {"room_id": "den", "name": "den", "shared": false},
+        "room": {
+          "room_id": "den",
+          "name": "den",
+          "shared": false,
+          "claim": false
+        },
         "audio_sample_rate_in": 16000,
         "features": [
           "speech_pause",
@@ -1004,6 +1044,7 @@
           "room_display",
           "support_shell",
           "time_sync",
+          "wake_claim",
           "wifi"
         ],
         "frames_sent": [
@@ -1030,7 +1071,9 @@
           "support_open",
           "support_input",
           "support_resize",
-          "support_close"
+          "support_close",
+          "wake_grant",
+          "capture_keep"
         ],
         "upgrade_extra": {
           "plugin_payloads": false
@@ -1170,7 +1213,12 @@
         "protocol_version": "0.1",
         "room_id": "nursery",
         "satellite_id": "nursery",
-        "room": {"room_id": "nursery", "name": "nursery", "shared": false},
+        "room": {
+          "room_id": "nursery",
+          "name": "nursery",
+          "shared": false,
+          "claim": false
+        },
         "audio_sample_rate_in": 16000,
         "features": [
           "speech_pause",
@@ -1223,6 +1271,7 @@
           "time_sync",
           "turn_progress",
           "voice",
+          "wake_claim",
           "wake_clips",
           "wifi"
         ],
@@ -1250,7 +1299,9 @@
           "support_open",
           "support_input",
           "support_resize",
-          "support_close"
+          "support_close",
+          "wake_grant",
+          "capture_keep"
         ],
         "upgrade_extra": null,
         "config_hidden_sections": null,
@@ -1325,6 +1376,101 @@
           "wake_word": "hey_jarvis"
         }
       }
+    }
+  },
+  "room_turns": {
+    "about": [
+      "One turn per wake word (1.5.0), docs/uml/satellite-protocol.md 'One turn per wake word'.",
+      "Two satellites in one room, both with wake_claim. Read by domovoi/tests/test_wake_claims.py;",
+      "slice 4 (satellite/) and the phone apps build their claim side against these frames."
+    ],
+    "hello_supports_adds": "wake_claim",
+    "ready_room": {
+      "room_id": "kitchen",
+      "name": "Kitchen",
+      "shared": true,
+      "claim": true
+    },
+    "ready_features_adds": "wake_claim",
+    "claim": {
+      "type": "wake_claim",
+      "claim": 7,
+      "word": "hey_jarvis",
+      "score": 0.91,
+      "floor_dbfs": -52.0
+    },
+    "claim_late": {
+      "type": "wake_claim",
+      "claim": 3,
+      "word": "hey_jarvis",
+      "score": 0.88,
+      "floor_dbfs": -47.5
+    },
+    "grant_owner": {
+      "type": "wake_grant",
+      "claim": 7,
+      "turn": "t1",
+      "role": "owner"
+    },
+    "grant_quiet": {
+      "type": "wake_grant",
+      "claim": 3,
+      "turn": "t1",
+      "role": "quiet",
+      "stream_ms": 2000
+    },
+    "owner_utterance_start": {
+      "type": "utterance_start",
+      "trigger": "wake_word",
+      "claim": 7,
+      "utt": 1,
+      "wake_word": "hey_jarvis",
+      "wake_score": 0.91
+    },
+    "capture_keep": {
+      "type": "capture_keep",
+      "claim": 3,
+      "turn": "t1"
+    },
+    "end_capture_quiet": {
+      "type": "end_capture",
+      "claim": 3
+    },
+    "quiet_end": {
+      "type": "quiet_end",
+      "claim": 3,
+      "frames": 52,
+      "reason": "stopped"
+    },
+    "barge_in_claim": {
+      "type": "wake_claim",
+      "claim": 4,
+      "word": "hey_jarvis",
+      "score": 0.8,
+      "floor_dbfs": -40.0,
+      "barge_in": true
+    },
+    "response_start_room_audio_adds": {
+      "room_audio": true
+    },
+    "response_end_room_audio_adds": [
+      "play_end_us"
+    ],
+    "duplicate_dropped_response_end": {
+      "type": "response_end",
+      "interrupted": true,
+      "expect_followup": false,
+      "ignored": true,
+      "duplicate": true
+    },
+    "constants": {
+      "stream_ms": 2000,
+      "join_window_ms": 1500,
+      "score_window_ms": 1500,
+      "min_scored_ms": 300,
+      "fail_open_ms": 150,
+      "cooldown_ms": 1000,
+      "level_percentile": 90
     }
   }
 }

@@ -146,6 +146,20 @@ class RoomStreamer:
         self._flush(at)
         return at
 
+    def cut_speech(self, at_us: float | None = None) -> int:
+        """A barge-in: the queued and playing sounds (an answer, a timer)
+        stop at ``at_us`` on every speaker; music, if any, plays on from
+        there (it was ducked under the speech)."""
+        at = self._at(at_us)
+        self._speech.clear()
+        self._flush(at)
+        if self.next_index is not None:
+            if self.music is not None and not self.paused:
+                self.next_index = min(self.next_index, max(0, self.index_at(at)))
+            else:
+                self.next_index = None
+        return at
+
     def pause(self, at_us: float | None = None) -> int:
         """Like stop, but the music source stays attached (drained, not
         played) until :meth:`resume`."""
