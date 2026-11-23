@@ -2,7 +2,7 @@
  * processor (window.DomovoiDocEditor), and the full-screen surface the
  * Files page and the phone app open it in (window.DocEditor).
  *
- * Built on Tiptap 2 / ProseMirror (MIT), vendored in vendor/tiptap with
+ * Built on Tiptap 3 / ProseMirror (MIT), vendored in vendor/tiptap with
  * Yjs in vendor/yjs (scripts/vendor/editors/build.mjs); both are loaded
  * the first time a document opens, never with the dashboard.
  *
@@ -53,7 +53,7 @@
     });
     return pending[src];
   };
-  // Yjs first, always: the tiptap bundle's y-prosemirror is bound to window.Y.
+  // Yjs first, always: the tiptap bundle's y-tiptap is bound to window.Y.
   const loadYjs = () => (window.Y ? Promise.resolve(window.Y) : loadScript(VENDOR.yjs).then(() => window.Y));
   const load = () => loadYjs()
     .then(() => (window.DomovoiTiptap ? null : loadScript(VENDOR.tiptap)))
@@ -505,9 +505,9 @@
 .de-fig-cap:focus { background: #f5f8fd; }
 .de-fig-cap.empty { display: none; } .de-fig.sel .de-fig-cap.empty { display: block; }
 .de-paper::after { content: ""; display: block; clear: both; }
-.collaboration-cursor__caret { border-left: 1px solid #0d0d0d; border-right: 1px solid #0d0d0d; margin-left: -1px; margin-right: -1px;
+.collaboration-carets__caret { border-left: 1px solid #0d0d0d; border-right: 1px solid #0d0d0d; margin-left: -1px; margin-right: -1px;
   pointer-events: none; position: relative; word-break: normal; }
-.collaboration-cursor__label { border-radius: 3px 3px 3px 0; color: #0d0d0d; font: 600 12px/normal system-ui, sans-serif; left: -1px;
+.collaboration-carets__label { border-radius: 3px 3px 3px 0; color: #0d0d0d; font: 600 12px/normal system-ui, sans-serif; left: -1px;
   padding: .1rem .3rem; position: absolute; top: -1.4em; user-select: none; white-space: nowrap; }
 .de-pop { position: fixed; z-index: 120; background: var(--card); color: var(--fg); border: 1px solid var(--border); border-radius: var(--r-md, 8px);
   box-shadow: var(--shadow-md, 0 6px 20px rgba(0,0,0,.2)); padding: 8px; max-width: calc(100vw - 16px); }
@@ -1156,8 +1156,14 @@
   const buildEditor = (T, mount, opts, env) => {
     const collab = opts.collab || null;
     const exts = [
+      // Tiptap 3's StarterKit also carries Link, Underline and a trailing
+      // empty paragraph: the first two are configured below, the last
+      // would add a paragraph to every saved document.
       T.StarterKit.configure({
-        history: collab ? false : { depth: 200 },
+        undoRedo: collab ? false : { depth: 200 },
+        link: false,
+        underline: false,
+        trailingNode: false,
         heading: { levels: [1, 2, 3, 4] },
         codeBlock: { HTMLAttributes: {} },
         dropcursor: { color: '#1a5fb4', width: 2 },
@@ -1176,7 +1182,7 @@
         defaultProtocol: 'https',
         protocols: ['mailto', 'tel'],
         HTMLAttributes: { target: '_blank', rel: 'noopener noreferrer nofollow' },
-        validate: (href) => SAFE.href(href),
+        shouldAutoLink: (href) => SAFE.href(href),
         isAllowedUri: (href) => SAFE.href(href),
       }),
       T.Table.configure({ resizable: !env.markdown, lastColumnResizable: true }),
@@ -1190,7 +1196,7 @@
     if (collab) {
       exts.push(T.Collaboration.configure({ document: collab.ydoc, field: collab.field || 'default' }));
       if (collab.provider && collab.provider.awareness) {
-        exts.push(T.CollaborationCursor.configure({
+        exts.push(T.CollaborationCaret.configure({
           provider: collab.provider,
           user: collab.user || { name: 'Someone', color: '#1a5fb4' },
         }));
@@ -1252,7 +1258,7 @@
         const first = editor.state.doc.firstChild;
         const empty = editor.state.doc.childCount <= 1 && editor.state.doc.textContent === ''
           && !(first && /figure|table/.test(first.type.name));
-        if (empty) editor.chain().setMeta('addToHistory', false).setContent(env.initialHtml, true).run();
+        if (empty) editor.chain().setMeta('addToHistory', false).setContent(env.initialHtml, { emitUpdate: true }).run();
       };
       if (typeof collab.onSeed === 'function') collab.onSeed(() => seedNow());
       else if (collab.seed) {
@@ -1784,7 +1790,7 @@
         if (!bridge.editor || !bridge.serializer) return opts.format === 'md' ? initial : '';
         return bridge.serializer.serialize(bridge.editor.state.doc).replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
       },
-      setContent: (html) => { if (bridge.editor) bridge.editor.commands.setContent(sanitizeDoc(html), true); },
+      setContent: (html) => { if (bridge.editor) bridge.editor.commands.setContent(sanitizeDoc(html), { emitUpdate: true }); },
       isEmpty: () => (bridge.editor ? bridge.editor.isEmpty : !initial),
       // The editor is up and showing the document (not still loading, not
       // destroyed). Only a live editor's content may be saved: getHTML()

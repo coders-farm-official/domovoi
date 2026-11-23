@@ -99,6 +99,10 @@ a way that would otherwise get reported as a bug.
 
 ## 1.4.1 (unreleased)
 
+- The Documents editor runs on Tiptap 3 (3.33.1, was 2.27.3). Documents,
+  saving and co-editing work as before; the accepted Tiptap advisory
+  (GHSA-cp6q-959q-f8rh) is fixed in this version, so its exception is gone.
+  A span nested in a coloured span now keeps both styles when pasted.
 - Room devices looking for every house count a server only when its
   identity proof is bound to the address they dialled, and the server
   signs the approval-proof form only bound to one.
