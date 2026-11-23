@@ -191,3 +191,55 @@ def test_known_answer_transcript(monkeypatch):
     assert tag == KAT_DEVICE_TAG
     assert srv.device_proved(tag) and srv.proof == KAT_SERVER_TAG
     assert dev.server_proved(KAT_SERVER_TAG)
+
+
+# --- version 2: the pairing token is in the transcript (L9, 1.5.0) ----------
+
+TOKEN_HASH = pp.token_digest("t" * 64)
+
+
+def test_v2_proves_both_ways_with_the_same_token():
+    dev = pp.DeviceExchange(CODE)
+    srv = pp.ServerExchange(CODE, dev.message, room_id=ROOM, fingerprint=FP_A,
+                            token_hash=TOKEN_HASH)
+    tag = dev.answer(srv.message, room_id=ROOM, fingerprint=FP_A, token_hash=TOKEN_HASH)
+    assert srv.device_proved(tag) and dev.server_proved(srv.proof)
+
+
+@pytest.mark.parametrize("dev_hash, srv_hash", [
+    (TOKEN_HASH, pp.token_digest("r" * 64)),   # a token swapped on the way
+    (TOKEN_HASH, None),                        # a v1 core, a v2 device
+    (None, TOKEN_HASH),                        # a v1 device, a v2 run
+])
+def test_v2_fails_for_any_other_token_or_version(dev_hash, srv_hash):
+    dev = pp.DeviceExchange(CODE)
+    srv = pp.ServerExchange(CODE, dev.message, room_id=ROOM, fingerprint=FP_A,
+                            token_hash=srv_hash)
+    tag = dev.answer(srv.message, room_id=ROOM, fingerprint=FP_A, token_hash=dev_hash)
+    assert not srv.device_proved(tag)
+
+
+def test_a_malformed_token_hash_is_refused():
+    dev = pp.DeviceExchange(CODE)
+    with pytest.raises(ValueError):
+        pp.ServerExchange(CODE, dev.message, room_id=ROOM, fingerprint=FP_A, token_hash="zz")
+
+
+def test_the_fixture_vector_matches():
+    """The shared fixture's version-2 tag vector, so another implementation
+    can check its transcript against this one."""
+    import json
+    from pathlib import Path
+
+    doc = json.loads((Path(__file__).resolve().parents[2] / "docs" / "uml"
+                      / "satellite-fixtures.json").read_text(encoding="utf-8"))
+    vec = doc["pairing_proof"]["v2_tag_vector"]
+    device, server = pp._tags(
+        room_id=vec["room_id"], fingerprint=vec["fingerprint"],
+        x_elem=int(vec["x"], 16), y_elem=int(vec["y"], 16), z_elem=int(vec["z"], 16),
+        w=int(vec["w"], 16), token_hash=vec["token_hash"],
+    )
+    assert device.hex() == vec["device_tag"] and server.hex() == vec["server_tag"]
+    assert pp.token_digest(vec["token"]) == vec["token_hash"]
+    assert doc["pairing_proof"]["version"] == pp.VERSION
+    assert doc["pairing_proof"]["hello_v2_adds"] == {"pairing_proof": pp.TOKEN_BOUND}

@@ -185,12 +185,24 @@ def test_a_reply_keeps_its_stats_and_the_sender_its_device(monkeypatch):
         assert st["context_limit"] == chat_api._HISTORY_LIMIT
         assert st["first_token_ms"] >= 0 and st["wall_ms"] >= st["first_token_ms"]
 
-        msgs = c.get(f"/api/chat/threads/{t['id']}/messages").json()["messages"]
+        # L39 (1.5.0): reads carry no device ids — ``mine`` against the
+        # caller's own X-Device-Id, and the device's name.
+        msgs = c.get(f"/api/chat/threads/{t['id']}/messages",
+                     headers={"X-Device-Id": "chat-test-phone"}).json()["messages"]
         user, reply = msgs
-        assert user["device_id"] == "chat-test-phone"
+        assert "device_id" not in user and "device_id" not in reply
+        assert user["mine"] is True and reply["mine"] is False
         assert user["device_name"] == "Kitchen tablet"
         assert user["stats"] is None
-        assert reply["stats"] == st and reply["device_id"] is None
+        assert reply["stats"] == st
+        assert "device_id" not in done and done["mine"] is False
+        other = c.get(f"/api/chat/threads/{t['id']}/messages",
+                      headers={"X-Device-Id": "chat-test-other"}).json()["messages"]
+        assert [m["mine"] for m in other] == [False, False]
+        bare = c.get(f"/api/chat/threads/{t['id']}/messages").json()["messages"]
+        assert [m["mine"] for m in bare] == [False, False]
+        assert all("device_id" not in m for m in other + bare)
+        assert "chat-test-phone" not in c.get(f"/api/chat/threads/{t['id']}/messages").text
 
 
 @requires_db
@@ -205,7 +217,7 @@ def test_a_malformed_device_id_is_not_kept(stub_stream, bad):
                    json={"content": "hello", "device_id": bad})
         assert r.status_code == 200
         user = c.get(f"/api/chat/threads/{t['id']}/messages").json()["messages"][0]
-        assert user["role"] == "user" and user["device_id"] is None
+        assert user["role"] == "user" and "device_id" not in user and user["mine"] is False
 
 
 def test_reply_stats_leave_out_what_is_unknown() -> None:

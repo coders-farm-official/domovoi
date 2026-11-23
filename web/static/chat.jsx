@@ -231,8 +231,8 @@ const chatCopyText = async (text) => {
 /* Who sent a user message, as the details show it. */
 const chatDeviceLabel = (m) => {
   if (m.device) return m.device;
-  const mine = typeof DeviceIdentity !== 'undefined' && m.device_id && m.device_id === DeviceIdentity.id();
-  return mine ? 'this browser' : (m.device_name || m.device_id || null);
+  // `mine`: the server compared the row with this browser's X-Device-Id.
+  return m.mine ? 'this browser' : (m.device_name || null);
 };
 
 /* The copy / details menu, at the pointer (right-click or long press) or
@@ -619,7 +619,7 @@ const ChatPageMain = () => {
   const [videos, setVideos] = React.useState([]);
   const loadMessages = async (id) => {
     try {
-      const r = await apiGet(`/api/chat/threads/${id}/messages`);
+      const r = await apiGet(`/api/chat/threads/${id}/messages`, { headers: callerDeviceHeaders() });
       setMessages(r.messages || []);
       setJobs(r.jobs || []);
       setVideos(r.videos || []);

@@ -56,6 +56,15 @@ ERROR_CODES: dict[str, ErrorHelp] = {
         "that would go online is refused. An admin can change the answer to Yes or Sometimes.",
         "internet",
     ),
+    # ── "this is me": a device acting as its person ─────────────────────
+    "claim_key_required": _e(
+        "This phone or browser can't prove whose it is",
+        "Changing a person's own settings (their music mix) from a phone or browser needs the "
+        "key it was handed when it said \"this is me\" on that person's People page. This one "
+        "has no key, or an out-of-date one: say \"this is me\" again on the person's People page "
+        "(Settings → Household → People), or ask an admin to make the change.",
+        "people",
+    ),
     # ── chat replies (stats.error_code) ──────────────────────────────────
     "model_missing": _e(
         "The chat model isn't installed",

@@ -512,6 +512,10 @@ class House:
     #: address binding, or something relaying one), or "" (not recorded —
     #: a House built by hand).
     identity: str = ""
+    #: The approval-exchange version it SIGNED for that address (0: none).
+    #: 2 or more: the device binds its pairing token into the exchange
+    #: (satellite/pairing_proof.py) — never with a server that signed less.
+    proof_version: int = 0
 
 
 def probe_house(host: str, *, port: int = CORE_PORT,
@@ -580,7 +584,7 @@ def probe_house(host: str, *, port: int = CORE_PORT,
     ws = "wss" if scheme == "https" else "ws"
     name = str(doc.get("bot_name") or "")[:40]
     return House(url=f"{ws}://{host}:{port}", fingerprint=fingerprint, proof=proof, name=name,
-                 identity=state)
+                 identity=state, proof_version=version if proof else 0)
 
 
 def find_houses(
@@ -686,7 +690,7 @@ def locate_all(
         if house.fingerprint:
             seen_fp.add(house.fingerprint)
         out.append(House(house.url, house.fingerprint, house.proof, house.name, via,
-                         house.identity))
+                         house.identity, house.proof_version))
 
     def ask(host: str, p: int, via: str) -> None:
         try:

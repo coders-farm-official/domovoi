@@ -111,11 +111,12 @@ class _DeviceSide:
         return item
 
 
-def _bridge(sessions: list):
+def _bridge(sessions: list, *, swap_token: str | None = None):
     """A ``connect`` for house_pairing: each call opens a socket to a fresh
     core StreamSession for the room in the URL, which reads the hello and
     runs ``_validate_pairing`` — then says ``ready`` if it accepted, as the
-    real session does."""
+    real session does. ``swap_token``: something in between replaces the
+    hello's pairing token before the core sees it."""
 
     @asynccontextmanager
     async def connect(url: str):
@@ -128,6 +129,8 @@ def _bridge(sessions: list):
 
         async def serve() -> None:
             hello = json.loads(await to_core.get())
+            if swap_token is not None:
+                hello["pairing_token"] = swap_token
             if await sess._validate_pairing(hello):
                 await core_ws.send_text(json.dumps({"type": "ready", "room_id": room}))
             await to_device.put(None)
@@ -145,19 +148,22 @@ def _bridge(sessions: list):
     return connect
 
 
-def _house() -> House:
+def _house(version: int = 0) -> House:
+    """``version`` 0: built by hand, as a device from before the signed
+    version (it runs version 1); 2: a house that signed ``pairing_proof=2``."""
     return House(url="ws://192.168.1.20:6370", fingerprint=_fingerprint(), proof=True,
-                 name="Domovoi", via="name")
+                 name="Domovoi", via="name", proof_version=version)
 
 
-async def _visit(code: str = CODE, *, budget=None, tmp=None, sessions=None):
-    house = _house()
+async def _visit(code: str = CODE, *, budget=None, tmp=None, sessions=None,
+                 version: int = 0, swap_token: str | None = None):
+    house = _house(version)
     sessions = [] if sessions is None else sessions
     budget = budget or house_pairing.ProofBudget(tmp / "budget.json")
     token = house_pairing.house_token(MASTER, house.fingerprint)
     result = await house_pairing.visit(
         house, room_id=ROOM, code=code, hello={"type": "hello", "approval_code": code},
-        token=token, connect=_bridge(sessions), budget=budget,
+        token=token, connect=_bridge(sessions, swap_token=swap_token), budget=budget,
     )
     return result, token, sessions
 
@@ -211,6 +217,58 @@ async def test_the_right_code_typed_approves_and_the_device_checks_the_proof(tmp
     assert await _row() is None
     kinds = [f.get("type") for f in sessions[0].ws.sent]
     assert kinds.index("approval_challenge") < kinds.index("approval_proof")
+
+
+@pytest.mark.asyncio
+async def test_a_token_bound_device_is_approved_by_this_core(tmp_path) -> None:
+    """L9 (1.5.0): a device that saw ``pairing_proof=2`` signed says so in
+    its hello and binds its token into the exchange; this core runs the
+    same transcript, approves it, and binds that token."""
+    await _visit(tmp=tmp_path, version=2)
+    assert await _type_code(CODE) == "entered"
+    result, token, sessions = await _visit(tmp=tmp_path, version=2)
+    assert result.kind == "approved"
+    pairing = await _pairing()
+    assert pairing is not None and pairing[0] == token_sha256(token)
+
+
+@pytest.mark.asyncio
+async def test_a_version_one_device_is_still_approved(tmp_path) -> None:
+    """An older device (no ``pairing_proof`` in its hello) still runs the
+    version-1 exchange with this core."""
+    await _visit(tmp=tmp_path, version=1)
+    assert await _type_code(CODE) == "entered"
+    result, token, _sessions = await _visit(tmp=tmp_path, version=1)
+    assert result.kind == "approved"
+    pairing = await _pairing()
+    assert pairing is not None and pairing[0] == token_sha256(token)
+
+
+@pytest.mark.asyncio
+async def test_a_swapped_token_fails_the_token_bound_exchange(tmp_path) -> None:
+    """L9: something in between forwards the exchange but puts its own
+    token in the hello. In version 2 the two sides then compute different
+    transcripts: the device's confirmation fails, nothing is bound, and the
+    device gets no proof."""
+    other = "f" * 64
+    await _visit(tmp=tmp_path, version=2, swap_token=other)
+    assert await _type_code(CODE) == "entered"
+    result, _token, sessions = await _visit(tmp=tmp_path, version=2, swap_token=other)
+    assert result.kind == "mismatch"
+    assert await _pairing() is None
+    assert all(f.get("type") != "approval_proof" for f in sessions[0].ws.sent)
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_exchange_version_is_refused() -> None:
+    sess = _sess()
+    dev = pairing_proof.DeviceExchange(CODE)
+    ok = await sess._validate_pairing({
+        "type": "hello", "room_id": ROOM, "pairing_token": MASTER,
+        "approval_pake": dev.message, "pairing_proof": 9,
+    })
+    assert ok is False
+    assert sess.ws.sent[-1]["reason"] == "approval_pake_invalid"
 
 
 @pytest.mark.asyncio

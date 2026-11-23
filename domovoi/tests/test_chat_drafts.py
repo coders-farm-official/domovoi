@@ -567,9 +567,18 @@ def test_each_version_records_the_device_that_made_it(model):
         e = c.post(f"/api/chat/drafts/{did}/versions",
                    json={"text": "Dear Sam,\n\nHi.", "base_version": 1, "device_id": "android-bbbb"})
         assert e.status_code == 200
-        vs = c.get(f"/api/chat/drafts/{did}").json()["versions"]
-        assert [v["device_id"] for v in vs] == ["browser-aaaa", "android-bbbb"]
+        # L39 (1.5.0): the read says ``mine`` for the caller's own
+        # X-Device-Id and never returns the stored ids.
+        vs = c.get(f"/api/chat/drafts/{did}", headers={"X-Device-Id": "browser-aaaa"}).json()["versions"]
+        assert [v["mine"] for v in vs] == [True, False]
+        assert all("device_id" not in v for v in vs)
         assert "device_name" in vs[1]
+        vs = c.get(f"/api/chat/drafts/{did}", headers={"X-Device-Id": "android-bbbb"}).json()["versions"]
+        assert [v["mine"] for v in vs] == [False, True]
+        bare = c.get(f"/api/chat/drafts/{did}")
+        assert [v["mine"] for v in bare.json()["versions"]] == [False, False]
+        assert "browser-aaaa" not in bare.text and "android-bbbb" not in bare.text
+        assert e.json()["version"]["mine"] is True and "device_id" not in e.json()["version"]
 
 
 @requires_db
@@ -588,7 +597,11 @@ async def test_a_version_names_its_device_and_the_person_whose_device_it_is():
         await drafts_api.edit_draft(did, drafts_api.EditBody(text=LETTER + "\nMine.\n", base_version=1,
                                                              device_id="android-d4own"))
         v = (await _all_versions(did))[1]
-        assert (v["device_id"], v["device_name"], v["person_id"]) == ("android-d4own", "Sam's phone", pid)
+        assert (v["device_name"], v["person_id"]) == ("Sam's phone", pid)
+        assert "device_id" not in v and v["mine"] is False
+        async with session_scope() as s:
+            mine = (await drafts_api._versions(s, did, "android-d4own"))[1]
+        assert mine["mine"] is True
     finally:
         async with session_scope() as s:
             await s.execute(sql("DELETE FROM devices WHERE device_id = 'android-d4own'"))

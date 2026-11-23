@@ -11070,7 +11070,8 @@ def _probe_one_house(cfg: "Config") -> tuple[str, Any]:
     if house.proof and house.fingerprint and (not expected or house.fingerprint == expected):
         _remember_proof_server(house.fingerprint)
         return "proof", discovery.House(url=url, fingerprint=house.fingerprint, proof=True,
-                                        name=house.name, via="address", identity="proved")
+                                        name=house.name, via="address", identity="proved",
+                                        proof_version=house.proof_version)
     if _proof_server_remembered(expected, house.fingerprint):
         log.error(
             "%s has proved before that it can prove an approval, and now says it "
