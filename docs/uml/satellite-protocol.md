@@ -804,7 +804,7 @@ frames, all before `ready`:
 
 | Direction | Frame | Payload | Meaning |
 |---|---|---|---|
-| device → core | `hello` | `pairing_token` (this server's own: `HMAC-SHA256(device token, server fingerprint)`), `approval_pake` (`X`, 512 hex chars), **no** `approval_code` | Park (or refresh) a proof request. Never pairs on trust, strict or not; a malformed `approval_pake` is `error{reason:"approval_pake_invalid"}`. A room already paired takes the ordinary token check. |
+| device → core | `hello` | `pairing_token` (this server's own: `HMAC-SHA256(device token, server fingerprint)`), `approval_pake` (`X`, 512 hex chars), `pairing_proof: 2` (1.5.0, only to a server that SIGNED `pairing_proof >= 2`), **no** `approval_code` | Park (or refresh) a proof request. Never pairs on trust, strict or not; a malformed `approval_pake`, or a `pairing_proof` other than absent, `1` or `2`, is `error{reason:"approval_pake_invalid"}`. A room already paired takes the ordinary token check. |
 | core → device | `error` | `reason:"awaiting_approval"`, `proof:true`, no `code` | Parked; nothing typed for it yet. The device asks again in ten seconds. |
 | core → device | `approval_challenge` | `pake` (`Y`) | A code was typed on the dashboard: run the exchange with it. The typed code is used up only by a confirmation that does not check out (a guess); a run the device declines, does not answer within 20 s or leaves puts it back for the next visit. |
 | device → core | `approval_confirm` | `tag` (64 hex) | The device's confirmation. The core checks it in constant time within 20 s. |
@@ -816,6 +816,31 @@ frames, all before `ready`:
 Other new refusals: `approval_unavailable` (the core could not record or
 run the exchange; it fails closed), `approval_throttled` (the per-source
 limit, consulted before any arithmetic; withdrawals count too).
+
+**Version 2: the exchange binds the pairing token (1.5.0).** The frames
+are the same; what changes is the transcript both sides hash into the key
+`K` the two tags come from. Version 1:
+`"domovoi-pairing-proof-v1" || lp(room_id) || lp(fingerprint) || lp(X) || lp(Y) || lp(Z) || lp(w)`.
+Version 2:
+`"domovoi-pairing-proof-v2" || lp(SHA-256(pairing_token)) || lp(room_id) || lp(fingerprint) || lp(X) || lp(Y) || lp(Z) || lp(w)`
+— `lp` is an 8-byte little-endian length then the bytes; the token hash
+is the 32 raw bytes of the SHA-256 of the `pairing_token` string (UTF-8)
+as it appears in the `hello`; group elements and `w` are 256 bytes
+big-endian; `K = SHA-256(transcript)`, the device's tag
+`HMAC-SHA256(K, "device confirms")`, the server's
+`HMAC-SHA256(K, "server confirms")`. The device hashes the token it sent,
+the core the token it received, so a `hello` whose token was replaced on
+the way makes the device's confirmation fail (`approval_code_mismatch`)
+and nothing is bound.
+
+* A 1.5.0 core signs `pairing_proof=2` in `/v1/health` and runs version 2
+  for a `hello` with `pairing_proof: 2`, version 1 for one without it.
+* A 1.5.0 device runs version 2, and adds `pairing_proof: 2` to its
+  `hello`, only for a server whose SIGNED advert is 2 or more; with a
+  server that signed 1 it sends no `pairing_proof` and runs version 1.
+* The shared fixtures carry the version and a version-2 tag vector
+  (`pairing_proof` in [`satellite-fixtures.json`](satellite-fixtures.json)),
+  read by `satellite/tests/test_pairing_proof.py`.
 
 See [voice-turn.md](voice-turn.md) for what happens between `utterance_end`
 and `response_start`, and [../SATELLITE_HARDWARE.md](../SATELLITE_HARDWARE.md)

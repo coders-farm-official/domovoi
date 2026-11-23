@@ -77,7 +77,9 @@ times, how much of the thread was sent as context and which model setting
 answered (:func:`_reply_stats`). A user row keeps the ``device_id`` of the
 install that sent it — self-asserted, like queue provenance, and kept only
 when it is a well-formed id (``devices.valid_device_id``) — and reads join
-``devices`` for its current name.
+``devices`` for its current name. Reads never return the stored id (1.5.0,
+L39 of the 2026-11 review): a row says ``mine`` instead — true when it was
+sent with the id the caller names in ``X-Device-Id`` (:func:`caller_id`).
 """
 
 from __future__ import annotations
@@ -415,8 +417,25 @@ _MSG_COLUMNS = (
 )
 
 
-def _msg_dict(r: Any) -> dict[str, Any]:
+def caller_id(request: Request | None) -> str | None:
+    """The device id a chat read compares rows with: the caller's own
+    ``X-Device-Id`` header, when it is a well-formed id. Self-asserted,
+    and only ever used for the ``mine`` display hint."""
+    if request is None:
+        return None
+    try:
+        return valid_device_id(request.headers.get("X-Device-Id"))
+    except Exception:  # noqa: BLE001 — no header, no "mine"
+        return None
+
+
+def _msg_dict(r: Any, me: str | None = None) -> dict[str, Any]:
+    """A message row as clients read it. The sender's device id stays in
+    the database: the row says ``mine`` (sent with ``me``, the caller's own
+    id) and ``device_name`` instead."""
     d = dict(r)
+    stored = d.pop("device_id", None)
+    d["mine"] = bool(me) and stored == me
     d["created_at"] = d["created_at"].isoformat()
     for key in ("stats", "documents", "doc", "draft"):
         if isinstance(d.get(key), str):
@@ -610,7 +629,11 @@ def _reply_stats(
 
 
 @router.get("/threads/{thread_id}/messages", dependencies=READ)
-async def list_messages(thread_id: int) -> dict[str, Any]:
+async def list_messages(thread_id: int, request: Request = None) -> dict[str, Any]:  # type: ignore[assignment]
+    """The thread's messages, oldest first. No device ids: a user row says
+    ``mine`` (sent from the ``X-Device-Id`` the caller names) and
+    ``device_name``."""
+    me = caller_id(request)
     async with session_scope() as s:
         exists = (
             await s.execute(text("SELECT 1 FROM chat_threads WHERE id = :id"), {"id": thread_id})
@@ -645,7 +668,7 @@ async def list_messages(thread_id: int) -> dict[str, Any]:
     except Exception as e:  # noqa: BLE001 — the messages still show
         log.warning("chat: the videos of thread %s are unreadable: %s", thread_id, type(e).__name__)
         videos = []
-    return {"messages": [_msg_dict(r) for r in rows], "jobs": jobs, "videos": videos}
+    return {"messages": [_msg_dict(r, me) for r in rows], "jobs": jobs, "videos": videos}
 
 
 class SendBody(BaseModel):

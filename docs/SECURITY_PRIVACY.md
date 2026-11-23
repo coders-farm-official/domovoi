@@ -2380,6 +2380,20 @@ shared screen, or the device letting go wipes it. A claim and an admin
 marking the device shared at the same moment take turns (the device row is
 locked, and the write refuses a shared screen).
 
+**Since 1.5.0 (L39 and L40 of the review of 2026-11-22, closed in 1.5.0).**
+Chat reads no longer hand out the device ids messages and draft versions
+were sent from (`GET /api/chat/threads/{id}/messages`,
+`GET /api/chat/drafts/{id}`): each row says `mine` instead — true when it
+was sent with the id the caller names in its own `X-Device-Id` header,
+false for every row when there is none — and keeps `device_name`. `mine`
+is a display hint only ("this browser", "edited by you"), so the
+self-asserted header is enough for it. Writes still carry `device_id` as
+before. And a person's own music-mix sliders (`PUT
+/api/people/{id}/music-mix`) now take the same claim-key check as clearing
+their history: from a device claimed as that person, the request carries
+`X-Domovoi-Claim-Key`; without a matching key it is refused `403`
+`{"detail", "code": "claim_key_required"}`. An admin skips the check.
+
 **What this still allows.** Claiming a person **nobody has claimed** stays
 easy on purpose (owner decision 2026-11-12: "this is me" should just work).
 So any household device can claim, for example, a child or anyone else who
@@ -4858,6 +4872,25 @@ instead of passing the server off as an older one. The core signs a
 counts a server as found at an address only when its answer is bound to
 that address: an unbound answer holds no fingerprint, so it can't stand in
 for the real server when the device looks for every house.
+
+**The exchange binds the pairing token (version 2, 1.5.0; L9 of the review
+of 2026-11-22, closed in 1.5.0).** In version 1 the exchange's transcript
+named the room and the server's key but not the pairing token the core
+then stored for the room, so something relaying a device's connection at
+the server's own address could forward the exchange unchanged and put its
+own token in the `hello`. A 1.5.0 core signs `pairing_proof=2`, and a
+1.5.0 device that sees that signed adds `pairing_proof: 2` to its `hello`
+and runs the version-2 transcript, which also carries `SHA-256(pairing
+token)`: the device hashes the token it sent, the core the token it
+received. A swapped token makes the two transcripts differ, so the
+device's confirmation fails as a wrong code would, nothing is bound and
+the device gets no proof. The device uses version 2 only with a server
+that signed version 2 (the advert is signed, so it can't be raised or
+lowered on the way); with a 1.4.0 core it runs version 1 as before, and a
+1.5.0 core still serves a 1.4.0 device's version-1 `hello`. A `hello` that
+names any other version is refused (`approval_pake_invalid`). Removing
+`pairing_proof: 2` from a version-2 device's `hello` on the way only makes
+the run fail: the device computes version 2 whatever the core does.
 
 *Known limit.* The setup portal still accepts an address the person types
 in and, on a device with no server key recorded, keeps the old approval

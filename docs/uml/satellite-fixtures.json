@@ -1493,5 +1493,28 @@
       "cooldown_ms": 1000,
       "level_percentile": 90
     }
+  },
+  "pairing_proof": {
+    "about": "The approval exchange (satellite/pairing_proof.py, docs/uml/satellite-protocol.md). Version 2 (1.5.0) binds SHA-256(pairing_token) into the transcript: transcript = 'domovoi-pairing-proof-v2' || lp(sha256(token), 32 bytes) || lp(room_id) || lp(fingerprint) || lp(X) || lp(Y) || lp(Z) || lp(w); lp = 8-byte little-endian length, then the bytes; X, Y, Z, w as 256-byte big-endian; K = SHA-256(transcript); device tag = HMAC-SHA256(K, 'device confirms'), server tag = HMAC-SHA256(K, 'server confirms'). Version 1 is the same without the token field, under 'domovoi-pairing-proof-v1'. A device adds hello_v2_adds only for a server whose /v1/health SIGNED pairing_proof >= 2. The vector's elements are placeholders for the transcript only (hex, no leading zeros).",
+    "version": 2,
+    "supported": [
+      1,
+      2
+    ],
+    "hello_v2_adds": {
+      "pairing_proof": 2
+    },
+    "v2_tag_vector": {
+      "room_id": "kitchen",
+      "fingerprint": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "token": "placeholder-pairing-token",
+      "token_hash": "d4e709efcb626cc9210675e65456f481cc18126d65a6ff44224cf733d601e240",
+      "x": "20",
+      "y": "80",
+      "z": "800",
+      "w": "75bcd15",
+      "device_tag": "8f79d661cb5c3ac00b310d5721c99338aef7f51bb158bab31305e6d5e0a3b1d1",
+      "server_tag": "669d77f82ec6ff9aa75ffedc245e220c44d67b406809079cc61b68b91106e95e"
+    }
   }
 }

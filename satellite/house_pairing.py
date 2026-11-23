@@ -451,6 +451,14 @@ async def _visit(
     frame_out["room_id"] = room_id
     frame_out["pairing_token"] = token
     frame_out["approval_pake"] = exchange.message
+    # Version 2 binds this hello's token into the exchange — only with a
+    # server that SIGNED it speaks version 2 (an older core would compute
+    # the version-1 transcript, and the run would fail as a wrong code).
+    token_bound = house.proof_version >= pairing_proof.TOKEN_BOUND
+    frame_out.pop("pairing_proof", None)
+    if token_bound:
+        frame_out["pairing_proof"] = pairing_proof.TOKEN_BOUND
+    token_hash = pairing_proof.token_digest(token) if token_bound else None
     async with connect(_stream_url(house, room_id)) as ws:
         await ws.send(json.dumps(frame_out))
         while True:
@@ -478,7 +486,7 @@ async def _visit(
                 state["answered"] = True
                 tag = await asyncio.to_thread(
                     exchange.answer, frame.get("pake"),
-                    room_id=room_id, fingerprint=house.fingerprint,
+                    room_id=room_id, fingerprint=house.fingerprint, token_hash=token_hash,
                 )
                 if tag is None:
                     return Visit("refused", "the challenge was not a valid exchange message")

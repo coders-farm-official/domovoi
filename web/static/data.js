@@ -931,7 +931,23 @@ const reportMutationFailure = (fire, verb, e, { kept = false, key = null } = {})
 };
 
 // apiGet(path, { quiet: true }) — a read that never opens a prompt.
-const apiGet = (path, opts) => apiFetch(path, opts && opts.quiet ? { quiet: true } : {});
+// apiGet(path, { headers }) — extra request headers (e.g. callerDeviceHeaders()).
+const apiGet = (path, opts) => {
+  const init = {};
+  if (opts && opts.quiet) init.quiet = true;
+  if (opts && opts.headers) init.headers = opts.headers;
+  return apiFetch(path, init);
+};
+
+// This browser's device id as X-Device-Id, for the reads that answer
+// "is this row mine?" (chat messages, draft versions: their `mine`) — the
+// server no longer hands out the stored ids themselves.
+const callerDeviceHeaders = () => {
+  try {
+    const id = typeof DeviceIdentity !== 'undefined' ? DeviceIdentity.id() : null;
+    return id ? { 'X-Device-Id': id } : {};
+  } catch { return {}; }
+};
 const apiPost = (path, body) => apiFetch(path, { method: 'POST', body: JSON.stringify(body || {}) });
 const apiPatch = (path, body) => apiFetch(path, { method: 'PATCH', body: JSON.stringify(body || {}) });
 const apiPut = (path, body) => apiFetch(path, { method: 'PUT', body: JSON.stringify(body || {}) });

@@ -102,8 +102,13 @@ def _draft_row(r: Any) -> dict[str, Any]:
     return d
 
 
-def _version_row(r: Any) -> dict[str, Any]:
+def _version_row(r: Any, me: str | None = None) -> dict[str, Any]:
+    """A version as clients read it. The editing device's id stays in the
+    database (L39): ``mine`` says whether ``me`` (the caller's own id) made
+    it, ``device_name`` names the device otherwise."""
     d = dict(r)
+    stored = d.pop("device_id", None)
+    d["mine"] = bool(me) and stored == me
     d["created_at"] = _iso(d.get("created_at"))
     d["saved"] = _json(d.get("saved")) or []
     d["words"] = blocks.word_count(d.get("body") or "")
@@ -126,18 +131,19 @@ _VERSION_FROM = "chat_draft_versions v LEFT JOIN devices dv ON dv.device_id = v.
 _OWNER = "(SELECT owner_person_id FROM devices WHERE device_id = :dev)"
 
 
-async def _versions(s: Any, draft_id: int) -> list[dict[str, Any]]:
+async def _versions(s: Any, draft_id: int, me: str | None = None) -> list[dict[str, Any]]:
     rows = (await s.execute(text(
         f"SELECT {_VERSION_COLS} FROM {_VERSION_FROM} WHERE v.draft_id = :id ORDER BY v.version"),
         {"id": draft_id})).mappings().all()
-    return [_version_row(r) for r in rows]
+    return [_version_row(r, me) for r in rows]
 
 
-async def _version(s: Any, draft_id: int, version: int | None) -> dict[str, Any] | None:
+async def _version(s: Any, draft_id: int, version: int | None,
+                   me: str | None = None) -> dict[str, Any] | None:
     q = (f"SELECT {_VERSION_COLS} FROM {_VERSION_FROM} "
          "WHERE v.draft_id = :id " + ("AND v.version = :v" if version else "ORDER BY v.version DESC LIMIT 1"))
     r = (await s.execute(text(q), {"id": draft_id, "v": version})).mappings().first()
-    return _version_row(r) if r else None
+    return _version_row(r, me) if r else None
 
 
 async def latest_draft(thread_id: int) -> tuple[dict[str, Any], dict[str, Any]] | None:
@@ -485,16 +491,20 @@ def _with_changes(versions: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 @router.get("/drafts/{draft_id}", dependencies=READ)
-async def get_draft(draft_id: int) -> dict[str, Any]:
+async def get_draft(draft_id: int, request: Request = None) -> dict[str, Any]:  # type: ignore[assignment]
     """The draft and every version (oldest first): its markdown, the plain
     text the changes view shows (``display``), and ``changes`` against the
     version before (``[[op, text]]``: ``=`` kept, ``+`` added, ``-``
-    removed; null for v1)."""
+    removed; null for v1). No device ids: each version says ``mine``
+    (made from the ``X-Device-Id`` the caller names) and ``device_name``."""
+    from web.backend.api.chat import caller_id
+
+    me = caller_id(request)
     async with session_scope() as s:
         d = await _draft(s, draft_id)
         if d is None:
             raise HTTPException(status_code=404, detail="draft not found")
-        versions = await _versions(s, draft_id)
+        versions = await _versions(s, draft_id, me)
     tpl = [{"id": t.id, "label": t.label} for t in templates.for_kind(d["kind"])]
     # Off the event loop: each diff is bounded (diff.WORK_BUDGET), but a
     # draft can have many versions.
@@ -546,6 +556,9 @@ async def edit_draft(draft_id: int, body: EditBody, request: Request = None) -> 
             if latest is not None and latest["version"] != body.base_version:
                 return _stale(latest["version"])
             if latest is not None and latest["body"] == text_:
+                from web.backend.api.chat import caller_id
+
+                latest = await _version(s, draft_id, None, caller_id(request) or device)
                 return {"version": latest, "unchanged": True}
             version = (latest["version"] if latest else 0) + 1
             await s.execute(text(
@@ -555,7 +568,7 @@ async def edit_draft(draft_id: int, body: EditBody, request: Request = None) -> 
             await s.execute(text("UPDATE chat_drafts SET updated_at = now() WHERE id = :d"), {"d": draft_id})
             await _notify(s, "draft-edited")
             await s.commit()
-            v = await _version(s, draft_id, version)
+            v = await _version(s, draft_id, version, device)
     except IntegrityError:
         async with session_scope() as s:
             latest = await _version(s, draft_id, None)

@@ -4,6 +4,26 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Security: pairing proof v2, chat reads, music-mix claim key
+
+- **What changed.** Three items of the 2026-11-22 security review (L9,
+  L39, L40). The approval exchange a room device runs with a server it
+  found by itself also binds its pairing token (`/v1/health` now says
+  `pairing_proof: 2`); a 1.5.0 core still approves 1.4.0 devices, and a
+  1.5.0 device still runs the old exchange with a 1.4.0 core. Chat reads
+  (`GET /api/chat/threads/{id}/messages`, `GET /api/chat/drafts/{id}`)
+  no longer return the device id of each message or draft version: each
+  row says `mine` instead, for the id in the caller's own `X-Device-Id`
+  header. Changing a person's own music-mix sliders from their phone or
+  browser now needs that device's claim key (`X-Domovoi-Claim-Key`), as
+  clearing their listening history does.
+- **What to know.** A phone app that does not yet send `X-Device-Id` on
+  those chat reads shows no "this phone" / "edited by you" marks until it
+  does. A phone app that does not yet send its claim key on the music-mix
+  change is refused with `claim_key_required` (an admin can still make
+  the change); the web dashboard sends it already. A browser or phone
+  that said "this is me" before claims had keys says it again once.
+
 ## 1.5.0 (unreleased) — Every speaker in a room plays together
 
 - **What changed.** In a room with several satellites, music, radio,

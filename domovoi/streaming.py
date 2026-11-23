@@ -3444,6 +3444,18 @@ class StreamSession:
             return False
         from satellite import pairing_proof
 
+        proof_version = ctrl.get("pairing_proof", 1)
+        if (isinstance(proof_version, bool) or not isinstance(proof_version, int)
+                or proof_version not in pairing_proof.SUPPORTED):
+            log.warning(
+                "pairing: room=%s approval request refused — it asks for an "
+                "approval exchange version this server does not run", self.satellite_id,
+            )
+            await self._safe_send_text({
+                "type": "error", "reason": "approval_pake_invalid",
+                "message": "the approval exchange version is not supported",
+            })
+            return False
         if await asyncio.to_thread(pairing_proof.decode, pake) is None:
             log.warning(
                 "pairing: room=%s approval request refused — its approval_pake "
@@ -3503,7 +3515,8 @@ class StreamSession:
                 "proof": True,
             })
             return False
-        return await self._prove_approval(token_hash, entered[0], pake, entered_at=entered[1])
+        return await self._prove_approval(token_hash, entered[0], pake, entered_at=entered[1],
+                                          proof_version=proof_version)
 
     async def _proof_unavailable(self, e: BaseException) -> bool:
         log.warning("pairing: room=%s proof request failed: %s", self.satellite_id, e)
@@ -3541,7 +3554,7 @@ class StreamSession:
             log.debug("pairing: could not keep the typed code: %s", e)
 
     async def _prove_approval(self, token_hash: str, code: str, pake: Any,
-                              *, entered_at: Any = None) -> bool:
+                              *, entered_at: Any = None, proof_version: int = 1) -> bool:
         """Run the exchange for a code an operator typed (taken off the row
         for this run).
 
@@ -3557,7 +3570,12 @@ class StreamSession:
         (``approval_decline``: it is busy with another house's exchange,
         out of budget, or holding this server back), says nothing for
         :data:`APPROVAL_CONFIRM_TIMEOUT_SEC`, or goes away — tested nothing,
-        so the code is put back for the next visit and nothing is counted."""
+        so the code is put back for the next visit and nothing is counted.
+
+        ``proof_version`` 2 (the hello said ``pairing_proof: 2``) binds the
+        token this room is about to be bound to into the transcript: a hello
+        whose token was swapped on the way makes the device's confirmation
+        fail here, so nothing is bound."""
         from domovoi import server_identity as core_identity
         from satellite import pairing_proof
 
@@ -3567,6 +3585,7 @@ class StreamSession:
             exchange = await asyncio.to_thread(
                 pairing_proof.ServerExchange, code, pake,
                 room_id=self.satellite_id, fingerprint=fingerprint,
+                token_hash=token_hash if proof_version >= pairing_proof.TOKEN_BOUND else None,
             )
         except (OSError, ValueError) as e:
             await self._put_code_back(token_hash, code, entered_at)
