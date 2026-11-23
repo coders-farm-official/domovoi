@@ -496,8 +496,7 @@ class SupportSessions:
             if not await self._admin_live(sess, force=True):
                 await self.end(sess, "admin_session_ended", announce=False)
                 return
-            sat = (getattr(getattr(self.app, "state", None), "active_sessions", None) or {}).get(
-                sess.satellite_id)
+            sat = live_satellite(self.app, sess.satellite_id)
             if sat is None:
                 await self.end(sess, "satellite_disconnected", announce=False)
                 return
@@ -726,9 +725,9 @@ class SupportSessions:
             sat.support_strays = count
         except AttributeError:
             pass
-        log.info("support: dropped %r from %s (%d)", kind, getattr(sat, "room_id", "?"), count)
+        log.info("support: dropped %r from %s (%d)", kind, satellite_of(sat) or "?", count)
         if count >= STRAY_FRAME_LIMIT:
-            sess = self.by_satellite.get(getattr(sat, "room_id", None) or "")
+            sess = self.by_satellite.get(satellite_of(sat) or "")
             if sess is not None and sess.sat is sat:
                 await self.end(sess, "limits_broken", announce=False)
             try:
@@ -802,18 +801,28 @@ class SupportSessions:
         return True
 
     async def end_in_room(self, room_id: str | None, reason: str, *, announce: bool = True) -> int:
-        """End every session on a satellite in ``room_id`` (by voice)."""
+        """End every session on a satellite in ``room_id`` (by voice): the
+        room's devices from the registry (domovoi/room_devices.py), and any
+        session recorded in that room."""
         if not room_id:
             return 0
+        devices: set[str] = set()
+        if self.app is not None:
+            from domovoi import room_devices
+
+            try:
+                devices = set(room_devices.registry(self.app).devices_in(room_id))
+            except Exception as e:  # noqa: BLE001 - fall back to the recorded room
+                log.debug("support: room registry unavailable: %s", e)
         hits = [s for s in list(self.by_id.values())
-                if s.room_id == room_id or s.satellite_id == room_id]
+                if s.satellite_id in devices or s.room_id == room_id]
         for sess in hits:
             await self.end(sess, reason, announce=announce)
         return len(hits)
 
     async def connection_dropped(self, sat: Any) -> None:
         """The satellite's socket closed: its session ends, never resumes."""
-        sess = self.by_satellite.get(getattr(sat, "room_id", None) or "")
+        sess = self.by_satellite.get(satellite_of(sat) or "")
         if sess is not None and (sess.sat is sat or sess.sat is None):
             await self.end(sess, "satellite_disconnected", announce=False)
 
@@ -831,6 +840,23 @@ def get_manager(app: Any) -> SupportSessions:
 
 
 # ─── helpers ──────────────────────────────────────────────────────────────
+
+
+def satellite_of(sat: Any) -> str | None:
+    """A live session's satellite id (1.5.0 rooms: a device connects by its
+    own id, ``StreamSession.satellite_id``; its ``room_id`` is the room)."""
+    return getattr(sat, "satellite_id", None) or getattr(sat, "room_id", None)
+
+
+def live_satellite(app: Any, satellite_id: str) -> Any | None:
+    """The live session of the satellite ``satellite_id`` (never another
+    device of a room that happens to have that id)."""
+    from domovoi import room_devices
+
+    found = room_devices.registry(app).session_for(satellite_id)
+    if found is None or satellite_of(found) != satellite_id:
+        return None
+    return found
 
 
 def _clamp(value: Any, bounds: tuple[int, int]) -> int:
@@ -873,7 +899,7 @@ async def _say(sat: Any, words: str) -> None:
     try:
         await sat.announce(words, kind="user")
     except Exception as e:  # noqa: BLE001
-        log.info("support: couldn't say %r in %s: %s", words, getattr(sat, "room_id", "?"), e)
+        log.info("support: couldn't say %r in %s: %s", words, satellite_of(sat) or "?", e)
 
 
 # ─── the audit list and the files ─────────────────────────────────────────

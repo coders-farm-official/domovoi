@@ -3035,9 +3035,13 @@ async def admin_snapshot() -> dict[str, Any]:
         # Rooms whose connected device declared `support_shell` (1.5.0),
         # and the support sessions open now (the banner every dashboard
         # shows; domovoi/support_sessions.py). Ids and times only.
+        # Keyed by satellite id (a device connects by its own id since the
+        # rooms work); the room's speaker by room id too, for older readers.
         "satellite_support_shell": sorted(
-            room for room, sess in app.state.active_sessions.items()
-            if satellite_abilities.session_abilities(sess).allows("support_shell")
+            {sid for sid, sess in (getattr(app.state, "active_satellites", None) or {}).items()
+             if satellite_abilities.session_abilities(sess).allows("support_shell")}
+            | {room for room, sess in app.state.active_sessions.items()
+               if satellite_abilities.session_abilities(sess).allows("support_shell")}
         ),
         "support_sessions": _support_active(),
         "satellite_board": {

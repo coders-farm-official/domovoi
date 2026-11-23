@@ -141,7 +141,7 @@ async def support_open(satellite_id: str, body: OpenBody, request: Request) -> d
             status_code=409,
             detail="support sessions are off for this satellite: turn on Allow support sessions first",
         )
-    target = (getattr(request.app.state, "active_sessions", None) or {}).get(satellite_id)
+    target = support_sessions.live_satellite(request.app, satellite_id)
     if target is None:
         raise HTTPException(status_code=404, detail=f"{satellite_id} is not connected")
     abilities = satellite_abilities.session_abilities(target)

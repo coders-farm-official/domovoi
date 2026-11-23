@@ -197,8 +197,9 @@ def test_the_viewer_never_renders_a_transcript_as_html() -> None:
 
 
 class FakeSat:
-    def __init__(self, room_id: str = SAT, **hello) -> None:
+    def __init__(self, room_id: str = SAT, *, satellite_id: str | None = None, **hello) -> None:
         self.room_id = room_id
+        self.satellite_id = satellite_id or room_id
         self.frames: list[dict] = []
         self.said: list[str] = []
         self.closed: list[int] = []
@@ -263,7 +264,8 @@ async def world(_db, tmp_path, monkeypatch):  # noqa: F811
     async with session_scope() as s:
         token = await admin_auth.create_session(s, label="test sign-in")
     sat = FakeSat()
-    app = SimpleNamespace(state=SimpleNamespace(active_sessions={SAT: sat}))
+    app = SimpleNamespace(state=SimpleNamespace(active_sessions={SAT: sat},
+                                                active_satellites={SAT: sat}))
     mgr = ss.SupportSessions(app)
     yield SimpleNamespace(mgr=mgr, sat=sat, token=token, hash=admin_auth.token_sha256(token),
                           app=app, tmp=tmp_path)
@@ -578,12 +580,14 @@ async def house(_db, tmp_path, monkeypatch):  # noqa: F811
     token = await login()
     sat = FakeSat()
     core_app.state.active_sessions = {SAT: sat}
+    core_app.state.active_satellites = {SAT: sat}
     core_app.state.support_sessions = ss.SupportSessions(core_app)
     yield SimpleNamespace(token=token, sat=sat, app=core_app)
     mgr = core_app.state.support_sessions
     for sess in list(mgr.by_id.values()):
         await mgr.end(sess, "browser_closed", announce=False)
     core_app.state.active_sessions = {}
+    core_app.state.active_satellites = {}
     await sql("DELETE FROM support_sessions")
     await sql("DELETE FROM satellites WHERE satellite_id = :s", s=SAT)
     await sql("DELETE FROM rooms WHERE room_id = :s", s=SAT)
@@ -662,17 +666,18 @@ async def test_a_phone_grant_session_can_never_open_one(house) -> None:
 @requires_db
 async def test_a_device_that_did_not_declare_it_or_a_spare_pc_is_refused(house) -> None:
     assert (await core_post(ALLOW, house.token)).status_code == 200
-    house.app.state.active_sessions[SAT] = FakeSat(supports=["restart"])
+    house.app.state.active_sessions[SAT] = house.app.state.active_satellites[SAT] = FakeSat(supports=["restart"])
     assert (await core_post(OPEN, house.token, json={"password": STRONG_PW})).status_code == 409
     pc = FakeSat(supports=["support_shell"])
     pc.board = "linux_pc"
-    house.app.state.active_sessions[SAT] = pc
+    house.app.state.active_sessions[SAT] = house.app.state.active_satellites[SAT] = pc
     assert (await core_post(OPEN, house.token, json={"password": STRONG_PW})).status_code == 409
     busy = FakeSat()
     busy.dropin_peer = object()
-    house.app.state.active_sessions[SAT] = busy
+    house.app.state.active_sessions[SAT] = house.app.state.active_satellites[SAT] = busy
     assert (await core_post(OPEN, house.token, json={"password": STRONG_PW})).status_code == 409
     del house.app.state.active_sessions[SAT]
+    del house.app.state.active_satellites[SAT]
     assert (await core_post(OPEN, house.token, json={"password": STRONG_PW})).status_code == 404
 
 
@@ -770,3 +775,83 @@ async def test_the_terminal_socket_needs_its_ticket_and_a_dashboard_origin(house
             with client.websocket_connect(f"/v1/admin/support-sessions/{'a' * 32}/terminal",
                                           headers={"x-support-ticket": "b" * 64}) as ws:
                 ws.receive_text()
+
+
+# ═══ Rooms (V072): a satellite whose id is not its room's ═════════════════
+
+ROOM = "kitchen"
+SAT2 = "kitchen-pi-2"
+
+
+@requires_db
+async def test_a_satellite_whose_id_is_not_its_rooms(_db, tmp_path, monkeypatch) -> None:  # noqa: F811
+    from domovoi import room_devices
+    from domovoi.handlers.support_session import SupportSessionHandler
+    from domovoi.main import app as core_app
+    from domovoi.models import Context
+
+    monkeypatch.setattr(ss, "transcript_dir", lambda: tmp_path / "support-sessions")
+    await sql("DELETE FROM support_sessions")
+    await sql("DELETE FROM satellites WHERE satellite_id = :s", s=SAT2)
+    await sql("INSERT INTO rooms (room_id, name) VALUES (:r, 'Kitchen') ON CONFLICT DO NOTHING", r=ROOM)
+    await sql("INSERT INTO satellites (satellite_id, room_id) VALUES (:s, :r)", s=SAT2, r=ROOM)
+    async with web_client() as c:
+        await claim_admin(c)
+    token = await login()
+    # The room's speaker is ANOTHER device; ours is the second one in the room.
+    speaker = FakeSat(ROOM, satellite_id="kitchen-speaker")
+    ours = FakeSat(ROOM, satellite_id=SAT2)
+    core_app.state.active_sessions = {ROOM: speaker}
+    core_app.state.active_satellites = {"kitchen-speaker": speaker, SAT2: ours}
+    reg = room_devices.registry(core_app)
+    reg.note(SAT2, ROOM)
+    reg.note("kitchen-speaker", ROOM)
+    mgr = core_app.state.support_sessions = ss.SupportSessions(core_app)
+    try:
+        r = await core_post(f"/v1/admin/satellites/{SAT2}/support/allow", token)
+        assert r.status_code == 200, r.text
+        # The room's id is not a satellite to open a session on.
+        r = await core_post(f"/v1/admin/satellites/{ROOM}/support/open", token,
+                            json={"password": STRONG_PW})
+        assert r.status_code == 404
+        r = await core_post(f"/v1/admin/satellites/{SAT2}/support/open", token,
+                            json={"password": STRONG_PW})
+        assert r.status_code == 200, r.text
+        sess = mgr.redeem(r.json()["ticket"], r.json()["session_id"])
+        assert sess.satellite_id == SAT2 and sess.room_id == ROOM
+        browser = FakeBrowser()
+        task = asyncio.create_task(mgr.run(browser, sess))
+        await until(lambda: "support_open" in ours.kinds())
+        assert speaker.frames == []                    # only the device asked for
+        await mgr.satellite_frame(ours, {"type": "support_opened", "session_id": sess.id})
+        await until(lambda: sess.state == "open")
+        assert mgr.active()[0]["satellite_id"] == SAT2
+        # A frame from the room's other device is a stray, not this session's.
+        await mgr.satellite_frame(speaker, {"type": "support_output", "session_id": sess.id,
+                                            "data": b64(b"x")})
+        assert browser.of("out") == []
+        # The room ends it by voice, whichever device heard it.
+        handler = SupportSessionHandler()
+        m = handler.fast_paths[0].pattern.match("end support session")
+        reply = await handler._from_match(m, Context(room_id=ROOM, app=core_app), None)
+        assert reply.text == ss.VOICE_END_REPLY
+        await asyncio.wait_for(task, 3)
+        assert (await row(sess.id)).end_reason == "voice"
+        # And a dropped socket of THAT device ends a new one.
+        sess2, _ = await mgr.create(satellite_id=SAT2, room_id=ROOM,
+                                    admin_hash=admin_auth.token_sha256(token), cols=80, rows=24)
+        sess2.sat = ours
+        sess2.state = "open"
+        await mgr.connection_dropped(speaker)
+        assert sess2.state == "open"
+        await mgr.connection_dropped(ours)
+        assert sess2.state == "ended" and sess2.reason == "satellite_disconnected"
+    finally:
+        for sess in list(mgr.by_id.values()):
+            await mgr.end(sess, "browser_closed", announce=False)
+        core_app.state.active_sessions = {}
+        core_app.state.active_satellites = {}
+        reg.note(SAT2, None)
+        reg.note("kitchen-speaker", None)
+        await sql("DELETE FROM support_sessions")
+        await sql("DELETE FROM satellites WHERE satellite_id = :s", s=SAT2)
