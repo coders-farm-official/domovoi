@@ -65,10 +65,10 @@ import java.time.Duration
 @Composable
 fun SatSessionsTab(room: String) {
     val sessionsState = rememberApi(room) {
-        it.api.get("/api/satellites/$room/sessions?limit=100").decode<List<SatSession>>()
+        it.api.get(satPath(room, "/sessions?limit=100")).decode<List<SatSession>>()
     }
     val convosState = rememberApi(room) {
-        it.api.get("/api/satellites/$room/conversations?limit=300").decode<List<SatTurn>>()
+        it.api.get(satPath(room, "/conversations?limit=300")).decode<List<SatTurn>>()
     }
     val sessions = sessionsState.data
     val convos = convosState.data ?: emptyList()
@@ -248,7 +248,7 @@ private fun RefreshWhilePending(turns: List<SatTurn>?, refresh: () -> Unit) {
 fun SatConversationsTab(room: String) {
     var q by remember(room) { mutableStateOf("") }
     val state = rememberApi(room) {
-        it.api.get("/api/satellites/$room/conversations?limit=300").decode<List<SatTurn>>()
+        it.api.get(satPath(room, "/conversations?limit=300")).decode<List<SatTurn>>()
     }
     val all = state.data
     RefreshWhilePending(all, state.refresh)
@@ -322,7 +322,7 @@ fun SatRecentlyPlayedTab(room: String) {
     val toast = LocalToast.current
     val scope = rememberCoroutineScope()
     val state = rememberApi(room) {
-        it.api.get("/api/satellites/$room/recently-played?limit=100").decode<List<SatPlayed>>()
+        it.api.get(satPath(room, "/recently-played?limit=100")).decode<List<SatPlayed>>()
     }
     // Rows added this session — flip to "queued" optimistically; the row only
     // truly drops off once the async download lands.
@@ -454,7 +454,7 @@ fun SatRecentlyPlayedTab(room: String) {
 @Composable
 fun SatNotesTab(room: String) {
     val state = rememberApi(room) {
-        it.api.get("/api/satellites/$room/notes").decode<List<SatNote>>()
+        it.api.get(satPath(room, "/notes")).decode<List<SatNote>>()
     }
     val notes = state.data
     when {
@@ -506,7 +506,7 @@ fun SatTimersTab(room: String) {
     val toast = LocalToast.current
     val scope = rememberCoroutineScope()
     val state = rememberApi(room) {
-        it.api.get("/api/satellites/$room/timers").decode<List<SatTimer>>()
+        it.api.get(satPath(room, "/timers")).decode<List<SatTimer>>()
     }
 
     // 1s tick so the remaining column counts down between fetches.
@@ -520,7 +520,7 @@ fun SatTimersTab(room: String) {
 
     fun cancel(t: SatTimer) {
         scope.launch {
-            runCatching { app.api.delete("/api/satellites/$room/timers/${t.id}") }
+            runCatching { app.api.delete(satPath(room, "/timers/${t.id}")) }
                 .onSuccess {
                     toast("cancelled ${if (t.is_reminder) "reminder" else "timer"} #${t.id}")
                     state.refresh()

@@ -662,7 +662,7 @@ public final class ManualModel {
             var heard = false
             for room in asked {
                 guard !Task.isCancelled else { return }
-                let path = "/api/satellites/\(room)/sessions?limit=1"
+                let path = "/api/satellites/\(encodedRoomPathSegment(room))/sessions?limit=1"
                 if let sessions = try? await client.get(path, as: [ManualSessionRow].self),
                    !sessions.isEmpty {
                     heard = true

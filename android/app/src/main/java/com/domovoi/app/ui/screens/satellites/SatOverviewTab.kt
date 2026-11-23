@@ -77,7 +77,7 @@ fun SatOverviewTab(s: Satellite, sats: List<Satellite>, onRefresh: () -> Unit = 
     // Whether it was upgraded but not rebooted (the health sample says so).
     // A read the caller may not make (or an older server) is just "no".
     val healthState = rememberApi(s.room_id) {
-        runCatching { it.api.get("/api/satellites/${s.room_id}/health").decode<SatHealthDoc>() }.getOrNull()
+        runCatching { it.api.get(satPath(s.room_id, "/health")).decode<SatHealthDoc>() }.getOrNull()
     }
     val rebootReason = rebootNeeded(healthState.data)
     val netStep = netStepLine(healthState.data)
@@ -255,7 +255,7 @@ private fun VolumeSection(s: Satellite) {
         scope.launch {
             runCatching {
                 app.api.post(
-                    "/api/satellites/${s.room_id}/volume",
+                    satPath(s.room_id, "/volume"),
                     buildJsonObject { put("level", level) },
                 )
             }.onSuccess { toast("${s.room_id} volume set to $level%") }
@@ -351,7 +351,7 @@ private fun AnnounceSection(s: Satellite) {
         scope.launch {
             runCatching {
                 app.api.post(
-                    "/api/satellites/${s.room_id}/announce",
+                    satPath(s.room_id, "/announce"),
                     buildJsonObject { put("message", m) },
                 ).decode<AnnounceResult>()
             }.onSuccess { res ->
@@ -470,7 +470,7 @@ private fun DropInSection(s: Satellite) {
 
     fun hangUp() {
         scope.launch {
-            runCatching { app.api.post("/api/satellites/${s.room_id}/dropin/end") }
+            runCatching { app.api.post(satPath(s.room_id, "/dropin/end")) }
                 .onSuccess { toast("hung up ${s.room_id}") }
                 .onFailure { toast("hang up failed: ${it.message}") }
         }

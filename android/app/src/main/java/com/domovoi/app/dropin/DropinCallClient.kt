@@ -14,6 +14,7 @@ import com.domovoi.app.audio.MicOwnership
 import com.domovoi.app.data.Prefs
 import com.domovoi.app.net.ApiClient
 import com.domovoi.app.net.DomovoiJson
+import com.domovoi.app.ui.screens.music.encComponent
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.json.intOrNull
@@ -143,12 +144,12 @@ class DropinCallClient(
     }
 
     private suspend fun resolveWsUrl(roomId: String): String {
-        val info = api.get("/api/satellites/$roomId/dropin/phone-info").jsonObject
+        val info = api.get("/api/satellites/${encComponent(roomId)}/dropin/phone-info").jsonObject
         val webHost = URI(prefs.serverUrl.value).host ?: "localhost"
         val host = info["domovoi_host"]?.jsonPrimitive?.contentOrNull ?: webHost
         val port = info["domovoi_port"]?.jsonPrimitive?.intOrNull ?: 6370
         val scheme = if (prefs.serverUrl.value.startsWith("https")) "wss" else "ws"
-        return "$scheme://$host:$port/v1/dropin/$roomId?phone_id=${prefs.deviceId}"
+        return "$scheme://$host:$port/v1/dropin/${encComponent(roomId)}?phone_id=${encComponent(prefs.deviceId)}"
     }
 
     private fun startPlayback() {
