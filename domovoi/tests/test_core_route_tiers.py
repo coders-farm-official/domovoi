@@ -156,6 +156,7 @@ DEVICE_READS = [
     ("GET", "/v1/admin/friend-houses"),
     ("GET", "/v1/admin/friend-houses/friends"),
     ("GET", "/v1/admin/friend-houses/conversations"),
+    ("GET", "/v1/admin/friend-houses/unread"),
     ("GET", "/v1/admin/friend-houses/conversations/{house}"),
     ("POST", "/v1/admin/friend-houses/conversations/{house}/read"),
     ("POST", "/v1/admin/friend-houses/messages"),

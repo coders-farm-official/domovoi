@@ -17703,6 +17703,26 @@
         }
       }
     },
+    "/api/friend-houses/unread": {
+      "get": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Unread",
+        "description": "The house inbox's unread count only (Home's \"needs attention\").",
+        "operationId": "friend_houses_unread_api_friend_houses_unread_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/friend-houses/conversations/{house}": {
       "get": {
         "tags": [

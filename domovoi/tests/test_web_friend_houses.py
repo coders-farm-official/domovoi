@@ -116,6 +116,7 @@ ROUTES: dict[str, tuple[str, str, dict | None]] = {
     # F3: messages
     "alert": ("PUT", "/api/friend-houses/friends/fr0123abcd/alert", {"alert": "sender"}),
     "conversations": ("GET", "/api/friend-houses/conversations", None),
+    "unread": ("GET", "/api/friend-houses/unread", None),
     "conversation": ("GET", f"/api/friend-houses/conversations/{HOUSE}", None),
     "mark-read": ("POST", f"/api/friend-houses/conversations/{HOUSE}/read", None),
     "export": ("GET", f"/api/friend-houses/conversations/{HOUSE}/export", None),
@@ -141,6 +142,7 @@ _IDS = sorted(ROUTES)
 HOUSEHOLD_ROUTES = {
     ("GET", "/api/friend-houses"), ("GET", "/api/friend-houses/friends"),
     ("GET", "/api/friend-houses/conversations"), ("GET", "/api/friend-houses/conversations/{house}"),
+    ("GET", "/api/friend-houses/unread"),
     ("POST", "/api/friend-houses/conversations/{house}/read"), ("POST", "/api/friend-houses/messages"),
     ("GET", "/api/friend-houses/shared-lists"),
 }
@@ -375,40 +377,95 @@ def test_the_page_says_the_message_states_and_choices_plainly() -> None:
     assert "`Friend Houses - ${fhSafe(name) || 'friend'} - " in src
 
 
-def _quiet_notes(cases: list) -> list:
-    """fhQuietNote(quiet, alert) from the page, run in node for each case."""
+def _run_js(source: str, fn: str, cases: list) -> list:
+    """``fn(...case)`` for each case, with ``source`` (a slice of a page's
+    plain-JS helpers) loaded first, in node."""
     import json
     import shutil
     import subprocess
 
     node = shutil.which("node")
-    assert node, "node is required to run the page's quiet-hours note"
-    src = _page()
-    helpers = src[src.index("const fhClock = "):src.index("const FhAlertChoice = ")]
-    script = ("const window = {};\n" + helpers +
-              "\nconsole.log(JSON.stringify(JSON.parse(process.argv[1]).map(([q, a]) => fhQuietNote(q, a))));")
-    out = subprocess.run([node, "-e", script, json.dumps(cases)], capture_output=True, text=True, encoding="utf-8",
-                         timeout=60, check=True)
+    assert node, "node is required to run the page's helpers"
+    script = ("const window = {};\n" + source +
+              f"\nconsole.log(JSON.stringify(JSON.parse(process.argv[1]).map((c) => {fn}(...c))));")
+    out = subprocess.run([node, "-e", script, json.dumps(cases)], capture_output=True, text=True,
+                         encoding="utf-8", timeout=60, check=True)
     return json.loads(out.stdout)
 
 
+def _fh_helpers() -> str:
+    src = _page()
+    return src[src.index("const fhClockOf = "):src.index("const FhAlertChoice = ")]
+
+
 def test_the_quiet_hours_note_shows_only_when_the_friend_speaks_and_its_quiet_now() -> None:
-    all_ = {"rooms": "all", "until": "07:00", "read_later": False}
-    some = {"rooms": "some", "until": "07:00", "read_later": False}
-    assert _quiet_notes([[all_, "read"], [all_, "sender"], [all_, "inbox"], [None, "read"],
-                         [some, "read"], [{**all_, "read_later": True}, "read"]]) == [
-        "Quiet hours until 7:00am: new messages wait in the inbox and won’t be read out later.",
-        "Quiet hours until 7:00am: new messages wait in the inbox and won’t be announced later.",
-        None,
-        None,
-        "Quiet hours in some rooms until 7:00am: new messages aren’t read out there, and won’t be later.",
+    all_ = {"rooms": "all", "until": "07:00", "read_later": True}
+    some = {"rooms": "some", "until": "07:00", "read_later": True}
+    assert _run_js(_fh_helpers(), "fhQuietNote", [
+        [all_, "read"], [all_, "sender"], [all_, "inbox"], [None, "read"],
+        [some, "read"], [some, "sender"], [{**all_, "read_later": False}, "read"]]) == [
         "Quiet hours until 7:00am: new messages will be read out at 7:00am.",
+        "Quiet hours until 7:00am: new messages will be announced at 7:00am.",
+        None,
+        None,
+        "Quiet hours in some rooms until 7:00am: new messages will be read out there at 7:00am.",
+        "Quiet hours in some rooms until 7:00am: new messages will be announced there at 7:00am.",
+        "Quiet hours until 7:00am: new messages wait in the inbox and won’t be read out later.",
     ]
     src = _page()
-    # From the friends payload, next to the choices; and on a held message.
+    # From the friends payload, next to the choices.
     assert "quiet={friends && friends.quiet_hours}" in src
     assert "{fhQuietNote(quiet, current) && (" in src
-    assert "{!out && m.held === 'quiet_hours' && <span className=\"fh-held\">· held for quiet hours</span>}" in src
+
+
+def test_a_held_message_says_so_and_when_it_was_read_out() -> None:
+    at = "2026-11-23T07:02:00"  # no zone: the browser's own clock, as fmtClock reads it
+    assert _run_js(_fh_helpers(), "fhHeldText", [
+        [{"direction": "in", "held": "quiet_hours", "read_out_at": None}],
+        [{"direction": "in", "held": "quiet_hours", "read_out_at": at}],
+        [{"direction": "in", "held": None, "read_out_at": None}],
+        [{"direction": "out", "held": "quiet_hours", "read_out_at": None}]]) == [
+        "held for quiet hours", "held for quiet hours · read out at 7:02am", None, None]
+    assert '{fhHeldText(m) && <span className="fh-held">· {fhHeldText(m)}</span>}' in _page()
+
+
+def test_the_sections_run_messages_first_and_this_house_after_adding() -> None:
+    src = _page()
+    body = src[src.index("const FriendHousesPanel = "):]
+    body = body[body.rindex("{head}"):]
+    order = ["<FhInboxCard", "<FhSharedListsCard", "<FhRequestsCard", "<FhInvitesCard", "<FhAddCard",
+             "<FhHouseCard", "<FhFriendsCard", "<FhBlockedCard"]
+    at = [body.index(tag) for tag in order]
+    assert at == sorted(at)
+    # Home's unread row lands on the Messages section.
+    assert "const FriendHousesPanel = ({ marks = [] }) => {" in src
+    assert "if (mark !== 'messages')" in src
+
+
+def _home() -> str:
+    return (STATIC / "home.jsx").read_text(encoding="utf-8")
+
+
+def test_home_lists_unread_friend_houses_messages() -> None:
+    src = _home()
+    helpers = (src[src.index("const HomePlural = "):src.index("// Answered once")]
+               + src[src.index("const HOME_FH_INBOX = "):src.index("/* ---- status line")])
+    row = {"key": "fh-unread", "tone": "brand", "scope": "household",
+           "text": "2 unread Friend Houses messages", "href": "#settings/friend-houses/messages"}
+    assert _run_js(helpers, "HomeFriendHousesRow", [
+        [{"unread": 2}], [{"unread": 1}], [{"unread": 0}], [None]]) == [
+        row, {**row, "text": "1 unread Friend Houses message"}, None, None]
+    problem = {"key": "db", "text": "database"}
+    assert _run_js(helpers, "HomeWithRow", [
+        [{"mode": "rows", "rows": [problem]}, row], [{"mode": "none"}, row],
+        [{"mode": "summary", "count": 1}, row], [{"mode": "none"}, None]]) == [
+        {"mode": "rows", "rows": [problem, row]}, {"mode": "rows", "rows": [row]},
+        {"mode": "summary", "count": 1, "extra": [row]}, {"mode": "none"}]
+    # The inbox's own tier: asked only by a paired browser or an admin, and
+    # re-read with the health tick and on focus.
+    assert "useApiObject(viewer.paired || admin ? HOME_FH_INBOX : null," in src
+    assert "fhInbox.refresh(); }, HOME_HEALTH_MS);" in src
+    assert "HomeFriendHousesRow(fhInbox.data)" in src
 
 
 @pytest.mark.asyncio
