@@ -499,7 +499,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.harness == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The provision harness alone takes ~21 min, and the two images are
+    # built fresh every run (2 to 19 min, by the mirrors' day): 30 cut
+    # green runs off mid-harness.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
