@@ -243,3 +243,64 @@ def test_the_fixture_vector_matches():
     assert pp.token_digest(vec["token"]) == vec["token_hash"]
     assert doc["pairing_proof"]["version"] == pp.VERSION
     assert doc["pairing_proof"]["hello_v2_adds"] == {"pairing_proof": pp.TOKEN_BOUND}
+
+
+# --- version 3: the support key is in the transcript too (1.5.0) -----------
+
+SUPPORT_KEY = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+
+
+def test_v3_proves_both_ways_with_the_same_token_and_key():
+    for key in (SUPPORT_KEY, ""):
+        dev = pp.DeviceExchange(CODE)
+        srv = pp.ServerExchange(CODE, dev.message, room_id=ROOM, fingerprint=FP_A,
+                                token_hash=TOKEN_HASH, support_key=key)
+        tag = dev.answer(srv.message, room_id=ROOM, fingerprint=FP_A, token_hash=TOKEN_HASH,
+                         support_key=key)
+        assert srv.device_proved(tag) and dev.server_proved(srv.proof)
+
+
+@pytest.mark.parametrize("dev_key, srv_key", [
+    (SUPPORT_KEY, "B" * 43 + "="),   # a key swapped on the way
+    (SUPPORT_KEY, ""),               # a key stripped from the hello
+    ("", SUPPORT_KEY),               # a key added to the hello
+    (SUPPORT_KEY, None),             # a v2 run on the core's side
+    (None, SUPPORT_KEY),             # a v2 device, a v3 run
+])
+def test_v3_fails_for_any_other_key_or_version(dev_key, srv_key):
+    dev = pp.DeviceExchange(CODE)
+    srv = pp.ServerExchange(CODE, dev.message, room_id=ROOM, fingerprint=FP_A,
+                            token_hash=TOKEN_HASH, support_key=srv_key)
+    tag = dev.answer(srv.message, room_id=ROOM, fingerprint=FP_A, token_hash=TOKEN_HASH,
+                     support_key=dev_key)
+    assert not srv.device_proved(tag)
+
+
+def test_a_key_bound_run_needs_the_token_bound_too():
+    dev = pp.DeviceExchange(CODE)
+    with pytest.raises(ValueError):
+        pp.ServerExchange(CODE, dev.message, room_id=ROOM, fingerprint=FP_A,
+                          support_key=SUPPORT_KEY)
+    with pytest.raises(ValueError):
+        pp.ServerExchange(CODE, dev.message, room_id=ROOM, fingerprint=FP_A,
+                          token_hash=TOKEN_HASH, support_key="k" * 300)
+
+
+def test_the_v3_fixture_vector_matches():
+    import json
+    from pathlib import Path
+
+    doc = json.loads((Path(__file__).resolve().parents[2] / "docs" / "uml"
+                      / "satellite-fixtures.json").read_text(encoding="utf-8"))
+    sec = doc["pairing_proof"]
+    vec = sec["v3_tag_vector"]
+    for key, d_name, s_name in ((vec["support_key"], "device_tag", "server_tag"),
+                                ("", "no_key_device_tag", "no_key_server_tag")):
+        device, server = pp._tags(
+            room_id=vec["room_id"], fingerprint=vec["fingerprint"],
+            x_elem=int(vec["x"], 16), y_elem=int(vec["y"], 16), z_elem=int(vec["z"], 16),
+            w=int(vec["w"], 16), token_hash=vec["token_hash"], support_key=key,
+        )
+        assert device.hex() == vec[d_name] and server.hex() == vec[s_name]
+    assert sec["hello_v3_adds"] == {"pairing_proof": pp.KEY_BOUND}
+    assert sec["supported"] == list(pp.SUPPORTED)

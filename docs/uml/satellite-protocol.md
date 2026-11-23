@@ -106,7 +106,7 @@ sequenceDiagram
 | `set_wake_word` | `slug`, `threshold`?, `words`? | Push a trained model: the Pi writes the slug to its wake sidecar (`~/.domovoi/wake`), writes `threshold` (when present, 0-1) into `[wake] threshold` with the same merge and `.bak` as `set_config` (absent: the setting stays), syncs the model from `/v1/wake-models`, and self-restarts. Older satellites kept the threshold in `~/.domovoi/wake_threshold`, which overrode the setting; current ones move that file into `[wake] threshold` at start and delete it. The slug is simultaneously the model file stem, the effective wake word, and the openWakeWord prediction key. `words` (1.4.0, only to a device whose `hello` sent `wake_words_max`, never longer than it): the room's whole list, `[{slug, threshold?}]`, `slug` first; the device keeps it in `~/.domovoi/wake_words.json` and loads every word, each at its own threshold (none: `[wake] threshold`). Without `words` the device runs `slug` alone. |
 | `wake_models_changed` | — | Served wake models changed; the Pi re-syncs its `~/.domovoi/wake_models` cache. |
 | `diag_request` | `probe` | 1.5.0. Run one read-only diagnostics probe, by NAME only (`recent_logs`, `network`, `system`, `audio`, `versions`, `service`; `mic_dsp` only to a device that also declared `mic_dsp`), on a device that declared `diagnostics`; answered by `diag_result`. No other field: nothing from the core reaches a subprocess or a file path. The core rate-limits it per satellite and keeps one request per probe in flight. |
-| `support_allow` | `signed` (doc: `kind`, `satellite_id`, `nonce`, `satellite_key`, `issued_at`, `allowed`) | 1.5.0; after `ready` and whenever an admin flips the switch. `allowed` is true only when the switch is on AND the hello's `support_key` is the one pinned when it was turned on. Every frame the server signs names that key (`satellite_key`); the device refuses one naming any key other than its own. The device's own copy of **Allow support sessions** for this connection; it refuses every open until it holds a signed `allowed: true`, and a signed `false` ends an open session. |
+| `support_allow` | `signed` (doc: `kind`, `satellite_id`, `nonce`, `satellite_key`, `issued_at`, `allowed`) | 1.5.0; after `ready` and whenever an admin flips the switch. `allowed` is true only when the switch is on AND the hello's `support_key` is the pinned one (pinned when the device's pairing was approved, the version-3 exchange below binding it; for a device paired before that, when the switch was first turned on). A device presenting another key gets `allowed: false` and nothing else changes on its connection; the dashboard's room drawer says to re-pair it. Every frame the server signs names that key (`satellite_key`); the device refuses one naming any key other than its own. The device's own copy of **Allow support sessions** for this connection; it refuses every open until it holds a signed `allowed: true`, and a signed `false` ends an open session. |
 | `support_open` | `session_id`, `signed` (doc: `kind`, `satellite_id`, `nonce`, `satellite_key`, `issued_at`, `session_id`, `cols`, `rows`, `max_sec`, `idle_sec`) | 1.5.0; only to a device that declared `support_shell`. Start a PTY as the service account; the device refuses `max_sec` over 3600 and keeps its own time and idle limits. Answered by `support_opened` / `support_refused`. |
 | `support_input` | `session_id`, `signed` (doc: `kind`, `satellite_id`, `nonce`, `satellite_key`, `issued_at`, `session_id`, `seq`, `active`, `data` base64 at most 4 KB) | 1.5.0. Bytes for the shell; `seq` only goes up; `active` (a key press or paste) is what resets the idle limit. |
 | `support_resize` | `session_id`, `cols`, `rows` | 1.5.0. The terminal's size. |
@@ -863,7 +863,8 @@ error frame (if the socket is still open) and closes the connection without
 provisioning or relaying anything. Resetting a room's pairing (admin-gated
 `DELETE /v1/admin/satellites/{room_id}/pairing`) deletes the row so the next
 connect re-pairs — needed after re-flashing a Pi or moving a room to new
-hardware. Full model + the first-connect race caveat:
+hardware. Approving the re-pair pins the support key the device presents
+then (1.5.0, "Version 3" below), replacing the one pinned before. Full model + the first-connect race caveat:
 [../SECURITY_PRIVACY.md](../SECURITY_PRIVACY.md#satellite-pairing-ws-auth).
 
 ### An approval the device can check (1.4.0)
@@ -876,7 +877,7 @@ frames, all before `ready`:
 
 | Direction | Frame | Payload | Meaning |
 |---|---|---|---|
-| device → core | `hello` | `pairing_token` (this server's own: `HMAC-SHA256(device token, server fingerprint)`), `approval_pake` (`X`, 512 hex chars), `pairing_proof: 2` (1.5.0, only to a server that SIGNED `pairing_proof >= 2`), **no** `approval_code` | Park (or refresh) a proof request. Never pairs on trust, strict or not; a malformed `approval_pake`, or a `pairing_proof` other than absent, `1` or `2`, is `error{reason:"approval_pake_invalid"}`. A room already paired takes the ordinary token check. |
+| device → core | `hello` | `pairing_token` (this server's own: `HMAC-SHA256(device token, server fingerprint)`), `approval_pake` (`X`, 512 hex chars), `pairing_proof: 2` or `3` (1.5.0, only to a server that SIGNED that version or more), `support_key` (when the device has one; version 3 binds it), **no** `approval_code` | Park (or refresh) a proof request. Never pairs on trust, strict or not; a malformed `approval_pake`, or a `pairing_proof` other than absent, `1`, `2` or `3`, is `error{reason:"approval_pake_invalid"}`. A room already paired takes the ordinary token check. |
 | core → device | `error` | `reason:"awaiting_approval"`, `proof:true`, no `code` | Parked; nothing typed for it yet. The device asks again in ten seconds. |
 | core → device | `approval_challenge` | `pake` (`Y`) | A code was typed on the dashboard: run the exchange with it. The typed code is used up only by a confirmation that does not check out (a guess); a run the device declines, does not answer within 20 s or leaves puts it back for the next visit. |
 | device → core | `approval_confirm` | `tag` (64 hex) | The device's confirmation. The core checks it in constant time within 20 s. |
@@ -905,13 +906,30 @@ the core the token it received, so a `hello` whose token was replaced on
 the way makes the device's confirmation fail (`approval_code_mismatch`)
 and nothing is bound.
 
-* A 1.5.0 core signs `pairing_proof=2` in `/v1/health` and runs version 2
-  for a `hello` with `pairing_proof: 2`, version 1 for one without it.
-* A 1.5.0 device runs version 2, and adds `pairing_proof: 2` to its
-  `hello`, only for a server whose SIGNED advert is 2 or more; with a
-  server that signed 1 it sends no `pairing_proof` and runs version 1.
-* The shared fixtures carry the version and a version-2 tag vector
-  (`pairing_proof` in [`satellite-fixtures.json`](satellite-fixtures.json)),
+**Version 3: the exchange binds the support key too (1.5.0).** The
+transcript is version 2's with the hello's `support_key` added right
+after the token hash, under its own context:
+`"domovoi-pairing-proof-v3" || lp(SHA-256(pairing_token)) || lp(support_key) || lp(room_id) || lp(fingerprint) || lp(X) || lp(Y) || lp(Z) || lp(w)`
+— `support_key` is the hello's string exactly as sent, UTF-8 (the base64
+of the device's 32-byte Ed25519 support public key), and empty for a
+device that sends none. When the run approves the device the core pins
+that key (`satellites.support_key`): the key the operator approved is the
+one the device holds, and a `hello` whose key was swapped, added or
+stripped on the way fails the run (`approval_code_mismatch`), binding and
+pinning nothing. An approval by an older version pins no key (and drops
+one pinned for an earlier pairing of that device id); a request approved
+by its code (the device's `approval_code` in its hello) pins the key that
+parked hello carried.
+
+* A 1.5.0 core signs `pairing_proof=3` in `/v1/health` and runs the
+  version a `hello` names: 3 or 2 for `pairing_proof: 3` or `2`, 1 for
+  one without it.
+* A 1.5.0 device runs version 3, adding `pairing_proof: 3`, only for a
+  server whose SIGNED advert is 3 or more; version 2 (`pairing_proof: 2`)
+  for one that signed 2; with a server that signed 1 it sends no
+  `pairing_proof` and runs version 1.
+* The shared fixtures carry the version and version-2 and version-3 tag
+  vectors (`pairing_proof` in [`satellite-fixtures.json`](satellite-fixtures.json)),
   read by `satellite/tests/test_pairing_proof.py`.
 
 See [voice-turn.md](voice-turn.md) for what happens between `utterance_end`

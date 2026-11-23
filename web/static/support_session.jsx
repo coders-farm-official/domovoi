@@ -362,6 +362,15 @@
     if (!admin || !s) return null;
     const online = s.status === 'online';
     const toggle = async (on) => {
+      // A satellite paired before support keys were pinned at approval has
+      // none pinned: switching on trusts the key it presents right now.
+      if (on && !s.support_key_pinned && !await askConfirm(
+        'This satellite was paired before support keys were checked at approval, so turning '
+        + 'this on trusts the support key it presents right now. If another device on your '
+        + 'network were posing as it at this moment, that device’s key would be trusted '
+        + 'instead.\n\nRe-pairing the satellite pins its key when you approve it, with '
+        + 'nothing trusted on first sight.',
+        { title: 'Trust this satellite’s support key now?', confirmLabel: 'Trust and allow' })) return;
       setBusy(true); setError(null);
       try {
         await apiPost(`/api/satellites/${encodeURIComponent(s.room_id)}/support/${on ? 'allow' : 'disallow'}`, {});
@@ -382,11 +391,16 @@
         <div style={{ color: 'var(--fg-muted)', fontSize: 12 }}>
           Lets an admin open a shell on this satellite for a fault the diagnostics can’t fix.
           Turning it on needs a password sign-in in the last 5 minutes and the satellite
-          connected: it trusts the satellite’s own support key from then on.
+          connected. Only the support key pinned when its pairing was approved is trusted.
           {!s.support_shell && online && ' This device doesn’t offer support sessions (only a Raspberry Pi on a prepared card whose account can’t use sudo does).'}
         </div>
+        {s.support_key_changed && online && (
+          <div role="status" style={{ color: 'var(--warn-ink)', fontSize: 12 }}>
+            This satellite’s support key changed; re-pair it to use support sessions.
+          </div>
+        )}
         {error && <div style={{ color: 'var(--err-ink)', fontSize: 12 }}>{error}</div>}
-        {s.support_allowed && s.support_shell && online && (
+        {s.support_allowed && s.support_shell && online && !s.support_key_changed && (
           <div><Button icon="terminal" onClick={() => setTerminal(true)}>Open support session</Button></div>
         )}
         <a className="home-link" href="#settings/support-sessions" style={{ fontSize: 12 }}>past support sessions</a>

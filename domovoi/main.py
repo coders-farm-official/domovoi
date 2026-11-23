@@ -3267,6 +3267,10 @@ async def admin_snapshot() -> dict[str, Any]:
             | {room for room, sess in app.state.active_sessions.items()
                if satellite_abilities.session_abilities(sess).allows("support_shell")}
         ),
+        # Connected satellites presenting a support key other than the one
+        # pinned at their approval: the room drawer says to re-pair them
+        # (support sessions only; voice use is unaffected).
+        "satellite_support_key_changed": _support_key_changed(),
         "support_sessions": _support_active(),
         "satellite_board": {
             room: board
@@ -3516,6 +3520,21 @@ def _live_devices() -> list[Any]:
     for sess in [*reg.satellites.values(), *reg.sessions.values()]:
         seen.setdefault(id(sess), sess)
     return list(seen.values())
+
+
+def _support_key_changed() -> list[str]:
+    """Connected satellites (and their rooms' speakers, by room id) whose
+    support key is not the pinned one (domovoi/support_sessions.py
+    ``note_key_changed``)."""
+    def changed(sess: Any) -> bool:
+        return getattr(sess, "support_key_changed", False) is True
+
+    return sorted(
+        {sid for sid, sess in (getattr(app.state, "active_satellites", None) or {}).items()
+         if changed(sess)}
+        | {room for room, sess in (getattr(app.state, "active_sessions", None) or {}).items()
+           if changed(sess)}
+    )
 
 
 def _support_active() -> list[dict[str, Any]]:

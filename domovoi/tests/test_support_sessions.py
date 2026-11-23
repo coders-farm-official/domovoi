@@ -1301,7 +1301,11 @@ async def test_a_satellite_presenting_another_key_gets_no_session(world) -> None
 
 
 @requires_db
-async def test_allowing_pins_the_connected_satellites_key(house) -> None:
+async def test_a_satellite_paired_before_pinning_falls_back_to_switch_on(house) -> None:
+    """No key pinned at approval (paired before 1.5.0 pinned it there):
+    turning the switch on pins the key the connected satellite presents,
+    as before, and says so (``key_trusted_now``); the dashboard's confirm
+    dialog warns first."""
     house.app.state.active_sessions = {}
     house.app.state.active_satellites = {}
     r = await core_post(ALLOW, house.token)                  # not connected: nothing to pin
@@ -1311,18 +1315,76 @@ async def test_allowing_pins_the_connected_satellites_key(house) -> None:
     house.app.state.active_sessions[SAT] = house.app.state.active_satellites[SAT] = keyless
     assert (await core_post(ALLOW, house.token)).status_code == 409
     house.app.state.active_sessions[SAT] = house.app.state.active_satellites[SAT] = house.sat
-    assert (await core_post(ALLOW, house.token)).status_code == 200
+    r = await core_post(ALLOW, house.token)
+    assert r.status_code == 200 and r.json()["key_trusted_now"] is True
     (r,) = await sql("SELECT support_key FROM satellites WHERE satellite_id = :s", s=SAT)
     assert r.support_key == house.sat.support_key
-    # Another key on the next connection: no open until the switch is
-    # turned off and on again (which clears, then pins the new one).
+    # Pinned now: turning it off keeps the pin, and on again trusts nothing new.
+    assert (await core_post(DISALLOW, house.token)).status_code == 200
+    (r,) = await sql("SELECT support_key FROM satellites WHERE satellite_id = :s", s=SAT)
+    assert r.support_key == house.sat.support_key
+    r = await core_post(ALLOW, house.token)
+    assert r.status_code == 200 and r.json()["key_trusted_now"] is False
+    r = await core_post(OPEN, house.token, json={"password": STRONG_PW})
+    assert r.status_code == 200, r.text
+
+
+@requires_db
+async def test_a_hello_key_mismatch_means_no_support_and_a_drawer_note(house) -> None:
+    """The connection presents a key other than the pinned one: it is
+    armed "not allowed", the snapshot names it for the room drawer's note,
+    and nothing else about the connection changes (no close, no other
+    frame: voice use goes on). The pinned key again clears the note."""
+    from domovoi import main as core_main
+
+    await sql("UPDATE satellites SET support_allowed = true, support_key = :k "
+              "WHERE satellite_id = :s", s=SAT, k=house.sat.support_key)
+    swapped = FakeSat(key=Ed25519PrivateKey.generate())
+    house.app.state.active_sessions[SAT] = house.app.state.active_satellites[SAT] = swapped
+    assert await ss.send_allow_state(house.app, swapped)
+    assert _verify(swapped.frames[-1], "support_allow", key=swapped.support_key)["allowed"] is False
+    assert swapped.kinds() == ["support_allow"] and swapped.closed == [] and swapped.said == []
+    assert swapped.support_key_changed is True
+    assert SAT in core_main._support_key_changed()
+    house.app.state.active_sessions[SAT] = house.app.state.active_satellites[SAT] = house.sat
+    assert await ss.send_allow_state(house.app, house.sat)
+    assert _verify(house.sat.frames[-1], "support_allow")["allowed"] is True
+    assert SAT not in core_main._support_key_changed()
+
+
+def test_the_drawer_note_and_the_fallback_confirm_text() -> None:
+    """The room drawer shows the re-pair note for a changed key (and no
+    Open button), and turning the switch on for a satellite with no key
+    pinned asks first, saying the key is being trusted now."""
+    jsx = (REPO / "web" / "static" / "support_session.jsx").read_text(encoding="utf-8")
+    assert "This satellite’s support key changed; re-pair it to use support sessions." in jsx
+    assert "!s.support_key_changed && (" in jsx
+    assert "on && !s.support_key_pinned && !await askConfirm(" in jsx
+    assert "trusts the support key it presents right now" in jsx
+    assert ss.KEY_CHANGED_DETAIL == (
+        "this satellite's support key changed; re-pair it to use support sessions")
+    schema = (REPO / "web" / "backend" / "schemas.py").read_text(encoding="utf-8")
+    assert "support_key_pinned: bool = False" in schema
+    assert "support_key_changed: bool = False" in schema
+
+
+@requires_db
+async def test_a_key_pinned_at_approval_is_the_only_one_the_switch_takes(house) -> None:
+    """Pinned at approval: the switch trusts nothing new. Another key on
+    the connection (a reflashed card, a host in the middle) is refused by
+    the switch and by Open alike, with the re-pair note; flipping the
+    switch never re-pins."""
+    await sql("UPDATE satellites SET support_key = :k WHERE satellite_id = :s",
+              s=SAT, k=house.sat.support_key)
+    r = await core_post(ALLOW, house.token)
+    assert r.status_code == 200 and r.json()["key_trusted_now"] is False
     swapped = FakeSat(key=Ed25519PrivateKey.generate())
     house.app.state.active_sessions[SAT] = house.app.state.active_satellites[SAT] = swapped
     r = await core_post(OPEN, house.token, json={"password": STRONG_PW})
-    assert r.status_code == 409 and "support key" in r.json()["detail"]
+    assert r.status_code == 409 and r.json()["detail"] == ss.KEY_CHANGED_DETAIL
     assert (await core_post(DISALLOW, house.token)).status_code == 200
-    (r,) = await sql("SELECT support_key FROM satellites WHERE satellite_id = :s", s=SAT)
-    assert r.support_key is None
-    assert (await core_post(ALLOW, house.token)).status_code == 200
-    r = await core_post(OPEN, house.token, json={"password": STRONG_PW})
-    assert r.status_code == 200, r.text
+    r = await core_post(ALLOW, house.token)
+    assert r.status_code == 409 and r.json()["detail"] == ss.KEY_CHANGED_DETAIL
+    (r,) = await sql("SELECT support_allowed, support_key FROM satellites WHERE satellite_id = :s",
+                     s=SAT)
+    assert r.support_allowed is False and r.support_key == house.sat.support_key
