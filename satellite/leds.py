@@ -59,6 +59,18 @@ COLOR_RECORDING = (200, 200, 200)
 COLOR_SUPPORT = (255, 0, 200)    # #FF00C8
 SUPPORT_BREATH_SEC = 4.0         # 2 s up, 2 s down, eased
 SUPPORT_BREATH_MIN = 0.10        # 10% .. full
+# "server_changed" (1.5.0, S3-4): the server at this room's address proved a
+# DIFFERENT identity from the one the room was set up for (the house was
+# reinstalled without keeping its identity, or another house took the
+# address). Teal, a colour no other state uses, so it can't be mistaken for
+# the no-server orange, the awaiting-approval violet or a support session's
+# magenta: a double blink every two seconds on the 2-Mics HAT, a slow teal
+# breath on the XVF3800 (the chip has no blink). Held until the room
+# connects again. NEEDS A CHECK ON REAL HARDWARE (both boards): the teal
+# against the HAT's speaking green and the ring's listening blue.
+COLOR_SERVER_CHANGED = (0, 224, 176)   # #00E0B0
+# (on, off) pairs, in seconds: blink, blink, rest — 2 s a cycle.
+SERVER_CHANGED_BLINKS = ((0.18, 0.18), (0.18, 1.46))
 # "quiet": another satellite in the room took this wake word's turn (1.5.0).
 # No listening colour — a dim blue that fades out over QUIET_FADE_SEC, then
 # off (owner answer Q5: the losers' LED only fades).
@@ -242,6 +254,8 @@ class _WS2812XvfDriver:
         "dropin":    {"effect": 3, "color": COLOR_DROPIN},                     # solid red — live call
         "recording": {"effect": 3, "color": COLOR_RECORDING},                  # steady white — training clip
         "quiet":     {"effect": 3, "color": COLOR_QUIET},                      # dim blue, off after QUIET_FADE_SEC
+        # My server changed (S3-4): a slow teal breath, a colour nothing else breathes.
+        "server_changed": {"effect": 1, "color": COLOR_SERVER_CHANGED, "speed": XVF_SPEED_BREATH},
     }
 
     def __init__(self, brightness: int, xvf_host_path: str) -> None:
@@ -575,6 +589,8 @@ class LEDController:
                 self._tick_error()
             elif state == "quiet":
                 self._tick_quiet()
+            elif state == "server_changed":
+                self._tick_server_changed()
             else:
                 self._solid(COLOR_OFF)
                 self._changed.wait()
@@ -648,6 +664,17 @@ class LEDController:
                 return
         self._demote("quiet")
 
+    def _tick_server_changed(self) -> None:
+        """Teal double blink, every two seconds, until another state."""
+        while not self._stop.is_set() and self._current_state() == "server_changed":
+            for on, off in SERVER_CHANGED_BLINKS:
+                self._solid(COLOR_SERVER_CHANGED)
+                if self._changed.wait(timeout=on):
+                    return
+                self._solid(COLOR_OFF)
+                if self._changed.wait(timeout=off):
+                    return
+
     def _tick_error(self) -> None:
         for _ in range(3):
             if self._stop.is_set() or self._current_state() != "error":
@@ -693,6 +720,7 @@ SETUP_COLORS: dict[str, tuple[int, int, int]] = {
     "no-microphone":     (229, 72, 77),
     "startup-failed":    (229, 72, 77),
     "no-server":         (255, 106, 0),
+    "server-changed":    COLOR_SERVER_CHANGED,
     "off":               (0, 0, 0),
 }
 

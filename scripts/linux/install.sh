@@ -80,7 +80,7 @@ PYTHON=python3
 
 # provision.sh's options, passed through as given (a test keeps these
 # lists in step with provision.sh's own).
-PASS_VALUE_OPTS=" --checkout-dir --user --tier --lan-ip --ollama-url --host-stt-url --host-stt-model --vm-guard --vm-guard-dns --vm-guard-lan --media --health-timeout --allowed-signers --stop-before "
+PASS_VALUE_OPTS=" --checkout-dir --user --tier --lan-ip --ollama-url --host-stt-url --host-stt-model --vm-guard --vm-guard-dns --vm-guard-lan --media --health-timeout --allowed-signers --stop-before --restore-identity "
 PASS_FLAG_OPTS=" --wsl --no-wsl --skip-models --no-vision-model --ai-models --no-ai-models --host-stt-shares-gpu --dry-run --keep-downloads "
 # Chosen here from the checked release, never passed through.
 OWN_OPTS=" --repo-url --ref --track-branch --offline-kit "
@@ -97,6 +97,7 @@ HAVE_TTY=0
 WORK=""
 BRANCH=""
 TRACK=""
+RESTORE_IDENTITY=""
 HEAD_SHA=""
 TAG=""
 # --kit: the offline kit's folder (KIT_GIVEN=1 once the option is seen).
@@ -127,6 +128,10 @@ Options (after "sudo bash -s --" when piped):
   --yes, -y           ask nothing, start at once (needs --internet)
   --channel CHANNEL   stable (default): the latest release; main: the
                       newest code, which has no release signature
+  --restore-identity FILE
+                      give the new install a house identity backup (from
+                      Settings > System > About & updates), so rooms set up
+                      for that house trust it: checked before it is used
   --kit [DIR]         install from an offline kit (a USB stick an online
                       Domovoi server made), with no internet: DIR is the
                       stick (default: the stick this install.sh is on).
@@ -193,6 +198,7 @@ parse_args() {
           case $opt in
             --user) SVC_USER=$val ;;
             --checkout-dir) CHECKOUT=${val%/} ;;
+            --restore-identity) restore_identity_arg "$val" ;;
           esac
         elif [[ $PASS_FLAG_OPTS == *" $opt "* ]] && [ "$has" = 0 ]; then
           [ "$opt" != --dry-run ] || DRY=1
@@ -219,6 +225,21 @@ parse_args() {
     [ "$CHANNEL" = stable ] || usage_die "--kit installs the release on the kit; --channel doesn't go with it"
     find_kit
   fi
+}
+
+# --restore-identity FILE: a house identity backup, checked by provision.sh
+# (format and key pair) before Domovoi first starts. Here only that it is
+# there, before anything is downloaded; provision.sh runs from /, so the
+# path it is given is absolute.
+restore_identity_arg() {
+  local f=$1 i
+  [ -f "$f" ] && [ ! -L "$f" ] && [ -r "$f" ]     || usage_die "--restore-identity: $f is not a readable file (give the house identity backup itself)"
+  [[ $f == /* ]] || f=$PWD/$f
+  for i in "${!PASS[@]}"; do
+    if [ "${PASS[$i]}" = --restore-identity ] && [ $((i + 1)) -lt ${#PASS[@]} ]; then PASS[$((i + 1))]=$f; fi
+    if [[ ${PASS[$i]} == --restore-identity=* ]]; then PASS[$i]=--restore-identity=$f; fi
+  done
+  RESTORE_IDENTITY=$f
 }
 
 # The kit's folder: --kit DIR, or, with --kit alone, the stick this script
@@ -723,6 +744,7 @@ summary() {
   say "  Time zone:  $TIMEZONE"
   say "  Goes into:  $CHECKOUT, run by the user $SVC_USER (made for it if new)"
   [ ${#PASS[@]} -eq 0 ] || say "  Options:    ${PASS[*]}"
+  [ -z "$RESTORE_IDENTITY" ] || say "  Identity:   restored from $RESTORE_IDENTITY (checked first), so the rooms set up for that house trust this one"
   [ "$DRY" = 0 ] || say "  Dry run:    it only says what it would do; nothing is changed"
   if [ -n "$KIT" ]; then
     say "It installs from the kit and downloads nothing; it can take half an hour or"

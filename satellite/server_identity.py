@@ -473,6 +473,46 @@ class IdentityUnavailable(IdentityError):
     outage."""
 
 
+class DifferentServer(IdentityError):
+    """The server answered with a complete, valid proof — a signature over
+    OUR nonce and the address we dialed — for a key that is not the one
+    this device is pinned to. A different Domovoi (another house, or this
+    one reinstalled with a new identity) at that address.
+
+    Told apart from the other refusals only so the room can SAY so
+    ("my server changed, set me up again") instead of the generic
+    no-server blink. It changes nothing about trust: the caller refuses it
+    exactly as before, records nothing and never re-pins. ``fingerprint``
+    is the other server's (public) one; ``addr`` the address dialed."""
+
+    def __init__(self, message: str, *, fingerprint: str, addr: str | None) -> None:
+        super().__init__(message)
+        self.fingerprint = fingerprint
+        self.addr = addr
+
+
+# The last DifferentServer any check in this process met: (monotonic time,
+# the address dialed, the other fingerprint). Read by the client to tell
+# the room; never used for any trust decision.
+_LAST_DIFFERENT: tuple[float, str | None, str] | None = None
+
+
+def _note_different(addr: str | None, fingerprint: str) -> None:
+    global _LAST_DIFFERENT
+    _LAST_DIFFERENT = (time.monotonic(), addr, fingerprint)
+
+
+def last_different_server() -> tuple[float, str | None, str] | None:
+    """``(monotonic time, address dialed, fingerprint)`` of the last valid
+    proof for a key other than the pin, or None."""
+    return _LAST_DIFFERENT
+
+
+def forget_different_server() -> None:
+    global _LAST_DIFFERENT
+    _LAST_DIFFERENT = None
+
+
 def verify_health_document(
     doc: Any, *, challenge: str, expected_fingerprint: str | None,
     addr: str | None = None, pairing_proof: int | None = None,
@@ -548,9 +588,14 @@ def verify_health_document(
     if claimed and claimed != actual:
         raise IdentityError("the server's fingerprint does not match its key")
     if expected_fingerprint and actual != expected_fingerprint:
-        raise IdentityError(
+        # Only here, after the signature over our nonce (and, pinned, the
+        # dialed address) checked out: a host that merely says another key,
+        # or relays someone else's answer, never gets this far.
+        _note_different(addr, actual)
+        raise DifferentServer(
             f"this is a different server: {actual} is not the "
-            f"{expected_fingerprint} this device was prepared for"
+            f"{expected_fingerprint} this device was prepared for",
+            fingerprint=actual, addr=addr,
         )
     return actual
 

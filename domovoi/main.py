@@ -1247,6 +1247,11 @@ from domovoi.support_routes import router as support_router  # noqa: E402
 
 app.include_router(support_router)
 
+# The house identity backup (1.5.0, S3-4; domovoi/identity_backup_routes.py).
+from domovoi.identity_backup_routes import router as identity_backup_router  # noqa: E402
+
+app.include_router(identity_backup_router)
+
 
 @app.get("/v1/voice/activity", dependencies=[Depends(require_device)])
 async def get_voice_activity() -> dict[str, Any]:

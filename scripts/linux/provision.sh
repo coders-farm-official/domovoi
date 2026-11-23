@@ -666,6 +666,12 @@ HEALTH_TIMEOUT=900
 ALLOWED_SIGNERS=""
 KEEP_DOWNLOADS=0
 STOP_BEFORE=""
+# --restore-identity FILE: a house identity backup (docs/SECURITY_PRIVACY.md,
+# "Keeping the house identity"), made this install's identity right before
+# the start step, after the backup is checked (format and key pair) by
+# python -m domovoi.server_identity as the service user. A different
+# identity already here is never replaced: the run stops instead.
+RESTORE_IDENTITY=""
 # --offline-kit DIR: install from an offline kit (docs/OFFLINE_KIT.md): the
 # folder of a kit, as scripts/linux/install.sh --kit hands it on. Empty: online.
 OFFLINE_KIT=""
@@ -784,6 +790,12 @@ feeds.
   --allowed-signers F   install F as /etc/domovoi/allowed_signers first, so
                         HEAD and every later update must verify against it
   --health-timeout SEC  how long the first start may take (default: 900)
+  --restore-identity F  make the house identity backup F (Settings > System >
+                        About & updates > House identity backup) this
+                        server's identity before Domovoi first starts, so the
+                        rooms set up for it trust this install. Checked
+                        first; never replaces a different identity already
+                        here
   --keep-downloads      keep the Ollama tarball in /var/cache/domovoi-provision
   --offline-kit DIR     install from the offline kit at DIR (a USB stick
                         made by an online Domovoi server; docs/OFFLINE_KIT.md)
@@ -837,7 +849,7 @@ while [ $# -gt 0 ]; do
     --*=*) val=${opt#*=}; opt=${opt%%=*}; has_val=1 ;;
   esac
   case $opt in
-    --repo-url|--ref|--track-branch|--checkout-dir|--user|--internet|--tier|--timezone|--lan-ip|--ollama-url|--host-stt-url|--host-stt-model|--vm-guard|--vm-guard-dns|--vm-guard-lan|--media|--health-timeout|--allowed-signers|--stop-before|--offline-kit)
+    --repo-url|--ref|--track-branch|--checkout-dir|--user|--internet|--tier|--timezone|--lan-ip|--ollama-url|--host-stt-url|--host-stt-model|--vm-guard|--vm-guard-dns|--vm-guard-lan|--media|--health-timeout|--allowed-signers|--stop-before|--offline-kit|--restore-identity)
       if [ "$has_val" = 0 ]; then
         [ $# -ge 2 ] || usage_error "$opt needs a value"
         val=$2
@@ -882,6 +894,7 @@ while [ $# -gt 0 ]; do
         --allowed-signers) ALLOWED_SIGNERS=$val ;;
         --stop-before) STOP_BEFORE=$val ;;
         --offline-kit) OFFLINE_KIT=$val ;;
+        --restore-identity) RESTORE_IDENTITY=$val ;;
       esac
       ;;
     --wsl|--no-wsl|--skip-models|--no-vision-model|--ai-models|--no-ai-models|--host-stt-shares-gpu|--dry-run|--keep-downloads|-h|--help)
@@ -912,6 +925,17 @@ if [ -n "$STOP_BEFORE" ]; then
     *" $STOP_BEFORE "*) ;;
     *) usage_error "--stop-before takes a step id from apt to update-unit, not: $STOP_BEFORE" ;;
   esac
+fi
+if [ -n "$RESTORE_IDENTITY" ]; then
+  # Checked again, fully, right before it is used; here only that it is
+  # a plain readable file of a backup's size, so a typo stops the run now.
+  [[ $RESTORE_IDENTITY == /* ]] || RESTORE_IDENTITY=$PWD/$RESTORE_IDENTITY
+  if [ -L "$RESTORE_IDENTITY" ] || [ ! -f "$RESTORE_IDENTITY" ] || [ ! -r "$RESTORE_IDENTITY" ]; then
+    usage_error "--restore-identity: $RESTORE_IDENTITY is not a readable file (give the backup file itself, not a link)"
+  fi
+  if [ "$(wc -c <"$RESTORE_IDENTITY")" -gt 16384 ]; then
+    usage_error "--restore-identity: $RESTORE_IDENTITY is far too large to be a house identity backup"
+  fi
 fi
 if [ -n "$VM_GUARD_NET" ] && [ "$OLLAMA_EXTERNAL" != 1 ]; then
   usage_error "--vm-guard goes with --ollama-url (the one service on the host the VM may still reach)"
@@ -6249,6 +6273,39 @@ do_start() {
   STEP_DONE_MSG="Domovoi is running"
 }
 
+# ─── --restore-identity ──────────────────────────────────────────────────
+
+# Make the backup this server's identity before the core first starts
+# (load_or_create would otherwise make a new one). Root reads the file and
+# hands its bytes to the checkout's python as the service user on stdin, so
+# root never writes into that user's home and never runs its code: the
+# service user's own python checks the backup (format, the key pair, a
+# signature that verifies) and writes ~/.domovoi/server-identity.json, 0600,
+# itself. Exactly this key already there: nothing to do. A different one:
+# the run stops, nothing replaced (python -m domovoi.server_identity
+# --restore-identity FILE --replace-existing does that by hand). The key is
+# never printed or logged; its fingerprint is.
+restore_identity() {
+  local out rc
+  if dry; then
+    log "would make the house identity backup $RESTORE_IDENTITY this server's identity (checked first)"
+    return 0
+  fi
+  [ -x "$VENV_PY" ] || die "--restore-identity: the checkout's python ($VENV_PY) is missing, so the backup can't be checked"
+  set +e
+  out=$(svc_py -m domovoi.server_identity --restore-identity - <"$RESTORE_IDENTITY" 2>&1)
+  rc=$?
+  set -e
+  if [ "$rc" != 0 ]; then
+    die "--restore-identity: the backup was not used: $(printf '%s' "$out" | tail -n 1 | cut -c1-400)"
+  fi
+  log "house identity: $(printf '%s' "$out" | head -n 1)"
+  if printf '%s' "$out" | grep -q '^restored' && systemctl is-active --quiet domovoi-core.service; then
+    log "restarting the core so it signs with the restored identity"
+    systemctl restart domovoi-core.service --no-block
+  fi
+}
+
 # ─── update-unit ─────────────────────────────────────────────────────────
 
 # This box was installed from the hash-pinned lock (the venv step), so its
@@ -6592,6 +6649,7 @@ for step in "${STEP_IDS[@]:1}"; do
     final_line stopped 0 "Stopped before: ${STEP_TITLE[$step]} (--stop-before $step)"
     exit 0
   fi
+  if [ "$step" = start ] && [ -n "$RESTORE_IDENTITY" ]; then restore_identity; fi
   run_step "$step"
   case $step in
     user) SVC_HOME=$(svc_home) || true; [ -n "$SVC_HOME" ] || SVC_HOME=/home/$SVC_USER ;;

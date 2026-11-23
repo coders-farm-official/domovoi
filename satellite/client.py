@@ -167,6 +167,20 @@ REPLY_DEADLINE_ERROR_HOLD_SEC = 1.5
 # the satellite then plays nothing rather than the network clip, which says
 # to move the unit closer to the router, wrong advice here.
 NO_ANSWER_CLIP = "server_no_answer.mp3"
+# "My server changed" (1.5.0, S3-4): the server at this room's address
+# proved a DIFFERENT identity from the one the room was set up for (the
+# house was reinstalled without keeping its identity, or another house took
+# the address). The room keeps refusing it (no re-pin, ever) and says so:
+# this clip, which the core renders per voice like the two above and this
+# device synced while it was still connected, and the teal LED pattern
+# (satellite/leds.py, "server_changed") instead of the no-server orange.
+SERVER_CHANGED_CLIP = "server_changed.mp3"
+# Said once when the change is first seen, then at most this often, so it
+# doesn't nag all night. When it was last said is kept on disk, so a
+# restart (or a crash loop) doesn't say it again either. A wake word heard
+# meanwhile is someone asking: that is answered with the clip every time.
+SERVER_CHANGED_SAY_EVERY_SEC = 12 * 3600.0
+SERVER_CHANGED_SAID_SIDECAR = Path("~/.domovoi/server-changed-said").expanduser()
 
 # openWakeWord's `Model.reset()` refills its feature buffer by running the
 # speech-embedding model over 4 s of random noise: 41 embedding windows, the
@@ -832,6 +846,26 @@ def _resolve_sound(relpath: str) -> Path:
     if cached.is_file():
         return cached
     return Path(__file__).resolve().parent / "sounds" / relpath
+
+
+def _server_changed_say_due(now: float, path: Path | None = None) -> bool:
+    """Whether "my server changed" is due: never said, or said at least
+    SERVER_CHANGED_SAY_EVERY_SEC ago by the wall clock (a time in the
+    future, a clock set back, counts as due)."""
+    try:
+        last = float((path or SERVER_CHANGED_SAID_SIDECAR).read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return True
+    return not (0 <= now - last < SERVER_CHANGED_SAY_EVERY_SEC)
+
+
+def _server_changed_said(now: float, path: Path | None = None) -> None:
+    target = path or SERVER_CHANGED_SAID_SIDECAR
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(f"{now:.0f}\n", encoding="utf-8")
+    except OSError as e:
+        log.debug("could not record when the server change was said: %s", e)
 
 
 def _greetings_dir() -> Path:
@@ -4936,6 +4970,49 @@ class Satellite(pc_engine.SpareDeviceEngine):
 
     _last_relocate_at: float | None = None
 
+    # -- "my server changed" (1.5.0, S3-4) ----------------------------------
+
+    _server_changed_fp: str | None = None
+
+    def _server_changed(self, fingerprint: str) -> None:
+        """The server at this room's address proved a different identity.
+        Show it (teal, satellite/leds.py) for as long as it lasts, and say
+        it: once now, then at most every SERVER_CHANGED_SAY_EVERY_SEC.
+        Trust is untouched: the caller has already refused the server."""
+        first = self._server_changed_fp is None
+        self._server_changed_fp = fingerprint
+        if first:
+            log.warning(
+                "this room's server changed (now %s): showing it on the ring and "
+                "telling the room; set this room up again to use the new server",
+                fingerprint,
+            )
+        self._leds.set_state("server_changed")
+        if _server_changed_say_due(time.time()):
+            self._say_server_changed()
+
+    def _say_server_changed(self) -> bool:
+        """Play the "my server changed" clip, when this device has it.
+        Returns True when it was played (and records when)."""
+        clip = _resolve_sound(SERVER_CHANGED_CLIP)
+        if not clip.is_file():
+            log.info("no %s synced yet: the server change is shown on the ring only",
+                     SERVER_CHANGED_CLIP)
+            return False
+        _server_changed_said(time.time())
+        self._play_canned_mp3(clip, "server-changed")
+        if self._server_changed_fp:
+            self._leds.set_state("server_changed")
+        return True
+
+    def _server_changed_cleared(self) -> None:
+        """A session is up: whatever this room's server is, it is not a
+        different one any more."""
+        if self._server_changed_fp is None:
+            return
+        self._server_changed_fp = None
+        self._leds.set_state_if("server_changed", "idle")
+
     def _relocate_server(self) -> None:
         """The core has been unreachable for a while: look for it again, in
         the usual order (its name, this address, the sweep), and switch to
@@ -6527,9 +6604,12 @@ class Satellite(pc_engine.SpareDeviceEngine):
                             )
                             self._stop_music()
                             self._drain_mic()
-                            self._play_canned_mp3(
-                                _resolve_sound("network_issues.mp3"), "network-issues"
-                            )
+                            # A room whose server changed says THAT (no
+                            # network advice), every time it is asked.
+                            if not (self._server_changed_fp and self._say_server_changed()):
+                                self._play_canned_mp3(
+                                    _resolve_sound("network_issues.mp3"), "network-issues"
+                                )
                             # Reset the wake model so its internal state
                             # doesn't carry forward the canned playback's
                             # echo as primed wake context.
@@ -9334,6 +9414,9 @@ class Satellite(pc_engine.SpareDeviceEngine):
             self._set_conn(
                 "offline" if failure.startswith("could not reach") else "unpinned", failure
             )
+            changed = _LAST_IDENTITY_CHANGED
+            if changed:
+                await asyncio.to_thread(self._server_changed, changed)
             raise ConnectionError(
                 f"{url} did not prove it is this device's Domovoi server"
             )
@@ -9450,6 +9533,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
         self._approval_code = None
         self._approval_pending = False
         self._set_conn("connected")
+        self._server_changed_cleared()
         # Before the opener, because this is the frame that says the core
         # accepts this device: if an earlier `awaiting_approval` tore
         # capture down because the refusal could not be recorded, this is
@@ -9918,7 +10002,11 @@ class Satellite(pc_engine.SpareDeviceEngine):
                     # Exactly at the threshold, not past it: the ring holds
                     # the colour on its own, and every call here is a sudo +
                     # process spawn this board cannot spare during an outage.
-                    if unreachable == _UNREACHABLE_AFTER:
+                    if unreachable == _UNREACHABLE_AFTER and self._server_changed_fp:
+                        # Not "no server": a different one, already shown
+                        # (teal) and said by _server_changed.
+                        pass
+                    elif unreachable == _UNREACHABLE_AFTER:
                         log.error(
                             "cannot reach %s after %d attempts - showing it on "
                             "the ring, which is the only surface left when the "
@@ -10744,6 +10832,10 @@ _SERVER_HAS_NO_IDENTITY = False
 # Why the last identity check refused (for a spare computer's status), or
 # None after one that passed.
 _LAST_IDENTITY_FAILURE: str | None = None
+# The fingerprint of a DIFFERENT server that proved itself at this room's
+# own address in the last check (server_identity.DifferentServer), or None.
+# Only ever used to tell the room; never to trust anything.
+_LAST_IDENTITY_CHANGED: str | None = None
 
 
 class _SkipPayloads(Exception):
@@ -10771,10 +10863,11 @@ def _verify_server_identity(cfg: "Config", *, opener=None) -> bool:
     identity it meets and returns True, so a device prepared before
     identities keeps connecting exactly as it did. From then on the
     recorded fingerprint is the pin, and a different one is refused."""
-    global _SERVER_HAS_NO_IDENTITY, _LAST_IDENTITY_FAILURE
+    global _SERVER_HAS_NO_IDENTITY, _LAST_IDENTITY_FAILURE, _LAST_IDENTITY_CHANGED
     from satellite import server_identity, sound_sync
 
     _LAST_IDENTITY_FAILURE = None
+    _LAST_IDENTITY_CHANGED = None
 
     expected, source = _pinned_fingerprint(cfg)
     if not expected and _SERVER_HAS_NO_IDENTITY:
@@ -10800,6 +10893,23 @@ def _verify_server_identity(cfg: "Config", *, opener=None) -> bool:
         log.info("server identity not available at %s (%s)", http_base, e)
         _SERVER_HAS_NO_IDENTITY = True
         return True
+    except server_identity.DifferentServer as e:
+        # A complete, valid proof, over our nonce and this very address,
+        # for another key. Refused exactly like any other mismatch, nothing
+        # recorded and nothing re-pinned; the only difference is that the
+        # room can say so.
+        log.error(
+            "refusing to connect to %s: the server there is a different Domovoi "
+            "(%s; this room was set up for %s, pinned from %s). Set this room up "
+            "again for the new server; it will not trust it on its own",
+            http_base, e.fingerprint, expected, source,
+        )
+        _LAST_IDENTITY_FAILURE = (
+            f"the server changed: {http_base} is a different Domovoi ({e.fingerprint}). "
+            "Set this room up again for it"
+        )
+        _LAST_IDENTITY_CHANGED = e.fingerprint
+        return False
     except server_identity.IdentityError as e:
         if expected:
             log.error(
