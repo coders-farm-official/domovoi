@@ -459,19 +459,39 @@ def _read_cap(seconds: float) -> list[str]:
     return ["-threads", "1", "-filter_threads", "1", "-t", f"{max(0.1, float(seconds)):.2f}"]
 
 
-def scene_argv(src: Path, duration: float | None, video_index: int | None = None) -> list[str]:
-    """Pass 0's scene scan of a video the upload accepted at ``duration``."""
+def _span(duration: float | None, start: float | None, seconds: float | None) -> list[str]:
+    """A pass's input window: from ``start`` (a library video's chunk;
+    None for the whole of a chat video) for ``seconds`` (None: the chat
+    cap, :func:`limits.pass_seconds` of ``duration``)."""
+    read = limits.pass_seconds(duration) if seconds is None else float(seconds)
+    seek = ["-ss", f"{max(0.0, float(start)):.2f}"] if start else []
+    return [*seek, *_read_cap(read)]
+
+
+def _pcm_cap(duration: float | None, seconds: float | None) -> int:
+    """The most bytes a sound pass may write (16 kHz mono 16-bit PCM)."""
+    if seconds is None:
+        return limits.pcm_max_bytes(duration)
+    return int((max(0.1, float(seconds)) + 1.0) * SAMPLE_RATE * 2)
+
+
+def scene_argv(src: Path, duration: float | None, video_index: int | None = None, *,
+               start: float | None = None, seconds: float | None = None) -> list[str]:
+    """Pass 0's scene scan of a video the upload accepted at ``duration``
+    (or, for a library video, ``seconds`` of it from ``start``)."""
     return ["ffmpeg", "-nostdin", "-hide_banner", "-skip_frame", "nokey",
-            *_read_cap(limits.pass_seconds(duration)), "-i", str(src),
+            *_span(duration, start, seconds), "-i", str(src),
             *_map(video_index, "0:V:0?"), "-an", "-sn",
             "-vf", f"scale=160:-2,select='gt(scene,{SCENE_THRESHOLD})',metadata=print", "-f", "null", "-"]
 
 
-def audio_argv(src: Path, dest: Path, duration: float | None, audio_index: int | None = None) -> list[str]:
-    """The sound pass of a video the upload accepted at ``duration``."""
-    return ["ffmpeg", "-nostdin", "-v", "error", "-y", *_read_cap(limits.pass_seconds(duration)), "-i", str(src),
+def audio_argv(src: Path, dest: Path, duration: float | None, audio_index: int | None = None, *,
+               start: float | None = None, seconds: float | None = None) -> list[str]:
+    """The sound pass of a video the upload accepted at ``duration`` (or,
+    for a library video, ``seconds`` of it from ``start``)."""
+    return ["ffmpeg", "-nostdin", "-v", "error", "-y", *_span(duration, start, seconds), "-i", str(src),
             *_map(audio_index, "0:a:0?"), "-vn", "-sn", "-ac", "1", "-ar", str(SAMPLE_RATE),
-            "-fs", str(limits.pcm_max_bytes(duration)), "-f", "s16le", str(dest)]
+            "-fs", str(_pcm_cap(duration, seconds)), "-f", "s16le", str(dest)]
 
 
 def frame_argv(src: Path, at: float, dest: Path, video_index: int | None = None) -> list[str]:
@@ -486,25 +506,32 @@ FRAME_READ_SEC = 10.0
 
 
 async def scene_changes(src: Path, *, duration: float | None = None, video_index: int | None = None,
-                        hold: Hold | None = None) -> list[tuple[float, float]]:
+                        hold: Hold | None = None, start: float | None = None, seconds: float | None = None,
+                        timeout: float = PASS_TIMEOUT_SEC) -> list[tuple[float, float]]:
     """Pass 0's scene changes in the first :func:`limits.pass_seconds` of
-    ``src`` (``duration``: the length the upload accepted)."""
-    code, _out, err = await _run(scene_argv(src, duration, video_index),
-                                 timeout=PASS_TIMEOUT_SEC, hold=hold)
+    ``src`` (``duration``: the length the upload accepted), or in
+    ``seconds`` of it from ``start`` (times are from the video's start)."""
+    code, _out, err = await _run(scene_argv(src, duration, video_index, start=start, seconds=seconds),
+                                 timeout=timeout, hold=hold)
     if code != 0:
         raise RuntimeError(f"ffmpeg scene scan exit {code}")
-    return parse_scenes(err.decode("utf-8", "replace"))
+    scenes = parse_scenes(err.decode("utf-8", "replace"))
+    if start:
+        scenes = [(round(t + float(start), 2), sc) for t, sc in scenes]
+    return scenes
 
 
 # ─── Pass 0/1: sound ────────────────────────────────────────────────────
 async def extract_audio(src: Path, dest: Path, *, duration: float | None = None,
-                        audio_index: int | None = None, hold: Hold | None = None) -> bool:
-    """The sound of the first :func:`limits.pass_seconds` of ``src`` as 16
-    kHz mono 16-bit PCM in ``dest``, never larger than
-    :func:`limits.pcm_max_bytes`; False when the video has none."""
+                        audio_index: int | None = None, hold: Hold | None = None,
+                        start: float | None = None, seconds: float | None = None,
+                        timeout: float = PASS_TIMEOUT_SEC) -> bool:
+    """The sound of the first :func:`limits.pass_seconds` of ``src`` (or of
+    ``seconds`` from ``start``) as 16 kHz mono 16-bit PCM in ``dest``, never
+    larger than that many seconds make; False when the video has none."""
     part = dest.with_suffix(".part")
-    code, _out, _err = await _run(audio_argv(src, part, duration, audio_index),
-                                  timeout=PASS_TIMEOUT_SEC, hold=hold)
+    code, _out, _err = await _run(audio_argv(src, part, duration, audio_index, start=start, seconds=seconds),
+                                  timeout=timeout, hold=hold)
     if code != 0 or not part.is_file():
         part.unlink(missing_ok=True)
         return False
@@ -512,11 +539,12 @@ async def extract_audio(src: Path, dest: Path, *, duration: float | None = None,
     return True
 
 
-def read_pcm(path: Path, duration: float | None = None) -> bytes:
-    """The sound file, at most :func:`limits.pcm_max_bytes` of it (what the
-    pass may write; anything past that is never read)."""
+def read_pcm(path: Path, duration: float | None = None, *, seconds: float | None = None) -> bytes:
+    """The sound file, at most :func:`limits.pcm_max_bytes` of it (or what
+    ``seconds`` make: what the pass may write; anything past that is never
+    read)."""
     with Path(path).open("rb") as f:
-        return f.read(limits.pcm_max_bytes(duration))
+        return f.read(_pcm_cap(duration, seconds))
 
 
 def window_levels(pcm: bytes) -> list[float]:

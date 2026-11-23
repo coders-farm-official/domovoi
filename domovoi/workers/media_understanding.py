@@ -5,7 +5,8 @@
   Videos by ``stat()`` (domovoi/media_understanding/catalog.py).
 * ``media_understanding`` (long run): chat videos first, then library work
   in its windows, voice first (domovoi/media_understanding/runner.py).
-  It replaced the 1.4.0 ``chat_video`` worker, whose jobs it runs.
+  It replaced the 1.4.0 ``chat_video`` worker, whose jobs it runs. Its
+  analysers: the fingerprint, then the videos' (media_understanding/videos.py).
 
 Both skipped under stubs (the tests drive them directly). Core-internal.
 """
@@ -49,6 +50,8 @@ class MediaUnderstandingWorker(LongRunWorker):
         self._runner = runner
 
     async def run(self, shutdown: asyncio.Event) -> None:
+        from domovoi.media_understanding import videos
         from domovoi.media_understanding.runner import Runner
 
+        videos.install()     # slice 3: scan, faces hook, transcript, frames, summary
         await (self._runner or Runner()).run_forever(shutdown)

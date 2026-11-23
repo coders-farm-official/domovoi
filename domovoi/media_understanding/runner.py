@@ -707,6 +707,10 @@ class Runner(VoiceFirst):
             if switches.admin_cap(self.sw) and pass_kind == "deep":
                 time_budget = budget.MAX_VIDEO_BUDGET_S
         failed = False
+        # A video that already had a frame pass keeps it unless a frame
+        # analyser ran again now (a faces-only pass mustn't mark a quick
+        # video deep).
+        ran_frames = False
         for a in analysers():
             if item.kind not in a.kinds or not a.wanted(item, self.sw):
                 continue
@@ -717,6 +721,7 @@ class Runner(VoiceFirst):
                               progress=dict(row["progress"] or {}) if row else {},
                               spent_s=spent, time_budget_s=time_budget)
             await self._stage_start(item, a.name, pass_kind)
+            ran_frames = ran_frames or bool(getattr(a, "deepens", False))
             before = ctx.spent_s
             try:
                 await a.run(item, ctx)
@@ -746,7 +751,8 @@ class Runner(VoiceFirst):
                 shutil.rmtree(ctx.work_dir, ignore_errors=True)
             spent += ctx.spent_s - before
         if not failed:
-            await self._end_item(item, "done", None, frame_pass=pass_kind)
+            keep = item.frame_pass is not None and not ran_frames
+            await self._end_item(item, "done", None, frame_pass=None if keep else pass_kind)
         await self.notify()
 
     async def _stage_start(self, item: Item, name: str, pass_kind: str | None) -> None:

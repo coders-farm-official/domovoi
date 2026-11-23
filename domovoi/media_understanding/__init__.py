@@ -8,7 +8,10 @@ and videos, in the background, voice first.
 * :mod:`.budget` — the adaptive per-video frame budget and the benchmark
   it stands on;
 * :mod:`.ratelimit` — the 20 MB/s read bucket and partial fingerprints;
-* :mod:`.switches` — the household's switches (household_settings).
+* :mod:`.switches` — the household's switches (household_settings);
+* :mod:`.videos` — the video analysers (scenes, transcript, keyframes,
+  summary, the faces hook) and the timeline;
+* :mod:`.moments` — the moment in a video a search matched.
 
 Design: MEDIA-UNDERSTANDING §5 and §7. Core-internal: not offered to
 plugins.
