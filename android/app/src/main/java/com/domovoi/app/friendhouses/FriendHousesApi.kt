@@ -20,11 +20,14 @@ import java.io.IOException
 // between households" (the server's domovoi/friend_houses/, proxied by the
 // dashboard's web/backend/api/friend_houses.py).
 //
-// What a household phone may do (owner decision 17): read the house inbox
-// (one for the whole house), send a message, mark a conversation read, and
-// see the friends and the shared lists. Everything about who the house
-// trusts is an admin's, on the dashboard: the phone shows words for those,
-// never a control (no misleading controls).
+// What a household phone may do (owner decision 17, widened 2026-11-23):
+// read the house inbox (one for the whole house), send a message, mark a
+// conversation read, see the friends and the shared lists, and accept,
+// decline or stop sharing a shared list. Everything about who the house
+// trusts (requests, friends, friend files, blocking, a friend's message
+// choice, starting a share), and saving or deleting a conversation, is an
+// admin's, on the dashboard: the phone shows no control for those, and no
+// words standing in for one (no misleading controls).
 //
 // The household token goes in the X-Device-Token header, as every request
 // of this app's ApiClient does (net/DeviceAuth.kt): no cookie (the client
@@ -107,7 +110,28 @@ data class FhFriend(
 )
 
 @Serializable
-data class FhFriends(val friends: List<FhFriend> = emptyList())
+data class FhFriends(
+    val friends: List<FhFriend> = emptyList(),
+    /** The house's quiet hours right now, `{rooms, until, read_later}` or
+     *  null; absent on an older server. Kept raw and read by
+     *  [fhQuietHours]: a malformed value must never fail the friends read. */
+    @SerialName("quiet_hours") val quietHours: JsonElement? = null,
+)
+
+/** Quiet hours in force now, in the house's time: [rooms] is `all` or
+ *  `some` (only some rooms are quiet), [until] is "HH:MM", and [readLater]
+ *  says whether a held message is read out once they end. */
+data class FhQuietHours(val rooms: String, val until: String, val readLater: Boolean)
+
+/** [friends]' quiet hours, or null: none now, an older server, or a value
+ *  this build can't read. A missing `read_later` is false. */
+fun fhQuietHours(friends: FhFriends): FhQuietHours? {
+    val o = friends.quietHours as? JsonObject ?: return null
+    fun str(k: String) = (o[k] as? JsonPrimitive)?.takeIf { it.isString }?.content
+    val until = str("until") ?: return null
+    val later = (o["read_later"] as? JsonPrimitive)?.takeIf { !it.isString }?.content == "true"
+    return FhQuietHours(rooms = str("rooms") ?: "all", until = until, readLater = later)
+}
 
 @Serializable
 data class FhConversation(
@@ -145,6 +169,11 @@ data class FhMessage(
     @SerialName("created_at") val createdAt: String? = null,
     @SerialName("delivered_at") val deliveredAt: String? = null,
     @SerialName("last_error") val lastError: String? = null,
+    /** An incoming message whose alert quiet hours held back: "quiet_hours",
+     *  else null (and null from an older server). */
+    val held: String? = null,
+    /** When a room said that held message afterwards (ISO), else null. */
+    @SerialName("read_out_at") val readOutAt: String? = null,
 ) {
     val incoming: Boolean get() = direction != "out"
 }
@@ -155,7 +184,8 @@ data class FhMessages(val messages: List<FhMessage> = emptyList())
 @Serializable
 data class FhSharedList(
     val id: String = "",
-    /** active | invited (an admin hasn't accepted yet). */
+    /** active | invited (not accepted yet: theirs offered to this house, or
+     *  ours waiting for them). */
     val state: String = "",
     /** us: our list, shared with them; them: their list, here. */
     val origin: String = "",
@@ -183,18 +213,36 @@ object FhPaths {
     const val CONVERSATIONS = "$STATUS/conversations"
     const val MESSAGES = "$STATUS/messages"
     const val SHARED_LISTS = "$STATUS/shared-lists"
+    /** The inbox's unread count alone (Home's row); 404 before 1.4.1. */
+    const val UNREAD = "$STATUS/unread"
 
     /** A conversation's page size (the dashboard's FH_PAGE). */
     const val PAGE = 50
 
     private val HOUSE = Regex("[0-9a-f]{64}")
     private val ID = Regex("[A-Za-z0-9_-]{1,64}")
+    private val SPACE = Regex("[0-9a-f]{32}")
 
     /** True for a house key a URL may carry: exactly 64 lowercase hex. */
     fun isHouseKey(value: String?): Boolean = value != null && HOUSE.matches(value)
 
     /** True for a friend id the server could have made (its _ID rule). */
     fun isFriendId(value: String?): Boolean = value != null && ID.matches(value)
+
+    /** True for a shared list's id a URL may carry: exactly 32 lowercase hex. */
+    fun isSpaceId(value: String?): Boolean = value != null && SPACE.matches(value)
+
+    private fun space(value: String): String {
+        require(isSpaceId(value)) { "not a shared list id" }
+        return value
+    }
+
+    /** One shared list: DELETE stops sharing it. */
+    fun sharedList(id: String): String = "$SHARED_LISTS/${space(id)}"
+
+    fun acceptList(id: String): String = "${sharedList(id)}/accept"
+
+    fun declineList(id: String): String = "${sharedList(id)}/decline"
 
     private fun house(value: String): String {
         // The value is never in the message: it is not one of ours.
@@ -310,7 +358,11 @@ class FriendHousesApi(private val api: ApiClient) {
         FhGate.decide(null, null)
     }
 
-    suspend fun friends(): List<FhFriend> = decode(FhPaths.FRIENDS, FhFriends.serializer()).friends
+    suspend fun friends(): List<FhFriend> = roster().friends
+
+    /** The friends payload whole: the friends and the house's quiet hours
+     *  ([fhQuietHours]). */
+    suspend fun roster(): FhFriends = decode(FhPaths.FRIENDS, FhFriends.serializer())
 
     suspend fun inbox(): FhInbox = decode(FhPaths.CONVERSATIONS, FhInbox.serializer())
 
@@ -336,6 +388,39 @@ class FriendHousesApi(private val api: ApiClient) {
 
     suspend fun sharedLists(): List<FhSharedList> =
         decode(FhPaths.SHARED_LISTS, FhSharedLists.serializer()).sharedLists
+
+    /** Accept a list a friend offered this house: it becomes one of the
+     *  house's lists, named [name] when given (a name already taken here is
+     *  a 400 with the server's sentence). Returns the name it was added as,
+     *  when the server says. */
+    suspend fun acceptList(id: String, name: String? = null): String? {
+        val body = buildJsonObject { name?.trim()?.takeIf { it.isNotEmpty() }?.let { put("name", it) } }
+        val r = api.post(FhPaths.acceptList(id), body) as? JsonObject
+        return (r?.get("name") as? JsonPrimitive)?.takeIf { it.isString }?.content
+    }
+
+    /** Decline a list a friend offered: not added, and they aren't told. */
+    suspend fun declineList(id: String) {
+        api.post(FhPaths.declineList(id))
+    }
+
+    /** Stop sharing a list (ours or theirs): both houses keep a copy. */
+    suspend fun stopSharing(id: String) {
+        api.delete(FhPaths.sharedList(id))
+    }
+
+    /**
+     * The house inbox's unread count, for Home. Null where the server has
+     * no such read for this phone: a server before it (404), or one that
+     * refuses the household token here (401, 403), or before setup (501).
+     * Never raises the pairing screen; anything else throws.
+     */
+    suspend fun unread(): Int? = try {
+        val r = DomovoiJson.parseToJsonElement(api.raw("GET", FhPaths.UNREAD, trackPairing = false)) as? JsonObject
+        (r?.get("unread") as? JsonPrimitive)?.content?.toIntOrNull()?.coerceAtLeast(0) ?: 0
+    } catch (e: ApiException) {
+        if (e.status in FhGate.HIDING_CODES) null else throw e
+    }
 
     private suspend fun <T> decode(path: String, s: kotlinx.serialization.KSerializer<T>): T =
         DomovoiJson.decodeFromJsonElement(s, api.get(path))

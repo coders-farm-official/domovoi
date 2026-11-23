@@ -58,18 +58,18 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import com.domovoi.app.LocalApp
+import com.domovoi.app.LocalToast
 import com.domovoi.app.friendhouses.FH_DESCRIPTION
 import com.domovoi.app.friendhouses.FH_MESSAGE_MAX
 import com.domovoi.app.friendhouses.FhConversation
-import com.domovoi.app.friendhouses.FhFriend
 import com.domovoi.app.friendhouses.FhMessage
-import com.domovoi.app.friendhouses.FhPaths
 import com.domovoi.app.friendhouses.FhSharedList
 import com.domovoi.app.friendhouses.FhStatus
 import com.domovoi.app.friendhouses.fhLength
 import com.domovoi.app.friendhouses.fhProblem
 import com.domovoi.app.friendhouses.fhSendable
 import com.domovoi.app.friendhouses.fhStatusLine
+import com.domovoi.app.ui.components.ConfirmDialog
 import com.domovoi.app.ui.components.EmptyState
 import com.domovoi.app.ui.components.LoadingState
 import com.domovoi.app.ui.components.PageHeader
@@ -86,12 +86,15 @@ import kotlinx.coroutines.launch
 /**
  * Friend houses: "Serverless messaging and friend system between
  * households". The house inbox (one for the whole house), a conversation
- * and its composer, the friends and the shared lists, mirroring the
- * dashboard's Settings → Household → Friend Houses at phone width.
+ * and its composer, and the shared lists (accept, decline, stop sharing),
+ * mirroring the dashboard's Settings → Household → Friend Houses at phone
+ * width, top to bottom as there: Messages, then Shared lists.
  *
  * Reached only while the server says it is on (the shell's gate,
- * friendhouses/FhGate). What the household token may do is a control;
- * what only an admin may do is a line of words ([FhWords]).
+ * friendhouses/FhGate). The phone holds the household token, so the
+ * dashboard's admin zone ("Friends and connections"), a conversation's
+ * "Save a copy" and "Delete", and starting a share are not here at all
+ * ([FhWords]): no control the server would refuse.
  *
  * Every name, body, title and last_error came from another house: shown
  * only through [FhPlain], a plain-String Text (no links, no markup, line
@@ -107,18 +110,16 @@ fun FriendHousesScreen(navigate: (Route) -> Unit) {
     var tab by rememberSaveable { mutableStateOf(FhTab.Messages) }
     var open by rememberSaveable(server) { mutableStateOf<String?>(null) }
     var inbox by remember(server) { mutableStateOf<FhRead<List<FhConversation>>?>(null) }
-    var friends by remember(server) { mutableStateOf<FhRead<List<FhFriend>>?>(null) }
     var shared by remember(server) { mutableStateOf<FhRead<List<FhSharedList>>?>(null) }
     var tick by remember { mutableStateOf(0) }
 
-    // The inbox and the friends, read at once and every 15 s while the
-    // screen is on screen (nothing pushes them); the shared lists with them.
+    // The inbox, read at once and every 15 s while the screen is on screen
+    // (nothing pushes it); the shared lists with it.
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(server, tick, lifecycle) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (true) {
                 inbox = fhRead("load messages") { app.friendHouses.api.inbox().newestFirst() }
-                friends = fhRead("load friends") { app.friendHouses.api.friends() }
                 shared = fhRead("load shared lists") { app.friendHouses.api.sharedLists() }
                 app.friendHouses.refresh()
                 delay(INBOX_POLL_MS)
@@ -128,8 +129,7 @@ fun FriendHousesScreen(navigate: (Route) -> Unit) {
     val reload: () -> Unit = { tick++ }
 
     val inboxList = (inbox as? FhRead.Ok)?.value.orEmpty()
-    val friendList = (friends as? FhRead.Ok)?.value.orEmpty()
-    val conv = fhOpenConversation(open, inboxList, friendList)
+    val conv = fhOpenConversation(open, inboxList)
     BackHandler(enabled = open != null) { open = null }
 
     Column(Modifier.fillMaxSize().padding(16.dp)) {
@@ -143,8 +143,7 @@ fun FriendHousesScreen(navigate: (Route) -> Unit) {
             Box(Modifier.weight(1f)) {
                 when (tab) {
                     FhTab.Messages -> InboxTab(inbox) { open = it }
-                    FhTab.Friends -> FriendsTab(friends) { house -> tab = FhTab.Messages; open = house }
-                    FhTab.Shared -> SharedTab(shared, server, navigate)
+                    FhTab.Shared -> SharedTab(shared, server, navigate, onChanged = reload)
                 }
             }
         } else {
@@ -158,7 +157,10 @@ fun FriendHousesScreen(navigate: (Route) -> Unit) {
     }
 }
 
-enum class FhTab(val label: String) { Messages("messages"), Friends("friends"), Shared("shared lists") }
+/** The dashboard's sections a household phone shows, in its order. Its
+ *  admin zone (requests, friends, friend files, this house, blocked
+ *  houses) has no tab: the household token is refused all of it. */
+enum class FhTab(val label: String) { Messages("messages"), Shared("shared lists") }
 
 /** How often the inbox and an open conversation are read again. */
 private const val INBOX_POLL_MS = 15_000L
@@ -191,7 +193,7 @@ internal fun FhPlain(
     )
 }
 
-/** A muted line of words (the admin-only sentences, notes). */
+/** A muted line of words (notes). */
 @Composable
 private fun Note(text: String, modifier: Modifier = Modifier) {
     FhPlain(text, modifier, style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted)
@@ -391,7 +393,8 @@ private fun ConversationView(
             }
             FhPlain(name, style = MaterialTheme.typography.titleMedium, maxLines = 2, modifier = Modifier.weight(1f))
         }
-        Note(if (former) FhWords.FORMER_FRIEND else FhWords.CONVERSATION_ADMIN, Modifier.padding(bottom = 8.dp))
+        // Saving a copy and deleting stay admin: not offered here at all.
+        if (former) Note(FhWords.FORMER_FRIEND, Modifier.padding(bottom = 8.dp))
         problem?.let { Problem(it) }
         LazyColumn(
             Modifier.weight(1f).fillMaxWidth(),
@@ -472,8 +475,8 @@ private fun ConversationView(
 }
 
 /** One message: its text exactly as sent (plain, line breaks kept), when
- *  it arrived, the sender's clock if it disagrees, and an outgoing one's
- *  state in words. */
+ *  it arrived, the sender's clock if it disagrees, an outgoing one's state
+ *  in words, and an incoming one quiet hours held back. */
 @Composable
 internal fun MessageBubble(m: FhMessage) {
     val out = !m.incoming
@@ -505,85 +508,164 @@ internal fun MessageBubble(m: FhMessage) {
                 StatusDot(tone)
                 FhPlain(words, style = MaterialTheme.typography.labelSmall, color = Domovoi.colors.fgMuted)
             }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Friends (read only).
-// ---------------------------------------------------------------------------
-
-@Composable
-private fun FriendsTab(read: FhRead<List<FhFriend>>?, onMessage: (String) -> Unit) {
-    when (read) {
-        null -> LoadingState()
-        is FhRead.Problem -> Problem(read.text)
-        is FhRead.Ok -> LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            if (read.value.isEmpty()) item(key = "none") { EmptyState(FhWords.NO_FRIENDS, FhWords.NO_FRIENDS_SUB) }
-            items(read.value, key = { it.id }) { f -> FriendRow(f, onMessage) }
-            item(key = "admin") {
-                Column(Modifier.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Note(FhWords.PHONE_FOLLOWS)
-                    Note(FhWords.FRIENDS_ADMIN)
-                }
+            fhHeldText(m)?.let {
+                Text("\u00b7 $it", style = MaterialTheme.typography.labelSmall, color = Domovoi.colors.fgSubtle)
             }
         }
     }
 }
 
-@Composable
-internal fun FriendRow(f: FhFriend, onMessage: (String) -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FhPlain(f.name, fontWeight = FontWeight.SemiBold, maxLines = 2, modifier = Modifier.weight(1f))
-            if (f.verified) Pill(FhWords.VERIFIED, Tone.Ok) else Pill(FhWords.NOT_VERIFIED, Tone.Warn)
-        }
-        FhWords.presence(f)?.let { Note(it) }
-        Note(FhWords.alert(f.alert))
-        if (FhPaths.isHouseKey(f.house)) {
-            TextButton(onClick = { onMessage(f.house) }) { Text("message") }
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
-// Shared lists (read only here; the list itself is an ordinary list).
+// Shared lists: the offers to this house, then the lists shared now. A
+// list shared now is an ordinary list too (open in Lists). Accepting,
+// declining and stopping are the household's; starting a share is an
+// admin's, so it isn't here.
 // ---------------------------------------------------------------------------
 
 @Composable
-private fun SharedTab(read: FhRead<List<FhSharedList>>?, server: String, navigate: (Route) -> Unit) {
+private fun SharedTab(
+    read: FhRead<List<FhSharedList>>?,
+    server: String,
+    navigate: (Route) -> Unit,
+    onChanged: () -> Unit,
+) {
+    val app = LocalApp.current
+    val toast = LocalToast.current
     val context = LocalContext.current
+    val api = app.friendHouses.api
     when (read) {
         null -> LoadingState()
         is FhRead.Problem -> Problem(read.text)
         is FhRead.Ok -> LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            val lists = fhSharedOrder(read.value)
-            if (lists.isEmpty()) item(key = "none") { EmptyState(FhWords.NO_SHARED) }
-            items(lists, key = { it.id }) { s ->
-                SharedRow(s) { listId ->
-                    ListsSelection.save(context, server, listId)
-                    navigate(Route.Lists)
-                }
+            val (offers, now) = fhSharedSplit(read.value)
+            item(key = "explain") { Note(FhWords.SHARE_EXPLAIN, Modifier.padding(bottom = 8.dp)) }
+            if (offers.isEmpty() && now.isEmpty()) item(key = "none") { EmptyState(FhWords.NO_SHARED) }
+            if (offers.isNotEmpty()) item(key = "offered") { SectionLabel(FhWords.OFFERED) }
+            items(offers, key = { "offer-${it.id}" }) { s ->
+                OfferRow(
+                    s,
+                    onAccept = { name -> fhAcceptList(api, s, name).also { if (it is FhDone.Ok) { toast(it.toast); onChanged() } } },
+                    onDecline = { fhDeclineList(api, s).also { if (it is FhDone.Ok) { toast(it.toast); onChanged() } } },
+                )
             }
-            item(key = "admin") { Note(FhWords.LISTS_ADMIN, Modifier.padding(top = 12.dp)) }
+            if (now.isNotEmpty()) item(key = "now") { SectionLabel(FhWords.SHARED_NOW) }
+            items(now, key = { "now-${it.id}" }) { s ->
+                SharedRow(
+                    s,
+                    onOpen = { listId ->
+                        ListsSelection.save(context, server, listId)
+                        navigate(Route.Lists)
+                    },
+                    onStop = { fhStopSharing(api, s).also { if (it is FhDone.Ok) { toast(it.toast); onChanged() } } },
+                )
+            }
         }
     }
 }
 
 @Composable
-internal fun SharedRow(s: FhSharedList, onOpen: (Long) -> Unit) {
+private fun SectionLabel(text: String) {
+    Text(text, style = MaterialTheme.typography.labelLarge, color = Domovoi.colors.fgMuted, modifier = Modifier.padding(top = 8.dp))
+}
+
+/** A list a friend offered this house: Accept (under another name if the
+ *  one it has is taken here, or by choice) or Decline (asked first). */
+@Composable
+internal fun OfferRow(
+    s: FhSharedList,
+    onAccept: suspend (name: String?) -> FhDone,
+    onDecline: suspend () -> FhDone,
+) {
+    val scope = rememberCoroutineScope()
     val friend = FhWords.friendName(s.friend)
+    val offer = remember(s.id) { FhOffer(s.title) }
+    var confirm by remember(s.id) { mutableStateOf(false) }
+    val busy = offer.busy
+    val naming = offer.naming
     Column(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        if (s.state == "invited") {
-            FhPlain(FhWords.invited(friend, s.title.orEmpty()))
-            return@Column
+        FhPlain(FhWords.offered(friend, s.title.orEmpty()))
+        if (naming) {
+            OutlinedTextField(
+                value = offer.name,
+                onValueChange = { offer.name = it; offer.problem = null },
+                enabled = !busy,
+                label = { Text(FhWords.CALL_IT) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        } else {
+            TextButton(onClick = { offer.naming = true }, enabled = !busy) { Text(FhWords.RENAME) }
         }
-        FhPlain(s.listName ?: s.title.orEmpty(), fontWeight = FontWeight.SemiBold, maxLines = 2)
-        Note(if (s.origin == "us") "Our list, shared with $friend" else "$friend's list, shared with this house")
+        offer.problem?.let { Problem(it) }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Button(
+                onClick = { if (offer.canAccept) scope.launch { offer.accept(onAccept) } },
+                enabled = offer.canAccept,
+                colors = ButtonDefaults.buttonColors(containerColor = Domovoi.colors.brand, contentColor = Domovoi.colors.brandFg),
+            ) { Text(FhWords.ACCEPT) }
+            TextButton(onClick = { confirm = true }, enabled = !busy) { Text(FhWords.DECLINE) }
+        }
+    }
+    if (confirm) {
+        ConfirmDialog(
+            title = FhWords.DECLINE_TITLE,
+            body = FhWords.declineBody(s.title, friend),
+            confirmLabel = FhWords.DECLINE,
+            destructive = true,
+            onConfirm = { scope.launch { offer.decline(onDecline) } },
+            onDismiss = { confirm = false },
+        )
+    }
+}
+
+/** A list shared now, ours or theirs: its name, with whom, and Stop
+ *  sharing (asked first; both houses keep their own copy). */
+@Composable
+internal fun SharedRow(
+    s: FhSharedList,
+    onOpen: (Long) -> Unit,
+    onStop: suspend () -> FhDone,
+) {
+    val scope = rememberCoroutineScope()
+    val friend = FhWords.friendName(s.friend)
+    val listName = fhListName(s)
+    var busy by remember(s.id) { mutableStateOf(false) }
+    var confirm by remember(s.id) { mutableStateOf(false) }
+    var problem by remember(s.id) { mutableStateOf<String?>(null) }
+    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        FhPlain(FhWords.shared(listName, friend, ours = s.origin == "us"), fontWeight = FontWeight.SemiBold, maxLines = 3)
+        // Ours, not accepted by them yet.
+        if (s.state == "invited") Note(FhWords.WAITING_FOR_THEM)
+        val title = s.title
+        if (s.origin == "them" && !title.isNullOrEmpty() && title != listName) Note(FhWords.theyCallIt(title))
         if (s.waitingToSend > 0) Note(FhWords.waiting(s.waitingToSend))
-        val listId = s.listId
-        if (listId != null && listId > 0) {
-            TextButton(onClick = { onOpen(listId) }) { Text("open in lists") }
+        problem?.let { Problem(it) }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            val listId = s.listId
+            if (listId != null && listId > 0) {
+                TextButton(onClick = { onOpen(listId) }) { Text(FhWords.OPEN_IN_LISTS) }
+            }
+            TextButton(onClick = { confirm = true }, enabled = !busy) { Text(FhWords.STOP_SHARING) }
         }
+    }
+    if (confirm) {
+        ConfirmDialog(
+            title = FhWords.STOP_TITLE,
+            body = FhWords.stopBody(listName, friend),
+            confirmLabel = FhWords.STOP_SHARING,
+            destructive = true,
+            onConfirm = {
+                busy = true
+                problem = null
+                scope.launch {
+                    try {
+                        (onStop() as? FhDone.Problem)?.let { problem = it.text }
+                    } finally {
+                        busy = false
+                    }
+                }
+            },
+            onDismiss = { confirm = false },
+        )
     }
 }
