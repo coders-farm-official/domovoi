@@ -234,7 +234,16 @@ opens it); a network folder doesn't.
 1. **Checksums.** `kit.json` and the release's signed manifest against the
    stick's `SHA256SUMS`. They only catch a bad copy or a dying stick.
 2. **The kit.** A kit format this Setup reads, made for "A Windows or
-   Linux PC".
+   Linux PC". Then what is on the stick: no link of any kind (a symlink,
+   a junction or any other reparse point; none is walked into), nothing
+   `kit.json` doesn't account for, and no package folder under `apt\`
+   with a name apt doesn't use, in the kit checker's words
+   ([OFFLINE_KIT.md, What the checks prove](OFFLINE_KIT.md#what-the-checks-prove)).
+   The system's own files (`.DS_Store`, `Thumbs.db`, `desktop.ini`, `._*`
+   and the like) are let be in any folder as plain files, and its own
+   folders (`System Volume Information`, `$RECYCLE.BIN` and the few others
+   listed there) only at the top of the drive, when the kit is the drive
+   itself.
 3. **The release signature.** `release\DomovoiSetup.manifest.json` must be
    signed with Domovoi's release key, the one this Setup already pins for
    the Windows update ([The release key](#the-release-key)), name the
@@ -276,6 +285,7 @@ so. Inside the distro `provision.sh --offline-kit` has its own guards.
 | This kit was made for a Mac only. | Make the kit again with "A Windows or Linux PC" ticked. |
 | This kit is missing what Setup needs: ... | A part isn't on it. Make the kit again. |
 | This stick has a damaged file: ... Make the stick again. | A checksum doesn't match. |
+| This stick holds what a kit never does, so Setup used nothing from it. ... is a link, which a kit never holds. / ... is not part of the kit (kit.json doesn't list it). ... Make the stick again. | The stick was changed (or a computer added files to it). Up to five entries are named. |
 | This kit is not a Domovoi release signed with Domovoi's release key ... | Nothing on it is used. Use a kit from a house you trust. |
 | Installing from this kit needs about N GB free on C:\ ... | Free some space, or make a kit without AI chat. |
 | Domovoi couldn't open the offline kit at E:\ (is the stick still plugged in ...) | During the install: plug it back in and **Retry**. |

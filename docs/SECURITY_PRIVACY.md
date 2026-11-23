@@ -5129,8 +5129,24 @@ so a damaged or hostile kit.json can't make it build a huge list. It
 names every entry kit.json doesn't account for: an unlisted file, a link
 or other non-regular entry (a link to a folder is not walked into), and
 a folder kit.json lists nothing in (M12, review of 2026-11-23). Windows
-Setup does not walk the stick for extra entries yet; the install it
-starts runs provision.sh, which holds the package folders as below.
+Setup walks the stick the same way before it uses anything on it
+(`OfflineKit.Unaccounted` in `windows/common/OfflineKit.cs`, run by the
+helper's kit-check right after kit.json is read, before the release
+signature): any reparse point (a symlink, a junction or anything else
+Windows redirects) is refused and not walked into, files and folders
+kit.json doesn't account for are refused in the checker's words, and an
+apt suite or component folder outside `^[a-z0-9][a-z0-9.+-]{0,63}$` is
+refused even when kit.json lists it (kit.json itself is not signed). The
+refusal is one message in Setup's "This offline kit can't be used"
+dialog that names up to five entries. The only entries let be, never
+read or copied, are the operating system's own: its files (`.DS_Store`,
+`Thumbs.db`, `desktop.ini`, `.metadata_never_index`, `._*`, as the
+checker) in any folder, only as plain files (a link or folder with such a
+name is refused); and its folders (`System Volume Information`,
+`$RECYCLE.BIN`, `.Trashes`, `.Spotlight-V100`, `.fseventsd`,
+`.TemporaryItems`, `.DocumentRevisions-V100`, `lost+found`) only at the
+top of the drive when the kit is the drive itself (deeper down they are
+refused). provision.sh then holds the package folders again, as below.
 
 **The kit's packages go through apt's signature check.** Each suite and
 component of the kit's Ubuntu packages is a folder name on the stick, and

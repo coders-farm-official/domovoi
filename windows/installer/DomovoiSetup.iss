@@ -51,7 +51,8 @@
 ; release folder, or the kit's own), takes /kit=DIR, or the household picks
 ; the kit's folder when the internet check fails. Before anything changes,
 ; the helper's kit-check (windows\common\OfflineKit.cs) checks the stick's
-; SHA256SUMS, the signed release manifest against the release key, that the
+; SHA256SUMS, that nothing on it is a link or unaccounted for by kit.json,
+; the signed release manifest against the release key, that the
 ; kit is this Setup's own release (tag and commit), the parts and the disk.
 ; Then nothing is downloaded: Ubuntu's image, WSL's MSI and provision.sh
 ; come off the stick, each checked against this Setup's pins, the helper's

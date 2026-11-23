@@ -150,8 +150,9 @@ with internet.
 
 **Windows 11.** Open the stick and double-click `release\DomovoiSetup.exe`.
 Setup sees the kit beside it and installs from it, with no internet: it
-checks the stick (checksums, the release signature, that the kit is the
-Setup's own release, the parts and the disk) before it changes anything,
+checks the stick (checksums, that nothing on it is a link or missing from
+`kit.json`, the release signature, that the kit is the Setup's own
+release, the parts and the disk) before it changes anything,
 takes WSL and Ubuntu's image from `windows\` and `provision.sh` from
 `linux\`, each against Setup's own pins, and opens the stick read-only
 inside Domovoi's Linux system for `provision.sh --offline-kit`. Keep the
@@ -292,6 +293,22 @@ SHA256SUMS` checks every file too.
   right SHA-256; split files join back correctly; nothing else is on the
   stick. This catches a bad write or a failing stick. It is not proof of
   where the stick came from.
+- **Nothing is hidden beside the kit.** A link of any kind (on Windows a
+  symlink, a junction or any other reparse point), a file or folder
+  `kit.json` doesn't account for, or a package folder under `apt/` whose
+  name apt doesn't use (`^[a-z0-9][a-z0-9.+-]{0,63}$`) means the stick was
+  changed. The checker names each one; Windows Setup refuses the kit,
+  naming them, before it uses anything on it; the Linux installers stop
+  at a linked or oddly named package folder. What an operating system
+  puts on a stick by itself is let be, and never read: its files
+  (`.DS_Store`, `Thumbs.db`, `desktop.ini`, `.metadata_never_index`, `._*`)
+  in any folder, as long as each is a plain file (a link or a folder with
+  such a name is still refused), so a stick opened in a Mac's Finder or
+  Windows' Explorer still passes; and its folders (`System Volume
+  Information`, `$RECYCLE.BIN`, `.Trashes`, `.Spotlight-V100`,
+  `.fseventsd`, `.TemporaryItems`, `.DocumentRevisions-V100`,
+  `lost+found`) at the kit's top for the checker, and for Windows Setup
+  only at the top of the drive, when the kit is the drive itself.
 - **It is a Domovoi release.** The installers in `release/` come with the
   release's signed manifest. The check verifies that signature with
   Domovoi's release key (the same key the Linux, Windows and Mac
