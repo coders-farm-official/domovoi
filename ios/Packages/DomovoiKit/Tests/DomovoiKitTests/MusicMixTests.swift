@@ -205,13 +205,15 @@ final class MusicMixTests: XCTestCase {
         let api = client(Live(base))
         StubURLProtocol.enqueue(.json(Self.personAnswer))
         let saved = try await savePersonMix(
-            client: api, server: base, deviceID: "ios-1a2b", personID: 4,
+            client: api, server: base, deviceID: "ios-1a2b", claimKey: "held-key", personID: 4,
             override: MixSliders(discoveryFavorites: 5, closeWander: 3)
         )
         let sent = try XCTUnwrap(StubURLProtocol.recorded.first)
         XCTAssertEqual("PUT", sent.httpMethod)
         XCTAssertEqual("/api/people/4/music-mix", sent.url?.path)
         XCTAssertEqual("ios-1a2b", sent.value(forHTTPHeaderField: deviceIDHeader))
+        // As for clearing listening history (security review 2026-11-22, L40).
+        XCTAssertEqual("held-key", sent.value(forHTTPHeaderField: claimKeyHeader))
         XCTAssertEqual(#"{"override":{"discovery_favorites":5,"close_wander":3}}"#, body(at: 0))
         XCTAssertEqual(MixSliders(discoveryFavorites: 5, closeWander: 3), saved.uses)
 

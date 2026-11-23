@@ -167,17 +167,19 @@ class MusicMixTest {
             server.enqueue(MockResponse().setBody(
                 """{"person_id":4,"override":{"discovery_favorites":5,"close_wander":3},"uses":{"discovery_favorites":5,"close_wander":3}}""",
             ))
-            val saved = savePersonMix(api, base, "android-1a2b", 4, MixSliders(5, 3))
+            val saved = savePersonMix(api, base, "android-1a2b", "held-key", 4, MixSliders(5, 3))
             val req = server.takeRequest()
             assertEquals("PUT", req.method)
             assertEquals("/api/people/4/music-mix", req.path)
             assertEquals("android-1a2b", req.getHeader(DEVICE_ID_HEADER))
+            // As for clearing listening history (security review 2026-11-22, L40).
+            assertEquals("held-key", req.getHeader(com.domovoi.app.net.CLAIM_KEY_HEADER))
             assertEquals("""{"override":{"discovery_favorites":5,"close_wander":3}}""", req.body.readUtf8())
             assertEquals(MixSliders(5, 3), saved.uses)
 
             server.enqueue(MockResponse().setResponseCode(403).setBody("""{"detail":"$PERSON_MIX_NOT_YOURS"}"""))
             val e = try {
-                savePersonMix(api, base, "android-1a2b", 7, null)
+                savePersonMix(api, base, "android-1a2b", null, 7, null)
                 fail("refused"); null
             } catch (x: ApiException) { x }!!
             assertEquals(PERSON_MIX_NOT_YOURS, mixWriteRefusal(e))
