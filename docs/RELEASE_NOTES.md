@@ -128,6 +128,14 @@ a way that would otherwise get reported as a bug.
 
 ## 1.4.1 (unreleased)
 
+- Holiday questions work offline: "how many days until New Year's Day",
+  "when is Thanksgiving", "what day is Easter next year" answer with the
+  date and the day count. The built-in table covers the common public
+  holidays and observances of the US, Canada, the UK, Ireland, Australia
+  and New Zealand, plus Easter and the days counted from it, and uses the
+  country of the Home location (the US when none is set). "This year" for
+  a holiday that already passed says how many days ago it was.
+
 - A chat draft's changes view on the dashboard leaves a paragraph gap
   between a long removed passage and the added text after it, so the old
   last word no longer runs into the new first word.
