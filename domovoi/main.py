@@ -5963,6 +5963,22 @@ async def admin_satellite_reject(room_id: str) -> dict[str, Any]:
     return {"rejected": bool(ok), "room_id": room_id}
 
 
+async def _close_room_session(room_id: str) -> bool:
+    """Close the room's live satellite socket, if one is open: a device
+    whose pairing or room was just removed must not keep the room's audio
+    and announcements until its socket happens to drop. Its own teardown
+    unregisters it; a device that is still wanted reconnects and is checked
+    like any other."""
+    sess = (getattr(app.state, "active_sessions", None) or {}).get(room_id)
+    if sess is None:
+        return False
+    try:
+        await sess.ws.close(code=1008)
+    except Exception:  # noqa: BLE001 — already gone
+        pass
+    return True
+
+
 @app.delete(
     "/v1/admin/satellites/{room_id}/pairing",
     # Resetting a pairing is a SECURITY op (it lets the next connection
@@ -5976,15 +5992,18 @@ async def admin_reset_satellite_pairing(room_id: str) -> dict[str, Any]:
     that room re-pairs trust-on-first-use. Needed after re-flashing a Pi or
     moving a room to a new device (the old device's token no longer matches).
 
-    Works whether or not the room is currently connected — the pairing lives
-    in the DB, not the live session. Returns whether a row was actually
-    removed (``reset``: false means the room had no pairing to clear)."""
+    Works whether or not the room is currently connected; a live socket for
+    the room is closed, so the device that held it reconnects and is checked
+    against the reset pairing. Returns whether a row was actually removed
+    (``reset``: false means the room had no pairing to clear)."""
     from domovoi.db.repositories import SatellitePairingRepository
 
     async with session_scope() as s:
         removed = await SatellitePairingRepository(s).reset_pairing(room_id)
+    closed = await _close_room_session(room_id)
     log.info(
-        "pairing: admin reset room=%s (row_existed=%s)", room_id, removed
+        "pairing: admin reset room=%s (row_existed=%s, closed_live=%s)",
+        room_id, removed, closed,
     )
     return {"room_id": room_id, "reset": removed}
 
@@ -6147,6 +6166,7 @@ async def admin_delete_satellite(
         if purge:
             removed_approval = await SatelliteApprovalRepository(s).reject(room_id)
 
+    await _close_room_session(room_id)
     removed_mpd = {}
     if purge and provisioned is not None:
         from domovoi import mpd_provisioner
