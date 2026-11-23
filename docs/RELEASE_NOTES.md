@@ -48,6 +48,8 @@ a way that would otherwise get reported as a bug.
 - **Installing a plugin from GitHub** refuses a branch or tag name with
   empty or `.`/`..` parts, so the download always comes from the
   repository shown on the install screen.
+- **News feed discovery** reads only the first 256 KB of a page, scans
+  it in a worker thread and in time that grows only with its length.
 - **The dashboard logs it** if it can't keep its port-80 permission away
   from the programs it starts.
 - **Video poster frames**: every spelling of one file's path shares one
