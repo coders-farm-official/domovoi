@@ -158,8 +158,8 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
   `GET /v1/admin/room-media/{room_id}`. A room screen's thumbnail token
   works only while its results are on the screen, is answered `no-store`
   and is blanked in the log.
-- **Nightly face re-group** runs in a worker thread with the maths library
-  on one thread, a blocked neighbour search, at most 20,000 faces a night,
+- **Nightly face re-group** runs in a worker thread with a blocked
+  neighbour search, at most 20,000 faces a night,
   pausing for voice; the night is marked done before it starts.
 - **Forget my face.** A phone's claim must be older than the person's
   oldest confirmed face (else admin); moving someone's face to another

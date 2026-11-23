@@ -642,11 +642,14 @@ def test_a_real_pty_runs_a_shell_as_this_user() -> None:
 def test_a_real_pty_write_gives_up_when_the_session_ends() -> None:
     """M3 on the real PTY: a program that never reads its input fills the
     PTY; the write waits with a timeout and stops once the session is over,
-    instead of blocking forever."""
+    instead of blocking forever. The program holds the terminal in raw mode,
+    as a full-screen program does: a canonical-mode line discipline drops
+    what doesn't fit in its line buffer instead of blocking the writer, so
+    a plain "sleep" never fills the PTY."""
     pty = sh.PtyBackend()
     pty.spawn(80, 24)
     try:
-        pty.write(b"sleep 30\n")
+        pty.write(b"stty raw -echo; sleep 30\n")
         time.sleep(0.3)
         over = threading.Event()
         threading.Timer(1.5, over.set).start()

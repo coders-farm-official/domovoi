@@ -381,7 +381,10 @@ ERROR_CODES: dict[str, ErrorHelp] = {
                              "build here)." + _PLUGIN_RETRY, "plugins"),
     "plugin_file_too_large": _e("A file in the plugin is too large", "One of its files is over the limit." + _PLUGIN_ZIP,
                                 "plugins"),
-    "requirements_conflict": _e("The plugin needs other versions of Domovoi's packages",
+    "repo_changed": _e("The plugin's repository moved or changed owner",
+                       "Its GitHub repository isn't the one it was installed from, so no update is installed "
+                       "from it. Reinstall the plugin from its new address if you trust it.", "plugins"),
+    "requirements_conflict":_e("The plugin needs other versions of Domovoi's packages",
                                 "Its requirements clash with what Domovoi uses." + _PLUGIN_AUTHOR, "plugins"),
     "requirements_sdist": _e("The plugin needs a package that would be built here",
                              "Domovoi installs only prebuilt packages." + _PLUGIN_AUTHOR, "plugins"),

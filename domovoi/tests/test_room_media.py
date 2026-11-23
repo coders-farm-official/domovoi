@@ -321,8 +321,10 @@ async def test_a_thumbnail_token_names_one_item_and_expires(monkeypatch):
     assert asked == [("thumb", "core:pictures", "f1.jpg", "m"), ("poster", "core:pictures", "f2.jpg")]
     for bad in ("/v1/room-media/nope", "/v1/room-media/" + "A" * 32, "/v1/room-media/..%2F..%2Fetc"):
         assert (await _get(core_app, bad)).status_code == 404
-    # Expired: gone.
-    tok = room_media.mint("kitchen", "core:pictures", "x.jpg", "image", clock=clock)
+    # Expired: gone. (A room with nothing on its screen: the kitchen's
+    # results were shown on the real monotonic clock, which a fresh CI
+    # machine may not have run past this fake clock's 1000 s yet.)
+    tok = room_media.mint("den", "core:pictures", "x.jpg", "image", clock=clock)
     assert room_media.resolve(tok, clock=clock) is not None
     clock.t += room_media.TOKEN_TTL_SEC
     assert room_media.resolve(tok, clock=clock) is None

@@ -414,18 +414,6 @@ def components(E: np.ndarray, threshold: float = GROUP_MATCH, chunk: int = REGRO
     return compress()
 
 
-def _one_blas_thread() -> Any:
-    """A context that holds numpy's maths library to one thread (the core's
-    other work keeps its cores); a no-op without threadpoolctl."""
-    import contextlib
-
-    try:
-        from threadpoolctl import threadpool_limits
-    except Exception:  # noqa: BLE001
-        return contextlib.nullcontext()
-    return threadpool_limits(limits=1, user_api="blas")
-
-
 @dataclass
 class _Plan:
     gone: list[int]
@@ -438,29 +426,28 @@ def plan_regroup(rows: list[Any], deny: np.ndarray, named: list[Group], *, pause
     """The re-group's maths, pure (run in a worker thread): which faces go
     (denied), which are suggested for a named person, and the components of
     the rest."""
-    with _one_blas_thread():
-        gone: list[int] = []
-        faces: list[tuple[int, np.ndarray, Any, list[int]]] = []
-        for k, (fid, emb, gid, rej) in enumerate(rows):
-            if k % REGROUP_WRITE_BATCH == 0:
-                _yield_to_voice(pause)
-            v = from_bytes(emb)
-            if v is None or denied(deny, v):
-                gone.append(int(fid))
-            else:
-                faces.append((int(fid), unit(v), gid, list(rej or [])))
-        suggest: list[tuple[int, int, int]] = []
-        free: list[tuple[int, np.ndarray, Any]] = []
-        for k, (fid, v, gid, rej) in enumerate(faces):
-            if k % REGROUP_WRITE_BATCH == 0:
-                _yield_to_voice(pause)
-            g, _ = choose(named, v, rej)
-            if g is not None:
-                suggest.append((fid, g.id, int(g.person_id)))
-            else:
-                free.append((fid, v, gid))
-        labels = (components(np.stack([v for _f, v, _g in free]), pause=pause)
-                  if free else np.zeros(0, dtype=np.int64))
+    gone: list[int] = []
+    faces: list[tuple[int, np.ndarray, Any, list[int]]] = []
+    for k, (fid, emb, gid, rej) in enumerate(rows):
+        if k % REGROUP_WRITE_BATCH == 0:
+            _yield_to_voice(pause)
+        v = from_bytes(emb)
+        if v is None or denied(deny, v):
+            gone.append(int(fid))
+        else:
+            faces.append((int(fid), unit(v), gid, list(rej or [])))
+    suggest: list[tuple[int, int, int]] = []
+    free: list[tuple[int, np.ndarray, Any]] = []
+    for k, (fid, v, gid, rej) in enumerate(faces):
+        if k % REGROUP_WRITE_BATCH == 0:
+            _yield_to_voice(pause)
+        g, _ = choose(named, v, rej)
+        if g is not None:
+            suggest.append((fid, g.id, int(g.person_id)))
+        else:
+            free.append((fid, v, gid))
+    labels = (components(np.stack([v for _f, v, _g in free]), pause=pause)
+              if free else np.zeros(0, dtype=np.int64))
     return _Plan(gone, suggest, free, labels)
 
 
