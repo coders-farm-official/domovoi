@@ -35,7 +35,9 @@ import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import quote
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from domovoi import egress, executors
@@ -1115,6 +1117,25 @@ def _semver_cmp(a: str, b: str) -> int:
 
 # ─── GitHub install (§3.3) ─────────────────────────────────────────────────
 
+def _ref_is_plain(ref: str) -> bool:
+    """A branch, tag or commit name with no empty or dot segments, so the
+    archive URL built from it names the repository the user was shown."""
+    return bool(ref) and all(seg not in ("", ".", "..") for seg in ref.split("/"))
+
+
+def _codeload_url(owner: str, repo: str, ref: str) -> str:
+    """The archive URL from quoted parts; refuses one whose normalised path
+    would leave ``/{owner}/{repo}/zip/``."""
+    prefix = f"/{quote(owner, safe='')}/{quote(repo, safe='')}/zip/"
+    url = f"https://codeload.github.com{prefix}{quote(ref, safe='/')}"
+    if not httpx.URL(url).path.startswith(prefix):
+        raise InstallError(
+            "github_url_invalid",
+            "expected https://github.com/<owner>/<repo>[@ref]",
+        )
+    return url
+
+
 async def download_github_zip(github_url: str) -> tuple[bytes, str]:
     """Resolve + download a repo archive with a streaming size cap.
     Returns (zip bytes, 'url@ref').
@@ -1131,6 +1152,15 @@ async def download_github_zip(github_url: str) -> tuple[bytes, str]:
     if egress.internet_turned_off():
         raise InstallError("internet_off", egress.TURNED_OFF_REASON)
     owner, repo, ref = m.group(1), m.group(2), m.group(3)
+    if (
+        not owner.strip(".")
+        or not repo.strip(".")
+        or (ref is not None and not _ref_is_plain(ref))
+    ):
+        raise InstallError(
+            "github_url_invalid",
+            "expected https://github.com/<owner>/<repo>[@ref]",
+        )
     headers = {
         "User-Agent": "domovoi/1.4.0 (+github.com/coders-farm-official/domovoi)"
     }
@@ -1144,7 +1174,11 @@ async def download_github_zip(github_url: str) -> tuple[bytes, str]:
                     f"could not resolve default branch ({r.status_code})",
                 )
             ref = r.json().get("default_branch") or "main"
-        url = f"https://codeload.github.com/{owner}/{repo}/zip/{ref}"
+        if not _ref_is_plain(ref):
+            raise InstallError(
+                "github_repo_unavailable", "the repository's default branch is unusable"
+            )
+        url = _codeload_url(owner, repo, ref)
         buf = bytearray()
         async with client.stream("GET", url, headers=headers) as resp:
             if resp.status_code != 200:

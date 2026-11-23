@@ -45,6 +45,9 @@ a way that would otherwise get reported as a bug.
 - **The Windows update copies the downloaded Setup more strictly**: each
   file is opened without following a link and checked to be the file it
   names, and a refused update removes every file it copied.
+- **Installing a plugin from GitHub** refuses a branch or tag name with
+  empty or `.`/`..` parts, so the download always comes from the
+  repository shown on the install screen.
 - **The dashboard logs it** if it can't keep its port-80 permission away
   from the programs it starts.
 - **Video poster frames**: every spelling of one file's path shares one
