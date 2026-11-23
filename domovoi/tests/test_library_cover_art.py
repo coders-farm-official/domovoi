@@ -672,3 +672,124 @@ def test_same_tier_as_the_library_listing():
 def test_a_claimed_install_serves_it_without_credentials(library):
     mp3 = tagged_mp3(library.root / "a" / "t.mp3", [(3, "image/jpeg", JPEG)])
     assert get(library.add(mp3)).status_code == 200      # no token, no cookie, no bearer
+
+
+# ── sized covers (?size=, 2026-11-22) ────────────────────────────────
+#
+# A list draws a cover at about 50 points, and a file's picture is often a
+# 1-2 MB scan: a page of 50 rows fetched tens of megabytes. ``size`` answers
+# a WebP no bigger than the bucket's edge, made once per cover version.
+
+def _real_jpeg(edge: int = 1200) -> bytes:
+    """A decodable JPEG, big enough that shrinking it means something."""
+    import io as _io
+
+    from PIL import Image
+
+    out = _io.BytesIO()
+    Image.new("RGB", (edge, edge // 2), (180, 90, 30)).save(out, "JPEG", quality=90)
+    return out.getvalue()
+
+
+@pytest.fixture
+def thumbs(tmp_path, monkeypatch) -> Path:
+    where = tmp_path / "image_thumbs"
+    monkeypatch.setattr(settings, "image_thumbs_dir", str(where))
+    return where
+
+
+def _sized(tid: int, size: str, headers: dict | None = None):
+    async def go():
+        async with AsyncClient(transport=ASGITransport(app=web_app), base_url="http://test") as c:
+            return await c.get(f"/api/music/library/{tid}/cover?size={size}", headers=headers or {})
+    return asyncio.run(go())
+
+
+def _webp_edge(data: bytes) -> tuple[str, int]:
+    import io as _io
+
+    from PIL import Image
+
+    with Image.open(_io.BytesIO(data)) as im:
+        return im.format, max(im.size)
+
+
+@pytest.mark.parametrize("size,edge", [("s", 160), ("m", 320), ("l", 512), ("xl", 768)])
+def test_a_sized_cover_is_a_small_webp(library, thumbs, size, edge):
+    big = _real_jpeg()
+    mp3 = tagged_mp3(library.root / "a" / "t.mp3", [(3, "image/jpeg", big)])
+    tid = library.add(mp3)
+    r = _sized(tid, size)
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/webp"
+    assert _webp_edge(r.content) == ("WEBP", edge)
+    assert len(r.content) < len(big) / 4
+    assert get(tid).content == big                        # no size: the picture as it is
+
+
+def test_a_folder_image_is_sized_too(library, thumbs):
+    album = library.root / "Album"
+    album.mkdir()
+    (album / "t.mp3").write_bytes(silent_mp3())
+    (album / "cover.jpg").write_bytes(_real_jpeg())
+    r = _sized(library.add(album / "t.mp3"), "s")
+    assert (r.status_code, r.headers["content-type"]) == (200, "image/webp")
+    assert _webp_edge(r.content) == ("WEBP", 160)
+
+
+def test_a_sized_cover_is_made_once_and_has_its_own_etag(library, thumbs, monkeypatch):
+    mp3 = tagged_mp3(library.root / "a" / "t.mp3", [(3, "image/jpeg", _real_jpeg())])
+    tid = library.add(mp3)
+    full_etag = get(tid).headers["etag"]
+    first = _sized(tid, "s")
+    small_etag = first.headers["etag"]
+    assert small_etag != full_etag and small_etag.startswith('"') and not small_etag.startswith("W/")
+    assert first.headers["cache-control"] == "public, max-age=86400"
+    assert len(list((thumbs / "covers" / "s").glob("*.webp"))) == 1
+
+    made = []
+    monkeypatch.setattr(music_api, "_make_cover_thumb", lambda *a: made.append(a) or False)
+    again = _sized(tid, "s")
+    assert (again.content, again.headers["etag"]) == (first.content, small_etag)
+    assert made == [], "a kept copy was made again"
+
+    r = _sized(tid, "s", {"If-None-Match": small_etag})
+    assert (r.status_code, r.content) == (304, b"")
+    assert _sized(tid, "s", {"If-None-Match": full_etag}).status_code == 200
+
+
+def test_a_new_picture_makes_a_new_sized_copy(library, thumbs):
+    album = library.root / "Album"
+    album.mkdir()
+    (album / "t.mp3").write_bytes(silent_mp3())
+    (album / "cover.jpg").write_bytes(_real_jpeg(1200))
+    tid = library.add(album / "t.mp3")
+    before = _sized(tid, "m")
+    (album / "cover.jpg").write_bytes(_real_jpeg(600))
+    os.utime(album / "cover.jpg", ns=(time.time_ns() + 10**9,) * 2)
+    after = _sized(tid, "m")
+    assert after.headers["etag"] != before.headers["etag"]
+    assert _webp_edge(after.content) == ("WEBP", 320)
+    assert len(list((thumbs / "covers" / "m").glob("*.webp"))) == 2
+
+
+def test_a_picture_that_cannot_be_shrunk_is_served_as_it_is(library, thumbs):
+    # JPEG here is magic bytes and filler: a content-type sniff passes it, a
+    # decoder doesn't. The person still gets the picture the full route
+    # serves, under that picture's own ETag, and nothing is kept.
+    mp3 = tagged_mp3(library.root / "a" / "t.mp3", [(3, "image/jpeg", JPEG)])
+    tid = library.add(mp3)
+    r = _sized(tid, "s")
+    assert (r.status_code, r.content) == (200, JPEG)
+    assert r.headers["etag"] == get(tid).headers["etag"]
+    assert not list(thumbs.rglob("*.webp")) and not list(thumbs.rglob("*.tmp"))
+
+
+def test_an_unknown_size_is_refused_and_no_art_is_still_a_404(library, thumbs):
+    mp3 = tagged_mp3(library.root / "a" / "t.mp3", [(3, "image/jpeg", _real_jpeg())])
+    assert _sized(library.add(mp3), "huge").status_code == 400
+    bare = library.root / "b" / "t.mp3"
+    bare.parent.mkdir()
+    bare.write_bytes(silent_mp3())
+    assert _sized(library.add(bare), "s").status_code == 404
+    assert not thumbs.exists() or not list(thumbs.rglob("*.webp"))

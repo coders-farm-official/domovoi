@@ -66,6 +66,9 @@ const playerUrls = {
   audio: (trackId) => absMedia(`/api/music/library/${trackId}/audio`),
   // Versioned (?v=, V059) through the shared builder, so a cover the
   // Cover Art Archive or an Undo changed is fetched anew (components.jsx).
+  // Unsized: one item is drawn at several sizes (the bar's 44px tile, the
+  // sheet's 200px one, the OS media controls), and each sizes it there
+  // with coverUrlAtSize.
   cover: (trackId, coverV) => libraryCoverUrl(trackId, coverV),
 };
 
@@ -1682,8 +1685,11 @@ const PlaybackProvider = ({ children }) => {
     try {
       // No `type`: a library cover is whatever the file carries (JPEG,
       // PNG, WebP). A cover the page already knows is missing isn't offered.
-      const artwork = item.coverUrl && !coverMisses.has(item.coverUrl)
-        ? [{ src: item.coverUrl, sizes: '512x512' }] : [];
+      // A library cover asks for the largest thumbnail (xl, 768px): a lock
+      // screen or a car display draws it big; audiobook and podcast
+      // artwork is passed through as it is.
+      const artwork = item.coverUrl && !coverMissed(item.coverUrl)
+        ? [{ src: coverUrlAtSize(item.coverUrl, 'xl'), sizes: '768x768' }] : [];
       navigator.mediaSession.metadata = new window.MediaMetadata({
         title: item.title || 'unknown',
         artist: item.artist || '',
@@ -2787,11 +2793,13 @@ const PlayerSheet = ({ p, closing = false, originRef, onClose, onClosed,
 /* Cover tile — the item's cover (a library track's comes from the file
  * itself, see CoverArt in components.jsx) over the player's own fallback:
  * the warm gradient for a track, a sunken tile with a radio glyph for a
- * live stream. A cover that 404s stays on the fallback, quietly. */
+ * live stream. A cover that 404s stays on the fallback, quietly. A library
+ * cover asks for the thumbnail that fits the tile (coverUrlAtSize: the bar's
+ * 44px gets s, the sheet's 200px gets l). */
 const CoverTile = ({ item, size = 44, radius = 'var(--r-sm)' }) => {
   const live = !!item && item.seekable === false;
   const grad = 'linear-gradient(135deg, oklch(0.86 0.06 75), oklch(0.62 0.14 50))';
-  return <CoverArt src={(item && item.coverUrl) || null} size={size} radius={radius}
+  return <CoverArt src={coverUrlAtSize((item && item.coverUrl) || null, size)} size={size} radius={radius}
                    icon={live ? 'radio' : 'music'} background={live ? 'var(--sunken)' : grad}
                    iconColor="inherit"/>;
 };

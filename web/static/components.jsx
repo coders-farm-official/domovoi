@@ -671,8 +671,43 @@ const IconButton = ({ name, ...rest }) => (
  * A URL that failed is remembered for the life of the page (coverMisses),
  * so a re-render, a page flipped back to, or the same track in another
  * row never asks again: one request per artless track per visit, not one
- * per render, and nothing logged from here. */
+ * per render, and nothing logged from here. A library cover is remembered
+ * without its ?size= (coverMissKey): a track with no art has none at any
+ * size, so the 40px row's 404 also spares the 200px player its request.
+ *
+ * Sizes: the original picture can be 1.5 MB, so every library cover the
+ * dashboard draws asks for a thumbnail, `?size=` s (160px long edge), m
+ * (320), l (512) or xl (768), a WebP with its own ETag (track_cover). The
+ * bucket is the smallest whose edge covers the tile at 2x (coverBucket):
+ * table cells and cards (<= 80px) get s, the expanded player's 200px tile
+ * l, the OS media controls xl. A server too old to know `size` ignores it
+ * and sends the original, as before. */
 const coverMisses = new Set();
+const COVER_BUCKETS = [['s', 160], ['m', 320], ['l', 512], ['xl', 768]];
+/* The bucket for a tile `css` px wide (or a bucket name, passed through). */
+const coverBucket = (css) => {
+  if (typeof css === 'string' && COVER_BUCKETS.some(([b]) => b === css)) return css;
+  const need = Number(css) * 2;
+  if (!Number.isFinite(need)) return 'xl';
+  const hit = COVER_BUCKETS.find(([, edge]) => edge >= need);
+  return hit ? hit[0] : 'xl';
+};
+const MUSIC_COVER_PATH = /\/api\/music\/library\/[^/?#]+\/cover(?:\?|$)/;
+/* `url` with its ?size= set to `css`'s bucket (or dropped, css == null),
+ * every other parameter (?v=) kept. Only a music library cover is touched:
+ * an audiobook's or a podcast's URL comes back as it was. */
+const coverUrlAtSize = (url, css) => {
+  if (typeof url !== 'string' || !MUSIC_COVER_PATH.test(url)) return url;
+  const at = url.indexOf('?');
+  const path = at < 0 ? url : url.slice(0, at);
+  const params = (at < 0 ? '' : url.slice(at + 1)).split('&')
+    .filter((p) => p && p !== 'size' && !p.startsWith('size='));
+  if (css != null) params.push(`size=${coverBucket(css)}`);
+  return params.length ? `${path}?${params.join('&')}` : path;
+};
+/* What a miss is remembered under: the URL without its size. */
+const coverMissKey = (url) => coverUrlAtSize(url, null);
+const coverMissed = (url) => !!url && coverMisses.has(coverMissKey(url));
 /* The cover's version (V059): a track row's `cover_v`, carried on the URL
  * as ?v= so the browser's cached picture (and a remembered miss) is
  * replaced exactly when the art changes. `library.cover.changed` names the
@@ -697,13 +732,17 @@ const listenForCoverVersions = () => {
     }
   });
 };
-const libraryCoverUrl = (trackId, coverV) => {
+/* A track's cover URL. `size` is the tile's CSS px (or a bucket name) and
+ * adds ?size=; left out, the URL names the original picture (the player's
+ * queue items keep that form, and each place that draws one sizes it). */
+const libraryCoverUrl = (trackId, coverV, size) => {
   if (trackId == null) return null;
   listenForCoverVersions();
   const known = coverVersions.get(trackId);
   const v = Math.max(Number.isFinite(coverV) ? coverV : 0, known || 0);
-  return `${typeof API_BASE === 'string' ? API_BASE : ''}/api/music/library/${encodeURIComponent(trackId)}/cover`
+  const url = `${typeof API_BASE === 'string' ? API_BASE : ''}/api/music/library/${encodeURIComponent(trackId)}/cover`
     + (v > 0 || Number.isFinite(coverV) ? `?v=${v}` : '');
+  return size == null ? url : coverUrlAtSize(url, size);
 };
 /* The artists a track credits beyond the one its artist line already
  * names (schemas.Track `artists`, in the file's order): what the library
@@ -724,7 +763,7 @@ const CoverArt = ({ src, size = 40, radius = 'var(--r-sm)', icon = 'music',
   // from an effect, which drew the new URL under the last picture's 'shown'
   // and put a known-missing cover into an <img> (a second request and a
   // second 404 line on the console).
-  const fresh = src && !coverMisses.has(src) ? 'loading' : 'none';
+  const fresh = src && !coverMissed(src) ? 'loading' : 'none';
   const [held, setHeld] = React.useState({ src, state: fresh });
   if (held.src !== src) setHeld({ src, state: fresh });
   const state = held.src === src ? held.state : fresh;
@@ -739,7 +778,7 @@ const CoverArt = ({ src, size = 40, radius = 'var(--r-sm)', icon = 'music',
       {state !== 'none' && (
         <img src={src} alt="" width={size} height={size} loading="lazy" decoding="async" draggable={false}
              onLoad={() => setHeld({ src, state: 'shown' })}
-             onError={() => { coverMisses.add(src); setHeld({ src, state: 'none' }); }}
+             onError={() => { coverMisses.add(coverMissKey(src)); setHeld({ src, state: 'none' }); }}
              style={{ position: 'absolute', inset: 0, width: '100%', height: '100%',
                       objectFit: 'cover', opacity: shown ? 1 : 0 }}/>
       )}
@@ -5347,6 +5386,7 @@ Object.assign(window, {
   CaptureChip, useAdminSignedIn, adminReloadState, useAdminReloadState, AdminSignedOutNotice,
   TimerFireAlerts,
   CoverArt, libraryCoverUrl, coverMisses, coverVersions, creditedWith,
+  coverBucket, coverUrlAtSize, coverMissKey, coverMissed,
   ContainerGuardStore, useContainerGuard, containerGuardBanner, ContainerGuardBanner,
   CONTAINER_GUARD_GUEST_TEXT,
   DeviceTokenNotice, deviceTokenNoticeText, tokenWaitClock,

@@ -8,7 +8,17 @@ import SwiftUI
 /// `AsyncImage`. Three sizes are used in this app and each is Android's:
 /// 40 points on a library row (`LibraryTab.kt:290`), 112 in the player's head
 /// (`PlayerTab.kt:258`) and 56 in the track sheet and on a room card, which
-/// are iOS-only surfaces sized between the two.
+/// are iOS-only surfaces sized between the two. (The mini player draws it at
+/// 36 and the track sheet at 96.)
+///
+/// ### Asked for at the size drawn
+///
+/// Each cover is fetched at the server's smallest size bucket that covers
+/// its frame at 3x (``MusicCoverSize/fitting(points:scale:)``): `s` (160 px)
+/// for the 36- and 40-point rows, `m` (320 px) for 56 and 96, `l` (512 px)
+/// for the player's 112. Not the original picture, which can be 1.5 MB and
+/// was decoded in full to draw a 40-point square. The bucket is part of the
+/// store's key, so the same song at two sizes is two pictures.
 ///
 /// ### Why the frame is fixed and not `@ScaledMetric`
 ///
@@ -61,10 +71,14 @@ struct MusicCoverView: View {
     /// cover redraws the moment its version moves.
     private var versions: MusicCoverVersions { MusicCoverVersions.shared }
 
+    /// The size bucket asked for: the smallest that covers this frame at 3x.
+    private var bucket: MusicCoverSize { MusicCoverSize.fitting(points: Double(size)) }
+
     /// Which picture this is: the track, at the larger of the row's version
-    /// and the newest heard; no version from an older server.
+    /// and the newest heard (no version from an older server), at the size
+    /// bucket this frame needs.
     private var key: MusicCoverKey {
-        MusicCoverKey(trackID: trackID, version: versions.version(trackID, row: coverV))
+        MusicCoverKey(trackID: trackID, version: versions.version(trackID, row: coverV), size: bucket)
     }
 
     /// Whether the server has settled on "this track has no picture".
@@ -105,7 +119,7 @@ struct MusicCoverView: View {
         if case .image = now { return now }
         if now == .absent { return now }
         guard key.version != nil else { return now }
-        let earlier = covers.newestImage(trackID: trackID)
+        let earlier = covers.newestImage(trackID: trackID, size: bucket)
         return earlier ?? now
     }
 

@@ -209,9 +209,30 @@ namespace Domovoi.Windows.Helper
             }
         }
 
+        // The file's name inside its parent folder's final path (the parent
+        // opened through any link above it, as the OS resolves it).
+        static string InResolvedParent(string path)
+        {
+            string full = LongPath(path);
+            string parent = Path.GetDirectoryName(full);
+            using (SafeFileHandle d = CreateFileW(parent, FILE_READ_ATTRIBUTES | SYNCHRONIZE, SHARE_READ | SHARE_WRITE | SHARE_DELETE, IntPtr.Zero,
+                OPEN_EXISTING, FLAG_BACKUP_SEMANTICS, IntPtr.Zero))
+            {
+                if (d.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error(), "can't open " + parent);
+                return Path.Combine(FinalPath(d).TrimEnd('\\') + "\\", Path.GetFileName(full));
+            }
+        }
+
         // Opens a source by path, the link itself if it is one, and checks
         // the handle: a plain file with one name, at the path asked for.
-        public static SafeFileHandle OpenSource(string path)
+        public static SafeFileHandle OpenSource(string path) { return OpenSource(path, false); }
+
+        // With parentMayBeLinked, a link ABOVE the file (a relocated
+        // profile: a user folder reached through a junction to another
+        // drive) is accepted: the handle must be the file's own name inside
+        // the parent folder's final path. The file itself is still never a
+        // link, and still has one name.
+        public static SafeFileHandle OpenSource(string path, bool parentMayBeLinked)
         {
             SafeFileHandle h = CreateFileW(path, GENERIC_READ | FILE_READ_ATTRIBUTES, SHARE_READ | SHARE_WRITE | SHARE_DELETE, IntPtr.Zero,
                 OPEN_EXISTING, FLAG_OPEN_REPARSE_POINT, IntPtr.Zero);
@@ -222,7 +243,8 @@ namespace Domovoi.Windows.Helper
                 if ((i.FileAttributes & (ATTR_REPARSE_POINT | ATTR_DIRECTORY)) != 0) throw new InvalidOperationException(path + " is a link or a folder");
                 if (i.NumberOfLinks != 1) throw new InvalidOperationException(path + " has " + Inv.S((int)i.NumberOfLinks) + " names (hard links)");
                 string real = FinalPath(h);
-                if (!SamePath(real, LongPath(path))) throw new InvalidOperationException(path + " leads to " + real);
+                string want = parentMayBeLinked ? InResolvedParent(path) : LongPath(path);
+                if (!SamePath(real, want)) throw new InvalidOperationException(path + " leads to " + real);
                 return h;
             }
             catch { h.Dispose(); throw; }

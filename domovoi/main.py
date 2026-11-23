@@ -1655,7 +1655,7 @@ async def music_cover(track_id: int, request: Request) -> Any:
     except Exception as e:  # noqa: BLE001 — a core installed without web/
         log.debug("cover route: the web package is not importable: %s", e)
         raise HTTPException(status_code=404, detail="no cover art") from None
-    return await track_cover(track_id, request)
+    return await track_cover(track_id, request, size=None)
 
 
 @app.get(

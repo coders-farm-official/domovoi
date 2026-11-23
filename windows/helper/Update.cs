@@ -169,7 +169,7 @@ namespace Domovoi.Windows.Helper
         // out of reach of anyone but an administrator: null when the copy
         // may run, else why not and code (SetupCheck's words). Each source
         // is opened without following a link and checked on its handle
-        // (Logs.OpenSource: a plain file at the path asked for), and copied
+        // (Logs.OpenSource: a plain file with one name, in the folder asked for, which may itself be reached through a link), and copied
         // from that handle, so a folder swapped for a link meanwhile can't
         // make this copy some other file.
         public static string CopyAndCheck(string from, string dir, SetupExpectation want, out SetupManifest m, out string code)
@@ -183,7 +183,7 @@ namespace Domovoi.Windows.Helper
                 {
                     string src = Path.Combine(from, name), dest = Path.Combine(dir, name);
                     if (!File.Exists(src) || (File.GetAttributes(src) & FileAttributes.ReparsePoint) != 0) { code = SetupCheck.NoSignedSetup; return "the download has no " + name; }
-                    using (Microsoft.Win32.SafeHandles.SafeFileHandle h = Logs.OpenSource(src))
+                    using (Microsoft.Win32.SafeHandles.SafeFileHandle h = Logs.OpenSource(src, true))
                     using (var input = new FileStream(h, FileAccess.Read))
                     using (var output = new FileStream(dest, FileMode.CreateNew, FileAccess.Write, FileShare.None))
                         input.CopyTo(output);

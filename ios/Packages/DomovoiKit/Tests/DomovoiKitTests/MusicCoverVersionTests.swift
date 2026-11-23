@@ -293,7 +293,10 @@ final class MusicCoverVersionPlayerTests: XCTestCase {
             ["/api/music/library/12/cover?v=2", "/api/music/library/13/cover?v=5"],
             harness.model.queue.map(\.coverPath)
         )
-        XCTAssertEqual("/api/music/library/12/cover?v=2", harness.nowPlaying.artworkPaths.last ?? nil)
+        XCTAssertEqual(
+            "/api/music/library/12/cover?v=2&size=xl", harness.nowPlaying.artworkPaths.last ?? nil,
+            "the lock screen asks for the largest bucket, at the new version"
+        )
         XCTAssertEqual(callsBefore, harness.engine.calls.count, "the engine was touched for a picture: \(harness.engine.calls)")
     }
 }

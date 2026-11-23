@@ -430,10 +430,10 @@ def test_the_listing_marks_claims_and_keeps_who_and_where_for_an_admin(monkeypat
     priya, chevy = asyncio.run(_seed())
     install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN}, device_token=DEVICE_TOKEN)
     with TestClient(web_app) as c:
-        open_rows = c.get(f"/api/people/{priya}/profiles").json()
+        open_rows = c.get(f"/api/people/{priya}/profiles", headers={"X-Device-Token": DEVICE_TOKEN}).json()
         admin_rows = c.get(f"/api/people/{priya}/profiles", headers=bearer(ADMIN_TOKEN)).json()
     by_room_open = sorted((r["source"], r["room_id"], r["claimed"]) for r in open_rows)
-    # N4: an open caller never sees a phone's id, nor who claimed or where.
+    # N4: a device caller never sees a phone's id, nor who claimed or where.
     assert by_room_open == [("phone", None, False), ("phone", None, True), ("satellite", "kitchen", False)]
     assert all(r["claim_room"] is None and r["claimed_by_person_id"] is None
                and r["claimed_by_name"] is None for r in open_rows)

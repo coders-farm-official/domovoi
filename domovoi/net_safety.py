@@ -872,7 +872,8 @@ async def fetch_bytes(
     gigabytes stops at the cap without ever being held whole.
 
     The whole fetch has a deadline, :data:`FETCH_DEADLINE_TIMEOUTS` times
-    ``timeout``: past it, ``httpx.ReadTimeout``, as a stalled read gets."""
+    ``timeout``: past it, ``httpx.ReadTimeout``, as a stalled read gets, or
+    with ``truncate=True`` the bytes that have arrived, marked truncated."""
     import httpx
 
     deadline = time.monotonic() + timeout * FETCH_DEADLINE_TIMEOUTS
@@ -889,7 +890,8 @@ async def fetch_bytes(
             async for chunk in chunks:
                 if body.add(chunk):
                     break
-                _check_deadline(deadline, timeout)
+                if _past_deadline(deadline, timeout, body):
+                    break
             content, truncated = body.finish()
         finally:
             await response.aclose()
@@ -929,7 +931,8 @@ def fetch_bytes_sync(
                 if body.add(chunk):
                     # Stop reading: closing the response drops the rest.
                     break
-                _check_deadline(deadline, timeout)
+                if _past_deadline(deadline, timeout, body):
+                    break
             content, truncated = body.finish()
         finally:
             response.close()
@@ -939,8 +942,14 @@ def fetch_bytes_sync(
             client.close()
 
 
-def _check_deadline(deadline: float, timeout: float) -> None:
+def _past_deadline(deadline: float, timeout: float, body: "_CappedBody") -> bool:
+    """True when the whole-fetch deadline has passed and the caller asked for
+    ``truncate``: what arrived so far is kept, marked truncated. Without
+    ``truncate``, ``httpx.ReadTimeout``."""
     if time.monotonic() > deadline:
+        if body.truncate:
+            body.truncated = True
+            return True
         import httpx
 
         raise httpx.ReadTimeout(

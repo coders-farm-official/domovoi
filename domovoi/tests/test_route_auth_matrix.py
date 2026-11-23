@@ -431,7 +431,6 @@ SPEECH_READS_SECURITY: list[tuple[str, str]] = [
 # decision. Pinned open so that gating one is a recorded decision (here,
 # in docs/SECURITY_PRIVACY.md and docs/API_REFERENCE.md), not a drive-by.
 SPEECH_ADJACENT_LEFT_OPEN: dict[tuple[str, str], str] = {
-    ("web", "/api/people/{person_id}/profiles"): "voice-profile enrolment metadata, never an embedding",
     ("web", "/api/satellites/{room_id}/timers"): (
         "household state: a room's countdowns; rule M1 — every reminder answers without its "
         "words (masked) unless the caller passes the device check"
@@ -471,6 +470,7 @@ HOUSEHOLD_STATE_READS: dict[tuple[str, str], str] = {
     ("web", "/api/people"): "the roster: names, last_seen_at (presence), the people.notes column",
     ("web", "/api/people/{person_id}"): "one roster row, with last_seen_at",
     ("web", "/api/people/{person_id}/sessions"): "when and in which room a person spoke",
+    ("web", "/api/people/{person_id}/profiles"): "voice-sample metadata, never an embedding",
     ("web", "/api/satellites"): "every room: presence, Wi-Fi SSID, hardware, code SHA, in_call_with",
     ("web", "/api/satellites/{room_id}"): "one room's row (the kiosk's label and idle mode)",
     ("web", "/api/satellites/pending"): "a satellite being adopted: MAC, board, model",
