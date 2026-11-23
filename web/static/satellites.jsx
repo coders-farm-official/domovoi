@@ -3130,10 +3130,17 @@ const approvalFieldError = (e) => {
   return { ...shape, text: apiErrorText(e, 0) };
 };
 
-const ApprovalCard = ({ a, busy, error, onApprove, onReject, onClearError }) => {
+const ApprovalCard = ({ a, rooms = [], busy, error, onApprove, onReject, onClearError }) => {
   const [code, setCode] = React.useState('');
-  const ready = code.length >= 4 && !busy;
-  const submit = () => { if (ready) onApprove(a, code); };
+  // Which room is it in? The room the device asked for when that room has a
+  // name here; otherwise a room of its own, as before 1.5.0 (or a new one).
+  const asked = a.requested_room && a.requested_room_name
+    && rooms.some(r => r.room_id === a.requested_room) ? a.requested_room : '';
+  const [roomPick, setRoomPick] = React.useState(asked);
+  const [roomName, setRoomName] = React.useState('');
+  const roomOk = roomChoiceReady(roomPick, roomName, true);
+  const ready = code.length >= 4 && !busy && roomOk;
+  const submit = () => { if (ready) onApprove(a, code, roomChoiceBody(roomPick, roomName)); };
   // Typing is the operator answering the message, so it goes. The digits
   // stay: fixing the one that was wrong beats retyping all six, and the
   // budget is five tries.
@@ -3146,7 +3153,7 @@ const ApprovalCard = ({ a, busy, error, onApprove, onReject, onClearError }) => 
       <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 16px',
                     flexWrap: 'wrap' }}>
         <div style={{ flex: 1, minWidth: 200 }}>
-          <div style={{ fontWeight: 600 }}>{a.room_id}</div>
+          <div style={{ fontWeight: 600 }}>{a.satellite_id || a.room_id}</div>
           <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
             {(a.board && (SAT_BOARD_LABELS[a.board] || a.board)) || 'unknown board'}
             {a.mac ? ` · ${a.mac.slice(-8)}` : ''}
@@ -3162,6 +3169,12 @@ const ApprovalCard = ({ a, busy, error, onApprove, onReject, onClearError }) => 
                 </span>
               : null}
           </div>
+        </div>
+        <div style={{ flexBasis: '100%', order: 5 }}>
+          <div className="label" style={{ marginBottom: 4 }}>Which room is it in?</div>
+          <RoomPicker rooms={rooms} value={roomPick} onChange={setRoomPick}
+                      newName={roomName} onNewName={setRoomName}
+                      none="A room of its own" label="which room is it in"/>
         </div>
         <input value={code}
                onChange={e => retype(e.target.value.replace(/\D/g, '').slice(0, 10))}
@@ -4119,6 +4132,300 @@ const SpareDeviceCard = ({ fire }) => {
 // How often the page asks whether the core answers (the web pings it).
 const SAT_HEALTH_POLL_MS = 10000;
 
+/* ---- Rooms and their satellites (1.5.0) ---------------------------------
+ *
+ * A room is a place; a satellite is a device in one room. The page's cards
+ * stay one per device (their drawers hold the per-satellite tabs); this
+ * block is the room view on top: each room with the satellites in it, and
+ * the admin's way to rename, move, create, delete and merge. Reads are the
+ * household's (GET /api/rooms); every change is the admin's, so the
+ * controls only show to a signed-in admin. A merge is OFFERED from the
+ * server's merge_offers and only ever runs from the admin's own click
+ * (owner Q11). Words: "satellite" lives here on the admin page; a device
+ * with no name of its own reads "Satellite for the Kitchen".
+ */
+const ROOM_NEW = '__new__';
+
+const roomSatName = (sat, room) => sat.name || `Satellite for the ${room.name}`;
+
+const roomsErrText = (e, what) => {
+  if (e && e.status === 409) return `${what}: that conflicts with how the room is set up now.`;
+  if (e && e.status === 404) return `${what}: it was already changed. Refresh and try again.`;
+  return mutationErrorText(e, what, { kept: false });
+};
+
+/* Which room: an existing one, or a new one by name. `none` is the extra
+ * first choice for the approval's "a room of its own". */
+const RoomPicker = ({ rooms, value, onChange, newName, onNewName, exclude, none, label }) => (
+  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+    <select value={value} aria-label={label} onChange={e => onChange(e.target.value)}
+            style={{ ...adoptInputStyle, height: 34, width: 'auto', minWidth: 150 }}>
+      {none ? <option value="">{none}</option> : <option value="" disabled>choose a room</option>}
+      {rooms.filter(r => r.room_id !== exclude)
+            .map(r => <option key={r.room_id} value={r.room_id}>{r.name}</option>)}
+      <option value={ROOM_NEW}>a new room…</option>
+    </select>
+    {value === ROOM_NEW && (
+      <input value={newName} onChange={e => onNewName(e.target.value)} aria-label="new room name"
+             placeholder="Den" maxLength={120}
+             style={{ ...adoptInputStyle, width: 150 }}/>
+    )}
+  </div>
+);
+
+/* A room choice as the API takes it: exactly one key, or none. */
+const roomChoiceBody = (value, newName) =>
+  value === ROOM_NEW ? { new_room_name: newName.trim() }
+    : value ? { room_id: value } : {};
+
+const roomChoiceReady = (value, newName, noneOk) =>
+  value === ROOM_NEW ? newName.trim().length > 0 : (noneOk || !!value);
+
+const RoomSatelliteRow = ({ room, sat, rooms, admin, canOpen, onOpen, fire, refresh }) => {
+  const [mode, setMode] = React.useState(null);        // null | 'rename' | 'move'
+  const [name, setName] = React.useState(sat.name || '');
+  const [dest, setDest] = React.useState('');
+  const [destName, setDestName] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const id = encodeURIComponent(sat.satellite_id);
+  const done = () => { setMode(null); setBusy(false); refresh(); };
+  const saveName = async () => {
+    setBusy(true);
+    try {
+      await apiPatch(`/api/satellites/${id}/name`, { name: name.trim() || null });
+      fire(name.trim() ? 'Satellite renamed' : 'Satellite name cleared');
+      done();
+    } catch (e) { setBusy(false); const t = roomsErrText(e, 'rename'); if (t) fire(t); }
+  };
+  const move = async () => {
+    setBusy(true);
+    try {
+      const r = await apiPost(`/api/satellites/${id}/room`, roomChoiceBody(dest, destName));
+      fire(r && r.moved === false ? 'It is already there'
+        : r && r.learned_samples_dropped
+          ? `Moved. ${r.learned_samples_dropped} learned voice samples were left behind`
+          : 'Moved');
+      done();
+    } catch (e) { setBusy(false); const t = roomsErrText(e, 'move'); if (t) fire(t); }
+  };
+  return (
+    <div className="room-sat-row" style={{ padding: '10px 16px', borderBottom: '1px solid var(--border-soft)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <StatusDot tone={sat.connected ? 'ok' : 'idle'} live={!!sat.connected}/>
+        <div style={{ fontWeight: 600, flex: 1, minWidth: 140 }}>{roomSatName(sat, room)}</div>
+        {sat.speaks_for_room && <Pill tone="live">speaks for the room</Pill>}
+        <Pill tone={sat.connected ? 'live' : 'idle'}>{sat.connected ? 'connected' : 'not connected'}</Pill>
+      </div>
+      <div style={{ fontSize: 12, color: 'var(--fg-muted)', margin: '2px 0 0 18px' }}>
+        {(sat.board && (SAT_BOARD_LABELS[sat.board] || sat.board)) || 'Raspberry Pi'}
+        {' · '}{sat.sat_type || 'voice'}
+        {sat.paired === false ? ' · not paired' : ''}
+      </div>
+      {mode === 'rename' && admin && (
+        <div style={{ display: 'flex', gap: 6, marginTop: 8, marginLeft: 18 }}>
+          <input value={name} onChange={e => setName(e.target.value)} aria-label="satellite name"
+                 placeholder={`Satellite for the ${room.name}`} maxLength={120}
+                 onKeyDown={e => { if (e.key === 'Enter') saveName(); }}
+                 style={{ ...adoptInputStyle, flex: 1 }}/>
+          <Button variant="primary" disabled={busy} onClick={saveName}>Save</Button>
+          <Button variant="ghost" disabled={busy} onClick={() => setMode(null)}>Cancel</Button>
+        </div>
+      )}
+      {mode === 'move' && admin && (
+        <div style={{ display: 'flex', gap: 6, marginTop: 8, marginLeft: 18, flexWrap: 'wrap', alignItems: 'center' }}>
+          <RoomPicker rooms={rooms} exclude={room.room_id} value={dest} onChange={setDest}
+                      newName={destName} onNewName={setDestName} label="move to room"/>
+          <Button variant="primary" disabled={busy || !roomChoiceReady(dest, destName, false)}
+                  onClick={move}>Move</Button>
+          <Button variant="ghost" disabled={busy} onClick={() => setMode(null)}>Cancel</Button>
+          <div style={{ fontSize: 12, color: 'var(--fg-muted)', flexBasis: '100%' }}>
+            Moving keeps its history with this room, forgets the voices it learned here, and
+            clears its speaker tuning. Voices you enrolled stay.
+          </div>
+        </div>
+      )}
+      {mode === null && (
+        <div style={{ display: 'flex', gap: 6, marginTop: 8, marginLeft: 18, flexWrap: 'wrap' }}>
+          {canOpen && <Button variant="ghost" icon="info" onClick={() => onOpen(sat.satellite_id)}>Details</Button>}
+          {admin && <Button variant="ghost" icon="pencil" onClick={() => { setName(sat.name || ''); setMode('rename'); }}>Rename</Button>}
+          {admin && <Button variant="ghost" icon="arrow-right" onClick={() => setMode('move')}>Move to another room</Button>}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const RoomDrawer = ({ room, rooms, sats, admin, onClose, onOpenSatellite, fire, refresh }) => {
+  const [renaming, setRenaming] = React.useState(false);
+  const [name, setName] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  React.useEffect(() => { setRenaming(false); }, [room && room.room_id]);
+  React.useEffect(() => {
+    if (!room) return undefined;
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [room, onClose]);
+  if (!room) return null;
+  const rid = encodeURIComponent(room.room_id);
+  const rename = async () => {
+    if (!name.trim()) return;
+    setBusy(true);
+    try {
+      await apiPatch(`/api/rooms/${rid}`, { name: name.trim() });
+      fire('Room renamed');
+      setRenaming(false); refresh();
+    } catch (e) { const t = roomsErrText(e, 'rename'); if (t) fire(t); }
+    finally { setBusy(false); }
+  };
+  const remove = async () => {
+    if (!window.confirm(`Delete the ${room.name}?\n\nOnly an empty room can go. Its history is kept.`)) return;
+    setBusy(true);
+    try {
+      await apiDelete(`/api/rooms/${rid}`);
+      fire('Room deleted');
+      onClose(); refresh();
+    } catch (e) { const t = roomsErrText(e, 'delete'); if (t) fire(t); }
+    finally { setBusy(false); }
+  };
+  const list = room.satellites || [];
+  const known = new Set(sats.map(s => s.room_id));
+  return (
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'oklch(0 0 0 / 0.18)', backdropFilter: 'blur(2px)', zIndex: 60 }}/>
+      <aside aria-label={`${room.name} satellites`}
+             style={{ position: 'fixed', top: 0, right: 0, height: 'var(--app-h)', width: 560, maxWidth: '100%',
+                      background: 'var(--card)', borderLeft: '1px solid var(--border)',
+                      boxShadow: 'var(--shadow-md)', zIndex: 61, display: 'flex', flexDirection: 'column' }}>
+        <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border-soft)',
+                      display: 'flex', alignItems: 'center', gap: 10 }}>
+          {renaming ? (
+            <>
+              <input value={name} onChange={e => setName(e.target.value)} aria-label="room name" autoFocus
+                     maxLength={120} onKeyDown={e => { if (e.key === 'Enter') rename(); }}
+                     style={{ ...adoptInputStyle, flex: 1 }}/>
+              <Button variant="primary" disabled={busy || !name.trim()} onClick={rename}>Save</Button>
+              <Button variant="ghost" onClick={() => setRenaming(false)}>Cancel</Button>
+            </>
+          ) : (
+            <>
+              <div style={{ fontSize: 18, fontWeight: 600, letterSpacing: '-0.01em' }}>{room.name}</div>
+              <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+                {list.length === 1 ? '1 satellite' : `${list.length} satellites`}
+              </span>
+              {admin && <IconButton name="pencil" title="Rename room"
+                                    onClick={() => { setName(room.name); setRenaming(true); }}/>}
+              <div style={{ marginLeft: 'auto' }}><IconButton name="x" onClick={onClose}/></div>
+            </>
+          )}
+        </div>
+        <div style={{ flex: 1, overflow: 'auto' }}>
+          {list.length === 0 ? (
+            <Empty glyph="sleeping" title="no satellites here yet"
+                   sub="move one in from another room, or approve a new one into this room"/>
+          ) : list.map(sat => (
+            <RoomSatelliteRow key={sat.satellite_id} room={room} sat={sat} rooms={rooms} admin={admin}
+                              canOpen={known.has(sat.satellite_id)} onOpen={onOpenSatellite}
+                              fire={fire} refresh={refresh}/>
+          ))}
+          {admin && list.length === 0 && (
+            <div style={{ padding: 16 }}>
+              <Button variant="ghost" icon="trash-2" disabled={busy} onClick={remove}>Delete this room</Button>
+            </div>
+          )}
+          {admin && list.length > 0 && (
+            <div style={{ padding: '12px 16px', fontSize: 12, color: 'var(--fg-muted)' }}>
+              A room can be deleted once its satellites are moved out.
+            </div>
+          )}
+        </div>
+      </aside>
+    </>
+  );
+};
+
+const RoomsCard = ({ rooms, merge, admin, onOpenRoom, fire, refresh }) => {
+  const [adding, setAdding] = React.useState(false);
+  const [name, setName] = React.useState('');
+  const [busy, setBusy] = React.useState('');
+  const create = async () => {
+    if (!name.trim()) return;
+    setBusy('create');
+    try {
+      await apiPost('/api/rooms', { name: name.trim() });
+      fire('Room added');
+      setName(''); setAdding(false); refresh();
+    } catch (e) { const t = roomsErrText(e, 'add room'); if (t) fire(t); }
+    finally { setBusy(''); }
+  };
+  // Only the admin's click merges; the server never does it on its own.
+  const doMerge = async (offer) => {
+    const [keep, ...rest] = offer.rooms;
+    if (!window.confirm(
+      `Merge the ${offer.rooms.length} rooms called ${offer.name} into one?\n\n` +
+      `Their satellites all move into it. Voices a satellite learned in its old room are ` +
+      `forgotten, and speaker tuning is cleared.`)) return;
+    setBusy(keep);
+    try {
+      await apiPost(`/api/rooms/${encodeURIComponent(keep)}/merge`, { rooms: rest });
+      fire(`Merged into one ${offer.name}`);
+      refresh();
+    } catch (e) { const t = roomsErrText(e, 'merge'); if (t) fire(t); }
+    finally { setBusy(''); }
+  };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div className="label" style={{ flex: 1 }}>rooms and their satellites</div>
+        {admin && !adding && <Button variant="ghost" icon="plus" onClick={() => setAdding(true)}>Add a room</Button>}
+      </div>
+      {admin && adding && (
+        <Card>
+          <div style={{ display: 'flex', gap: 6, padding: '10px 16px' }}>
+            <input value={name} onChange={e => setName(e.target.value)} aria-label="new room name"
+                   placeholder="Porch" maxLength={120} autoFocus
+                   onKeyDown={e => { if (e.key === 'Enter') create(); }}
+                   style={{ ...adoptInputStyle, flex: 1 }}/>
+            <Button variant="primary" disabled={busy === 'create' || !name.trim()} onClick={create}>Add</Button>
+            <Button variant="ghost" onClick={() => { setAdding(false); setName(''); }}>Cancel</Button>
+          </div>
+        </Card>
+      )}
+      {admin && merge.map(offer => (
+        <Card key={offer.rooms.join(',')}>
+          <div className="room-merge-offer" style={{ display: 'flex', alignItems: 'center', gap: 10,
+                                                      padding: '10px 16px', flexWrap: 'wrap' }}>
+            <div style={{ flex: 1, minWidth: 200, fontSize: 13, lineHeight: 1.5 }}>
+              {offer.rooms.length} rooms are all called {offer.name}. Are they the same room?
+            </div>
+            <Button icon="merge" disabled={!!busy} onClick={() => doMerge(offer)}>Merge into one</Button>
+          </div>
+        </Card>
+      ))}
+      <Card>
+        {rooms.length === 0 ? (
+          <div style={{ padding: '12px 16px', fontSize: 12, color: 'var(--fg-muted)' }}>no rooms yet</div>
+        ) : rooms.map(r => {
+          const n = (r.satellites || []).length;
+          const live = (r.satellites || []).filter(x => x.connected).length;
+          return (
+            <button key={r.room_id} type="button" className="room-row" onClick={() => onOpenRoom(r.room_id)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left',
+                             padding: '10px 16px', background: 'none', border: 0, font: 'inherit',
+                             color: 'var(--fg)', cursor: 'pointer', borderBottom: '1px solid var(--border-soft)' }}>
+              <StatusDot tone={live ? 'ok' : 'idle'} live={live > 0}/>
+              <span style={{ fontWeight: 600, flex: 1 }}>{r.name}</span>
+              <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+                {n === 0 ? 'empty' : n === 1 ? '1 satellite' : `${n} satellites`}
+              </span>
+            </button>
+          );
+        })}
+      </Card>
+    </div>
+  );
+};
+
 const SatellitesPage = ({ embedded = false } = {}) => {
   const [openRoom, setOpenRoom] = React.useState(null);
   const [tick, setTick] = React.useState(0);
@@ -4149,6 +4456,15 @@ const SatellitesPage = ({ embedded = false } = {}) => {
     wasDown.current = coreDown;
   }, [coreDown, refresh]);
   const { items: approvals, refresh: refreshApprovals } = useApiList('/api/satellites/approvals');
+  // Rooms and the satellites in them (1.5.0); a household read, the
+  // changes on it are the admin's.
+  const adminIn = useAdminSignedIn();
+  const { data: roomsDoc, refresh: refreshRoomsDoc } = useApiObject('/api/rooms', { quiet: true });
+  const roomList = (roomsDoc && Array.isArray(roomsDoc.rooms)) ? roomsDoc.rooms : [];
+  const mergeOffers = (roomsDoc && Array.isArray(roomsDoc.merge_offers)) ? roomsDoc.merge_offers : [];
+  const [openRoomId, setOpenRoomId] = React.useState(null);
+  const refreshRooms = React.useCallback(() => { refreshRoomsDoc(); refresh(); }, [refreshRoomsDoc, refresh]);
+  React.useEffect(() => { refreshRoomsDoc(); }, [sats.length, approvals.length, refreshRoomsDoc]);
   // Why a room couldn't join, when only the server knows (a dialled
   // address it can't prove is its own, a room paired with another device):
   // otherwise the room's ring just stays red. Admin read, like approvals.
@@ -4166,7 +4482,7 @@ const SatellitesPage = ({ embedded = false } = {}) => {
     return () => clearInterval(t);
   }, [refreshApprovals, refreshJoin]);
 
-  const decide = async (a, action, code) => {
+  const decide = async (a, action, code, roomChoice) => {
     if (action === 'reject' && !window.confirm(
       `Reject ${a.room_id}?\n\nThe room device keeps retrying until it is ` +
       `approved or powered off — this clears the request, it doesn't ban the device.`
@@ -4176,8 +4492,8 @@ const SatellitesPage = ({ embedded = false } = {}) => {
     try {
       // The code rides with the approval: the server compares it before it
       // binds the room to that device, so an approve without one is refused.
-      const r = await apiPost(`/api/satellites/approvals/${encodeURIComponent(a.room_id)}/${action}`,
-                              action === 'approve' ? { code } : {});
+      const r = await apiPost(`/api/satellites/approvals/${encodeURIComponent(a.satellite_id || a.room_id)}/${action}`,
+                              action === 'approve' ? { code, ...(roomChoice || {}) } : {});
       // A room device that checks the code itself (1.4.0) hasn't said yes
       // yet: it confirms on its next visit, within seconds. Don't call it
       // approved before it is.
@@ -4293,11 +4609,11 @@ const SatellitesPage = ({ embedded = false } = {}) => {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div className="label">waiting for approval</div>
           {approvals.map(a => (
-            <ApprovalCard key={a.room_id} a={a} busy={approvalBusy === a.room_id}
+            <ApprovalCard key={a.room_id} a={a} rooms={roomList} busy={approvalBusy === a.room_id}
                           error={approvalError && approvalError.room_id === a.room_id
                                  ? approvalError : null}
                           onClearError={() => setApprovalError(null)}
-                          onApprove={(x, code) => decide(x, 'approve', code)}
+                          onApprove={(x, code, choice) => decide(x, 'approve', code, choice)}
                           onReject={x => decide(x, 'reject')}/>
           ))}
         </div>
@@ -4347,6 +4663,11 @@ const SatellitesPage = ({ embedded = false } = {}) => {
         </div>
       )}
 
+      {roomList.length > 0 && (
+        <RoomsCard rooms={roomList} merge={mergeOffers} admin={adminIn}
+                   onOpenRoom={setOpenRoomId} fire={fire} refresh={refreshRooms}/>
+      )}
+
       <Broadcast onlineCount={onlineCount} fire={fire}/>
 
       <MusicGroupsCard sats={sats} fire={fire}/>
@@ -4355,6 +4676,10 @@ const SatellitesPage = ({ embedded = false } = {}) => {
 
       <SpareDeviceCard fire={fire}/>
 
+      <RoomDrawer room={roomList.find(r => r.room_id === openRoomId) || null} rooms={roomList}
+                  sats={sats} admin={adminIn} onClose={() => setOpenRoomId(null)}
+                  onOpenSatellite={(id) => { setOpenRoomId(null); setOpenRoom(id); }}
+                  fire={fire} refresh={refreshRooms}/>
       <SatDrawer s={open} sats={sats} onClose={() => setOpenRoom(null)} fire={fire} refresh={refresh}/>
       {adoptTarget && (
         <AdoptModal pending={adoptTarget.pending} sats={sats} force={adoptTarget.force}

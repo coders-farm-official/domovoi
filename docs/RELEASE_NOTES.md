@@ -4,6 +4,22 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Several satellites in one room, managed from Settings → Rooms
+
+- **What changed.** Settings → Rooms now lists each room with the
+  satellites in it. Open a room to rename a satellite, move it to another
+  room or a new one, or rename, add or delete a room. Approving a new
+  satellite asks "Which room is it in?" (the room it asked for is
+  pre-selected). Rooms that share a name are offered for a merge.
+- **What to know.** These controls are for a signed-in admin; everyone
+  else sees the list. Nothing merges on its own: the merge happens only
+  when an admin presses **Merge into one** and confirms. Moving a
+  satellite keeps its history with the old room, forgets the voices it
+  learned there (enrolled voices stay) and clears its speaker tuning. A
+  room can be deleted only when it is empty. The phone apps have no
+  admin screens and say "the Kitchen", never "satellite".
+  [SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md#rooms-and-their-satellites).
+
 ## 1.5.0 (unreleased) — Rooms play internet radio through the core
 
 - **What changed.** A room's music player no longer fetches an internet
