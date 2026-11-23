@@ -23,6 +23,7 @@ Sizing:
 from __future__ import annotations
 
 import logging
+import re
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -49,6 +50,29 @@ _PROMPT_RELEVANT_PREF_KEYS: tuple[str, ...] = (
     "tts_voice",  # only here because the QA model occasionally riffs
                   # on it ("I'll keep using that voice")
 )
+
+
+# "Tell me, how far is the moon?" is not about the person: the "me" of a
+# request to answer.
+_REQUEST_ME_RE = re.compile(
+    r"\b(?:tell|give|show|let|help|remind)\s+me\b", re.IGNORECASE
+)
+_FIRST_PERSON_RE = re.compile(
+    r"\b(?:i|i'm|i've|i'd|i'll|me|my|mine|myself|we|we're|us|our|ours)\b",
+    re.IGNORECASE,
+)
+
+
+def about_the_speaker(transcript: str) -> bool:
+    """True when the speaker talks about themselves ("what are my pets
+    called?", "what should I cook tonight?"), the only questions their
+    profile can help answer. A plain fact question ("how far is the moon
+    from Earth?") gets the same prompt as anyone's: the person's name and
+    remembered facts in a small Q&A model's prompt pull its answer off the
+    question (a fact it had just answered refused, a fact about the person
+    tacked on)."""
+    text = _REQUEST_ME_RE.sub(" ", (transcript or "").replace("’", "'"))
+    return _FIRST_PERSON_RE.search(text) is not None
 
 
 async def build_profile_prefix(

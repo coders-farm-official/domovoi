@@ -902,40 +902,41 @@ class MemoriesRepository:
         )
         return result.rowcount or 0
 
-    async def next_pending_for_offer(
+    async def pending_for_offer(
         self,
         person_id: int,
         offer_cooldown_sec: int,
-    ) -> tuple[int, str, str | None] | None:
-        """Pick the oldest pending memory eligible to surface.
+        limit: int = 10,
+    ) -> list[tuple[int, str, str | None]]:
+        """The pending memories eligible to surface, oldest first.
 
-        Eligibility: ``status='pending'`` AND
-        ``last_offered_at IS NULL OR last_offered_at < NOW() -
-        cooldown``. Returns ``(id, body, topic)`` or None.
-
-        Ordered by created_at so memories the extractor surfaced first
-        get asked about first — keeps the conversational ordering
-        sensible when several have piled up across a long session.
+        At most one offer per person per cooldown: nothing is eligible
+        while ANY of the person's memories was offered within
+        ``offer_cooldown_sec``, so several pending facts don't take
+        turns being tacked onto every answer. Returns ``(id, body,
+        topic)`` rows, oldest first, so memories the extractor surfaced
+        first get asked about first.
         """
-        row = await self.s.execute(
+        rows = await self.s.execute(
             text(
                 """
                 SELECT id, body, topic
                 FROM memories
                 WHERE person_id = :pid
                   AND status = 'pending'
-                  AND (last_offered_at IS NULL
-                       OR last_offered_at < NOW() - make_interval(secs => :cooldown))
+                  AND NOT EXISTS (
+                      SELECT 1 FROM memories recent
+                      WHERE recent.person_id = :pid
+                        AND recent.last_offered_at
+                            >= NOW() - make_interval(secs => :cooldown)
+                  )
                 ORDER BY created_at
-                LIMIT 1
+                LIMIT :limit
                 """
             ),
-            {"pid": person_id, "cooldown": offer_cooldown_sec},
+            {"pid": person_id, "cooldown": offer_cooldown_sec, "limit": limit},
         )
-        result = row.first()
-        if result is None:
-            return None
-        return int(result[0]), result[1], result[2]
+        return [(int(r[0]), r[1], r[2]) for r in rows.all()]
 
     async def mark_offered(self, memory_id: int) -> None:
         await self.s.execute(
@@ -1009,7 +1010,8 @@ class MemoriesRepository:
     async def has_similar_active_or_pending(
         self, person_id: int, fragment: str
     ) -> bool:
-        """Cheap dedup gate before inserting a pending memory.
+        """Cheap dedup gate before inserting a pending memory. A rejected
+        row counts too: a fact the person said no to isn't offered again.
 
         Substring ILIKE comparison both directions — catches the
         common "I have a dog named Max" vs "user has a dog named
@@ -1024,7 +1026,7 @@ class MemoriesRepository:
                 SELECT 1
                 FROM memories
                 WHERE person_id = :pid
-                  AND status IN ('active', 'pending')
+                  AND status IN ('active', 'pending', 'rejected')
                   AND (
                        body ILIKE :pat
                        OR :fragment ILIKE '%' || body || '%'

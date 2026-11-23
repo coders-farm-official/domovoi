@@ -139,6 +139,14 @@ a way that would otherwise get reported as a bug.
   country of the Home location (the US when none is set). "This year" for
   a holiday that already passed says how many days ago it was.
 
+- A spoken "Should I remember that?" offer no longer rides on the answer
+  to a question. It comes after a remark or a chat, at most once a day per
+  person, and never for something Domovoi already knows (your name, a
+  fact it remembers). A one-word "yes" to it now saves the fact. A plain
+  fact question from someone Domovoi recognizes gets the same prompt as
+  anyone's; their remembered facts go in only when the question is about
+  them.
+
 - A chat draft's changes view on the dashboard leaves a paragraph gap
   between a long removed passage and the added text after it, so the old
   last word no longer runs into the new first word.
