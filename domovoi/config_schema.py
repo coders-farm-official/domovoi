@@ -1126,9 +1126,9 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "is a built-in filter; 'rnnoise' needs the pyrnnoise package "
         "(installed with pip install --no-deps pyrnnoise) and passes the "
         "audio through unchanged without it. Wake words and voice "
-        "recognition always hear the room as it is. In tests with synthetic "
-        "party noise neither mode understood commands better than off, and "
-        "each costs CPU on every command, so leave it off unless you are "
+        "recognition always hear the room as it is, and any error uses the "
+        "raw audio. Cleanup can make clean speech harder to recognize and "
+        "costs CPU on every command, so leave it off unless you are "
         "comparing. Applies on the next command.",
         "choice", section="advanced", tier="hot",
         choices=list(STT_DENOISE_MODES), choice_labels=dict(STT_DENOISE_LABELS),

@@ -470,6 +470,19 @@ back or asked about the same way. Saying the wake word close to the
 satellite, then the command right away, works best. Details:
 [uml/satellite-protocol.md](uml/satellite-protocol.md#noisy-rooms-first_voiced_frame-150).
 
+**An experiment: cleaning up the noise before transcribing.** Settings →
+Configuration → Speech-to-text → *Clean up noise before transcribing
+(experiment)* (`STT_DENOISE`) cleans a command's audio before Whisper
+hears it: *spectral* is a built-in filter, *rnnoise* uses RNNoise and
+needs `pip install --no-deps pyrnnoise` on the server. It is **off by
+default** and stays off until the measurements (and the XVF3800 room
+test) show it helps: noise cleanup can make clean speech harder to
+recognize, and it costs CPU on every command. The wake word and voice
+recognition always hear the room as it is, and anything that goes wrong
+uses the raw audio. Developers compare the modes with
+`scripts/dev/denoise_ab.py`, on synthetic party noise or on a room's kept
+command recordings.
+
 ## Custom wake words
 
 A new satellite boots on `hey_jarvis`, and its server then gives it the

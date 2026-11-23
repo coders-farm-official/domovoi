@@ -22,6 +22,19 @@ a way that would otherwise get reported as a bug.
   core older than 1.5.0.
   [SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md#a-room-with-several-speakers).
 
+## 1.5.0 (unreleased) — Noise cleanup before speech to text, an experiment (off)
+
+- **What changed.** New setting `stt_denoise` (`STT_DENOISE`; Settings →
+  Configuration → Speech-to-text, advanced): `off` (the default),
+  `spectral` (a built-in filter) or `rnnoise` (needs `pip install
+  --no-deps pyrnnoise`). When on, a spoken command's audio is cleaned
+  before Whisper hears it; the wake word, voice recognition and command
+  recordings keep the raw audio, and any error falls back to it.
+- **What to know.** Nothing changes unless you turn it on. It is an A/B
+  experiment for noisy rooms (`scripts/dev/denoise_ab.py`); whether a
+  mode becomes the default waits for that data and the XVF3800 room test.
+  [SATELLITE_HARDWARE.md](SATELLITE_HARDWARE.md#a-command-in-a-loud-room).
+
 ## 1.5.0 (unreleased) — A command in a loud room is said back, and asked about first
 
 - **What changed.** When a room is too loud for the capture to end (it
