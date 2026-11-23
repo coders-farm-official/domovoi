@@ -1,6 +1,7 @@
 package com.domovoi.app.assistant
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -317,7 +318,7 @@ class ReplyReportTest {
             appVersion = "9.9.9",
             clock = { 1_760_550_060_000 },
         )
-        scope.launch { c.messages.collect { said += it } }
+        scope.launch(start = CoroutineStart.UNDISPATCHED) { c.messages.collect { said += it } }
         return c to said
     }
 

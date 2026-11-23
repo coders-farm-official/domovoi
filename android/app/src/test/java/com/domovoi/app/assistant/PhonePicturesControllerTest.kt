@@ -1,6 +1,7 @@
 package com.domovoi.app.assistant
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.awaitCancellation
@@ -69,7 +70,7 @@ class PhonePicturesControllerTest {
         probeTimeoutMs = 2_000,
         residentKb = residentKb,
         exitReasons = { exit },
-    ).also { c -> scope.launch { c.messages.collect { said += it } } }
+    ).also { c -> scope.launch(start = CoroutineStart.UNDISPATCHED) { c.messages.collect { said += it } } }
 
     private fun install(m: CatalogModel = llm) {
         m.files.forEach { f -> store.fileFor(m, f).apply { parentFile!!.mkdirs(); writeBytes(ByteArray(f.size.toInt())) } }

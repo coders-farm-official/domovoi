@@ -50,6 +50,7 @@ import logging
 import os
 import secrets
 import sys
+import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -113,6 +114,9 @@ PENDING_SERVER_SIDECAR = CONFIG_DIR / "pending-server.json"
 
 HTTP_TIMEOUT_SEC = 5.0
 _CHALLENGE_BYTES = 16
+#: The most of a /v1/health answer that is read. A real one is well under
+#: a kilobyte; anything past this is not a Domovoi server's.
+HEALTH_BODY_MAX_BYTES = 64 * 1024
 
 
 # ─── primitives ───────────────────────────────────────────────────────────
@@ -579,6 +583,32 @@ def verify_health_proof(
     return fingerprint, advert
 
 
+def read_health_body(r: Any, *, timeout: float,
+                     limit: int = HEALTH_BODY_MAX_BYTES) -> bytes:
+    """A /v1/health body, read under ONE deadline (``timeout``, at least a
+    second, from the first byte asked for) and at most ``limit`` bytes:
+    the socket timeout bounds each read, not a body that keeps trickling.
+    Raises :class:`IdentityError` past either. A response without
+    ``read1`` (not an HTTP one) is read whole and then held to ``limit``."""
+    read1 = getattr(r, "read1", None)
+    if read1 is None:
+        body = r.read()
+        if len(body) > limit:
+            raise IdentityError("the /v1/health answer is too large")
+        return body
+    deadline = time.monotonic() + max(float(timeout), 1.0)
+    buf = bytearray()
+    while True:
+        chunk = read1(min(16 * 1024, limit + 1 - len(buf)))
+        if not chunk:
+            return bytes(buf)
+        buf += chunk
+        if len(buf) > limit:
+            raise IdentityError("the /v1/health answer is too large")
+        if time.monotonic() > deadline:
+            raise IdentityError("the /v1/health answer took too long")
+
+
 def fetch_health(
     http_base: str, *, challenge: str, timeout: float = HTTP_TIMEOUT_SEC,
     opener=None, addr: str | None = None,
@@ -593,7 +623,7 @@ def fetch_health(
     with opener(url, timeout=timeout) as r:
         if getattr(r, "status", 200) != 200:
             raise IdentityError("the server did not answer /v1/health")
-        return json.loads(r.read().decode("utf-8", "replace"))
+        return json.loads(read_health_body(r, timeout=timeout).decode("utf-8", "replace"))
 
 
 def verify_server(

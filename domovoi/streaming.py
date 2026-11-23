@@ -674,6 +674,11 @@ APPROVAL_CONFIRM_TIMEOUT_SEC = 20.0
 # retrying, gets its turn back quickly.
 APPROVAL_TAKEOVER_SEC = 180.0
 
+# The largest first frame read as a hello, before anything about the
+# device is known. A real hello is a few KiB (its prev_health record is
+# bounded at 16 KiB on the device); anything bigger is closed unread.
+HELLO_MAX_CHARS = 64 * 1024
+
 # The setup portal minted FOUR digits until SAT-5 (2026-09-22), and a
 # satellite keeps the code it was given in ~/.domovoi/approval_code for
 # good, sending it in every hello. A unit onboarded before then still
@@ -3035,6 +3040,8 @@ class StreamSession:
             if text is None:
                 # Binary before hello — nobody we know streams audio first.
                 return {"type": "<binary>"}
+            if len(text) > HELLO_MAX_CHARS:
+                return {"type": "<oversized>"}
             try:
                 ctrl = json.loads(text)
             except json.JSONDecodeError:
@@ -3194,6 +3201,9 @@ class StreamSession:
             takeover_after_sec=APPROVAL_TAKEOVER_SEC,
             requested_room=_requested_room(ctrl),
         )
+        if outcome == "full":
+            await self._approvals_full()
+            return False
         if outcome == "conflict":
             join_problems.name_taken(self.satellite_id)
             log.warning(
@@ -3228,6 +3238,19 @@ class StreamSession:
             "code": parked_code or code,
         })
         return False
+
+    async def _approvals_full(self) -> None:
+        """Too many requests already wait on a human: this one is told to
+        try again later, the way a throttled request is."""
+        log.warning(
+            "pairing: room=%s approval request refused — too many requests "
+            "are already waiting", self.room_id,
+        )
+        await self._safe_send_text({
+            "type": "error",
+            "reason": "approval_throttled",
+            "message": "too many devices are waiting for approval — try again shortly",
+        })
 
     async def _proof_pairing(self, ctrl: dict[str, Any], token_hash: str) -> bool | None:
         """The hello of a device that PROVES approvals (1.4.0).
@@ -3329,6 +3352,9 @@ class StreamSession:
                     proof=True,
                     requested_room=_requested_room(ctrl),
                 )
+                if outcome == "full":
+                    await self._approvals_full()
+                    return False
                 if outcome == "conflict":
                     join_problems.name_taken(self.satellite_id)
                     log.warning(

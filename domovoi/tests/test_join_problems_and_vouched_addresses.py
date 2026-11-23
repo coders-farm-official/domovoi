@@ -305,6 +305,19 @@ async def test_health_signs_the_pairing_proof_advert(healthy_core, identity_in_t
 
 
 @pytest.mark.asyncio
+async def test_a_pairing_proof_challenge_is_signed_only_bound(healthy_core, identity_in_tmp):
+    """Every device that asks the pairing-proof form names the address it
+    dialed, so the form without one gets no signature."""
+    challenge = "pairing-proof." + "cd" * 16
+    doc = await main.health(challenge=challenge)
+    assert "signature" not in doc["identity"] and "addr" not in doc["identity"]
+    with pytest.raises(sat_identity.IdentityError):
+        sat_identity.verify_health_document(
+            doc, challenge=challenge, expected_fingerprint=None, addr=None,
+        )
+
+
+@pytest.mark.asyncio
 async def test_an_ordinary_challenge_is_signed_as_it_always_was(healthy_core, identity_in_tmp):
     """Older devices (and the root clock helper) never ask: their message
     is byte for byte what it was."""

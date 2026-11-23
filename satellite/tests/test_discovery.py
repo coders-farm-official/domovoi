@@ -65,6 +65,50 @@ def _opener(body: bytes, status: int = 200):
     return lambda url, timeout=None: _Resp(body, status)
 
 
+class _EndlessResp(_Resp):
+    """An HTTP-like answer whose body never ends."""
+
+    def __init__(self):
+        super().__init__(b"")
+        self.reads = 0
+
+    def read(self):  # what an uncapped reader would call: never returns
+        raise AssertionError("the whole body was asked for")
+
+    def read1(self, n):
+        self.reads += 1
+        return b'{"status": "ok", "bot_name": "Domovoi", "pad": "' if self.reads == 1 else b"x" * n
+
+
+def test_an_endless_health_body_is_cut_off_not_read_whole():
+    for call, miss in ((discovery.probe, False), (discovery.probe_house, None)):
+        resp = _EndlessResp()
+        assert call("192.168.1.66", opener=lambda url, timeout=None, r=resp: r) is miss
+        # Read in pieces, and only up to the cap.
+        assert 1 < resp.reads <= server_identity.HEALTH_BODY_MAX_BYTES // 1024
+
+
+def test_a_stalled_probe_cannot_hold_the_sweep(monkeypatch):
+    import threading
+    import time
+
+    release = threading.Event()
+    monkeypatch.setattr(discovery, "SWEEP_DEADLINE_SEC", 0.3)
+
+    def probe_fn(host, port=None):
+        if host == "192.168.1.66":
+            release.wait(5)
+        return None
+
+    started = time.monotonic()
+    try:
+        assert discovery.find_houses(hosts=["192.168.1.66", "192.168.1.67"], probe_fn=probe_fn) == []
+        assert discovery.find_core(hosts=["192.168.1.66"], probe_fn=probe_fn) is None
+    finally:
+        release.set()
+    assert time.monotonic() - started < 3
+
+
 def test_probe_accepts_a_real_core():
     body = b'{"status": "ok", "bot_name": "Domovoi", "use_stubs": "false"}'
     assert discovery.probe("192.168.1.20", opener=_opener(body)) is True

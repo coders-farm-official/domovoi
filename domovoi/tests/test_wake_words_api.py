@@ -529,8 +529,16 @@ def _stub_admin_down(monkeypatch) -> None:
 
 
 @requires_db
+def _as_admin(monkeypatch) -> None:
+    """record/start is on the security tier: drive it as a signed-in admin."""
+    from domovoi import admin_auth
+
+    monkeypatch.setitem(app.dependency_overrides, admin_auth.require_admin_security, lambda: None)
+
+
 def test_record_start_proxies_502_when_domovoi_down(monkeypatch) -> None:
     _stub_admin_down(monkeypatch)
+    _as_admin(monkeypatch)
     with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         wid = _create(client, name="Proxy A", phrase="hey proxy a").json()["id"]
         r = client.post(f"/api/wake-words/{wid}/record/start", json={"room_id": "kitchen"})
@@ -569,6 +577,7 @@ def test_record_start_forwards_room_and_id_to_admin(monkeypatch) -> None:
         return 200, {"announced_to": ["kitchen"]}
 
     monkeypatch.setattr(wake_api, "post_admin", _fake_post_admin)
+    _as_admin(monkeypatch)
 
     with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         wid = _create(client, name="Forwarder", phrase="hey forwarder").json()["id"]

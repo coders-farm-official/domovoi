@@ -200,6 +200,61 @@ a way that would otherwise get reported as a bug.
   the server runs 1.4.1; the block appears after it reconnects. Other
   satellites don't show it.
 
+## 1.4.1 (unreleased) — Tighter checks on recording, live state and satellite setup
+
+- **Recording wake-word clips needs the admin sign-in.** Starting a
+  wake-word recording take now needs an admin, also before setup and after
+  `--reset-admin` (it answers 501 until someone signs in), like a drop-in.
+- **The dashboard's live updates check where they come from, and keep
+  checking.** The live-state connection accepts the dashboard's sign-in
+  cookie only from the dashboard's own page, and it ends within about 30
+  seconds of a sign-out or a household-token rotation.
+- **Satellite hellos are bounded.** An oversized first message from a
+  device is closed unread, the hardware address and kind a waiting device
+  reports are stored only in their known shape, and at most 32 devices can
+  wait for approval at once (a new one past that is asked to try again).
+- **Satellites read a server's health answer within limits.** A room
+  device looking for its server reads at most 64 KiB of each answer under
+  one deadline, and a network search can no longer be held open by one
+  slow host. This ships with the satellite code update.
+
+## 1.4.1 (unreleased)
+
+- Room devices looking for every house count a server only when its
+  identity proof is bound to the address they dialled, and the server
+  signs the approval-proof form only bound to one.
+- Friend Houses: a friend request broken off partway counts as a try on
+  the friend file; the file closes after three, and the asking house stops
+  retrying on its own after one (the request says to withdraw it and try
+  again).
+- Friend Houses: the check that pings friends has one deadline per ping,
+  and each stage of the retry loop has a deadline, so one friend can't
+  hold up the others.
+- Friend Houses: wake phrases are taken out of a friend's text more
+  loosely, after the speech cleaner, and from the whole sentence read
+  aloud (messages and shared lists).
+- Friend Houses: a friend's messages and names read aloud stay out of the
+  chat model's history, and "double check that" declines such a reply.
+
+## 1.4.1 (unreleased) — Queue, downloads, podcast and Word export hardening
+
+- **Up next** trims only songs a room was heard playing. Jumping ahead in a
+  long queue no longer lets the songs it passed be trimmed as played.
+- **Radio**: the docs now say exactly what the stream redirect check
+  covers. It judges the server's own request; the room's player makes its
+  own. Nothing changed in how stations play.
+- **Download queue**: `GET /v1/acquisitions` and `GET /api/acquisitions`
+  stay open, but a caller who is not admin gets `requested_by` and
+  `origin_ref` as `null` and `error` as a fixed sentence. An admin still
+  reads the raw values.
+- **Podcasts**: `GET /api/podcasts/positions/{episode_id}` is a device-tier
+  read now, like the audiobook one. The episode list stays open, but
+  `position_sec` is filled in only for a caller with a household
+  credential.
+- **Word export**: a Word copy of a Markdown or text file, and a chat
+  draft's file, are built off the dashboard's main loop, and one longer
+  than 20,000 lines is refused with `413`.
+
 ## 1.4.1 (unreleased) — Home location, in Settings → Household
 
 - **What changed.** The household's town has its own place: Settings →

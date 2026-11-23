@@ -202,6 +202,18 @@ def test_export_markdown_to_docx(docs_dir):
     assert any("bold" in t for t in texts)
 
 
+def test_export_of_a_very_long_text_file_is_refused_before_building(docs_dir, monkeypatch):
+    from web.backend.api import documents as documents_api
+
+    built: list[str] = []
+    monkeypatch.setattr(documents_api, "_markdown_to_docx", lambda t: built.append(t) or b"")
+    (docs_dir / "long.txt").write_text("a\n" * documents_api.DOCX_MAX_LINES, encoding="utf-8")
+    with _client() as c:
+        r = c.get("/api/documents/export/doc/long.txt", params={"fmt": "docx"})
+    assert r.status_code == 413
+    assert built == []
+
+
 def test_export_sheet_csv_and_xlsx(docs_dir):
     (docs_dir / "t.csv").write_text("a,b\n1,2\n", encoding="utf-8")
     with _client() as c:
