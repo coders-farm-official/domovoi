@@ -169,7 +169,7 @@ def catalogue(rel: Release, repo_dir: str, *, read: pins.Reader | None = None,
     out += parts.ollama_runtime_parts(p)
     models = parts.model_parts(p)
     out += models
-    out += parts.rooms_parts(rel)
+    out += parts.rooms_parts(rel, p)
     out += parts.household_model_parts(p)
     out += parts.household_wake_parts()
     out.append(parts.licence_part(rel, repo_dir, models))

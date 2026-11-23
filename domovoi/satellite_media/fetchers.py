@@ -55,7 +55,10 @@ def _turned_off(what: str) -> tuple[bool, str] | None:
     if not egress.internet_turned_off():
         return None
     log.info("satellite media: %s not refreshed — internet access is turned off", what)
-    return False, f"{egress.TURNED_OFF_REASON}; using what is already cached"
+    from domovoi import kit_rooms
+
+    kit = kit_rooms.note(what, ready=False)
+    return False, f"{egress.TURNED_OFF_REASON}; using what is already cached" + (f". {kit}" if kit else "")
 
 # The satellite's base apt set (PROVISIONING §3) + the adoption-mode tools.
 BASE_APT_PACKAGES = (

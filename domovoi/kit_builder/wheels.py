@@ -71,8 +71,9 @@ def parse_lock(text: str) -> list[Locked]:
     return out
 
 
-def _manylinux_ok(plat: str, arch: str) -> int:
-    """A rank (higher is better) when ``plat`` installs on ``arch``, else 0."""
+def _manylinux_ok(plat: str, arch: str, glibc_max: tuple[int, int] = GLIBC_MAX) -> int:
+    """A rank (higher is better) when ``plat`` installs on ``arch`` with
+    glibc ``glibc_max``, else 0."""
     if plat == "any":
         return 1
     legacy = {"manylinux1": (2, 5), "manylinux2010": (2, 12), "manylinux2014": (2, 17)}
@@ -84,14 +85,14 @@ def _manylinux_ok(plat: str, arch: str) -> int:
         if not m:
             return 0
         glibc, a = (int(m.group(1)), int(m.group(2))), m.group(3)
-    if a != arch or glibc > GLIBC_MAX:
+    if a != arch or glibc > glibc_max:
         return 0
     return 10 + glibc[0] * 100 + glibc[1]
 
 
-def rank(filename: str, arch: str) -> int:
-    """How good ``filename`` is for CPython 3.14 on ``arch``: 0 = unusable,
-    1 = the sdist, higher = better wheels."""
+def rank(filename: str, arch: str, py: tuple[int, int] = PY, glibc_max: tuple[int, int] = GLIBC_MAX) -> int:
+    """How good ``filename`` is for CPython ``py`` (3.14) on ``arch``:
+    0 = unusable, 1 = the sdist, higher = better wheels."""
     if filename.endswith((".tar.gz", ".zip")):
         return 1
     if not filename.endswith(".whl"):
@@ -101,33 +102,35 @@ def rank(filename: str, arch: str) -> int:
         return 0
     pys, abis, plats = parts[-3].split("."), parts[-2].split("."), parts[-1].split(".")
     best = 0
-    for py in pys:
+    for tag in pys:
         for abi in abis:
-            if abi == f"cp{PY[0]}{PY[1]}" and py == f"cp{PY[0]}{PY[1]}":
+            if abi == f"cp{py[0]}{py[1]}" and tag == f"cp{py[0]}{py[1]}":
                 kind = 4
-            elif abi == "abi3" and (m := re.fullmatch(r"cp3(\d+)", py)) and int(m.group(1)) <= PY[1]:
+            elif abi == "abi3" and (m := re.fullmatch(r"cp3(\d+)", tag)) and int(m.group(1)) <= py[1]:
                 kind = 3
-            elif abi == "none" and py in ("py3", f"py{PY[0]}{PY[1]}", "py2.py3", f"cp{PY[0]}{PY[1]}"):
+            elif abi == "none" and tag in ("py3", f"py{py[0]}{py[1]}", "py2.py3", f"cp{py[0]}{py[1]}"):
                 kind = 2
             else:
                 continue
             for plat in plats:
-                pr = _manylinux_ok(plat, arch)
+                pr = _manylinux_ok(plat, arch, glibc_max)
                 if pr:
                     best = max(best, kind * 10000 + pr)
     return best
 
 
-def choose(locked: Locked, files: list[dict], arch: str) -> Pick:
-    """The best file of this release for ``arch`` whose SHA-256 the lock
-    lists. Raises WheelError when there is none."""
+def choose(locked: Locked, files: list[dict], arch: str, *, py: tuple[int, int] = PY,
+           glibc_max: tuple[int, int] = GLIBC_MAX, wheels_only: bool = False) -> Pick:
+    """The best file of this release for ``arch`` (and CPython ``py``)
+    whose SHA-256 the lock lists; with ``wheels_only`` never the sdist.
+    Raises WheelError when there is none."""
     cands = []
     for f in files:
         sha = (f.get("digests") or {}).get("sha256")
         if sha not in locked.hashes:
             continue
-        r = rank(str(f.get("filename", "")), arch)
-        if r:
+        r = rank(str(f.get("filename", "")), arch, py, glibc_max)
+        if r > (1 if wheels_only else 0):
             cands.append((r, f))
     if not cands:
         raise WheelError(f"{locked.name}=={locked.version}: no file of it the lock allows installs "
@@ -205,3 +208,59 @@ def download(picks: list[Pick], progress: fetch.Tick | None = None) -> None:
 
 def folder(arch: str) -> str:
     return f"python/cp{PY[0]}{PY[1]}-{arch}"
+
+
+# ─── a new room's packages (P6) ──────────────────────────────────────────
+#
+# A spare Linux computer installs its satellite from
+# ``satellite/locks/pc-<cpXY>-<machine>.txt`` (install-pc.sh: pip
+# --require-hashes --only-binary=:all: --no-deps). An offline server serves
+# it those files (domovoi/satellite_linux.py), so the kit carries, for each
+# lock, one wheel per package whose SHA-256 the lock lists. The oldest
+# computers install-pc.sh accepts have glibc 2.28, so a wheel built for it
+# is picked first, a newer one only when the release has nothing older.
+
+#: install-pc.sh's floor: manylinux_2_28.
+PC_GLIBC_MIN = (2, 28)
+
+
+def pc_lock_target(name: str) -> tuple[tuple[int, int], str]:
+    """``pc-cp313-x86_64`` -> ((3, 13), "x86_64"). Raises WheelError."""
+    m = re.fullmatch(r"pc-cp3(\d{1,2})-(x86_64|aarch64)", name)
+    if not m:
+        raise WheelError(f"{name} is not a spare-computer lock name")
+    return (3, int(m.group(1))), m.group(2)
+
+
+def choose_pc(locked: Locked, files: list[dict], name: str) -> Pick:
+    py, arch = pc_lock_target(name)
+    try:
+        return choose(locked, files, arch, py=py, glibc_max=PC_GLIBC_MIN, wheels_only=True)
+    except WheelError:
+        return choose(locked, files, arch, py=py, wheels_only=True)
+
+
+def _pc_cache_file(name: str, text: str) -> Path:
+    return _cache() / f"{name}-{hashlib.sha256(text.encode()).hexdigest()[:16]}.json"
+
+
+def cached_pc_picks(name: str, text: str) -> list[Pick] | None:
+    try:
+        return [Pick(**p) for p in json.loads(_pc_cache_file(name, text).read_text(encoding="utf-8"))]
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def resolve_pc(name: str, text: str, files_of=None) -> list[Pick]:
+    """The wheels of one spare-computer lock (one PyPI request per package;
+    cached by the lock's text). ``files_of`` replaces PyPI in tests."""
+    hit = cached_pc_picks(name, text)
+    if hit is not None:
+        return hit
+    files_of = files_of or _json
+    locked = parse_lock(text)
+    if not locked:
+        raise WheelError(f"{name} lists no packages")
+    picks = [choose_pc(lk, files_of(lk), name) for lk in locked]
+    _pc_cache_file(name, text).write_text(json.dumps([p.__dict__ for p in picks]), encoding="utf-8")
+    return picks

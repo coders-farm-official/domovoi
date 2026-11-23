@@ -37,7 +37,7 @@ from domovoi.offline_kit import format as fmt
 from domovoi.offline_kit.sshsig import RELEASE_KEY, parse_public_key, sshsig_problem
 
 from . import apt_mirror, fetch, host, images, licences, ollama_store, wheels
-from .pins import FilePin, Pins
+from .pins import LINUX_PYTHON, WINDOWS_RUNTIME, FilePin, Pins
 
 log = logging.getLogger(__name__)
 
@@ -720,47 +720,251 @@ def platform_parts(p: Pins) -> list[Part]:
     return out
 
 
-def rooms_parts(rel: Release) -> list[Part]:
-    """What an offline server needs to add rooms: the Windows satellite
-    Setup, Debian's netinst for the room stick, and the rooms' package
-    cache as this server holds it (P6 teaches the installers to use it)."""
+#: Where a new room's files sit on the stick (docs/OFFLINE_KIT.md; the
+#: installed server takes them back with domovoi/kit_rooms.py).
+ROOMS_WINDOWS = "rooms/windows"            # + /<python version>/<file>: windows-runtime.json
+ROOMS_LINUX_PYTHON = "rooms/linux-python"  # + /<file>: satellite/locks/linux-python.txt
+ROOMS_LINUX_WHEELS = "rooms/linux-wheels"  # + /<file>: satellite/locks/pc-*.txt (hashes)
+ROOMS_PI = "rooms/satellite"               # + /wheels|debs|dtbo|xvf_host/...: the Pi card's cache
+#: The Pi card cache's buckets that go on a kit (the wake-word models are
+#: already in wake/, pinned).
+PI_BUCKETS = ("wheels", "debs", "dtbo", "xvf_host")
+#: An estimate for a Pi cache the server hasn't fetched yet (Trixie's
+#: Python 3.13 wheels for aarch64 and the base .debs).
+PI_ESTIMATE = 130_000_000
+#: A spare-computer lock the server hasn't looked up on PyPI yet.
+PC_LOCK_ESTIMATE = 95_000_000
+
+
+def rooms_parts(rel: Release, p: Pins | None = None) -> list[Part]:
+    """What an offline server needs to add rooms (P6): the Windows
+    satellite Setup and the Windows laptop's Python and wheels, a Linux
+    computer's own Python and wheels, the Raspberry Pi card's package
+    cache, and Debian's installer for the room stick. Each pinned file is
+    held to the pin in the release commit (``p``); the Pi cache has no
+    pin (Pi OS's packages and the satellite's requirement ranges), so it
+    goes on as this server's, "from the house that made this kit"."""
+    from domovoi import satellite_setup
     from domovoi.satellite_media import cache
     from domovoi.usb_stick import image as stick_image
 
     out = []
+    label = "the rooms' parts"
     sat = _release_file(rel, "DomovoiSatelliteSetup.exe")
     if sat:
-        m, g = _pinned_file(sat, f"release/{rel.tag}", f"rooms/{sat.name}")
+        m, g = _pinned_file(sat, f"release/{rel.tag}", f"rooms/{sat.name}",
+                            local=cache.CACHE_ROOT / satellite_setup.CACHE_BUCKET / sat.name)
         out.append(Part(id="rooms:windows-setup", group="rooms", kind="rooms", name=sat.name,
                         version=rel.version, licence="MIT", pinned_by="the release's SHA256SUMS",
                         size=sat.size_or_zero, exact=True, download=m, acquire=lambda ctx: [g(ctx)],
-                        label="the rooms' parts"))
+                        label=label))
     try:
         pin = stick_image.load_pin()
         fp = FilePin(name=pin["name"], url=pin["urls"][0], sha256=pin["sha256"], size=pin["size"],
                      pinned_by="domovoi/usb_stick/debian-image.json")
-        m, g = _pinned_file(fp, "rooms", f"rooms/{pin['name']}",
-                            local=cache.CACHE_ROOT / "usb_stick" / pin["version"] / pin["name"])
+        m2, g2 = _pinned_file(fp, "rooms", f"rooms/{pin['name']}",
+                              local=cache.CACHE_ROOT / "usb_stick" / pin["version"] / pin["name"])
         out.append(Part(id="rooms:debian", group="rooms", kind="rooms", name=pin["name"], version=pin["version"],
                         licence="LicenseRef-distro-archive", pinned_by=fp.pinned_by, size=pin["size"], exact=True,
-                        download=m, acquire=lambda ctx: [g(ctx)], label="the rooms' parts"))
+                        download=m2, acquire=lambda ctx: [g2(ctx)], label=label))
     except stick_image.PinError:
         pass
-    files = []
-    for bucket in ("wheels", "debs", "oww_models"):
-        root = cache.CACHE_ROOT / bucket
-        if root.is_dir():
-            for f in sorted(root.rglob("*")):
-                if f.is_file() and not f.is_symlink() and not f.name.startswith("."):
-                    rel_path = f.relative_to(cache.CACHE_ROOT).as_posix()
-                    if fmt.path_problem(f"rooms/satellite/{rel_path}") is None:
-                        files.append((f"rooms/satellite/{rel_path}", f))
-    if files:
-        out.append(Part(id="rooms:satellite-cache", group="rooms", kind="rooms",
-                        name="The rooms' package cache", version="this server's", licence="LicenseRef-mixed-see-sbom",
-                        pinned_by=None, size=sum(f.stat().st_size for _, f in files), exact=True, download=0,
-                        acquire=lambda ctx: [Source(k, f) for k, f in files], files_estimate=len(files)))
+    if p is not None:
+        out += _windows_runtime_parts(p, label)
+        out += _linux_python_parts(p, label)
+        out += _linux_wheel_parts(p, label)
+    out += _oww_room_parts(label)
+    out += _pi_cache_parts(label)
     return out
+
+
+#: The openWakeWord models wake/ already carries (base, every kit).
+OWW_IN_WAKE = ("embedding_model.onnx", "melspectrogram.onnx", "silero_vad.onnx", "hey_jarvis_v0.1.onnx")
+
+
+def _oww_room_parts(label: str) -> list[Part]:
+    """The rest of openWakeWord's pinned release files: preparing a Pi's
+    card offline needs every one of them (satellite_media/builder.py
+    refuses a card with any missing), so they go on with Rooms, each with
+    its own licence, held to ``fetchers.OWW_MODEL_FILES``."""
+    from domovoi.satellite_media import cache, fetchers
+
+    out = []
+    for name, (sha, size) in sorted(fetchers.OWW_MODEL_FILES.items()):
+        if name in OWW_IN_WAKE:
+            continue
+        fp = FilePin(name=name, url=fetchers.OWW_RELEASE_URL + name, sha256=sha, size=size,
+                     pinned_by="domovoi/satellite_media/fetchers.py OWW_MODEL_FILES")
+        m, g = _pinned_file(fp, "wake", f"{ROOMS_PI}/oww_models/{name}", local=cache.CACHE_ROOT / "oww_models" / name)
+        out.append(Part(id=f"rooms:oww:{name}", group="rooms", kind="rooms", name=name,
+                        version="openWakeWord v0.5.1", licence=licences.oww_licence(name), pinned_by=fp.pinned_by,
+                        size=size, exact=True, download=m, acquire=lambda ctx, g=g: [g(ctx)], label=label))
+    return out
+
+
+def _file_part(pid: str, name: str, version: str, licence: str, pinned_by: str, label: str,
+               files: list[tuple[FilePin, str, Path | None]]) -> Part:
+    """One component of several pinned files: (pin, kit path, local copy)."""
+    getters = [_pinned_file(fp, "rooms", path, local=local) for fp, path, local in files]
+    return Part(id=pid, group="rooms", kind="rooms", name=name, version=version, licence=licence,
+                pinned_by=pinned_by, size=sum(fp.size_or_zero for fp, _, _ in files), exact=True,
+                download=sum(m for m, _ in getters), acquire=lambda ctx: [g(ctx) for _, g in getters],
+                files_estimate=len(files), label=label)
+
+
+def _windows_runtime_parts(p: Pins, label: str) -> list[Part]:
+    from domovoi import satellite_windows
+    from domovoi.satellite_media import cache
+
+    lock = p.windows_runtime
+    if not lock:
+        return []
+    try:
+        version = str(lock["python"]["version"])
+        files = []
+        for e in satellite_windows.entries(lock):
+            name = str(e["file"])
+            path = f"{ROOMS_WINDOWS}/{version}/{name}"
+            if not satellite_windows._FILE_RE.match(name) or fmt.path_problem(path):
+                raise ValueError(f"a file {name!r} a kit can't hold")
+            fp = FilePin(name=name, url=str(e["url"]), sha256=str(e["sha256"]), size=int(e["size"]),
+                         pinned_by=WINDOWS_RUNTIME)
+            files.append((fp, path, cache.CACHE_ROOT / "windows" / version / name))
+    except (KeyError, TypeError, ValueError) as e:
+        log.warning("offline kit: the Windows satellite's lock can't be used: %s", e)
+        return []
+    return [_file_part("rooms:windows-runtime", f"The Windows room's Python {version} and packages", version,
+                       "LicenseRef-mixed-see-sbom", WINDOWS_RUNTIME, label, files)]
+
+
+def _linux_python_parts(p: Pins, label: str) -> list[Part]:
+    from domovoi import satellite_linux
+    from domovoi.satellite_media import cache
+
+    if not p.linux_python:
+        return []
+    try:
+        lock = satellite_linux.parse_lock(p.linux_python)
+    except satellite_linux.LockError as e:
+        log.warning("offline kit: the Linux satellite's Python lock can't be used: %s", e)
+        return []
+    files = [(FilePin(name=e["file"], url=e["url"], sha256=e["sha256"], size=e["size"], pinned_by=LINUX_PYTHON),
+              f"{ROOMS_LINUX_PYTHON}/{e['file']}", cache.CACHE_ROOT / "linux-python" / e["file"])
+             for e in satellite_linux.entries(lock)]
+    return [_file_part("rooms:linux-python", "A Linux room's own Python",
+                       " ".join(f"{e['machine']}-{e['version']}" for e in satellite_linux.entries(lock)),
+                       "LicenseRef-mixed-see-sbom", LINUX_PYTHON, label, files)]
+
+
+def _linux_wheel_parts(p: Pins, label: str) -> list[Part]:
+    """One component: every spare-computer lock's wheels, a file two locks
+    share stored once. Exact once the server has looked each lock up on
+    PyPI (cached), else an estimate."""
+    from domovoi import satellite_linux
+
+    if not p.pc_locks:
+        return []
+    known: dict[str, wheels.Pick] = {}
+    unknown = 0
+    for name, text in sorted(p.pc_locks.items()):
+        picks = wheels.cached_pc_picks(name, text)
+        if picks is None:
+            unknown += 1
+            continue
+        for x in picks:
+            known.setdefault(x.filename, x)
+    local = satellite_linux.wheel_dir()
+    size = sum(x.size for x in known.values()) + unknown * PC_LOCK_ESTIMATE
+    missing = sum(x.size for x in known.values()
+                  if not fetch.present(local / x.filename, x.size) and not fetch.present(wheels.file_path(x), x.size))
+    missing += unknown * PC_LOCK_ESTIMATE
+
+    def acquire(ctx: Ctx) -> list[Source]:
+        picks: dict[str, wheels.Pick] = {}
+        for name, text in sorted(p.pc_locks.items()):
+            ctx.check()
+            try:
+                for x in wheels.resolve_pc(name, text):
+                    picks.setdefault(x.filename, x)
+            except wheels.WheelError as e:
+                raise PartError(f"a Linux room's packages ({name}): {e}") from None
+        srcs = []
+        for x in sorted(picks.values(), key=lambda x: x.filename):
+            here = local / x.filename
+            if fetch.matches(here, x.sha256, x.size):
+                srcs.append(Source(f"{ROOMS_LINUX_WHEELS}/{x.filename}", here, x.sha256))
+                continue
+            if not fetch.matches(wheels.file_path(x), x.sha256, x.size):
+                ctx.say(f"Downloading {x.filename}")
+                fetch.fetch_file(x.url, wheels.file_path(x), sha256=x.sha256, size=x.size, progress=ctx.progress)
+            srcs.append(Source(f"{ROOMS_LINUX_WHEELS}/{x.filename}", wheels.file_path(x), x.sha256))
+        return srcs
+
+    return [Part(id="rooms:linux-wheels", group="rooms", kind="rooms", name="A Linux room's Python packages",
+                 version=" ".join(sorted(p.pc_locks)), licence="LicenseRef-mixed-see-sbom",
+                 pinned_by="satellite/locks/pc-*.txt (hashes)", size=size, exact=unknown == 0, download=missing,
+                 acquire=acquire, files_estimate=max(len(known), 25 * len(p.pc_locks)), label=label)]
+
+
+def _pi_files() -> list[tuple[str, Path]]:
+    from domovoi.satellite_media import boards, cache
+
+    board = boards.PI02W
+    roots = {"wheels": cache.CACHE_ROOT / "wheels" / board.python_version,
+             "debs": cache.CACHE_ROOT / "debs" / board.os_release,
+             "dtbo": cache.CACHE_ROOT / "dtbo", "xvf_host": cache.CACHE_ROOT / "xvf_host"}
+    files = []
+    for bucket in PI_BUCKETS:
+        root = roots[bucket]
+        if not root.is_dir():
+            continue
+        for f in sorted(root.rglob("*")):
+            if f.is_file() and not f.is_symlink() and not f.name.startswith("."):
+                path = f"{ROOMS_PI}/{f.relative_to(cache.CACHE_ROOT).as_posix()}"
+                if fmt.path_problem(path) is None:
+                    files.append((path, f))
+    return files
+
+
+def _pi_cache_parts(label: str) -> list[Part]:
+    """The Raspberry Pi card's packages (Trixie's Python wheels for aarch64,
+    Pi OS's arm64 .debs, and the optional mic-board files) as this server
+    holds them; fetched first, the way preparing a card fetches them, when
+    it holds no wheels or misses a base package."""
+    from domovoi.satellite_media import boards, fetchers
+
+    board = boards.PI02W
+    files = _pi_files()
+    have_wheels = any(k.startswith(f"{ROOMS_PI}/wheels/") and k.endswith(".whl") for k, _ in files)
+    lacking = not have_wheels or bool(fetchers.base_debs_missing(board.os_release))
+    size = sum(f.stat().st_size for _, f in files)
+
+    def acquire(ctx: Ctx) -> list[Source]:
+        from domovoi.config import settings
+
+        if not any(k.endswith(".whl") for k, _ in _pi_files()):
+            ctx.say("Downloading the Raspberry Pi's Python packages")
+            ok, msg = fetchers.fetch_wheels(Path(settings.repo_dir), board.python_version,
+                                            board.manylinux_platforms, run=ctx.run)
+            if not ok:
+                raise PartError(f"the Raspberry Pi's packages couldn't be fetched: {msg}")
+        if fetchers.base_debs_missing(board.os_release):
+            ctx.say("Downloading the Raspberry Pi's system packages")
+            ok, msg = fetchers.fetch_debs(board.os_release, run=ctx.run)
+            gone = fetchers.base_debs_missing(board.os_release)
+            if not ok or gone:
+                raise PartError("the Raspberry Pi's system packages couldn't be fetched: "
+                                + (msg if not ok else ", ".join(gone)))
+        return [Source(k, f) for k, f in _pi_files()]
+
+    return [Part(id="rooms:pi-cache", group="rooms", kind="rooms",
+                 name="The Raspberry Pi card's packages", version="this server's",
+                 licence="LicenseRef-mixed-see-sbom", pinned_by=None,
+                 size=max(size, PI_ESTIMATE) if lacking else size, exact=not lacking,
+                 download=PI_ESTIMATE if lacking else 0, acquire=acquire,
+                 files_estimate=max(len(files), 60), label=label,
+                 note="from the house that made this kit: Pi OS's packages and the satellite's "
+                      "libraries have no pin in a release")]
 
 
 def licence_part(rel: Release, repo_dir: str, model_parts_: list[Part]) -> Part:

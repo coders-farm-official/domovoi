@@ -159,6 +159,49 @@ stick in until Setup finishes.
 has the steps, the checks and the refusals. The Mac follows in a later
 step of 1.5.0.
 
+## Adding rooms with no internet
+
+Tick **Rooms: Raspberry Pis and spare computers** when you make the kit.
+The installer then puts the rooms' files on the new server by itself
+(you'll see "Copying the phone app and the rooms' files from the offline
+kit"), each checked against the pins of the release, and you add rooms as
+usual: **Settings → Household → Rooms**. With internet access set to
+"No", every room below installs from the server alone.
+
+| Room | What it takes from the server | No internet? |
+|---|---|---|
+| A Raspberry Pi | its card, prepared on the dashboard: the Pi's Python packages, its system packages and every wake-word model | Yes |
+| A Windows PC | `DomovoiSatelliteSetup.exe`, then its Python and packages | Yes |
+| A Linux computer | its packages (and, on older Linux, its own Python) | Yes, when it already has its sound packages (PortAudio, mpg123, the ALSA utilities; most desktops do) |
+| An old computer, from the room stick | Debian's installer image (the server builds the stick from it) | No: Debian installs over the network, so that room needs internet while it sets up |
+| A phone in room mode | the app, from the join page | Yes |
+
+What the stick carries for rooms (`rooms/`), and what holds each file:
+
+| On the stick | Held to |
+|---|---|
+| `rooms/DomovoiSatelliteSetup.exe` | the release's `SHA256SUMS` (`release/SHA256SUMS`, as online: the Setup isn't code-signed yet) |
+| `rooms/windows/<python version>/` | `satellite/windows-runtime.json` |
+| `rooms/linux-python/` | `satellite/locks/linux-python.txt` |
+| `rooms/linux-wheels/` | a hash `satellite/locks/pc-*.txt` lists for that package |
+| `rooms/satellite/oww_models/` (and `wake/`) | `OWW_MODEL_FILES` in `domovoi/satellite_media/fetchers.py` |
+| `rooms/<Debian's netinst>.iso` | `domovoi/usb_stick/debian-image.json` |
+| `rooms/satellite/wheels/`, `debs/`, `dtbo/`, `xvf_host/` | nothing: Pi OS's packages and the satellite's libraries have no pin in a release, so they are "from the house that made this kit" |
+
+The server that makes the kit fetches what it lacks first (the Windows
+files, the Linux Python, the Linux packages from PyPI by the locks'
+hashes, the Pi's packages the way preparing a card fetches them). Under
+internet access "No" the card says "This server has no internet, so it
+can't fetch: the rooms' parts" instead.
+
+A server installed from a kit **without** Rooms can't add a Windows,
+Linux or Pi room until it has those files. Where the dashboard would
+otherwise say only "internet access is off", it says so: "This server was
+set up from an offline kit (Domovoi 1.5.0) made without Rooms ticked, so
+it has no …". Update it from a kit made with Rooms ticked, or allow
+internet for a while. A file on the stick that doesn't match its pin is
+refused and named in the install's log; the rest still go in.
+
 ## Checking a stick
 
 Every installer checks the stick before it uses it. To check one
@@ -296,8 +339,17 @@ it goes.
   the release's `windows/installer/pins.iss`, which is where Windows Setup
   looks), `mac/` (Ollama for macOS,
   Ubuntu's arm64 cloud image, whisper.cpp's model).
-- `rooms/`: `DomovoiSatelliteSetup.exe`, Debian's netinst, and the rooms'
-  package cache as the server holds it under `rooms/satellite/`.
+- `rooms/`: `DomovoiSatelliteSetup.exe`, Debian's netinst,
+  `windows/<python version>/` (every file of
+  `satellite/windows-runtime.json`), `linux-python/` (every file of
+  `satellite/locks/linux-python.txt`), `linux-wheels/` (one wheel per
+  package of each `satellite/locks/pc-*.txt`, the oldest manylinux build
+  first; a file two locks share once), and `satellite/` in the layout of
+  the server's `~/.domovoi/satellite_media/cache/`: `oww_models/` (the
+  pinned openWakeWord files `wake/` doesn't already carry), `wheels/3.13/`,
+  `debs/trixie/`, `dtbo/`, `xvf_host/`. An install puts each into that
+  cache with `python -m domovoi.kit_rooms install` (provision.sh does it)
+  and records it in `~/.domovoi/offline_kit/rooms-from-kit.json`.
 - `licences/`: Domovoi's licence, `LICENSES.md`, the Apache-2.0 and
   CC BY-NC-SA 4.0 texts, the release's SBOMs and a README tying them
   together (with "Built with Llama" when a Llama model is on the stick).
