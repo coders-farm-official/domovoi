@@ -35,7 +35,9 @@ ffmpeg, and the scan reader's tesseract through :func:`run_low`) is also
 * every ffmpeg pass reads at most :func:`limits.pass_seconds` of the video
   (``-t`` before ``-i``), whatever its header claims, and only the stream
   the probe checked (``-map``); the sound pass is also cut off by size
-  (``-fs``).
+  (``-fs``);
+* what a helper writes back is read as it comes and capped
+  (:data:`OUTPUT_CAP_BYTES`); ffprobe is asked only for the fields used.
 """
 
 from __future__ import annotations
@@ -62,6 +64,12 @@ log = logging.getLogger(__name__)
 #: How long one ffprobe may take; one ffmpeg pass.
 PROBE_TIMEOUT_SEC = 30.0
 PASS_TIMEOUT_SEC = 300.0
+#: The most a helper may write to each of its output streams before it is
+#: stopped (:class:`OutputTooLarge`); ffprobe's answer and the scene scan's
+#: log have their own, smaller caps.
+OUTPUT_CAP_BYTES = 8 * 1024 * 1024
+PROBE_OUTPUT_CAP_BYTES = 1024 * 1024
+SCENE_LOG_CAP_BYTES = 2 * 1024 * 1024
 #: The scene-change threshold (ffmpeg's ``scene`` score, 0-1).
 SCENE_THRESHOLD = 0.3
 #: The vision model's frame width; the fingerprint's.
@@ -225,6 +233,49 @@ class Proc:
         self.suspended = False
 
 
+class OutputTooLarge(RuntimeError):
+    """A helper wrote more than its output cap; it was stopped. ``out`` and
+    ``err`` hold what was read up to the cap."""
+
+    def __init__(self, out: bytes, err: bytes) -> None:
+        super().__init__("helper output over its cap")
+        self.out = out
+        self.err = err
+
+
+async def _collect(proc: asyncio.subprocess.Process, cap: int) -> tuple[bytes, bytes]:
+    """Both output streams, each read as it comes and at most ``cap`` bytes
+    kept; past that the process is killed and :class:`OutputTooLarge`
+    raised."""
+    over = False
+
+    async def read(stream: asyncio.StreamReader | None) -> bytes:
+        nonlocal over
+        if stream is None:
+            return b""
+        buf = bytearray()
+        while True:
+            chunk = await stream.read(65536)
+            if not chunk:
+                return bytes(buf)
+            if over:
+                continue        # killed: what is left in the pipe is read and dropped
+            room = cap - len(buf)
+            if len(chunk) > room:
+                buf += chunk[:max(0, room)]
+                over = True
+                with _quiet():
+                    proc.kill()
+                continue
+            buf += chunk
+
+    out, err = await asyncio.gather(read(proc.stdout), read(proc.stderr))
+    await proc.wait()
+    if over:
+        raise OutputTooLarge(out, err)
+    return out, err
+
+
 #: ``hold(proc)`` — called while a pass runs: holds ``proc`` still while a
 #: voice turn is under way, and returns when the pass may go on (the
 #: runner's :meth:`Runner.hold_while_voice`). None: never held.
@@ -233,14 +284,17 @@ Hold = Callable[[Proc], Awaitable[None]]
 
 async def _run(argv: list[str], *, timeout: float, hold: Hold | None = None,
                stdout: bool = False, env: dict[str, str] | None = None,
-               memory_bytes: int | None = None) -> tuple[int, bytes, bytes]:
+               memory_bytes: int | None = None,
+               max_output: int = OUTPUT_CAP_BYTES) -> tuple[int, bytes, bytes]:
     """Run ``argv`` at low priority, memory-capped; (returncode, stdout,
     stderr). Raises FileNotFoundError when the program isn't installed,
     TimeoutError past ``timeout`` (the process is killed), and whatever
     ``hold`` raises (the job's stop: the process is killed at once).
     ``env``: extra environment variables for the program. ``memory_bytes``:
-    the cap (:func:`helper_memory_bytes` when None, 0 for none). The scan
-    reader runs tesseract through it too (:func:`run_low`)."""
+    the cap (:func:`helper_memory_bytes` when None, 0 for none).
+    ``max_output``: the most kept from each output stream; past it the
+    process is killed and :class:`OutputTooLarge` raised. The scan reader
+    runs tesseract through it too (:func:`run_low`)."""
     mem = helper_memory_bytes() if memory_bytes is None else int(memory_bytes)
     extra: dict[str, Any] = {}
     if mem and sys.platform.startswith("linux"):
@@ -259,7 +313,7 @@ async def _run(argv: list[str], *, timeout: float, hold: Hold | None = None,
     )
     job = _windows_cap(proc.pid, mem) if mem and sys.platform == "win32" else None
     wrapped = Proc(proc)
-    comm = asyncio.ensure_future(proc.communicate())
+    comm = asyncio.ensure_future(_collect(proc, max(1, int(max_output))))
     watcher = asyncio.ensure_future(_watch(wrapped, hold, comm)) if hold is not None else None
     try:
         waits = {comm} if watcher is None else {comm, watcher}
@@ -376,16 +430,26 @@ def _int(v: Any) -> int | None:
         return None
 
 
+#: Only the fields :func:`parse_probe` reads (a file's tags can be huge).
+PROBE_ENTRIES = ("format=duration,format_name:stream=index,codec_type,codec_name,width,height,duration"
+                 ":stream_disposition=attached_pic")
+
+
+def probe_argv(path: Path) -> list[str]:
+    return ["ffprobe", "-v", "error", "-threads", "1", "-print_format", "json",
+            "-show_entries", PROBE_ENTRIES, str(path)]
+
+
 async def probe(path: Path) -> ProbeResult:
     try:
-        code, out, _err = await _run(
-            ["ffprobe", "-v", "error", "-threads", "1", "-print_format", "json", "-show_format", "-show_streams",
-             str(path)],
-            timeout=PROBE_TIMEOUT_SEC, stdout=True)
+        code, out, _err = await _run(probe_argv(path), timeout=PROBE_TIMEOUT_SEC, stdout=True,
+                                     max_output=PROBE_OUTPUT_CAP_BYTES)
     except FileNotFoundError:
         raise ProbeFailed("ffprobe is not installed", missing_tools=True) from None
     except asyncio.TimeoutError:
         raise ProbeFailed("ffprobe took too long") from None
+    except OutputTooLarge:
+        raise ProbeFailed("ffprobe output too large") from None
     if code != 0:
         raise ProbeFailed(f"ffprobe exit {code}")
     try:
@@ -475,16 +539,23 @@ def frame_argv(src: Path, at: float, dest: Path, video_index: int | None = None)
             "-vf", f"scale='min({FRAME_WIDTH},iw)':-2", "-q:v", "3", str(dest)]
 
 
-#: A frame grab reads at most this many seconds from where it seeks to.
+#: A frame grab reads at most this many seconds from where it seeks to,
+#: and may take this long.
 FRAME_READ_SEC = 10.0
+FRAME_TIMEOUT_SEC = 60.0
 
 
 async def scene_changes(src: Path, *, duration: float | None = None, video_index: int | None = None,
                         hold: Hold | None = None) -> list[tuple[float, float]]:
     """Pass 0's scene changes in the first :func:`limits.pass_seconds` of
     ``src`` (``duration``: the length the upload accepted)."""
-    code, _out, err = await _run(scene_argv(src, duration, video_index),
-                                 timeout=PASS_TIMEOUT_SEC, hold=hold)
+    try:
+        code, _out, err = await _run(scene_argv(src, duration, video_index), timeout=PASS_TIMEOUT_SEC,
+                                     hold=hold, max_output=SCENE_LOG_CAP_BYTES)
+    except OutputTooLarge as e:
+        # The log is read only up to its cap: the rows it holds are kept
+        # (the last, possibly cut, line dropped).
+        return parse_scenes(e.err[:e.err.rfind(b"\n") + 1].decode("utf-8", "replace"))
     if code != 0:
         raise RuntimeError(f"ffmpeg scene scan exit {code}")
     return parse_scenes(err.decode("utf-8", "replace"))
@@ -497,8 +568,11 @@ async def extract_audio(src: Path, dest: Path, *, duration: float | None = None,
     kHz mono 16-bit PCM in ``dest``, never larger than
     :func:`limits.pcm_max_bytes`; False when the video has none."""
     part = dest.with_suffix(".part")
-    code, _out, _err = await _run(audio_argv(src, part, duration, audio_index),
-                                  timeout=PASS_TIMEOUT_SEC, hold=hold)
+    try:
+        code, _out, _err = await _run(audio_argv(src, part, duration, audio_index),
+                                      timeout=PASS_TIMEOUT_SEC, hold=hold)
+    except OutputTooLarge:
+        code = -1
     if code != 0 or not part.is_file():
         part.unlink(missing_ok=True)
         return False
@@ -597,7 +671,10 @@ async def grab_frame(src: Path, at: float, dest: Path, *, video_index: int | Non
     """One frame at ``at`` seconds as a JPEG, upright, at most
     :data:`FRAME_WIDTH` wide."""
     part = dest.with_name(dest.stem + ".part.jpg")
-    code, _out, _err = await _run(frame_argv(src, at, part, video_index), timeout=60.0, hold=hold)
+    try:
+        code, _out, _err = await _run(frame_argv(src, at, part, video_index), timeout=FRAME_TIMEOUT_SEC, hold=hold)
+    except OutputTooLarge:
+        code = -1
     if code != 0 or not part.is_file() or part.stat().st_size == 0:
         part.unlink(missing_ok=True)
         return False
@@ -646,8 +723,8 @@ def disk_free(path: Path) -> int | None:
 
 
 __all__ = [
-    "Proc", "ProbeFailed", "ProbeResult", "audio_argv", "dhash", "disk_free", "extract_audio", "frame_argv",
+    "OutputTooLarge", "Proc", "ProbeFailed", "ProbeResult", "audio_argv", "dhash", "disk_free", "extract_audio", "frame_argv",
     "grab_frame", "hamming", "helper_memory_bytes", "parse_probe", "parse_scenes", "pcm_slice", "picture_fits",
-    "probe", "read_pcm", "refusal", "remove_quietly", "scene_argv", "scene_changes", "speech_pieces",
+    "probe", "probe_argv", "read_pcm", "refusal", "remove_quietly", "scene_argv", "scene_changes", "speech_pieces",
     "speech_spans", "tools_present", "window_levels",
 ]

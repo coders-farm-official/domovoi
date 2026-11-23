@@ -3248,7 +3248,9 @@ parts:
   the subnets routed out of the interface that holds the default route
   (`/proc/net/route`), which leaves Docker's bridge networks (where
   Postgres, SearxNG and MPD live) out by construction; elsewhere, the /24
-  around the server's LAN address;
+  around the server's LAN address. In a Mac install's VM, only the /24
+  around the Mac's LAN address (from `lan.json`), and the VM's default
+  gateways (the Mac itself) count as the server's own addresses;
 - refused: public addresses, loopback, the server's own addresses, the
   subnet's network and broadcast addresses, link-local (169.254/16, cloud
   metadata included), CGNAT, multicast, private ranges that aren't the home

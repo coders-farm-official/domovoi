@@ -141,6 +141,8 @@ async def read_page(png: Path, *, hold: Hold | None = None, langs: list[str] | N
         raise OcrMissing() from None
     except TimeoutError:
         raise OcrFailed("timeout") from None
+    except media.OutputTooLarge:
+        raise OcrFailed("output too large") from None
     if rc != 0:
         raise OcrFailed(f"exit {rc}")
     return parse_tsv(out.decode("utf-8", "replace"))

@@ -548,11 +548,20 @@ class Runner(VoiceFirst):
             video = self._video(job)
             times = plan.candidate_times(job.duration, [tuple(s) for s in p.get("scenes") or []])
             hashes: list[int | None] = []
+            spent = 0.0
             for k, t in enumerate(times):
+                if spent >= limits.FRAME_GRAB_BUDGET_SEC:
+                    # The grabs have had their time: the rest are skipped.
+                    log.info("chat video %s: frame grabs over budget; %d of %d candidates kept",
+                             job.id[:8], k, len(times))
+                    times = times[:k]
+                    break
                 await self.wait_for_quiet(job)
                 dest = work / f"cand-{k:03d}.jpg"
+                t0 = time.monotonic()
                 ok = await media.grab_frame(video, t, dest, video_index=self._streams(job)[0],
                                             hold=self.pass_hold(job))
+                spent += time.monotonic() - t0
                 # A frame that couldn't be grabbed has no fingerprint: it is
                 # kept, and grabbed again (or skipped) when its turn comes.
                 hashes.append(media.dhash(dest) if ok else None)
