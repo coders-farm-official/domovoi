@@ -2623,7 +2623,7 @@ class SatelliteApprovalRepository:
             await self.s.execute(
                 text(
                     "SELECT count(*) AS n, "
-                    "count(*) FILTER (WHERE room_id = :r) AS mine "
+                    "count(*) FILTER (WHERE satellite_id = :r) AS mine "
                     "FROM satellite_approvals"
                 ),
                 {"r": room_id},
