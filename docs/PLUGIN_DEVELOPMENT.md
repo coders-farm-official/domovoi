@@ -387,7 +387,7 @@ runs in `domovoi plugin dev`, `pack`, and the install pipeline.
 | `publisher` | Shown on the install preview. Bundled radio declares `"Coders Farm"`. |
 | `license` | SPDX-style string. |
 | `description` | One or two sentences — shown on the install preview. |
-| `domovoi_api` | A comma-separated specifier set evaluated against the core SDK version (currently `1.16.0`). Supported operators: `>=`, `<=`, `==`, `!=`, `>`, `<`, `~=`. An unsatisfiable range fails the parse with a "targets a different Domovoi release" message. Recommended: `">=1.0,<2.0"`. |
+| `domovoi_api` | A comma-separated specifier set evaluated against the core SDK version (currently `1.17.0`). Supported operators: `>=`, `<=`, `==`, `!=`, `>`, `<`, `~=`. An unsatisfiable range fails the parse with a "targets a different Domovoi release" message. Recommended: `">=1.0,<2.0"`. |
 | `homepage` | Optional URL. |
 | `help` | Optional (SDK 1.8): a short Markdown help file inside the plugin, e.g. `"HELP.md"`. Domovoi's help desk indexes it with the manual (see [your plugin's help file](#your-plugins-help-file-sdk-18)). Optional for third-party plugins; **required for Coders Farm's own**. |
 | `accent` | Optional. Your dashboard page's colour, `"#rrggbb"` (or `"#rgb"`): its primary buttons, links, selection washes and the frame the dashboard draws around it. Checked for contrast at load; see [the frame and your accent](#the-frame-and-your-accent). Without it the page gets the neutral plugin slate. |
@@ -993,7 +993,7 @@ from domovoi.sdk import (
 
 `PluginSDK` instances are **injected** — your `register(ctx)` receives a
 `PluginContext` whose `ctx.sdk` is your facade. You never construct one.
-`domovoi.sdk.API_VERSION` (currently `"1.16.0"`) is the semver your
+`domovoi.sdk.API_VERSION` (currently `"1.17.0"`) is the semver your
 `domovoi_api` range is checked against. What each minor version added:
 
 | SDK | Added |
@@ -1012,6 +1012,7 @@ from domovoi.sdk import (
 | 1.14 | `[[web.home_cards]]`: a plugin card on the dashboard Home page (§3) |
 | 1.15 | `playback.player_route(room_id)`: the host and port a room's music player dials to reach the core, and the address the core sees it call from (`.url(path)`, `.admits(address)`), for a plugin that hands the player a URL on the core, such as a stream relay |
 | 1.16 | `playback.relay_url(room_id, remote_url, kind="file"\|"radio")` and `playback.relay_target(url)`: a room's music player plays a REMOTE URL through the core's checked relay instead of fetching it itself (§4.5, "A remote URL for a room's player"); `RelayUnavailable` |
+| 1.17 | the event `core.voice_history_deleted` `{person_id}` and `core_config.voice_history_keep`: **the hook every plugin that stores person-linked data must honour** (§4.21) |
 
 Ask for the version whose names you use (`">=1.4"` for 1.4's), or
 feature-test so an older core still loads you: call `ctx.add_container` only
@@ -1429,7 +1430,13 @@ core.library_track_deleted   core.now_playing_stamped     core.plugin_enabled
 core.entity_deleted          core.now_playing_cleared     core.plugin_disabled
 core.playlist_deleted        core.connectivity_changed    core.plugin_uninstalled
 core.timer_fired             core.timer_fire_settled      core.plugin_upgraded
+core.voice_history_deleted
 ```
+
+`core.voice_history_deleted` (SDK 1.17) is emitted after a person's voice
+history, or all of it, is deleted and committed: `{person_id: int}` or
+`{person_id: None}`. Plugins storing person-linked data must honour it;
+see [§4.21](#421-forgetting-people--corevoice_history_deleted-sdk-117).
 
 `core.timer_fired` is emitted once when a timer or reminder goes off
 (after it is recorded): `{fire_id, timer_id, kind: "timer"|"reminder",
@@ -1533,7 +1540,9 @@ live: false means nothing may ask a language model), and since SDK 1.9
 answers come from; send requests through `sdk.http` so the AI switch
 still applies), and since SDK 1.12 `news_location` (the household's
 place, which core's weather and local news use; since SDK 1.13 the name
-of the Home location, Settings → Household → Home location). For the whole
+of the Home location, Settings → Household → Home location), and since
+SDK 1.17 `voice_history_keep` ("Keep voice history", live: `"30"`,
+`"90"`, `"365"` or `"forever"`; see §4.21). For the whole
 place, coordinates included, `await sdk.household.home_location()` returns
 `{"name": "Denver, Colorado, US", "lat": 39.7392, "lon": -104.9847,
 "country": "US"}` or `None`, and `sdk.places.suggest("denv")` searches the
@@ -2035,6 +2044,64 @@ question that offered `n` things, the way the core's music question does:
 `"pass"` (not an answer: return None from `handle_choice_reply`). See §4.2,
 "Choices".
 
+### 4.21 Forgetting people — `core.voice_history_deleted` (SDK 1.17)
+
+**This is THE hook any plugin that stores person-linked data must honour.**
+Person-linked means anything you keep because of what someone said or who
+said it: a lookup history, a per-person setting, a transcript, a log line
+with a `person_id` or a quote of what was asked. When a household member
+says "forget me", an admin deletes them on People, or an admin presses
+"Delete all voice history", the core deletes its own copy of what they said.
+A copy in your schema is not reached by that delete, and the household was
+told everything was forgotten. So:
+
+1. **Delete on the event.** Subscribe to `core.voice_history_deleted`. Its
+   payload is `{"person_id": 7}` (that person's history was deleted; their
+   `people` row is gone too) or `{"person_id": None}` (an admin deleted ALL
+   voice history: delete everything person-linked, whoever it was about).
+   It is emitted only after the deletion has committed, in the core process,
+   whichever process the deletion ran in. A deletion made while the core
+   was down (People runs in the dashboard's process) is announced at the
+   core's next start, and delivery is at least once: deleting twice must
+   be harmless.
+2. **Keep nothing longer than `voice_history_keep`.** The daily "Keep
+   voice history" trim sends no event. Read
+   `sdk.core_config.voice_history_keep` (`"30"`, `"90"`, `"365"` or
+   `"forever"`) in a worker and delete what is older yourself.
+
+```python
+from datetime import datetime, timedelta, timezone
+from sqlalchemy import text
+
+async def _on_voice_history_deleted(event) -> None:
+    pid = event.payload["person_id"]
+    async with sdk.db.session_scope() as s:
+        if pid is None:      # "Delete all voice history"
+            await s.execute(text("DELETE FROM lookups"))
+        else:                # one person forgotten
+            await s.execute(text("DELETE FROM lookups WHERE person_id = :p"), {"p": pid})
+
+async def _trim(ctx) -> None:   # a [[workers]] tick, hourly is plenty
+    keep = sdk.core_config.voice_history_keep
+    if keep == "forever":
+        return
+    cutoff = datetime.now(timezone.utc) - timedelta(days=int(keep))
+    async with sdk.db.session_scope() as s:
+        await s.execute(text("DELETE FROM lookups WHERE at < :c"), {"c": cutoff})
+
+def register(ctx):
+    ctx.sdk.events.subscribe("core.voice_history_deleted", _on_voice_history_deleted)
+    ...
+```
+
+The bus keeps nothing, so the event is the fast path (§6.4): a person
+deleted while your plugin was disabled or not yet installed sends you
+nothing. If you keep a `person_id`, store it without a foreign key (plugins
+never reference core tables) and have the same trim worker drop rows for
+people who are gone. On a core before SDK 1.17 the event name is unknown
+and subscribing raises: guard with `domovoi_api = ">=1.17,<2.0"`, or wrap
+the subscribe in `try`/`except ValueError` and rely on the trim.
+
 ## 5. Worked example — the bundled radio plugin
 
 [`plugins/radio/`](../plugins/radio/) is the reference plugin, published by
@@ -2525,7 +2592,9 @@ in place with `domovoi plugin dev` removes its registry row and leaves your
 working copy untouched, and installing a release over such a registration
 is refused (`dev_registration`) — uninstall the registration first.
 Design your tables so *keep* is meaningful — user-created data (favorites,
-history) is why the default is keep.
+history) is why the default is keep. Person-linked rows still follow
+§4.21 while you are installed: deleted on `core.voice_history_deleted`,
+and kept no longer than `voice_history_keep`.
 
 ### 6.10 Assorted sharp edges
 
