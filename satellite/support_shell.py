@@ -20,11 +20,26 @@ docs/SECURITY_PRIVACY.md, "Support sessions". This side:
   wrong-satellite or wrong-connection frame is refused, and so is an open
   before a signed ``support_allow`` on this connection. Only the signed
   document's values are used.
+* **The device signs what it sends.** Every ``support_*`` frame this
+  device sends (opened, refused, output, echo, closed) carries its own
+  Ed25519 signature, under the same context with a direction label
+  (``satellite-to-server``), over this satellite's id, the connection's
+  nonce, the session id and a sequence number that rises on every frame of
+  the connection. The key is the device's support key
+  (``~/.domovoi/support_key``, made once); the server pins its public half
+  when an admin turns the switch on, and every server frame names the key
+  it pinned: a frame naming another key is refused here, so a key swapped
+  in the hello never reaches the shell.
 * **The shell.** A PTY running the account's login shell as this process's
-  own user (not root, on a device that declares it), inside the service's own sandbox, with a clean
-  environment, ``TERM=xterm-256color`` and the home folder as its working
-  directory. No new sudoers line, no new helper, no new port: the bytes
-  ride the satellite's existing WebSocket as base64 in JSON text frames.
+  own user (not root, on a device that declares it), inside a sandbox of
+  its own (satellite/support_sandbox.py): user, mount, PID and IPC
+  namespaces, every mount read-only (the home folder, ``~/.domovoi`` and
+  ``~/domovoi`` too), a private in-memory ``/tmp`` holding the session's
+  working directory, ``HOME`` and ``TMPDIR``, and its own ``/proc``.
+  Nothing it writes outlives the session, whatever way it ends. A device
+  that can't build the sandbox doesn't declare the ability. No new
+  sudoers line, no setuid helper, no new port: the bytes ride the
+  satellite's existing WebSocket as base64 in JSON text frames.
 * **Its own limits**, kept whatever the server says: it refuses a
   ``max_sec`` over 60 minutes, ends at ``max_sec`` and after ``idle_sec``
   without input, reads at most 16 KB a frame and 64 KB a second (over that
@@ -103,6 +118,92 @@ _UNIT_PATH_KEYS = frozenset({
 })
 _ABS_PATH_RE = re.compile(r"(?<![\w@])/[^\s\"';:]+")
 _NONCE_RE = re.compile(r"^[0-9a-f]{32}\Z")
+#: The device's support key: a 32-byte Ed25519 seed, hex, made once.
+SUPPORT_KEY_PATH = Path("~/.domovoi/support_key").expanduser()
+#: The sandbox helper, run by path with ``python -I`` (stdlib only).
+SANDBOX_SCRIPT = Path(__file__).resolve().parent / "support_sandbox.py"
+SANDBOX_PROBE_TIMEOUT_SEC = 20.0
+
+
+# ─── the device's key ─────────────────────────────────────────────────────
+
+
+class DeviceKey:
+    """This device's support key (Ed25519). The seed lives in
+    :data:`SUPPORT_KEY_PATH` (0600, this account's); the shell's sandbox
+    hides the file, so a session can't sign as the device."""
+
+    def __init__(self, seed: bytes) -> None:
+        if len(seed) != 32:
+            raise ValueError("an ed25519 seed is 32 bytes")
+        self._seed = seed
+        self._priv: Any = None
+        try:
+            from cryptography.hazmat.primitives import serialization
+            from cryptography.hazmat.primitives.asymmetric import ed25519
+
+            self._priv = ed25519.Ed25519PrivateKey.from_private_bytes(seed)
+            self.public = self._priv.public_key().public_bytes(
+                serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+        except Exception:  # noqa: BLE001 - no wheel on this image: the vendored fallback
+            from satellite import _ed25519
+
+            self._priv = None
+            self.public = _ed25519.public_key(seed)
+        self.public_b64 = base64.b64encode(self.public).decode("ascii")
+
+    def sign(self, message: bytes) -> bytes:
+        if self._priv is not None:
+            return self._priv.sign(message)
+        from satellite import _ed25519
+
+        return _ed25519.sign(self._seed, message)
+
+    @classmethod
+    def load_or_create(cls, path: Path | None = None) -> "DeviceKey":
+        """The key in ``path`` (:data:`SUPPORT_KEY_PATH`), made (0600) when
+        there is none. OSError or ValueError when it can't be read or
+        written."""
+        path = SUPPORT_KEY_PATH if path is None else path
+        try:
+            raw = path.read_text(encoding="ascii").strip()
+        except FileNotFoundError:
+            raw = ""
+        if raw:
+            return cls(bytes.fromhex(raw))
+        seed = secrets.token_bytes(32)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="ascii") as f:
+            f.write(seed.hex() + "\n")
+        os.replace(tmp, path)
+        return cls(seed)
+
+
+def load_device_key() -> DeviceKey | None:
+    try:
+        return DeviceKey.load_or_create()
+    except (OSError, ValueError) as e:
+        log.warning("support sessions not offered: no support key (%s)", e)
+        return None
+
+
+def sandbox_available(
+    run: Callable[..., Any] = subprocess.run,
+    home: str | None = None,
+) -> bool:
+    """Whether this device can build the shell's sandbox: the helper's
+    probe builds it, checks the home folder, ``~/.domovoi`` and
+    ``~/domovoi`` can't be written from inside, and exits 0."""
+    home = home or str(Path.home())
+    try:
+        rc = run([sys.executable, "-I", str(SANDBOX_SCRIPT), "--probe", "--home", home],
+                 capture_output=True, timeout=SANDBOX_PROBE_TIMEOUT_SEC,
+                 stdin=subprocess.DEVNULL).returncode
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return rc == 0
 
 
 # ─── who may declare it ───────────────────────────────────────────────────
@@ -273,6 +374,7 @@ def should_declare(
     root_pin: Callable[[], bool] = _pin_is_root_owned,
     root_path: Callable[[], str | None] = root_unit_runs_my_code,
     watchdog: Callable[[], str | None] = notify_socket,
+    sandbox: Callable[[], bool] = sandbox_available,
 ) -> bool:
     """Whether this device's hello may declare ``support_shell``: a Pi on a
     prepared card with the root-owned server pin, a watchdog, no Domovoi
@@ -304,7 +406,7 @@ def should_declare(
         rc = run(["sudo", "-n", "true"], capture_output=True, timeout=5.0,
                  stdin=subprocess.DEVNULL).returncode
     except FileNotFoundError:
-        return True     # no sudo at all: nothing to escalate with
+        return _sandbox_ok(sandbox)     # no sudo at all: nothing to escalate with
     except (OSError, subprocess.SubprocessError):
         return False    # couldn't tell: don't offer it
     if rc == 0:
@@ -321,7 +423,15 @@ def should_declare(
     if loose:
         log.info("support sessions not offered: a sudo rule takes free arguments (%s)", loose)
         return False
-    return True
+    return _sandbox_ok(sandbox)
+
+
+def _sandbox_ok(sandbox: Callable[[], bool]) -> bool:
+    if sandbox():
+        return True
+    log.info("support sessions not offered: the shell's sandbox can't be built here "
+             "(unprivileged user namespaces; satellite/support_sandbox.py)")
+    return False
 
 
 # ─── the PTY ──────────────────────────────────────────────────────────────
@@ -344,15 +454,20 @@ _CTTY_HELPER = (
 
 
 class PtyBackend:
-    """The real PTY (Linux). The shell is started through a two-line
-    helper that makes the PTY its controlling terminal and then becomes the
-    login shell, so no Python runs in a forked child of this threaded
-    process. The master is non-blocking: a write waits for room with a
-    timeout and gives up once the session is over."""
+    """The real PTY (Linux). The shell is started through the sandbox
+    helper (satellite/support_sandbox.py), which builds the session's
+    namespaces, makes the PTY the shell's controlling terminal and becomes
+    the login shell, so no Python runs in a forked child of this threaded
+    process. ``sandboxed=False`` (tests of the PTY alone) uses a two-line
+    helper that only does the terminal. The master is non-blocking: a write
+    waits for room with a timeout and gives up once the session is over."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, sandboxed: bool = True,
+                 hide: tuple[Path, ...] | None = None) -> None:
         self._master: int | None = None
         self._proc: subprocess.Popen[bytes] | None = None
+        self._sandboxed = sandboxed
+        self._hide = (SUPPORT_KEY_PATH,) if hide is None else hide
 
     def spawn(self, cols: int, rows: int) -> None:
         import pwd
@@ -371,12 +486,21 @@ class PtyBackend:
         }
         try:
             self._proc = subprocess.Popen(
-                [sys.executable, "-I", "-c", _CTTY_HELPER, shell],
-                stdin=slave, stdout=slave, stderr=slave, cwd=home, env=env,
+                self.argv(shell, home), stdin=slave, stdout=slave, stderr=slave, cwd="/", env=env,
                 start_new_session=True, close_fds=True,
             )
         finally:
             os.close(slave)
+
+    def argv(self, shell: str, home: str) -> list[str]:
+        """How the shell is started: through the sandbox helper (hiding
+        the device's support key), or the terminal-only helper."""
+        if not self._sandboxed:
+            return [sys.executable, "-I", "-c", _CTTY_HELPER, shell]
+        argv = [sys.executable, "-I", str(SANDBOX_SCRIPT), "--home", home]
+        for path in self._hide:
+            argv += ["--hide", str(path)]
+        return argv + [shell]
 
     @staticmethod
     def _winsize(fd: int, cols: int, rows: int) -> None:
@@ -476,13 +600,16 @@ def _clamp(value: Any, bounds: tuple[int, int]) -> int:
 
 
 def _verifier_for(satellite_id: Callable[[], str], pinned: Callable[[], str | None],
-                  wall: Callable[[], float]) -> Callable[[Any, str, str | None], dict[str, Any]]:
+                  wall: Callable[[], float],
+                  device_key: Callable[[], str | None] = lambda: None,
+                  ) -> Callable[[Any, str, str | None], dict[str, Any]]:
     def verify(envelope: Any, kind: str, nonce: str | None) -> dict[str, Any]:
         from satellite import server_identity
 
         return server_identity.verify_support(
             envelope, kind=kind, expected_fingerprint=pinned(),
             satellite_id=satellite_id(), nonce=nonce, now=wall(),
+            satellite_key=device_key(),
         )
     return verify
 
@@ -513,15 +640,21 @@ class SupportShell:
         pinned: Callable[[], str | None] = root_pinned_fingerprint,
         wall: Callable[[], float] = time.time,
         verify: Callable[[Any, str, str | None], dict[str, Any]] | None = None,
+        key: Callable[[], DeviceKey | None] = load_device_key,
     ) -> None:
-        self.declared = declared
+        # No key the server can pin: nothing this device sends could be
+        # checked, so it doesn't offer sessions at all.
+        self.key = key() if declared else None
+        self.declared = declared and self.key is not None
         self._emit = emit
         self._on_open = on_open
         self._on_end = on_end
         self._busy = busy
         self._factory = backend_factory
         self._clock = clock
-        self._verify = verify or _verifier_for(satellite_id, pinned, wall)
+        self._satellite_id = satellite_id
+        self._verify = verify or _verifier_for(
+            satellite_id, pinned, wall, lambda: self.key.public_b64 if self.key else None)
         self._lock = threading.Lock()
         self.session_id: str | None = None
         self._backend: Backend | None = None
@@ -532,7 +665,6 @@ class SupportShell:
         self.deadline = 0.0
         self.idle_sec = 0.0
         self.last_input = 0.0
-        self._seq = 0
         self._echo = True
         self._tokens = float(OUTPUT_RATE_MAX)
         self._refill_at = 0.0
@@ -542,6 +674,16 @@ class SupportShell:
         self.allowed = False
         self._seen_ids: set[str] = set()
         self._in_seq = 0
+        # What this device sends on this connection: one rising number
+        # across every signed frame, sent in order (the lock covers the
+        # number, the signature and the queueing).
+        self._out_lock = threading.Lock()
+        self._out_seq = 0
+
+    @property
+    def support_key(self) -> str | None:
+        """The public half of this device's support key, for the hello."""
+        return self.key.public_b64 if self.declared and self.key else None
 
     @property
     def active(self) -> bool:
@@ -553,8 +695,30 @@ class SupportShell:
         connection arrives. None when the device doesn't offer sessions."""
         self.allowed = False
         self._seen_ids = set()
-        self.nonce = secrets.token_hex(16) if self.declared else None
+        with self._out_lock:
+            self._out_seq = 0
+            self.nonce = secrets.token_hex(16) if self.declared else None
         return self.nonce
+
+    def _send(self, kind: str, sid: Any, **fields: Any) -> None:
+        """Send a frame about a session, signed with this device's key over
+        its kind, this satellite, this connection's nonce, the session id,
+        the next sequence number and its fields (which travel only inside
+        the signed document). Unsigned (and so ignored by the server) only
+        on a device with no key, which never offers sessions."""
+        from satellite import server_identity
+
+        with self._out_lock:
+            if self.key is None or not self.nonce:
+                self._emit({"type": kind, "session_id": sid, **fields})
+                return
+            self._out_seq += 1
+            doc = {"kind": kind, "satellite_id": self._satellite_id(), "nonce": self.nonce,
+                   "session_id": sid, "seq": self._out_seq, **fields}
+            signature = self.key.sign(server_identity.support_reply_message(doc))
+            self._emit({"type": kind, "session_id": sid, "signed": {
+                "algorithm": server_identity.ALGORITHM, "doc": doc,
+                "signature": base64.b64encode(signature).decode("ascii")}})
 
     # ── frames from the core ─────────────────────────────────────────
 
@@ -595,7 +759,7 @@ class SupportShell:
 
     def _refuse(self, sid: Any, reason: str) -> None:
         log.info("support session refused: %s", reason)
-        self._emit({"type": "support_refused", "session_id": sid, "reason": reason})
+        self._send("support_refused", sid, reason=reason)
 
     def open(self, frame: dict[str, Any]) -> None:
         raw_sid = frame.get("session_id")
@@ -648,7 +812,6 @@ class SupportShell:
             self.deadline = now + max_sec
             self.idle_sec = float(idle_sec)
             self.last_input = now
-            self._seq = 0
             self._in_seq = 0
             self._echo = True
             self._tokens = float(OUTPUT_RATE_MAX)
@@ -656,7 +819,7 @@ class SupportShell:
             self._stop = threading.Event()
             self._inbox = queue.Queue(maxsize=INPUT_QUEUE_MAX)
         log.info("support session %s opened (%d min, idle %d min)", sid[:8], max_sec // 60, idle_sec // 60)
-        self._emit({"type": "support_opened", "session_id": sid})
+        self._send("support_opened", sid)
         try:
             self._on_open()
         except Exception:  # noqa: BLE001
@@ -770,7 +933,7 @@ class SupportShell:
         on = backend.echo_on()
         if on != self._echo:
             self._echo = on
-            self._emit({"type": "support_echo", "session_id": self.session_id, "on": on})
+            self._send("support_echo", self.session_id, on=on)
 
     def step(self) -> bool:
         """One pass of the reader: the clocks, then at most one frame of
@@ -799,9 +962,7 @@ class SupportShell:
             return False
         if chunk:
             self._tokens -= len(chunk)
-            self._seq += 1
-            self._emit({"type": "support_output", "session_id": sid, "seq": self._seq,
-                        "data": base64.b64encode(chunk).decode("ascii")})
+            self._send("support_output", sid, data=base64.b64encode(chunk).decode("ascii"))
         self._check_echo()
         return True
 
@@ -836,10 +997,8 @@ class SupportShell:
                 log.debug("support terminate failed", exc_info=True)
         log.info("support session %s ended: %s", sid[:8], reason)
         if not by_server:
-            frame: dict[str, Any] = {"type": "support_closed", "session_id": sid, "reason": reason}
-            if code is not None:
-                frame["exit_code"] = code
-            self._emit(frame)
+            extra: dict[str, Any] = {} if code is None else {"exit_code": code}
+            self._send("support_closed", sid, reason=reason, **extra)
         try:
             self._on_end(reason, by_server)
         except Exception:  # noqa: BLE001

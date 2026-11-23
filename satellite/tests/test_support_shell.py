@@ -4,7 +4,12 @@ Pins: only a Pi on a prepared card with the root-owned server pin, a
 watchdog, no root unit running code its account can write, no sudo and no
 free-argument sudo rule declares it (no spare PCs or phones in 1.5.0);
 every open, input and allow must carry the pinned server's signature for
-this satellite and this connection (H3); the device's own limits (60-minute
+this satellite, this connection and this device's own support key (H3);
+every frame the device sends is signed with that key, in one rising
+sequence, under a direction label of its own; a device with no key or no
+sandbox never declares it; the shell's sandbox (satellite/support_sandbox.py:
+the mount plan anywhere, the real namespaces on Linux where they can be
+built); the device's own limits (60-minute
 cap, the session's time and idle limits, 16 KB frames, 64 KB/s, 4 KB
 input, one at a time, busy refusals); input never blocks the caller (M3);
 only key presses count as activity; echo reporting; the end (the shell's
@@ -71,6 +76,7 @@ def _run(rc: int | None = None, exc: Exception | None = None, listing: str = SUD
 
 
 def declare(model, state, run, **kw):
+    kw.setdefault("sandbox", lambda: True)
     kw.setdefault("root_pin", lambda: True)
     kw.setdefault("root_path", lambda: None)
     kw.setdefault("watchdog", lambda: "/run/systemd/notify")
@@ -113,6 +119,58 @@ def test_no_root_pin_no_watchdog_or_a_root_path_never_declares_it(tmp_path) -> N
     assert not declare(model, state, run)
 
 
+def test_no_sandbox_never_declares_it(tmp_path) -> None:
+    """M3: a device that can't build the shell's sandbox (no unprivileged
+    user namespaces) doesn't offer sessions, sudo or not."""
+    model, state = _pi(tmp_path)
+    run, _ = _run(rc=1)
+    assert not declare(model, state, run, sandbox=lambda: False)
+    run, _ = _run(exc=FileNotFoundError("sudo"))
+    assert not declare(model, state, run, sandbox=lambda: False)
+    assert declare(model, state, run, sandbox=lambda: True)
+
+
+def test_the_sandbox_probe_runs_the_helper_isolated(tmp_path) -> None:
+    seen = []
+
+    def run(argv, **kw):
+        seen.append((argv, kw))
+        return SimpleNamespace(returncode=0)
+
+    assert sh.sandbox_available(run=run, home="/home/alex")
+    argv, kw = seen[0]
+    assert argv == [sys.executable, "-I", str(sh.SANDBOX_SCRIPT), "--probe", "--home", "/home/alex"]
+    assert kw["stdin"] == subprocess.DEVNULL and kw["timeout"] > 0
+    assert not sh.sandbox_available(run=lambda *a, **k: SimpleNamespace(returncode=72), home="/h")
+    assert not sh.sandbox_available(
+        run=lambda *a, **k: (_ for _ in ()).throw(subprocess.TimeoutExpired("x", 1)), home="/h")
+
+
+def test_no_support_key_means_not_offered() -> None:
+    shell = sh.SupportShell(declared=True, emit=lambda f: None, key=lambda: None)
+    assert not shell.declared and shell.support_key is None
+    assert shell.new_connection() is None
+
+
+def test_the_device_key_is_made_once_private_and_kept(tmp_path) -> None:
+    path = tmp_path / ".domovoi" / "support_key"
+    key = sh.DeviceKey.load_or_create(path)
+    assert len(key.public) == 32
+    if sys.platform != "win32":
+        assert (path.stat().st_mode & 0o777) == 0o600
+    again = sh.DeviceKey.load_or_create(path)
+    assert again.public_b64 == key.public_b64
+    # The vendored fallback signs exactly as cryptography does (Ed25519 is
+    # deterministic), so a Pi on either backend makes the same signature.
+    from satellite import _ed25519
+
+    seed = bytes.fromhex(path.read_text().strip())
+    assert _ed25519.sign(seed, b"m") == key.sign(b"m")
+    path.write_text("not hex")
+    with pytest.raises(ValueError):
+        sh.DeviceKey.load_or_create(path)
+
+
 def test_a_root_unit_running_the_accounts_code_is_found(tmp_path) -> None:
     units = tmp_path / "units"
     units.mkdir()
@@ -147,6 +205,7 @@ def test_the_client_says_it_in_its_hello_only_when_declared() -> None:
     hello = inspect.getsource(client.Satellite._hello_frame)
     assert '"support_shell": bool(getattr(self, "_support", None) and self._support.declared)' in hello
     assert 'hello["support_nonce"] = support.new_connection()' in hello
+    assert 'hello["support_key"] = support.support_key' in hello
     init = inspect.getsource(client.Satellite.__init__)
     assert "support_shell.should_declare(is_pc=pc_engine.is_pc(cfg))" in init
     assert "satellite_id=lambda: self.cfg.room_id" in init
@@ -242,6 +301,23 @@ def _pub(key) -> bytes:
 
 
 FP = si.fingerprint_for(_pub(KEY))
+DEVICE_SEED = bytes(range(32))
+DEVICE = sh.DeviceKey(DEVICE_SEED)
+
+
+def plain(frame: dict) -> dict:
+    """A frame the device sent, checked against its key and read back as
+    its type, session id and signed fields (nothing travels outside the
+    signature but the type and the session id)."""
+    signed_part = frame["signed"]
+    assert set(frame) == {"type", "session_id", "signed"}
+    doc = signed_part["doc"]
+    Ed25519PrivateKey.from_private_bytes(DEVICE_SEED).public_key().verify(
+        base64.b64decode(signed_part["signature"]), si.support_reply_message(doc))
+    assert doc["kind"] == frame["type"] and doc["session_id"] == frame["session_id"]
+    assert doc["satellite_id"] == SAT
+    fields = {k: v for k, v in doc.items() if k not in ("kind", "satellite_id", "nonce", "session_id", "seq")}
+    return {"type": frame["type"], "session_id": frame["session_id"], **fields}
 
 
 def signed(doc: dict, key=KEY) -> dict:
@@ -260,6 +336,7 @@ def make(declared: bool = True, busy=None, allow: bool = True):
         on_end=lambda reason, by_server: ends.append((reason, by_server)),
         busy=busy or (lambda: None), backend_factory=lambda: pty, clock=clock,
         satellite_id=lambda: SAT, pinned=lambda: FP, wall=lambda: WALL,
+        key=lambda: DEVICE,
     )
     # The tests drive step() and the input pump themselves.
     shell._thread = None
@@ -273,7 +350,7 @@ def make(declared: bool = True, busy=None, allow: bool = True):
 
 def doc(w, kind: str, **fields) -> dict:
     return {"kind": kind, "satellite_id": SAT, "nonce": w.shell.nonce,
-            "issued_at": int(WALL), **fields}
+            "satellite_key": DEVICE.public_b64, "issued_at": int(WALL), **fields}
 
 
 def allow_frame(w, allowed: bool, **over) -> dict:
@@ -295,7 +372,7 @@ def input_frame(w, data: bytes, seq: int, sid: str = "s1", active: bool = True, 
 def opened(w, monkeypatch):
     monkeypatch.setattr(sh.threading.Thread, "start", lambda self: None)
     w.shell.handle(open_frame(w))
-    assert w.sent[-1] == {"type": "support_opened", "session_id": "s1"}
+    assert plain(w.sent[-1]) == {"type": "support_opened", "session_id": "s1"}
     return w
 
 
@@ -310,7 +387,7 @@ def typed(w, data: bytes, seq: int, **kw) -> None:
 def _refused(w) -> str:
     assert w.sent[-1]["type"] == "support_refused", w.sent[-1]
     assert w.pty.spawned is None
-    return w.sent[-1]["reason"]
+    return plain(w.sent[-1])["reason"]
 
 
 def test_an_unsigned_open_is_refused(monkeypatch) -> None:
@@ -347,6 +424,12 @@ def test_a_wrong_satellite_stale_or_other_connection_open_is_refused(monkeypatch
     _refused(w)
     w.shell.handle(open_frame(w, nonce="0" * 32))
     _refused(w)
+    # Signed by the server, but naming another device key: the key in the
+    # hello was swapped on the way, so this device refuses it.
+    w.shell.handle(open_frame(w, satellite_key=base64.b64encode(b"k" * 32).decode()))
+    _refused(w)
+    w.shell.handle(allow_frame(w, False, satellite_key=base64.b64encode(b"k" * 32).decode()))
+    assert w.shell.allowed
 
 
 def test_a_replayed_open_is_refused(monkeypatch) -> None:
@@ -391,6 +474,40 @@ def test_no_pinned_key_refuses_everything(monkeypatch) -> None:
     w.shell._verify = sh._verifier_for(lambda: SAT, lambda: None, lambda: WALL)
     w.shell.handle(allow_frame(w, True))
     assert not w.shell.allowed
+    # Without its own key to name, nothing the server signs is taken either.
+    w.shell._verify = sh._verifier_for(lambda: SAT, lambda: FP, lambda: WALL, lambda: None)
+    w.shell.handle(allow_frame(w, True))
+    assert not w.shell.allowed
+
+
+def test_every_frame_the_device_sends_is_signed_in_one_rising_sequence(monkeypatch) -> None:
+    """The satellite's frames: its own key, the satellite-to-server label
+    (never the server's message), this connection's nonce, one sequence
+    across every kind, restarted on a new connection."""
+    w = opened(make(), monkeypatch)
+    w.pty.output = [b"hello"]
+    w.shell.step()
+    w.pty.echo = False
+    w.shell.step()
+    w.shell.close("exit")
+    frames = [f for f in w.sent if f["type"] != "support_allow"]
+    assert [f["type"] for f in frames] == ["support_opened", "support_output", "support_echo",
+                                           "support_closed"]
+    docs = [f["signed"]["doc"] for f in frames]
+    assert [d["seq"] for d in docs] == [1, 2, 3, 4]
+    assert {d["nonce"] for d in docs} == {w.shell.nonce}
+    assert [plain(f) for f in frames][1:] == [
+        {"type": "support_output", "session_id": "s1", "data": base64.b64encode(b"hello").decode()},
+        {"type": "support_echo", "session_id": "s1", "on": False},
+        {"type": "support_closed", "session_id": "s1", "reason": "exit", "exit_code": 0}]
+    pub = Ed25519PrivateKey.from_private_bytes(DEVICE_SEED).public_key()
+    with pytest.raises(Exception):     # not the server's message: the label is in the bytes
+        pub.verify(base64.b64decode(frames[0]["signed"]["signature"]), si.support_message(docs[0]))
+    assert si.support_reply_message(docs[0]).startswith(si.SUPPORT_CONTEXT + b"\nsatellite-to-server\n")
+    w.shell.new_connection()
+    w.shell.handle(allow_frame(w, True))
+    w.shell.handle(open_frame(w, sid="s9"))
+    assert w.sent[-1]["signed"]["doc"]["seq"] == 1 and w.sent[-1]["signed"]["doc"]["nonce"] == w.shell.nonce
 
 
 def test_input_must_be_signed_in_sequence_for_this_session(monkeypatch) -> None:
@@ -419,16 +536,16 @@ def test_refusals(monkeypatch) -> None:
     assert w.sent[-1]["type"] == "support_refused" and w.pty.spawned is None
     w = make(busy=lambda: "the room is in a drop-in call")
     w.shell.handle(open_frame(w))
-    assert w.sent[-1] == {"type": "support_refused", "session_id": "s1",
-                          "reason": "the room is in a drop-in call"}
+    assert plain(w.sent[-1]) == {"type": "support_refused", "session_id": "s1",
+                                 "reason": "the room is in a drop-in call"}
     w = make()
     w.shell.handle(open_frame(w, sid="s0", max_sec=3601))   # over 60 minutes
     assert w.sent[-1]["type"] == "support_refused" and w.pty.spawned is None
     w.shell.handle(open_frame(w))
     assert w.sent[-1]["type"] == "support_opened" and w.opened == [True]
     w.shell.handle(open_frame(w, sid="s2"))                 # one at a time
-    assert w.sent[-1] == {"type": "support_refused", "session_id": "s2",
-                          "reason": "a support session is already open"}
+    assert plain(w.sent[-1]) == {"type": "support_refused", "session_id": "s2",
+                                 "reason": "a support session is already open"}
 
 
 def test_input_and_resize(monkeypatch) -> None:
@@ -459,7 +576,7 @@ def test_input_never_blocks_the_caller_and_a_stalled_shell_ends_it(monkeypatch) 
     gate.set()
     assert not w.shell.active
     assert w.ends == [("input_stalled", False)]
-    assert w.sent[-1]["reason"] == "input_stalled"
+    assert plain(w.sent[-1])["reason"] == "input_stalled"
 
 
 def test_only_key_presses_count_as_activity(monkeypatch) -> None:
@@ -480,14 +597,15 @@ def test_output_frames_and_the_rate(monkeypatch) -> None:
     for _ in range(20):
         w.shell.step()
     frames = [f for f in w.sent if f["type"] == "support_output"]
-    sizes = [len(base64.b64decode(f["data"])) for f in frames]
+    sizes = [len(base64.b64decode(plain(f)["data"])) for f in frames]
     assert max(sizes) <= sh.OUTPUT_FRAME_MAX
     assert sum(sizes) <= sh.OUTPUT_RATE_MAX                  # no time passed: one second's worth
-    assert [f["seq"] for f in frames] == list(range(1, len(frames) + 1))
+    seqs = [f["signed"]["doc"]["seq"] for f in frames]
+    assert seqs == list(range(seqs[0], seqs[0] + len(frames)))
     w.clock.t += 1.0                                         # a second later, another
     for _ in range(20):
         w.shell.step()
-    sizes = [len(base64.b64decode(f["data"])) for f in w.sent if f["type"] == "support_output"]
+    sizes = [len(base64.b64decode(plain(f)["data"])) for f in w.sent if f["type"] == "support_output"]
     assert sum(sizes) <= 2 * sh.OUTPUT_RATE_MAX and sum(sizes) > sh.OUTPUT_RATE_MAX
 
 
@@ -495,10 +613,10 @@ def test_echo_changes_are_reported(monkeypatch) -> None:
     w = opened(make(), monkeypatch)
     w.pty.echo = False
     w.shell.step()
-    assert {"type": "support_echo", "session_id": "s1", "on": False} in w.sent
+    assert {"type": "support_echo", "session_id": "s1", "on": False} in [plain(f) for f in w.sent[1:]]
     w.pty.echo = True
     typed(w, b"\r", 1)
-    assert w.sent[-1] == {"type": "support_echo", "session_id": "s1", "on": True}
+    assert plain(w.sent[-1]) == {"type": "support_echo", "session_id": "s1", "on": True}
 
 
 def test_its_own_time_and_idle_limits(monkeypatch) -> None:
@@ -509,7 +627,8 @@ def test_its_own_time_and_idle_limits(monkeypatch) -> None:
     w.shell.step()                                          # output is not input
     w.clock.t += 2
     assert not w.shell.step()
-    assert w.sent[-1] == {"type": "support_closed", "session_id": "s1", "reason": "idle", "exit_code": 0}
+    assert plain(w.sent[-1]) == {"type": "support_closed", "session_id": "s1", "reason": "idle",
+                                 "exit_code": 0}
     assert w.ends == [("idle", False)] and w.pty.ended
 
     w = opened(make(), monkeypatch)
@@ -524,7 +643,7 @@ def test_the_shell_exiting(monkeypatch) -> None:
     w = opened(make(), monkeypatch)
     w.pty.ended = True
     assert not w.shell.step()
-    assert w.sent[-1]["reason"] == "exit" and w.ends == [("exit", False)]
+    assert plain(w.sent[-1])["reason"] == "exit" and w.ends == [("exit", False)]
 
 
 def test_the_server_ending_it_and_a_dropped_socket(monkeypatch) -> None:
@@ -608,7 +727,7 @@ def test_the_client_refuses_while_busy() -> None:
 def test_a_real_pty_runs_a_shell_as_this_user() -> None:
     import os
 
-    pty = sh.PtyBackend()
+    pty = sh.PtyBackend(sandboxed=False)
     pty.spawn(80, 24)
     try:
         out = b""
@@ -646,7 +765,7 @@ def test_a_real_pty_write_gives_up_when_the_session_ends() -> None:
     as a full-screen program does: a canonical-mode line discipline drops
     what doesn't fit in its line buffer instead of blocking the writer, so
     a plain "sleep" never fills the PTY."""
-    pty = sh.PtyBackend()
+    pty = sh.PtyBackend(sandboxed=False)
     pty.spawn(80, 24)
     try:
         pty.write(b"stty raw -echo; sleep 30\n")

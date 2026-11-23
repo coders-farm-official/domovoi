@@ -84,19 +84,29 @@ async def _satellite_row(satellite_id: str) -> Any:
 )
 async def support_allow(satellite_id: str, request: Request) -> dict[str, Any]:
     """Turn "Allow support sessions" ON for one satellite: the security
-    tier, and a password sign-in within the last five minutes."""
+    tier, and a password sign-in within the last five minutes. The
+    satellite must be connected: this pins the support key it presents
+    (``satellites.support_key``), the only key its session frames are
+    accepted under from then on."""
     await _require_fresh(request)
     await _satellite_row(satellite_id)
+    target = support_sessions.live_satellite(request.app, satellite_id)
+    key = getattr(target, "support_key", None) if target is not None else None
+    if target is None or not key:
+        raise HTTPException(
+            status_code=409,
+            detail=("connect the satellite first: turning this on trusts the support key it "
+                    "presents (a satellite without one doesn't offer support sessions)"),
+        )
     async with session_scope() as s:
         await s.execute(
-            text("UPDATE satellites SET support_allowed = true, updated_at = now() "
-                 "WHERE satellite_id = :id"), {"id": satellite_id})
-    log.info("support sessions allowed on %s", satellite_id)
+            text("UPDATE satellites SET support_allowed = true, support_key = :key, "
+                 "updated_at = now() WHERE satellite_id = :id"),
+            {"id": satellite_id, "key": key})
+    log.info("support sessions allowed on %s (support key pinned)", satellite_id)
     # The satellite holds its own copy of the switch, set only by a signed
     # frame (satellite/support_shell.py): until it has one, it refuses.
-    target = support_sessions.live_satellite(request.app, satellite_id)
-    if target is not None:
-        await support_sessions.send_allow_state(request.app, target, True)
+    await support_sessions.send_allow_state(request.app, target, True)
     return {"satellite_id": satellite_id, "support_allowed": True}
 
 
@@ -109,8 +119,8 @@ async def support_disallow(satellite_id: str, request: Request) -> dict[str, Any
     await _satellite_row(satellite_id)
     async with session_scope() as s:
         await s.execute(
-            text("UPDATE satellites SET support_allowed = false, updated_at = now() "
-                 "WHERE satellite_id = :id"), {"id": satellite_id})
+            text("UPDATE satellites SET support_allowed = false, support_key = NULL, "
+                 "updated_at = now() WHERE satellite_id = :id"), {"id": satellite_id})
     ended = await support_sessions.get_manager(request.app).end_for_satellite(
         satellite_id, "switch_off")
     target = support_sessions.live_satellite(request.app, satellite_id)
@@ -161,6 +171,12 @@ async def support_open(satellite_id: str, body: OpenBody, request: Request) -> d
             detail=satellite_abilities.unsupported_detail(
                 satellite_id, getattr(target, "board", None), "a support session",
                 support_sessions.ABILITY),
+        )
+    if not support_sessions.key_is_pinned(target, await support_sessions.pinned_key(satellite_id)):
+        raise HTTPException(
+            status_code=409,
+            detail=("this satellite presents a support key other than the one pinned when "
+                    "support sessions were allowed: turn Allow support sessions off and on again"),
         )
     if getattr(target, "dropin_peer", None) is not None:
         raise HTTPException(status_code=409, detail="the room is in a drop-in call")

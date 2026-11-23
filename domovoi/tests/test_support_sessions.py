@@ -17,7 +17,12 @@ answers of 22 Nov:
   unpairing, a core restart, the admin; the spoken lines at open and end;
 * the transcript: asciicast, hidden input, redaction, the 8 MB cap, the
   30-day / 200 MB sweep, and plain text that stays text;
-* stray satellite frames are dropped and a run of them closes the socket.
+* stray satellite frames are dropped and a run of them closes the socket;
+* every frame the satellite sends is signed with its pinned support key
+  (unsigned, tampered, replayed, out-of-order, other-kind, other-connection
+  and other-session frames are refused, logged without content and counted
+  for nothing: a forged close ends nothing); a satellite with no key, or
+  another key than the one pinned when the switch went on, gets no session.
 """
 
 from __future__ import annotations
@@ -33,7 +38,10 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import text
 
-from domovoi import admin_auth, satellite_abilities, support_sessions as ss
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+from domovoi import admin_auth, satellite_abilities, server_identity, support_sessions as ss
 from domovoi.db.session import engine, session_scope
 from domovoi.tests.auth_testkit import (
     STRONG_PW,
@@ -198,8 +206,17 @@ def test_the_viewer_never_renders_a_transcript_as_html() -> None:
 # ═══ DB-backed: the manager ══════════════════════════════════════════════
 
 
+SAT_KEY = Ed25519PrivateKey.from_private_bytes(bytes(range(32)))
+
+
+def pub_b64(key: Ed25519PrivateKey) -> str:
+    return b64(key.public_key().public_bytes(serialization.Encoding.Raw,
+                                             serialization.PublicFormat.Raw))
+
+
 class FakeSat:
-    def __init__(self, room_id: str = SAT, *, satellite_id: str | None = None, **hello) -> None:
+    def __init__(self, room_id: str = SAT, *, satellite_id: str | None = None,
+                 key: Ed25519PrivateKey = SAT_KEY, **hello) -> None:
         self.room_id = room_id
         self.satellite_id = satellite_id or room_id
         self.frames: list[dict] = []
@@ -207,6 +224,10 @@ class FakeSat:
         self.closed: list[int] = []
         self.abilities = satellite_abilities.from_hello(hello or {"support_shell": True})
         self.support_nonce = "ab" * 16
+        self.key = key
+        self.support_key = pub_b64(key)
+        self.support_rx_seq = 0
+        self.out_seq = 0
         self.board = None
         self.dropin_peer = None
         self.wake_recording = None
@@ -226,6 +247,18 @@ class FakeSat:
 
     def kinds(self) -> list[str]:
         return [f["type"] for f in self.frames]
+
+    def frame(self, kind: str, sid, *, seq: int | None = None, key=None, **fields) -> dict:
+        """A frame this satellite sends, signed the way the device signs
+        it (satellite/support_shell.py), with the next sequence number."""
+        if seq is None:
+            self.out_seq += 1
+            seq = self.out_seq
+        doc = {"kind": kind, "satellite_id": self.satellite_id, "nonce": self.support_nonce,
+               "session_id": sid, "seq": seq, **fields}
+        sig = (key or self.key).sign(server_identity.support_reply_message(doc))
+        return {"type": kind, "session_id": sid,
+                "signed": {"algorithm": "ed25519", "doc": doc, "signature": b64(sig)}}
 
 
 class FakeBrowser:
@@ -264,6 +297,12 @@ async def sql(stmt: str, **params):
 async def world(_db, tmp_path, monkeypatch):  # noqa: F811
     monkeypatch.setattr(ss, "transcript_dir", lambda: tmp_path / "support-sessions")
     await sql("DELETE FROM support_sessions")
+    # The satellite's row, with its support key pinned (the switch was
+    # turned on while it was connected).
+    await sql("DELETE FROM satellites WHERE satellite_id = :s", s=SAT)
+    await sql("INSERT INTO rooms (room_id, name) VALUES (:s, 'Kitchen') ON CONFLICT DO NOTHING", s=SAT)
+    await sql("INSERT INTO satellites (satellite_id, room_id, support_allowed, support_key) "
+              "VALUES (:s, :s, true, :k)", s=SAT, k=pub_b64(SAT_KEY))
     async with session_scope() as s:
         token = await admin_auth.create_session(s, label="test sign-in")
     sat = FakeSat()
@@ -275,6 +314,7 @@ async def world(_db, tmp_path, monkeypatch):  # noqa: F811
     for sess in list(mgr.by_id.values()):
         await mgr.end(sess, "browser_closed", announce=False)
     await sql("DELETE FROM support_sessions")
+    await sql("DELETE FROM satellites WHERE satellite_id = :s", s=SAT)
 
 
 async def open_one(w, *, answer: str | None = None):
@@ -287,12 +327,12 @@ async def open_one(w, *, answer: str | None = None):
     opening = w.sat.frames[-1]["signed"]["doc"]
     assert opening["max_sec"] == ss.MAX_SEC and opening["idle_sec"] == ss.IDLE_SEC
     assert opening["satellite_id"] == SAT and opening["nonce"] == w.sat.support_nonce
+    assert opening["satellite_key"] == w.sat.support_key
     if answer is None:
-        await w.mgr.satellite_frame(w.sat, {"type": "support_opened", "session_id": sess.id})
+        await w.mgr.satellite_frame(w.sat, w.sat.frame("support_opened", sess.id))
         await until(lambda: sess.state == "open")
     else:
-        await w.mgr.satellite_frame(w.sat, {"type": "support_refused", "session_id": sess.id,
-                                            "reason": answer})
+        await w.mgr.satellite_frame(w.sat, w.sat.frame("support_refused", sess.id, reason=answer))
     return sess, browser, task
 
 
@@ -310,8 +350,7 @@ async def test_a_session_opens_relays_logs_and_ends(world) -> None:
     await browser.inbox.put(json.dumps({"t": "in", "d": b64(b"uptime\r")}))
     await until(lambda: "support_input" in w.sat.kinds())
     assert base64.b64decode(w.sat.frames[-1]["signed"]["doc"]["data"]) == b"uptime\r"
-    await w.mgr.satellite_frame(w.sat, {"type": "support_output", "session_id": sess.id,
-                                        "seq": 1, "data": b64(b" 10:00 up 3 days\r\n")})
+    await w.mgr.satellite_frame(w.sat, w.sat.frame("support_output", sess.id, data=b64(b" 10:00 up 3 days\r\n")))
     await until(lambda: browser.of("out"))
     await browser.inbox.put(json.dumps({"t": "resize", "cols": 120, "rows": 40}))
     await until(lambda: "support_resize" in w.sat.kinds())
@@ -369,8 +408,7 @@ async def test_idle_counts_input_not_output(world) -> None:
     sess, browser, task = await open_one(w)
     start = sess.last_input
     for i in range(3):
-        await w.mgr.satellite_frame(w.sat, {"type": "support_output", "session_id": sess.id,
-                                            "seq": i, "data": b64(b"top\r\n")})
+        await w.mgr.satellite_frame(w.sat, w.sat.frame("support_output", sess.id, data=b64(b"top\r\n")))
     assert sess.last_input == start
     await w.mgr.tick(sess, now=start + ss.IDLE_WARN_SEC + 1)
     await until(lambda: browser.of("warn"))
@@ -385,13 +423,13 @@ async def test_output_and_input_caps(world) -> None:
     w = world
     sess, browser, task = await open_one(w)
     big = b64(b"x" * (ss.OUTPUT_FRAME_MAX + 1))
-    await w.mgr.satellite_frame(w.sat, {"type": "support_output", "session_id": sess.id, "data": big})
+    await w.mgr.satellite_frame(w.sat, w.sat.frame("support_output", sess.id, data=big))
     assert sess.bytes_out == 0 and w.sat.support_strays == 1
     ok = b64(b"y" * ss.OUTPUT_FRAME_MAX)
     for _ in range(int(ss.OUTPUT_RATE_MAX * ss.OUTPUT_RATE_SLACK) // ss.OUTPUT_FRAME_MAX):
-        await w.mgr.satellite_frame(w.sat, {"type": "support_output", "session_id": sess.id, "data": ok})
+        await w.mgr.satellite_frame(w.sat, w.sat.frame("support_output", sess.id, data=ok))
     accepted = sess.bytes_out
-    await w.mgr.satellite_frame(w.sat, {"type": "support_output", "session_id": sess.id, "data": ok})
+    await w.mgr.satellite_frame(w.sat, w.sat.frame("support_output", sess.id, data=ok))
     assert sess.bytes_out == accepted and w.sat.support_strays == 2     # over the rate
     # Input over 4 KB is not sent.
     await w.mgr.browser_message(sess, json.dumps({"t": "in", "d": b64(b"z" * (ss.INPUT_FRAME_MAX + 1))}))
@@ -402,7 +440,7 @@ async def test_output_and_input_caps(world) -> None:
 async def test_hidden_input_while_echo_is_off(world) -> None:
     w = world
     sess, browser, task = await open_one(w)
-    await w.mgr.satellite_frame(w.sat, {"type": "support_echo", "session_id": sess.id, "on": False})
+    await w.mgr.satellite_frame(w.sat, w.sat.frame("support_echo", sess.id, on=False))
     await w.mgr.browser_message(sess, json.dumps({"t": "in", "d": b64(b"hunter2\r")}))
     assert base64.b64decode(w.sat.frames[-1]["signed"]["doc"]["data"]) == b"hunter2\r"  # still typed
     await w.mgr.end_by_id(sess.id, "admin_ended")
@@ -418,8 +456,7 @@ async def test_the_log_full_ends_it(world, monkeypatch) -> None:
     for i in range(40):
         if sess.state != "open":
             break
-        await w.mgr.satellite_frame(w.sat, {"type": "support_output", "session_id": sess.id,
-                                            "data": b64(b"q" * 200)})
+        await w.mgr.satellite_frame(w.sat, w.sat.frame("support_output", sess.id, data=b64(b"q" * 200)))
     await asyncio.wait_for(task, 3)
     r = await row(sess.id)
     assert r.end_reason == "log_full" and r.truncated
@@ -460,8 +497,7 @@ async def test_a_satellite_disconnect_ends_it_without_a_line(world) -> None:
 async def test_the_shell_exiting_ends_it(world) -> None:
     w = world
     sess, browser, task = await open_one(w)
-    await w.mgr.satellite_frame(w.sat, {"type": "support_closed", "session_id": sess.id,
-                                        "reason": "exit", "exit_code": 0})
+    await w.mgr.satellite_frame(w.sat, w.sat.frame("support_closed", sess.id, reason="exit", exit_code=0))
     await asyncio.wait_for(task, 3)
     assert (await row(sess.id)).end_reason == "exit"
 
@@ -504,12 +540,10 @@ async def test_stray_frames_are_dropped_and_a_run_closes_the_socket(world) -> No
     other = FakeSat()
     sess, browser, task = await open_one(w)
     # A frame from another connection for this session: dropped.
-    await w.mgr.satellite_frame(other, {"type": "support_output", "session_id": sess.id,
-                                        "data": b64(b"spoof")})
+    await w.mgr.satellite_frame(other, other.frame("support_output", sess.id, data=b64(b"spoof")))
     assert browser.of("out") == [] and other.support_strays == 1
     for _ in range(ss.STRAY_FRAME_LIMIT):
-        await w.mgr.satellite_frame(w.sat, {"type": "support_output", "session_id": "f" * 32,
-                                            "data": b64(b"x")})
+        await w.mgr.satellite_frame(w.sat, w.sat.frame("support_output", "f" * 32, data=b64(b"x")))
     assert w.sat.closed == [1008]
     await asyncio.wait_for(task, 3)
     assert (await row(sess.id)).end_reason == "limits_broken"
@@ -697,7 +731,7 @@ async def open_via_routes(house) -> tuple[ss.Session, asyncio.Task, FakeBrowser]
     browser = FakeBrowser()
     task = asyncio.create_task(mgr.run(browser, sess))
     await until(lambda: "support_open" in house.sat.kinds())
-    await mgr.satellite_frame(house.sat, {"type": "support_opened", "session_id": sess.id})
+    await mgr.satellite_frame(house.sat, house.sat.frame("support_opened", sess.id))
     await until(lambda: sess.state == "open")
     return sess, task, browser
 
@@ -832,12 +866,11 @@ async def test_a_satellite_whose_id_is_not_its_rooms(_db, tmp_path, monkeypatch)
         task = asyncio.create_task(mgr.run(browser, sess))
         await until(lambda: "support_open" in ours.kinds())
         assert speaker.frames == []                    # only the device asked for
-        await mgr.satellite_frame(ours, {"type": "support_opened", "session_id": sess.id})
+        await mgr.satellite_frame(ours, ours.frame("support_opened", sess.id))
         await until(lambda: sess.state == "open")
         assert mgr.active()[0]["satellite_id"] == SAT2
         # A frame from the room's other device is a stray, not this session's.
-        await mgr.satellite_frame(speaker, {"type": "support_output", "session_id": sess.id,
-                                            "data": b64(b"x")})
+        await mgr.satellite_frame(speaker, speaker.frame("support_output", sess.id, data=b64(b"x")))
         assert browser.of("out") == []
         # The room ends it by voice, whichever device heard it.
         handler = SupportSessionHandler()
@@ -869,21 +902,21 @@ async def test_a_satellite_whose_id_is_not_its_rooms(_db, tmp_path, monkeypatch)
 # ═══ The 2026-11-23 security round ═══════════════════════════════════════
 
 
-def _verify(frame: dict, kind: str, sat_id: str = SAT, nonce: str = "ab" * 16) -> dict:
+def _verify(frame: dict, kind: str, sat_id: str = SAT, nonce: str = "ab" * 16,
+            key: str | None = None) -> dict:
     """The satellite's own check (satellite/server_identity.verify_support)
     against this core's key: what the core signs is what the device takes."""
-    from domovoi import server_identity
     from satellite import server_identity as sat_identity
 
     fp = server_identity.load_or_create().fingerprint
     return sat_identity.verify_support(frame["signed"], kind=kind, expected_fingerprint=fp,
-                                       satellite_id=sat_id, nonce=nonce, now=time.time())
+                                       satellite_id=sat_id, nonce=nonce, now=time.time(),
+                                       satellite_key=key or pub_b64(SAT_KEY))
 
 
 def test_support_signatures_have_their_own_context() -> None:
     """H3: a support signature can never pass as a health answer or a
     manifest signature, nor one of those as a support frame."""
-    from domovoi import server_identity
     from satellite import server_identity as sat_identity
 
     assert server_identity.SUPPORT_CONTEXT == b"domovoi-support-v1"
@@ -914,6 +947,8 @@ async def test_the_open_and_each_input_are_signed_for_this_satellite_and_connect
         _verify(opening, "support_open", nonce="cd" * 16)        # another connection
     with pytest.raises(sat_identity.IdentityError):
         _verify(opening, "support_input")                         # another kind
+    with pytest.raises(sat_identity.IdentityError):
+        _verify(opening, "support_open", key=pub_b64(Ed25519PrivateKey.generate()))  # another key
     for word in (b"ls\r", b"pwd\r"):
         await w.mgr.browser_message(sess, json.dumps({"t": "in", "d": b64(word), "k": True}))
     inputs = [_verify(f, "support_input") for f in w.sat.frames if f["type"] == "support_input"]
@@ -1154,3 +1189,140 @@ def test_the_dashboard_relay_forwards_the_bearer_and_draws_no_links() -> None:
     assert "`bearer.${bearer}`" in jsx
     assert "linkHandler = { activate: () => {}" in jsx            # L32
     assert "term.onKey(" in jsx and ", k });" in jsx                # L29
+
+
+# ═══ Signed satellite frames and the pinned support key ══════════════════
+
+
+def test_the_two_directions_sign_different_bytes() -> None:
+    """A frame the server signed can't pass as one the satellite signed, or
+    the other way round: the satellite's carry a direction label."""
+    from satellite import server_identity as sat_identity
+
+    doc = {"kind": "support_closed", "satellite_id": SAT, "session_id": "s", "seq": 1}
+    assert server_identity.support_reply_message(doc) == sat_identity.support_reply_message(doc)
+    assert server_identity.support_reply_message(doc) != server_identity.support_message(doc)
+    assert server_identity.support_reply_message(doc).startswith(
+        b"domovoi-support-v1\nsatellite-to-server\n{")
+
+
+def test_a_hello_key_must_be_32_bytes_of_canonical_base64() -> None:
+    good = pub_b64(SAT_KEY)
+    assert ss.clean_key(good) == good
+    for bad in (None, 5, "", "abc", b64(b"x" * 31), b64(b"x" * 33), good.rstrip("=") + "x",
+                good + "\n", "=" * 44):
+        assert ss.clean_key(bad) is None, bad
+
+
+@requires_db
+async def test_forged_satellite_frames_are_refused_and_count_for_nothing(world, caplog) -> None:
+    """Unsigned, tampered, replayed, out-of-order, other-kind, other-
+    connection, other-satellite, other-key and other-session frames are
+    refused, logged without their content, and never counted as strays:
+    neither a forged close nor a run of forged frames ends the session."""
+    w = world
+    sess, browser, task = await open_one(w)
+    secret = "s3cr3t-output"
+    forged = [
+        {"type": "support_closed", "session_id": sess.id, "reason": "exit"},        # unsigned
+        {"type": "support_output", "session_id": sess.id, "data": b64(secret.encode())},
+    ]
+    tampered = w.sat.frame("support_output", sess.id, data=b64(b"real"))
+    tampered["signed"]["doc"]["data"] = b64(secret.encode())
+    forged.append(tampered)
+    forged.append(w.sat.frame("support_closed", sess.id, key=Ed25519PrivateKey.generate(),
+                              reason="exit"))                                       # another key
+    kind_swap = w.sat.frame("support_echo", sess.id, on=False)
+    kind_swap["type"] = "support_closed"
+    forged.append(kind_swap)                                                        # another kind
+    other_sid = w.sat.frame("support_closed", "e" * 32, reason="exit")
+    other_sid["session_id"] = sess.id
+    forged.append(other_sid)                                                        # another session
+    nonce, w.sat.support_nonce = w.sat.support_nonce, "cd" * 16
+    forged.append(w.sat.frame("support_closed", sess.id, reason="exit"))           # another connection
+    w.sat.support_nonce = nonce
+    sid_saved, w.sat.satellite_id = w.sat.satellite_id, "bedroom-pi"
+    forged.append(w.sat.frame("support_closed", sess.id, reason="exit"))           # another satellite
+    w.sat.satellite_id = sid_saved
+    good = w.sat.frame("support_output", sess.id, data=b64(b"one\r\n"))
+    await w.mgr.satellite_frame(w.sat, good)
+    await until(lambda: browser.of("out"))
+    forged.append(good)                                                             # replayed
+    late = w.sat.frame("support_closed", sess.id, seq=w.sat.out_seq - 1, reason="exit")
+    forged.append(late)                                                             # out of order
+    caplog.set_level("WARNING", logger="domovoi.support_sessions")
+    for _ in range(3):                    # well past the stray limit, all together
+        for frame in forged:
+            await w.mgr.satellite_frame(w.sat, frame)
+    assert sess.state == "open" and w.sat.closed == []
+    assert getattr(w.sat, "support_strays", 0) == 0
+    assert [m["d"] for m in browser.of("out")] == [b64(b"one\r\n")]
+    assert sess.bytes_out == len(b"one\r\n") and sess.echo_on is True
+    assert "support: refused a support_closed frame" in caplog.text
+    assert secret not in caplog.text and b64(secret.encode()) not in caplog.text
+    # The real close still works.
+    await w.mgr.satellite_frame(w.sat, w.sat.frame("support_closed", sess.id, reason="exit"))
+    await asyncio.wait_for(task, 3)
+    assert (await row(sess.id)).end_reason == "exit"
+
+
+@requires_db
+async def test_a_forged_close_leaves_the_session_to_its_own_limits(world) -> None:
+    w = world
+    sess, browser, task = await open_one(w)
+    start = sess.last_input
+    await w.mgr.satellite_frame(w.sat, {"type": "support_closed", "session_id": sess.id,
+                                        "reason": "exit"})
+    assert sess.state == "open"
+    await w.mgr.tick(sess, now=start + ss.IDLE_SEC + 1)
+    await asyncio.wait_for(task, 3)
+    assert (await row(sess.id)).end_reason == "idle"
+
+
+@requires_db
+async def test_a_satellite_presenting_another_key_gets_no_session(world) -> None:
+    """Fail closed: the pinned key, or nothing. A key swapped in the hello
+    (or a reflashed card) is not armed and is never sent an open."""
+    w = world
+    w.sat.key = Ed25519PrivateKey.generate()
+    w.sat.support_key = pub_b64(w.sat.key)
+    assert await ss.send_allow_state(w.app, w.sat)            # sent, but as "not allowed"
+    assert _verify(w.sat.frames[-1], "support_allow", key=w.sat.support_key)["allowed"] is False
+    sess, _ = await w.mgr.create(satellite_id=SAT, room_id="kitchen", admin_hash=w.hash,
+                                 cols=80, rows=24)
+    await asyncio.wait_for(w.mgr.run(FakeBrowser(), sess), 3)
+    assert "support_open" not in w.sat.kinds()
+    assert (await row(sess.id)).end_reason == "untrusted_key"
+    # No key at all: nothing is signed for it.
+    w.sat.support_key = None
+    assert not await ss.send_allow_state(w.app, w.sat, True)
+    with pytest.raises(ss.FrameRefused):
+        ss.verify_satellite_frame(w.sat, w.sat.frame("support_opened", "x"))
+
+
+@requires_db
+async def test_allowing_pins_the_connected_satellites_key(house) -> None:
+    house.app.state.active_sessions = {}
+    house.app.state.active_satellites = {}
+    r = await core_post(ALLOW, house.token)                  # not connected: nothing to pin
+    assert r.status_code == 409 and "connect the satellite first" in r.json()["detail"]
+    keyless = FakeSat()
+    keyless.support_key = None
+    house.app.state.active_sessions[SAT] = house.app.state.active_satellites[SAT] = keyless
+    assert (await core_post(ALLOW, house.token)).status_code == 409
+    house.app.state.active_sessions[SAT] = house.app.state.active_satellites[SAT] = house.sat
+    assert (await core_post(ALLOW, house.token)).status_code == 200
+    (r,) = await sql("SELECT support_key FROM satellites WHERE satellite_id = :s", s=SAT)
+    assert r.support_key == house.sat.support_key
+    # Another key on the next connection: no open until the switch is
+    # turned off and on again (which clears, then pins the new one).
+    swapped = FakeSat(key=Ed25519PrivateKey.generate())
+    house.app.state.active_sessions[SAT] = house.app.state.active_satellites[SAT] = swapped
+    r = await core_post(OPEN, house.token, json={"password": STRONG_PW})
+    assert r.status_code == 409 and "support key" in r.json()["detail"]
+    assert (await core_post(DISALLOW, house.token)).status_code == 200
+    (r,) = await sql("SELECT support_key FROM satellites WHERE satellite_id = :s", s=SAT)
+    assert r.support_key is None
+    assert (await core_post(ALLOW, house.token)).status_code == 200
+    r = await core_post(OPEN, house.token, json={"password": STRONG_PW})
+    assert r.status_code == 200, r.text

@@ -381,7 +381,8 @@
         </label>
         <div style={{ color: 'var(--fg-muted)', fontSize: 12 }}>
           Lets an admin open a shell on this satellite for a fault the diagnostics can’t fix.
-          Turning it on needs a password sign-in in the last 5 minutes.
+          Turning it on needs a password sign-in in the last 5 minutes and the satellite
+          connected: it trusts the satellite’s own support key from then on.
           {!s.support_shell && online && ' This device doesn’t offer support sessions (only a Raspberry Pi on a prepared card whose account can’t use sudo does).'}
         </div>
         {error && <div style={{ color: 'var(--err-ink)', fontSize: 12 }}>{error}</div>}

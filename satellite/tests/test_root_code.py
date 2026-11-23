@@ -439,7 +439,7 @@ def _declares(card: root_code.Layout, tmp_path: Path) -> bool:
 
     return support_shell.should_declare(
         is_pc=False, platform="linux", model_path=model, state_dir=card.state_dir, run=run,
-        root_pin=lambda: True, watchdog=lambda: "/run/systemd/notify",
+        root_pin=lambda: True, watchdog=lambda: "/run/systemd/notify", sandbox=lambda: True,
         root_path=lambda: support_shell.root_unit_runs_my_code((card.unit.parent,),
                                                                writable=_mine))
 
