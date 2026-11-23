@@ -3920,6 +3920,76 @@ LAN: the identity proves *who* answered and that the code manifest is the
 one your core published, not that nothing in between could read the
 traffic. See the hardening backlog.
 
+### Keeping the house identity across a reinstall
+
+1.5.0 (S3-4). A reinstall used to mint a new key, and every room set up
+for the old one then refused the new install: rightly, since nothing tells
+a reinstalled house from an impostor at the same address. The fix is to
+keep the key, never to teach rooms to accept a new one: re-pinning over the
+network was considered and rejected (owner decision 2026-11-22). Three
+ways keep it:
+
+- **A keep-data uninstall**, the default on every host. Linux
+  (`scripts/linux/uninstall.sh`) leaves `~/.domovoi` with the key, the
+  database volumes and the settings where they are; Windows moves the
+  distro's disk (database, settings, key) to an administrators-only
+  `C:\ProgramData\Domovoi-kept-<time>` and the next Setup offers to import
+  it in place. **Remove everything** deletes the key with the rest and is
+  asked for explicitly (typed on Linux, a second confirmation on Windows).
+- **The house identity backup**, Settings → System → About & updates →
+  **Download house identity backup** (`POST /api/config/server-identity/backup`,
+  then the core's `POST /v1/admin/server-identity/backup`). The file is the
+  private key, so it is guarded like nothing else on the dashboard: the
+  security tier (an admin session; fails closed before setup; never the
+  household token or a phone grant's session), a password sign-in within
+  the last 5 minutes **and** the password typed again behind the login
+  backoff, at both hops. The answer is `Cache-Control: no-store` and an
+  attachment; the dashboard relays it and keeps nothing. The core logs that
+  a backup was downloaded and the (public) fingerprint, never the key or
+  the password. It is in no household-tier export: the route is the only
+  code that builds one (`test_identity_backup.py` holds that). The page
+  says plainly that the file is the key and should be kept like one. From
+  a shell on the server: `python -m domovoi.server_identity --write-backup FILE`
+  (a new file, mode 0600).
+- **A restore at install**: `install.sh --restore-identity FILE` (and
+  `provision.sh --restore-identity FILE`), or Windows Setup's **Restore the
+  house identity from a backup file**. The backup is checked completely
+  before anything is written: its kind and schema, the algorithm, a 32-byte
+  private key, that the public key and fingerprint are the ones the private
+  key makes, and a signature over a fresh message that verifies. A damaged,
+  edited or foreign file (a room's public record, a different algorithm) is
+  refused and nothing is written. On Linux root hands the file's bytes to
+  the service user's own python on stdin, which writes
+  `~/.domovoi/server-identity.json` (0600) itself, right before Domovoi's
+  first start; on Windows Setup checks the file's shape, DomovoiHost copies
+  it into the distro root-only, and the same check runs there (the copy is
+  deleted once used, and a later repair or update never restores it again).
+  A restore never replaces a **different** identity already in place: the
+  install stops instead (by hand, `--restore-identity FILE
+  --replace-existing` retires the current key beside the new one, never
+  deleting it).
+
+A restore weakens nothing a room checks: the room still holds the server to
+its pinned fingerprint, and a restored key either is that fingerprint or is
+refused like any other.
+
+**A room whose server changed says so.** A room (1.5.0 code) that gets a
+complete, valid proof at its own address, signed over its nonce and the
+address it dialled, for a key that is not its pin, refuses it exactly as
+before (nothing recorded, no re-pin) and tells the household instead of
+blinking the generic no-server orange: a teal LED pattern (a double blink on
+the 2-Mics HAT, a slow breath on the XVF3800) and the spoken line "My Domovoi
+server has changed, so I can't connect to it. Please set me up again"
+(`server_changed.mp3`, rendered by the core per voice and synced while the
+room was still connected). The line is said when the change is first seen,
+then at most every 12 hours (the time is kept on disk, so a restart doesn't
+repeat it), and whenever someone says the wake word. A relayed answer, an
+unsigned one or one not bound to the dialled address never counts as
+"changed". A rogue host at the room's address can make it say the line (any
+key can sign); it can't make the room trust it, and the room sends it
+nothing it doesn't send any server (a nonce and the dialled address, never
+its pin).
+
 ### Which crypto library does the arithmetic
 
 Since 1.3.0 the server signs and checks signatures with

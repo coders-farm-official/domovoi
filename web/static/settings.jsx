@@ -4270,6 +4270,112 @@ const ServerFingerprint = () => {
         will talk to no other server. It is printed on the card &mdash; if the two
         ever disagree, the room is being answered by something else.
       </div>
+      <IdentityBackup/>
+    </div>
+  );
+};
+
+/* The house identity backup (1.5.0, S3-4): this server's PRIVATE key as a
+ * file, so a reinstall can be given it (install.sh --restore-identity, or
+ * Windows Setup's restore) and every room keeps trusting the house. Admins
+ * only, and the server asks for the password again (and a sign-in within
+ * five minutes). The file is handed to the browser and kept nowhere. */
+const IdentityBackup = () => {
+  const [, force] = React.useReducer((n) => n + 1, 0);
+  React.useEffect(() => {
+    try { return Auth.subscribe(force); } catch { return undefined; }
+  }, []);
+  const [open, setOpen] = React.useState(false);
+  const [password, setPassword] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState(null);
+  const [stale, setStale] = React.useState(false);
+  const [done, setDone] = React.useState(false);
+  let admin = false;
+  try { admin = !!Auth.isLoggedIn(); } catch { admin = false; }
+  if (!admin) return null;
+  const close = () => { setOpen(false); setPassword(''); setError(null); setStale(false); };
+  const download = async () => {
+    if (!password || busy) return;
+    setBusy(true); setError(null); setStale(false);
+    try {
+      const r = await apiFetchRaw('/api/config/server-identity/backup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+      });
+      if (!r.ok) {
+        let detail = `HTTP ${r.status}`;
+        try { const j = await r.json(); if (j && typeof j.detail === 'string') detail = j.detail; } catch { /* not JSON */ }
+        throw new Error(detail);
+      }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'domovoi-house-identity.json';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setDone(true);
+      close();
+    } catch (e) {
+      const text = (e && e.message) || String(e);
+      setStale(/sign in with the password again/.test(text));
+      setError(text);
+    } finally {
+      setPassword('');
+      setBusy(false);
+    }
+  };
+  return (
+    <div style={{ marginTop: 8 }} data-settings-mark="identity-backup">
+      <div style={{ fontSize: 12, color: 'var(--fg)', marginBottom: 4 }}>House identity backup</div>
+      <div style={{ fontSize: 11, color: 'var(--fg-faint)', marginBottom: 6 }}>
+        Reinstalling Domovoi makes a new identity, and every room set up for this one then
+        refuses it. Keep a backup, and give it to the new install
+        (<code>install.sh --restore-identity</code>, or Setup's restore on Windows): the rooms
+        reconnect by themselves.
+        {done && <strong style={{ color: 'var(--fg)' }}> Downloaded: move it somewhere only you can open.</strong>}
+      </div>
+      {!open ? (
+        <Button icon="download" onClick={() => { setOpen(true); setDone(false); }}>
+          Download house identity backup
+        </Button>
+      ) : (
+        <div role="group" aria-label="Download house identity backup"
+             style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 10,
+                      border: '1px solid var(--border)', borderRadius: 'var(--r-md)',
+                      background: 'var(--warn-soft)' }}>
+          <div style={{ fontSize: 12, color: 'var(--fg)' }}>
+            <strong>This file is the server's private key.</strong> Anyone who has it can
+            pretend to be this house to your rooms. Don't email it, share it or leave it in
+            Downloads: keep it on a USB stick in a drawer or in a password manager.
+          </div>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12 }}>
+            <span>Admin password</span>
+            <input type="password" className="input" autoComplete="current-password" value={password}
+                   autoFocus onChange={(e) => setPassword(e.target.value)}
+                   onKeyDown={(e) => { if (e.key === 'Enter') download(); }}/>
+          </label>
+          {error && <div style={{ color: 'var(--err-ink)', fontSize: 12 }}>{error}</div>}
+          {stale && (
+            <div>
+              <button type="button" className="home-link"
+                      onClick={() => { try { Auth.requestLogin(); } catch { /* no auth module */ } }}>
+                sign in again
+              </button>
+            </div>
+          )}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+            <Button icon="x" onClick={close} disabled={busy}>Cancel</Button>
+            <Button variant="primary" icon="download" disabled={!password || busy} onClick={download}>
+              {busy ? 'Preparing…' : 'Download'}
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

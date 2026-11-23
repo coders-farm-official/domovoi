@@ -29,6 +29,7 @@ namespace Domovoi.Windows.Host
         Host host;
         Thread worker;
         bool unregisterMode;
+        bool keepMode;
 
         public HostService()
         {
@@ -43,7 +44,8 @@ namespace Domovoi.Windows.Host
         {
             // Start parameters reach here only from someone allowed to start
             // the service: Administrators and SYSTEM (the SCM's default DACL).
-            unregisterMode = args != null && args.Length == 1 && args[0] == Paths.UnregisterArg;
+            keepMode = args != null && args.Length == 1 && args[0] == Paths.KeepArg;
+            unregisterMode = keepMode || (args != null && args.Length == 1 && args[0] == Paths.UnregisterArg);
             host = new Host(stop);
             worker = new Thread(Work);
             worker.IsBackground = true;
@@ -55,7 +57,7 @@ namespace Domovoi.Windows.Host
         {
             try
             {
-                if (unregisterMode) host.Unregister();
+                if (unregisterMode) host.Unregister(keepMode);
                 else host.Run();
             }
             catch (Exception e)

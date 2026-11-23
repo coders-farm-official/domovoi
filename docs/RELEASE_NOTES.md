@@ -98,6 +98,36 @@ a way that would otherwise get reported as a bug.
   plugin now needs SDK 1.15 (new: `playback.player_route`).
   SECURITY_PRIVACY.md, "Radio streams".
 
+## 1.5.0 (unreleased) — Reinstall without losing your rooms
+
+- **What changed.** Rooms trust one server by its identity, and a reinstall
+  used to make a new one, so every room then refused the house. Now:
+  - **Uninstalling keeps your data by default**, the identity included.
+    Linux has an uninstaller, `sudo bash /opt/domovoi/scripts/linux/uninstall.sh`
+    (keep data, or `--remove-everything`, which asks you to type it); the
+    Windows uninstaller asks first, and keeping moves the data to an
+    administrators-only `C:\ProgramData\Domovoi-kept-<time>` that the next
+    Setup offers to use. Installing again brings everything back and the
+    rooms reconnect by themselves.
+  - **House identity backup**: Settings → System → About & updates →
+    **Download house identity backup** (admins, with the password typed
+    again). Give it to a new install, `install.sh --restore-identity FILE`
+    or Windows Setup's **Restore the house identity from a backup file**,
+    and the rooms trust it. The file is checked before it is used.
+  - **A room whose server changed says so**: a teal light (not the
+    "no server" orange) and "My Domovoi server has changed… please set me
+    up again", once, then at most every 12 hours, and whenever you say the
+    wake word. It still refuses the new server: set it up again, or restore
+    the identity. New: `POST /v1/admin/server-identity/backup` and
+    `/api/config/server-identity/backup`, the canned line
+    `server_changed.mp3`, the satellite LED state `server_changed`.
+- **What to know.** The backup file is the server's private key: anyone
+  with it can pass for your house to your rooms, so keep it like a
+  password. A restore never replaces a different identity already on the
+  server. Rooms re-pinning over the network was rejected on purpose.
+  LINUX_HOST.md and WINDOWS_HOST.md ("…without losing your rooms"),
+  SECURITY_PRIVACY.md ("Keeping the house identity across a reinstall").
+
 ## 1.5.0 (unreleased) — Any plugin can play a remote URL through the core (SDK 1.16)
 
 - **What changed.** The relay that plays internet radio in a room is now

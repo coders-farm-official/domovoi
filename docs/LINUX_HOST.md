@@ -2862,6 +2862,62 @@ in this order.
 
 <a id="two-more-linux-notes"></a>
 
+## Uninstalling, and reinstalling without losing your rooms
+
+Every room is set up to trust this server's **identity**, a key in the
+service user's `~/.domovoi/server-identity.json` (mode 0600), made on the
+first start. A fresh install makes a new one, and the rooms then refuse
+it: they show a teal light and say "my server has changed" instead of
+connecting ([SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#keeping-the-house-identity-across-a-reinstall)).
+Keep the identity and they reconnect by themselves.
+
+**Uninstall** (1.5.0):
+
+```bash
+sudo bash /opt/domovoi/scripts/linux/uninstall.sh                     # asks; keep data is the default
+sudo bash /opt/domovoi/scripts/linux/uninstall.sh --keep-data --yes   # unattended
+sudo bash /opt/domovoi/scripts/linux/uninstall.sh --remove-everything # asks you to type "remove everything"
+sudo bash /opt/domovoi/scripts/linux/uninstall.sh --dry-run           # says what it would do
+```
+
+- **Keep my data** (the default): Domovoi's services and timers are stopped
+  and disabled, their unit files, sudo grants (`domovoi-restart`,
+  `domovoi-update`) and helpers under `/usr/local/lib/domovoi-*` removed, and
+  its containers stopped. Kept where they are, and listed by the script with
+  their paths: the identity (its fingerprint is printed), the database (the
+  `domovoi_*` Docker volumes), the settings and secrets (`/opt/domovoi/domovoi/.env`,
+  `~/.domovoi`), the program folder, Domovoi's records in `/var/lib` and `/etc`,
+  and the service user. Running the install command again picks all of it
+  up: the database, the settings and the identity, so every room reconnects.
+- **Remove everything** also deletes the database volumes and containers,
+  `~/.domovoi` with the identity, the program folder and the records. Every
+  room must then be set up again after a new install. It asks you to type
+  `remove everything` (or `--yes`); with no terminal and no `--yes` it
+  changes nothing.
+
+Either way your media folders, Docker, Ollama and its models, other
+packages and the service account itself stay; the script's last lines say
+how to remove those by hand.
+
+**A new machine, or a fresh install: restore the identity from a backup.**
+Download it first, from the old install: Settings → System → About &
+updates → **Download house identity backup** (an admin, with the password
+again). The file is the server's private key: keep it like one. Then:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/coders-farm-official/domovoi/stable/scripts/linux/install.sh \
+  | sudo bash -s -- --restore-identity /home/alex/domovoi-house-identity.json
+```
+
+The backup is checked (its format, and that its keys belong together)
+before Domovoi first starts, and the install stops, changing nothing of
+the identity, if it isn't a usable one or if this computer already has a
+different identity (by hand: `cd /opt/domovoi && sudo -u domovoi .venv/bin/python
+-m domovoi.server_identity --restore-identity FILE --replace-existing`,
+which keeps the old key beside the new one). The rooms reconnect; the
+database starts fresh. Delete the backup from wherever you copied it once
+the install is done, or keep it somewhere only you can open.
+
 ## More Linux notes
 
 **Firewall.** If `ufw` is on, satellites need `6370` and browsers need

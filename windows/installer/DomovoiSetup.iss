@@ -171,7 +171,7 @@ Name: "{autoprograms}\Domovoi"; Filename: "{app}\DomovoiTray.exe"; Parameters: "
 Type: filesandordirs; Name: "{app}\resume"
 
 [Messages]
-ConfirmUninstall=Remove Domovoi from this PC?%n%nThis deletes Domovoi's Linux system with its database (settings, history, voice profiles), the hidden account domovoi-svc, the DomovoiHost service, Domovoi's firewall rules and C:\ProgramData\Domovoi.%n%nFiles in your media folders are kept; a media folder is removed only if it is empty.
+ConfirmUninstall=Remove Domovoi from this PC now?%n%nIt removes the hidden account domovoi-svc, the DomovoiHost service, Domovoi's firewall rules and C:\ProgramData\Domovoi. Your data is kept or deleted as you just chose.%n%nFiles in your media folders are kept; a media folder is removed only if it is empty.
 
 [Code]
 const
@@ -224,6 +224,16 @@ var
   InternetIntro: TNewStaticText;
   RadioAlways, RadioSometimes, RadioNever: TNewRadioButton;
   MediaPage: TInputDirWizardPage;
+  { The house identity (S3-4): kept data, a backup file, or fresh. }
+  IdentityPage: TWizardPage;
+  RadioIdentityKept, RadioIdentityBackup, RadioIdentityFresh: TNewRadioButton;
+  IdentityKeptText: TNewStaticText;
+  IdentityEdit: TNewEdit;
+  IdentityBrowse: TNewButton;
+  KeptDir: String;
+  KeptLooked: Boolean;
+  { The uninstaller: keep the data (the default) or remove everything. }
+  UninstallKeepData: Boolean;
   DownloadPage: TDownloadWizardPage;
   ProgressPage: TOutputProgressWizardPage;
   CheckPage: TOutputMarqueeProgressWizardPage;
@@ -1092,6 +1102,116 @@ begin
     Result := 'never';
 end;
 
+
+{ -- the house identity (S3-4, owner decision 2026-11-22) --------------- }
+
+{ Every room is set up to trust this house's identity, a key the server
+  makes on its first start. A plain reinstall makes a new one, and the
+  rooms then refuse it (they only say "my server changed"). So Setup offers:
+  the data a keep-data uninstall left (C:\ProgramData\Domovoi-kept-<time>:
+  the database, settings and the identity, imported in place), a house
+  identity backup file (Settings > System > About & updates; checked in
+  the distro before use), or a fresh start. After a restart the choice
+  comes back on the command line (/usekept=, /identity=). }
+
+procedure IdentityChoiceClick(Sender: TObject);
+begin
+  IdentityEdit.Enabled := RadioIdentityBackup.Checked;
+  IdentityBrowse.Enabled := RadioIdentityBackup.Checked;
+end;
+
+procedure IdentityBrowseClick(Sender: TObject);
+var
+  F: String;
+begin
+  F := IdentityEdit.Text;
+  if GetOpenFileName('Choose the house identity backup', F, '', 'House identity backup (*.json)|*.json|All files|*.*', 'json') then
+    IdentityEdit.Text := F;
+end;
+
+procedure CreateIdentityPage(AfterID: Integer);
+var
+  T: TNewStaticText;
+  Y: Integer;
+begin
+  IdentityPage := CreateCustomPage(AfterID, 'Your house''s identity', 'Installing Domovoi again? Keep your rooms working.');
+  T := AddText(IdentityPage, 'Every room device is set up to trust one Domovoi server, by its identity. A new install has a new identity, so rooms set up before won''t connect to it until they are set up again, unless you bring the identity back.', 0, 0, False, False);
+  Y := T.Top + T.Height + ScaleY(10);
+  RadioIdentityKept := NewRadio(IdentityPage, 'Use the data kept from the last install (recommended).', Y);
+  RadioIdentityKept.OnClick := @IdentityChoiceClick;
+  IdentityKeptText := AddText(IdentityPage, 'No kept data was found on this PC.', RadioIdentityKept.Top + RadioIdentityKept.Height, ScaleX(18), True, False);
+  Y := IdentityKeptText.Top + IdentityKeptText.Height + ScaleY(8);
+  RadioIdentityBackup := NewRadio(IdentityPage, 'Restore the house identity from a backup file.', Y);
+  RadioIdentityBackup.OnClick := @IdentityChoiceClick;
+  T := AddText(IdentityPage, 'The file from Settings > System > About & updates > House identity backup. Your rooms reconnect; the database starts fresh.', RadioIdentityBackup.Top + RadioIdentityBackup.Height, ScaleX(18), True, False);
+  Y := T.Top + T.Height + ScaleY(4);
+  IdentityEdit := TNewEdit.Create(IdentityPage);
+  IdentityEdit.Parent := IdentityPage.Surface;
+  IdentityEdit.SetBounds(ScaleX(18), Y, IdentityPage.SurfaceWidth - ScaleX(18) - ScaleX(90), ScaleY(21));
+  IdentityBrowse := TNewButton.Create(IdentityPage);
+  IdentityBrowse.Parent := IdentityPage.Surface;
+  IdentityBrowse.Caption := 'Browse...';
+  IdentityBrowse.SetBounds(IdentityPage.SurfaceWidth - ScaleX(82), Y - ScaleY(1), ScaleX(82), ScaleY(23));
+  IdentityBrowse.OnClick := @IdentityBrowseClick;
+  Y := Y + ScaleY(30);
+  RadioIdentityFresh := NewRadio(IdentityPage, 'Start fresh, with a new identity.', Y);
+  RadioIdentityFresh.OnClick := @IdentityChoiceClick;
+  T := AddText(IdentityPage, 'For a first install. Rooms set up for an earlier install must be set up again.', RadioIdentityFresh.Top + RadioIdentityFresh.Height, ScaleX(18), True, False);
+  RadioIdentityKept.Enabled := False;
+  RadioIdentityFresh.Checked := True;
+  IdentityChoiceClick(nil);
+end;
+
+{ Ask the helper (read-only) for the newest kept data, once. }
+procedure FindKeptData;
+var
+  Lines: TArrayOfString;
+  Code: Integer;
+begin
+  if KeptLooked then
+    Exit;
+  KeptLooked := True;
+  KeptDir := '';
+  if RunHelper(TmpHelper, 'kept-data', Lines, Code) and (Code = 0) then
+    KeptDir := KvValue(Lines, 'kept_dir');
+  if KeptDir <> '' then
+  begin
+    IdentityKeptText.Caption := 'Found: ' + KeptDir + ' (kept ' + KvValue(Lines, 'kept_when') + ', ' + KvValue(Lines, 'kept_gb') + ' GB). Your database, settings and the house identity come back, and your rooms reconnect by themselves.';
+    RadioIdentityKept.Enabled := True;
+    RadioIdentityKept.Checked := True;
+  end;
+  IdentityChoiceClick(nil);
+end;
+
+{ The kept folder to use, or ''. }
+function UseKeptDir: String;
+begin
+  Result := ExpandConstant('{param:usekept|}');
+  if Result <> '' then
+    Exit;
+  if (not UpdateMode) and (KeptDir <> '') and RadioIdentityKept.Checked then
+    Result := KeptDir;
+end;
+
+{ The backup file to restore, or ''. }
+function IdentityBackupFile: String;
+begin
+  Result := ExpandConstant('{param:identity|}');
+  if Result <> '' then
+    Exit;
+  if (not UpdateMode) and RadioIdentityBackup.Checked then
+    Result := Trim(IdentityEdit.Text);
+end;
+
+function IdentityJobArgs: String;
+begin
+  Result := '';
+  if UseKeptDir <> '' then
+    Result := ' --import-in-place'
+  else if IdentityBackupFile <> '' then
+    Result := ' --restore-identity ' + AddQuotes(IdentityBackupFile);
+end;
+
 { -- the finish page ---------------------------------------------------- }
 
 procedure CopyCodeClick(Sender: TObject);
@@ -1573,7 +1693,9 @@ begin
     if not Step('Creating the hidden account domovoi-svc and the DomovoiHost service', 'account --exe ' + AddQuotes(ExpandConstant('{app}\DomovoiHost.exe')) + Deny, 4, Lines) then Exit;
     if not Step('Setting up the media folders', 'media', 6, Lines) then Exit;
     if not Step('Adding the firewall rules', 'firewall', 8, Lines) then Exit;
-    if not Step('Handing the work to DomovoiHost', 'job' + OfflineArg + KitArg + ' --image ' + AddQuotes(ImagePath) +
+    if UseKeptDir <> '' then
+      if not Step('Bringing back the data kept from the last install', 'adopt-kept --dir ' + AddQuotes(UseKeptDir), 10, Lines) then Exit;
+    if not Step('Handing the work to DomovoiHost', 'job' + OfflineArg + KitArg + IdentityJobArgs + ' --image ' + AddQuotes(ImagePath) +
       ' --image-sha256 {#UbuntuSha256} --provision ' + AddQuotes(ProvisionPath) +
       ' --provision-sha256 {#ProvisionSha256} --repo-url {#DomovoiRepoUrl} --ref {#DomovoiCommit} --track-branch {#DomovoiChannel} --lan-ip auto', 12, Lines) then Exit;
     if not Step('Starting DomovoiHost', 'host-start', 14, Lines) then Exit;
@@ -1798,6 +1920,10 @@ begin
     Data := Data + ' /kit=' + AddQuotes(RemoveBackslash(KitRoot));
   if NoDenyLogon then
     Data := Data + ' /nodenylogon=1';
+  if UseKeptDir <> '' then
+    Data := Data + ' /usekept=' + AddQuotes(UseKeptDir)
+  else if IdentityBackupFile <> '' then
+    Data := Data + ' /identity=' + AddQuotes(IdentityBackupFile);
   Result := RegWriteStringValue(HKLM, RunOnceKey, RunOnceName, Data);
   if not Result then
   begin
@@ -1997,6 +2123,7 @@ begin
     'Domovoi keeps your media in a Windows folder you can open in Explorer and copy files into. Setup makes Music, Pictures, Videos, Documents, Audiobooks and Podcasts inside it. Pick a folder on a drive of this PC.',
     False, '');
   MediaPage.Add('Media folder:');
+  CreateIdentityPage(MediaPage.ID);
   Root := ExpandConstant('{param:mediaroot|}');
   if UpdateMode then
     Root := SavedMediaRoot;
@@ -2031,9 +2158,9 @@ begin
   end;
   if Resumed and (ExpandConstant('{param:internet|}') <> '') then
 #ifdef ProvisionAiChoice
-    Result := (PageID = AiPage.ID) or (PageID = ConsentPage.ID) or (PageID = InternetPage.ID) or (PageID = MediaPage.ID);
+    Result := (PageID = AiPage.ID) or (PageID = ConsentPage.ID) or (PageID = InternetPage.ID) or (PageID = MediaPage.ID) or (PageID = IdentityPage.ID);
 #else
-    Result := (PageID = ConsentPage.ID) or (PageID = InternetPage.ID) or (PageID = MediaPage.ID);
+    Result := (PageID = ConsentPage.ID) or (PageID = InternetPage.ID) or (PageID = MediaPage.ID) or (PageID = IdentityPage.ID);
 #endif
 end;
 
@@ -2052,7 +2179,9 @@ begin
   end
   else
 #endif
-  if CurPageID = ConsentPage.ID then
+  if CurPageID = IdentityPage.ID then
+    FindKeptData
+  else if CurPageID = ConsentPage.ID then
     ConsentPage.RichEditViewer.Lines.Text := ConsentText
   else if CurPageID = InternetPage.ID then
   begin
@@ -2183,6 +2312,28 @@ begin
       else
         MsgBox(Problem, mbError, MB_OK);
       Result := False;
+    end;
+  end
+  else if CurPageID = IdentityPage.ID then
+  begin
+    { A backup file: its shape checked now (read-only); the key pair is
+      checked in the new install before it is used. }
+    if RadioIdentityBackup.Checked then
+    begin
+      Problem := '';
+      if Trim(IdentityEdit.Text) = '' then
+        Problem := 'Choose the house identity backup file, or pick another answer.'
+      else if not RunHelper(TmpHelper, 'check-backup --file ' + AddQuotes(Trim(IdentityEdit.Text)), Lines, Code) then
+        Problem := 'Setup could not check that file.'
+      else if Code <> 0 then
+        Problem := KvValue(Lines, 'error');
+      if Problem <> '' then
+      begin
+        MsgBox(Problem, mbError, MB_OK);
+        Result := False;
+      end
+      else
+        Result := MsgBox('This backup is the house identity ' + KvValue(Lines, 'fingerprint') + '. Rooms set up for that house will trust this install.' + #13#10#13#10 + 'Keep the backup file somewhere safe afterwards: it is the server''s private key.', mbInformation, MB_OKCANCEL) = IDOK;
     end;
   end
   else if CurPageID = wpReady then
@@ -2370,10 +2521,41 @@ begin
       StartTray;
   end;
   if UndoOnExit and FileExists(ExpandConstant('{uninstallexe}')) then
-    Exec(ExpandConstant('{uninstallexe}'), '/SILENT /NORESTART', '', SW_SHOWNORMAL, ewNoWait, Code);
+    Exec(ExpandConstant('{uninstallexe}'), '/SILENT /NORESTART /KEEPDATA=0', '', SW_SHOWNORMAL, ewNoWait, Code);
 end;
 
 { -- uninstall (PLAN 7) ------------------------------------------------- }
+
+{ Keep the data (the default, S3-4) or remove everything: asked first. Kept:
+  the distro's disk, with the database, settings and the house identity,
+  in an administrators-only C:\ProgramData\Domovoi-kept-<time>; the next
+  Setup offers to use it, so the rooms reconnect by themselves. Silent
+  (Setup's own undo of a failed first install passes /KEEPDATA=0): as the
+  command line says, keep by default. }
+function InitializeUninstall: Boolean;
+var
+  Choice: Integer;
+begin
+  Result := True;
+  UninstallKeepData := ExpandConstant('{param:keepdata|1}') <> '0';
+  if UninstallSilent then
+    Exit;
+  Choice := TaskDialogMsgBox('Keep your Domovoi data?',
+    'Keep my data (recommended): Domovoi is removed, and its database, settings and the house''s identity are kept on this PC (C:\ProgramData\Domovoi-kept-..., administrators only). Install Domovoi again and it picks them up: your rooms reconnect by themselves.' + #13#10#13#10 +
+    'Remove everything: also deletes the database (history, voice profiles, settings) and the house''s identity. Every room must then be set up again after a new install.' + #13#10#13#10 +
+    'Files in your media folders are kept either way.',
+    mbConfirmation, MB_YESNOCANCEL, ['Keep my data (recommended)', 'Remove everything'], 0);
+  if Choice = IDCANCEL then
+  begin
+    Result := False;
+    Exit;
+  end;
+  UninstallKeepData := Choice = IDYES;
+  if not UninstallKeepData then
+    Result := TaskDialogMsgBox('Delete all of Domovoi''s data?',
+      'The database and the house''s identity are deleted for good. To keep the identity instead, download a backup first (Settings > System > About & updates > House identity backup).',
+      mbError, MB_YESNO, ['Delete everything', 'Don''t uninstall'], 0) = IDYES;
+end;
 
 { The steps as they happen, under the progress bar (owner fixes
   2026-10-12, item 7: the window sat on one message for minutes while the
@@ -2492,7 +2674,7 @@ end;
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   Code: Integer;
-  HelperExe, LogFile, Later, LeftText, StillText: String;
+  HelperExe, LogFile, Later, LeftText, StillText, Params: String;
   Kept: TArrayOfString;
 begin
   if CurUninstallStep = usPostUninstall then
@@ -2518,7 +2700,11 @@ begin
   UninstallProgressForm.StatusLabel.Caption := 'Looking at what Setup changed...';
   SetArrayLength(UninstLines, 0);
   try
-    if not ExecAndLogOutput(HelperExe, 'uninstall', '', SW_HIDE, ewWaitUntilTerminated, Code, @UninstallOutput) then
+    if UninstallKeepData then
+      Params := 'uninstall --keep-data'
+    else
+      Params := 'uninstall';
+    if not ExecAndLogOutput(HelperExe, Params, '', SW_HIDE, ewWaitUntilTerminated, Code, @UninstallOutput) then
       Code := -1;
   except
     Log('Could not run the helper: ' + GetExceptionMessage);

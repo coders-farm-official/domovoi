@@ -72,6 +72,7 @@ static partial class Tests
     static int Main()
     {
         ProgressLines();
+        KeepIdentity();
         Outcomes();
         Args();
         AiChoice();
