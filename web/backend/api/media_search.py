@@ -32,7 +32,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from domovoi.admin_auth import require_device_read
-from domovoi.media_understanding import search
+from domovoi.media_understanding import moments, search
 from web.backend.db import session_scope
 
 router = APIRouter(tags=["media-understanding"])
@@ -74,4 +74,6 @@ async def media_search(
     parsed = search.parse_query(q)
     async with session_scope() as s:
         page = await search.search(s, parsed, kind=kind or None, start=start, end=end, limit=limit, offset=offset)
+        # A video hit opens at the moment that matched (transcript line or keyframe).
+        await moments.add_moments(s, page["items"], parsed.words)
     return {"query": {"words": parsed.words, "kind": kind or parsed.kind, "when": parsed.when}, **page}

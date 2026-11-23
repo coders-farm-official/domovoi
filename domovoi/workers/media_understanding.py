@@ -6,7 +6,8 @@
 * ``media_understanding`` (long run): chat videos first, then library work
   in its windows, voice first (domovoi/media_understanding/runner.py).
   It replaced the 1.4.0 ``chat_video`` worker, whose jobs it runs. Its
-  analysers: the fingerprint, then the photos' (media_understanding/photos.py).
+  analysers: the fingerprint, then the photos' and videos' (media_understanding/photos.py,
+  videos.py).
 
 Both skipped under stubs (the tests drive them directly). Core-internal.
 """
@@ -50,10 +51,11 @@ class MediaUnderstandingWorker(LongRunWorker):
         self._runner = runner
 
     async def run(self, shutdown: asyncio.Event) -> None:
-        from domovoi.media_understanding import faces, photos
+        from domovoi.media_understanding import faces, photos, videos
         from domovoi.media_understanding.runner import Runner
 
         photos.install()     # slice 2: the photo date, caption and text analysers
+        videos.install()     # slice 3: scan, faces hook, transcript, frames, summary
         # Faces (slice 4): the photo analyser and its housekeeping (model
         # fetch on opt-in, the nightly re-group). Inert while faces are off.
         faces.install()

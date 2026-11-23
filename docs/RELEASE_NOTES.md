@@ -47,6 +47,27 @@ a way that would otherwise get reported as a bug.
   model card doesn't name its training data (docs/LICENSES.md). There is
   no export of face data; database backups include it. A face-only person
   appears on the People page like any other.
+## 1.5.0 (unreleased) — Videos: scenes, what is said, keyframes, a summary
+
+- **What changed.** With "Understand photos and videos" on, the background
+  runner now works through the library's videos: it finds the scene
+  changes, transcribes what is said (the first two hours of a video), has
+  the vision model describe keyframes picked at scene changes (how many
+  depends on the server's measured speed, the video's length and its
+  scenes: up to 120 on a CPU-only server), and writes a short summary and a
+  suggested title. With a big backlog (25 or more videos waiting) each
+  video first gets a quick pass with about a quarter of the frames, and a
+  later pass adds the rest. All of it is searchable, and a search can tell
+  the moment in the video that matched. Nothing is written into the video
+  files.
+- **What to know.** Transcripts run even with AI features off (captions
+  and summaries don't). A caption is a small model's guess and is shown as
+  "might show". A video ffmpeg can't read is skipped and marked with a code
+  (`video-unreadable`, `video-no-picture`, `video-too-big` past 8K). On a
+  CPU-only server a long video's first look takes minutes and its full
+  pass tens of minutes, all in the night window, pausing for every voice
+  turn. When faces are turned on, videos already looked at are queued
+  again for faces only (at night).
 
 ## 1.5.0 (unreleased) — Photos and videos: the catalogue and the background runner
 

@@ -15,6 +15,9 @@ and videos, in the background, voice first.
   training, forget-my-face, the photo analyser and the video-frame hook;
   :mod:`.face_engine` (YuNet + SFace on ONNX Runtime, in numpy) and
   :mod:`.face_models` (the pinned fetch on opt-in).
+* :mod:`.videos` — the video analysers (scenes, transcript, keyframes,
+  summary, the faces hook) and the timeline;
+* :mod:`.moments` — the moment in a video a search matched.
 
 Design: MEDIA-UNDERSTANDING §5 and §7. Core-internal: not offered to
 plugins.
