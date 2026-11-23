@@ -4181,8 +4181,8 @@ async def admin_friend_houses_withdraw(request_id: str) -> dict[str, Any]:
 async def admin_friend_houses_friends() -> dict[str, Any]:
     """The friends, and ``quiet_hours``: null, or which connected rooms are
     in quiet hours now (``rooms``: all | some), ``until`` ("HH:MM", the
-    house's clock) and ``read_later`` (false: a message that comes meanwhile
-    is never said in those rooms; it waits in the inbox)."""
+    house's clock) and ``read_later`` (true: a message that comes meanwhile
+    is said in each of those rooms when its quiet hours end, if still unread)."""
     from domovoi.friend_houses import friending, messages
 
     return {"friends": await friending.list_friends(),
@@ -4248,6 +4248,15 @@ async def admin_friend_houses_conversations() -> dict[str, Any]:
 
     return {"conversations": await messages.conversations(),
             "unread": await messages.unread_total()}
+
+
+@app.get("/v1/admin/friend-houses/unread", dependencies=_FH_HOUSEHOLD)
+async def admin_friend_houses_unread() -> dict[str, Any]:
+    """How many messages in the house inbox are unread, and nothing else:
+    for Home's "needs attention" (no names, no text)."""
+    from domovoi.friend_houses import messages
+
+    return {"unread": await messages.unread_total()}
 
 
 @app.get("/v1/admin/friend-houses/conversations/{house}", dependencies=_FH_HOUSEHOLD)

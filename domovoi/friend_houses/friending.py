@@ -581,7 +581,15 @@ async def _speak(text: str) -> bool:
 
 
 async def announce_held() -> int:
-    """Say what waited for quiet hours (run by the service's retry loop)."""
+    """Say what waited for quiet hours (run by the service's retry loop):
+    the messages each room held back, as its own quiet hours end
+    (messages.say_held), then the trust changes, once the house's end."""
+    from domovoi.friend_houses import messages
+
+    try:
+        await messages.say_held()
+    except Exception:  # noqa: BLE001 — tried again on the next pass
+        log.exception("Friend Houses: saying held messages failed")
     if _house_quiet_now():
         return 0
     async with _db() as s:

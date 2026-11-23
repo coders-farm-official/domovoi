@@ -702,14 +702,23 @@ const fhHouseOk = (h) => /^[0-9a-f]{64}$/.test(String(h || ''));
 
 /* ---- friends -------------------------------------------------------- */
 
-// "07:00" (the house's clock, from the server) as the dashboard shows a
-// time elsewhere (calendar.jsx's fmtClock: "7:00am").
-const fhClock = (hhmm) => {
-  const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || ''));
-  if (!m) return null;
-  const d = new Date(2000, 0, 1, Number(m[1]), Number(m[2]));
+// A time as the dashboard shows one elsewhere (calendar.jsx's fmtClock:
+// "7:00am").
+const fhClockOf = (d) => {
+  if (!(d instanceof Date) || !Number.isFinite(d.getTime())) return null;
   if (window.fmtClock) return window.fmtClock(d);
   return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }).toLowerCase().replace(/\s/g, '');
+};
+// "07:00" (the house's clock, from the server).
+const fhClock = (hhmm) => {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || ''));
+  return m ? fhClockOf(new Date(2000, 0, 1, Number(m[1]), Number(m[2]))) : null;
+};
+// What an incoming message says about quiet hours (held, read_out_at).
+const fhHeldText = (m) => {
+  if (!m || m.direction === 'out' || m.held !== 'quiet_hours') return null;
+  const at = m.read_out_at ? fhClockOf(new Date(m.read_out_at)) : null;
+  return at ? `held for quiet hours · read out at ${at}` : 'held for quiet hours';
 };
 
 /* Why a friend's messages aren't being said right now: the friends
@@ -1000,7 +1009,7 @@ const FhMessage = ({ m }) => {
         <span>{fhWhen(here)}</span>
         {skewed && <span>· sent {fhWhen(theirs)} (their clock)</span>}
         {st && <span style={{ display: 'inline-flex', gap: 5, alignItems: 'center' }}>· <StatusDot tone={st.tone}/>{st.text}</span>}
-        {!out && m.held === 'quiet_hours' && <span className="fh-held">· held for quiet hours</span>}
+        {fhHeldText(m) && <span className="fh-held">· {fhHeldText(m)}</span>}
       </div>
     </div>
   );
@@ -1366,7 +1375,7 @@ const FhSharedListsCard = ({ shared, lists, friends, shareFor, fire, onChanged }
 
 /* ---- the section ---------------------------------------------------- */
 
-const FriendHousesPanel = () => {
+const FriendHousesPanel = ({ marks = [] }) => {
   const admin = useAdminSignedIn();
   const [fire, toastNode] = useToast();
   // Every read is the security tier: the admin sign-in in this tab only.
@@ -1414,6 +1423,16 @@ const FriendHousesPanel = () => {
       try { if (listsRef.current) listsRef.current.scrollIntoView({ block: 'start', behavior: 'smooth' }); } catch { /* gone */ }
     }, 0);
   };
+  // #settings/friend-houses/messages (Home's unread row): the inbox on
+  // screen, once per arrival.
+  const mark = marks[0] || null;
+  const markDone = React.useRef(null);
+  React.useEffect(() => {
+    if (mark !== 'messages') { markDone.current = null; return; }
+    if (markDone.current === mark || !inboxRef.current) return;
+    markDone.current = mark;
+    toInbox();
+  });
   const openConversation = (house) => {
     if (!fhHouseOk(house)) return;
     setOpen(house);
@@ -1491,7 +1510,9 @@ const FriendHousesPanel = () => {
     <div className="friend-houses" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {toastNode}
       {head}
-      <FhHouseCard status={status} fire={fire} onSaved={st.refresh} busy={switching} onTurnOff={() => turn(false)}/>
+      {/* Top to bottom (owner, 2026-11-22): Messages, Shared lists,
+          Requests, Make a friend file, Add a friend, This house; then the
+          friends and the blocked houses. */}
       <div ref={inboxRef}>
         <FhInboxCard conversations={convs.data} friends={fr.data} open={open} setOpen={setOpen} fire={fire}
                      onChanged={() => { convs.refresh(); st.refresh(); }}/>
@@ -1500,9 +1521,10 @@ const FriendHousesPanel = () => {
         <FhSharedListsCard shared={shared.data} lists={lists.data} friends={fr.data} shareFor={shareFor} fire={fire}
                            onChanged={() => { shared.refresh(); lists.refresh(); }}/>
       </div>
+      <FhRequestsCard requests={req.data} fire={fire} onChanged={() => { req.refresh(); fr.refresh(); st.refresh(); }}/>
       {workable && <FhInvitesCard status={status} invites={inv.data} fire={fire} onChanged={() => { inv.refresh(); st.refresh(); }}/>}
       {workable && <FhAddCard fire={fire} onSent={() => { req.refresh(); st.refresh(); }}/>}
-      <FhRequestsCard requests={req.data} fire={fire} onChanged={() => { req.refresh(); fr.refresh(); st.refresh(); }}/>
+      <FhHouseCard status={status} fire={fire} onSaved={st.refresh} busy={switching} onTurnOff={() => turn(false)}/>
       <FhFriendsCard friends={fr.data} fire={fire}
                      onChanged={() => { fr.refresh(); st.refresh(); convs.refresh(); shared.refresh(); blockedHouses.refresh(); }}
                      onMessage={openConversation} onShare={shareWith}/>

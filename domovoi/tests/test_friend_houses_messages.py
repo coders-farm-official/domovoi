@@ -309,16 +309,91 @@ def _quiet_night(monkeypatch) -> None:
 @requires_db
 async def test_a_message_in_quiet_hours_is_held_and_marked(house, monkeypatch) -> None:
     _quiet_night(monkeypatch)
-    assert await fm.quiet_hours_now() == {"rooms": "all", "until": "07:00", "read_later": False}
+    assert await fm.quiet_hours_now() == {"rooms": "all", "until": "07:00", "read_later": True}
     await fm.set_alert("fthem", "read")
     _, event = _incoming(house, body="Still up?")
     await fm.on_message(event)
     await house.drain()
     assert house.spoken == []
     [row] = await fm.conversation(house.them.house_key)
-    assert row["held"] == "quiet_hours" and row["last_error"] is None and row["state"] == "unread"
-    # Not said later either: nothing waits to be read out.
-    assert fm.QUIET_READ_LATER is False
+    assert row["held"] == "quiet_hours" and row["read_out_at"] is None
+    assert row["last_error"] is None and row["state"] == "unread"
+
+
+class _Rooms:
+    """Connected rooms, which of them are quiet, and what each said."""
+
+    def __init__(self, monkeypatch, rooms, quiet=()):
+        from domovoi import quiet_hours
+
+        self.rooms, self.quiet, self.said = list(rooms), set(quiet), []
+        monkeypatch.setattr(fm, "_connected_rooms", lambda: list(self.rooms))
+
+        async def quiet_rooms(room_ids, **_kw):
+            return [r for r in room_ids if r in self.quiet]
+
+        monkeypatch.setattr(quiet_hours, "quiet_rooms", quiet_rooms)
+
+        async def announce(room, said):
+            heard = [r for r in ([room] if room else self.rooms) if r not in self.quiet]
+            self.said += [(r, said) for r in heard]
+            return heard
+
+        monkeypatch.setattr(fm, "_announce", announce)
+
+
+@requires_db
+async def test_held_messages_are_read_out_when_quiet_hours_end_once_per_room(house, monkeypatch) -> None:
+    rooms = _Rooms(monkeypatch, ["den", "kitchen"], quiet={"den", "kitchen"})
+    await fm.set_alert("fthem", "read")
+    _, event = _incoming(house, body="Still up?")
+    await fm.on_message(event)
+    await house.drain()
+    assert rooms.said == [] and await fm.say_held() == 0  # still quiet everywhere
+    rooms.quiet = {"kitchen"}  # the den's own hours end first
+    assert await fm.say_held() == 1
+    assert rooms.said == [("den", "A message from The Smiths: Still up?")]
+    [row] = await fm.conversation(house.them.house_key)
+    assert row["held"] == "quiet_hours" and row["read_out_at"]
+    rooms.quiet = set()
+    assert await fm.say_held() == 1  # the kitchen now; the den not again
+    assert await fm.say_held() == 0  # kept in the database: not after a restart either
+    assert [r for r, _ in rooms.said] == ["den", "kitchen"]
+
+
+@requires_db
+async def test_a_room_awake_on_arrival_says_it_then_and_the_quiet_one_later(house, monkeypatch) -> None:
+    rooms = _Rooms(monkeypatch, ["den", "kitchen"], quiet={"kitchen"})
+    await fm.set_alert("fthem", "sender")
+    _, event = _incoming(house)
+    await fm.on_message(event)
+    await house.drain()
+    assert rooms.said == [("den", "A message from The Smiths.")]
+    [row] = await fm.conversation(house.them.house_key)
+    assert row["held"] is None and row["read_out_at"] is None  # the den said it on arrival
+    rooms.quiet = set()
+    assert await fm.say_held() == 1
+    assert rooms.said[-1] == ("kitchen", "A message from The Smiths.")
+
+
+@requires_db
+async def test_held_messages_read_meanwhile_or_turned_off_are_not_said(house, monkeypatch) -> None:
+    rooms = _Rooms(monkeypatch, ["kitchen"], quiet={"kitchen"})
+    await fm.set_alert("fthem", "sender")
+    for seq in (1, 2):
+        fm._LAST_ANNOUNCED.clear()
+        _, event = _incoming(house, seq=seq)
+        await fm.on_message(event)
+        await house.drain()
+    rooms.quiet = set()
+    await fm.set_alert("fthem", "inbox")
+    assert await fm.say_held() == 0  # the friend's choice now: inbox only
+    await fm.set_alert("fthem", "sender")
+    assert await fm.say_held() == 1
+    assert rooms.said == [("kitchen", "2 messages from The Smiths.")]
+    rooms.rooms.append("den")
+    await fm.mark_read(house.them.house_key)
+    assert await fm.say_held() == 0  # read on a phone meanwhile: the den skips them
 
 
 @requires_db
@@ -345,12 +420,24 @@ async def test_the_friends_route_says_whether_quiet_hours_are_on(house, monkeypa
 
     _quiet_night(monkeypatch)
     out = await main.admin_friend_houses_friends()
-    assert out["quiet_hours"] == {"rooms": "all", "until": "07:00", "read_later": False}
+    assert out["quiet_hours"] == {"rooms": "all", "until": "07:00", "read_later": True}
     assert [f["name"] for f in out["friends"]] == ["The Smiths"]
     from domovoi.config import settings
 
     monkeypatch.setattr(settings, "quiet_hours_enabled", False)
     assert (await main.admin_friend_houses_friends())["quiet_hours"] is None
+
+
+@requires_db
+async def test_the_unread_route_is_a_count_only(house) -> None:
+    from domovoi import main
+
+    assert await main.admin_friend_houses_unread() == {"unread": 0}
+    _, event = _incoming(house)
+    await fm.on_message(event)
+    assert await main.admin_friend_houses_unread() == {"unread": 1}
+    await fm.mark_read(house.them.house_key)
+    assert await main.admin_friend_houses_unread() == {"unread": 0}
 
 
 @requires_db
