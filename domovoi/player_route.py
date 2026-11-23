@@ -132,9 +132,11 @@ def player_room(room_id: str | None) -> str | None:
     return mpd_module._resolve_room(mpd_module._host_of(room_id))
 
 
-async def player_route(room_id: str | None) -> PlayerRoute | None:
+async def player_route(room_id: str | None, *, own: bool = False) -> PlayerRoute | None:
     """How the player that plays ``room_id``'s music reaches this core,
-    or None when it can't be told (no player, Docker didn't answer)."""
+    or None when it can't be told (no player, Docker didn't answer).
+    ``own``: ``room_id``'s OWN player, whatever shared queue it is in (a
+    relay token is bound to the room whose player fetches it)."""
     from domovoi.config import settings
 
     if settings.use_stubs:
@@ -144,7 +146,12 @@ async def player_route(room_id: str | None) -> PlayerRoute | None:
     kind = host_kind.host_kind()
     if kind not in SAME_SYSTEM_KINDS:
         return route_for_kind(kind)
-    room = player_room(room_id)
+    if own:
+        from domovoi.clients import mpd as mpd_module
+
+        room = room_id if room_id in mpd_module._room_ports else None
+    else:
+        room = player_room(room_id)
     if room is None:
         return None
     from domovoi.mpd_provisioner import _container_name

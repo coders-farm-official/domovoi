@@ -247,8 +247,18 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
   after 30 seconds, and a stop ends a stalled stream at once (M4). A
   relay link presented by any address but the room's player's, or with a
   forwarding header, is refused without ending the room's stream, and
-  the access log no longer holds it (L23, L24); a relay is made only for
-  a room with a music player, after the outbound check (L25). Plugin
+  the access log no longer holds it, nor do the open now-playing and
+  queue reads or the play history (L23, L24); a relay is made only for
+  a room with a music player, after the outbound check (L25). No raw
+  internet address stays in a room's music queue: anything that adds one
+  is refused or goes through the relay, and each room's queue is checked
+  at core start, at every start of its player and when a group hands its
+  queue to another room, an internet entry being moved onto the relay or
+  removed; a queued station renews its relay link when it plays again,
+  so it resumes after a restart (L20). Plugins installed from GitHub are
+  pinned to their repository when the install is confirmed, and an
+  update from the same address is held to that pin whichever download it
+  uses (M6). Plugin
   update checks pin each plugin's GitHub repository by its numeric ids:
   a repository that moved, changed owner or was re-registered under the
   same name reads "the repository moved or changed owner" and offers no
@@ -263,7 +273,11 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
   name (L39). Windows Setup deletes its copy of the house identity
   backup once the restore is recorded (L42).
 - **What to know.** The first update check after upgrading pins each
-  plugin's repository as it is then (`~/.domovoi/plugin_repo_pins.json`).
+  plugin's repository as it is then, in the database (migration V081);
+  pins a 1.5.0 test build kept in `~/.domovoi/plugin_repo_pins.json` are
+  imported once and the file renamed `.imported`. A station queued before
+  the upgrade is kept when the room's play history names it, else it is
+  removed from the queue at the first start: play it again by name.
   A plugin whose repository really moved shows "the repository moved or
   changed owner": reinstall it from the new address to pin that one. A
   plugin card on Home runs as part of the dashboard, like plugin pages:

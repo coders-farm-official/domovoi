@@ -402,6 +402,10 @@ def test_the_relay_url_stands_for_its_target() -> None:
     assert player_relay.target_for(url) == "http://good.example/live"
     assert player_relay.target_for("http://good.example/live") is None
     player_relay.revoke_room("kitchen")
+    # The grant is gone; the record stays while the queue holds the entry
+    # (it renews when it plays, L20), and goes when the queue doesn't.
+    assert player_relay.target_for(url) == "http://good.example/live"
+    player_relay.forget_records("kitchen", keep=set())
     assert player_relay.target_for(url) is None
 
 
@@ -689,3 +693,92 @@ async def test_minting_checks_the_url_before_ending_the_rooms_relay(monkeypatch)
         with pytest.raises(RelayUnavailable):
             await api.relay_url(f"made-up-{n}", "http://93.184.216.34/b.ogg")
     assert api.relay_target(good) == "http://93.184.216.34/a.ogg"
+
+
+# ─── L20: a queued relay entry outlives its token ─────────────────────────
+
+
+class _Player:
+    """A room's own player as the renewal asks it: its current song and state."""
+
+    def __init__(self, file: str | None = None, state: str = "play") -> None:
+        self.file = file
+        self.st = state
+
+    async def current_song(self):
+        return {"file": self.file} if self.file else None
+
+    async def state(self) -> str:
+        return self.st
+
+
+@pytest.fixture
+def player(monkeypatch):
+    from domovoi.clients import mpd as mpd_mod
+
+    p = _Player()
+    monkeypatch.setitem(mpd_mod._clients, "kitchen", p)
+
+    async def route(room_id):
+        return ROUTE
+
+    monkeypatch.setattr(player_relay, "_route_for", route)
+    return p
+
+
+async def test_a_long_playing_station_renews_while_its_entry_plays(app, remote, player, monkeypatch) -> None:
+    now = [1000.0]
+    monkeypatch.setattr(player_relay, "_clock", lambda: now[0])
+    remote.plan["good.example/live"] = [_audio(), _audio(), _audio()]
+    url = _radio()
+    player.file = url
+    assert (await _get(app, url)).status_code == 200          # its one connection
+    now[0] += player_relay.MAX_DURATION_SEC + 60                # a day and more later
+    r = await _get(app, url)                                    # the player reconnects
+    assert r.status_code == 200 and r.content == AUDIO
+    assert (await _get(app, url, caller="192.168.1.30")).status_code == 404   # never anyone else
+
+
+async def test_a_file_renews_past_its_hours_only_while_it_is_the_current_song(
+    app, remote, player, monkeypatch,
+) -> None:
+    now = [1000.0]
+    monkeypatch.setattr(player_relay, "_clock", lambda: now[0])
+    remote.files["files.example/song.flac"] = FILE
+    url = _file()
+    player.file = url
+    assert (await _get(app, url)).status_code == 200
+    now[0] += player_relay.FILE_TTL_SEC + 1
+    player.st = "stop"                                          # stopped: no renewal
+    assert (await _get(app, url, Range="bytes=10-")).status_code == 404
+    player.st = "pause"                                         # paused on it, then a seek
+    r = await _get(app, url, Range="bytes=10-")
+    assert r.status_code == 206 and r.content == FILE[10:]
+    player.file = "Artist/other.mp3"                            # another song now
+    player_relay.revoke_room("kitchen")
+    assert (await _get(app, url)).status_code == 404
+
+
+async def test_a_station_resumes_through_the_relay_after_a_core_restart(
+    app, remote, player, tmp_path, monkeypatch,
+) -> None:
+    monkeypatch.setenv("DOMOVOI_PLAYER_RELAY_DIR", str(tmp_path))
+    remote.plan["good.example/live"] = [_audio(), _audio()]
+    url = _radio()
+    saved = (tmp_path / "entries.json").read_text(encoding="utf-8")
+    assert url.rsplit("/", 1)[1] not in saved                  # a hash of the token, never the token
+    # The core restarts: every grant and in-memory record is gone.
+    player_relay._GRANTS.clear()
+    player_relay._RECORDS.clear()
+    player_relay._records_loaded = False
+    player.file = url                                           # MPD resumed its queue
+    r = await _get(app, url)
+    assert r.status_code == 200 and r.content == AUDIO
+    assert [k for k, _ in remote.seen] == ["good.example/live"]
+
+
+async def test_a_token_the_core_never_minted_is_not_renewed(app, remote, player) -> None:
+    url = ROUTE.url("/v1/player-relay/" + "A" * 43)
+    player.file = url
+    assert (await _get(app, url)).status_code == 404
+    assert remote.seen == []

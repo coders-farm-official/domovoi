@@ -48,6 +48,23 @@ refused and a running stream ends. Each connection reads no faster than
 :data:`MAX_BYTES_PER_SEC` after a :data:`BURST_BYTES` start, and ends
 after :data:`MAX_DURATION_SEC`.
 
+Queue entries (L20, review 2026-11-23): a relay URL sits in the room's
+queue for as long as the entry does, which is longer than a token lives (a
+spent ``radio`` connection, a ``file`` past its hours, a core restart that
+forgot every grant). So each minted token also leaves a RECORD: the room,
+the remote URL and the kind, kept core-side (in memory and in an
+owner-only file, :func:`_records_path`, keyed by a hash of the token, never
+the token). When a token's grant is gone, the player's request for it is
+admitted again (:func:`_renew`: a fresh grant on the same token, as if just
+minted) only when all of these hold: a record says this core minted it for
+that room, the request comes from that room's player's address, and that
+room's player has this very entry as its current song and is playing or
+paused on it (the player is fetching the entry it was told to play). A
+stop still ends the stream at once; it is the next play of the same entry
+that renews. The queue checks (domovoi/relay_queue.py) rewrite or remove
+what a record can't vouch for, and drop the records of entries a queue no
+longer holds.
+
 Stalls (M4, review 2026-11-23): the remote server has
 :data:`OPEN_DEADLINE_SEC` to answer with its headers and first bytes, or
 the player's request is answered 504 and nothing is held. While a stream
@@ -59,10 +76,15 @@ the grant (a stop, a new relay, internet set to No) is looked at every
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
+import os
 import re
 import secrets
+import sys
 import time
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
@@ -157,6 +179,148 @@ class _Grant:
 _GRANTS: dict[str, _Grant] = {}
 
 
+# ─── Records: what a queued relay URL stands for (L20) ────────────────────
+
+#: The most records kept for one room, and in all (oldest go first).
+MAX_RECORDS_PER_ROOM = 8
+MAX_RECORDS = 1024
+
+
+@dataclass(frozen=True)
+class Record:
+    """What a relay URL this core minted stands for. ``digest`` is a hash
+    of the token, never the token."""
+
+    room_id: str
+    url: str
+    kind: str
+    digest: str
+
+
+#: digest -> record, oldest first.
+_RECORDS: dict[str, Record] = {}
+_records_loaded = False
+
+
+def digest_of(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def token_of(player_url: str | None) -> str | None:
+    """The token in a relay URL (``.../v1/player-relay/<token>``), else None."""
+    if not isinstance(player_url, str) or _PREFIX not in player_url:
+        return None
+    token = player_url.split(_PREFIX, 1)[1]
+    if not token or not all(c.isascii() and (c.isalnum() or c in "-_") for c in token):
+        return None
+    return token
+
+
+def _records_path() -> Path:
+    base = os.environ.get("DOMOVOI_PLAYER_RELAY_DIR") or str(Path.home() / ".domovoi" / "player_relay")
+    return Path(base) / "entries.json"
+
+
+def _load_records() -> None:
+    global _records_loaded
+    if _records_loaded:
+        return
+    _records_loaded = True
+    try:
+        raw = json.loads(_records_path().read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return
+    except Exception as e:  # noqa: BLE001 - a damaged file is a fresh start
+        log.warning("player relay: couldn't read the queued-entry records (%s)", type(e).__name__)
+        return
+    for row in raw if isinstance(raw, list) else []:
+        try:
+            rec = Record(str(row["room_id"]), str(row["url"]), str(row["kind"]), str(row["digest"]))
+        except (KeyError, TypeError):
+            continue
+        if rec.kind in KINDS and rec.room_id and rec.digest:
+            _RECORDS[rec.digest] = rec
+
+
+def _save_records() -> None:
+    path = _records_path()
+    rows = [dict(room_id=r.room_id, url=r.url, kind=r.kind, digest=r.digest)
+            for r in _RECORDS.values()]
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if sys.platform != "win32":
+            try:
+                os.chmod(path.parent, 0o700)
+            except OSError:
+                pass
+        tmp = path.with_name(path.name + ".tmp")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0)
+        with os.fdopen(os.open(tmp, flags, 0o600), "w", encoding="utf-8") as f:
+            json.dump(rows, f)
+        os.replace(tmp, path)
+    except OSError as e:
+        log.warning("player relay: couldn't save the queued-entry records (%s)", type(e).__name__)
+
+
+def _remember(rec: Record) -> None:
+    _load_records()
+    _RECORDS.pop(rec.digest, None)
+    _RECORDS[rec.digest] = rec
+    mine = [d for d, r in _RECORDS.items() if r.room_id == rec.room_id]
+    for d in mine[: max(0, len(mine) - MAX_RECORDS_PER_ROOM)]:
+        _RECORDS.pop(d, None)
+    while len(_RECORDS) > MAX_RECORDS:
+        _RECORDS.pop(next(iter(_RECORDS)))
+    _save_records()
+
+
+def record_for(player_url: str | None) -> Record | None:
+    """The record of a relay URL this core minted (any room), else None."""
+    token = token_of(player_url)
+    if token is None:
+        return None
+    _load_records()
+    return _RECORDS.get(digest_of(token))
+
+
+def is_relay_url(uri: str | None) -> bool:
+    """A relay URL this core minted: its token is a live grant or has a
+    record. A look-alike path on some other server is not."""
+    token = token_of(uri)
+    return token is not None and (token in _GRANTS or record_for(uri) is not None)
+
+
+def forget_records(room_id: str, *, keep: set[str]) -> int:
+    """Drop ``room_id``'s records whose digest is not in ``keep`` (the
+    entries its queue still holds). Returns how many went."""
+    _load_records()
+    gone = [d for d, r in _RECORDS.items() if r.room_id == room_id and d not in keep]
+    for d in gone:
+        _RECORDS.pop(d, None)
+    if gone:
+        _save_records()
+    return len(gone)
+
+
+_TOKEN_IN_TEXT = re.compile(r"(/v1/player-relay/)([A-Za-z0-9_\-]+)")
+
+
+def redact(text: Any) -> Any:
+    """``text`` with every relay token replaced by a non-secret stand-in
+    (``~`` and a hash of the token), for an open read (L23, review
+    2026-11-23): the same entry reads the same everywhere, so two reads
+    still compare equal, and the token itself is never shown. Anything
+    but a string is returned as it is."""
+    if not isinstance(text, str) or _PREFIX not in text:
+        return text
+    return _TOKEN_IN_TEXT.sub(lambda m: m.group(1) + "~" + digest_of(m.group(2))[:16], text)
+
+
+def url_hash(url: str | None) -> str:
+    """A short, non-reversible label for a URL in a log line (never the URL)."""
+    return "url#" + hashlib.sha256(str(url or "").encode("utf-8")).hexdigest()[:12]
+
+
 def _clock() -> float:
     return time.monotonic()
 
@@ -198,21 +362,76 @@ def mint(room_id: str, url: str, route: Any, *, kind: str = "file") -> str:
     now = _clock()
     _prune(now)
     token = secrets.token_urlsafe(32)
-    _GRANTS[token] = _Grant(
-        room_id=room_id, url=str(url), kind=kind, route=route,
-        open_by=now + OPEN_WITHIN_SEC,
-        expires_at=now + (FILE_TTL_SEC if kind == "file" else MAX_DURATION_SEC),
-    )
+    _grant(token, room_id, str(url), kind, route, now)
+    _remember(Record(room_id=room_id, url=str(url), kind=kind, digest=digest_of(token)))
     return route.url(_PREFIX + token)
 
 
+def _grant(token: str, room_id: str, url: str, kind: str, route: Any, now: float) -> _Grant:
+    grant = _Grant(
+        room_id=room_id, url=url, kind=kind, route=route,
+        open_by=now + OPEN_WITHIN_SEC,
+        expires_at=now + (FILE_TTL_SEC if kind == "file" else MAX_DURATION_SEC),
+    )
+    _GRANTS[token] = grant
+    return grant
+
+
 def target_for(player_url: str | None) -> str | None:
-    """The remote URL a relay URL handed to a player stands for, while its
-    token is still good; None otherwise (any other URL included)."""
-    if not player_url or _PREFIX not in player_url:
+    """The remote URL a relay URL handed to a player stands for: its live
+    grant's, else its record's (a queued entry that renews when it plays);
+    None for any other URL."""
+    token = token_of(player_url)
+    if token is None:
         return None
-    grant = _GRANTS.get(player_url.rsplit("/", 1)[-1])
-    return grant.url if grant is not None and not grant.ended else None
+    grant = _GRANTS.get(token)
+    if grant is not None and not grant.ended:
+        return grant.url
+    rec = record_for(player_url)
+    return rec.url if rec is not None else None
+
+
+async def _route_for(room_id: str) -> Any:
+    from domovoi.player_route import player_route
+
+    return await player_route(room_id, own=True)
+
+
+async def _plays_entry(room_id: str, token: str) -> bool:
+    """Whether ``room_id``'s own player has the relay entry for ``token`` as
+    its current song and is playing or paused on it."""
+    from domovoi.clients.mpd import own_player
+
+    client = own_player(room_id)
+    if client is None:
+        return False
+    try:
+        song = await client.current_song()
+        state = await client.state()
+    except Exception as e:  # noqa: BLE001 - can't tell: no renewal
+        log.debug("player relay: room %s's player didn't say what it plays: %s", room_id, e)
+        return False
+    return state in ("play", "pause") and token_of(str((song or {}).get("file") or "")) == token
+
+
+async def _renew(token: str, caller: str | None) -> _Grant | None:
+    """A fresh grant for a queued entry whose own has gone (module
+    docstring, "Queue entries"); None when anything doesn't hold."""
+    _load_records()
+    rec = _RECORDS.get(digest_of(token))
+    if rec is None:
+        return None
+    route = await _route_for(rec.room_id)
+    if route is None or not route.admits(caller):
+        return None
+    if not await _plays_entry(rec.room_id, token):
+        return None
+    revoke_room(rec.room_id)
+    now = _clock()
+    _prune(now)
+    _grant(token, rec.room_id, rec.url, rec.kind, route, now)
+    log.info("player relay: room %s's queued entry renewed as it plays", rec.room_id)
+    return _admit(token, caller)
 
 
 def _admit(token: str, caller: str | None) -> _Grant | None:
@@ -426,9 +645,11 @@ async def serve(token: str, request: Any) -> StreamingResponse:
         raise HTTPException(status_code=404, detail="not found")
     grant = _admit(token, caller)
     if grant is None:
+        grant = await _renew(token, caller)
+    if grant is None:
         raise HTTPException(status_code=404, detail="not found")
     if egress.check_destination(grant.url) is not None:
-        egress.log_refusal(f"player relay {grant.url[:120]}")
+        egress.log_refusal(f"player relay {url_hash(grant.url)}")
         raise egress.http_exception("a room's stream")
     # Identity: the bytes (and any ICY title blocks counted through them)
     # pass exactly as the remote server sent them.
@@ -458,7 +679,7 @@ async def serve(token: str, request: Any) -> StreamingResponse:
         if grant.ended or grant.generation != mine:
             return False
         if egress.check_destination(grant.url) is not None:
-            egress.log_refusal(f"player relay {grant.url[:120]}")
+            egress.log_refusal(f"player relay {url_hash(grant.url)}")
             return False
         return True
 
@@ -548,4 +769,8 @@ async def player_relay_stream(token: str, request: Request):
 
 
 def reset_for_tests() -> None:
+    """Forget every grant and record (in memory; the file is left)."""
+    global _records_loaded
     _GRANTS.clear()
+    _RECORDS.clear()
+    _records_loaded = True

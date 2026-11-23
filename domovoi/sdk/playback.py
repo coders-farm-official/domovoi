@@ -88,7 +88,7 @@ class PlaybackAPI:
         from domovoi import player_relay
 
         if egress.check_destination(player_relay.target_for(stream_url) or stream_url) is not None:
-            egress.log_refusal(f"music stream {stream_url[:120]}")
+            egress.log_refusal(f"music stream {player_relay.url_hash(stream_url)}")
             return Response(
                 text=(
                     f"{egress.spoken_offline_phrase()}, so I can't play "
@@ -96,6 +96,22 @@ class PlaybackAPI:
                 ),
                 data={"stream_url": stream_url, "ok": False, "status": "internet_off"},
             )
+        # A raw internet URL never reaches the room's queue (L20): it is
+        # played through the core's relay, as a file the player may seek
+        # in (a plugin that knows it is a live station asks relay_url
+        # with kind="radio" itself).
+        from domovoi.relay_queue import is_internet_uri
+
+        if is_internet_uri(stream_url):
+            try:
+                stream_url = await self.relay_url(room_id, stream_url, kind="file")
+            except (ValueError, player_relay.RelayUnavailable) as e:
+                log.warning("play_url: room=%s: the stream can't be relayed (%s)",
+                            room_id, type(e).__name__)
+                return Response(
+                    text=f"I found {title}, but the music player wouldn't accept the stream.",
+                    data={"ok": False},
+                )
         ok = False
         try:
             ok = await get_mpd_client_for(room_id).prepare_url(
@@ -115,6 +131,8 @@ class PlaybackAPI:
         # Now-playing stamp — data carries "stream_url" by convention (the
         # sweeper's freshness key) and "title" for the dashboard card.
         data = dict(now_playing_data or {})
+        if player_relay.token_of(stream_url) is not None:
+            data["stream_url"] = stream_url  # what the player holds (a relay URL)
         data.setdefault("stream_url", stream_url)
         data.setdefault("title", title)
         if play_ref is not None:
@@ -139,7 +157,9 @@ class PlaybackAPI:
                         title=title,
                         artist=artist,
                         url=play_ref,
-                        stream_url=stream_url,
+                        # The remote URL, never a relay token: the queue
+                        # check reads it back (domovoi/relay_queue.py).
+                        stream_url=player_relay.target_for(stream_url) or stream_url,
                     )
             except Exception as e:
                 log.debug("play_url: media_plays record failed: %s", e)

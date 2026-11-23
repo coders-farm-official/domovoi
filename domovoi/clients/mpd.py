@@ -29,10 +29,20 @@ def refuses_stream_url(url: str) -> bool:
     ``never`` and its host is not on this network. MPD fetches a queued
     stream itself, out of sight of every in-process gate, so the check has
     to happen before ``add``. The SDK's ``playback.play_url`` refuses first
-    with a spoken reply; this is the backstop for direct callers."""
-    if egress.check_destination(url) is None:
+    with a spoken reply; this is the backstop for direct callers.
+
+    Under every answer, an internet URL that is not a relay URL the core
+    minted is refused too (L20, domovoi/relay_queue.py); a relay URL is
+    judged by the remote URL it stands for."""
+    from domovoi import player_relay
+    from domovoi.relay_queue import refuses_queue_uri
+
+    if refuses_queue_uri(url):
+        return True
+    target = player_relay.target_for(url) or url
+    if egress.check_destination(target) is None:
         return False
-    egress.log_refusal(f"music stream {str(url)[:120]}")
+    egress.log_refusal(f"music stream {player_relay.url_hash(target)}")
     return True
 
 
@@ -283,8 +293,10 @@ class MPDStubClient:
         # path in ``refused_files`` (as MPD refuses one not in its database).
         from pathlib import PurePosixPath
 
+        from domovoi.relay_queue import refuses_queue_uri
+
         def _takes(uri: str) -> bool:
-            return bool(uri) and uri not in self.refused_files
+            return bool(uri) and uri not in self.refused_files and not refuses_queue_uri(uri)
 
         songs = [
             {"file": uri, "title": PurePosixPath(uri).stem}
@@ -333,8 +345,10 @@ class MPDStubClient:
 
         out: list[dict[str, Any] | None] = []
         taken: list[dict[str, Any]] = []
+        from domovoi.relay_queue import refuses_queue_uri
+
         for uri in uris:
-            if not uri or uri in self.refused_files:
+            if not uri or uri in self.refused_files or refuses_queue_uri(uri):
                 out.append(None)
                 continue
             entry = self._assign_ids([{"file": uri, "title": PurePosixPath(uri).stem}])[0]
@@ -342,6 +356,15 @@ class MPDStubClient:
             out.append({"file": uri, "id": entry["id"]})
         self._insert(taken, position)
         return out
+
+    async def queue_tag(self, song_id: int, *, title: str | None = None,
+                        artist: str | None = None) -> None:
+        for entry in self._queue:
+            if int(entry["id"]) == int(song_id):
+                if title:
+                    entry["title"] = title
+                if artist:
+                    entry["artist"] = artist
 
     async def play_id(self, song_id: int, *, paused: bool = False) -> bool:
         for entry in self._queue:
@@ -1033,6 +1056,16 @@ class RealMPDClient:
                 if at is not None:
                     at += 1
         return out
+
+    async def queue_tag(self, song_id: int, *, title: str | None = None,
+                        artist: str | None = None) -> None:
+        """Stamp a stream entry's title / artist (``addtagid``), as
+        ``play_url`` does: a relay entry rewritten by domovoi/relay_queue.py
+        keeps the station name the favorites match on."""
+        async with self._connect() as c:
+            for tag, value in (("title", title), ("artist", artist)):
+                if value:
+                    await c.addtagid(int(song_id), tag, str(value))
 
     async def play_id(self, song_id: int, *, paused: bool = False) -> bool:
         """``playid``: play that queue entry now (the queue's "play this
