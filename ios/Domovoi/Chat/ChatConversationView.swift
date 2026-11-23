@@ -268,7 +268,7 @@ struct ChatConversationView: View {
     /// **Nil, not `false`, when the row is not in hand.** A conversation can
     /// be reached before the list has loaded — `takePendingChatThread()`
     /// (``ChatView``) races it, and the archived list is only fetched when the
-    /// archived view is opened — and a chip reading "internet off" for a chat
+    /// archived view is opened — and a chip reading "internet: ask first" for a chat
     /// the server has on states the one fact it exists to state, wrongly.
     /// ``ChatMoreModel/internetAllowedKnown`` keeps it blank instead, and
     /// ``ChatMoreModel/seedInternetAllowed(_:)`` fills it in below.

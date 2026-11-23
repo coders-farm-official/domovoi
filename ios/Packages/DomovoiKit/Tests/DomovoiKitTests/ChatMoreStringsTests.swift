@@ -205,6 +205,7 @@ final class ChatMoreStringsTests: XCTestCase {
         ("internetOff", ChatMoreStrings.internetOff),
         ("internetAlwaysOn", ChatMoreStrings.internetAlwaysOn),
         ("internetOnForThisChat", ChatMoreStrings.internetOnForThisChat),
+        ("internetAskFirst", ChatMoreStrings.internetAskFirst),
         ("verbChangeIt", ChatMoreStrings.verbChangeIt),
         ("headsUp", ChatMoreStrings.headsUp),
         ("neverWarn", ChatMoreStrings.neverWarn),
@@ -282,7 +283,7 @@ final class ChatMoreStringsTests: XCTestCase {
         ("notAPicture", ChatMoreStrings.notAPicture),
         ("uploadNotAPicture", ChatMoreStrings.uploadNotAPicture),
         ]
-        XCTAssertEqual(ported.count, 84, "a string added to the port is checked here too")
+        XCTAssertEqual(ported.count, 85,"a string added to the port is checked here too")
         for (name, ours) in ported {
             assertKotlinSays(name, ours)
         }
