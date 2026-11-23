@@ -842,7 +842,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     #   podcast_feed_poller → calendar_feed_refresher → plugin_update_check →
     #   audiobook_indexer →
     #   room_book_positions →
-    #   command_capture_pruner → acquisition_budget_sweeper → guests_seen_pruner →
+    #   command_capture_pruner → support_session_pruner →
+    #   acquisition_budget_sweeper → guests_seen_pruner →
     #   printer_status → print_jobs →
     #   print_history → voice_history_pruner → container_guard → chat_video → scan_reader →
     #   listenbrainz_fetch →

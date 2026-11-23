@@ -171,9 +171,15 @@ async def test_web_routes_refuse_a_bad_room_id(method: str, path: str) -> None:
 
 
 def test_the_approval_buttons_encode_the_room_id() -> None:
+    # Since rooms slice 8 the approval is addressed by the device's own
+    # satellite id (the core's path segment is the satellite id since
+    # piece 2), falling back to the room id from an older core. Either one
+    # rides encoded, never raw.
     src = (STATIC / "satellites.jsx").read_text(encoding="utf-8")
-    assert "`/api/satellites/approvals/${encodeURIComponent(a.room_id)}/${action}`" in src
+    assert ("`/api/satellites/approvals/${encodeURIComponent(a.satellite_id || a.room_id)}/${action}`"
+            in src)
     assert "/api/satellites/approvals/${a.room_id}" not in src
+    assert "/api/satellites/approvals/${a.satellite_id" not in src
 
 
 _ROOM_IN_URL = re.compile(

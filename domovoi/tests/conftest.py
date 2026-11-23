@@ -401,6 +401,22 @@ def _not_shutting_down():
 
 
 @pytest.fixture(autouse=True)
+def _mpd_clients_rebound():
+    """A test that REBINDS the MPD client cache (``mpd._clients = {...}``,
+    common in the handler tests) never hands its fakes to the next test in
+    the process: the module's own dict is put back afterwards. Without it a
+    later test asking for "kitchen" got an earlier test's fake player, one
+    that never tells the room playout of a pause (test_room_sound failed
+    only after test_music_other_artist on the same worker)."""
+    from domovoi.clients import mpd
+
+    own = mpd._clients
+    yield
+    if mpd._clients is not own:
+        mpd._clients = own
+
+
+@pytest.fixture(autouse=True)
 def _no_groups():
     """No test starts with another test's groups or shared queues
     (domovoi/music_groups.py keeps them in memory, as the core does)."""

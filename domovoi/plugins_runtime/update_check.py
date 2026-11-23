@@ -520,7 +520,7 @@ ASSET_HOSTS = frozenset({
     "api.github.com", "github.com",
     "objects.githubusercontent.com", "release-assets.githubusercontent.com",
 })
-_SHA256_LINE = re.compile(r"^([0-9a-fA-F]{64})\s+\*?(\S.*?)\s*$")
+_SHA256_LINE = re.compile(r"^([0-9a-fA-F]{64})\s+\*?(\S.*?)\s*\Z")
 
 
 def asset_name(slug: str, version: Version) -> str:
