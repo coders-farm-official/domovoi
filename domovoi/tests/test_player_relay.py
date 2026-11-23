@@ -16,6 +16,8 @@ pinned request goes to the address, by name in Host).
 
 from __future__ import annotations
 
+import asyncio
+import functools
 import ipaddress
 from typing import Any
 
@@ -25,6 +27,7 @@ from fastapi import FastAPI
 
 from domovoi import egress, net_safety, player_relay
 from domovoi.player_route import PlayerRoute
+from domovoi.tests import raw_stream_testkit
 
 PUBLIC_V4 = "93.184.216.34"
 PLAYER = "172.17.0.5"
@@ -72,6 +75,12 @@ def _ranged(data: bytes, wanted: str | None) -> httpx.Response:
         headers={**base, "content-range": f"bytes {start}-{end}/{len(data)}"},
         content=data[start:end + 1],
     )
+
+
+@pytest.fixture(autouse=True)
+def _raw_helpers(monkeypatch):
+    """H2's net_safety helpers, until they arrive from main."""
+    raw_stream_testkit.install(monkeypatch)
 
 
 @pytest.fixture(autouse=True)
@@ -341,13 +350,16 @@ async def test_the_token_expires_if_not_opened_in_time(app, remote, monkeypatch,
 
 
 @pytest.mark.parametrize("kind", player_relay.KINDS)
-async def test_only_the_rooms_player_may_use_it_and_a_stranger_ends_it(app, remote, kind) -> None:
+async def test_only_the_rooms_player_may_use_it_and_a_stranger_changes_nothing(
+    app, remote, kind,
+) -> None:
+    """L23 (review 2026-11-23): the token is readable on open routes, so a
+    stranger presenting it is answered 404 and the room's stream goes on."""
     remote.plan["good.example/live"] = [_audio()]
     url = player_relay.mint("kitchen", "http://good.example/live", ROUTE, kind=kind)
     assert (await _get(app, url, caller="192.168.1.30")).status_code == 404
-    # Ended by the stranger's try: the player gets nothing either.
-    assert (await _get(app, url)).status_code == 404
     assert remote.seen == []
+    assert (await _get(app, url)).status_code == 200
 
 
 async def test_a_file_token_rechecks_the_caller_on_every_range(app, remote) -> None:
@@ -355,8 +367,19 @@ async def test_a_file_token_rechecks_the_caller_on_every_range(app, remote) -> N
     url = _file()
     assert (await _get(app, url)).status_code == 200
     assert (await _get(app, url, caller="192.168.1.30", Range="bytes=10-")).status_code == 404
-    assert (await _get(app, url, Range="bytes=10-")).status_code == 404
-    assert len(remote.seen) == 1
+    assert (await _get(app, url, Range="bytes=10-")).status_code == 206
+    assert len(remote.seen) == 2
+
+
+@pytest.mark.parametrize("header", ["X-Forwarded-For", "Forwarded", "X-Real-IP"])
+async def test_a_request_with_a_forwarding_header_is_refused(app, remote, header) -> None:
+    """L24: the player calls the core directly; a forwarded request (a
+    local process claiming the player's address) is refused."""
+    remote.files["files.example/song.flac"] = FILE
+    url = _file()
+    assert (await _get(app, url, **{header: PLAYER})).status_code == 404
+    assert remote.seen == []
+    assert (await _get(app, url)).status_code == 200
 
 
 @pytest.mark.parametrize("kind", player_relay.KINDS)
@@ -525,3 +548,151 @@ def test_the_route_is_open_and_marked_so() -> None:
     from domovoi.webkit import is_open_endpoint
 
     assert is_open_endpoint(player_relay.player_relay_stream)
+
+
+# ─── H2: nothing is decompressed ─────────────────────────────────────────
+
+
+@functools.lru_cache(maxsize=1)
+def _nested_gzip(size: int, depth: int = 2) -> bytes:
+    import gzip
+
+    data = b"\0" * size
+    for _ in range(depth):
+        data = gzip.compress(data, compresslevel=9)
+    return data
+
+
+@pytest.mark.parametrize("kind", player_relay.KINDS)
+@pytest.mark.parametrize("coding", ["gzip, gzip", "gzip", "br", "deflate"])
+async def test_a_compressed_answer_is_refused_not_decoded(app, remote, kind, coding) -> None:
+    """H2 (review 2026-11-23): a station answering with nested gzip (a few
+    KB on the wire, hundreds of MB decoded) gets a 502 before a byte is
+    decoded; the request asked for identity."""
+    bomb = _nested_gzip(32 * 1024 * 1024)
+    assert len(bomb) < 200_000
+    # A stream, not content=: httpx would decode content= as it builds the
+    # answer, here in the test.
+    remote.plan["good.example/live"] = [httpx.Response(
+        200, headers={"content-type": "audio/mpeg", "content-encoding": coding},
+        stream=httpx.ByteStream(bomb),
+    )]
+    r = await _get(app, player_relay.mint("kitchen", "http://good.example/live", ROUTE, kind=kind))
+    assert r.status_code == 502
+    assert "compressed" in r.json()["detail"]
+    (_, sent) = remote.seen[-1]
+    assert sent["accept-encoding"] == "identity"
+
+
+async def test_the_relay_reads_raw_bytes_in_capped_chunks(remote, monkeypatch) -> None:
+    """The body is read through net_safety.iter_raw, chunk by chunk, never
+    through the library's decoders, and no chunk passed on is larger than
+    the relay's chunk size."""
+    calls: list[int] = []
+    real = net_safety.iter_raw
+
+    async def spy(response, chunk_size=65536):
+        calls.append(chunk_size)
+        async for c in real(response, chunk_size=chunk_size):
+            yield c
+
+    monkeypatch.setattr(net_safety, "iter_raw", spy, raising=False)
+    remote.plan["good.example/live"] = [_audio(b"x" * 200_000)]
+    resp = await player_relay.serve(_radio().rsplit("/", 1)[-1], _Request())
+    sizes = [len(c) async for c in resp.body_iterator]
+    assert calls == [player_relay._CHUNK]
+    assert sum(sizes) == 200_000 and max(sizes) <= player_relay._CHUNK
+
+
+# ─── M4: a stalled upstream ends ─────────────────────────────────────────
+
+
+# Whole chunks: a raw read hands on full chunks while bytes keep coming.
+STALL_HEAD = AUDIO[:4] + bytes(2 * player_relay._CHUNK - 4)
+
+
+def _stalled(monkeypatch, *, first: bytes | None) -> asyncio.Event:
+    """The remote server answers nothing (``first=None``), or its headers
+    and ``first`` then nothing more."""
+    import asyncio as _asyncio
+
+    never = _asyncio.Event()
+
+    class Stall(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            if first:
+                yield first
+            await never.wait()
+
+    class Transport(httpx.AsyncBaseTransport):
+        # Not MockTransport: it reads the whole answer before handing it on.
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            if first is None:
+                await never.wait()
+            return httpx.Response(200, headers={"content-type": "audio/mpeg"}, stream=Stall())
+
+    def resolve(host: str):
+        return [ipaddress.ip_address(PUBLIC_V4)]
+
+    monkeypatch.setattr(net_safety, "resolve_host", resolve)
+
+    def client(*args: Any, **kwargs: Any) -> httpx.AsyncClient:
+        kwargs["transport"] = Transport()
+        return _RealClient(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", client)
+    return never
+
+
+async def test_an_upstream_that_never_answers_is_a_504_in_time(app, monkeypatch) -> None:
+    """M4 (review 2026-11-23): a server that accepts and never answers no
+    longer holds the player's request (and one of the core's connections)
+    forever."""
+    import time as _time
+
+    _stalled(monkeypatch, first=None)
+    monkeypatch.setattr(player_relay, "OPEN_DEADLINE_SEC", 0.3)
+    began = _time.monotonic()
+    r = await _get(app, _radio())
+    assert r.status_code == 504
+    assert _time.monotonic() - began < 5
+
+
+async def test_a_stream_that_stalls_ends_at_the_read_timeout(monkeypatch) -> None:
+    _stalled(monkeypatch, first=STALL_HEAD)
+    monkeypatch.setattr(player_relay, "READ_TIMEOUT_SEC", 0.3)
+    monkeypatch.setattr(player_relay, "CHECK_EVERY_SEC", 0.05)
+    resp = await player_relay.serve(_radio().rsplit("/", 1)[-1], _Request())
+    assert await asyncio.wait_for(_drain(resp), 5) == len(STALL_HEAD)
+
+
+async def test_a_stop_ends_a_stalled_stream_without_waiting_for_bytes(monkeypatch) -> None:
+    """The read waits on bytes that never come; the stop still ends it
+    (the grant is looked at while the read waits)."""
+    _stalled(monkeypatch, first=STALL_HEAD[:player_relay._CHUNK])
+    monkeypatch.setattr(player_relay, "CHECK_EVERY_SEC", 0.05)
+    resp = await player_relay.serve(_radio().rsplit("/", 1)[-1], _Request())
+    got = await asyncio.wait_for(
+        _drain(resp, after_first=lambda: player_relay.revoke_room("kitchen")), 5)
+    assert got == player_relay._CHUNK
+
+
+# ─── L25: minting ────────────────────────────────────────────────────────
+
+
+async def test_minting_checks_the_url_before_ending_the_rooms_relay(monkeypatch) -> None:
+    """L25: the outbound check runs before the room's current relay is
+    ended, and a made-up room name can't evict a real room's relay."""
+    from domovoi.clients import mpd as mpd_module
+    from domovoi.sdk import PlaybackAPI, RelayUnavailable
+
+    monkeypatch.setattr(mpd_module, "_room_ports", {"kitchen": (6650, 8050)})
+    api = PlaybackAPI("someplugin")
+    good = await api.relay_url("kitchen", "http://93.184.216.34/a.ogg")
+    with pytest.raises(ValueError):
+        await api.relay_url("kitchen", "http://192.168.1.1/admin")
+    assert api.relay_target(good) == "http://93.184.216.34/a.ogg"
+    for n in range(5):
+        with pytest.raises(RelayUnavailable):
+            await api.relay_url(f"made-up-{n}", "http://93.184.216.34/b.ogg")
+    assert api.relay_target(good) == "http://93.184.216.34/a.ogg"

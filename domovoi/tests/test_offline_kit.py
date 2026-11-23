@@ -290,6 +290,23 @@ def test_extra_files(tmp_path: Path) -> None:
     ])
 
 
+def test_an_unlisted_folder_and_a_link_are_reported(tmp_path: Path) -> None:
+    """M12 (review 2026-11-23): a folder kit.json lists nothing in (an
+    extra apt suite) and a link (a linked suite folder) are named, not
+    passed because they hold no unlisted plain file."""
+    import os
+
+    root = _make(tmp_path)
+    (root / "apt" / "amd64" / "ubuntu" / "dists" / "evil").mkdir(parents=True)
+    errors = _check(root).errors
+    assert "apt/amd64/ubuntu/dists/evil/ is not part of the kit (kit.json lists nothing in it)." in errors
+    try:
+        os.symlink(root / "wake", root / "wake-link", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("this system can't make a link here")
+    assert "wake-link is a link, which a kit never holds." in _check(root).errors
+
+
 def test_every_problem_is_reported_not_just_the_first(tmp_path: Path) -> None:
     root = _make(tmp_path)
     (root / "START-HERE.txt").unlink()

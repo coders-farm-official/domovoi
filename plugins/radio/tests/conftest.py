@@ -74,6 +74,15 @@ def _dlls_registered():
 
 
 @pytest.fixture(autouse=True)
+def _raw_stream_helpers(monkeypatch):
+    """The core's player relay reads through net_safety.open_raw_stream /
+    iter_raw (H2), which arrive from main; stand-ins until then."""
+    from domovoi.tests import raw_stream_testkit
+
+    raw_stream_testkit.install(monkeypatch)
+
+
+@pytest.fixture(autouse=True)
 def _fresh_client_singletons():
     """Reset the plugin clients' module-level singletons between tests
     so a test-injected stub can't leak into its neighbors."""

@@ -6,9 +6,12 @@ the core. So a plugin never hands it one. It asks
 ``sdk.playback.relay_url(room_id, remote_url, kind=...)`` and hands the
 player the URL that comes back: ``GET /v1/player-relay/<token>`` on the
 core, which fetches the remote URL itself through
-:func:`domovoi.net_safety.open_stream` (http(s) only, every redirect hop
-re-checked and pinned to the address its check judged) and passes the
-bytes on. Only audio or other media is passed: a page, a script or a
+:func:`domovoi.net_safety.open_raw_stream` (http(s) only, every redirect
+hop re-checked and pinned to the address its check judged, identity
+asked for and any other ``Content-Encoding`` refused) and passes the raw
+bytes on, read with :func:`domovoi.net_safety.iter_raw` in chunks of at
+most :data:`_CHUNK` bytes: nothing is ever decompressed, so a few bytes on
+the wire can't become gigabytes in the core (H2, review 2026-11-23). Only audio or other media is passed: a page, a script or a
 playlist (which a player would open entry by entry, past the relay) is
 refused before a byte moves.
 
@@ -19,8 +22,13 @@ proxy anyone can point somewhere.
 The token is random (256 bits), bound to one room, one remote URL and the
 address that room's player calls from (:func:`domovoi.player_route.player_route`),
 and must be first presented within :data:`OPEN_WITHIN_SEC`. A presentation
-from any other address ends it. A new token for the room, or a stop in the
-room, ends the old one and any stream it is serving. Then by kind:
+from any other address is answered 404 and changes nothing (L23: a LAN
+host that read a token can't end a room's stream with it), and so is any
+request that carries a forwarding header (L24: a local process could
+otherwise claim the player's address through the server's
+``X-Forwarded-For`` rewrite, which trusts loopback). A new token for the
+room, or a stop in the room, ends the old one and any stream it is
+serving. Then by kind:
 
 * ``radio`` (a live stream): good for ONE connection, as the radio plugin's
   own relay was (M11). ICY metadata is asked for when the player asks, and
@@ -39,6 +47,13 @@ and the internet answer: under ``INTERNET_ACCESS=never`` a request is
 refused and a running stream ends. Each connection reads no faster than
 :data:`MAX_BYTES_PER_SEC` after a :data:`BURST_BYTES` start, and ends
 after :data:`MAX_DURATION_SEC`.
+
+Stalls (M4, review 2026-11-23): the remote server has
+:data:`OPEN_DEADLINE_SEC` to answer with its headers and first bytes, or
+the player's request is answered 504 and nothing is held. While a stream
+runs, a read that waits longer than :data:`READ_TIMEOUT_SEC` ends it, and
+the grant (a stop, a new relay, internet set to No) is looked at every
+:data:`CHECK_EVERY_SEC` while a read waits, not only when bytes arrive.
 """
 
 from __future__ import annotations
@@ -79,7 +94,19 @@ MAX_BYTES_PER_SEC = 512 * 1024
 #: mints for room names that never play).
 MAX_GRANTS = 256
 CONNECT_TIMEOUT = 10.0
+#: The remote server's time to answer: headers and the first bytes (M4).
+OPEN_DEADLINE_SEC = 15.0
+#: The longest a running stream waits for its next bytes.
+READ_TIMEOUT_SEC = 30.0
+#: How often a waiting read looks at the grant and the internet answer.
+CHECK_EVERY_SEC = 2.0
 _CHUNK = 16 * 1024
+
+#: A request carrying any of these came through a proxy, or claims to: the
+#: room's player calls the core directly, so it is refused (L24).
+_FORWARDING_HEADERS = (
+    "forwarded", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "x-real-ip",
+)
 
 #: Station headers passed to the player for ``radio``.
 _ICY_HEADERS = ("icy-metaint", "icy-name", "icy-genre", "icy-description", "icy-br")
@@ -190,10 +217,16 @@ def target_for(player_url: str | None) -> str | None:
 
 def _admit(token: str, caller: str | None) -> _Grant | None:
     """The grant for ``token`` when this request may use it; None otherwise.
-    A ``radio`` token is spent by the first request that presents it,
-    whoever made it."""
+    A request from any address but the room's player's changes nothing
+    (L23); a ``radio`` token is spent by the player's first request."""
     grant = _GRANTS.get(token)
     if grant is None or grant.ended:
+        return None
+    if not grant.route.admits(caller):
+        log.warning(
+            "player relay: room %s's token presented from another address; refused",
+            grant.room_id,
+        )
         return None
     now = _clock()
     if grant.kind == "radio":
@@ -204,13 +237,6 @@ def _admit(token: str, caller: str | None) -> _Grant | None:
             _end(token)
             return None
     elif (not grant.opened and now > grant.open_by) or now > grant.expires_at:
-        _end(token)
-        return None
-    if not grant.route.admits(caller):
-        log.warning(
-            "player relay: room %s's token presented from another address; ended",
-            grant.room_id,
-        )
         _end(token)
         return None
     grant.opened = True
@@ -282,15 +308,11 @@ class _Upstream:
     _closed: bool = False
 
     def _iterator(self) -> Any:
+        # Raw bytes as sent, never decoded (H2): open_raw_stream refused any
+        # Content-Encoding, and iter_raw checks it again.
         if self._chunks is None:
-            self._chunks = self.response.aiter_bytes(chunk_size=_CHUNK)
+            self._chunks = net_safety.iter_raw(self.response, chunk_size=_CHUNK)
         return self._chunks
-
-    async def body(self):
-        if self.head:
-            yield self.head
-        async for chunk in self._iterator():
-            yield chunk
 
     def header(self, name: str) -> str | None:
         return self.response.headers.get(name)
@@ -306,17 +328,32 @@ class _Upstream:
 
 
 async def _open(url: str, headers: dict[str, str], kind: str, ranged: bool) -> _Upstream:
+    """The remote answer, checked, with its first bytes read: within
+    :data:`OPEN_DEADLINE_SEC` or a 504 (M4)."""
+    try:
+        return await asyncio.wait_for(_open_now(url, headers, kind, ranged), OPEN_DEADLINE_SEC)
+    except asyncio.TimeoutError as e:
+        raise _Refused(504, "upstream didn't answer in time") from e
+
+
+async def _open_now(url: str, headers: dict[str, str], kind: str, ranged: bool) -> _Upstream:
     import httpx
 
-    client = httpx.AsyncClient(timeout=httpx.Timeout(CONNECT_TIMEOUT, read=None))
+    client = httpx.AsyncClient(timeout=httpx.Timeout(CONNECT_TIMEOUT, read=READ_TIMEOUT_SEC))
     try:
-        resp = await net_safety.open_stream(client, url, headers=headers)
+        resp = await net_safety.open_raw_stream(client, url, headers=headers)
+    except net_safety.UnsupportedContentEncoding as e:
+        await client.aclose()
+        raise _Refused(502, "upstream sent compressed content, which is never relayed") from e
     except net_safety.OutboundFetchError as e:
         await client.aclose()
         raise _Refused(409, str(e)) from e
     except Exception as e:
         await client.aclose()
-        raise _Refused(502, f"upstream unreachable: {e}") from e
+        raise _Refused(502, f"upstream unreachable: {type(e).__name__}") from e
+    except BaseException:
+        await client.aclose()  # cancelled at the deadline
+        raise
     up = _Upstream(client=client, response=resp)
     try:
         if resp.status_code == 416 and ranged:
@@ -333,9 +370,11 @@ async def _open(url: str, headers: dict[str, str], kind: str, ranged: bool) -> _
         chunks = up._iterator()
         while not up.head:
             try:
-                up.head = await chunks.__anext__()
+                up.head = (await chunks.__anext__())[:_CHUNK]
             except StopAsyncIteration:
                 break
+            except net_safety.UnsupportedContentEncoding as e:
+                raise _Refused(502, "upstream sent compressed content, which is never relayed") from e
         if looks_like_playlist(up.head):
             raise _Refused(502, "upstream is a playlist, not media")
     except BaseException:
@@ -382,6 +421,9 @@ async def serve(token: str, request: Any) -> StreamingResponse:
     remote server can't satisfy, 502 for one that can't be relayed, else
     the bytes."""
     caller = request.client.host if request.client else None
+    if any(request.headers.get(h) is not None for h in _FORWARDING_HEADERS):
+        log.warning("player relay: a request with a forwarding header; refused")
+        raise HTTPException(status_code=404, detail="not found")
     grant = _admit(token, caller)
     if grant is None:
         raise HTTPException(status_code=404, detail="not found")
@@ -412,15 +454,29 @@ async def serve(token: str, request: Any) -> StreamingResponse:
 
     mine = grant.generation
 
+    def _still_good() -> bool:
+        if grant.ended or grant.generation != mine:
+            return False
+        if egress.check_destination(grant.url) is not None:
+            egress.log_refusal(f"player relay {grant.url[:120]}")
+            return False
+        return True
+
     async def _gen():
         began = _clock()
         sent = 0
+        chunks = up._iterator()
+        first = up.head
         try:
-            async for chunk in up.body():
-                if grant.ended or grant.generation != mine:
-                    break
-                if egress.check_destination(grant.url) is not None:
-                    egress.log_refusal(f"player relay {grant.url[:120]}")
+            while True:
+                if first:
+                    chunk, first = first, b""
+                else:
+                    chunk = await _next_chunk(chunks, _still_good)
+                    if chunk is None:
+                        break
+                    chunk = chunk[:_CHUNK]
+                if not _still_good():
                     break
                 elapsed = _clock() - began
                 if elapsed > MAX_DURATION_SEC:
@@ -446,6 +502,35 @@ async def serve(token: str, request: Any) -> StreamingResponse:
     except Exception:
         await up.aclose()
         raise
+
+
+async def _next_chunk(chunks: Any, still_good: Any) -> bytes | None:
+    """The stream's next chunk, or None when it ended, the grant went
+    (looked at every :data:`CHECK_EVERY_SEC` while the read waits), or the
+    read waited :data:`READ_TIMEOUT_SEC` (M4)."""
+    task = asyncio.ensure_future(chunks.__anext__())
+    waited = 0.0
+    try:
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=CHECK_EVERY_SEC)
+            if done:
+                try:
+                    return task.result()
+                except StopAsyncIteration:
+                    return None
+                except Exception as e:  # noqa: BLE001 - a broken or refused read ends the stream
+                    log.info("player relay: the stream ended (%s)", type(e).__name__)
+                    return None
+            waited += CHECK_EVERY_SEC
+            if waited >= READ_TIMEOUT_SEC or not still_good():
+                return None
+    finally:
+        if not task.done():
+            task.cancel()
+            try:
+                await task
+            except BaseException:  # noqa: BLE001 - only waiting for the cancel
+                pass
 
 
 router = APIRouter()

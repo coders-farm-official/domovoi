@@ -203,6 +203,38 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
   [TROUBLESHOOTING.md](TROUBLESHOOTING.md#rooms-with-several-satellites),
   [ROOM_AUDIO_PROTOCOL.md](ROOM_AUDIO_PROTOCOL.md).
 
+## 1.5.0 (unreleased) — Security: the player relay, plugin update sources, offline kit packages
+
+- **What changed.** Items of the 2026-11-23 security review on 1.5.0
+  code. The core's player relay asks a station for uncompressed audio and
+  refuses any compressed answer, reading raw bytes in small chunks (H2);
+  a station has 15 seconds to start answering, a stalled stream ends
+  after 30 seconds, and a stop ends a stalled stream at once (M4). A
+  relay link presented by any address but the room's player's, or with a
+  forwarding header, is refused without ending the room's stream, and
+  the access log no longer holds it (L23, L24); a relay is made only for
+  a room with a music player, after the outbound check (L25). Plugin
+  update checks pin each plugin's GitHub repository by its numeric ids:
+  a repository that moved, changed owner or was re-registered under the
+  same name reads "the repository moved or changed owner" and offers no
+  update, and the update's download is refused (M6). The update trust
+  screen lists a changed publisher and any new permission; a check
+  answer is dropped when the plugin was reinstalled from another repo
+  (L36), and one unreadable answer no longer stops the other plugins'
+  checks (L37). Installing from an offline kit stops when a package
+  folder on the stick is a link or has a name apt doesn't use, and apt
+  runs with unsigned sources refused (M12); the kit checker names
+  links and unlisted folders; Whisper's files come off a stick only by
+  name (L39). Windows Setup deletes its copy of the house identity
+  backup once the restore is recorded (L42).
+- **What to know.** The first update check after upgrading pins each
+  plugin's repository as it is then (`~/.domovoi/plugin_repo_pins.json`).
+  A plugin whose repository really moved shows "the repository moved or
+  changed owner": reinstall it from the new address to pin that one. A
+  plugin card on Home runs as part of the dashboard, like plugin pages:
+  "household-tier data only" is a rule for plugin authors, not a control
+  (L38, now said in PLUGIN_DEVELOPMENT.md).
+
 ## 1.5.0 (unreleased) — Security: pairing proof v2, chat reads, music-mix claim key
 
 - **What changed.** Three items of the 2026-11-22 security review (L9,
