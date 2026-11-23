@@ -302,6 +302,32 @@ class ContainerDecl:
 
 
 @dataclass(frozen=True)
+class IsolatedDecl:
+    """The ``[isolated]`` table (core 1.5.0): the plugin's decode-only
+    decoder, run out of process in a container the core builds and runs
+    (:mod:`domovoi.plugins_runtime.isolated`). ``decoder`` is
+    ``domovoi_plugin_<slug>.<subpackage>[.<module>...]:<function>``; the
+    image holds only that subpackage's ``.py`` files, the core's runner and
+    the Debian packages named in ``debian`` (from the core's allowlist)."""
+
+    decoder: str
+    debian: tuple[str, ...] = ()
+
+    @property
+    def module(self) -> str:
+        return self.decoder.split(":", 1)[0]
+
+    @property
+    def function(self) -> str:
+        return self.decoder.split(":", 1)[1]
+
+    @property
+    def subpackage(self) -> str:
+        """The subpackage copied into the image (``<package>/<sub>``)."""
+        return self.module.split(".")[1]
+
+
+@dataclass(frozen=True)
 class PluginManifest:
     # [plugin]
     slug: str
@@ -352,6 +378,8 @@ class PluginManifest:
     satellite: SatelliteDecl | None = None
     # [[containers]] (SDK 1.5)
     containers: tuple[ContainerDecl, ...] = ()
+    # [isolated] (core 1.5.0): the decode-only container mode
+    isolated: IsolatedDecl | None = None
     # [android]
     android_capabilities: tuple[str, ...] = ()
     # [assets]
@@ -598,6 +626,7 @@ def parse_manifest(toml_text: str) -> PluginManifest:
         "hardware",
         "filesystem_outside_data",
         "satellite_root",
+        "friend_houses",
     ):
         val = perms_raw.get(key, False)
         if not isinstance(val, bool):
@@ -788,6 +817,22 @@ def parse_manifest(toml_text: str) -> PluginManifest:
         )
 
     containers = _parse_containers(data.get("containers", []), warnings)
+    isolated = _parse_isolated(data.get("isolated"), slug)
+    if permissions.get("friend_houses"):
+        # Friend bytes are decoded only out of process (owner decision
+        # 2026-11-23: required for friend_houses plugins from 1.5.0).
+        if isolated is None:
+            raise ManifestError(
+                "permissions.friend_houses requires an [isolated] decoder: what "
+                "friend houses send is decoded only in the plugin's decode-only "
+                "container (docs/PLUGIN_DEVELOPMENT.md, \"[isolated]\")"
+            )
+        if not warnings:
+            raise ManifestError(
+                "permissions.friend_houses requires at least one "
+                "permissions.warnings entry saying what the plugin exchanges "
+                "with friend houses"
+            )
 
     android = data.get("android", {})
     if not isinstance(android, dict):
@@ -835,6 +880,7 @@ def parse_manifest(toml_text: str) -> PluginManifest:
         media_libraries=tuple(media_libraries),
         satellite=satellite,
         containers=containers,
+        isolated=isolated,
         android_capabilities=android_caps,
         migrations_dir=migrations_dir,
         sounds_dir=sounds_dir,
@@ -921,6 +967,55 @@ def _parse_containers(raw: Any, warnings: tuple[str, ...]) -> tuple[ContainerDec
             )
         )
     return tuple(out)
+
+
+# [isolated] (core 1.5.0): the decoder reference, and the Debian packages
+# a decode-only image may add, with the top-level modules each provides
+# (the import check in validate_plugin_dir). Nothing else is installed:
+# no pip, no other apt package.
+ISOLATED_DECODER_RE = re.compile(
+    r"^(domovoi_plugin_[a-z][a-z0-9_]{1,31})((?:\.[a-z_][a-z0-9_]{0,63}){1,4}):([A-Za-z_][A-Za-z0-9_]{0,63})\Z"
+)
+ISOLATED_DEBIAN_ALLOWLIST: dict[str, tuple[str, ...]] = {
+    "python3-pil": ("PIL",),
+    "python3-msgpack": ("msgpack",),
+    "python3-cbor2": ("cbor2",),
+}
+
+
+def _parse_isolated(raw: Any, slug: str) -> IsolatedDecl | None:
+    """``[isolated]``: the plugin's decode-only decoder."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ManifestError("[isolated] must be a table")
+    unknown = sorted(set(raw) - {"decoder", "debian"})
+    if unknown:
+        raise ManifestError(f"[isolated] has unknown keys {unknown}; allowed: decoder, debian")
+    decoder = _req_str(raw, "decoder", "isolated", max_len=200)
+    m = ISOLATED_DECODER_RE.match(decoder)
+    if not m or m.group(1) != f"domovoi_plugin_{slug}":
+        raise ManifestError(
+            f"isolated.decoder {decoder!r} must be "
+            f"'domovoi_plugin_{slug}.<subpackage>.<module>:<function>': a function "
+            f"in a subpackage of the plugin's own package"
+        )
+    if m.group(2).count(".") < 2:
+        raise ManifestError(
+            f"isolated.decoder {decoder!r} must name a module inside a subpackage "
+            f"(domovoi_plugin_{slug}.<subpackage>.<module>:<function>): only that "
+            f"subpackage is copied into the container"
+        )
+    debian = _str_list(raw, "debian", "isolated")
+    bad = sorted(set(debian) - set(ISOLATED_DEBIAN_ALLOWLIST))
+    if bad:
+        raise ManifestError(
+            f"isolated.debian names {bad}; a decode-only container may add only "
+            f"{sorted(ISOLATED_DEBIAN_ALLOWLIST)}"
+        )
+    if len(set(debian)) != len(debian):
+        raise ManifestError("isolated.debian lists a package more than once")
+    return IsolatedDecl(decoder=decoder, debian=tuple(sorted(debian)))
 
 
 _ROOM_PLAY_CHARS = re.compile(r"/[A-Za-z0-9_.~{}/-]*")
@@ -1162,7 +1257,97 @@ def validate_plugin_dir(root: Path, manifest: PluginManifest) -> list[str]:
                     f"satellite.pip_lockfile {sat.pip_lockfile!r} carries no "
                     f"--hash= entries"
                 )
+    if manifest.isolated is not None:
+        errors.extend(isolated_dir_problems(root, manifest))
     return errors
+
+
+# The decode-only image (domovoi/plugins_runtime/isolated.py) holds at most
+# this much of the plugin: its decoder subpackage's .py files.
+ISOLATED_MAX_FILES = 200
+ISOLATED_MAX_BYTES = 2 * 1024 * 1024
+
+
+def isolated_sources(root: Path, manifest: PluginManifest) -> tuple[list[tuple[str, Path]], list[str]]:
+    """``([(relative name, path)], problems)``: the ``.py`` files of the
+    ``[isolated]`` decoder's subpackage, sorted, that go into the image.
+    Symlinks, files past the caps and anything outside the subpackage are
+    problems, never copied."""
+    assert manifest.isolated is not None
+    pkg = manifest.package_name
+    sub = manifest.isolated.subpackage
+    base = root / pkg / sub
+    problems: list[str] = []
+    out: list[tuple[str, Path]] = []
+    if base.is_symlink() or not base.is_dir() or not (base / "__init__.py").is_file():
+        return [], [f"isolated.decoder: {pkg}/{sub}/ must be a package (a folder with __init__.py)"]
+    total = 0
+    for path in sorted(base.rglob("*")):
+        rel = path.relative_to(root).as_posix()
+        if path.is_symlink():
+            problems.append(f"isolated: {rel} is a symlink; the decoder's files must be plain files")
+            continue
+        if not path.is_file() or path.suffix != ".py" or "__pycache__" in path.parts:
+            continue
+        if not _inside(base, path):
+            problems.append(f"isolated: {rel} is outside {pkg}/{sub}/")
+            continue
+        total += path.stat().st_size
+        out.append((rel, path))
+    if len(out) > ISOLATED_MAX_FILES:
+        problems.append(f"isolated: {pkg}/{sub}/ has {len(out)} .py files; at most {ISOLATED_MAX_FILES}")
+    if total > ISOLATED_MAX_BYTES:
+        problems.append(f"isolated: {pkg}/{sub}/ holds {total} bytes of code; at most {ISOLATED_MAX_BYTES}")
+    module_file = root / Path(*manifest.isolated.module.split("."))
+    if not (module_file.with_suffix(".py").is_file() or (module_file / "__init__.py").is_file()):
+        problems.append(f"isolated.decoder: module {manifest.isolated.module} is missing")
+    return out, problems
+
+
+def isolated_dir_problems(root: Path, manifest: PluginManifest) -> list[str]:
+    """The ``[isolated]`` subpackage's layout and imports. It runs in a
+    container with only Python's standard library and the declared Debian
+    packages, so it may import nothing else: not Domovoi, not the rest of
+    the plugin, not a pip requirement."""
+    import sys
+
+    assert manifest.isolated is not None
+    files, problems = isolated_sources(root, manifest)
+    own = f"{manifest.package_name}.{manifest.isolated.subpackage}"
+    # The core's helper in the image (Image, reencode).
+    allowed = set(sys.stdlib_module_names) | {"domovoi_isolated"}
+    for pkg_name in manifest.isolated.debian:
+        allowed.update(ISOLATED_DEBIAN_ALLOWLIST.get(pkg_name, ()))
+    for rel, path in files:
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=rel)
+        except (SyntaxError, UnicodeDecodeError, ValueError) as e:
+            problems.append(f"isolated: {rel} does not parse: {e}")
+            continue
+        for node in ast.walk(tree):
+            names: list[str] = []
+            if isinstance(node, ast.Import):
+                names = [a.name for a in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                if node.level:
+                    # Relative: fine while it stays inside the subpackage.
+                    if node.level > len(rel.split("/")) - 2:
+                        problems.append(
+                            f"isolated: {rel} imports from outside its subpackage "
+                            f"({'.' * node.level}{node.module or ''})"
+                        )
+                    continue
+                names = [node.module or ""]
+            for name in names:
+                if name == own or name.startswith(own + "."):
+                    continue
+                if name.split(".")[0] in allowed:
+                    continue
+                problems.append(
+                    f"isolated: {rel} imports {name!r}; the decoder may import only the "
+                    f"standard library, domovoi_isolated, its own subpackage and isolated.debian packages"
+                )
+    return problems
 
 
 def _inside(root: Path, p: Path) -> bool:

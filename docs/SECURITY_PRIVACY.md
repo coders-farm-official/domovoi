@@ -2160,6 +2160,38 @@ What the install flow *does* do (verified in
   hostile plugin could build a `RegisteredSource(core=True)` itself and
   register it directly, or patch the module; nothing in-process can stop
   that. Same boundary as above: install plugins from publishers you trust.
+- **A plugin's decode-only container is the one place plugin code runs
+  outside the core (core 1.5.0).** A plugin that declares an `[isolated]`
+  decoder gets a container the core builds and runs
+  (`domovoi/plugins_runtime/isolated.py`), for decoding input it doesn't
+  trust; a plugin with the `friend_houses` permission must have one, and
+  its install is refused otherwise. The core writes the image itself, never
+  from a plugin's Dockerfile: the same digest-pinned Debian base as the
+  Friend Houses listener, Python and up to three allowlisted Debian
+  packages (no pip), the core's runner, and only the `.py` files of the
+  plugin's decoder subpackage, whose imports are checked at install. The
+  container guard trusts exactly the image ID the core built. The
+  container has the listener's wall: no network, read-only root, no
+  capabilities, no new privileges, user `nobody`, memory, process and CPU
+  caps, a small `noexec` tmpfs, no mounts, no environment, no logs. It
+  talks over stdin and stdout only, one length-prefixed request at a time (payload up to 256 KiB);
+  every answer is held to a size, depth, number and encoding check and
+  re-serialized by the core before the plugin's in-process code sees it,
+  and a hang, crash or malformed frame refuses the item and restarts the
+  container with backoff. An image a decoder returns is decoded and
+  encoded anew inside the container by the core's helper (PNG, JPEG or
+  WebP in; a pixel cap checked before decoding; one frame; EXIF, GPS, XMP,
+  ICC and text dropped by copying only the pixels; at most 1024 pixels a
+  side), and the core re-reads the PNG or WebP that comes out without
+  decoding it, refusing any chunk but the pixels', so the browser never
+  gets image bytes a friend crafted. The image build is capped at 1 GB and
+  a low CPU weight on Docker's classic builder (BuildKit ignores the
+  caps); on a Docker without that builder the core refuses to build. What this buys: a parser bug reachable by
+  hostile bytes (a decompression bomb, a native image decoder flaw) lands
+  in a box that can't reach the network, the database or the house keys.
+  What it doesn't: the plugin's own in-process code is still unsandboxed,
+  and a decoder's answers are still the plugin's data. The boundary
+  against a hostile *plugin* remains the publisher you trust.
 - **Plugin HTTP routes are admin-gated by default in both processes.** A
   plugin's routers on the core (`/v1/plugins/<slug>/…`) and on the web
   dashboard (`/api/plugins/<slug>/…`) sit behind the same rule

@@ -580,10 +580,15 @@ warnings = [
 ]
 ```
 
-Five booleans (`network`, `subprocess`, `hardware`,
-`filesystem_outside_data` and `satellite_root`, all default `false`) plus
-free-text `warnings`. `satellite_root` is for a `[satellite]` payload that
-installs packages or runs a script as root (see `[satellite]` below).
+Six booleans (`network`, `subprocess`, `hardware`,
+`filesystem_outside_data`, `satellite_root` and `friend_houses`, all
+default `false`) plus free-text `warnings`. `satellite_root` is for a
+`[satellite]` payload that installs packages or runs a script as root (see
+`[satellite]` below). `friend_houses` (core 1.5.0) is for a plugin that
+exchanges data with friend houses: it requires an `[isolated]` decoder and
+at least one `warnings` entry, and the install is refused without them
+(see `[isolated]` below). The SDK surface that uses it comes in a later
+SDK; until then the permission only fixes the rule.
 These are **not** a sandbox — an installed plugin runs with full access to
 the server (the install preview says exactly that). They are the trust
 screen: write them as if the user's trust depends on them, because it does.
@@ -929,7 +934,7 @@ label = "the Jellyfin server"       # plain words for the banner
 | Key | Rules |
 |---|---|
 | `id` | `^[a-z][a-z0-9_]{0,31}$`, unique in the plugin. |
-| `name` | A Docker container name, unique in the plugin; never one of the core's own (`domovoi-postgres`, `domovoi-flyway`, `domovoi-flyway-test`, `domovoi-searxng`, `domovoi-letta`, anything starting `domovoi-mpd-`), and never one another enabled plugin declares (contract check 8). |
+| `name` | A Docker container name, unique in the plugin; never one of the core's own (`domovoi-postgres`, `domovoi-flyway`, `domovoi-flyway-test`, `domovoi-searxng`, `domovoi-letta`, `domovoi-tor`, `domovoi-fh-listener`, anything starting `domovoi-mpd-` or `domovoi-plugin-dec-`), and never one another enabled plugin declares (contract check 8). |
 | `image` | An image reference. **Pin by digest** (`@sha256:` + 64 hex) and the guard checks the container runs exactly that image. A **tag only** gets a weaker check: the container must have been created from that repository and tag; a different image retagged under the same name isn't detected. Either way, another image of the same repository pulled from a registry is reported as **outdated** (a failure: recreate it), another repository as tampering. While the plugin is disabled (or failed to load) a running container is checked against the repository only, any tag. |
 | `required` | Default `true`. |
 | `label` | Up to 80 characters; default `the <plugin name> container`. |
@@ -939,6 +944,87 @@ A plugin that needs Docker (a `docker` system requirement) and declares no
 containers still installs and runs; it simply isn't watched, and its card
 on the Plugins page says "containers not watched". A core older than SDK
 1.5 ignores the table.
+
+### `[isolated]` — the decode-only container (core 1.5.0)
+
+A decoder that runs **outside the core's process**, in a container the core
+builds and runs. Use it for any input you don't trust: everything a friend
+house sends (a `friend_houses` plugin must declare one), or a feed or file
+format whose parser you'd rather not run next to the database and the
+house keys.
+
+```toml
+[isolated]
+decoder = "domovoi_plugin_games.link.decode:main"   # <package>.<subpackage>.<module>:<function>
+debian = ["python3-pil"]                             # optional, from the list below
+```
+
+| Key | Rules |
+|---|---|
+| `decoder` | A function in a **subpackage** of your own package: `domovoi_plugin_<slug>.<subpackage>[.<module>...]:<function>`. Only that subpackage goes into the container. |
+| `debian` | Extra Debian packages, only from the core's allowlist: `python3-pil` (Pillow), `python3-msgpack`, `python3-cbor2`. No pip, no other package. |
+
+**What the container holds.** The core writes the build context itself
+(you supply no Dockerfile): its own Dockerfile on the same digest-pinned
+Debian base as the core's other images, Python 3 and the listed packages
+from Debian, the core's small runner, and the `.py` files of your decoder
+subpackage (at most 200 files and 2 MB). Your package's top `__init__.py`
+in the image is an empty file the core writes, so none of your in-process
+code is in there. The decoder may import only the standard library, its
+own subpackage (relative imports included, never above it) and the
+modules of the Debian packages it lists; directory validation (`domovoi
+plugin pack`, install) refuses anything else.
+
+**What it can do.** Nothing but decode. The container has no network, a
+read-only root, no capabilities, no new privileges, runs as `nobody`, has
+256 MB of memory, 32 processes, half a CPU and an 8 MB `noexec` `/tmp`, no
+mounts, no environment and no logs. It talks to the core over stdin and
+stdout only.
+
+**The contract.** `main(payload: bytes, meta: dict) -> value`. The core
+sends one item at a time (payload up to 256 KiB, `meta` a small JSON object
+it chooses). Return anything JSON can carry, or an image (below); raise to
+refuse the item.
+`print()` is safe (it goes to stderr). The core checks every answer before
+your in-process code sees it: at most 64 KiB, UTF-8, nesting at most 16
+deep, no NaN or infinity, integers within 64 bits, no duplicate keys, and
+then re-serializes it, so your code only ever handles the core's own
+canonical JSON. An answer that fails a check is a refused item. A decoder
+that hangs (5 s), crashes, or writes anything but a well-formed reply is
+killed and restarted, with a backoff from 1 s doubling to 60 s; items
+meanwhile are refused.
+
+**Images.** Return `domovoi_isolated.Image(data, format="png"|"webp",
+lossless=True)` (or plain `bytes`, meaning a PNG) and the core's helper,
+inside the container, re-encodes it: the input must be PNG, JPEG or WebP
+(by its first bytes, and Pillow must agree), at most 12 million pixels by
+its header (a decompression bomb is refused before anything is decoded),
+one frame, not truncated. The EXIF orientation is applied, then only the
+pixels are copied into a fresh image, so EXIF (GPS included), XMP, ICC
+profiles and text chunks are all gone; it is scaled to at most 1024 pixels
+a side and must come out at most 512 KiB. Images need `debian =
+["python3-pil"]`; `import domovoi_isolated` is always allowed. The core
+reads the result's container format again without decoding it (PNG or
+WebP only, the size and dimensions, and no chunk but the pixels') and
+hands your in-process code the new bytes, never the ones a friend sent.
+
+Inside the decoder: never unpickle anything; decompress with a
+`max_length`; validate against your own schema before returning.
+
+**Lifecycle.** The core builds the image (when needed) and starts the
+container when the plugin loads (install, enable, boot); stops and
+removes it when the plugin is disabled, upgraded or uninstalled; and
+removes the image on uninstall. The image is rebuilt whenever your
+decoder's files change (an upgrade) and when it is 30 days old, so
+Debian's fixes get in. The build is capped at 1 GB of memory and a low CPU
+weight; Docker's BuildKit ignores those caps, so the core builds this
+image with Docker's classic builder, and refuses to build it at all on a
+Docker that no longer has one. The build runs in the background: until it is up,
+items are refused. The container is named `domovoi-plugin-dec-<slug>`, a
+name the container guard watches: it must run exactly the image the core
+built.
+
+A core older than 1.5.0 ignores the table (and the `friend_houses` key).
 
 ### `[android]`
 
@@ -967,6 +1053,9 @@ screen never appears for a server nobody confirmed.
 * The declared lockfile must exist with hashes (see above).
 * A declared `help` file must exist inside the plugin, be UTF-8 and at most
   32 KB (SDK 1.8).
+* An `[isolated]` decoder's subpackage must exist with its module, hold no
+  symlinks, stay within 200 `.py` files and 2 MB, and import only what the
+  container has (core 1.5.0, see `[isolated]`).
 
 ---
 
