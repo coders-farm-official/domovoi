@@ -716,19 +716,26 @@ async def test_the_sender_reads_fixed_size_answers_only(tmp_path) -> None:
 
 async def test_the_ack_deadline_is_overall(tmp_path) -> None:
     a, b = _pair(tmp_path)
+    stop = asyncio.Event()
+    handled = asyncio.Event()
 
     async def handle(reader, writer):
         async def friend_for(_sk):
             return fs.Friend(a.house_key, a.session_key)
 
-        sess = await fs.respond(reader, writer, keys=b, me=_hello(b), friend_for=friend_for)
         try:
-            for _ in range(40):  # a frame every 0.1 s never extends the wait
-                await sess.send(fs.Kind.PONG, b"\x00" * 8)
-                await asyncio.sleep(0.1)
-        except Exception:  # noqa: BLE001
-            pass
-        writer.close()
+            sess = await fs.respond(reader, writer, keys=b, me=_hello(b), friend_for=friend_for)
+            try:
+                for _ in range(40):  # a frame every 0.1 s never extends the wait
+                    if stop.is_set():
+                        break
+                    await sess.send(fs.Kind.PONG, b"\x00" * 8)
+                    await asyncio.sleep(0.1)
+            except Exception:  # noqa: BLE001
+                pass
+            writer.close()
+        finally:
+            handled.set()
 
     server = await asyncio.start_server(handle, "127.0.0.1", 0)
     async with server:
@@ -737,6 +744,10 @@ async def test_the_ack_deadline_is_overall(tmp_path) -> None:
         assert await pw.await_answer(sess, b"\x00" * 16, deadline=0.5) is None
         assert time.monotonic() - start < 1.5
         await sess.close()
+        # Writes to a closed peer needn't fail at once (Linux), so the
+        # sender would outlive the test: stop it and wait for it.
+        stop.set()
+        await asyncio.wait_for(handled.wait(), 5)
 
 
 # ─── core: plugin mail is refused, never a person's message (D12) ────────

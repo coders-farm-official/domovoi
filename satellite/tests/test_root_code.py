@@ -444,6 +444,15 @@ def _declares(card: root_code.Layout, tmp_path: Path) -> bool:
                                                                writable=_mine))
 
 
+def _root_writes(path: Path, text: str) -> None:
+    """Overwrite a file the switch left read-only (sudoers is 0440), as
+    root would: root writes through the mode, the test runner doesn't."""
+    mode = path.stat().st_mode & 0o7777
+    path.chmod(mode | 0o200)
+    path.write_text(text)
+    path.chmod(mode)
+
+
 def test_the_check_fails_the_old_layout_and_passes_the_switched_one(card, tmp_path):
     assert support_shell.root_unit_runs_my_code((card.unit.parent,), writable=_mine)
     assert not _declares(card, tmp_path)
@@ -451,7 +460,7 @@ def test_the_check_fails_the_old_layout_and_passes_the_switched_one(card, tmp_pa
     assert support_shell.root_unit_runs_my_code((card.unit.parent,), writable=_mine) is None
     assert _declares(card, tmp_path)
     # Half a switch is not enough: the old sudoers line alone still fails it.
-    card.sudoers.write_text(OLD_SUDOERS)
+    _root_writes(card.sudoers, OLD_SUDOERS)
     assert not _declares(card, tmp_path)
 
 
@@ -524,7 +533,7 @@ def test_root_refuses_an_unsigned_tampered_or_older_update(card, account):
 def test_refresh_puts_back_a_loosened_sudoers_from_roots_own_copy(card, account):
     ops = FakeOps()
     root_code.switch(_files(), USER, layout=card, ops=ops)
-    card.sudoers.write_text(OLD_SUDOERS)
+    _root_writes(card.sudoers, OLD_SUDOERS)
     result = root_code.refresh(USER, layout=card, ops=ops, pin=lambda: None)
     assert result["changed"] == ["sudoers"]
     assert "xvf_host" not in "\n".join(_rules(card.sudoers.read_text()))

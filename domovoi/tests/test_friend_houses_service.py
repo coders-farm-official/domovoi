@@ -234,7 +234,7 @@ async def test_friend_changes_reload_and_rewrite_the_key_files(house) -> None:
     assert sorted(p.name for p in auth.iterdir()) == ["f2.auth"]
     listed = json.loads((house.root / "friend-houses" / "listener" / "friends.json").read_text())
     assert list(listed) == [bytes([3]).hex() * 32]  # only friend 2's session key
-    assert listed[bytes([3]).hex() * 32] == {"house": bytes([2]).hex() * 32, "pending": False}
+    assert listed[bytes([3]).hex() * 32] == {"house": bytes([2]).hex() * 32, "pending": False, "apps": []}
 
 
 @linux_only

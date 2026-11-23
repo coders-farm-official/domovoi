@@ -344,7 +344,7 @@ async def test_fh11_an_asked_house_cant_take_a_friends_entry(house, monkeypatch)
     monkeypatch.setattr(svc, "_inputs", with_a_clash)
     await svc.reconcile()
     entry = _listed(house)[friend.session_key.hex()]
-    assert entry == {"house": friend.house_key.hex(), "pending": False}
+    assert entry == {"house": friend.house_key.hex(), "pending": False, "apps": []}
 
 
 # ─── FH-7: what reaches text-to-speech carries no wake phrase ─────────────
