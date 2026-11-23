@@ -26,6 +26,7 @@ import ctypes
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import time
@@ -49,6 +50,8 @@ PENDING_CHANNEL = "satellites.pending"
 
 # nonce → mount path. Server-side only; rebuilt on every scan.
 _MOUNT_BY_NONCE: dict[str, Path] = {}
+
+_NONCE_RE = re.compile(r"[0-9a-f]{8,64}")
 
 # TTL cache so the ~1.5 s realtime poll tick doesn't re-enumerate drives
 # every single pass (drive probes touch Win32 APIs and, worst case, spin
@@ -181,6 +184,10 @@ def scan_pending() -> list[dict[str, Any]]:
                 continue
             raw = json.loads(info_path.read_text(encoding="utf-8"))
             info = proto.validate_device_info(raw)
+            # The device writes secrets.token_hex(8); the id goes into a
+            # URL and a dict key, so it stays hex.
+            if not _NONCE_RE.fullmatch(info["nonce"]):
+                raise proto.ProvisionInvalid("malformed nonce")
         except proto.ProvisionInvalid as e:
             found.append({
                 "pending_id": f"drive:{drive_token(str(mount))}",
