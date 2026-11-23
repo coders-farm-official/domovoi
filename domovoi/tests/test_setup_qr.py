@@ -240,9 +240,12 @@ def test_no_route_serves_the_code_or_its_qr() -> None:
                        "domovoi/setup_qr.py", "domovoi/support_sessions.py"], readers
     # And no route of either app is about it.
     from domovoi.main import app as core_app
+    from domovoi.tests.route_walk import iter_route_contexts
     from web.backend.main import app as web_app
 
     for app in (core_app, web_app):
-        for r in app.routes:
-            path = getattr(r, "path", "")
+        contexts = list(iter_route_contexts(app.routes))
+        assert len(contexts) > 50       # the walk sees the included routers
+        for r in contexts:
+            path = getattr(r, "path", "") or ""
             assert "qr" not in path.lower() or "setup" not in path.lower(), path

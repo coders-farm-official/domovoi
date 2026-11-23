@@ -845,7 +845,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     #   command_capture_pruner → support_session_pruner →
     #   acquisition_budget_sweeper → guests_seen_pruner →
     #   printer_status → print_jobs →
-    #   print_history → voice_history_pruner → container_guard → chat_video → scan_reader →
+    #   print_history → voice_history_pruner → container_guard →
+    #   media_catalog → media_understanding → scan_reader →
     #   listenbrainz_fetch →
     #   library_alias_fetch → lyrics_scan → lyrics_fetch →
     #   library_tag_backfill → library_year_fetch → library_cover_art.
@@ -951,7 +952,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # runs the videos attached in chat (V064) first, then library work in
     # the night window and the daytime trickle
     # (domovoi/media_understanding/; it replaced the chat_video worker).
-    from domovoi.workers.media_understanding import MediaCatalogWorker, MediaUnderstandingWorker
+    from domovoi.workers.media_understanding import MediaCatalogWorker
+    from domovoi.workers.media_understanding import MediaUnderstandingWorker
 
     WORKERS.add_worker(MediaCatalogWorker(), owner="core")
     WORKERS.add_worker(MediaUnderstandingWorker(), owner="core")

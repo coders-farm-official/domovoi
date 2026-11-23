@@ -148,7 +148,7 @@ def clean_text(value: Any, limit: int) -> str:
     return s[:limit].rstrip() if len(s) > limit else s
 
 
-_TAG_OK = re.compile(r"^[\w][\w '\-]*$", re.UNICODE)
+_TAG_OK = re.compile(r"^[\w][\w '\-]*\Z", re.UNICODE)
 
 
 def clean_tags(value: Any) -> list[str]:

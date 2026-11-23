@@ -180,10 +180,11 @@ const MediaUnderstandingPanel = () => {
   const left = ((p.photos && p.photos.left) || 0) + ((p.videos && p.videos.left) || 0);
   const locked = !admin || busy;
 
-  const turnFacesOff = () => {
+  const turnFacesOff = async () => {
     if (!data.face_count) { save({ faces: false }, 'faces off'); return; }
-    if (window.confirm(
-      `Turning faces off deletes ${muCount(data.face_count)} saved faces and every name on them. Turning it on again starts from zero.`)) {
+    if (await askConfirm(
+      `Turning faces off deletes ${muCount(data.face_count)} saved faces and every name on them. Turning it on again starts from zero.`,
+      { title: 'Delete every saved face?', confirmLabel: 'Turn faces off' })) {
       save({ faces: false, confirm_delete_faces: true }, 'faces off: every face deleted');
     }
   };

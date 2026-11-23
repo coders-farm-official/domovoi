@@ -145,7 +145,7 @@ def clean_text(value: Any, limit: int, *, lines: bool = False) -> str:
     return s
 
 
-_TAG_OK = re.compile(r"^[\w][\w '\-]*$", re.UNICODE)
+_TAG_OK = re.compile(r"^[\w][\w '\-]*\Z", re.UNICODE)
 
 
 def clean_tags(value: Any) -> list[str]:

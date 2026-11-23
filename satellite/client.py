@@ -863,7 +863,10 @@ def _server_changed_said(now: float, path: Path | None = None) -> None:
     target = path or SERVER_CHANGED_SAID_SIDECAR
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(f"{now:.0f}\n", encoding="utf-8")
+        # Whole seconds, rounded DOWN: rounded to nearest, a time up to half a
+        # second ahead of the clock read back as "in the future" (so due),
+        # and the room said it again on the next reconnect attempt.
+        target.write_text(f"{int(now)}\n", encoding="utf-8")
     except OSError as e:
         log.debug("could not record when the server change was said: %s", e)
 

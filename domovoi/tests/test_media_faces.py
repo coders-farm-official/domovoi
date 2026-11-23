@@ -801,18 +801,31 @@ def test_face_tables_are_touched_only_by_the_faces_code() -> None:
     assert hits <= FACE_TABLE_READERS, sorted(hits - FACE_TABLE_READERS)
 
 
-def test_no_route_answers_with_an_embedding() -> None:
-    from fastapi.routing import APIRoute
+def _endpoint(rc):
+    fn = getattr(rc, "endpoint", None) or getattr(getattr(rc, "dependant", None), "call", None)
+    return getattr(fn, "__wrapped__", fn)
 
+
+def test_no_route_answers_with_an_embedding() -> None:
     from domovoi.main import app as core_app
+    from domovoi.tests.route_walk import iter_route_contexts
     from web.backend.main import app as web_app
 
+    # route_walk: FastAPI >= 0.139 keeps an included router nested, so an
+    # isinstance(APIRoute) walk of app.routes finds none of /api/faces.
+    exports = 0
     for app in (core_app, web_app):
-        for r in app.routes:
-            if isinstance(r, APIRoute) and "export" in r.path:
-                src = Path(r.endpoint.__code__.co_filename).read_text(encoding="utf-8")
-                assert not any(t in src for t in FACE_TABLES), r.path
-    face_routes = [r for r in web_app.routes if isinstance(r, APIRoute) and r.path.startswith("/api/faces")]
+        for rc in iter_route_contexts(app.routes):
+            path = getattr(rc, "path", "") or ""
+            if "export" in path:
+                fn = _endpoint(rc)
+                assert fn is not None and hasattr(fn, "__code__"), path
+                exports += 1
+                src = Path(fn.__code__.co_filename).read_text(encoding="utf-8")
+                assert not any(t in src for t in FACE_TABLES), path
+    assert exports, "no export route found: the walk is looking in the wrong place"
+    face_routes = [rc for rc in iter_route_contexts(web_app.routes)
+                   if (getattr(rc, "path", "") or "").startswith("/api/faces")]
     assert face_routes and not any("export" in r.path or "download" in r.path for r in face_routes)
     src = (REPO / "web" / "backend" / "api" / "faces.py").read_text(encoding="utf-8")
     fsrc = (REPO / "domovoi" / "media_understanding" / "faces.py").read_text(encoding="utf-8")

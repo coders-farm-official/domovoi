@@ -72,7 +72,7 @@ const SHELL_ASSETS = [
   '/index.html',
   '/colors_and_type.css',
   '/styles.css',
-  // Read first, in <head>: the setup-code QR's fragment (setup_fragment.js).
+  // Read first, in <head>: the fragment of the setup-code QR (setup_fragment.js).
   '/setup_fragment.js',
   '/auth.js',
   '/data.js',
