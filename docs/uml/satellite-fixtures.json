@@ -1339,6 +1339,27 @@
       "slice 4 (satellite/) and the phone apps build their claim side against these frames."
     ],
     "hello_supports_adds": "wake_claim",
+    "pi_hello_supports": [
+      "restart",
+      "code_sync",
+      "plugin_payloads",
+      "config",
+      "wifi",
+      "mic_gain",
+      "leds",
+      "display",
+      "logs",
+      "wake_clips",
+      "wake_models",
+      "sounds",
+      "voice",
+      "time_sync",
+      "chat_mode",
+      "announce_after_session_end",
+      "turn_progress",
+      "wake_claim"
+    ],
+    "pi_hello_supports_about": "A 1.5.0 Pi (satellite/client.py) declares a list so it can name wake_claim: everything a hello without one was assumed to have, plus wake_claim. The devices above are Pis and PCs from before 1.5.0; a 1.5.0 one sends their hello with this list (a Pi) or hello_supports_adds appended (a PC).",
     "ready_room": {
       "room_id": "kitchen",
       "name": "Kitchen",

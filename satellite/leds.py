@@ -51,6 +51,11 @@ COLOR_OFF = (0, 0, 0)
 # off between clips), so each clip is visible, unlike the sound-following
 # listening look (2026-11-10).
 COLOR_RECORDING = (200, 200, 200)
+# "quiet": another satellite in the room took this wake word's turn (1.5.0).
+# No listening colour — a dim blue that fades out over QUIET_FADE_SEC, then
+# off (owner answer Q5: the losers' LED only fades).
+COLOR_QUIET = (0, 20, 85)
+QUIET_FADE_SEC = 0.8
 
 # ── XVF3800 WS2812 ring palette (whole-ring effects via xvf_host) ──────────
 # The XVF chip only does whole-ring effects (off/breath/rainbow/single/DoA) —
@@ -211,6 +216,7 @@ class _WS2812XvfDriver:
         "error":     {"effect": 3, "color": COLOR_ERROR},                      # solid red
         "dropin":    {"effect": 3, "color": COLOR_DROPIN},                     # solid red — live call
         "recording": {"effect": 3, "color": COLOR_RECORDING},                  # steady white — training clip
+        "quiet":     {"effect": 3, "color": COLOR_QUIET},                      # dim blue, off after QUIET_FADE_SEC
     }
 
     def __init__(self, brightness: int, xvf_host_path: str) -> None:
@@ -470,7 +476,13 @@ class LEDController:
         """Set-once rendering for hardware that animates its own effects."""
         while not self._stop.is_set():
             self._changed.clear()
-            self._driver.render_state(self._current_state())
+            state = self._current_state()
+            self._driver.render_state(state)
+            if state == "quiet":
+                # The ring has no fade of its own: dim, then off.
+                if not self._changed.wait(timeout=QUIET_FADE_SEC):
+                    self._demote("quiet")
+                continue
             self._changed.wait()
 
     def _run_pixel(self) -> None:
@@ -498,6 +510,8 @@ class LEDController:
                 self._tick_thinking()
             elif state == "error":
                 self._tick_error()
+            elif state == "quiet":
+                self._tick_quiet()
             else:
                 self._solid(COLOR_OFF)
                 self._changed.wait()
@@ -519,6 +533,25 @@ class LEDController:
             self._driver.show()
             i = (i + 1) % n
             self._changed.wait(timeout=period)
+
+    def _demote(self, state: str) -> None:
+        """A timed state is over: idle, unless someone set another since."""
+        with self._lock:
+            if self._state == state:
+                self._state = "idle"
+                self._changed.set()
+
+    def _tick_quiet(self) -> None:
+        steps = 8
+        r, g, b = COLOR_QUIET
+        for i in range(steps, -1, -1):
+            if self._stop.is_set() or self._current_state() != "quiet":
+                return
+            k = i / steps
+            self._solid((int(r * k), int(g * k), int(b * k)))
+            if self._changed.wait(timeout=QUIET_FADE_SEC / steps):
+                return
+        self._demote("quiet")
 
     def _tick_error(self) -> None:
         for _ in range(3):
