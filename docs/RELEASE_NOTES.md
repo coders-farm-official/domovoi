@@ -128,6 +128,9 @@ a way that would otherwise get reported as a bug.
 
 ## 1.4.1 (unreleased)
 
+- A chat draft's changes view on the dashboard leaves a paragraph gap
+  between a long removed passage and the added text after it, so the old
+  last word no longer runs into the new first word.
 - Room devices looking for every house count a server only when its
   identity proof is bound to the address they dialled, and the server
   signs the approval-proof form only bound to one.
