@@ -47,7 +47,7 @@ from web.backend.db import session_scope
 #: How far back a chat's results stay in the model's view (messages).
 RECENT_MESSAGES = 6
 
-_END = re.compile(r"[\s.!?]+$")
+_END = re.compile(r"[\s.!?]+\Z")
 
 
 def fast_request(message: str) -> ask.Request | None:

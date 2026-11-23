@@ -63,12 +63,12 @@ _DET = r"(?:(?:the|my|our|some|any|all|all the|all my|all our) )?"
 #: "... in my library" is the music library's (handlers/library.py).
 _NOT_LIBRARY = r"(?!.* in my library$)"
 REQUEST_RES: tuple[re.Pattern[str], ...] = (
-    re.compile(rf"^{_NOT_LIBRARY}{_LEAD} {_DET}(?P<kind>{KIND})(?: (?P<rest>.+))?$"),
-    re.compile(rf"^{_NOT_LIBRARY}search {_DET}(?P<kind>{KIND}) for (?P<rest>.+)$"),
+    re.compile(rf"^{_NOT_LIBRARY}{_LEAD} {_DET}(?P<kind>{KIND})(?: (?P<rest>.+))?\Z"),
+    re.compile(rf"^{_NOT_LIBRARY}search {_DET}(?P<kind>{KIND}) for (?P<rest>.+)\Z"),
     re.compile(rf"^{_NOT_LIBRARY}(?:do|have) (?:we|i) (?:have|got) {_DET}(?P<kind>{KIND}) "
-               rf"(?P<rest>(?:of|from|with|where|when|showing|at|in) .+)$"),
+               rf"(?P<rest>(?:of|from|with|where|when|showing|at|in) .+)\Z"),
     re.compile(rf"^{_NOT_LIBRARY}(?:are there|is there) {_DET}(?P<kind>{KIND}) "
-               rf"(?P<rest>(?:of|from|with|where|when|showing|at|in) .+)$"),
+               rf"(?P<rest>(?:of|from|with|where|when|showing|at|in) .+)\Z"),
 )
 _CUE = re.compile(r"\b(?:photos?|pictures?|pics|videos?|clips?|snaps)\b")
 

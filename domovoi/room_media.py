@@ -65,7 +65,7 @@ CAPTION_MAX = 160
 SAID_MAX = 300
 
 THUMB_PATH = "/v1/room-media/"
-TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{20,64}$")
+TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{20,64}\Z")
 
 Clock = Callable[[], float]
 
