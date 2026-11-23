@@ -142,15 +142,21 @@ def _open_containers(head: bytes, spans: list[tuple[int, int]]) -> list[bytes]:
     """Names of the elements still open at the end of ``head``, outermost
     first (``[b"rss", b"channel"]``)."""
     stack: list[bytes] = []
+    # How many of each name are open: a lookup, not a scan of the stack.
+    open_count: dict[bytes, int] = {}
     for closing, name, selfclosing in _tags(head, spans):
         if selfclosing:
             continue
         if not closing:
             stack.append(name)
-        elif name in stack:
+            open_count[name] = open_count.get(name, 0) + 1
+        elif open_count.get(name):
             # Pop to the matching open tag (tolerates a stray unclosed one).
-            while stack and stack.pop() != name:
-                pass
+            while stack:
+                popped = stack.pop()
+                open_count[popped] -= 1
+                if popped == name:
+                    break
     return stack
 
 
