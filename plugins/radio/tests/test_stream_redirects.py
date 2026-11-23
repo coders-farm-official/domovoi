@@ -26,6 +26,7 @@ import pytest
 from domovoi.models import Context
 from domovoi.sdk import net_safety
 
+from domovoi_plugin_radio import player_relay
 from domovoi_plugin_radio.handlers import radio as radio_mod
 from domovoi_plugin_radio.handlers.radio import RadioHandler
 
@@ -90,11 +91,15 @@ async def test_a_redirect_into_the_house_never_reaches_the_player(stub_sdk, _wir
     assert not any(s.startswith(("192.168.1.20", "router.lan.example")) for s in _wire)
 
 
-async def test_the_player_is_handed_the_url_that_answered(stub_sdk, _wire) -> None:
+async def test_the_player_is_handed_a_relay_url_never_the_station(stub_sdk, _wire) -> None:
+    """M11: the player makes no request of its own to the station; it is
+    handed a one-use URL on the core that stands for the station."""
     h = RadioHandler(stub_sdk)
     await h._stream_station_row(_directory_pick("http://honest.example/live"), Context(room_id="kitchen"), None)
     (call,) = stub_sdk.playback.calls
-    assert call["stream_url"] == "http://cdn.example/edge/live.mp3"
+    assert call["stream_url"].startswith("http://127.0.0.1:6370/v1/plugins/radio/player-relay/")
+    assert "example" not in call["stream_url"]
+    assert player_relay.station_url_for(call["stream_url"]) == "http://honest.example/live"
 
 
 async def test_an_unreachable_stream_plays_nothing(stub_sdk, monkeypatch) -> None:

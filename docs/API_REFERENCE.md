@@ -2700,7 +2700,8 @@ for how to declare them.
 reference implementation.
 
 Core router → mounted at `/v1/plugins/radio` (the FCC import keeps the
-admin default; the simulcast lookup and play-in-room are `@device_endpoint`):
+admin default; the simulcast lookup and play-in-room are `@device_endpoint`;
+the players' relay is `@open_endpoint`):
 
 | Method & path | Auth | Purpose |
 |---|---|---|
@@ -2708,6 +2709,7 @@ admin default; the simulcast lookup and play-in-room are `@device_endpoint`):
 | `GET /v1/plugins/radio/fcc-import` | Open | Import job progress. |
 | `POST /v1/plugins/radio/stations/{station_id}/resolve-simulcast` | Device (`@device_endpoint`) | Find an online simulcast stream for an FM station. `409` under `never`. |
 | `POST /v1/plugins/radio/stations/{station_id}/play-in-room` | Device (`@device_endpoint`) | `{"room_id": "kitchen"}`: play a saved station in a room of the house, the same play a voice request makes (egress and outbound-URL checks, the FM tuner), then tell the room's satellite. `200 {ok, room_id, station: {id, name}, text}`. `404` an unknown station, or a room the house doesn't have (a name never creates a room); `409` a station that can't play now (internet set to No, no FM tuner, no stream address; `detail` says which in words); `502` the room's music player refused it; `503` the room couldn't be looked up. |
+| `GET /v1/plugins/radio/player-relay/{token}` | Open (`@open_endpoint`; the token is the credential) | A room's music player streaming an internet station through the core (1.5.0). The token is minted by a play, good for one connection opened within 30 s, and answered only to the address of the room's own player; the core fetches the station through the outbound-URL check, every redirect re-checked, and passes the audio (and ICY title blocks, when the player sends `Icy-MetaData: 1`) on. `404` an unknown, spent, late or misaddressed token; `409` a station the server won't fetch, or internet set to No; `502` unreachable, an error, or not an audio stream. Not for clients. |
 | `GET /v1/plugins/radio/state` | Open | Live tuner state: `{sdr_available, sdr_frequency_mhz, fcc_import}`. (Named `/state` because the core reserves `/status`.) |
 
 Web router → mounted at `/api/plugins/radio` (slug-enable gate; GETs open

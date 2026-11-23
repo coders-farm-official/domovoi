@@ -51,6 +51,7 @@ from domovoi.clients.mpd import (
 from domovoi.db.session import session_scope
 from domovoi.handlers.shared.play_history import record_media_play
 from domovoi.models import Response
+from domovoi.player_route import PlayerRoute, player_route
 from domovoi.now_playing import NOW_PLAYING
 
 log = logging.getLogger(__name__)
@@ -262,6 +263,15 @@ class PlaybackAPI:
         except Exception as e:  # noqa: BLE001 — the play surfaces it
             log.warning("playback.ensure_room(%s) failed: %s", room_id, e)
         return True
+
+    async def player_route(self, room_id: str) -> PlayerRoute | None:
+        """SDK 1.15: how the music player that plays ``room_id``'s music
+        reaches this core (``.host`` / ``.port``, ``.url(path)``) and the
+        address the core sees it call from (``.admits(request.client.host)``),
+        for a plugin that hands the player a URL on the core itself, such
+        as a stream relay (domovoi/player_route.py). None when it can't be
+        told (no player yet, Docker didn't answer)."""
+        return await player_route(room_id)
 
     async def mpd_client_for(self, room_id: str) -> MPDClient:
         """Escape hatch (search_only, seek, ...) — same client the core

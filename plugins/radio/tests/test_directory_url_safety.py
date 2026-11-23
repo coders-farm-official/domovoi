@@ -23,6 +23,7 @@ import pytest
 from domovoi.models import Context
 from domovoi.sdk import net_safety
 
+from domovoi_plugin_radio import player_relay
 from domovoi_plugin_radio.clients.radio_browser import RadioBrowserStation
 from domovoi_plugin_radio.handlers.radio import RadioHandler
 from domovoi_plugin_radio.workers import simulcast
@@ -192,7 +193,7 @@ async def test_streaming_a_public_url_still_plays(stub_sdk) -> None:
         _online("http://news.example/live.mp3"), Context(room_id="kitchen"), None
     )
     (call,) = stub_sdk.playback.calls
-    assert call["stream_url"] == "http://news.example/live.mp3"
+    assert player_relay.station_url_for(call["stream_url"]) == "http://news.example/live.mp3"
     assert resp.text == "Streaming News Station."
 
 
@@ -203,7 +204,7 @@ async def test_a_name_that_does_not_resolve_is_left_to_the_player(stub_sdk) -> N
     await h._stream_station_row(
         _online("http://nowhere.invalid/live.mp3"), Context(room_id="kitchen"), None
     )
-    assert [c["stream_url"] for c in stub_sdk.playback.calls] == [
+    assert [player_relay.station_url_for(c["stream_url"]) for c in stub_sdk.playback.calls] == [
         "http://nowhere.invalid/live.mp3"
     ]
 

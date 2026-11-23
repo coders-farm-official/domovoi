@@ -1187,8 +1187,8 @@ it is `http(s)`, never any other kind of intent.
 
 Several features make the server fetch a **caller-chosen URL**: media
 acquisition (`POST /v1/admin/music/add-by-url`), a podcast feed and its
-episode files, a news feed, an internet radio stream (the browser proxy and
-the song sampler), a model pull. A server that fetches what it is told to
+episode files, a news feed, an internet radio stream (the browser proxy, the rooms'
+players' relay and the song sampler), a model pull. A server that fetches what it is told to
 is a server-side request-forgery surface — the thing it can reach that you
 cannot is *everything else in your house*, plus its own admin endpoints on
 localhost. Two rules apply.
@@ -1207,8 +1207,8 @@ station writes (favorite, play, a stream-URL edit, the simulcast lookup)
 sit on the device tier; model pull, cancel and delete on the admin tier.
 
 **Where the server will go** (`domovoi/net_safety.py`, used by every
-fetcher — the podcast poller, the news fetcher, the radio stream proxy and
-sampler, the model pull):
+fetcher — the podcast poller, the news fetcher, the radio stream relays
+(the browser's and the rooms' players') and sampler, the model pull):
 
 - `http` and `https` only. Not `file:`, not `concat:`, nothing else — the
   radio sampler never hands ffmpeg the station URL at all: it opens the
@@ -2127,9 +2127,12 @@ What the install flow *does* do (verified in
   `@open_endpoint` socket, a Starlette `WebSocketRoute` (which skips the
   gate) and any socket on the dashboard process are refused at load. The
   bundled
-  radio plugin opens nothing to the whole LAN: its
-  everyday mutations (play, favorite, edit, forget, simulcast lookup) are
-  `@device_endpoint` and its FCC bulk import keeps the admin default.
+  radio plugin opens one route without a credential: the rooms' players'
+  stream relay (`GET /v1/plugins/radio/player-relay/<token>`, below), which
+  answers only a one-use token, only to the address of the room's own
+  player. Its everyday mutations (play, favorite, edit, forget, simulcast
+  lookup) are `@device_endpoint` and its FCC bulk import keeps the admin
+  default.
 
 And the crucial caveat: **the manifest's permission flags and warnings are
 honesty devices, not enforcement.** A flag like `network = true` is the
@@ -3494,7 +3497,7 @@ watch the server's traffic under **No**.
 | **Satellite approval** — a portal-onboarded satellite waits for a human before it is paired | Every first connection from a device presenting a setup code | Type the satellite's six-digit code into the approval card. The dashboard never shows you the code — it is on the device, which is what ties the request on screen to the unit in the room. The server compares it and allows five attempts per room per five minutes. A device that brings a code must bring six digits (or the four that satellites set up before 2026-09-22 were given and still say), or nothing is parked (a request no code could ever approve would only take the name away from the real device). The first device to park holds that room name for three minutes, or until someone approves or rejects it; a different device asking for the same name inside that window is refused as a conflict (`approval_conflict`), and after it the newcomer's request **replaces** the parked one — its token and its own code together, so the code the operator hears from the device in the room is still the only one that approves anything. Being first with an unapprovable request therefore delays onboarding by minutes; it no longer blocks it until someone presses Reject (CORE-22). This is what replaces trust-on-first-use for that path; `SATELLITE_PAIRING_STRICT` still governs tokenless connects. A device set up with the server address left blank never sends its code at all: it checks the approval itself ([Asking every house](#asking-every-house-an-approval-the-device-can-check-140)). |
 | **Version check / pull** — `git fetch`/`pull` against the GitHub repo | Only when an admin clicks check/update in the dashboard | Don't click it. Nothing runs automatically. Under `never` both buttons are greyed and the core answers with the turned-off reason without running git. The follow-up **restart** is admin-gated and can only work if you granted the sudoers line in [LINUX_HOST.md](LINUX_HOST.md). A plain restart bounces systemd units and reaches no network. With the update unit installed it also re-syncs Python dependencies from PyPI (and the PyTorch CPU index) when the pull changed them, and rebuilds the MPD image (Debian's package mirrors) when that changed; it rebuilds the wake-word trainer image when that changed (on a box that built one) and, on an NVIDIA box, installs the NVIDIA Container Toolkit while it is missing (rows below). |
 | **Media acquisition** — provider plugins fetching from external sources; add-by-URL fetches the URL you gave | When you ask for something the library doesn't have, or add by URL | Don't install provider plugins / uninstall them; add-by-URL is governed by the outbound-fetch tier above. |
-| **Radio streams** — fetched by the room's music player (MPD container) or the dashboard's relay | While you're listening to an internet station (bundled radio plugin, or a plugin that plays a URL through `sdk.playback`). MPD also resumes whatever it had queued after its container restarts | Don't play internet radio; FM/SDR paths in the same plugin are local RF. Under `never` no internet URL is handed to MPD, a room playing one is stopped and internet entries are removed from every queue (at the switch and at every core start), and an open relay is cut off. Before the radio plugin hands a station to the player it follows the stream's redirects itself, every hop through the outbound-URL check, and hands over the URL that answered: a station listed in the public directory whose stream redirects into the house is refused, not played (PLG-12, round 6). The player still looks that name up itself, so a name that changes its answer between the two lookups is not covered; the player's container is not fenced off the house network. |
+| **Radio streams** — fetched by the core, for a room's music player (MPD container) or the dashboard's browser player | While you're listening to an internet station (bundled radio plugin, or a plugin that plays a URL through `sdk.playback`). MPD also resumes whatever it had queued after its container restarts | Don't play internet radio; FM/SDR paths in the same plugin are local RF. Under `never` no internet URL is handed to MPD, a room playing one is stopped and internet entries are removed from every queue (at the switch and at every core start), and an open relay is cut off. Since 1.5.0 a room's player never fetches an internet station itself: the radio plugin hands it a one-use relay URL on the core (`/v1/plugins/radio/player-relay/<token>`), and the core makes the only request to the station, through the outbound-URL check with every redirect hop checked and pinned to the address its check judged, and passes the audio on. A station that answers the core's first look with audio and a later request with a redirect into the house is refused at the relay, and nothing plays (M11, review of 2026-11-22; before 1.5.0 the player made its own request and followed its own redirects). The token is random, good for one connection, opened within 30 seconds, bound to one room and one station, and served only to the address that room's player calls from; a new play in the room ends the old relay. The relay passes audio only (no playlist, which the player would open entry by entry), reads no faster than 512 KiB/s after an 8 MiB start, ends after 24 hours, and passes the station's ICY title blocks through unchanged so "now playing" still names the song. A queued relay URL is spent, so a player that resumes its queue after a restart plays nothing rather than refetching. FM is not relayed: the player reads the tuner's own listener on this machine. On a development box running the core natively on Windows or macOS (Docker Desktop) the player's connection arrives from loopback, so there the token alone binds it. |
 | **Radio detectors and lookups** — ICY "now playing" polls of favorited internet stations, short clips of them to Shazam, station-directory searches (radio-browser.info), an FM favorite's call sign to find its simulcast, the FCC import | While favorited internet stations exist (detectors), and when you search, favorite FM or import | `RADIO_SAMPLER_ENABLED=false` / `RADIO_ICY_POLLER_ENABLED=false` in `~/.domovoi/plugins/radio.env`. Offline the sampler samples only house-network streams, against your own library. |
 | **Video-satellite kiosk browser** — Chromium's own background traffic | Never: the kiosk is launched with `--disable-background-networking`, `--disable-component-update`, `--no-pings` and `--disable-domain-reliability` | Nothing to do. The page itself talks only to the Domovoi server. |
 | **Wake-word base models** — one-time openWakeWord model download (GitHub release assets) | Refreshing the satellite media cache on the server; on the Pi only for a card prepared with offline off | One-time. Every file is checked against pinned SHA-256 digests on the server and again on the Pi; a mismatch is deleted, never loaded. Under `never` the server refuses the refresh. |
@@ -3574,7 +3577,8 @@ network:
   existing ones are stopped and removed from every queue when the answer
   becomes `never` and at every core start;
 - transfers already running when the answer changes: the radio stream
-  relay, a model pull and a podcast episode download stop;
+  relays (the browser player's and the rooms' players'), a model pull and
+  a podcast episode download stop;
 - plugins' requests through the SDK's HTTP client (`sdk.http` in the core,
   the web host's `http()`), which refuse any non-local URL;
 - the SearXNG container, which is stopped when the answer is saved and

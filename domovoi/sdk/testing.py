@@ -50,6 +50,13 @@ class RecordingPlayback:
             music_stream_url=f"http://stub-mpd/{room_id}",
         )
 
+    async def player_route(self, room_id: str) -> Any:
+        """SDK 1.15: loopback both ways, as under USE_STUBS. Not recorded
+        in ``calls``."""
+        from domovoi.player_route import PlayerRoute
+
+        return PlayerRoute(host="127.0.0.1", peer="127.0.0.1")
+
     async def stop(self, room_id: str) -> Response:
         self.calls.append({"action": "stop", "room_id": room_id})
         return Response(text="Stopped.", music_action="stop")

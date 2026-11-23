@@ -4,6 +4,22 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Rooms play internet radio through the core
+
+- **What changed.** A room's music player no longer fetches an internet
+  radio station itself. The radio plugin (1.5.2) hands it a one-use URL on
+  the core, and the core fetches the station, every redirect checked, and
+  passes the audio on. Before, the player made its own request to the
+  station and followed its own redirects, unchecked. FM is unchanged.
+- **What to know.** The player reaches the core on port 6370 from its
+  container: on Linux, in the Windows installer's WSL distro and in the
+  Mac VM it dials its Docker network's gateway, so a host firewall must
+  let the Docker bridge reach port 6370. A station a room was playing is
+  not resumed after its player restarts (the relay URL is spent): play it
+  again. The radio
+  plugin now needs SDK 1.15 (new: `playback.player_route`).
+  SECURITY_PRIVACY.md, "Radio streams".
+
 ## 1.5.0 (unreleased) — Diagnostics for a satellite, in its room drawer
 
 - **What changed.** A room's drawer has a **Diagnostics** tab: **Run all**
