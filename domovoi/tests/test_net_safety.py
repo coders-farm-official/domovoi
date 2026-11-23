@@ -516,6 +516,35 @@ async def test_a_body_that_never_ends_hits_the_whole_fetch_deadline(dns, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_the_deadline_is_checked_per_read_not_per_chunk(dns, monkeypatch) -> None:
+    """A one-byte drip is stopped after a few reads, not after a whole
+    ``chunk_size`` of them."""
+    monkeypatch.setattr(net_safety, "time", _Clock())
+    url = "http://feeds.example.com/show.rss"
+    pulled = [0, 0]
+
+    async def adrip():
+        while True:
+            pulled[0] += 1
+            yield b"x"
+
+    def drip():
+        while True:
+            pulled[1] += 1
+            yield b"x"
+
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, content=adrip()))
+    async with httpx.AsyncClient(transport=transport) as client:
+        with pytest.raises(httpx.TimeoutException):
+            await net_safety.fetch_bytes(url, max_bytes=1 << 30, timeout=1.0, client=client)
+    sync_transport = httpx.MockTransport(lambda request: httpx.Response(200, content=drip()))
+    with httpx.Client(transport=sync_transport) as client:
+        with pytest.raises(httpx.TimeoutException):
+            net_safety.fetch_bytes_sync(url, max_bytes=1 << 30, timeout=1.0, client=client)
+    assert pulled[0] < 1000 and pulled[1] < 1000
+
+
+@pytest.mark.asyncio
 async def test_truncate_keeps_what_arrived_at_the_whole_fetch_deadline(dns, monkeypatch) -> None:
     """A slow big feed with ``truncate=True`` returns the partial bytes,
     marked truncated, instead of failing at the deadline."""
