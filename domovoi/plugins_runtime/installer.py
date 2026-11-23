@@ -93,10 +93,15 @@ _RESERVED_DEVICE_NAMES = frozenset(
     | {f"lpt{i}" for i in range(1, 10)}
 )
 
+# The words the dashboard's trust screen shows (web/static/plugins.jsx) and
+# docs/SECURITY_PRIVACY.md quotes: the browser half included.
 TRUST_STATEMENT = (
     "This plugin runs with full access to your Domovoi server. It can read "
     "and modify your library, database, configuration, and anything else "
-    "this machine can reach. Only install plugins from publishers you trust."
+    "this machine can reach. Its dashboard pages run as part of the dashboard "
+    "in every household browser that opens it, with the same access as whoever "
+    "is using it — a signed-in admin session and the household token included. "
+    "Only install plugins from publishers you trust."
 )
 
 _GITHUB_URL_RE = re.compile(

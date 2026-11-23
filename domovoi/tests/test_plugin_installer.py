@@ -240,6 +240,8 @@ async def test_stage_returns_preview() -> None:
     ]
     assert p["migration_count"] == 1
     assert "full access" in p["trust_statement"]
+    # The same words the trust screen shows, browser half included.
+    assert "every household browser" in p["trust_statement"]
     assert (staged.root / "domovoi-plugin.toml").is_file()
     installer._drop_staged(staged)
 
