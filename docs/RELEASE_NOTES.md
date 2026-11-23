@@ -34,6 +34,9 @@ a way that would otherwise get reported as a bug.
 
 ## 1.4.1 (unreleased) — Printing, videos, scans and Windows update hardening
 
+- **Up next keeps the songs a jump or a move passed**: on a long room queue
+  only songs the room was heard playing are trimmed after a jump, and the
+  200-song ceiling behind the current song no longer takes them.
 - **The list of a person's voice samples now needs a household device**, like the
   rest of their People page.
 - **Printer discovery on a Mac install** counts only the Mac's own home
