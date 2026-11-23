@@ -154,10 +154,9 @@ async def wait_for_voice(max_sec: float = 30.0, poll_sec: float = 0.5) -> None:
     turn, at most ``max_sec`` (S3-7). The house's Ollama answers one
     request at a time, so a chat reply started mid-turn would hold the
     turn's spoken answer up for as long as the reply takes."""
-    waited = 0.0
-    while waited < max_sec and await voice_busy():
+    deadline = time.monotonic() + max_sec
+    while time.monotonic() < deadline and await voice_busy():
         await asyncio.sleep(poll_sec)
-        waited += poll_sec
 
 
 # ─── Measured speed ─────────────────────────────────────────────────────
