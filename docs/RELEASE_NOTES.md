@@ -254,6 +254,13 @@ a way that would otherwise get reported as a bug.
   and podcast log lines leave them out too.
 - Listens posted by phones and browsers have a house-wide daily cap beside
   the per-device one.
+- A plugin installed from GitHub is downloaded from `api.github.com` and
+  `codeload.github.com` only, redirects included. The install screen's
+  trust statement from the server now also says that a plugin's dashboard
+  pages run in every household browser that opens them.
+- Resetting a room's pairing, or removing the room, closes its satellite's
+  live connection; a device that is still wanted reconnects and is checked
+  again.
 
 ## 1.4.1 (unreleased) — Sign-in, room pairing and drop-in checks
 
