@@ -37,6 +37,9 @@ a way that would otherwise get reported as a bug.
 - **"Download as Word" for Markdown and text files** is built in the same
   short-lived, time-limited process as the Word copy of a formatted
   document, and its line limit counts every kind of line break.
+- **The sheet editor's grid read and the sheet export** run in the sheets
+  worker, not on the dashboard's main loop, and a .csv's grid is read from
+  its first 8 MB.
 - **Up next keeps the songs a jump or a move passed**: on a long room queue
   only songs the room was heard playing are trimmed after a jump, and the
   200-song ceiling behind the current song no longer takes them.

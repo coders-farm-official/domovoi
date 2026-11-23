@@ -202,6 +202,9 @@ _TEXT_MAX_BYTES = 2 * 1024 * 1024
 # not data warehouses. Reads truncate to this window; writes reject beyond.
 _SHEET_MAX_ROWS = 1000
 _SHEET_MAX_COLS = 60
+#: The most of a .csv the grid read looks at: the window above fits in far
+#: less, and a file past it shows its first rows, as a long one always did.
+_SHEET_READ_MAX_CSV_BYTES = 8 * 1024 * 1024
 
 
 def _doc_category(ext: str) -> str:
@@ -1020,13 +1023,18 @@ def _read_sheet_grid(target: Path) -> list[list[dict[str, Any]]]:
     ext = target.suffix.lower()
     grid: list[list[dict[str, Any]]] = []
     if ext == ".csv":
-        with target.open("r", encoding="utf-8-sig", errors="replace", newline="") as fh:
-            for r, row in enumerate(csv.reader(fh)):
-                if r >= _SHEET_MAX_ROWS:
-                    break
-                grid.append(
-                    [{"v": cell, "f": None} for cell in row[:_SHEET_MAX_COLS]]
-                )
+        with target.open("rb") as fh:
+            raw = fh.read(_SHEET_READ_MAX_CSV_BYTES + 1)
+        cut = len(raw) > _SHEET_READ_MAX_CSV_BYTES
+        if cut:  # the last line may be partial: it is left out
+            raw = raw[: raw.rfind(b"\n", 0, _SHEET_READ_MAX_CSV_BYTES) + 1]
+        text_ = raw.decode("utf-8-sig", errors="replace")
+        for r, row in enumerate(csv.reader(io.StringIO(text_, newline=""))):
+            if r >= _SHEET_MAX_ROWS:
+                break
+            grid.append(
+                [{"v": cell, "f": None} for cell in row[:_SHEET_MAX_COLS]]
+            )
         return grid
     if ext == ".xlsx":
         from openpyxl import load_workbook
@@ -1301,7 +1309,7 @@ async def read_sheet(rel_path: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=f"{rel_path} not found")
     return {
         "rel_path": _rel_of(target),
-        "rows": _read_sheet_grid(target),
+        "rows": await executors.run("sheets", _read_sheet_grid, target),
         "max_rows": _SHEET_MAX_ROWS,
         "max_cols": _SHEET_MAX_COLS,
     }
@@ -1738,6 +1746,18 @@ async def export_sheet(
     target = _readable_target(rel_path)
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail=f"{rel_path} not found")
+    data, media, name = await executors.run("sheets", _sheet_export_bytes, target, fmt)
+    return Response(
+        content=data,
+        media_type=media,
+        headers={**_download_headers(target.stem, "." + name.rsplit(".", 1)[-1]),
+                 "Content-Length": str(len(data))},
+    )
+
+
+def _sheet_export_bytes(target: Path, fmt: str) -> tuple[bytes, str, str]:
+    """The export's file, read and built in the sheets pool, never on the
+    event loop."""
     grid = _read_sheet_grid(target)  # 415s for non-editable types
 
     if fmt == "csv":
@@ -1770,12 +1790,7 @@ async def export_sheet(
         data = buf.getvalue()
         media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         name = f"{target.stem}.xlsx"
-    return Response(
-        content=data,
-        media_type=media,
-        headers={**_download_headers(target.stem, "." + name.rsplit(".", 1)[-1]),
-                 "Content-Length": str(len(data))},
-    )
+    return data, media, name
 
 
 # ─── The live document editor (.html / .md / .docx) ─────────────────
