@@ -3075,8 +3075,11 @@ and videos → Recognize faces). The code is
   person within 30 s), not one per frame.
 * **Where it is worked out.** On the server only, by two small models on
   ONNX Runtime (one thread, voice first, like all background
-  understanding). The nightly re-group runs in a worker thread with a
-  blocked neighbour search (memory bounded
+  understanding). The nightly re-group runs in a short-lived child
+  process at low priority whose maths library is held to one thread (its
+  thread-count variables are set before numpy loads; the child gets the
+  faces' embeddings on a pipe and answers with ids and group labels
+  only), a blocked neighbour search (memory bounded
   by the block, not the library), pausing while a voice turn runs, for at
   most 20,000 unconfirmed faces a night; the night is marked done before
   it starts, so a re-group that dies is not retried in a loop (security

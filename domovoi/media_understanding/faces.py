@@ -24,7 +24,8 @@ answers with an embedding or a centroid.
 Each night :func:`regroup` takes the faces nobody confirmed (the newest
 :data:`REGROUP_MAX_FACES`) and does it again over that set (connected
 components of the pairs above :data:`GROUP_MATCH`: a blocked neighbour
-search in a worker thread with the maths library on one thread, pausing
+search in a short-lived child process whose maths library runs on one
+thread (:mod:`~domovoi.media_understanding.regroup_worker`), pausing
 while a voice turn runs; the night is marked done before it starts):
 **confirmed faces never move.** A component keeps the group most of it was in, so
 groups keep their ids and the household's "hide".
@@ -364,8 +365,9 @@ def components(E: np.ndarray, threshold: float = GROUP_MATCH, chunk: int = REGRO
     A blocked neighbour search: every pair of ``chunk``-row blocks is
     compared once (memory ``chunk x chunk``, never ``chunk x n``), and its
     pairs are merged into a union-find by hooking roots onto the smaller
-    root, vectorised. Pure CPU: call it in a worker thread
-    (:func:`regroup` does, with the maths library held to one thread).
+    root, vectorised. Pure CPU: :func:`regroup` runs it in a child
+    process whose maths library is held to one thread
+    (:mod:`~domovoi.media_understanding.regroup_worker`).
     ``pause``, when given, is asked between blocks and the work sleeps
     while it says yes (a voice turn)."""
     n = len(E)
@@ -423,9 +425,9 @@ class _Plan:
 
 
 def plan_regroup(rows: list[Any], deny: np.ndarray, named: list[Group], *, pause: Any = None) -> _Plan:
-    """The re-group's maths, pure (run in a worker thread): which faces go
-    (denied), which are suggested for a named person, and the components of
-    the rest."""
+    """The re-group's maths, pure (:func:`regroup` runs it in a one-thread
+    child process, :func:`plan_in_child`): which faces go (denied), which
+    are suggested for a named person, and the components of the rest."""
     gone: list[int] = []
     faces: list[tuple[int, np.ndarray, Any, list[int]]] = []
     for k, (fid, emb, gid, rej) in enumerate(rows):
@@ -451,19 +453,40 @@ def plan_regroup(rows: list[Any], deny: np.ndarray, named: list[Group], *, pause
     return _Plan(gone, suggest, free, labels)
 
 
+def plan_in_child(rows: list[Any], deny: np.ndarray, named: list[Group], *, pause: Any = None) -> _Plan:
+    """:func:`plan_regroup` in a short-lived child process whose maths
+    library runs on one thread (H4; :mod:`~domovoi.media_understanding.regroup_worker`).
+    Blocking: call it in a worker thread. The child answers with ids and
+    labels only; the free faces' vectors are rebuilt here from ``rows``."""
+    from domovoi.media_understanding import regroup_worker
+
+    answer = regroup_worker.run(rows, deny, named, pause=pause)
+    by_id = {int(r[0]): r for r in rows}
+    free: list[tuple[int, np.ndarray, Any]] = []
+    for fid in answer["free"]:
+        r = by_id[int(fid)]
+        free.append((int(fid), unit(from_bytes(r[1])), r[2]))
+    labels = np.asarray(answer["labels"], dtype=np.int64)
+    if len(labels) != len(free):
+        raise regroup_worker.RegroupWorkerFailed("the face re-group's labels don't match its faces")
+    return _Plan([int(f) for f in answer["gone"]],
+                 [(int(f), int(g), int(p)) for f, g, p in answer["suggest"]], free, labels)
+
+
 async def regroup(s: Any, *, max_faces: int = REGROUP_MAX_FACES, pause: Any = _voice_busy) -> dict[str, int]:
     """Re-group the faces nobody confirmed (confirmed faces never move): at
-    most ``max_faces`` of them, the newest. The maths runs in a worker
-    thread (:func:`plan_regroup`), so the event loop keeps answering, and
+    most ``max_faces`` of them, the newest. The maths runs in a one-thread
+    child process (:func:`plan_in_child`), so the event loop and the
+    other cores keep answering, and
     the writes go in batches; a face confirmed meanwhile is left alone."""
     rows, deny, named = await _load_regroup(s, max_faces)
-    plan = await asyncio.to_thread(plan_regroup, rows, deny, named, pause=pause)
+    plan = await asyncio.to_thread(plan_in_child, rows, deny, named, pause=pause)
     return await _apply_regroup(s, rows, named, plan)
 
 
 async def regroup_night(*, max_faces: int = REGROUP_MAX_FACES, pause: Any = _voice_busy) -> dict[str, int] | None:
     """The nightly pass as :func:`housekeeping` runs it: read in one short
-    transaction, the maths in a worker thread with no transaction open
+    transaction, the maths in a child process with no transaction open
     (so nothing waits on a lock it holds: "faces off" and the runner's
     Pause go through), then apply under the faces switch's share lock.
     None when faces were turned off meanwhile."""
@@ -471,7 +494,7 @@ async def regroup_night(*, max_faces: int = REGROUP_MAX_FACES, pause: Any = _voi
 
     async with session_scope() as s:
         rows, deny, named = await _load_regroup(s, max_faces)
-    plan = await asyncio.to_thread(plan_regroup, rows, deny, named, pause=pause)
+    plan = await asyncio.to_thread(plan_in_child, rows, deny, named, pause=pause)
     async with session_scope() as s:
         if not await _faces_on_locked(s):
             return None

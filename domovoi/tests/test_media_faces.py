@@ -235,8 +235,8 @@ def test_components_pause_while_a_voice_turn_runs(monkeypatch) -> None:
 
 async def test_a_large_library_regroup_does_not_block_the_event_loop(monkeypatch) -> None:
     """H4 (security review 2026-11-23): the nightly re-group's maths runs
-    in a worker thread with the maths library on one thread, so the event
-    loop (voice, sockets, requests) keeps its turns."""
+    in a one-thread child process waited on from a worker thread, so the
+    event loop (voice, sockets, requests) keeps its turns."""
     import asyncio
     import time
 
@@ -277,6 +277,112 @@ async def test_a_large_library_regroup_does_not_block_the_event_loop(monkeypatch
     assert out == {"faces": n} and len(set(applied["labels"].tolist())) <= 400
     assert took > 0.2, "the pass should take long enough for the lag figure to mean something"
     assert lag < 0.25, f"the event loop stalled {lag:.3f}s during the re-group"
+
+
+# ─── H4: the re-group child's maths library runs on one thread ───────────
+
+_BLAS_PROBE = r"""
+import json, os, sys
+import numpy as np
+a = np.ones((600, 600), dtype=np.float32)
+for _ in range(3):
+    a @ a                                  # the BLAS pool is up by now
+try:
+    os_threads = len(os.listdir("/proc/self/task"))
+except OSError:
+    os_threads = None
+try:
+    from threadpoolctl import threadpool_info
+    blas = [int(i["num_threads"]) for i in threadpool_info() if i.get("user_api") == "blas"]
+except Exception:
+    blas = None
+print(json.dumps({"os": os_threads, "blas": blas}))
+"""
+
+
+def _probe(env: dict[str, str]) -> dict[str, Any]:
+    import json
+    import subprocess
+    import sys
+
+    out = subprocess.run([sys.executable, "-I", "-c", _BLAS_PROBE], env=env,
+                         capture_output=True, timeout=120, check=True)
+    return json.loads(out.stdout.decode().strip().splitlines()[-1])
+
+
+def test_the_regroup_childs_environment_holds_blas_to_one_thread(monkeypatch) -> None:
+    """H4: numpy in a process started with the re-group child's environment
+    runs its BLAS on one thread, even when the core's environment asks for
+    more; the same probe without it shows the pool the cap removes."""
+    import os
+
+    from domovoi.media_understanding import regroup_worker as W
+
+    for k in W.ONE_THREAD_ENV:
+        monkeypatch.setenv(k, "8")
+    capped = _probe(W.child_env())
+    if capped["os"] is None and capped["blas"] is None:
+        pytest.skip("no way to count the BLAS threads here (no /proc, no threadpoolctl)")
+    if capped["os"] is not None:
+        assert capped["os"] == 1, capped
+    if capped["blas"]:
+        assert set(capped["blas"]) == {1}, capped
+    if (os.cpu_count() or 1) > 1:
+        free_env = {k: v for k, v in os.environ.items() if k not in W.ONE_THREAD_ENV}
+        free = _probe(free_env)
+        assert (free["os"] or 0) > 1 or max(free["blas"] or [1]) > 1, (
+            "the probe saw one thread without the cap too, so it proves nothing", free)
+
+
+def test_the_regroup_runs_in_a_one_thread_child_with_the_same_plan(monkeypatch) -> None:
+    """H4: the nightly maths runs in the child, which reports its own
+    environment and OS threads after the work; its plan is the in-process
+    one."""
+    from domovoi.media_understanding import regroup_worker as W
+
+    monkeypatch.setenv("OPENBLAS_NUM_THREADS", "8")
+    rng = np.random.default_rng(5)
+    bases = rng.normal(size=(6, F.EMBED_DIM)).astype(np.float32)
+    embs = bases[rng.integers(0, 6, 300)] + rng.normal(size=(300, F.EMBED_DIM)).astype(np.float32) * 0.02
+    embs /= np.linalg.norm(embs, axis=1, keepdims=True)
+    rows = [(i + 1, F.to_bytes(embs[i]), None, []) for i in range(len(embs))]
+    named = [F.Group(id=77, person_id=5, hidden=False, centroid=F.unit(bases[0]))]
+    deny = F.unit(bases[1])[None, :]
+    want = F.plan_regroup(rows, deny, named)
+    W.LAST_THREADS.clear()
+    got = F.plan_in_child(rows, deny, named)
+    assert got.gone == want.gone and got.suggest == want.suggest and want.gone and want.suggest
+    assert [f for f, _v, _g in got.free] == [f for f, _v, _g in want.free]
+    assert np.array_equal(got.labels, want.labels)
+    assert all(np.array_equal(a[1], b[1]) for a, b in zip(got.free, want.free))
+    assert W.LAST_THREADS["env"] == W.ONE_THREAD_ENV
+    if W.LAST_THREADS["os"] is not None:                  # Linux: the child's own count
+        assert W.LAST_THREADS["os"] == 1, W.LAST_THREADS
+
+
+def test_the_regroup_child_sleeps_while_voice_is_busy() -> None:
+    import time
+
+    from domovoi.media_understanding import regroup_worker as W
+
+    a = _base()
+    rows = [(i + 1, F.to_bytes(_near(a)), None, []) for i in range(8)]
+    until = time.monotonic() + 1.0
+    t0 = time.monotonic()
+    out = W.run(rows, np.zeros((0, F.EMBED_DIM), np.float32), [], pause=lambda: time.monotonic() < until)
+    assert time.monotonic() - t0 >= 0.9
+    assert len(set(out["labels"])) == 1
+
+
+def test_a_failed_regroup_child_is_an_error_not_a_plan(monkeypatch) -> None:
+    from domovoi.media_understanding import regroup_worker as W
+
+    monkeypatch.setattr(W, "_CHILD_CODE", "import sys; sys.stderr.write('boom'); sys.exit(3)")
+    with pytest.raises(W.RegroupWorkerFailed, match="exited 3: boom"):
+        W.run([], np.zeros((0, F.EMBED_DIM), np.float32), [])
+    monkeypatch.setattr(W, "_CHILD_CODE", "import time; time.sleep(30)")
+    with pytest.raises(W.RegroupWorkerFailed, match="ran past"):
+        W.run([], np.zeros((0, F.EMBED_DIM), np.float32), [], timeout=0.5)
 
 
 # ─── the pinned model fetch ──────────────────────────────────────────────
