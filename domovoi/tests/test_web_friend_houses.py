@@ -73,7 +73,9 @@ def test_a_friend_file_stays_in_memory_and_post_bodies() -> None:
 
 def test_the_page_says_what_friend_houses_is() -> None:
     src = _page()
-    assert "const FH_DESCRIPTION = 'Serverless messaging and friend system between households';" in src
+    assert "const FH_DESCRIPTION = 'Message and share lists with friends’ houses, house to house, with no company server in between';" in src
+    # Said once: the section subtitle, not again in the page's head.
+    assert "{FH_DESCRIPTION}.</span>" not in src
     assert "gaming" not in src.lower()
     assert "Anyone who gets this file can ask to be your friend. Nothing happens unless you accept." in src
     assert "They won’t be able to reach this house any more." in src

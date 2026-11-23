@@ -53,7 +53,7 @@
  */
 
 const FH_API = '/api/friend-houses';
-const FH_DESCRIPTION = 'Serverless messaging and friend system between households';
+const FH_DESCRIPTION = 'Message and share lists with friends’ houses, house to house, with no company server in between';
 const FH_POLL_MS = 15000;
 const FH_FILE_POLL_MS = 5000;
 const FH_NAME_MAX = 40;
@@ -1400,17 +1400,16 @@ const FriendHousesPanel = () => {
   // The unread total: the inbox's own count, else the status's.
   const unreadRaw = convs.data && convs.data.unread != null ? convs.data.unread : (status && status.unread);
   const unread = Number(unreadRaw) || 0;
-  const head = (
-    <div style={{ ...fhRow, fontSize: 13, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
-      <span style={{ flex: '1 1 auto' }}>{FH_DESCRIPTION}.</span>
-      {unread > 0 && (
-        <button type="button" className="home-link" aria-label={`${unread} unread messages`}
-                onClick={() => { setOpen(null); toInbox(); }}>
-          <Pill tone="live">{`${unread} unread`}</Pill>
-        </button>
-      )}
+  // The section's subtitle already says what Friend Houses is: the head
+  // holds only the unread count.
+  const head = unread > 0 ? (
+    <div style={{ ...fhRow, justifyContent: 'flex-end' }}>
+      <button type="button" className="home-link" aria-label={`${unread} unread messages`}
+              onClick={() => { setOpen(null); toInbox(); }}>
+        <Pill tone="live">{`${unread} unread`}</Pill>
+      </button>
     </div>
-  );
+  ) : null;
 
   if (!admin) {
     return (

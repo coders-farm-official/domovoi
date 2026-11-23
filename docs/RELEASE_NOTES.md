@@ -59,6 +59,9 @@ a way that would otherwise get reported as a bug.
   changed since answer 404 as the by-path lookup already did, and asking
   for a read of a file over the 1 GB limit is refused before the file is
   hashed (an unchanged file is not hashed again).
+- **The phone app's speech-recognition libraries are rebuilt in CI** from
+  their recorded recipe, weekly and whenever they change, and must match
+  their committed checksums byte for byte.
 
 ## 1.4.1 (unreleased) — Dashboard update fixes
 
@@ -127,6 +130,22 @@ a way that would otherwise get reported as a bug.
   slow host. This ships with the satellite code update.
 
 ## 1.4.1 (unreleased)
+
+- Holiday questions work offline: "how many days until New Year's Day",
+  "when is Thanksgiving", "what day is Easter next year" answer with the
+  date and the day count. The built-in table covers the common public
+  holidays and observances of the US, Canada, the UK, Ireland, Australia
+  and New Zealand, plus Easter and the days counted from it, and uses the
+  country of the Home location (the US when none is set). "This year" for
+  a holiday that already passed says how many days ago it was.
+
+- A spoken "Should I remember that?" offer no longer rides on the answer
+  to a question. It comes after a remark or a chat, at most once a day per
+  person, and never for something Domovoi already knows (your name, a
+  fact it remembers). A one-word "yes" to it now saves the fact. A plain
+  fact question from someone Domovoi recognizes gets the same prompt as
+  anyone's; their remembered facts go in only when the question is about
+  them.
 
 - A chat draft's changes view on the dashboard leaves a paragraph gap
   between a long removed passage and the added text after it, so the old

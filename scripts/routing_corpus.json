@@ -130,6 +130,27 @@
       "note": "date math with no digits: the calculator gate must not drop this"
     },
     {
+      "utterance": "how many days until new year's day",
+      "handler": "calculator",
+      "path": "fast",
+      "tags": ["calculator"],
+      "note": "2026-11-22 live: answered 'I don't know the date of New Year's Day.'"
+    },
+    {
+      "utterance": "when is thanksgiving",
+      "handler": "calculator",
+      "path": "fast",
+      "tags": ["calculator"],
+      "note": "holiday date question: the built-in holiday table, offline"
+    },
+    {
+      "utterance": "what day is easter next year",
+      "handler": "calculator",
+      "path": "fast",
+      "tags": ["calculator"],
+      "note": "holiday date question with a year"
+    },
+    {
       "utterance": "convert 5 miles to kilometers",
       "handler": "calculator",
       "tags": ["calculator"],

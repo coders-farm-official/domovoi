@@ -182,3 +182,48 @@ def offer_text(body: str) -> str:
     }:
         fact = fact[0].lower() + fact[1:]
     return f"By the way, {fact}. Should I remember that?"
+
+
+# Words that carry no fact of their own: who it is about, the verb that
+# links it, articles. What is left of "My pets are Waffle and Plum" is
+# {pet, waffle, plum}, the same as what is left of "Waffle and Plum are
+# your pets".
+_FILLER_WORDS = frozenset((
+    "i", "im", "ive", "id", "me", "my", "mine", "myself", "we", "our", "ours",
+    "us", "you", "youre", "your", "yours", "yourself", "user", "users",
+    "speaker", "they", "their", "them", "the", "a", "an", "and", "is", "are",
+    "am", "was", "were", "be", "has", "have", "had", "of", "to", "called",
+    "named", "s",
+))
+
+
+def _fact_words(text: str) -> set[str]:
+    words = re.findall(r"[a-z0-9]+", (text or "").lower().replace("’", "").replace("'", ""))
+    out = set()
+    for w in words:
+        if w in _FILLER_WORDS:
+            continue
+        # "pets" and "pet" are the same fact.
+        if len(w) > 3 and w.endswith("s") and not w.endswith("ss"):
+            w = w[:-1]
+        out.add(w)
+    return out
+
+
+def already_known(fact: str, name: str | None, known: list[str]) -> bool:
+    """True when ``fact`` says nothing the house doesn't already know about
+    the person: their name ("My name is Alex"), or every word of
+    it is in one fact already remembered ("Waffle and Plum are my pets"
+    next to "My pets are Waffle and Plum"). Offering it again sounds like
+    Domovoi just learned it."""
+    words = _fact_words(fact)
+    if not words:
+        return True
+    # "My name is Alex", or "My name is Alec" when the speech-to-text
+    # misheard it: the person's name is on their profile already, and a
+    # memory doesn't rename anyone.
+    if name and "name" in words and (
+        len(words) == 2 or words <= _fact_words(name) | {"name"}
+    ):
+        return True
+    return any(words <= _fact_words(body) for body in known)
