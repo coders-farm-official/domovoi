@@ -329,6 +329,12 @@ async def on_message(event: dict[str, Any]) -> bool:
     except (KeyError, ValueError, TypeError, fe.BadEnvelope):
         log.warning("Friend Houses: a message event failed its checks and was dropped")
         return False
+    # Explicit dispatch, default refuse (review D12): text and list changes
+    # only. Plugin mail has its own event and its own service, and is never
+    # stored as a person's message, whatever its body says.
+    if env.kind not in (fe.KIND_TEXT, fe.KIND_SPACE):
+        log.warning("Friend Houses: a message event of another kind was refused")
+        return False
     if env.kind == fe.KIND_SPACE:
         async with _db() as s:
             friend = await store.friend_by_house(s, house)
