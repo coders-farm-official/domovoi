@@ -698,3 +698,17 @@ async def test_tick_skips_known_and_rejected_facts(db_session) -> None:
         )
     ).scalars().all()
     assert pending == ["I like jazz"]
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_extraction_leaves_out_words_read_from_outside_and_their_repeats(db_session) -> None:
+    person_id = await PeopleRepository(db_session).create(name="Alex")
+    for handler, said in (("qa", "Mars is red."), ("friend_houses", "From Sam: hi"),
+                          ("repeat", "From Sam: hi")):
+        await db_session.execute(text(
+            "INSERT INTO conversation_log (person_id, user_text, assistant_text, matched_handler, at) "
+            "VALUES (:p, 'x', :a, :h, NOW())"), {"p": person_id, "a": said, "h": handler})
+    await db_session.commit()
+    turns = await MemoriesRepository(db_session).recent_turns_for_extraction(person_id, 10)
+    assert sorted(a for _u, a in turns if a) == ["Mars is red."]

@@ -57,6 +57,10 @@ a way that would otherwise get reported as a bug.
 - **Friend Houses read-outs** also leave out words that sound like a wake
   word when the house says them, not only ones spelled like it, and the
   stock wake words' names on their own.
+- **"Say that again" after a friend house's message or a shared list's
+  items** repeats them without adding them to the conversation the AI
+  model reads or to what the memory pass looks at; "double check that"
+  still declines them.
 - **The dashboard logs it** if it can't keep its port-80 permission away
   from the programs it starts.
 - **Video poster frames**: every spelling of one file's path shares one
