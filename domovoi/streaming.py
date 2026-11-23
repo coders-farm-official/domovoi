@@ -657,7 +657,7 @@ from domovoi.turn_timings import (
 )
 from domovoi.log_privacy import said
 from domovoi import overheard, room_devices, room_display
-from domovoi import turn_history, turn_watchdog, wake_default
+from domovoi import turn_history, turn_watchdog, wake_claims, wake_default
 from domovoi.turn_watchdog import (
     STAGE_IDENTIFY,
     STAGE_REPLY,
@@ -1852,7 +1852,7 @@ class _InterimSpeech:
         })
         for chunk in _iter_chunks(pcm):
             try:
-                await sess.ws.send_bytes(chunk)
+                await sess._send_pcm(chunk)
             except Exception:
                 return True  # Pi went away mid-line; the turn's own send path will notice
             sess._note_audio_sent(len(chunk), sr)
@@ -2109,6 +2109,24 @@ class StreamSession:
         # (domovoi/fast_lane.py, shadow mode: it decides nothing here).
         # None whenever fastlane_mode is off.
         self._fastlane: fast_lane.LaneCapture | None = None
+        # ── One turn per wake word (1.5.0, domovoi/wake_claims.py) ────
+        # This device's quiet stream of another device's turn, from its
+        # `wake_grant` (role quiet) to its `quiet_end`; its frames go to
+        # the arbiter, never to `audio_buf`.
+        self.quiet_stream: Any = None
+        # The claim this device owns a turn by (its `wake_grant` owner).
+        self.owner_claim: int | None = None
+        # The capture in flight is a duplicate of another device's turn:
+        # nothing of it is kept; its utterance_end gets `ignored`.
+        self._dup_capture = False
+        # The turn's answer plays on the room's synced playout (from the
+        # response_start that said `room_audio` to its response_end), at
+        # this rate; when its last sample leaves the speakers (server µs).
+        self._room_reply = False
+        self._room_reply_rate = 0
+        self._room_play_end_us = 0.0
+        # The `room.claim` this device was last told.
+        self._claim_flag_sent: bool | None = None
 
     async def run(self) -> None:
         await self.ws.accept()
@@ -2208,6 +2226,11 @@ class StreamSession:
         await self._safe_send_text(ready)
         self._connected_at = time.monotonic()
         self._ready_sent = True
+        # 1.5.0: a device joining a room may make its neighbours claim.
+        try:
+            await self.push_claim_flags()
+        except Exception as e:  # noqa: BLE001 — never holds up a connect
+            log.debug("wake claims: claim flags not pushed: %s", e)
         # A music_start the room's previous socket was holding when it
         # closed (a Wi-Fi blip mid-turn) is held again here.
         self._take_carried_music()
@@ -2266,6 +2289,8 @@ class StreamSession:
             # for the room gets it (`_carry_held_music`).
             self._carry_held_music()
             self._drop_music_hold()
+            # A turn this device owned, or its quiet stream of one, ends.
+            wake_claims.arbiter(self.ws.app).forget(self)
             # Nobody is left to use a speculative transcript.
             self._discard_speculation()
             self._committed = None
@@ -2352,6 +2377,13 @@ class StreamSession:
         # Before any early return: announce_block reads it to tell a live
         # capture from one that went quiet without an utterance_end.
         self._last_audio_at = time.monotonic()
+        # 1.5.0: a quiet stream of another device's turn (wake_claims): to
+        # the arbiter, which keeps it only until the pick.
+        if self.quiet_stream is not None:
+            await wake_claims.arbiter(self.ws.app).on_quiet_audio(self, data)
+            return
+        if self._dup_capture:
+            return
         # ── Drop-in relay (Feature 4) ───────────────────────────────
         # While paired AND not capturing a command utterance, every raw
         # mic frame is forwarded verbatim to the peer room's socket — no
@@ -2399,6 +2431,9 @@ class StreamSession:
             self._clock.frame(self._utt_frames, time.perf_counter())
         self.audio_buf.extend(data)
         self._utt_frames += 1
+        if self.owner_claim is not None:
+            # The turn's own stream, scored against the quiet ones.
+            await wake_claims.arbiter(self.ws.app).on_owner_audio(self, data)
         # The streaming fast lane (domovoi/fast_lane.py, shadow only) reads
         # the same frames, before anything below can end the capture.
         if self._fastlane is not None:
@@ -3744,7 +3779,73 @@ class StreamSession:
         if row is not None:
             shared = shared or int(row["satellites"]) > 1
         name = row["name"] if row is not None else self.room_id
-        return {"room_id": self.room_id, "name": name, "shared": shared}
+        claims = wake_claims.arbiter(self.ws.app)
+        try:
+            await claims.refresh_links()
+        except Exception as e:  # noqa: BLE001 — the links read again next time
+            log.debug("rooms: hear-links unreadable: %s", e)
+        claim = shared or claims.claim_flag(self.room_id)
+        self._claim_flag_sent = claim
+        return {"room_id": self.room_id, "name": name, "shared": shared, "claim": claim}
+
+    async def push_claim_flags(self) -> None:
+        """``room.claim`` may have changed for other live devices (this one
+        joined or moved): each 1.5.0 device whose flag differs from what it
+        was told hears its ``room`` frame again (same room, new flag)."""
+        claims = wake_claims.arbiter(self.ws.app)
+        reg = room_devices.registry(self.ws.app)
+        for sess in list(reg.satellites.values()):
+            if sess is self or not getattr(sess, "knows_rooms", False):
+                continue
+            told = getattr(sess, "_claim_flag_sent", None)
+            if told is None or told == claims.claim_flag(sess.room_id):
+                continue
+            await sess._safe_send_text({"type": "room", "room": await sess._room_info()})
+
+    def room_speech_playing(self) -> bool:
+        """This device's latest answer or announcement is still playing on
+        the room's synced playout (wake_claims: a wake now is a barge-in)."""
+        if self._room_play_end_us <= 0:
+            return False
+        from domovoi.room_playout.clock import now_us
+        return now_us() < self._room_play_end_us
+
+    def mic_moved(self) -> None:
+        """Another device's stream of this turn was picked (wake_claims):
+        the copy transcribed from this capture early, and an early commit
+        judged on it, are of the wrong audio."""
+        self._discard_speculation()
+        self._commit_on = False
+
+    def _reply_via_room(self) -> bool:
+        """Whether this device's answer plays on the room's synced playout:
+        the room holds another live device, and this one plays room audio.
+        A device that can't (an older one) keeps its own speaker."""
+        if self.conversational_mode or self.dropin_peer is not None:
+            return False
+        pl = getattr(self.ws.app.state, "room_playout", None)
+        if pl is None or self.satellite_id not in pl.speakers(self.room_id):
+            return False
+        return len(room_devices.registry(self.ws.app).speakers(self.room_id)) > 1
+
+    async def _send_pcm(self, chunk: bytes) -> None:
+        """One chunk of the answer: to the room's playout while the
+        response says `room_audio`, else down this socket."""
+        if self._room_reply:
+            pl = self.ws.app.state.room_playout
+            _, end = pl.say(self.room_id, chunk, self._room_reply_rate or 16_000)
+            self._room_play_end_us = end
+            return
+        await self.ws.send_bytes(chunk)
+
+    def _cut_room_speech(self) -> None:
+        """A barge-in from this device: the room's synced answer stops on
+        every speaker (single rooms have none playing)."""
+        if self.room_speech_playing() or self._room_reply:
+            self._room_play_end_us = 0.0
+            pl = getattr(self.ws.app.state, "room_playout", None)
+            if pl is not None and self.room_id in pl.streamers:
+                pl.cut_speech(self.room_id)
 
     async def moved_to(self, room_id: str) -> None:
         """The admin moved this device (the registry already rebound it).
@@ -3758,6 +3859,7 @@ class StreamSession:
                 except Exception as e:  # noqa: BLE001 — music only
                     log.warning("MPD provisioning failed for room=%s: %s", self.room_id, e)
             await self._safe_send_text({"type": "room", "room": await self._room_info(reread=True)})
+            await self.push_claim_flags()
             return
         await self._close_quietly(1001)
 
@@ -4045,7 +4147,30 @@ class StreamSession:
         if t == "ping":
             await self._safe_send_text({"type": "pong"})
             return
+        if t == "wake_claim":
+            # One turn per wake word (1.5.0): answered at once. A device
+            # that never declared the ability is ignored quietly (an
+            # `error` would end its turn).
+            if self.abilities.allows(wake_claims.ABILITY) and self.mic_enabled:
+                await wake_claims.arbiter(self.ws.app).on_claim(self, ctrl)
+            return
+        if t == "quiet_end":
+            wake_claims.arbiter(self.ws.app).on_quiet_end(self, ctrl)
+            return
         if t == "utterance_start":
+            self._dup_capture = False
+            if not await wake_claims.arbiter(self.ws.app).on_capture_start(self, ctrl):
+                # Another device's turn is capturing in this room's group:
+                # this capture is its duplicate. Nothing of it is kept.
+                self._dup_capture = True
+                self.utterance_active = True
+                self.audio_buf.clear()
+                self._last_audio_at = time.monotonic()
+                if self._capture_control and ctrl.get("utt") is not None:
+                    await self._safe_send_text({"type": "end_capture", "utt": ctrl.get("utt")})
+                return
+            if self._response_task and not self._response_task.done():
+                self._cut_room_speech()
             self._clock = _CaptureClock(
                 start_rx=time.perf_counter(),
                 sat_start=_sat_clock(ctrl, "backlog_ms", "wake_ms"),
@@ -4092,6 +4217,15 @@ class StreamSession:
             self._on_speech_hint(t, ctrl)
             return
         if t == "utterance_end":
+            if self._dup_capture:
+                self._dup_capture = False
+                self.utterance_active = False
+                self.audio_buf.clear()
+                await self._safe_send_text({
+                    "type": "response_end", "interrupted": True,
+                    "expect_followup": False, "ignored": True, "duplicate": True,
+                })
+                return
             if not self.utterance_active:
                 # Late for a capture this server ended early (or a stray).
                 self._note_late_utterance_end(ctrl)
@@ -4132,6 +4266,12 @@ class StreamSession:
             )
             reuse = self._reusable_speculation(last_voiced)
             speculations = self._spec_history
+            # 1.5.0: another device of the room heard this command best
+            # (wake_claims): the turn is transcribed from its stream, once,
+            # and this capture's early copies are of the wrong audio.
+            handover = await wake_claims.arbiter(self.ws.app).on_owner_end(self)
+            if handover is not None:
+                reuse, speculations = None, []
             self._spec = None
             self._spec_history = []
             self._spec_on = False
@@ -4163,6 +4303,7 @@ class StreamSession:
                     capture_meta=capture_meta,
                     capture_clock=clock,
                     wake_score=self._wake_score, wake_word=self._wake_fired,
+                    handover=handover,
                 )
             )
             return
@@ -4170,6 +4311,10 @@ class StreamSession:
             if self._response_task and not self._response_task.done():
                 self._response_task.cancel()
             self._cut_announcement()
+            # 1.5.0: the answer playing on every speaker of the room stops
+            # too, whichever device it was this one's or another's.
+            self._cut_room_speech()
+            await wake_claims.arbiter(self.ws.app).on_barge_in(self)
             # The satellite stops playback and drains its queue on a barge.
             self._playout_until = time.monotonic()
             return
@@ -4407,6 +4552,9 @@ class StreamSession:
         # `mic_dsp_state` (an older core would answer it with `error`).
         if self.abilities.allows("mic_dsp"):
             features.append("mic_dsp")
+        # One turn per wake word (1.5.0): a device that declared it claims.
+        if self.abilities.allows(wake_claims.ABILITY):
+            features.append(wake_claims.ABILITY)
         return features
 
     def _health_frame_allowed(self, kind: str) -> bool:
@@ -4694,7 +4842,7 @@ class StreamSession:
         })
         for chunk in _iter_chunks(pcm):
             try:
-                await self.ws.send_bytes(chunk)
+                await self._send_pcm(chunk)
             except Exception:
                 return True  # Pi went away mid-broadcast
             self._note_audio_sent(len(chunk), sr)
@@ -5426,7 +5574,14 @@ class StreamSession:
     async def _process_utterance(self, pcm_bytes: bytes, **kw: Any) -> None:
         """One utterance's turn, marked in progress for its whole length
         (domovoi/voice_activity.py): a document job on the home server
-        waits between its parts while a voice turn is being answered."""
+        waits between its parts while a voice turn is being answered.
+        ``handover`` (1.5.0): another device's stream was picked for this
+        turn (domovoi/wake_claims.py); the turn waits for its end and
+        transcribes it instead of this capture."""
+        handover = kw.pop("handover", None)
+        if handover is not None:
+            pcm_bytes = await handover.pcm()
+            kw["mic_satellite_id"] = handover.satellite_id
         async with voice_activity.turn("satellite"):
             await self._process_utterance_turn(pcm_bytes, **kw)
 
@@ -5448,6 +5603,7 @@ class StreamSession:
         capture_clock: _CaptureClock | None = None,
         wake_score: float | None = None,
         wake_word: str | None = None,
+        mic_satellite_id: str | None = None,
     ) -> None:
         interrupted = False
         response = None
@@ -5573,6 +5729,11 @@ class StreamSession:
                     room_id=self.room_id, session_id=self.session_id,
                     user_text=transcript, trigger=trigger,
                     audio_ms=audio_ms, at=turn_at, wake_score=wake_score, wake_word=wake_word,
+                    # 1.5.0: the device that owned the turn, and the mic
+                    # it was transcribed from (another device's, when
+                    # that one heard it best).
+                    satellite_id=self.satellite_id,
+                    mic_satellite_id=mic_satellite_id or self.satellite_id,
                 )
                 await self._safe_send_text({"type": "transcript", "text": transcript})
 
@@ -6179,13 +6340,13 @@ class StreamSession:
         )
         try:
             for chunk in _iter_chunks(first_pcm):
-                await self.ws.send_bytes(chunk)
+                await self._send_pcm(chunk)
                 self._note_audio_sent(len(chunk), sr)
                 # First call only: tts_first_ms + total_ms.
                 timings.first_audio(tts_t0)
             if 0 in paragraph_ends:
                 for chunk in _iter_chunks(_paragraph_silence(sr)):
-                    await self.ws.send_bytes(chunk)
+                    await self._send_pcm(chunk)
                     self._note_audio_sent(len(chunk), sr)
 
             for i, _ in enumerate(sentences[1:], start=1):
@@ -6210,7 +6371,7 @@ class StreamSession:
                 if i in paragraph_ends:
                     pcm += _paragraph_silence(sr)
                 for chunk in _iter_chunks(pcm):
-                    await self.ws.send_bytes(chunk)
+                    await self._send_pcm(chunk)
                     self._note_audio_sent(len(chunk), sr)
                     # A first sentence that rendered to no audio at all.
                     timings.first_audio(tts_t0)
@@ -6293,7 +6454,7 @@ class StreamSession:
             # sentence that opened the response.
             self._last_spoken_text = " ".join(said)
             for chunk in _iter_chunks(pcm):
-                await self.ws.send_bytes(chunk)
+                await self._send_pcm(chunk)
                 self._note_audio_sent(len(chunk), rate)
                 timings.first_audio(tts_t0)
 
@@ -6855,7 +7016,7 @@ class StreamSession:
                             await self._send_chat_response_start(sentence, sr, session_id)
                             started = True
                         for chunk in _iter_chunks(pcm):
-                            await self.ws.send_bytes(chunk)
+                            await self._send_pcm(chunk)
                             self._note_audio_sent(len(chunk), sr)
             # Flush whatever's left in the buffer (the final, unterminated
             # sentence — Letta often ends without trailing punctuation).
@@ -6866,7 +7027,7 @@ class StreamSession:
                     await self._send_chat_response_start(tail, sr, session_id)
                     started = True
                 for chunk in _iter_chunks(pcm):
-                    await self.ws.send_bytes(chunk)
+                    await self._send_pcm(chunk)
                     self._note_audio_sent(len(chunk), sr)
         except asyncio.CancelledError:
             # Barge-in: the user cut us off. Mark interrupted so the
@@ -6932,14 +7093,14 @@ class StreamSession:
         await self._send_chat_response_start(text, sr, session_id)
         try:
             for chunk in _iter_chunks(first_pcm):
-                await self.ws.send_bytes(chunk)
+                await self._send_pcm(chunk)
                 self._note_audio_sent(len(chunk), sr)
             for sentence in sentences[1:]:
                 pcm, _sr = _wav_to_pcm(
                     await tts.synthesize(sentence, engine=synth_engine, voice=synth_voice)
                 )
                 for chunk in _iter_chunks(pcm):
-                    await self.ws.send_bytes(chunk)
+                    await self._send_pcm(chunk)
                     self._note_audio_sent(len(chunk), _sr)
         finally:
             await self._safe_send_text({
@@ -7619,6 +7780,10 @@ class StreamSession:
         shutdown lands here: uvicorn closes every satellite socket before
         the teardown, often while a first sentence is synthesizing."""
         tts = get_tts_client()
+        # 1.5.0: a timer, an alarm or an announcement in a room with several
+        # devices plays from every speaker, on the synced playout.
+        self._room_reply = self._reply_via_room()
+        self._room_reply_rate = sr
         try:
             await self.ws.send_text(json.dumps({
                 "type": "response_start",
@@ -7628,6 +7793,7 @@ class StreamSession:
                 "session_id": None,
                 "online": True,
                 "audio_sample_rate": sr,
+                **({"room_audio": True} if self._room_reply else {}),
             }))
         except asyncio.CancelledError:
             raise
@@ -7637,7 +7803,7 @@ class StreamSession:
                 reason="send_failed",
             ) from e
         for chunk in _iter_chunks(first_pcm):
-            await self.ws.send_bytes(chunk)
+            await self._send_pcm(chunk)
             self._note_audio_sent(len(chunk), sr)
         for sentence in sentences[1:]:
             try:
@@ -7654,13 +7820,16 @@ class StreamSession:
                 # already-delivered audio land and stop here.
                 break
             for chunk in _iter_chunks(pcm):
-                await self.ws.send_bytes(chunk)
+                await self._send_pcm(chunk)
                 self._note_audio_sent(len(chunk), _sr)
+        room_end = ({"play_end_us": int(self._room_play_end_us)} if self._room_reply else {})
+        self._room_reply = False
         await self.ws.send_text(json.dumps({
             "type": "response_end",
             "interrupted": False,
             "expect_followup": False,
             **(end_extra or {}),
+            **room_end,
         }))
 
     def _restart_music_after_announce(self, url: str) -> None:
@@ -7779,6 +7948,16 @@ class StreamSession:
         # here rather than at each call site because every response_start on
         # the command path goes through this helper, and a missed site would
         # silently disarm the guard for that path.
+        if payload.get("type") == "response_start":
+            # 1.5.0: in a room with several devices the answer plays on
+            # the synced playout, and this socket carries no PCM for it.
+            self._room_reply = self._reply_via_room()
+            if self._room_reply:
+                payload = {**payload, "room_audio": True}
+                self._room_reply_rate = int(payload.get("audio_sample_rate") or 16_000)
+        if payload.get("type") == "response_end" and self._room_reply:
+            payload = {**payload, "play_end_us": int(self._room_play_end_us)}
+            self._room_reply = False
         if payload.get("type") == "response_start":
             self._last_spoken_text = str(payload.get("text") or "")
             # The turn's first reply frame: its reply guard is done.
@@ -8539,14 +8718,14 @@ class StreamSession:
             "audio_sample_rate": sr,
         }))
         for chunk in _iter_chunks(first_pcm):
-            await self.ws.send_bytes(chunk)
+            await self._send_pcm(chunk)
             self._note_audio_sent(len(chunk), sr)
         for sentence in sentences[1:]:
             pcm, _sr = _wav_to_pcm(
                 await tts.synthesize(sentence, engine=p_engine, voice=p_voice)
             )
             for chunk in _iter_chunks(pcm):
-                await self.ws.send_bytes(chunk)
+                await self._send_pcm(chunk)
                 self._note_audio_sent(len(chunk), _sr)
         end_frame = {
             "type": "response_end",
