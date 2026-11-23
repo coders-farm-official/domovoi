@@ -61,7 +61,7 @@ const HomeLocationPanel = () => {
       {toastNode}
       <Card title="Home location"
             sub="The town Domovoi’s weather answers and local news are for. Plugins can read it too.">
-        <div data-settings-mark="home-location" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div data-settings-mark="home-location" style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
           {data.needs_pick && (
             <div className="chat-note info" role="note">
               {data.carried_over ? 'Carried over from the old news location: ' : ''}

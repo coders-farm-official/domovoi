@@ -9,7 +9,7 @@
   `IndexeddbPersistence` (y-indexeddb 9.0.12), and `versions`.
 
 The Documents editor bundle (`../tiptap/tiptap.min.js`) carries
-y-prosemirror 1.3.7 bound to this `window.Y`, so load this file **first**.
+y-tiptap 3.3.0 bound to this `window.Y`, so load this file **first**.
 A page must never load a second Yjs: two copies break Yjs's own type checks.
 
 Exact versions and licences of everything inside: `THIRD-PARTY.json`;

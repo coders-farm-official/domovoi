@@ -5,6 +5,33 @@ needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
 
+## 1.4.1 (unreleased) — Chat lookups reach the web
+
+- **What changed.** A chat lookup with the internet allowed now reaches
+  web search when the offline library has nothing relevant. Before, the
+  library's first three results, related or not, filled every slot, so the
+  web was never asked and the reply was "I couldn't find that in what I
+  looked up."
+- **What changed.** Every lookup source's results pass a relevance check
+  before they are read or cited. A plugin source's 0–1 `score` decides it
+  (under 0.3 is dropped; 0 means no score). Otherwise the title and snippet
+  must share the question's key words. A reply that couldn't find the
+  answer lists no sources.
+- **What changed.** Questions about businesses, opening hours, "near me",
+  news, weather and prices go to web sources first and skip the offline
+  library. "Near me" and "local" are searched with the Home location.
+  With the internet set to "never", such a question gets "I need the
+  internet for that" instead of an unrelated library answer.
+- **What changed.** When the first lookup doesn't answer the question and
+  the chat allows the internet, the chat runs one more lookup with web
+  sources only. A short follow-up such as "how about now?" after a lookup
+  repeats that lookup.
+- **What changed.** The dashboard chat's internet chip says "internet:
+  ask first" when Domovoi asks before going online. "internet off" now
+  means the household's internet answer is "never".
+- **For plugin authors.** `LookupHit.score` is a 0–1 relevance for plugin
+  sources; `POST /v1/phone/lookup` takes an optional `web_only`.
+
 ## 1.4.1 (unreleased) — Printing, videos, scans and Windows update hardening
 
 - **The list of a person's voice samples now needs a household device**, like the
@@ -101,6 +128,19 @@ a way that would otherwise get reported as a bug.
 
 ## 1.4.1 (unreleased)
 
+- A chat draft's changes view on the dashboard leaves a paragraph gap
+  between a long removed passage and the added text after it, so the old
+  last word no longer runs into the new first word.
+
+- A room device set up for a different Domovoi server (another house, or
+  this one before it was reinstalled) used to only blink "no server". Its
+  address is now listed under Settings → Rooms, with the advice to set it
+  up again for this server. The room still trusts only its own server.
+
+- The Documents editor runs on Tiptap 3 (3.33.1, was 2.27.3). Documents,
+  saving and co-editing work as before; the accepted Tiptap advisory
+  (GHSA-cp6q-959q-f8rh) is fixed in this version, so its exception is gone.
+  A span nested in a coloured span now keeps both styles when pasted.
 - Room devices looking for every house count a server only when its
   identity proof is bound to the address they dialled, and the server
   signs the approval-proof form only bound to one.

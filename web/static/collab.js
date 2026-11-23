@@ -7,7 +7,7 @@
  *
  * Hand `collab` to the editor (builder A: DomovoiDocEditor.create(el,
  * {collab})). The editor binds Tiptap's Collaboration extension to
- * `collab.ydoc` (XmlFragment "default") and CollaborationCursor to
+ * `collab.ydoc` (XmlFragment "default") and CollaborationCaret to
  * `collab.provider` with `collab.user`.
  *
  * What the editor has to do besides binding (web/backend/collab/__init__.py

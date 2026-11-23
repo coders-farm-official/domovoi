@@ -93,8 +93,11 @@ class LookupHit:
     ``id`` is opaque to the core (the source's own key). ``url`` is where a
     person can read it (a dashboard route like ``#manual/hears``, or a web
     address). ``section`` names where it sits ("Rooms and devices →
-    Wi-Fi"), for "from the manual's …" lines. ``score`` is the source's own
-    relevance, only comparable within that source."""
+    Wi-Fi"), for "from the manual's …" lines. ``score`` is the hit's
+    relevance: for a plugin's source, 0 to 1 (1 the best match), and a hit
+    scored under :data:`RELEVANT_SCORE_MIN` is dropped (:func:`relevant`);
+    0 means "no score", and the core then judges the title and snippet.
+    The core's own sources keep their own scales."""
 
     id: str
     title: str
@@ -307,6 +310,41 @@ def _clean_licence(value: Any) -> str | None:
     return text or None
 
 
+#: A plugin hit's 0-1 ``score`` under this is not about the question. (The
+#: offline library's scale, kiwix 1.3.1: 0.7 x the title's share of the
+#: question's words + 0.3 x the snippet's. A snippet alone, however full,
+#: reaches 0.3 only with every word.)
+RELEVANT_SCORE_MIN = 0.3
+#: With no score: a hit's title must hold this share of the query's key
+#: words (or the query most of the title's), or its title and snippet
+#: together this share, to count as relevant.
+RELEVANT_TITLE_SHARE = 0.5
+RELEVANT_TEXT_SHARE = 0.75
+
+
+def relevant(query: str, hit: Any, *, scored: bool = True) -> bool:
+    """Whether ``hit`` is about ``query``: "COVID-19 pandemic in Illinois"
+    is not about "restaurants in Springfield, IL", "Red panda" is about "red
+    panda". The gate every source's hits pass before they fill a lookup's
+    slots, reach a prompt or are cited.
+
+    ``scored`` (a plugin's source): a ``score`` between 0 and 1 decides it
+    (:data:`RELEVANT_SCORE_MIN`). Otherwise (no score, or a core source
+    with its own scale) the title and snippet must share the query's key
+    words, stop words ignored. A query with no key words keeps every hit."""
+    from domovoi import lookup_answer as la
+
+    score = float(getattr(hit, "score", 0.0) or 0.0)
+    if scored and 0.0 < score <= 1.0:
+        return score >= RELEVANT_SCORE_MIN
+    if not la._terms(query):
+        return True
+    title = str(getattr(hit, "title", "") or "")
+    if la.overlap(query, title) >= RELEVANT_TITLE_SHARE or la.title_coverage(query, title) >= RELEVANT_TITLE_SHARE:
+        return True
+    return la.overlap(query, f"{title} {getattr(hit, 'snippet', '') or ''}") >= RELEVANT_TEXT_SHARE
+
+
 def _clean_hit(hit: Any) -> LookupHit | None:
     if not isinstance(hit, LookupHit):
         return None
@@ -341,7 +379,9 @@ async def search_sources(
 
     ``enough``: stop asking once that many hits are in hand, so a question
     the offline library answers never reaches the internet sources after
-    it. ``sources``: ask these (already ordered) instead of the registry's."""
+    it. Only hits :func:`relevant` to ``query`` are kept or counted, so a
+    source that returns something for any words never holds the others
+    back. ``sources``: ask these (already ordered) instead of the registry's."""
     out: list[tuple[Any, list[LookupHit]]] = []
     found = 0
     if sources is None:
@@ -357,7 +397,9 @@ async def search_sources(
             log.warning("lookup source %s failed: %s: %s", getattr(source, "slug", "?"),
                         type(e).__name__, str(e)[:200])
             continue
-        hits = [h for h in (_clean_hit(x) for x in (raw or [])[:MAX_HITS_PER_SOURCE]) if h]
+        scored = not getattr(source, "core", False)
+        hits = [h for h in (_clean_hit(x) for x in (raw or [])[:MAX_HITS_PER_SOURCE])
+                if h and relevant(query, h, scored=scored)]
         if hits:
             out.append((source, hits[:limit]))
             found += len(hits[:limit])
