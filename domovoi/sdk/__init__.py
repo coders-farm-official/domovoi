@@ -68,7 +68,11 @@ from __future__ import annotations
 # 1.16.0: playback.relay_url(room_id, remote_url, kind="file"|"radio") and
 #         playback.relay_target(url): a room's player plays a remote URL
 #         through the core's checked relay (GET /v1/player-relay/<token>).
-API_VERSION = "1.16.0"
+# 1.17.0: the event core.voice_history_deleted {person_id} (None = all of
+#         it), after a person's voice history or all of it is deleted, and
+#         core_config.voice_history_keep: the hook any plugin keeping
+#         person-linked data must honour (security review M8).
+API_VERSION = "1.17.0"
 
 from domovoi.capabilities import (  # noqa: E402,F401
     CAPABILITIES,

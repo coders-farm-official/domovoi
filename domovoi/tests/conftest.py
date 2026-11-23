@@ -189,6 +189,8 @@ TABLES_TO_TRUNCATE = [
     "sessions",
     "intents_log",
     "conversation_log",
+    # Forgets waiting to be told to plugins (V079, SDK 1.17).
+    "voice_history_forgets",
     "calendar_events",
     # Calendars by link and phones' shared calendars (V055).
     "calendar_sources",

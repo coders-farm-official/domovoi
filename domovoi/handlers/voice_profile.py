@@ -3184,6 +3184,9 @@ class VoiceProfileHandler(Handler):
             # person_id to NULL). domovoi/voice_history.py.
             await voice_history.delete_person_history(session, person_id)
             await PeopleRepository(session).delete(person_id)
+            # Plugins hear core.voice_history_deleted once the turn's
+            # transaction commits (SDK 1.17); a rollback tells nobody.
+            voice_history.announce_after_commit(session)
         except Exception as e:
             log.warning("forget-me delete failed: %s", e)
             return Response(

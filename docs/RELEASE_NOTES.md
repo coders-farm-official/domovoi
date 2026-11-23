@@ -340,6 +340,22 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
   LINUX_HOST.md and WINDOWS_HOST.md ("…without losing your rooms"),
   SECURITY_PRIVACY.md ("Keeping the house identity across a reinstall").
 
+## 1.5.0 (unreleased) — Plugins forget people too (SDK 1.17)
+
+- **What changed.** When someone says "forget me", an admin deletes a
+  person on People, or an admin deletes all voice history, plugins are
+  now told: the core emits `core.voice_history_deleted` with
+  `{person_id}` (`None` for all of it) once the deletion has committed.
+  A delete made on the dashboard while the core is down is announced
+  when the core is back. Plugins can also read "Keep voice history" as
+  `sdk.core_config.voice_history_keep`. Security review M8: a plugin
+  could keep a lookup history that "forget me" never reached.
+- **What to know.** A plugin that stores anything tied to a person must
+  delete it on this event and keep nothing longer than
+  `voice_history_keep` (PLUGIN_DEVELOPMENT.md §4.21). The daily trim
+  sends no event. Migration V079 adds the small `voice_history_forgets`
+  table the core announces from.
+
 ## 1.5.0 (unreleased) — Any plugin can play a remote URL through the core (SDK 1.16)
 
 - **What changed.** The relay that plays internet radio in a room is now

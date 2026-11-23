@@ -1092,6 +1092,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # fires once plugin loading has settled the handler registry.
     WORKERS.mark_core_hook_done("core.letta_sync")
 
+    # Tell the plugins just loaded about voice history deleted while the
+    # core was down (People -> delete person in the web process): SDK 1.17,
+    # core.voice_history_deleted. In the background; the hourly
+    # voice-history tick retries (domovoi/voice_history.py).
+    from domovoi import voice_history as _voice_history
+
+    _voice_history.schedule_announce()
+
     # Load the voice models into Ollama in the background, now that plugin
     # handlers are registered and the router's tool list is final — so the
     # first question after a restart doesn't pay the cold start. Never
@@ -9092,6 +9100,25 @@ async def admin_voice_history_delete_all() -> dict[str, Any]:
             latency_ms=0,
         )
     return {"job": job}
+
+
+@app.post(
+    "/v1/admin/voice-history/announce-forgets",
+    # The People delete's own tier, forwarded by the web hop. It takes no
+    # input and only tells plugins about deletions already committed.
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def admin_voice_history_announce_forgets() -> dict[str, Any]:
+    """Tell plugins now about voice history deleted outside this process
+    (SDK 1.17): the web's People -> delete person records the forget in
+    its own transaction (``voice_history_forgets``, V079) and calls this
+    after the commit. Emits ``core.voice_history_deleted`` once per
+    recorded forget and drops it. Unreachable, the forget waits for the
+    core's next start or its hourly voice-history tick. ``{announced}``:
+    how many were emitted."""
+    from domovoi import voice_history
+
+    return {"announced": len(await voice_history.announce_forgets())}
 
 
 # ─── Settings → Privacy → Internet ──────────────────────────────────────────────────
