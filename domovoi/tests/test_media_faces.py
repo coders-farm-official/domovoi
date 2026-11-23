@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import io
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -182,6 +182,101 @@ def test_connected_components_over_cosine() -> None:
     E_ = np.stack([_near(a), _near(b), _near(a), _near(b), _near(a)])
     labels = F.components(E_, chunk=2)
     assert labels[0] == labels[2] == labels[4] != labels[1] == labels[3]
+
+
+def _brute_components(E_: np.ndarray, thr: float) -> np.ndarray:
+    n = len(E_)
+    adj = (E_ @ E_.T) >= thr
+    lab = np.arange(n)
+    for i in range(n):
+        if lab[i] != i:
+            continue
+        stack, seen = [i], {i}
+        while stack:
+            k = stack.pop()
+            for j in np.nonzero(adj[k])[0]:
+                if j not in seen:
+                    seen.add(j)
+                    stack.append(j)
+        for j in seen:
+            lab[j] = min(lab[j], i)
+    return lab
+
+
+def test_blocked_components_match_a_brute_force_search() -> None:
+    rng = np.random.default_rng(3)
+    bases = [E.unit(rng.normal(size=128)) for _ in range(12)]
+    # A chain: each step near the last, so only transitive links join the ends.
+    chain = [bases[0]]
+    for _ in range(9):
+        chain.append(E.unit(chain[-1] + rng.normal(size=128) * 0.9 / np.sqrt(128)))
+    rows = chain + [E.unit(bases[rng.integers(1, 12)] + rng.normal(size=128) * 0.5 / np.sqrt(128))
+                    for _ in range(150)] + [E.unit(rng.normal(size=128)) for _ in range(40)]
+    E_ = np.stack(rows)[rng.permutation(200)].astype(np.float32)
+    want = _brute_components(E_, F.GROUP_MATCH)
+    for chunk in (1, 7, 64, 4096):
+        assert np.array_equal(F.components(E_, chunk=chunk), want), chunk
+
+
+def test_components_pause_while_a_voice_turn_runs(monkeypatch) -> None:
+    asks = []
+    slept = []
+    monkeypatch.setattr(F, "REGROUP_VOICE_POLL_SEC", 0.0)
+    monkeypatch.setattr("time.sleep", lambda sec: slept.append(sec))
+
+    def pause() -> bool:
+        asks.append(1)
+        return len(asks) <= 3                    # busy for the first three asks
+
+    a = _base()
+    F.components(np.stack([_near(a) for _ in range(6)]), chunk=2, pause=pause)
+    assert len(slept) == 3 and len(asks) > 3
+
+
+async def test_a_large_library_regroup_does_not_block_the_event_loop(monkeypatch) -> None:
+    """H4 (security review 2026-11-23): the nightly re-group's maths runs
+    in a worker thread with the maths library on one thread, so the event
+    loop (voice, sockets, requests) keeps its turns."""
+    import asyncio
+    import time
+
+    rng = np.random.default_rng(11)
+    bases = rng.normal(size=(400, 128)).astype(np.float32)
+    n = 12000
+    embs = bases[rng.integers(0, 400, n)] + rng.normal(size=(n, 128)).astype(np.float32) * 0.03
+    embs /= np.linalg.norm(embs, axis=1, keepdims=True)
+    rows = [(i + 1, F.to_bytes(embs[i]), None, []) for i in range(n)]
+    applied = {}
+
+    async def load(s, max_faces):
+        assert max_faces == F.REGROUP_MAX_FACES
+        return rows, np.zeros((0, 128), np.float32), []
+
+    async def apply(s, rows_, named, plan):
+        applied["labels"] = plan.labels
+        return {"faces": len(rows_)}
+
+    monkeypatch.setattr(F, "_load_regroup", load)
+    monkeypatch.setattr(F, "_apply_regroup", apply)
+    lag = 0.0
+    done = False
+
+    async def ticker() -> None:
+        nonlocal lag
+        while not done:
+            t0 = time.perf_counter()
+            await asyncio.sleep(0.01)
+            lag = max(lag, time.perf_counter() - t0 - 0.01)
+
+    tick = asyncio.ensure_future(ticker())
+    t0 = time.perf_counter()
+    out = await F.regroup(None, pause=None)
+    took = time.perf_counter() - t0
+    done = True
+    await tick
+    assert out == {"faces": n} and len(set(applied["labels"].tolist())) <= 400
+    assert took > 0.2, "the pass should take long enough for the lag figure to mean something"
+    assert lag < 0.25, f"the event loop stalled {lag:.3f}s during the re-group"
 
 
 # ─── the pinned model fetch ──────────────────────────────────────────────
@@ -469,6 +564,19 @@ async def test_the_nightly_regroup_never_moves_confirmed_faces(fh) -> None:
 
 
 @requires_db
+async def test_the_nightly_regroup_takes_at_most_a_nights_cap(fh) -> None:
+    a = _base()
+    await _photos(fh, {f"{i}.png": [_near(a)] for i in range(1, 5)})
+    async with session_scope() as s:
+        await s.execute(text("UPDATE media_faces SET group_id = NULL"))
+    async with session_scope() as s:
+        out = await F.regroup(s, max_faces=2, pause=None)
+    assert out["faces"] == 2
+    rows = await _faces()
+    assert sum(1 for r in rows if r["group_id"] is None) == 2       # the rest wait for a later night
+
+
+@requires_db
 async def test_hide_merge_and_split(fh) -> None:
     a, b, c = _base(), _base(), _base()
     await _photos(fh, {"1.png": [_near(a)], "2.png": [_near(b)], "3.png": [_near(c)], "4.png": [_near(c)]})
@@ -619,17 +727,21 @@ async def test_faces_off_deletes_everything_and_on_again_starts_from_zero(fh, mo
 async def test_housekeeping_regroups_once_a_night(fh, monkeypatch) -> None:
     calls = []
 
-    async def fake_regroup(s):
-        calls.append(1)
+    async def fake_regroup():
+        # The night is marked done BEFORE the heavy step, in its own
+        # transaction: a pass the watchdog kills is not retried tonight.
+        async with session_scope() as s:
+            st = await F.read_state(s)
+        calls.append(st.get("last_regroup"))
         return {"faces": 0, "suggested": 0, "groups_made": 0}
 
-    monkeypatch.setattr(F, "regroup", fake_regroup)
+    monkeypatch.setattr(F, "regroup_night", fake_regroup)
     day, night = _HKRunner(True, night=False), _HKRunner(True, night=True)
     await F.housekeeping(day)
     assert calls == []
     await F.housekeeping(night)
     await F.housekeeping(night)
-    assert calls == [1]
+    assert calls == [date.today().isoformat()]
 
 
 # ── the routes and their tiers ───────────────────────────────────────────
@@ -771,6 +883,71 @@ async def test_forget_is_for_admins_and_the_persons_own_claimed_device(fh, monke
         assert r.status_code == 200
         assert (await c.post("/api/faces/people/999999/forget",
                              headers={**c.headers, **bearer("adm")})).status_code == 404
+
+
+@requires_db
+async def test_a_household_token_cannot_claim_someone_then_forget_them(fh, monkeypatch) -> None:
+    """M9 (security review 2026-11-23): a claim made after the person's
+    faces were confirmed, or for a person with none confirmed, is not
+    enough to forget them; moving someone's face to another person and
+    touching a hidden group are admin; an admin can list and undo a
+    forgotten face."""
+    from domovoi.tests.auth_testkit import HEADER, bearer, install_fake_db, web_client
+    from web.backend.api import devices as devices_api
+
+    d = await _seed_route_data(fh)
+    bare = await _person("FT Kid")                                  # no confirmed faces
+    async with session_scope() as s:
+        oldest = (await s.execute(text(
+            "SELECT min(created_at) FROM media_faces WHERE person_id = :p AND confirmed"),
+            {"p": d["pid"]})).scalar()
+        late = oldest + timedelta(seconds=1)
+        await s.execute(text("UPDATE media_faces SET created_at = created_at - interval '2 hours'"))
+        for dev, pid in (("facetest-late", d["pid"]), ("facetest-kid", bare)):
+            await s.execute(text(
+                "INSERT INTO devices (device_id, name, owner_person_id, claim_key_hash, owner_claimed_at) "
+                "VALUES (:d, 'Phone', :p, :k, :t)"),
+                {"d": dev, "p": pid, "k": devices_api.claim_key_hash("key-" + dev),
+                 "t": late - timedelta(hours=1)})                   # 10-minute rule passes; still after the faces
+    install_fake_db(monkeypatch, admin=True, sessions={"adm"}, device_token="household")
+    async with web_client() as c:
+        hh = {**c.headers, HEADER: "household"}
+        ad = {**c.headers, **bearer("adm")}
+        for dev, pid in (("facetest-late", d["pid"]), ("facetest-kid", bare)):
+            r = await c.post(f"/api/faces/people/{pid}/forget",
+                             headers={**hh, "X-Domovoi-Device-Id": dev, devices_api.CLAIM_KEY_HEADER: "key-" + dev})
+            assert r.status_code == 403, (dev, r.text)
+        assert await _count("face_denylist") == 0
+        # Moving Hal's confirmed face onto a new person: admin.
+        newp = await _person("FT Decoy")
+        r = await c.post(f"/api/faces/face/{d['fnamed']}/confirm", headers=hh, json={"person_id": newp})
+        assert r.status_code == 403
+        # A hidden group: naming, merging, splitting, confirming are admin.
+        r = await c.post(f"/api/faces/groups/{d['gb']}/hide", headers=hh, json={"hidden": True})
+        assert r.status_code == 200
+        async with session_scope() as s:
+            fb = (await s.execute(text("SELECT id FROM media_faces WHERE group_id = :g LIMIT 1"),
+                                  {"g": d["gb"]})).scalar()
+        for method, path, body in [
+            ("POST", f"/api/faces/groups/{d['gb']}/name", {"name": "FT Peek"}),
+            ("POST", "/api/faces/merge", {"into": d["ga"], "groups": [d["gb"]]}),
+            ("POST", "/api/faces/split", {"face_ids": [fb]}),
+            ("POST", f"/api/faces/face/{fb}/confirm", {"person_id": newp}),
+        ]:
+            r = await c.request(method, path, headers=hh, json=body)
+            assert r.status_code == 403, (path, r.status_code, r.text)
+        # The admin forgets, lists and undoes.
+        assert (await c.post(f"/api/faces/people/{d['pid']}/forget", headers=ad)).status_code == 200
+        assert (await c.get("/api/faces/denylist", headers=hh)).status_code == 403
+        r = await c.get("/api/faces/denylist", headers=ad)
+        assert r.status_code == 200 and len(r.json()["entries"]) == 1
+        assert "embedding" not in r.text
+        eid = r.json()["entries"][0]["id"]
+        assert (await c.delete(f"/api/faces/denylist/{eid}", headers=hh)).status_code == 403
+        r = await c.delete(f"/api/faces/denylist/{eid}", headers=ad)
+        assert r.status_code == 200 and r.json()["deleted"] == eid
+        assert (await c.delete(f"/api/faces/denylist/{eid}", headers=ad)).status_code == 404
+    assert await _count("face_denylist") == 0
 
 
 @requires_db

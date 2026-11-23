@@ -931,17 +931,22 @@ async def get_satellite(room_id: str) -> Satellite:
 
 
 @router.get("/{room_id}/media", dependencies=READ)
-async def get_room_media(room_id: str) -> dict[str, Any]:
+async def get_room_media(room_id: str, request: Request) -> dict[str, Any]:
     """Photo and video results asked for by voice in this room, while its
     screen shows them (1.5.0, domovoi/room_media.py): ``{"media": null |
     {id, said, count, more, expires_in_ms, items: [{kind, thumb, caption,
     date, at_s}]}}``. For the video satellite's kiosk page
     (web/static/display.html); ``thumb`` is this dashboard's thumbnail or
-    poster route. From the Domovoi server's snapshot (at most a poll old);
-    null when the room shows none or the server isn't answering. A caption
-    is a picture model's words: draw it as text."""
-    snapshot = get_cached_snapshot() or {}
-    m = (snapshot.get("room_media") or {}).get(room_id)
+    poster route. Read from the Domovoi server's device-read
+    ``GET /v1/admin/room-media/{room_id}`` with the caller's credentials
+    (the open snapshot carries only which results are up); null when the
+    room shows none or the server isn't answering. A caption is a picture
+    model's words: draw it as text."""
+    from urllib.parse import quote
+
+    status, doc = await get_admin(f"/v1/admin/room-media/{quote(room_id, safe='')}",
+                                  headers=auth_forward_headers(request))
+    m = doc.get("media") if status == 200 and isinstance(doc, dict) else None
     return {"media": m if isinstance(m, dict) else None}
 
 

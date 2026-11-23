@@ -502,7 +502,12 @@ def room_media_digest(snapshot: dict[str, Any] | None) -> dict[str, Any]:
     rooms = (snapshot or {}).get("room_media") or {}
     if not isinstance(rooms, dict):
         return {}
-    return {str(room): m.get("id") for room, m in rooms.items() if isinstance(m, dict)}
+    out: dict[str, Any] = {}
+    for room, m in rooms.items():
+        rid = m.get("id") if isinstance(m, dict) else m
+        if isinstance(rid, int) and not isinstance(rid, bool):
+            out[str(room)] = rid
+    return out
 
 
 
