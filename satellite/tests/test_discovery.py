@@ -88,6 +88,82 @@ def test_an_endless_health_body_is_cut_off_not_read_whole():
         assert 1 < resp.reads <= server_identity.HEALTH_BODY_MAX_BYTES // 1024
 
 
+def _serve_once(script):
+    """A loopback listener that runs ``script(conn)`` for one connection;
+    returns its port."""
+    import socket
+    import threading
+
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+
+    def run():
+        conn, _ = srv.accept()
+        try:
+            conn.recv(4096)
+            script(conn)
+        except OSError:
+            pass
+        finally:
+            conn.close()
+            srv.close()
+
+    threading.Thread(target=run, daemon=True).start()
+    return srv.getsockname()[1]
+
+
+def _drip(head: bytes):
+    import time
+
+    def script(conn):
+        conn.sendall(head)
+        for _ in range(100):       # one byte at a time, never a full line
+            conn.sendall(b"x")
+            time.sleep(0.05)
+    return script
+
+
+@pytest.mark.parametrize("head", [
+    b"HTTP/1.1 200 ",                                                    # the status line
+    b"HTTP/1.1 200 OK\r\nX-Pad: ",                                        # a header
+    b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n",           # a chunk size
+])
+def test_a_dripped_answer_stops_at_one_deadline(head):
+    import time
+
+    port = _serve_once(_drip(head))
+    started = time.monotonic()
+    with pytest.raises(Exception):
+        server_identity.get_bounded(f"http://127.0.0.1:{port}/v1/health", timeout=0.3)
+    assert time.monotonic() - started < 2.5   # 0.3 to connect + 1 s for the answer
+
+
+def test_a_bounded_get_reads_a_real_answer():
+    body = b'{"status": "ok", "bot_name": "Domovoi"}'
+
+    def script(conn):
+        conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                     b"Content-Length: %d\r\n\r\n" % len(body) + body)
+
+    port = _serve_once(script)
+    assert discovery.probe("127.0.0.1", port=port, timeout=0.5) is True
+
+
+def test_a_bounded_get_treats_an_error_status_as_unreachable():
+    port = _serve_once(lambda conn: conn.sendall(
+        b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n"))
+    with pytest.raises(server_identity.IdentityError, match="could not reach"):
+        server_identity.verify_server(f"http://127.0.0.1:{port}", expected_fingerprint=None,
+                                      timeout=0.5)
+
+
+def test_a_name_with_a_crowd_of_addresses_gets_the_first_few():
+    infos = [(2, 1, 6, "", (f"192.168.1.{i}", 6370)) for i in range(40, 70)]
+    addrs = discovery.resolve_name("domovoi.local", resolver=lambda *a: infos)
+    assert addrs == [f"192.168.1.{i}" for i in range(40, 40 + discovery.MAX_NAME_ADDRS)]
+
+
 def test_a_stalled_probe_cannot_hold_the_sweep(monkeypatch):
     import threading
     import time

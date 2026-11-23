@@ -40,6 +40,9 @@ a way that would otherwise get reported as a bug.
 - **The sheet editor's grid read and the sheet export** run in the sheets
   worker, not on the dashboard's main loop, and a .csv's grid is read from
   its first 8 MB.
+- **A satellite's check of a server has one deadline for the whole answer**,
+  status line and headers included, and at most 8 addresses of a server
+  name are tried. This ships with the satellite code update.
 - **Up next keeps the songs a jump or a move passed**: on a long room queue
   only songs the room was heard playing are trimmed after a jump, and the
   200-song ceiling behind the current song no longer takes them.

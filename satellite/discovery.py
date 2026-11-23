@@ -65,6 +65,8 @@ _NAME_RE = re.compile(r"^(?=.{1,253}\Z)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(\.
 _NAME_TIMEOUT_SEC = 3.0
 # One host, not a sweep: it may take its time to answer.
 _SINGLE_PROBE_TIMEOUT_SEC = 2.0
+#: The most addresses of one server name that are probed.
+MAX_NAME_ADDRS = 8
 # What resolves a name when the caller passes no resolver. A module
 # attribute so the test suite can refuse real lookups (satellite/tests/
 # conftest.py): resolving domovoi.local on a developer's machine asks the
@@ -139,18 +141,14 @@ def probe(host: str, *, port: int = CORE_PORT, timeout: float = _PROBE_TIMEOUT_S
 
     from satellite import server_identity
 
-    opener = opener or urllib.request.urlopen
     challenge = server_identity.new_challenge() if expected_fingerprint else None
     addr = f"{host}:{port}"
     url = f"{'https' if scheme == 'https' else 'http'}://{host}:{port}{HEALTH_PATH}"
     if challenge:
         url = f"{url}?challenge={challenge}&addr={urllib.parse.quote(addr, safe='')}"
     try:
-        with opener(url, timeout=timeout) as r:
-            if getattr(r, "status", 200) != 200:
-                return False
-            body = server_identity.read_health_body(r, timeout=timeout)
-            doc = json.loads(body.decode("utf-8", "replace"))
+        body = server_identity.health_body(url, timeout=timeout, opener=opener)
+        doc = json.loads(body.decode("utf-8", "replace"))
     except Exception:      # noqa: BLE001 — every failure is just "not here"
         return False
     if not (isinstance(doc, dict) and doc.get("status") == "ok" and doc.get("bot_name")):
@@ -348,7 +346,9 @@ def resolve_name(name: str, *, timeout: float = _NAME_TIMEOUT_SEC,
             continue
         if addr not in out:
             out.append(addr)
-    return out
+    # Each is probed in turn, ahead of the bounded sweep: a name that
+    # answers with a crowd of addresses gets the first few.
+    return out[:MAX_NAME_ADDRS]
 
 
 @dataclass(frozen=True)
@@ -532,22 +532,16 @@ def probe_house(host: str, *, port: int = CORE_PORT,
     for the address dialled; a server that signed none is an older one,
     which an unpinned device never asks — and an answer whose advert was
     stripped on the way does not verify at all (``identity == "failed"``)."""
-    import urllib.request
-
     from satellite import server_identity
 
-    opener = opener or urllib.request.urlopen
     challenge = server_identity.new_challenge(pairing_proof=True)
     addr = f"{host}:{port}"
     http = "https" if scheme == "https" else "http"
     url = (f"{http}://{host}:{port}{HEALTH_PATH}?challenge={challenge}"
            f"&addr={urllib.parse.quote(addr, safe='')}")
     try:
-        with opener(url, timeout=timeout) as r:
-            if getattr(r, "status", 200) != 200:
-                return None
-            body = server_identity.read_health_body(r, timeout=timeout)
-            doc = json.loads(body.decode("utf-8", "replace"))
+        body = server_identity.health_body(url, timeout=timeout, opener=opener)
+        doc = json.loads(body.decode("utf-8", "replace"))
     except Exception:      # noqa: BLE001 — every failure is just "not here"
         return None
     if not (isinstance(doc, dict) and doc.get("status") == "ok" and doc.get("bot_name")):
