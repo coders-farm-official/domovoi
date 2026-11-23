@@ -75,6 +75,11 @@ MANIFEST_CONTEXT = b"domovoi-manifest-v1"
 # The freshness-carrying manifest signature. A different separator from the
 # v1 one, so neither signature can stand in for the other.
 MANIFEST_CONTEXT_V2 = b"domovoi-manifest-v2"
+# Support-session control frames (1.5.0, domovoi/support_sessions.py): the
+# open, each input frame and the per-connection allow state. Its own
+# separator, so no health answer or manifest signature can stand in for one
+# and a support signature can never pass as either of those.
+SUPPORT_CONTEXT = b"domovoi-support-v1"
 
 CODE_CHANNEL = "satellite-code"
 PLUGIN_CHANNEL = "satellite-plugins"
@@ -210,6 +215,14 @@ def manifest_message_v2(
         "serial": int(serial),
     }
     return MANIFEST_CONTEXT_V2 + b"\n" + canonical_json(signed)
+
+
+def support_message(doc: Any) -> bytes:
+    """The bytes signed for a support-session control frame: the context,
+    then the canonical document (its ``kind``, the satellite's id, the
+    connection's nonce, the issue time and the frame's own fields). The
+    satellite (satellite/server_identity.py) builds the identical bytes."""
+    return SUPPORT_CONTEXT + b"\n" + canonical_json(doc)
 
 
 def manifest_digest(manifest: Any) -> str:
@@ -502,6 +515,17 @@ class ServerIdentity:
         signed_proof = pairing_proof if addr is not None else None
         doc["signature"] = b64(self.sign(health_message(challenge, addr, signed_proof)))
         return doc
+
+    def signed_support(self, doc: dict[str, Any]) -> dict[str, str | dict[str, Any]]:
+        """A support-session control document and this key's signature over
+        it (:func:`support_message`), as the ``signed`` field of the frame.
+        The satellite acts only on what is inside ``doc``."""
+        return {
+            "algorithm": ALGORITHM,
+            "public_key": self.public_key_b64,
+            "doc": doc,
+            "signature": b64(self.sign(support_message(doc))),
+        }
 
     def serials_path(self) -> Path:
         base = self.path if self.path is not None else identity_path()

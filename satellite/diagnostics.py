@@ -59,15 +59,31 @@ LOG_READ_BYTES = 32 * 1024
 _NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}\Z")
 
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f​-‏ -‮⁦-⁩]")
-_SECRET_RULES: list[tuple[re.Pattern[str], str]] = [
+# Every run below is bounded and the assignment rule starts only at a
+# word's start, so the work is linear in the text: an answer of one keyword
+# repeated thousands of times can't make a rule backtrack for minutes. The
+# core runs the same rules (domovoi/satellite_diagnostics.py).
+_SECRET_KEY = re.compile(
+    r"(?i)token|password|passwd|passphrase|secret|api[_-]?key|apikey|psk|cookie|"
+    r"auth|credential|private[_-]?key")
+_ASSIGNMENT = re.compile(
+    r"(?<![\w-])([\w-]{1,80}[\"']?)([ \t]{0,8}[=:][ \t]{0,8})(?!\[redacted\])"
+    r"(\"[^\"\n]{0,512}\"|'[^'\n]{0,512}'|[^\n]{1,512})"
+)
+
+
+def _assignment(m: re.Match[str]) -> str:
+    """key=value / key: value / "key": "value" whose key names a secret:
+    the value goes to the end of the line (all of a multi-word secret)."""
+    if not _SECRET_KEY.search(m.group(1)):
+        return m.group(0)
+    return m.group(1) + m.group(2) + "[redacted]"
+
+
+_SECRET_RULES: list[tuple[re.Pattern[str], Any]] = [
     (re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}"), "Bearer [redacted]"),
-    # key=value / key: value / "key": "value" whose key names a secret.
-    (re.compile(
-        r"(?i)([\w-]*(?:token|password|passwd|passphrase|secret|api[_-]?key|apikey|psk|cookie|"
-        r"auth|credential|private[_-]?key)[\w-]*[\"']?)(\s*[=:]\s*)(?!\[redacted\])"
-        r"(\"[^\"\n]*\"|'[^'\n]*'|[^\s,;}]+)"
-    ), r"\1\2[redacted]"),
-    (re.compile(r"(?i)\b(password|passwd|passphrase|secret|psk)(\s+)(?!\[redacted\])([^\s,;]+)"),
+    (_ASSIGNMENT, _assignment),
+    (re.compile(r"(?i)\b(password|passwd|passphrase|secret|psk)([ \t]{1,8})(?!\[redacted\])([^\n]{1,512})"),
      r"\1\2[redacted]"),
     (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)"),
      "[redacted private key]"),
@@ -80,7 +96,9 @@ def scrub(text: str, known: tuple[str, ...] = (), limit: int = MAX_TEXT_CHARS) -
     """``text`` as it may leave the device: control characters out (tab
     and newline kept), each ``known`` secret value replaced, then anything
     secret-looking, then cut to ``limit`` characters."""
-    out = _CONTROL.sub("", str(text or "")).replace("\r", "")
+    out = _CONTROL.sub("", str(text or "")[: limit * 8]).replace("\r", "")
+    if len(out) > limit * 2:
+        out = out[: limit * 2]      # bound the rules' work before they run
     for value in known:
         if value and len(value) >= 6:
             out = out.replace(value, "[redacted]")
@@ -91,10 +109,38 @@ def scrub(text: str, known: tuple[str, ...] = (), limit: int = MAX_TEXT_CHARS) -
     return out
 
 
-def ssid_hash(ssid: str) -> str:
-    """A network name as the probe shows it: never the name, a short hash
-    (the same network always gives the same one, so two rooms compare)."""
-    return "#" + hashlib.sha256(ssid.encode("utf-8", "replace")).hexdigest()[:8]
+def ssid_hash(ssid: str, salt: str = "") -> str:
+    """A network name as the probe shows it: never the name, a short keyed
+    hash. The key is the house's (the server fingerprint every satellite of
+    it pins), so two rooms of one house compare, and a table of common
+    network names made elsewhere doesn't apply."""
+    import hmac
+
+    return "#" + hmac.new(salt.encode("utf-8", "replace"), ssid.encode("utf-8", "replace"),
+                          hashlib.sha256).hexdigest()[:8]
+
+
+class RequestBucket:
+    """At most ``burst`` probe requests at once, refilled at ``per_sec``:
+    the device's own limit, whatever the server sends (the core has its
+    own). :meth:`take` is True when one may run."""
+
+    def __init__(self, burst: int = 8, per_sec: float = 0.3,
+                 clock: Callable[[], float] = time.monotonic) -> None:
+        self.burst = burst
+        self.per_sec = per_sec
+        self._clock = clock
+        self._tokens = float(burst)
+        self._at = clock()
+
+    def take(self) -> bool:
+        now = self._clock()
+        self._tokens = min(float(self.burst), self._tokens + (now - self._at) * self.per_sec)
+        self._at = now
+        if self._tokens < 1.0:
+            return False
+        self._tokens -= 1.0
+        return True
 
 
 @dataclass
@@ -119,6 +165,8 @@ class Context:
     known_secrets: tuple[str, ...] = ()
     #: The XVF3800's DSP control (satellite/mic_dsp.XvfDsp), or None.
     mic_dsp: Any = None
+    #: The key the network name is hashed with (the pinned server fingerprint).
+    hash_salt: str = ""
     now: Callable[[], float] = time.time
     monotonic: Callable[[], float] = time.monotonic
 
@@ -164,7 +212,14 @@ def _dur(seconds: float | None) -> str:
 
 def probe_recent_logs(ctx: Context) -> str:
     lines = (ctx.log_tail(LOG_READ_BYTES) or "").splitlines()[-LOG_LINES:]
-    return "\n".join(lines) if lines else "the log is empty"
+    if not lines:
+        return "the log is empty"
+    text = "\n".join(lines)
+    # The client logs the Wi-Fi network's name; it never leaves the device.
+    ssid = (ctx.run(["iwgetid", "-r"], timeout=3.0) or "").strip()
+    if len(ssid) >= 2:
+        text = text.replace(ssid, "[wifi network]")
+    return text
 
 
 def _wifi_signal(ctx: Context) -> str | None:
@@ -185,7 +240,7 @@ def probe_network(ctx: Context) -> str:
     host, port = _server(ctx)
     out: list[str] = []
     ssid = (ctx.run(["iwgetid", "-r"], timeout=3.0) or "").strip()
-    out.append(f"wifi network: {ssid_hash(ssid) if ssid else 'none or unknown'} (name hashed)")
+    out.append(f"wifi network: {ssid_hash(ssid, ctx.hash_salt) if ssid else 'none or unknown'} (name hashed)")
     out.append(f"wifi signal: {_wifi_signal(ctx) or 'unknown'}")
     out.append(f"address: {(ctx.local_address(host, port) if host else None) or 'unknown'}")
     gateway = health.parse_default_gateway(ctx.run(["ip", "route"], timeout=3.0))

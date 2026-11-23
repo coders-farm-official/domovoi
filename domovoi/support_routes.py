@@ -5,7 +5,7 @@
 | ``POST /v1/admin/satellites/{satellite_id}/support/allow`` | security + password sign-in within 5 min |
 | ``POST /v1/admin/satellites/{satellite_id}/support/disallow`` | admin (ends an open session) |
 | ``POST /v1/admin/satellites/{satellite_id}/support/open`` | security + fresh sign-in + the password typed again |
-| ``WS /v1/admin/support-sessions/{id}/terminal`` | the single-use ticket (``X-Support-Ticket``), relayed by the dashboard |
+| ``WS /v1/admin/support-sessions/{id}/terminal`` | the single-use ticket (``X-Support-Ticket``) AND the opener's own Bearer, relayed by the dashboard |
 | ``POST /v1/admin/support-sessions/{id}/end`` | device tier: any paired household device may end one |
 | ``GET /v1/admin/support-sessions/active`` | device read (the banner) |
 | ``GET /v1/admin/support-sessions`` | security read, Bearer only (the audit list) |
@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import hmac
 import logging
 from typing import Any
 
@@ -91,6 +92,11 @@ async def support_allow(satellite_id: str, request: Request) -> dict[str, Any]:
             text("UPDATE satellites SET support_allowed = true, updated_at = now() "
                  "WHERE satellite_id = :id"), {"id": satellite_id})
     log.info("support sessions allowed on %s", satellite_id)
+    # The satellite holds its own copy of the switch, set only by a signed
+    # frame (satellite/support_shell.py): until it has one, it refuses.
+    target = support_sessions.live_satellite(request.app, satellite_id)
+    if target is not None:
+        await support_sessions.send_allow_state(request.app, target, True)
     return {"satellite_id": satellite_id, "support_allowed": True}
 
 
@@ -107,6 +113,9 @@ async def support_disallow(satellite_id: str, request: Request) -> dict[str, Any
                  "WHERE satellite_id = :id"), {"id": satellite_id})
     ended = await support_sessions.get_manager(request.app).end_for_satellite(
         satellite_id, "switch_off")
+    target = support_sessions.live_satellite(request.app, satellite_id)
+    if target is not None:
+        await support_sessions.send_allow_state(request.app, target, False)
     log.info("support sessions turned off on %s (ended one: %s)", satellite_id, ended)
     return {"satellite_id": satellite_id, "support_allowed": False, "ended": ended}
 
@@ -178,14 +187,23 @@ async def support_open(satellite_id: str, body: OpenBody, request: Request) -> d
 async def support_terminal(ws: WebSocket, session_id: str) -> None:
     """The terminal's socket, reached through the dashboard's relay. The
     ticket (``X-Support-Ticket``) is single use and bound to the admin
-    session and the satellite; the admin session must still be live."""
+    session and the satellite, and the hop must also carry the Bearer of
+    the admin who opened it (a ticket sniffed off the network is not
+    enough); the admin session must still be live."""
     if not origin_allowed(ws.headers.get("origin")):
         await ws.close(code=1008)
         return
     mgr = support_sessions.get_manager(ws.app)
     sess = None
+    bearer = admin_auth.bearer_token(ws)
     if support_sessions.valid_id(session_id):
         sess = mgr.redeem(ws.headers.get(TICKET_HEADER), session_id)
+    if sess is not None and (
+            not bearer
+            or not hmac.compare_digest(admin_auth.token_sha256(bearer), sess.admin_hash)):
+        log.info("support terminal refused: the hop's Bearer is not the opener's")
+        await mgr.end(sess, "never_attached", announce=False)
+        sess = None
     if sess is None:
         log.info("support terminal refused: no valid ticket for %s", session_id[:8])
         await ws.close(code=1008)

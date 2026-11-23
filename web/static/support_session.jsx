@@ -208,6 +208,8 @@
         fontFamily: '"JetBrains Mono", ui-monospace, monospace',
         theme: { background: '#111111' },
       });
+      // Satellite output can draw clickable links (OSC 8): none ever opens.
+      try { term.options.linkHandler = { activate: () => {}, allowNonHttpProtocols: false }; } catch { /* older build */ }
       const fit = new FitAddon();
       term.loadAddon(fit);
       term.open(holder.current);
@@ -215,9 +217,13 @@
       live.current.term = term;
       live.current.id = opened.session_id;
       live.current.fit = fit;
+      // The admin's own Bearer rides along (a socket can't send headers):
+      // the core refuses the ticket from anyone but the admin who opened it.
+      let bearer = '';
+      try { bearer = String((Auth.headers() || {}).Authorization || '').replace(/^Bearer /, ''); } catch { /* no auth module */ }
       const ws = new WebSocket(
         wsUrl(`/api/support-sessions/${encodeURIComponent(opened.session_id)}/terminal`),
-        ['domovoi-support', `ticket.${opened.ticket}`],
+        ['domovoi-support', `ticket.${opened.ticket}`, `bearer.${bearer}`],
       );
       live.current.ws = ws;
       ws.onopen = () => send({ t: 'resize', cols: term.cols, rows: term.rows });
@@ -239,9 +245,15 @@
         Store.refresh();
       };
       const enc = new TextEncoder();
+      // Only a key press or a paste is activity for the idle limit (`k`):
+      // the terminal's own answers to a program's queries are not.
+      let human = 0;
+      term.onKey(() => { human = Date.now(); });
+      holder.current.addEventListener('paste', () => { human = Date.now(); }, true);
       const input = (bytes) => {
+        const k = Date.now() - human < 1000;
         for (let i = 0; i < bytes.length; i += INPUT_CHUNK) {
-          send({ t: 'in', d: bytesToB64(bytes.subarray(i, i + INPUT_CHUNK)) });
+          send({ t: 'in', d: bytesToB64(bytes.subarray(i, i + INPUT_CHUNK)), k });
         }
       };
       term.onData((d) => input(enc.encode(d)));

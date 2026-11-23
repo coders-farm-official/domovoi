@@ -4,12 +4,24 @@ The core's side, and why it is safe, is domovoi/support_sessions.py and
 docs/SECURITY_PRIVACY.md, "Support sessions". This side:
 
 * **Who declares it.** Only a Raspberry Pi on a prepared card (stage 1 made
-  ``/var/lib/domovoi``) whose service account can NOT use sudo
-  (``sudo -n true`` fails at start). A hand-built Pi whose user is in sudo
-  never declares it: there the shell would be root. Spare PCs and phones
-  never declare it (:func:`should_declare`).
+  ``/var/lib/domovoi``) that holds the root-owned server pin, whose service
+  account can NOT use sudo (``sudo -n true`` fails at start), that has no
+  known way from this account to root (no Domovoi root unit runs code this
+  account can write; no sudo rule hands the XVF3800 tool free arguments),
+  and whose unit lets this process feed a systemd watchdog. A hand-built Pi
+  whose user is in sudo never declares it: there the shell would be root.
+  Spare PCs and phones never declare it (:func:`should_declare`).
+* **Only the server can open one.** ``support_allow`` (the per-satellite
+  switch, sent on every connect and on every change), ``support_open`` and
+  every ``support_input`` carry the server's Ed25519 signature under their
+  own context (``domovoi-support-v1``) over this satellite's id, this
+  connection's nonce (sent in the hello, new on every connect) and the
+  issue time. The key must be the pinned one. An unsigned, replayed, stale,
+  wrong-satellite or wrong-connection frame is refused, and so is an open
+  before a signed ``support_allow`` on this connection. Only the signed
+  document's values are used.
 * **The shell.** A PTY running the account's login shell as this process's
-  own user (never root), inside the service's own sandbox, with a clean
+  own user (not root, on a device that declares it), inside the service's own sandbox, with a clean
   environment, ``TERM=xterm-256color`` and the home folder as its working
   directory. No new sudoers line, no new helper, no new port: the bytes
   ride the satellite's existing WebSocket as base64 in JSON text frames.
@@ -19,9 +31,18 @@ docs/SECURITY_PRIVACY.md, "Support sessions". This side:
   it stops reading the PTY, so the shell slows rather than floods), takes
   at most 4 KB of input a frame, and ends on any socket drop (never
   resumes). One session at a time.
+* **The end can't be held off from inside the shell.** Input reaches the
+  PTY through a bounded queue and a worker thread, so a program that stops
+  reading can't block the client's event loop (a full queue ends the
+  session). While a session is open the event loop feeds a systemd watchdog
+  (``WATCHDOG_USEC`` set at open): a client stopped or frozen from inside
+  the shell is killed with its whole unit. At open the process is made
+  non-dumpable, so the shell (the same account) can't attach a debugger to
+  it or write its memory.
 * **The end.** The PTY's process group is hung up (then killed), and the
   client restarts its own service so nothing started with ``nohup`` or
-  ``setsid`` lives on: the unit's cgroup kill covers every child.
+  ``setsid`` lives on: the unit's cgroup kill covers every child. If the
+  restart can't be asked for, the client exits non-zero and systemd does it.
 
 Linux only. The module imports anywhere; :class:`PtyBackend` needs
 ``pty``-era modules (``fcntl``, ``termios``) and is never built on Windows.
@@ -33,6 +54,10 @@ import base64
 import binascii
 import logging
 import os
+import queue
+import re
+import secrets
+import socket
 import subprocess
 import sys
 import threading
@@ -49,10 +74,193 @@ INPUT_FRAME_MAX = 4 * 1024
 COLS_RANGE = (20, 400)
 ROWS_RANGE = (5, 200)
 READ_POLL_SEC = 0.2
+#: Input frames waiting for the PTY. A shell that stops reading fills it,
+#: and the session ends ("input_stalled") instead of the client blocking.
+INPUT_QUEUE_MAX = 64
+#: How long one write to the PTY waits for room before it checks again
+#: whether the session is still open.
+WRITE_POLL_SEC = 0.5
+#: The systemd watchdog armed for a session: the event loop feeds it every
+#: WATCHDOG_FEED_SEC; WATCHDOG_SEC without a feed and systemd kills the
+#: unit (every process in it, the shell's too) and starts it again.
+WATCHDOG_SEC = 30
+WATCHDOG_FEED_SEC = 5.0
+#: The lowest LED brightness a remote set_config may set while this device
+#: offers support sessions (the light is the room's sign of a session).
+MIN_LED_BRIGHTNESS = 4
 
 DEVICE_MODEL = Path("/proc/device-tree/model")
 #: Root's state directory, made by stage 1 of a prepared card.
 PREPARED_STATE_DIR = Path("/var/lib/domovoi")
+#: Where root's units live: no Domovoi unit there may run as root from a
+#: path this account can write.
+SYSTEMD_UNIT_DIRS = (Path("/etc/systemd/system"), Path("/lib/systemd/system"),
+                     Path("/usr/lib/systemd/system"))
+ROOT_UNIT_GLOB = "domovoi*.service"
+_UNIT_PATH_KEYS = frozenset({
+    "ExecStart", "ExecStartPre", "ExecStartPost", "ExecStop", "ExecStopPost",
+    "ExecReload", "WorkingDirectory", "Environment", "EnvironmentFile",
+})
+_ABS_PATH_RE = re.compile(r"(?<![\w@])/[^\s\"';:]+")
+_NONCE_RE = re.compile(r"^[0-9a-f]{32}\Z")
+
+
+# ─── who may declare it ───────────────────────────────────────────────────
+
+
+def _pin_is_root_owned() -> bool:
+    """Whether this device holds the root-owned server pin first boot
+    installed (satellite/server_identity.ROOT_PIN): the one pin this account
+    can't rewrite, and the key every support frame is checked against."""
+    from satellite import server_identity
+
+    fingerprint, source = server_identity.pinned_fingerprint(None)
+    return bool(fingerprint) and source == "image"
+
+
+def root_pinned_fingerprint() -> str | None:
+    """The root-owned pin, or None (a config or recorded pin never counts)."""
+    from satellite import server_identity
+
+    fingerprint, source = server_identity.pinned_fingerprint(None)
+    return fingerprint if source == "image" else None
+
+
+def _writable_by_me(path: Path) -> bool:
+    """Whether this account could change what ``path`` holds: the path or
+    any directory above it is this account's or writable to it."""
+    uid = os.getuid() if hasattr(os, "getuid") else -1
+    p = path
+    for _ in range(64):
+        try:
+            st = p.stat()
+        except OSError:
+            st = None
+        if st is not None and (st.st_uid == uid or os.access(p, os.W_OK)):
+            return True
+        if p.parent == p:
+            return False
+        p = p.parent
+    return True
+
+
+def root_unit_runs_my_code(
+    unit_dirs: tuple[Path, ...] = SYSTEMD_UNIT_DIRS,
+    writable: Callable[[Path], bool] = _writable_by_me,
+) -> str | None:
+    """The first Domovoi unit that runs as root from a path this account
+    can write (the provisioning unit started ``~/domovoi`` code with the
+    account's venv), or None. One such unit means a shell as this account
+    reaches root at the next boot, so the shell is not offered."""
+    for directory in unit_dirs:
+        try:
+            units = sorted(directory.glob(ROOT_UNIT_GLOB))
+        except OSError:
+            continue
+        for unit in units:
+            try:
+                text = unit.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                return str(unit)    # can't read it: can't vouch for it
+            user = "root"
+            paths: list[str] = []
+            for raw in text.splitlines():
+                line = raw.strip()
+                if "=" not in line or line.startswith(("#", ";")):
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                if key == "User":
+                    user = value.strip() or "root"
+                elif key in _UNIT_PATH_KEYS:
+                    paths.extend(_ABS_PATH_RE.findall(value))
+            if user not in ("root", "0"):
+                continue
+            for found in paths:
+                if writable(Path(found)):
+                    return f"{unit.name} ({found})"
+    return None
+
+
+def sudo_rule_takes_free_args(listing: str) -> str | None:
+    """A ``sudo -n -l`` rule that lets this account run ``ALL`` or hand the
+    XVF3800 tool any arguments (it has options that load a library and that
+    write the chip's saved settings); None when there is none."""
+    for raw in listing.splitlines():
+        line = raw.strip()
+        if "NOPASSWD:" in line:
+            line = line.split("NOPASSWD:", 1)[1]
+        elif line.startswith("(") and ")" in line:
+            line = line.split(")", 1)[1]
+        else:
+            continue
+        for cmd in (c.strip() for c in line.split(",")):
+            if not cmd:
+                continue
+            if cmd == "ALL" or cmd.endswith(" ALL"):
+                return cmd
+            argv = cmd.split()
+            if argv and argv[0].endswith("/xvf_host") and (len(argv) == 1 or "*" in cmd):
+                return cmd
+    return None
+
+
+def notify_socket() -> str | None:
+    """systemd's notify socket for this unit (``NotifyAccess=main``), or
+    None: then there is no watchdog to arm."""
+    return os.environ.get("NOTIFY_SOCKET") or None
+
+
+def sd_notify(message: str, path: str | None = None) -> bool:
+    """Send one ``sd_notify`` datagram (``WATCHDOG=1``, ``WATCHDOG_USEC=…``).
+    False when there is no socket or the send failed."""
+    path = path or notify_socket()
+    if not path or not hasattr(socket, "AF_UNIX"):
+        return False
+    addr = "\0" + path[1:] if path.startswith("@") else path
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
+            sock.connect(addr)
+            sock.sendall(message.encode("ascii"))
+        return True
+    except OSError:
+        return False
+
+
+def make_undumpable() -> bool:
+    """``PR_SET_DUMPABLE`` 0 for this process: another process of the same
+    account (the shell) can no longer ptrace it or open its memory."""
+    if not sys.platform.startswith("linux"):
+        return False
+    try:
+        import ctypes
+
+        libc = ctypes.CDLL(None, use_errno=True)
+        return libc.prctl(4, 0, 0, 0, 0) == 0     # PR_SET_DUMPABLE
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def screen_led_changes(changes: dict[str, Any], declared: bool) -> tuple[dict[str, Any], list[str]]:
+    """While this device offers support sessions, a remote ``set_config``
+    may not turn the status light off or down to nothing: the light is the
+    room's sign that a session is open. ``(kept, refused keys)``."""
+    if not declared:
+        return changes, []
+    kept: dict[str, Any] = {}
+    refused: list[str] = []
+    for key, value in changes.items():
+        if key == "leds.enabled" and value is not True:
+            refused.append(key)
+        elif key == "leds.brightness" and (
+                isinstance(value, bool) or not isinstance(value, int) or value < MIN_LED_BRIGHTNESS):
+            refused.append(key)
+        elif key == "leds.num_leds" and (
+                isinstance(value, bool) or not isinstance(value, int) or value < 1):
+            refused.append(key)
+        else:
+            kept[key] = value
+    return kept, refused
 
 
 def should_declare(
@@ -62,10 +270,15 @@ def should_declare(
     model_path: Path = DEVICE_MODEL,
     state_dir: Path = PREPARED_STATE_DIR,
     run: Callable[..., Any] = subprocess.run,
+    root_pin: Callable[[], bool] = _pin_is_root_owned,
+    root_path: Callable[[], str | None] = root_unit_runs_my_code,
+    watchdog: Callable[[], str | None] = notify_socket,
 ) -> bool:
     """Whether this device's hello may declare ``support_shell``: a Pi on a
-    prepared card whose account cannot use sudo. Never a spare PC or a
-    phone (1.5.0, owner decision 22 Nov)."""
+    prepared card with the root-owned server pin, a watchdog, no Domovoi
+    root unit running code this account can write, no sudo, and no sudo
+    rule with free arguments. Never a spare PC or a phone (1.5.0, owner
+    decision 22 Nov)."""
     if is_pc or not platform.startswith("linux"):
         return False
     try:
@@ -74,6 +287,18 @@ def should_declare(
     except OSError:
         return False
     if not state_dir.is_dir():
+        return False
+    if not root_pin():
+        log.info("support sessions not offered: no root-owned server pin to check them against")
+        return False
+    if not watchdog():
+        log.info("support sessions not offered: the service has no watchdog "
+                 "(NotifyAccess=main in domovoi-satellite.service)")
+        return False
+    found = root_path()
+    if found:
+        log.info("support sessions not offered: a root unit runs code this account can "
+                 "write (%s), so a shell would reach root", found)
         return False
     try:
         rc = run(["sudo", "-n", "true"], capture_output=True, timeout=5.0,
@@ -85,13 +310,27 @@ def should_declare(
     if rc == 0:
         log.info("support sessions not offered: this account can use sudo (the shell would be root)")
         return False
+    try:
+        listed = run(["sudo", "-n", "-l"], capture_output=True, timeout=5.0, text=True,
+                     stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if listed.returncode != 0:
+        return False    # couldn't list the rules: don't offer it
+    loose = sudo_rule_takes_free_args(str(listed.stdout or ""))
+    if loose:
+        log.info("support sessions not offered: a sudo rule takes free arguments (%s)", loose)
+        return False
     return True
+
+
+# ─── the PTY ──────────────────────────────────────────────────────────────
 
 
 class Backend(Protocol):
     def spawn(self, cols: int, rows: int) -> None: ...
     def read(self, max_bytes: int, timeout: float) -> bytes | None: ...  # None: the shell ended
-    def write(self, data: bytes) -> None: ...
+    def write(self, data: bytes, still_open: Callable[[], bool] = ...) -> None: ...
     def resize(self, cols: int, rows: int) -> None: ...
     def echo_on(self) -> bool: ...
     def terminate(self) -> int | None: ...
@@ -108,7 +347,8 @@ class PtyBackend:
     """The real PTY (Linux). The shell is started through a two-line
     helper that makes the PTY its controlling terminal and then becomes the
     login shell, so no Python runs in a forked child of this threaded
-    process."""
+    process. The master is non-blocking: a write waits for room with a
+    timeout and gives up once the session is over."""
 
     def __init__(self) -> None:
         self._master: int | None = None
@@ -119,6 +359,7 @@ class PtyBackend:
 
         master, slave = os.openpty()
         self._master = master
+        os.set_blocking(master, False)
         self._winsize(slave, cols, rows)
         pw = pwd.getpwuid(os.getuid())
         shell = pw.pw_shell if pw.pw_shell and os.access(pw.pw_shell, os.X_OK) else "/bin/sh"
@@ -148,21 +389,35 @@ class PtyBackend:
     def read(self, max_bytes: int, timeout: float) -> bytes | None:
         import select
 
-        assert self._master is not None
-        ready, _, _ = select.select([self._master], [], [], timeout)
+        master = self._master
+        if master is None:
+            return None
+        ready, _, _ = select.select([master], [], [], timeout)
         if not ready:
             return b""
         try:
-            data = os.read(self._master, max_bytes)
+            data = os.read(master, max_bytes)
+        except BlockingIOError:
+            return b""
         except OSError:      # EIO: every writer of the PTY is gone
             return None
         return data or None
 
-    def write(self, data: bytes) -> None:
-        assert self._master is not None
+    def write(self, data: bytes, still_open: Callable[[], bool] = lambda: True) -> None:
+        import select
+
         view = memoryview(data)
         while view:
-            n = os.write(self._master, view)
+            master = self._master
+            if master is None or not still_open():
+                raise OSError("the session is over")
+            _, ready, _ = select.select([], [master], [], WRITE_POLL_SEC)
+            if not ready:
+                continue
+            try:
+                n = os.write(master, view)
+            except BlockingIOError:
+                continue
             view = view[n:]
 
     def resize(self, cols: int, rows: int) -> None:
@@ -203,12 +458,12 @@ class PtyBackend:
                 except subprocess.TimeoutExpired:
                     continue
             code = proc.poll()
-        if self._master is not None:
+        master, self._master = self._master, None
+        if master is not None:
             try:
-                os.close(self._master)
+                os.close(master)
             except OSError:
                 pass
-            self._master = None
         return code
 
 
@@ -220,14 +475,29 @@ def _clamp(value: Any, bounds: tuple[int, int]) -> int:
     return max(bounds[0], min(bounds[1], v))
 
 
+def _verifier_for(satellite_id: Callable[[], str], pinned: Callable[[], str | None],
+                  wall: Callable[[], float]) -> Callable[[Any, str, str | None], dict[str, Any]]:
+    def verify(envelope: Any, kind: str, nonce: str | None) -> dict[str, Any]:
+        from satellite import server_identity
+
+        return server_identity.verify_support(
+            envelope, kind=kind, expected_fingerprint=pinned(),
+            satellite_id=satellite_id(), nonce=nonce, now=wall(),
+        )
+    return verify
+
+
 class SupportShell:
     """One support session at a time on this device.
 
-    ``emit(frame)`` sends a text frame to the core; ``on_end(reason,
-    by_server)`` runs once when a session that OPENED ends (the client
-    turns the light off and restarts its service); ``busy()`` names why a
-    session can't open now (a drop-in call, a wake-word recording) or
-    returns None."""
+    ``emit(frame)`` sends a text frame to the core; ``on_open()`` runs when
+    a session opens (the client lights the overlay and arms the watchdog);
+    ``on_end(reason, by_server)`` runs once when a session that OPENED ends
+    (the client turns the light off and restarts its service); ``busy()``
+    names why a session can't open now (a drop-in call, a wake-word
+    recording) or returns None. ``satellite_id()`` is this device's id as
+    the core knows it and ``pinned()`` the root-owned server fingerprint:
+    the signed frames are checked against both."""
 
     def __init__(
         self,
@@ -239,6 +509,10 @@ class SupportShell:
         busy: Callable[[], str | None] = lambda: None,
         backend_factory: Callable[[], Backend] = PtyBackend,
         clock: Callable[[], float] = time.monotonic,
+        satellite_id: Callable[[], str] = lambda: "",
+        pinned: Callable[[], str | None] = root_pinned_fingerprint,
+        wall: Callable[[], float] = time.time,
+        verify: Callable[[Any, str, str | None], dict[str, Any]] | None = None,
     ) -> None:
         self.declared = declared
         self._emit = emit
@@ -247,10 +521,13 @@ class SupportShell:
         self._busy = busy
         self._factory = backend_factory
         self._clock = clock
+        self._verify = verify or _verifier_for(satellite_id, pinned, wall)
         self._lock = threading.Lock()
         self.session_id: str | None = None
         self._backend: Backend | None = None
         self._thread: threading.Thread | None = None
+        self._writer: threading.Thread | None = None
+        self._inbox: queue.Queue[dict[str, Any] | None] = queue.Queue(maxsize=INPUT_QUEUE_MAX)
         self._stop = threading.Event()
         self.deadline = 0.0
         self.idle_sec = 0.0
@@ -259,16 +536,33 @@ class SupportShell:
         self._echo = True
         self._tokens = float(OUTPUT_RATE_MAX)
         self._refill_at = 0.0
+        # This connection: its nonce, whether the server armed it, the
+        # session ids it has seen, the last input sequence number.
+        self.nonce: str | None = None
+        self.allowed = False
+        self._seen_ids: set[str] = set()
+        self._in_seq = 0
 
     @property
     def active(self) -> bool:
         return self.session_id is not None
 
+    def new_connection(self) -> str | None:
+        """A new socket to the core: a fresh nonce for the hello, and the
+        device disarmed until the server's signed ``support_allow`` for THIS
+        connection arrives. None when the device doesn't offer sessions."""
+        self.allowed = False
+        self._seen_ids = set()
+        self.nonce = secrets.token_hex(16) if self.declared else None
+        return self.nonce
+
     # ── frames from the core ─────────────────────────────────────────
 
     def handle(self, frame: dict[str, Any]) -> None:
         kind = frame.get("type")
-        if kind == "support_open":
+        if kind == "support_allow":
+            self.allow(frame)
+        elif kind == "support_open":
             self.open(frame)
         elif kind == "support_input":
             self.input(frame)
@@ -278,24 +572,60 @@ class SupportShell:
             if frame.get("session_id") == self.session_id and self.active:
                 self.close(str(frame.get("reason") or "closed"), by_server=True)
 
+    def _signed(self, frame: dict[str, Any], kind: str) -> dict[str, Any] | None:
+        from satellite import server_identity
+
+        if not self.declared or not self.nonce or not _NONCE_RE.match(self.nonce):
+            return None
+        try:
+            return self._verify(frame.get("signed"), kind, self.nonce)
+        except server_identity.IdentityError as e:
+            log.warning("support: refused a %s frame: %s", kind, e)
+            return None
+
+    def allow(self, frame: dict[str, Any]) -> None:
+        """The server's signed switch for this connection."""
+        doc = self._signed(frame, "support_allow")
+        if doc is None:
+            return
+        self.allowed = doc.get("allowed") is True
+        log.info("support sessions %s by the server", "allowed" if self.allowed else "not allowed")
+        if not self.allowed and self.active:
+            self.close("switch_off", by_server=True)
+
     def _refuse(self, sid: Any, reason: str) -> None:
         log.info("support session refused: %s", reason)
         self._emit({"type": "support_refused", "session_id": sid, "reason": reason})
 
     def open(self, frame: dict[str, Any]) -> None:
-        sid = frame.get("session_id")
-        if not isinstance(sid, str) or not sid:
+        raw_sid = frame.get("session_id")
+        if not isinstance(raw_sid, str) or not raw_sid or len(raw_sid) > 64:
             return
         if not self.declared:
-            self._refuse(sid, "support sessions are not offered on this device")
+            self._refuse(raw_sid, "support sessions are not offered on this device")
+            return
+        doc = self._signed(frame, "support_open")
+        if doc is None:
+            self._refuse(raw_sid, "the open was not signed by this device's server")
+            return
+        sid = doc.get("session_id")
+        if not isinstance(sid, str) or sid != raw_sid:
+            self._refuse(raw_sid, "the open was not signed by this device's server")
+            return
+        if sid in self._seen_ids:
+            self._refuse(sid, "that open was already used")
+            return
+        self._seen_ids.add(sid)
+        if not self.allowed:
+            self._refuse(sid, "support sessions are off for this satellite")
             return
         busy = self._busy()
         if busy:
             self._refuse(sid, busy)
             return
         try:
-            max_sec = int(frame.get("max_sec"))
-            idle_sec = int(frame.get("idle_sec"))
+            max_sec = int(doc.get("max_sec"))
+            idle_sec = int(doc.get("idle_sec"))
         except (TypeError, ValueError):
             self._refuse(sid, "bad limits")
             return
@@ -308,7 +638,7 @@ class SupportShell:
                 return
             backend = self._factory()
             try:
-                backend.spawn(_clamp(frame.get("cols"), COLS_RANGE), _clamp(frame.get("rows"), ROWS_RANGE))
+                backend.spawn(_clamp(doc.get("cols"), COLS_RANGE), _clamp(doc.get("rows"), ROWS_RANGE))
             except Exception as e:  # noqa: BLE001
                 self._refuse(sid, f"couldn't start a shell: {type(e).__name__}")
                 return
@@ -319,10 +649,12 @@ class SupportShell:
             self.idle_sec = float(idle_sec)
             self.last_input = now
             self._seq = 0
+            self._in_seq = 0
             self._echo = True
             self._tokens = float(OUTPUT_RATE_MAX)
             self._refill_at = now
             self._stop = threading.Event()
+            self._inbox = queue.Queue(maxsize=INPUT_QUEUE_MAX)
         log.info("support session %s opened (%d min, idle %d min)", sid[:8], max_sec // 60, idle_sec // 60)
         self._emit({"type": "support_opened", "session_id": sid})
         try:
@@ -332,26 +664,87 @@ class SupportShell:
         self._thread = threading.Thread(target=self._reader, args=(sid,), daemon=True,
                                         name="support-shell")
         self._thread.start()
+        self._writer = threading.Thread(target=self._write_loop, args=(sid,), daemon=True,
+                                        name="support-input")
+        self._writer.start()
 
     def input(self, frame: dict[str, Any]) -> None:
-        if frame.get("session_id") != self.session_id or self._backend is None:
+        """An input frame for the open session, queued for the writer
+        thread, which checks its signature and writes it. Never blocks the
+        caller (the event loop): a full queue ends the session."""
+        if self.session_id is None or frame.get("session_id") != self.session_id:
             return
-        raw = frame.get("data")
+        try:
+            self._inbox.put_nowait(frame)
+        except queue.Full:
+            threading.Thread(target=self.close, args=("input_stalled",), daemon=True,
+                             name="support-close").start()
+
+    def _input_bytes(self, frame: dict[str, Any]) -> bytes | None:
+        """The bytes of a queued input frame, if the server signed it for
+        this session and connection with a sequence number past the last."""
+        doc = self._signed(frame, "support_input")
+        if doc is None or doc.get("session_id") != self.session_id:
+            return None
+        seq = doc.get("seq")
+        if not isinstance(seq, int) or isinstance(seq, bool) or seq <= self._in_seq:
+            log.warning("support: refused an input frame out of sequence")
+            return None
+        raw = doc.get("data")
         if not isinstance(raw, str) or len(raw) > (INPUT_FRAME_MAX * 4) // 3 + 8:
-            return
+            return None
         try:
             data = base64.b64decode(raw, validate=True)
         except (binascii.Error, ValueError):
-            return
+            return None
         if not data or len(data) > INPUT_FRAME_MAX:
-            return
-        self.last_input = self._clock()
+            return None
+        self._in_seq = seq
+        # Only a key press or a paste counts for the idle limit (the server
+        # signs which it was): a terminal's automatic answers don't.
+        if doc.get("active") is True:
+            self.last_input = self._clock()
+        return data
+
+    def pump_input(self, sid: str, *, block: bool = False) -> int:
+        """Check and write queued input to the PTY (the writer thread's
+        work; a test calls it directly). Returns how many frames were
+        written."""
+        written = 0
+        while self.session_id == sid:
+            try:
+                frame = self._inbox.get(timeout=READ_POLL_SEC) if block else self._inbox.get_nowait()
+            except queue.Empty:
+                if block:
+                    continue
+                return written
+            if frame is None:
+                return written
+            data = self._input_bytes(frame)
+            if data is None:
+                continue
+            backend = self._backend
+            if backend is None:
+                return written
+            try:
+                backend.write(data, lambda: self.session_id == sid)
+            except OSError:
+                if self.session_id == sid:
+                    self.close("exit")
+                return written
+            written += 1
+            self._check_echo()
+            if block:
+                continue
+        return written
+
+    def _write_loop(self, sid: str) -> None:
         try:
-            self._backend.write(data)
-        except OSError:
-            self.close("exit")
-            return
-        self._check_echo()
+            self.pump_input(sid, block=True)
+        except Exception:  # noqa: BLE001
+            log.exception("support shell writer failed")
+            if self.session_id == sid:
+                self.close("exit")
 
     def resize(self, frame: dict[str, Any]) -> None:
         if frame.get("session_id") != self.session_id or self._backend is None:
@@ -362,7 +755,9 @@ class SupportShell:
             pass
 
     def connection_lost(self) -> None:
-        """The socket dropped: the session ends here and never resumes."""
+        """The socket dropped: the session ends here and never resumes, and
+        the device stays disarmed until the next connection's allow."""
+        self.allowed = False
         if self.active:
             self.close("connection_lost", by_server=True)
 
@@ -429,6 +824,10 @@ class SupportShell:
             self.session_id = None
             self._backend = None
             self._stop.set()
+        try:
+            self._inbox.put_nowait(None)     # wake the writer
+        except queue.Full:
+            pass
         code = None
         if backend is not None:
             try:

@@ -227,3 +227,55 @@ async def test_mic_dsp_is_refused_without_the_ability_and_nothing_is_sent(sessio
     with pytest.raises(NotDeclared):
         await s.request_diagnostic("mic_dsp")
     assert s.ws.sent == []
+
+
+# --- M5: a hostile answer can't hold the core's event loop ------------------
+
+
+def test_the_cleaning_rules_are_bounded_on_a_hostile_answer():
+    import time
+
+    for text in ("psk" * (sd.MAX_TEXT_CHARS * 3), "auth-" * 40_000 + "=",
+                 "x" * 5_000_000):
+        started = time.monotonic()
+        sd.clean_text(text)
+        assert time.monotonic() - started < 1.0, text[:12]
+
+
+def test_the_receive_loop_only_cuts_the_answer_to_size():
+    raw = sd.raw_result({"ok": True, "text": "y" * 10_000_000, "at": 1.0})
+    assert len(raw["text"]) == sd.RAW_TEXT_MAX_CHARS
+
+
+@pytest.mark.asyncio
+async def test_the_cleaning_runs_off_the_event_loop(monkeypatch):
+    import time
+
+    def slow_clean(probe, raw):
+        time.sleep(0.5)             # a blocking clean: on a worker thread
+        return {"probe": probe, "ok": True, "text": "", "at": 0.0}
+
+    monkeypatch.setattr(sd, "clean_result", slow_clean)
+    ticks = 0
+
+    async def ticker():
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.02)
+            ticks += 1
+
+    t = asyncio.create_task(ticker())
+    s = answering(text="psk" * 3000)
+    await s.request_diagnostic("system")
+    t.cancel()
+    assert ticks >= 10              # the loop kept running meanwhile
+
+
+@pytest.mark.asyncio
+async def test_a_clean_that_overruns_its_deadline_answers_failed(monkeypatch):
+    import time
+
+    monkeypatch.setattr(sd, "CLEAN_DEADLINE_S", 0.05)
+    monkeypatch.setattr(sd, "clean_result", lambda probe, raw: time.sleep(0.3) or {})
+    r = await sd.clean_result_off_loop("system", {"text": "x"})
+    assert r["ok"] is False and "in time" in r["text"]

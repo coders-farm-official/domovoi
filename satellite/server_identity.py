@@ -67,6 +67,13 @@ HEALTH_CONTEXT = b"domovoi-health-v1"
 MANIFEST_CONTEXT = b"domovoi-manifest-v1"
 # The manifest signature that also covers the list's issue time and serial.
 MANIFEST_CONTEXT_V2 = b"domovoi-manifest-v2"
+# Support-session control frames (1.5.0, satellite/support_shell.py). The
+# core's domovoi/server_identity.py holds the same string.
+SUPPORT_CONTEXT = b"domovoi-support-v1"
+#: How far a signed support frame's issue time may be from this device's
+#: clock. The per-connection nonce is what stops a replay; this only refuses
+#: a frame signed long ago (the clock is the server's, set on every connect).
+SUPPORT_MAX_SKEW_SEC = 120
 
 CODE_CHANNEL = "satellite-code"
 PLUGIN_CHANNEL = "satellite-plugins"
@@ -225,6 +232,53 @@ def manifest_message_v2(
         "serial": int(serial),
     }
     return MANIFEST_CONTEXT_V2 + b"\n" + canonical_json(signed)
+
+
+def support_message(doc: Any) -> bytes:
+    """What the core signs for a support-session control frame."""
+    return SUPPORT_CONTEXT + b"\n" + canonical_json(doc)
+
+
+def verify_support(
+    envelope: Any, *, kind: str, expected_fingerprint: str | None,
+    satellite_id: str, nonce: str | None, now: float,
+    max_skew: float = SUPPORT_MAX_SKEW_SEC,
+) -> dict[str, Any]:
+    """The signed document inside a support frame's ``signed`` field, or
+    :class:`IdentityError`.
+
+    Refused: no pinned fingerprint (nothing to check against), a missing or
+    malformed envelope, a key other than the pinned one, a bad signature, a
+    document for another kind of frame, another satellite or another
+    connection (``nonce``), and one issued more than ``max_skew`` seconds
+    from this device's clock."""
+    if not expected_fingerprint:
+        raise IdentityError("this device has no pinned server key")
+    if not nonce:
+        raise IdentityError("no connection nonce")
+    if not isinstance(envelope, dict):
+        raise IdentityError("the frame is not signed")
+    if envelope.get("algorithm") != ALGORITHM:
+        raise IdentityError("unsupported signature algorithm")
+    public = unb64(envelope.get("public_key"))
+    signature = unb64(envelope.get("signature"))
+    doc = envelope.get("doc")
+    if public is None or signature is None or not isinstance(doc, dict):
+        raise IdentityError("the signature is malformed")
+    if fingerprint_for(public) != expected_fingerprint:
+        raise IdentityError("signed by a key other than this device's server")
+    if not verify(public, support_message(doc), signature):
+        raise IdentityError("the signature did not verify")
+    if doc.get("kind") != kind:
+        raise IdentityError("signed for another kind of frame")
+    if doc.get("satellite_id") != satellite_id:
+        raise IdentityError("signed for another satellite")
+    if doc.get("nonce") != nonce:
+        raise IdentityError("signed for another connection")
+    issued = doc.get("issued_at")
+    if not isinstance(issued, int) or isinstance(issued, bool) or abs(now - issued) > max_skew:
+        raise IdentityError("the signed frame is stale (check this device's clock)")
+    return doc
 
 
 def manifest_digest(manifest: Any) -> str:
