@@ -5412,7 +5412,12 @@ room's own core and only at `/v1/music/cover/<digits>` (any other path,
 percent-encoding or `..` is refused), and its size is read before it is
 decoded: a cover with a side over 4096 px or longer than 8:1 is not
 drawn, and the rest are decoded to at most 1024 px on the long side, so
-a crafted cover cannot crash the room.
+a crafted cover cannot crash the room. Since 1.5.0 the frame may also
+carry photo and video results asked for by voice in that room, for 90
+seconds (`domovoi/room_media.py`): never filtered by a person's face for a
+guest's voice, captions drawn as text only, and thumbnails from the open
+`GET /v1/room-media/{token}`, where a random token kept only in the core's
+memory names one shown item and expires after 10 minutes.
 
 **One microphone owner:** room mode, the phone drop-in call, the chat mic
 and phone chats (Domovoi on this phone) ask `audio/MicArbiter` first; while room mode

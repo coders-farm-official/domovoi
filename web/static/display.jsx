@@ -254,6 +254,86 @@ const DpReconnect = ({ show }) => show ? (
   </div>
 ) : null;
 
+/* Photo and video results asked for by voice in this room (1.5.0,
+ * domovoi/room_media.py): GET /api/satellites/{room}/media, read again on
+ * `satellites.media.changed`. Shown over everything until the server drops
+ * them (the push says so) or `expires_in_ms` runs out here. Captions are a
+ * picture model's words: text only, never markup, as "Might show: …".
+ * Thumbnails go through the dashboard's own routes with the household
+ * token (withDeviceToken), as the other images on this page do. */
+const dpMediaDate = (iso) => {
+  if (!iso) return null;
+  const d = new Date(`${String(iso).slice(0, 10)}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+};
+
+const DpMediaThumb = ({ src }) => {
+  const [failed, setFailed] = React.useState(false);
+  React.useEffect(() => setFailed(false), [src]);
+  const style = { width: '100%', aspectRatio: '4 / 3', objectFit: 'cover', display: 'block',
+                  borderRadius: 'var(--r-md)', border: '1px solid var(--border)', background: 'var(--sunken)' };
+  if (!src || failed) return <div style={style}/>;
+  return <img src={withDeviceToken(`${API_BASE}${src}`)} alt="" style={style} onError={() => setFailed(true)}/>;
+};
+
+const DpMedia = ({ media }) => (
+  <div className="dp-media" style={{ position: 'fixed', inset: 0, zIndex: 5, background: 'var(--canvas)',
+                                     display: 'flex', flexDirection: 'column', boxSizing: 'border-box',
+                                     padding: 'min(5vh, 40px) min(5vw, 48px)', gap: 20, overflow: 'hidden' }}>
+    <div className="dp-media-said" style={{ fontSize: 'min(3.2vh, 24px)', color: 'var(--fg)', lineHeight: 1.4 }}>
+      {String(media.said || '')}
+    </div>
+    <div style={{ flex: 1, minHeight: 0, display: 'grid', gap: 18, alignContent: 'start',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(min(240px, 40vw), 1fr))' }}>
+      {(media.items || []).map((it, i) => (
+        <div key={i} className="dp-media-item" style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
+          <div style={{ position: 'relative' }}>
+            <DpMediaThumb src={it.thumb}/>
+            {it.kind === 'video' && it.at_s != null && (
+              <span className="mono dp-media-at" style={{ position: 'absolute', right: 8, bottom: 8, fontSize: 13,
+                                                          padding: '2px 8px', borderRadius: 'var(--r-sm)',
+                                                          background: 'var(--overlay)', color: 'var(--fg)' }}>
+                {dpFmtDur(it.at_s)}
+              </span>
+            )}
+          </div>
+          {it.caption && (
+            <div className="dp-media-caption" style={{ fontSize: 15, color: 'var(--fg-muted)', overflow: 'hidden',
+                                                       display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+              {`Might show: ${String(it.caption)}`}
+            </div>
+          )}
+          {dpMediaDate(it.date) && (
+            <div className="mono" style={{ fontSize: 13, color: 'var(--fg-faint)' }}>{dpMediaDate(it.date)}</div>
+          )}
+        </div>
+      ))}
+    </div>
+  </div>
+);
+
+const useDpMedia = () => {
+  const [media, setMedia] = React.useState(null);
+  const refresh = React.useCallback(async () => {
+    try {
+      const r = await apiGet(`/api/satellites/${encodeURIComponent(DP_ROOM)}/media`);
+      setMedia(r && r.media && Array.isArray(r.media.items) && r.media.items.length ? r.media : null);
+    } catch { setMedia(null); }
+  }, []);
+  React.useEffect(() => { refresh(); }, [refresh]);
+  useStateEvents(['satellites.media.changed'], () => refresh());
+  useStateEvents(['_status'], (ev) => { if (ev && ev.connected) refresh(); });
+  // Gone by `expires_in_ms` even if no push comes (a dropped socket).
+  React.useEffect(() => {
+    if (!media) return undefined;
+    const ms = Math.max(1000, Math.min(Number(media.expires_in_ms) || 90000, 300000));
+    const t = setTimeout(() => setMedia(null), ms);
+    return () => clearTimeout(t);
+  }, [media && media.id]);
+  return media;
+};
+
 const DisplayApp = () => {
   if (!DP_ROOM) {
     return (
@@ -282,6 +362,7 @@ const DisplayApp = () => {
   const [tickNow, setTickNow] = React.useState(() => Date.now());
   const [busy, setBusy] = React.useState(false);
   const lastTrackIdRef = React.useRef(null);
+  const media = useDpMedia();
 
   // Room metadata (label + configured idle mode) — refreshed on display
   // config changes; tolerant of the room being offline (defaults apply).
@@ -342,6 +423,7 @@ const DisplayApp = () => {
   return (
     <DpBurnInShifter>
       <DpReconnect show={!wsUp || !haveData}/>
+      {media && <DpMedia media={media}/>}
       {!active ? (
         <DpIdle mode={idleMode} lastTrackId={lastTrackIdRef.current} roomName={roomName}/>
       ) : (
