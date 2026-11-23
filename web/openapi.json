@@ -19845,7 +19845,7 @@
           "videos"
         ],
         "summary": "Poster",
-        "description": "Cached poster frame for one video. 204 when extraction isn't possible\n(missing ffmpeg, unreadable file) \u2014 the client shows a placeholder tile.\nCache key includes size+mtime so an edited file re-extracts.",
+        "description": "Cached poster frame for one video. 204 when extraction isn't possible\n(missing ffmpeg, unreadable file) \u2014 the client shows a placeholder tile.\nCache key includes size+mtime so an edited file re-extracts; it names\nthe file by its resolved place in the library, so every spelling of one\npath shares one entry.",
         "operationId": "poster_api_videos_poster_get",
         "parameters": [
           {
