@@ -362,7 +362,7 @@ class BodyLimitMiddleware:
 
         if declared is not None and declared > limit:
             log.warning(
-                "refused %s %s: Content-Length %d over the %d-byte limit",
+                "refused %s %r: Content-Length %d over the %d-byte limit",
                 scope.get("method"), scope.get("path"), declared, limit,
             )
             await _send_413(send, limit, scope.get("path", "") or "")
@@ -378,7 +378,7 @@ class BodyLimitMiddleware:
                 read += len(message.get("body") or b"")
                 if read > limit:
                     log.warning(
-                        "cut off %s %s: body passed the %d-byte limit",
+                        "cut off %s %r: body passed the %d-byte limit",
                         scope.get("method"), scope.get("path"), limit,
                     )
                     responded = True

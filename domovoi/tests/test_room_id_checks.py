@@ -237,3 +237,17 @@ async def test_removal_still_refuses_odd_ids(room: str) -> None:
     with pytest.raises(Exception) as refused:
         await room_ids.require_room_id_path(_request("DELETE", room))
     assert getattr(refused.value, "status_code", None) == 422
+
+
+@pytest.mark.parametrize("sock", ["stream", "dropin"])
+def test_a_bad_room_id_is_refused_first_and_logged_escaped(
+    sock: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    client = TestClient(core_app)
+    with caplog.at_level("WARNING", logger="domovoi.main"):
+        with client.websocket_connect(
+            f"/v1/{sock}/kitchen%0Aforged", headers={"origin": "http://evil.example"}
+        ) as ws:
+            assert json.loads(ws.receive_text())["code"] == "bad_room_id"
+    lines = [r.getMessage() for r in caplog.records if "ws upgrade refused" in r.getMessage()]
+    assert lines and all("\n" not in line for line in lines)

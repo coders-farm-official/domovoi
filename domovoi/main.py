@@ -9200,7 +9200,8 @@ async def _refuse_ws(ws: WebSocket, code: str, detail: str) -> None:
         await ws.close(code=1008)
     except Exception:  # noqa: BLE001
         pass
-    log.warning("ws upgrade refused (%s): %s", code, detail)
+    # %r: the detail carries the decoded path, which the caller chose.
+    log.warning("ws upgrade refused (%s): %r", code, detail)
 
 
 @app.websocket("/v1/stream/{room_id}")
@@ -9223,14 +9224,14 @@ async def stream(ws: WebSocket, room_id: str) -> None:
     if source is not None:
         join_problems.stream_opened(source)
     try:
+        if not room_ids.is_room_id(room_id):
+            await _refuse_ws(ws, "bad_room_id", f"/v1/stream/{room_id!r} is not a room id")
+            return
         if not origin_allowed(ws.headers.get("origin")):
             await _refuse_ws(
                 ws, "cross_origin",
                 f"/v1/stream/{room_id} from Origin {ws.headers.get('origin')!r}",
             )
-            return
-        if not room_ids.is_room_id(room_id):
-            await _refuse_ws(ws, "bad_room_id", f"/v1/stream/{room_id!r} is not a room id")
             return
         session = StreamSession(ws, room_id)
         await session.run()
@@ -9265,6 +9266,9 @@ async def phone_dropin(ws: WebSocket, room_id: str) -> None:
     """
     from domovoi.phone_dropin import PhoneDropinSession
 
+    if not room_ids.is_room_id(room_id):
+        await _refuse_ws(ws, "bad_room_id", f"/v1/dropin/{room_id!r} is not a room id")
+        return
     if not origin_allowed(ws.headers.get("origin")):
         await _refuse_ws(
             ws, "cross_origin",

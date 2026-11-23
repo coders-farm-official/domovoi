@@ -235,6 +235,8 @@ a way that would otherwise get reported as a bug.
 - The core's per-room admin routes check the room id, as the dashboard's
   already did. A room paired under an older id (capitals, spaces) can now
   be removed from the dashboard instead of answering 422.
+- The satellite and drop-in sockets check the room id before anything
+  else, and refused requests are logged with the path quoted.
 
 ## 1.4.1 (unreleased) — Sign-in, room pairing and drop-in checks
 
