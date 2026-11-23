@@ -74,6 +74,11 @@ SUPPORT_CONTEXT = b"domovoi-support-v1"
 #: clock. The per-connection nonce is what stops a replay; this only refuses
 #: a frame signed long ago (the clock is the server's, set on every connect).
 SUPPORT_MAX_SKEW_SEC = 120
+#: The direction label in what a satellite signs about a support session
+#: (with its own support key, satellite/support_shell.py): the server's
+#: frames are the context then the document, the satellite's the context,
+#: this label, then the document, so neither can stand in for the other.
+SUPPORT_FROM_SATELLITE = b"satellite-to-server"
 
 CODE_CHANNEL = "satellite-code"
 PLUGIN_CHANNEL = "satellite-plugins"
@@ -239,9 +244,16 @@ def support_message(doc: Any) -> bytes:
     return SUPPORT_CONTEXT + b"\n" + canonical_json(doc)
 
 
+def support_reply_message(doc: Any) -> bytes:
+    """What this device signs for a support frame it sends: the context,
+    the direction label, then the canonical document."""
+    return SUPPORT_CONTEXT + b"\n" + SUPPORT_FROM_SATELLITE + b"\n" + canonical_json(doc)
+
+
 def verify_support(
     envelope: Any, *, kind: str, expected_fingerprint: str | None,
     satellite_id: str, nonce: str | None, now: float,
+    satellite_key: str | None = None,
     max_skew: float = SUPPORT_MAX_SKEW_SEC,
 ) -> dict[str, Any]:
     """The signed document inside a support frame's ``signed`` field, or
@@ -250,10 +262,14 @@ def verify_support(
     Refused: no pinned fingerprint (nothing to check against), a missing or
     malformed envelope, a key other than the pinned one, a bad signature, a
     document for another kind of frame, another satellite or another
-    connection (``nonce``), and one issued more than ``max_skew`` seconds
-    from this device's clock."""
+    connection (``nonce``) or another device key (``satellite_key``: the
+    public half of this device's support key, which the server names in
+    every frame so a key swapped in the hello is caught here), and one
+    issued more than ``max_skew`` seconds from this device's clock."""
     if not expected_fingerprint:
         raise IdentityError("this device has no pinned server key")
+    if not satellite_key:
+        raise IdentityError("this device has no support key")
     if not nonce:
         raise IdentityError("no connection nonce")
     if not isinstance(envelope, dict):
@@ -275,6 +291,8 @@ def verify_support(
         raise IdentityError("signed for another satellite")
     if doc.get("nonce") != nonce:
         raise IdentityError("signed for another connection")
+    if doc.get("satellite_key") != satellite_key:
+        raise IdentityError("signed for another device key")
     issued = doc.get("issued_at")
     if not isinstance(issued, int) or isinstance(issued, bool) or abs(now - issued) > max_skew:
         raise IdentityError("the signed frame is stale (check this device's clock)")

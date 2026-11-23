@@ -9442,6 +9442,10 @@ class Satellite(pc_engine.SpareDeviceEngine):
         support = getattr(self, "_support", None)
         if support is not None and support.declared:
             hello["support_nonce"] = support.new_connection()
+            # The public half of this device's support key: the core pins it
+            # when an admin turns the switch on and checks every support
+            # frame this device sends against it.
+            hello["support_key"] = support.support_key
         # A spare computer says what it is and what it can do (its board and
         # its `supports` list), so the core never sends it a Pi-only frame.
         # A Pi sends no board. Since 1.5.0 it does send a list: `wake_claim`

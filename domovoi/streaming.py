@@ -4158,6 +4158,13 @@ class StreamSession:
             nonce = ctrl.get("support_nonce")
             self.support_nonce = (
                 nonce if isinstance(nonce, str) and re.fullmatch(r"[0-9a-f]{32}", nonce) else None)
+            # And the public half of its support key: the frames it sends
+            # about a session are checked against it, once an admin has
+            # pinned it (domovoi/support_sessions.py).
+            from domovoi import support_sessions
+
+            self.support_key = support_sessions.clean_key(ctrl.get("support_key"))
+            self.support_rx_seq = 0
             raw_board = ctrl.get("board")
             self.board = satellite_abilities.clean_board(raw_board)
             # Stored settings the satellite could not use (it runs on its

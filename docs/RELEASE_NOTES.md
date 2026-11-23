@@ -555,6 +555,25 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
   links, the opening line is said before any input reaches the shell, no
   drop-in call starts during a session, and removing a satellite ends its
   session. `domovoi-satellite.service` gains `NotifyAccess=main`.
+- **Signed both ways, and nothing left behind (2026-11-23).** What the
+  satellite sends about a session (the output, the echo state, its own
+  close, its answer to an open) is now signed by the satellite's own
+  support key, in one rising sequence per connection, so a host in the
+  middle of the LAN can't change the transcript or end a session with a
+  forged close; the core refuses such frames, logs them without their
+  content and ignores them. The key is made on the satellite and sent in
+  its hello; the core **pins it when Allow support sessions is turned on**
+  (migration V082, `satellites.support_key`), so the switch can only be
+  turned on while the satellite is connected, and a satellite that later
+  presents another key (a reflashed card) gets no session until the switch
+  is turned off and on again. The shell now runs in a sandbox of its own
+  (user, mount and PID namespaces): every folder is read-only to it, its
+  home and temp folder are a private in-memory folder that disappears with
+  the session however it ends, and it can't read the device's key. A
+  satellite that can't build the sandbox doesn't offer sessions. The
+  shell can read the satellite's settings but no longer change them; use
+  the dashboard. Both the sandbox and the signing want a check on real
+  hardware.
 
 ## 1.5.0 (unreleased) — Diagnostics for a satellite, in its room drawer
 

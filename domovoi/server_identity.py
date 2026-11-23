@@ -80,6 +80,10 @@ MANIFEST_CONTEXT_V2 = b"domovoi-manifest-v2"
 # separator, so no health answer or manifest signature can stand in for one
 # and a support signature can never pass as either of those.
 SUPPORT_CONTEXT = b"domovoi-support-v1"
+# What a satellite signs about a support session carries this direction
+# label after the context (satellite/server_identity.py holds the same), so
+# a frame signed one way can never pass as one signed the other way.
+SUPPORT_FROM_SATELLITE = b"satellite-to-server"
 
 CODE_CHANNEL = "satellite-code"
 PLUGIN_CHANNEL = "satellite-plugins"
@@ -223,6 +227,13 @@ def support_message(doc: Any) -> bytes:
     connection's nonce, the issue time and the frame's own fields). The
     satellite (satellite/server_identity.py) builds the identical bytes."""
     return SUPPORT_CONTEXT + b"\n" + canonical_json(doc)
+
+
+def support_reply_message(doc: Any) -> bytes:
+    """The bytes a satellite signs, with its own support key, for a frame
+    it sends about a support session: the context, the direction label,
+    then the canonical document."""
+    return SUPPORT_CONTEXT + b"\n" + SUPPORT_FROM_SATELLITE + b"\n" + canonical_json(doc)
 
 
 def manifest_digest(manifest: Any) -> str:

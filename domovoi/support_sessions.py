@@ -30,10 +30,22 @@ docs/uml/satellite-protocol.md has the frames. In short:
   the 8 MB cap, so no string the shell prints can stop the log. Best
   effort; the transcript is an admin-only read for that reason. Kept 30
   days and 200 MB in all, oldest first.
-* **Signed.** The satellite acts on ``support_allow``, ``support_open`` and
-  each ``support_input`` only with this server's identity signature
-  (domovoi/server_identity.py, ``SUPPORT_CONTEXT``) over the satellite's
-  id, its connection's nonce and the issue time (satellite/support_shell.py).
+* **Signed, both ways.** The satellite acts on ``support_allow``,
+  ``support_open`` and each ``support_input`` only with this server's
+  identity signature (domovoi/server_identity.py, ``SUPPORT_CONTEXT``) over
+  the satellite's id, its connection's nonce, the issue time and the
+  satellite's pinned support key (satellite/support_shell.py). Every frame
+  the satellite sends about a session (opened, refused, output, echo,
+  closed) carries the satellite's own signature with its support key,
+  under the same context with the ``satellite-to-server`` label, over its
+  id, the connection's nonce, the session id and a sequence number that
+  rises on every frame of the connection; only the signed values are used.
+  The key is pinned (``satellites.support_key``, V082) when an admin turns
+  the switch on, from the key the connected satellite presents; a
+  satellite presenting any other key is not offered sessions. A frame
+  that fails the check is dropped and logged without its content, and
+  counts for nothing: a forged close or a run of forged frames ends no
+  session (a missing close runs into the session's own limits).
 
 The satellite never gets new power over the server: its ``support_*``
 frames are accepted only for the session open on that same connection,
@@ -124,6 +136,7 @@ REASONS: dict[str, str] = {
     "satellite_ended": "the satellite ended it",
     "input_stalled": "the shell stopped reading its input",
     "not_signed": "the server couldn't sign the open",
+    "untrusted_key": "the satellite's support key is not the one pinned for it",
     "removed": "the satellite was removed",
 }
 
@@ -132,6 +145,9 @@ SATELLITE_REASONS = frozenset({"exit", "time_limit", "idle", "satellite_ended",
                                "input_stalled"})
 
 _ID_RE = re.compile(r"^[0-9a-f]{32}\Z")
+#: Refused satellite frames logged per connection before only every
+#: hundredth is (the rest are counted).
+REFUSED_LOG_FIRST = 5
 
 
 def valid_id(value: Any) -> bool:
@@ -488,15 +504,94 @@ def plain_text(cast: str) -> str:
 # ─── Signed control frames ────────────────────────────────────────────────
 
 
+def clean_key(value: Any) -> str | None:
+    """A support key from a hello: the base64 of 32 bytes, in canonical
+    form, or None."""
+    if not isinstance(value, str) or not 40 <= len(value) <= 48:
+        return None
+    try:
+        raw = base64.b64decode(value, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    if len(raw) != 32 or base64.b64encode(raw).decode("ascii") != value:
+        return None
+    return value
+
+
 def signed_doc(sat: Any, kind: str, **fields: Any) -> dict[str, Any]:
     """The document the satellite checks: the frame's kind, the satellite's
-    id, the nonce its hello sent on THIS connection, the issue time and the
-    frame's own fields. ValueError when the connection sent no nonce."""
+    id, the nonce its hello sent on THIS connection, the support key it
+    presented, the issue time and the frame's own fields. ValueError when
+    the connection sent no nonce or no key."""
     nonce = getattr(sat, "support_nonce", None)
     if not isinstance(nonce, str) or not nonce:
         raise ValueError("the satellite sent no support nonce on this connection")
+    key = getattr(sat, "support_key", None)
+    if not isinstance(key, str) or not key:
+        raise ValueError("the satellite sent no support key on this connection")
     return {"kind": kind, "satellite_id": satellite_of(sat), "nonce": nonce,
-            "issued_at": int(time.time()), **fields}
+            "satellite_key": key, "issued_at": int(time.time()), **fields}
+
+
+async def pinned_key(satellite_id: str) -> str | None:
+    """The support key pinned for ``satellite_id`` (None: none)."""
+    async with session_scope() as s:
+        row = (await s.execute(
+            text("SELECT support_key FROM satellites WHERE satellite_id = :id"),
+            {"id": satellite_id},
+        )).first()
+    return row.support_key if row is not None and row.support_key else None
+
+
+def key_is_pinned(sat: Any, pinned: str | None) -> bool:
+    """Whether this connection presented the pinned key."""
+    key = getattr(sat, "support_key", None)
+    return bool(pinned) and isinstance(key, str) and hmac.compare_digest(key, str(pinned))
+
+
+class FrameRefused(Exception):
+    """A satellite's support frame failed its signature check."""
+
+
+def verify_satellite_frame(sat: Any, ctrl: dict[str, Any]) -> dict[str, Any]:
+    """The signed document of a ``support_*`` frame the satellite sent, or
+    :class:`FrameRefused`: unsigned, malformed, a bad signature (a changed
+    field included), signed for another kind of frame, another satellite,
+    another connection (nonce) or another session, or a sequence number not
+    past the last one on this connection (replayed or out of order). The
+    key is the one this connection presented, which a session only runs on
+    when it is the pinned one."""
+    from domovoi import server_identity
+
+    key = getattr(sat, "support_key", None)
+    nonce = getattr(sat, "support_nonce", None)
+    if not key or not nonce:
+        raise FrameRefused("this connection has no support key")
+    envelope = ctrl.get("signed")
+    if not isinstance(envelope, dict):
+        raise FrameRefused("unsigned")
+    doc = envelope.get("doc")
+    signature = _b64(envelope.get("signature"), 64)
+    if envelope.get("algorithm") != server_identity.ALGORITHM or not isinstance(doc, dict) \
+            or signature is None or len(signature) != 64:
+        raise FrameRefused("malformed signature")
+    if not server_identity.verify(base64.b64decode(key), server_identity.support_reply_message(doc),
+                                  signature):
+        raise FrameRefused("bad signature")
+    if doc.get("kind") != ctrl.get("type"):
+        raise FrameRefused("signed for another kind of frame")
+    if doc.get("satellite_id") != satellite_of(sat):
+        raise FrameRefused("signed for another satellite")
+    if doc.get("nonce") != nonce:
+        raise FrameRefused("signed for another connection")
+    if doc.get("session_id") != ctrl.get("session_id"):
+        raise FrameRefused("signed for another session")
+    seq = doc.get("seq")
+    last = getattr(sat, "support_rx_seq", 0) or 0
+    if not isinstance(seq, int) or isinstance(seq, bool) or seq <= last:
+        raise FrameRefused("replayed or out of order")
+    sat.support_rx_seq = seq
+    return doc
 
 
 def sign(doc: dict[str, Any]) -> dict[str, Any]:
@@ -512,17 +607,26 @@ async def send_allow_state(app: Any, sat: Any, allowed: bool | None = None) -> b
     allowed on it (``satellites.support_allowed`` unless ``allowed`` is
     given). The satellite refuses every open until it holds a signed
     "allowed" for its current connection. False when nothing was sent."""
+    try:
+        async with session_scope() as s:
+            row = (await s.execute(
+                text("SELECT support_allowed, support_key FROM satellites "
+                     "WHERE satellite_id = :id"),
+                {"id": satellite_of(sat)},
+            )).first()
+    except Exception as e:  # noqa: BLE001 - the satellite stays disarmed
+        log.info("support: couldn't read the allow switch for %s: %s", satellite_of(sat), e)
+        return False
     if allowed is None:
-        try:
-            async with session_scope() as s:
-                row = (await s.execute(
-                    text("SELECT support_allowed FROM satellites WHERE satellite_id = :id"),
-                    {"id": satellite_of(sat)},
-                )).first()
-            allowed = bool(row and row.support_allowed)
-        except Exception as e:  # noqa: BLE001 - the satellite stays disarmed
-            log.info("support: couldn't read the allow switch for %s: %s", satellite_of(sat), e)
-            return False
+        allowed = bool(row and row.support_allowed)
+    if allowed and not key_is_pinned(sat, row.support_key if row is not None else None):
+        # Only the key pinned when the switch went on is trusted: another
+        # one (a reflashed card, or one put in the hello by a host in the
+        # middle) is not armed. Turning the switch off and on pins anew.
+        log.warning("support: %s presented a support key other than the pinned one; "
+                    "not allowing sessions (turn the switch off and on to trust it)",
+                    satellite_of(sat))
+        allowed = False
     try:
         frame = {"type": "support_allow",
                  "signed": sign(signed_doc(sat, "support_allow", allowed=bool(allowed)))}
@@ -563,6 +667,7 @@ class Session:
     last_admin_check: float = 0.0
     last_stamp: float = 0.0
     in_seq: int = 0                 # the last signed input frame's number
+    key: str | None = None          # the satellite's pinned support key
     ack: asyncio.Future[Any] | None = None
     outbox: asyncio.Queue[dict[str, Any] | None] = field(default_factory=asyncio.Queue)
     ended: asyncio.Event = field(default_factory=asyncio.Event)
@@ -666,6 +771,14 @@ class SupportSessions:
                 await self.end(sess, "satellite_disconnected", announce=False)
                 return
             sess.sat = sat
+            try:
+                sess.key = await pinned_key(sess.satellite_id)
+            except Exception as e:  # noqa: BLE001 - fail closed
+                log.warning("support session %s: couldn't read the pinned key: %s", sess.id[:8], e)
+                sess.key = None
+            if not key_is_pinned(sat, sess.key):
+                await self.end(sess, "untrusted_key", announce=False)
+                return
             known = await _known_secrets()
             sess.writer = Transcript(
                 sess.id, cols=sess.cols, rows=sess.rows,
@@ -859,28 +972,39 @@ class SupportSessions:
     # ── frames from the satellite ────────────────────────────────────
 
     async def satellite_frame(self, sat: Any, ctrl: dict[str, Any]) -> None:
-        """A ``support_*`` frame from a satellite connection. Accepted only
-        for the session open on THAT connection; anything else is dropped
-        and counted, and a run of them closes the socket."""
-        sid = ctrl.get("session_id")
-        sess = self.by_id.get(sid) if isinstance(sid, str) else None
-        if sess is None or sess.sat is not sat or sess.state not in ("opening", "open"):
-            await self._stray(sat, ctrl.get("type"))
-            return
+        """A ``support_*`` frame from a satellite connection. Its signature
+        is checked first (:func:`verify_satellite_frame`): a frame that
+        fails is dropped and logged without its content, and counts for
+        nothing, so forged frames can't end a session or close the socket.
+        A signed one is accepted only for the session open on THAT
+        connection (and on the pinned key); anything else is dropped and
+        counted, and a run of them closes the socket. Only the signed
+        values are used."""
         kind = ctrl.get("type")
+        try:
+            doc = verify_satellite_frame(sat, ctrl)
+        except FrameRefused as e:
+            self._refused(sat, kind, ctrl.get("session_id"), str(e))
+            return
+        sid = doc.get("session_id")
+        sess = self.by_id.get(sid) if isinstance(sid, str) else None
+        if sess is None or sess.sat is not sat or sess.state not in ("opening", "open") \
+                or not key_is_pinned(sat, sess.key):
+            await self._stray(sat, kind)
+            return
         if kind == "support_opened":
             if sess.ack is not None and not sess.ack.done():
                 sess.ack.set_result(True)
             return
         if kind == "support_refused":
             if sess.ack is not None and not sess.ack.done():
-                sess.ack.set_result(str(ctrl.get("reason") or "refused"))
+                sess.ack.set_result(str(doc.get("reason") or "refused"))
             return
         if sess.state != "open":
             await self._stray(sat, kind)
             return
         if kind == "support_output":
-            data = _b64(ctrl.get("data"), OUTPUT_FRAME_MAX)
+            data = _b64(doc.get("data"), OUTPUT_FRAME_MAX)
             if data is None or not self._within_rate(sess, len(data)):
                 await self._stray(sat, kind)
                 return
@@ -893,9 +1017,9 @@ class SupportSessions:
             sess.bytes_out += len(data)
             sess.outbox.put_nowait({"t": "out", "d": base64.b64encode(data).decode("ascii")})
         elif kind == "support_echo":
-            sess.echo_on = bool(ctrl.get("on"))
+            sess.echo_on = doc.get("on") is not False
         elif kind == "support_closed":
-            reason = ctrl.get("reason")
+            reason = doc.get("reason")
             await self.end(sess, reason if reason in SATELLITE_REASONS else "satellite_ended")
         else:
             await self._stray(sat, kind)
@@ -906,6 +1030,20 @@ class SupportSessions:
             sess.out_window, sess.out_window_bytes = now, 0
         sess.out_window_bytes += size
         return sess.out_window_bytes <= OUTPUT_RATE_MAX * OUTPUT_RATE_SLACK
+
+    def _refused(self, sat: Any, kind: Any, sid: Any, why: str) -> None:
+        """Log a frame that failed its signature check: the kind, the
+        satellite, the session's first digits and why, never its content.
+        The first few per connection, then every hundredth."""
+        count = getattr(sat, "support_refused_frames", 0) + 1
+        try:
+            sat.support_refused_frames = count
+        except AttributeError:
+            pass
+        if count <= REFUSED_LOG_FIRST or count % 100 == 0:
+            short = sid[:8] if isinstance(sid, str) else "?"
+            log.warning("support: refused a %s frame from %s for session %s: %s (%d refused)",
+                        str(kind)[:32], satellite_of(sat) or "?", short, why, count)
 
     async def _stray(self, sat: Any, kind: Any) -> None:
         count = getattr(sat, "support_strays", 0) + 1
