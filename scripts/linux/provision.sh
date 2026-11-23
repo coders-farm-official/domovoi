@@ -3894,71 +3894,94 @@ do_env() {
 # Ollama's default 4096 each, 1728 MiB with an 8192 routing window.
 #   below the standard tier (MemTotal under tier_standard_min_mem_mib): 1
 #   the standard tier: 2;  MemTotal of 44 GiB or more (a 48 GB box): 3
-#   NVIDIA GPUs whose free memory, when Ollama started, holds the tier's
+#   NVIDIA GPUs whose memory, less a reserve per card, holds the tier's
 #   models plus 4 windows: 4 (the windows then live on the cards)
 # A box steps down while MemTotal is under the standard tier's line plus
 # the extra slots' cost, so the voice models keep the room the tier counts
-# on. What the GPUs have free comes from Ollama's own start-up lines (as
-# ollama_gpus reads them); when this boot has none yet, a 4 the unit
-# already has is kept, so a re-run doesn't flip the unit (and restart
-# Ollama) back and forth.
+# on. The GPUs are judged on stable numbers: each card's total from
+# Ollama's own start-up lines (as ollama_gpus reads them) less
+# OLLAMA_GPU_RESERVE_MIB for the desktop, the speech model or an image
+# generator, never what happened to be free at that start. A unit that
+# already has 4 keeps it down to the models plus 2 windows, and also when
+# this boot's journal has no Ollama start yet: an update's re-run doesn't
+# flip the unit (and restart Ollama) back and forth.
 OLLAMA_PARALLEL_3_MIN_MEM_MIB=45056
 OLLAMA_KV_KIB_PER_TOKEN=144
 OLLAMA_DEFAULT_CTX=4096
 # The standard tier's three models (router, Q&A, pictures), as loaded.
 OLLAMA_GPU_WEIGHTS_MIB=9400
+# Kept back on every card, whatever else it runs.
+OLLAMA_GPU_RESERVE_MIB=1536
 
-# Free memory, in MiB, of the NVIDIA GPUs Ollama found at its last start
-# this boot (summed: Ollama spreads a model over them); nothing when this
-# boot's journal has no Ollama start.
-ollama_gpu_free_mib() {
-  journalctl -u ollama.service -b --no-pager -o cat 2>/dev/null | awk '
-/msg="server config"/ { mib = 0; seen = 0; next }
+# The NVIDIA GPUs' memory, in MiB, that Ollama may count on: each card's
+# total at Ollama's last start this boot less OLLAMA_GPU_RESERVE_MIB,
+# summed (Ollama spreads a model over them; a card listed twice counts
+# once). Nothing when this boot's journal has no Ollama start.
+ollama_gpu_usable_mib() {
+  journalctl -u ollama.service -b --no-pager -o cat 2>/dev/null | awk -v reserve="$OLLAMA_GPU_RESERVE_MIB" '
+/msg="server config"/ { split("", card); seen = 0; next }
 /msg="inference compute"/ {
   seen = 1
   if ($0 !~ /library=(CUDA|cuda)/) next
-  if (match($0, /available="[0-9.]+ [GM]iB"/)) {
-    v = substr($0, RSTART + 11, RLENGTH - 12); split(v, a, " ")
-    mib += (a[2] == "GiB") ? a[1] * 1024 : a[1]
+  id = ""
+  if (match($0, /[ \t]id=[^ \t]+/)) id = substr($0, RSTART + 4, RLENGTH - 4)
+  if (match($0, /total="[0-9.]+ [GM]iB"/)) {
+    v = substr($0, RSTART + 7, RLENGTH - 8); split(v, a, " ")
+    mib = (a[2] == "GiB") ? a[1] * 1024 : a[1]
+    card[id] = (mib > reserve) ? mib - reserve : 0
   }
 }
-END { if (seen) printf "%d\n", mib }' || true
+END {
+  if (!seen) exit
+  sum = 0
+  for (k in card) sum += card[k]
+  printf "%d\n", sum
+}' || true
+}
+
+# A whole number from the manifest or .env, read in base 10 (a leading
+# zero is not octal); $2 when it isn't one.
+ollama_int() {
+  if [[ "$1" =~ ^[0-9]+$ ]] && [ "$((10#$1))" -gt 0 ]; then echo "$((10#$1))"; else echo "$2"; fi
 }
 
 # One context window of every loaded model, in MiB: one slot's cost.
 ollama_slot_mib() {
   local qa tool
-  qa=$(dotenv_get OLLAMA_NUM_CTX); tool=$(dotenv_get OLLAMA_TOOL_NUM_CTX)
-  [[ "$qa" =~ ^[1-9][0-9]*$ ]] || qa=$OLLAMA_DEFAULT_CTX
-  [[ "$tool" =~ ^[1-9][0-9]*$ ]] || tool=$OLLAMA_DEFAULT_CTX
+  qa=$(ollama_int "$(dotenv_get OLLAMA_NUM_CTX)" "$OLLAMA_DEFAULT_CTX")
+  tool=$(ollama_int "$(dotenv_get OLLAMA_TOOL_NUM_CTX)" "$OLLAMA_DEFAULT_CTX")
   echo $(( (qa + tool) * OLLAMA_KV_KIB_PER_TOKEN / 1024 ))
 }
 
 # The OLLAMA_NUM_PARALLEL for this box.
 ollama_parallel() {
-  local n=1 slot gpu had line=${M[tier_standard_min_mem_mib]:-22528}
+  local n=1 slot gpu had line mem
+  line=$(ollama_int "${M[tier_standard_min_mem_mib]:-}" 22528)
+  mem=$(ollama_int "${MEM_MIB:-0}" 0)
   slot=$(ollama_slot_mib)
-  gpu=$(ollama_gpu_free_mib)
+  gpu=$(ollama_gpu_usable_mib)
   had=$(sed -n 's/^Environment=OLLAMA_NUM_PARALLEL=\([0-9]*\)$/\1/p' "$UNIT_DIR/ollama.service" 2>/dev/null) || had=""
   if [ -n "$gpu" ] && [ "$gpu" -ge $(( OLLAMA_GPU_WEIGHTS_MIB + 4 * slot )) ]; then
     n=4
-  elif [ -z "$gpu" ] && [ "$had" = 4 ]; then
+  elif [ "$had" = 4 ] && { [ -z "$gpu" ] || [ "$gpu" -ge $(( OLLAMA_GPU_WEIGHTS_MIB + 2 * slot )) ]; }; then
     n=4
   else
-    if [ "${MEM_MIB:-0}" -ge "$OLLAMA_PARALLEL_3_MIN_MEM_MIB" ]; then n=3
+    if [ "$mem" -ge "$OLLAMA_PARALLEL_3_MIN_MEM_MIB" ]; then n=3
     elif [ "$TIER_EFF" = standard ]; then n=2
     fi
-    while [ "$n" -gt 1 ] && [ "${MEM_MIB:-0}" -lt $(( line + (n - 1) * slot )) ]; do n=$((n - 1)); done
+    while [ "$n" -gt 1 ] && [ "$mem" -lt $(( line + (n - 1) * slot )) ]; do n=$((n - 1)); done
   fi
   echo "$n"
 }
 
 # The unit docs/LINUX_HOST.md gives ("the unit install.sh writes"); the
 # Python test holds the two together. One Environment= line more when
-# Ollama answers more than one request at once (ollama_parallel).
+# Ollama answers more than one request at once (ollama_parallel); if that
+# can't be worked out, none, never a broken unit.
 ollama_unit_text() {
   local n
-  n=$(ollama_parallel)
+  n=$(ollama_parallel) || n=1
+  [[ "$n" =~ ^[1-4]$ ]] || n=1
   cat <<'EOF'
 [Unit]
 Description=Ollama Service

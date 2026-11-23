@@ -152,12 +152,14 @@ def test_ollama_unit_is_the_docs_unit():
     assert "Environment=OLLAMA_NUM_PARALLEL=" in LINUX_HOST.read_text(encoding="utf-8")
 
 
-def _unit_for(tmp_path: Path, *, mem_mib: int, tier: str, journal: str = "",
-              env: dict[str, str] | None = None, had: int | None = None) -> str:
+def _unit_for(tmp_path: Path, *, mem_mib: int | str, tier: str, journal: str = "",
+              env: dict[str, str] | None = None, had: int | None = None,
+              standard_line: str = "22528", after: str = "") -> str:
     """ollama_unit_text() as provision.sh writes it on a box with
     ``mem_mib`` of MemTotal, the given tier, Ollama start-up lines in the
     journal, .env context windows and the unit it already has (the
-    script's own functions; what they call is stubbed)."""
+    script's own functions; what they call is stubbed). ``after`` is bash
+    run after the functions are defined (to break one)."""
     script = SCRIPT.read_text(encoding="utf-8")
     start = script.index("OLLAMA_PARALLEL_3_MIN_MEM_MIB=")
     end = script.index("ollama_served_version() {")
@@ -169,13 +171,13 @@ def _unit_for(tmp_path: Path, *, mem_mib: int, tier: str, journal: str = "",
     (tmp_path / "journal").write_text(journal, encoding="utf-8", newline="\n")
     env_lines = "".join(f"  {k}) echo '{v}' ;;\n" for k, v in (env or {}).items())
     prog = (
-        "set -u\n"
-        "declare -A M=([tier_standard_min_mem_mib]=22528)\n"
+        "set -euo pipefail\n"
+        f"declare -A M=([tier_standard_min_mem_mib]={standard_line})\n"
         f"MEM_MIB={mem_mib}; TIER_EFF={tier}; UNIT_DIR='{unit_dir.as_posix()}'\n"
         f"journalctl() {{ cat '{(tmp_path / 'journal').as_posix()}'; }}\n"
         f"dotenv_get() {{ case $1 in\n{env_lines}  *) ;;\n  esac; }}\n"
         + script[start:end]
-        + "\nollama_unit_text\n"
+        + "\n" + after + "\nollama_unit_text\n"
     )
     (tmp_path / "prog.sh").write_text(prog, encoding="utf-8", newline="\n")
     proc = subprocess.run([BASH, str(tmp_path / "prog.sh")], capture_output=True, text=True)
@@ -192,10 +194,12 @@ _START = 'time=x level=INFO source=routes.go:1 msg="server config" env=map[]\n'
 _CPU = 'time=x level=INFO msg="inference compute" id=cpu library=cpu compute="" name=cpu description=cpu total="62.5 GiB"\n'
 
 
-def _gpu(free_gib: float) -> str:
-    return (f'time=x level=INFO msg="inference compute" id=0 library=CUDA compute=8.9 name=CUDA0 '
-            f'description="NVIDIA GeForce RTX 4070 Ti SUPER" type=discrete total="16.0 GiB" '
-            f'available="{free_gib} GiB"\n')
+def _gpu(total_gib: float, *, card: int = 0, free_gib: float = 1.0) -> str:
+    """One card's start-up line; what is free changes from start to start
+    and must not matter."""
+    return (f'time=x level=INFO msg="inference compute" id={card} filter_id={card} library=CUDA compute=8.9 '
+            f'name=CUDA{card} description="NVIDIA GeForce RTX 4070 Ti SUPER" type=discrete '
+            f'total="{total_gib} GiB" available="{free_gib} GiB"\n')
 
 
 @requires_bash
@@ -221,26 +225,60 @@ def test_ollama_answers_at_once_by_tier(tmp_path):
 
 
 @requires_bash
-def test_ollama_answers_four_at_once_with_room_on_the_gpus(tmp_path):
-    two_cards = _START + _CPU + _gpu(14.7) + _gpu(14.7)
-    assert _parallel(_unit_for(tmp_path, mem_mib=64000, tier="standard", journal=two_cards)) == 4
-    # The windows live on the cards, so the box's own memory doesn't matter.
-    assert _parallel(_unit_for(tmp_path, mem_mib=15800, tier="floor", journal=_START + _CPU + _gpu(14.7))) == 4
-    # A card without room for the models plus four windows: the memory tier.
-    assert _parallel(_unit_for(tmp_path, mem_mib=23800, tier="standard", journal=_START + _CPU + _gpu(10.9))) == 2
-    assert _parallel(_unit_for(tmp_path, mem_mib=23800, tier="standard", journal=_START + _CPU)) == 2
-    # Only Ollama's last start counts.
-    assert _parallel(_unit_for(tmp_path, mem_mib=23800, tier="standard",
-                               journal=_START + _CPU + _gpu(14.7) + _START + _CPU)) == 2
+def test_numbers_with_a_leading_zero_are_read_in_base_ten(tmp_path):
+    assert _parallel(_unit_for(tmp_path, mem_mib="023800", tier="standard", standard_line="022528",
+                               env={"OLLAMA_TOOL_NUM_CTX": "04096"})) == 2
 
 
 @requires_bash
-def test_an_unknown_gpu_keeps_the_units_four(tmp_path):
-    """No Ollama start in this boot's journal yet: a 4 the unit has stays,
-    so a re-run doesn't rewrite the unit and restart Ollama."""
+def test_a_failure_working_out_the_number_still_writes_the_whole_unit(tmp_path):
+    for broken in ("ollama_parallel() { return 1; }", "ollama_parallel() { echo lots; }"):
+        assert _unit_for(tmp_path, mem_mib=64000, tier="standard", after=broken) == _docs_ollama_unit()
+
+
+@requires_bash
+def test_ollama_answers_four_at_once_with_room_on_the_gpus(tmp_path):
+    """Each card counts its total less 1.5 GiB: the models (9400 MiB) plus
+    four default windows (4608 MiB) need 14008 MiB."""
+    two_cards = _START + _CPU + _gpu(16.0, card=0) + _gpu(16.0, card=1)
+    assert _parallel(_unit_for(tmp_path, mem_mib=64000, tier="standard", journal=two_cards)) == 4
+    # The windows live on the cards, so the box's own memory doesn't matter.
+    assert _parallel(_unit_for(tmp_path, mem_mib=15800, tier="floor", journal=_START + _CPU + _gpu(16.0))) == 4
+    # A card without room for the models plus four windows: the memory tier.
+    assert _parallel(_unit_for(tmp_path, mem_mib=23800, tier="standard", journal=_START + _CPU + _gpu(12.0))) == 2
+    assert _parallel(_unit_for(tmp_path, mem_mib=23800, tier="standard", journal=_START + _CPU)) == 2
+    # Only Ollama's last start counts.
+    assert _parallel(_unit_for(tmp_path, mem_mib=23800, tier="standard",
+                               journal=_START + _CPU + _gpu(16.0) + _START + _CPU)) == 2
+    # A card listed twice counts once (2 x 8704 would pass the line).
+    assert _parallel(_unit_for(tmp_path, mem_mib=23800, tier="standard",
+                               journal=_START + _CPU + _gpu(10.0) + _gpu(10.0))) == 2
+
+
+@requires_bash
+def test_what_is_free_at_a_start_never_flips_the_unit(tmp_path):
+    """The same cards give the same unit whatever was free when Ollama
+    started (an image generator or the speech model holding memory)."""
+    busy = _START + _CPU + _gpu(16.0, free_gib=2.0)
+    idle = _START + _CPU + _gpu(16.0, free_gib=15.5)
+    first = _unit_for(tmp_path, mem_mib=23800, tier="standard", journal=busy)
+    assert _parallel(first) == 4
+    assert _unit_for(tmp_path, mem_mib=23800, tier="standard", journal=idle, had=4) == first
+    assert _unit_for(tmp_path, mem_mib=23800, tier="standard", journal=busy, had=4) == first
+
+
+@requires_bash
+def test_a_unit_with_four_keeps_it_down_to_two_windows(tmp_path):
+    """Hysteresis: once 4, the unit stays 4 until the cards can't hold the
+    models plus 2 windows (11704 MiB); and while this boot's journal has no
+    Ollama start yet."""
+    just_under = _START + _CPU + _gpu(15.0)  # 13824 MiB: under 14008, over 11704
+    assert _parallel(_unit_for(tmp_path, mem_mib=23800, tier="standard", journal=just_under)) == 2
+    assert _parallel(_unit_for(tmp_path, mem_mib=23800, tier="standard", journal=just_under, had=4)) == 4
+    assert _parallel(_unit_for(tmp_path, mem_mib=23800, tier="standard", journal=_START + _CPU + _gpu(12.0),
+                               had=4)) == 2
     assert _parallel(_unit_for(tmp_path, mem_mib=23800, tier="standard", had=4)) == 4
     assert _parallel(_unit_for(tmp_path, mem_mib=23800, tier="standard", had=3)) == 2
-    # Known again, and without room on a GPU: the memory tier.
     assert _parallel(_unit_for(tmp_path, mem_mib=23800, tier="standard", had=4, journal=_START + _CPU)) == 2
 
 

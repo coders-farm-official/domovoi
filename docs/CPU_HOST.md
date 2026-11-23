@@ -767,16 +767,21 @@ still starts at once instead of waiting.
 | Under 24 GB | 1 | The floor tier's models and the voice models already fill it. |
 | 24 GB or more (the standard tier) | 2 | One slot for voice beside one chat or story: about 1.2 GB more. |
 | 48 GB or more | 3 | Room for two background answers and voice: about 2.3 GB more. |
-| NVIDIA GPUs with free memory for the models (about 9.4 GB) plus four windows | 4 | The windows live on the cards, so the box's memory isn't spent. |
+| NVIDIA GPUs whose memory, less 1.5 GB per card, holds the models (about 9.4 GB) plus four windows | 4 | The windows live on the cards, so the box's memory isn't spent. |
 
 A box steps down a number while its memory is under the standard tier's
 line (22 GiB) plus the extra slots' cost, so the larger windows never
 squeeze the voice models: a 24 GB box with an 8192 routing window stays at
-1. What the GPUs have free is read from Ollama's own start-up lines, so a
-GPU box gets its 4 at the update after Ollama has first started there.
-The setting is written by the installer and by every update's
-re-provision, which restarts Ollama only when the unit's text changed. A
-Mac server follows the same memory tiers.
+1. The GPUs are judged by each card's total memory as Ollama reports it
+at its start, less 1.5 GB kept back per card for the desktop, the speech
+model or an image generator, never by what happened to be free at that
+moment, so the number doesn't change from one update to the next. A unit
+that already has 4 keeps it until the cards could no longer hold the
+models plus two windows. A GPU box gets its 4 at the update after Ollama
+has first started there. The setting is written by the installer and by
+every update's re-provision, which restarts Ollama only when the unit's
+text changed. On a Mac server, Ollama's setting comes from the Mac
+installer.
 
 ---
 
