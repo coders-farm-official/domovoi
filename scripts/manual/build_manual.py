@@ -84,8 +84,6 @@ ROUTES: dict[str, dict] = {
     "settings/photos-and-videos": {"dashboard": "#settings/photos-and-videos", "app": {"dashboard": True}},
     "settings/internet": {"dashboard": "#settings/internet", "app": {"screen": "Settings", "tab": "internet"}},
     "settings/search": {"dashboard": "#settings/search", "app": {"dashboard": True}},
-    # Photos and videos (1.5.0, media understanding): dashboard only.
-    "settings/photos-and-videos": {"dashboard": "#settings/photos-and-videos", "app": {"dashboard": True}},
     "settings/fonts": {"dashboard": "#settings/fonts", "app": {"dashboard": True}},
     "settings/voice-history": {"dashboard": "#settings/voice-history", "app": {"screen": "Settings", "tab": "voice-history"}},
     # Listening history (2026-11-12): the app has no tab for it yet.

@@ -6,7 +6,9 @@
 weights by how much a word says about the file:
 
 * **A** the tags ("dog", "beach");
-* **B** the captions and the summary;
+* **B** the captions, the summary and the place's name (slice 7, only
+  while "Use photo locations" is on: "Portland, Oregon, United States",
+  plus its accent-free spelling, so "Zurich" finds "Zürich");
 * **C** the text found in the picture and what is said (transcripts);
 * **D** the file and folder names.
 
@@ -24,6 +26,12 @@ by its name, and a part of a name ("birthd") still matches.
   "Christmas 2021", "Halloween", "New Year's Eve"), or "today",
   "yesterday", "this/last week/month/year". A month, season or holiday
   without a year means every year's;
+* "at home" ("near home", "around home", "from home"): photos taken
+  within :data:`geocode.HOME_KM` of the Home location, worked out in the
+  query from the coordinates the caller passes (never stored with the
+  results). Without locations on or a Home location, "home" stays a word;
+* a place ("in Portland", "from Paris") needs no parsing: its name is in
+  ``search_doc``, so it is one of the words;
 * the rest are the words, searched with ``websearch_to_tsquery`` (all of
   them must match, quotes for a phrase, ``-word`` to leave one out).
 
@@ -75,7 +83,8 @@ def name_words(rel_path: str) -> str:
 REFRESH_SQL = """
 UPDATE media_items m SET search_doc =
     setweight(to_tsvector('english', left(coalesce(f.tags, ''), :mx)), 'A')
- || setweight(to_tsvector('english', left(coalesce(f.captions, '') || ' ' || coalesce(sm.summary, ''), :mx)), 'B')
+ || setweight(to_tsvector('english', left(coalesce(f.captions, '') || ' ' || coalesce(sm.summary, '')
+                                          || ' ' || :place, :mx)), 'B')
  || setweight(to_tsvector('english', left(coalesce(f.ocr, '') || ' ' || coalesce(sg.words, ''), :mx)), 'C')
  || setweight(to_tsvector('english', :names), 'D'),
     updated_at = now()
@@ -91,10 +100,24 @@ WHERE m.id = :i
 
 async def refresh_doc(s: Any, item_id: int) -> None:
     """Rebuild one item's ``search_doc`` from its results and its names."""
-    rel = (await s.execute(text("SELECT rel_path FROM media_items WHERE id = :i"), {"i": item_id})).scalar()
-    if rel is None:
+    row = (await s.execute(text("SELECT rel_path, place_name FROM media_items WHERE id = :i"),
+                           {"i": item_id})).first()
+    if row is None:
         return
-    await s.execute(text(REFRESH_SQL), {"i": item_id, "mx": DOC_PART_MAX, "names": name_words(rel)})
+    rel, place = row
+    await s.execute(text(REFRESH_SQL), {"i": item_id, "mx": DOC_PART_MAX, "names": name_words(rel),
+                                        "place": place_words(place)})
+
+
+def place_words(place: str | None) -> str:
+    """A place's name as searched: as written, and without accents when
+    that differs."""
+    if not place:
+        return ""
+    from domovoi.places import fold
+
+    plain = fold(place)
+    return place if plain == place.casefold().replace(",", "") else f"{place} {plain}"
 
 
 # ─── reading a query ──────────────────────────────────────────────────────
@@ -132,6 +155,8 @@ KIND_WORDS = {
 #: Asking words that say nothing about the file ("show me photos of ...").
 FILLER = {"show", "me", "find", "search", "for", "of", "the", "a", "an", "my", "our", "some", "all",
           "any", "where", "we", "were", "was", "with", "taken", "from", "that", "those", "these"}
+#: Words before "home" that make it "near the Home location".
+HOME_PREPS = {"at", "near", "around", "from"}
 #: Words that may stand before a time and go with it.
 TIME_PREPS = {"in", "from", "at", "during", "on", "of", "around"}
 
@@ -147,6 +172,7 @@ class Query:
     kind: str | None = None
     ranges: list[tuple[datetime, datetime]] = field(default_factory=list)
     when: str | None = None   # the time words as said, for the answer ("last summer")
+    at_home: bool = False     # "at home": near the Home location (when the caller can tell)
 
 
 def _day(d: date) -> datetime:
@@ -212,6 +238,12 @@ def parse_query(q: str, *, today: date | None = None) -> Query:
             used[k] = True
             k -= 1
         said.append(" ".join(raw[i:i + n]))
+
+    # "at home", "near home", ...: a filter, not words.
+    for j in range(1, len(toks)):
+        if toks[j] == "home" and toks[j - 1] in HOME_PREPS and not used[j - 1]:
+            used[j - 1] = used[j] = True
+            out.at_home = True
 
     i = 0
     while i < len(toks):
@@ -353,11 +385,18 @@ def _name_terms(words: str) -> list[str]:
 
 async def search(s: Any, query: Query, *, kind: str | None = None, start: datetime | None = None,
                  end: datetime | None = None, limit: int = 40, offset: int = 0,
-                 only_ids: list[int] | None = None) -> dict[str, Any]:
+                 only_ids: list[int] | None = None,
+                 home: tuple[float, float] | None = None) -> dict[str, Any]:
     """One page of hits for ``query`` (filters: ``kind``, ``start``/``end``
     as UTC instants on top of the query's own time, and ``only_ids``: only
-    these items, the person filter of :mod:`.ask`)."""
+    these items, the person filter of :mod:`.ask`).
+
+    ``home``: the Home location's point, passed only while locations are on
+    and the caller may see places. Each hit then says ``near_home``, and
+    "at home" filters on it; the point is a query parameter, never stored
+    or returned. Without it, "at home" searches the word "home"."""
     from domovoi import household_time
+    from domovoi.media_understanding import geocode
 
     limit = max(1, min(int(limit), LIMIT_MAX))
     offset = max(0, int(offset))
@@ -381,8 +420,16 @@ async def search(s: Any, query: Query, *, kind: str | None = None, start: dateti
         params["r_to"] = [household_time.to_utc(b) for _a, b in query.ranges]
         where.append(f"EXISTS (SELECT 1 FROM unnest(CAST(:r_from AS timestamptz[]), CAST(:r_to AS timestamptz[])) "
                      f"AS r(a, b) WHERE {WHEN_SQL} >= r.a AND {WHEN_SQL} < r.b)")
-    score = "0"
+    near = "NULL"
     words = query.words.strip()
+    if home is not None:
+        params.update(home_lat=float(home[0]), home_lon=float(home[1]), home_km=geocode.HOME_KM)
+        near = geocode.near_sql("m")
+        if query.at_home:
+            where.append(near)
+    elif query.at_home:
+        words = f"{words} home".strip()
+    score = "0"
     if words:
         params["q"] = words
         names = _name_terms(words)
@@ -401,8 +448,8 @@ async def search(s: Any, query: Query, *, kind: str | None = None, start: dateti
         score = (f"(CASE WHEN numnode(q.tsq) > 0 THEN coalesce(ts_rank_cd(m.search_doc, q.tsq), 0) ELSE 0 END "
                  f"+ {name_score})")
     sql = (
-        "SELECT m.id, m.library_id, m.rel_path, m.kind, m.state, m.taken_at, m.mtime, "
-        f"{WHEN_SQL} AS taken, {score} AS score, "
+        "SELECT m.id, m.library_id, m.rel_path, m.kind, m.state, m.taken_at, m.mtime, m.place_name, "
+        f"{WHEN_SQL} AS taken, {score} AS score, {near} AS near_home, "
         "f.caption, f.tags, f.has_text, f.ocr_text "
         "FROM media_items m "
         "CROSS JOIN (SELECT websearch_to_tsquery('english', coalesce(CAST(:q AS text), '')) AS tsq) q "
@@ -422,7 +469,10 @@ HIT_TEXT_MAX = 500
 
 def hit(r: Any) -> dict[str, Any]:
     """One result. ``might_show`` is the caption (what the picture MIGHT
-    show: a model's words); it, ``tags`` and ``text`` are untrusted text."""
+    show: a model's words); it, ``tags`` and ``text`` are untrusted text.
+    ``place`` is the town's name (locations on), ``near_home`` whether it
+    was taken near the Home location (None when that can't be told). Never
+    a coordinate."""
     taken = r["taken"]
     ocr = r["ocr_text"] or None
     return {
@@ -438,5 +488,7 @@ def hit(r: Any) -> dict[str, Any]:
         "tags": list(r["tags"] or []),
         "has_text": r["has_text"],
         "text": ocr[:HIT_TEXT_MAX] if ocr else None,
+        "place": r["place_name"] or None,
+        "near_home": r["near_home"],
         "score": round(float(r["score"] or 0), 4),
     }
