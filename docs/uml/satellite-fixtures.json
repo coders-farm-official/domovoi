@@ -246,6 +246,8 @@
         "type": "ready",
         "protocol_version": "0.1",
         "room_id": "kitchen",
+        "satellite_id": "kitchen",
+        "room": {"room_id": "kitchen", "name": "kitchen", "shared": false},
         "audio_sample_rate_in": 16000,
         "features": [
           "speech_pause",
@@ -455,6 +457,8 @@
         "type": "ready",
         "protocol_version": "0.1",
         "room_id": "living-room",
+        "satellite_id": "living-room",
+        "room": {"room_id": "living-room", "name": "living-room", "shared": false},
         "audio_sample_rate_in": 16000,
         "features": [
           "speech_pause",
@@ -677,6 +681,8 @@
         "type": "ready",
         "protocol_version": "0.1",
         "room_id": "study",
+        "satellite_id": "study",
+        "room": {"room_id": "study", "name": "study", "shared": false},
         "audio_sample_rate_in": 16000,
         "features": [
           "speech_pause",
@@ -903,6 +909,8 @@
         "type": "ready",
         "protocol_version": "0.1",
         "room_id": "den",
+        "satellite_id": "den",
+        "room": {"room_id": "den", "name": "den", "shared": false},
         "audio_sample_rate_in": 16000,
         "features": [
           "speech_pause",
@@ -1120,6 +1128,8 @@
         "type": "ready",
         "protocol_version": "0.1",
         "room_id": "nursery",
+        "satellite_id": "nursery",
+        "room": {"room_id": "nursery", "name": "nursery", "shared": false},
         "audio_sample_rate_in": 16000,
         "features": [
           "speech_pause",

@@ -1292,6 +1292,11 @@ class SatelliteApproveRequest(BaseModel):
     compares it in constant time and counts the attempt."""
 
     code: str = Field(..., min_length=1, max_length=16, pattern=r"^[0-9]+$")
+    # 1.5.0, "Which room is it in?": an existing room's id OR a name for a
+    # new room (not both). Neither: the room the device asked for, if it
+    # exists, else a room of its own.
+    room_id: str | None = Field(default=None, max_length=120)
+    new_room_name: str | None = Field(default=None, max_length=120)
 
 
 class AdoptRequest(BaseModel):

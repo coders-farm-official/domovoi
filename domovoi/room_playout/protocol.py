@@ -7,16 +7,16 @@ a 24-byte little-endian header. Everything here is pure encode/decode.
 from __future__ import annotations
 
 import json
-import re
 import struct
 from dataclasses import dataclass
 from typing import Any
 
+#: A satellite id is a room id's shape (every device from before 1.5.0 has
+#: its room's id): ONE rule for both, domovoi/room_ids.py.
+from domovoi.room_ids import is_room_id as is_satellite_id  # noqa: F401 — re-exported
+
 PROTO = 1
 SUPPORTED = (PROTO,)
-
-#: A satellite id as the core takes it elsewhere (main.py ``_ROOM_ID_RE``).
-SATELLITE_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}\Z")
 
 RATE = 48_000
 CHANNELS = 2

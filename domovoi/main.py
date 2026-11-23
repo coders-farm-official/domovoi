@@ -44,6 +44,7 @@ from domovoi import voice_activity  # noqa: E402
 from domovoi import turn_watchdog  # noqa: E402
 from domovoi import join_problems, server_identity  # noqa: E402
 from domovoi import room_ids  # noqa: E402
+from domovoi.room_devices import require_id_paths  # noqa: E402
 from domovoi import crypto_backend  # noqa: E402
 try:  # noqa: E402 — the satellite tree ships beside the core (it serves it to rooms)
     from satellite.pairing_proof import VERSION as PAIRING_PROOF_VERSION
@@ -67,7 +68,7 @@ from domovoi.admin_auth import (  # noqa: E402
 from domovoi.canned_sounds import _SOUNDS_DIR as SOUNDS_DIR  # noqa: E402
 from domovoi.canned_sounds import regenerate_if_needed as regenerate_canned_sounds  # noqa: E402
 from domovoi.canned_sounds import voice_dir  # noqa: E402
-from domovoi.db.repositories import SatelliteApprovalRepository
+from domovoi.db.repositories import RoomsRepository, SatelliteApprovalRepository, SatellitesRepository  # noqa: E402
 from domovoi.db.repositories import (  # noqa: E402
     SatelliteHealthRepository,
     SatelliteOutageRepository,
@@ -688,6 +689,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from domovoi.sdk import speech as _sdk_speech
 
     _sdk_speech.bind_active_sessions(lambda: app.state.active_sessions)
+    # 1.5.0: every live device by its own id, and the room registry over
+    # both maps plus where each known device is (domovoi/room_devices.py).
+    app.state.active_satellites = {}
+    from domovoi import room_devices as _room_devices
+
+    try:
+        await _room_devices.registry(app).refresh()
+    except Exception as e:  # noqa: BLE001 — filled in as devices say hello
+        log.warning("rooms: could not load the satellites' rooms: %s", e)
     # sdk.speech.render reads each room's voice from here (SDK 1.9).
     _sdk_speech.bind_room_voices(lambda: app.state.satellite_voice)
 
@@ -3217,6 +3227,26 @@ async def admin_dropin_end(body: _AdminDropInEndBody) -> dict[str, Any]:
     return {"ended": True, "peer": peer_room}
 
 
+def _live_device(any_id: str) -> Any | None:
+    """The live session of a satellite by its id, else the speaker of the
+    room by that id (1.5.0, domovoi/room_devices.py). The device routes
+    take a satellite id; every device from before 1.5.0 has its room's."""
+    from domovoi import room_devices
+
+    return room_devices.registry(app).session_for(any_id)
+
+
+def _live_devices() -> list[Any]:
+    """Every live satellite session once (a fan-out to devices, not rooms)."""
+    from domovoi import room_devices
+
+    reg = room_devices.registry(app)
+    seen: dict[int, Any] = {}
+    for sess in [*reg.satellites.values(), *reg.sessions.values()]:
+        seen.setdefault(id(sess), sess)
+    return list(seen.values())
+
+
 def _require_declared(target: Any, ability: str, what: str) -> None:
     """409 when the connected device's hello declared `supports` without
     ``ability`` (domovoi/satellite_abilities.py): the action is a frame it
@@ -3254,7 +3284,7 @@ async def admin_satellite_restart(body: _AdminSatelliteRestartBody) -> dict[str,
     sessions: dict[str, Any] = app.state.active_sessions
     if not sessions:
         raise HTTPException(status_code=503, detail="no rooms connected")
-    target = sessions.get(body.room_id)
+    target = _live_device(body.room_id)
     if target is None:
         raise HTTPException(
             status_code=404, detail=f"room {body.room_id!r} not connected"
@@ -3304,7 +3334,7 @@ async def admin_satellite_set_volume(body: _AdminSetVolumeBody) -> dict[str, Any
     sessions: dict[str, Any] = app.state.active_sessions
     if not sessions:
         raise HTTPException(status_code=503, detail="no rooms connected")
-    target = sessions.get(body.room_id)
+    target = _live_device(body.room_id)
     if target is None:
         raise HTTPException(
             status_code=404, detail=f"room {body.room_id!r} not connected"
@@ -3354,7 +3384,7 @@ async def admin_satellite_display(body: _AdminSatelliteDisplayBody) -> dict[str,
     sessions: dict[str, Any] = app.state.active_sessions
     if not sessions:
         raise HTTPException(status_code=503, detail="no rooms connected")
-    target = sessions.get(body.room_id)
+    target = _live_device(body.room_id)
     if target is None:
         raise HTTPException(
             status_code=404, detail=f"room {body.room_id!r} not connected"
@@ -3993,7 +4023,7 @@ async def admin_satellite_upgrade(
     sessions: dict[str, Any] = app.state.active_sessions
     if not sessions:
         raise HTTPException(status_code=503, detail="no rooms connected")
-    target = sessions.get(body.room_id)
+    target = _live_device(body.room_id)
     if target is None:
         raise HTTPException(
             status_code=404, detail=f"room {body.room_id!r} not connected"
@@ -4646,7 +4676,7 @@ async def admin_wake_record_start(
     on a send failure."""
     from domovoi.db.repositories import WakeWordsRepository
 
-    target = app.state.active_sessions.get(body.room_id)
+    target = _live_device(body.room_id)
     if target is None:
         raise HTTPException(
             status_code=404, detail=f"room {body.room_id!r} not connected"
@@ -4785,7 +4815,7 @@ async def admin_wake_record_stop(
             if rec is not None and rec.wake_word_id == body.wake_word_id:
                 targets[rid] = sess
     if not targets:
-        target = app.state.active_sessions.get(body.room_id)
+        target = _live_device(body.room_id)
         if target is None:
             raise HTTPException(
                 status_code=404, detail=f"room {body.room_id!r} not connected"
@@ -4817,7 +4847,7 @@ async def admin_wake_push(body: _AdminWakePushBody) -> dict[str, Any]:
     502 on a send failure."""
     from domovoi.db.repositories import WakeWordsRepository
 
-    target = app.state.active_sessions.get(body.room_id)
+    target = _live_device(body.room_id)
     if target is None:
         raise HTTPException(
             status_code=404, detail=f"room {body.room_id!r} not connected"
@@ -4925,7 +4955,7 @@ async def admin_wake_room(body: _AdminWakeRoomBody) -> dict[str, Any]:
         slugs = wake_default.check_word_list(body.slugs)
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
-    target = app.state.active_sessions.get(body.room_id)
+    target = _live_device(body.room_id)
     if target is None:
         raise HTTPException(status_code=404, detail=f"room {body.room_id!r} not connected")
     _require_declared(target, "wake_models", "a wake-word model")
@@ -5017,7 +5047,7 @@ async def admin_wake_use(body: _AdminWakeUseBody) -> dict[str, Any]:
     slug = body.slug.strip()
     if slug not in wake_default.BUILTIN_WORDS and slug not in wake_default.PUBLISHED:
         raise HTTPException(status_code=404, detail=f"no built-in or published word {slug!r}")
-    target = app.state.active_sessions.get(body.room_id)
+    target = _live_device(body.room_id)
     if target is None:
         raise HTTPException(status_code=404, detail=f"room {body.room_id!r} not connected")
     _require_declared(target, "wake_models", "a wake-word model")
@@ -5433,7 +5463,7 @@ async def admin_get_satellite_config(room_id: str) -> dict[str, Any]:
     from domovoi.config_schema import widget_payload
     from domovoi.satellite_config_schema import EDITABLE_FIELDS
 
-    target = app.state.active_sessions.get(room_id)
+    target = _live_device(room_id)
     if target is None:
         raise HTTPException(status_code=404, detail=f"room {room_id!r} not connected")
     # A device that declared `supports` (S0) is shown only the settings it
@@ -5471,7 +5501,7 @@ class _AdminMicDspMarkBody(BaseModel):
 
 
 def _mic_dsp_target(room_id: str) -> Any:
-    target = app.state.active_sessions.get(room_id)
+    target = _live_device(room_id)
     if target is None:
         raise HTTPException(status_code=404, detail=f"room {room_id!r} not connected")
     # Declared only: an older satellite, a 2-Mic HAT or a spare computer
@@ -5615,7 +5645,7 @@ async def admin_update_satellite_config(
         spec_for_board,
     )
 
-    target = app.state.active_sessions.get(room_id)
+    target = _live_device(room_id)
     if target is None:
         raise HTTPException(status_code=404, detail=f"room {room_id!r} not connected")
     _require_declared(target, "config", "remote settings")
@@ -5729,7 +5759,7 @@ async def admin_get_satellite_logs(
         except Exception as e:  # noqa: BLE001 — V022 missing or DB down
             log.debug("last outage for %s unavailable: %s", room_id, e)
 
-    target = app.state.active_sessions.get(room_id)
+    target = _live_device(room_id)
     # A connected device whose hello declared `supports` without "logs"
     # (S0) has no ring to pull: it is answered like an offline room, with
     # what the core retains, and `live_supported: false` says why.
@@ -5905,7 +5935,7 @@ async def admin_get_satellite_health(room_id: str) -> dict[str, Any]:
         log.debug("satellite health history for %s unavailable: %s", room_id, e)
     return {
         "room_id": room_id,
-        "connected": room_id in app.state.active_sessions,
+        "connected": _live_device(room_id) is not None,
         "latest": latest,
         "last_outage": last_outage,
         "outages": outages,
@@ -5935,6 +5965,49 @@ async def admin_satellite_approvals() -> list[dict[str, Any]]:
 
 class _ApproveSatelliteBody(BaseModel):
     code: str = Field(default="", max_length=64)
+    # 1.5.0, "Which room is it in?": an existing room's id, or a name for a
+    # new room. Neither: the room the device asked for when that room
+    # exists, else a room of its own named by its id (as before 1.5.0).
+    room_id: str | None = Field(default=None, max_length=120)
+    new_room_name: str | None = Field(default=None, max_length=120)
+
+
+class _RoomChoiceRefused(Exception):
+    def __init__(self, status: int, detail: str) -> None:
+        super().__init__(detail)
+        self.status, self.detail = status, detail
+
+
+async def _room_choice(
+    s: Any, room_id: str | None, new_room_name: str | None
+) -> tuple[str | None, bool]:
+    """``(room id, created)`` for a room picker's answer: an existing room
+    (404 when it isn't one), or a new room made from the name. ``(None,
+    False)`` when neither was given."""
+    from domovoi import room_devices
+    from domovoi.db.repositories import RoomsRepository
+
+    if room_id is not None and new_room_name is not None:
+        raise _RoomChoiceRefused(422, "send room_id or new_room_name, not both")
+    rooms = RoomsRepository(s)
+    if room_id is not None:
+        if not room_ids.is_room_id(room_id):
+            raise _RoomChoiceRefused(422, "not a room id")
+        if await rooms.get(room_id) is None:
+            raise _RoomChoiceRefused(404, f"no room {room_id!r}")
+        return room_id, False
+    if new_room_name is not None:
+        name = new_room_name.strip()
+        if not name:
+            raise _RoomChoiceRefused(422, "a new room needs a name")
+        rid = await room_devices.new_room_id(s, name)
+        await rooms.create(rid, name)
+        return rid, True
+    return None, False
+
+
+class _ApprovalNotTaken(Exception):
+    """Rolls the room choice back when the approval did not go through."""
 
 
 # Five tries per room per five minutes. Six digits is a million
@@ -6025,14 +6098,48 @@ async def admin_satellite_approve(
             status_code=400,
             detail="send the numeric code the room device is showing",
         )
+    if body.room_id is not None and body.new_room_name is not None:
+        raise HTTPException(status_code=422, detail="send room_id or new_room_name, not both")
     if not APPROVAL_CODE_LIMITER.allow(f"approve:{room_id}"):
         log.warning("pairing: room=%s approval attempts throttled", room_id)
         # The sentence, and why it says what it says, live on
         # approval_throttled_detail() — one definition the dashboard's
         # tests can send through the real rendering path.
         raise HTTPException(status_code=429, detail=approval_throttled_detail())
-    async with session_scope() as s:
-        result = await SatelliteApprovalRepository(s).approve(room_id, code)
+    from domovoi import room_devices
+
+    into: str | None = None
+    try:
+        async with session_scope() as s:
+            try:
+                into, _created = await _room_choice(s, body.room_id, body.new_room_name)
+            except _RoomChoiceRefused as e:
+                raise HTTPException(status_code=e.status, detail=e.detail) from None
+            if into is None:
+                pending = await SatelliteApprovalRepository(s).get(room_id)
+                asked = (pending or {}).get("requested_room")
+                if asked and await RoomsRepository(s).get(asked) is not None:
+                    into = asked
+            if into is not None:
+                why = await room_devices.tokenless_refusal(
+                    s, into, [room_id], paired={room_id})
+                if why is not None:
+                    raise HTTPException(status_code=409, detail=why)
+            result = await SatelliteApprovalRepository(s).approve(room_id, code, into=into)
+            if result not in ("approved", "entered"):
+                # Nothing bound: a room made for it and the choice go too.
+                raise _ApprovalNotTaken(result)
+    except _ApprovalNotTaken as e:
+        result = str(e)
+    where = into
+    if result == "approved":
+        try:
+            async with session_scope() as s:
+                where = await SatellitesRepository(s).room_of(room_id) or into
+        except Exception as e:  # noqa: BLE001 — the device's hello says it again
+            log.debug("rooms: could not read %s's room after approval: %s", room_id, e)
+        if where is not None:
+            room_devices.registry(app).note(room_id, where)
     if result == "not_pending":
         raise HTTPException(status_code=409, detail="nothing pending for that room")
     if result == "no_code":
@@ -6053,7 +6160,8 @@ async def admin_satellite_approve(
             "pairing: room=%s code typed; waiting for the device to confirm it",
             room_id,
         )
-        return {"approved": False, "waiting_for_device": True, "room_id": room_id}
+        return {"approved": False, "waiting_for_device": True, "room_id": room_id,
+                "satellite_id": room_id, "into_room_id": into}
     if result == "malformed":
         raise HTTPException(
             status_code=422,
@@ -6072,8 +6180,9 @@ async def admin_satellite_approve(
                 "room device is showing and saying, and try again"
             ),
         )
-    log.info("pairing: room=%s APPROVED by an operator", room_id)
-    return {"approved": True, "room_id": room_id}
+    log.info("pairing: room=%s APPROVED by an operator (into %s)", room_id, where)
+    return {"approved": True, "room_id": room_id, "satellite_id": room_id,
+            "into_room_id": where}
 
 
 @app.get(
@@ -6304,6 +6413,10 @@ async def admin_delete_satellite(
         if purge:
             removed_approval = await SatelliteApprovalRepository(s).reject(room_id)
 
+    if removed_meta:
+        from domovoi import room_devices
+
+        room_devices.registry(app).note(room_id, None)
     removed_mpd = {}
     if purge and provisioned is not None:
         from domovoi import mpd_provisioner
@@ -6359,6 +6472,252 @@ async def admin_set_satellite_label(
     return {"room_id": room_id, "room_label": label or None}
 
 
+# ─── Rooms and their satellites (1.5.0) ─────────────────────────────────────
+#
+# A room is the place, a satellite a device in one room (V072,
+# domovoi/room_devices.py). The read is the household's (the Rooms screens
+# on the phones and the web); changing which device is in which room, and
+# naming or removing rooms, is the admin's. Spec: docs/API_REFERENCE.md,
+# "Rooms and satellites".
+
+
+# The drawer's writes: the admin tier, and ids in the path that follow the
+# one id rule (domovoi/room_ids.py), answered 422 before anything is read.
+_ROOM_ADMIN = [Depends(require_admin_mutation), Depends(require_id_paths)]
+
+
+class _RoomNameBody(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+
+
+class _SatelliteNameBody(BaseModel):
+    # null or blank clears the display name.
+    name: str | None = Field(default=None, max_length=120)
+
+
+class _MoveSatelliteBody(BaseModel):
+    room_id: str | None = Field(default=None, max_length=120)
+    new_room_name: str | None = Field(default=None, max_length=120)
+
+
+class _MergeRoomsBody(BaseModel):
+    rooms: list[str] = Field(..., min_length=1, max_length=50)
+
+
+def _satellite_view(row: dict[str, Any]) -> dict[str, Any]:
+    from domovoi import room_devices
+
+    reg = room_devices.registry(app)
+    sid = row["satellite_id"]
+    live = reg.satellites.get(sid)
+    if live is None:
+        speaker = reg.sessions.get(row["room_id"])
+        live = speaker if getattr(speaker, "satellite_id", None) == sid else None
+    return {
+        "satellite_id": sid,
+        "name": row.get("name"),
+        "sat_type": row.get("sat_type"),
+        "board": row.get("board"),
+        "paired": bool(row.get("paired")),
+        "connected": live is not None,
+        "speaks_for_room": live is not None and reg.sessions.get(row["room_id"]) is live,
+    }
+
+
+async def _rooms_payload(s: Any) -> dict[str, Any]:
+    from domovoi import room_devices
+
+    reg = room_devices.registry(app)
+    repo = RoomsRepository(s)
+    rooms = await repo.list()
+    devices = (await s.execute(text(
+        "SELECT s.satellite_id, s.room_id, s.name, s.sat_type, s.board, "
+        "(p.satellite_id IS NOT NULL) AS paired FROM satellites s "
+        "LEFT JOIN satellite_pairings p USING (satellite_id) ORDER BY s.satellite_id"
+    ))).mappings().all()
+    by_room: dict[str, list[dict[str, Any]]] = {}
+    for d in devices:
+        reg.note(d["satellite_id"], d["room_id"])
+        by_room.setdefault(d["room_id"], []).append(_satellite_view(dict(d)))
+    out = []
+    names: dict[str, list[dict[str, Any]]] = {}
+    for r in rooms:
+        sats = by_room.get(r["room_id"], [])
+        out.append({
+            "room_id": r["room_id"],
+            "name": r["name"],
+            "satellites": sats,
+            "shared": len(sats) > 1,
+            "linked_rooms": await repo.linked(r["room_id"]),
+        })
+        names.setdefault(r["name"].strip().casefold(), []).append(r)
+    # Rooms that share a name (label-grouped before 1.5.0): offered as a
+    # merge, never merged on their own (owner answer Q11).
+    offers = [{"name": rs[0]["name"], "rooms": [r["room_id"] for r in rs]}
+              for rs in names.values() if len(rs) > 1]
+    return {"rooms": out, "merge_offers": offers}
+
+
+@app.get("/v1/admin/rooms", dependencies=[Depends(require_device_read)])
+async def admin_list_rooms() -> dict[str, Any]:
+    """Every room with its satellites, and the merges on offer."""
+    async with session_scope() as s:
+        return await _rooms_payload(s)
+
+
+@app.post("/v1/admin/rooms", dependencies=[Depends(require_admin_mutation)])
+async def admin_create_room(body: _RoomNameBody) -> dict[str, Any]:
+    """Add an empty room ("Add a room"); its id comes from the name."""
+    from domovoi import room_devices
+
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="a room needs a name")
+    async with session_scope() as s:
+        rid = await room_devices.new_room_id(s, name)
+        await RoomsRepository(s).create(rid, name)
+    return {"room_id": rid, "name": name}
+
+
+@app.patch("/v1/admin/rooms/{room_id}", dependencies=_ROOM_ADMIN)
+async def admin_rename_room(room_id: str, body: _RoomNameBody) -> dict[str, Any]:
+    """Rename a room. Its id never changes."""
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="a room needs a name")
+    async with session_scope() as s:
+        if not await RoomsRepository(s).rename(room_id, name):
+            raise HTTPException(status_code=404, detail=f"no room {room_id!r}")
+    return {"room_id": room_id, "name": name}
+
+
+@app.delete("/v1/admin/rooms/{room_id}", dependencies=_ROOM_ADMIN)
+async def admin_delete_room(room_id: str) -> dict[str, Any]:
+    """Delete an EMPTY room (409 while it has satellites: move them
+    first). Its history keeps the id."""
+    async with session_scope() as s:
+        result = await RoomsRepository(s).delete(room_id)
+    if result == "missing":
+        raise HTTPException(status_code=404, detail=f"no room {room_id!r}")
+    if result == "has_satellites":
+        raise HTTPException(
+            status_code=409, detail="the room still has satellites — move them first")
+    return {"room_id": room_id, "deleted": True}
+
+
+async def _after_moves(moves: list[tuple[str, str]]) -> list[str]:
+    """Tell the registry (and through it room playout) and each moved live
+    device; returns the ids that were live."""
+    from domovoi import room_devices
+
+    reg = room_devices.registry(app)
+    live: list[str] = []
+    for sid, room in moves:
+        sess = reg.moved(sid, room)
+        if sess is not None:
+            live.append(sid)
+            try:
+                await sess.moved_to(room)
+            except Exception as e:  # noqa: BLE001 — it reconnects into the new room
+                log.warning("rooms: telling %s about its move failed: %s", sid, e)
+    return live
+
+
+@app.post("/v1/admin/rooms/{room_id}/merge", dependencies=_ROOM_ADMIN)
+async def admin_merge_rooms(room_id: str, body: _MergeRoomsBody) -> dict[str, Any]:
+    """Move every satellite of ``rooms`` into this room and delete those
+    rooms. Only ever on an admin's request (the list offers merges). The
+    moved devices drop their learned voice samples, like any move."""
+    from domovoi import room_devices
+    from domovoi.db.repositories import VoiceProfilesRepository
+
+    others = [r for r in dict.fromkeys(body.rooms) if r != room_id]
+    if not all(room_ids.is_room_id(r) for r in others):
+        raise HTTPException(status_code=422, detail="not a room id")
+    if not others:
+        raise HTTPException(status_code=422, detail="name at least one other room")
+    async with session_scope() as s:
+        rooms = RoomsRepository(s)
+        for r in (room_id, *others):
+            if await rooms.get(r) is None:
+                raise HTTPException(status_code=404, detail=f"no room {r!r}")
+        joining = [
+            d["satellite_id"] for r in others
+            for d in await SatellitesRepository(s).in_room(r)
+        ]
+        why = await room_devices.tokenless_refusal(s, room_id, joining)
+        if why is not None:
+            raise HTTPException(status_code=409, detail=why)
+        moved = await rooms.merge(room_id, others)
+        dropped = 0
+        for sid in moved:
+            dropped += await VoiceProfilesRepository(s).drop_learned_by(sid)
+            # Calibration belongs to the room around the device.
+            await s.execute(text(
+                "UPDATE satellites SET output_latency_us = NULL, calibrated_at = NULL "
+                "WHERE satellite_id = :s"), {"s": sid})
+    await _after_moves([(sid, room_id) for sid in moved])
+    log.info("rooms: merged %s into %s (moved %s)", others, room_id, moved)
+    return {"room_id": room_id, "merged": others, "moved_satellites": moved,
+            "learned_samples_dropped": dropped}
+
+
+@app.post(
+    "/v1/admin/satellites/{satellite_id}/room",
+    dependencies=_ROOM_ADMIN,
+)
+async def admin_move_satellite(satellite_id: str, body: _MoveSatelliteBody) -> dict[str, Any]:
+    """Move a satellite to another room (an existing one, or a new one by
+    name). Its id never changes and its history stays where it happened;
+    its learned voice samples are dropped (enrolled ones kept, owner
+    answer Q7) and its speaker calibration cleared. A connected 1.5.0
+    device gets a ``room`` frame; an older one is closed 1001 and comes
+    back into the new room."""
+    from domovoi import room_devices
+    from domovoi.db.repositories import VoiceProfilesRepository
+
+    if (body.room_id is None) == (body.new_room_name is None):
+        raise HTTPException(status_code=422, detail="send room_id or new_room_name")
+    if body.room_id is not None and not room_ids.is_room_id(body.room_id):
+        raise HTTPException(status_code=422, detail="not a room id")
+    async with session_scope() as s:
+        sats = SatellitesRepository(s)
+        before = await sats.room_of(satellite_id)
+        if before is None:
+            raise HTTPException(status_code=404, detail=f"no satellite {satellite_id!r}")
+        try:
+            target, _created = await _room_choice(s, body.room_id, body.new_room_name)
+        except _RoomChoiceRefused as e:
+            raise HTTPException(status_code=e.status, detail=e.detail) from None
+        if target is None or target == before:
+            return {"satellite_id": satellite_id, "room_id": before,
+                    "from_room_id": before, "moved": False,
+                    "learned_samples_dropped": 0, "connected": False}
+        why = await room_devices.tokenless_refusal(s, target, [satellite_id])
+        if why is not None:
+            raise HTTPException(status_code=409, detail=why)
+        await sats.move(satellite_id, target)
+        dropped = await VoiceProfilesRepository(s).drop_learned_by(satellite_id)
+    live = await _after_moves([(satellite_id, target)])
+    log.info("rooms: moved %s from %s to %s (%d learned samples dropped)",
+             satellite_id, before, target, dropped)
+    return {"satellite_id": satellite_id, "room_id": target, "from_room_id": before,
+            "moved": True, "learned_samples_dropped": dropped, "connected": bool(live)}
+
+
+@app.patch(
+    "/v1/admin/satellites/{satellite_id}/name",
+    dependencies=_ROOM_ADMIN,
+)
+async def admin_name_satellite(satellite_id: str, body: _SatelliteNameBody) -> dict[str, Any]:
+    """Give a satellite a display name ("Kitchen phone"); null clears it."""
+    name = (body.name or "").strip() or None
+    async with session_scope() as s:
+        if not await SatellitesRepository(s).set_name(satellite_id, name):
+            raise HTTPException(status_code=404, detail=f"no satellite {satellite_id!r}")
+    return {"satellite_id": satellite_id, "name": name}
+
+
 async def _run_sounds_regenerate() -> None:
     """Render all registered voices' clips, refresh greeting phrases, and tell
     connected satellites to re-sync. Serialized by a lock so overlapping
@@ -6371,7 +6730,7 @@ async def _run_sounds_regenerate() -> None:
         # to strip a bled-in greeting from transcripts.
         app.state.greeting_phrases, app.state.greeting_clips = await load_greeting_bank()
         notified: list[str] = []
-        for sess in list(app.state.active_sessions.values()):
+        for sess in _live_devices():
             try:
                 await sess.notify_sounds_changed()
                 notified.append(sess.room_id)

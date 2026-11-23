@@ -469,7 +469,9 @@ def test_pairing_auth_refuses_a_missing_token_in_any_pairing_mode(monkeypatch) -
         assert asyncio.run(S.pairing_auth("kitchen", "")) is False
 
 
-@pytest.mark.parametrize("sid", ["Kitchen", "kitchen-2", "2kitchen", "k" * 33, "kitchen%0A"])
+# "kitchen-2" and "2kitchen" are ids the setup portal makes, so the stream
+# socket takes them (domovoi/room_ids.py) and this socket does too.
+@pytest.mark.parametrize("sid", ["Kitchen", "-kitchen", "kitchen.2", "k" * 33, "kitchen%0A"])
 def test_socket_refuses_a_malformed_satellite_id(sid: str) -> None:
     playout = RoomPlayout(InMemoryRoomRegistry(), run_tasks=False)
     client = TestClient(_app(playout, {sid: "tok"}))
@@ -481,9 +483,11 @@ def test_socket_refuses_a_malformed_satellite_id(sid: str) -> None:
 
 
 def test_satellite_id_rule_matches_the_core() -> None:
-    from domovoi.main import _ROOM_ID_RE
+    # One rule for device and room ids (domovoi/room_ids.py), so the
+    # room-audio socket and the stream socket can't drift apart.
+    from domovoi import room_ids
 
-    assert P.SATELLITE_ID_RE.pattern == _ROOM_ID_RE.pattern
+    assert P.is_satellite_id is room_ids.is_room_id
 
 
 def test_idle_streamers_are_dropped_once_no_one_listens() -> None:

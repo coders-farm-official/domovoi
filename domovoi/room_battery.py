@@ -468,7 +468,9 @@ def session_speaker(app: Any) -> Speaker:
     from domovoi.timer_delivery import AnnounceInterrupted, AnnounceNotStarted
 
     async def speak(room_id: str, words: str) -> bool | None:
-        session = (getattr(app.state, "active_sessions", None) or {}).get(room_id)
+        from domovoi import room_devices
+
+        session = room_devices.registry(app).session_for(room_id)
         if session is None:
             return False
         try:

@@ -35,7 +35,10 @@ class _FakeApprovals:
     def __init__(self, session: Any) -> None:
         pass
 
-    async def approve(self, room_id: str, code: str) -> str:
+    async def get(self, room_id: str) -> None:
+        return None  # 1.5.0: no room asked for
+
+    async def approve(self, room_id: str, code: str, *, into: str | None = None) -> str:
         type(self).calls.append(("approve", room_id))
         return "approved"
 
@@ -88,7 +91,8 @@ async def test_after_setup_an_admin_still_approves(monkeypatch, repo) -> None:
     install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN})
     r = await _core_post(APPROVE, bearer(ADMIN_TOKEN), json={"code": "123456"})
     assert r.status_code == 200, r.text
-    assert r.json() == {"approved": True, "room_id": ROOM}
+    assert r.json() == {"approved": True, "room_id": ROOM, "satellite_id": ROOM,
+                        "into_room_id": None}
     r = await _core_post(REJECT, bearer(ADMIN_TOKEN))
     assert r.status_code == 200, r.text
     assert repo.calls == [("approve", ROOM), ("reject", ROOM)]
