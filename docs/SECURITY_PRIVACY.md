@@ -2953,12 +2953,16 @@ history keeps a stand-in ("I read 2 friend house messages aloud"), and
 or a shared list.
 
 **Shared lists.** An admin can share a household list with a friend house.
+Anyone in the household (the household token or an admin) can then use
+it, accept or decline a list a friend offers, and stop sharing; making
+and removing friends stays with the admin.
 Each house keeps its own copy in its own Lists, and the two exchange
 signed changes (items added, edited, ticked off, removed; not its order
 or who in the house did what). The list's name goes with the first change,
 as the title the friend sees on the offer. A friend's changes can
 only touch the one list its share is linked to here. A list a friend
-offers waits for an admin to accept it, and declining tells nobody. Text a
+offers waits for someone in the household to accept it, and declining
+tells nobody. Text a
 friend adds to a list is cleaned, cut at 200 characters, and has every
 wake phrase taken out before it is stored, because the Lists voice
 handler reads items aloud. Either house can stop sharing at any time;

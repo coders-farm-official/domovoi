@@ -205,6 +205,12 @@ a way that would otherwise get reported as a bug.
   room when its own quiet hours end, if they are still unread (once per
   room); Home's "needs attention" counts unread Friend Houses messages and
   links to them; and the Friend Houses page now starts with Messages.
+- Friend Houses: the page is open to everyone in the household. Messages
+  and Shared lists (taking, declining and stopping a shared list with an
+  existing friend) need only the household's paired browser or phone;
+  starting a share stays with the admin. Requests, friend files, this
+  house, the friends list and blocking sit in a "Friends and connections"
+  section at the bottom that asks for the admin sign-in when opened.
 - A guest's "play this one" on a room that stopped in the meantime is
   refused, so a guest never starts a stopped room.
 - A room's queue looks up the songs it can't place by path in one query
