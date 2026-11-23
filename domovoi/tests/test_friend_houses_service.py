@@ -113,6 +113,11 @@ def house(tmp_path, monkeypatch):
     monkeypatch.setattr(svc, "firewall_state", lambda: "in_place")
     monkeypatch.setitem(svc._STATE, "applied", None)
     monkeypatch.setitem(svc._STATE, "last_reload", 0.0)
+    # "Came online" is read from was_on: a test that ran earlier in this
+    # worker (any order under xdist) must not leave the house already on.
+    monkeypatch.setitem(svc._STATE, "was_on", False)
+    monkeypatch.setitem(svc._STATE, "onion", None)
+    monkeypatch.setitem(svc._STATE, "pairing", None)
     monkeypatch.setattr(settings, "friend_houses_enabled", False, raising=False)
     policy = {"value": "always"}
     monkeypatch.setattr(egress, "policy", lambda: policy["value"])
