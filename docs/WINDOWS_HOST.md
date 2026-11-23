@@ -239,9 +239,11 @@ opens it); a network folder doesn't.
    `kit.json` doesn't account for, and no package folder under `apt\`
    with a name apt doesn't use, in the kit checker's words
    ([OFFLINE_KIT.md, What the checks prove](OFFLINE_KIT.md#what-the-checks-prove)).
-   Only the system's own folders and files at the top of the drive
-   (`System Volume Information`, `$RECYCLE.BIN` and the few others listed
-   there) are let be, and only when the kit is the drive itself.
+   The system's own files (`.DS_Store`, `Thumbs.db`, `desktop.ini`, `._*`
+   and the like) are let be in any folder as plain files, and its own
+   folders (`System Volume Information`, `$RECYCLE.BIN` and the few others
+   listed there) only at the top of the drive, when the kit is the drive
+   itself.
 3. **The release signature.** `release\DomovoiSetup.manifest.json` must be
    signed with Domovoi's release key, the one this Setup already pins for
    the Windows update ([The release key](#the-release-key)), name the

@@ -330,8 +330,8 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
   links and unlisted folders, and Windows Setup refuses such a stick
   before it uses anything on it, naming what it found (links and
   junctions, entries kit.json doesn't account for, an odd package
-  folder name; only the system's own folders at a drive's top are let
-  be); Whisper's files come off a stick only by
+  folder name; only the system's own files, and its own folders at a
+  drive's top, are let be); Whisper's files come off a stick only by
   name (L39). Windows Setup deletes its copy of the house identity
   backup once the restore is recorded (L42).
 - **What to know.** The first update check after upgrading pins each

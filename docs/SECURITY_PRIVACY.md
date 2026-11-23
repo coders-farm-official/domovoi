@@ -5137,13 +5137,15 @@ kit.json doesn't account for are refused in the checker's words, and an
 apt suite or component folder outside `^[a-z0-9][a-z0-9.+-]{0,63}$` is
 refused even when kit.json lists it (kit.json itself is not signed). The
 refusal is one message in Setup's "This offline kit can't be used"
-dialog that names up to five entries. The only entries let be are the
-operating system's own (`System Volume Information`, `$RECYCLE.BIN`,
-`.Trashes`, `.Spotlight-V100`, `.fseventsd`, `.TemporaryItems`,
-`.DocumentRevisions-V100`, `lost+found`; `.DS_Store`, `Thumbs.db`,
-`desktop.ini`, `.metadata_never_index`), and only at the top of the drive
-when the kit is the drive itself; the same names anywhere else are
-refused. provision.sh then holds the package folders again, as below.
+dialog that names up to five entries. The only entries let be, never
+read or copied, are the operating system's own: its files (`.DS_Store`,
+`Thumbs.db`, `desktop.ini`, `.metadata_never_index`, `._*`, as the
+checker) in any folder, only as plain files (a link or folder with such a
+name is refused); and its folders (`System Volume Information`,
+`$RECYCLE.BIN`, `.Trashes`, `.Spotlight-V100`, `.fseventsd`,
+`.TemporaryItems`, `.DocumentRevisions-V100`, `lost+found`) only at the
+top of the drive when the kit is the drive itself (deeper down they are
+refused). provision.sh then holds the package folders again, as below.
 
 **The kit's packages go through apt's signature check.** Each suite and
 component of the kit's Ubuntu packages is a folder name on the stick, and

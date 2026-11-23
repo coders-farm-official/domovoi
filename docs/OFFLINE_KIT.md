@@ -300,16 +300,15 @@ SHA256SUMS` checks every file too.
   changed. The checker names each one; Windows Setup refuses the kit,
   naming them, before it uses anything on it; the Linux installers stop
   at a linked or oddly named package folder. What an operating system
-  puts on a stick by itself is let be: the checker lets be its folders
-  (`System Volume Information`, `$RECYCLE.BIN`, `.Trashes`,
-  `.Spotlight-V100`, `.fseventsd`, `.TemporaryItems`,
-  `.DocumentRevisions-V100`, `lost+found`) at the kit's top and its files
+  puts on a stick by itself is let be, and never read: its files
   (`.DS_Store`, `Thumbs.db`, `desktop.ini`, `.metadata_never_index`, `._*`)
-  anywhere. Windows Setup is stricter: it lets those same folders and the
-  same files (not `._*`) be only at the top of the drive, when the kit is
-  the drive itself, and nowhere else. A stick opened in a Mac's Finder
-  can gain a `.DS_Store` in each folder it showed; Setup then names it, and
-  deleting those files (or making the stick again) is the fix.
+  in any folder, as long as each is a plain file (a link or a folder with
+  such a name is still refused), so a stick opened in a Mac's Finder or
+  Windows' Explorer still passes; and its folders (`System Volume
+  Information`, `$RECYCLE.BIN`, `.Trashes`, `.Spotlight-V100`,
+  `.fseventsd`, `.TemporaryItems`, `.DocumentRevisions-V100`,
+  `lost+found`) at the kit's top for the checker, and for Windows Setup
+  only at the top of the drive, when the kit is the drive itself.
 - **It is a Domovoi release.** The installers in `release/` come with the
   release's signed manifest. The check verifies that signature with
   Domovoi's release key (the same key the Linux, Windows and Mac

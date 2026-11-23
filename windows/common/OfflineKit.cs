@@ -16,9 +16,10 @@
 //      kit.json doesn't account for (the rules and words of the Python
 //      checker, domovoi/offline_kit/checker.py _unlisted), and the apt
 //      suite and component folders named as provision.sh's kit_apt_name
-//      allows. Only when the kit is a drive's root are the folders and
-//      files an operating system puts there by itself let be (OsRootDirs,
-//      OsRootFiles), and only at that root.
+//      allows. The files an operating system leaves in any folder
+//      (OsFiles, ._*) are let be wherever they are, as plain files only;
+//      the folders it puts at a drive's root (OsRootDirs) only there, and
+//      only when the kit is that drive's root.
 //   3. The release signature: release\DomovoiSetup.manifest.json signed with
 //      the release key this Setup pins (SshSig, the same check as the
 //      Windows update), naming the tag and commit kit.json names, and that
@@ -511,25 +512,36 @@ namespace Domovoi.Windows
             return r;
         }
 
-        // What an operating system puts at a drive's root by itself
-        // (Windows, a Mac, Linux's fsck), let be only there, and only when
-        // the kit is the drive's root: the same names as the Python
-        // checker's OS_LITTER_DIRS and OS_LITTER_FILES
-        // (domovoi/offline_kit/format.py). Nothing else is let be.
+        // What an operating system leaves on a stick by itself (Windows, a
+        // Mac's Finder, Linux's fsck), the same names as the Python
+        // checker's OS_LITTER_DIRS and is_os_litter
+        // (domovoi/offline_kit/format.py). The folders are let be only at
+        // a drive's root, when the kit is that root; the files in any
+        // folder, as plain files only (never a link, never a folder).
+        // Neither is ever read or copied. Nothing else is let be.
         public static readonly string[] OsRootDirs = {
             "System Volume Information", "$RECYCLE.BIN", ".Trashes", ".Spotlight-V100",
             ".fseventsd", ".TemporaryItems", ".DocumentRevisions-V100", "lost+found",
         };
-        public static readonly string[] OsRootFiles = { ".DS_Store", "Thumbs.db", "desktop.ini", ".metadata_never_index" };
+        public static readonly string[] OsFiles = { ".DS_Store", "Thumbs.db", "desktop.ini", ".metadata_never_index" };
 
         // An apt suite or component folder's name (provision.sh and
         // install.sh kit_apt_name): it goes into apt's source stanza as is.
         static readonly Regex AptName = new Regex("^[a-z0-9][a-z0-9.+-]{0,63}\\z");
 
-        static bool OsRootEntry(string name, bool dir)
+        static bool OsRootDir(string name)
         {
-            foreach (string n in dir ? OsRootDirs : OsRootFiles)
+            foreach (string n in OsRootDirs)
                 if (string.Equals(n, name, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+
+        // The checker's is_os_litter: one of OsFiles, or a Mac's ._ file.
+        public static bool OsFile(string name)
+        {
+            if (name.StartsWith("._", StringComparison.Ordinal)) return true;
+            foreach (string n in OsFiles)
+                if (string.Equals(n, name, StringComparison.Ordinal)) return true;
             return false;
         }
 
@@ -556,7 +568,7 @@ namespace Domovoi.Windows
         // kit; and apt suite or component folders (apt/<arch>/<source>/
         // dists/<suite>[/<component>]) with a name apt's source stanza
         // can't take. driveRoot: the kit is a drive's root, so the
-        // operating system's own entries there are let be. Read-only.
+        // operating system's own folders there are let be. Read-only.
         public static List<string> Unaccounted(string root, KitIndex k, bool driveRoot)
         {
             var listed = new HashSet<string>(k.Stored, StringComparer.Ordinal) { KitJson, Sums };
@@ -588,7 +600,7 @@ namespace Domovoi.Windows
                     if (dir)
                     {
                         if (link) { found.Add(Shown(rel) + " is a link, which a kit never holds."); continue; }
-                        if (at.Key.Length == 0 && driveRoot && OsRootEntry(e.Name, true)) continue;
+                        if (at.Key.Length == 0 && driveRoot && OsRootDir(e.Name)) continue;
                         string[] parts = rel.Split('/');
                         if ((parts.Length == 5 || parts.Length == 6) && parts[0] == "apt" && parts[3] == "dists" && !AptName.IsMatch(e.Name))
                             found.Add("The package folder " + Shown(rel) + "/ has a name a kit never uses.");
@@ -596,7 +608,7 @@ namespace Domovoi.Windows
                         subdirs.Add(new KeyValuePair<string, string>(rel, e.FullName));
                         continue;
                     }
-                    if (at.Key.Length == 0 && driveRoot && !link && OsRootEntry(e.Name, false)) continue;
+                    if (!link && (e.Attributes & FileAttributes.Device) == 0 && OsFile(e.Name)) continue;
                     foreach (string d in Parents(rel)) withFiles.Add(d);
                     if (link || (e.Attributes & FileAttributes.Device) != 0)
                         found.Add(Shown(rel) + " is a link or not a plain file, which a kit never holds.");
