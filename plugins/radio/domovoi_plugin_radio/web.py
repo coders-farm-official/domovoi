@@ -1045,9 +1045,15 @@ async def _proxy_stream(url: str) -> StreamingResponse:
 
     client = httpx.AsyncClient(timeout=httpx.Timeout(10.0, read=None))
     try:
-        resp = await net_safety.open_stream(
+        resp = await net_safety.open_raw_stream(
             client, url, headers={"Icy-MetaData": "0"}
         )
+    except net_safety.UnsupportedContentEncoding as e:
+        # A station stream is relayed as it came; a compressed one is not.
+        await client.aclose()
+        raise HTTPException(
+            status_code=502, detail="upstream sent a compressed stream"
+        ) from e
     except net_safety.OutboundFetchError as e:
         await client.aclose()
         raise HTTPException(status_code=409, detail=str(e)) from e
@@ -1081,7 +1087,7 @@ async def _proxy_stream(url: str) -> StreamingResponse:
 
     async def _gen():
         try:
-            async for chunk in resp.aiter_bytes(chunk_size=_STREAM_CHUNK):
+            async for chunk in net_safety.iter_raw(resp, _STREAM_CHUNK):
                 # Switching the box to "never" ends a relay that is
                 # already open (one os.stat per chunk, cached on .env).
                 if egress.check_destination(url) is not None:

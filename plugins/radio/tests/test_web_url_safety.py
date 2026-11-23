@@ -279,6 +279,10 @@ def test_the_proxy_404s_for_a_station_that_is_not_there(proxy_client) -> None:
 # relayed, always as a download-if-navigated, never sniffed.
 
 
+async def _streamed(body: bytes):
+    yield body
+
+
 @pytest.fixture
 def relay_client(monkeypatch):
     """Router over one public station row, with httpx answering from a
@@ -295,21 +299,32 @@ def relay_client(monkeypatch):
         ),
     )
 
-    upstream: dict[str, Any] = {"content_type": None, "body": b"ID3" + b"\x00" * 64}
+    upstream: dict[str, Any] = {
+        "content_type": None, "body": b"ID3" + b"\x00" * 64, "encoding": None,
+    }
     opened: list[str] = []
+    accepted: list[str | None] = []
 
     import httpx
 
     def answer(request: httpx.Request) -> httpx.Response:
         opened.append(str(request.url))
+        accepted.append(request.headers.get("accept-encoding"))
         headers: list[tuple[bytes, bytes]] = []
+        if upstream["encoding"]:
+            headers.append((b"content-encoding", upstream["encoding"].encode("ascii")))
         declared = upstream["content_type"]
         if declared is not None:
             # Bytes go on the wire as they are: how a test sends a type
             # that is not ASCII.
             raw = declared if isinstance(declared, bytes) else declared.encode("ascii")
             headers.append((b"content-type", raw))
-        return httpx.Response(200, headers=headers, content=upstream["body"])
+        body = upstream["body"]
+        if upstream["encoding"]:
+            # Unread, as off the network: a bytes body is decoded when the
+            # response is built.
+            body = _streamed(body)
+        return httpx.Response(200, headers=headers, content=body)
 
     real_client = httpx.AsyncClient
     closed: list[bool] = []
@@ -341,6 +356,7 @@ def relay_client(monkeypatch):
     with TestClient(app) as client:
         client.upstream = upstream
         client.opened = opened
+        client.accepted = accepted
         client.closed = closed
         yield client
 
@@ -404,6 +420,37 @@ def test_the_relay_serves_audio_inert_on_the_dashboard_origin(
     assert resp.headers["content-disposition"] == "attachment"
     assert resp.headers["content-security-policy"] == "sandbox"
     assert resp.content == relay_client.upstream["body"]
+
+
+def _nested_gzip(layers: int = 2) -> bytes:
+    import gzip
+
+    body = b"\x00" * (1 << 20)
+    for _ in range(layers):
+        body = gzip.compress(body)
+    return body
+
+
+def test_the_relay_asks_for_the_stream_uncompressed(relay_client) -> None:
+    relay_client.upstream["content_type"] = "audio/mpeg"
+    resp = relay_client.get("/api/plugins/radio/stations/1/stream")
+    assert resp.status_code == 200, resp.text
+    assert relay_client.accepted == ["identity"]
+
+
+@pytest.mark.parametrize("encoding", ["gzip, gzip", "gzip", "br", "identity, gzip"])
+def test_the_relay_never_inflates_a_compressed_stream(relay_client, encoding) -> None:
+    """A station that answers compressed anyway gets a 502 and its body
+    is never decoded or relayed."""
+    relay_client.upstream["content_type"] = "audio/mpeg"
+    relay_client.upstream["encoding"] = encoding
+    relay_client.upstream["body"] = _nested_gzip()
+    resp = relay_client.get("/api/plugins/radio/stations/1/stream")
+    assert resp.status_code == 502, resp.text
+    assert "compressed" in resp.json()["detail"]
+    assert len(resp.content) < 1000
+    assert relay_client.opened, "the upstream was never asked (test is vacuous)"
+    assert relay_client.closed
 
 
 # ─── The ICY poller's own fetch ──────────────────────────────────────────

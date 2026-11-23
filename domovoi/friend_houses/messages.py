@@ -47,6 +47,7 @@ arrival, and ``read_out_at`` once one said it afterwards;
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import re
@@ -374,7 +375,10 @@ async def _alert_for(s, friend_id: str) -> str:
 
 # ─── alerts ───────────────────────────────────────────────────────────────
 
-_STOCK_WAKE_PHRASES = ("hey jarvis", "alexa", "hey mycroft", "hey rhasspy", "domovoi", "domo")
+# The stock words, and their names alone: some wake models fire on the
+# name without the "hey".
+_STOCK_WAKE_PHRASES = ("hey jarvis", "alexa", "hey mycroft", "hey rhasspy", "domovoi", "domo",
+                       "jarvis", "mycroft", "rhasspy")
 
 
 async def wake_phrases() -> list[str]:
@@ -443,26 +447,80 @@ def _near(heard: str, phrase: str) -> bool:
     return any(long_[:i] + long_[i + 1:] == short for i in range(len(long_)))
 
 
+@functools.lru_cache(maxsize=4096)
+def _sounds(word: str) -> tuple[str, ...]:
+    """A folded word's phonemes as the house's speech front end says it
+    (ARPAbet, stress marks off): "jarvice" and "jarvis" give the same."""
+    from domovoi.phonemizer import get_phonemizer
+    from domovoi.phonemizer.convert import base
+
+    if len(word) > 40:  # longer than any wake phrase run together
+        return ()
+    try:
+        phones, _src = get_phonemizer().word_arpa(word)
+    except Exception:  # noqa: BLE001 — the spelling match still runs
+        return ()
+    return tuple(base(p) for p in phones)
+
+
+def _near_sound(heard: tuple[str, ...], phrase: tuple[str, ...]) -> bool:
+    """Equal, or (for a phrase of five phonemes or more) one phoneme
+    added, dropped or changed."""
+    if heard == phrase:
+        return True
+    if len(phrase) < 5 or abs(len(heard) - len(phrase)) > 1:
+        return False
+    if len(heard) == len(phrase):
+        return sum(a != b for a, b in zip(heard, phrase)) <= 1
+    short, long_ = sorted((heard, phrase), key=len)
+    return any(long_[:i] + long_[i + 1:] == short for i in range(len(long_)))
+
+
+def _sound_targets(phrases: list[str]) -> set[tuple[str, ...]]:
+    """Each wake phrase as phonemes; empty when the speech front end can't
+    load (the spelling match still runs)."""
+    try:
+        from domovoi.phonemizer import get_phonemizer
+
+        get_phonemizer()
+    except Exception:  # noqa: BLE001
+        log.warning("Friend Houses: the sound match is unavailable", exc_info=True)
+        return set()
+    return {t for t in (sum((_sounds(w) for w in (_fold(x) for x in p.split()) if w), ())
+                        for p in phrases) if t}
+
+
 def _strip_loose(said: str, phrases: list[str]) -> str:
     """``said`` without any run of words that, folded and run together,
     is (or is one letter from) a wake phrase: "Hey Jarviss", "a lexa",
-    fullwidth letters."""
+    fullwidth letters; or that SOUNDS like one as the house would say it
+    ("hey jarvice", "aleksa")."""
     targets = {t for t in (_fold("".join(p.split())) for p in phrases) if t}
     if not targets:
         return said
+    sound_targets = _sound_targets(phrases)
     words = said.split()
     folded = [_fold(w) for w in words]
     drop = [False] * len(words)
     longest = max(len(t) for t in targets) + 1
+    longest_sound = max((len(t) for t in sound_targets), default=0) + 1
     for i in range(len(words)):
         if not folded[i] or drop[i]:
             continue
         run = ""
+        sound: tuple[str, ...] = ()
         for j in range(i, min(len(words), i + _SPREAD_MAX)):
-            run = _fold(run + folded[j])
-            if len(run) > longest:
+            if len(run) <= longest:
+                run = _fold(run + folded[j])
+            if sound_targets and len(sound) <= longest_sound and folded[j]:
+                sound += _sounds(folded[j])
+            if len(run) > longest and (not sound_targets or len(sound) > longest_sound):
                 break
-            if folded[j] and any(_near(run, t) for t in targets):
+            if folded[j] and (
+                (len(run) <= longest and any(_near(run, t) for t in targets))
+                or (len(sound) <= longest_sound
+                    and any(_near_sound(sound, t) for t in sound_targets))
+            ):
                 for k in range(i, j + 1):
                     drop[k] = True
                 break

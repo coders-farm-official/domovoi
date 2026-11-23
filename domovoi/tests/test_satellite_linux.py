@@ -183,11 +183,12 @@ def test_the_real_pinned_fetcher_refuses_other_bytes(cache, monkeypatch):
 
     class Response:
         status_code = 200
+        headers: dict = {}
 
         def __init__(self, body):
             self.body = body
 
-        def iter_bytes(self, n):
+        def iter_raw(self, n):
             yield self.body
 
         def close(self):
@@ -202,7 +203,7 @@ def test_the_real_pinned_fetcher_refuses_other_bytes(cache, monkeypatch):
 
     bodies = {X86: b"Z" * 300, ARM: b"A" * 999}     # wrong bytes; too many bytes
     monkeypatch.setattr(fetchers, "_oww_http_client", lambda: Client())
-    monkeypatch.setattr(fetchers.net_safety, "open_stream_sync",
+    monkeypatch.setattr(fetchers.net_safety, "open_raw_stream_sync",
                         lambda client, url: Response(bodies[urllib.parse.unquote(url.rsplit("/", 1)[-1])]))
     ok, message = sl.fetch(lock)
     assert not ok and "checksum mismatch" in message and "larger than the pinned" in message

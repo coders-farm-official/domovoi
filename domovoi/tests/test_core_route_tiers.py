@@ -99,7 +99,6 @@ GUEST_TIER = [
 ADMIN_TIER = [
     ("POST", "/v1/admin/satellite/restart"),
     ("POST", "/v1/admin/satellite/display"),
-    ("POST", "/v1/admin/satellite/{room_id}/config"),
     ("POST", "/v1/admin/satellite/{room_id}/voice"),
     # XVF3800 DSP presets and test markers (1.4.1, domovoi/mic_dsp.py).
     ("POST", "/v1/admin/satellite/{room_id}/mic_dsp"),
@@ -123,6 +122,8 @@ LIVE_MIC_TIER = [
     ("POST", "/v1/admin/dropin/start"),
     # A wake-word take records the room for hours: the same rule.
     ("POST", "/v1/admin/wake/record/start"),
+    # A room's settings decide when and how long its microphone listens.
+    ("POST", "/v1/admin/satellite/{room_id}/config"),
 ]
 
 # Delta review N5 (2026-10-16): pulling new code (it moves an unclaimed
