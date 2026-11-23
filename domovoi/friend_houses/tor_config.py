@@ -34,6 +34,7 @@ from __future__ import annotations
 import base64
 import os
 import re
+import secrets
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -202,7 +203,7 @@ class TorFolder:
 
     def authorized(self) -> set[str]:
         folder = self.data / "hs-main" / "authorized_clients"
-        return {p.stem for p in folder.glob("*.auth")} if folder.is_dir() else set()
+        return _friend_stems(folder, "*.auth")
 
     def hold_key_for(self, friend_id: str, onion_key: bytes, reach_private: bytes) -> None:
         """Keep the key this house uses to reach a friend's onion."""
@@ -219,7 +220,7 @@ class TorFolder:
 
     def held(self) -> set[str]:
         folder = self.data / "clientauth"
-        return {p.stem for p in folder.glob("*.auth_private")} if folder.is_dir() else set()
+        return _friend_stems(folder, "*.auth_private")
 
     def onion_key(self, service: str = "hs-main") -> bytes | None:
         """This house's onion key as tor wrote it (``hostname``), or None
@@ -238,6 +239,14 @@ class TorFolder:
             (folder / name).unlink(missing_ok=True)
 
 
+def _friend_stems(folder: Path, pattern: str) -> set[str]:
+    """The friend ids with a key file in ``folder``. A name that isn't one
+    of ours is ignored, so a stray file can't stop a reconcile."""
+    if not folder.is_dir():
+        return set()
+    return {p.stem for p in folder.glob(pattern) if _FRIEND_ID.match(p.stem)}
+
+
 def _check_id(friend_id: str) -> None:
     if not _FRIEND_ID.match(friend_id):
         raise ValueError("a friend id is 1-32 lowercase letters and digits")
@@ -250,13 +259,21 @@ def _chmod(path: Path, mode: int) -> None:
         pass
 
 
-def _write_private(path: Path, text: str) -> None:
+def _write_private(path: Path, text: str | bytes) -> None:
+    """Atomic 0600 write. The folder is shared with the daemon's container,
+    so the temp file gets a fresh random name and is created exclusively,
+    never through an existing name or a link."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    tmp = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(tmp, flags, 0o600)
     try:
-        os.write(fd, text.encode("utf-8"))
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-    os.replace(tmp, path)
+        try:
+            os.write(fd, text.encode("utf-8") if isinstance(text, str) else text)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise

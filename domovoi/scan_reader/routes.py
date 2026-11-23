@@ -12,7 +12,10 @@ scans live in; asking for a read is device tier.
 * ``POST /v1/scan/reads`` ``{"path"}`` — read a scan (an older one, or one
   whose read failed): the read already under way or done for those bytes
   when there is one.
-* ``GET /v1/scan/reads/{id}`` — its state and progress.
+  A file over the size limit is refused (413) before it is hashed.
+* ``GET /v1/scan/reads/{id}`` — its state and progress. This and the
+  summary and text routes answer 404 for a finished read whose file's
+  bytes changed since, as the by-path lookup does.
 * ``GET /v1/scan/reads/{id}/summary`` — "What does it say?": the short
   summary (made once, by the chat model, then kept; with AI features off
   the start of the text instead). Made voice first and one at a time in
@@ -59,6 +62,15 @@ async def _read_or_404(read_id: str) -> dict[str, Any]:
     return row
 
 
+async def _current_read_or_404(read_id: str) -> dict[str, Any]:
+    """The read, only while its file's bytes are still the ones read (the
+    same check the by-path lookup makes)."""
+    row = await store.current_or_none(await _read_or_404(read_id))
+    if row is None:
+        raise HTTPException(status_code=404, detail="No such scan reading.")
+    return row
+
+
 @router.get("/v1/scan/reads", dependencies=READ)
 async def read_for_path(path: str = Query(..., min_length=1, max_length=1000)) -> dict[str, Any]:
     rel = scan_path(path)
@@ -78,9 +90,11 @@ async def start_read(body: ReadBody) -> dict[str, Any]:
     path = runner.resolve(rel)
     if path is None:
         raise HTTPException(status_code=404, detail="That scan isn't in Documents any more.")
+    if runner.too_large(path):
+        raise HTTPException(status_code=413, detail=runner.FAILURE_TEXT[runner.CODE_TOO_LARGE])
     have = await store.latest_for_path(rel)
     if have is not None and have["state"] in ("queued", "running", "done"):
-        sha = await asyncio.to_thread(store.sha256_of, path)
+        sha = await asyncio.to_thread(store.current_sha, path)
         if have["sha256"] == sha:
             return await store.read_json_for(have)  # type: ignore[return-value]
     read_id = await runner.queue_scan(rel)
@@ -91,12 +105,12 @@ async def start_read(body: ReadBody) -> dict[str, Any]:
 
 @router.get("/v1/scan/reads/{read_id}", dependencies=READ)
 async def get_read(read_id: str) -> dict[str, Any]:
-    return await store.read_json_for(await _read_or_404(read_id))  # type: ignore[return-value]
+    return await store.read_json_for(await _current_read_or_404(read_id))  # type: ignore[return-value]
 
 
 @router.get("/v1/scan/reads/{read_id}/summary", dependencies=READ)
 async def read_summary(read_id: str) -> dict[str, Any]:
-    row = await _read_or_404(read_id)
+    row = await _current_read_or_404(read_id)
     if row["state"] != "done":
         raise HTTPException(status_code=409, detail="Domovoi is still reading this scan.")
     out = await says.summary(row, gate=True)
@@ -114,5 +128,5 @@ async def cancel_read(read_id: str) -> dict[str, Any]:
 
 @router.get("/v1/scan/reads/{read_id}/text", dependencies=READ)
 async def read_text(read_id: str) -> dict[str, Any]:
-    row = await _read_or_404(read_id)
+    row = await _current_read_or_404(read_id)
     return {"read": await store.read_json_for(row), **(await says.full(row))}

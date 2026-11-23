@@ -41,7 +41,11 @@ copied on its own into a throwaway test VM.
 Every TXT value is a hint only: what is stored comes from the printer's
 own Get-Printer-Attributes / ScannerCapabilities answer. Names and TXT
 values are capped and stripped of control characters; parsing bounds every
-loop (name-pointer depth, record counts) so a hostile packet costs nothing.
+loop (name-pointer depth, record counts, and a budget of labels per packet,
+with name pointers allowed to point backwards only, the rule the
+network-name parser in ``domovoi/lan_name/packet.py`` follows) so a hostile
+packet costs little. Only answers from the home network are kept
+(``accept``), at most :data:`MAX_PACKETS_PER_SOURCE` from any one address.
 """
 
 from __future__ import annotations
@@ -54,6 +58,7 @@ import socket
 import struct
 import time
 from dataclasses import dataclass, field
+from typing import Callable
 
 log = logging.getLogger(__name__)
 
@@ -64,6 +69,11 @@ MAX_PACKET = 9000
 MAX_RECORDS = 200
 MAX_NAME_DEPTH = 16
 MAX_TXT = 1023
+#: Labels read in one packet, pointers followed included.
+MAX_LABELS_PER_PACKET = 512
+#: Packets kept from one look, and from any one source address.
+MAX_PACKETS = 2000
+MAX_PACKETS_PER_SOURCE = 32
 
 T_A, T_PTR, T_TXT, T_AAAA, T_SRV = 1, 12, 16, 28, 33
 
@@ -93,11 +103,17 @@ def _clean(s: str, cap: int = 255) -> str:
     return "".join(ch for ch in s[:cap] if ch >= " " and ch != "\x7f")
 
 
-def read_name(data: bytes, off: int, depth: int = 0) -> tuple[str, int]:
-    """A (possibly compressed) domain name at ``off``: (name, offset after it)."""
+def read_name(data: bytes, off: int, depth: int = 0, budget: list[int] | None = None) -> tuple[str, int]:
+    """A (possibly compressed) domain name at ``off``: (name, offset after it).
+    A pointer must point before the labels it follows, so the walk only
+    moves backwards. ``budget``: the packet's label budget (a one-item list,
+    counted down)."""
+    if budget is None:
+        budget = [MAX_LABELS_PER_PACKET]
     labels: list[str] = []
     end = None
     jumps = 0
+    run_start = off
     while True:
         if off >= len(data):
             raise MdnsParseError("name runs past the packet")
@@ -112,14 +128,17 @@ def read_name(data: bytes, off: int, depth: int = 0) -> tuple[str, int]:
             if end is None:
                 end = off + 2
             jumps += 1
-            if jumps > MAX_NAME_DEPTH or ptr >= len(data):
+            if jumps > MAX_NAME_DEPTH or ptr >= run_start:
                 raise MdnsParseError("bad name pointer")
-            off = ptr
+            off = run_start = ptr
             continue
         if ln & 0xC0:
             raise MdnsParseError("bad label")
         if off + 1 + ln > len(data):
             raise MdnsParseError("label runs past the packet")
+        budget[0] -= 1
+        if budget[0] < 0:
+            raise MdnsParseError("too many labels in the packet")
         labels.append(data[off + 1:off + 1 + ln].decode("utf-8", "replace"))
         off += 1 + ln
         if len(labels) > 64:
@@ -143,12 +162,13 @@ def parse_packet(data: bytes) -> tuple[bool, list[Record]]:
     if qd + an + ns + ar > MAX_RECORDS:
         raise MdnsParseError("too many records")
     off = 12
+    budget = [MAX_LABELS_PER_PACKET]
     for _ in range(qd):
-        _, off = read_name(data, off)
+        _, off = read_name(data, off, budget=budget)
         off += 4
     out: list[Record] = []
     for _ in range(an + ns + ar):
-        name, off = read_name(data, off)
+        name, off = read_name(data, off, budget=budget)
         if off + 10 > len(data):
             raise MdnsParseError("truncated record")
         rtype, _cls, _ttl, rdlen = struct.unpack("!HHIH", data[off:off + 10])
@@ -158,10 +178,10 @@ def parse_packet(data: bytes) -> tuple[bool, list[Record]]:
         rd = data[off:off + rdlen]
         value: object = None
         if rtype == T_PTR:
-            value = read_name(data, off)[0]
+            value = read_name(data, off, budget=budget)[0]
         elif rtype == T_SRV and rdlen >= 7:
             port = struct.unpack("!H", rd[4:6])[0]
-            value = (read_name(data, off + 6)[0], port)
+            value = (read_name(data, off + 6, budget=budget)[0], port)
         elif rtype == T_A and rdlen == 4:
             value = socket.inet_ntoa(rd)
         elif rtype == T_AAAA and rdlen == 16:
@@ -262,11 +282,13 @@ def collect(packets: list[tuple[bytes, str, str]]) -> BrowseResult:
     return BrowseResult(services=[s for s in services.values() if s.port], heard=heard, errors=errors)
 
 
-def browse(iface_ip: str | None, seconds: float = 3.0, modes: tuple[str, ...] = ("group", "legacy")) -> BrowseResult:
+def browse(iface_ip: str | None, seconds: float = 3.0, modes: tuple[str, ...] = ("group", "legacy"),
+           accept: Callable[[str], bool] | None = None) -> BrowseResult:
     """Ask for ``seconds`` (blocking; run it in a thread). ``iface_ip`` is
     the server's LAN address: queries go out of that interface
     (``IP_MULTICAST_IF``) — out of the default route they can reach
-    nothing (measured on the Windows host, 2026-10-21)."""
+    nothing (measured on the Windows host, 2026-10-21). ``accept``: whether
+    a packet from that source address is kept (None: every source)."""
     socks: dict[str, socket.socket] = {}
     errors: list[str] = []
     if "group" in modes:
@@ -308,6 +330,7 @@ def browse(iface_ip: str | None, seconds: float = 3.0, modes: tuple[str, ...] = 
         except OSError as e:
             errors.append("unicast: couldn't open a socket (%s)" % (e.strerror or type(e).__name__))
     packets: list[tuple[bytes, str, str]] = []
+    per_source: dict[str, int] = {}
     query = build_query()
     sends = [0.0, 1.0, 2.0]
     t0 = time.monotonic()
@@ -330,8 +353,13 @@ def browse(iface_ip: str | None, seconds: float = 3.0, modes: tuple[str, ...] = 
                     data, addr = sock.recvfrom(MAX_PACKET)
                 except OSError:
                     continue
-                if len(packets) < 2000:
-                    packets.append((data, addr[0], kind))
+                src = addr[0]
+                if len(packets) >= MAX_PACKETS or per_source.get(src, 0) >= MAX_PACKETS_PER_SOURCE:
+                    continue
+                if accept is not None and not accept(src):
+                    continue
+                per_source[src] = per_source.get(src, 0) + 1
+                packets.append((data, src, kind))
     finally:
         for sock in socks.values():
             sock.close()

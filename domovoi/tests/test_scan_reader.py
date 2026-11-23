@@ -205,7 +205,7 @@ async def test_pages_are_counted_and_drawn_in_the_worker(tmp_path) -> None:
 def saved(monkeypatch) -> list[tuple]:
     out: list[tuple] = []
 
-    async def save_page(job_id, page, method, page_text, confidence, words):
+    async def save_page(job_id, page, method, page_text, confidence, words, **kw):
         out.append((page, method, page_text))
 
     monkeypatch.setattr(runner_mod, "save_page", save_page)
@@ -864,3 +864,78 @@ def test_fe11_the_scan_sheet_shows_no_links_and_offers_stop() -> None:
     assert "chatMarkdownHtml(t, { links: false })" in sheet
     assert "chatMarkdownHtml(t)" not in sheet
     assert "/cancel`" in sheet and "Stop reading" in sheet
+
+
+# ─── Reads stay bound to the bytes they read ────────────────────────────
+@requires_db
+async def test_pages_of_bytes_replaced_by_another_read_are_not_saved(db_session, docs) -> None:
+    scan_pdf(docs / "Scans" / "Scan.pdf", [LETTER])
+    read_id = await runner_mod.queue_scan("Scans/Scan.pdf")
+    row = await store.get(read_id)
+    background = runner_mod.Job.from_row(row)
+    await runner_mod._adopt_sha(background, row["sha256"])
+    await runner_mod.save_page(read_id, 1, "ocr", "old page", 90.0, 2, sha=background.sha256)
+    # A read by voice finds other bytes at the path and takes the row over.
+    by_voice = runner_mod.Job.from_row(row)
+    await runner_mod._adopt_sha(by_voice, "f" * 64)
+    assert by_voice.pages == 0 and await runner_mod.saved_pages(read_id) == set()
+    with pytest.raises(runner_mod._Superseded):
+        await runner_mod.save_page(read_id, 2, "ocr", "old page", 90.0, 2, sha=background.sha256)
+    assert await runner_mod.saved_pages(read_id) == set()
+    await runner_mod.save_page(read_id, 1, "ocr", "new page", 90.0, 2, sha=by_voice.sha256)
+    assert await runner_mod.saved_pages(read_id) == {1}
+
+
+@requires_db
+async def test_the_by_id_routes_refuse_a_read_of_replaced_bytes(db_session, docs) -> None:
+    import httpx
+
+    from domovoi import admin_auth
+    from domovoi.main import app
+
+    scan_pdf(docs / "Scans" / "Scan.pdf", [LETTER])
+    read_id = await runner_mod.queue_scan("Scans/Scan.pdf")
+    await runner_mod.Runner(vision=FakeVision(), ocr_fn=FakeOcr({1: good(LETTER)}), poll_sec=0.01,
+                            quiet_sec=0).run_next()
+    app.dependency_overrides[admin_auth.require_device_read] = lambda: None
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+            for tail in ("", "/text"):
+                assert (await c.get(f"/v1/scan/reads/{read_id}{tail}")).status_code == 200
+            scan_pdf(docs / "Scans" / "Scan.pdf", [["Something else entirely"]])
+            for tail in ("", "/summary", "/text"):
+                assert (await c.get(f"/v1/scan/reads/{read_id}{tail}")).status_code == 404, tail
+    finally:
+        app.dependency_overrides.pop(admin_auth.require_device_read, None)
+
+
+@requires_db
+async def test_asking_for_a_read_checks_the_size_first_and_hashes_once(db_session, docs, monkeypatch) -> None:
+    import httpx
+
+    from domovoi import admin_auth
+    from domovoi.main import app
+
+    pdf = scan_pdf(docs / "Scans" / "Scan.pdf", [LETTER])
+    hashed: list[Path] = []
+    real = store.sha256_of
+
+    def counting(path):
+        hashed.append(Path(path))
+        return real(path)
+
+    monkeypatch.setattr(store, "sha256_of", counting)
+    store._SHA_CACHE.clear()
+    app.dependency_overrides[admin_auth.require_device] = lambda: None
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+            first = await c.post("/v1/scan/reads", json={"path": "Scans/Scan.pdf"})
+            again = await c.post("/v1/scan/reads", json={"path": "Scans/Scan.pdf"})
+            assert first.status_code == 201 and again.json()["id"] == first.json()["id"]
+            assert len(hashed) == 1, "an unchanged file is hashed once"
+            monkeypatch.setattr(runner_mod, "MAX_SCAN_BYTES", pdf.stat().st_size - 1)
+            hashed.clear()
+            r = await c.post("/v1/scan/reads", json={"path": "Scans/Scan.pdf"})
+            assert r.status_code == 413 and hashed == []
+    finally:
+        app.dependency_overrides.pop(admin_auth.require_device, None)

@@ -508,11 +508,15 @@ async def auth_change_password(
         raise HTTPException(status_code=401, detail="admin session required")
     current = admin_auth.bearer_token(request)
     keep = admin_auth.token_sha256(current) if current else None
+    # The old-password check shares the sign-in backoff: a session holder
+    # gets no faster guessing here than at the sign-in form.
+    source = admin_auth.enforce_login_backoff(request)
     async with session_scope() as s:
         password_hash = await admin_auth.get_password_hash(s)
         if password_hash is None or not admin_auth.verify_password(
             password_hash, body.old_password
         ):
+            admin_auth.LOGIN_BACKOFF.record_failure(source)
             raise HTTPException(status_code=401, detail="wrong password")
         await admin_auth.set_password(s, body.new_password)
         # Every phone's day grant ends with the old password (and the
@@ -520,6 +524,7 @@ async def auth_change_password(
         await admin_auth.revoke_all_phone_grants(s, keep)
         revoked = await admin_auth.revoke_other_sessions(s, keep)
         await admin_auth.mark_signed_in(s, keep)
+    admin_auth.LOGIN_BACKOFF.record_success(source)
     return {"ok": True, "revoked_sessions": revoked}
 
 

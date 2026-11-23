@@ -122,14 +122,15 @@ async def track_row(s: Any, track_id: int | None) -> dict[str, Any] | None:
     return dict(r) if r is not None else None
 
 
-def pick_json(p: dict[str, Any]) -> dict[str, Any]:
+def pick_json(p: dict[str, Any], *, with_why: bool = True) -> dict[str, Any]:
     return {
         "seq": p["seq"], "track_id": p["track_id"], "title": p["title"] or "", "artist": p["artist"] or "",
         "album": p["album"] or "", "duration_sec": p["duration_sec"], "reason_code": p["reason_code"],
         "reason_label": p["reason_label"], "status": p["status"], "mpd_song_id": p["mpd_song_id"],
         "batch_no": p["batch_no"],
         # "why this song?" in plain words, from the signals the picker used.
-        "why": why_text(_why_list(p.get("why"))),
+        # It comes from the listener's history, so a guest gets null.
+        "why": why_text(_why_list(p.get("why"))) if with_why else None,
     }
 
 
@@ -146,7 +147,8 @@ async def session_json(s: Any, st: store.Stored, *, picks: list[dict[str, Any]] 
                        with_person: bool = True) -> dict[str, Any]:
     """The ``Session`` answer. ``with_person=False`` leaves ``person`` out
     altogether: a guest reading a room's session never learns whose taste
-    it follows (plan §4)."""
+    it follows (plan §4), nor each pick's ``why`` (null), which is worded
+    from that person's listening history."""
     sess = st.sess
     kind, ident = sess.target_kind, sess.target_id
     seed_track = await track_row(s, sess.seed.track_id)
@@ -168,7 +170,7 @@ async def session_json(s: Any, st: store.Stored, *, picks: list[dict[str, Any]] 
             "label": sess.seed.label,
             "list": ({"kind": sess.seed.kind, "name": st.list_name} if sess.seed.kind else None),
         },
-        "picks": [pick_json(p) for p in picks],
+        "picks": [pick_json(p, with_why=with_person) for p in picks],
         "batch_no": sess.batch_no,
         "have_through_seq": await store.max_seq(s, sess.id),
         "ended": sess.ended or st.ended_at is not None,

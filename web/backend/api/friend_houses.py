@@ -28,7 +28,11 @@ from fastapi.routing import APIRoute
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field, ValidationError
 
-from domovoi.admin_auth import require_admin_security, require_admin_security_read, require_device
+from domovoi.admin_auth import (
+    require_admin_security,
+    require_admin_security_read,
+    require_device_after_setup,
+)
 from web.backend.api.csrf_guard import require_requested_with
 from web.backend.domovoi_client import (
     auth_forward_headers,
@@ -62,8 +66,9 @@ WRITE = [Depends(require_requested_with), Depends(require_admin_security)]
 # What every household phone may do with existing friends (owner decision
 # 17): read the inbox and send, see friends and shared lists. The household
 # token or an admin Bearer, header only, as the Lists API takes writes (the
-# cookie never authorises a write, so no CSRF guard is needed here).
-HOUSEHOLD = [Depends(require_device)]
+# cookie never authorises a write, so no CSRF guard is needed here). No
+# pre-setup grace: 501 until an admin exists, as at the core.
+HOUSEHOLD = [Depends(require_device_after_setup)]
 
 CORE = "/v1/admin/friend-houses"
 

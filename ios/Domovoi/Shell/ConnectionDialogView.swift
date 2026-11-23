@@ -36,6 +36,8 @@ struct ConnectionDialogView: View {
 
     @State private var picker: ServerPickerModel?
 
+    @Environment(\.scenePhase) private var scenePhase
+
     var body: some View {
         ZStack {
             sheet
@@ -80,6 +82,12 @@ struct ConnectionDialogView: View {
             picker?.scanOnOpen()
         }
         .onDisappear { picker?.stop() }
+        // The Local Network alert's answer, and the trip back from Settings,
+        // both arrive as the app becoming active again
+        // (``ServerPickerModel/appBecameActive()``).
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { picker?.appBecameActive() }
+        }
     }
 
     private func forgetAsk(_ picker: ServerPickerModel) -> ForgetActiveServerAsk? {

@@ -218,6 +218,7 @@ struct PersonMusicMixSection: View {
             client: model.container.client,
             server: { store.serverURL },
             deviceID: { [weak model] in model?.deviceID },
+            claimKey: { [weak model] at in model?.owners.claimKey(for: at) },
             say: { [weak model] text in model?.showToast(text) }
         ))
     }

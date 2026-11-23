@@ -88,6 +88,7 @@ import asyncio
 import ipaddress
 import logging
 import socket
+import time
 from dataclasses import dataclass
 from typing import Any, Iterable
 from urllib.parse import urljoin, urlsplit
@@ -98,6 +99,11 @@ IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
 ALLOWED_SCHEMES: frozenset[str] = frozenset({"http", "https"})
 MAX_REDIRECTS = 5
+
+#: A whole fetch's budget in :func:`fetch_bytes`, in multiples of its
+#: ``timeout`` (which httpx applies per read): a body that arrives a byte
+#: at a time never trips the per-read timeout.
+FETCH_DEADLINE_TIMEOUTS = 4
 
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 
@@ -134,6 +140,9 @@ _BLOCKED_V6: tuple[ipaddress.IPv6Network, ...] = tuple(
     )
 )
 _NAT64 = ipaddress.IPv6Network("64:ff9b::/96")
+# A known limit (docs/SECURITY_PRIVACY.md): a GLOBAL IPv6 address counts as
+# public, the server's own and its LAN neighbours' included. Nothing here
+# reads the prefixes on the server's interfaces.
 
 
 # ─── Errors ───────────────────────────────────────────────────────────────
@@ -201,6 +210,26 @@ def is_public_address(address: IPAddress | str) -> bool:
             return is_public_address(embedded)
         return not any(ip in net for net in _BLOCKED_V6)
     return not any(ip in net for net in _BLOCKED_V4)
+
+
+def url_without_secrets(url: str | None) -> str:
+    """``url`` as ``scheme://host[:port]/path``: no user info, query or
+    fragment, which is where a private feed carries its per-subscriber
+    token. For log lines and open reads."""
+    if not url:
+        return ""
+    try:
+        parts = urlsplit(str(url))
+        host = parts.hostname or ""
+        port = parts.port
+    except ValueError:
+        return "<unreadable url>"
+    if ":" in host:
+        host = f"[{host}]"
+    netloc = f"{host}:{port}" if port else host
+    if not parts.scheme:
+        return netloc + parts.path
+    return f"{parts.scheme}://{netloc}{parts.path}"
 
 
 def parse_ip_literal(host: str) -> IPAddress | None:
@@ -840,9 +869,14 @@ async def fetch_bytes(
     The request asks for gzip; ``max_bytes`` counts DECODED bytes, and a
     gzip or deflate body is inflated here a bounded step at a time
     (:class:`_CappedBody`), so a small compressed body that inflates to
-    gigabytes stops at the cap without ever being held whole."""
+    gigabytes stops at the cap without ever being held whole.
+
+    The whole fetch has a deadline, :data:`FETCH_DEADLINE_TIMEOUTS` times
+    ``timeout``: past it, ``httpx.ReadTimeout``, as a stalled read gets, or
+    with ``truncate=True`` the bytes that have arrived, marked truncated."""
     import httpx
 
+    deadline = time.monotonic() + timeout * FETCH_DEADLINE_TIMEOUTS
     own = client is None
     if own:
         client = httpx.AsyncClient(timeout=timeout)
@@ -855,6 +889,8 @@ async def fetch_bytes(
             chunks = response.aiter_raw(chunk_size) if body.raw else _consumed(response)
             async for chunk in chunks:
                 if body.add(chunk):
+                    break
+                if _past_deadline(deadline, timeout, body):
                     break
             content, truncated = body.finish()
         finally:
@@ -876,9 +912,11 @@ def fetch_bytes_sync(
     truncate: bool = False,
 ) -> FetchResult:
     """Blocking twin of :func:`fetch_bytes` (for code already running in a
-    worker thread, such as the feedparser callers), ``truncate`` included."""
+    worker thread, such as the feedparser callers), ``truncate`` and the
+    deadline included."""
     import httpx
 
+    deadline = time.monotonic() + timeout * FETCH_DEADLINE_TIMEOUTS
     own = client is None
     if own:
         client = httpx.Client(timeout=timeout)
@@ -893,6 +931,8 @@ def fetch_bytes_sync(
                 if body.add(chunk):
                     # Stop reading: closing the response drops the rest.
                     break
+                if _past_deadline(deadline, timeout, body):
+                    break
             content, truncated = body.finish()
         finally:
             response.close()
@@ -900,6 +940,21 @@ def fetch_bytes_sync(
     finally:
         if own:
             client.close()
+
+
+def _past_deadline(deadline: float, timeout: float, body: "_CappedBody") -> bool:
+    """True when the whole-fetch deadline has passed and the caller asked for
+    ``truncate``: what arrived so far is kept, marked truncated. Without
+    ``truncate``, ``httpx.ReadTimeout``."""
+    if time.monotonic() > deadline:
+        if body.truncate:
+            body.truncated = True
+            return True
+        import httpx
+
+        raise httpx.ReadTimeout(
+            f"the answer took over {timeout * FETCH_DEADLINE_TIMEOUTS:g} s to arrive"
+        )
 
 
 async def _consumed(response: Any):

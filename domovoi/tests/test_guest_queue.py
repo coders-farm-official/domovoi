@@ -308,6 +308,26 @@ async def test_core_guest_reads_a_playing_rooms_queue(
     assert no_player_starts == []
 
 
+async def test_core_guest_queue_read_asks_for_no_why(
+    rooms, claimed, no_player_starts, monkeypatch
+) -> None:
+    """The "why this song?" text is worded from a listener's history: a
+    guest's queue read asks Up next to leave it out."""
+    from domovoi.up_next import rooms as up_next_rooms
+
+    seen: list[bool] = []
+
+    async def _view(room_id, items, *, with_why=True):
+        seen.append(with_why)
+        return {"session_id": None, "autoplay": None, "up_next": None}
+
+    monkeypatch.setattr(up_next_rooms, "queue_view", _view)
+    async with _core() as c:
+        r = await c.get(f"/v1/admin/music/queue/{ACTIVE}")
+    assert r.status_code == 200, r.text
+    assert seen == [False]
+
+
 async def test_core_guest_adds_removes_and_moves_on_a_playing_room(
     rooms, claimed, no_player_starts, core_db
 ) -> None:
@@ -381,6 +401,36 @@ async def test_core_guest_add_never_starts_a_room_that_stopped_meanwhile(
     assert r.status_code == 200, r.text
     assert r.json()["started"] is False
     assert len(await stub.queue_list()) == 1
+    assert stub._state == "stop"
+    assert no_player_starts == []
+
+
+async def test_core_guest_jump_never_starts_a_room_that_stopped_meanwhile(
+    monkeypatch, claimed, no_player_starts, core_db, fake_bans
+) -> None:
+    """The gate saw the room playing; by the time the jump ran it had
+    stopped. A guest's "play this one" is refused and the room stays
+    stopped."""
+
+    class _StopsAfterTheGate(MPDStubClient):
+        calls = 0
+
+        async def state(self):
+            type(self).calls += 1
+            return "play" if type(self).calls == 1 else "stop"
+
+        async def current_song(self):
+            return {"id": 99, "title": "fading out"}
+
+    stub = _StopsAfterTheGate()
+    await stub.queue_add_tracks([{"title": "next", "artist": "", "file_path": "next.mp3"}])
+    target = _ids(stub)[0]
+    monkeypatch.setitem(mpd_mod._clients, "gq-fading", stub)
+    monkeypatch.setattr(settings, "guest_queue_editing", True)
+    async with _core() as c:
+        r = await c.post("/v1/admin/music/queue/gq-fading/play", json={"song_id": target})
+    assert r.status_code == 403, r.text
+    assert r.json()["detail"] == admin_auth.GUEST_ROOM_IDLE_DETAIL
     assert stub._state == "stop"
     assert no_player_starts == []
 

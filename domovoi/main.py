@@ -1648,10 +1648,11 @@ async def health(
         else:
             log.warning(
                 "refused to sign the identity proof for %s: it is not an "
-                "address of this server. If satellites reach this server "
-                "through that address (a name, a NAT or a port-forward), list "
-                "it in TRUSTED_HOSTS; otherwise something between a "
-                "satellite and this server is relaying its questions.", addr,
+                "address of this server. Only if someone set a satellite up "
+                "with that address (a name, a NAT or a port-forward that "
+                "reaches this server) does it belong in TRUSTED_HOSTS; "
+                "otherwise something between a satellite and this server may "
+                "be relaying its questions, and it must not be listed.", addr,
             )
             # And where an admin looks: Settings → Rooms says it too.
             join_problems.addr_refused(addr)
@@ -1705,7 +1706,7 @@ async def music_cover(track_id: int, request: Request) -> Any:
     except Exception as e:  # noqa: BLE001 — a core installed without web/
         log.debug("cover route: the web package is not importable: %s", e)
         raise HTTPException(status_code=404, detail="no cover art") from None
-    return await track_cover(track_id, request)
+    return await track_cover(track_id, request, size=None)
 
 
 @app.get(
@@ -2970,14 +2971,24 @@ async def admin_snapshot() -> dict[str, Any]:
     """
     import time
 
+    from domovoi.models import PHONE_ROOM_PREFIX
     from domovoi.workers.lyrics_index import lyrics_index_status
     # active_dropins is keyed by room_id in both directions; emit one row
     # per call (the initiator side) so the web UI can list live drop-ins
     # and offer a Hang-up button.
+    # This route is open: a phone leg is named "phone", never by the device
+    # id the app uses to recognise itself.
+    def _leg(name: Any) -> Any:
+        if isinstance(name, str) and name.startswith(PHONE_ROOM_PREFIX) and (
+            name not in app.state.active_sessions
+        ):
+            return "phone"
+        return name
+
     active_dropins = [
         {
-            "initiator": room,
-            "target": v["peer"],
+            "initiator": _leg(room),
+            "target": _leg(v["peer"]),
             "started_at": v.get("started_at"),
         }
         for room, v in app.state.active_dropins.items()
@@ -4210,7 +4221,9 @@ _FH_WRITE = [Depends(require_admin_security)]
 # inbox and send, see the friends and the shared lists. Header credentials
 # only (the household token or an admin Bearer): no cookie, no query token,
 # since these carry message text. Trust and household settings stay above.
-_FH_HOUSEHOLD = [Depends(require_device)]
+# No pre-setup grace: after --reset-admin the friends and messages are still
+# there, so the routes answer 501 until an admin exists again.
+_FH_HOUSEHOLD = [Depends(admin_auth_mod.require_device_after_setup)]
 
 
 def _fh_error(e: Exception) -> HTTPException:
@@ -7659,7 +7672,8 @@ async def admin_music_queue(room_id: str, request: Request) -> dict[str, Any]:
     items = [_queue_entry_dict(e) for e in entries]
     # Up next (P4): each entry's origin (``auto`` for a pick) and reason,
     # its library song, and the room's session. Never a person's name.
-    view = await up_next_rooms.queue_view(room_id, items)
+    guest = guest_activity(request) is not None
+    view = await up_next_rooms.queue_view(room_id, items, with_why=not guest)
     return {
         "room_id": room_id,
         "items": items,
@@ -7667,7 +7681,7 @@ async def admin_music_queue(room_id: str, request: Request) -> dict[str, Any]:
         # Who this answer was given to: the web hop shows a guest's view
         # whenever the core says so (review finding 2) — it cannot tell
         # from what it forwarded alone.
-        "guest": guest_activity(request) is not None,
+        "guest": guest,
         # The shared queue this room hears (a group, domovoi/music_groups.py):
         # {id, name, host_room, rooms, group_id, everywhere}, or null. A
         # member's queue IS its host's.
@@ -7863,6 +7877,14 @@ async def admin_music_queue_play(
     mpd = get_mpd_client_for(room_id)
     try:
         state_before = await mpd.state()
+    except Exception as e:
+        log.warning("admin queue play MPD raised: %s", e)
+        raise _music_player_down(room_id) from e
+    if guest and state_before == "stop":
+        # The gate saw the room playing; it stopped since. A guest never
+        # starts a stopped room, and MPD's playid would.
+        raise HTTPException(status_code=403, detail=admin_auth_mod.GUEST_ROOM_IDLE_DETAIL)
+    try:
         current = await _current_song_id(mpd)
         start = state_before == "stop" and not guest
         if current is not None and current != body.song_id and state_before != "stop":
@@ -9901,11 +9923,22 @@ async def phone_dropin(ws: WebSocket, room_id: str) -> None:
         )
         return
 
-    phone_id = ws.query_params.get("phone_id") or "phone"
+    from domovoi.phone_voice import PHONE_ID_RE
+
+    raw_phone_id = ws.query_params.get("phone_id")
+    # The same device-id shape the phone's voice turns take: the id is a
+    # registry key and is spoken in ring mode.
+    if raw_phone_id is not None and raw_phone_id != "" and not PHONE_ID_RE.match(raw_phone_id):
+        await _refuse_ws(ws, "bad_phone_id", f"/v1/dropin/{room_id}: phone_id is not a device id")
+        return
+    phone_id = raw_phone_id or "phone"
     # Namespace the id so a phone can never collide with (or masquerade
     # as) a real room in the active_dropins registry.
     if not phone_id.startswith("phone-"):
         phone_id = f"phone-{phone_id}"
+    if phone_id in ws.app.state.active_sessions:
+        await _refuse_ws(ws, "bad_phone_id", f"/v1/dropin/{room_id}: phone_id names a room")
+        return
     session = PhoneDropinSession(ws, phone_id=phone_id, target_room=room_id)
     # CORE-44: the credential that opened the call is read again every 30 s;
     # a rotated token, a sign-out or an idled-out session ends it (1008).

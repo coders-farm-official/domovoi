@@ -162,10 +162,16 @@ namespace Domovoi.Windows.Helper
             return dir;
         }
 
+        static readonly string[] CopiedNames = { ReleaseNames.Manifest, ReleaseNames.ManifestSig, ReleaseNames.SetupSig, ReleaseNames.SetupAsset };
+
         // The four files from the tray's folder into dir (the
         // administrators' run folder), then the check on what is now there,
         // out of reach of anyone but an administrator: null when the copy
-        // may run, else why not and code (SetupCheck's words).
+        // may run, else why not and code (SetupCheck's words). Each source
+        // is opened without following a link and checked on its handle
+        // (Logs.OpenSource: a plain file with one name, in the folder asked for, which may itself be reached through a link), and copied
+        // from that handle, so a folder swapped for a link meanwhile can't
+        // make this copy some other file.
         public static string CopyAndCheck(string from, string dir, SetupExpectation want, out SetupManifest m, out string code)
         {
             m = null;
@@ -173,17 +179,34 @@ namespace Domovoi.Windows.Helper
             try
             {
                 var bytes = new Dictionary<string, byte[]>();
-                foreach (string name in new[] { ReleaseNames.Manifest, ReleaseNames.ManifestSig, ReleaseNames.SetupSig, ReleaseNames.SetupAsset })
+                foreach (string name in CopiedNames)
                 {
                     string src = Path.Combine(from, name), dest = Path.Combine(dir, name);
                     if (!File.Exists(src) || (File.GetAttributes(src) & FileAttributes.ReparsePoint) != 0) { code = SetupCheck.NoSignedSetup; return "the download has no " + name; }
-                    File.Copy(src, dest, false);
+                    using (Microsoft.Win32.SafeHandles.SafeFileHandle h = Logs.OpenSource(src, true))
+                    using (var input = new FileStream(h, FileAccess.Read))
+                    using (var output = new FileStream(dest, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                        input.CopyTo(output);
                     bytes[name] = File.ReadAllBytes(dest);
                 }
                 return SetupCheck.Run(want, bytes[ReleaseNames.Manifest], Encoding.ASCII.GetString(bytes[ReleaseNames.ManifestSig]),
                     bytes[ReleaseNames.SetupAsset], Encoding.ASCII.GetString(bytes[ReleaseNames.SetupSig]), out m, out code);
             }
             catch (IOException e) { code = "failed"; return "the download couldn't be copied: " + e.Message; }
+            catch (System.ComponentModel.Win32Exception e) { code = "failed"; return "the download couldn't be copied: " + e.Message; }
+            catch (InvalidOperationException e) { code = "failed"; return "the download couldn't be copied: " + e.Message; }
+            catch (UnauthorizedAccessException e) { code = "failed"; return "the download couldn't be copied: " + e.Message; }
+        }
+
+        // A refused run keeps only its result.txt: every copied file goes.
+        static void RemoveCopies(string dir)
+        {
+            foreach (string name in CopiedNames)
+            {
+                try { File.Delete(Path.Combine(dir, name)); }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+            }
         }
 
         // The Windows step's elevated half (header: run-update).
@@ -204,7 +227,7 @@ namespace Domovoi.Windows.Helper
                 result.Outcome = code ?? SetupCheck.BadSignature;
                 result.Error = "Domovoi didn't run the Setup: " + why;
                 File.WriteAllText(Path.Combine(dir, UpdateRun.ResultFile), result.Format(), new UTF8Encoding(false));
-                try { File.Delete(Path.Combine(dir, ReleaseNames.SetupAsset)); } catch (IOException) { }
+                RemoveCopies(dir);
                 o.Kv("error", result.Error);
                 o.LogOnly("run-update " + run + ": refused: " + why);
                 return 1;

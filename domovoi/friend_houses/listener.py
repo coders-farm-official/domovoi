@@ -63,6 +63,12 @@ log = logging.getLogger("domovoi.friend_houses.listener")
 MAX_CONNECTIONS = 32       # on main.sock
 MAX_PAIRING_CONNECTIONS = 8  # on pairing.sock: its own slots (audit R6 FH-9)
 MAX_PER_FRIEND = 4
+# Connections still before their handshake (main.sock) or before naming an
+# open friend file (pairing.sock). When these are full, the oldest is
+# closed to make room, so callers that say nothing can't hold every slot.
+MAX_HANDSHAKING = 8
+MAX_PAIRING_HANDSHAKING = 4
+PINGS_PER_CONNECTION = 16  # a house pings once per check; more is closed
 PAIRING_PER_HOUR = 20      # requests that name an open friend file
 MESSAGES_PER_HOUR = 60     # per friend (threat-model finding 32)
 EVENTS_PER_HOUR = 120      # per house: connected / I'm back / accepted (R6 FH-3)
@@ -97,6 +103,8 @@ class State:
     _invites: _Cached = field(default_factory=_Cached)
     _open: int = 0
     _open_pairing: int = 0
+    _handshaking: deque = field(default_factory=deque)          # main.sock writers
+    _pairing_handshaking: deque = field(default_factory=deque)  # pairing.sock writers
     _per_friend: dict[bytes, int] = field(default_factory=dict)
     _event_times: dict[bytes, deque] = field(default_factory=dict)
     _pairing_times: deque = field(default_factory=deque)
@@ -181,6 +189,27 @@ class State:
         return True
 
 
+def _admit(open_now: int, max_open: int, waiting: deque, max_waiting: int) -> bool:
+    """Whether a new connection gets a slot. When every slot is taken, or
+    too many are still before their handshake, the oldest of those is
+    closed to make room (its handler sees its stream end and gives the slot
+    back); with every slot past its handshake, the newcomer is refused."""
+    if open_now >= max_open:
+        if not waiting:
+            return False
+        waiting.popleft().close()
+    while len(waiting) >= max_waiting:
+        waiting.popleft().close()
+    return True
+
+
+def _done_waiting(waiting: deque, writer: asyncio.StreamWriter) -> None:
+    try:
+        waiting.remove(writer)
+    except ValueError:
+        pass
+
+
 def _within(times: deque, limit: int, window: float = 3600.0) -> bool:
     now = time.monotonic()
     while times and now - times[0] > window:
@@ -229,11 +258,13 @@ def emit(event: str, **fields: str) -> None:
 
 async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, state: State) -> None:
     """One inbound connection on main.sock, start to finish. Never raises."""
-    if state._open >= MAX_CONNECTIONS:
+    if not _admit(state._open, MAX_CONNECTIONS, state._handshaking, MAX_HANDSHAKING):
         writer.close()
         return
     state._open += 1
+    state._handshaking.append(writer)
     caller: bytes | None = None
+    pings = 0
     try:
         hello = state.hello()
         if hello is None:
@@ -252,6 +283,7 @@ async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, sta
         sess = await asyncio.wait_for(
             fs.respond(reader, writer, keys=state.keys, me=hello, friend_for=friend_for),
             HANDSHAKE_DEADLINE_SEC)
+        _done_waiting(state._handshaking, writer)
         assert peer is not None
         caller = sess.peer.statement.session_key
         state._per_friend[caller] = state._per_friend.get(caller, 0) + 1
@@ -279,6 +311,9 @@ async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, sta
             elif peer.pending:
                 break  # a pending house may only deliver its accept
             elif kind is fs.Kind.PING:
+                pings += 1
+                if pings > PINGS_PER_CONNECTION:
+                    break
                 await sess.send(fs.Kind.PONG, body)
             elif kind is fs.Kind.IM_BACK:
                 if not said_back and state.event_allowed(house_key):
@@ -298,6 +333,7 @@ async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, sta
         log.exception("connection failed")
     finally:
         state._open -= 1
+        _done_waiting(state._handshaking, writer)
         if caller is not None:
             state._per_friend[caller] -= 1
             if not state._per_friend[caller]:
@@ -315,19 +351,28 @@ async def handle_pairing(reader: asyncio.StreamReader, writer: asyncio.StreamWri
     Its connections have their own slots, separate from friends' (R6 FH-9),
     and only a handshake that names an open friend file spends the hourly
     budget: empty connections from anyone who once saw a file don't."""
-    if state._open_pairing >= MAX_PAIRING_CONNECTIONS:
+    if not _admit(state._open_pairing, MAX_PAIRING_CONNECTIONS,
+                  state._pairing_handshaking, MAX_PAIRING_HANDSHAKING):
         writer.close()
         return
     state._open_pairing += 1
+    state._pairing_handshaking.append(writer)
     revealed: list[bytes] = []
     done = False
+
+    def nonce_sent(invite_id: bytes) -> None:
+        # It named an open friend file: no longer one that can be closed
+        # to make room.
+        _done_waiting(state._pairing_handshaking, writer)
+        revealed.append(invite_id)
+
     try:
         async def invite_open(invite_id: bytes) -> bool:
             return state.invite_open(invite_id) and state.pairing_allowed()
 
         req = await asyncio.wait_for(
             fp.answer(reader, writer, keys=state.keys, invite_open=invite_open,
-                      nonce_sent=revealed.append),
+                      nonce_sent=nonce_sent),
             PAIRING_DEADLINE_SEC)
         done = True
         emit("request", invite=req.invite_id.hex(), statement=req.statement.to_bytes().hex(),
@@ -340,6 +385,7 @@ async def handle_pairing(reader: asyncio.StreamReader, writer: asyncio.StreamWri
         log.exception("friend request failed")
     finally:
         state._open_pairing -= 1
+        _done_waiting(state._pairing_handshaking, writer)
         if revealed and not done:
             # A run broken off after the nonce went out is one try at the
             # code: a file allows only a few, then it is closed.

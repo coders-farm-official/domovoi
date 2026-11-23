@@ -236,6 +236,22 @@ def test_the_reviewers_proof_a_real_uvicorn_access_log_carries_no_token() -> Non
 # ─── said(): words at DEBUG only ──────────────────────────────────────────
 
 
+def test_station_directory_search_fields_are_blanked_on_its_host_only(monkeypatch) -> None:
+    """The radio plugin's station searches carry what was said in ``name`` /
+    ``tag`` / ``language``: blanked in a URL on the directory's host at the
+    default level, left alone on any other host and at DEBUG."""
+    monkeypatch.setattr(log_privacy, "_words_hidden", lambda: True)
+    line = ("HTTP Request: GET https://de1.api.radio-browser.info/json/stations/search"
+            "?limit=30&name=smooth+jazz&tag=lounge&language=french&order=clickcount")
+    out = scrub(line)
+    assert "smooth" not in out and "lounge" not in out and "french" not in out
+    assert "name=<words>" in out and "limit=30" in out and "order=clickcount" in out
+    other = "GET https://example.org/list?name=kitchen&tag=v2"
+    assert scrub(other) == other
+    monkeypatch.setattr(log_privacy, "_words_hidden", lambda: False)
+    assert scrub(line) == line
+
+
 def test_said_shows_a_word_count_at_info_and_the_words_at_debug(caplog) -> None:
     caplog.set_level(logging.INFO)
     log = logging.getLogger("domovoi.router")

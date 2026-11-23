@@ -469,3 +469,38 @@ async def test_a_dropin_that_hangs_up_stops_its_recheck(monkeypatch, open_call):
     up.disconnect()
     await asyncio.wait_for(task, timeout=2)
     assert open_call["ended"] and up.close_code is None
+
+
+# ─── phone_id on the drop-in socket ───────────────────────────────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phone_id", ["x" * 65, "a%20b", "a%0Ab", "%2E%2E"])
+async def test_dropin_refuses_a_phone_id_that_is_not_a_device_id(monkeypatch, phone_id):
+    install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN},
+                    device_token=DEVICE_TOKEN)
+    up = Upgrade(headers=device(), query=f"phone_id={phone_id}")
+    await _dropin(up)
+    assert up.close_code == 1008 and up.error_code() == "bad_phone_id"
+
+
+@pytest.mark.asyncio
+async def test_dropin_refuses_a_phone_id_that_names_a_connected_room(monkeypatch):
+    install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN},
+                    device_token=DEVICE_TOKEN)
+    app = make_app_state()
+    app.state.active_sessions["phone-hall"] = SimpleNamespace(room_id="phone-hall")
+    up = Upgrade(headers=device(), query="phone_id=hall", app=app)
+    await _dropin(up)
+    assert up.close_code == 1008 and up.error_code() == "bad_phone_id"
+    assert app.state.active_dropins == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("query", ["", "phone_id=android-1a2b", "phone_id=ios-4F2A.x:1"])
+async def test_dropin_takes_an_app_device_id(monkeypatch, query):
+    install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN},
+                    device_token=DEVICE_TOKEN)
+    up = Upgrade(headers=device(), query=query)
+    await _dropin(up)
+    assert up.accepted and up.error_code() == "target_offline"

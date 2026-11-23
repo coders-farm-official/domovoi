@@ -972,8 +972,8 @@ const VideoControls = ({ s, fire }) => {
       reportMutationFailure(fire, 'display action', e);
     }
   };
-  const restartKiosk = () => {
-    if (!window.confirm(
+  const restartKiosk = async () => {
+    if (!await askConfirm(
       `Restart the kiosk browser on ${s.room_id}?\n\n` +
       `The screen goes blank for a few seconds while it relaunches.`
     )) return;
@@ -1035,7 +1035,7 @@ const SatCaptureControl = ({ s, fire, refresh }) => {
   const plural = (n) => `${n} recording${n === 1 ? '' : 's'}`;
 
   const turnOn = async () => {
-    if (!window.confirm(
+    if (!await askConfirm(
       `Record commands in ${s.room_id}?\n\n` +
       `Each command said in this room (after the wake word, or answering a ` +
       `follow-up question) is kept on the Domovoi server for ${days} days, the audio ` +
@@ -1056,7 +1056,7 @@ const SatCaptureControl = ({ s, fire, refresh }) => {
   };
 
   const turnOff = async () => {
-    if (!window.confirm(
+    if (!await askConfirm(
       `Stop recording in ${s.room_id}?\n\n` +
       (kept ? `The ${plural(kept)} kept so far will be deleted now. This can't be undone.`
             : 'Nothing kept here yet, so nothing to delete.')
@@ -1410,7 +1410,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
   const restartSat = async () => {
     if (upgrading) { fire(`${s.room_id} is upgrading — it restarts itself when the new code is in`); return; }
     if (s.status !== 'online') { fire(`${s.room_id} is offline`); return; }
-    if (!window.confirm(`Restart the ${s.room_id} room? It'll drop offline for a few seconds while the service bounces.`)) return;
+    if (!await askConfirm(`Restart the ${s.room_id} room? It'll drop offline for a few seconds while the service bounces.`)) return;
     try {
       await apiPost(`/api/satellites/${encodeURIComponent(s.room_id)}/restart`, {});
       fire(`restarting ${s.room_id}…`);
@@ -1422,7 +1422,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
   const upgradeSat = async () => {
     if (upgrading || asking) return;
     if (s.status !== 'online') { fire(`${s.room_id} is offline`); return; }
-    if (!window.confirm(
+    if (!await askConfirm(
       `Upgrade the ${s.room_id} room to ${coreSha || 'the latest domovoi code'}?\n\n` +
       `It pulls the new room software from the Domovoi server, backs up its current ` +
       `tree, and restarts — dropping offline for a few seconds. If the new code won't ` +
@@ -1460,7 +1460,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
   // moving a room to a new device (the old token no longer matches). Works
   // whether or not the room is online — the pairing lives in the DB.
   const resetPairing = async () => {
-    if (!window.confirm(
+    if (!await askConfirm(
       `Reset pairing for ${s.room_id}?\n\n` +
       `The next device that connects as this room will re-pair and take it ` +
       `over. Do this after re-flashing the Pi or moving the room to a new ` +
@@ -1685,7 +1685,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
             {s.room_label || 'ungrouped'}
           </span>
           <IconButton name="pencil" title="edit room label" onClick={async () => {
-            const v = window.prompt('Room label (empty to clear):', s.room_label || '');
+            const v = await askPrompt('Room label (empty to clear):', { value: s.room_label || '', confirmLabel: 'Save' });
             if (v === null) return;
             try {
               await apiPatch(`/api/satellites/${encodeURIComponent(s.room_id)}`, { room_label: v.trim() || null });
@@ -1725,7 +1725,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
           </Button>
           {waiting && (
             <Button icon="trash-2" onClick={async () => {
-              if (!window.confirm(
+              if (!await askConfirm(
                 `Remove ${s.room_id}?\n\nThis deletes the adopted-but-never-connected room and its ` +
                 `preseeded pairing. Do this if the device was unplugged mid-setup or adopted by mistake.`
               )) return;
@@ -1748,7 +1748,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
               refuses to retire a room out from under a live device. */}
           {!waiting && s.status !== 'online' && (
             <Button icon="trash-2" onClick={async () => {
-              if (!window.confirm(
+              if (!await askConfirm(
                 `Retire ${s.room_id}?\n\n` +
                 `Frees the name so a new room device can use it. Removes this room's ` +
                 `pairing, any pending approval, and its music instance.\n\n` +
@@ -2349,7 +2349,7 @@ const RoomSettingsBody = ({ room, fire }) => {
 
   const save = async () => {
     if (dirtyCount === 0 || badEdits.length > 0) return;
-    if (!window.confirm(`Save and restart the ${room} room? It'll drop offline for a few seconds while it applies the change.`)) return;
+    if (!await askConfirm(`Save and restart the ${room} room? It'll drop offline for a few seconds while it applies the change.`)) return;
     setSaving(true); setResult(null);
     try {
       const res = await apiPatch(`/api/satellites/${encodeURIComponent(room)}/config`, { changes: edits });
@@ -2865,7 +2865,7 @@ const MusicGroupsCard = ({ sats, fire }) => {
     }
   };
   const remove = async (g) => {
-    if (!window.confirm(`Delete the group ${g.name}?\n\nMusic playing in its rooms keeps playing.`)) return;
+    if (!await askConfirm(`Delete the group ${g.name}?\n\nMusic playing in its rooms keeps playing.`)) return;
     setBusy(true);
     try {
       await apiDelete(`/api/music/groups/${g.id}`);
@@ -3256,8 +3256,8 @@ const PendingSatCard = ({ p, adopted, onAdopt }) => {
       ) : failed ? (
         <Button variant="primary" icon="wifi" onClick={() => onAdopt(p, true)}>Re-enter Wi-Fi</Button>
       ) : readopt ? (
-        <Button icon="rotate-cw" onClick={() => {
-          if (window.confirm(`Re-provision this device as "${p.already_adopted_as}"? Its pairing token is rotated — the previous device for that room stops matching.`)) onAdopt(p, true);
+        <Button icon="rotate-cw" onClick={async () => {
+          if (await askConfirm(`Re-provision this device as "${p.already_adopted_as}"? Its pairing token is rotated — the previous device for that room stops matching.`)) onAdopt(p, true);
         }}>Re-provision</Button>
       ) : (
         <Button variant="primary" icon="plug" onClick={() => onAdopt(p, false)}>Adopt</Button>
@@ -4331,7 +4331,7 @@ const RoomDrawer = ({ room, rooms, sats, admin, onClose, onOpenSatellite, fire, 
     finally { setBusy(false); }
   };
   const remove = async () => {
-    if (!window.confirm(`Delete the ${room.name}?\n\nOnly an empty room can go. Its history is kept.`)) return;
+    if (!await askConfirm(`Delete the ${room.name}?\n\nOnly an empty room can go. Its history is kept.`)) return;
     setBusy(true);
     try {
       await apiDelete(`/api/rooms/${rid}`);
@@ -4414,7 +4414,7 @@ const RoomsCard = ({ rooms, merge, admin, onOpenRoom, fire, refresh }) => {
   // Only the admin's click merges; the server never does it on its own.
   const doMerge = async (offer) => {
     const [keep, ...rest] = offer.rooms;
-    if (!window.confirm(
+    if (!await askConfirm(
       `Merge the ${offer.rooms.length} rooms called ${offer.name} into one?\n\n` +
       `Their satellites all move into it. Voices a satellite learned in its old room are ` +
       `forgotten, and speaker tuning is cleared.`)) return;
@@ -4536,7 +4536,7 @@ const SatellitesPage = ({ embedded = false } = {}) => {
   }, [refreshApprovals, refreshJoin]);
 
   const decide = async (a, action, code, roomChoice) => {
-    if (action === 'reject' && !window.confirm(
+    if (action === 'reject' && !await askConfirm(
       `Reject ${a.room_id}?\n\nThe room device keeps retrying until it is ` +
       `approved or powered off — this clears the request, it doesn't ban the device.`
     )) return;

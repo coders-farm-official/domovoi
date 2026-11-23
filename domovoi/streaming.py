@@ -941,6 +941,21 @@ def _clean_wake_slug(raw: object) -> str | None:
         return raw.strip()
     return None
 
+
+# A hello's ``synced_sha``: the version label the device recorded after its
+# last code sync (a short SHA, maybe "-dirty"; older labels have a version
+# and a SHA in brackets). Printable, short, one line.
+_SYNCED_SHA_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._+()-]{0,63}\Z")
+
+
+def _clean_synced_sha(raw: object) -> str | None:
+    """A hello's ``synced_sha`` when it is a short version label, else None
+    (absent, not a string, too long, or with characters no label has)."""
+    if isinstance(raw, str) and _SYNCED_SHA_RE.match(raw.strip()):
+        return raw.strip()
+    return None
+
+
 # Speculative decodes per utterance, at most. Each is a full Whisper pass
 # (faster-whisper pads every call to a 30 s window, so a partial costs what
 # a whole one does), and a capture that keeps pausing and resuming — a TV,
@@ -4137,9 +4152,8 @@ class StreamSession:
             # satellite-code sync (None if never synced), so the dashboard can
             # flag satellites behind the core's SHA. Cleared on
             # disconnect.
-            self.ws.app.state.satellite_synced_sha[self.satellite_id] = ctrl.get(
-                "synced_sha"
-            )
+            synced_sha = _clean_synced_sha(ctrl.get("synced_sha"))
+            self.ws.app.state.satellite_synced_sha[self.satellite_id] = synced_sha
             # The wake word this room answers to (its effective slug: a word
             # pushed from the dashboard, else its configured one), for the
             # user manual's "say ..." (GET /api/satellites wake_word). Kept
@@ -4178,7 +4192,7 @@ class StreamSession:
             upgrades = getattr(self.ws.app.state, "satellite_upgrades", None)
             if upgrades:
                 satellite_upgrades.on_hello(
-                    upgrades, self.satellite_id, ctrl.get("synced_sha"), time.time()
+                    upgrades, self.satellite_id, synced_sha, time.time()
                 )
             # Cache the satellite type and whether voice input is running.
             # Both are OPTIONAL hello fields (absent on older clients) and

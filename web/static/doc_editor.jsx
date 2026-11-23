@@ -2267,7 +2267,7 @@ img { max-width: 100%; height: auto; }
       if (s.change > s.saved && state.doc && clientSaves()) {
         if (state.doc.format === 'docx' && docxChoice !== 'docx') { setAskDocx(true); return; }
         const ok = await saveRef.current();
-        if (!ok && !window.confirm("Your latest changes couldn't be saved. Close anyway and lose them?")) return;
+        if (!ok && !await askConfirm("Your latest changes couldn't be saved. Close anyway and lose them?")) return;
       }
       onClose();
     };

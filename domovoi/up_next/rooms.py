@@ -26,7 +26,8 @@ core keeps it going:
   - more than :data:`TRIM_KEEP_BEHIND` songs behind the current one: the
     oldest the room was heard playing go (a jump ahead leaves the songs it
     passed), so a day-long session keeps a small queue and "previous"
-    still works.
+    still works. Never more than :data:`TRIM_MAX_BEHIND` songs stay behind,
+    heard or not.
 
 * **After a stream** — a song from an external source (a streaming-search
   provider's ``sdk.playback.play_url``) arms the room's session as it is
@@ -67,6 +68,10 @@ log = logging.getLogger(__name__)
 
 #: Songs kept behind the current one before the oldest are trimmed (§5).
 TRIM_KEEP_BEHIND = 50
+#: Hard ceiling on songs behind the current one: past it the oldest go even if
+#: never heard (skipped fast, behind at a restart, queued before the session),
+#: so the behind-queue cannot grow without bound. A jump only moves the pointer.
+TRIM_MAX_BEHIND = 4 * TRIM_KEEP_BEHIND
 #: A session whose room has been paused or stopped this long ends (§5).
 IDLE_END_SEC = 2 * 3600.0
 #: After a refill that found nothing to add, wait this long before the next.
@@ -144,11 +149,12 @@ async def uris_for(s: Any, track_ids: Iterable[int]) -> dict[int, str]:
 async def tracks_for_files(s: Any, files: Iterable[str]) -> dict[str, int]:
     """MPD path -> library track id, for the paths that are library songs.
     One query for the paths stored the way the indexer writes them (the
-    music folder + the MPD path), then the listen logger's matching (the
-    path under the music folder, in either slash) for the rest. A stream or
-    a file the library doesn't know is left out."""
+    music folder + the MPD path), then ONE more with the listen logger's
+    matching (the path under the music folder, in either slash;
+    :func:`domovoi.workers.listen_logger.track_for_file`) for the rest, so
+    a queue of files the library doesn't know costs two queries, not one
+    per entry. A stream or a file the library doesn't know is left out."""
     from domovoi.handlers.shared.library_match import library_path_for_mpd_file
-    from domovoi.workers.listen_logger import track_for_file
 
     want = sorted({str(x) for x in files if x and "://" not in str(x)})
     if not want:
@@ -166,11 +172,25 @@ async def tracks_for_files(s: Any, files: Iterable[str]) -> dict[str, int]:
         f = full.get(fp)
         if f is not None and f not in out:
             out[f] = int(tid)
+    rest: dict[str, list[str]] = {}
     for f in want:
         if f not in out:
-            found = await track_for_file(s, f)
-            if found is not None:
-                out[f] = found[0]
+            rest.setdefault(f.replace("\\", "/").lstrip("/"), []).append(f)
+    rest.pop("", None)
+    if rest:
+        rows = (await s.execute(text(
+            """
+            SELECT DISTINCT ON (u.rel) u.rel, t.id
+            FROM unnest(CAST(:rels AS text[])) AS u(rel)
+            JOIN library_tracks t
+              ON right(replace(t.file_path, chr(92), '/'), length(u.rel) + 1) = '/' || u.rel
+              OR replace(t.file_path, chr(92), '/') = u.rel
+            ORDER BY u.rel, length(t.file_path)
+            """
+        ), {"rels": sorted(rest)})).all()
+        for rel, tid in rows:
+            for f in rest.get(rel, ()):
+                out[f] = int(tid)
     return out
 
 
@@ -562,8 +582,10 @@ async def look(room_id: str, client: Any, snap: dict[str, Any], *,
     seen.heard.add(int(songid))
     seen.heard &= set(ids)
     if cur > TRIM_KEEP_BEHIND:
-        # "Behind" is not "played": only songs the room was heard playing go.
-        old = [i for i in ids[: cur - TRIM_KEEP_BEHIND] if i in seen.heard]
+        # "Behind" is not "played": only songs the room was heard playing go,
+        # plus whatever sits beyond the hard cap behind the current song.
+        old = [i for n, i in enumerate(ids[: cur - TRIM_KEEP_BEHIND])
+               if i in seen.heard or n < cur - TRIM_MAX_BEHIND]
         trimmed = await client.queue_remove(old) if old else []
         did["trimmed"] = len(trimmed)
         ids = [i for i in ids if i not in set(trimmed)]
@@ -623,13 +645,17 @@ async def song_ended(room_id: str, *, songid: Any, track_id: int | None, played_
 # ─── What the room's queue shows ──────────────────────────────────────────
 
 
-async def queue_view(room_id: str, items: list[dict[str, Any]]) -> dict[str, Any]:
+async def queue_view(
+    room_id: str, items: list[dict[str, Any]], *, with_why: bool = True
+) -> dict[str, Any]:
     """The room queue's Up next fields (``GET …/queue/{room}``): each item
     gains ``origin`` (``auto`` for a pick, else ``explicit``), and for a
     pick ``reason_label`` and ``up_next_seq``; every item its ``track_id``
     when it is a library song (else null). Returns ``{session_id, autoplay,
     up_next}`` for the queue itself (all null without a session). Never
-    names a person: the queue is household-visible."""
+    names a person: the queue is household-visible. ``with_why=False`` (a
+    guest's read) leaves each pick's ``why`` null: it is worded from the
+    listener's history."""
     out: dict[str, Any] = {"session_id": None, "autoplay": None, "up_next": None}
     for it in items:
         it.setdefault("origin", "explicit")
@@ -651,7 +677,8 @@ async def queue_view(room_id: str, items: list[dict[str, Any]]) -> dict[str, Any
                 if p is not None and p["status"] != "removed":
                     it["origin"] = "auto"
                     it["reason_label"] = p["reason_label"]
-                    it["why"] = service.why_text(service._why_list(p.get("why")))
+                    if with_why:
+                        it["why"] = service.why_text(service._why_list(p.get("why")))
                     it["up_next_seq"] = int(p["seq"])
             seed = await service.track_row(s, st.sess.seed.track_id)
             out.update({

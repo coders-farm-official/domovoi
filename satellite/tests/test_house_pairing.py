@@ -538,6 +538,7 @@ def test_adopting_the_approving_house_pins_it_and_keeps_its_token(tmp_path, conf
     import types
 
     monkeypatch.setattr(client, "APPROVED_MARKER", tmp_path / "approved")
+    monkeypatch.setattr(client, "APPROVAL_PROOF_SERVERS_PATH", tmp_path / "proof-servers.json")
     cfg = types.SimpleNamespace(domovoi_url="auto", server_fingerprint="", room_id=ROOM)
     house = House("ws://192.168.1.30:6370", FP2, True, "test")
     token = house_pairing.house_token(MASTER, FP2)
@@ -681,10 +682,29 @@ def test_adopting_records_the_approval_so_a_restart_is_not_half_paired(
     monkeypatch.setattr(client, "PAIRING_TOKEN_SIDECAR", tmp_path / "pairing_token")
     monkeypatch.setattr(client, "_PAIRING_TOKEN_OVERRIDE", None)
     monkeypatch.setattr(client, "APPROVED_MARKER", tmp_path / "approved")
+    monkeypatch.setattr(client, "APPROVAL_PROOF_SERVERS_PATH", tmp_path / "proof-servers.json")
     cfg = types.SimpleNamespace(domovoi_url="auto", server_fingerprint="", room_id=ROOM)
     house = House("ws://192.168.1.30:6370", FP2, True, "test")
     client._adopt_approved_house(cfg, config_file, house, house_pairing.house_token(MASTER, FP2))
     assert client._read_approval_record() == client._APPROVAL_YES
+
+
+def test_adopting_remembers_the_house_proves_approvals(tmp_path, config_file, monkeypatch):
+    """After an every-house approval the device's later hellos to that
+    server carry no approval code, as after a one-house approval."""
+    import types
+
+    monkeypatch.setattr(server_identity, "PENDING_SERVER_SIDECAR", tmp_path / "pending.json")
+    monkeypatch.setattr(client, "PAIRING_TOKEN_SIDECAR", tmp_path / "pairing_token")
+    monkeypatch.setattr(client, "_PAIRING_TOKEN_OVERRIDE", None)
+    monkeypatch.setattr(client, "APPROVED_MARKER", tmp_path / "approved")
+    monkeypatch.setattr(client, "APPROVAL_PROOF_SERVERS_PATH", tmp_path / "proof-servers.json")
+    cfg = types.SimpleNamespace(domovoi_url="auto", server_fingerprint="", room_id=ROOM)
+    house = House("ws://192.168.1.30:6370", FP2, True, "test")
+    assert not client._proof_server_remembered(FP2)
+    client._adopt_approved_house(cfg, config_file, house, house_pairing.house_token(MASTER, FP2))
+    assert client._proof_server_remembered(FP2)
+    assert client._legacy_approval_code(cfg) is None
 
 
 # ─── SAT-15: the budget, and who gets the places ───────────────────────────

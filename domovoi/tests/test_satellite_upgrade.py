@@ -274,6 +274,23 @@ async def test_hello_caches_none_when_never_synced() -> None:
     assert ws.app.state.satellite_synced_sha["garage"] is None
 
 
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_paired_hello")
+@pytest.mark.parametrize("raw", [{"a": 1}, ["abc"], 12345, "a" * 65, "abc\n123", "<b>x</b>"])
+async def test_hello_drops_a_synced_sha_that_is_not_a_label(raw) -> None:
+    ws = _FakeWS()
+    session = StreamSession(ws, "kitchen")
+    await session._on_control({"type": "hello", "synced_sha": raw})
+    assert ws.app.state.satellite_synced_sha["kitchen"] is None
+
+
+@pytest.mark.parametrize("label", ["abc1234", "abc1234-dirty", "1.0.0rc2 (abc1234)", "unknown"])
+def test_a_real_version_label_is_kept(label) -> None:
+    from domovoi.streaming import _clean_synced_sha
+
+    assert _clean_synced_sha(label) == label
+
+
 # ─── git_version (never-raises contract) ─────────────────────────────────
 
 

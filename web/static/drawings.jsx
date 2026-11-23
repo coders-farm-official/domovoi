@@ -268,7 +268,7 @@ const DrawingOverlay = ({ file, lib, onClose, onSaved, fire, blockedReason = nul
       } else {
         content = lib.serializeAsJSON(elements, appState, files, 'local');
         if (!rel) {
-          const name = window.prompt('Save whiteboard as:', 'sketch');
+          const name = await askPrompt('Save whiteboard as:', { value: 'sketch', confirmLabel: 'Save' });
           if (!name) { setSaving(false); return; }
           rel = name.replace(/\.excalidraw$/i, '') + '.excalidraw';
         }
@@ -292,8 +292,8 @@ const DrawingOverlay = ({ file, lib, onClose, onSaved, fire, blockedReason = nul
     } finally { setSaving(false); }
   };
 
-  const requestClose = () => {
-    if (dirty && !window.confirm('You have unsaved changes. Discard them and close?')) return;
+  const requestClose = async () => {
+    if (dirty && !await askConfirm('You have unsaved changes. Discard them and close?')) return;
     onClose();
   };
 

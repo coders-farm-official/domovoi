@@ -2798,13 +2798,18 @@ class SatelliteApprovalRepository:
             candidate = (code or "").strip()
             if not pairing_proof.valid_code(candidate):
                 return "malformed"
-            await self.s.execute(
+            # Only for the device that was read: a takeover in between
+            # parked another one, which this code was not typed for.
+            entered = await self.s.execute(
                 text(
                     "UPDATE satellite_approvals SET entered_code = :c, "
-                    "entered_at = now() WHERE satellite_id = :r"
+                    "entered_at = now() WHERE satellite_id = :r AND token_hash = :h "
+                    "AND proof"
                 ),
-                {"r": room_id, "c": candidate},
+                {"r": room_id, "c": candidate, "h": pending.token_hash},
             )
+            if not entered.rowcount:
+                return "not_pending"
             return "entered"
         stored = pending.code
         candidate = (code or "").strip()
@@ -2826,13 +2831,16 @@ class SatelliteApprovalRepository:
             await self.s.execute(
                 text(
                     "DELETE FROM satellite_approvals WHERE satellite_id = :r "
+                    "AND token_hash = :h AND code = :c "
                     "RETURNING token_hash, board, sat_type, requested_room"
                 ),
-                {"r": room_id},
+                {"r": room_id, "h": pending.token_hash, "c": stored},
             )
         ).first()
         if row is None:
-            # Raced a reject between the read and the delete.
+            # Raced a reject between the read and the delete, or a takeover
+            # parked another device under the name: the code checked was
+            # not that device's, so nothing is bound.
             return "not_pending"
         await self._bind(room_id, row)
         return "approved"

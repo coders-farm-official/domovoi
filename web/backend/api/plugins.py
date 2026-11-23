@@ -26,8 +26,9 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from domovoi.admin_auth import check_admin_request
 from web.backend.domovoi_client import auth_forward_headers
-from web.backend.plugin_host import HOST
+from web.backend.plugin_host import HOST, WEB_LOAD_ERROR_OPEN
 
 log = logging.getLogger(__name__)
 
@@ -150,12 +151,14 @@ async def _worker_notes() -> dict[str, list[dict[str, str]]]:
 
 
 @router.get("")
-async def list_installed() -> dict[str, Any]:
+async def list_installed(request: Request) -> dict[str, Any]:
     """Installed plugins for the admin page: registry row + the fields
     the list renders (permissions, capabilities, pages), and what the
     plugin's running workers say about themselves (``worker_notes``, from
     the core). Open read — §12 keeps the registry list open; errors show
-    for everyone."""
+    for everyone, but a web module's load error in full only for an admin
+    (it can carry install paths)."""
+    admin = await check_admin_request(request) in ("ok", "pre-setup")
     plugins: list[dict[str, Any]] = []
     notes = await _worker_notes()
     for slug in sorted(HOST.rows):
@@ -189,7 +192,12 @@ async def list_installed() -> dict[str, Any]:
                 "android_capabilities": (m.get("android") or {}).get(
                     "capabilities"
                 ) or [],
-                "web_load_error": HOST.load_errors.get(slug),
+                # The exception text for an admin; anyone else, only that
+                # it failed.
+                "web_load_error": (
+                    HOST.load_errors.get(slug) if admin
+                    else (WEB_LOAD_ERROR_OPEN if HOST.load_errors.get(slug) else None)
+                ),
                 "worker_notes": notes.get(slug, []),
                 # The container guard (SDK 1.5): what the plugin declares it
                 # runs, and whether a plugin that needs Docker declared

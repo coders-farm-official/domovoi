@@ -671,8 +671,43 @@ const IconButton = ({ name, ...rest }) => (
  * A URL that failed is remembered for the life of the page (coverMisses),
  * so a re-render, a page flipped back to, or the same track in another
  * row never asks again: one request per artless track per visit, not one
- * per render, and nothing logged from here. */
+ * per render, and nothing logged from here. A library cover is remembered
+ * without its ?size= (coverMissKey): a track with no art has none at any
+ * size, so the 40px row's 404 also spares the 200px player its request.
+ *
+ * Sizes: the original picture can be 1.5 MB, so every library cover the
+ * dashboard draws asks for a thumbnail, `?size=` s (160px long edge), m
+ * (320), l (512) or xl (768), a WebP with its own ETag (track_cover). The
+ * bucket is the smallest whose edge covers the tile at 2x (coverBucket):
+ * table cells and cards (<= 80px) get s, the expanded player's 200px tile
+ * l, the OS media controls xl. A server too old to know `size` ignores it
+ * and sends the original, as before. */
 const coverMisses = new Set();
+const COVER_BUCKETS = [['s', 160], ['m', 320], ['l', 512], ['xl', 768]];
+/* The bucket for a tile `css` px wide (or a bucket name, passed through). */
+const coverBucket = (css) => {
+  if (typeof css === 'string' && COVER_BUCKETS.some(([b]) => b === css)) return css;
+  const need = Number(css) * 2;
+  if (!Number.isFinite(need)) return 'xl';
+  const hit = COVER_BUCKETS.find(([, edge]) => edge >= need);
+  return hit ? hit[0] : 'xl';
+};
+const MUSIC_COVER_PATH = /\/api\/music\/library\/[^/?#]+\/cover(?:\?|$)/;
+/* `url` with its ?size= set to `css`'s bucket (or dropped, css == null),
+ * every other parameter (?v=) kept. Only a music library cover is touched:
+ * an audiobook's or a podcast's URL comes back as it was. */
+const coverUrlAtSize = (url, css) => {
+  if (typeof url !== 'string' || !MUSIC_COVER_PATH.test(url)) return url;
+  const at = url.indexOf('?');
+  const path = at < 0 ? url : url.slice(0, at);
+  const params = (at < 0 ? '' : url.slice(at + 1)).split('&')
+    .filter((p) => p && p !== 'size' && !p.startsWith('size='));
+  if (css != null) params.push(`size=${coverBucket(css)}`);
+  return params.length ? `${path}?${params.join('&')}` : path;
+};
+/* What a miss is remembered under: the URL without its size. */
+const coverMissKey = (url) => coverUrlAtSize(url, null);
+const coverMissed = (url) => !!url && coverMisses.has(coverMissKey(url));
 /* The cover's version (V059): a track row's `cover_v`, carried on the URL
  * as ?v= so the browser's cached picture (and a remembered miss) is
  * replaced exactly when the art changes. `library.cover.changed` names the
@@ -697,13 +732,17 @@ const listenForCoverVersions = () => {
     }
   });
 };
-const libraryCoverUrl = (trackId, coverV) => {
+/* A track's cover URL. `size` is the tile's CSS px (or a bucket name) and
+ * adds ?size=; left out, the URL names the original picture (the player's
+ * queue items keep that form, and each place that draws one sizes it). */
+const libraryCoverUrl = (trackId, coverV, size) => {
   if (trackId == null) return null;
   listenForCoverVersions();
   const known = coverVersions.get(trackId);
   const v = Math.max(Number.isFinite(coverV) ? coverV : 0, known || 0);
-  return `${typeof API_BASE === 'string' ? API_BASE : ''}/api/music/library/${encodeURIComponent(trackId)}/cover`
+  const url = `${typeof API_BASE === 'string' ? API_BASE : ''}/api/music/library/${encodeURIComponent(trackId)}/cover`
     + (v > 0 || Number.isFinite(coverV) ? `?v=${v}` : '');
+  return size == null ? url : coverUrlAtSize(url, size);
 };
 /* The artists a track credits beyond the one its artist line already
  * names (schemas.Track `artists`, in the file's order): what the library
@@ -724,7 +763,7 @@ const CoverArt = ({ src, size = 40, radius = 'var(--r-sm)', icon = 'music',
   // from an effect, which drew the new URL under the last picture's 'shown'
   // and put a known-missing cover into an <img> (a second request and a
   // second 404 line on the console).
-  const fresh = src && !coverMisses.has(src) ? 'loading' : 'none';
+  const fresh = src && !coverMissed(src) ? 'loading' : 'none';
   const [held, setHeld] = React.useState({ src, state: fresh });
   if (held.src !== src) setHeld({ src, state: fresh });
   const state = held.src === src ? held.state : fresh;
@@ -739,7 +778,7 @@ const CoverArt = ({ src, size = 40, radius = 'var(--r-sm)', icon = 'music',
       {state !== 'none' && (
         <img src={src} alt="" width={size} height={size} loading="lazy" decoding="async" draggable={false}
              onLoad={() => setHeld({ src, state: 'shown' })}
-             onError={() => { coverMisses.add(src); setHeld({ src, state: 'none' }); }}
+             onError={() => { coverMisses.add(coverMissKey(src)); setHeld({ src, state: 'none' }); }}
              style={{ position: 'absolute', inset: 0, width: '100%', height: '100%',
                       objectFit: 'cover', opacity: shown ? 1 : 0 }}/>
       )}
@@ -789,6 +828,75 @@ const DeleteConfirmDialog = ({ open = true, title = 'Delete?', busy = false, con
     </div>
   );
 };
+
+/* ---- In-page confirm / prompt -------------------------------- */
+/* The dashboard's own answer to window.confirm and window.prompt, which an
+ * embedded browser (and some phone webviews) dismisses without ever showing,
+ * so the press that asked did nothing. Both return a promise:
+ *
+ *   if (!await askConfirm('Restart now?', { confirmLabel: 'Restart' })) return;
+ *   const name = await askPrompt('Rename chat', { value: title });   // null = cancelled
+ *
+ * One dialog at a time; a second ask waits for the first. Escape and the
+ * backdrop cancel. `message` keeps its line breaks. */
+const InPageAsk = ({ ask, onDone }) => {
+  const [text, setText] = React.useState(ask.value || '');
+  const done = (ok) => onDone(ask.input ? (ok ? text : null) : !!ok);
+  React.useEffect(() => {
+    const h = (e) => { if (e.key === 'Escape') done(false); };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  });
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 110, background: 'rgba(0,0,0,0.45)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
+         onClick={() => done(false)}>
+      <div role="dialog" aria-modal="true" aria-label={ask.title} onClick={(e) => e.stopPropagation()}
+           style={{ width: 'min(480px, 100%)', background: 'var(--card)',
+                    border: '1px solid var(--border)', borderRadius: 'var(--r-lg)',
+                    boxShadow: 'var(--shadow-md), var(--inner-highlight)', overflow: 'hidden' }}>
+        <div style={{ padding: '13px 16px', borderBottom: '1px solid var(--border-soft)' }}>
+          <strong style={{ fontSize: 14 }}>{ask.title}</strong>
+        </div>
+        <div style={{ padding: '14px 16px', fontSize: 13, color: 'var(--fg-muted)',
+                      whiteSpace: 'pre-wrap', display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div>{ask.message}</div>
+          {ask.input && (
+            <input autoFocus value={text} onChange={(e) => setText(e.target.value)}
+                   onKeyDown={(e) => { if (e.key === 'Enter') done(true); }}
+                   style={{ font: 'inherit', padding: '6px 8px', borderRadius: 'var(--r-md)',
+                            border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--fg)' }}/>
+          )}
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '12px 16px',
+                      borderTop: '1px solid var(--border-soft)' }}>
+          <Button onClick={() => done(false)}>Cancel</Button>
+          <Button variant="primary" onClick={() => done(true)}>{ask.confirmLabel}</Button>
+        </div>
+      </div>
+    </div>
+  );
+};
+const inPageAsks = { queue: [], root: null, host: null, busy: false };
+const inPageNext = () => {
+  const st = inPageAsks;
+  if (st.busy || !st.queue.length) return;
+  const ask = st.queue.shift();
+  st.busy = true;
+  if (!st.host) {
+    st.host = document.createElement('div');
+    document.body.appendChild(st.host);
+    st.root = ReactDOM.createRoot(st.host);
+  }
+  const finish = (v) => { st.root.render(null); st.busy = false; ask.resolve(v); inPageNext(); };
+  st.root.render(<InPageAsk ask={ask} onDone={finish}/>);
+};
+const inPageAsk = (message, o) => new Promise((resolve) => {
+  inPageAsks.queue.push({ message: String(message), title: 'Are you sure?', confirmLabel: 'OK', ...o, resolve });
+  inPageNext();
+});
+const askConfirm = (message, o = {}) => inPageAsk(message, o);
+const askPrompt = (message, o = {}) => inPageAsk(message, { title: message, confirmLabel: 'OK', ...o, input: true });
 
 /* The pending-delete state a list panel needs to put DeleteConfirmDialog
  * in front of its delete handler:
@@ -1313,7 +1421,7 @@ const restartDomovoiServer = async ({ core, fire, question, plain = false, confi
   });
   // What the confirm asks, from the panel's copy.
   const asked = fullBy(core);
-  if (!confirmed && !window.confirm(asked
+  if (!confirmed && !await askConfirm(asked
     ? fullUpdateText(asked, false)
     : plain
     ? `${question || 'Restart Domovoi now?'}\n\n` +
@@ -1350,7 +1458,7 @@ const restartDomovoiServer = async ({ core, fire, question, plain = false, confi
     // Asked as a quick restart, and the server as it is now says the unit
     // would run its full update (a pull landed after the panel read the
     // version, say): ask again, as that, before anything happens.
-    if (!window.confirm(fullUpdateText(full, true))) {
+    if (!await askConfirm(fullUpdateText(full, true))) {
       // Nothing was asked for, and the panel's copy is out of date.
       try { await onSettled(); } catch { /* the caller's re-read reports itself */ }
       return false;
@@ -1675,7 +1783,7 @@ const CoreRestart = ({ onBack, style }) => {
   }, [silent, busy, refresh]);
   if (!admin || !st || st.answering) return null;
   const press = async () => {
-    if (!window.confirm(
+    if (!await askConfirm(
       'Restart the Domovoi core?\n\n' +
       'It isn’t answering. The dashboard first makes sure it is really stuck ' +
       '(no answer at all for about a minute, longer than the core waits before ' +
@@ -5274,10 +5382,11 @@ Object.assign(window, {
   FirstRun, welcomeShows, FirstRunWelcome, FirstRunAllSet, copyToClipboard,
   ConnectAsk, connectShows, ConnectPrompt,
   satCan, satBoardLabel, SAT_BOARD_LABELS,
-  DeleteConfirmDialog, useDeleteConfirm, TrustServerPrompt, WriteBlockedNotice,
+  DeleteConfirmDialog, useDeleteConfirm, askConfirm, askPrompt, TrustServerPrompt, WriteBlockedNotice,
   CaptureChip, useAdminSignedIn, adminReloadState, useAdminReloadState, AdminSignedOutNotice,
   TimerFireAlerts,
   CoverArt, libraryCoverUrl, coverMisses, coverVersions, creditedWith,
+  coverBucket, coverUrlAtSize, coverMissKey, coverMissed,
   ContainerGuardStore, useContainerGuard, containerGuardBanner, ContainerGuardBanner,
   CONTAINER_GUARD_GUEST_TEXT,
   DeviceTokenNotice, deviceTokenNoticeText, tokenWaitClock,

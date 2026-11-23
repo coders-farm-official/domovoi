@@ -154,6 +154,9 @@ async def test_a_refused_address_is_said_where_an_admin_looks(healthy_core, monk
     assert line["kind"] == "addr_refused"
     assert "192.0.2.197:6370" in line["text"]
     assert "couldn't prove it's the one at that address" in line["text"]
+    # The address came from the request, so the advice never just says to
+    # trust it: listing it is only for an address someone set up.
+    assert "If nobody set a room up with it, don't trust it" in line["text"]
 
 
 def test_join_problems_keep_the_newest_few_and_count_repeats(monkeypatch):

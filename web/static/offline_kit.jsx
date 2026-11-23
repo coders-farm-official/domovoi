@@ -195,7 +195,7 @@ const OfflineKitCard = () => {
     try { await apiPost('/api/offline-kit/cancel', {}); load(sel); } catch (e) { setError(kitRefusalText(e)); }
   };
   const remove = async (id) => {
-    if (!window.confirm('Delete the offline kit image from the server?')) return;
+    if (!await askConfirm('Delete the offline kit image from the server?')) return;
     try { setSt(await apiDelete(`/api/offline-kit/${id}`)); fire('the kit image is gone from the server'); }
     catch (e) { setError(kitRefusalText(e)); }
   };

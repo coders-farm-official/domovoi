@@ -7,6 +7,7 @@ import com.domovoi.app.net.DEVICE_ID_HEADER
 import com.domovoi.app.net.DeviceOwner
 import com.domovoi.app.net.DomovoiJson
 import com.domovoi.app.net.apiDetail
+import com.domovoi.app.net.claimHeaders
 import com.domovoi.app.net.decode
 import com.domovoi.app.net.isDeviceTokenRefusal
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -240,13 +241,23 @@ suspend fun readHouseholdMix(api: ApiClient, server: String): MusicMix =
 suspend fun readPersonMix(api: ApiClient, server: String, personId: Long): PersonMix =
     parse(api.raw("GET", "/api/people/$personId/music-mix", onlyTo = server)).decode()
 
-/** `PUT /api/people/{id}/music-mix` to [server] only, naming this phone
- *  ([DEVICE_ID_HEADER]: the server matches its owner against [personId]). */
-suspend fun savePersonMix(api: ApiClient, server: String, deviceId: String, personId: Long, override: MixSliders?): PersonMix =
+/** `PUT /api/people/{id}/music-mix` to [server] only, as this phone's
+ *  person: [DEVICE_ID_HEADER] and the claim key ([claimHeaders]), as for
+ *  clearing that person's listening history. The server matches the
+ *  phone's owner against [personId] and, from 1.5.0, checks the key
+ *  (security review 2026-11-22, L40). */
+suspend fun savePersonMix(
+    api: ApiClient,
+    server: String,
+    deviceId: String,
+    claimKey: String?,
+    personId: Long,
+    override: MixSliders?,
+): PersonMix =
     api.put(
         "/api/people/$personId/music-mix",
         personMixBody(override),
-        headers = mapOf(DEVICE_ID_HEADER to deviceId),
+        headers = claimHeaders(deviceId, claimKey),
         onlyTo = server,
     ).decode()
 

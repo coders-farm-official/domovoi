@@ -296,6 +296,59 @@ a way that would otherwise get reported as a bug.
   `--reset-admin`, ends every grant. The phone apps use it from their next
   release; until then the list stays empty.
 
+## 1.4.1 (unreleased) — Printing, videos, scans and Windows update hardening
+
+- **The list of a person's voice samples now needs a household device**, like the
+  rest of their People page.
+- **Printer discovery on a Mac install** counts only the Mac's own home
+  network as home, and never dials the Mac itself through the VM's
+  networks.
+- **Printer discovery reads network answers within limits**: a bounded
+  amount of work per answer, at most 32 answers kept from any one
+  address, and answers from outside the home network dropped.
+- **The Windows update copies the downloaded Setup more strictly**: each
+  file is opened without following a link and checked to be the file it
+  names, and a refused update removes every file it copied.
+- **The dashboard logs it** if it can't keep its port-80 permission away
+  from the programs it starts.
+- **Video poster frames**: every spelling of one file's path shares one
+  cached poster, and the frame is made at low priority, at most two at a
+  time, ended at its time limit.
+- **Video in chat reads the helper programs' output within limits**: the
+  upload check asks only for the fields it uses, the scene scan stops
+  reading its log at a cap, and a job's frame grabs have an overall time
+  budget.
+- **Scan reading**: a page is saved only while the scan still has the
+  bytes it was read from, the read, summary and text of a scan whose file
+  changed since answer 404 as the by-path lookup already did, and asking
+  for a read of a file over the 1 GB limit is refused before the file is
+  hashed (an unchanged file is not hashed again).
+
+## 1.4.1 (unreleased) — Dashboard update fixes
+
+- **What changed.** Restarting the server for an update no longer makes
+  open dashboard tabs say "plugins changed — reload to get the new pages"
+  when no plugin changed; only a real upgrade of a plugin the tab already
+  runs asks for a reload.
+- **What changed.** Every confirmation and name prompt in the dashboard
+  (update, restart, delete, remove, rename and the rest) is now a dialog
+  inside the page. Some embedded browsers and phone web views dismissed the
+  browser's own pop-ups unseen, so pressing "Update Domovoi" did nothing.
+- **What changed.** The Version card in Settings → About & updates reads
+  the server again after it restarts, so it shows the new version and a
+  fresh update check without a manual reload.
+
+## 1.4.1 (unreleased) — A busy machine no longer restarts the core
+
+- **What changed.** The core no longer restarts itself when the database
+  is slow to answer because the machine is busy; it still restarts when
+  the core itself is stuck. When the database probe gets no answer, the
+  core now asks again on a separate connection of its own: only if that
+  one answers does the miss count toward a restart. The core log says
+  when the database itself was slow, and a stall report now includes the
+  machine's I/O and memory pressure and load average on Linux.
+
+
 ## 1.4.1 (unreleased) — A slow start no longer switches a plugin off
 
 - **What changed.** A plugin that took a long time to load on a busy
@@ -354,6 +407,88 @@ a way that would otherwise get reported as a bug.
   aloud (messages and shared lists).
 - Friend Houses: a friend's messages and names read aloud stay out of the
   chat model's history, and "double check that" declines such a reply.
+- A guest's "play this one" on a room that stopped in the meantime is
+  refused, so a guest never starts a stopped room.
+- A room's queue looks up the songs it can't place by path in one query
+  instead of one per entry, and a guest's queue and Up next reads leave out
+  the "why this song?" text, which comes from a listener's history.
+- The privacy page no longer says the room-queue blocks stop a device that
+  calls the core directly: the dashboard checks them, the core doesn't.
+- Radio 1.5.2: a failed station-directory search no longer logs what was
+  searched, and the log scrub blanks those search words in the directory's
+  URLs; a now-playing poll has a whole-poll deadline, so a station that
+  sends a byte now and then can't stall polling for every station.
+- The open plugin list and manifest say only that a plugin's server web
+  module failed to load; the error text is shown to an admin.
+- Feed and page fetches have a deadline for the whole answer, not just per
+  read. The privacy page notes that a global IPv6 address of the server or
+  a neighbour counts as public for outbound fetches.
+- The podcast list shows a feed URL without its query or user info (where
+  a private feed keeps its token) to a caller without the household token,
+  and podcast log lines leave them out too.
+- Listens posted by phones and browsers have a house-wide daily cap beside
+  the per-device one.
+
+## 1.4.1 (unreleased) — Sign-in, room pairing and drop-in checks
+
+- **Changing the admin password** checks the old password under the same
+  backoff as the sign-in form: after a wrong old password, the next try
+  waits (`429` with `Retry-After`).
+- **The dashboard's log** quotes the request path in its "refused" lines,
+  so a path can't start a new log line.
+- **Security docs**: the admin idle hour is restarted by any successful
+  admin write, including one that answers `"ok": false`; the house-wide
+  sign-in ceiling and what it costs are described; the short address
+  switch is listed among the admin-gated controls; and a hostile server
+  that stays on the network can hold a device asking every house from
+  answering until the server's address is typed in its setup portal.
+- **Room approval** binds a room only to the device whose request the
+  code was checked against: if another device took the request over in
+  between, nothing is bound and the request stays waiting.
+- **Settings → Rooms** no longer advises trusting an address a room
+  dialled that isn't the server's own unless someone set a room up with
+  it; otherwise it may be a relay.
+- **Drop-in from a phone**: `phone_id` must be a device id (the shape the
+  chat mic's voice turns already take) and may not name a connected room;
+  anything else is closed with `bad_phone_id`. The open snapshot names a
+  phone in a call `phone`, not by its device id.
+- **Satellite hellos**: `synced_sha` is kept only when it is a short
+  version label; anything else reads as unknown.
+- **Satellites** (with the satellite code update): a device approved by
+  asking every house remembers that server proves approvals, so its later
+  hellos never carry its approval code; and a pushed wake word whose name
+  isn't a wake-word name is ignored, as is such a name saved earlier (the
+  configured word is used).
+
+## 1.4.1 (unreleased) — Friend Houses: tighter limits
+
+- **Friend Houses waits for an admin after a reset.** If the admin
+  password is reset (`--reset-admin`), phones and the dashboard can't read
+  or send friend messages, see the friend list or use shared lists until
+  someone signs in as admin again.
+- Friend Houses writes Tor's config and key files through a fresh,
+  exclusively created temp file, and a key file with an unexpected name
+  is ignored instead of stopping the update.
+- The Friend Houses listener closes the oldest connection that hasn't
+  finished its handshake when its slots fill up, and closes a connection
+  that sends far more pings than a house ever does.
+- The Friend Houses firewall drops every IPv6 packet from its network
+  (the network has no IPv6), and its state file says `ipv6=absent` where
+  `ip6tables` isn't installed.
+- With the internet answer "never", Friend Houses stops Tor before it
+  reads the database, so a database outage can't keep it running.
+- Shared lists: an offer withdrawn before it was accepted is forgotten,
+  and old applied changes are pruned by count. When a friend's edit to an
+  item wins, the item shows as from a friend house, not as the household
+  member who first added it.
+- **Removing or blocking a friend stops sharing lists with that house.**
+  Each house keeps its own copy as an ordinary list, and messages or list
+  changes still waiting to go to that house are dropped, so nothing goes
+  out if you become friends again later.
+- New-friend and shared-list announcements that no room heard (no room
+  connected, or all quiet or busy) wait and are tried again.
+- Docs: the friend list's 4-digit code is readable by household phones;
+  only marking it verified needs an admin.
 
 ## 1.4.1 (unreleased) — Queue, downloads, podcast and Word export hardening
 

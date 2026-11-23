@@ -177,9 +177,10 @@ class CoverVersionTest {
         assertNull(CoverArt.refreshedItem(episode))
         // An unchanged version changes nothing (no swap, no reload of the artwork).
         assertNull(CoverArt.refreshedItem(PlayItem.fromTrack(12, "Song", "Main", null, 200.0, coverV = 5)))
-        // The media session's artwork is the item's cover, so it moves too.
+        // The media session's artwork is the item's cover (its largest
+        // smaller copy, CoverSize.XL), so it moves too.
         assertEquals(
-            "$server/api/music/library/12/cover?v=5",
+            "$server/api/music/library/12/cover?v=5&size=xl",
             SessionMedia.artwork(CoverArt.refreshedItem(playing)!!) { server + it },
         )
     }

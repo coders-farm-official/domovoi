@@ -180,6 +180,28 @@ async def test_tristate_flips_false_after_consecutive_misses(
     assert state.icy_supported is False
 
 
+async def test_a_poll_that_never_finishes_is_cut_off_and_counted_as_a_miss(
+    radio_sdk, db_session
+) -> None:
+    """A stream that never finishes a poll (bytes now and then, never the
+    whole block) must not hold up the tick for every station."""
+    import asyncio
+
+    sid = await _insert_station(db_session)
+
+    class _Hangs(IcyStubClient):
+        async def fetch(self, url: str) -> IcyPollResult:
+            await asyncio.sleep(3600)
+            raise AssertionError("unreachable")
+
+    _set_icy_client_for_tests(_Hangs())
+    radio_sdk.config.icy_request_timeout_sec = 0.05
+    poller = RadioIcyPoller(radio_sdk)
+    assert await asyncio.wait_for(poller.tick(), 5) == 1
+    assert poller._misses.get(sid) == 1
+    assert (await _station_state(db_session, sid)).last_icy_poll_at is not None
+
+
 async def test_one_success_resets_miss_counter(radio_sdk, db_session) -> None:
     sid = await _insert_station(db_session)
     stub = IcyStubClient(default_result=IcyPollResult(supported=False))

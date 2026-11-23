@@ -387,6 +387,7 @@ async def test_fh8_a_new_friend_in_quiet_hours_is_said_when_they_end(house, monk
 
     async def speak(text_):
         said.append(text_)
+        return True
 
     monkeypatch.setattr(fr, "_speak", speak)
     quiet = {"now": True}
@@ -396,6 +397,25 @@ async def test_fh8_a_new_friend_in_quiet_hours_is_said_when_they_end(house, monk
     assert await fr.announce_held() == 0  # still quiet
     quiet["now"] = False
     assert await fr.announce_held() == 1 and said == ["The Smiths are now a Friend House."]
+    assert await fr.announce_held() == 0
+
+
+async def test_an_announcement_no_room_heard_waits_and_is_tried_again(house, monkeypatch) -> None:
+    rooms: list[str] = []
+
+    class _Speech:
+        def __init__(self, slug):
+            pass
+
+        async def announce(self, room, said):
+            return list(rooms)
+
+    monkeypatch.setattr("domovoi.sdk.speech.SpeechAPI", _Speech)
+    monkeypatch.setattr(fr, "_house_quiet_now", lambda: False)
+    await fr.announce("The Smiths are now a Friend House.")
+    assert await fr.announce_held() == 0  # still nobody to hear it
+    rooms.append("kitchen")
+    assert await fr.announce_held() == 1
     assert await fr.announce_held() == 0
 
 

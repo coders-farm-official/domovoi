@@ -42,12 +42,13 @@ def test_refresh_loads_a_new_plugin_and_flags_only_an_upgrade(tmp_path: Path) ->
     harness.write_text(
         """
 const calls = [];
-const window = { DomovoiPluginErrors: { record() {} } };
+const window = { DomovoiPluginErrors: { record() {} }, DomovoiPluginRefreshRetryMs: [1, 1] };
 const ServerStore = { isTrusted: () => true, current: () => '' };
 const API_BASE = '';
 const Babel = { transform: (c) => ({ code: c }) };
 let manifest = { plugins: [] };
-const apiGet = async () => JSON.parse(JSON.stringify(manifest));
+let down = 0;
+const apiGet = async () => { if (down > 0) { down--; throw new Error('restarting'); } return JSON.parse(JSON.stringify(manifest)); };
 globalThis.fetch = async (u) => { calls.push(u); return { ok: true, text: async () => 'window.ran.push(' + JSON.stringify(u) + ');' }; };
 window.ran = [];
 globalThis.window = window;
@@ -66,6 +67,15 @@ globalThis.window = window;
   // Alpha upgraded: its running code is old, so a reload is asked for.
   manifest = { plugins: [mk('alpha', '1.1.0'), mk('beta', '1.0.0')] };
   out.upgrade = await refreshPlugins();
+  // A restart: same plugins. The read fails while the server is down (and
+  // is retried), or answers the very same set. Neither is news.
+  manifest = { plugins: [mk('alpha', '1.0.0'), mk('beta', '1.0.0')] };
+  down = 1;
+  out.restartRetried = await refreshPlugins();
+  down = 99;
+  out.restartDown = await refreshPlugins();
+  down = 0;
+  out.same = await refreshPlugins();
   console.log(JSON.stringify(out));
 })();
 """,
@@ -78,3 +88,6 @@ globalThis.window = window;
     assert out["nav"] == ["alpha", "beta"]    # the new item is in the nav data
     assert out["ran"] == ["/plugins/alpha/static/p.js", "/plugins/beta/static/p.js"]
     assert out["upgrade"] is True
+    assert out["restartRetried"] is False     # a read that recovered, same set
+    assert out["restartDown"] is False        # a server still down: quiet
+    assert out["same"] is False               # identical set: no toast

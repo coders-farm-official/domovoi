@@ -561,27 +561,34 @@ def _house_quiet_now() -> bool:
 
 async def announce(text: str) -> None:
     """A trust change said aloud in the rooms: now, or (in the house's
-    quiet hours) as soon as they end. Never dropped."""
+    quiet hours) as soon as they end. Never dropped: when no room was
+    reached, it waits and is tried again too."""
     if _house_quiet_now():
-        async with _db() as s:
-            current = await store.household_settings(s)
-            held = list(current.get("held_announcements") or [])[-(HELD_MAX - 1):]
-            held.append(text[:200])
-            current["held_announcements"] = held
-            await store.save_household_settings(s, current)
+        await _hold([text])
         log.info("Friend Houses: quiet hours; the announcement waits for them to end")
         return
-    await _speak(text)
+    if not await _speak(text):
+        await _hold([text])
 
 
-async def _speak(text: str) -> None:
+async def _hold(texts: list[str]) -> None:
+    async with _db() as s:
+        current = await store.household_settings(s)
+        held = list(current.get("held_announcements") or []) + [t[:200] for t in texts]
+        current["held_announcements"] = held[-HELD_MAX:]
+        await store.save_household_settings(s, current)
+
+
+async def _speak(text: str) -> bool:
+    """Whether at least one room said it."""
     try:
         from domovoi.sdk.speech import SpeechAPI
         from domovoi.speech_sanitize import sanitize_for_speech
 
-        await SpeechAPI("core").announce(None, sanitize_for_speech(text))
+        return bool(await SpeechAPI("core").announce(None, sanitize_for_speech(text)))
     except Exception as e:  # noqa: BLE001 — the log line and the status are the record
         log.info("Friend Houses: an announcement failed: %s", e)
+        return False
 
 
 async def announce_held() -> int:
@@ -595,9 +602,10 @@ async def announce_held() -> int:
             return 0
         current["held_announcements"] = []
         await store.save_household_settings(s, current)
-    for text_ in held:
-        await _speak(str(text_))
-    return len(held)
+    unsaid = [str(t) for t in held if not await _speak(str(t))]
+    if unsaid:
+        await _hold(unsaid)  # no room reached: tried again on the next pass
+    return len(held) - len(unsaid)
 
 
 async def recent_changes(days: int = 7) -> list[dict[str, Any]]:

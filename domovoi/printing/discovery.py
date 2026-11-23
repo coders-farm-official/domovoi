@@ -30,7 +30,7 @@ import logging
 import secrets
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from domovoi.printing import capabilities as caps_mod
 from domovoi.printing import devices, escl, http11, ipp, lan_target, mdns, store
@@ -145,9 +145,21 @@ def _from_mdns(result: mdns.BrowseResult) -> list[Found]:
     return list(devices_.values())
 
 
+def from_home(nets: list[ipaddress.IPv4Network]) -> Callable[[str], bool]:
+    """Whether a packet's source address is on one of ``nets``."""
+    def accept(src: str) -> bool:
+        try:
+            ip = ipaddress.ip_address(src)
+        except ValueError:
+            return False
+        return any(ip in n for n in nets)
+    return accept
+
+
 def browse_mdns() -> mdns.BrowseResult:
-    """Module-level so tests substitute it."""
-    return mdns.browse(lan_target.server_lan_ipv4(), MDNS_SECONDS)
+    """Module-level so tests substitute it. Answers from outside the home
+    network are dropped as they arrive (they would be refused anyway)."""
+    return mdns.browse(lan_target.server_lan_ipv4(), MDNS_SECONDS, accept=from_home(lan_target.home_networks()))
 
 
 async def _tcp_open(address: str, port: int) -> bool:

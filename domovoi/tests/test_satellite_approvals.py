@@ -288,6 +288,34 @@ def test_after_the_window_a_different_device_takes_the_request_over():
     assert _run(_pairing())[0] == HASH_B
 
 
+def test_a_takeover_between_the_check_and_the_bind_binds_nothing():
+    """The code is checked against the device that was read; if another
+    device took the request over before the bind, nothing is bound."""
+    _run(_request(token_hash=HASH_A, code=CODE))
+
+    async def _t():
+        async with session_scope() as s:
+            repo = SatelliteApprovalRepository(s)
+            real = s.execute
+
+            async def execute(stmt, *a, **kw):
+                result = await real(stmt, *a, **kw)
+                if "SELECT token_hash, code, proof" in str(stmt):
+                    async with engine.begin() as conn:
+                        await conn.execute(text(
+                            "UPDATE satellite_approvals SET token_hash = :h, code = :c "
+                            "WHERE satellite_id = :r"
+                        ), {"h": HASH_B, "c": OTHER_CODE, "r": ROOM})
+                return result
+
+            s.execute = execute
+            return await repo.approve(ROOM, CODE)
+
+    assert _run(_t()) == "not_pending"
+    assert _run(_pairing()) is None
+    assert _run(_get())["token_hash"] == HASH_B
+
+
 def test_a_takeover_never_keeps_the_old_code_for_a_device_that_brought_none():
     """A newcomer with no code of its own parks with none (the core mints
     one for it before it gets here); it never inherits the code the

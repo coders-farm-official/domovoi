@@ -9,6 +9,7 @@ under test. Admin gating passes via the pre-setup grace.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -207,6 +208,42 @@ def test_poster_caches_and_sentinels(registry, roots, poster_dir, monkeypatch):
                     params={"library_id": "core:documents", "path": "broken.webm"})
     assert p1.status_code == 204 and p2.status_code == 204
     assert len(fails) == 1
+
+
+@requires_db
+def test_poster_cache_is_shared_by_every_spelling_of_a_path(registry, roots, poster_dir, monkeypatch):
+    _mkvideo(roots["movies"], "sub/clip.mp4")
+    calls = []
+
+    async def _fake_extract(src, dest):
+        calls.append(src)
+        dest.write_bytes(b"jpegdata")
+        return True
+
+    monkeypatch.setattr(videos_api, "_extract_poster", _fake_extract)
+    with _client() as c:
+        for spelling in ("sub/clip.mp4", "./sub/clip.mp4", "sub/./clip.mp4", "sub//clip.mp4", "/sub/clip.mp4"):
+            r = c.get("/api/videos/poster", params={"library_id": "core:documents", "path": spelling})
+            assert r.status_code == 200, (spelling, r.status_code)
+    assert len(calls) == 1
+    assert len(list(poster_dir.iterdir())) == 1
+
+
+async def test_poster_extraction_runs_through_the_capped_runner(tmp_path, monkeypatch):
+    from domovoi.chat_video import media
+
+    seen = []
+
+    async def _run(argv, **kw):
+        seen.append((argv[0], kw))
+        raise asyncio.TimeoutError()
+
+    monkeypatch.setattr(media, "run_low", _run)
+    dest = tmp_path / "p.jpg"
+    assert await videos_api._extract_poster(tmp_path / "v.mp4", dest) is False
+    assert [a for a, _ in seen] == ["ffprobe", "ffmpeg"]
+    assert all(kw["timeout"] == videos_api._FFMPEG_TIMEOUT_SEC and kw["max_output"] for _, kw in seen)
+    assert not dest.exists() and not list(tmp_path.glob("*.part.jpg"))
 
 
 # ─── Positions ──────────────────────────────────────────────────────────────
