@@ -48,7 +48,7 @@ RW = {"X-Requested-With": "domovoi-tests"}
 DEVICE = "android-3f2a9c"
 LABEL = "Alex's Pixel"
 MIGRATION = (
-    Path(__file__).resolve().parents[1] / "db" / "migrations" / "V073__admin_phone_grants.sql"
+    Path(__file__).resolve().parents[1] / "db" / "migrations" / "V074__admin_phone_grants.sql"
 )
 
 
