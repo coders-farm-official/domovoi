@@ -316,7 +316,7 @@ async def test_a_thumbnail_token_names_one_item_and_expires(monkeypatch):
     room_media.show(app, "kitchen", _answer([_card(1), _card(2, "video", at_s=3.0)]), "x", people_ok=True)
     items = room_media.frame_media("kitchen")["items"]
     r = await _get(core_app, items[0]["thumb"])
-    assert r.status_code == 200 and r.content == b"webp" and r.headers["cache-control"] == "private, max-age=600"
+    assert r.status_code == 200 and r.content == b"webp" and r.headers["cache-control"] == "no-store"
     assert (await _get(core_app, items[1]["thumb"])).content == b"jpg"
     assert asked == [("thumb", "core:pictures", "f1.jpg", "m"), ("poster", "core:pictures", "f2.jpg")]
     for bad in ("/v1/room-media/nope", "/v1/room-media/" + "A" * 32, "/v1/room-media/..%2F..%2Fetc"):
@@ -326,6 +326,19 @@ async def test_a_thumbnail_token_names_one_item_and_expires(monkeypatch):
     assert room_media.resolve(tok, clock=clock) is not None
     clock.t += room_media.TOKEN_TTL_SEC
     assert room_media.resolve(tok, clock=clock) is None
+    # Tied to the results on the screen: replaced, cleared or timed out, the
+    # old results' tokens stop working at once.
+    old_tok = items[0]["thumb"].removeprefix(room_media.THUMB_PATH)
+    room_media.show(app, "kitchen", _answer([_card(3)]), "y", people_ok=True)
+    assert room_media.resolve(old_tok) is None
+    new_tok = room_media.frame_media("kitchen")["items"][0]["thumb"].removeprefix(room_media.THUMB_PATH)
+    assert room_media.resolve(new_tok) is not None
+    room_media.clear("kitchen")
+    assert room_media.resolve(new_tok) is None
+    room_media.show(app, "kitchen", _answer([_card(4)]), "z", people_ok=True, clock=clock)
+    tok4 = room_media.frame_media("kitchen", clock=clock)["items"][0]["thumb"].removeprefix(room_media.THUMB_PATH)
+    clock.t += room_media.SHOW_SEC
+    assert room_media.resolve(tok4, clock=clock) is None and room_media.current("kitchen", clock=clock) is None
     # Bounded: the oldest go first.
     for _ in range(room_media.MAX_TOKENS + 5):
         room_media.mint("kitchen", "core:pictures", "x.jpg", "image")
@@ -336,18 +349,39 @@ async def test_a_thumbnail_token_names_one_item_and_expires(monkeypatch):
 
 
 async def test_the_kiosk_reads_its_rooms_results_and_the_push_is_a_digest(monkeypatch):
-    from domovoi.tests.auth_testkit import HEADER, install_fake_db, web_client
+    from domovoi.tests.auth_testkit import HEADER, core_client, install_fake_db, web_client
     from web.backend import domovoi_client, realtime
+    from web.backend.api import satellites as sat_api
 
     app = _house(_sess("den", "den", screen=False), video=("den",))
     room_media.show(app, "den", _answer([_card(1, caption="<b>hi</b>")]), "I found 1 photo.", people_ok=True)
     snap = {"room_media": room_media.snapshot()}
+    # The open snapshot says which results are up, never a word of them.
+    assert snap["room_media"] == {"den": room_media.current("den").id}
     monkeypatch.setattr(domovoi_client, "_snapshot", snap)
     install_fake_db(monkeypatch, admin=True, device_token="household")    # set up: no LAN grace
+    hops: list[tuple[str, dict]] = []
+
+    async def via_core(path, timeout=10.0, headers=None):
+        hops.append((path, dict(headers or {})))
+        async with core_client() as cc:
+            rr = await cc.get(path, headers=headers or {})
+        return rr.status_code, rr.json()
+
+    monkeypatch.setattr(sat_api, "get_admin", via_core)
     async with web_client() as c:
         r = await c.get("/api/satellites/den/media", headers={HEADER: "household"})
         none = await c.get("/api/satellites/kitchen/media", headers={HEADER: "household"})
         anon = await c.get("/api/satellites/den/media")
+    assert hops and hops[0][0] == "/v1/admin/room-media/den"
+    # The core's results route is device read: no credential, no results.
+    async with core_client() as cc:
+        assert (await cc.get("/v1/admin/room-media/den")).status_code == 401
+    from domovoi import main as core_main
+
+    open_snap = {"room_media": core_main._room_media_snapshot()}    # what the open route carries
+    assert open_snap["room_media"] == {"den": room_media.current("den").id}
+    assert "hi" not in json.dumps(open_snap["room_media"]) and "I found" not in json.dumps(open_snap["room_media"])
     assert r.status_code == 200 and r.json()["media"]["items"][0]["caption"] == "<b>hi</b>"
     assert r.json()["media"]["items"][0]["thumb"].startswith("/api/images/thumb?")
     assert none.json() == {"media": None}
@@ -357,6 +391,7 @@ async def test_the_kiosk_reads_its_rooms_results_and_the_push_is_a_digest(monkey
     assert digest == {"den": room_media.current("den").id}
     assert "hi" not in json.dumps(digest) and "thumb" not in json.dumps(digest)
     assert realtime.room_media_digest(None) == {} and realtime.room_media_digest({"room_media": []}) == {}
+    assert realtime.room_media_digest({"room_media": {"x": "said words", "y": True}}) == {}
 
 
 # ─── the kiosk page ──────────────────────────────────────────────────────
@@ -407,3 +442,12 @@ def test_the_kiosk_page_draws_results_as_text():
                            "/api/videos/poster?library_id=core%3Apictures&path=v.mp4&device_token=t"]
     src = (REPO / "web" / "static" / "display.jsx").read_text(encoding="utf-8")
     assert "useStateEvents(['satellites.media.changed']" in src
+
+
+def test_a_room_media_token_never_reaches_the_log():
+    from domovoi import log_privacy
+
+    tok = "Ab3_" + "x" * 28
+    line = f'192.168.1.41:50000 - "GET /v1/room-media/{tok} HTTP/1.1" 200'
+    out = log_privacy.scrub(line)
+    assert tok not in out and "/v1/room-media/***" in out

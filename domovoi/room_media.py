@@ -11,9 +11,11 @@ results are shown there too, for :data:`SHOW_SEC`:
   (:func:`frame_media`, documented in domovoi/room_display.py);
 * a **video satellite's kiosk** (a live satellite of the room whose hello
   said ``sat_type: "video"``; web/static/display.html) reads them from the
-  web backend, ``GET /api/satellites/{room}/media``, which takes them from
-  the admin snapshot (:func:`snapshot`); the ``satellites.media`` push says
-  when to read again.
+  web backend, ``GET /api/satellites/{room}/media``, which reads them from
+  the core's device-read ``GET /v1/admin/room-media/{room}``
+  (:func:`web_media`); the open admin snapshot carries only
+  ``{room: results id}`` (:func:`snapshot`), and the ``satellites.media``
+  push says when to read again.
 
 A room with neither gets nothing: nothing is kept for it.
 
@@ -26,7 +28,9 @@ shown only when the caller says the turn may see people.
 **Thumbnails.** A room phone holds only its room key, which no HTTP route
 takes. Each item it is sent carries ``/v1/room-media/{token}``: a random
 token (:func:`mint`) that names one item, kept in this process only, good
-for :data:`TOKEN_TTL_SEC`; :func:`serve` answers it with the dashboard's
+for :data:`TOKEN_TTL_SEC` and only while the results it names are on
+the screen (replaced, cleared or timed-out results drop their tokens);
+:func:`serve` answers it, ``Cache-Control: no-store``, with the dashboard's
 own thumbnail (a photo) or poster frame (a video). The kiosk holds the
 household token and uses the dashboard's routes directly.
 
@@ -149,16 +153,28 @@ def _caption(v: Any) -> str | None:
     return s[:CAPTION_MAX] or None
 
 
+def _remember(tok: str, t: _Token, now: float) -> None:
+    for old, o in list(_TOKENS.items()):
+        if o.until <= now:
+            del _TOKENS[old]
+    while len(_TOKENS) >= MAX_TOKENS:
+        _TOKENS.popitem(last=False)
+    _TOKENS[tok] = t
+
+
+def _drop_tokens(room_id: str) -> None:
+    """Forget every thumbnail token of ``room_id``'s results: a token works
+    only while the results it names are on the screen."""
+    for tok, t in list(_TOKENS.items()):
+        if t.room_id == room_id:
+            del _TOKENS[tok]
+
+
 def mint(room_id: str, library_id: str, path: str, kind: str, *, clock: Clock = time.monotonic) -> str:
     """A thumbnail token for one item, for :data:`TOKEN_TTL_SEC`."""
     now = clock()
-    for tok, t in list(_TOKENS.items()):
-        if t.until <= now:
-            del _TOKENS[tok]
-    while len(_TOKENS) >= MAX_TOKENS:
-        _TOKENS.popitem(last=False)
     tok = secrets.token_urlsafe(24)
-    _TOKENS[tok] = _Token(room_id, library_id, path, kind, now + TOKEN_TTL_SEC)
+    _remember(tok, _Token(room_id, library_id, path, kind, now + TOKEN_TTL_SEC), now)
     return tok
 
 
@@ -170,6 +186,10 @@ def resolve(token: str, *, clock: Clock = time.monotonic) -> _Token | None:
         return None
     if t.until <= clock():
         _TOKENS.pop(token, None)
+        return None
+    shown = _SHOWN.get(t.room_id)
+    if shown is not None and shown.until <= clock():
+        current(t.room_id, clock=clock)
         return None
     return t
 
@@ -196,7 +216,8 @@ def show(app: Any, room_id: str | None, answer: Any, said: str, *, people_ok: bo
         at_s = c.get("at_s")
         items.append({
             "kind": kind,
-            "token": mint(room_id, str(c["library_id"]), str(c["path"]), kind, clock=clock),
+            "token": (tok := secrets.token_urlsafe(24)),
+            "_tok": (tok, _Token(room_id, str(c["library_id"]), str(c["path"]), kind, clock() + TOKEN_TTL_SEC)),
             "web_thumb": c.get("thumb"),
             "library_id": c.get("library_id"),
             "path": c.get("path"),
@@ -208,6 +229,10 @@ def show(app: Any, room_id: str | None, answer: Any, said: str, *, people_ok: bo
                   count=int(getattr(answer, "count", len(cards)) or len(cards)),
                   more=bool(getattr(answer, "more", False)), person=bool(getattr(answer, "person", None)),
                   until=clock() + SHOW_SEC, items=items)
+    _drop_tokens(room_id)          # the results they named are off the screen
+    for it in items:
+        tok, t = it.pop("_tok")
+        _remember(tok, t, clock())
     _SHOWN[room_id] = shown
     for sess in displays:
         feed = getattr(sess, "room_display", None)
@@ -218,6 +243,7 @@ def show(app: Any, room_id: str | None, answer: Any, said: str, *, people_ok: bo
 
 def clear(room_id: str) -> None:
     _SHOWN.pop(room_id, None)
+    _drop_tokens(room_id)
 
 
 def current(room_id: str, *, clock: Clock = time.monotonic) -> Shown | None:
@@ -226,6 +252,7 @@ def current(room_id: str, *, clock: Clock = time.monotonic) -> Shown | None:
         return None
     if shown.until <= clock():
         _SHOWN.pop(room_id, None)
+        _drop_tokens(room_id)
         return None
     return shown
 
@@ -267,14 +294,17 @@ def web_media(room_id: str, *, clock: Clock = time.monotonic) -> dict[str, Any] 
     }
 
 
-def snapshot(*, clock: Clock = time.monotonic) -> dict[str, Any]:
-    """``{room: web_media}`` for every room showing results now (the admin
-    snapshot's ``room_media``)."""
-    out: dict[str, Any] = {}
+def snapshot(*, clock: Clock = time.monotonic) -> dict[str, int]:
+    """``{room: results id}`` for every room showing results now (the admin
+    snapshot's ``room_media``). The snapshot route is open on the LAN, so
+    it carries only which results are up, never a word of them: what was
+    said, captions, dates and paths come from the device-read
+    ``GET /v1/admin/room-media/{room_id}`` (:func:`web_media`)."""
+    out: dict[str, int] = {}
     for room in list(_SHOWN):
-        m = web_media(room, clock=clock)
-        if m is not None:
-            out[room] = m
+        shown = current(room, clock=clock)
+        if shown is not None:
+            out[room] = shown.id
     return out
 
 
@@ -305,7 +335,7 @@ async def serve(token: str) -> Any:
         log.debug("room media: no thumbnail for a token: %s", type(e).__name__)
         raise HTTPException(status_code=404, detail="not found") from None
     try:
-        resp.headers["Cache-Control"] = f"private, max-age={int(TOKEN_TTL_SEC)}"
+        resp.headers["Cache-Control"] = "no-store"
     except Exception:  # noqa: BLE001
         pass
     return resp

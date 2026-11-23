@@ -1778,6 +1778,20 @@ async def room_media_thumb(token: str) -> Any:
     return await room_media.serve(token)
 
 
+@app.get("/v1/admin/room-media/{room_id}", dependencies=[Depends(require_device_read)])
+async def admin_room_media(room_id: str) -> dict[str, Any]:
+    """Photo and video results on a room's screen now (1.5.0,
+    domovoi/room_media.py :func:`web_media`): ``{"media": null | {id, said,
+    count, more, expires_in_ms, items}}`` for the dashboard's
+    ``GET /api/satellites/{room}/media`` (the video satellite's kiosk).
+
+    Device read tier: what was said, captions, dates and file paths. The
+    open snapshot carries only ``{room: results id}``."""
+    from domovoi import room_media
+
+    return {"media": room_media.web_media(room_id)}
+
+
 @app.get(
     "/v1/stats/latency",
     # Device READ tier (2026-10-08, REV-11): counts per room and window say
@@ -3266,9 +3280,10 @@ async def admin_snapshot() -> dict[str, Any]:
         # idle_mode}) video satellites report via display_status — drives
         # the dashboard's Display block and dead-kiosk warning.
         "satellite_display": dict(app.state.satellite_display),
-        # Photo and video results on a room's screen now (1.5.0,
-        # domovoi/room_media.py): {room: {id, said, count, more,
-        # expires_in_ms, items}}, the kiosk page's thumbnails.
+        # Which rooms show photo and video results now (1.5.0,
+        # domovoi/room_media.py): {room: results id} only. This route is
+        # open; the results themselves are device-read
+        # (GET /v1/admin/room-media/{room_id}).
         "room_media": _room_media_snapshot(),
         # Rooms whose connected satellite declared mic_dsp (an XVF3800 with
         # xvf_host), with the preset state it last reported ({} until it

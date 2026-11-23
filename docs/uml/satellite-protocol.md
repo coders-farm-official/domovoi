@@ -463,7 +463,9 @@ then lists `"room_display"`. A Pi never does; nothing else changes for it.
 
   At most 6 items. `id` is new for each set of results. `thumb` is a path on
   this core (`GET /v1/room-media/{token}`, open: the random token is the
-  credential, it names one item and works for 10 minutes). `caption` is
+  credential, it names one item and works only while these results are
+  shown, 90 seconds unless replaced or cleared sooner; answered
+  `no-store`). `caption` is
   what the picture MIGHT show, a picture model's words and untrusted text:
   draw it as text, never markup, as "Might show: …". `date` is
   `YYYY-MM-DD` or null; `at_s` a video's best moment in seconds, or null.

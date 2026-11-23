@@ -571,6 +571,7 @@ HOUSEHOLD_STATE_READS: dict[tuple[str, str], str] = {
     ("web", "/api/faces/hidden"): "the hidden (strangers') groups; admin inside",
     ("web", "/api/faces/groups/{group_id}"): "one group's faces: which photos, where in them",
     ("web", "/api/faces/people/{person_id}/items"): "every photo and video a person is in",
+    ("web", "/api/faces/denylist"): "the forgotten faces' ids and dates; admin inside",
 }
 
 # Faces training (1.5.0): every write is the device tier at the gate, with
@@ -584,6 +585,7 @@ FACES_DEVICE_WRITES = [
     ("POST", "/api/faces/merge"),
     ("POST", "/api/faces/split"),
     ("POST", "/api/faces/people/{person_id}/forget"),
+    ("DELETE", "/api/faces/denylist/{entry_id}"),           # admin inside
 ]
 
 

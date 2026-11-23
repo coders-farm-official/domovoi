@@ -501,8 +501,11 @@ async def delete_person(person_id: int, request: Request) -> None:
     it (``POST /v1/admin/voice-history/announce-forgets``). If the core is
     down, the delete still succeeds and the core announces it when back.
     """
+    from domovoi.media_understanding.faces import unname_faces
+
     async with session_scope() as s:
         await voice_history.delete_person_history(s, person_id)
+        await unname_faces(s, person_id)            # their faces become unnamed
         result = await s.execute(
             text("DELETE FROM people WHERE id = :id"), {"id": person_id}
         )

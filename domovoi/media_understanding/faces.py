@@ -21,10 +21,12 @@ answers with an embedding or a centroid.
 3. Otherwise it joins the closest unnamed group at :data:`GROUP_MATCH`.
 4. Otherwise it starts a new unnamed group.
 
-Each night :func:`regroup` takes every face nobody confirmed and does it
-again over the whole set (connected components of the pairs above
-:data:`GROUP_MATCH`, label propagation in numpy, chunked): **confirmed
-faces never move.** A component keeps the group most of it was in, so
+Each night :func:`regroup` takes the faces nobody confirmed (the newest
+:data:`REGROUP_MAX_FACES`) and does it again over that set (connected
+components of the pairs above :data:`GROUP_MATCH`: a blocked neighbour
+search in a worker thread with the maths library on one thread, pausing
+while a voice turn runs; the night is marked done before it starts):
+**confirmed faces never move.** A component keeps the group most of it was in, so
 groups keep their ids and the household's "hide".
 
 **Strangers.** Unnamed groups are nobody's and the household is never
@@ -61,9 +63,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from collections import Counter
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 from typing import Any, Iterable
 
 import numpy as np
@@ -92,7 +96,6 @@ VIDEO_MIN_GAP_S = 2.0
 APPEARANCE_GAP_S = 30.0
 APPEARANCE_MATCH = 0.5
 REGROUP_CHUNK = 2048
-REGROUP_MAX_ROUNDS = 64
 
 #: household_settings row for the faces bookkeeping (not a switch): the
 #: model fetch's last error, whether the library was queued again for
@@ -101,6 +104,14 @@ STATE_KEY = "media_faces_state"
 
 ANALYSER = "faces"
 CODE_MODELS = "faces-models-missing"
+CODE_TOO_LARGE = "faces-photo-too-large"
+CODE_UNREADABLE = "faces-photo-unreadable"
+CODE_FORMAT = "faces-format-unsupported"
+#: The largest photo the face stage reads (the caption stage's cap,
+#: domovoi/media_understanding/photos.py ``MAX_PHOTO_BYTES``).
+MAX_FACE_PHOTO_BYTES = 80 * 1024 * 1024
+#: Photo extensions the face stage decodes (``image_safety.LIBRARY_FORMATS``).
+FACE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".avif"})
 
 
 class FacesOff(Exception):
@@ -316,66 +327,208 @@ async def store(s: Any, item_id: int, found: list[Found], *, at_s: float | None 
 # ─── the nightly re-group ────────────────────────────────────────────────
 
 
-def components(E: np.ndarray, threshold: float = GROUP_MATCH, chunk: int = REGROUP_CHUNK) -> np.ndarray:
+#: Faces one night's re-group takes at most (the newest unconfirmed ones);
+#: the rest keep the groups :func:`assign` gave them until a later night.
+REGROUP_MAX_FACES = 20000
+#: Rows written per statement while the re-group applies its plan.
+REGROUP_WRITE_BATCH = 500
+#: How long the worker sleeps between checks while a voice turn runs.
+REGROUP_VOICE_POLL_SEC = 0.25
+
+
+def _voice_busy() -> bool:
+    try:
+        from domovoi import voice_activity
+
+        return voice_activity.busy()
+    except Exception:  # noqa: BLE001 - no voice front end: never busy
+        return False
+
+
+def _yield_to_voice(pause: Any) -> None:
+    """In the worker thread, between blocks: sleep while a voice turn runs."""
+    import time
+
+    if pause is None:
+        return
+    while pause():
+        time.sleep(REGROUP_VOICE_POLL_SEC)
+
+
+def components(E: np.ndarray, threshold: float = GROUP_MATCH, chunk: int = REGROUP_CHUNK,
+               *, pause: Any = None) -> np.ndarray:
     """Connected components of "cosine at least ``threshold``" over the
     rows of ``E`` (unit vectors): a label per row (the smallest index in
-    its component). Label propagation, ``chunk`` rows at a time, so memory
-    stays ``chunk x n``."""
+    its component).
+
+    A blocked neighbour search: every pair of ``chunk``-row blocks is
+    compared once (memory ``chunk x chunk``, never ``chunk x n``), and its
+    pairs are merged into a union-find by hooking roots onto the smaller
+    root, vectorised. Pure CPU: call it in a worker thread
+    (:func:`regroup` does, with the maths library held to one thread).
+    ``pause``, when given, is asked between blocks and the work sleeps
+    while it says yes (a voice turn)."""
     n = len(E)
-    labels = np.arange(n)
-    for _ in range(REGROUP_MAX_ROUNDS):
-        new = labels.copy()
-        for a in range(0, n, chunk):
-            sims = E[a:a + chunk] @ E.T
-            masked = np.where(sims >= threshold, labels[None, :], n)
-            new[a:a + chunk] = np.minimum(new[a:a + chunk], masked.min(axis=1))
-        new = new[new]                       # pointer jumping
-        if np.array_equal(new, labels):
-            break
-        labels = new
-    return labels
+    parent = np.arange(n)
+    if n == 0:
+        return parent
+    E = np.ascontiguousarray(E, dtype=np.float32)
+    chunk = max(1, int(chunk))
+
+    def roots(ix: np.ndarray) -> np.ndarray:
+        r = parent[ix]
+        while True:
+            nr = parent[r]
+            if np.array_equal(nr, r):
+                return r
+            r = nr
+
+    def compress() -> np.ndarray:
+        p = parent
+        while True:
+            nxt = p[p]
+            if np.array_equal(nxt, p):
+                return p
+            p = nxt
+
+    for a in range(0, n, chunk):
+        for b in range(a, n, chunk):
+            _yield_to_voice(pause)
+            sims = E[a:a + chunk] @ E[b:b + chunk].T
+            ii, jj = np.nonzero(sims >= threshold)
+            if not len(ii):
+                continue
+            u = ii + a
+            v = jj + b
+            keep = u != v
+            u, v = u[keep], v[keep]
+            while len(u):
+                ru, rv = roots(u), roots(v)
+                diff = ru != rv
+                if not diff.any():
+                    break
+                u, v, ru, rv = u[diff], v[diff], ru[diff], rv[diff]
+                np.minimum.at(parent, np.maximum(ru, rv), np.minimum(ru, rv))
+            # Compress so later blocks walk short paths.
+            parent = compress()
+    return compress()
 
 
-async def regroup(s: Any) -> dict[str, int]:
-    """Re-group every face nobody confirmed (confirmed faces never move)."""
+def _one_blas_thread() -> Any:
+    """A context that holds numpy's maths library to one thread (the core's
+    other work keeps its cores); a no-op without threadpoolctl."""
+    import contextlib
+
+    try:
+        from threadpoolctl import threadpool_limits
+    except Exception:  # noqa: BLE001
+        return contextlib.nullcontext()
+    return threadpool_limits(limits=1, user_api="blas")
+
+
+@dataclass
+class _Plan:
+    gone: list[int]
+    suggest: list[tuple[int, int, int]]          # (face, group, person)
+    free: list[tuple[int, np.ndarray, Any]]
+    labels: np.ndarray
+
+
+def plan_regroup(rows: list[Any], deny: np.ndarray, named: list[Group], *, pause: Any = None) -> _Plan:
+    """The re-group's maths, pure (run in a worker thread): which faces go
+    (denied), which are suggested for a named person, and the components of
+    the rest."""
+    with _one_blas_thread():
+        gone: list[int] = []
+        faces: list[tuple[int, np.ndarray, Any, list[int]]] = []
+        for k, (fid, emb, gid, rej) in enumerate(rows):
+            if k % REGROUP_WRITE_BATCH == 0:
+                _yield_to_voice(pause)
+            v = from_bytes(emb)
+            if v is None or denied(deny, v):
+                gone.append(int(fid))
+            else:
+                faces.append((int(fid), unit(v), gid, list(rej or [])))
+        suggest: list[tuple[int, int, int]] = []
+        free: list[tuple[int, np.ndarray, Any]] = []
+        for k, (fid, v, gid, rej) in enumerate(faces):
+            if k % REGROUP_WRITE_BATCH == 0:
+                _yield_to_voice(pause)
+            g, _ = choose(named, v, rej)
+            if g is not None:
+                suggest.append((fid, g.id, int(g.person_id)))
+            else:
+                free.append((fid, v, gid))
+        labels = (components(np.stack([v for _f, v, _g in free]), pause=pause)
+                  if free else np.zeros(0, dtype=np.int64))
+    return _Plan(gone, suggest, free, labels)
+
+
+async def regroup(s: Any, *, max_faces: int = REGROUP_MAX_FACES, pause: Any = _voice_busy) -> dict[str, int]:
+    """Re-group the faces nobody confirmed (confirmed faces never move): at
+    most ``max_faces`` of them, the newest. The maths runs in a worker
+    thread (:func:`plan_regroup`), so the event loop keeps answering, and
+    the writes go in batches; a face confirmed meanwhile is left alone."""
+    rows, deny, named = await _load_regroup(s, max_faces)
+    plan = await asyncio.to_thread(plan_regroup, rows, deny, named, pause=pause)
+    return await _apply_regroup(s, rows, named, plan)
+
+
+async def regroup_night(*, max_faces: int = REGROUP_MAX_FACES, pause: Any = _voice_busy) -> dict[str, int] | None:
+    """The nightly pass as :func:`housekeeping` runs it: read in one short
+    transaction, the maths in a worker thread with no transaction open
+    (so nothing waits on a lock it holds: "faces off" and the runner's
+    Pause go through), then apply under the faces switch's share lock.
+    None when faces were turned off meanwhile."""
+    from domovoi.db.session import session_scope
+
+    async with session_scope() as s:
+        rows, deny, named = await _load_regroup(s, max_faces)
+    plan = await asyncio.to_thread(plan_regroup, rows, deny, named, pause=pause)
+    async with session_scope() as s:
+        if not await _faces_on_locked(s):
+            return None
+        out = await _apply_regroup(s, rows, named, plan)
+        await write_state(s, regroup_attempts=0)
+    return out
+
+
+async def _load_regroup(s: Any, max_faces: int) -> tuple[list[Any], np.ndarray, list[Group]]:
     rows = (await s.execute(text(
         "SELECT id, embedding, group_id, rejected_person_ids FROM media_faces "
-        "WHERE model = :m AND NOT confirmed ORDER BY id"), {"m": MODEL})).all()
+        "WHERE model = :m AND NOT confirmed ORDER BY id DESC LIMIT :n"),
+        {"m": MODEL, "n": int(max_faces)})).all()
     deny = await _denylist(s)
-    faces, gone = [], []
-    for fid, emb, gid, rej in rows:
-        v = from_bytes(emb)
-        if v is None or denied(deny, v):
-            gone.append(int(fid))
-        else:
-            faces.append((int(fid), unit(v), gid, list(rej or [])))
+    named = [g for g in await _groups(s) if g.person_id is not None]
+    return [tuple(r) for r in rows], deny, named
+
+
+async def _apply_regroup(s: Any, rows: list[Any], named: list[Group], plan: _Plan) -> dict[str, int]:
     touched: set[int] = {int(r[2]) for r in rows if r[2] is not None}
-    if gone:
-        await s.execute(text("DELETE FROM media_faces WHERE id = ANY(:ids)"), {"ids": gone})
+    for i in range(0, len(plan.gone), REGROUP_WRITE_BATCH):
+        await s.execute(text("DELETE FROM media_faces WHERE id = ANY(:ids) AND NOT confirmed"),
+                        {"ids": plan.gone[i:i + REGROUP_WRITE_BATCH]})
+        await asyncio.sleep(0)
     # Named people's centroids come from confirmed faces only, so they are
     # fixed for this pass; each free face is suggested on its own first.
-    named = [g for g in await _groups(s) if g.person_id is not None]
-    suggested = 0
-    free = []
-    for fid, v, gid, rej in faces:
-        g, _ = choose(named, v, rej)
-        if g is not None:
-            await s.execute(text(
-                "UPDATE media_faces SET group_id = :g, person_id = :p WHERE id = :f"),
-                {"g": g.id, "p": g.person_id, "f": fid})
-            touched.add(g.id)
-            suggested += 1
-        else:
-            free.append((fid, v, gid))
+    params = [{"g": g, "p": p, "f": f} for f, g, p in plan.suggest]
+    for i in range(0, len(params), REGROUP_WRITE_BATCH):
+        await s.execute(text(
+            "UPDATE media_faces SET group_id = :g, person_id = :p WHERE id = :f AND NOT confirmed"),
+            params[i:i + REGROUP_WRITE_BATCH])
+        await asyncio.sleep(0)
+    touched.update(g for _f, g, _p in plan.suggest)
     made = 0
+    free = plan.free
     if free:
-        labels = components(np.stack([v for _f, v, _g in free]))
         comps: dict[int, list[int]] = {}
-        for i, lab in enumerate(labels):
+        for i, lab in enumerate(plan.labels):
             comps.setdefault(int(lab), []).append(i)
         named_ids = {g.id for g in named}
         used: set[int] = set()
-        for members in sorted(comps.values(), key=len, reverse=True):
+        for k, members in enumerate(sorted(comps.values(), key=len, reverse=True)):
+            if k % 50 == 0:
+                await asyncio.sleep(0)
             before = Counter(free[i][2] for i in members
                              if free[i][2] is not None and free[i][2] not in named_ids)
             gid = next((g for g, _n in before.most_common() if g not in used), None)
@@ -384,14 +537,18 @@ async def regroup(s: Any) -> dict[str, int]:
                 made += 1
             used.add(gid)
             touched.add(gid)
-            await s.execute(text(
-                "UPDATE media_faces SET group_id = :g, person_id = NULL WHERE id = ANY(:ids)"),
-                {"g": gid, "ids": [free[i][0] for i in members]})
+            ids = [free[i][0] for i in members]
+            for j in range(0, len(ids), REGROUP_WRITE_BATCH):
+                await s.execute(text(
+                    "UPDATE media_faces SET group_id = :g, person_id = NULL "
+                    "WHERE id = ANY(:ids) AND NOT confirmed"),
+                    {"g": gid, "ids": ids[j:j + REGROUP_WRITE_BATCH]})
     await refresh(s, touched)
     # Groups a change of file or a training action left with no face.
     await s.execute(text(
         "DELETE FROM face_groups g WHERE NOT EXISTS (SELECT 1 FROM media_faces f WHERE f.group_id = g.id)"))
-    return {"faces": len(faces), "suggested": suggested, "groups_made": made, "dropped": len(gone)}
+    return {"faces": len(rows) - len(plan.gone), "suggested": len(plan.suggest), "groups_made": made,
+            "dropped": len(plan.gone)}
 
 
 async def _exists(s: Any, gid: int) -> bool:
@@ -606,6 +763,9 @@ async def forget_person(s: Any, person_id: int) -> dict[str, int]:
     rows = (await s.execute(text(
         "SELECT embedding, confirmed FROM media_faces WHERE person_id = :p AND model = :m"),
         {"p": person_id, "m": MODEL})).all()
+    name = (await s.execute(text("SELECT name FROM people WHERE id = :p"), {"p": person_id})).scalar()
+    if name:
+        await strip_chat_results(s, str(name))
     confirmed = [from_bytes(r[0]) for r in rows if r[1]]
     sig = mean_unit(confirmed) if any(v is not None for v in confirmed) else \
         mean_unit(from_bytes(r[0]) for r in rows)
@@ -628,6 +788,19 @@ async def forget_person(s: Any, person_id: int) -> dict[str, int]:
     return {"faces": deleted + look_alikes, "groups": groups, "denylisted": int(sig is not None)}
 
 
+async def unname_faces(s: Any, person_id: int) -> int:
+    """Before a person is deleted (voice "forget me", the admin's delete):
+    their faces become unnamed faces, grouped again by the nightly pass,
+    and their face groups go. Without this the confirmations would stay
+    on rows tied to nobody (V078's ``ON DELETE SET NULL``; security
+    review 2026-11-23, L47)."""
+    r = await s.execute(text(
+        "UPDATE media_faces SET person_id = NULL, group_id = NULL, confirmed = false, "
+        "rejected_person_ids = array_remove(rejected_person_ids, :p) WHERE person_id = :p"), {"p": person_id})
+    await s.execute(text("DELETE FROM face_groups WHERE person_id = :p"), {"p": person_id})
+    return int(r.rowcount or 0)
+
+
 async def delete_all(s: Any) -> dict[str, int]:
     """Faces off: every face, group and faces stage goes (the denylist
     stays; see the module note). Call it after writing the switch, in the
@@ -636,7 +809,28 @@ async def delete_all(s: Any) -> dict[str, int]:
     g = int((await s.execute(text("DELETE FROM face_groups"))).rowcount or 0)
     await s.execute(text(f"DELETE FROM media_item_stages WHERE analyser = '{ANALYSER}'"))
     await s.execute(text("DELETE FROM household_settings WHERE key = :k"), {"k": STATE_KEY})
+    await strip_chat_results(s)
     return {"faces": n, "groups": g}
+
+
+#: What a chat reply that showed a person's photos says once those results
+#: are stripped (forget my face, faces off).
+CHAT_RESULTS_GONE = "These photo results were removed when faces were forgotten."
+
+
+async def strip_chat_results(s: Any, name: str | None = None) -> int:
+    """Chat replies that showed photos filtered by a person (``stats.media
+    .person``): their result cards and words are replaced by
+    :data:`CHAT_RESULTS_GONE`. ``name``: only that person's (forget my
+    face); None: everyone's (faces off). Security review 2026-11-23, L48."""
+    where = "stats -> 'media' ->> 'person' IS NOT NULL"
+    params: dict[str, Any] = {"gone": CHAT_RESULTS_GONE}
+    if name is not None:
+        where += " AND lower(btrim(stats -> 'media' ->> 'person')) = lower(btrim(:n))"
+        params["n"] = name
+    r = await s.execute(text(
+        f"UPDATE chat_messages SET stats = stats - 'media', content = :gone WHERE {where}"), params)
+    return int(r.rowcount or 0)
 
 
 # ─── reads (the People pages, and the search hook for slices 5-6) ────────
@@ -775,11 +969,29 @@ class FaceAnalyser:
         return bool(sw.get("faces")) and face_models.ready()
 
     async def run(self, item: Any, ctx: Any) -> None:
-        from domovoi import executors
+        from domovoi import executors, image_safety
+        from domovoi.media_understanding.runner import Skip
 
+        # Formats the face stage can decode (HEIC, HEIF and TIFF are not:
+        # skipped, not failed three times).
+        if Path(str(item.rel_path)).suffix.lower() not in FACE_EXTENSIONS:
+            raise Skip(CODE_FORMAT)
+        # The photo stage's cap, on the file as it is now (security review
+        # 2026-11-23, M11): never a whole multi-gigabyte "x.jpg" in memory.
+        try:
+            size = (await asyncio.to_thread(os.stat, item.path)).st_size if item.path is not None                 else int(item.size_bytes)
+        except OSError:
+            size = int(item.size_bytes)
+        if max(size, int(item.size_bytes)) > MAX_FACE_PHOTO_BYTES:
+            raise Skip(CODE_TOO_LARGE)
         async with ctx.charge():
-            data = await ctx.read(0, int(item.size_bytes))
-        image = await executors.run("pictures", load_picture, data)
+            data = await ctx.read(0, min(size, MAX_FACE_PHOTO_BYTES))
+        try:
+            image = await executors.run("pictures", load_picture, data)
+        except image_safety.PictureRefused:
+            raise Skip(CODE_UNREADABLE) from None
+        finally:
+            data = b""
         found = await _detect(ctx, image)
         from domovoi.db.session import session_scope
 
@@ -926,6 +1138,16 @@ async def requeue_photos(s: Any) -> int:
     return int(r.rowcount or 0)
 
 
+async def requeue_faceless(s: Any) -> int:
+    """After a forgotten face is undone: photos the faces stage finished
+    with no face stored are queued again for faces (only that stage
+    runs)."""
+    await s.execute(text(
+        f"DELETE FROM media_item_stages st WHERE st.analyser = '{ANALYSER}' AND NOT EXISTS ("
+        "SELECT 1 FROM media_faces f WHERE f.item_id = st.item_id)"))
+    return await requeue_photos(s)
+
+
 async def housekeeping(runner: Any) -> None:
     """Each library step, with the switches read: fetch the models when
     faces are on and they aren't there (only then: never on a house that
@@ -948,11 +1170,16 @@ async def housekeeping(runner: Any) -> None:
             log.info("faces: %d photo%s queued for faces", n, "" if n == 1 else "s")
     tonight = date.today().isoformat()
     if runner.in_night() and st.get("last_regroup") != tonight:
+        # The night's mark goes first, in its own transaction: a re-group
+        # that dies (a restart, the watchdog) is not tried again tonight.
         async with session_scope() as s:
             if not await _faces_on_locked(s):
                 return
-            out = await regroup(s)
-            await write_state(s, last_regroup=tonight)
+            await write_state(s, last_regroup=tonight,
+                              regroup_attempts=int(st.get("regroup_attempts") or 0) + 1)
+        out = await regroup_night()
+        if out is None:
+            return
         log.info("faces: nightly re-group: %d free faces, %d suggested, %d new groups",
                  out["faces"], out["suggested"], out["groups_made"])
 

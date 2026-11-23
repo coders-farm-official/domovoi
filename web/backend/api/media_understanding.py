@@ -22,7 +22,7 @@ switches and folder exclusions are admin):
 * ``POST /api/media-understanding/pause`` (admin): ``{"paused": bool}``.
 * ``POST /api/media-understanding/run-now`` (admin): ignore the night
   window until the backlog is done (still voice first, still capped).
-* ``POST /api/media-understanding/rescan`` (household, ``require_device``):
+* ``POST /api/media-understanding/rescan`` (admin, ``require_admin_mutation``):
   walk the libraries at the core's next look (within a minute).
 * ``POST /api/media-understanding/excluded`` (admin):
   ``{"library_id", "prefix", "confirm_delete"}``. Any library the catalogue
@@ -49,7 +49,7 @@ from typing import Any
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy import text
 
-from domovoi.admin_auth import require_admin_mutation, require_device, require_device_read
+from domovoi.admin_auth import require_admin_mutation, require_device_read
 from domovoi.media_understanding import catalog, geocode, switches
 from domovoi.media_understanding import faces as face_data
 from domovoi.media_understanding.runner import estimate, progress
@@ -204,7 +204,9 @@ async def run_now() -> dict[str, Any]:
     return {"settings": saved}
 
 
-@router.post("/api/media-understanding/rescan", dependencies=[Depends(require_device)])
+# Admin (security review 2026-11-23, L49): a rescan keeps the walker
+# running; the household's walks are hourly anyway.
+@router.post("/api/media-understanding/rescan", dependencies=[Depends(require_admin_mutation)])
 async def rescan() -> dict[str, bool]:
     async with session_scope() as s:
         await s.execute(text(

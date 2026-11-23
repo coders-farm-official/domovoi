@@ -590,3 +590,13 @@ async def test_a_new_vision_model_reruns_captions_once(house, monkeypatch) -> No
     assert await _runner(now=lambda: NIGHT, vision_model=lambda: "vision:7b").requeue_if_changed() == 0
     await _drain(_runner(now=lambda: NIGHT, vision_model=lambda: "vision:7b"))
     assert len(vision.calls) == 4
+
+
+def test_an_exif_date_at_the_calendar_edge_is_no_date_not_a_failure() -> None:
+    """L55: year 1 with a positive offset (or 9999 with a negative one)
+    overflows; the photo gets no date instead of failing three times."""
+    from domovoi.media_understanding import photos as P
+
+    for when, off in (("0001:01:01 00:00:00", "+05:00"), ("9999:12:31 23:59:59", "-05:00")):
+        out = P.exif_facts({}, {P.TAG_DATETIME_ORIGINAL: when, P.TAG_OFFSET_ORIGINAL: off}, {}, places=False)
+        assert out["taken_at"] is None

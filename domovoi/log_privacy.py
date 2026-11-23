@@ -123,6 +123,10 @@ _RELAY_PATH_RE = re.compile(r"(?P<lead>/v1/player-relay/)(?P<value>[A-Za-z0-9_\-
 #: A page title in a Wikipedia API or page path, derived from the words.
 _TITLE_PATH_RE = re.compile(r"(?P<lead>/(?:page/summary|wiki)/)(?P<value>[^?#\s\"']+)")
 WORDS_MASK = "<words>"
+#: Path segments that ARE a credential (1.5.0): a room screen's thumbnail
+#: token, ``/v1/room-media/{token}`` (domovoi/room_media.py). Blanked at
+#: every level; the access line keeps the route.
+_PATH_TOKEN_RE = re.compile(r"(?P<lead>/v1/room-media/)(?P<value>[^/?#\s\"']+)")
 
 
 def _words_hidden() -> bool:
@@ -132,7 +136,7 @@ def _words_hidden() -> bool:
 def _may_hold(text: str) -> bool:
     lowered = text.lower()
     return ("=" in text or "bearer" in lowered or "/wiki/" in text or "/page/summary/" in text
-            or "/player-relay/" in text)
+            or "/player-relay/" in text or "/v1/room-media/" in text)
 
 
 def scrub(text: str) -> str:
@@ -140,6 +144,8 @@ def scrub(text: str) -> str:
     docstring). Unchanged text is returned as the same object."""
     if not text or not _may_hold(text):
         return text
+    if "/v1/room-media/" in text:
+        text = _PATH_TOKEN_RE.sub(lambda m: f"{m.group('lead')}{MASK}", text)
     if "/api/media/" in text:
         text = _ALWAYS_PATH_RE.sub(lambda m: _Q_RE.sub(lambda q: f"{q.group('lead')}{WORDS_MASK}", m.group(0)), text)
     if "/player-relay/" in text:

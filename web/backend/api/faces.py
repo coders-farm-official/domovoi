@@ -19,7 +19,8 @@ and §8; owner answers 2026-11-22). The data and the grouping live in
   unhide and list hidden groups.
 * **Forget my face**: an admin, or a phone or browser claimed as that
   person (its claim key, not a shared screen, claimed over 10 minutes ago,
-  as clearing listening history takes).
+  as clearing listening history takes, and before the person's oldest
+  confirmed face). Admins can list and undo forgotten faces.
 
 Every route but ``/status`` answers 409 while faces are off (no
 misleading controls). No answer ever carries an embedding or a centroid,
@@ -43,7 +44,15 @@ Routes:
 * ``POST /api/faces/face/{face_id}/not-this-person``.
 * ``POST /api/faces/merge``: ``{"into": group_id, "groups": [ids]}``.
 * ``POST /api/faces/split``: ``{"face_ids": [ids]}``.
-* ``POST /api/faces/people/{person_id}/forget``.
+* ``POST /api/faces/people/{person_id}/forget``: an admin, or the
+  person's own device whose claim is older than their oldest confirmed
+  face (security review 2026-11-23, M9).
+* ``GET /api/faces/denylist`` and ``DELETE /api/faces/denylist/{id}``
+  (admin): the forgotten faces, and their undo.
+
+Hidden groups stay admin's: naming, merging, splitting or confirming a
+face in one is admin, as is moving a face that is already someone's to
+someone else.
 """
 
 from __future__ import annotations
@@ -69,6 +78,8 @@ FACES_OFF_DETAIL = "recognizing faces is turned off (an admin turns it on in Set
 FRESH_DETAIL = ("this phone or browser said it was {name}'s less than 10 minutes ago, so until "
                 "then only an admin can forget {name}'s face")
 ADMIN_DETAIL = "only an admin can {what}"
+NOT_LONG_CLAIMED_DETAIL = ("this phone or browser said it was {name}'s after {name}'s faces were "
+                           "named, so only an admin can forget {name}'s face")
 NOT_YOURS_DETAIL = ("only an admin, or {name}'s own phone or browser, can forget {name}'s face. "
                     "Sign in as an admin, or say \"this is me\" on this phone first.")
 
@@ -109,6 +120,14 @@ def _int(raw: Any, what: str) -> int:
     if not isinstance(raw, int) or isinstance(raw, bool) or raw < 1:
         raise HTTPException(status_code=422, detail=f"{what} must be a positive whole number")
     return raw
+
+
+async def _any_hidden(s: Any, group_ids: list[int | None]) -> bool:
+    ids = [int(g) for g in group_ids if g is not None]
+    if not ids:
+        return False
+    return (await s.execute(text("SELECT 1 FROM face_groups WHERE id = ANY(:ids) AND hidden LIMIT 1"),
+                            {"ids": ids})).first() is not None
 
 
 def _ids(raw: Any, what: str, most: int = 500) -> list[int]:
@@ -195,6 +214,8 @@ async def name_group(group_id: int, request: Request, body: dict[str, Any] = Bod
         await _require_on(s)
         try:
             current = await faces.group_person(s, group_id)
+            if await _any_hidden(s, [group_id]):
+                await _require_admin(request, "name a hidden group")
             if "person_id" in body:
                 pid = _int(body["person_id"], "person_id")
             elif isinstance(body.get("name"), str):
@@ -224,10 +245,22 @@ async def hide_group(group_id: int, request: Request, body: dict[str, Any] = Bod
 
 
 @router.post("/face/{face_id}/confirm", dependencies=WRITE)
-async def confirm(face_id: int, body: dict[str, Any] | None = Body(None)) -> dict[str, Any]:
+async def confirm(face_id: int, request: Request, body: dict[str, Any] | None = Body(None)) -> dict[str, Any]:
+    """Confirm a face (its suggestion, or ``person_id``). Moving a face that
+    is already someone's (suggested or confirmed, or in a named group) to a
+    different person, or confirming a face in a hidden group, is admin."""
     pid = _int(body["person_id"], "person_id") if body and "person_id" in body else None
     async with session_scope() as s:
         await _require_on(s)
+        f = (await s.execute(text(
+            "SELECT f.person_id, f.group_id, g.person_id FROM media_faces f "
+            "LEFT JOIN face_groups g ON g.id = f.group_id WHERE f.id = :f"), {"f": face_id})).first()
+        if f is not None:
+            owners = {p for p in (f[0], f[2]) if p is not None}
+            if pid is not None and owners - {pid}:
+                await _require_admin(request, "move a face that is someone else's")
+            if await _any_hidden(s, [f[1]]):
+                await _require_admin(request, "confirm a face in a hidden group")
         try:
             return await faces.confirm_face(s, face_id, pid)
         except faces.Refused as e:
@@ -254,6 +287,8 @@ async def merge(request: Request, body: dict[str, Any] = Body(...)) -> dict[str,
             named = [g for g in [into, *others] if await faces.group_person(s, g) is not None]
             if named:
                 await _require_admin(request, "merge a named person's faces")
+            if await _any_hidden(s, [into, *others]):
+                await _require_admin(request, "merge a hidden group")
             return await faces.merge_groups(s, into, others)
         except faces.Refused as e:
             raise _http(e) from None
@@ -269,6 +304,11 @@ async def split(request: Request, body: dict[str, Any] = Body(...)) -> dict[str,
             "WHERE f.id = ANY(:ids) AND g.person_id IS NOT NULL LIMIT 1"), {"ids": ids})).first()
         if named:
             await _require_admin(request, "split a named person's faces")
+        hidden = (await s.execute(text(
+            "SELECT 1 FROM media_faces f JOIN face_groups g ON g.id = f.group_id "
+            "WHERE f.id = ANY(:ids) AND g.hidden LIMIT 1"), {"ids": ids})).first()
+        if hidden:
+            await _require_admin(request, "split a hidden group")
         try:
             return await faces.split_faces(s, ids)
         except faces.Refused as e:
@@ -306,6 +346,45 @@ async def forget(person_id: int, request: Request) -> dict[str, Any]:
             claimed = device[3]
             if claimed is None or claimed > datetime.now(timezone.utc) - FRESH_CLAIM:
                 raise HTTPException(status_code=403, detail=FRESH_DETAIL.format(name=name))
+            # The claim must be older than the faces it would forget: a
+            # phone that claimed a person after their faces were confirmed
+            # (or a person with none confirmed) needs an admin, so a
+            # household token can't claim someone and erase them for good.
+            oldest = (await s.execute(text(
+                "SELECT min(created_at) FROM media_faces WHERE person_id = :p AND confirmed"),
+                {"p": person_id})).scalar()
+            if oldest is None or claimed >= oldest:
+                raise HTTPException(status_code=403, detail=NOT_LONG_CLAIMED_DETAIL.format(name=name))
         out = await faces.forget_person(s, person_id)
     log.info("faces: person %s forgotten (%s)", person_id, "admin" if admin else "their device")
     return {"person_id": person_id, **out}
+
+
+# ─── the denylist (admin) ────────────────────────────────────────────────
+
+
+@router.get("/denylist", dependencies=READ)
+async def denylist(request: Request) -> dict[str, Any]:
+    """The "forget my face" entries (admin): ids and dates only, never the
+    signature. Each entry is one forgotten face, tied to nobody."""
+    await _require_admin(request, "see forgotten faces")
+    async with session_scope() as s:
+        rows = (await s.execute(text(
+            "SELECT id, model, created_at FROM face_denylist ORDER BY id"))).all()
+    return {"entries": [{"id": int(r[0]), "model": r[1],
+                         "created_at": r[2].isoformat() if r[2] else None} for r in rows]}
+
+
+@router.delete("/denylist/{entry_id}", dependencies=WRITE)
+async def delete_denylist_entry(entry_id: int, request: Request) -> dict[str, Any]:
+    """Undo a "forget my face" (admin): the face may be learned again from
+    photos analysed from now on (the photos it was forgotten from are
+    looked at again for faces)."""
+    await _require_admin(request, "undo a forgotten face")
+    async with session_scope() as s:
+        gone = (await s.execute(text("DELETE FROM face_denylist WHERE id = :i"), {"i": entry_id})).rowcount
+        if not gone:
+            raise HTTPException(status_code=404, detail="no such entry")
+        requeued = await faces.requeue_faceless(s)
+    log.info("faces: denylist entry %s removed by an admin", entry_id)
+    return {"deleted": entry_id, "requeued": requeued}
