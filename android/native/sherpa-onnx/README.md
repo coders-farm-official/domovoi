@@ -55,6 +55,10 @@ espeak-ng, piper-phonemize or TTS string is in the output, and
 `SHA256SUMS`, the same strings, each library's ELF class and machine for its
 ABI, and 16 KB alignment for the 64-bit ones.
 
+CI checks this every week, too: `.github/workflows/sherpa-onnx-rebuild.yml`
+rebuilds each ABI's library with `build-native.sh` (Tuesdays, on any change
+to this folder, or by hand) and fails if a file differs from `SHA256SUMS`.
+
 The 32-bit libraries are for the app's 32-bit APKs (old and budget phones),
 which have no on-device assistant (LiteRT-LM is 64-bit only) but keep
 speech recognition and voice detection for what else needs them.
