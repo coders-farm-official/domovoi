@@ -77,6 +77,9 @@ CORE_NAV: dict[str, int] = {
     "podcasts": 12,
     "audiobooks": 14,
     "videos": 15,
+    # Photos and Faces (1.5.0, media understanding), in the Media group.
+    "photos": 17,
+    "faces": 19,
     "news": 18,
     "people": 20,
     # No sidebar row since 2026-10-11 (a Settings tab; #settings/rooms opens it),

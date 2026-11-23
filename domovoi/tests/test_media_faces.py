@@ -688,6 +688,15 @@ async def test_the_faces_routes_tier_matrix(fh, monkeypatch) -> None:
         assert r.status_code == 200
         for bad in ({"into": 0, "groups": [1]}, {"into": d["named"], "groups": []}, {"into": "x"}):
             assert (await c.post("/api/faces/merge", headers=ad, json=bad)).status_code == 422
+        # A person's photos load as the page scrolls: has_more, next_cursor.
+        path = f"/api/faces/people/{d['pid']}/items"
+        every = (await c.get(path, headers=hh)).json()
+        assert every["has_more"] is False and every["next_cursor"] is None and len(every["items"]) >= 2
+        one = (await c.get(path, headers=hh, params={"limit": 1})).json()
+        assert one["has_more"] is True and one["next_cursor"] == "1" and len(one["items"]) == 1
+        nxt = (await c.get(path, headers=hh, params={"limit": 1, "cursor": "1"})).json()
+        assert nxt["items"][0]["item_id"] == every["items"][1]["item_id"]
+        assert (await c.get(path, headers=hh, params={"cursor": "x"})).status_code == 422
 
 
 @requires_db

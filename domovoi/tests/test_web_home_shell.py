@@ -476,10 +476,12 @@ def test_a_sidebar_handed_the_badges_polls_nothing_itself(driven) -> None:
     # the whole page: components.jsx ShareAddressStore)
     share = ["/api/lan-name", "/api/short-address"]
     alone = driven["sidebar_polls_alone"]["gets"]
-    assert [g for g in alone if g not in share] == ["/api/plugins/radio/badge", "/api/capabilities", "/api/nav-layout"]
+    # (and whether the Faces page is on: one shared read, FacesPageStore)
+    assert [g for g in alone if g not in share] == ["/api/plugins/radio/badge", "/api/capabilities", "/api/faces/status",
+                                                     "/api/nav-layout"]
     assert sorted(g for g in alone if g in share) == share
     given = driven["sidebar_given_badges"]
-    assert [g for g in given["gets"] if g not in share] == ["/api/capabilities", "/api/nav-layout"]
+    assert [g for g in given["gets"] if g not in share] == ["/api/capabilities", "/api/faces/status", "/api/nav-layout"]
     assert "4" in given["text"]
 
 

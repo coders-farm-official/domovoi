@@ -72,7 +72,7 @@ RESERVED_SLUGS = frozenset(
 # test_plugin_web_routes.py pins this set to index.html and plugin_host.
 CORE_WEB_ROUTES = frozenset(
     {
-        "home", "chat", "music", "podcasts", "audiobooks", "videos", "news",
+        "home", "chat", "music", "podcasts", "audiobooks", "videos", "photos", "faces", "news",
         "people", "satellites", "calendar", "lists", "files", "plugins", "settings",
         "manual", "containers",
     }

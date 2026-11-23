@@ -35,7 +35,8 @@ Routes:
 * ``GET  /api/faces/hidden`` (admin): hidden groups.
 * ``GET  /api/faces/groups/{group_id}``: a group's faces (a hidden one: admin).
 * ``GET  /api/faces/people/{person_id}/items``: photos and videos a person
-  is in, with video moments (the search hook).
+  is in, with video moments (the search hook); paged by ``offset`` or
+  ``cursor``, ``has_more`` / ``next_cursor`` say where it sits.
 * ``POST /api/faces/groups/{group_id}/name``: ``{"person_id"}`` or ``{"name"}``.
 * ``POST /api/faces/groups/{group_id}/hide``: ``{"hidden": bool}`` (false: admin).
 * ``POST /api/faces/face/{face_id}/confirm``: optional ``{"person_id"}``.
@@ -167,12 +168,22 @@ async def group(group_id: int, request: Request, limit: int = Query(200, ge=1, l
 @router.get("/people/{person_id}/items", dependencies=READ)
 async def person_items(person_id: int, confirmed: bool = Query(False),
                        kind: str | None = Query(None, pattern="^(image|video)$"),
-                       limit: int = Query(200, ge=1, le=500), offset: int = Query(0, ge=0)) -> dict[str, Any]:
+                       limit: int = Query(200, ge=1, le=500), offset: int = Query(0, ge=0),
+                       cursor: str | None = Query(None, max_length=8)) -> dict[str, Any]:
+    """``cursor`` (the ``next_cursor`` of the page before) stands in for
+    ``offset``: the dashboard's grid loads as it scrolls (usePagedList)."""
+    if cursor:
+        if not cursor.isdigit():
+            raise HTTPException(status_code=422, detail="cursor is the next_cursor of the page before")
+        offset = int(cursor)
     async with session_scope() as s:
         await _require_on(s)
         items = await faces.items_for_person(s, person_id, confirmed_only=confirmed, kind=kind,
-                                             limit=limit, offset=offset)
-    return {"person_id": person_id, "items": items}
+                                             limit=limit + 1, offset=offset)
+    more = len(items) > limit
+    items = items[:limit]
+    return {"person_id": person_id, "items": items, "has_more": more,
+            "next_cursor": str(offset + len(items)) if more else None}
 
 
 # ─── training ────────────────────────────────────────────────────────────

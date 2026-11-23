@@ -1136,6 +1136,7 @@ const HomeEverything = ({ counts, badges: given, shared }) => {
   const badges = given || own;
   const c = counts || {};
   const ai = useAiFeatures();
+  useFacesPage();   // Faces comes and goes with the switch (navItemsFor reads it)
   const items = navItemsFor(manifest, { shared, ai });
   const onBar = new Set(phoneBarRoutes(items, usePhoneBar()));
   // The sidebar's groups (resolveNavTree, components.jsx) over what the bar

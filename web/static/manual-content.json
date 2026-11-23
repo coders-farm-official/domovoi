@@ -138,6 +138,18 @@
     "screen": "Videos"
    }
   },
+  "photos": {
+   "dashboard": "#photos",
+   "app": {
+    "dashboard": true
+   }
+  },
+  "faces": {
+   "dashboard": "#faces",
+   "app": {
+    "dashboard": true
+   }
+  },
   "news": {
    "dashboard": "#news",
    "app": {
@@ -253,6 +265,12 @@
    "app": {
     "screen": "Settings",
     "tab": "chat"
+   }
+  },
+  "settings/photos-and-videos": {
+   "dashboard": "#settings/photos-and-videos",
+   "app": {
+    "dashboard": true
    }
   },
   "settings/internet": {
@@ -682,6 +700,7 @@
    ],
    "pieces": [
     "people",
+    "faces",
     "guests",
     "devices",
     "kept",
@@ -3373,7 +3392,9 @@
     "delete",
     "usb drive",
     "from chat",
-    "scans"
+    "scans",
+    "photo search",
+    "might show"
    ],
    "blocks": [
     {
@@ -3432,14 +3453,41 @@
       {
        "text": "**Chat documents** holds drafts saved in a phone chat. Files shows it once it holds one.",
        "only": "app"
+      },
+      {
+       "text": "[Photos](route:photos) shows every photo and video, newest first, and finds them by what is in them and when: \"dog at the beach\", \"christmas 2023\", \"snow last winter\". A video found by a moment opens there. A description reads \"Might show: …\": it's a computer's guess, sometimes wrong. Domovoi looks at your photos on this server, at night, once **Understand photos and videos** is on in [Settings → Chat & AI → Photos and videos](route:settings/photos-and-videos); until it has looked at some, Photos says so.",
+       "only": "dashboard"
+      },
+      {
+       "text": "With **Understand photos and videos** on ([Settings → Chat & AI → Photos and videos](route:settings/photos-and-videos)), ask for them by voice or in a chat. The answer says how many it found and that they're on the Photos page; a chat also shows them. With **Recognize faces** on, a name finds that person's photos, for a voice Domovoi recognizes, never a guest's."
+      }
+     ]
+    },
+    {
+     "type": "p",
+     "text": "[More detail](doc:docs/FAQ.md#can-i-move-files-around-without-the-command-line) · [Photos and videos](doc:docs/PHOTOS_AND_VIDEOS.md)"
+    },
+    {
+     "type": "label",
+     "role": "say",
+     "text": "Try saying"
+    },
+    {
+     "type": "say",
+     "phrases": [
+      {
+       "text": "show me photos of the beach from last summer",
+       "handler": "media_search",
+       "path": "fast"
+      },
+      {
+       "text": "find the video where we sang happy birthday",
+       "handler": "media_search",
+       "path": "fast"
       }
      ]
     }
-   ],
-   "more": {
-    "text": "More detail",
-    "target": "doc:docs/FAQ.md#can-i-move-files-around-without-the-command-line"
-   }
+   ]
   },
   {
    "id": "documents",
@@ -5193,6 +5241,60 @@
    "more": {
     "text": "More detail",
     "target": "doc:docs/FAQ.md#does-it-support-multiple-people"
+   }
+  },
+  {
+   "id": "faces",
+   "topic": "people-and-privacy",
+   "title": "Faces in photos",
+   "subtitle": "name the people in your photos",
+   "keywords": [
+    "faces",
+    "face",
+    "recognize faces",
+    "people in photos",
+    "forget my face",
+    "name a face"
+   ],
+   "blocks": [
+    {
+     "type": "p",
+     "text": "With **Recognize faces** on {admin}, Domovoi groups the same face across your photos and videos, on this server, so you can name the people you know. It's off until an admin turns it on in [Settings → Chat & AI → Photos and videos](route:settings/photos-and-videos); turning it off deletes every face."
+    },
+    {
+     "type": "label",
+     "role": "how",
+     "text": "How to"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "Open [Faces](route:faces). It's only there while faces are on, and never for a guest or on a shared screen.",
+       "only": "dashboard"
+      },
+      {
+       "text": "Name a group: open it, type a name (someone from People, or a new name) and press **add name**."
+      },
+      {
+       "text": "Check a person's faces: on their page, **yes, Sarah** or **not this person** on each face Domovoi suggested."
+      },
+      {
+       "text": "**hide this group** for a stranger. Groups of only a face or two stay under **show more**, and Domovoi never asks who someone is."
+      },
+      {
+       "text": "{admin} merge two groups, split faces into a new group, move a person's faces to someone else, and show a hidden group again."
+      },
+      {
+       "text": "**Forget my face**: on your own page, from the phone or browser that's yours (**this is me**), or by an admin. It deletes every saved face of you and keeps a pattern tied to nobody, so new photos of you aren't grouped again. Your photos stay, and so do your voice and memories."
+      }
+     ]
+    }
+   ],
+   "more": {
+    "text": "More detail",
+    "target": "doc:docs/PHOTOS_AND_VIDEOS.md#faces"
    }
   },
   {

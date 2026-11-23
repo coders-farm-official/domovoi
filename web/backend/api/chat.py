@@ -118,6 +118,8 @@ from web.backend.api import chat_letters as _letters
 from domovoi.doc_qa import letter as _letter
 from web.backend.api import chat_drafts as _drafts
 from web.backend.api import chat_videos as _videos
+from web.backend.api import chat_media as _media
+from domovoi.media_understanding import ask as _ask
 from web.backend.api.devices import valid_device_id
 from web.backend.db import session_scope
 from web.backend.domovoi_client import auth_forward_headers, domovoi_url
@@ -442,6 +444,9 @@ def _msg_dict(r: Any, me: str | None = None) -> dict[str, Any]:
             d[key] = json.loads(d[key])
     if isinstance(d.get("stats"), dict) and d["stats"].get("print_attachment"):
         d["print_attachment"] = d["stats"]["print_attachment"]
+    # A photo and video search's results (chat_media.py): the cards.
+    if isinstance(d.get("stats"), dict) and isinstance(d["stats"].get("media"), dict):
+        d["media"] = d["stats"]["media"]
     if d.get("speaker_confidence") is not None:
         d["speaker_confidence"] = round(float(d["speaker_confidence"]), 4)
     # The same judgement the core made when the turn came in
@@ -1292,6 +1297,14 @@ async def _answer(
         dturn = await _drafts.plan_turn(thread_id, question, revise_draft=revise_draft, device_id=device_id)
         if dturn is not None:
             model_role = "draft"
+    if dturn is None and not has_images and replace_id is None and not documents and revise_draft is None:
+        # "show me photos of the dog" (chat_media.py, media slice 6): the
+        # household's photos and videos, answered by the app with result
+        # cards, no model asked. Ahead of a documents thread's find.
+        mreq = _media.fast_request(question)
+        if mreq is not None:
+            mturn = await _media.answer(mreq.q, request, mreq)
+            return await _immediate_reply(thread_id, mturn.text, {"model_role": "media", "media": mturn.media})
     if not has_images and replace_id is None and dturn is None:
         previous = await _docs.previous_question(thread_id, before_id=user_row_id)
         plan = await _docs.plan_reply(thread_id, question, documents or [], previous, heads_up)
@@ -1419,6 +1432,18 @@ async def _answer(
             video_rules = None
         if video_rules:
             system["content"] += "\n\n" + video_rules
+    # A chat that searched its photos and videos (chat_media.py): a later
+    # plain text turn is given the latest results, fenced as untrusted
+    # data (captions, tags and text from the pictures).
+    media_rules: str | None = None
+    if refusal is None and plan is None and dturn is None and help_turn is None and not vision_call:
+        try:
+            media_rules = await _media.rules(thread_id)
+        except Exception as e:  # noqa: BLE001 — the question is still answered
+            log.warning("chat: the photo results of thread %s are unreadable: %s", thread_id, type(e).__name__)
+            media_rules = None
+        if media_rules:
+            system["content"] += "\n\n" + media_rules
     # Lookups (part 5, W1): a plain text turn (not help, documents,
     # pictures, a draft or a retry) is told about LOOK_UP / READ_PAGE, and a
     # "look up …" or "what does this page say: …" needs no model to say so.
@@ -1433,13 +1458,19 @@ async def _answer(
     # about LOOK_UP / READ_PAGE and its reply is never read as a proposal,
     # so words from a video (its speech, a sign in a frame, its name) can't
     # send a search out, as on a document or picture turn.
-    model_lookups = lookups_offered and not video_rules
+    # The same for a turn carrying photo results (words in a picture).
+    model_lookups = lookups_offered and not video_rules and not media_rules
     proposal: lookup_answer.Proposal | None = None
     thread_allowed = False
     if lookups_offered:
         proposal = lookup_answer.fast_path(question)
         if model_lookups:
             system["content"] += "\n\n" + lookup_answer.tool_prompt(internet=not egress.internet_turned_off())
+    # The photo and video search (chat_media.py): offered to the model only
+    # when the message talks about photos or videos, as the voice tool gate.
+    media_tool = lookups_offered and proposal is None and _ask.mentions_media(question)
+    if media_tool:
+        system["content"] += "\n\n" + _ask.TOOL_PROMPT
         async with session_scope() as s:
             thread_allowed = bool((await s.execute(
                 text("SELECT internet_allowed FROM chat_threads WHERE id = :id"), {"id": thread_id},
@@ -1495,6 +1526,8 @@ async def _answer(
         first_token_ms: float | None = None
         doc: dict[str, Any] | None = None
         draft: dict[str, Any] | None = None
+        media_q: str | None = None
+        media_card: dict[str, Any] | None = None
         if dturn is not None and dturn.immediate is not None:
             # "print it": the print card, with no model asked.
             first_token_ms = 0.0
@@ -1550,7 +1583,7 @@ async def _answer(
             # its first characters are held back, so a proposal never
             # reaches the screen as text.
             held = ""
-            holding = model_lookups
+            holding = model_lookups or media_tool
             proposing = False
             try:
                 async with contextlib.aclosing(ollama_client.chat_stream(
@@ -1563,9 +1596,12 @@ async def _answer(
                         if holding:
                             held += delta
                             head = held.lstrip()
-                            if not proposing and len(head) < 12 and lookup_answer.may_be_proposal(head):
+                            maybe = ((model_lookups and lookup_answer.may_be_proposal(head))
+                                     or (media_tool and _ask.may_be_tool(head)))
+                            if not proposing and len(head) < 12 and maybe:
                                 continue
-                            if proposing or _PROPOSAL_START.match(head):
+                            if (proposing or (model_lookups and _PROPOSAL_START.match(head))
+                                    or (media_tool and _ask.TOOL_START.match(head))):
                                 proposing = True
                                 first_line = head.split("\n", 1)
                                 if (len(first_line) > 1 and first_line[0].strip()) or len(head) > 400:
@@ -1577,11 +1613,13 @@ async def _answer(
                         if not checking:
                             yield f"event: delta\ndata: {json.dumps({'text': delta})}\n\n"
                 if held:
-                    proposal = lookup_answer.parse_proposal(held) if proposing else None
-                    if proposal is None:
+                    media_q = _ask.parse_tool(held) if (proposing and media_tool) else None
+                    proposal = (lookup_answer.parse_proposal(held)
+                                if (proposing and model_lookups and media_q is None) else None)
+                    if proposal is None and media_q is None:
                         chunks.append(held)
                         yield f"event: delta\ndata: {json.dumps({'text': held})}\n\n"
-                if chunks and proposal is None and ollama_stats.get("done_reason") == "length":
+                if chunks and proposal is None and media_q is None and ollama_stats.get("done_reason") == "length":
                     # The cap stopped it (a loop, or an answer that long):
                     # end it visibly, the same in the stream and the row.
                     tail = "…" + CUT_OFF_NOTE
@@ -1596,6 +1634,13 @@ async def _answer(
                     "chat stream failed (thread %s, model %s, %s): %s: %s",
                     thread_id, model, code, type(e).__name__, str(e)[:500],
                 )
+
+        if media_q is not None and error is None:
+            # The model asked for the photo and video search: the app
+            # answers with the results (chat_media.py), never the model.
+            mturn = await _media.answer(media_q, request)
+            chunks, media_card = [mturn.text], mturn.media
+            yield f"event: delta\ndata: {json.dumps({'text': mturn.text})}\n\n"
 
         if proposal is not None and error is None:
             # A lookup: local sources answer at once; anything that would
@@ -1650,6 +1695,9 @@ async def _answer(
                 stats["window_from_id"] = window["from_id"]
         if code is not None:
             stats["error_code"] = code
+        if media_card is not None:
+            stats["model_role"] = "media"
+            stats["media"] = media_card
         if help_turn is not None:
             stats["help"] = {
                 "covered": help_turn.covered,

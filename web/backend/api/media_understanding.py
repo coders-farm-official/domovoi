@@ -14,7 +14,11 @@ switches and folder exclusions are admin):
   Turning faces off deletes every face and group
   (``face_data.delete_all``), which needs ``confirm_delete_faces: true`` when
   there are any (409 otherwise). Turning them on starts the one-time,
-  pinned model fetch on the core.
+  pinned model fetch on the core. Turning ``places`` ("Use photo
+  locations") off deletes every stored GPS position and place name
+  (``geocode.delete_all``), which needs ``confirm_delete_places: true``
+  when there are any (409 otherwise); turning it on starts the one-time,
+  pinned fetch of the GeoNames town list on the core.
 * ``POST /api/media-understanding/pause`` (admin): ``{"paused": bool}``.
 * ``POST /api/media-understanding/run-now`` (admin): ignore the night
   window until the backlog is done (still voice first, still capped).
@@ -37,7 +41,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy import text
 
 from domovoi.admin_auth import require_admin_mutation, require_device, require_device_read
-from domovoi.media_understanding import catalog, switches
+from domovoi.media_understanding import catalog, geocode, switches
 from domovoi.media_understanding import faces as face_data
 from domovoi.media_understanding.runner import estimate, progress
 from web.backend.db import session_scope
@@ -90,6 +94,8 @@ async def get_state() -> dict[str, Any]:
         excluded = (await s.execute(text(
             "SELECT library_id, prefix FROM media_excluded ORDER BY library_id, prefix"))).mappings().all()
         faces = int((await s.execute(text("SELECT count(*) FROM media_faces"))).scalar() or 0)
+        located = await geocode.located_count(s)
+        places_state = await geocode.read_state(s)
     est = estimate(prog["photos"]["left"], prog["videos"]["left"], prog["benchmark"])
     return {
         "settings": {k: sw[k] for k in ("enabled", "faces", "places", "paused", "run_now",
@@ -99,6 +105,11 @@ async def get_state() -> dict[str, Any]:
         "progress": prog,
         "estimate": {"seconds": round(est.seconds), "nights": est.nights},
         "face_count": faces,
+        # Never a coordinate: how many photos have a location, and why
+        # places can't be named yet (the town list's one-time download).
+        "places": {"count": located, "ready": geocode.ready(),
+                   "problem": geocode.problem() if sw["places"] else None,
+                   "fetch_error": places_state.get("fetch_error")},
         "libraries": _libraries(),
         "excluded": [dict(r) for r in excluded],
     }
@@ -108,6 +119,7 @@ async def get_state() -> dict[str, Any]:
 async def put_settings(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
     body = dict(body)
     confirm = bool(body.pop("confirm_delete_faces", False))
+    confirm_places = bool(body.pop("confirm_delete_places", False))
     async with session_scope() as s:
         current = await switches.read(s)
         try:
@@ -121,6 +133,12 @@ async def put_settings(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
                 raise HTTPException(status_code=409, detail=(
                     f"turning faces off deletes {n} saved faces and every group and name on them; "
                     "send confirm_delete_faces to go ahead"))
+        if current["places"] and not new["places"]:
+            n = await geocode.located_count(s)
+            if n and not confirm_places:
+                raise HTTPException(status_code=409, detail=(
+                    f"turning photo locations off deletes where {n} photos were taken (their positions "
+                    "and place names); send confirm_delete_places to go ahead"))
         # The switch first: its row lock makes a face the runner is storing
         # right now either land before this delete or see faces off
         # (domovoi/media_understanding/faces.py, _faces_on_locked).
@@ -131,6 +149,12 @@ async def put_settings(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
             # Turned on: the runner fetches the models (only now), then
             # queues the photos again for faces.
             await face_data.write_state(s, requeued=False, fetch_error=None)
+        if current["places"] and not new["places"]:
+            await geocode.delete_all(s)
+        elif new["places"] and not current["places"]:
+            # Turned on: the runner fetches the town list (only now), then
+            # reads where each photo was taken.
+            await geocode.write_state(s, requeued=False, fetch_error=None)
     return {"settings": saved}
 
 

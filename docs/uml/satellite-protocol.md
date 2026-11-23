@@ -418,7 +418,8 @@ then lists `"room_display"`. A Pi never does; nothing else changes for it.
                  "controls": ["pause", "skip", "previous"]},
  "timers": [{"id": 7, "kind": "timer", "label": "pasta", "remaining_ms": 299000, "total_ms": 600000},
             {"id": 9, "kind": "alarm", "label": "7 AM alarm", "remaining_ms": 32400000, "total_ms": 36000000}],
- "ringing": null}
+ "ringing": null,
+ "media": null}
 ```
 
 * `sent_at_ms`: this server's monotonic clock in ms: for ordering frames
@@ -447,8 +448,32 @@ then lists `"room_display"`. A Pi never does; nothing else changes for it.
   timer" takes (announced here in the last 30 s, set here and fired in the
   last 30 s, or still waiting its turn here); else null.
 
+* `media` (1.5.0, `domovoi/room_media.py`): photo and video results asked
+  for by voice in this room ("show me photos of the beach"), else null:
+
+  ```json
+  {"id": 7, "said": "I found 12 photos that might show the beach, from last summer. They're on the Photos page.",
+   "count": 12, "more": false, "expires_in_ms": 90000,
+   "items": [{"kind": "image", "thumb": "/v1/room-media/Zk3…", "caption": "A beach with a red umbrella.",
+              "date": "2025-07-14", "at_s": null},
+             {"kind": "video", "thumb": "/v1/room-media/q9P…", "caption": null,
+              "date": "2025-08-02", "at_s": 42.0}]}
+  ```
+
+  At most 6 items. `id` is new for each set of results. `thumb` is a path on
+  this core (`GET /v1/room-media/{token}`, open: the random token is the
+  credential, it names one item and works for 10 minutes). `caption` is
+  what the picture MIGHT show, a picture model's words and untrusted text:
+  draw it as text, never markup, as "Might show: …". `date` is
+  `YYYY-MM-DD` or null; `at_s` a video's best moment in seconds, or null.
+  The results go with the next frame sent for any other reason (null
+  then), when newer results replace them (a new `id`), or after
+  `expires_in_ms` even if no frame comes. Results filtered by a person's
+  face are never sent for a guest's voice. A client from before 1.5.0
+  ignores the key; nothing else in the frame changed.
+
 Sent once after `ready`, then whenever it changes (this room's or its group
-host's music, its timers or alarms, one going off), at most one a second.
+host's music, its timers or alarms, one going off, photo results), at most one a second.
 Time passing is not a change; a seek, or a position or end more than 2.5 s
 from where the last frame put it, is.
 

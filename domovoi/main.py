@@ -1720,6 +1720,21 @@ async def music_cover(track_id: int, request: Request) -> Any:
     return await track_cover(track_id, request, size=None)
 
 
+@app.get("/v1/room-media/{token}")
+async def room_media_thumb(token: str) -> Any:
+    """A photo or video result's thumbnail for a room's screen (1.5.0,
+    domovoi/room_media.py: the ``room_display`` frame's ``media.items[].thumb``).
+
+    Open, as ``/v1/music/cover`` is: a room phone holds only its room key,
+    which no HTTP route takes, so the token IS the credential. It is random,
+    names one item of results shown in one room, lives in this process only
+    and works for 10 minutes. The bytes are the dashboard's own thumbnail
+    (a photo) or poster frame (a video). ``404`` for anything else."""
+    from domovoi import room_media
+
+    return await room_media.serve(token)
+
+
 @app.get(
     "/v1/stats/latency",
     # Device READ tier (2026-10-08, REV-11): counts per room and window say
@@ -2971,6 +2986,12 @@ class _AdminPlayBody(BaseModel):
     query: str = Field(..., min_length=1, max_length=500)
 
 
+def _room_media_snapshot() -> dict[str, Any]:
+    from domovoi import room_media
+
+    return room_media.snapshot()
+
+
 @app.get("/v1/admin/snapshot")
 async def admin_snapshot() -> dict[str, Any]:
     """Process-state snapshot for the web UI's poll loop.
@@ -3083,6 +3104,10 @@ async def admin_snapshot() -> dict[str, Any]:
         # idle_mode}) video satellites report via display_status — drives
         # the dashboard's Display block and dead-kiosk warning.
         "satellite_display": dict(app.state.satellite_display),
+        # Photo and video results on a room's screen now (1.5.0,
+        # domovoi/room_media.py): {room: {id, said, count, more,
+        # expires_in_ms, items}}, the kiosk page's thumbnails.
+        "room_media": _room_media_snapshot(),
         # Rooms whose connected satellite declared mic_dsp (an XVF3800 with
         # xvf_host), with the preset state it last reported ({} until it
         # does). Only these get the Settings tab's Microphone DSP block.

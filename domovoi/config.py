@@ -1301,6 +1301,10 @@ class Settings(BaseSettings):
     # face_models.py) are fetched, pinned by SHA-256, when an admin turns
     # faces on. Never shipped; server-private, never served.
     face_models_dir: str = str(Path.home() / ".domovoi" / "face_models")
+    # Where the GeoNames town list (domovoi/media_understanding/geocode.py)
+    # is fetched, pinned by SHA-256, when an admin turns photo locations on.
+    # Read on this server only: no coordinate is ever sent anywhere.
+    place_names_dir: str = str(Path.home() / ".domovoi" / "place_names")
 
     # ─── MPD (lazy per-room provisioning) ──────────────────────────────
     # An MPD daemon per voice-satellite room keeps playback queues / current

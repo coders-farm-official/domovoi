@@ -411,6 +411,38 @@ The vision model isn't installed by default (a server set up by `scripts/linux/p
 
 The default vision model is the pick for a box without a GPU: a 1.9 GB download, about 3 GB of memory while it is loaded. With an NVIDIA GPU, `qwen2.5vl:7b` is the pick for the Vision row instead: quick on the GPU, but minutes per picture on a processor alone. A change in the Vision row reaches the dashboard's chat when the dashboard restarts.
 
+## Does Domovoi send my photos anywhere?
+
+**No.** When an admin turns on **Understand photos and videos** (Settings →
+Chat & AI → Photos and videos), the server looks at the photos in Pictures
+and the videos in Videos with the models on your own hardware, at night and
+never while someone is talking to it. Nothing is uploaded, and nothing is
+written into your files. The only downloads are two small face models, if an
+admin turns on faces, and a list of towns, if an admin turns on photo
+locations: both only on request, and neither sends anything about your
+photos. Details: [Photos and videos](PHOTOS_AND_VIDEOS.md).
+
+## Why does a description say "Might show"?
+
+Because it is a small computer model's guess. It is usually right about
+plain scenes (a dog, a beach, a birthday cake) and sometimes wrong: it can
+misname a breed or an object, or see something that isn't there. So
+descriptions and tags are labelled "Might show" and are there to help you
+search, not to be taken as fact. Writing found in a picture is read by a
+different program and is exact when it is clear.
+
+## How do I make Domovoi forget my face?
+
+Faces are off unless an admin turned on **Recognize faces**. If they are on,
+open **Faces** on the dashboard from the phone or browser that is yours
+(press **this is me** if you haven't), open your page and press **Forget my
+face**; an admin can do it for anyone. Every saved face of yours is deleted
+and a pattern tied to nobody is kept, so new photos of you aren't grouped
+again. Your photos, your voice and your memories stay. That kept pattern
+survives even if faces are turned off and on again, which is what makes
+forgetting permanent. Turning faces off deletes everything else about faces.
+See [Photos and videos](PHOTOS_AND_VIDEOS.md#faces).
+
 ## Can I ask a chat about a document?
 
 Yes. The paperclip in Chat takes a PDF, Word (.docx), OpenDocument (.odt), Excel (.xlsx), CSV, text or markdown file, up to 100 MB, in a chat with the home server (on the dashboard and in the app) and in a chat on the phone. Ask what it says: the answer names the pages or sections it came from, a press on one shows the passage, and when the document doesn't say, the answer is "I couldn't find that in the document" rather than a guess. Files → Documents has **Ask about this document**. "Summarize" works on long documents too: Domovoi reads them in parts ("reading part 3 of 8"), **stop** keeps what was read, and every point in the summary cites a page.

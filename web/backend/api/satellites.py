@@ -911,6 +911,21 @@ async def get_satellite(room_id: str) -> Satellite:
                                 wake_facts=await _room_wake_facts_or_empty(room_id))
 
 
+@router.get("/{room_id}/media", dependencies=READ)
+async def get_room_media(room_id: str) -> dict[str, Any]:
+    """Photo and video results asked for by voice in this room, while its
+    screen shows them (1.5.0, domovoi/room_media.py): ``{"media": null |
+    {id, said, count, more, expires_in_ms, items: [{kind, thumb, caption,
+    date, at_s}]}}``. For the video satellite's kiosk page
+    (web/static/display.html); ``thumb`` is this dashboard's thumbnail or
+    poster route. From the Domovoi server's snapshot (at most a poll old);
+    null when the room shows none or the server isn't answering. A caption
+    is a picture model's words: draw it as text."""
+    snapshot = get_cached_snapshot() or {}
+    m = (snapshot.get("room_media") or {}).get(room_id)
+    return {"media": m if isinstance(m, dict) else None}
+
+
 # ─── Sessions / conversations / notes / timers (per room) ─────────────────
 
 

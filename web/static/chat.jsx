@@ -21,6 +21,9 @@
  * runs shows it from the message list's `jobs`, polled until it ends; a
  * stopped summary offers "carry on".
  *
+ * Photo and video results (chat_media.jsx, ChatMedia): a reply that found
+ * the household's photos or videos carries `media`; its cards are drawn
+ * under the reply (optional here, like ChatVideos).
  * Videos (chat_videos.jsx, ChatVideos): one short video a message rides
  * the same paperclip when the server can watch one; the attachment shows
  * "Watching your video… about N minutes left" (the thread's `videos`,
@@ -43,6 +46,8 @@
  * the URL carries the household token as ?device_token= (withDeviceToken,
  * data.js) — the query the server accepts on reads and nowhere else. */
 const chatUploadUrl = (token) => withDeviceToken(`${API_BASE}/api/chat/uploads/${token}`);
+// A reply carrying photo and video results (chat_media.jsx).
+const hasMediaCards = (m) => !!(m && m.media && Array.isArray(m.media.items) && m.media.items.length);
 
 /* What a send says when the household's AI features are off. */
 const CHAT_AI_OFF_TEXT = 'AI chat is turned off on your home server';
@@ -396,7 +401,7 @@ const ChatMessage = ({ m, threadId, onCopy, admin, onLookup, onHeadsUp, busy, st
           <span style={{ flexShrink: 0, marginTop: 3 }}><DomovoiGlyph size={14}/></span>
           <div {...bubbleEvents}
                style={{ fontSize: 13, lineHeight: 1.6, overflowWrap: 'break-word', minWidth: 0,
-                        flex: (m.draft || m.print_attachment) && !m.pending ? 1 : undefined }}>
+                        flex: (m.draft || m.print_attachment || hasMediaCards(m)) && !m.pending ? 1 : undefined }}>
             {headsUp ? (
               // A heads-up card is the reply until an option is picked
               // (documents plan D3): its own sentence and buttons.
@@ -413,6 +418,7 @@ const ChatMessage = ({ m, threadId, onCopy, admin, onLookup, onHeadsUp, busy, st
             ) : m.stats && m.stats.lookup_card
               ? <ChatLookups.Card m={m} busy={busy} onDecide={onLookup}/>
               : <div className="chat-md" dangerouslySetInnerHTML={{ __html: window.chatMarkdownHtml(m.content || '') }}/>}
+            {!m.pending && m.media && window.ChatMedia && <window.ChatMedia.Cards media={m.media}/>}
             {m.pending && m.status === 'drafting' && (
               <span className="mono chat-doc-checking">writing the draft…</span>
             )}

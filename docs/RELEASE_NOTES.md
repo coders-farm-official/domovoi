@@ -4,90 +4,135 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
-## 1.5.0 (unreleased) — Photos: descriptions, text in pictures, dates, and search
+## 1.5.0 (unreleased) — Photos and videos
 
-- **What changed.** The background runner now looks at each photo in
-  Pictures: the date it was taken (from the photo's own EXIF data, else
-  the file's time), one sentence of what it might show and up to 12 tags
-  (one call to the household's existing vision model, `qwen3-vl:2b` on a
-  CPU server or the larger one a GPU house picked in Settings → Models),
+Domovoi now works out what is in the photos in Pictures and the videos in
+Videos, on the server, so you can find them by words, times, places and
+people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
+
+- **The catalogue and the runner.** The core keeps a catalogue of the
+  image and video files in Pictures and Videos (migration V078), walked by
+  `stat()` once an hour, and one background runner for everything it works
+  out about them, which also runs the videos attached in chat (first, as
+  before; the `chat_video` worker is now `media_understanding`). The runner
+  works at night (the household's quiet hours) and, by day, only on new
+  files, after 10 quiet minutes; it gives way to every voice turn, waits
+  for memory before using the vision model, reads at most 20 MB/s, and caps
+  the time it spends on one video. Settings → Chat & AI → Photos and videos
+  shows the progress, the switches, Pause, Run now, Rescan, the per-video
+  frame cap (Automatic or manual) and excluded folders. A house that
+  upgrades starts with "Understand photos and videos" **off** until an
+  admin turns it on; a new install starts with it on. Faces and photo
+  locations are off for everyone. Nothing is written into the media files.
+- **Photos.** For each photo: the date it was taken (from its EXIF data,
+  else the file's time), one sentence of what it might show and up to 12
+  tags (one call to the household's existing vision model, `qwen3-vl:2b` on
+  a CPU server or the larger one a GPU house picked in Settings → Models),
   and, only when that model says the photo has writing in it, the exact
-  text, read by Tesseract. `GET /api/media/search` (paired devices) finds
-  photos and videos by those words, their file and folder names, and a
-  time said plainly ("dog at the beach last summer", "Christmas 2021",
-  "2023"). Settings → Chat & AI → Photos and videos has a search box once
-  something has been looked at.
-- **What to know.** Descriptions come from a small model and are shown as
-  "Might show: ..."; they are sometimes wrong. With the household's AI
-  features off there are no descriptions: Tesseract then reads every
-  photo and keeps only a confident reading; turning AI on later, or
-  changing the vision model, queues the descriptions again for the next
-  nights. A photo's location is kept
-  only while "Use photo locations" is on. Tesseract is the package the
-  scan reader already installed (`tesseract-ocr`, `tesseract-ocr-eng`);
-  nothing new to install.
-
-## 1.5.0 (unreleased) — Faces and people (server side)
-
-- **What changed.** With **Recognize faces** on (Settings → Chat & AI →
-  Photos and videos; off by default, admin only), the server finds faces
-  in the Pictures library (and, once video understanding lands, in video
-  keyframes, one row per appearance), and groups the same person's faces
-  as they arrive and again each night. Groups are named with the same
-  people voice ID knows. New routes under `/api/faces` (API_REFERENCE
-  §3.5c1c): the household views, names, confirms, says "not this person"
-  and hides; merging or splitting a named person's faces is admin; guests
-  and shared screens get nothing. "Forget my face" (admin, or the person's
-  own claimed phone) deletes their faces and keeps them from being learned
-  again. Turning faces off deletes every face and group.
-- **What to know.** Turning faces on makes the server download two models
-  once, about 39 MB, from GitHub (OpenCV Zoo's YuNet, MIT, and SFace,
-  Apache-2.0; pinned by SHA-256; never under internet access "No"); then
-  every photo already analysed is queued again for faces only. SFace's
-  model card doesn't name its training data (docs/LICENSES.md). There is
-  no export of face data; database backups include it. A face-only person
-  appears on the People page like any other.
-
-## 1.5.0 (unreleased) — Videos: scenes, what is said, keyframes, a summary
-
-- **What changed.** With "Understand photos and videos" on, the background
-  runner now works through the library's videos: it finds the scene
-  changes, transcribes what is said (the first two hours of a video), has
-  the vision model describe keyframes picked at scene changes (how many
-  depends on the server's measured speed, the video's length and its
-  scenes: up to 120 on a CPU-only server), and writes a short summary and a
-  suggested title. With a big backlog (25 or more videos waiting) each
-  video first gets a quick pass with about a quarter of the frames, and a
-  later pass adds the rest. All of it is searchable, and a search can tell
-  the moment in the video that matched. Nothing is written into the video
-  files.
-- **What to know.** Transcripts run even with AI features off (captions
-  and summaries don't). A caption is a small model's guess and is shown as
-  "might show". A video ffmpeg can't read is skipped and marked with a code
-  (`video-unreadable`, `video-no-picture`, `video-too-big` past 8K). On a
-  CPU-only server a long video's first look takes minutes and its full
-  pass tens of minutes, all in the night window, pausing for every voice
-  turn. When faces are turned on, videos already looked at are queued
-  again for faces only (at night).
-
-## 1.5.0 (unreleased) — Photos and videos: the catalogue and the background runner
-
-- **What changed.** The core keeps a catalogue of the image and video
-  files in Pictures and Videos (migration V078), walked by `stat()` once an
-  hour, and one background runner for everything it works out about them,
-  which also runs the videos attached in chat (first, as before; the
-  `chat_video` worker is now `media_understanding`). The runner works at
-  night (the household's quiet hours) and, by day, only on new files,
-  after 10 quiet minutes; it gives way to every voice turn, waits for
-  memory before using the vision model, reads at most 20 MB/s, and caps
-  the time it spends on one video. Settings → Chat & AI → Photos and
-  videos shows the progress and the switches. This release's first part
-  only catalogues and fingerprints; descriptions, transcripts and faces
-  follow in later 1.5.0 work.
-- **What to know.** A house that upgrades starts with "Understand photos
-  and videos" **off** until an admin turns it on; a new install starts
-  with it on. Faces and photo locations are off for everyone. Nothing is
-  written into the media files.
+  text, read by Tesseract (the package the scan reader already installed;
+  nothing new to install). `GET /api/media/search` (paired devices) finds
+  photos and videos by those words, their file and folder names, and a time
+  said plainly ("dog at the beach last summer", "Christmas 2021", "2023").
+  Descriptions come from a small model, are shown as "Might show: ...", and
+  are sometimes wrong. With the household's AI features off there are no
+  descriptions: Tesseract then reads every photo and keeps only a confident
+  reading; turning AI on later, or changing the vision model, queues the
+  descriptions again for the next nights.
+- **Videos.** The runner finds the scene changes, transcribes what is said
+  (the first two hours of a video), has the vision model describe keyframes
+  picked at scene changes (how many depends on the server's measured speed,
+  the video's length and its scenes: up to 120 on a CPU-only server), and
+  writes a short summary and a suggested title. With a big backlog (25 or
+  more videos waiting) each video first gets a quick pass with about a
+  quarter of the frames, and a later pass adds the rest. A search can tell
+  the moment in the video that matched. Transcripts run even with AI
+  features off (captions and summaries don't). A video ffmpeg can't read is
+  skipped and marked with a code (`video-unreadable`, `video-no-picture`,
+  `video-too-big` past 8K). On a CPU-only server a long video's first look
+  takes minutes and its full pass tens of minutes, all in the night window,
+  pausing for every voice turn.
+- **Faces and people.** With **Recognize faces** on (off by default, admin
+  only), the server finds faces in photos and in video keyframes (one row
+  per appearance), and groups the same person's faces as they arrive and
+  again each night. Groups are named with the same people voice ID knows.
+  New routes under `/api/faces` (API_REFERENCE §3.5c1c): the household
+  views, names, confirms, says "not this person" and hides; merging or
+  splitting a named person's faces is admin; guests and shared screens get
+  nothing. "Forget my face" (admin, or the person's own claimed phone)
+  deletes their faces and keeps them from being learned again. Turning
+  faces off deletes every face, group and embedding, but keeps the forget
+  list (owner decision, 2026-11-22), so forgetting stays permanent:
+  deleting it too would let a forgotten person be learned again from the
+  same photos once faces were turned back on. Both confirms say so.
+  Turning faces on makes the server download two models once, about 39 MB,
+  from GitHub (OpenCV Zoo's YuNet, MIT, and SFace, Apache-2.0; pinned by
+  SHA-256; never under internet access "No"); then every photo and video
+  already analysed is queued again for faces only, at night. SFace's model
+  card doesn't name its training data (docs/LICENSES.md). There is no
+  export of face data; database backups include it.
+- **Photo locations.** With **Use photo locations** on (off by default,
+  admin only), the server keeps each photo's EXIF GPS position and names
+  the town it was taken in, on the server, from GeoNames' list of towns
+  over 1,000 people. Search finds photos by the place ("photos from
+  Portland") and "at home" finds the ones taken near the Home location
+  (Settings → Household), meaning within 10 km, which is a town, not your
+  address. Search answers carry `place` and `near_home`, never a
+  coordinate; a shared screen gets neither. Turning it on downloads the
+  town list once, about 11 MB, from the Internet Archive's copy of
+  GeoNames' files (CC BY 4.0; pinned by SHA-256; never under internet
+  access "No", where places stay unnamed), then reads again where the
+  photos already looked at were taken (the first 256 KB of each, at night).
+  No position is ever sent anywhere. Turning it off deletes every stored
+  position and place name (it asks first). Videos keep no location.
+- **The Photos and Faces pages.** The Media group has two new pages.
+  **Photos** (`#photos`) shows every photo and video catalogued, newest
+  first, loading as you scroll, with a search box; a photo opens its
+  details (what it might show, its tags, the text found in it, its date),
+  a video opens the player at the moment the search matched. **Faces**
+  (`#faces`) lists the people named in the photos, unnamed groups to name
+  (the small ones behind "show more"), and each person's photos and videos
+  with **yes, <name>** / **not this person** on the faces Domovoi
+  suggested, and **Forget my face**. Merge, split, moving a named person's
+  faces and showing a hidden group again are for an admin only.
+  `GET /api/media/search` and `GET /api/faces/people/{id}/items` also take
+  `cursor` and answer `has_more` / `next_cursor` (API_REFERENCE). Faces is
+  on the menu only while **Recognize faces** is on, and never for a guest
+  or on a shared screen. With understanding off, or nothing looked at yet,
+  Photos says so and links to Settings → Chat & AI → Photos and videos.
+  `photos` and `faces` are now core routes: a plugin page on either route
+  is refused at install, enable and boot, like the other core pages.
+- **Asking by voice and in chat.** "Show me photos of the beach from last
+  summer", "find the video where we sang happy birthday", "do we have any
+  pictures from Christmas" work by voice (new core handler `media_search`,
+  band 305, offline) and in a home-server chat. The answer says how many
+  were found and that they're on the Photos page; a chat reply also carries
+  result cards (`stats.media` / the message's `media`: thumbnail, "might
+  show", date, a video's moment). In a chat that mentions photos or videos,
+  the model may ask for the search itself (`FIND_MEDIA: ...`); the app runs
+  it. With understanding off the answer is "Photo understanding is off; an
+  admin can turn it on in Settings.", and before anything has been looked
+  at, "I haven't looked through your photos yet." A name finds that
+  person's photos only with faces on, and only for a voice Domovoi
+  recognizes, a phone's chat mic or a chat that isn't on a shared screen; a
+  guest voice or a shared screen gets no person-based results. Captions,
+  tags and text from pictures reach a later chat turn's model only inside a
+  fenced block it is told never to obey, and such a turn is not offered
+  lookups.
+- **Results as cards, and on a room's screen.** The dashboard's chat draws
+  a reply's results as cards: a thumbnail, "Might show: ...", the date and,
+  on a video, a time badge for its best moment. A photo opens the picture;
+  a video opens the player at that moment. Asked by voice in a room with a
+  screen (a phone or tablet in room mode, or a video satellite's kiosk),
+  the results show there for 90 seconds: the `room_display` frame has a new
+  `media` part (null otherwise), with thumbnails on the new open route
+  `GET /v1/room-media/{token}` (a random token, 10 minutes), and the kiosk
+  reads `GET /api/satellites/{room}/media` on the `satellites.media` push.
+  A room without a screen gets nothing new. A guest's voice never puts
+  photos filtered by a person's face on a screen. The results go with the
+  next frame sent for another reason (music, a timer), newer results, or
+  after 90 seconds. Clients from before this ignore `media`; the Android and
+  iPhone room modes and chats draw it in their own release. Captions are a
+  picture model's words and every screen draws them as text.
 
 ## 1.5.0 (unreleased) — A QR code for the setup code
 

@@ -7,8 +7,9 @@ Two analysers on the runner (:mod:`.runner`), cheap work first:
   ``DateTimeOriginal`` (with ``OffsetTimeOriginal`` when the camera wrote
   one, else the household's wall clock), else the file's modified time.
   EXIF GPS is kept only while the household's "Use photo locations"
-  switch is on; with it off nothing about where is saved (places
-  themselves, the names, are slice 7). Reads only the first 256 KB, where
+  switch is on; with it off nothing about where is saved. With it on,
+  the town is named offline (:mod:`.geocode`) and goes into the search
+  text. Reads only the first 256 KB, where
   a JPEG keeps its EXIF, through the read-rate bucket.
 * :class:`PhotoCaptionAnalyser` (``photo_caption``): ONE vision call per
   photo, on the household's existing vision slot
@@ -63,7 +64,7 @@ from sqlalchemy import text
 
 from domovoi import ai_features, executors, image_safety
 from domovoi.db.session import session_scope
-from domovoi.media_understanding import search
+from domovoi.media_understanding import geocode, search
 from domovoi.media_understanding.runner import Item, Paused, Skip, StepContext, register
 
 log = logging.getLogger(__name__)
@@ -431,13 +432,20 @@ class PhotoDateAnalyser:
             exif, exif_ifd, gps_ifd = await executors.run("pictures", read_exif, head)
         facts = exif_facts(exif, exif_ifd, gps_ifd, places=places)
         taken = facts["taken_at"] or datetime.fromtimestamp(item.mtime, tz=timezone.utc)
+        gps = facts["gps"]
+        # The town is found here, on this server (geocode.py): None while
+        # the town list isn't downloaded yet (named later by housekeeping).
+        place = await geocode.name_of(gps) if gps else None
         async with session_scope() as s:
+            # Under a share lock on the switch: an admin's "locations off"
+            # either deletes after this, or this sees it off.
+            if gps and not await geocode.places_on_locked(s):
+                gps, place, places = None, None, False
             await s.execute(text(
-                "UPDATE media_items SET taken_at = :t, gps = CAST(:g AS JSONB), "
-                "place_name = CASE WHEN :g IS NULL THEN NULL ELSE place_name END WHERE id = :i"),
-                {"t": taken, "g": json.dumps(facts["gps"]) if facts["gps"] else None, "i": item.id})
+                "UPDATE media_items SET taken_at = :t, gps = CAST(:g AS JSONB), place_name = :p WHERE id = :i"),
+                {"t": taken, "g": json.dumps(gps) if gps else None, "p": place, "i": item.id})
             await search.refresh_doc(s, item.id)
-        await ctx.save({"from": "exif" if facts["taken_at"] else "file", "gps": bool(facts["gps"])})
+        await ctx.save({"from": "exif" if facts["taken_at"] else "file", "gps": bool(gps), "places": places})
 
 
 class PhotoCaptionAnalyser:

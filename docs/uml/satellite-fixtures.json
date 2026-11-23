@@ -1552,5 +1552,106 @@
       "device_tag": "8f79d661cb5c3ac00b310d5721c99338aef7f51bb158bab31305e6d5e0a3b1d1",
       "server_tag": "669d77f82ec6ff9aa75ffedc245e220c44d67b406809079cc61b68b91106e95e"
     }
+  },
+  "room_display_frames": {
+    "about": [
+      "The room display frame (domovoi/room_display.py, docs/uml/satellite-protocol.md 'The room",
+      "display'). 1.5.0 adds one key, `media`: photo and video results asked for by voice in the",
+      "room (domovoi/room_media.py), null otherwise. A 1.4.0 client reads only `client_keys_1_4_0`",
+      "and ignores every other key, so `with_media` reads to it exactly as `before_media`. Read by",
+      "domovoi/tests/test_room_media.py; the room-mode apps' tests may read it too. Tokens here are",
+      "placeholders."
+    ],
+    "client_keys_1_4_0": [
+      "type",
+      "sent_at_ms",
+      "now_playing",
+      "timers",
+      "ringing"
+    ],
+    "before_media": {
+      "type": "room_display",
+      "sent_at_ms": 123456789,
+      "now_playing": null,
+      "timers": [
+        {
+          "id": 7,
+          "kind": "timer",
+          "label": "pasta",
+          "remaining_ms": 299000,
+          "total_ms": 600000
+        }
+      ],
+      "ringing": null
+    },
+    "with_media": {
+      "type": "room_display",
+      "sent_at_ms": 123456789,
+      "now_playing": null,
+      "timers": [
+        {
+          "id": 7,
+          "kind": "timer",
+          "label": "pasta",
+          "remaining_ms": 299000,
+          "total_ms": 600000
+        }
+      ],
+      "ringing": null,
+      "media": {
+        "id": 7,
+        "said": "I found 12 photos that might show the beach, from last summer. They're on the Photos page.",
+        "count": 12,
+        "more": false,
+        "expires_in_ms": 90000,
+        "items": [
+          {
+            "kind": "image",
+            "thumb": "/v1/room-media/PLACEHOLDERtokenAAAAAAAAAAAAAAAA",
+            "caption": "A beach with a red umbrella.",
+            "date": "2025-07-14",
+            "at_s": null
+          },
+          {
+            "kind": "video",
+            "thumb": "/v1/room-media/PLACEHOLDERtokenBBBBBBBBBBBBBBBB",
+            "caption": null,
+            "date": "2025-08-02",
+            "at_s": 42.0
+          }
+        ]
+      }
+    },
+    "media_cleared": {
+      "type": "room_display",
+      "sent_at_ms": 123456789,
+      "now_playing": null,
+      "timers": [
+        {
+          "id": 7,
+          "kind": "timer",
+          "label": "pasta",
+          "remaining_ms": 299000,
+          "total_ms": 600000
+        }
+      ],
+      "ringing": null,
+      "media": null
+    },
+    "media_item_keys": [
+      "kind",
+      "thumb",
+      "caption",
+      "date",
+      "at_s"
+    ],
+    "media_keys": [
+      "id",
+      "said",
+      "count",
+      "more",
+      "expires_in_ms",
+      "items"
+    ]
   }
 }

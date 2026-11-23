@@ -267,7 +267,7 @@ async def test_no_text_no_ocr_and_the_date_comes_from_exif(house, monkeypatch) -
     assert f["caption"] == "A dog running on a sandy beach." and f["tags"] == ["dog", "beach", "ball"]
     assert f["has_text"] is False and f["ocr_text"] is None
     assert await _doc_matches(item["id"], "dogs") and await _doc_matches(item["id"], "trips")
-    assert (await _stage(item["id"], "photo_date"))["progress"] == {"from": "exif", "gps": False}
+    assert (await _stage(item["id"], "photo_date"))["progress"] == {"from": "exif", "gps": False, "places": False}
 
 
 @requires_db
@@ -474,7 +474,7 @@ async def test_the_search_route_is_household_and_answers_untrusted_text_as_data(
             r = await c.get("/api/media/search", params={"q": "cat 2025"}, headers={**c.headers, **headers})
             assert r.status_code == 200, r.text
             body = r.json()
-            assert body["query"] == {"words": "cat", "kind": None, "when": "2025"}
+            assert body["query"] == {"words": "cat", "kind": None, "when": "2025", "at_home": False}
             hit = body["items"][0]
             assert hit["might_show"] == evil and hit["text"] == "<script>x</script>"
             assert hit["date_from"] == "photo" and hit["analysed"] is True
@@ -486,6 +486,15 @@ async def test_the_search_route_is_household_and_answers_untrusted_text_as_data(
         r = await c.get("/api/media/search", params={"q": "cat", "from": "2025-05-05", "to": "2025-05-05"},
                         headers=h)
         assert [x["path"] for x in r.json()["items"]] == ["evil.jpg"]
+        # Load as you scroll (the Photos page, usePagedList): has_more and
+        # next_cursor, and a cursor stands in for the offset.
+        await _seed_item("evil2.jpg", taken=_utc(2025, 5, 4, 12), caption="Another cat.", tags=["cat"])
+        one = (await c.get("/api/media/search", params={"q": "cat", "limit": 1}, headers=h)).json()
+        assert one["has_more"] is True and one["more"] is True and one["next_cursor"] == "1"
+        two = (await c.get("/api/media/search", params={"q": "cat", "limit": 1, "cursor": "1"}, headers=h)).json()
+        assert two["has_more"] is False and two["next_cursor"] is None
+        assert {one["items"][0]["path"], two["items"][0]["path"]} == {"evil.jpg", "evil2.jpg"}
+        assert (await c.get("/api/media/search", params={"cursor": "x"}, headers=h)).status_code == 422
 
 
 def test_the_search_route_wears_the_household_read_gate() -> None:

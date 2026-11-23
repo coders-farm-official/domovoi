@@ -23,7 +23,7 @@
  * only as React text children (never HTML), and a caption is shown as
  * "Might show: …" because a small model sometimes sees things that aren't
  * there. The search box only shows once something has been understood
- * (no misleading controls); the Photos page (slice 5) takes it over.
+ * (no misleading controls); Media ▸ Photos (photos.jsx) is the full page.
  */
 
 const MU_PHASES = {
@@ -90,6 +90,11 @@ const MuHit = ({ hit }) => (
       <span style={{ color: 'var(--fg-muted)', fontSize: 12 }}>
         {muWhen(hit.taken_at)}{hit.date_from === 'file' ? ' (the file’s date)' : ''}
       </span>
+      {(hit.place || hit.near_home) && (
+        <span style={{ color: 'var(--fg-muted)', fontSize: 12 }}>
+          {hit.place || ''}{hit.near_home ? `${hit.place ? ' · ' : ''}near home` : ''}
+        </span>
+      )}
       {hit.might_show && <span>Might show: {hit.might_show}</span>}
       {hit.tags && hit.tags.length > 0 && (
         <span style={{ color: 'var(--fg-muted)', fontSize: 12 }}>{hit.tags.join(', ')}</span>
@@ -150,6 +155,9 @@ const MediaUnderstandingPanel = () => {
   const [cap, setCap] = React.useState('');
   const [newLib, setNewLib] = React.useState('');
   const [newPrefix, setNewPrefix] = React.useState('');
+  // The shared confirm dialog (components.jsx useDeleteConfirm).
+  const facesOff = useDeleteConfirm(() => save({ faces: false, confirm_delete_faces: true }, 'faces off: every face deleted'));
+  const placesOff = useDeleteConfirm(() => save({ places: false, confirm_delete_places: true }, 'photo locations off: every location deleted'));
   React.useEffect(() => {
     if (data && data.settings) setCap(data.settings.frame_cap == null ? '' : String(data.settings.frame_cap));
   }, [data && data.settings && data.settings.frame_cap]);
@@ -180,18 +188,35 @@ const MediaUnderstandingPanel = () => {
   const left = ((p.photos && p.photos.left) || 0) + ((p.videos && p.videos.left) || 0);
   const locked = !admin || busy;
 
-  const turnFacesOff = async () => {
+  const turnFacesOff = () => {
     if (!data.face_count) { save({ faces: false }, 'faces off'); return; }
-    if (await askConfirm(
-      `Turning faces off deletes ${muCount(data.face_count)} saved faces and every name on them. Turning it on again starts from zero.`,
-      { title: 'Delete every saved face?', confirmLabel: 'Turn faces off' })) {
-      save({ faces: false, confirm_delete_faces: true }, 'faces off: every face deleted');
-    }
+    facesOff.request(null, {
+      title: 'Turn faces off?', confirmLabel: 'Turn off and delete',
+      body: (
+        <>
+          <div>This deletes every face and group: {muCount(data.face_count)} saved faces and every name on them. Turning it on again starts from zero, and this can’t be undone.</div>
+          <div>People who asked to be forgotten stay forgotten: their forget list is kept, so they aren’t learned again if faces are turned back on.</div>
+        </>
+      ),
+    });
+  };
+
+  const pl = data.places || {};
+  const turnPlacesOff = () => {
+    if (!pl.count) { save({ places: false }, 'photo locations off'); return; }
+    placesOff.request(null, {
+      title: 'Turn photo locations off?', confirmLabel: 'Turn off and delete',
+      body: (
+        <div>This deletes where {muCount(pl.count)} photos were taken: their positions and place names. Turning it on again reads them from the photos afresh.</div>
+      ),
+    });
   };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {toastNode}
+      {facesOff.node}
+      {placesOff.node}
       <div style={{ fontSize: 13, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
         Domovoi can look at your photos and videos on this server, so you can find them by what is in them.
         {' '}Nothing leaves the house and nothing is written into your files. It works at night, and pauses whenever someone talks to Domovoi.
@@ -245,9 +270,12 @@ const MediaUnderstandingPanel = () => {
                     label="Recognize faces"
                     sub="Groups the same face across photos and videos so you can name people. Off by default. Turning it off deletes every face."/>
           <MuSwitch checked={s.places} disabled={locked || !s.enabled}
-                    onChange={(on) => save({ places: on }, on ? 'photo locations on' : 'photo locations off')}
+                    onChange={(on) => (on ? save({ places: true }, 'photo locations on') : turnPlacesOff())}
                     label="Use photo locations"
-                    sub="Reads where a photo was taken from the photo itself, on this server. Off by default."/>
+                    sub="Reads where a photo was taken from the photo itself and names the town on this server, so you can search “photos from Paris” or “at home”. Off by default. Turning it off deletes every location. Town names: GeoNames (CC BY 4.0)."/>
+          {s.places && pl.problem && (
+            <div role="status" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>{pl.problem}</div>
+          )}
         </div>
       </Card>
 
