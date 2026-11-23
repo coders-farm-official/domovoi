@@ -4,6 +4,29 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Friend Houses: plugin mail on the wire
+
+- **What changed.** Friend Houses learned the wire for plugin mail ("apps
+  with friends"): a plugin mail envelope kind, a `CAPS` frame in which a
+  house tells a friend its protocol number and which of its apps that
+  friend may mail (sent only to friends an admin turned "Apps with this
+  friend" on for; never plugin versions), and a `MESSAGE_NACK` frame that
+  refuses one plugin mail with a reason and a wait. The listener sorts
+  plugin mail from people's messages before spending any budget and gives
+  it budgets of its own (2,400 an hour per friend and app, 3,600 per friend,
+  7,200 and 64 MiB per house); people's 60 messages an hour per friend now
+  count text and list changes only. The listener's friend list carries
+  each friend's allowed apps (`"apps"` in `friends.json`).
+- **What to know.** Nothing is sent or accepted yet: no friend has "Apps
+  with this friend" on until the plugin mail service and its page arrive
+  later in 1.5.0, and until then the core refuses every plugin mail as
+  "unavailable"; none reaches the house inbox. Houses before 1.5.0 are
+  unaffected: people's messages, lists and presence work as before in a
+  mixed pair, an older house is never sent the new frames on a connection
+  that carries people's messages, and one that closes on `CAPS` is
+  recorded as older, not offline. The listener's image is rebuilt once
+  after the upgrade (its code changed).
+
 ## 1.5.0 (unreleased) — Plugins: decode-only containers
 
 - **What changed.** A plugin can declare an `[isolated]` decoder: a

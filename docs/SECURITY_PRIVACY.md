@@ -3292,8 +3292,7 @@ again on every frame, so a friend removed or blocked mid-connection is cut
 off at its next one. Tor's SOCKS port reaches onion addresses only.
 
 **The listener is walled off.** The code that reads what other houses
-send (the inbound listener, which reads only fixed-size, fixed-format
-frames) runs in a container of its own, `domovoi-fh-listener`, built by
+send (the inbound listener) runs in a container of its own, `domovoi-fh-listener`, built by
 the core like the Tor image (`domovoi/Dockerfile.fh-listener`: the same
 pinned Debian base, Debian's Python and cryptography, and only the
 listener's own modules). The container has **no network at all**, a
@@ -3311,9 +3310,50 @@ What a defect there could still read is the house keys, which the
 listener needs to answer the handshake; and it shares the kernel with the
 rest of the server, like any container.
 
+What the listener parses is small and bounded. Most frames have a fixed
+size and layout. Since 1.5.0 two don't: a friend's `CAPS` (at most 1,059
+bytes, checked to the exact length) and a plugin mail envelope (at most
+about 16.5 KiB). Of a plugin mail the listener reads only the kind and the
+app's name, to sort it and to check it against the friend's allowed apps,
+then checks the signature; **the payload stays opaque there**, because the
+listener holds the house keys. Payloads are decoded only in the plugin's
+decode-only container, one per friend.
+
+**Plugin mail ("apps with friends", 1.5.0).** The wire is in place; the
+service that stores mail and hands it to plugins comes later in 1.5.0, and
+**until it does, every plugin mail is refused** (`MESSAGE_NACK`
+"unavailable") and none ever reaches the house inbox. Plugin mail is its
+own envelope kind on its own path: the listener sorts it by kind before
+spending any budget, sends it to the core as a separate event, and the
+core's message code accepts text and list changes only, refusing any other
+kind. A house tells a friend which of its apps that friend may mail in a
+`CAPS` frame: a protocol number and the apps' names, never their versions,
+and only to friends an admin turned "Apps with this friend" on for, so
+other friends don't learn that the house runs 1.5.0. The listener takes at
+most one `CAPS` per connection, only from a current friend (not from a
+house this one only asked), with its own budget of 12 an hour per friend.
+A house before 1.5.0 doesn't know `CAPS` and closes the connection; the
+calling house records that the friend was online before it sends `CAPS`,
+so an older house is marked "older", never "offline", and people's
+messages between a 1.5.0 house and an older one work as before. What a
+friend's `CAPS` said is forgotten after 6 hours without a fresh one, when
+the friend restores from a backup, and when it is removed or blocked. A
+friend refused plugin mail learns only a reason (full, not allowed, rate,
+unavailable) and a wait; `MESSAGE_NACK` goes only on a connection whose
+caller sent a `CAPS` with the plugin protocol number first, and people's
+messages keep the old silent refusal. The app list each friend may mail
+travels in the listener's friend list; a list it can't read opens no app
+and leaves people's messages alone, and any change to it closes that
+friend's open connection.
+
 **Limits that keep one house from swamping this one.** A friend can send
-at most 60 messages an hour; connects, "I'm back" and accepts are capped
-at 120 an hour per house, and one accept ends its connection; friend
+at most 60 messages an hour (text and list changes only: plugin mail
+never spends it); plugin mail has budgets of its own, each a sustained rate
+plus a burst: 2,400 an hour per friend and app (burst 120), 3,600 an hour
+per friend over all its apps (180), 7,200 an hour for the whole house
+(360), and 64 MiB an hour of it (4 MiB); mail for an app the friend isn't
+allowed is refused before any budget is spent; connects, "I'm back" and
+accepts are capped at 120 an hour per house, and one accept ends its connection; friend
 requests have their own 8 connection slots and only a request naming an
 open friend file counts toward the 20 an hour; the handshake must finish
 within 20 seconds. The core handles at most 24 events from the listener

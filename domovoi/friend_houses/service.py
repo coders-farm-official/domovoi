@@ -214,6 +214,10 @@ class _Peer:
     session_key: bytes
     house_key: bytes
     pending: bool
+    # The plugins this friend may mail (its "apps" in friends.json). Empty
+    # until the plugin mail service (slice 4) fills it from the toggle and
+    # the allowed pairs.
+    apps: tuple[str, ...] = ()
 
 
 async def _inputs() -> tuple[list[_Peer], dict[str, float]]:
@@ -419,7 +423,8 @@ def _write_friend_list(peers: list[_Peer]) -> Path:
     tc._chmod(folder, 0o700)
     doc: dict[str, dict] = {}
     for p in sorted(peers, key=lambda p: not p.pending):  # pending first, friends last
-        doc[p.session_key.hex()] = {"house": p.house_key.hex(), "pending": p.pending}
+        doc[p.session_key.hex()] = {"house": p.house_key.hex(), "pending": p.pending,
+                                    "apps": [] if p.pending else sorted(set(p.apps))}
     tc._write_private(folder / fl.FRIENDS_FILE, json.dumps(doc))
     return folder
 
@@ -591,6 +596,23 @@ def handle_event(event: dict) -> None:
     if kind in ("listening", "connected", "im_back"):
         house = str(event.get("house", ""))[:16]
         log.info("Friend Houses: %s%s", kind, f" ({house}…)" if house else "")
+    if kind == "plugin_mail":
+        # Its own path, never the message one, never the event pool (D7, D12).
+        _refuse_plugin_mail(event)
+        return
+    if kind == "caps":
+        _on_caps(event)
+        return
+    if kind == "connected":
+        try:
+            house_key, epoch = bytes.fromhex(str(event.get("house", ""))), \
+                bytes.fromhex(str(event.get("epoch", "")))
+        except ValueError:
+            house_key, epoch = b"", b""
+        if len(house_key) == 32 and len(epoch) == fid.EPOCH_BYTES:
+            from domovoi.friend_houses import plugin_wire
+
+            plugin_wire.KNOWN.saw_epoch(house_key, epoch)  # a restore forgets its apps
     if kind in ("connected", "im_back"):
         # Presence, and a friend's newer address (presence.py).
         from domovoi.friend_houses import presence
@@ -629,14 +651,76 @@ async def _store_and_answer(event: dict) -> None:
     except Exception:  # noqa: BLE001 — not acknowledged: the sender keeps it
         log.exception("Friend Houses: storing a message failed")
     msg_id = _msg_id_of(event)
+    if msg_id:
+        await _answer_listener(f"{'stored' if stored else 'refused'} {msg_id}")
+
+
+#: How long one answer to the listener may take to write (review D4).
+PIPE_WRITE_SEC = 5.0
+
+
+async def _answer_listener(line: str) -> None:
+    """One ASCII line to the listener's stdin, with a deadline: a listener
+    that stops reading can't hold a core task for ever."""
     proc = _LISTENER["proc"]
-    if msg_id and proc is not None and proc.stdin is not None and proc.returncode is None:
-        try:
-            answer = "stored" if stored else "refused"
-            proc.stdin.write((f"{answer} {msg_id}" + chr(10)).encode("ascii"))
-            await proc.stdin.drain()
-        except (ConnectionError, RuntimeError):
-            pass
+    if proc is None or proc.stdin is None or proc.returncode is not None:
+        return
+    try:
+        proc.stdin.write((line[:80] + chr(10)).encode("ascii"))
+        await asyncio.wait_for(proc.stdin.drain(), PIPE_WRITE_SEC)
+    except (ConnectionError, RuntimeError, asyncio.TimeoutError):
+        pass
+
+
+# ─── plugin mail (1.5.0): refused until the mail service exists ──────────
+
+#: What a friend is told to wait before trying a plugin mail again while
+#: this house has no plugin mail service (slice 4 brings it).
+PLUGIN_MAIL_RETRY_SEC = 3600
+# Refusals being written at once; the listener refuses any it isn't
+# answered about in time as "unavailable" anyway.
+_REFUSALS_MAX = 64
+_REFUSALS: set[asyncio.Task] = set()
+
+
+def _refuse_plugin_mail(event: dict) -> None:
+    """Review D12: until the plugin mail service exists, every plugin mail
+    is refused as ``unavailable``. It never reaches :func:`messages.on_message`
+    (people's inbox), and it doesn't use the event pool people's messages
+    share."""
+    msg_id = _msg_id_of(event)
+    if not msg_id or len(_REFUSALS) >= _REFUSALS_MAX:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    task = loop.create_task(
+        _answer_listener(f"refused {msg_id} unavailable {PLUGIN_MAIL_RETRY_SEC}"),
+        name="friend-houses-plugin-refuse")
+    _REFUSALS.add(task)
+    task.add_done_callback(_REFUSALS.discard)
+
+
+def _on_caps(event: dict) -> None:
+    """A friend's CAPS (the listener parsed it; checked again here)."""
+    from domovoi.friend_houses import envelope as fe
+    from domovoi.friend_houses import plugin_wire
+
+    try:
+        house = bytes.fromhex(str(event.get("house", "")))
+        epoch = bytes.fromhex(str(event.get("epoch", "")))
+        proto = int(str(event.get("proto", "")))
+        raw = str(event.get("apps", ""))
+        slugs = tuple(raw.split(",")) if raw else ()
+    except ValueError:
+        return
+    if (len(house) != 32 or len(epoch) != fid.EPOCH_BYTES or not fs.PROTO <= proto <= 0xFFFF
+            or len(slugs) > plugin_wire.MAX_SLUGS or not all(fe.valid_slug(s) for s in slugs)
+            or list(slugs) != sorted(set(slugs))):
+        log.warning("Friend Houses: a CAPS event failed its checks and was dropped")
+        return
+    plugin_wire.KNOWN.caps(house, plugin_wire.Caps(proto, slugs), epoch)
 
 
 def _msg_id_of(event: dict) -> str | None:

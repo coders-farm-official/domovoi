@@ -60,12 +60,14 @@ SOURCES = (
     "_ed25519.py",
     "crypto_backend.py",
     "friend_houses/__init__.py",
+    "friend_houses/budget.py",
     "friend_houses/envelope.py",
     "friend_houses/friend_file.py",
     "friend_houses/identity.py",
     "friend_houses/listener.py",
     "friend_houses/noise.py",
     "friend_houses/pairing.py",
+    "friend_houses/plugin_wire.py",
     "friend_houses/session.py",
 )
 
