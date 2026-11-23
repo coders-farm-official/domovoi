@@ -269,3 +269,36 @@ async def test_the_web_wait_ends_at_its_deadline(monkeypatch):
     t0 = loop.time()
     await jobs_api.wait_for_voice(max_sec=0.2, poll_sec=0.01)
     assert loop.time() - t0 < 0.5
+
+
+async def test_a_task_started_inside_exempt_yields_to_a_turn_after_it():
+    """exempt() covers the tool's own calls while it runs; a task it started
+    that outlives it is background work again."""
+    attempts: list[str] = []
+    first_started = asyncio.Event()
+
+    async def make():
+        n = len(attempts)
+        attempts.append("started")
+        if n == 0:
+            first_started.set()
+            try:
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                attempts[n] = "cancelled"
+                raise
+        return f"answer {n}"
+
+    with voice_activity.exempt():
+        assert voice_activity.in_turn()
+        task = asyncio.create_task(voice_first.ahead_of_voice(make, poll_sec=FAST))
+        await first_started.wait()
+    assert not voice_activity.in_turn()
+    started, release = asyncio.Event(), asyncio.Event()
+    turn = asyncio.create_task(_hold_turn(started, release))
+    await started.wait()
+    await asyncio.sleep(0.1)
+    assert attempts == ["cancelled"]
+    release.set()
+    await turn
+    assert await asyncio.wait_for(task, 2) == "answer 1"

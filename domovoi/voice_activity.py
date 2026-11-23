@@ -45,10 +45,10 @@ _ids = itertools.count(1)
 _last_end: float | None = None
 #: Satellite streams that may be taking in a command (``_capturing(now)``).
 _captures: "weakref.WeakSet[Any]" = weakref.WeakSet()
-#: The key of the turn whose code this is (copied into the tasks it starts),
-#: or :data:`EXEMPT`: the turn's own model calls never wait for voice, for
-#: as long as that turn is open (:func:`in_turn`).
-EXEMPT = -1
+#: The key of the turn (or :func:`exempt` block) whose code this is, copied
+#: into the tasks it starts: its own model calls never wait for voice, for
+#: as long as that turn or block is open (:func:`in_turn`).
+_exempt_open: set[int] = set()
 _in_turn: contextvars.ContextVar[int | None] = contextvars.ContextVar("voice_turn", default=None)
 
 
@@ -92,20 +92,27 @@ async def turn(kind: str = "voice") -> AsyncIterator[None]:
 def exempt() -> Iterator[None]:
     """Code that works for a voice turn from outside it (a chat-mode tool
     the model calls back for): its model calls don't wait for voice."""
-    token = _in_turn.set(EXEMPT)
+    key = next(_ids)
+    _exempt_open.add(key)
+    token = _in_turn.set(key)
     try:
         yield
     finally:
-        _in_turn.reset(token)
+        _exempt_open.discard(key)
+        try:
+            _in_turn.reset(token)
+        except ValueError:  # left in another context than it was entered in
+            pass
 
 
 def in_turn() -> bool:
     """Whether the caller is a voice turn's own code (inside :func:`turn`,
-    or a task it started) while that turn is still open, or :func:`exempt`:
+    or a task it started) while that turn is still open, or inside
+    :func:`exempt` while that block runs:
     a "voice first" wait would only hold the turn up behind itself. A task
     a turn started that outlives it is background work again."""
     key = _in_turn.get()
-    return key == EXEMPT or (key is not None and key in _open)
+    return key is not None and (key in _open or key in _exempt_open)
 
 
 def snapshot(now: float | None = None) -> dict[str, object]:
@@ -133,5 +140,6 @@ def busy(now: float | None = None) -> bool:
 def _reset_for_tests() -> None:
     global _last_end
     _open.clear()
+    _exempt_open.clear()
     _captures.clear()
     _last_end = None
