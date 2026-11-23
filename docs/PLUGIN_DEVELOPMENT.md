@@ -999,7 +999,7 @@ from domovoi.sdk import (
 | 1.10 | `spoken_names` and `choices` (§4.20); `choice_kinds` on plugin handlers (§4.2); `playback.ensure_room` (§4.5); the player source's `room_play_template` (§3) |
 | 1.11 | `@device_endpoint` websocket routes on the core router (§4.15) |
 | 1.12 | `core_config.news_location` (the household's place); a plugin registering the `"weather"` capability takes weather questions over from core |
-| 1.13 | `sdk.household.home_location()` (async: the Home location `{name, lat, lon, country}` or `None`; `lat`/`lon`/`country` are `None` for a name that matched no town) and `sdk.places.suggest(text, limit=8)` (the bundled GeoNames town list, offline, biggest first; same shape); `core_config.news_location` is now the Home location's name (§4.13) |
+| 1.13 | `sdk.household.home_location()` (async: the Home location `{name, lat, lon, country}` or `None`; `lat`/`lon`/`country` are `None` for a name that matched no town) and `sdk.places.suggest(text, limit=8)` (the bundled GeoNames town list, offline, biggest first; same shape); `core_config.news_location` is now the Home location's name (§4.13). 1.13.1: `net_safety.open_raw_stream` / `iter_raw` and their `_sync` twins (a stream read as it came, never decoded) |
 | 1.14 | `[[web.home_cards]]`: a plugin card on the dashboard Home page (§3) |
 | 1.15 | `playback.player_route(room_id)`: the host and port a room's music player dials to reach the core, and the address the core sees it call from (`.url(path)`, `.admits(address)`), for a plugin that hands the player a URL on the core, such as a stream relay |
 | 1.16 | `playback.relay_url(room_id, remote_url, kind="file"\|"radio")` and `playback.relay_target(url)`: a room's music player plays a REMOTE URL through the core's checked relay instead of fetching it itself (§4.5, "A remote URL for a room's player"); `RelayUnavailable` |
@@ -1569,6 +1569,14 @@ is `auto`, which the core resolves to its current LAN address.
   Better still, read `sdk.core_config.ai_features` first and don't offer
   the step at all. A plugin that calls Ollama through its own client is
   outside this check — read the flag yourself.
+  **Voice goes first** (1.4.1): in the core, a POST to one of the house
+  Ollama's generate paths (`/api/chat`, `/api/generate`,
+  `/v1/chat/completions`, `/v1/completions`; port 11434 or the core's
+  `OLLAMA_URL`) waits while a voice turn is under way, up to 60 s, and if a
+  turn starts before Ollama has answered it is stopped and sent again after
+  the turn (at most three times; a streamed answer only before its first
+  byte). Expect such a request to take longer while people are talking;
+  your voice handler's own requests, made inside the turn, never wait.
 * `egress` (`from domovoi.sdk import egress`; `domovoi.webkit.egress` in
   `web.py`; SDK 1.4) — the one place the internet answer
   (`INTERNET_ACCESS`: `always` \| `sometimes` \| `never`, `""` while
@@ -1602,9 +1610,12 @@ is `auto`, which the core resolves to its current LAN address.
   fetch later. Need an external tool to read it? Do not hand the tool the
   URL: a tool that opens a URL resolves the name itself, follows redirects
   unchecked and opens whatever a playlist lists, all outside the check.
-  Open it yourself with `open_stream` and feed the tool the bytes — the
-  bundled radio plugin feeds ffmpeg on stdin under
-  `-protocol_whitelist pipe` and refuses playlists. The check reads the
+  Open it yourself and feed the tool the bytes — the bundled radio plugin
+  feeds ffmpeg on stdin under `-protocol_whitelist pipe` and refuses
+  playlists. A body with no end (a live stream) opens with `await
+  open_raw_stream(client, url)` (SDK 1.13.1): it asks for `identity` and
+  refuses a compressed answer; read it with `net_safety.iter_raw(response)`,
+  never `aiter_bytes`, which would inflate it. The check reads the
   operator's `OUTBOUND_ALLOW_HOSTS` for you (empty by default), so a
   household that has deliberately allowlisted a LAN endpoint gets the same
   answer from your plugin as from core — never keep your own allowlist.

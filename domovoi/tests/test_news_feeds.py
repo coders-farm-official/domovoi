@@ -65,6 +65,39 @@ def test_extract_ignores_non_feed_links() -> None:
     assert _extract_autodiscovery_links(html, "https://x/") == []
 
 
+def test_extract_stays_linear_on_unclosed_link_tags() -> None:
+    import time
+
+    html = "<link " * 200_000 + (
+        '<link rel="alternate" type="application/rss+xml" href="/f.xml">'
+    )
+    started = time.monotonic()
+    links = _extract_autodiscovery_links(html, "https://x/")
+    assert time.monotonic() - started < 2.0
+    assert links == ["https://x/f.xml"]
+
+
+@pytest.mark.asyncio
+async def test_probe_reads_only_the_start_of_a_page(monkeypatch) -> None:
+    from domovoi.clients import news_feeds
+
+    seen: dict = {}
+
+    async def fake_fetch(url, **kw):
+        seen.update(kw)
+
+        class R:
+            status_code = 200
+            content = b'<link rel="alternate" type="application/rss+xml" href="/f.xml">'
+
+        return R()
+
+    monkeypatch.setattr(news_feeds.net_safety, "fetch_bytes", fake_fetch)
+    assert await news_feeds._probe_page_for_feed_urls("https://x/page") == ["https://x/f.xml"]
+    assert seen["max_bytes"] <= 256 * 1024
+    assert seen["truncate"] is True
+
+
 # ─── discover_feeds ─────────────────────────────────────────────────────
 
 

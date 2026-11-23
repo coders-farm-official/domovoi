@@ -590,3 +590,49 @@ def test_staged_pictures_never_sent_go_after_an_hour(uploads_dir, stub_stream, t
         # Deleting the chat removes the picture it carried.
         assert c.delete(f"/api/chat/threads/{t['id']}").status_code == 200
         assert not any(uploads_dir.glob(f"{sent}*"))
+
+
+# ─── Voice goes first (S3-7) ────────────────────────────────────────────────
+@requires_db
+def test_a_reply_waits_for_a_voice_turn_and_says_so(stub_stream, monkeypatch):
+    """While the core answers a voice turn, a typed reply first sends a
+    ``waiting_for_voice`` status, then waits, then streams."""
+    from web.backend.api import chat_doc_jobs as jobs_api
+
+    answers = iter([True, True, False])
+
+    async def _busy():
+        return next(answers, False)
+
+    monkeypatch.setattr(jobs_api, "voice_busy", _busy)
+    with _client() as c:
+        t = c.post("/api/chat/threads", json={}).json()
+        r = c.post(f"/api/chat/threads/{t['id']}/messages", json={"content": "hi"})
+        events = _sse_events(r.text)
+    assert events[0] == ("status", {"state": "waiting_for_voice"})
+    assert [d["text"] for ev, d in events if ev == "delta"] == ["Hello", " there"]
+
+
+@requires_db
+def test_a_refusal_never_asks_about_voice(uploads_dir, stub_stream, tags, monkeypatch):
+    """A refusal (a picture with no vision model set) is said at once,
+    voice or not: only a reply that asks the model waits."""
+    from web.backend.api import chat_doc_jobs as jobs_api
+
+    asked: list[int] = []
+
+    async def _busy():
+        asked.append(1)
+        return True
+
+    monkeypatch.setattr(jobs_api, "voice_busy", _busy)
+    monkeypatch.setattr(chat_api.core_settings, "ollama_vision_model", "")
+    with _client() as c:
+        token = _upload(c)
+        t = c.post("/api/chat/threads", json={}).json()
+        r = c.post(f"/api/chat/threads/{t['id']}/messages",
+                   json={"content": "and this?", "images": [{"token": token, "name": "x.png"}]})
+        events = _sse_events(r.text)
+    assert next(d for ev, d in events if ev == "error")["code"] == "vision_model_missing"
+    assert not any(ev == "status" for ev, _ in events)
+    assert asked == []

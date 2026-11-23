@@ -57,8 +57,9 @@ log = logging.getLogger(__name__)
 # An RSS/Atom document. Generous for a feed with long show notes, still
 # bounded — the parse happens in this process.
 MAX_FEED_BYTES = 8 * 1024 * 1024
-# The HTML page probed for an autodiscovery <link>.
-MAX_PAGE_BYTES = 4 * 1024 * 1024
+# The HTML page probed for an autodiscovery <link>. Those links sit in the
+# <head>, so only the start of a longer page is read.
+MAX_PAGE_BYTES = 256 * 1024
 
 
 # ─── Curated default feeds ───────────────────────────────────────────────
@@ -243,7 +244,7 @@ def _extract_autodiscovery_links(html: str, base_url: str) -> list[str]:
 
     out: list[str] = []
     seen: set[str] = set()
-    for m in re.finditer(r"<link\b[^>]*>", html, flags=re.IGNORECASE):
+    for m in re.finditer(r"<link\b[^<>]*>", html, flags=re.IGNORECASE):
         tag = m.group(0)
         low = tag.lower()
         if "alternate" not in low:
@@ -273,6 +274,7 @@ async def _probe_page_for_feed_urls(url: str) -> list[str]:
         result = await net_safety.fetch_bytes(
             url,
             max_bytes=MAX_PAGE_BYTES,
+            truncate=True,
             timeout=8.0,
             headers={"User-Agent": "Domovoi-news/1.0"},
         )
@@ -283,7 +285,8 @@ async def _probe_page_for_feed_urls(url: str) -> list[str]:
         log.debug("news: probe fetch failed for %s: %s", url, e)
         return candidates
 
-    for feed_url in _extract_autodiscovery_links(html, url):
+    links = await asyncio.to_thread(_extract_autodiscovery_links, html, url)
+    for feed_url in links:
         if feed_url not in candidates:
             candidates.append(feed_url)
     return candidates

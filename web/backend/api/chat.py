@@ -103,7 +103,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-from domovoi import ai_features, chat_titles, egress, executors, image_safety, live_env, lookup_answer
+from domovoi import ai_features, chat_titles, egress, executors, image_safety, live_env, lookup_answer, uncertainty
 from domovoi.admin_auth import require_device, require_device_read
 from domovoi.clients import ollama as ollama_client
 from domovoi.help_desk import answer as help_answer
@@ -1464,6 +1464,12 @@ async def _answer(
     thread_allowed = False
     if lookups_offered:
         proposal = lookup_answer.fast_path(question)
+        if proposal is None and lookup_answer.is_bare_followup(question):
+            # "how about now?" after a lookup: the same words again (the
+            # chat's internet may have been turned on since).
+            earlier = await _previous_lookup_query(thread_id)
+            if earlier:
+                proposal = lookup_answer.Proposal("search", earlier)
         if model_lookups:
             system["content"] += "\n\n" + lookup_answer.tool_prompt(internet=not egress.internet_turned_off())
         async with session_scope() as s:
@@ -1537,6 +1543,8 @@ async def _answer(
         elif dturn is not None:
             # The draft streams as the model writes it; the done row is the
             # card (its one line, and the version it wrote).
+            async for ev in _voice_first_events():
+                yield ev
             yield f"event: status\ndata: {json.dumps({'state': 'drafting', 'action': dturn.action})}\n\n"
             try:
                 async for delta in dturn.stream(model=model, stats=ollama_stats):
@@ -1576,6 +1584,8 @@ async def _answer(
             # A document turn shows nothing until the app has checked the
             # reply (review round 1): the client gets "checking" now and
             # the checked text, once, at the end.
+            async for ev in _voice_first_events():
+                yield ev
             checking = plan is not None
             if checking:
                 yield f"event: status\ndata: {json.dumps({'state': 'checking'})}\n\n"
@@ -1886,12 +1896,15 @@ class _LookupFailed(Exception):
         self.code = code
 
 
-async def _core_lookup(request: Request | None, proposal: lookup_answer.Proposal, *, internet: bool) -> dict[str, Any]:
+async def _core_lookup(request: Request | None, proposal: lookup_answer.Proposal, *, internet: bool,
+                       web_only: bool = False) -> dict[str, Any]:
     """The core's lookup with the caller's own credentials: the payload of
     ``POST /v1/phone/lookup``. Raises :class:`_LookupFailed`."""
     body: dict[str, Any] = (
         {"url": proposal.query} if proposal.kind == "page" else {"query": proposal.query, "internet": internet}
     )
+    if web_only and proposal.kind == "search":
+        body["web_only"] = True
     url = f"{domovoi_url().rstrip('/')}/v1/phone/lookup"
     headers = auth_forward_headers(request) if request is not None else {}
     try:
@@ -1960,22 +1973,40 @@ async def _lookup_turn(
     """What a proposal becomes: an answer from this server's own sources
     (no question asked), the permission card, or, with the person's allow
     (``decided``, the chat's own, or the household's), an answer from what
-    the internet sources found. Under internet "never" nothing leaves."""
+    the internet sources found. Under internet "never" nothing leaves.
+
+    A question only the live web can answer (a business, "near me", news,
+    weather, prices: :func:`uncertainty.needs_internet`) never gets an
+    offline-library answer: it is looked up online (asking first, as any
+    lookup), or, under "never", answered plainly that it needs the
+    internet. Library results that don't cover the question don't stand
+    in for the internet: the card is shown, as when nothing was found."""
     internet_on = not egress.internet_turned_off()
     allowed = decided or thread_allowed or always_allow()
+    if proposal.kind == "search" and lookup_answer.is_bare_followup(proposal.query):
+        earlier = await _previous_lookup_query(thread_id)
+        if earlier:
+            proposal = lookup_answer.Proposal("search", earlier)
+    live_only = proposal.kind == "search" and (
+        uncertainty.needs_internet(question) or uncertainty.needs_internet(proposal.query))
+    if live_only and not internet_on:
+        async for ev in _fixed(thread_id, lookup_answer.NEEDS_INTERNET, proposal, {"internet_used": False},
+                               reason="needs_internet"):
+            yield ev
+        return
     if allowed and not decided and from_model and proposal.kind == "page":
         # A page the MODEL wants to read: a chat's (or the house's) allow
         # covers the sites already allowed in it and the ones the person
         # typed, not a new site a page or an answer suggested.
         if _site_of(proposal.query) not in await _allowed_sites(thread_id):
             allowed = False
-    if proposal.kind == "search" and not (allowed and internet_on):
+    if proposal.kind == "search" and not (allowed and internet_on) and not live_only:
         try:
             local = await _core_lookup(request, proposal, internet=False)
         except _LookupFailed as e:
             local = {}
             log.info("chat lookup (local): %s %s", e.status, e.code)
-        if local.get("results"):
+        if local.get("results") and (not internet_on or _covered(proposal, question, local)):
             async for ev in _answer_from(thread_id, question, proposal, local, model, history):
                 yield ev
             return
@@ -2005,7 +2036,8 @@ async def _lookup_turn(
         yield f"event: done\ndata: {json.dumps(_msg_dict(row))}\n\n"
         return
     try:
-        found = await _core_lookup(request, proposal, internet=True)
+        # A question only the web can answer asks the web alone.
+        found = await _core_lookup(request, proposal, internet=True, web_only=live_only)
     except _LookupFailed as e:
         if e.code == "internet_off":
             async for ev in _fixed(thread_id, lookup_answer.NEVER_REPLY, proposal, {"internet_used": False},
@@ -2018,8 +2050,51 @@ async def _lookup_turn(
                                reason=e.code or "lookup_failed"):
             yield ev
         return
-    async for ev in _answer_from(thread_id, question, proposal, found, model, history):
+    async def web_round() -> dict[str, Any] | None:
+        try:
+            return await _core_lookup(request, proposal, internet=True, web_only=True)
+        except _LookupFailed as e:
+            log.info("chat lookup (web round): %s %s", e.status, e.code)
+            return None
+
+    second = web_round if proposal.kind == "search" and not live_only and not _all_web(found) else None
+    async for ev in _answer_from(thread_id, question, proposal, found, model, history, web_round=second):
         yield ev
+
+
+def _all_web(payload: dict[str, Any]) -> bool:
+    results = [d for d in (payload.get("results") or []) if isinstance(d, dict)]
+    return bool(results) and all(d.get("source_class") == "web" for d in results)
+
+
+def _covered(proposal: lookup_answer.Proposal, question: str, payload: dict[str, Any]) -> bool:
+    """Whether what was found holds enough of the question to answer it."""
+    results = [_Result(d) for d in (payload.get("results") or []) if isinstance(d, dict)][:3]
+    ask = proposal.query if proposal.kind == "search" else question
+    return bool(results) and lookup_answer.covers(ask, lookup_answer.rank_passages(ask, results))
+
+
+async def _previous_lookup_query(thread_id: int) -> str | None:
+    """The words of this chat's last lookup, when the last reply was one
+    (its answer or its card): what a bare follow-up looks up again."""
+    async with session_scope() as s:
+        stats = (await s.execute(
+            text("SELECT stats FROM chat_messages WHERE thread_id = :t AND role = 'assistant' "
+                 "ORDER BY id DESC LIMIT 1"),
+            {"t": thread_id},
+        )).scalar_one_or_none()
+    if isinstance(stats, str):
+        try:
+            stats = json.loads(stats)
+        except ValueError:
+            return None
+    if not isinstance(stats, dict):
+        return None
+    for key in ("lookup", "lookup_card"):
+        got = stats.get(key)
+        if isinstance(got, dict) and got.get("kind") == "search" and str(got.get("query") or "").strip():
+            return str(got["query"]).strip()[:200]
+    return None
 
 
 _URL_IN_TEXT_RE = re.compile(r"https?://[^\s<>\"')\]]+", re.I)
@@ -2101,10 +2176,13 @@ async def _fixed(thread_id: int, text_: str, proposal: lookup_answer.Proposal, p
 
 async def _answer_from(
     thread_id: int, question: str, proposal: lookup_answer.Proposal, payload: dict[str, Any], model: str,
-    history: list[dict[str, Any]],
+    history: list[dict[str, Any]], web_round: Any = None,
 ) -> AsyncIterator[str]:
     """Answer ``question`` from what the lookup found: a few ranked
-    passages, fenced, no tools; the sources line written here."""
+    passages, fenced, no tools; the sources line written here. Results
+    that don't answer it are never cited. ``web_round`` (the chat allows
+    the internet): when they don't, one more lookup, the web sources only,
+    and the answer is from that."""
     results = [_Result(d) for d in (payload.get("results") or []) if isinstance(d, dict)][:3]
     lines = lookup_answer.source_lines(results)
     if not results:
@@ -2115,8 +2193,12 @@ async def _answer_from(
     ask = proposal.query if proposal.kind == "search" else question
     passages = lookup_answer.rank_passages(ask, results)
     if proposal.kind == "search" and not lookup_answer.covers(ask, passages):
-        async for ev in _fixed(thread_id, lookup_answer.COULDNT_FIND, proposal, payload, reason="not_covered",
-                               lines=lines):
+        again = await web_round() if web_round is not None else None
+        if again and again.get("results"):
+            async for ev in _answer_from(thread_id, question, proposal, again, model, history):
+                yield ev
+            return
+        async for ev in _fixed(thread_id, lookup_answer.COULDNT_FIND, proposal, payload, reason="not_covered"):
             yield ev
         return
     system = {"role": "system", "content": lookup_answer.system_prompt(question, passages, bot=core_settings.bot_name)}
@@ -2128,6 +2210,8 @@ async def _answer_from(
     started = time.monotonic()
     first_token_ms: float | None = None
     error = code = None
+    async for ev in _voice_first_events():
+        yield ev
     try:
         async with contextlib.aclosing(ollama_client.chat_stream(
             [system, *[{"role": t["role"], "content": t["content"]} for t in turns]], model=model,
@@ -2142,6 +2226,14 @@ async def _answer_from(
         code, error = _failure(e, model, "chat")
         log.warning("chat lookup answer failed (thread %s, %s): %s", thread_id, code, type(e).__name__)
     reply = "".join(chunks)
+    if web_round is not None and error is None and lookup_answer.couldnt_find(reply):
+        again = await web_round()
+        if again and again.get("results"):
+            # What was read didn't answer it: the web's answer replaces it.
+            yield f"event: replace\ndata: {json.dumps({'text': ''})}\n\n"
+            async for ev in _answer_from(thread_id, question, proposal, again, model, history):
+                yield ev
+            return
     content = lookup_answer.finish(reply, lines, notice=payload.get("notice")) if reply else ""
     if reply and content.startswith(reply) and len(content) > len(reply):
         yield f"event: delta\ndata: {json.dumps({'text': content[len(reply):]})}\n\n"
@@ -2316,6 +2408,8 @@ async def _declined_answer(thread_id: int, history: list[dict[str, Any]], model:
     ollama_stats: dict[str, Any] = {}
     started = time.monotonic()
     error = code = None
+    async for ev in _voice_first_events():
+        yield ev
     try:
         async with contextlib.aclosing(ollama_client.chat_stream(
             [system, *history], model=model, stats=ollama_stats, num_predict=_reply_cap(),
@@ -2419,8 +2513,9 @@ async def _title_loop() -> None:
         await asyncio.sleep(TITLE_DELAY_SEC)
         while _replies_busy > 0:
             await asyncio.sleep(0.2)
-        if not _title_queue:
-            return
+        await _jobs.wait_for_voice()
+        if not _title_queue or _replies_busy > 0:
+            continue
         thread_id = _title_queue.pop(0)
         _title_running = thread_id
         try:
@@ -2434,6 +2529,15 @@ def stop_title_jobs() -> None:
     """A message, try again or voice turn is coming: the title being
     written stops (and is written later); the queue waits for the reply."""
     _stop_worker()
+
+
+async def _voice_first_events() -> AsyncIterator[str]:
+    """Before a reply asks the model: while the core answers a voice turn,
+    a ``status`` of ``waiting_for_voice`` and a wait (at most 30 s), so the
+    spoken answer isn't held up behind this reply (S3-7)."""
+    if await _jobs.voice_busy():
+        yield f"event: status\ndata: {json.dumps({'state': 'waiting_for_voice'})}\n\n"
+        await _jobs.wait_for_voice()
 
 
 def _reply_started() -> None:

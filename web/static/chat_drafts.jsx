@@ -98,16 +98,30 @@ const ChatDrafts = (() => {
     return (typeof apiErrorText === 'function' ? apiErrorText(e, 0) : null) || 'save failed';
   };
 
-  /* The added and removed words, as elements (never HTML). */
-  const Changes = ({ ops }) => (
-    <div className="chat-draft-changes">
-      {(ops || []).map(([op, text], i) => (
-        op === '+' ? <span key={i} className="chat-draft-add">{text}</span>
-          : op === '-' ? <del key={i} className="chat-draft-del">{text}</del>
-            : <span key={i}>{text}</span>
-      ))}
-    </div>
-  );
+  /* A removed run long enough to stand as its own block: a line break in
+   * it, or GAP_WORDS words or more. */
+  const GAP_WORDS = 8;
+  const longRun = (t) => t.includes('\n') || t.trim().split(/\s+/).length >= GAP_WORDS;
+  /* The added and removed words, as elements (never HTML). A long removed
+   * run with an added run straight after it (the server's over-budget
+   * diff: everything between the shared start and end, old then new) gets
+   * a display-only paragraph gap between them, unless the line already
+   * breaks there; inline, the old last word ran into the new first one. */
+  const Changes = ({ ops }) => {
+    const list = ops || [];
+    const out = [];
+    list.forEach(([op, text], i) => {
+      out.push(op === '+' ? <span key={i} className="chat-draft-add">{text}</span>
+        : op === '-' ? <del key={i} className="chat-draft-del">{text}</del>
+          : <span key={i}>{text}</span>);
+      const next = list[i + 1];
+      if (op === '-' && next && next[0] === '+' && longRun(text)
+          && !text.endsWith('\n') && !next[1].startsWith('\n')) {
+        out.push(<span key={`gap${i}`} className="chat-draft-gap" aria-hidden="true"/>);
+      }
+    });
+    return <div className="chat-draft-changes">{out}</div>;
+  };
 
   /* Saves a version's file on this device (the server names it). */
   const download = (id, version, format) => {

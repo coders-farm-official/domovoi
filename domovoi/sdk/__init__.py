@@ -61,6 +61,9 @@ from __future__ import annotations
 #         country, or None) and sdk.places.suggest(text, limit=8) (the
 #         bundled town list); core_config.news_location is now the Home
 #         location's name.
+# 1.13.1: net_safety.open_raw_stream / iter_raw (and _sync twins):
+#         open_stream that asks for identity and refuses an encoded
+#         answer, read raw with no total cap (a live stream).
 # 1.14.0: [[web.home_cards]]: a plugin card on the dashboard's Home page
 #         (window.DomovoiPlugins.<slug>.homeCards.<Component>).
 # 1.15.0: playback.player_route(room_id): how a room's music player reaches

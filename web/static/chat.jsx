@@ -419,6 +419,9 @@ const ChatMessage = ({ m, threadId, onCopy, admin, onLookup, onHeadsUp, busy, st
               ? <ChatLookups.Card m={m} busy={busy} onDecide={onLookup}/>
               : <div className="chat-md" dangerouslySetInnerHTML={{ __html: window.chatMarkdownHtml(m.content || '') }}/>}
             {!m.pending && m.media && window.ChatMedia && <window.ChatMedia.Cards media={m.media}/>}
+            {m.pending && m.status === 'waiting_for_voice' && !m.content && (
+              <span className="mono chat-doc-checking">a spoken answer goes first…</span>
+            )}
             {m.pending && m.status === 'drafting' && (
               <span className="mono chat-doc-checking">writing the draft…</span>
             )}

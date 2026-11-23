@@ -171,19 +171,90 @@ final class ChatTranscriptTests: XCTestCase {
 
     /// **The events this app does not read, ignored by name.**
     ///
-    /// `replace`, `job` and `progress` are in the map; `status` and
+    /// `job` and `progress` are in the map; `status` and
     /// `lookup_permission` are not and are in the server (`chat.py:1431`,
     /// `:1862`). An event that ended the reply because this build had no case
-    /// for it would be the worst failure this screen has.
+    /// for it would be the worst failure this screen has. (`replace` is read
+    /// now, below.)
     func testTheEventsThisAppDoesNotReadAreIgnoredAndDoNotEndTheReply() {
         var transcript = ChatTranscript()
         transcript.beginSend(content: "hi", atISO: now)
         transcript.apply(event("delta", #"{"text":"ten"}"#))
-        for name in ["replace", "job", "progress", "status", "lookup_permission", "message", "nonsense"] {
+        for name in ["job", "progress", "status", "lookup_permission", "message", "nonsense"] {
             XCTAssertEqual(.ignored(name), transcript.apply(event(name, #"{"anything":true}"#)), name)
         }
         XCTAssertEqual("ten", transcript.live?.content, "nothing was written or taken away")
         XCTAssertTrue(transcript.streaming, "and the reply is still being written")
+    }
+
+    // MARK: - replace (1.4.1)
+
+    /// **An empty `replace` starts the reply over**: the house threw its first
+    /// answer away and a web answer follows as new deltas. The words before it
+    /// are gone at once — checked after every event, so "ABC" (the old words
+    /// joined to the new answer, which is what ignoring it drew) never shows.
+    func testAnEmptyReplaceStartsTheReplyOverAndTheOldWordsNeverShow() {
+        var transcript = ChatTranscript()
+        transcript.beginSend(content: "who won?", atISO: now)
+        let stream: [(ServerEvent, ChatStreamStep, String)] = [
+            (event("delta", #"{"text":"A"}"#), .delta("A"), "A"),
+            (event("delta", #"{"text":"B"}"#), .delta("B"), "AB"),
+            (event("replace", #"{"text":""}"#), .replaced(""), ""),
+            (event("delta", #"{"text":"C"}"#), .delta("C"), "C"),
+        ]
+        for (sent, step, shown) in stream {
+            XCTAssertEqual(step, transcript.apply(sent), sent.name)
+            XCTAssertEqual(shown, transcript.live?.content, "after \(sent.name) \(sent.data)")
+            XCTAssertNotEqual("ABC", transcript.live?.content)
+            XCTAssertTrue(transcript.streaming, "a replace does not end the reply")
+        }
+        XCTAssertEqual(
+            .finished(kept: false, replaces: nil),
+            transcript.apply(event("done", #"{"id":5,"role":"assistant","content":"C"}"#))
+        )
+        XCTAssertEqual(["who won?", "C"], transcript.messages.map(\.content))
+        XCTAssertEqual(.finished, transcript.finishStream(atISO: later))
+        XCTAssertEqual("C", transcript.messages.last?.content)
+    }
+
+    /// A non-empty `replace` is the corrected reply, and later deltas append
+    /// to it.
+    func testAReplaceWithTextIsTheReplyAndLaterDeltasAppendToIt() {
+        var transcript = ChatTranscript()
+        transcript.beginSend(content: "hi", atISO: now)
+        transcript.apply(event("delta", #"{"text":"wrong words"}"#))
+        XCTAssertEqual(.replaced("X"), transcript.apply(event("replace", #"{"text":"X"}"#)))
+        XCTAssertEqual("X", transcript.live?.content)
+        transcript.apply(event("delta", #"{"text":"Y"}"#))
+        XCTAssertEqual("XY", transcript.live?.content)
+        // A stream that ends without its `done` keeps the replaced words.
+        XCTAssertEqual(.unfinished(nil), transcript.finishStream(atISO: later))
+        XCTAssertEqual("XY", transcript.messages.last?.content)
+    }
+
+    /// A `replace` this build cannot read changes nothing: a missing `text`
+    /// read as "" would wipe the reply, which is worse than keeping it.
+    func testAReplaceWithNoTextIsUnreadableAndKeepsTheWords() {
+        var transcript = ChatTranscript()
+        transcript.beginSend(content: "hi", atISO: now)
+        transcript.apply(event("delta", #"{"text":"ten"}"#))
+        XCTAssertEqual(.unreadable("replace"), transcript.apply(event("replace", #"{"anything":true}"#)))
+        XCTAssertEqual(.unreadable("replace"), transcript.apply(event("replace", #"{"text":null}"#)))
+        XCTAssertEqual(.unreadable("replace"), transcript.apply(event("replace", "not json")))
+        XCTAssertEqual("ten", transcript.live?.content)
+        XCTAssertTrue(transcript.streaming)
+    }
+
+    /// A retry that is told to start over and then fails still puts the old
+    /// reply back: `replace` is words, not the `done` that settles a retry.
+    func testAReplaceDuringARetryThatFailsStillPutsTheOldReplyBack() {
+        var transcript = answered()
+        XCTAssertTrue(transcript.beginRetry())
+        transcript.apply(event("delta", #"{"text":"twen"}"#))
+        transcript.apply(event("replace", #"{"text":""}"#))
+        XCTAssertEqual("", transcript.live?.content)
+        XCTAssertEqual(.keptOldReply(nil), transcript.finishStream(atISO: later))
+        XCTAssertEqual(["how long?", "ten minutes"], transcript.messages.map(\.content))
     }
 
     /// A `done` body this build cannot read leaves the words on screen and the

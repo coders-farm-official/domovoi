@@ -53,7 +53,7 @@
  */
 
 const FH_API = '/api/friend-houses';
-const FH_DESCRIPTION = 'Serverless messaging and friend system between households';
+const FH_DESCRIPTION = 'Message and share lists with friends’ houses, house to house, with no company server in between';
 const FH_POLL_MS = 15000;
 const FH_FILE_POLL_MS = 5000;
 const FH_NAME_MAX = 40;
@@ -710,7 +710,44 @@ const fhHouseOk = (h) => /^[0-9a-f]{64}$/.test(String(h || ''));
 
 /* ---- friends -------------------------------------------------------- */
 
-const FhAlertChoice = ({ friend, fire, onChanged }) => {
+// A time as the dashboard shows one elsewhere (calendar.jsx's fmtClock:
+// "7:00am").
+const fhClockOf = (d) => {
+  if (!(d instanceof Date) || !Number.isFinite(d.getTime())) return null;
+  if (window.fmtClock) return window.fmtClock(d);
+  return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }).toLowerCase().replace(/\s/g, '');
+};
+// "07:00" (the house's clock, from the server).
+const fhClock = (hhmm) => {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || ''));
+  return m ? fhClockOf(new Date(2000, 0, 1, Number(m[1]), Number(m[2]))) : null;
+};
+// What an incoming message says about quiet hours (held, read_out_at).
+const fhHeldText = (m) => {
+  if (!m || m.direction === 'out' || m.held !== 'quiet_hours') return null;
+  const at = m.read_out_at ? fhClockOf(new Date(m.read_out_at)) : null;
+  return at ? `held for quiet hours · read out at ${at}` : 'held for quiet hours';
+};
+
+/* Why a friend's messages aren't being said right now: the friends
+   payload's quiet_hours ({rooms: all|some, until, read_later} or null).
+   Only for a choice that speaks in the rooms. */
+const fhQuietNote = (quiet, alert) => {
+  if (!quiet || (alert !== 'read' && alert !== 'sender')) return null;
+  const until = fhClock(quiet.until);
+  if (!until) return null;
+  const said = alert === 'read' ? 'read out' : 'announced';
+  if (quiet.rooms === 'some') {
+    return quiet.read_later
+      ? `Quiet hours in some rooms until ${until}: new messages will be ${said} there at ${until}.`
+      : `Quiet hours in some rooms until ${until}: new messages aren’t ${said} there, and won’t be later.`;
+  }
+  return quiet.read_later
+    ? `Quiet hours until ${until}: new messages will be ${said} at ${until}.`
+    : `Quiet hours until ${until}: new messages wait in the inbox and won’t be ${said} later.`;
+};
+
+const FhAlertChoice = ({ friend, quiet, fire, onChanged }) => {
   const [busy, setBusy] = React.useState(false);
   const current = FH_ALERTS.some((a) => a.id === friend.alert) ? friend.alert : 'inbox';
   const choose = async (alert) => {
@@ -736,6 +773,11 @@ const FhAlertChoice = ({ friend, fire, onChanged }) => {
         </label>
       ))}
       <span style={fhMuted}>Every choice keeps to each room’s quiet hours.</span>
+      {fhQuietNote(quiet, current) && (
+        <span className="fh-quiet-note" role="note" style={{ fontSize: 13, color: 'var(--warn-ink)' }}>
+          {fhQuietNote(quiet, current)}
+        </span>
+      )}
     </fieldset>
   );
 };
@@ -810,7 +852,7 @@ const FhBlockDialog = ({ friend, open, onCancel, onBlocked, fire }) => {
   );
 };
 
-const FhFriend = ({ friend, fire, onChanged, onMessage, onShare }) => {
+const FhFriend = ({ friend, quiet, fire, onChanged, onMessage, onShare }) => {
   const [editing, setEditing] = React.useState(false);
   const [name, setName] = React.useState(String(friend.name || ''));
   const [busy, setBusy] = React.useState(false);
@@ -863,7 +905,7 @@ const FhFriend = ({ friend, fire, onChanged, onMessage, onShare }) => {
           <Button icon="check" disabled={busy} onClick={verified}>We compared the codes</Button>
         </div>
       )}
-      <FhAlertChoice friend={friend} fire={fire} onChanged={onChanged}/>
+      <FhAlertChoice friend={friend} quiet={quiet} fire={fire} onChanged={onChanged}/>
       <div style={fhRow}>
         <span style={fhMuted}>fingerprint</span>
         <FhFingerprint value={friend.fingerprint} fire={fire}/>
@@ -889,7 +931,8 @@ const FhFriendsCard = ({ friends, fire, onChanged, onMessage, onShare }) => {
     <Card title="Friends" sub="Houses this house is friends with.">
       <div style={{ padding: '0 16px 4px' }}>
         {!list.length && <div style={{ ...fhMuted, padding: '12px 0' }}>no friends yet</div>}
-        {list.map((f) => <FhFriend key={f.id} friend={f} fire={fire} onChanged={onChanged} onMessage={onMessage} onShare={onShare}/>)}
+        {list.map((f) => <FhFriend key={f.id} friend={f} quiet={friends && friends.quiet_hours} fire={fire}
+                                   onChanged={onChanged} onMessage={onMessage} onShare={onShare}/>)}
       </div>
     </Card>
   );
@@ -974,12 +1017,13 @@ const FhMessage = ({ m }) => {
         <span>{fhWhen(here)}</span>
         {skewed && <span>· sent {fhWhen(theirs)} (their clock)</span>}
         {st && <span style={{ display: 'inline-flex', gap: 5, alignItems: 'center' }}>· <StatusDot tone={st.tone}/>{st.text}</span>}
+        {fhHeldText(m) && <span className="fh-held">· {fhHeldText(m)}</span>}
       </div>
     </div>
   );
 };
 
-const FhConversation = ({ conv, fire, onChanged, onClose }) => {
+const FhConversation = ({ conv, fire, admin, onChanged, onClose }) => {
   const house = conv.house;
   const [msgs, setMsgs] = React.useState([]);     // oldest first, by id
   const [more, setMore] = React.useState(false);  // earlier ones to load
@@ -1064,8 +1108,9 @@ const FhConversation = ({ conv, fire, onChanged, onClose }) => {
         <strong style={{ fontSize: 14, overflowWrap: 'anywhere', flex: '1 1 auto' }}>
           {name}{former ? ' (no longer a friend)' : ''}
         </strong>
-        {msgs.length > 0 && <Button icon="download" onClick={save}>Save a copy (with proof of what was sent)</Button>}
-        {msgs.length > 0 && <Button icon="trash-2" disabled={busy} onClick={() => setConfirm(true)}>Delete</Button>}
+        {/* Saving a copy and deleting stay admin (the security tier). */}
+        {admin && msgs.length > 0 && <Button icon="download" onClick={save}>Save a copy (with proof of what was sent)</Button>}
+        {admin && msgs.length > 0 && <Button icon="trash-2" disabled={busy} onClick={() => setConfirm(true)}>Delete</Button>}
       </div>
       {more && <div><Button variant="ghost" onClick={earlier}>Load earlier</Button></div>}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }} aria-live="polite">
@@ -1099,7 +1144,7 @@ const FhConversation = ({ conv, fire, onChanged, onClose }) => {
   );
 };
 
-const FhInboxCard = ({ conversations, friends, open, setOpen, fire, onChanged }) => {
+const FhInboxCard = ({ conversations, friends, open, setOpen, fire, admin, onChanged }) => {
   const list = (conversations && conversations.conversations) || [];
   const friendList = (friends && friends.friends) || [];
   // The open conversation: from the inbox, else a friend with no messages yet.
@@ -1115,7 +1160,7 @@ const FhInboxCard = ({ conversations, friends, open, setOpen, fire, onChanged })
     <Card title="Messages" sub="Messages with your friend houses. New ones arrive here.">
       <div style={{ padding: '4px 16px 12px' }}>
         {conv ? (
-          <FhConversation key={conv.house} conv={conv} fire={fire} onChanged={onChanged} onClose={() => setOpen(null)}/>
+          <FhConversation key={conv.house} conv={conv} fire={fire} admin={admin} onChanged={onChanged} onClose={() => setOpen(null)}/>
         ) : (
           <>
             {!list.length && <div style={{ ...fhMuted, padding: '8px 0' }}>no messages yet · press Message on a friend to write one</div>}
@@ -1310,7 +1355,7 @@ const FhShareList = ({ lists, friends, shares, shareFor, fire, onChanged }) => {
   );
 };
 
-const FhSharedListsCard = ({ shared, lists, friends, shareFor, fire, onChanged }) => {
+const FhSharedListsCard = ({ shared, lists, friends, shareFor, fire, admin, onChanged }) => {
   const all = ((shared && shared.shared_lists) || []).filter((s) => fhSpaceOk(s.id));
   const offers = all.filter((s) => s.origin === 'them' && s.state === 'invited');
   const current = all.filter((s) => !(s.origin === 'them' && s.state === 'invited'));
@@ -1331,7 +1376,9 @@ const FhSharedListsCard = ({ shared, lists, friends, shareFor, fire, onChanged }
           </div>
         )}
         {!all.length && <div style={fhMuted}>no shared lists yet</div>}
-        <FhShareList lists={lists} friends={friends} shares={all} shareFor={shareFor} fire={fire} onChanged={onChanged}/>
+        {/* Starting a share stays admin (the security tier): shown only to
+            the admin sign-in in this tab, with nothing in its place. */}
+        {admin && <FhShareList lists={lists} friends={friends} shares={all} shareFor={shareFor} fire={fire} onChanged={onChanged}/>}
       </div>
     </Card>
   );
@@ -1339,13 +1386,57 @@ const FhSharedListsCard = ({ shared, lists, friends, shareFor, fire, onChanged }
 
 /* ---- the section ---------------------------------------------------- */
 
-const FriendHousesPanel = () => {
-  const admin = useAdminSignedIn();
+/* The admin zone (owner, 2026-11-23): everything that changes who this
+   house trusts, in one place at the bottom, collapsed on every visit.
+   Opening it needs the admin sign-in in this tab: the press asks for it
+   (Auth.ensureLoggedIn) and the zone opens only once it succeeds; a
+   cancel or a wrong password leaves it shut. Nothing is remembered. The
+   server enforces the split either way (the security tier on every route
+   behind it). */
+const FH_ZONE_TITLE = 'Friends and connections';
+const FH_ZONE_SUB = 'Requests, friends, friend files, this house’s name and blocked houses. Admin sign-in needed.';
+const fhSignIn = async () => {
+  try {
+    if (typeof Auth === 'undefined' || !Auth.ensureLoggedIn) return false;
+    return !!(await Auth.ensureLoggedIn());
+  } catch { return false; }
+};
+const FhAdminZone = ({ open, onOpen, onClose, children }) => {
+  const [asking, setAsking] = React.useState(false);
+  const toggle = async () => {
+    if (open) { onClose(); return; }
+    if (asking) return;
+    setAsking(true);
+    try { if (await fhSignIn()) onOpen(); } finally { setAsking(false); }
+  };
+  return (
+    <div className="fh-admin-zone" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <button type="button" className="fh-zone-toggle" aria-expanded={open} disabled={asking} onClick={toggle}
+              style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left',
+                       padding: '12px 16px', borderRadius: 'var(--r-md)', border: '1px solid var(--border)',
+                       background: 'var(--card)', color: 'var(--fg)', font: 'inherit', cursor: 'pointer' }}>
+        <Icon name={open ? 'chevron-down' : 'chevron-right'} size={16}/>
+        <span style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: '1 1 auto' }}>
+          <strong style={{ fontSize: 14 }}>{FH_ZONE_TITLE}</strong>
+          <span style={fhMuted}>{FH_ZONE_SUB}</span>
+        </span>
+        {!open && <Icon name="lock" size={14}/>}
+      </button>
+      {open && children}
+    </div>
+  );
+};
+
+const FriendHousesPanel = ({ marks = [] }) => {
   const [fire, toastNode] = useToast();
-  // Every read is the security tier: the admin sign-in in this tab only.
+  // Messages and shared lists: anyone in the household (the device tier,
+  // a paired browser or an admin). The rest: the admin sign-in in this
+  // tab, and only while the zone is open.
   const live = adminReloadState().live;
+  const [zoneOpen, setZoneOpen] = React.useState(false);
+  const zone = zoneOpen && live;   // signing out shuts it
   const opts = { quiet: true, refetchOnAuth: true };
-  const st = useApiObject(live ? FH_API : null, opts);
+  const st = useApiObject(FH_API, opts);
   const cfg = useApiObject(live ? '/api/config/editable' : null, opts);
   const { data: pub } = useApiObject('/api/config', { quiet: true });
   const [switching, setSwitching] = React.useState(false);
@@ -1363,18 +1454,18 @@ const FriendHousesPanel = () => {
   // connection can't run here.
   const workable = enabled && !internetNever && state !== 'unavailable';
 
-  const inv = useApiObject(live && enabled ? `${FH_API}/invites` : null, opts);
-  const req = useApiObject(live && enabled ? `${FH_API}/requests` : null, opts);
-  const fr = useApiObject(live && enabled ? `${FH_API}/friends` : null, opts);
-  const convs = useApiObject(live && enabled ? `${FH_API}/conversations` : null, opts);
-  const shared = useApiObject(live && enabled ? `${FH_API}/shared-lists` : null, opts);
-  const lists = useApiObject(live && enabled ? '/api/lists' : null, opts);
-  const blockedHouses = useApiObject(live && enabled ? `${FH_API}/blocked` : null, opts);
+  const fr = useApiObject(enabled ? `${FH_API}/friends` : null, opts);
+  const convs = useApiObject(enabled ? `${FH_API}/conversations` : null, opts);
+  const shared = useApiObject(enabled ? `${FH_API}/shared-lists` : null, opts);
+  const lists = useApiObject(enabled ? '/api/lists' : null, opts);
+  const inv = useApiObject(zone && enabled ? `${FH_API}/invites` : null, opts);
+  const req = useApiObject(zone && enabled ? `${FH_API}/requests` : null, opts);
+  const blockedHouses = useApiObject(zone && enabled ? `${FH_API}/blocked` : null, opts);
   const refreshAll = () => {
-    st.refresh(); inv.refresh(); req.refresh(); fr.refresh(); convs.refresh(); shared.refresh(); lists.refresh();
-    blockedHouses.refresh();
+    st.refresh(); fr.refresh(); convs.refresh(); shared.refresh(); lists.refresh();
+    if (zone) { inv.refresh(); req.refresh(); blockedHouses.refresh(); }
   };
-  useFhEvery(FH_POLL_MS, refreshAll, live);
+  useFhEvery(FH_POLL_MS, refreshAll, true);
 
   const toInbox = () => {
     setTimeout(() => {
@@ -1387,6 +1478,16 @@ const FriendHousesPanel = () => {
       try { if (listsRef.current) listsRef.current.scrollIntoView({ block: 'start', behavior: 'smooth' }); } catch { /* gone */ }
     }, 0);
   };
+  // #settings/friend-houses/messages (Home's unread row): the inbox on
+  // screen, once per arrival.
+  const mark = marks[0] || null;
+  const markDone = React.useRef(null);
+  React.useEffect(() => {
+    if (mark !== 'messages') { markDone.current = null; return; }
+    if (markDone.current === mark || !inboxRef.current) return;
+    markDone.current = mark;
+    toInbox();
+  });
   const openConversation = (house) => {
     if (!fhHouseOk(house)) return;
     setOpen(house);
@@ -1408,41 +1509,17 @@ const FriendHousesPanel = () => {
   // The unread total: the inbox's own count, else the status's.
   const unreadRaw = convs.data && convs.data.unread != null ? convs.data.unread : (status && status.unread);
   const unread = Number(unreadRaw) || 0;
-  const head = (
-    <div style={{ ...fhRow, fontSize: 13, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
-      <span style={{ flex: '1 1 auto' }}>{FH_DESCRIPTION}.</span>
-      {unread > 0 && (
-        <button type="button" className="home-link" aria-label={`${unread} unread messages`}
-                onClick={() => { setOpen(null); toInbox(); }}>
-          <Pill tone="live">{`${unread} unread`}</Pill>
-        </button>
-      )}
+  // The section's subtitle already says what Friend Houses is: the head
+  // holds only the unread count.
+  const head = unread > 0 ? (
+    <div style={{ ...fhRow, justifyContent: 'flex-end' }}>
+      <button type="button" className="home-link" aria-label={`${unread} unread messages`}
+              onClick={() => { setOpen(null); toInbox(); }}>
+        <Pill tone="live">{`${unread} unread`}</Pill>
+      </button>
     </div>
-  );
+  ) : null;
 
-  if (!admin) {
-    return (
-      <Card title="Friend Houses" sub={FH_DESCRIPTION}>
-        <FhNote>
-          Admins only.{' '}
-          <button type="button" className="home-link"
-                  onClick={() => { try { Auth.requestLogin(); } catch { /* no auth module */ } }}>sign in</button>
-        </FhNote>
-      </Card>
-    );
-  }
-  if (!live) {
-    return (
-      <Card title="Friend Houses" sub={FH_DESCRIPTION}>
-        <div style={{ padding: '12px 16px', fontSize: 12, color: 'var(--fg-muted)', display: 'flex',
-                      alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <span style={{ flex: 1 }}>This tab is view only, and Friend Houses is shown only to the admin sign-in. Sign in again to manage it.</span>
-          <Button variant="primary" icon="key"
-                  onClick={() => { try { Auth.openModal(); } catch { /* auth.js absent */ } }}>sign in again</Button>
-        </div>
-      </Card>
-    );
-  }
   if (st.error && !status) {
     return (
       <Card title="Friend Houses" sub={FH_DESCRIPTION}>
@@ -1465,22 +1542,28 @@ const FriendHousesPanel = () => {
     <div className="friend-houses" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {toastNode}
       {head}
-      <FhHouseCard status={status} fire={fire} onSaved={st.refresh} busy={switching} onTurnOff={() => turn(false)}/>
+      {/* Top to bottom (owner, 2026-11-23): Messages, Shared lists, then
+          the admin zone: Requests, Friends, Make a friend file, Add a
+          friend, This house, Blocked houses. */}
       <div ref={inboxRef}>
         <FhInboxCard conversations={convs.data} friends={fr.data} open={open} setOpen={setOpen} fire={fire}
-                     onChanged={() => { convs.refresh(); st.refresh(); }}/>
+                     admin={live} onChanged={() => { convs.refresh(); st.refresh(); }}/>
       </div>
       <div ref={listsRef}>
         <FhSharedListsCard shared={shared.data} lists={lists.data} friends={fr.data} shareFor={shareFor} fire={fire}
+                           admin={live}
                            onChanged={() => { shared.refresh(); lists.refresh(); }}/>
       </div>
-      {workable && <FhInvitesCard status={status} invites={inv.data} fire={fire} onChanged={() => { inv.refresh(); st.refresh(); }}/>}
-      {workable && <FhAddCard fire={fire} onSent={() => { req.refresh(); st.refresh(); }}/>}
-      <FhRequestsCard requests={req.data} fire={fire} onChanged={() => { req.refresh(); fr.refresh(); st.refresh(); }}/>
-      <FhFriendsCard friends={fr.data} fire={fire}
-                     onChanged={() => { fr.refresh(); st.refresh(); convs.refresh(); shared.refresh(); blockedHouses.refresh(); }}
-                     onMessage={openConversation} onShare={shareWith}/>
-      <FhBlockedCard blocked={blockedHouses.data} fire={fire} onChanged={() => { blockedHouses.refresh(); }}/>
+      <FhAdminZone open={zone} onOpen={() => setZoneOpen(true)} onClose={() => setZoneOpen(false)}>
+        <FhRequestsCard requests={req.data} fire={fire} onChanged={() => { req.refresh(); fr.refresh(); st.refresh(); }}/>
+        <FhFriendsCard friends={fr.data} fire={fire}
+                       onChanged={() => { fr.refresh(); st.refresh(); convs.refresh(); shared.refresh(); blockedHouses.refresh(); }}
+                       onMessage={openConversation} onShare={shareWith}/>
+        {workable && <FhInvitesCard status={status} invites={inv.data} fire={fire} onChanged={() => { inv.refresh(); st.refresh(); }}/>}
+        {workable && <FhAddCard fire={fire} onSent={() => { req.refresh(); st.refresh(); }}/>}
+        <FhHouseCard status={status} fire={fire} onSaved={st.refresh} busy={switching} onTurnOff={() => turn(false)}/>
+        <FhBlockedCard blocked={blockedHouses.data} fire={fire} onChanged={() => { blockedHouses.refresh(); }}/>
+      </FhAdminZone>
     </div>
   );
 };

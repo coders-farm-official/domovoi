@@ -25,6 +25,7 @@ from domovoi.db.repositories import (
     ConversationLogRepository,
     IntentLogRepository,
     MemoriesRepository,
+    PeopleRepository,
     SessionRepository,
     WebSearchPrefsRepository,
 )
@@ -32,7 +33,7 @@ from domovoi.handlers import HANDLER_BY_NAME, HANDLERS
 from domovoi.handlers.base import FastPath, Handler, as_fast_path, satellite_setting_refusal
 from domovoi.handlers.shared.tool_gate import about_the_house, answers_without_tools
 from domovoi.models import Context, Intent, Response
-from domovoi.profile_context import build_profile_prefix
+from domovoi.profile_context import build_profile_prefix, wants_profile
 from domovoi.spoken_answer import SpokenAnswer, StreamedQA
 from domovoi.turn_timings import timings_for_row
 from domovoi import egress, weather
@@ -610,38 +611,84 @@ async def _persist_turn(
         await music_listens.note_voice_start(ctx.room_id, ctx.person_id)
 
 
+_INFORMATION_REQUEST_RE = re.compile(
+    r"^\s*(?:tell me about|explain|define|describe)\b", re.IGNORECASE
+)
+
+
+def _asks_for_information(transcript: str) -> bool:
+    """A question, or a request for facts ("tell me about Mars"): its
+    answer is no place for a memory offer."""
+    return looks_like_question(transcript) or bool(
+        _INFORMATION_REQUEST_RE.match(transcript or "")
+    )
+
+
+async def _food_safety_note(
+    ctx: Context, transcript: str, session: AsyncSession
+) -> str:
+    """The line after a food recommendation when someone in the house has
+    a remembered allergy or diet (domovoi/food_safety.py), else "". An
+    unrecognised speaker may be a guest: that line names no one and no
+    allergy. Best-effort: a failure here never blocks the answer."""
+    from domovoi import food_safety
+
+    if not food_safety.is_food_recommendation(transcript):
+        return ""
+    try:
+        rows = await MemoriesRepository(session).list_active_household()
+    except Exception as e:
+        log.warning("food safety note: couldn't read memories: %s", e)
+        return ""
+    mine = [b for pid, b in rows if pid == ctx.person_id]
+    others = [b for pid, b in rows if pid != ctx.person_id]
+    return food_safety.household_note(ctx.person_id is not None, mine, others)
+
+
 async def _maybe_offer_pending_memory(
     ctx: Context, session: AsyncSession
 ) -> tuple[str, int] | None:
     """If the implicit extractor has parked a pending memory for the
-    current speaker and it's outside the offer cooldown, return
-    ``(offer_text, memory_id)`` and stamp ``last_offered_at`` so the
-    same row doesn't surface every turn. Returns None if nothing's
-    eligible.
+    current speaker and the speaker is outside the offer cooldown (one
+    offer per person per ``memory_extractor_offer_cooldown_sec``), return
+    ``(offer_text, memory_id)`` and stamp ``last_offered_at``. Returns
+    None if nothing's eligible.
+
+    A pending fact the house already knows (the person's own name, or
+    one of their remembered facts said another way) is never offered:
+    it's set aside as rejected, so the extractor doesn't add it again.
 
     Wrapped in a broad try/except so a profile-side bug never blocks
     the QA response — failure here logs and returns None.
     """
     try:
         repo = MemoriesRepository(session)
-        row = await repo.next_pending_for_offer(
+        rows = await repo.pending_for_offer(
             ctx.person_id,  # type: ignore[arg-type]  # caller guards
             settings.memory_extractor_offer_cooldown_sec,
         )
-        if row is None:
+        if not rows:
             return None
-        memory_id, body, _topic = row
-        await repo.mark_offered(memory_id)
-        # Said to the person the fact is about: "my"/"their"/"the user"
-        # become "your" (domovoi/memory_wording.py). Word for word, a
-        # fact like "Biscuit and Pepper are their pets" sounded like
-        # Domovoi talking about someone else.
+        from domovoi.memory_wording import already_known
         from domovoi.memory_wording import offer_text as _word_offer
 
-        offer_text = _word_offer(body)
-        if not offer_text:
-            return None
-        return offer_text, memory_id
+        person = await PeopleRepository(session).get(ctx.person_id)  # type: ignore[arg-type]
+        name = person[1] if person else None
+        known = [b for _i, b, _t, _s in await repo.list_active(ctx.person_id)]  # type: ignore[arg-type]
+        for memory_id, body, _topic in rows:
+            if already_known(body, name, known):
+                await repo.set_status(memory_id, ctx.person_id, "rejected")  # type: ignore[arg-type]
+                continue
+            # Said to the person the fact is about: "my"/"their"/"the user"
+            # become "your" (domovoi/memory_wording.py). Word for word, a
+            # fact like "Biscuit and Pepper are their pets" sounded like
+            # Domovoi talking about someone else.
+            offer_text = _word_offer(body)
+            if not offer_text:
+                continue
+            await repo.mark_offered(memory_id)
+            return offer_text, memory_id
+        return None
     except Exception as e:
         log.warning("memory surfacing failed: %s", e)
         return None
@@ -1318,7 +1365,12 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
     # Failure here is non-fatal: log + proceed without personalization
     # rather than break QA for a profile-side bug.
     try:
-        profile_prefix = await build_profile_prefix(ctx.person_id, session)
+        # Only for a question about the speaker or a request for
+        # suggestions: a plain fact question gets the same prompt as
+        # anyone's (profile_context.wants_profile).
+        profile_prefix = await build_profile_prefix(
+            ctx.person_id if wants_profile(intent.transcript) else None, session,
+        )
     except Exception as e:
         log.warning("profile_prefix build failed: %s", e)
         profile_prefix = ""
@@ -1459,6 +1511,9 @@ async def _finish_qa(
             latency_ms=latency_ms(),
         )
         return response, response.text
+    # A food suggestion: a fixed line about the household's allergies and
+    # diets, added here by code (never left to the model).
+    note = await _food_safety_note(ctx, intent.transcript, session)
     # The model may already close with an offer of its own ("…can I look
     # that up for you?"): that counts as its doubt, and it is the offer —
     # parked below so a "yes" is kept, not asked a second time.
@@ -1471,6 +1526,7 @@ async def _finish_qa(
     should_offer = ctx.online and not ctx.long_capture and (category is not None or self_doubt)
     expect_followup = False
     offer = ""
+    memory_offer_made = False
     if should_offer:
         if not offers_itself:
             offer = _ONLINE_CHECK_OFFER
@@ -1495,22 +1551,32 @@ async def _finish_qa(
             # If we couldn't park the confirmation, drop the offer text
             # so we don't promise something the next "yes" can't honor.
             offer = ""
-    elif ctx.person_id is not None and not ctx.long_capture:
+    elif (
+        ctx.person_id is not None
+        and not ctx.long_capture
+        and not _asks_for_information(intent.transcript)
+    ):
         # No higher-priority offer is firing — see if the implicit
         # memory extractor has parked anything to surface. Mutually
         # exclusive with the self-doubt offer above so we never park
-        # two pending_confirmations at once.
+        # two pending_confirmations at once. Never after an answer to a
+        # question ("how far is the moon? … By the way, your pets are
+        # …"): only after a remark or a chat, where it reads naturally.
         memory_offer = await _maybe_offer_pending_memory(ctx, session)
         if memory_offer is not None:
             offer_text, memory_id = memory_offer
             offer = offer_text
+            memory_offer_made = True
             try:
                 await request_confirmation(
                     session,
                     session_id,
                     kind="core.pending_memory_offer",
                     handler="memory",
-                    data={"memory_id": memory_id},
+                    # The person it was offered to: a one-word "yes" is
+                    # too short for voice ID, so the reply turn usually
+                    # has no speaker of its own.
+                    data={"memory_id": memory_id, "person_id": ctx.person_id},
                 )
                 expect_followup = True
             except Exception as e:
@@ -1520,6 +1586,12 @@ async def _finish_qa(
                 # Drop the offer text if we can't park it.
                 offer = ""
 
+    # The conversation history the model reads next turn keeps the answer
+    # without a memory offer: a history of answers ending "By the way,
+    # <a fact about you>" teaches the model to tack facts on itself.
+    if note:
+        answer = _end_sentence(answer) + " " + note
+    history_text = answer if (offer and memory_offer_made) else None
     if offer:
         answer = _end_sentence(answer) + " " + offer
     response = Response(
@@ -1529,6 +1601,7 @@ async def _finish_qa(
         matched_path="qa",
         online=ctx.online,
         expect_followup=expect_followup,
+        history_text=history_text,
     )
     await _persist_turn(
         session=session,
@@ -1540,4 +1613,5 @@ async def _finish_qa(
         matched_path="qa",
         latency_ms=latency_ms(),
     )
-    return response, (offer if spoken else response.text)
+    rest = " ".join(part for part in (note, offer) if part)
+    return response, (rest if spoken else response.text)

@@ -348,7 +348,7 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
   /v1/player-relay/<token>`) to hand a room's player instead of the
   remote URL. `kind="file"` serves byte ranges, so a player can seek in
   and resume a file; `kind="radio"` is the one-connection stream with ICY
-  titles. The radio plugin (1.5.3, needs SDK 1.16) uses it and no longer
+  titles. The radio plugin (1.5.4, needs SDK 1.16) uses it and no longer
   has its own `/v1/plugins/radio/player-relay/<token>` route.
 - **What to know.** A plugin from outside this repo that hands a room's
   player a remote URL should use it: feature-test
@@ -605,6 +605,33 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
   `--reset-admin`, ends every grant. The phone apps use it from their next
   release; until then the list stays empty.
 
+## 1.4.1 (unreleased) — Chat lookups reach the web
+
+- **What changed.** A chat lookup with the internet allowed now reaches
+  web search when the offline library has nothing relevant. Before, the
+  library's first three results, related or not, filled every slot, so the
+  web was never asked and the reply was "I couldn't find that in what I
+  looked up."
+- **What changed.** Every lookup source's results pass a relevance check
+  before they are read or cited. A plugin source's 0–1 `score` decides it
+  (under 0.3 is dropped; 0 means no score). Otherwise the title and snippet
+  must share the question's key words. A reply that couldn't find the
+  answer lists no sources.
+- **What changed.** Questions about businesses, opening hours, "near me",
+  news, weather and prices go to web sources first and skip the offline
+  library. "Near me" and "local" are searched with the Home location.
+  With the internet set to "never", such a question gets "I need the
+  internet for that" instead of an unrelated library answer.
+- **What changed.** When the first lookup doesn't answer the question and
+  the chat allows the internet, the chat runs one more lookup with web
+  sources only. A short follow-up such as "how about now?" after a lookup
+  repeats that lookup.
+- **What changed.** The dashboard chat's internet chip says "internet:
+  ask first" when Domovoi asks before going online. "internet off" now
+  means the household's internet answer is "never".
+- **For plugin authors.** `LookupHit.score` is a 0–1 relevance for plugin
+  sources; `POST /v1/phone/lookup` takes an optional `web_only`.
+
 ## 1.4.1 (unreleased) — Printing, videos, scans and Windows update hardening
 
 - **The list of a person's voice samples now needs a household device**, like the
@@ -618,6 +645,22 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
 - **The Windows update copies the downloaded Setup more strictly**: each
   file is opened without following a link and checked to be the file it
   names, and a refused update removes every file it copied.
+- **Installing a plugin from GitHub** refuses a branch or tag name with
+  empty or `.`/`..` parts, so the download always comes from the
+  repository shown on the install screen.
+- **News feed discovery** reads only the first 256 KB of a page, scans
+  it in a worker thread and in time that grows only with its length.
+- **A room's satellite settings** (how its microphone listens, among
+  others) can be changed only once an admin password exists, like
+  recording a wake word; before setup and after `--reset-admin` saving
+  them asks for the admin setup first.
+- **Friend Houses read-outs** also leave out words that sound like a wake
+  word when the house says them, not only ones spelled like it, and the
+  stock wake words' names on their own.
+- **"Say that again" after a friend house's message or a shared list's
+  items** repeats them without adding them to the conversation the AI
+  model reads or to what the memory pass looks at; "double check that"
+  still declines them.
 - **The dashboard logs it** if it can't keep its port-80 permission away
   from the programs it starts.
 - **Video poster frames**: every spelling of one file's path shares one
@@ -632,6 +675,21 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
   changed since answer 404 as the by-path lookup already did, and asking
   for a read of a file over the 1 GB limit is refused before the file is
   hashed (an unchanged file is not hashed again).
+- **The phone app's speech-recognition libraries are rebuilt in CI** from
+  their recorded recipe, weekly and whenever they change, and must match
+  their committed checksums byte for byte.
+
+- **Voice goes first with the house's AI model**: a bedtime story being
+  written, a memory pass or a news briefing stops when a room hears its
+  wake word and carries on after the answer, and a typed chat reply or a
+  chat title waits for a spoken answer in progress, so a question asked
+  out loud no longer waits behind them.
+- **The AI models answer more than one request at once on bigger
+  servers**: two with 24 GB of memory, three with 48 GB, four with NVIDIA
+  GPUs that have room, one below 24 GB as before. Each extra one takes
+  about 1.2 GB of memory (about twice that with an 8192-token routing
+  window; a server without the room stays a step lower). It takes effect
+  at the next update, which restarts the model service once.
 
 ## 1.4.1 (unreleased) — Dashboard update fixes
 
@@ -701,6 +759,51 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
 
 ## 1.4.1 (unreleased)
 
+- Radio 1.5.3 (SDK 1.13.1): station streams, for the song sampler and the
+  browser player alike, are asked for uncompressed and read exactly as
+  sent; a station that answers compressed is refused. Model, voice,
+  lyrics, font and plugin downloads read their bodies the same way. New
+  for plugins: `net_safety.open_raw_stream` and `iter_raw`.
+
+- Holiday questions work offline: "how many days until New Year's Day",
+  "when is Thanksgiving", "what day is Easter next year" answer with the
+  date and the day count. The built-in table covers the common public
+  holidays and observances of the US, Canada, the UK, Ireland, Australia
+  and New Zealand, plus Easter and the days counted from it, and uses the
+  country of the Home location (the US when none is set). "This year" for
+  a holiday that already passed says how many days ago it was.
+
+- A spoken "Should I remember that?" offer no longer rides on the answer
+  to a question. It comes after a remark or a chat, at most once a day per
+  person, and never for something Domovoi already knows (your name, a
+  fact it remembers). A one-word "yes" to it now saves the fact. A plain
+  fact question from someone Domovoi recognizes gets the same prompt as
+  anyone's; their remembered facts go in only when the question is about
+  them.
+
+- Spoken suggestions (meals, restaurants, gifts, music, things to do) for
+  someone Domovoi recognizes use their remembered tastes and diet again;
+  plain fact questions still don't. Remembered allergies and diets are
+  never cut when a profile is long. After a food suggestion, when someone
+  in the house has a remembered allergy or diet, Domovoi adds one line: to
+  a voice it doesn't recognize, that nobody's allergies were taken into
+  account (naming no one and no allergy); to someone it knows, what the
+  others need ("Heads up: not all of these are peanut-free."), naming no
+  one.
+
+- A chat draft's changes view on the dashboard leaves a paragraph gap
+  between a long removed passage and the added text after it, so the old
+  last word no longer runs into the new first word.
+
+- A room device set up for a different Domovoi server (another house, or
+  this one before it was reinstalled) used to only blink "no server". Its
+  address is now listed under Settings → Rooms, with the advice to set it
+  up again for this server. The room still trusts only its own server.
+
+- The Documents editor runs on Tiptap 3 (3.33.1, was 2.27.3). Documents,
+  saving and co-editing work as before; the accepted Tiptap advisory
+  (GHSA-cp6q-959q-f8rh) is fixed in this version, so its exception is gone.
+  A span nested in a coloured span now keeps both styles when pasted.
 - Room devices looking for every house count a server only when its
   identity proof is bound to the address they dialled, and the server
   signs the approval-proof form only bound to one.
@@ -716,6 +819,20 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
   aloud (messages and shared lists).
 - Friend Houses: a friend's messages and names read aloud stay out of the
   chat model's history, and "double check that" declines such a reply.
+- Friend Houses: a friend set to "say who it's from" or "read aloud" now
+  shows, during quiet hours, when new messages will be said (or that only
+  some rooms are quiet), and a message that wasn't said because of quiet
+  hours is marked "held for quiet hours" in Messages.
+- Friend Houses: messages that came during quiet hours are said in each
+  room when its own quiet hours end, if they are still unread (once per
+  room); Home's "needs attention" counts unread Friend Houses messages and
+  links to them; and the Friend Houses page now starts with Messages.
+- Friend Houses: the page is open to everyone in the household. Messages
+  and Shared lists (taking, declining and stopping a shared list with an
+  existing friend) need only the household's paired browser or phone;
+  starting a share stays with the admin. Requests, friend files, this
+  house, the friends list and blocking sit in a "Friends and connections"
+  section at the bottom that asks for the admin sign-in when opened.
 - A guest's "play this one" on a room that stopped in the meantime is
   refused, so a guest never starts a stopped room.
 - A room's queue looks up the songs it can't place by path in one query

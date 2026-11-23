@@ -1372,6 +1372,9 @@ class _LookupBody(BaseModel):
     # the person allowed the internet for this lookup.
     internet: bool = True
     limit: int = Field(3, ge=1, le=3)
+    # With internet: the web sources only (a second round when the first
+    # found nothing that answers).
+    web_only: bool = False
 
 
 @app.post(
@@ -1420,7 +1423,8 @@ async def phone_lookup(body: _LookupBody, request: Request) -> Any:
         if url:
             outcome = await lookup_web.read_page(url, query=query)
         else:
-            outcome = await lookup_web.run_lookup(query, internet=body.internet, limit=body.limit)
+            outcome = await lookup_web.run_lookup(query, internet=body.internet, limit=body.limit,
+                                                   web_only=body.web_only and body.internet)
     except egress.InternetTurnedOff:
         raise egress.http_exception("a lookup")
     except lookup_web.LookupRefused as e:
@@ -1536,6 +1540,23 @@ def _arrival_ports(request: Any) -> set[int] | None:
     except (AttributeError, TypeError, ValueError, IndexError):
         port = None
     return {port} if port else None
+
+
+def _room_device_source(conn: Any) -> str | None:
+    """The address one room device is calling from, for the "set up for a
+    different server" inference (join_problems.identity_checked), or None
+    when it can't be told. A trusted proxy with no forwarded address (the
+    web process, a host's forwarder) stands for every device at once, and
+    naming it would be wrong. Never raises."""
+    try:
+        if conn is None or conn.client is None:
+            return None
+        if (conn.client.host in admin_auth_mod.TRUSTED_PROXIES
+                and not conn.headers.get("x-forwarded-for")):
+            return None
+        return admin_auth_mod.request_source(conn)
+    except Exception:  # noqa: BLE001 — a hint must never break the caller
+        return None
 
 
 @app.get("/v1/health")
@@ -1663,6 +1684,13 @@ async def health(
             doc["identity"] = identity.health_answer(
                 challenge, addr=addr, pairing_proof=signed_proof,
             )
+            if signed_proof is None:
+                # A room device checking the server it is pinned to before
+                # it connects. One that never connects afterwards was set
+                # up for a different server (S3-4): said in Settings → Rooms.
+                source = _room_device_source(request)
+                if source is not None:
+                    join_problems.identity_checked(source)
         else:
             log.warning(
                 "refused to sign the identity proof for %s: it is not an "
@@ -4378,9 +4406,11 @@ class _AdminChatToolBody(BaseModel):
 
 _FH_READ = [Depends(require_admin_security_read)]
 _FH_WRITE = [Depends(require_admin_security)]
-# What every household phone may do with existing friends (owner decision
-# 17, for the apps, which carry only the household token): read the house
-# inbox and send, see the friends and the shared lists. Header credentials
+# What everyone in the household may do with existing friends (owner
+# decision 17, for the apps, which carry only the household token; widened
+# 2026-11-23 to the dashboard's Friend Houses page): read the house inbox
+# and send, see the friends, and see, take, decline and stop sharing
+# lists with existing friends. Starting a share stays admin. Header credentials
 # only (the household token or an admin Bearer): no cookie, no query token,
 # since these carry message text. Trust and household settings stay above.
 # No pre-setup grace: after --reset-admin the friends and messages are still
@@ -4558,9 +4588,14 @@ async def admin_friend_houses_withdraw(request_id: str) -> dict[str, Any]:
 
 @app.get("/v1/admin/friend-houses/friends", dependencies=_FH_HOUSEHOLD)
 async def admin_friend_houses_friends() -> dict[str, Any]:
-    from domovoi.friend_houses import friending
+    """The friends, and ``quiet_hours``: null, or which connected rooms are
+    in quiet hours now (``rooms``: all | some), ``until`` ("HH:MM", the
+    house's clock) and ``read_later`` (true: a message that comes meanwhile
+    is said in each of those rooms when its quiet hours end, if still unread)."""
+    from domovoi.friend_houses import friending, messages
 
-    return {"friends": await friending.list_friends()}
+    return {"friends": await friending.list_friends(),
+            "quiet_hours": await messages.quiet_hours_now()}
 
 
 @app.post("/v1/admin/friend-houses/friends/{friend_id}/verified", dependencies=_FH_WRITE)
@@ -4622,6 +4657,15 @@ async def admin_friend_houses_conversations() -> dict[str, Any]:
 
     return {"conversations": await messages.conversations(),
             "unread": await messages.unread_total()}
+
+
+@app.get("/v1/admin/friend-houses/unread", dependencies=_FH_HOUSEHOLD)
+async def admin_friend_houses_unread() -> dict[str, Any]:
+    """How many messages in the house inbox are unread, and nothing else:
+    for Home's "needs attention" (no names, no text)."""
+    from domovoi.friend_houses import messages
+
+    return {"unread": await messages.unread_total()}
 
 
 @app.get("/v1/admin/friend-houses/conversations/{house}", dependencies=_FH_HOUSEHOLD)
@@ -4691,7 +4735,7 @@ class _FhAcceptListBody(BaseModel):
 @app.get("/v1/admin/friend-houses/shared-lists", dependencies=_FH_HOUSEHOLD)
 async def admin_friend_houses_shared_lists() -> dict[str, Any]:
     """Lists shared with friend houses: ours they have, theirs we have, and
-    theirs waiting for an admin here (``state`` invited)."""
+    theirs waiting here (``state`` invited)."""
     from domovoi.friend_houses import shared_lists
 
     return {"shared_lists": await shared_lists.overview()}
@@ -4707,7 +4751,7 @@ async def admin_friend_houses_share_list(body: _FhShareBody) -> dict[str, Any]:
         raise _fh_error(e) from e
 
 
-@app.post("/v1/admin/friend-houses/shared-lists/{space}/accept", dependencies=_FH_WRITE)
+@app.post("/v1/admin/friend-houses/shared-lists/{space}/accept", dependencies=_FH_HOUSEHOLD)
 async def admin_friend_houses_accept_list(space: str, body: _FhAcceptListBody) -> dict[str, Any]:
     from domovoi.friend_houses import shared_lists
 
@@ -4717,7 +4761,7 @@ async def admin_friend_houses_accept_list(space: str, body: _FhAcceptListBody) -
         raise _fh_error(e) from e
 
 
-@app.post("/v1/admin/friend-houses/shared-lists/{space}/decline", dependencies=_FH_WRITE)
+@app.post("/v1/admin/friend-houses/shared-lists/{space}/decline", dependencies=_FH_HOUSEHOLD)
 async def admin_friend_houses_decline_list(space: str) -> dict[str, Any]:
     from domovoi.friend_houses import shared_lists
 
@@ -4726,7 +4770,7 @@ async def admin_friend_houses_decline_list(space: str) -> dict[str, Any]:
     return {"declined": True}
 
 
-@app.delete("/v1/admin/friend-houses/shared-lists/{space}", dependencies=_FH_WRITE)
+@app.delete("/v1/admin/friend-houses/shared-lists/{space}", dependencies=_FH_HOUSEHOLD)
 async def admin_friend_houses_leave_list(space: str) -> dict[str, Any]:
     """Stop sharing. Both houses keep their copy as an ordinary list."""
     from domovoi.friend_houses import shared_lists
@@ -4868,7 +4912,10 @@ async def admin_chat_tool(body: _AdminChatToolBody) -> dict[str, str]:
     """
     from domovoi.letta_tools import dispatch_tool
 
-    text = await dispatch_tool(body.tool, body.args or {}, app=app)
+    # The tool works for the chat-mode turn that called it back: its model
+    # calls don't wait for voice (that turn), voice_first.py.
+    with voice_activity.exempt():
+        text = await dispatch_tool(body.tool, body.args or {}, app=app)
     return {"text": text}
 
 
@@ -5861,9 +5908,11 @@ class _AdminSatelliteConfigBody(BaseModel):
 
 @app.post(
     "/v1/admin/satellite/{room_id}/config",
-    # Admin tier: this rewrites the Pi's config.toml and restarts it to
-    # apply — it decides whether that room has a working microphone.
-    dependencies=[Depends(require_admin_mutation)],
+    # Security tier: this rewrites the Pi's config.toml and restarts it to
+    # apply — it decides whether and how much that room's microphone
+    # hears, so like the wake-word take it waits for an admin (501 before
+    # setup and after --reset-admin).
+    dependencies=[Depends(require_admin_security)],
 )
 async def admin_update_satellite_config(
     room_id: str, body: _AdminSatelliteConfigBody
@@ -10136,17 +10185,27 @@ async def stream(ws: WebSocket, room_id: str) -> None:
     credential that actually authenticates a satellite is still the
     pairing token in its ``hello`` frame.
     """
-    if not origin_allowed(ws.headers.get("origin")):
-        await _refuse_ws(
-            ws, "cross_origin",
-            f"/v1/stream/{room_id} from Origin {ws.headers.get('origin')!r}",
-        )
-        return
-    if not room_ids.is_room_id(room_id):
-        await _refuse_ws(ws, "bad_room_id", f"/v1/stream/{room_id!r} is not a room id")
-        return
-    session = StreamSession(ws, room_id)
-    await session.run()
+    # Whatever opens a room socket talks to this server, even one refused
+    # below: it is not a device set up for a different one (S3-4,
+    # join_problems.identity_checked).
+    source = _room_device_source(ws)
+    if source is not None:
+        join_problems.stream_opened(source)
+    try:
+        if not origin_allowed(ws.headers.get("origin")):
+            await _refuse_ws(
+                ws, "cross_origin",
+                f"/v1/stream/{room_id} from Origin {ws.headers.get('origin')!r}",
+            )
+            return
+        if not room_ids.is_room_id(room_id):
+            await _refuse_ws(ws, "bad_room_id", f"/v1/stream/{room_id!r} is not a room id")
+            return
+        session = StreamSession(ws, room_id)
+        await session.run()
+    finally:
+        if source is not None:
+            join_problems.stream_closed(source)
 
 
 @app.websocket("/v1/room-audio/{satellite_id}")

@@ -496,7 +496,21 @@ def _ics_samples() -> list[bytes]:
     return [b"\x00" + ICS_SAMPLE.encode()]
 
 
+_DOC_SAMPLES: list[bytes] | None = None
+
+
 def _document_samples() -> list[bytes]:
+    """Built once: a zipped sample (.docx, .odt, .xlsx) stamps the clock
+    into its parts, so a rebuild can differ in bytes and length, and
+    Hypothesis replaying an example would then draw from a different
+    blob (``FlakyStrategyDefinition``)."""
+    global _DOC_SAMPLES
+    if _DOC_SAMPLES is None:
+        _DOC_SAMPLES = _build_document_samples()
+    return list(_DOC_SAMPLES)
+
+
+def _build_document_samples() -> list[bytes]:
     from domovoi.tests import doc_fixtures as fx
 
     out = [

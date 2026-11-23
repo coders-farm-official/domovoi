@@ -1906,10 +1906,10 @@ class Settings(BaseSettings):
     # we DO write is awaiting user confirmation, so this is a quality
     # filter, not a safety boundary.
     memory_extractor_min_confidence: float = 0.6
-    # Cooldown before re-offering a pending memory whose previous
-    # offer the user didn't answer. 24h means a "Should I remember
-    # X?" that fell into background noise gets one fresh shot the
-    # next day instead of pestering the user every turn.
+    # At most one memory offer ("Should I remember X?") per person per
+    # this many seconds, whichever pending fact it is; also the wait
+    # before an unanswered offer gets one fresh shot. 24h: several
+    # pending facts don't take turns riding on every answer.
     memory_extractor_offer_cooldown_sec: int = 86400
     # Per-extraction transcript budget. Pull at most N turns of
     # conversation_log for each pass — keeps the Ollama prompt under

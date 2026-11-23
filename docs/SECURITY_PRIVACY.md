@@ -3132,7 +3132,8 @@ happen:
 
 ## Friend Houses (house to house, off by default)
 
-"Serverless messaging and friend system between households"
+Messages and shared lists with friends’ houses, house to house, with no
+company server in between
 (`domovoi/friend_houses/`). It is **off** until an admin turns it on
 (Settings, `friend_houses_enabled`). While it's off, nothing runs and
 nothing connects: no keys are made, no image is built, no daemon starts.
@@ -3313,12 +3314,16 @@ history keeps a stand-in ("I read 2 friend house messages aloud"), and
 or a shared list.
 
 **Shared lists.** An admin can share a household list with a friend house.
+Anyone in the household (the household token or an admin) can then use
+it, accept or decline a list a friend offers, and stop sharing; making
+and removing friends stays with the admin.
 Each house keeps its own copy in its own Lists, and the two exchange
 signed changes (items added, edited, ticked off, removed; not its order
 or who in the house did what). The list's name goes with the first change,
 as the title the friend sees on the offer. A friend's changes can
 only touch the one list its share is linked to here. A list a friend
-offers waits for an admin to accept it, and declining tells nobody. Text a
+offers waits for someone in the household to accept it, and declining
+tells nobody. Text a
 friend adds to a list is cleaned, cut at 200 characters, and has every
 wake phrase taken out before it is stored, because the Lists voice
 handler reads items aloud. Either house can stop sharing at any time;
@@ -4013,6 +4018,15 @@ traffic: five lines, one per kind and subject, a repeat bumps a count, a
 day's age drops a line, a restart clears them. The address in a line is the
 one the device SAID it dialled (validated to `host:port` characters) — text
 for an admin to read, never anything the core acts on.
+
+One line is the server's own inference (1.4.1): an address that has this
+server sign its identity for the address it dialled, and then opens no room
+socket for two and a half minutes, is a room set up for a different server
+(another house, or this one before a reinstall gave it a new key). It is
+text only: the device's pin is untouched, nothing the server says can move
+it, and the only way to bring it over is setting it up again. Only an IP
+address is ever named, and never a loopback address or a trusted proxy with
+no forwarded address, which stand for every device at once.
 
 **A signed list says when, not only who.** Every `manifest.sig` envelope
 carries `issued_at` and a per-channel `serial` that only grows when the

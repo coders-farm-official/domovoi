@@ -145,7 +145,7 @@ async def run_case(case: dict[str, Any], ask: AskModel) -> tuple[bool, str, str]
     lines = lookup_answer.source_lines(results)
     passages = lookup_answer.rank_passages(question, results)
     if not passages or not lookup_answer.covers(question, passages):
-        reply = lookup_answer.fixed_reply(lookup_answer.COULDNT_FIND, lines)
+        reply = lookup_answer.fixed_reply(lookup_answer.COULDNT_FIND, [])   # nothing it found is cited
     else:
         messages = [{"role": "system", "content": lookup_answer.system_prompt(question, passages)},
                     {"role": "user", "content": question}]
@@ -163,7 +163,9 @@ async def run_case(case: dict[str, Any], ask: AskModel) -> tuple[bool, str, str]
         return False, "should have said it couldn't find it", reply
     if case.get("expect") and honest:
         return False, "said it couldn't find an answer the passages hold", reply
-    if results and "*Sources:*" not in reply:
+    if honest and "*Sources:*" in reply:
+        return False, "cites passages that didn't answer it", reply
+    if results and not honest and "*Sources:*" not in reply:
         return False, "no sources line", reply
     return True, "ok", reply
 

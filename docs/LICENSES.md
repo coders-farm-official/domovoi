@@ -250,8 +250,8 @@ those voices shaped it; **Synthetic voices only** avoids that.
   `vendor/yjs`, `vendor/mammoth`), built from exact pinned versions by
   `scripts/vendor/editors/build.mjs`, each folder with a `THIRD-PARTY.json`
   that lists every package inside with its version and licence, and the
-  licence texts in `licenses/`: Tiptap 2.27.3 and ProseMirror (MIT; the
-  editor), y-prosemirror 1.3.7, Yjs 13.6.33, y-protocols 1.0.7, lib0
+  licence texts in `licenses/`: Tiptap 3.33.1 and ProseMirror (MIT; the
+  editor), y-tiptap 3.3.0, Yjs 13.6.33, y-protocols 1.0.7, lib0
   0.2.119, y-websocket 3.1.0 and y-indexeddb 9.0.12 (MIT; co-editing),
   markdown-it 14.3.3 and prosemirror-markdown (MIT, with entities under
   BSD-2-Clause; Markdown files), linkifyjs (MIT), and mammoth 1.13.0

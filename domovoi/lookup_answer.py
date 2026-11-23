@@ -43,6 +43,10 @@ NEVER_REPLY = (
     "I couldn't find that in this server's offline library or its manual, and this "
     "Domovoi is set to stay off the internet (Settings → Privacy → Internet), so I didn't look online."
 )
+NEEDS_INTERNET = (
+    "I need the internet for that, and this Domovoi is set to stay off the internet "
+    "(Settings → Privacy → Internet). Ask me something general and I'll try the offline library."
+)
 DECLINED_NOTE = (
     "The person chose not to look this up online. Answer from what you already know, say "
     "plainly that you didn't look it up, and don't offer to look it up again."
@@ -361,6 +365,22 @@ def fast_path(message: str) -> Proposal | None:
     return None
 
 
+_FOLLOWUP_WORDS = frozenset(
+    "now again then also instead more else try retry ok okay well hey hi so still too one time "
+    "domovoi".split()
+)
+
+
+def is_bare_followup(text: str) -> bool:
+    """A short follow-up that names nothing of its own ("how about now?",
+    "try again"): the words to look up are the earlier turn's."""
+    t = (text or "").strip()
+    if not t or len(t) > 60:
+        return False
+    words = _WORD_RE.findall(t.lower())
+    return bool(words) and all(w in _STOP or w in _FOLLOWUP_WORDS for w in words)
+
+
 # ─── The finished reply ───────────────────────────────────────────────────
 
 
@@ -477,6 +497,7 @@ def finish(reply: str, lines: list[SourceLine], *, notice: str | None = None) ->
     # of a tool call the person would see as text.
     if couldnt_find(text) or parse_proposal(text) is not None or _PROPOSAL_ANYWHERE.search(text):
         text = COULDNT_FIND
+        lines = []      # what didn't answer it isn't cited as a source
     if notice:
         text += f"\n\n*{_md(notice)}*"
     return text + sources_footer(lines)

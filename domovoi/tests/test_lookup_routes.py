@@ -52,8 +52,10 @@ class _Kiwix:
 
     def __init__(self) -> None:
         self.hits: list[lookup.LookupHit] = []
+        self.asked: list[str] = []
 
     async def search(self, query, *, limit=3):
+        self.asked.append(query)
         return list(self.hits)
 
     async def fetch(self, id):
@@ -545,3 +547,124 @@ async def test_the_apps_hop_forwards_to_the_core_and_its_refusal(db_session, wor
     assert ok.status_code == 200 and ok.json()["results"][0]["source"] == "kiwix"
     assert off.status_code == 409 and off.headers[egress.REFUSAL_HEADER] == egress.REFUSAL_VALUE
     assert world.net.sent == []
+
+
+# ─── Chat lookups that reach the web (1.4.1) ─────────────────────────────
+# The 22 Nov report: a chat with the internet on asked about a town's
+# restaurants and got "I couldn't find that in what I looked up." with three
+# unrelated offline-library articles as its sources, every time.
+
+_JUNK = [lookup.LookupHit(id=f"B/{i}", title=t, snippet="restaurants closed during the pandemic")
+         for i, t in enumerate(("COVID-19 pandemic in Illinois", "Criticism of fast food", "List of smoking bans"))]
+_EATS = [{"title": "Best restaurants in Springfield, IL", "url": "https://eats.example/springfield",
+          "content": "Ten restaurants in Springfield, Illinois.", "engine": "duckduckgo"}]
+
+
+def _searched(net) -> list[str]:
+    from urllib.parse import parse_qs
+
+    return [parse_qs(r.url.query.decode())["q"][0] for r in net.sent if r.url.path == "/search"]
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_the_phone_route_reaches_the_web_past_an_irrelevant_library(db_session, world) -> None:
+    world.kiwix.hits = list(_JUNK)
+    async with _core() as c:
+        body = (await c.post("/v1/phone/lookup", json={"query": "red panda", "internet": True})).json()
+    assert world.kiwix.asked == ["red panda"]
+    assert [x["source"] for x in body["results"]] == ["wikipedia"] and body["internet_used"] is True
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_chat_with_the_internet_on_cites_the_web_not_the_library(db_session, world, model) -> None:
+    world.kiwix.hits = list(_JUNK)
+    world.net.web_results = list(_EATS)
+    async with _web() as web:
+        tid = await _thread(web)
+        await web.patch(f"/api/chat/threads/{tid}", json={"internet_allowed": True})
+        model.replies = [["LOOK_UP: springfield il restaurants\n"], ["Try the places on Eats."]]
+        done = _done(await _send(web, tid, "hey! can you lookup springfield il restaurants?"))
+        # A short follow-up looks up the same words again.
+        model.replies = [["Still the places on Eats."]]
+        again = _done(await _send(web, tid, "how about now?"))
+    for d in (done, again):
+        assert "eats.example/springfield" in d["content"] and "COVID" not in d["content"]
+        assert d["stats"]["lookup"]["internet_used"] is True
+    # A restaurant question goes to the web alone: the library isn't asked.
+    assert world.kiwix.asked == []
+    assert _searched(world.net) == ["springfield il restaurants", "springfield il restaurants"]
+    assert len(model.calls) == 3          # the follow-up needed no proposal
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_second_web_round_when_the_first_did_not_answer(db_session, world, model) -> None:
+    world.kiwix.hits = [lookup.LookupHit(id="A/Red_panda", title="Red panda", snippet="A small mammal.")]
+    world.net.searxng = {"infoboxes": []}
+    world.net.web_results = [{"title": "What red pandas eat", "url": "https://zoo.example/rp",
+                              "content": "Red pandas eat bamboo.", "engine": "duckduckgo"}]
+    async with _web() as web:
+        tid = await _thread(web)
+        await web.patch(f"/api/chat/threads/{tid}", json={"internet_allowed": True})
+        model.replies = [["LOOK_UP: red panda food\n"], [lookup_answer.COULDNT_FIND], ["They eat bamboo."]]
+        events = await _send(web, tid, "what do red pandas eat?")
+    done = _done(events)
+    assert done["content"].startswith("They eat bamboo.") and "zoo.example/rp" in done["content"]
+    assert "from your offline library" not in done["content"]
+    assert ("replace", {"text": ""}) in events
+    bodies = [json.loads(h.content) for h in world.hops if h.method == "POST"]
+    assert bodies[-1].get("web_only") is True
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_local_question_under_never_says_it_needs_the_internet(db_session, world, model) -> None:
+    world.kiwix.hits = list(_JUNK)
+    with egress.override_policy("never"):
+        async with _web() as web:
+            tid = await _thread(web)
+            model.replies = [["LOOK_UP: local restaurants\n"]]
+            done = _done(await _send(web, tid, "Hey domovoi! Can you research some local restaurants?"))
+    assert done["content"] == lookup_answer.NEEDS_INTERNET
+    assert world.kiwix.asked == [] and world.net.sent == []
+    assert done["stats"]["lookup"]["reason"] == "needs_internet" and done["stats"]["lookup"]["sources"] == []
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_local_question_in_a_chat_that_asks_first_shows_the_card(db_session, world, model) -> None:
+    world.kiwix.hits = list(_JUNK)
+    async with _web() as web:
+        tid = await _thread(web)
+        model.replies = [["LOOK_UP: restaurants springfield il\n"]]
+        events = await _send(web, tid, "what about restaurants for springfield il?")
+    assert "lookup_permission" in [e for e, _ in events]
+    assert world.kiwix.asked == [] and world.net.sent == []
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_irrelevant_library_hits_are_not_an_answer_in_a_chat_that_asks_first(db_session, world, model) -> None:
+    world.kiwix.hits = list(_JUNK)
+    async with _web() as web:
+        tid = await _thread(web)
+        events = await _send(web, tid, "look up red panda")
+        assert "lookup_permission" in [e for e, _ in events]       # not "couldn't find" + junk sources
+        with egress.override_policy("never"):
+            done = _done(await _send(web, tid, "look up red panda"))
+    assert done["content"] == lookup_answer.NEVER_REPLY            # "nothing in the offline library"
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_general_question_under_never_still_uses_the_library(db_session, world, model) -> None:
+    world.kiwix.hits = [lookup.LookupHit(id="A/Red_panda", title="Red panda", snippet="A small mammal.")]
+    with egress.override_policy("never"):
+        async with _web() as web:
+            tid = await _thread(web)
+            model.replies = [["Red pandas eat bamboo."]]
+            done = _done(await _send(web, tid, "look up red panda"))
+    assert world.kiwix.asked == ["red panda"]
+    assert done["content"].startswith("Red pandas eat bamboo.") and "from your offline library" in done["content"]

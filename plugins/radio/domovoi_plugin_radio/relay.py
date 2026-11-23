@@ -3,11 +3,13 @@
 The web process relays a station's audio to the browser instead of letting
 the browser fetch it. (A room's music player is relayed by the core itself,
 ``sdk.playback.relay_url``, SDK 1.16, which makes the same checks.) The
-station is opened here, through ``net_safety.open_stream``: http(s) only, every
-redirect hop re-checked and each connection pinned to the address its
-check judged. Only an audio stream is relayed (``stream_types``): a page,
-a script or a playlist (which a player would open entry by entry on its
-own) is refused before a byte moves.
+station is opened here, through ``net_safety.open_raw_stream``: http(s) only,
+every redirect hop re-checked and each connection pinned to the address its
+check judged; it asks for ``identity`` and refuses a compressed answer, and
+the body is read raw (``net_safety.iter_raw``), never decoded. Only an
+audio stream is relayed (``stream_types``): a page, a script or a playlist
+(which a player would open entry by entry on its own) is refused before a
+byte moves.
 
 Imports only ``domovoi.webkit`` and this package's stdlib modules, so the
 web process may import it (see ``web.py``'s import rules).
@@ -51,7 +53,7 @@ class Upstream:
 
     def _iterator(self) -> Any:
         if self._chunks is None:
-            self._chunks = self.response.aiter_bytes(chunk_size=self.chunk_size)
+            self._chunks = net_safety.iter_raw(self.response, self.chunk_size)
         return self._chunks
 
     async def body(self):
@@ -100,7 +102,11 @@ async def open_audio(
 
     client = httpx.AsyncClient(timeout=httpx.Timeout(CONNECT_TIMEOUT, read=None))
     try:
-        resp = await net_safety.open_stream(client, url, headers=headers)
+        resp = await net_safety.open_raw_stream(client, url, headers=headers)
+    except net_safety.UnsupportedContentEncoding as e:
+        # A station stream is relayed as it came; a compressed one is not.
+        await client.aclose()
+        raise RelayRefused(502, "upstream sent a compressed stream") from e
     except net_safety.OutboundFetchError as e:
         await client.aclose()
         raise RelayRefused(409, str(e)) from e

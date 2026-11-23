@@ -187,6 +187,9 @@ extension ChatMessage {
 public enum ChatStreamStep: Equatable, Sendable {
     /// More words arrived.
     case delta(String)
+    /// The reply is this text from now on (`event: replace`, 1.4.1), and
+    /// later deltas append to it. Empty: start over, a web answer follows.
+    case replaced(String)
     /// The server said why the reply stopped.
     case failed(detail: String, code: String?, model: String?)
     /// The persisted row arrived. `kept` is a retry that failed and left the
@@ -399,6 +402,23 @@ public struct ChatTranscript: Equatable, Sendable {
             messages[index].content += payload.text
             return .delta(payload.text)
 
+        case "replace":
+            // **The reply becomes exactly `text`**, and later deltas append to
+            // it (1.4.1, `ChatScreen.kt`'s `ChatStreamEvent.Replace`). An empty
+            // `text` starts over: the house threw its first answer away and a
+            // web answer follows as new deltas. A non-empty one is the
+            // corrected reply. Ignoring it, as this used to, drew the old
+            // words joined to the new answer until the `done` row fixed it.
+            //
+            // `content` is the reply's only running total on this phone —
+            // there is no chunk list, count or first-word clock beside it —
+            // so setting it is the whole reset. A body with no string `text`
+            // is unreadable and changes nothing: wiping the words on a body
+            // this build cannot read would be worse than leaving them.
+            guard let payload: ChatReplace = event.payload() else { return .unreadable(event.name) }
+            messages[index].content = payload.text
+            return .replaced(payload.text)
+
         case "error":
             guard let payload: ChatStreamError = event.payload(),
                   let detail = payload.detail else { return .unreadable(event.name) }
@@ -441,8 +461,6 @@ public struct ChatTranscript: Equatable, Sendable {
             return .finished(kept: row.kept, replaces: row.replaces)
 
         // Ignored by name, each with the feature it belongs to:
-        //  `replace`   — a lookup answer that became the honest line; the
-        //                `done` row carries the kept text (`ChatScreen.kt:386`).
         //  `job`,
         //  `progress`  — a long document read in parts (documents plan D2).
         //  `status`    — "drafting" / "checking" (`chat.py:1431`), the drafts
@@ -450,7 +468,7 @@ public struct ChatTranscript: Equatable, Sendable {
         //  `lookup_permission`
         //              — the card that asks to go online (`chat.py:1862`), the
         //                lookups work. **Not in the map.**
-        case "replace", "job", "progress", "status", "lookup_permission":
+        case "job", "progress", "status", "lookup_permission":
             return .ignored(event.name)
 
         default:
@@ -527,6 +545,14 @@ struct ChatDelta: Decodable {
     }
 
     enum CodingKeys: String, CodingKey { case text }
+}
+
+/// `event: replace` — `{"text": "…"}`: the reply's text from now on.
+///
+/// Unlike ``ChatDelta``, `text` is **required**: a missing delta adds
+/// nothing, but a missing replace read as "" would wipe the reply.
+struct ChatReplace: Decodable {
+    let text: String
 }
 
 /// `event: error` — `{"detail": …, "code": …, "model": …}` (`chat.py:1639`).

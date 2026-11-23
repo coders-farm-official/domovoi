@@ -467,6 +467,16 @@ pull requests into it and weekly (Security → Code scanning, admins only), skip
 `.github/ci-extra-requirements.txt`, `.github/ci-test-tools-requirements.txt` (hypothesis, coverage, pytest-cov) and
 `.github/ci-fuzz-requirements.txt` (Atheris) (`pip install --require-hashes`); bump them by hand with the new version's PyPI hashes.
 
+**sherpa-onnx rebuild** (`.github/workflows/sherpa-onnx-rebuild.yml`)
+rebuilds the app's committed speech-recognition libraries
+(`android/native/sherpa-onnx/jniLibs/`) from source with `build-native.sh`,
+the no-Docker build F-Droid runs, one job per ABI, and checks every file it
+writes against that folder's `SHA256SUMS` byte for byte. It runs weekly, by
+hand, and on pushes to `main` and pull requests into it that change that
+folder or the workflow; never otherwise. A red run's `compare` job summary
+lists each file that no longer reproduces (the folder's README says how
+the build is pinned).
+
 **Dependabot** (`.github/dependabot.yml`) offers weekly update pull requests
 for the workflows' actions and the Android app's Gradle dependencies,
 grouped one per kind, each release at least 14 days old, never a new major

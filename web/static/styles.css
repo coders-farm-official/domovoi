@@ -2262,6 +2262,7 @@ a.home-att-row:hover { background: var(--brand-soft); }
 .chat-draft-changes { white-space: pre-wrap; overflow-wrap: break-word; color: var(--fg); }
 .chat-draft-add { background: var(--brand-soft); color: var(--fg); border-radius: 2px; }
 .chat-draft-del { color: var(--fg-subtle); text-decoration: line-through; }
+.chat-draft-gap { display: block; height: 0.8em; }
 .chat-draft-list { display: flex; flex-direction: column; gap: 2px; max-width: 560px; width: 100%; align-self: center; }
 .chat-draft-list-head { font-size: 11px; color: var(--fg-muted); padding: 0 8px 4px; }
 .chat-draft-list-row { display: flex; align-items: center; gap: 8px; font: inherit; font-size: 13px; padding: 9px 12px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--fg); cursor: pointer; text-align: left; min-height: 40px; }

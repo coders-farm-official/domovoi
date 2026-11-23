@@ -97,7 +97,7 @@ WEB_LIBRARIES: list[dict[str, Any]] = [
     {"name": "@excalidraw/excalidraw", "version": "0.17.6", "license": "MIT", "npm": True,
      "files": ["excalidraw/*.js", "excalidraw/excalidraw-assets/*.js", "excalidraw/excalidraw-assets/locales/*.js"],
      "inside": [{"name": "dompurify", "version": "3.0.3", "license": "Apache-2.0 OR MPL-2.0"}]},
-    {"name": "domovoi-tiptap-bundle", "version": "2.27.3", "license": "MIT AND BSD-2-Clause",
+    {"name": "domovoi-tiptap-bundle", "version": "3.33.1", "license": "MIT AND BSD-2-Clause",
      "description": "Tiptap and ProseMirror for the Documents editor, built by scripts/vendor/editors/build.mjs",
      "files": ["tiptap/tiptap.min.js"], "third_party": ("json", "tiptap/THIRD-PARTY.json")},
     {"name": "domovoi-yjs-bundle", "version": "13.6.33", "license": "MIT",

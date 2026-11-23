@@ -34,7 +34,8 @@ from simpleeval import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from domovoi.clients.holidays import next_occurrence
+from domovoi import home_location
+from domovoi.clients.holidays import find as find_holiday, spoken_names
 from domovoi.clients.units import UNITS, convert as unit_convert, lookup as unit_lookup
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
 from domovoi.handlers.shared.tool_gate import is_plain_knowledge_question
@@ -313,12 +314,42 @@ _HOURS_FUTURE_RE = re.compile(r"^(?P<n>\d+)\s+hours?\s+from\s+now$")
 _IN_N_HOURS_RE = re.compile(r"^in\s+(?P<n>\d+)\s+hours?$")
 _HOURS_PAST_RE = re.compile(r"^(?P<n>\d+)\s+hours?\s+ago$")
 
-# "days until christmas" / "how many days until christmas" / "days till
-# new year's" / "days to halloween". Holiday name is a bare label that
-# we look up via clients.holidays.next_occurrence; an unknown name gets
-# a graceful "I don't know that holiday" instead of a wrong answer.
+# "this year" / "next year" / "in 2027" after a holiday name.
+_YEAR_SUFFIX = r"(?:,?\s+(?P<year>this year|next year|last year|(?:in\s+)?\d{4}))?"
+
+# "days until christmas" / "how many days until new year's day" / "how
+# many days are left until easter next year" / "days to halloween". The
+# holiday is a bare label looked up in clients.holidays; an unknown name
+# gets a graceful "I don't know the date of ..." instead of a wrong answer.
 _DAYS_UNTIL_RE = re.compile(
-    r"^(?:how many\s+)?days?\s+(?:until|till|to|'til)\s+(?P<holiday>[a-z][a-z'\s]*?)$"
+    r"^(?:how many\s+)?days?\s+(?:is it\s+|are there\s+|are\s+)?(?:left\s+)?"
+    r"(?:until|till|to|'til|before)\s+(?:the\s+)?"
+    r"(?P<holiday>(?:[a-z]|\d+(?:st|nd|rd|th)\s)[a-z0-9'.\s]*?)" + _YEAR_SUFFIX + "$"
+)
+
+
+def _holiday_alternation() -> str:
+    """Every holiday name in the table as one regex alternation; the
+    apostrophes and dots in a name are optional, as Whisper writes them
+    either way."""
+    pats = {
+        re.escape(n.lower()).replace("'", "'?").replace(r"\.", r"\.?")
+        for n in spoken_names()
+    }
+    return "|".join(sorted(pats, key=len, reverse=True))
+
+
+# "when is thanksgiving" / "what day is christmas this year" / "what date
+# is easter next year" / "what day does halloween fall on" / "how long
+# until mother's day". The opener is a general question, so only a name in
+# the holiday table matches: "when is my appointment" stays the calendar's.
+_HOLIDAY_WHEN_RE = re.compile(
+    r"^(?:when(?:'s|\s+is|\s+will\s+be|\s+does)"
+    r"|what\s+(?:day|date)(?:\s+of\s+the\s+week)?\s+(?:is|does|will|was)"
+    r"|how\s+long\s+(?:is\s+it\s+)?(?:until|till|'til|before))"
+    rf"\s+(?:the\s+)?(?P<holiday>{_holiday_alternation()})"
+    r"(?:\s+(?:fall|land|be|start)(?:\s+on)?)?" + _YEAR_SUFFIX
+    + r"(?:\s+(?:fall|land|be)(?:\s+on)?)?$"
 )
 
 # "next monday" / "next friday". Always returns the next future
@@ -343,6 +374,37 @@ _MONTH_NAMES = [
     "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December",
 ]
+
+
+_WEEKDAY_NAMES = [
+    "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
+]
+
+_LABEL_YEAR_RE = re.compile(r"^(?P<name>.*?)" + _YEAR_SUFFIX + r"\s*$")
+
+
+def _split_year(label: str) -> tuple[str, str | None]:
+    """'easter next year' → ('easter', 'next year'); a tool-model label
+    may carry the year words the fast paths take apart."""
+    m = _LABEL_YEAR_RE.match(label.strip().lower())
+    if not m or not m.group("name"):
+        return label, None
+    return m.group("name"), m.group("year")
+
+
+def _year_number(year: str | None, today: date) -> int | None:
+    """'this year' / 'next year' / 'last year' / 'in 2027' as a year."""
+    if not year:
+        return None
+    year = year.strip().lower()
+    if year == "this year":
+        return today.year
+    if year == "next year":
+        return today.year + 1
+    if year == "last year":
+        return today.year - 1
+    digits = re.sub(r"\D", "", year)
+    return int(digits) if digits else None
 
 
 def _ordinal(n: int) -> str:
@@ -627,6 +689,7 @@ class CalculatorHandler(Handler):
             FastPath(_IN_N_HOURS_RE, CalculatorHandler._date_hours_forward, early_commit="B"),
             FastPath(_HOURS_PAST_RE, CalculatorHandler._date_hours_back, early_commit="B"),
             FastPath(_DAYS_UNTIL_RE, CalculatorHandler._date_days_until, early_commit="B"),
+            FastPath(_HOLIDAY_WHEN_RE, CalculatorHandler._date_days_until, early_commit="B"),
             FastPath(_NEXT_WEEKDAY_RE, CalculatorHandler._date_next_weekday, early_commit="B"),
             FastPath(_SQRT_RE, CalculatorHandler._arith_sqrt, early_commit="B"),
             FastPath(_ARITH_PREFIX_RE, CalculatorHandler._arith_from_match, early_commit="B"),
@@ -758,7 +821,10 @@ class CalculatorHandler(Handler):
             if kind == "holiday":
                 if not label:
                     return self._ask("Which holiday?", ctx, missing="label")
-                return self._respond_holiday(label, ctx)
+                name, year = _split_year(label)
+                return self._respond_holiday(
+                    name, ctx, country=await self._home_country(), year=year,
+                )
             if kind == "next_weekday":
                 if not label:
                     return self._ask("Which day of the week?", ctx, missing="label")
@@ -870,7 +936,10 @@ class CalculatorHandler(Handler):
     async def _date_days_until(
         self, m: re.Match[str], ctx: Context, session: AsyncSession
     ) -> Response:
-        return self._respond_holiday(m.group("holiday"), ctx)
+        return self._respond_holiday(
+            m.group("holiday"), ctx,
+            country=await self._home_country(), year=m.group("year"),
+        )
 
     async def _date_next_weekday(
         self, m: re.Match[str], ctx: Context, session: AsyncSession
@@ -1031,38 +1100,52 @@ class CalculatorHandler(Handler):
             data={"target": target.isoformat(), "n_hours": n},
         )
 
-    def _respond_holiday(self, label: str, ctx: Context) -> Response:
+    async def _home_country(self) -> str | None:
+        """The Home location's country code (None: none set, or no town
+        picked). The holiday table falls back to the US."""
+        try:
+            place = await home_location.current()
+        except Exception as e:  # noqa: BLE001 — a date answer never fails on this
+            log.debug("home location read failed: %s", e)
+            return None
+        return (place or {}).get("country")
+
+    def _respond_holiday(
+        self, label: str, ctx: Context, *,
+        country: str | None = None, year: str | None = None,
+    ) -> Response:
+        """The holiday's date and how far away it is. No year: the next
+        one (today counts). "this year" / "next year" / "2027": that
+        year's, which may already have passed ("... was ..., N days ago")."""
         today = self._today(ctx)
-        # Normalize spoken aliases: "xmas" → "christmas", "new years" /
-        # "new year" → "new year's", "july fourth" → "july 4th".
-        norm = label.strip().lower()
-        norm = re.sub(r"\bxmas\b", "christmas", norm)
-        norm = re.sub(r"^new years?$", "new year's", norm)
-        norm = re.sub(r"^july fourth$", "july 4th", norm)
-        norm = re.sub(r"^the fourth(?: of july)?$", "fourth of july", norm)
-        target = next_occurrence(norm, today)
-        if target is None:
+        holiday = find_holiday(label, country)
+        if holiday is None:
             return Response(
                 text=f"I don't know the date of {label.strip()}.",
                 session_id=ctx.session_id,
                 matched_handler=self.name,
             )
+        wanted = _year_number(year, today)
+        target = holiday.next_from(today) if wanted is None else holiday.on(wanted)
         delta = (target - today).days
+        name = holiday.name[0].upper() + holiday.name[1:]
+        when = f"{_WEEKDAY_NAMES[target.weekday()]}, {_format_date_spoken(target)}"
         if delta == 0:
-            return Response(
-                text=f"{label.strip().title()} is today.",
-                session_id=ctx.session_id,
-                matched_handler=self.name,
-            )
+            text = f"{name} is today, {when}."
+        elif delta > 0:
+            rel = "tomorrow" if delta == 1 else f"{delta:,} days from now"
+            text = f"{name} is {when} — {rel}."
+        else:
+            rel = "yesterday" if delta == -1 else f"{-delta:,} days ago"
+            text = f"{name} was {when} — {rel}."
         return Response(
-            text=(
-                f"{delta} day{'s' if delta != 1 else ''} until "
-                f"{label.strip().title()} — that's "
-                f"{_format_date_spoken(target)}."
-            ),
+            text=text,
             session_id=ctx.session_id,
             matched_handler=self.name,
-            data={"target": target.isoformat(), "days": delta, "holiday": norm},
+            data={
+                "target": target.isoformat(), "days": delta,
+                "holiday": holiday.name, "country": country,
+            },
         )
 
     def _respond_next_weekday(self, weekday: str, ctx: Context) -> Response:

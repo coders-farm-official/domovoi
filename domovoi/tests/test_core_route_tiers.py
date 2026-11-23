@@ -99,7 +99,6 @@ GUEST_TIER = [
 ADMIN_TIER = [
     ("POST", "/v1/admin/satellite/restart"),
     ("POST", "/v1/admin/satellite/display"),
-    ("POST", "/v1/admin/satellite/{room_id}/config"),
     ("POST", "/v1/admin/satellite/{room_id}/voice"),
     # Read-only diagnostics (1.5.0): the recent-logs probe carries what the
     # room heard, so admin at both hops, like the log pull.
@@ -127,6 +126,8 @@ LIVE_MIC_TIER = [
     ("POST", "/v1/admin/dropin/start"),
     # A wake-word take records the room for hours: the same rule.
     ("POST", "/v1/admin/wake/record/start"),
+    # A room's settings decide when and how long its microphone listens.
+    ("POST", "/v1/admin/satellite/{room_id}/config"),
 ]
 
 # Delta review N5 (2026-10-16): pulling new code (it moves an unclaimed
@@ -160,11 +161,30 @@ DEVICE_READS = [
     ("GET", "/v1/admin/friend-houses"),
     ("GET", "/v1/admin/friend-houses/friends"),
     ("GET", "/v1/admin/friend-houses/conversations"),
+    ("GET", "/v1/admin/friend-houses/unread"),
     ("GET", "/v1/admin/friend-houses/conversations/{house}"),
     ("POST", "/v1/admin/friend-houses/conversations/{house}/read"),
     ("POST", "/v1/admin/friend-houses/messages"),
     ("GET", "/v1/admin/friend-houses/shared-lists"),
 ]
+
+# Shared lists with existing friends, open to the household since
+# 2026-11-23 (the dashboard's Friend Houses page is no longer admin-only).
+# Starting a share stays admin (FRIEND_HOUSES_SECURITY).
+FRIEND_HOUSES_DEVICE_WRITES = [
+    ("POST", "/v1/admin/friend-houses/shared-lists/{space}/accept"),
+    ("POST", "/v1/admin/friend-houses/shared-lists/{space}/decline"),
+    ("DELETE", "/v1/admin/friend-houses/shared-lists/{space}"),
+]
+
+
+@pytest.mark.parametrize(("method", "path"), FRIEND_HOUSES_DEVICE_WRITES,
+                         ids=[f"{m} {p}" for m, p in FRIEND_HOUSES_DEVICE_WRITES])
+def test_friend_houses_shared_list_writes_are_household(method, path) -> None:
+    gates = _gates_for(method, path)
+    assert admin_auth.require_device in gates, (method, path)
+    assert admin_auth.require_admin_security not in gates
+    assert admin_auth.require_admin_security_read not in gates
 
 FRIEND_HOUSES_SECURITY = [
     ("PUT", "/v1/admin/friend-houses/settings"),
@@ -184,9 +204,6 @@ FRIEND_HOUSES_SECURITY = [
     ("GET", "/v1/admin/friend-houses/conversations/{house}/export"),
     ("DELETE", "/v1/admin/friend-houses/conversations/{house}"),
     ("POST", "/v1/admin/friend-houses/shared-lists"),
-    ("POST", "/v1/admin/friend-houses/shared-lists/{space}/accept"),
-    ("POST", "/v1/admin/friend-houses/shared-lists/{space}/decline"),
-    ("DELETE", "/v1/admin/friend-houses/shared-lists/{space}"),
     ("POST", "/v1/admin/friend-houses/friends/{friend_id}/block"),
     ("GET", "/v1/admin/friend-houses/blocked"),
     ("DELETE", "/v1/admin/friend-houses/blocked/{house}"),
@@ -679,7 +696,7 @@ def test_device_reads_are_on_the_device_tier(method, path) -> None:
     assert admin_auth.require_admin_mutation not in gates
 
 
-FRIEND_HOUSES_HOUSEHOLD = [mp for mp in DEVICE_READS if "/friend-houses" in mp[1]]
+FRIEND_HOUSES_HOUSEHOLD = [mp for mp in DEVICE_READS if "/friend-houses" in mp[1]] + FRIEND_HOUSES_DEVICE_WRITES
 
 
 @pytest.mark.parametrize(("method", "path"), FRIEND_HOUSES_HOUSEHOLD,
@@ -698,10 +715,10 @@ async def test_friend_houses_household_routes_are_closed_before_setup(
     household routes answer 501, whatever is presented, until an admin
     exists again."""
     install_fake_db(monkeypatch, admin=False, device_token=DEVICE_TOKEN)
-    url = path.replace("{house}", "a" * 56)
+    url = path.replace("{house}", "a" * 56).replace("{space}", "b" * 32)
     async with _client() as c:
         for headers in ({}, {HEADER: DEVICE_TOKEN}):
-            r = await c.request(method, url, json={} if method == "POST" else None,
+            r = await c.request(method, url, json={} if method in ("POST", "PUT") else None,
                                 headers=headers)
             assert r.status_code == 501, (path, r.status_code, r.text)
 

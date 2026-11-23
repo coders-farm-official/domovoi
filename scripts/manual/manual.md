@@ -328,9 +328,10 @@ two-way call into a room.
 - "any messages"
 - "read my messages"
 
-**Friend Houses** (serverless messaging and friend system between
-households): friends are other Domovoi houses, made on the dashboard
-*(admin)*: [Settings → Household → Friend Houses](#settings/friend-houses).
+**Friend Houses** (message and share lists with friends’ houses, house
+to house, with no company server in between): friends are other Domovoi houses. On the dashboard,
+[Settings → Household → Friend Houses](#settings/friend-houses) shows the messages and shared lists to
+everyone in the household; making and managing friends is under **Friends and connections** *(admin)*.
 Both houses then show the same 6-digit code: call them and check it
 matches, if you like. Adding a friend needs Domovoi 1.5.0 or later on both
 houses; friends you already have keep working either way.

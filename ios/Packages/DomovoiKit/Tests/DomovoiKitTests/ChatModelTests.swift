@@ -414,7 +414,9 @@ final class ChatModelTests: XCTestCase {
         model.typed("plan")
         waits.release()
         await settleUntil({ model.hits != nil })
-        let asked = house.seen.current.count
+        // Once start()'s own reads (the thread list) have landed: one still
+        // on its way used to count as the blank field's (CI, 2026-11-22).
+        let asked = await quietCount("the requests the house saw") { house.seen.current.count }
         model.typed("   ")
         XCTAssertNil(model.hits)
         XCTAssertFalse(model.searching)
@@ -1490,6 +1492,73 @@ final class ChatModelTests: XCTestCase {
             },
             "the stream's end reaching endStream(): neither list was re-read"
         )
+    }
+
+    /// **An empty `replace` starts the reply over** (1.4.1), through the real
+    /// stream reader: the house dropped its first answer and a web answer
+    /// follows. Ignoring it drew "ABC" — the old words joined to the new
+    /// answer — until the `done` row corrected it.
+    ///
+    /// The `done` row here says "C" too, so what is asserted is the streamed
+    /// words and not a row that would have fixed them anyway: every look at
+    /// the reply while the stream runs is checked for "ABC" as well.
+    func testAnEmptyReplaceStartsTheStreamedReplyOver() async {
+        let (model, house, _) = rig()
+        house.stream.set("""
+        event: delta
+        data: {"text":"A"}
+
+        event: delta
+        data: {"text":"B"}
+
+        event: replace
+        data: {"text":""}
+
+        event: delta
+        data: {"text":"C"}
+
+        event: done
+        data: {"id":12,"role":"assistant","content":"C","retryable":true}
+
+        """)
+        model.start()
+        await waitUntil("the thread list") { model.threads.data != nil }
+        model.startNewChat()
+        XCTAssertTrue(model.send("who won?"))
+        var shown: Set<String> = []
+        await waitUntil("the stream with a replace in it") {
+            if let words = model.transcript.messages.last?.content { shown.insert(words) }
+            return !model.sending
+        }
+        XCTAssertFalse(shown.contains("ABC"), "the old words were joined to the new answer: \(shown)")
+        XCTAssertEqual(["who won?", "C"], model.transcript.messages.map(\.content))
+        XCTAssertEqual(12, model.transcript.messages.last?.id)
+        XCTAssertFalse(model.transcript.streaming)
+    }
+
+    /// A `replace` with words **is** the reply, and the deltas after it
+    /// append. The stream ends without a `done`, so nothing but the streamed
+    /// words can have put "XY" on screen.
+    func testAReplaceWithWordsIsTheReplyAndLaterDeltasAppend() async {
+        let (model, house, _) = rig()
+        house.stream.set("""
+        event: delta
+        data: {"text":"first try"}
+
+        event: replace
+        data: {"text":"X"}
+
+        event: delta
+        data: {"text":"Y"}
+
+        """)
+        model.start()
+        await waitUntil("the thread list") { model.threads.data != nil }
+        model.startNewChat()
+        XCTAssertTrue(model.send("say it again"))
+        await waitUntil("the stream with a replace in it") { !model.sending }
+        XCTAssertEqual(["say it again", "XY"], model.transcript.messages.map(\.content))
+        XCTAssertFalse(model.transcript.messages.last?.pending ?? true)
     }
 
     /// A `done` that arrives with **no blank line after it** still lands.

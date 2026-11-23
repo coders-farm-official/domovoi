@@ -319,19 +319,20 @@ class ConversationLogRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.s = session
 
-    async def latest_assistant_text_in_room(
+    async def latest_assistant_turn_in_room(
         self, *, room_id: str | None, within_seconds: int
-    ) -> str | None:
+    ) -> tuple[str, str | None] | None:
         """Most recent non-empty assistant_text spoken in ``room_id`` within
-        the trailing ``within_seconds`` window. Used by RepeatHandler as a
-        fallback when ``sessions.context.last_assistant_response`` is empty
-        (typically because the prior session aged out between turns).
-        Returns None if no qualifying row exists.
+        the trailing ``within_seconds`` window, with the handler that said
+        it. Used by RepeatHandler as a fallback when
+        ``sessions.context.last_assistant_response`` is empty (typically
+        because the prior session aged out between turns). Returns None if
+        no qualifying row exists.
         """
         result = await self.s.execute(
             text(
                 """
-                SELECT assistant_text
+                SELECT assistant_text, matched_handler
                 FROM conversation_log
                 WHERE room_id IS NOT DISTINCT FROM :room_id
                   AND assistant_text IS NOT NULL
@@ -349,7 +350,7 @@ class ConversationLogRepository:
         value = row[0]
         if not isinstance(value, str) or not value.strip():
             return None
-        return value
+        return value, row[1]
 
     async def record_turn(
         self,
@@ -836,6 +837,15 @@ class MemoriesRepository:
         )
         return [(int(r[0]), r[1], r[2], r[3]) for r in row.all()]
 
+    async def list_active_household(self) -> list[tuple[int, str]]:
+        """``(person_id, body)`` for every active memory in the house: the
+        food-safety note after a meal suggestion reads everyone's
+        allergies and diets (domovoi/food_safety.py)."""
+        row = await self.s.execute(
+            text("SELECT person_id, body FROM memories WHERE status = 'active'")
+        )
+        return [(int(r[0]), r[1]) for r in row.all()]
+
     async def list_all(
         self, person_id: int, limit: int = 200
     ) -> list[tuple[int, str, str | None, str, str, datetime]]:
@@ -903,40 +913,41 @@ class MemoriesRepository:
         )
         return result.rowcount or 0
 
-    async def next_pending_for_offer(
+    async def pending_for_offer(
         self,
         person_id: int,
         offer_cooldown_sec: int,
-    ) -> tuple[int, str, str | None] | None:
-        """Pick the oldest pending memory eligible to surface.
+        limit: int = 10,
+    ) -> list[tuple[int, str, str | None]]:
+        """The pending memories eligible to surface, oldest first.
 
-        Eligibility: ``status='pending'`` AND
-        ``last_offered_at IS NULL OR last_offered_at < NOW() -
-        cooldown``. Returns ``(id, body, topic)`` or None.
-
-        Ordered by created_at so memories the extractor surfaced first
-        get asked about first — keeps the conversational ordering
-        sensible when several have piled up across a long session.
+        At most one offer per person per cooldown: nothing is eligible
+        while ANY of the person's memories was offered within
+        ``offer_cooldown_sec``, so several pending facts don't take
+        turns being tacked onto every answer. Returns ``(id, body,
+        topic)`` rows, oldest first, so memories the extractor surfaced
+        first get asked about first.
         """
-        row = await self.s.execute(
+        rows = await self.s.execute(
             text(
                 """
                 SELECT id, body, topic
                 FROM memories
                 WHERE person_id = :pid
                   AND status = 'pending'
-                  AND (last_offered_at IS NULL
-                       OR last_offered_at < NOW() - make_interval(secs => :cooldown))
+                  AND NOT EXISTS (
+                      SELECT 1 FROM memories recent
+                      WHERE recent.person_id = :pid
+                        AND recent.last_offered_at
+                            >= NOW() - make_interval(secs => :cooldown)
+                  )
                 ORDER BY created_at
-                LIMIT 1
+                LIMIT :limit
                 """
             ),
-            {"pid": person_id, "cooldown": offer_cooldown_sec},
+            {"pid": person_id, "cooldown": offer_cooldown_sec, "limit": limit},
         )
-        result = row.first()
-        if result is None:
-            return None
-        return int(result[0]), result[1], result[2]
+        return [(int(r[0]), r[1], r[2]) for r in rows.all()]
 
     async def mark_offered(self, memory_id: int) -> None:
         await self.s.execute(
@@ -994,8 +1005,9 @@ class MemoriesRepository:
                 SELECT user_text,
                        -- Answers that read out words from outside the
                        -- house (a friend house's messages or list items)
-                       -- never feed the memory extractor (R6 FH-15).
-                       CASE WHEN matched_handler IN ('friend_houses', 'lists')
+                       -- never feed the memory extractor (R6 FH-15), nor
+                       -- does a repeat (it only says an earlier answer again).
+                       CASE WHEN matched_handler IN ('friend_houses', 'lists', 'repeat')
                             THEN NULL ELSE assistant_text END
                 FROM conversation_log
                 WHERE person_id = :pid
@@ -1010,7 +1022,8 @@ class MemoriesRepository:
     async def has_similar_active_or_pending(
         self, person_id: int, fragment: str
     ) -> bool:
-        """Cheap dedup gate before inserting a pending memory.
+        """Cheap dedup gate before inserting a pending memory. A rejected
+        row counts too: a fact the person said no to isn't offered again.
 
         Substring ILIKE comparison both directions — catches the
         common "I have a dog named Max" vs "user has a dog named
@@ -1025,7 +1038,7 @@ class MemoriesRepository:
                 SELECT 1
                 FROM memories
                 WHERE person_id = :pid
-                  AND status IN ('active', 'pending')
+                  AND status IN ('active', 'pending', 'rejected')
                   AND (
                        body ILIKE :pat
                        OR :fragment ILIKE '%' || body || '%'

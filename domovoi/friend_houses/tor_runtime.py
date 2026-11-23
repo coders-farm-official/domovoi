@@ -33,6 +33,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import re
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -101,20 +102,39 @@ class ImageInfo:
         return None
 
 
+_GO_TIME = re.compile(r"^(\S+) (\S+) ([+-]\d{2})(\d{2})(?: \S+)?\Z")
+_FRACTION = re.compile(r"^(\d+)(.*)\Z", re.S)
+
+
 def _parse_created(text: str) -> datetime | None:
+    """An image's ``{{.Created}}``, always **timezone-aware**, or None.
+
+    Docker prints RFC 3339 with nanoseconds, in UTC (``…45.123456789Z``)
+    on most hosts, but some print local time with an offset
+    (``…45.123456789-05:00``), and Go's own form
+    (``2026-11-17 14:25:30.123456789 -0500 EST``) turns up too. Only the
+    fraction's own digits are trimmed to microseconds: this used to count
+    the offset's digits into the fraction too, which turned an offset time
+    into a naive one, and :meth:`ImageInfo.stale` then failed every
+    reconcile with "can't subtract offset-naive and offset-aware
+    datetimes" (seen on a house, 2026-11-22). A time that still names no
+    zone is taken as UTC, so the age check can never raise."""
     text = text.strip()
     if not text:
         return None
-    # Docker prints RFC 3339 with nanoseconds: trim to microseconds.
+    go = _GO_TIME.match(text)
+    if go:
+        text = f"{go.group(1)}T{go.group(2)}{go.group(3)}:{go.group(4)}"
     if "." in text:
         head, tail = text.split(".", 1)
-        frac = "".join(ch for ch in tail if ch.isdigit())[:6]
-        zone = tail[len("".join(ch for ch in tail if ch.isdigit())):] or "Z"
-        text = f"{head}.{frac}{zone}"
+        m = _FRACTION.match(tail)
+        if m:
+            text = f"{head}.{m.group(1)[:6]}{m.group(2)}"
     try:
-        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError:
         return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
 
 async def image_info() -> ImageInfo | None:

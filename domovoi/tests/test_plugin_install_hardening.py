@@ -108,3 +108,45 @@ def test_lockfile_lines_are_parsed_into_pins() -> None:
     assert [(r.key, r.version) for r in reqs] == [("xfoo", "1.0"), ("foo-bar", "2.0")]
     # 'foo==1.0' is a substring of the first line but no parsed pin says so.
     assert ("foo", "1.0") not in {(r.key, r.version) for r in reqs}
+
+
+# ─── GitHub install URL: the archive comes from the repo that was named ───
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://github.com/alex/plugin@../../../other/x/zip/main",
+        "https://github.com/alex/plugin@main/../..",
+        "https://github.com/alex/plugin@/main",
+        "https://github.com/alex/plugin@a//b",
+        "https://github.com/alex/plugin@./main",
+        "https://github.com/../plugin@main",
+        "https://github.com/alex/..@main",
+    ],
+)
+async def test_github_url_with_dot_or_empty_segments_is_refused(monkeypatch, url: str) -> None:
+    from domovoi.plugins_runtime import installer
+
+    def _no_request(*a, **k):
+        raise AssertionError("no request may be made")
+
+    monkeypatch.setattr(installer.egress, "async_client", _no_request)
+    with pytest.raises(InstallError) as ei:
+        await installer.download_github_zip(url)
+    assert ei.value.code == "github_url_invalid"
+
+
+@pytest.mark.parametrize(
+    ("ref", "expected"),
+    [
+        ("main", "https://codeload.github.com/alex/plugin/zip/main"),
+        ("feature/x", "https://codeload.github.com/alex/plugin/zip/feature/x"),
+        ("v1.2.0", "https://codeload.github.com/alex/plugin/zip/v1.2.0"),
+    ],
+)
+def test_archive_url_stays_under_the_named_repo(ref: str, expected: str) -> None:
+    from domovoi.plugins_runtime.installer import _codeload_url
+
+    assert _codeload_url("alex", "plugin", ref) == expected

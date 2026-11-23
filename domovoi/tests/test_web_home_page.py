@@ -351,6 +351,18 @@ SCENARIOS["paired"] = scenario(
     ".filter((f) => f.method === 'GET' && f.path !== '/api/auth/status').map((f) => f.device) };",
     ls=PAIRED_LS,
 )
+# Friend Houses' unread count (device tier): a paired browser, not an
+# admin, gets the row, and it leads to the Messages section, which the
+# household may use (2026-11-23).
+SCENARIOS["paired_fh_unread"] = scenario(
+    house(**{"GET /api/friend-houses/unread": {"unread": 2}}), SNAP, ls=PAIRED_LS,
+)
+SCENARIOS["unpaired_fh_unread"] = scenario(
+    house(**{"GET /api/friend-houses/unread": {"unread": 2},
+             "GET /api/satellites": {"__status": 401,
+                                     "__body": {"detail": "X-Device-Token or admin session required"}}}),
+    SNAP,
+)
 SCENARIOS["admin"] = scenario(
     house(**{
         "GET /api/auth/status": STATUS_ADMIN,
@@ -1083,6 +1095,18 @@ def test_paired_phone_is_live_with_no_pair_link_and_no_admin_rows(driven) -> Non
     assert {r["key"] for r in after["attention"]} == {"offline"}
     # Reads carry the household token.
     assert set(out["devices"]) == {"house-token"}
+
+
+def test_a_household_member_sees_unread_friend_messages_linking_to_messages(driven) -> None:
+    snap = driven["paired_fh_unread"]
+    rows = {r["key"]: r for r in snap["attention"]}
+    assert rows["fh-unread"]["text"] == "2 unread Friend Houses messages"
+    assert rows["fh-unread"]["href"] == "#settings/friend-houses/messages"
+    assert snap["modal"] is False and snap["pair"] is False
+    # A guest never asks: the count is the inbox's (device) tier.
+    unpaired = driven["unpaired_fh_unread"]
+    assert "GET /api/friend-houses/unread" not in unpaired["fetches"]
+    assert "fh-unread" not in {r["key"] for r in unpaired["attention"]}
 
 
 def test_admin_gets_the_admin_rows_from_admin_reads(driven) -> None:

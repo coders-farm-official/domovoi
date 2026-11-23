@@ -302,13 +302,13 @@ def _get(url: str, dest: Path | None, limit: int) -> bytes | str:
     body = bytearray()
     written = 0
     with _client() as client:
-        response = net_safety.open_stream_sync(client, url)
+        response = net_safety.open_raw_stream_sync(client, url)
         try:
             if response.status_code != 200:
                 raise ValueError(f"HTTP {response.status_code}")
             f = open(dest, "wb") if dest is not None else None
             try:
-                for chunk in response.iter_bytes(1 << 20):
+                for chunk in net_safety.iter_raw_sync(response, 1 << 20):
                     written += len(chunk)
                     if written > limit:
                         raise ValueError(f"larger than {limit} bytes")

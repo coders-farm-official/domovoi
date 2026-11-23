@@ -336,6 +336,27 @@ const HomeAttentionView = ({ rows, viewer, visibility, shared }) => {
   return { mode: 'rows', rows: own };
 };
 
+/* Friend Houses' unread messages: one row, not a problem (Health never
+ * lists it), for whoever may read the inbox (the device tier: a paired
+ * phone or browser, or an admin). It links to the Friend Houses page's
+ * Messages section and goes once they're read. */
+const HOME_FH_INBOX = '/api/friend-houses/unread';   // a count only: no names, no text
+const HomeFriendHousesRow = (inbox) => {
+  const n = Number(inbox && inbox.unread) || 0;
+  if (n <= 0) return null;
+  return { key: 'fh-unread', tone: 'brand', scope: 'household',
+           text: HomePlural(n, 'unread Friend Houses message'),
+           href: '#settings/friend-houses/messages' };
+};
+/* That row added to whatever the problems show: after the rows, below a
+ * summary line, or on its own. */
+const HomeWithRow = (view, row) => {
+  if (!row) return view;
+  if (view.mode === 'rows') return { ...view, rows: [...view.rows, row] };
+  if (view.mode === 'summary') return { ...view, extra: [...(view.extra || []), row] };
+  return { mode: 'rows', rows: [row] };
+};
+
 /* ---- status line --------------------------------------------------- */
 
 const HomeHeader = ({ name, nowMs, line, lineReady, live, viewer, onPair }) => {
@@ -416,6 +437,12 @@ const HomeAttention = ({ view, viewer, shared, checking, failed, refused, checke
             <span className="txt">something needs the admin's attention</span>
             <span className="when">{view.count}</span>
           </div>
+          {(view.extra || []).map((r) => (
+            <a key={r.key} className="home-att-row" data-key={r.key} href={r.href}>
+              <StatusDot tone={r.tone}/>
+              <span className="txt">{r.text}</span>
+            </a>
+          ))}
           {signInHint}
         </Card>
       </div>
@@ -1321,6 +1348,9 @@ const HomePage = ({ counts, badges }) => {
                                    { eventTypes: ['music.now_playing.changed'], quiet: true });
   const acq = useApiObject('/api/acquisitions?status=pending&limit=100',
                            { eventTypes: ['acquisitions.changed'], quiet: true });
+  // Friend Houses' unread count: the inbox's own tier (device), so only a
+  // paired browser or an admin asks.
+  const fhInbox = useApiObject(viewer.paired || admin ? HOME_FH_INBOX : null, { quiet: true, refetchOnAuth: true });
   const dayStart = HomeDayStart(Date.now());
   const calPath = React.useMemo(() => {
     const start = new Date(dayStart).toISOString();
@@ -1378,13 +1408,13 @@ const HomePage = ({ counts, badges }) => {
   // The problem-rows setting rides the health tick: a wall tablet that
   // never loses focus still picks up an admin's change within a minute.
   // (Whether this device is a shared screen, DeviceIdentity.boot re-asks.)
-  HomeHooks.useInterval(() => { health.refresh(); cfg.refresh(); }, HOME_HEALTH_MS);
+  HomeHooks.useInterval(() => { health.refresh(); cfg.refresh(); fhInbox.refresh(); }, HOME_HEALTH_MS);
   HomeHooks.useInterval(() => approvals.refresh(), HOME_APPROVALS_MS, admin);
   HomeHooks.useInterval(() => hardware.refresh(), HOME_HARDWARE_MS, admin);
   const versionAt = React.useRef(0);
   React.useEffect(() => { if (admin) versionAt.current = Date.now(); }, [admin]);
   HomeHooks.useOnFocus(() => {
-    cfg.refresh(); health.refresh(); cal.refresh();
+    cfg.refresh(); health.refresh(); cal.refresh(); fhInbox.refresh();
     if (!live) { roomsDirty.current = false; sats.refresh(); timers.refresh(); }
     else if (roomsDirty.current) { roomsDirty.current = false; refetchRooms(); }
     if (admin && Date.now() - versionAt.current > HOME_VERSION_GAP_MS) {
@@ -1473,8 +1503,8 @@ const HomePage = ({ counts, badges }) => {
   const visibility = (cfg.data && cfg.data.home_problems_visibility) || 'everyone';
   // A household member's rows wait for the setting that decides them, so
   // an "admins only" house never flashes them while /api/config loads.
-  const view = (!admin && !HomeAnswered(cfg)) ? { mode: 'none' }
-    : HomeAttentionView({ rows, viewer, visibility, shared });
+  const view = HomeWithRow((!admin && !HomeAnswered(cfg)) ? { mode: 'none' }
+    : HomeAttentionView({ rows, viewer, visibility, shared }), HomeFriendHousesRow(fhInbox.data));
   const [checkedAt, setCheckedAt] = React.useState(null);
   React.useEffect(() => { if (!checking) setCheckedAt(Date.now()); },
     [checking, health.data, sats.data, plugins.data, acq.data, approvals.data, pending.data,

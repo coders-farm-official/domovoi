@@ -560,12 +560,12 @@ def _fetch_pinned(url: str, dest: Path, *, sha256: str, size: int, progress=None
     written = 0
     try:
         with _oww_http_client() as client:
-            response = net_safety.open_stream_sync(client, url)
+            response = net_safety.open_raw_stream_sync(client, url)
             try:
                 if response.status_code != 200:
                     raise ValueError(f"HTTP {response.status_code}")
                 with open(part, "wb") as f:
-                    for chunk in response.iter_bytes(_OWW_CHUNK):
+                    for chunk in net_safety.iter_raw_sync(response, _OWW_CHUNK):
                         written += len(chunk)
                         if written > size:
                             raise ValueError(f"larger than the pinned {size} bytes")

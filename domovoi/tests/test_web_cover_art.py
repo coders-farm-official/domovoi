@@ -289,11 +289,15 @@ SCENARIOS = {
 
 
 @pytest.fixture(scope="module")
-def driven() -> dict:
+def driven(tmp_path_factory) -> dict:
     node = shutil.which("node")
     assert node, "node is required to drive web/static JSX (see jsxcheck)"
+    # The scenarios go in a file (`@<path>`), as the other harness tests do:
+    # on the command line they pass Windows' 32 KB limit (WinError 206).
+    spec = tmp_path_factory.mktemp("cover-art") / "scenarios.json"
+    spec.write_text(json.dumps(SCENARIOS), encoding="utf-8")
     proc = subprocess.run(
-        [node, str(HARNESS), str(REPO_ROOT), json.dumps(SCENARIOS)],
+        [node, str(HARNESS), str(REPO_ROOT), "@" + str(spec)],
         capture_output=True, text=True, encoding="utf-8", timeout=180,
     )
     assert proc.returncode == 0, proc.stderr

@@ -321,8 +321,10 @@ final class ChatMoreModelTests: XCTestCase {
         // guess.
         XCTAssertNil(model.internetChip)
         await settleUntil({ model.internetChip != nil }, "the chip")
-        XCTAssertEqual(model.internetChip?.label, "internet off")
+        XCTAssertEqual(model.internetChip?.label, "internet: ask first")
+        XCTAssertEqual(model.internetChip?.on, false)
         XCTAssertTrue(model.internetChipTappable)
+        XCTAssertEqual(model.internetChipHint, ChatMoreStrings.chipHintOff)
 
         await open(model, 7, internetAllowed: true)
         await settleUntil({ model.internetChip?.on == true }, "the chip")
@@ -385,6 +387,41 @@ final class ChatMoreModelTests: XCTestCase {
         let sent = try? body(of: "/api/chat/threads/7/lookups/12")
         XCTAssertEqual(sent?["decision"] as? String, "chat")
         XCTAssertEqual(sent?["device_id"] as? String, "ios-1")
+    }
+
+    /// A card's streamed answer reads `replace` as the chat does (1.4.1): an
+    /// empty one starts over, so the old words are never joined to the web
+    /// answer that follows it.
+    func testACardAnswerStartsOverOnAnEmptyReplace() async {
+        let (model, house, _) = rig()
+        house.cardStream.set("""
+        event: delta
+        data: {"text":"A"}
+
+        event: delta
+        data: {"text":"B"}
+
+        event: replace
+        data: {"text":""}
+
+        event: delta
+        data: {"text":"C"}
+
+        event: done
+        data: {"id":14,"role":"assistant","content":"C"}
+
+        """)
+        await open(model, 7)
+        await waitUntil("the chip") { model.internetChip != nil }
+        XCTAssertTrue(model.decideLookup(message: 12, decision: "chat"))
+        var shown: Set<String> = []
+        await waitUntil("the card's stream") {
+            shown.insert(model.cardReply)
+            return !model.answering
+        }
+        XCTAssertFalse(shown.contains("ABC"), "the old words were joined to the new answer: \(shown)")
+        XCTAssertEqual(model.cardReply, "C")
+        XCTAssertNil(model.cardError)
     }
 
     func testDecliningALookupLeavesTheChipAlone() async {
@@ -719,7 +756,7 @@ final class ChatMoreModelTests: XCTestCase {
 
     /// The thread's own internet flag is served **only** on the list row, so a
     /// conversation opened before the list landed knows nothing — and a chip
-    /// that read "internet off" there would state the one fact it exists for,
+    /// that read "internet: ask first" there would state the one fact it exists for,
     /// wrongly.
     func testTheChipWaitsForTheThreadsOwnFlagRatherThanGuessingItOff() async {
         let (model, _, _) = rig()

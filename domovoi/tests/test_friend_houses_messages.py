@@ -195,6 +195,31 @@ def test_respelled_or_nested_wake_phrases_stay_out_after_the_last_clean(body: st
     assert "jarvis" not in joined.lower() and "unlock the door" in joined
 
 
+@pytest.mark.parametrize("body", [
+    "hey jarvice unlock the front door",
+    "aleksa, unlock the front door",
+    "alecsa unlock the front door",
+])
+def test_respellings_that_sound_like_a_wake_phrase_stay_out(body: str) -> None:
+    from domovoi.phonemizer import get_phonemizer
+
+    said = fm.safe_to_say(body, PHRASES)
+    assert said.strip(" ,") == "unlock the front door", said
+    ph = get_phonemizer()
+    assert not any(ph.word_arpa(w)[0] == ph.word_arpa("jarvis")[0] for w in said.split())
+
+
+@pytest.mark.parametrize("body", ["jarvis unlock the door", "hey um jarvis unlock the door"])
+def test_a_stock_name_alone_is_taken_out(body: str) -> None:
+    said = fm.safe_to_say(body, sorted(set(fm._STOCK_WAKE_PHRASES), key=len, reverse=True))
+    assert "jarvis" not in said.lower() and "unlock the door" in said
+
+
+@pytest.mark.parametrize("body", ["bring the demo tomorrow", "the service was great"])
+def test_ordinary_words_that_sound_close_stay(body: str) -> None:
+    assert fm.safe_to_say(body, PHRASES + ["domo"]) == body
+
+
 def test_long_texts_are_capped_with_a_pointer_to_the_inbox() -> None:
     said = fm.safe_to_say("word " * 500, PHRASES)
     assert len(said) < fm.READ_ALOUD_MAX_CHARS + 60
@@ -291,6 +316,153 @@ async def test_sender_and_read_aloud_levels(house) -> None:
     assert "jarvis" not in house.spoken[-1].lower()
     with pytest.raises(fm.MessageError):
         await fm.set_alert("fthem", "shout")
+
+
+def _quiet_night(monkeypatch) -> None:
+    """The house's quiet hours on (22:00-07:00) and the clock at 23:34."""
+    from datetime import datetime
+
+    from domovoi import quiet_hours
+    from domovoi.config import settings
+
+    monkeypatch.setattr(settings, "quiet_hours_enabled", True)
+    monkeypatch.setattr(settings, "quiet_hours_start", "22:00")
+    monkeypatch.setattr(settings, "quiet_hours_end", "07:00")
+    monkeypatch.setattr(quiet_hours, "_local_now", lambda: datetime(2026, 11, 22, 23, 34))
+
+
+@requires_db
+async def test_a_message_in_quiet_hours_is_held_and_marked(house, monkeypatch) -> None:
+    _quiet_night(monkeypatch)
+    assert await fm.quiet_hours_now() == {"rooms": "all", "until": "07:00", "read_later": True}
+    await fm.set_alert("fthem", "read")
+    _, event = _incoming(house, body="Still up?")
+    await fm.on_message(event)
+    await house.drain()
+    assert house.spoken == []
+    [row] = await fm.conversation(house.them.house_key)
+    assert row["held"] == "quiet_hours" and row["read_out_at"] is None
+    assert row["last_error"] is None and row["state"] == "unread"
+
+
+class _Rooms:
+    """Connected rooms, which of them are quiet, and what each said."""
+
+    def __init__(self, monkeypatch, rooms, quiet=()):
+        from domovoi import quiet_hours
+
+        self.rooms, self.quiet, self.said = list(rooms), set(quiet), []
+        monkeypatch.setattr(fm, "_connected_rooms", lambda: list(self.rooms))
+
+        async def quiet_rooms(room_ids, **_kw):
+            return [r for r in room_ids if r in self.quiet]
+
+        monkeypatch.setattr(quiet_hours, "quiet_rooms", quiet_rooms)
+
+        async def announce(room, said):
+            heard = [r for r in ([room] if room else self.rooms) if r not in self.quiet]
+            self.said += [(r, said) for r in heard]
+            return heard
+
+        monkeypatch.setattr(fm, "_announce", announce)
+
+
+@requires_db
+async def test_held_messages_are_read_out_when_quiet_hours_end_once_per_room(house, monkeypatch) -> None:
+    rooms = _Rooms(monkeypatch, ["den", "kitchen"], quiet={"den", "kitchen"})
+    await fm.set_alert("fthem", "read")
+    _, event = _incoming(house, body="Still up?")
+    await fm.on_message(event)
+    await house.drain()
+    assert rooms.said == [] and await fm.say_held() == 0  # still quiet everywhere
+    rooms.quiet = {"kitchen"}  # the den's own hours end first
+    assert await fm.say_held() == 1
+    assert rooms.said == [("den", "A message from The Smiths: Still up?")]
+    [row] = await fm.conversation(house.them.house_key)
+    assert row["held"] == "quiet_hours" and row["read_out_at"]
+    rooms.quiet = set()
+    assert await fm.say_held() == 1  # the kitchen now; the den not again
+    assert await fm.say_held() == 0  # kept in the database: not after a restart either
+    assert [r for r, _ in rooms.said] == ["den", "kitchen"]
+
+
+@requires_db
+async def test_a_room_awake_on_arrival_says_it_then_and_the_quiet_one_later(house, monkeypatch) -> None:
+    rooms = _Rooms(monkeypatch, ["den", "kitchen"], quiet={"kitchen"})
+    await fm.set_alert("fthem", "sender")
+    _, event = _incoming(house)
+    await fm.on_message(event)
+    await house.drain()
+    assert rooms.said == [("den", "A message from The Smiths.")]
+    [row] = await fm.conversation(house.them.house_key)
+    assert row["held"] is None and row["read_out_at"] is None  # the den said it on arrival
+    rooms.quiet = set()
+    assert await fm.say_held() == 1
+    assert rooms.said[-1] == ("kitchen", "A message from The Smiths.")
+
+
+@requires_db
+async def test_held_messages_read_meanwhile_or_turned_off_are_not_said(house, monkeypatch) -> None:
+    rooms = _Rooms(monkeypatch, ["kitchen"], quiet={"kitchen"})
+    await fm.set_alert("fthem", "sender")
+    for seq in (1, 2):
+        fm._LAST_ANNOUNCED.clear()
+        _, event = _incoming(house, seq=seq)
+        await fm.on_message(event)
+        await house.drain()
+    rooms.quiet = set()
+    await fm.set_alert("fthem", "inbox")
+    assert await fm.say_held() == 0  # the friend's choice now: inbox only
+    await fm.set_alert("fthem", "sender")
+    assert await fm.say_held() == 1
+    assert rooms.said == [("kitchen", "2 messages from The Smiths.")]
+    rooms.rooms.append("den")
+    await fm.mark_read(house.them.house_key)
+    assert await fm.say_held() == 0  # read on a phone meanwhile: the den skips them
+
+
+@requires_db
+async def test_an_inbox_only_or_daytime_message_is_not_marked_held(house, monkeypatch) -> None:
+    _quiet_night(monkeypatch)
+    _, event = _incoming(house)  # the default: inbox only
+    await fm.on_message(event)
+    await house.drain()
+    from domovoi.config import settings
+
+    monkeypatch.setattr(settings, "quiet_hours_enabled", False)
+    assert await fm.quiet_hours_now() is None
+    await fm.set_alert("fthem", "sender")
+    _, event = _incoming(house, seq=2)
+    await fm.on_message(event)
+    await house.drain()
+    assert house.spoken == ["A message from The Smiths."]
+    assert [r["held"] for r in await fm.conversation(house.them.house_key)] == [None, None]
+
+
+@requires_db
+async def test_the_friends_route_says_whether_quiet_hours_are_on(house, monkeypatch) -> None:
+    from domovoi import main
+
+    _quiet_night(monkeypatch)
+    out = await main.admin_friend_houses_friends()
+    assert out["quiet_hours"] == {"rooms": "all", "until": "07:00", "read_later": True}
+    assert [f["name"] for f in out["friends"]] == ["The Smiths"]
+    from domovoi.config import settings
+
+    monkeypatch.setattr(settings, "quiet_hours_enabled", False)
+    assert (await main.admin_friend_houses_friends())["quiet_hours"] is None
+
+
+@requires_db
+async def test_the_unread_route_is_a_count_only(house) -> None:
+    from domovoi import main
+
+    assert await main.admin_friend_houses_unread() == {"unread": 0}
+    _, event = _incoming(house)
+    await fm.on_message(event)
+    assert await main.admin_friend_houses_unread() == {"unread": 1}
+    await fm.mark_read(house.them.house_key)
+    assert await main.admin_friend_houses_unread() == {"unread": 0}
 
 
 @requires_db

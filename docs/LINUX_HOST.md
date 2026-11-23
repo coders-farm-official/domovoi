@@ -789,6 +789,14 @@ RestartSec=3
 WantedBy=default.target
 ```
 
+On a box with 24 GB of memory or more, or NVIDIA GPUs with room to
+spare, the installer adds one line under `ExecStart=` so Ollama answers
+more than one request at once (a voice turn needn't wait behind a chat
+reply): `Environment=OLLAMA_NUM_PARALLEL=2` (3 from 48 GB, 4 with room
+on the GPUs). Each extra request costs about 1.2 GB of memory; see
+[CPU_HOST.md, "Answers at once"](CPU_HOST.md#answers-at-once) for the
+tiers and their cost.
+
 ```bash
 sudo systemctl daemon-reload && sudo systemctl enable --now ollama
 ```
@@ -1482,8 +1490,8 @@ Linux server has no such ceiling in Domovoi.
 
 ### Friend Houses' firewall
 
-Friend Houses ("serverless messaging and friend system between
-households") is off until an admin turns it on. When it runs, the core
+Friend Houses (messages and shared lists with friends’ houses, house
+to house, with no company server in between) is off until an admin turns it on. When it runs, the core
 starts C tor in a container of its own, `domovoi-tor`, on a Docker network
 of its own: `domovoi-fh`, subnet `172.31.254.0/24`, bridge interface
 `domovoi-fh0`. Tor needs the internet, so that container can't go without
