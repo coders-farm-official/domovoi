@@ -250,7 +250,9 @@ struct ChatMoreHeadsUpCardView: View {
 /// the household's own policy wins, and a chip that looked like a switch and
 /// changed nothing is the control [[no-misleading-controls]] forbids. It is
 /// still drawn, because "internet always on" and "internet off" are facts a
-/// person wants before they type.
+/// person wants before they type. Under `ask` it is a switch, and reads
+/// "internet: ask first" until this chat is allowed (as the dashboard and
+/// Android say it), "internet on for this chat" after.
 struct ChatMoreInternetChipView: View {
 
     let more: ChatMoreModel

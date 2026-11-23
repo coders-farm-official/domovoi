@@ -92,7 +92,7 @@ public final class ChatMoreModel {
     /// `:351`), so a conversation reached before its list row is in hand —
     /// `takePendingChatThread()` races the list load, and the archived list is
     /// only fetched when the archived view is opened — has nothing to read.
-    /// Rather than render "internet off" for a thread the server has
+    /// Rather than render "internet: ask first" for a thread the server has
     /// `internet_allowed = true` on, which is the one fact the chip exists to
     /// state, the chip draws nothing until this is true
     /// ([[no-misleading-controls]]) and ``seedInternetAllowed(_:)`` fills it
@@ -424,6 +424,13 @@ public final class ChatMoreModel {
                 switch event.name {
                 case "delta":
                     if let payload: ChatDelta = event.payload() { cardReply += payload.text }
+                case "replace":
+                    // The reply is `text` from now on (1.4.1); later deltas
+                    // append. Empty starts over for a web answer. As
+                    // ``ChatTranscript/apply(_:)``: `cardReply` is the only
+                    // running total, and a body with no string `text` changes
+                    // nothing.
+                    if let payload: ChatReplace = event.payload() { cardReply = payload.text }
                 case "error":
                     if let payload: ChatStreamError = event.payload(), let detail = payload.detail {
                         cardError = detail
@@ -434,7 +441,7 @@ public final class ChatMoreModel {
                     // is not a failure.
                     break
                 default:
-                    // `job`, `progress`, `replace`, `lookup_permission`: the
+                    // `job`, `progress`, `lookup_permission`: the
                     // server sends them and this model reads its own copies
                     // from the re-read. An event this app cannot use must not
                     // end a stream (``ServerEvent/payload(as:)`` says why).
@@ -465,7 +472,7 @@ public final class ChatMoreModel {
         // has arrived the chip is drawn only where it does not depend on it:
         // under `never` and under the household's "always allow" the words are
         // the policy's whatever the thread says (``ChatMoreInternetChip/words(policy:alwaysAllow:chatAllowed:)``).
-        // Anywhere else an unknown flag would read "internet off" for a chat
+        // Anywhere else an unknown flag would read "internet: ask first" for a chat
         // the server may well have on.
         guard internetAllowedKnown || internet.internet == "never" || internet.alwaysAllow else {
             return nil
