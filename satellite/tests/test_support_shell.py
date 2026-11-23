@@ -571,7 +571,9 @@ def test_input_never_blocks_the_caller_and_a_stalled_shell_ends_it(monkeypatch) 
         w.shell.handle(input_frame(w, b"y" * 4000, i + 1))
     assert time.monotonic() - started < 2.0
     deadline = time.monotonic() + 5
-    while w.shell.active and time.monotonic() < deadline:
+    # close() runs on its own thread and clears the session before it
+    # terminates the shell and calls on_end: wait for on_end, not `active`.
+    while not w.ends and time.monotonic() < deadline:
         time.sleep(0.01)
     gate.set()
     assert not w.shell.active
