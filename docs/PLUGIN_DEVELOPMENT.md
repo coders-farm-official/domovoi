@@ -712,6 +712,15 @@ order = 50
   per-household card settings yet, so a card with `default_on = false` is
   not shown. A core before 1.14 ignores the table.
 
+  "Household-tier data only" is a rule for you to follow, not something
+  the dashboard enforces. A card is your plugin's script running in the
+  dashboard's own page, like your pages: it runs for every viewer of Home,
+  guests and shared screens included, and while an admin is signed in on
+  that browser it can reach what the admin can (the dashboard's admin
+  Bearer, the household token, the session cookie). That is the plugin
+  trust statement the trust screen shows at install, nothing new; a card
+  just puts it on the landing page.
+
 #### The frame and your accent
 
 Every plugin page is shown inside a frame the dashboard draws, so it reads

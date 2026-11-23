@@ -773,3 +773,60 @@ def test_kit_asks_the_internet_question_with_no_as_its_default(kitlab):
     assert "Setup itself needs none: it installs from the kit" in proc.stderr
     assert "Answer 1, 2 or 3 [3]:" in proc.stderr
     assert kitlab.args[4:6] == ["--internet", "never"]
+
+
+# ─── M12: kit folder names in the apt source stanza ──────────────────────
+
+
+def _kit_apt_name(script: Path) -> str:
+    s = script.read_text(encoding="utf-8")
+    start = s.index("\nkit_apt_name() {\n") + 1
+    return s[start:s.index("\n}\n", start) + 3]
+
+
+@requires_bash
+@pytest.mark.parametrize("script", [SCRIPT, PROVISION], ids=["install.sh", "provision.sh"])
+@pytest.mark.parametrize("name,ok", [
+    ("noble", True), ("noble-updates", True), ("main", True), ("universe", True),
+    ("evil\nTrusted: yes", False), ("evil Trusted", False), ("../x", False),
+    ("Noble", False), ("-x", False), ("", False), ("a:b", False),
+])
+def test_a_hostile_kit_folder_name_is_refused(tmp_path: Path, script: Path, name: str, ok: bool) -> None:
+    """M12 (review 2026-11-23): a suite or component folder's name is
+    written into the apt source stanza, so one that could add a line of its
+    own (``Trusted: yes``) stops the install."""
+    d = tmp_path / "dists"
+    d.mkdir()
+    body = 'die() { echo "DIED: $*"; exit 1; }\n' + _kit_apt_name(script) + 'kit_apt_name "$1" "$2"\n'
+    r = subprocess.run([BASH, "-c", body, "x", name, str(d).replace("\\", "/") + "/"],
+                       capture_output=True, text=True, timeout=30)
+    assert (r.returncode == 0) is ok, (name, r.stdout, r.stderr)
+    if not ok:
+        assert "the stick was changed" in r.stdout
+
+
+@requires_bash
+@pytest.mark.parametrize("script", [SCRIPT, PROVISION], ids=["install.sh", "provision.sh"])
+def test_a_linked_kit_folder_is_refused(tmp_path: Path, script: Path) -> None:
+    import os
+
+    real = tmp_path / "noble"
+    real.mkdir()
+    link = tmp_path / "evil"
+    try:
+        os.symlink(real, link, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("this system can't make a link here")
+    body = 'die() { echo "DIED: $*"; exit 1; }\n' + _kit_apt_name(script) + 'kit_apt_name "$1" "$2"\n'
+    r = subprocess.run([BASH, "-c", body, "x", "evil", str(link).replace("\\", "/") + "/"],
+                       capture_output=True, text=True, timeout=30)
+    assert r.returncode != 0 and "DIED" in r.stdout
+
+
+@pytest.mark.parametrize("script", [SCRIPT, PROVISION], ids=["install.sh", "provision.sh"])
+def test_the_kit_apt_configuration_refuses_unsigned_sources(script: Path) -> None:
+    s = script.read_text(encoding="utf-8")
+    assert "Acquire::AllowInsecureRepositories=false" in s
+    assert "APT::Get::AllowUnauthenticated=false" in s
+    assert not re.search(r"printf '[^']*Trusted", s)
+    assert s.count('kit_apt_name "') >= 2

@@ -292,16 +292,32 @@ class PlaybackAPI:
         opened within 30 s, and ends at the room's next relay or stop.
 
         Raises ``RelayUnavailable`` when the room's player can't be told
-        (no player yet, Docker didn't answer), ``ValueError`` for an
-        unknown kind or a URL that isn't http(s)."""
-        from domovoi import player_relay
+        (no such room, no player yet, Docker didn't answer), ``ValueError``
+        for an unknown kind or a URL the core won't fetch (the outbound
+        check runs here, before the room's current relay is ended, and
+        again at every fetch).
+
+        The token is keyed on the room whose player plays ``room_id``'s
+        music, never on the caller's string (L25, review 2026-11-23): a
+        made-up room name can't evict another room's relay."""
+        from domovoi import net_safety, player_relay
+        from domovoi.clients import mpd as mpd_module
+        from domovoi.config import settings
+        from domovoi.player_route import player_room
 
         if kind not in player_relay.KINDS:
             raise ValueError(f"relay kind must be one of {player_relay.KINDS}, not {kind!r}")
-        route = await player_route(room_id)
+        host = mpd_module._host_of((room_id or "").strip())
+        if not host:
+            raise ValueError("relay needs a room")
+        if not settings.use_stubs or mpd_module._room_ports:
+            if player_room(host) != host:
+                raise player_relay.RelayUnavailable(f"no room {room_id!r} with a music player")
+        await net_safety.avet_outbound_url(remote_url, require_resolution=False)
+        route = await player_route(host)
         if route is None:
             raise player_relay.RelayUnavailable(f"no route to room {room_id!r}'s player")
-        return player_relay.mint(room_id, remote_url, route, kind=kind)
+        return player_relay.mint(host, remote_url, route, kind=kind)
 
     def relay_target(self, player_url: str | None) -> str | None:
         """SDK 1.16: the remote URL a :meth:`relay_url` stands for while it

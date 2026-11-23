@@ -39,7 +39,21 @@ limit), and a rate-limited answer (403/429 with ``X-RateLimit-Remaining:
 
 A private repo answers 404 (or 403) to a caller without credentials, and a
 network failure answers nothing: both read ``unreachable`` ("can't check
-for updates"), never "up to date".
+for updates"), never "up to date". So does an answer the check can't read:
+it ends that plugin's check, not the run (L37, review 2026-11-23).
+
+The repository's identity (M6, review 2026-11-23): ``owner/repo`` is only
+a name, which a renamed, transferred or deleted-and-re-registered repo
+hands to someone else. Each check first asks ``GET /repos/<owner>/<repo>``
+WITHOUT following a redirect and keeps the answer's numeric repository id
+and owner id per plugin (:func:`pins_path`, a small JSON file in
+``~/.domovoi``). The first answer for a plugin's repo pins them; a later
+answer that redirects (GitHub's answer for a renamed or transferred repo)
+or names another id reads ``repo_changed`` ("the repository moved or
+changed owner: reinstall from the new address"), and no update is
+offered. :func:`download_release_asset` holds the update's download to the
+same pin. Installing the plugin from another repo address (an admin's
+deliberate choice) pins that repo afresh.
 
 The answers live in this process's memory: a restart checks again on the
 worker's first tick.
@@ -48,9 +62,12 @@ worker's first tick.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 import re
 import time
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Any, Iterable
 
@@ -79,6 +96,7 @@ UNREACHABLE = "unreachable"       # private, gone, or no answer
 RATE_LIMITED = "rate_limited"
 INTERNET_OFF = "internet_off"
 NOT_CHECKED = "not_checked"
+REPO_CHANGED = "repo_changed"     # moved, transferred or re-registered (M6)
 
 
 # ─── semver ─────────────────────────────────────────────────────────────
@@ -253,6 +271,75 @@ def pick_latest(
     return best
 
 
+# ─── the repository's pinned identity (M6) ──────────────────────────────
+
+
+def pins_path() -> Path:
+    """Where each plugin's pinned repository identity is kept."""
+    override = os.environ.get("DOMOVOI_PLUGIN_REPO_PINS")
+    return Path(override) if override else Path.home() / ".domovoi" / "plugin_repo_pins.json"
+
+
+def load_pins() -> dict[str, dict[str, Any]]:
+    try:
+        doc = json.loads(pins_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {k: v for k, v in doc.items() if isinstance(v, dict)} if isinstance(doc, dict) else {}
+
+
+def _save_pins(pins: dict[str, dict[str, Any]]) -> None:
+    path = pins_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f".{path.name}.tmp")
+        tmp.write_text(json.dumps(pins, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError as e:
+        log.warning("plugin update check: can't save repository pins (%s)", e)
+
+
+class RepoChanged(Exception):
+    """The repository at the plugin's recorded address is not the one it
+    was installed from (moved, transferred, or a new repo under the old
+    name)."""
+
+
+def _identity(data: Any) -> tuple[int, int] | None:
+    if not isinstance(data, dict):
+        return None
+    rid = data.get("id")
+    owner = data.get("owner")
+    oid = owner.get("id") if isinstance(owner, dict) else None
+    if type(rid) is not int or type(oid) is not int:
+        return None
+    return rid, oid
+
+
+_REDIRECTS = (301, 302, 303, 307, 308)
+
+
+def check_pin(slug: str, full_name: str, status: int, data: Any) -> None:
+    """Hold ``slug``'s repo answer (``GET /repos/<owner>/<repo>``, not
+    redirected) to its pin, pinning it when there is none for this
+    address. Raises :class:`RepoChanged`, or ``_Unreachable`` for an
+    answer that names no repository."""
+    if status in _REDIRECTS:
+        raise RepoChanged("GitHub sends this address to another repository")
+    ident = _identity(data) if status == 200 else None
+    if ident is None:
+        raise _Unreachable(f"GitHub answered {status}")
+    pins = load_pins()
+    pin = pins.get(slug)
+    if pin and str(pin.get("repo", "")).lower() == full_name.lower():
+        if (pin.get("repo_id"), pin.get("owner_id")) != ident:
+            raise RepoChanged("a different repository now has this address")
+        return
+    pins[slug] = {"repo": full_name, "repo_id": ident[0], "owner_id": ident[1],
+                  "pinned_at": int(time.time())}
+    _save_pins(pins)
+
+
 # ─── the HTTP side ──────────────────────────────────────────────────────
 
 # Tests hand a fake transport in here (httpx.MockTransport): no real network.
@@ -319,7 +406,9 @@ class Checker:
 
     # -- one GET with ETag reuse ---------------------------------------
 
-    async def _get_json(self, client: Any, url: str) -> Any:
+    async def _get_json(self, client: Any, url: str, *, identity: bool = False) -> Any:
+        """The answer's JSON. ``identity``: the repo itself, NOT followed
+        through a redirect (M6); returns ``(status, data)``."""
         headers = {
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
@@ -329,7 +418,7 @@ class Checker:
         if cached is not None:
             headers["If-None-Match"] = cached.etag
         try:
-            resp = await client.get(url, headers=headers)
+            resp = await client.get(url, headers=headers, follow_redirects=not identity)
         except HostNotAllowed:
             raise _Unreachable("redirected off api.github.com")
         except Exception as e:  # noqa: BLE001 - network, TLS, egress refusal
@@ -338,9 +427,11 @@ class Checker:
             raise _Unreachable(f"no answer ({type(e).__name__})")
         self._note_limits(resp)
         if resp.status_code == 304 and cached is not None:
-            return cached.data
+            return (200, cached.data) if identity else cached.data
         if resp.status_code in (403, 429) and self.rate_limited():
             raise _RateLimited()
+        if identity and resp.status_code in _REDIRECTS:
+            return resp.status_code, None
         if resp.status_code != 200:
             raise _Unreachable(f"GitHub answered {resp.status_code}")
         try:
@@ -350,7 +441,7 @@ class Checker:
         etag = resp.headers.get("etag")
         if etag:
             self.etags[url] = _Cached(etag, data)
-        return data
+        return (200, data) if identity else data
 
     async def _check_one(self, client: Any, record: Any, repo: SourceRepo) -> dict[str, Any]:
         base = {
@@ -365,6 +456,8 @@ class Checker:
             return {**base, "state": UNREACHABLE, "reason": "installed version isn't semver"}
         api = f"{API_BASE}/repos/{repo.owner}/{repo.repo}"
         try:
+            status, info = await self._get_json(client, api, identity=True)
+            check_pin(record.slug, repo.full_name, status, info)
             releases = await self._get_json(client, f"{api}/releases?per_page=30")
             if not isinstance(releases, list):
                 raise _Unreachable("unexpected answer")
@@ -384,6 +477,8 @@ class Checker:
             return {**base, "state": RATE_LIMITED, "retry_at": self.blocked_until}
         except _Unreachable as e:
             return {**base, "state": UNREACHABLE, "reason": e.reason}
+        except RepoChanged as e:
+            return {**base, "state": REPO_CHANGED, "reason": str(e)}
         if best is None or compare(best.version, installed) <= 0:
             return {**base, "state": UP_TO_DATE}
         zip_name = asset_name(record.slug, best.version)
@@ -432,8 +527,8 @@ class Checker:
                 elif repo.origin != "github":
                     continue  # a homepage repo is checked on request only
                 prior = self.results.get(rec.slug)
-                if prior and prior.get("installed") != rec.version:
-                    prior = None  # updated since: the old answer is stale
+                if prior and not _same_install(prior, rec, repo):
+                    prior = None  # updated or reinstalled since: the old answer is stale
                     self.results.pop(rec.slug, None)
                 if (
                     not force and prior and prior.get("state") != INTERNET_OFF
@@ -478,6 +573,13 @@ class Checker:
                             "slug": rec.slug, "repo": repo.full_name, "origin": repo.origin,
                             "installed": rec.version, "state": INTERNET_OFF, "checked_at": now,
                         }
+                    except Exception as e:  # noqa: BLE001 - L37: one odd answer ends this plugin's check, not the run
+                        log.warning("plugin update check: %s: %s", rec.slug, type(e).__name__)
+                        self.results[rec.slug] = {
+                            "slug": rec.slug, "repo": repo.full_name, "origin": repo.origin,
+                            "installed": rec.version, "state": UNREACHABLE,
+                            "reason": "GitHub's answer couldn't be read", "checked_at": now,
+                        }
             return self.results
 
     def view(self, records: Iterable[Any]) -> dict[str, Any]:
@@ -489,7 +591,7 @@ class Checker:
             if repo is None:
                 continue
             prior = self.results.get(rec.slug)
-            if prior and prior.get("installed") == rec.version:
+            if prior and _same_install(prior, rec, repo):
                 out[rec.slug] = dict(prior)
             else:
                 out[rec.slug] = {
@@ -507,6 +609,13 @@ class Checker:
 
 
 CHECKER = Checker()
+
+
+def _same_install(prior: dict[str, Any], rec: Any, repo: SourceRepo) -> bool:
+    """An answer still stands for ``rec``: the same version from the same
+    repo (L36: a reinstall of that version from another repo is not)."""
+    return (prior.get("installed") == rec.version
+            and str(prior.get("repo", "")).lower() == repo.full_name.lower())
 
 
 # ─── installing an update from the release's own zip ─────────────────────
@@ -595,6 +704,27 @@ async def download_release_asset(github_url: str, slug: str) -> tuple[bytes, str
         return bytes(buf)
 
     async with egress.async_client(**kwargs) as client:
+        # M6: the repo answering at this address must be the one pinned for
+        # this plugin (a redirect is not followed: a moved repo stops here).
+        try:
+            info = await client.get(
+                f"{API_BASE}/repos/{owner}/{repo}", follow_redirects=False,
+                headers={**headers, "Accept": "application/vnd.github+json"})
+        except HostNotAllowed as e:
+            raise InstallError("github_download_failed", str(e))
+        try:
+            info_data = info.json() if info.status_code == 200 else None
+        except ValueError:
+            info_data = None
+        try:
+            check_pin(slug, f"{owner}/{repo}", info.status_code, info_data)
+        except RepoChanged as e:
+            raise InstallError(
+                "repo_changed",
+                f"{e}: the repository moved or changed owner, so the update was not "
+                "installed. Reinstall the plugin from its new address if you trust it.")
+        except _Unreachable as e:
+            raise InstallError("github_repo_unavailable", e.reason)
         api = f"{API_BASE}/repos/{owner}/{repo}/releases/tags/{tag}"
         try:
             r = await client.get(

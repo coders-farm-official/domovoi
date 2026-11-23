@@ -59,6 +59,9 @@ class FakeGitHub:
     def handler(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
         key = request.url.path
+        if key not in self.routes and key.count("/") == 3 and key.startswith("/repos/"):
+            # The repo itself (M6's identity read): the same ids every time.
+            return httpx.Response(200, json=REPO_INFO)
         if key not in self.routes:
             return httpx.Response(404, json={"message": "Not Found"})
         status, body, headers = self.routes[key]
@@ -67,6 +70,19 @@ class FakeGitHub:
             self.etag_hits += 1
             return httpx.Response(304, headers=headers)
         return httpx.Response(status, json=body, headers=headers)
+
+
+REPO_INFO = {"id": 4242, "full_name": "acme/domovoi-plugin-weather", "owner": {"id": 77}}
+
+
+@pytest.fixture(autouse=True)
+def _pins(monkeypatch, tmp_path):
+    """Each test's repository pins (M6) in its own file."""
+    monkeypatch.setenv("DOMOVOI_PLUGIN_REPO_PINS", str(tmp_path / "pins.json"))
+
+
+def _releases(gh: "FakeGitHub") -> list[httpx.Request]:
+    return [r for r in gh.requests if r.url.path.count("/") > 3]
 
 
 @pytest.fixture
@@ -214,12 +230,14 @@ async def test_a_redirect_off_github_is_refused(monkeypatch, checker):
 
     def handler(request):
         seen.append(request.url.host)
+        if request.url.host == "api.github.com" and request.url.path.count("/") == 3:
+            return httpx.Response(200, json=REPO_INFO)
         if request.url.host == "api.github.com":
             return httpx.Response(301, headers={"Location": "https://evil.example.net/x"})
         return httpx.Response(200, json=[])
     monkeypatch.setattr(uc, "_TRANSPORT", httpx.MockTransport(handler))
     out = await checker.run([Rec("weather", "1.0.0")])
-    assert seen == ["api.github.com"]
+    assert seen == ["api.github.com", "api.github.com"]
     assert out["weather"]["state"] == uc.UNREACHABLE
 
 
@@ -228,7 +246,7 @@ async def test_etag_is_reused(gh, checker):
     rec = Rec("weather", "1.0.0")
     first = await checker.run([rec], force=True)
     second = await checker.run([rec], force=True)
-    assert gh.requests[1].headers["if-none-match"] == '"abc"'
+    assert _releases(gh)[1].headers["if-none-match"] == '"abc"'
     assert gh.etag_hits == 1
     assert second["weather"]["latest"] == first["weather"]["latest"] == "1.3.0"
 
@@ -238,10 +256,10 @@ async def test_daily_interval_without_force(gh, checker):
     rec = Rec("weather", "1.0.0")
     await checker.run([rec])
     await checker.run([rec])
-    assert len(gh.requests) == 1
+    assert len(_releases(gh)) == 1
     checker.results["weather"]["checked_at"] = time.time() - uc.CHECK_INTERVAL_SEC - 1
     await checker.run([rec])
-    assert len(gh.requests) == 2
+    assert len(_releases(gh)) == 2
 
 
 async def test_rate_limit_headers_stop_checks(gh, checker):
@@ -252,7 +270,7 @@ async def test_rate_limit_headers_stop_checks(gh, checker):
                              Rec("other", "0.1.0", source_ref="https://github.com/acme/other@main")])
     assert out["weather"]["state"] == uc.RATE_LIMITED
     assert out["other"]["state"] == uc.RATE_LIMITED
-    assert len(gh.requests) == 1  # the second plugin waited for the reset
+    assert len(_releases(gh)) == 1  # the second plugin waited for the reset
     assert checker.blocked_until == reset
 
 
@@ -419,6 +437,8 @@ class FakeReleaseHost:
         self.hosts.append(request.url.host)
         path = request.url.path
         dl = "https://github.com/acme/domovoi-plugin-weather/releases/download/v1.2.0/"
+        if request.url.host == "api.github.com" and path == "/repos/acme/domovoi-plugin-weather":
+            return httpx.Response(200, json=REPO_INFO)
         if request.url.host == "api.github.com" and path.endswith("/releases/tags/v1.2.0"):
             assets = [{"name": "weather-1.2.0.zip", "browser_download_url": dl + "weather-1.2.0.zip"},
                       {"name": "SHA256SUMS", "browser_download_url": dl + "SHA256SUMS"}]
@@ -552,3 +572,78 @@ async def test_upgrade_route_prefers_the_asset_and_falls_back(monkeypatch, asset
     else:
         assert data == b"source-zip" and calls["codeload"] == URL
         assert res["download"]["from"] == "source"
+
+
+# ─── M6: the repository's identity is pinned ────────────────────────────
+
+
+async def test_a_moved_repo_is_flagged_not_offered(gh, checker):
+    """M6 (review 2026-11-23): the first check pins the repo's ids; the
+    same name answering with a redirect (renamed or transferred) or with
+    other ids (deleted and re-registered) offers no update."""
+    gh.set(REL, json=[_release("v1.2.0")])
+    rec = Rec("weather", "1.0.0")
+    assert (await checker.run([rec]))["weather"]["state"] == uc.UPDATE_AVAILABLE
+    assert uc.load_pins()["weather"]["repo_id"] == 4242
+
+    gh.set("/repos/acme/domovoi-plugin-weather", json={"id": 999, "owner": {"id": 1}})
+    gh.set(REL, json=[_release("v999.0.0")])
+    u = (await checker.run([rec], force=True))["weather"]
+    assert u["state"] == uc.REPO_CHANGED and "github_url" not in u
+
+    gh.set("/repos/acme/domovoi-plugin-weather", status=301, json={"url": "x"},
+           headers={"Location": "https://api.github.com/repositories/4242"})
+    assert (await checker.run([rec], force=True))["weather"]["state"] == uc.REPO_CHANGED
+    # The identity read is never followed through the redirect.
+    assert not any(r.url.path.startswith("/repositories/") for r in gh.requests)
+
+
+async def test_a_reinstall_from_another_repo_pins_afresh(gh, checker):
+    gh.set(REL, json=[_release("v1.0.0")])
+    await checker.run([Rec("weather", "1.0.0")])
+    other = Rec("weather", "1.0.0", source_ref="https://github.com/acme/other-weather@v1.0.0")
+    gh.set("/repos/acme/other-weather", json={"id": 5, "owner": {"id": 6}})
+    gh.set("/repos/acme/other-weather/releases", json=[_release("v1.0.0")])
+    assert (await checker.run([other], force=True))["weather"]["state"] == uc.UP_TO_DATE
+    assert uc.load_pins()["weather"]["repo"] == "acme/other-weather"
+
+
+async def test_the_update_download_is_held_to_the_pin(monkeypatch):
+    from domovoi.plugins_runtime.installer import InstallError
+
+    uc.check_pin("weather", "acme/domovoi-plugin-weather", 200, {"id": 1, "owner": {"id": 2}})
+    fake = FakeReleaseHost()
+    monkeypatch.setattr(uc, "_TRANSPORT", httpx.MockTransport(fake.handler))
+    with pytest.raises(InstallError) as e:
+        await uc.download_release_asset(URL, "weather")
+    assert e.value.code == "repo_changed"
+    assert "github.com" not in fake.hosts and "objects.githubusercontent.com" not in fake.hosts
+
+
+async def test_an_answer_for_another_repo_is_dropped(gh, checker):
+    """L36: an answer is for one version FROM ONE REPO."""
+    gh.set(REL, json=[_release("v1.2.0")])
+    await checker.run([Rec("weather", "1.0.0")])
+    other = Rec("weather", "1.0.0", source_ref="https://github.com/acme/other-weather@v1.0.0")
+    view = checker.view([other])["plugins"]["weather"]
+    assert view["state"] == uc.NOT_CHECKED and view["repo"] == "acme/other-weather"
+
+
+async def test_one_odd_answer_does_not_end_the_run(gh, checker, monkeypatch):
+    """L37: an unexpected value fails that plugin's check, not the rest."""
+    gh.set(REL, json=[_release("v1.2.0")])
+    gh.set("/repos/acme/other/releases", json=[_release("v0.2.0")])
+    real = uc.pick_latest
+
+    def picky(releases, installed):
+        if installed == parse_version("9.9.9"):
+            raise TypeError("odd")
+        return real(releases, installed)
+
+    monkeypatch.setattr(uc, "pick_latest", picky)
+    out = await checker.run([
+        Rec("weather", "9.9.9"),
+        Rec("other", "0.1.0", source_ref="https://github.com/acme/other@main"),
+    ])
+    assert out["weather"]["state"] == uc.UNREACHABLE
+    assert out["other"]["state"] == uc.UPDATE_AVAILABLE

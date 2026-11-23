@@ -1015,7 +1015,9 @@ svc_py() { (cd "$CHECKOUT" && as_svc "$VENV_PY" "$@"); }
 # In kit mode with the kit's apt configuration (kit_apt_args), and no other.
 apt_get() {
   local -a extra=()
-  if kit; then mapfile -t extra < <(kit_apt_args); fi
+  # The names are checked here, in this shell, where a die stops the run
+  # (kit_apt_args runs in a subshell).
+  if kit; then kit_apt_names; mapfile -t extra < <(kit_apt_args); fi
   apt-get -o Dpkg::Use-Pty=0 -o DPkg::Lock::Timeout=600 -q ${extra[@]+"${extra[@]}"} "$@"
 }
 
@@ -1443,14 +1445,33 @@ ubuntu_keyring() {
   [ -n "$k" ] || k=/usr/share/keyrings/ubuntu-archive-keyring.gpg
   printf '%s' "$k"
 }
+# kit_apt_name NAME: NAME is a plain apt suite or component name (it goes
+# into the source stanza as is). A folder name with a newline, a space or
+# a colon could add a line of its own (Trusted: yes), so anything else, or
+# a link, stops the install: the stick was altered.
+kit_apt_name() {
+  [[ $1 =~ ^[a-z0-9][a-z0-9.+-]{0,63}$ ]] && [ ! -L "${2%/}" ] \
+    || die "the offline kit's package folder ${2@Q} is not one a kit holds (a link, or an odd name): the stick was changed; make it again"
+}
+kit_apt_names() {
+  local d c arch
+  arch=$(deb_arch)
+  for d in "$OFFLINE_KIT/apt/$arch/ubuntu/dists"/*/; do
+    [ -e "$d" ] || continue
+    kit_apt_name "$(basename "$d")" "$d"
+    for c in "$d"*/; do [ -e "$c" ] && kit_apt_name "$(basename "$c")" "$c"; done
+  done
+  return 0
+}
 kit_apt_sources() {
   local d suite comps c arch
   arch=$(deb_arch)
   for d in "$OFFLINE_KIT/apt/$arch/ubuntu/dists"/*/; do
     [ -f "$d/InRelease" ] || continue
     suite=$(basename "$d")
+    kit_apt_name "$suite" "$d"
     comps=""
-    for c in "$d"*/; do [ -d "$c/binary-$arch" ] && comps+=" $(basename "$c")"; done
+    for c in "$d"*/; do [ -d "$c/binary-$arch" ] && kit_apt_name "$(basename "$c")" "$c" && comps+=" $(basename "$c")"; done
     [ -n "$comps" ] || continue
     printf 'Types: deb\nURIs: file:%s/apt/%s/ubuntu\nSuites: %s\nComponents:%s\nArchitectures: %s\nSigned-By: %s\nCheck-Valid-Until: no\nCheck-Date: no\n\n' \
       "$OFFLINE_KIT" "$arch" "$suite" "$comps" "$arch" "$(ubuntu_keyring)"
@@ -1468,7 +1489,7 @@ kit_apt_args() {
   fi
   kit_apt_sources >"$KIT_APT/sources.list.d/offline-kit.sources"
   printf '%s\n' -o "Dir::Etc::SourceList=$KIT_APT/sources.list" -o "Dir::Etc::SourceParts=$KIT_APT/sources.list.d" \
-    -o "Dir::State::Lists=$KIT_APT/lists" -o Acquire::Languages=none -o APT::Sandbox::User=root \
+    -o "Dir::State::Lists=$KIT_APT/lists" -o Acquire::Languages=none -o APT::Sandbox::User=root     -o Acquire::AllowInsecureRepositories=false -o Acquire::AllowDowngradeToInsecureRepositories=false     -o APT::Get::AllowUnauthenticated=false \
     -o Acquire::IndexTargets::deb::DEP-11::DefaultEnabled=false -o Acquire::IndexTargets::deb::DEP-11-icons::DefaultEnabled=false \
     -o Acquire::IndexTargets::deb::DEP-11-icons-small::DefaultEnabled=false -o Acquire::IndexTargets::deb::DEP-11-icons-hidpi::DefaultEnabled=false \
     -o Acquire::IndexTargets::deb::CNF::DefaultEnabled=false -o Acquire::IndexTargets::deb::Contents-deb::DefaultEnabled=false
@@ -4967,6 +4988,12 @@ kit_whisper() {
   while IFS= read -r p; do
     [ -n "$p" ] || continue
     [[ ${p#"$prefix"} != */* ]] || continue
+    # Only the files a Whisper model folder holds (L39): whatever else a
+    # stick carries there is never put beside the model.
+    case ${p#"$prefix"} in
+      model.bin|config.json|tokenizer.json|preprocessor_config.json|vocabulary.json|vocabulary.txt) ;;
+      *) continue ;;
+    esac
     kit_stage "$p" >/dev/null
   done < <(kit_py list "$prefix")
   staged=$KIT_STAGE/$prefix

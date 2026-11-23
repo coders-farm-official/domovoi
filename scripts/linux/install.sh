@@ -512,6 +512,15 @@ make_work() {
 
 # ─── An offline kit ──────────────────────────────────────────────────────
 
+# kit_apt_name NAME DIR: NAME (DIR's) is a plain apt suite or component
+# name, written into the source stanza as is. A folder name with a newline,
+# a space or a colon could add a line of its own (Trusted: yes), so anything
+# else, or a link, stops here: the stick was altered.
+kit_apt_name() {
+  [[ $1 =~ ^[a-z0-9][a-z0-9.+-]{0,63}$ ]] && [ ! -L "${2%/}" ] \
+    || die "the offline kit's package folder ${2@Q} is not one a kit holds (a link, or an odd name): the stick was changed; make it again"
+}
+
 # kit_apt_install PACKAGE...: from the kit's Ubuntu packages only, with an
 # apt configuration of this run's own (no other source, no lists of the
 # system's); apt checks the kit's InRelease with Ubuntu's keyring.
@@ -527,13 +536,16 @@ kit_apt_install() {
   for s in "$KIT"/apt/amd64/ubuntu/dists/*/; do
     [ -f "$s/InRelease" ] || continue
     suite=$(basename "$s") comps=""
-    for c in "$s"*/; do [ -d "$c/binary-amd64" ] && comps+=" $(basename "$c")"; done
+    kit_apt_name "$suite" "$s"
+    for c in "$s"*/; do [ -d "$c/binary-amd64" ] && kit_apt_name "$(basename "$c")" "$c" && comps+=" $(basename "$c")"; done
     [ -n "$comps" ] || continue
     printf 'Types: deb\nURIs: file:%s/apt/amd64/ubuntu\nSuites: %s\nComponents:%s\nArchitectures: amd64\nSigned-By: %s\nCheck-Valid-Until: no\nCheck-Date: no\n\n' \
       "$KIT" "$suite" "$comps" "$keyring" >>"$d/sources.list.d/offline-kit.sources"
   done
   local -a o=(-o "Dir::Etc::SourceList=$d/sources.list" -o "Dir::Etc::SourceParts=$d/sources.list.d"
-    -o "Dir::State::Lists=$d/lists" -o Acquire::Languages=none -o APT::Sandbox::User=root)
+    -o "Dir::State::Lists=$d/lists" -o Acquire::Languages=none -o APT::Sandbox::User=root
+    -o Acquire::AllowInsecureRepositories=false -o Acquire::AllowDowngradeToInsecureRepositories=false
+    -o APT::Get::AllowUnauthenticated=false)
   say "Installing $* from the offline kit..."
   apt-get "${o[@]}" -qq update </dev/null \
     && DEBIAN_FRONTEND=noninteractive apt-get "${o[@]}" install -y -qq --no-install-recommends "$@" </dev/null \

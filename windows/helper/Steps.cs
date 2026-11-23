@@ -540,6 +540,29 @@ namespace Domovoi.Windows.Helper
             return Json.ReadFile(path);
         }
 
+        // L42 (review 2026-11-23): the house identity backup Setup put in
+        // host\in (the house's private key) is deleted once DomovoiHost has
+        // recorded it restored (host-state.json's identity_restored names
+        // its SHA-256). DomovoiHost can only read host\in, so the helper
+        // does it, from Setup's status polls. Silent: the poll's output is
+        // key=value lines Setup reads.
+        static void ForgetUsedRestoreIdentity()
+        {
+            string path = Paths.RestoreIdentityFile;
+            try
+            {
+                if (!File.Exists(path)) return;
+                var state = ReadHostFile(Path.Combine(Paths.HostOut, "host-state.json"));
+                string done = state == null ? null : Json.Str(state, "identity_restored");
+                if (done == null || done != Sha256.OfFile(path)) return;
+                File.Delete(path);
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+            catch (FormatException) { }
+            catch (InvalidOperationException) { }
+        }
+
         public static void HostStatusOut(Output o)
         {
             string svc = "missing";
@@ -559,6 +582,7 @@ namespace Domovoi.Windows.Helper
             catch (IOException) { }
             if (d == null) { o.Kv("state", "none"); return; }
             HostStatus st = HostStatus.FromJson(d);
+            if (st.State == "ready") ForgetUsedRestoreIdentity();
             o.Kv("state", st.State);
             o.Kv("percent", Inv.S(st.Percent));
             o.Kv("message", st.Message);

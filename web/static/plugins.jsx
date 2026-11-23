@@ -20,6 +20,23 @@ const PERMISSION_LABELS = {
   filesystem_outside_data: 'writes files outside its own data directory',
 };
 
+/* An update's trust screen against the plugin it replaces (M6, review
+ * 2026-11-23): what the new package says that the installed one didn't.
+ * Empty when nothing changed, or for a first install. */
+const changesFromInstalled = (installed, p) => {
+  if (!installed) return [];
+  const out = [];
+  if ((installed.publisher || '') !== (p.publisher || '')) {
+    out.push(`publisher: was ${installed.publisher || '(none)'}, now ${p.publisher || '(none)'}`);
+  }
+  const was = installed.permissions || {};
+  const now = p.permissions || {};
+  Object.entries(PERMISSION_LABELS).forEach(([k, label]) => {
+    if (now[k] && !was[k]) out.push(`new: ${label}`);
+  });
+  return out;
+};
+
 const STATUS_PILL = {
   ok:          { tone: 'ok',   label: 'ok' },
   degraded:    { tone: 'warn', label: 'degraded' },
@@ -72,7 +89,7 @@ const ConfirmError = ({ err }) => (
  * requirements AND the resolved transitive tree with each dist's
  * origin, handlers + bands, publisher/license, and (github installs)
  * the source URL verbatim. */
-const TrustConfirmModal = ({ stagedId, preview, sourceLabel, verb, onDone, onCancel, fire }) => {
+const TrustConfirmModal = ({ stagedId, preview, sourceLabel, verb, installed = null, onDone, onCancel, fire }) => {
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState(null);
   const p = preview || {};
@@ -143,6 +160,18 @@ const TrustConfirmModal = ({ stagedId, preview, sourceLabel, verb, onDone, onCan
             using it — a signed-in admin session and the household token included. Only
             install plugins from publishers you trust.
           </div>
+
+          {installed && changesFromInstalled(installed, p).length > 0 && (
+            <div className="plugin-update-changes" style={{ border: '1px solid var(--warn)', background: 'var(--err-soft)',
+                          borderRadius: 'var(--r-sm)', padding: '10px 12px', fontSize: 12, lineHeight: 1.5 }}>
+              <strong>Changed from the installed version {installed.version || ''}</strong>
+              {changesFromInstalled(installed, p).map((c, i) => (
+                <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '3px 0' }}>
+                  <Icon name="alert-triangle" size={13}/> {c}
+                </div>
+              ))}
+            </div>
+          )}
 
           <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr', rowGap: 6, fontSize: 12 }}>
             <div className="label">publisher</div><div>{p.publisher || '—'}</div>
@@ -404,7 +433,9 @@ const UninstallModal = ({ plugin, onClose, onDone, fire }) => {
  * dismisses it. Without the key the failure stacked under a progress toast
  * that still said it was validating (2026-11-02). */
 const STAGE_TOAST = 'plugin-stage';
-const useInstallFlow = (fire, refresh, dismissToast) => {
+const useInstallFlow = (fire, refresh, dismissToast, plugins = []) => {
+  // The plugin an upgrade replaces, for the trust screen's comparison.
+  const installedOf = (slug) => (slug && (plugins || []).find((x) => x.slug === slug)) || null;
   const [staged, setStaged] = React.useState(null);  // {stagedId, preview, sourceLabel, verb}
   const fileInputRef = React.useRef(null);
   const upgradeSlugRef = React.useRef(null);
@@ -429,6 +460,7 @@ const useInstallFlow = (fire, refresh, dismissToast) => {
       setStaged({
         stagedId: res.staged_id, preview: res.preview,
         sourceLabel: file.name, verb: slug ? 'upgrade' : 'install',
+        installed: installedOf(slug),
       });
     } catch (e) {
       if (_wasSignInDismissed(e)) return;
@@ -463,6 +495,7 @@ const useInstallFlow = (fire, refresh, dismissToast) => {
       setStaged({
         stagedId: res.staged_id, preview: res.preview,
         sourceLabel: url + how, verb: slug ? 'upgrade' : 'install',
+        installed: installedOf(slug),
       });
     } catch (e) {
       if (_wasSignInDismissed(e)) return;
@@ -485,6 +518,7 @@ const useInstallFlow = (fire, refresh, dismissToast) => {
     <TrustConfirmModal
       stagedId={staged.stagedId} preview={staged.preview}
       sourceLabel={staged.sourceLabel} verb={staged.verb}
+      installed={staged.installed || null}
       fire={fire}
       onCancel={() => setStaged(null)}
       onDone={() => { setStaged(null); refresh(); }}/>
@@ -655,6 +689,8 @@ const PluginUpdatePanel = ({ p, u, onUpdate, onCheck, checking = false, internet
   // Calm on purpose: a private repo is normal (the check sends no
   // credentials), and nothing is offered that can't work.
   if (u.state === 'unreachable') return line(`can't check for updates (private or unreachable) · ${u.repo}`);
+  // M6: the address now answers for another repository; nothing is offered.
+  if (u.state === 'repo_changed') return line(`the repository moved or changed owner · ${u.repo} · no update is offered: reinstall from its new address if you trust it`, 'warn');
   if (u.state === 'rate_limited') return line("can't check for updates right now (GitHub's limit) · it tries again later", 'warn');
   if (u.state === 'internet_off') return line(`can't check for updates · ${NEEDS_INTERNET_TEXT}`);
   // not_checked: a GitHub install waits for the daily check; a zip install
@@ -832,7 +868,7 @@ const PluginsPage = () => {
   const [checking, setChecking] = React.useState(null);  // null | '*' | slug
   // Returns the re-reads, so the restart card can wait for them (onSettled).
   const refresh = () => Promise.all([refreshList(), refreshVersion(), refreshUpdates()]);
-  const flow = useInstallFlow(fire, refresh, dismissToast);
+  const flow = useInstallFlow(fire, refresh, dismissToast, plugins);
   const [ghUrl, setGhUrl] = React.useState('');
   // Installing from GitHub downloads; a zip install stays available.
   // The internet answer, read once for the page (the GET /api/config the
