@@ -1104,7 +1104,9 @@ final class RoomsModelTests: XCTestCase {
         model.select(.notes)
         await settleUntil({ model.openReads?.notes.data?.isEmpty == false }, "the notes read")
         model.stop()
-        let after = StubURLProtocol.requestCount
+        // Once the reads begun before stop() have landed: one still on its
+        // way to the stub used to count as the push's (CI, 2026-11-22).
+        let after = await StubURLProtocol.quietRequestCount()
         model.received(StateEvent(type: "satellites.presence.changed", frame: "{}"))
         await nothingHappens()
         XCTAssertEqual(after, StubURLProtocol.requestCount, "a push after stop() asks for nothing")
@@ -1153,7 +1155,8 @@ final class RoomsModelTests: XCTestCase {
         // which is exactly where `testCancellingATimerThatHasAlreadyGoneIsNotAFailure`
         // returns.
         await settleUntil({ model.toast != nil }, "the DELETE")
-        let before = StubURLProtocol.requestCount
+        // After the timers re-read the toast's own turn queued has landed.
+        let before = await StubURLProtocol.quietRequestCount()
         await closeEverything()
         await nothingHappens()
         await everythingLands()
