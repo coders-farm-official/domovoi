@@ -11,6 +11,8 @@ and videos, in the background, voice first.
 * :mod:`.switches` — the household's switches (household_settings);
 * :mod:`.photos` — the photo analysers (date, caption and tags, text);
 * :mod:`.search` — ``search_doc`` and the words-and-dates search;
+* :mod:`.ask` — asking for photos and videos in chat and by voice (the
+  phrasings, the person filter's tiers, the answers, the chat's fence);
 * :mod:`.faces` — faces and people (off by default): storage, grouping,
   training, forget-my-face, the photo analyser and the video-frame hook;
   :mod:`.face_engine` (YuNet + SFace on ONNX Runtime, in numpy) and

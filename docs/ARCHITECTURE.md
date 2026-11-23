@@ -315,6 +315,7 @@ map (from `domovoi/handlers/__init__.py`):
 | 290 | `playlist` | Before music's `^play` catch-all |
 | 295 | `music_alias` | "When I say X I mean Y" names, before music's `^play` |
 | 300 | `music` | Greedy `^play` catch-all; its room paths ("… in the garage") come first within it |
+| 305 | `media_search` | 1.5.0: "show me photos of the beach from last summer", "find the video where we sang happy birthday": an asking verb (show me, find, search, do we have, are there) and a photo or video word right after it; never "play" (music's), "print" (printing's) or "… in my library" (library's). Its tool is offered only when the turn says photo, picture, video or clip |
 | 310 | `library` | "Find X in my library" before a greedier "find X" |
 | 900 | *(media-provider plugin)* | Greedy `^find` catch-all — LAST band |
 

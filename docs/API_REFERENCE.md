@@ -2560,6 +2560,33 @@ max_mb, accept, extensions}`: `available` is false with AI features off
 (`reason: ai-off`) or no ffmpeg on the server (`no-ffmpeg`), and then
 clients offer no video control at all.
 
+**Photos and videos in a chat** (1.5.0, media understanding slice 6;
+`web/backend/api/chat_media.py`, `domovoi/media_understanding/ask.py`).
+A message that asks for them in so many words ("show me photos of the beach
+from last summer", "find the video where we sang happy birthday", "do we
+have any pictures from Christmas") is answered by the app with no model
+asked; a text turn that mentions photos or videos also tells the model it
+may reply with only `FIND_MEDIA: <words>`, which the app runs instead of
+showing (held back like `LOOK_UP`). The reply says the count, what they
+might show, when, and "They're on the Photos page."; or, honestly, "Photo
+understanding is off; an admin can turn it on in Settings." (switch off),
+"I haven't looked through your photos yet." (nothing of that kind
+analysed). The row's `stats.model_role` is `media` (not retryable) and
+`stats.media`, also read out as the message's `media`, is `{state:
+off|empty|people_refused|none|found, query: {words, kind, when}, person,
+count, more, items: [{id, kind, name, library_id, path, thumb, taken_at,
+date_from, might_show, tags, text, at_s}]}` (at most 12 items; `count` up
+to 100, `more` past it). `thumb` is `/api/images/thumb?…&size=m` for a
+photo and `/api/videos/poster?…` for a video; `at_s` is a video's best
+moment when known. `might_show`, `tags` and `text` (≤ 300 characters) are
+untrusted text from a model or OCR: draw them as text, never HTML, and a
+caption as "Might show: …". A person's name is a filter only with
+"Recognize faces" on, for a person with confirmed faces; a device marked as
+a shared screen gets "Photos of people aren't shown on a shared screen." and
+no items. A later text turn in the chat gives the model the latest results
+inside a fenced block with a per-call code (as chat video does) and is not
+told about `LOOK_UP` / `READ_PAGE`.
+
 | Method & path | Request | Purpose |
 |---|---|---|
 | `GET /api/chat/threads` | `?archived=`, `?q=` | Thread list, newest first, with message counts, last snippet, `archived` and `title_by_user`. Without `q` it lists the threads that aren't archived (`archived=true`: the archived ones). `q` (at most 200 characters) searches: the threads whose title or any message contains it, case ignored and literally (`%` and `_` are characters), archived ones too unless `archived` says which, at most 100, each with `match_snippet` (the words around the first match in a message, or `null` when only the title matched). |

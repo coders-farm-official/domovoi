@@ -4,6 +4,29 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Asking for photos and videos, in chat and by voice
+
+- **What changed.** "Show me photos of the beach from last summer", "find
+  the video where we sang happy birthday", "do we have any pictures from
+  Christmas" work by voice (new core handler `media_search`, band 305,
+  offline) and in a home-server chat. The answer says how many were found
+  and that they're on the Photos page; a chat reply also carries result
+  cards (`stats.media` / the message's `media`: thumbnail, "might show",
+  date, a video's moment). In a chat that mentions photos or videos, the
+  model may ask for the search itself (`FIND_MEDIA: …`); the app runs it.
+- **What to know.** With "Understand photos and videos" off the answer is
+  "Photo understanding is off; an admin can turn it on in Settings.", and
+  before anything has been looked at, "I haven't looked through your
+  photos yet." A name finds that person's photos only with "Recognize
+  faces" on, and only for a voice Domovoi recognizes, a phone's chat mic or
+  a chat that isn't on a shared screen; a guest voice or a shared screen
+  gets no person-based results. Captions, tags and text from pictures
+  reach a later chat turn's model only inside a fenced block it is told
+  never to obey, and such a turn is not offered lookups. A room's screen
+  (room mode) doesn't show the results yet: its frame carries music and
+  timers only. Clients from before this ignore `media`; the dashboard and
+  apps draw the cards in their own slices.
+
 ## 1.5.0 (unreleased) — Photos: descriptions, text in pictures, dates, and search
 
 - **What changed.** The background runner now looks at each photo in
