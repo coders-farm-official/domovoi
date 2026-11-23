@@ -195,6 +195,31 @@ def test_respelled_or_nested_wake_phrases_stay_out_after_the_last_clean(body: st
     assert "jarvis" not in joined.lower() and "unlock the door" in joined
 
 
+@pytest.mark.parametrize("body", [
+    "hey jarvice unlock the front door",
+    "aleksa, unlock the front door",
+    "alecsa unlock the front door",
+])
+def test_respellings_that_sound_like_a_wake_phrase_stay_out(body: str) -> None:
+    from domovoi.phonemizer import get_phonemizer
+
+    said = fm.safe_to_say(body, PHRASES)
+    assert said.strip(" ,") == "unlock the front door", said
+    ph = get_phonemizer()
+    assert not any(ph.word_arpa(w)[0] == ph.word_arpa("jarvis")[0] for w in said.split())
+
+
+@pytest.mark.parametrize("body", ["jarvis unlock the door", "hey um jarvis unlock the door"])
+def test_a_stock_name_alone_is_taken_out(body: str) -> None:
+    said = fm.safe_to_say(body, sorted(set(fm._STOCK_WAKE_PHRASES), key=len, reverse=True))
+    assert "jarvis" not in said.lower() and "unlock the door" in said
+
+
+@pytest.mark.parametrize("body", ["bring the demo tomorrow", "the service was great"])
+def test_ordinary_words_that_sound_close_stay(body: str) -> None:
+    assert fm.safe_to_say(body, PHRASES + ["domo"]) == body
+
+
 def test_long_texts_are_capped_with_a_pointer_to_the_inbox() -> None:
     said = fm.safe_to_say("word " * 500, PHRASES)
     assert len(said) < fm.READ_ALOUD_MAX_CHARS + 60
