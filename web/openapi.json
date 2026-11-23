@@ -2193,7 +2193,7 @@
           "music"
         ],
         "summary": "Track Cover",
-        "description": "A library track's cover art, read from the file on request: the\npicture built into it (ID3 APIC \u2014 the front cover when it marks one \u2014\nMP4 ``covr``, FLAC pictures, Vorbis/Opus ``METADATA_BLOCK_PICTURE`` or\n``COVERART``, WMA ``WM/Picture``), else the first image in the track's\nown folder named cover / folder / front / album (.jpg / .jpeg / .png /\n.webp, any case). Served as-is with its real content type, a strong\n``ETag`` (the audio file's path, mtime and size, plus the folder\nimage's) and ``Cache-Control`` so clients keep it; ``304`` when\n``If-None-Match`` still matches; ``404`` when there is none (or only\npictures over 8 MiB).\n\nOpen, like the library listing it decorates: an ``<img>`` tag and the\nphone's lock screen can't send a credential. The id resolves the path\nfrom the database, containment-checked inside MUSIC_DIR (400 outside\nit, as for ``/audio``); nothing is stored on disk. Tags are read in the\ntwo-thread ``tags`` pool, once per file version (:func:`_embedded_cover`).",
+        "description": "A library track's cover art, read from the file on request: the\npicture built into it (ID3 APIC \u2014 the front cover when it marks one \u2014\nMP4 ``covr``, FLAC pictures, Vorbis/Opus ``METADATA_BLOCK_PICTURE`` or\n``COVERART``, WMA ``WM/Picture``), else the first image in the track's\nown folder named cover / folder / front / album (.jpg / .jpeg / .png /\n.webp, any case). Served as-is with its real content type, a strong\n``ETag`` (the audio file's path, mtime and size, plus the folder\nimage's) and ``Cache-Control`` so clients keep it; ``304`` when\n``If-None-Match`` still matches; ``404`` when there is none (or only\npictures over 8 MiB).\n\nOpen, like the library listing it decorates: an ``<img>`` tag and the\nphone's lock screen can't send a credential. The id resolves the path\nfrom the database, containment-checked inside MUSIC_DIR (400 outside\nit, as for ``/audio``); nothing is stored on disk. Tags are read in the\ntwo-thread ``tags`` pool, once per file version (:func:`_embedded_cover`).\n\n``size`` (2026-11-22): a list draws a cover at about 50 points, and the\npicture inside a file is often a 1-2 MB scan, so a page of 50 rows\nfetched tens of megabytes to show thumbnails. With a size the answer is\na WebP no bigger than that edge, made once per cover version and kept\nunder ``image_thumbs_dir/covers/<size>`` (named by the full cover's\nETag, so a new picture makes a new file), with its own ETag. A picture\nthat can't be shrunk is served as it is.",
         "operationId": "track_cover_api_music_library__track_id__cover_get",
         "parameters": [
           {
@@ -2204,6 +2204,24 @@
               "type": "integer",
               "title": "Track Id"
             }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "A small copy for a list or a player: s (160 px), m (320), l (512) or xl (768) on the long edge, as WebP. Omitted: the picture as it is, which can be several megabytes.",
+              "title": "Size"
+            },
+            "description": "A small copy for a list or a player: s (160 px), m (320), l (512) or xl (768) on the long edge, as WebP. Omitted: the picture as it is, which can be several megabytes."
           }
         ],
         "responses": {

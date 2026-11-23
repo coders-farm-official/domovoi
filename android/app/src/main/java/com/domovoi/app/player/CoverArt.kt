@@ -39,10 +39,46 @@ import java.util.concurrent.ConcurrentHashMap
  * all move to the new picture. The ETag check above stays for a cover with
  * no version (an older server).
  *
- * Pure Kotlin: the URL rules, the miss memo, the revalidation, the epoch
- * and the versions are pinned by CoverArtTest and CoverVersionTest.
+ * The route also answers a smaller copy: `size=s|m|l|xl` ([CoverSize])
+ * returns a WebP no longer than that edge, with an ETag of its own; without
+ * it the original picture comes back, up to about 1.5 MB. Every place that
+ * draws a library cover asks for the smallest copy that is sharp at its
+ * drawn size ([sized], [CoverSize.forDp]): a list row a few KB instead of
+ * the whole embedded scan. An older server ignores the parameter. The size
+ * is part of the URL, so Coil's memory and disk caches and the media
+ * session's bitmap cache keep a small and a large copy apart; the miss memo
+ * ([isMissing]) ignores it, since a track with no cover has none at any size.
+ *
+ * Pure Kotlin: the URL rules, the miss memo, the revalidation, the epoch,
+ * the versions and the sizes are pinned by CoverArtTest, CoverVersionTest
+ * and CoverSizeTest.
  */
 object CoverArt {
+
+    // ── The copy's size ─────────────────────────────────────────────────
+
+    private val libraryCover = Regex("^(.*/api/music/library/[0-9]+/cover)(?:\\?([^#]*))?$")
+
+    /**
+     * [model] (a library cover's server path or absolute URL, as [model] or
+     * [libraryPath] gives it) asking for the [size] copy: `size=` after any
+     * `v=`, replacing a size it already named. Anything that is not a
+     * library track's cover (an audiobook's or a podcast's art, a content://
+     * URI) comes back as it is, as does null.
+     */
+    fun sized(model: String?, size: CoverSize): String? {
+        if (model == null) return null
+        val m = libraryCover.matchEntire(model) ?: return model
+        val rest = m.groupValues[2].split('&').filter { it.isNotEmpty() && !it.startsWith("size=") }
+        return m.groupValues[1] + "?" + (rest + "size=${size.param}").joinToString("&")
+    }
+
+    /** [model] with any `size=` taken off: the cover itself, whatever the copy. */
+    fun unsized(model: String): String {
+        val m = libraryCover.matchEntire(model) ?: return model
+        val rest = m.groupValues[2].split('&').filter { it.isNotEmpty() && !it.startsWith("size=") }
+        return if (rest.isEmpty()) m.groupValues[1] else m.groupValues[1] + "?" + rest.joinToString("&")
+    }
 
     /**
      * The server-relative path of a library track's cover. With a version
@@ -138,14 +174,16 @@ object CoverArt {
         _versions.value = Versions()
     }
 
-    private val versionedCover = Regex("^(.*/api/music/library/([0-9]+)/cover)(?:\\?v=([0-9]+))?$")
+    private val versionedCover =
+        Regex("^(.*/api/music/library/([0-9]+)/cover)(?:\\?v=([0-9]+))?(?:[?&](size=[a-z]+))?$")
 
     /**
      * [model] (an absolute cover URL or a server path) with the newest
      * version in [known], when that is newer than the one it carries — so a
      * row read before a cover changed, or the player's item, draws the new
      * picture. Only a cover of [known]'s server is touched (or a bare
-     * server path); everything else comes back as it is.
+     * server path); everything else comes back as it is. A `size=` it
+     * carries ([sized]) is kept.
      */
     fun withKnownVersion(model: String?, known: Versions): String? {
         if (model == null || known.byTrack.isEmpty()) return model
@@ -154,7 +192,9 @@ object CoverArt {
         val id = m.groupValues[2].toLongOrNull() ?: return model
         val v = known.byTrack[id] ?: return model
         val had = m.groupValues[3].toIntOrNull()
-        return if (had != null && had >= v) model else "${m.groupValues[1]}?v=$v"
+        if (had != null && had >= v) return model
+        val size = m.groupValues[4].takeIf { it.isNotEmpty() }?.let { "&$it" }.orEmpty()
+        return "${m.groupValues[1]}?v=$v$size"
     }
 
     /**
@@ -200,16 +240,17 @@ object CoverArt {
     // ask for the same missing picture again.
     private val missing: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
-    /** Whether [url] already came back "no cover" this run. */
-    fun isMissing(url: String): Boolean = url in missing
+    /** Whether [url] already came back "no cover" this run, at any size. */
+    fun isMissing(url: String): Boolean = unsized(url) in missing
 
     /**
      * A load of [url] failed with HTTP [status] (null: no answer at all).
-     * Only a 404 — "this track has no cover" — is remembered; a network
-     * blip or a server error is tried again next time the cover is drawn.
+     * Only a 404 — "this track has no cover" — is remembered, for every
+     * size of it; a network blip or a server error is tried again next time
+     * the cover is drawn.
      */
     fun noteFailure(url: String, status: Int?) {
-        if (status == 404) missing += url
+        if (status == 404) missing += unsized(url)
     }
 
     /** Forget every remembered miss (tests). */
@@ -267,7 +308,34 @@ object CoverArt {
      *  memory, so the picture comes from disk, which [revalidate] checks.
      *  A versioned cover is its URL alone: the version is the picture, so a
      *  known one is drawn from memory whatever the epoch, and a new version
-     *  is a new key. */
+     *  is a new key. Either way the key holds the model's `size=` ([sized]),
+     *  so a row's small copy and the player's large one never stand in for
+     *  each other. */
     fun memoryKey(model: String, epoch: Int): String =
         if (isVersionedModel(model)) model else "$model#cover-epoch=$epoch"
+}
+
+/**
+ * The smaller copies the cover route makes (`size=`, web/backend/api/music.py
+ * `track_cover`): a WebP no longer than [edgePx] on its long side.
+ */
+enum class CoverSize(val param: String, val edgePx: Int) {
+    S("s", 160),
+    M("m", 320),
+    L("l", 512),
+    XL("xl", 768);
+
+    companion object {
+        /** The pixels per dp assumed when choosing a copy: xxhdpi. */
+        const val DENSITY = 3f
+
+        /**
+         * The smallest copy sharp at [dp] on an xxhdpi screen (its edge at
+         * least [dp] x [DENSITY]); [XL] for anything bigger than that.
+         */
+        fun forDp(dp: Float): CoverSize {
+            val px = dp * DENSITY
+            return entries.firstOrNull { it.edgePx >= px } ?: XL
+        }
+    }
 }
