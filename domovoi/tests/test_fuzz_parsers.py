@@ -448,6 +448,17 @@ def test_a_probe_with_an_infinite_size_is_read_not_raised() -> None:
     assert r.width is None and r.sizes == ((0, 0),)
 
 
+def test_a_probe_whose_streams_are_not_a_list_reads_as_no_streams() -> None:
+    """A fuzzer-found ffprobe answer with ``"streams": 1`` raised TypeError."""
+    from domovoi.chat_video import media
+
+    for streams in (1, "x", {"a": 1}, [1, "x", None]):
+        r = media.parse_probe({"format": {"duration": "12.5"}, "streams": streams})
+        assert r.video_codec is None and r.sizes == ()
+    r = media.parse_probe({"format": 3, "streams": [{"codec_type": "video", "disposition": 7}]})
+    assert r.duration == 0.0 and r.sizes == ((0, 0),)
+
+
 def test_a_scene_log_with_a_malformed_number_is_skipped_not_raised() -> None:
     from domovoi.chat_video import media
 
