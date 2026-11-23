@@ -1136,6 +1136,21 @@ def _codeload_url(owner: str, repo: str, ref: str) -> str:
     return url
 
 
+#: The only hosts a GitHub install talks to, redirects included
+#: (docs/INTERNET.md).
+_GITHUB_INSTALL_HOSTS = frozenset({"api.github.com", "codeload.github.com"})
+
+
+async def _github_hosts_only(request: Any) -> None:
+    """httpx request hook: every hop, redirects included, stays on the
+    GitHub hosts an install uses."""
+    if request.url.scheme != "https" or request.url.host not in _GITHUB_INSTALL_HOSTS:
+        raise InstallError(
+            "github_download_failed",
+            "the download was sent to a host other than GitHub's; nothing was installed",
+        )
+
+
 async def download_github_zip(github_url: str) -> tuple[bytes, str]:
     """Resolve + download a repo archive with a streaming size cap.
     Returns (zip bytes, 'url@ref').
@@ -1164,7 +1179,10 @@ async def download_github_zip(github_url: str) -> tuple[bytes, str]:
     headers = {
         "User-Agent": "domovoi/1.4.0 (+github.com/coders-farm-official/domovoi)"
     }
-    async with egress.async_client(follow_redirects=True, timeout=60) as client:
+    async with egress.async_client(
+        follow_redirects=True, timeout=60,
+        event_hooks={"request": [_github_hosts_only]},
+    ) as client:
         if not ref:
             api = f"https://api.github.com/repos/{owner}/{repo}"
             r = await client.get(api, headers=headers)
