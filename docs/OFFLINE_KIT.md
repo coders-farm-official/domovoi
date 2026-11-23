@@ -8,7 +8,8 @@ packages.
 
 > **Coming in 1.5.0, being built.** This page describes the kit's format,
 > how to check a stick, how a server makes a kit and how a Linux computer
-> (Ubuntu 26.04) and a Windows 11 PC install from one. The Mac installing
+> (Ubuntu 26.04) and a Windows 11 PC install from one, and how a server
+> updates from a newer one. The Mac installing
 > from a kit arrives in a later step of 1.5.0; this page grows with it.
 
 ## Making a kit
@@ -158,6 +159,67 @@ stick in until Setup finishes.
 [WINDOWS_HOST.md, Installing without internet](WINDOWS_HOST.md#installing-without-internet)
 has the steps, the checks and the refusals. The Mac follows in a later
 step of 1.5.0.
+
+## Updating from a kit
+
+A house with no internet updates from a newer kit. On the server's
+dashboard, as the admin: **Settings → System → About & updates → Update
+from an offline kit**.
+
+1. Plug the newer kit's stick into the computer the browser runs on, and
+   press **choose the kit folder**. Choose the stick itself (`DOMOVOIKIT`,
+   the folder with `kit.json` in it).
+2. The server reads `kit.json` first and says plainly when it can't use
+   the kit:
+
+   | The card says | Why |
+   |---|---|
+   | This kit is 1.5.0; this server already runs 1.5.0. | A kit only updates to a newer release; it never downgrades. |
+   | This kit is for a Mac with an Apple chip; this server is a Windows or Linux PC… | The kit wasn't made for this server's machine. Make one with that box ticked. |
+   | This update needs 3.1 GB free on the server. It has 1.2 GB. | The files to come, the copy the update makes of what it installs, and a copy of the Python packages to roll back to. |
+   | Updates from a kit follow the stable channel… | Switch to stable in About & updates. |
+   | …its update service isn't installed. | Linux: `sudo bash scripts/linux/install-update-unit.sh`. |
+   | This kit is not a Domovoi release… | The release's signed manifest doesn't verify with Domovoi's release key. Nothing changes; what was sent is removed. |
+   | …doesn't match the kit… thrown away | A file's SHA-256 isn't the one `kit.json` names: a bad copy or a failing stick. Send it again, or make the stick again. |
+
+3. The page sends only what the server lacks: the release's signed
+   manifest and source first, then the Python packages it doesn't have at
+   the kit's versions, the container images Docker doesn't hold by their
+   pinned digests, the music player image, Ubuntu's packages when one the
+   update installs is missing, and the phone app when the kit's is newer.
+   A typical update sends 0.5 to 1.5 GB. If the page is closed or the
+   connection drops, choose the folder again: it picks up where it
+   stopped.
+4. Press **update now**. The server checks the release signature again,
+   takes the kit's release out of `source/domovoi.bundle` (it must be the
+   signed manifest's commit, built on the release the server runs, and
+   signed by an allowed signer while signed updates are enforced), moves
+   the checkout to it and starts the update, as **Restart** does after a
+   pull. The update installs the Python packages from the hash-pinned
+   lock with no package index, loads the images (each held to the digest
+   the compose file pins) and installs Ubuntu's packages from the kit's
+   copy of Ubuntu's signed archive. Nothing comes from the internet, so it
+   works with internet access set to **No**.
+5. After a good update the phone app from the kit goes in (checked like an
+   admin's upload of the APKs) and the uploaded copy is removed from the
+   server. If the update fails it is rolled back as usual, including the
+   Python packages (from a copy made before the update) and the music
+   player image; the uploaded files stay for another try, and **cancel**
+   removes them.
+
+Models, voices and the other files an install copies are not part of an
+update: an update with internet doesn't download them either.
+
+The upload lives in `~/.domovoi/offline_kit/update/` of the service user
+(`files/` in the kit's layout, `session.json`, and `request`, which names
+the commit for the update unit). The update unit copies what it installs
+into its own folder before using it, and removes that copy when it ends.
+An administrator who moved the checkout to the kit's release by hand can
+run one update from a stick: `sudo systemctl set-environment
+DOMOVOI_OFFLINE_SOURCE=/media/alex/DOMOVOIKIT`, `sudo systemctl start
+domovoi-update.service`, then `sudo systemctl unset-environment
+DOMOVOI_OFFLINE_SOURCE`. A split file on the stick is not joined that
+way; the dashboard's upload joins them.
 
 ## Checking a stick
 

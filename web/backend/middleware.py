@@ -63,6 +63,9 @@ BODY_LIMITS: tuple[tuple[str, int], ...] = (
     # A phone's shared calendars (api/calendar.py, at most 20,000 events
     # of a few hundred bytes each).
     ("/api/calendar/phones", 8 * MB),
+    # An update from an offline kit: kit.json (at most 64 MiB), then each
+    # file in chunks of at most 16 MiB (domovoi/kit_update.py CHUNK_MAX).
+    ("/api/offline-kit/update", 65 * MB),
 )
 
 

@@ -344,6 +344,38 @@ a way that would otherwise get reported as a bug.
   reserved plugin slug. INTERNET.md, and PLUGIN_DEVELOPMENT.md,
   "Publishing so updates are found".
 
+## 1.5.0 (unreleased) — Update a house with no internet from a newer offline kit
+
+- **What changed.** Settings → System → About & updates → **Update from an
+  offline kit** (admins): plug the newer kit's stick into any computer and
+  choose its folder in the browser. The server first reads `kit.json` and
+  refuses, in one sentence, a kit that is older than or the same as the
+  release it runs, a kit for another machine, a server that doesn't follow
+  stable or has no update service, and a disk without room for the
+  update. It then asks only for what it lacks: the release's signed
+  manifest, the source, the Python packages it doesn't have at the kit's
+  versions, the container images Docker doesn't hold by their pinned
+  digests, the music player image, Ubuntu's packages when one the update
+  installs is missing, and the phone app when the kit's is newer. The
+  upload goes in pieces and picks up where it stopped after a reload or a
+  dropped connection (choose the folder again); each file is held to
+  `kit.json`'s size and SHA-256, and the release signature is checked as
+  soon as it arrives. **Update now** fetches the kit's release from its
+  bundle (it must be the signed manifest's commit, built on what runs now,
+  and signed by an allowed signer while signing is enforced), moves the
+  checkout to it and starts the update unit, which installs the wheels,
+  images and Ubuntu packages from the uploaded copy, each against the
+  release's own pins, with no internet. After a good update the phone app
+  goes in through the same check as an admin's upload, and the uploaded
+  copy is removed; **cancel** removes it at any time but during the update.
+- **What to know.** It works with internet access set to No. A kit never
+  downgrades. Models, voices and the other files an install copies are not
+  part of an update (an online update doesn't download them either). The
+  update keeps a copy of the venv while it changes the Python packages, so
+  a rollback can put it back with no internet: the disk check counts it.
+  `apply-update.sh` also takes `DOMOVOI_OFFLINE_SOURCE=<kit folder>` for an
+  administrator's own run. OFFLINE_KIT.md, "Updating from a kit".
+
 ## 1.5.0 (unreleased) — Install Domovoi on Windows with no internet, from an offline kit
 
 - **What changed.** `DomovoiSetup.exe` installs from an offline kit: run

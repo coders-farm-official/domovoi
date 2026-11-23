@@ -559,6 +559,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         app.state.offline_kit_tidy_task = asyncio.create_task(
             asyncio.to_thread(kit_jobs.tidy_at_start), name="offline-kit-tidy")
+        # An update from an offline kit that the update unit just applied:
+        # the kit's phone app goes in and the uploaded copy goes
+        # (domovoi/kit_update.py settle).
+        from domovoi import kit_update
+
+        app.state.offline_kit_update_settle_task = asyncio.create_task(
+            asyncio.to_thread(kit_update.settle_at_start), name="offline-kit-update-settle")
 
     # Re-render the satellite-side canned MP3s (network_issues.mp3 today)
     # if the configured TTS voice has changed since the last render.
@@ -2791,6 +2798,89 @@ async def offline_kit_file(
         return FileResponse(path, media_type="application/octet-stream", filename=name,
                             headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"})
     raise HTTPException(status_code=404, detail="not found")
+
+
+# ─── Updating from a newer offline kit (release 1.5.0, P5) ────────────────
+# About & updates → Update from an offline kit (admins): the dashboard sends
+# the newer kit's kit.json, then each file the server lacks in resumable
+# chunks, then asks to apply: the release signature, the bundle's commit and
+# the checkout move here, then the update unit runs with the uploaded folder
+# as its offline source (domovoi/kit_update.py; scripts/linux/apply-update.sh).
+# Nothing reaches the internet, so it works under INTERNET_ACCESS=never.
+
+
+def _kit_refusal(e: Any) -> HTTPException:
+    return HTTPException(status_code=e.status, detail=e.detail())
+
+
+@app.get("/v1/admin/offline-kit/update", dependencies=[Depends(require_admin_read)])
+async def admin_offline_kit_update_status() -> dict[str, Any]:
+    """The update from a kit: what was sent, its state, the last error."""
+    from domovoi import kit_update
+
+    return await asyncio.to_thread(kit_update.status)
+
+
+@app.post("/v1/admin/offline-kit/update", dependencies=[Depends(require_admin_mutation)])
+async def admin_offline_kit_update_begin(request: Request) -> dict[str, Any]:
+    """The body is the newer kit's kit.json, as on the stick. 409/422
+    ``{reason, message}`` when the kit can't update this server (older or
+    the same release, another machine, no room on the disk, ...); else the
+    files to send, with what the server already holds of each."""
+    from domovoi import kit_update
+
+    raw = await request.body()
+    try:
+        return await asyncio.to_thread(kit_update.begin, raw)
+    except kit_update.Refusal as e:
+        raise _kit_refusal(e) from None
+
+
+@app.put("/v1/admin/offline-kit/update/{sid}/file", dependencies=[Depends(require_admin_mutation)])
+async def admin_offline_kit_update_file(
+    sid: str, request: Request,
+    path: str = Query(..., max_length=1024),
+    offset: int = Query(..., ge=0),
+) -> dict[str, Any]:
+    """One chunk (the raw body, at most 16 MiB) of one kit file at
+    ``offset``. 409 ``offset`` with ``received`` when the server holds
+    another amount (send from there); 422 ``pin`` when the finished file
+    isn't the one kit.json names (it is thrown away)."""
+    from domovoi import kit_update
+
+    body = await request.body()
+    try:
+        return await asyncio.to_thread(kit_update.receive, sid, path, offset, body)
+    except kit_update.Refusal as e:
+        raise _kit_refusal(e) from None
+
+
+@app.post("/v1/admin/offline-kit/update/{sid}/apply", dependencies=[Depends(require_admin_mutation)])
+async def admin_offline_kit_update_apply(sid: str) -> dict[str, Any]:
+    """Every file is here: check the release, move the checkout to the
+    kit's release and start the update unit with the kit as its source."""
+    await container_freeze.require_unfrozen("offline_kit")
+    from domovoi import kit_update, self_restart
+
+    try:
+        view = await asyncio.to_thread(kit_update.prepare_apply, sid)
+    except kit_update.Refusal as e:
+        raise _kit_refusal(e) from None
+    restart = await self_restart.restart()
+    if not restart.get("ok"):
+        await asyncio.to_thread(kit_update.restart_failed, sid, str(restart.get("error") or "not started"))
+    return {**view, "restart": restart}
+
+
+@app.delete("/v1/admin/offline-kit/update", dependencies=[Depends(require_admin_mutation)])
+async def admin_offline_kit_update_cancel() -> dict[str, Any]:
+    """Stop the update from a kit and remove what was uploaded."""
+    from domovoi import kit_update
+
+    try:
+        return await asyncio.to_thread(kit_update.cancel)
+    except kit_update.Refusal as e:
+        raise _kit_refusal(e) from None
 
 
 # ─── Satellite plugin-payload channel ──────────────────────────────────────

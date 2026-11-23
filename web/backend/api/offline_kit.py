@@ -104,6 +104,78 @@ async def offline_kit_cancel(request: Request):
     return bridge_response(status, doc) if status != 200 else doc
 
 
+# ─── Updating from a newer kit (P5; domovoi/kit_update.py on the core) ────
+# Declared before the "/{build_id}" routes, so "update" is never read as a
+# kit's id. The browser sends kit.json, then each file the core lacks in
+# chunks (raw bodies, at most 16 MiB), then asks to apply; this router
+# forwards them as they are, with the caller's credentials.
+
+_SID_RE = re.compile(r"[0-9a-f]{32}")
+_KIT_JSON_MAX = 64 * 1024 * 1024
+_CHUNK_MAX = 16 * 1024 * 1024
+
+
+async def _forward_raw(method: str, path: str, request: Request, limit: int, timeout: float = 300.0):
+    body = await request.body()
+    if len(body) > limit:
+        raise HTTPException(status_code=413, detail="too big")
+    url = f"{domovoi_url().rstrip('/')}{path}"
+    headers = {**auth_forward_headers(request), "Content-Type": "application/octet-stream"}
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=timeout)) as client:
+            r = await client.request(method, url, content=body, headers=headers)
+    except httpx.HTTPError:
+        raise HTTPException(status_code=502, detail="the core didn't answer") from None
+    try:
+        doc = r.json()
+    except ValueError:
+        doc = r.text
+    return bridge_response(r.status_code, doc) if r.status_code != 200 else doc
+
+
+@router.get("/update", dependencies=[Depends(require_admin_read)])
+async def offline_kit_update_status(request: Request):
+    """The update from a kit: what was sent, its state, the last error."""
+    status, doc = await get_admin("/v1/admin/offline-kit/update", timeout=60.0,
+                                  headers=auth_forward_headers(request))
+    return bridge_response(status, doc) if status != 200 else doc
+
+
+@router.post("/update", dependencies=[Depends(require_admin_mutation)])
+async def offline_kit_update_begin(request: Request):
+    """The body is the kit's kit.json. 409/422 ``{reason, message}`` when
+    the kit can't update this server; else the files to send."""
+    return await _forward_raw("POST", "/v1/admin/offline-kit/update", request, _KIT_JSON_MAX)
+
+
+@router.put("/update/{sid}/file", dependencies=[Depends(require_admin_mutation)])
+async def offline_kit_update_file(sid: str, request: Request, path: str = Query(..., max_length=1024),
+                                  offset: int = Query(..., ge=0)):
+    """One chunk of one kit file at ``offset`` (the raw body)."""
+    if not _SID_RE.fullmatch(sid):
+        raise HTTPException(status_code=404, detail="no such update")
+    q = urlencode({"path": path, "offset": offset})
+    return await _forward_raw("PUT", f"/v1/admin/offline-kit/update/{sid}/file?{q}", request, _CHUNK_MAX)
+
+
+@router.post("/update/{sid}/apply", dependencies=[Depends(require_admin_mutation)])
+async def offline_kit_update_apply(sid: str, request: Request):
+    """Check the release, move to it and start the update."""
+    if not _SID_RE.fullmatch(sid):
+        raise HTTPException(status_code=404, detail="no such update")
+    status, doc = await post_admin(f"/v1/admin/offline-kit/update/{sid}/apply", timeout=300.0,
+                                   headers=auth_forward_headers(request))
+    return bridge_response(status, doc) if status != 200 else doc
+
+
+@router.delete("/update", dependencies=[Depends(require_admin_mutation)])
+async def offline_kit_update_cancel(request: Request):
+    """Stop the update from a kit and remove what was uploaded."""
+    status, doc = await delete_admin("/v1/admin/offline-kit/update", timeout=60.0,
+                                     headers=auth_forward_headers(request))
+    return bridge_response(status, doc) if status != 200 else doc
+
+
 @router.post("/{build_id}/ticket", dependencies=[Depends(require_admin_mutation)])
 async def offline_kit_ticket(build_id: str, request: Request):
     """A single-use download ticket for the kit's image (5 minutes), and
