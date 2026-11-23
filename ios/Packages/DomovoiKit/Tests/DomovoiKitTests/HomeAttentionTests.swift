@@ -247,4 +247,80 @@ final class HomeAttentionTests: XCTestCase {
             "a wide pane: Android's 40 dp"
         )
     }
+
+    // MARK: - Friend Houses' unread row (1.4.1)
+
+    /// The dashboard's words, a count only, opening Friend houses; none at 0
+    /// or with no count.
+    func testFriendHousesRowSaysTheCountAndOpensFriendHouses() throws {
+        let one = try XCTUnwrap(homeFriendHousesRow(unread: 1))
+        XCTAssertEqual("1 unread Friend Houses message", one.text)
+        XCTAssertEqual("3 unread Friend Houses messages", homeFriendHousesRow(unread: 3)?.text)
+        XCTAssertEqual(.screen(.friendHouses), one.target)
+        XCTAssertEqual(.brand, one.tone)
+        XCTAssertNil(one.at)
+        XCTAssertNil(homeFriendHousesRow(unread: 0), "0 hides it")
+        XCTAssertNil(homeFriendHousesRow(unread: nil), "no count (an old server, or hidden): no row")
+        XCTAssertNil(homeFriendHousesRow(unread: -2))
+    }
+
+    /// Added to whatever the problems show (`HomeWithRow`): after the rows,
+    /// under the summary line, or on its own — the setting hides problems,
+    /// not a count of messages.
+    func testFriendHousesRowJoinsWhateverTheProblemsShow() throws {
+        let fh = try XCTUnwrap(homeFriendHousesRow(unread: 2))
+
+        let after = HomeAttentionState(view: .rows(rows(1)), friendHouses: fh)
+        XCTAssertTrue(after.shown)
+        XCTAssertEqual(["k0", "fh-unread"], after.shownRows.map(\.key))
+        XCTAssertEqual([], after.extraRows)
+
+        let summary = HomeAttentionState(view: .summary(count: 4), friendHouses: fh)
+        XCTAssertTrue(summary.shown)
+        XCTAssertEqual("4", summary.summaryCount)
+        XCTAssertEqual([], summary.shownRows)
+        XCTAssertEqual(["fh-unread"], summary.extraRows.map(\.key))
+        XCTAssertNil(summary.moreLabel)
+
+        // Nothing the setting lets this phone see (admins only, or not
+        // answered yet): the row on its own, and no "checking…" about
+        // problems it can't see.
+        let alone = HomeAttentionState(view: .none, checking: true, isStale: true, friendHouses: fh)
+        XCTAssertTrue(alone.shown)
+        XCTAssertEqual(["fh-unread"], alone.shownRows.map(\.key))
+        XCTAssertFalse(alone.showsChecking)
+        XCTAssertFalse(alone.showsStaleMark)
+
+        // No problems at all: the card is drawn for the row alone.
+        let empty = HomeAttentionState(view: .rows([]), friendHouses: fh)
+        XCTAssertTrue(empty.shown)
+        XCTAssertEqual(["fh-unread"], empty.shownRows.map(\.key))
+
+        // Without it, nothing changed.
+        XCTAssertFalse(HomeAttentionState(view: .none).shown)
+        XCTAssertFalse(HomeAttentionState(view: .rows([])).shown)
+    }
+
+    /// It counts toward the phone's cap like any row, last.
+    func testFriendHousesRowIsCountedInThePhonesCap() throws {
+        let fh = try XCTUnwrap(homeFriendHousesRow(unread: 1))
+        let state = HomeAttentionState(view: .rows(rows(homePhoneRows)), compact: true, friendHouses: fh)
+        XCTAssertEqual(homePhoneRows, state.shownRows.count)
+        XCTAssertFalse(state.shownRows.contains { $0.key == "fh-unread" })
+        XCTAssertEqual(homeMoreLabel(extra: 1), state.moreLabel)
+        let open = HomeAttentionState(view: .rows(rows(homePhoneRows)), compact: true, expanded: true, friendHouses: fh)
+        XCTAssertEqual("fh-unread", open.shownRows.last?.key)
+    }
+
+    /// `from` carries it through; the model's `attention` builds it from the
+    /// gate's count.
+    func testTheCardIsBuiltWithTheFriendHousesCount() {
+        let state = HomeAttentionState.from(
+            health: nil, rooms: nil, plugins: nil, acq: nil,
+            visibility: "admins", settingKnown: true, shared: false, checking: false,
+            friendHouses: homeFriendHousesRow(unread: 5)
+        )
+        XCTAssertEqual(.none, state.view)
+        XCTAssertEqual(["5 unread Friend Houses messages"], state.shownRows.map(\.text))
+    }
 }
