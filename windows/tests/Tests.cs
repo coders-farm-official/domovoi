@@ -2006,6 +2006,7 @@ static partial class Tests
                 System.IO.File.WriteAllText(x, "secret");
                 using (var h = Domovoi.Windows.Helper.Logs.OpenSource(x)) True(!h.IsInvalid, "a plain file opens");
                 Throws<InvalidOperationException>(delegate { Domovoi.Windows.Helper.Logs.OpenSource(System.IO.Path.Combine(link, "x.log")).Dispose(); }, "a source through a junction");
+                using (var h = Domovoi.Windows.Helper.Logs.OpenSource(System.IO.Path.Combine(link, "x.log"), true)) True(!h.IsInvalid, "an update source through a junction above it opens");
                 string hard = System.IO.Path.Combine(root, "hard.log");
                 var psi = new System.Diagnostics.ProcessStartInfo(System.IO.Path.Combine(Environment.SystemDirectory, "cmd.exe"),
                     "/c mklink /H " + CommandLine.Quote(hard) + " " + CommandLine.Quote(x));
@@ -2014,6 +2015,14 @@ static partial class Tests
                 True(System.IO.File.Exists(hard), "made a hard link");
                 Throws<InvalidOperationException>(delegate { Domovoi.Windows.Helper.Logs.OpenSource(hard).Dispose(); }, "a source with a second name");
                 Throws<InvalidOperationException>(delegate { Domovoi.Windows.Helper.Logs.OpenSource(x).Dispose(); }, "its other name too");
+                Throws<InvalidOperationException>(delegate { Domovoi.Windows.Helper.Logs.OpenSource(hard, true).Dispose(); }, "an update source with a second name");
+                string flink = System.IO.Path.Combine(root, "file-link.log");
+                var lpsi = new System.Diagnostics.ProcessStartInfo(System.IO.Path.Combine(Environment.SystemDirectory, "cmd.exe"),
+                    "/c mklink " + CommandLine.Quote(flink) + " " + CommandLine.Quote(x));
+                lpsi.UseShellExecute = false; lpsi.CreateNoWindow = true; lpsi.RedirectStandardOutput = true; lpsi.RedirectStandardError = true;
+                using (var pr = System.Diagnostics.Process.Start(lpsi)) { pr.StandardOutput.ReadToEnd(); pr.WaitForExit(); }
+                if (System.IO.File.Exists(flink))
+                    Throws<InvalidOperationException>(delegate { Domovoi.Windows.Helper.Logs.OpenSource(flink, true).Dispose(); }, "an update source that is itself a link");
             }
             finally
             {
