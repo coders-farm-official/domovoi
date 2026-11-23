@@ -379,3 +379,31 @@ def test_two_players_against_the_real_server_play_the_same_sample_together() -> 
     assert max(abs(e) for e in errs) <= 48, errs
     for rp, _ in devices:
         assert rp.player.late == 0 and rp.player.jumps == 0
+
+
+# ─── spoken sounds on the timeline (slice 5b) ─────────────────────────────
+
+
+def test_speech_spans_say_when_the_room_is_speaking_and_a_flush_cuts_them() -> None:
+    p = R.TimedPlayer()
+    p.on_text(msg(type="speech", start_us=50_000, end_us=90_000), 0)
+    assert p.speech_playing(10_000) is False          # no clock yet: can't tell
+    converged(p)                                      # server = local
+    assert p.speech_playing(40_000) is True           # queued: a wake now is a barge-in
+    assert p.speech_playing(60_000) is True
+    assert p.speech_playing(95_000) is False          # over
+    p.on_text(msg(type="speech", start_us=100_000, end_us=200_000), 0)
+    p.on_text(msg(type="flush", at_us=120_000), 0)    # a barge-in cut it
+    assert p.speech_playing(110_000) is True
+    assert p.speech_playing(130_000) is False
+    p.on_text(msg(type="speech", start_us=300_000, end_us=400_000), 0)
+    p.on_text(msg(type="timeline", timeline_id=2, t0_us=0), 0)
+    assert p.speech_playing(310_000) is False         # a new timeline forgets it
+
+
+def test_seconds_until_a_server_time_needs_the_clock() -> None:
+    rp = R.RoomPlayer("ws://192.168.1.20:6370/v1/room-audio/k_sat", "k_sat", lambda: "t",
+                      sd=SimpleNamespace(), clock=lambda: 20_000.0)
+    assert rp.seconds_until(500_000) is None
+    converged(rp.player, offset_us=1_000.0)
+    assert rp.seconds_until(521_000) == pytest.approx(0.5, abs=1e-3)

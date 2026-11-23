@@ -124,7 +124,9 @@ class RoomStreamer:
             last_start, last = self._speech[-1]
             start = max(start, last_start + len(last))
         self._speech.append((start, a))
-        return self.play_at(start), self.play_at(start + len(a))
+        span = self.play_at(start), self.play_at(start + len(a))
+        self._broadcast(P.speech_msg(*span))
+        return span
 
     # ── timed controls ─────────────────────────────────────────────────
     def _at(self, at_us: float | None) -> int:
@@ -176,10 +178,21 @@ class RoomStreamer:
             self._start()
 
     # ── music-only controls (slice 5b): sounds mixed in play on ──────
+    def _speech_spans(self, from_us: float | None = None) -> list[dict[str, Any]]:
+        """``speech`` messages for the sounds still to end (from ``from_us``)."""
+        now = self.clock() if from_us is None else from_us
+        out = []
+        for s, a in self._speech:
+            start, end = self.play_at(s), self.play_at(s + len(a))
+            if end > now:
+                out.append(P.speech_msg(max(start, now), end))
+        return out
+
     def _rerender_from(self, at: int) -> None:
         """After a flush at ``at``: send the timeline again from there, so
         a sound that was mixed into the flushed chunks (an answer, a timer)
-        plays on without the music it was mixed with."""
+        plays on without the music it was mixed with. The flush cut its
+        ``speech`` span on the speakers, so the span is sent again."""
         if self.next_index is None:
             return
         from_index = max(0, self.index_at(at))
@@ -188,6 +201,8 @@ class RoomStreamer:
             self.next_index = min(self.next_index, from_index)
         else:
             self.next_index = None
+        for msg in self._speech_spans(at):
+            self._broadcast(msg)
 
     def _drop_buffered_music(self) -> None:
         """Forget what the decoder holds: it was decoded before a pause or
@@ -245,6 +260,8 @@ class RoomStreamer:
     # ── speakers ───────────────────────────────────────────────────────
     def subscribe(self, sink: Sink) -> None:
         sink.send_control(P.timeline_msg(self.timeline_id, self.t0_us))
+        for msg in self._speech_spans():
+            sink.send_control(msg)
         soon = self.clock() + MIN_LEAD_US
         for index, frame in self._recent:
             if self.play_at(index) > soon:

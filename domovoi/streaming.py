@@ -402,6 +402,10 @@ Server → Client
                            hardware output volume (0-100). Sent BEFORE
                            response_start so the spoken confirmation plays
                            at the new level. Scales both TTS and music.
+                           1.5.0: `at_us` (room-audio server clock) for a
+                           device that plays room audio: every device of
+                           the room gets the frame and applies it then
+                           (domovoi/room_sound.py).
   text  sounds_changed     {"type":"sounds_changed"} — the core
                            re-rendered the sound clips (a greeting was
                            edited); the Pi re-syncs its sound cache. Carries

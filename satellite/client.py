@@ -6610,8 +6610,22 @@ class Satellite(pc_engine.SpareDeviceEngine):
         )
 
     def _reply_playing_here(self) -> bool:
-        """This device's speaker is playing (or draining) a reply."""
-        return self.playback_active.is_set() or not self._playback_idle.is_set()
+        """This device's speaker is playing (or draining) a reply, or the
+        room's synced playout is speaking (1.5.0: an answer, a timer or an
+        announcement from every speaker): a wake word now is a barge-in."""
+        return (self.playback_active.is_set() or not self._playback_idle.is_set()
+                or self._room_speech_playing())
+
+    def _room_speech_playing(self) -> bool:
+        """The room player has a spoken sound playing or queued
+        (`speech` spans on /v1/room-audio)."""
+        rp = getattr(self, "_room_player", None)
+        if rp is None:
+            return False
+        try:
+            return bool(rp.speech_playing())
+        except Exception:  # noqa: BLE001 — a hint for the barge-in flag only
+            return False
 
     def _claim_wake(
         self, word: str, score: float | None, pre_wake: list[float], *, barge_in: bool = False,
@@ -7391,8 +7405,13 @@ class Satellite(pc_engine.SpareDeviceEngine):
             # Stay armed through the deferred-drain tail (see the VAD-barge
             # monitor above) — short replies finish playing after response_end
             # clears playback_active, so also accept "audio still draining".
+            # 1.5.0: armed too while the answer plays on the room's synced
+            # playout (no PCM comes down this socket for it). Only the wake
+            # word barges in over it: the other speakers' sound is not in
+            # this device's echo reference, so the VAD barge stays off.
             if not self.cfg.barge_in or (
                 not self.playback_active.is_set() and self._playback_idle.is_set()
+                and not self._room_speech_playing()
             ):
                 pending = np.empty(0, dtype=np.int16)
                 primed = False

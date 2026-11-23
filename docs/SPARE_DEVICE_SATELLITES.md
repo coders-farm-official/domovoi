@@ -1248,3 +1248,32 @@ Manage them in **Settings → Rooms**, as a signed-in admin:
 
 Everyone else, and the phone apps, see only rooms ("the Kitchen"); the
 word "satellite" stays on the admin screens.
+
+### A room with several speakers
+
+Every satellite in a room plays the room's sound **together, in sync**:
+
+- **Music, radio, podcasts, audiobooks and Sleep sounds** play from every
+  speaker in the room at once. Pause, skip, stop and volume change on all
+  of them at the same moment.
+- **Answers, timers, alarms, announcements, intercom and plugins' speech**
+  play from every speaker too. Music dips under the words and comes back
+  after.
+- When someone says the wake word, the music goes quiet on every speaker
+  while Domovoi listens and answers, then carries on.
+- Saying the wake word during an answer, a timer or an announcement stops
+  it on every speaker (music keeps playing). Any satellite in the room
+  hears it.
+- The wake chime or greeting plays only on the satellite that heard you.
+- A **drop-in call** stays on one satellite (the one it was placed with);
+  the room's music stops for the call and comes back after it.
+- A Bluetooth speaker or headphones on a device are that device's own
+  business: Domovoi plays through whatever output the device uses.
+- An **older satellite or phone app** that can't play in sync plays the
+  room's sound only when it is the room's only device. Update it to have
+  it join in.
+
+A room with one satellite works as before, with answers starting as fast
+as ever. Its music now plays through the same synced player (a moment
+later at the start, about half a second, instead of a few seconds of
+buffering). How the timing works: [ROOM_AUDIO_PROTOCOL.md](ROOM_AUDIO_PROTOCOL.md).

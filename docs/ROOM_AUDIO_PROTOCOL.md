@@ -168,7 +168,28 @@ Room gain (ducking): from `at_us`, ramp linearly from the current gain to
 `gain` (0.0 to 1.0) over `ramp_ms`. It multiplies the device's own volume.
 The gain starts at 1.0 on connect and on every new timeline.
 
-### 5.4 `pong`
+### 5.4 `speech`
+
+```json
+{"type": "speech", "start_us": 124100000, "end_us": 126350000}
+```
+
+A spoken sound (an answer, a timer or an alarm, an announcement, a
+plugin's speech) is mixed into the timeline from `start_us` to `end_us`
+(server clock). Sent when the sound is queued (normally `playout_ms` before
+it starts), to a speaker that joins while one is still to end, and again
+after a `flush` that cut only the music (the flush itself cuts every span
+at its `at_us`; the span that plays on is told again from there).
+
+A client keeps the spans that have not ended. While one is playing or still
+to come, a wake word heard by the device is a **barge-in**, exactly as over
+its own reply: it sends `wake_claim` with `barge_in: true` on `/v1/stream`,
+and the server stops the room's speech on every speaker (a timed `flush`),
+while the music plays on. A client that ignores this message loses only
+that: the server still treats a wake during the room's answer as a
+barge-in.
+
+### 5.5 `pong`
 
 ```json
 {"type": "pong", "t0": 5551000, "t1": 123456001, "t2": 123456040}
@@ -251,7 +272,36 @@ time `T(n) = t0_us + n * 1e6 / 48000`.
 The spike held two clients within 1.1 ms (p95) for 6 minutes with this
 scheme, a 500 ms buffer, ±50 ppm clocks and Wi-Fi-like jitter.
 
-## 9. Codec
+## 9. What plays here
+
+Which room sounds take this stream (the server's
+`domovoi/room_sound.py`):
+
+| Sound | Path |
+|---|---|
+| Music, radio, podcasts, audiobooks, Sleep sounds (the room's MPD stream) | This stream, whenever a device of the room is connected here, a room with one speaker included. Devices that never connect here get today's `music_start` on `/v1/stream` (their own stream player) only when no device of the room plays room audio. |
+| Spoken answers, timers and alarms, announcements, intercom, Friend House messages, plugin speech | This stream in a room with more than one live device; `/v1/stream` (no playout delay) in a room with one. |
+| Wake chime or greeting | The device that heard the wake word, played by itself. |
+| Drop-in call | `/v1/stream` of the one device the call is on; the room's music here stops for the call and comes back after it. |
+
+Timing of the room's controls:
+
+* **Pause, stop and skip** (by voice, the dashboard, a phone, a room
+  screen): a `flush` at one `at_us` on every speaker; after a skip the
+  timeline carries on with the next song from there. A sound mixed over the
+  music (an answer) plays on: the flush cuts its `speech` span, which is
+  told again.
+* **A voice turn**: from the wake word the room's music is held silent with
+  `gain` 0 (30 ms ramp) on every speaker while the timeline runs on (the
+  song carries on, as it always did while a turn listened). It comes back
+  with `gain` 1 timed at the first sample of a synced answer (the streamer
+  mixes the music down under speech), or at the turn's end.
+* **Volume**: the `/v1/stream` frame `set_volume` goes to every device of
+  the room, with `at_us` (server clock) for devices that play room audio;
+  they apply it when their clock model reads that time (at most one second
+  ahead), so the speakers change together.
+
+## 10. Codec
 
 Version 1 sends PCM only: 1.5 Mbit/s per speaker. That fits home Wi-Fi for a
 room's few speakers, needs no native decoder on any device, and adds no codec
@@ -259,7 +309,7 @@ delay. `opus` (libopus, BSD-3; one 20 ms packet of 48 kHz stereo per audio
 frame, `codec` = 1) is reserved for when measurements on real Wi-Fi call for
 it; a server sends it only to clients that list `"opus"` in `codecs`.
 
-## 10. Closing
+## 11. Closing
 
 | Code | Meaning |
 |---|---|

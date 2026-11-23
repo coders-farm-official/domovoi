@@ -288,7 +288,10 @@ class Arbiter:
             await self.send(session, grant)
             return grant
         rooms = self.group(session.room_id)
-        if t is not None or self._speaking(rooms):
+        # `barge_in: true`: the device heard the wake word over the room's
+        # answer (its own, or the synced playout's `speech`); trusted as
+        # well as this server's own view of what is playing.
+        if t is not None or self._speaking(rooms) or ctrl.get("barge_in") is True:
             await self._barge(t, rooms)
         t = self._new_turn(session, floor=floor, claim=claim, comparable=floor is not None)
         session.owner_claim = claim
