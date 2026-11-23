@@ -1521,6 +1521,13 @@ class Settings(BaseSettings):
     # editable via the web gear.
     dropin_relay_gate_dbfs: float = -55.0
 
+    # Speaker tuning (domovoi/room_calibration.py): measure a satellite's
+    # real output delay on its own when it joins or moves into a room with
+    # other speakers, if nothing is playing there. Off by default: the run
+    # plays an audible chirp from every speaker in the room, unasked. The
+    # room drawer's "Tune the speakers" runs it on demand either way.
+    room_calibration_auto: bool = False
+
     # ─── Media-play history ─────────────────────────
     # The Satellites "Recently played" tab records one row per play.
     # The pruner deletes rows older than this many days so the table

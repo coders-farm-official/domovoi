@@ -3409,6 +3409,20 @@ class SatellitesRepository:
             {"r": satellite_id, "m": wake_max},
         )
 
+    async def set_calibration(self, satellite_id: str, output_latency_us: int) -> bool:
+        """Store a speaker calibration (domovoi/room_calibration.py): the
+        device's output latency, relative within its room, stamped now."""
+        row = (
+            await self.s.execute(
+                text(
+                    "UPDATE satellites SET output_latency_us = :us, calibrated_at = now() "
+                    "WHERE satellite_id = :r RETURNING 1"
+                ),
+                {"r": satellite_id, "us": int(output_latency_us)},
+            )
+        ).first()
+        return row is not None
+
     async def move(self, satellite_id: str, room_id: str) -> bool:
         """Put the device in another (existing) room. Its id never changes;
         its calibration is cleared (the room around it changed). False when

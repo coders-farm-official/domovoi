@@ -6585,6 +6585,9 @@ def _satellite_view(row: dict[str, Any]) -> dict[str, Any]:
         "paired": bool(row.get("paired")),
         "connected": live is not None,
         "speaks_for_room": live is not None and reg.sessions.get(row["room_id"]) is live,
+        "output_latency_us": row.get("output_latency_us"),
+        "calibrated_at": (row["calibrated_at"].isoformat()
+                          if row.get("calibrated_at") is not None else None),
     }
 
 
@@ -6596,6 +6599,7 @@ async def _rooms_payload(s: Any) -> dict[str, Any]:
     rooms = await repo.list()
     devices = (await s.execute(text(
         "SELECT s.satellite_id, s.room_id, s.name, s.sat_type, s.board, "
+        "s.output_latency_us, s.calibrated_at, "
         "(p.satellite_id IS NOT NULL) AS paired FROM satellites s "
         "LEFT JOIN satellite_pairings p USING (satellite_id) ORDER BY s.satellite_id"
     ))).mappings().all()
@@ -6605,6 +6609,9 @@ async def _rooms_payload(s: Any) -> dict[str, Any]:
         by_room.setdefault(d["room_id"], []).append(_satellite_view(dict(d)))
     out = []
     names: dict[str, list[dict[str, Any]]] = {}
+    from domovoi.room_calibration import get_calibration
+
+    cal = get_calibration(app)
     for r in rooms:
         sats = by_room.get(r["room_id"], [])
         out.append({
@@ -6613,6 +6620,10 @@ async def _rooms_payload(s: Any) -> dict[str, Any]:
             "satellites": sats,
             "shared": len(sats) > 1,
             "linked_rooms": await repo.linked(r["room_id"]),
+            # Speaker tuning: how many live speakers can take part, and
+            # the last run's outcome (kept until the core restarts).
+            "tunable_speakers": len(cal.participants(r["room_id"])),
+            "calibration": cal.last.get(r["room_id"]),
         })
         names.setdefault(r["name"].strip().casefold(), []).append(r)
     # Rooms that share a name (label-grouped before 1.5.0): offered as a
@@ -6724,6 +6735,27 @@ async def admin_merge_rooms(room_id: str, body: _MergeRoomsBody) -> dict[str, An
     log.info("rooms: merged %s into %s (moved %s)", others, room_id, moved)
     return {"room_id": room_id, "merged": others, "moved_satellites": moved,
             "learned_samples_dropped": dropped}
+
+
+@app.post("/v1/admin/rooms/{room_id}/calibrate", dependencies=_ROOM_ADMIN)
+async def admin_calibrate_room(room_id: str) -> dict[str, Any]:
+    """"Tune the speakers": every speaker of the room plays a chirp in turn
+    while the others listen, and each one's output latency is measured
+    (domovoi/room_calibration.py). Takes a few seconds per speaker.
+    ``409`` with a sentence when it cannot run (one speaker, the room
+    playing, a run already going)."""
+    from domovoi.room_calibration import CalibrationRefused, get_calibration
+
+    async with session_scope() as s:
+        room = await RoomsRepository(s).get(room_id)
+        if room is None:
+            raise HTTPException(status_code=404, detail=f"no room {room_id!r}")
+        names = {d["satellite_id"]: d.get("name")
+                 for d in await SatellitesRepository(s).in_room(room_id)}
+    try:
+        return await get_calibration(app).calibrate(room_id, names=names)
+    except CalibrationRefused as e:
+        raise HTTPException(status_code=e.status, detail=e.message) from None
 
 
 @app.post(

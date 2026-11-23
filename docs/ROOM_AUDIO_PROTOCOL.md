@@ -61,7 +61,8 @@ The client sends `hello` as its first frame, within 10 s of the upgrade.
 {"type": "hello", "proto": 1, "satellite_id": "kitchen_2",
  "pairing_token": "<the device's pairing token>",
  "codecs": ["pcm_s16le"], "channels": 2,
- "output_latency_us": 0, "client": "room_player/1.5.0"}
+ "output_latency_us": 0, "supports": ["calibrate"],
+ "client": "room_player/1.5.0"}
 ```
 
 | Field | Required | Meaning |
@@ -71,7 +72,8 @@ The client sends `hello` as its first frame, within 10 s of the upgrade.
 | `pairing_token` | see §4 | The same token the device presents on `/v1/stream`. |
 | `codecs` | no | Codecs the client decodes, in preference order. Default `["pcm_s16le"]`. |
 | `channels` | no | 1 or 2, what the device plays. Informational in v1. |
-| `output_latency_us` | no | The device's own estimate of its output path beyond what its audio API reports. Informational; calibration (slice 7) will supply it. |
+| `output_latency_us` | no | The device's own estimate of its output path beyond what its audio API reports. Informational: the value the device plays by comes from the server (`latency`, §5.5). |
+| `supports` | no | Optional features. `"calibrate"`: the device takes part in speaker calibration (§11). |
 | `client` | no | Free text for logs. |
 
 The server answers `ready`, then a `timeline` (and, if the room is playing,
@@ -177,6 +179,21 @@ The gain starts at 1.0 on connect and on every new timeline.
 The answer to a `ping` (§7): `t0` echoed, `t1` when the server received the
 ping, `t2` when it sent the pong, both server clock.
 
+### 5.5 `latency`
+
+```json
+{"type": "latency", "output_latency_us": 1830}
+```
+
+The device's calibrated output latency (§11): how much later than its audio
+API's reported time its sound actually leaves the speaker (DAC, amplifier,
+USB, OS buffers the API does not count). A device starts every connection
+at 0; the server sends `latency` right after `ready` when the device has a
+calibrated value in its room, whenever a calibration changes it, and with 0
+when the device moves room. The device adds it in
+§8 step 1. Values are relative within the room (§11.4): only the
+differences between the room's speakers matter for sync.
+
 ## 6. Client to server
 
 ```json
@@ -194,6 +211,13 @@ Every 5 s while playing, all fields optional: the clock fit (§7), the mean
 absolute playout error over the period, and counters since connect. The
 server keeps the latest per device (the room drawer's sync state; automatic
 `playout_ms` raises on underruns).
+
+```json
+{"type": "calibrate_result", "run_id": "k3x9", "step": 1, "played": false,
+ "heard": true, "arrival_us": 124003210.5, "snr_db": 24.1}
+```
+
+A device's answer to a `calibrate` step (§11.2).
 
 ## 7. Clock sync
 
@@ -234,7 +258,10 @@ time `T(n) = t0_us + n * 1e6 / 48000`.
    `snd_pcm_status` htstamp plus delay, `AudioTrack.getTimestamp`,
    `AVAudioTime` host time). Smooth it by fitting it against frames written
    over the last few seconds; reported times jitter by about 1.5 ms on
-   WASAPI. Add `output_latency_us` when calibration supplies it.
+   WASAPI. Add `output_latency_us` (§5.5): the buffer is played as if it
+   reached the hardware at `dac_time + output_latency_us`, so a device with a
+   longer acoustic path plays its samples that much earlier. A calibration
+   chirp (§11) is the exception: it is timed by the API's time alone.
 2. Convert that local time to server time with the fit, then to the due
    index `due = (server_time - t0_us) * 48000 / 1e6`.
 3. The first buffer after convergence starts at `pos = round(due)`.
@@ -270,3 +297,95 @@ it; a server sends it only to clients that list `"opus"` in `codecs`.
 
 A client reconnects with backoff (1 s, doubling to 30 s) and plays the plain
 HTTP stream meanwhile only if it is the room's only speaker.
+
+## 11. Speaker calibration
+
+Audio APIs report their own buffer, not the whole path to the air. The
+room measures the rest with its microphones: one speaker plays a chirp at a
+stamped time while every device in the room records, then the next speaker
+plays, and so on. The server solves each device's output latency and sends
+it back as `latency` (§5.5). It also stores it
+(`satellites.output_latency_us`, `calibrated_at`), and a move clears it.
+
+Only devices that list `"calibrate"` in their hello's `supports` take part.
+A room with one such device has nothing to calibrate against and is skipped.
+
+### 11.1 `calibrate` (server to client)
+
+```json
+{"type": "calibrate", "run_id": "k3x9", "step": 1, "at_us": 123999000,
+ "play": true, "listen_ms": 400,
+ "chirp": {"f0_hz": 1000, "f1_hz": 6000, "ms": 80, "level": 0.3}}
+```
+
+Every taking-part device of the room gets each step; `play` is true for
+exactly one of them. Steps come one at a time, at least `listen_ms` plus
+1 s apart, with `at_us` about 1 s ahead.
+
+* **Play** (`play: true`): the chirp's first sample reaches the hardware at
+  server time `at_us`, by the audio API's own time **without**
+  `output_latency_us` (the measurement must not include the value it
+  measures). It is mixed over whatever plays; the server only calibrates a
+  room that is quiet.
+* **The chirp**: a linear sweep from `f0_hz` to `f1_hz` over `ms`
+  milliseconds, `x(t) = level * sin(2 pi (f0 t + (f1 - f0) t^2 / (2 T)))`
+  for `0 <= t < T`, with 5 ms raised-cosine fades at both ends, the same on
+  both channels. Each device builds it itself at its own rate: nothing
+  but these numbers travels.
+* **Record** (every device, the player too): the microphone from
+  `at_us - 100 ms` to `at_us + listen_ms`, each captured sample stamped
+  with the server time it reached the microphone (the API's capture time
+  through the clock fit, §7, fitted against samples captured like §8's
+  output times).
+* **Find**: cross-correlate the recording with the chirp, take the
+  envelope (the magnitude of the analytic signal), and pick the earliest
+  peak within 6 dB of the highest (a reflection can be louder than the
+  direct path, never earlier). Refine to a fraction of a sample with a
+  parabola through the peak and its neighbours.
+* **Heard**: the peak must stand at least 12 dB over the recording's
+  median envelope; otherwise the chirp was not heard.
+
+### 11.2 `calibrate_result` (client to server)
+
+One per step, within 2 s of the end of the listening window:
+
+| Field | Meaning |
+|---|---|
+| `run_id`, `step` | Echoed. |
+| `played` | This device played the chirp (only when asked to). |
+| `heard` | The chirp was found in this device's recording. |
+| `arrival_us` | With `heard`: server time the chirp's first sample reached this device's microphone, by its capture API's time. |
+| `snr_db` | With `heard`: the peak over the median envelope. |
+| `reason` | Without `heard`: `not_heard` (too far, too noisy), `no_mic`, `no_clock` (the fit has not converged), `busy` (the speaker or mic could not be opened). |
+
+A device that does not answer in time counts as not heard.
+
+### 11.3 The solve
+
+For player `i` and listener `j`, the server takes
+`m(i, j) = arrival_us(j) - at_us`. With `L` a device's output latency, `M`
+its input latency (the microphone path its capture API does not count) and
+`d(i, j)` the time sound takes between the two:
+
+```
+m(i, j) = L(i) + d(i, j) + M(j)        m(j, i) = L(j) + d(i, j) + M(i)
+m(i, i) = L(i) + M(i)                  (the device hearing itself, d ~ 0)
+```
+
+Played both ways, the distance cancels; with the self-recordings, so does
+the input latency: `L(i) - L(j) = ((m(i,i) + m(i,j)) - (m(j,j) + m(j,i))) / 2`.
+The server solves every measurement at once by least squares (unknowns: each
+`L`, each `M`, each pair's `d`). A device that cannot hear itself (an
+echo-cancelling array removes its own playback from its microphone) is
+solved by assuming its input latency equals the room's others' (a weak prior
+that only decides what the measurements leave open).
+
+A device is solved when it is linked to the room's largest group by a pair
+heard both ways. Others keep their previous value. A solve whose residuals
+exceed 2 ms (the measurements disagree) stores nothing.
+
+### 11.4 Values
+
+Microphones alone cannot tell a delay all speakers share from none, so the
+values are relative: the room's lowest is 0. That is all sync needs; a
+constant added to every speaker of a room moves none against another.
