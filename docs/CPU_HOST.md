@@ -737,6 +737,47 @@ If the box has less than 16 GB, run one Ollama model: point
 `ollama_model` and `ollama_tool_model` at the *same* small model and
 accept weaker routing.
 
+
+### Answers at once
+
+Ollama answers one request per model at a time unless told otherwise, so
+a question asked out loud would wait behind a chat reply or a bedtime
+story being written. Two things keep voice first:
+
+- **The core makes room.** A background model call (a story passage, the
+  memory pass, the news briefing, a plugin's request through `sdk.http`)
+  waits while a voice turn is under way and is stopped and sent again
+  after the turn; a typed chat reply waits for a spoken answer in
+  progress. A chat reply already on screen is never stopped.
+- **Ollama answers several requests at once where memory allows.** The
+  installer sets `OLLAMA_NUM_PARALLEL` in Ollama's unit by hardware, so a
+  voice turn gets its own slot even beside a chat reply that is already
+  streaming.
+
+Each extra slot costs one more context window of working memory for
+every loaded model: about 144 KB a token, so with the Q&A and routing
+models loaded at Ollama's default 4096-token windows a slot is roughly
+**1.1-1.2 GB**, and about **1.7 GB with an 8192 routing window**
+(`ollama_tool_num_ctx`). On a CPU, two answers at once also share the
+processor, so each comes a little slower while both run; a voice turn
+still starts at once instead of waiting.
+
+| Box | `OLLAMA_NUM_PARALLEL` | Why |
+|---|---:|---|
+| Under 24 GB | 1 | The floor tier's models and the voice models already fill it. |
+| 24 GB or more (the standard tier) | 2 | One slot for voice beside one chat or story: about 1.2 GB more. |
+| 48 GB or more | 3 | Room for two background answers and voice: about 2.3 GB more. |
+| NVIDIA GPUs with free memory for the models (about 9.4 GB) plus four windows | 4 | The windows live on the cards, so the box's memory isn't spent. |
+
+A box steps down a number while its memory is under the standard tier's
+line (22 GiB) plus the extra slots' cost, so the larger windows never
+squeeze the voice models: a 24 GB box with an 8192 routing window stays at
+1. What the GPUs have free is read from Ollama's own start-up lines, so a
+GPU box gets its 4 at the update after Ollama has first started there.
+The setting is written by the installer and by every update's
+re-provision, which restarts Ollama only when the unit's text changed. A
+Mac server follows the same memory tiers.
+
 ---
 
 ## What about the integrated GPU?

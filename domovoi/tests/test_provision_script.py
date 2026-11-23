@@ -131,16 +131,117 @@ def test_the_doc_pins_exactly_one_ollama_release():
     assert len(re.findall(r"^OLLAMA_SHA256=[0-9a-f]{64}$", doc, re.M)) == 1
 
 
-def test_ollama_unit_is_the_docs_unit():
-    script = SCRIPT.read_text(encoding="utf-8")
-    m = re.search(r"^ollama_unit_text\(\) \{\n  cat <<'EOF'\n(.*?)\nEOF\n\}$", script, re.M | re.S)
-    assert m, "ollama_unit_text() not found in provision.sh"
+def _docs_ollama_unit() -> str:
     doc = LINUX_HOST.read_text(encoding="utf-8")
     d = re.search(
         r"\*\*`/etc/systemd/system/ollama\.service`\*\*.*?\n\n```ini\n(.*?)\n```", doc, re.S
     )
     assert d, "the ollama.service block is gone from LINUX_HOST.md"
-    assert m.group(1) == d.group(1)
+    return d.group(1) + "\n"
+
+
+def test_ollama_unit_is_the_docs_unit():
+    script = SCRIPT.read_text(encoding="utf-8")
+    m = re.search(r"^ollama_unit_text\(\) \{\n(.*?)\n\}$", script, re.M | re.S)
+    assert m, "ollama_unit_text() not found in provision.sh"
+    # Its two heredocs, joined, are the doc's unit (one request at a time);
+    # the doc names the line that goes between them.
+    parts = re.findall(r"cat <<'EOF'\n(.*?)\nEOF", m.group(1), re.S)
+    assert len(parts) == 2
+    assert "\n".join(parts) + "\n" == _docs_ollama_unit()
+    assert "Environment=OLLAMA_NUM_PARALLEL=" in LINUX_HOST.read_text(encoding="utf-8")
+
+
+def _unit_for(tmp_path: Path, *, mem_mib: int, tier: str, journal: str = "",
+              env: dict[str, str] | None = None, had: int | None = None) -> str:
+    """ollama_unit_text() as provision.sh writes it on a box with
+    ``mem_mib`` of MemTotal, the given tier, Ollama start-up lines in the
+    journal, .env context windows and the unit it already has (the
+    script's own functions; what they call is stubbed)."""
+    script = SCRIPT.read_text(encoding="utf-8")
+    start = script.index("OLLAMA_PARALLEL_3_MIN_MEM_MIB=")
+    end = script.index("ollama_served_version() {")
+    unit_dir = tmp_path / "units"
+    unit_dir.mkdir(exist_ok=True)
+    (unit_dir / "ollama.service").write_text(
+        "" if had is None else f"Environment=OLLAMA_NUM_PARALLEL={had}\n", encoding="utf-8", newline="\n"
+    )
+    (tmp_path / "journal").write_text(journal, encoding="utf-8", newline="\n")
+    env_lines = "".join(f"  {k}) echo '{v}' ;;\n" for k, v in (env or {}).items())
+    prog = (
+        "set -u\n"
+        "declare -A M=([tier_standard_min_mem_mib]=22528)\n"
+        f"MEM_MIB={mem_mib}; TIER_EFF={tier}; UNIT_DIR='{unit_dir.as_posix()}'\n"
+        f"journalctl() {{ cat '{(tmp_path / 'journal').as_posix()}'; }}\n"
+        f"dotenv_get() {{ case $1 in\n{env_lines}  *) ;;\n  esac; }}\n"
+        + script[start:end]
+        + "\nollama_unit_text\n"
+    )
+    (tmp_path / "prog.sh").write_text(prog, encoding="utf-8", newline="\n")
+    proc = subprocess.run([BASH, str(tmp_path / "prog.sh")], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    return proc.stdout
+
+
+def _parallel(unit: str) -> int:
+    m = re.search(r"^Environment=OLLAMA_NUM_PARALLEL=(\d+)$", unit, re.M)
+    return int(m.group(1)) if m else 1
+
+
+_START = 'time=x level=INFO source=routes.go:1 msg="server config" env=map[]\n'
+_CPU = 'time=x level=INFO msg="inference compute" id=cpu library=cpu compute="" name=cpu description=cpu total="62.5 GiB"\n'
+
+
+def _gpu(free_gib: float) -> str:
+    return (f'time=x level=INFO msg="inference compute" id=0 library=CUDA compute=8.9 name=CUDA0 '
+            f'description="NVIDIA GeForce RTX 4070 Ti SUPER" type=discrete total="16.0 GiB" '
+            f'available="{free_gib} GiB"\n')
+
+
+@requires_bash
+def test_ollama_answers_at_once_by_tier(tmp_path):
+    """OLLAMA_NUM_PARALLEL (S3-7): 1 below the standard tier, 2 on it, 3
+    from 44 GiB; a box steps down while the extra context windows wouldn't
+    leave the tier its memory."""
+    floor = _unit_for(tmp_path, mem_mib=15800, tier="floor")
+    assert _parallel(floor) == 1
+    assert floor == _docs_ollama_unit()  # the doc's unit, unchanged
+    assert _parallel(_unit_for(tmp_path, mem_mib=23800, tier="standard")) == 2
+    assert _parallel(_unit_for(tmp_path, mem_mib=64000, tier="standard")) == 3
+    # --tier standard forced on a small box: a second window doesn't fit.
+    assert _parallel(_unit_for(tmp_path, mem_mib=16000, tier="standard")) == 1
+    # A 24 GB box with an 8192 routing window: 22528 + 1728 > 23800.
+    assert _parallel(_unit_for(tmp_path, mem_mib=23800, tier="standard",
+                               env={"OLLAMA_TOOL_NUM_CTX": "8192"})) == 1
+    # 48 GB with huge windows (64k + 32k, 13824 MiB a slot): three don't fit, two do.
+    assert _parallel(_unit_for(tmp_path, mem_mib=47000, tier="standard",
+                               env={"OLLAMA_NUM_CTX": "65536", "OLLAMA_TOOL_NUM_CTX": "32768"})) == 2
+    unit = _unit_for(tmp_path, mem_mib=23800, tier="standard")
+    assert unit.index("ExecStart=") < unit.index("Environment=OLLAMA_NUM_PARALLEL=2\n") < unit.index("User=ollama")
+
+
+@requires_bash
+def test_ollama_answers_four_at_once_with_room_on_the_gpus(tmp_path):
+    two_cards = _START + _CPU + _gpu(14.7) + _gpu(14.7)
+    assert _parallel(_unit_for(tmp_path, mem_mib=64000, tier="standard", journal=two_cards)) == 4
+    # The windows live on the cards, so the box's own memory doesn't matter.
+    assert _parallel(_unit_for(tmp_path, mem_mib=15800, tier="floor", journal=_START + _CPU + _gpu(14.7))) == 4
+    # A card without room for the models plus four windows: the memory tier.
+    assert _parallel(_unit_for(tmp_path, mem_mib=23800, tier="standard", journal=_START + _CPU + _gpu(10.9))) == 2
+    assert _parallel(_unit_for(tmp_path, mem_mib=23800, tier="standard", journal=_START + _CPU)) == 2
+    # Only Ollama's last start counts.
+    assert _parallel(_unit_for(tmp_path, mem_mib=23800, tier="standard",
+                               journal=_START + _CPU + _gpu(14.7) + _START + _CPU)) == 2
+
+
+@requires_bash
+def test_an_unknown_gpu_keeps_the_units_four(tmp_path):
+    """No Ollama start in this boot's journal yet: a 4 the unit has stays,
+    so a re-run doesn't rewrite the unit and restart Ollama."""
+    assert _parallel(_unit_for(tmp_path, mem_mib=23800, tier="standard", had=4)) == 4
+    assert _parallel(_unit_for(tmp_path, mem_mib=23800, tier="standard", had=3)) == 2
+    # Known again, and without room on a GPU: the memory tier.
+    assert _parallel(_unit_for(tmp_path, mem_mib=23800, tier="standard", had=4, journal=_START + _CPU)) == 2
 
 
 def test_units_come_from_the_shipped_files():
