@@ -202,16 +202,39 @@ def test_export_markdown_to_docx(docs_dir):
     assert any("bold" in t for t in texts)
 
 
-def test_export_of_a_very_long_text_file_is_refused_before_building(docs_dir, monkeypatch):
-    from web.backend.api import documents as documents_api
+@pytest.mark.parametrize("sep", ["\n", "\r", "\u2028"])
+def test_export_of_a_very_long_text_file_is_refused_before_building(docs_dir, monkeypatch, sep):
+    from domovoi.richdoc import runner
 
     built: list[str] = []
-    monkeypatch.setattr(documents_api, "_markdown_to_docx", lambda t: built.append(t) or b"")
-    (docs_dir / "long.txt").write_text("a\n" * documents_api.DOCX_MAX_LINES, encoding="utf-8")
+
+    async def _build(markup, title="", **kw):
+        built.append(markup)
+        return b""
+
+    monkeypatch.setattr(runner, "to_docx", _build)
+    (docs_dir / "long.txt").write_bytes(("a" + sep).encode("utf-8") * docs.DOCX_MAX_LINES)
     with _client() as c:
         r = c.get("/api/documents/export/doc/long.txt", params={"fmt": "docx"})
     assert r.status_code == 413
     assert built == []
+
+
+def test_markdown_word_copy_is_built_in_the_worker_process(docs_dir, monkeypatch):
+    from domovoi.richdoc import runner
+
+    asked: list[dict] = []
+
+    async def _build(markup, title="", **kw):
+        asked.append({"markup": markup, **kw})
+        return b"docx"
+
+    monkeypatch.setattr(runner, "to_docx", _build)
+    (docs_dir / "n.md").write_bytes(b"# Hi\n")
+    with _client() as c:
+        r = c.get("/api/documents/export/doc/n.md", params={"fmt": "docx"})
+    assert r.status_code == 200 and r.content == b"docx"
+    assert asked == [{"markup": "# Hi\n", "kind": "markdown"}]
 
 
 def test_export_sheet_csv_and_xlsx(docs_dir):

@@ -34,6 +34,9 @@ a way that would otherwise get reported as a bug.
 
 ## 1.4.1 (unreleased) — Printing, videos, scans and Windows update hardening
 
+- **"Download as Word" for Markdown and text files** is built in the same
+  short-lived, time-limited process as the Word copy of a formatted
+  document, and its line limit counts every kind of line break.
 - **Up next keeps the songs a jump or a move passed**: on a long room queue
   only songs the room was heard playing are trimmed after a jump, and the
   200-song ceiling behind the current song no longer takes them.
