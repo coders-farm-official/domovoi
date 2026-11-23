@@ -232,6 +232,9 @@ a way that would otherwise get reported as a bug.
   and podcast log lines leave them out too.
 - Listens posted by phones and browsers have a house-wide daily cap beside
   the per-device one.
+- The core's per-room admin routes check the room id, as the dashboard's
+  already did. A room paired under an older id (capitals, spaces) can now
+  be removed from the dashboard instead of answering 422.
 
 ## 1.4.1 (unreleased) — Sign-in, room pairing and drop-in checks
 

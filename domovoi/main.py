@@ -5323,7 +5323,7 @@ _BACKGROUND_TASKS: set = set()
     # Device READ tier (2026-10-08, REV-11), like the dashboard's proxy:
     # a 200 or 404 says whether the room's satellite is connected, and the
     # body is the hardware it reported (mic, Wi-Fi, audio devices).
-    dependencies=[Depends(require_device_read)],
+    dependencies=[Depends(require_device_read), Depends(room_ids.require_room_id_path)],
 )
 async def admin_get_satellite_config(room_id: str) -> dict[str, Any]:
     """Editable satellite config (the schema joined with the values the Pi
@@ -5394,7 +5394,7 @@ def _mic_dsp_target(room_id: str) -> Any:
 @app.get(
     "/v1/admin/satellite/{room_id}/mic_dsp",
     # Admin tier, like the rest of the room's settings.
-    dependencies=[Depends(require_admin_read)],
+    dependencies=[Depends(require_admin_read), Depends(room_ids.require_room_id_path)],
 )
 async def admin_get_satellite_mic_dsp(room_id: str) -> dict[str, Any]:
     """The room's XVF3800 DSP preset as its satellite last reported it
@@ -5414,7 +5414,7 @@ async def admin_get_satellite_mic_dsp(room_id: str) -> dict[str, Any]:
 @app.post(
     "/v1/admin/satellite/{room_id}/mic_dsp",
     # Admin tier: it changes how the room's microphone hears the house.
-    dependencies=[Depends(require_admin_mutation)],
+    dependencies=[Depends(require_admin_mutation), Depends(room_ids.require_room_id_path)],
 )
 async def admin_set_satellite_mic_dsp(room_id: str, body: _AdminMicDspBody) -> dict[str, Any]:
     """Send a DSP preset NAME to an XVF3800 satellite (set_mic_dsp). The
@@ -5439,7 +5439,7 @@ async def admin_set_satellite_mic_dsp(room_id: str, body: _AdminMicDspBody) -> d
 @app.post(
     "/v1/admin/satellite/{room_id}/mic_dsp/mark",
     # Admin tier: it writes into the satellite's and the server's logs.
-    dependencies=[Depends(require_admin_mutation)],
+    dependencies=[Depends(require_admin_mutation), Depends(room_ids.require_room_id_path)],
 )
 async def admin_mark_satellite_mic_dsp(room_id: str, body: _AdminMicDspMarkBody) -> dict[str, Any]:
     """Stamp a test marker ("block 2, 1m") into this server's log and the
@@ -5473,7 +5473,7 @@ class _AdminSatelliteVoiceBody(BaseModel):
     "/v1/admin/satellite/{room_id}/voice",
     # Admin tier, as the room's other settings (/config): it changes what
     # a room sounds like for the whole household.
-    dependencies=[Depends(require_admin_mutation)],
+    dependencies=[Depends(require_admin_mutation), Depends(room_ids.require_room_id_path)],
 )
 async def admin_set_satellite_voice(
     room_id: str, body: _AdminSatelliteVoiceBody
@@ -5503,7 +5503,7 @@ class _AdminSatelliteConfigBody(BaseModel):
     "/v1/admin/satellite/{room_id}/config",
     # Admin tier: this rewrites the Pi's config.toml and restarts it to
     # apply — it decides whether that room has a working microphone.
-    dependencies=[Depends(require_admin_mutation)],
+    dependencies=[Depends(require_admin_mutation), Depends(room_ids.require_room_id_path)],
 )
 async def admin_update_satellite_config(
     room_id: str, body: _AdminSatelliteConfigBody
@@ -5590,7 +5590,7 @@ SATELLITE_LOG_MAX_BYTES = 10 * 1024 * 1024
     # so this returns room conversation, not just diagnostics. The
     # dashboard hop has always been gated; this is the same gate on the
     # route that actually holds the data. Bearer or the dashboard cookie.
-    dependencies=[Depends(require_admin_read)],
+    dependencies=[Depends(require_admin_read), Depends(room_ids.require_room_id_path)],
 )
 async def admin_get_satellite_logs(
     room_id: str,
@@ -5717,7 +5717,7 @@ async def admin_get_satellite_logs(
     # reported config under REV-11): memory, CPU, temperature, link and
     # reachability numbers, never speech. A paired device or a signed-in
     # dashboard reads it; nothing less.
-    dependencies=[Depends(require_device_read)],
+    dependencies=[Depends(require_device_read), Depends(room_ids.require_room_id_path)],
 )
 async def admin_get_satellite_health(room_id: str) -> dict[str, Any]:
     """The room's latest health sample, its last outage report and a 24 h
@@ -5833,7 +5833,7 @@ def approval_throttled_detail() -> str:
     # pairing the default, the pre-setup grace let any LAN host that parked
     # its own satellite on an unclaimed core approve it — the one pre-setup
     # write that minted a lasting trust relationship.
-    dependencies=[Depends(require_admin_security)],
+    dependencies=[Depends(require_admin_security), Depends(room_ids.require_room_id_path)],
 )
 async def admin_satellite_approve(
     room_id: str, body: _ApproveSatelliteBody
@@ -5949,7 +5949,7 @@ async def admin_satellite_join_problems() -> dict[str, Any]:
     "/v1/admin/satellites/approvals/{room_id}/reject",
     # Security tier like approve: the two decisions on a parked device take
     # the same credential, and neither has a pre-setup grace.
-    dependencies=[Depends(require_admin_security)],
+    dependencies=[Depends(require_admin_security), Depends(room_ids.require_room_id_path)],
 )
 async def admin_satellite_reject(room_id: str) -> dict[str, Any]:
     """Drop a pending request.
@@ -6007,7 +6007,7 @@ class _PreseedPairingBody(BaseModel):
     # Pre-seeding mints the room's WS-auth token — a SECURITY op like the
     # reset above: Bearer-only, 501 before setup, credentials forwarded by
     # the web.
-    dependencies=[Depends(require_admin_security)],
+    dependencies=[Depends(require_admin_security), Depends(room_ids.require_room_id_path)],
 )
 async def admin_preseed_satellite_pairing(
     room_id: str, body: _PreseedPairingBody
@@ -6184,7 +6184,7 @@ class _RoomLabelBody(BaseModel):
 @app.post(
     "/v1/admin/satellites/{room_id}/label",
     # Device tier: cosmetic grouping label.
-    dependencies=[Depends(require_device)],
+    dependencies=[Depends(require_device), Depends(room_ids.require_room_id_path)],
 )
 async def admin_set_satellite_label(
     room_id: str, body: _RoomLabelBody
@@ -7020,7 +7020,7 @@ async def _log_queue_edit(room_id: str, what: str) -> None:
     # it starts a room's player first. The web hop forwards the caller's
     # token and cookie. A guest reads it only while the room is playing,
     # and then nothing is started (domovoi/guest_queue.py).
-    dependencies=[Depends(require_device_read_or_active_room_guest)],
+    dependencies=[Depends(require_device_read_or_active_room_guest), Depends(room_ids.require_room_id_path)],
 )
 async def admin_music_queue(room_id: str, request: Request) -> dict[str, Any]:
     """The room's live MPD queue, in order, plus which entry is playing.
@@ -7092,7 +7092,7 @@ async def _insert_position(room_id: str, mpd: Any, where: str) -> int | None:
     # its own or a blocked device just calls :6370 instead. A guest
     # (no credential) adds only while the room is playing, throttled
     # per address (domovoi/guest_queue.py).
-    dependencies=[Depends(require_device_or_active_room_guest)],
+    dependencies=[Depends(require_device_or_active_room_guest), Depends(room_ids.require_room_id_path)],
 )
 async def admin_music_queue_add(
     room_id: str, body: _AdminQueueAddBody, request: Request
@@ -7226,7 +7226,7 @@ async def admin_music_queue_add(
     # The queue's "play this one" (Up next P4): a jump, on the tier of the
     # skip it is a kind of — the device tier, and a guest while the room is
     # playing, unless an admin banned it (domovoi/guest_queue.py).
-    dependencies=[Depends(require_device_or_active_room_guest)],
+    dependencies=[Depends(require_device_or_active_room_guest), Depends(room_ids.require_room_id_path)],
 )
 async def admin_music_queue_play(
     room_id: str, body: _AdminQueuePlayBody, request: Request
@@ -7289,7 +7289,7 @@ async def admin_music_queue_play(
 @app.post(
     "/v1/admin/music/queue/{room_id}/remove",
     # Device tier (ADD-3), like queue add — and a guest the same way.
-    dependencies=[Depends(require_device_or_active_room_guest)],
+    dependencies=[Depends(require_device_or_active_room_guest), Depends(room_ids.require_room_id_path)],
 )
 async def admin_music_queue_remove(
     room_id: str, body: _AdminQueueRemoveBody, request: Request
@@ -7334,7 +7334,7 @@ async def admin_music_queue_remove(
 @app.post(
     "/v1/admin/music/queue/{room_id}/move",
     # Device tier (ADD-3), like queue add — and a guest the same way.
-    dependencies=[Depends(require_device_or_active_room_guest)],
+    dependencies=[Depends(require_device_or_active_room_guest), Depends(room_ids.require_room_id_path)],
 )
 async def admin_music_queue_move(
     room_id: str, body: _AdminQueueMoveBody, request: Request
@@ -7367,7 +7367,7 @@ async def admin_music_queue_move(
     "/v1/admin/music/queue/{room_id}/clear",
     # Device tier (ADD-3), like queue add. NOT a guest's: clearing stops
     # the room (domovoi/guest_queue.py).
-    dependencies=[Depends(require_device)],
+    dependencies=[Depends(require_device), Depends(room_ids.require_room_id_path)],
 )
 async def admin_music_queue_clear(room_id: str) -> dict[str, Any]:
     """Empty the queue and stop the room. The satellite gets its music_stop
@@ -7395,7 +7395,7 @@ async def admin_music_queue_clear(room_id: str) -> dict[str, Any]:
     "/v1/admin/music/up-next/room/{room_id}",
     # Read like the room's queue: the device tier's read half, and a guest
     # while the room is playing (domovoi/guest_queue.py).
-    dependencies=[Depends(require_device_read_or_active_room_guest)],
+    dependencies=[Depends(require_device_read_or_active_room_guest), Depends(room_ids.require_room_id_path)],
 )
 async def admin_up_next_room(room_id: str, request: Request) -> dict[str, Any]:
     """``{session}``: the room's active Up next session (the ``Session``
@@ -8905,7 +8905,7 @@ def _music_failure_detail(failure: str, room_id: str, response: Response) -> str
     # credential) may pause, resume, skip and go back while the room is
     # playing — never stop — unless an admin banned it, throttled per
     # address (domovoi/guest_queue.py).
-    dependencies=[Depends(require_device_or_active_room_guest)],
+    dependencies=[Depends(require_device_or_active_room_guest), Depends(room_ids.require_room_id_path)],
 )
 async def admin_music_action(
     action: str,

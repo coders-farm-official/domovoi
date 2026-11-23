@@ -189,3 +189,51 @@ def test_dashboard_urls_encode_room_ids() -> None:
             if _ROOM_IN_URL.search(line):
                 found.append(f"{f.name}:{n}: {line.strip()}")
     assert found == []
+
+
+# ─── the core routes ───────────────────────────────────────────────────────
+
+# Removal paths take an older room id too (see the DELETE rule below).
+_CORE_REMOVALS = {
+    ("DELETE", "/v1/admin/satellites/{room_id}"),
+    ("DELETE", "/v1/admin/satellites/{room_id}/pairing"),
+}
+
+
+def test_core_room_routes_check_the_room_id() -> None:
+    missing = []
+    for route in core_app.routes:
+        path = getattr(route, "path", "")
+        if not path.startswith("/v1/admin") or "{room_id}" not in path:
+            continue
+        for method in getattr(route, "methods", ()) or ():
+            if (method, path) in _CORE_REMOVALS:
+                continue
+            calls = [d.call for d in route.dependant.dependencies]
+            if room_ids.require_room_id_path not in calls:
+                missing.append(f"{method} {path}")
+    assert missing == []
+
+
+def _request(method: str, room: str):
+    from starlette.requests import Request
+
+    return Request({"type": "http", "method": method, "path_params": {"room_id": room},
+                    "headers": [], "query_string": b""})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("room", ["Kitchen", "kitchen room", "Living Room 2"])
+async def test_an_older_room_id_can_still_be_removed(room: str) -> None:
+    await room_ids.require_room_id_path(_request("DELETE", room))
+    with pytest.raises(Exception) as refused:
+        await room_ids.require_room_id_path(_request("POST", room))
+    assert getattr(refused.value, "status_code", None) == 422
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("room", ["..\\x", "a\x00b", "x" * 65])
+async def test_removal_still_refuses_odd_ids(room: str) -> None:
+    with pytest.raises(Exception) as refused:
+        await room_ids.require_room_id_path(_request("DELETE", room))
+    assert getattr(refused.value, "status_code", None) == 422
