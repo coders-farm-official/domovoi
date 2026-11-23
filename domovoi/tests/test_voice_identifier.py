@@ -618,10 +618,12 @@ async def test_no_room_no_learning(store, monkeypatch) -> None:
 @pytest.fixture(autouse=True)
 def _reset_learning_counter():
     """Each test gets a fresh in-memory counter — the module-level dict
-    persists across tests in the same run otherwise."""
+    persists across tests in the same run otherwise (both dicts)."""
     _CONFIDENT_HITS.clear()
+    voice_identifier._CONFIDENT_VOICES.clear()
     yield
     _CONFIDENT_HITS.clear()
+    voice_identifier._CONFIDENT_VOICES.clear()
 
 
 async def _enroll_sarah(db_session, room: str = "kitchen", secs: float = 10.0) -> int:
