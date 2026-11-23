@@ -519,3 +519,182 @@ async def test_pending_memory_cooldown_suppresses_resurfacing(db_session) -> Non
     response2 = await route(intent, ctx2, db_session)
     await db_session.commit()
     assert "should i remember" not in response2.text.lower()
+
+
+# ─── Offers: only at a natural point, rarely, never old news ──────────────
+# A live evening: a blood-pressure answer ended "By the way, Waffle and
+# Plum are your pets…", and a moon-distance answer minutes later ended
+# "By the way, your name is …": each pending fact had its own cooldown,
+# so they took turns riding on factual answers, and facts the house knew
+# already came back as news.
+
+
+async def _person_with_pending(db_session, *bodies: str) -> tuple[int, list[int]]:
+    person_id = await PeopleRepository(db_session).create(name="Alex")
+    ids = [
+        await MemoriesRepository(db_session).add(
+            person_id=person_id, body=b, source="implicit", status="pending",
+        )
+        for b in bodies
+    ]
+    await db_session.commit()
+    return person_id, ids
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_no_memory_offer_on_an_answer_to_a_question(db_session) -> None:
+    person_id, _ = await _person_with_pending(db_session, "I work nights")
+    for asked in (
+        "Tell me, how far away is the moon from Earth?",
+        "what is a normal blood pressure",
+        "tell me about the moon",
+    ):
+        response = await route(
+            Intent(transcript=asked, room_id="kitchen"),
+            Context(room_id="kitchen", person_id=person_id, online=True),
+            db_session,
+        )
+        await db_session.commit()
+        assert response.matched_path == "qa"
+        assert "should i remember" not in response.text.lower(), asked
+    offered = (
+        await db_session.execute(
+            text("SELECT count(*) FROM memories WHERE person_id = :p AND last_offered_at IS NOT NULL"),
+            {"p": person_id},
+        )
+    ).scalar()
+    assert offered == 0
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_one_memory_offer_per_person_per_cooldown(db_session) -> None:
+    """Two pending facts: the second waits out the person's cooldown
+    instead of riding on the very next turn."""
+    person_id, _ = await _person_with_pending(db_session, "I work nights", "I like jazz")
+    first = await route(
+        Intent(transcript="tell me a joke", room_id="kitchen"),
+        Context(room_id="kitchen", person_id=person_id, online=True),
+        db_session,
+    )
+    await db_session.commit()
+    assert "should i remember" in first.text.lower()
+    await SessionRepository(db_session).set_context_key(
+        first.session_id, "pending_confirmation", None
+    )
+    await db_session.commit()
+    second = await route(
+        Intent(transcript="tell me a joke", room_id="kitchen"),
+        Context(room_id="kitchen", person_id=person_id, online=True,
+                session_id=first.session_id),
+        db_session,
+    )
+    await db_session.commit()
+    assert "should i remember" not in second.text.lower()
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_known_facts_are_never_offered(db_session) -> None:
+    person_id, (name_id, pets_id, news_id) = await _person_with_pending(
+        db_session, "My name is Alex", "Waffle and Plum are my pets", "I work nights",
+    )
+    await MemoriesRepository(db_session).add(
+        person_id=person_id, body="My pets are Waffle and Plum", source="explicit",
+    )
+    await db_session.commit()
+
+    response = await route(
+        Intent(transcript="tell me a joke", room_id="kitchen"),
+        Context(room_id="kitchen", person_id=person_id, online=True),
+        db_session,
+    )
+    await db_session.commit()
+    assert "you work nights" in response.text.lower()
+    assert "name" not in response.text.lower() and "waffle" not in response.text.lower()
+    statuses = dict(
+        (
+            await db_session.execute(
+                text("SELECT id, status FROM memories WHERE person_id = :p"),
+                {"p": person_id},
+            )
+        ).all()
+    )
+    assert statuses[name_id] == "rejected" and statuses[pets_id] == "rejected"
+    assert statuses[news_id] == "pending"
+    # The history the model reads next turn has the answer, not the offer.
+    ctx_data = await SessionRepository(db_session).get_context(response.session_id)
+    said = [t["text"] for t in ctx_data["recent_turns"] if t["role"] == "assistant"]
+    assert said and "by the way" not in said[-1].lower()
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_yes_to_a_memory_offer_counts_without_voice_id(db_session) -> None:
+    """A one-word "yes" is too short for voice ID: the reply turn has no
+    speaker, and the offer used to end in "Got it." with nothing saved."""
+    person_id, (memory_id,) = await _person_with_pending(db_session, "I work nights")
+    offered = await route(
+        Intent(transcript="tell me a joke", room_id="kitchen"),
+        Context(room_id="kitchen", person_id=person_id, online=True),
+        db_session,
+    )
+    await db_session.commit()
+    assert "should i remember" in offered.text.lower()
+    reply = await route(
+        Intent(transcript="yes", room_id="kitchen"),
+        Context(room_id="kitchen", person_id=None, online=True,
+                session_id=offered.session_id),
+        db_session,
+    )
+    await db_session.commit()
+    assert "remember" in reply.text.lower()
+    status = (
+        await db_session.execute(
+            text("SELECT status FROM memories WHERE id = :id"), {"id": memory_id}
+        )
+    ).scalar()
+    assert status == "active"
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_tick_skips_known_and_rejected_facts(db_session) -> None:
+    person_id = await PeopleRepository(db_session).create(name="Alex")
+    await PeopleRepository(db_session).touch_last_seen(person_id)
+    sid = await SessionRepository(db_session).get_or_create(None, "kitchen")
+    log_repo = ConversationLogRepository(db_session)
+    for _ in range(25):
+        await log_repo.record_turn(
+            session_id=sid, room_id="kitchen", person_id=person_id,
+            user_text="seed transcript", assistant_text="ok",
+            matched_handler=None, matched_path="qa", presence_tier="low",
+            online=True, latency_ms=10,
+        )
+    await MemoriesRepository(db_session).add(
+        person_id=person_id, body="I work nights", source="implicit", status="rejected",
+    )
+    await db_session.commit()
+
+    class _PatchedOllama:
+        async def extract_memories(self, transcript_block):
+            return [
+                ExtractedMemory(fact="My name is Alex", confidence=0.95, topic=""),
+                ExtractedMemory(fact="I work nights", confidence=0.95, topic="work"),
+                ExtractedMemory(fact="I like jazz", confidence=0.95, topic="music"),
+            ]
+
+    with patch(
+        "domovoi.workers.memory_extractor.get_ollama_client",
+        lambda: _PatchedOllama(),
+    ):
+        await MemoryExtractor().tick()
+
+    pending = (
+        await db_session.execute(
+            text("SELECT body FROM memories WHERE person_id = :p AND status = 'pending'"),
+            {"p": person_id},
+        )
+    ).scalars().all()
+    assert pending == ["I like jazz"]

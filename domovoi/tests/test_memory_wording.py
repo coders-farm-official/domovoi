@@ -75,3 +75,27 @@ def test_extractor_asks_for_the_speakers_own_words() -> None:
     prompt = _EXTRACT_MEMORIES_SYSTEM_PROMPT.format()
     assert "first person" in prompt
     assert '"the user"' in prompt
+
+
+# ─── Already known: never offered as if new ─────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("fact", "name", "known", "expected"),
+    [
+        # The person's own name, also when the speech-to-text misheard it.
+        ("My name is Alex", "Alex", [], True),
+        ("My name is Alec", "Alex", [], True),
+        # A remembered fact said another way.
+        ("Waffle and Plum are my pets", "Alex", ["My pets are Waffle and Plum"], True),
+        ("Waffle and Plum are their pets", "Alex", ["My pets are Waffle and Plum"], True),
+        # News.
+        ("I work nights", "Alex", ["My pets are Waffle and Plum"], False),
+        ("My dog's name is Rex", "Alex", [], False),
+        ("My pets are Waffle, Plum and Biscuit", "Alex", ["My pets are Waffle and Plum"], False),
+    ],
+)
+def test_already_known(fact, name, known, expected) -> None:
+    from domovoi.memory_wording import already_known
+
+    assert already_known(fact, name, known) is expected
