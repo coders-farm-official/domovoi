@@ -345,6 +345,13 @@ early_commit = true
 # 90-600.
 # speech_pause_ms = 240
 
+# Each command gets its own speech gate, set from how loud the room was just
+# before the wake word (+6 dB), then from the speaker's own level: at a
+# party the chatter counts as silence, so the command still ends when you
+# stop talking instead of running to max_record_seconds. false: the fixed
+# [noise_gate] dbfs alone, as before.
+adaptive_gate = true
+
 # Seconds to wait, after you stop talking, for the server's first answer
 # (what it heard, the reply, or an error). If nothing at all comes back in
 # time, the satellite gives up on that request: the ring shows red, a

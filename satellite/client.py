@@ -48,6 +48,7 @@ from websockets.exceptions import ConnectionClosed
 
 from satellite import (
     _volume,
+    adaptive_gate,
     base_packages,
     chime,
     code_sync,
@@ -68,6 +69,7 @@ from satellite import (
     remote_config,
     sound_sync,
     support_shell,
+    wake_claim,
     wake_gate,
     wake_model_sync,
     wake_words,
@@ -965,6 +967,11 @@ class Config:
     # 30 ms frames, SPEECH_PAUSE_FRAMES_MIN..MAX of them. Defaulted, like
     # early_commit, to what it has always been.
     speech_pause_ms: int = SPEECH_PAUSE_FRAMES * FRAME_MS
+    # [listen] adaptive_gate: each capture's own speech gate (noisy rooms,
+    # 1.5.0; satellite/adaptive_gate.py): the room's level just before the
+    # wake word + 6 dB, then the speaker's own level - 15 dB. Off: the
+    # fixed [noise_gate] dbfs alone, as before.
+    adaptive_gate: bool = True
     # [listen] response_deadline_sec: see RESPONSE_DEADLINE_SEC_DEFAULT.
     response_deadline_sec: float = RESPONSE_DEADLINE_SEC_DEFAULT
     # [listen] response_backstop_sec: see RESPONSE_BACKSTOP_SEC_DEFAULT.
@@ -1317,6 +1324,7 @@ class Config:
             # turn off in a room where people pause mid-command.
             early_commit=bool(listen.get("early_commit", True)),
             speech_pause_ms=speech_pause_ms,
+            adaptive_gate=bool(listen.get("adaptive_gate", True)),
             response_deadline_sec=_response_deadline_sec(listen.get("response_deadline_sec")),
             response_backstop_sec=_seconds_setting(
                 listen.get("response_backstop_sec"), "response_backstop_sec",
@@ -2011,6 +2019,10 @@ class Satellite(pc_engine.SpareDeviceEngine):
         # cleared when each capture starts. See `_capture_utt`.
         self._end_capture = threading.Event()
         self._capture_lock = threading.Lock()
+        # One turn per wake word (1.5.0, satellite/wake_claim.py): the
+        # claims this device sends, shared by the mic thread and the
+        # receiver.
+        self._claims = wake_claim.ClaimBook()
 
         # State-indicator LEDs. Backend depends on the device profile:
         # APA102 over SPI on the ReSpeaker HAT, or the WS2812 ring driven
@@ -2472,6 +2484,12 @@ class Satellite(pc_engine.SpareDeviceEngine):
         woke, self._woke_at = self._woke_at, None
         score, self._wake_score = self._wake_score, None
         fired, self._wake_fired = self._wake_fired, None
+        # The claim this device owns the turn by (1.5.0, `_claim_wake`):
+        # the core ties this capture to it. Taken once, like the wake time.
+        claim, self._owner_claim = getattr(self, "_owner_claim", None), None
+        self._capture_claim = claim if trigger in ("wake_word", "barge_in") else None
+        if self._capture_claim is not None:
+            msg["claim"] = claim
         if trigger == "wake_word" and woke is not None:
             msg["wake_ms"] = max(0, int(round((self._utt_started - woke) * 1000)))
             # Which of the room's words fired (1.4.0), so the room's history
@@ -6502,6 +6520,34 @@ class Satellite(pc_engine.SpareDeviceEngine):
                                 g.quiet_for(time.monotonic())
                             cooldown_logged = gate.cooldown_sec <= 0
                             continue  # back to listening
+                    # The room just before the wake phrase (and the phrase):
+                    # the claim's floor and this capture's gate.
+                    pre_wake = list(ambient_samples[-_PRE_WAKE_FRAMES:])
+                    self._pre_wake_dbfs = pre_wake
+                    # A room with several satellites (1.5.0): one turn per
+                    # wake word. Claim it and wait for the core's answer
+                    # (at most 150 ms), holding the chime and the music
+                    # stop. Only the owner goes on to the acknowledgement
+                    # and the capture.
+                    if self._claims_active():
+                        claim, decision = self._claim_wake(
+                            fired_slug, gate.last_peak, pre_wake,
+                            barge_in=self._reply_playing_here(),
+                        )
+                        if decision.role != wake_claim.OWNER:
+                            self._pre_wake_dbfs = None
+                            self._woke_at = self._wake_score = self._wake_fired = None
+                            self._quiet_listen(claim, decision, pre_wake)
+                            if self.shutdown_event.is_set():
+                                return False
+                            # Back to listening after a second (owner Q5).
+                            self._turn_open = False
+                            _reset_wake_model(oww)
+                            pending = np.empty(0, dtype=np.int16)
+                            for g in gates.values():
+                                g.quiet_for(time.monotonic(), wake_claim.COOLDOWN_SEC)
+                            cooldown_logged = True
+                            continue
                     # Flip the LED to "listening" immediately so the
                     # user gets feedback the moment we detect them —
                     # before the housekeeping below, which can take
@@ -6546,6 +6592,121 @@ class Satellite(pc_engine.SpareDeviceEngine):
                     _reset_wake_model(oww)
                     return True
         return False
+
+    # ── One turn per wake word (1.5.0, satellite/wake_claim.py) ────────
+
+    def _claim_book(self) -> "wake_claim.ClaimBook":
+        book = getattr(self, "_claims", None)
+        if book is None:
+            book = self._claims = wake_claim.ClaimBook()
+        return book
+
+    def _claims_active(self) -> bool:
+        """This wake is claimed: the core lists `wake_claim` in `ready` and
+        the room says `claim: true`. Otherwise the wake goes exactly as it
+        always did, with no added delay."""
+        return bool(getattr(self, "_room_claim", False)) and (
+            wake_claim.ABILITY in getattr(self, "_core_features", frozenset())
+        )
+
+    def _reply_playing_here(self) -> bool:
+        """This device's speaker is playing (or draining) a reply."""
+        return self.playback_active.is_set() or not self._playback_idle.is_set()
+
+    def _claim_wake(
+        self, word: str, score: float | None, pre_wake: list[float], *, barge_in: bool = False,
+    ) -> "tuple[int, wake_claim.Decision]":
+        """Send `wake_claim` and wait for its `wake_grant`, at most
+        `wake_claim.FAIL_OPEN_SEC`; no answer is owning the turn (fail
+        open). The mic keeps filling `raw_q` meanwhile, so nothing said is
+        lost. An owner's claim goes on its `utterance_start`."""
+        book = self._claim_book()
+        claim = book.open()
+        floor = adaptive_gate.pre_wake_floor(pre_wake)
+        sent = self._emit_text(
+            wake_claim.claim_frame(claim, word, score, floor, barge_in=barge_in)
+        )
+        decision = wake_claim.decide(book.wait(claim) if sent else None)
+        if decision.role == wake_claim.OWNER:
+            book.own(claim)
+            self._owner_claim = claim
+        log.info(
+            "wake claim %d%s: %s%s (floor %s dBFS)",
+            claim, " (barge-in)" if barge_in else "", decision.role,
+            " — no answer in time, failing open" if decision.failed_open and sent else "",
+            "-" if floor is None else f"{floor:.1f}",
+        )
+        return claim, decision
+
+    def _capture_gate(self, pre_wake: list[float] | None) -> "adaptive_gate.CaptureGate | None":
+        """This capture's speech gate (noisy rooms, stage 1): the pre-wake
+        floor + 6 dB, then the speaker's own level - 15 dB
+        (satellite/adaptive_gate.py). None when `[listen] adaptive_gate`
+        is off: the fixed `[noise_gate] dbfs`, as before. A capture with no
+        pre-wake window (a follow-up, a barge-in) has no floor: only the
+        speaker's level applies."""
+        if not getattr(self.cfg, "adaptive_gate", False):
+            return None
+        return adaptive_gate.CaptureGate.from_pre_wake(pre_wake or [], self.cfg.noise_gate_dbfs)
+
+    def _quiet_listen(self, claim: int, decision: "wake_claim.Decision",
+                      pre_wake: list[float] | None) -> None:
+        """A claim answered `quiet`: no chime, no greeting, no music stop;
+        the LED only fades. Stream the command as heard, at most
+        `stream_ms` of it, or on to this device's own end of speech once
+        the core keeps it (`capture_keep`); `end_capture {claim}` stops it.
+        Then `quiet_end`. `stream_ms: 0` is a stand-down: nothing streamed,
+        nothing sent. The caller holds the wake word off for
+        `wake_claim.COOLDOWN_SEC` afterwards."""
+        self._leds.set_state("quiet")
+        if decision.role != wake_claim.QUIET:
+            return
+        book = self._claim_book()
+        book.start_quiet(claim)
+        gate = self._capture_gate(pre_wake)
+        vad = webrtcvad.Vad(self.cfg.vad_aggressiveness)
+        limit = decision.stream_frames
+        max_frames = int(self.cfg.max_record_seconds * 1000 / FRAME_MS)
+        silence_limit = int(self.cfg.silence_timeout * 1000 / FRAME_MS)
+        frames = silent = 0
+        speaking = False
+        reason = wake_claim.LIMIT
+        try:
+            while True:
+                if self.shutdown_event.is_set() or book.stopped:
+                    reason = wake_claim.STOPPED
+                    break
+                kept = book.kept
+                if not kept and frames >= limit:
+                    reason = wake_claim.LIMIT
+                    break
+                if kept and frames >= max_frames:
+                    reason = "max_record_seconds"
+                    break
+                try:
+                    frame = self.raw_q.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+                if not self._emit_audio(frame):
+                    reason = wake_claim.STOPPED
+                    break
+                frames += 1
+                d = _frame_dbfs(frame)
+                threshold = gate.threshold() if gate is not None else self.cfg.noise_gate_dbfs
+                is_speech = d >= threshold and vad.is_speech(frame, SAMPLE_RATE)
+                if gate is not None and is_speech:
+                    gate.observe(d, True)
+                if is_speech:
+                    speaking, silent = True, 0
+                elif speaking:
+                    silent += 1
+                    if kept and silent >= silence_limit:
+                        reason = "vad_silence_after_speech"
+                        break
+        finally:
+            book.end_quiet()
+        self._emit_text({"type": "quiet_end", "claim": claim, "frames": frames, "reason": reason})
+        log.info("quiet stream %d ended (%s) after %d frames", claim, reason, frames)
 
     def _stream_capture(
         self,
@@ -6731,6 +6892,15 @@ class Satellite(pc_engine.SpareDeviceEngine):
             sent += 1
             capture_dbfs.append(_frame_dbfs(f))
 
+        # Noisy rooms, stage 1 (satellite/adaptive_gate.py): this capture's
+        # own gate, from the room's level just before the wake word and
+        # then the speaker's own level. None: the fixed gate, as before.
+        pre_wake, self._pre_wake_dbfs = getattr(self, "_pre_wake_dbfs", None), None
+        gate = self._capture_gate(pre_wake)
+        # The first frame the detector called speech (for the log: where a
+        # capped capture's command began).
+        first_voiced: int | None = 0 if prefix_frames else None
+
         # Tracks why the capture loop ended; surfaced in the stats log.
         # Default carries through if we exit via the `while` condition
         # going false (max_frames or shutdown_event without speech).
@@ -6747,10 +6917,12 @@ class Satellite(pc_engine.SpareDeviceEngine):
             self._stop_own_music_under_capture(utt)
             d = _frame_dbfs(frame)
             capture_dbfs.append(d)
-            loud = d >= self.cfg.noise_gate_dbfs
+            loud = d >= (gate.threshold() if gate is not None else self.cfg.noise_gate_dbfs)
             if loud:
                 gate_pass_count += 1
             is_speech = loud and vad.is_speech(frame, SAMPLE_RATE)
+            if is_speech and gate is not None:
+                gate.observe(d, True)
             if is_speech and pause_reported:
                 # BEFORE this frame's audio: the core counts every frame
                 # that reaches it while a reported pause stands as silence
@@ -6771,6 +6943,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 pre_speech_silent = 0
                 voiced_count += 1
                 last_voiced = sent - 1
+                if first_voiced is None:
+                    first_voiced = last_voiced
             elif speaking:
                 silent_frames += 1
                 if (
@@ -6840,6 +7014,12 @@ class Satellite(pc_engine.SpareDeviceEngine):
             sent, gate_pass_count, voiced_count,
             capture_dbfs, self.cfg.noise_gate_dbfs,
         )
+        if gate is not None:
+            g = gate.report()
+            stats += (
+                f"; capture gate {g['gate_dbfs']} dBFS (floor {g['floor_dbfs']}, "
+                f"speech {g['speech_dbfs']}), first voiced frame {first_voiced}"
+            )
 
         # Hit max without VAD ever finding silence — the most common
         # symptom of a misconfigured noise gate or wrong VAD level.
@@ -7193,6 +7373,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
         OWW_CHUNK = 1280  # 80 ms @ 16 kHz — see _wait_for_wake
         pending = np.empty(0, dtype=np.int16)
         primed = False
+        # What the mic heard under the reply: a barge-in claim's floor.
+        levels: deque[float] = deque(maxlen=_PRE_WAKE_FRAMES)
 
         while not self.shutdown_event.is_set():
             if self.response_done.is_set():
@@ -7223,6 +7405,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 _reset_wake_model(oww)
                 primed = True
 
+            levels.append(_frame_dbfs(frame))
             pending = np.concatenate([pending, np.frombuffer(frame, dtype=np.int16)])
             while pending.size >= OWW_CHUNK:
                 chunk, pending = pending[:OWW_CHUNK], pending[OWW_CHUNK:]
@@ -7231,8 +7414,14 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 except Exception as e:
                     log.warning("wake-barge predict failed: %s", e)
                     continue
-                if self._wake_hit(pred) is not None:
+                hit = self._wake_hit(pred)
+                if hit is not None:
                     log.info("barge-in detected (wake word)")
+                    if self._claims_active():
+                        # A room with several satellites (1.5.0): the barge-in
+                        # is a claim (`barge_in: true`), never a `barge_in`
+                        # frame; the core stops the answer on every speaker.
+                        return self._claim_barge(hit, pred, list(levels))
                     self._emit_text({"type": "barge_in"})
                     self.stop_playback.set()
                     self._drain_playback_q()
@@ -7244,6 +7433,30 @@ class Satellite(pc_engine.SpareDeviceEngine):
                     return "barge"
 
         return "shutdown"
+
+    def _claim_barge(self, word: str, pred: dict[str, Any], levels: list[float]) -> str:
+        """A wake word over the room's answer, in a room that claims: send
+        `wake_claim {barge_in: true}`. As owner (or failing open) stop the
+        reply here and capture the new command (`trigger: "barge_in"`, with
+        the claim); answered quiet, stream as a quiet listener and go back
+        to listening. Returns what `_await_response_with_barge` returns."""
+        try:
+            score: float | None = float(pred.get(word, 0.0))
+        except (TypeError, ValueError):
+            score = None
+        claim, decision = self._claim_wake(word, score, levels, barge_in=True)
+        self.stop_playback.set()
+        self._drain_playback_q()
+        self._stop_music()
+        if decision.role != wake_claim.OWNER:
+            self._owner_claim = None
+            # The answer this wake cut is not this device's to follow up.
+            self.expect_followup.clear()
+            self._quiet_listen(claim, decision, None)
+            return "shutdown" if self.shutdown_event.is_set() else "done"
+        self._begin_utterance("barge_in")
+        self._barge_prefix = []
+        return "barge"
 
     # ── Two-way drop-in / open-mic (Feature 4) ────────────────────────────
     # NOTE: this whole path is UNTESTED on the dev host — it needs real
@@ -8011,6 +8224,15 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 continue
             if not woke:
                 return
+            if self._claim_book().revoked(getattr(self, "_owner_claim", None)):
+                # Failed open, then the core's answer came after all: quiet.
+                # Another device owns the turn; this one goes idle.
+                log.info("wake claim %s answered quiet after failing open; not capturing",
+                         self._owner_claim)
+                self._owner_claim = None
+                self._pre_wake_dbfs = None
+                self._leds.set_state("idle")
+                continue
             self._begin_utterance("wake_word")
             prefix: list[bytes] = []
             # Set when this iteration is following up on the bot's own
@@ -8168,6 +8390,19 @@ class Satellite(pc_engine.SpareDeviceEngine):
     # This connection's capture counter: each utterance_start carries the
     # next number (`utt`), and so does everything about that capture.
     _utt_seq: int = 0
+    # One turn per wake word (1.5.0, satellite/wake_claim.py). Whether this
+    # device's room says `claim` (`ready.room`, the `room` frame); false
+    # between sessions.
+    _room_claim: bool = False
+    # The claim this device owns the coming capture by, for its
+    # `utterance_start` (taken once), and the claim the running capture was
+    # opened by (a late `quiet` grant for it ends the capture).
+    _owner_claim: int | None = None
+    _capture_claim: int | None = None
+    # The room's frame levels (dBFS) over the ~2 s before the latest wake
+    # word and the phrase itself, for the claim's floor and the wake
+    # capture's gate (satellite/adaptive_gate.py). Taken once.
+    _pre_wake_dbfs: list[float] | None = None
     # When the latest utterance_start went out, on this satellite's
     # monotonic clock (the capture's `sat_ms` counts from it), and when the
     # wake word that opened the latest wake capture fired (its `wake_ms`).
@@ -8269,6 +8504,9 @@ class Satellite(pc_engine.SpareDeviceEngine):
                     else frozenset()
                 )
                 self._session_ready_seen = True
+                # Whether this room claims its wakes (1.5.0): `ready.room`,
+                # updated later by the `room` frame. False on an older core.
+                self._room_claim = wake_claim.room_says_claim(payload.get("room"))
                 try:
                     self._start_room_player()
                 except Exception:  # noqa: BLE001 — never keeps the mic shut
@@ -8876,6 +9114,32 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 asyncio.create_task(self._send_logs(rid, want))
             else:
                 log.warning("get_logs: no request_id in payload; ignoring")
+        elif t == "room":
+            # This device's room changed (1.5.0): today only `claim` matters
+            # here — another satellite joined or left its group.
+            claim = wake_claim.room_says_claim(payload.get("room"))
+            if claim != self._room_claim:
+                log.info("room: wake claims %s", "on" if claim else "off")
+            self._room_claim = claim
+        elif t == "wake_grant":
+            # The answer to a wake_claim (1.5.0). The mic thread is waiting
+            # for it; one that comes after the device failed open and says
+            # `quiet` ends that capture (the core drops it anyway).
+            late = self._claim_book().on_grant(payload)
+            if late is not None:
+                log.info("wake claim %d answered quiet after failing open: ending its capture", late)
+                with self._capture_lock:
+                    if self._capture_utt is not None and getattr(self, "_capture_claim", None) == late:
+                        self._end_capture.set()
+        elif t == "capture_keep":
+            # Our quiet stream was picked: go on to this device's own end of
+            # speech (`_quiet_listen`).
+            if not self._claim_book().on_keep(payload):
+                log.debug("ignoring capture_keep for claim %r", payload.get("claim"))
+        elif t == "end_capture" and "claim" in payload and "utt" not in payload:
+            # A quiet stream not picked (or its turn ended): stop it now.
+            if not self._claim_book().on_end_capture(payload):
+                log.debug("ignoring end_capture for claim %r", payload.get("claim"))
         elif t == "end_capture":
             # The core has heard a whole command and is answering: stop
             # the capture it names — but only that one. A late end_capture
@@ -8986,9 +9250,15 @@ class Satellite(pc_engine.SpareDeviceEngine):
             hello["prev_health"] = self._prev_health
         # A spare computer says what it is and what it can do (its board and
         # its `supports` list), so the core never sends it a Pi-only frame.
-        # A Pi sends neither key: that is what keeps it exactly as before.
+        # A Pi sends no board. Since 1.5.0 it does send a list: `wake_claim`
+        # (one turn per wake word) can only be declared in one, so the Pi
+        # names everything a hello without a list was always taken to have
+        # (PI_SUPPORTS) and adds it.
         if pc_engine.is_pc(self.cfg):
             hello.update(pc_engine.hello_fields(self.cfg))
+        else:
+            hello["supports"] = list(PI_SUPPORTS)
+        hello["supports"].append(wake_claim.ABILITY)
         # It plays the room's synced sound from /v1/room-audio (1.5.0): a
         # boolean for a Pi (whose hello has no `supports`), the name in a
         # spare computer's list.
@@ -9193,6 +9463,10 @@ class Satellite(pc_engine.SpareDeviceEngine):
         # The next core may be an older one; it says what it understands
         # in its own `ready`.
         self._core_features = frozenset()
+        # And whether this room claims its wakes. A claim waiting for its
+        # grant fails open now; a quiet stream stops.
+        self._room_claim = False
+        self._claim_book().abort()
         # Disconnected: every log line from here on also goes to the spool
         # file, for the next core that lists `log_push`.
         LOG_SPOOL_HANDLER.set_mode("offline")
@@ -9659,6 +9933,26 @@ class Satellite(pc_engine.SpareDeviceEngine):
 
 
 # ─── CLI ──────────────────────────────────────────────────────────────────
+
+#: What a Pi's hello lists in `supports` (1.5.0): everything the core has
+#: always assumed for a hello without the key (domovoi/satellite_abilities.py,
+#: ASSUMED_WITHOUT_SUPPORTS), so declaring `wake_claim` takes nothing away.
+#: The behaviours negotiated by their own boolean keys (speech_pause,
+#: capture_control, full_duplex, dropin_ready, room_audio, diagnostics,
+#: mic_dsp) stay booleans. satellite/tests/test_wake_claim.py holds the two
+#: lists together.
+PI_SUPPORTS: tuple[str, ...] = (
+    "restart", "code_sync", "plugin_payloads", "config", "wifi", "mic_gain",
+    "leds", "display", "logs", "wake_clips", "wake_models", "sounds", "voice",
+    "time_sync", "chat_mode", "announce_after_session_end", "turn_progress",
+)
+
+#: Frame levels the wake loop hands a wake's claim and capture: the floor
+#: window and the wake phrase itself (satellite/adaptive_gate.py).
+_PRE_WAKE_FRAMES = (
+    adaptive_gate.GateSettings().floor_window_frames + adaptive_gate.GateSettings().wake_skip_frames
+)
+
 
 def _ensure_config(path: Path) -> bool:
     """If config doesn't exist, write the example next to it. Returns True if the
