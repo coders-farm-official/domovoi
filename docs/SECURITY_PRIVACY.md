@@ -340,7 +340,7 @@ neither the person nor a claim of its own forgets nothing, and is told why.
 A household with no claims sees no change. Settings → Household → People marks each
 claimed sample; where it was claimed and by whom are shown to an admin
 only, who deletes a wrong one there (a phone sample's room names the phone,
-so `GET /api/people/{id}/profiles`, which is open, leaves it out for
+so `GET /api/people/{id}/profiles`, a household device's read, leaves it out for
 everyone else, N4). Limits, said plainly: samples saved before V029 count
 as the person's own, whoever added them; a claim still makes the speaker
 recognized as that person until it is removed ("who am I" says "You're
@@ -5359,6 +5359,20 @@ claim itself, which needs no password by the owner's choice.
 claimed yet — a child, or anyone who only uses voice — and 10 minutes later
 clear their listening history from it. Song attribution ("listening as", a
 room's starter) stays self-asserted.
+
+### 3. Smaller known limits
+
+- **Pairing proof and the satellite's own token.** The pairing proof is not
+  yet bound to the satellite's own token. A device at the server's own
+  address could make a room's pairing fail, but cannot take the room over.
+  A protocol update is planned.
+- **A claim made before claim keys existed.** A person's device claim made
+  before claim keys existed can be re-claimed by another household device
+  that says "this is me". Re-claiming from your own device, with a key,
+  closes it, and a later update stops chat reads from showing device ids.
+- **The music-mix sliders and the claim key.** For now the sliders accept a
+  change from any household device for its own claim without the claim key.
+  The apps will start sending the key, and the server will then require it.
 
 **Until it lands:** the People page shows whose each device is, and an
 admin can see and change every device's person in Settings → Phones &

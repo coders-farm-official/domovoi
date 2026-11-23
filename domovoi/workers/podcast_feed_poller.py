@@ -267,8 +267,12 @@ def fetch_feed(feed_url: str, *, conditional: bool = True) -> FeedDocument:
                 "too_large",
                 f"feed is larger than {MAX_FEED_BYTES} bytes and {e}",
             ) from e
-    with _VALIDATORS_LOCK:
-        _FETCHED[feed_url] = (result.etag, result.last_modified)
+    # A read cut short by the fetch deadline (less than the size cap) is not
+    # the whole feed: keep no validators, so the next poll reads it again
+    # instead of getting 304 and never seeing the rest.
+    if not (result.truncated and len(result.content) < MAX_FEED_BYTES):
+        with _VALIDATORS_LOCK:
+            _FETCHED[feed_url] = (result.etag, result.last_modified)
     return FeedDocument(
         content=content,
         truncated=result.truncated,
