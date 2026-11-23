@@ -194,7 +194,7 @@ class RequireRequestedWithMiddleware:
             },
         )
         log.info(
-            "refused %s %s without X-Requested-With",
+            "refused %s %r without X-Requested-With",
             scope.get("method"), scope.get("path"),
         )
         await response(scope, receive, send)
@@ -320,7 +320,7 @@ def _content_length(scope: Scope) -> int | None:
 
 
 async def _too_large(limit: int, scope: Scope, receive: Receive, send: Send) -> None:
-    log.info("refused an oversized body on %s (budget %d bytes)", scope.get("path"), limit)
+    log.info("refused an oversized body on %r (budget %d bytes)", scope.get("path"), limit)
     response = JSONResponse(
         status_code=413,
         content={"detail": f"request body too large (limit {limit} bytes)"},

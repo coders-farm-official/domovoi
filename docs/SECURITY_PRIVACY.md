@@ -1629,6 +1629,7 @@ admin tier is code execution and configuration, not day-to-day use.
 | **Pulling new code, and clearing a tamper incident** (the pull moves the code on disk that the core runs and serves to satellites, and on an install no one has claimed yet it would move a pinned Windows install to upstream's tip; clearing the last open tamper incident lifts the container guard's freeze) | Core: `POST /v1/admin/version/pull`, `POST /v1/admin/containers/incidents/{id}/clear`. Dashboard: `POST /api/config/version/pull`, `POST /api/containers/incidents/{id}/clear`. | **Fails closed** — 501 until setup (delta review N5, 2026-10-16; both had the pre-setup grace before). Acknowledging a failure and running a check now stay on the admin tier with the grace. |
 | **Library sweeps** (long server-side jobs) | Dashboard: `POST /api/music/library/reindex`, `POST /api/music/library/enrich`, `POST /api/music/library/enrich/repair`. The version *check* beside the code pull is device tier — it fetches and reports, it never moves HEAD — and so is the version *read* (`GET /v1/admin/version`, `GET /api/config/version`), because beside the running commit it carries the update unit's last run, its error text included, and whether this host can restart itself (CORE-21). | Pre-setup grace. |
 | **Plugin mutations on the default tier** (every non-GET plugin route its author did not mark `@device_endpoint` or `@open_endpoint`) | Core: `/v1/plugins/<slug>/…`. Dashboard: `/api/plugins/<slug>/…`. For the bundled radio plugin that is the FCC bulk import (`POST /api/plugins/radio/fcc-import` and the core route it forwards to) — a long server-side job, like the library sweeps; its everyday mutations are device tier (above). | Pre-setup grace. |
+| **Short address** (whether port `80` redirects to the dashboard; see [The short address](#the-short-address-port-80-a-redirect-and-nothing-else)) | Dashboard: `PUT /api/short-address`. The read (`GET /api/short-address`) is device tier. | Pre-setup grace. On or off, it only starts or stops a redirect to the same dashboard behind the same gates; it changes no setting, credential or code. |
 | **Auth/session management** | `POST /api/auth/logout`, `DELETE /api/auth/sessions/{token_hash}`, `POST /api/auth/password`; `POST /api/auth/resume` (the session cookie, same origin, inside the reload window — [Staying signed in across a reload](#staying-signed-in-across-a-reload)); every admin session signs out after an hour without an admin action ([Signing out after an hour idle](#signing-out-after-an-hour-idle)) | n/a — these only exist once setup is done. |
 
 The `admin` in a `/v1/admin/...` path means "used by the dashboard," not
@@ -1724,7 +1725,14 @@ reason, so a new route cannot quietly ship open.
   accepted: argon2id keeps offline guessing expensive, and the setup code is
   single-use). Dashboard callers are throttled by their own address: the
   core trusts `X-Forwarded-For` only from loopback, where the web process
-  runs.
+  runs. Behind the per-address backoff sits a **house-wide ceiling**: 50
+  failed attempts from any addresses within 5 minutes refuse every
+  sign-in (`429`) until the oldest of them is 5 minutes old, so spreading
+  guesses over many addresses buys nothing. **Residual:** the ceiling
+  counts everyone, so a LAN host with a handful of addresses can keep
+  sign-in refused for as long as it keeps failing; it gets no guesses
+  out of it. The remedy is finding that host and taking it off the
+  network.
 - **CSRF stance:** login also sets a `SameSite=Strict`, `HttpOnly` cookie —
   a random secret of its own, never the Bearer (see *What a service on the
   same box can do with the cookie*, below) — but the cookie by itself can
@@ -1764,7 +1772,10 @@ processes, plugin management, a plugin's admin routes, and the session
 and password routes. A write the server refuses (a body that fails
 validation, a 404, a 409, a wrong old password) changed nothing and does
 not count: the gate only notes the session, and the stamp is made after
-the route has answered (CORE-42, round 6). Nothing else
+the route has answered (CORE-42, round 6). The test is the status code,
+not what the route did: a few admin writes answer 2xx with `"ok": false`
+when there was nothing to do (`POST /api/config/core/restart` while the
+core answers is one), and those count as actions too. Nothing else
 moves the clock: no `GET` (status probes, health, the version check,
 admin reads), no WebSocket, no page load with the cookie, no reload
 taking its sign-in back (`POST /api/auth/resume`), and not the device
@@ -1775,8 +1786,9 @@ device tier. The alternative, a header the dashboard sets on calls a
 person caused, was rejected: every call site would have to remember it,
 and any script holding the Bearer could add it to a poll and keep the
 session alive for ever. Under this rule a script can keep a session
-alive only by *changing things as admin*, which is what an admin does,
-and the 90-day cap still ends it. A credential holder who deliberately
+alive only by making admin writes (most of which change things, which
+is what an admin does; the `"ok": false` answers above are the
+exception), and the 90-day cap still ends it. A credential holder who deliberately
 scripts admin changes is not something any timeout can tell from a
 person.
 
@@ -4672,7 +4684,7 @@ any other run, with any other key.
 | A rogue device parked under your room's name | answer the exchange for the code you typed | each typed code serves **one guess** (a confirmation that does not check out uses it up; gone after ten minutes), and the approve route takes five codes per room per five minutes; a failed run is shown on the card ("the room device didn't accept the last code"). Declining, staying silent or leaving is not a guess: the code is put back and nothing is counted |
 | Someone watching the network | nothing | no message can be tested against a code |
 | Someone relaying between the device and your server | relay the exchange — and win nothing | the device's key check binds the address dialled, port included; the core will not sign for a relay's address — nor for its own address at a port it does not listen on |
-| Hostile servers spending the device's budget | delay approval | they cannot approve. While the device may not answer it keeps visiting every server (so its requests do not expire) and DECLINES each challenge; the server it was approved on keeps the typed code (the device's decline puts it back) until the device can answer, within its ten minutes, or the code is typed again. The delay is bounded by the budget: 30 minutes of running time at most for the five-per-window cap, and up to a day if many different servers each spend a share and the daily cap is reached. The core caps the arithmetic too: the per-source limit is consulted before any modular exponentiation, which runs off the event loop, and withdrawals count against it |
+| Hostile servers spending the device's budget | delay approval | they cannot approve. While the device may not answer it keeps visiting every server (so its requests do not expire) and DECLINES each challenge; the server it was approved on keeps the typed code (the device's decline puts it back) until the device can answer, within its ten minutes, or the code is typed again. Servers that spend the budget once and leave delay approval by 30 minutes of running time at most for the five-per-window cap, and up to a day if many different servers each spend a share and the daily cap is reached. A hostile server that **stays** and keeps challenging is not bounded that way: answered again each time its hold runs out, it can keep the budget spent for as long as it is on the network. The remedy is to type your server's address in the device's setup portal: the device then asks only that server, and the budget refills. The core caps the arithmetic too: the per-source limit is consulted before any modular exponentiation, which runs off the event loop, and withdrawals count against it |
 
 What the proof does **not** do: it does not encrypt anything, it does not
 protect a room after pairing (the pairing token and the server key do that,
