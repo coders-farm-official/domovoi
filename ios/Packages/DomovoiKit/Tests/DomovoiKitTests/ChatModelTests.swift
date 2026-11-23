@@ -414,7 +414,9 @@ final class ChatModelTests: XCTestCase {
         model.typed("plan")
         waits.release()
         await settleUntil({ model.hits != nil })
-        let asked = house.seen.current.count
+        // Once start()'s own reads (the thread list) have landed: one still
+        // on its way used to count as the blank field's (CI, 2026-11-22).
+        let asked = await quietCount("the requests the house saw") { house.seen.current.count }
         model.typed("   ")
         XCTAssertNil(model.hits)
         XCTAssertFalse(model.searching)
