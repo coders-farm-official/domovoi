@@ -484,3 +484,18 @@ def test_people_route_stays_reserved_and_opens_settings() -> None:
     html = _src("index.html")
     block = re.search(r"window\.DomovoiCore\.pages = \{(.*?)\};", html, re.S).group(1)
     assert re.search(r"^\s*people: \(\) => window\.SettingsPage,", block, re.M)
+
+
+def test_no_core_nav_item_shows_a_count() -> None:
+    """Owner 2026-11-20: a number beside Music or Stations read as
+    "something new here". Core items carry no count, and the bundled
+    radio plugin declares no badge (plugin badges stay for things that
+    are happening, like downloads in progress)."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2]
+    components = (root / "web/static/components.jsx").read_text(encoding="utf-8")
+    core = components[components.index("/* Core nav items."):]
+    core = core[:core.index("];")]
+    assert "countKey" not in core
+    radio = (root / "plugins/radio/domovoi-plugin.toml").read_text(encoding="utf-8")
+    assert not any(line.strip().startswith("badge") for line in radio.splitlines())
