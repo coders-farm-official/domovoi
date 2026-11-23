@@ -36,10 +36,17 @@
   (``/api/images/thumb``).
 
 The parsing and the query are in :mod:`domovoi.media_understanding.search`.
+
+**The words are never logged** (design §8). No line here names them; a
+search that fails answers 500 with a log line naming only the error's
+kind (a database error's text would hold the words as its parameters);
+and the access log's request line has ``q`` blanked for this route at
+every log level (``domovoi/log_privacy.py``, ``ALWAYS_BLANK_PATHS``).
 """
 
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -50,6 +57,8 @@ from domovoi.admin_auth import require_device_read
 from domovoi.media_understanding import geocode, moments, search, switches
 from web.backend.api import devices as devices_api
 from web.backend.db import session_scope
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(tags=["media-understanding"])
 
@@ -102,6 +111,22 @@ async def media_search(
             raise HTTPException(status_code=422, detail="cursor is the next_cursor of the page before")
         offset = int(cursor)
     parsed = search.parse_query(q)
+    try:
+        page = await _search(request, parsed, kind, start, end, limit, offset)
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001 — logged without its text: it holds the words
+        log.warning("media search failed: %s", type(e).__name__)
+        raise HTTPException(status_code=500, detail="the search failed") from None
+    home_known = page.pop("_at_home")
+    nxt = str(offset + len(page["items"])) if page["more"] else None
+    return {"query": {"words": parsed.words, "kind": kind or parsed.kind, "when": parsed.when,
+                      "at_home": bool(parsed.at_home and home_known)}, **page,
+            "has_more": page["more"], "next_cursor": nxt}
+
+
+async def _search(request: Request, parsed: Any, kind: str | None, start: Any, end: Any,
+                  limit: int, offset: int) -> dict[str, Any]:
     from domovoi import home_location
 
     async with session_scope() as s:
@@ -116,7 +141,5 @@ async def media_search(
                 h["place"] = h["near_home"] = None
         # A video hit opens at the moment that matched (transcript line or keyframe).
         await moments.add_moments(s, page["items"], parsed.words)
-    nxt = str(offset + len(page["items"])) if page["more"] else None
-    return {"query": {"words": parsed.words, "kind": kind or parsed.kind, "when": parsed.when,
-                      "at_home": bool(parsed.at_home and home is not None)}, **page,
-            "has_more": page["more"], "next_cursor": nxt}
+    page["_at_home"] = home is not None
+    return page

@@ -480,6 +480,24 @@ SCENARIOS["stop_all"] = scenario(
     ls=PAIRED_LS,
 )
 SCENARIOS["one_playing_no_stop_all"] = scenario(house(), SNAP, ls=PAIRED_LS)
+
+# Photos and videos: the backlog chip (1.5.0) -------------------------------
+def _mu(enabled: bool = True, photos_left: int = 7, videos_total: int = 2, paused: bool = False) -> dict:
+    return {"settings": {"enabled": enabled, "paused": paused},
+            "progress": {"photos": {"total": 3000, "done": 3000 - photos_left, "left": photos_left, "failed": 0},
+                         "videos": {"total": videos_total, "done": videos_total, "left": 0, "failed": 0}}}
+
+
+SCENARIOS["media_backlog"] = scenario(
+    house(**{"GET /api/media-understanding": _mu()}), SNAP, ls=PAIRED_LS)
+SCENARIOS["media_backlog_photos_paused"] = scenario(
+    house(**{"GET /api/media-understanding": _mu(videos_total=0, paused=True)}), SNAP, ls=PAIRED_LS)
+SCENARIOS["media_done"] = scenario(
+    house(**{"GET /api/media-understanding": _mu(photos_left=0)}), SNAP, ls=PAIRED_LS)
+SCENARIOS["media_off"] = scenario(
+    house(**{"GET /api/media-understanding": _mu(enabled=False)}), SNAP, ls=PAIRED_LS)
+SCENARIOS["media_shared"] = scenario(
+    house(**{"GET /api/media-understanding": _mu()}), SNAP, ls=SHARED_LS)
 SCENARIOS["core_down"] = scenario(
     house(**{"GET /api/auth/status": STATUS_ADMIN,
              "GET /api/health": {"status": "degraded", "db_reachable": True,
@@ -1821,3 +1839,26 @@ def test_failing_empty_unregistered_off_and_disabled_cards_stay_silent(driven) -
 
 def test_no_plugin_cards_means_no_slot(driven) -> None:
     assert driven["plugin_cards_none"]["slot"] == 0
+
+
+# ─── photos and videos: the backlog chip ─────────────────────────────────
+
+
+def test_the_photos_chip_shows_while_a_backlog_runs_and_links_to_settings(driven) -> None:
+    snap = driven["media_backlog"]
+    assert "/api/media-understanding" in _fetched(snap)
+    said = " ".join(snap["text"])
+    assert "Understanding your photos and videos: " in said and "2,995" in said and "3,002" in said
+    assert "#settings/photos-and-videos" in snap["blob"]
+    paused = driven["media_backlog_photos_paused"]
+    said = " ".join(paused["text"])
+    assert "Understanding your photos: " in said and "2,993" in said and "paused" in said
+
+
+def test_no_photos_chip_when_done_off_shared_or_for_a_guest(driven) -> None:
+    for name in ("media_done", "media_off"):
+        assert "Understanding your" not in "".join(driven[name]["text"]), name
+    shared = driven["media_shared"]
+    assert "Understanding your" not in "".join(shared["text"])
+    assert "/api/media-understanding" not in _fetched(shared)
+    assert "/api/media-understanding" not in _fetched(driven["unpaired"]["before"])

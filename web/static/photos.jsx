@@ -344,11 +344,17 @@ const facesErr = (e) => {
   return typeof d === 'string' ? d : apiErrorText(e);
 };
 
-/* A face's file and moment, as a line under it. */
+/* A face's file and, in a video, its appearance (first to last sighting),
+ * as a line under it. */
+const facesSpan = (face) => {
+  if (face.at_s == null) return '';
+  const end = typeof face.end_s === 'number' ? face.end_s : null;
+  return end != null && end - face.at_s >= 1 ? `${fmtDur(face.at_s)}–${fmtDur(end)}` : fmtDur(face.at_s);
+};
 const FacesFaceLabel = ({ face }) => (
   <span className="photos-muted photos-wrap faces-face-label">
     {String(face.rel_path || '').split('/').pop()}
-    {face.at_s != null ? ` · ${fmtDur(face.at_s)}` : ''}
+    {face.at_s != null ? ` · ${facesSpan(face)}` : ''}
   </span>
 );
 

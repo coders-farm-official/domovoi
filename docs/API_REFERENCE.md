@@ -1248,8 +1248,12 @@ as the core last did (null while it hasn't).
 
 Settings → Chat & AI → Photos and videos (`web/backend/api/media_understanding.py`,
 `domovoi/media_understanding/`, V078). The core catalogues the image and
-video files of Pictures and Videos by `stat()` alone (`media_catalog`, a
-walk an hour or after a rescan) and works through them in the background
+video files of every Files library by `stat()` alone (`media_catalog`, a
+walk an hour or after a rescan): images and videos in Pictures, plugins'
+media libraries and removable drives; videos only in Videos, Music,
+Audiobooks, Podcasts and Documents (album covers and scanned pages are not
+photos). A root inside another library's is left out, so no file is
+catalogued twice and works through them in the background
 (`media_understanding`): chat videos first, then the backlog in the night
 window (the household's quiet hours) and, by day, only new arrivals after
 10 minutes without a voice turn, at a 1:1 duty cycle. Every model step
@@ -1267,19 +1271,22 @@ starts the one-time pinned model fetch (§3.5c1c). Turning `places`
 name and rebuilds those photos' search text (`confirm_delete_places: true`
 when there are any); turning it on makes the core fetch the GeoNames town
 list once (pinned by SHA-256, never under internet access "No") and read
-the photos' positions again. Excluding a folder deletes what was worked out about it; a file
-deleted through Files loses its results at once. Changes fire
+the photos' positions again. Excluding a library or a folder in one
+deletes what was worked out about it (captions, tags, text, transcripts,
+summaries, faces, with their groups worked out again, places and the
+search words) and the walker never catalogues it again; a file deleted
+through Files, in any library, loses its results at once. Changes fire
 `media_understanding.changed` on `/ws/state`.
 
 | Method & path | Auth | Request | Response / purpose |
 |---|---|---|---|
-| `GET /api/media-understanding` | **Device read** | — | `{settings: {enabled, faces, places, paused, run_now, frame_cap_mode: "auto"\|"manual", frame_cap}, frame_cap_range: [3, 1000], ai_on, progress: {photos: {total, done, left, failed}, videos: {…}, phase: "off"\|"paused"\|"idle"\|"working"\|"waiting_for_window"\|"waiting_for_memory", waiting_for_voice, rescan_requested, benchmark: {model, s_per_frame, frames_per_s, tier: "cpu"\|"gpu", vram_bytes, measured_at} \| null, updated_at}, estimate: {seconds, nights}, face_count, places: {count, ready, problem, fetch_error}, libraries: [{id, label, present}], excluded: [{library_id, prefix}]}` |
+| `GET /api/media-understanding` | **Device read** | — | `{settings: {enabled, faces, places, paused, run_now, frame_cap_mode: "auto"\|"manual", frame_cap}, frame_cap_range: [3, 1000], ai_on, progress: {photos: {total, done, left, failed}, videos: {…}, phase: "off"\|"paused"\|"idle"\|"working"\|"waiting_for_window"\|"waiting_for_memory", waiting_for_voice, rescan_requested, benchmark: {model, s_per_frame, frames_per_s, tier: "cpu"\|"gpu", vram_bytes, measured_at} \| null, updated_at}, estimate: {seconds, nights}, face_count, places: {count, ready, problem, fetch_error}, libraries: [{id, label, present, kinds: ["image"\|"video"…]}], excluded: [{library_id, prefix}]}`. `libraries`: every library the catalogue walks, then any it still has results for that isn't there now (an unplugged drive: `present: false`, `label` its id, `kinds: []`), so that one can be excluded too. |
 | `PUT /api/media-understanding/settings` | **Admin** | any of `{enabled, faces, places, frame_cap_mode, frame_cap}`, plus `confirm_delete_faces`, `confirm_delete_places` | `{settings}`. `422` malformed (a manual cap is 3–1000); `409` turning faces off while faces are saved, without `confirm_delete_faces`, or locations off while photos have one, without `confirm_delete_places`. |
 | `POST /api/media-understanding/pause` | **Admin** | `{paused: bool}` | `{settings}`. Pausing also ends Run now; the item under way stops at its next step and carries on later. |
 | `POST /api/media-understanding/run-now` | **Admin** | — | `{settings}`: ignore the night window until the backlog is done (still voice first, still capped). `409` while understanding is off. |
 | `POST /api/media-understanding/rescan` | **Device** | — | `{ok: true}`: the core walks the libraries at its next look (within a minute). |
-| `POST /api/media-understanding/excluded` | **Admin** | `{library_id: "core:pictures"\|"core:videos", prefix: "Folder/Sub"}` (`""` = the whole library) | `{library_id, prefix, deleted}`: the rows (and results) deleted. `404` unknown library, `422` a path with `.`/`..`. |
-| `DELETE /api/media-understanding/excluded?library_id=&prefix=` | **Admin** | — | `{ok: true}`; the next walk catalogues the folder again. `404` when it wasn't excluded. |
+| `POST /api/media-understanding/excluded` | **Admin** | `{library_id, prefix: "Folder/Sub", confirm_delete: bool}`: any id in `libraries` (`""` prefix = the whole library) | `{library_id, prefix, deleted}`: the rows (and results) deleted. When the folder has catalogued files, `confirm_delete: true` is required: without it `409` `{detail: {message, files}}` (`files`: how many would lose their results) and nothing changes. `404` unknown library, `422` a path with `.`/`..`. |
+| `DELETE /api/media-understanding/excluded?library_id=&prefix=` | **Admin** | — | `{ok: true}`; the next walk catalogues the folder again (any excluded row, its library present or not). `404` when it wasn't excluded. |
 
 **Photos (slice 2).** Each photo gets two stages: `photo_date` (EXIF
 `DateTimeOriginal`, with `OffsetTimeOriginal` when present, else the
@@ -1300,7 +1307,7 @@ kept.
 
 | Method & path | Auth | Request | Response / purpose |
 |---|---|---|---|
-| `GET /api/media/search?q=&kind=&from=&to=&limit=&offset=&cursor=` | **Device read** | `q` (≤ 300 chars): words, a kind ("photos", "videos") and a time ("last summer", "July 2024", "Christmas", "2023", "yesterday", "last month"; a month, season or holiday without a year means every year's); `kind` `image`\|`video`; `from`/`to` `YYYY-MM-DD` (household days, `to` included); `limit` 1–100 (40); `offset` | `{query: {words, kind, when, at_home}, items: [{id, library_id, path, name, kind, analysed, taken_at, date_from: "photo"\|"file", might_show, tags, has_text, text, place, near_home, score}], more, has_more, next_cursor}`; `cursor` (the page before's `next_cursor`) stands in for `offset`, so the dashboard's Photos grid loads as it scrolls. `place`: the town the photo was taken in ("Portland, Oregon, United States"), only while `places` is on, so "photos from Portland" finds it by its words; `near_home`: within 10 km of the Home location (null when locations are off or no Home location is set), and "at home" / "near home" in `q` keeps only those (`query.at_home`). Never a coordinate; a device marked as a shared screen gets `place` and `near_home` null and no "at home" filter. All words must match (`websearch_to_tsquery`: quotes for a phrase, `-word` to leave one out) in the captions, tags, text and names, or in the file and folder names by trigram (so a file not looked at yet is found by its name). Ranked by text score, then date taken, newest first. `might_show`, `tags` and `text` (≤ 500 chars) are untrusted text a model or OCR made: show them as text, never HTML, and a caption as "Might show: …". Thumbnails: `/api/images/thumb`. `422` for a bad `kind`, date, range or `limit`. |
+| `GET /api/media/search?q=&kind=&from=&to=&limit=&offset=&cursor=` | **Device read** | `q` (≤ 300 chars): words, a kind ("photos", "videos") and a time ("last summer", "July 2024", "Christmas", "2023", "yesterday", "last month"; a month, season or holiday without a year means every year's); `kind` `image`\|`video`; `from`/`to` `YYYY-MM-DD` (household days, `to` included); `limit` 1–100 (40); `offset` | `{query: {words, kind, when, at_home}, items: [{id, library_id, path, name, kind, analysed, taken_at, date_from: "photo"\|"file", might_show, tags, has_text, text, place, near_home, score}], more, has_more, next_cursor}`; `cursor` (the page before's `next_cursor`) stands in for `offset`, so the dashboard's Photos grid loads as it scrolls. `place`: the town the photo was taken in ("Portland, Oregon, United States"), only while `places` is on, so "photos from Portland" finds it by its words; `near_home`: within 10 km of the Home location (null when locations are off or no Home location is set), and "at home" / "near home" in `q` keeps only those (`query.at_home`). Never a coordinate; a device marked as a shared screen gets `place` and `near_home` null and no "at home" filter. All words must match (`websearch_to_tsquery`: quotes for a phrase, `-word` to leave one out) in the captions, tags, text and names, or in the file and folder names by trigram (so a file not looked at yet is found by its name). Ranked by text score, then date taken, newest first. `might_show`, `tags` and `text` (≤ 500 chars) are untrusted text a model or OCR made: show them as text, never HTML, and a caption as "Might show: …". Thumbnails: `/api/images/thumb`. `422` for a bad `kind`, date, range or `limit`; `500` `{detail: "the search failed"}` when the search itself fails. **The words are never logged:** the access log's request line for this route has `q` blanked (`q=<words>`) at every log level, DEBUG included (`domovoi/log_privacy.py` `ALWAYS_BLANK_PATHS`), and a failure logs only the kind of error. |
 ### 3.5c1c Faces and people (1.5.0)
 
 `web/backend/api/faces.py`; the data and the grouping in
@@ -1314,7 +1321,7 @@ admin's Bearer included). No answer carries an embedding or a centroid;
 there is no export route.
 
 A face row: `{face_id, item_id, library_id, rel_path, kind: "image"|"video",
-at_s (null for a photo), box: [x, y, w, h] (fractions of the picture),
+at_s, end_s (both null for a photo; in a video one row is an appearance, from the first sighting, `at_s`, to the last, `end_s`, sightings under 30 s apart, the best look kept), box: [x, y, w, h] (fractions of the picture),
 quality, group_id, person_id, confirmed, suggested}`. `suggested` = put
 under a person by the grouping, not yet confirmed.
 
@@ -1324,7 +1331,7 @@ under a person by the grouping, not yet confirmed.
 | `GET /api/faces/people?more=` | **Device read** | — | `{people: [{id, name, faces, confirmed, group_id}], groups: [{group_id, hidden: false, faces}], shown_min_faces: 3}`: named people, and unnamed groups of 3 or more faces (`more=true`: all of them). Never hidden groups. |
 | `GET /api/faces/hidden` | **Admin** (on the device tier) | — | `{groups}`: the hidden groups. |
 | `GET /api/faces/groups/{group_id}?limit=&offset=` | **Device read**; a hidden group **admin** | — | `{group_id, person_id, hidden, faces: [face row]}`, confirmed first then by quality. `404` unknown. |
-| `GET /api/faces/people/{person_id}/items?confirmed=&kind=&limit=&offset=&cursor=` | **Device read** | — | `{person_id, items: [{item_id, library_id, rel_path, kind, taken_at, moments: [at_s…], confirmed, faces}], has_more, next_cursor}` (`cursor`: the page before's `next_cursor`, in place of `offset`): every photo and video the person is in, newest first; `moments` are the video times they appear (the search hook for "photos of Sarah"). |
+| `GET /api/faces/people/{person_id}/items?confirmed=&kind=&limit=&offset=&cursor=` | **Device read** | — | `{person_id, items: [{item_id, library_id, rel_path, kind, taken_at, moments: [at_s…], appearances: [{at_s, end_s}…], confirmed, faces}], has_more, next_cursor}` (`cursor`: the page before's `next_cursor`, in place of `offset`): every photo and video the person is in, newest first; `appearances` are when they are in a video, first to last sighting, in time order, and `moments` each appearance's start (where a hit opens the player; the search hook for "photos of Sarah"). |
 | `POST /api/faces/groups/{group_id}/name` | **Device**; a group that already has another person **admin** | `{person_id}` or `{name}` (a new name makes a face-only person; an existing one, case aside, is that person) | `{group_id, person_id, faces}`: the group's faces become the person's, confirmed (except faces already said not to be them); a person who already has a group gets them in it. `409` a name two people share. |
 | `POST /api/faces/face/{face_id}/confirm` | **Device** | optional `{person_id}` | `{face_id, person_id, group_id}`: "yes, this is them". Without `person_id`, the face's suggested person; `409` when it has none. |
 | `POST /api/faces/face/{face_id}/not-this-person` | **Device** | — | `{face_id, rejected_person_id, group_id}`: the face leaves the person, is never suggested for them again, and is grouped again. `409` a face that is nobody's. |

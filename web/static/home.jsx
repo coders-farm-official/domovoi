@@ -11,6 +11,9 @@
  *   rooms            one row per room: pause / resume / stop / play
  *   announce         say something in every room
  *   today            today's and tomorrow's events
+ *   photos chip      "Understanding your photos: 3,210 of 20,000" while the
+ *                    photos-and-videos backlog runs (household, read-only;
+ *                    links to Settings → Chat & AI → Photos and videos)
  *   everything       every page that is not on this phone's bar (and a
  *                    link to pick the bar's tabs)
  *
@@ -1184,6 +1187,41 @@ const HomeEverything = ({ counts, badges: given, shared }) => {
   );
 };
 
+/* ---- photos and videos: the backlog chip ------------------------------ */
+
+/* "Understanding your photos: 3,210 of 20,000" (1.5.0, design
+ * MEDIA-UNDERSTANDING §5): read-only, only while understanding is on and
+ * a backlog is left, and never for a guest or on a shared screen (the
+ * read itself is the household tier). Home has no summary endpoint of its
+ * own, so this is the Settings card's read (/api/media-understanding),
+ * issued only on Home and only for the household; its progress event
+ * re-reads it (the core sends one at most every 10 s while it works).
+ * The chip links to the card, where Pause and the estimate are. */
+const HOME_MEDIA_HREF = '#settings/photos-and-videos';
+
+const HomeMediaChip = ({ data }) => {
+  const s = (data && data.settings) || {};
+  const p = (data && data.progress) || {};
+  if (!s.enabled) return null;
+  const ph = p.photos || {};
+  const vi = p.videos || {};
+  const left = (ph.left || 0) + (vi.left || 0);
+  if (left <= 0) return null;
+  const total = (ph.total || 0) + (vi.total || 0);
+  const done = total - left;
+  const what = vi.total ? 'photos and videos' : 'photos';
+  const n = (x) => Number(x || 0).toLocaleString();
+  return (
+    <div className="home-sec home-sec-media">
+      <a className="home-chip home-media-chip" href={HOME_MEDIA_HREF}
+         title={s.paused ? 'paused · open Photos and videos in Settings' : 'open Photos and videos in Settings'}>
+        <Icon name="image" size={12}/>
+        <span>Understanding your {what}: <span className="mono">{n(done)}</span> of <span className="mono">{n(total)}</span>{s.paused ? ' · paused' : ''}</span>
+      </a>
+    </div>
+  );
+};
+
 /* ---- the page ------------------------------------------------------- */
 
 /* Plugin cards (SDK 1.14, [[web.home_cards]]). A plugin's panel bundle
@@ -1271,6 +1309,12 @@ const HomePage = ({ counts, badges }) => {
   const timers = useApiObject('/api/timers', { eventTypes: ['timers.changed', 'timer_fires.changed'], quiet: true,
                                                refetchOnAuth: true });
   const plugins = useApiObject('/api/plugins', { eventTypes: ['plugins.changed'], quiet: true });
+  // The photos-and-videos backlog chip: a household read, issued only once
+  // this browser is paired (or an admin's), never on a shared screen.
+  const mediaHousehold = (viewer.paired || viewer.isAdmin) && !shared;
+  const mediaUnderstanding = useApiObject(mediaHousehold ? '/api/media-understanding' : null,
+                                          { eventTypes: ['media_understanding.changed'], quiet: true,
+                                            refetchOnAuth: true });
   // Named groups (V060) for the rooms' "play in upstairs too": a household
   // read, never issued for a guest.
   const musicGroups = useApiObject(guest ? null : '/api/music/groups',
@@ -1597,6 +1641,7 @@ const HomePage = ({ counts, badges }) => {
               <Broadcast compact onlineCount={coreDown ? 0 : online.length} fire={fire}/>
             </div>
           )}
+          {mediaHousehold && <HomeMediaChip data={mediaUnderstanding.data}/>}
           <HomePluginCards guest={guest}/>
           {isPhone !== false && <HomeEverything counts={counts} badges={badges} shared={shared}/>}
         </div>

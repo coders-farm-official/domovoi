@@ -25,8 +25,17 @@ switches and folder exclusions are admin):
 * ``POST /api/media-understanding/rescan`` (household, ``require_device``):
   walk the libraries at the core's next look (within a minute).
 * ``POST /api/media-understanding/excluded`` (admin):
-  ``{"library_id", "prefix"}``; the folder's results are deleted at once.
-* ``DELETE /api/media-understanding/excluded?library_id=&prefix=`` (admin).
+  ``{"library_id", "prefix", "confirm_delete"}``. Any library the catalogue
+  walks (``libraries`` in the GET: Pictures, Videos, the other Files
+  libraries, plugins' and removable drives'), or one it still has results
+  for (a drive unplugged); ``prefix`` '' is the whole library. New
+  analysis stops there and what was worked out about its files is deleted
+  at once (captions, tags, text, transcripts, summaries, faces, places,
+  the search words). When there is any, that needs ``confirm_delete:
+  true`` (409 otherwise, with ``files``: how many would lose their
+  results).
+* ``DELETE /api/media-understanding/excluded?library_id=&prefix=`` (admin):
+  include it again (the walker looks at it at its next look).
 
 Everything is in Postgres; the core's runner and walker read it. Each
 change fires ``pg_notify('media_understanding_changed')``.
@@ -49,12 +58,21 @@ from web.backend.db import session_scope
 router = APIRouter(tags=["media-understanding"])
 
 PREFIX_MAX = 1024
-LIBRARY_LABELS = {"core:pictures": "Pictures", "core:videos": "Videos"}
+LIBRARY_ID_MAX = 200
 
 
-def _libraries() -> list[dict[str, Any]]:
-    return [{"id": lib.id, "label": LIBRARY_LABELS.get(lib.id, lib.id), "present": catalog.is_present(lib)}
-            for lib in catalog.core_libraries()]
+async def _libraries(s: Any) -> list[dict[str, Any]]:
+    """Every library the catalogue walks, then any it still has results
+    for that isn't here now (a drive unplugged), so it can be excluded too."""
+    out = [{"id": lib.id, "label": lib.label or lib.id, "present": catalog.is_present(lib),
+            "kinds": sorted(lib.kinds)}
+           for lib in await catalog.libraries(s)]
+    seen = {x["id"] for x in out}
+    rows = (await s.execute(text(
+        "SELECT library_id FROM media_libraries UNION SELECT DISTINCT library_id FROM media_items "
+        "ORDER BY 1"))).scalars().all()
+    out += [{"id": r, "label": r, "present": False, "kinds": []} for r in rows if r not in seen]
+    return out
 
 
 def clean_prefix(raw: Any) -> str:
@@ -73,9 +91,10 @@ def clean_prefix(raw: Any) -> str:
     return "/".join(parts)
 
 
-def _library_id(raw: Any) -> str:
-    ids = {lib.id for lib in catalog.core_libraries()}
-    if not isinstance(raw, str) or raw not in ids:
+async def _library_id(s: Any, raw: Any) -> str:
+    if not isinstance(raw, str) or not raw or len(raw) > LIBRARY_ID_MAX:
+        raise HTTPException(status_code=404, detail="no such library")
+    if raw not in {x["id"] for x in await _libraries(s)}:
         raise HTTPException(status_code=404, detail="no such library")
     return raw
 
@@ -96,6 +115,7 @@ async def get_state() -> dict[str, Any]:
         faces = int((await s.execute(text("SELECT count(*) FROM media_faces"))).scalar() or 0)
         located = await geocode.located_count(s)
         places_state = await geocode.read_state(s)
+        libraries = await _libraries(s)
     est = estimate(prog["photos"]["left"], prog["videos"]["left"], prog["benchmark"])
     return {
         "settings": {k: sw[k] for k in ("enabled", "faces", "places", "paused", "run_now",
@@ -110,7 +130,7 @@ async def get_state() -> dict[str, Any]:
         "places": {"count": located, "ready": geocode.ready(),
                    "problem": geocode.problem() if sw["places"] else None,
                    "fetch_error": places_state.get("fetch_error")},
-        "libraries": _libraries(),
+        "libraries": libraries,
         "excluded": [dict(r) for r in excluded],
     }
 
@@ -195,9 +215,16 @@ async def rescan() -> dict[str, bool]:
 
 @router.post("/api/media-understanding/excluded", dependencies=[Depends(require_admin_mutation)])
 async def add_excluded(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
-    lib = _library_id(body.get("library_id"))
     prefix = clean_prefix(body.get("prefix", ""))
+    confirm = body.get("confirm_delete") is True
     async with session_scope() as s:
+        lib = await _library_id(s, body.get("library_id"))
+        files = await catalog.count_under(s, lib, prefix)
+        if files and not confirm:
+            raise HTTPException(status_code=409, detail={
+                "message": (f"excluding it deletes what was worked out about {files} "
+                            f"{'file' if files == 1 else 'files'} in it; send confirm_delete to go ahead"),
+                "files": files})
         await s.execute(text(
             "INSERT INTO media_excluded (library_id, prefix) VALUES (:l, :p) ON CONFLICT DO NOTHING"),
             {"l": lib, "p": prefix})
@@ -207,8 +234,10 @@ async def add_excluded(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
 
 
 @router.delete("/api/media-understanding/excluded", dependencies=[Depends(require_admin_mutation)])
-async def remove_excluded(library_id: str = Query(...), prefix: str = Query("")) -> dict[str, Any]:
-    lib = _library_id(library_id)
+async def remove_excluded(library_id: str = Query(..., max_length=LIBRARY_ID_MAX),
+                          prefix: str = Query("")) -> dict[str, Any]:
+    # Any excluded row can go, whether or not its library is here now.
+    lib = library_id
     p = clean_prefix(prefix)
     async with session_scope() as s:
         r = await s.execute(text("DELETE FROM media_excluded WHERE library_id = :l AND prefix = :p"),
@@ -222,9 +251,9 @@ async def remove_excluded(library_id: str = Query(...), prefix: str = Query(""))
 
 
 async def forget_deleted(library_id: str, rel_paths: list[str]) -> None:
-    """Files deleted through Files: their results go at once. Best effort:
-    the walker deletes them within the hour anyway."""
-    if library_id not in LIBRARY_LABELS or not rel_paths:
+    """Files deleted through Files, in any library: their results go at
+    once. Best effort: the walker deletes them within the hour anyway."""
+    if not library_id or not rel_paths:
         return
     try:
         async with session_scope() as s:

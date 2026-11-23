@@ -11,8 +11,10 @@ Videos, on the server, so you can find them by words, times, places and
 people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
 
 - **The catalogue and the runner.** The core keeps a catalogue of the
-  image and video files in Pictures and Videos (migration V078), walked by
-  `stat()` once an hour, and one background runner for everything it works
+  image and video files in the household's libraries (migration V078):
+  photos and videos in Pictures, plugins' media folders and plugged-in
+  removable drives, and the videos in Videos, Music, Audiobooks, Podcasts
+  and Documents, walked by `stat()` once an hour, and one background runner for everything it works
   out about them, which also runs the videos attached in chat (first, as
   before; the `chat_video` worker is now `media_understanding`). The runner
   works at night (the household's quiet hours) and, by day, only on new
@@ -20,7 +22,12 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
   for memory before using the vision model, reads at most 20 MB/s, and caps
   the time it spends on one video. Settings → Chat & AI → Photos and videos
   shows the progress, the switches, Pause, Run now, Rescan, the per-video
-  frame cap (Automatic or manual) and excluded folders. A house that
+  frame cap (Automatic or manual) and excluded folders: any library or a
+  folder in one, which deletes what was worked out there, faces and places
+  included, after a confirm (`POST /api/media-understanding/excluded` needs
+  `confirm_delete: true` then, else `409` with the file count). While a
+  backlog is left, Home shows "Understanding your photos: N of M", linking
+  to that card. A house that
   upgrades starts with "Understand photos and videos" **off** until an
   admin turns it on; a new install starts with it on. Faces and photo
   locations are off for everyone. Nothing is written into the media files.
@@ -53,7 +60,8 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
   pausing for every voice turn.
 - **Faces and people.** With **Recognize faces** on (off by default, admin
   only), the server finds faces in photos and in video keyframes (one row
-  per appearance), and groups the same person's faces as they arrive and
+  per appearance: first to last sighting, `media_faces.end_s`, and
+  `appearances` on a person's items), and groups the same person's faces as they arrive and
   again each night. Groups are named with the same people voice ID knows.
   New routes under `/api/faces` (API_REFERENCE §3.5c1c): the household
   views, names, confirms, says "not this person" and hides; merging or
@@ -105,7 +113,13 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
   summer", "find the video where we sang happy birthday", "do we have any
   pictures from Christmas" work by voice (new core handler `media_search`,
   band 305, offline) and in a home-server chat. The answer says how many
-  were found and that they're on the Photos page; a chat reply also carries
+  were found and that they're on the Photos page; by voice, to someone it
+  recognizes with a phone marked as theirs, it then offers "Want them on
+  your phone?" and a yes sends a "Photos: …" chat with the result cards to
+  their phones through the help desk's send-to-your-phone path (same
+  notification and limits; never for a guest). The search words never reach
+  a log: the access log blanks `q` on `/api/media/search` at every level,
+  DEBUG included. A chat reply also carries
   result cards (`stats.media` / the message's `media`: thumbnail, "might
   show", date, a video's moment). In a chat that mentions photos or videos,
   the model may ask for the search itself (`FIND_MEDIA: ...`); the app runs

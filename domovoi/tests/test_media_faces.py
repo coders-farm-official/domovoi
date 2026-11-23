@@ -359,7 +359,7 @@ async def _person(name: str) -> int:
 async def _faces() -> list[dict[str, Any]]:
     async with session_scope() as s:
         rows = (await s.execute(text(
-            "SELECT f.id, f.group_id, f.person_id, f.confirmed, f.rejected_person_ids, i.rel_path, f.at_s "
+            "SELECT f.id, f.group_id, f.person_id, f.confirmed, f.rejected_person_ids, i.rel_path, f.at_s, f.end_s "
             "FROM media_faces f JOIN media_items i ON i.id = f.item_id ORDER BY f.id"))).mappings().all()
     return [dict(r) for r in rows]
 
@@ -545,13 +545,16 @@ async def test_video_frames_become_appearances_with_moments(fh) -> None:
     eng.by_size[(10, 10)] = [_found(_near(a), 0.5)]
     eng.by_size[(11, 10)] = [_found(_near(a), 0.8), _found(_near(b))]
     vf = await F.VideoFaces.start(item)
-    frames = [(0.0, (10, 10)), (1.0, (11, 10)), (2.5, (11, 10)), (10.0, (10, 10)), (100.0, (10, 10))]
+    frames = [(0.0, (10, 10)), (1.0, (11, 10)), (2.5, (11, 10)), (10.0, (10, 10)), (35.0, (10, 10)),
+              (100.0, (10, 10))]
     saved = [await vf.frame(t, Image.new("RGB", size)) for t, size in frames]
     # 1.0 s is under the 2 s gap; at 2.5 s b appears; a is one appearance
-    # until a 90 s gap, then a second one.
-    assert saved == [1, 0, 1, 0, 1]
+    # (each sighting under 30 s after the last) until a 65 s gap, then a
+    # second one.
+    assert saved == [1, 0, 1, 0, 0, 1]
     rows = await _faces()
-    assert [r["at_s"] for r in rows] == [0.0, 2.5, 100.0]
+    # One row per appearance, first to last sighting.
+    assert [(r["at_s"], r["end_s"]) for r in rows] == [(0.0, 35.0), (2.5, 2.5), (100.0, 100.0)]
     async with session_scope() as s:
         q = (await s.execute(text("SELECT quality FROM media_faces WHERE id = :f"), {"f": rows[0]["id"]})).scalar()
     assert q == pytest.approx(0.8)                                   # the better look kept
@@ -563,6 +566,15 @@ async def test_video_frames_become_appearances_with_moments(fh) -> None:
         await F.name_group(s, rows[0]["group_id"], pid)
         items = await F.items_for_person(s, pid)
     assert items[0]["moments"] == [0.0, 100.0]
+    assert items[0]["appearances"] == [{"at_s": 0.0, "end_s": 35.0}, {"at_s": 100.0, "end_s": 100.0}]
+    # A confirmed appearance still grows its end; its best look stays as confirmed.
+    async with session_scope() as s:
+        await s.execute(text("UPDATE media_faces SET confirmed = true WHERE id = :f"), {"f": rows[2]["id"]})
+    vf3 = await F.VideoFaces.start(item)
+    vf3.open.append(F._Sighting(rows[2]["id"], F.unit(eng.by_size[(10, 10)][0].embedding), 0.5, 100.0))
+    vf3.resume_after = None
+    assert await vf3.frame(120.0, Image.new("RGB", (10, 10))) == 0
+    assert [(r["at_s"], r["end_s"]) for r in await _faces()][2] == (100.0, 120.0)
 
 
 @requires_db

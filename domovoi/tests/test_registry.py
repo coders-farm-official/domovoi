@@ -257,6 +257,7 @@ def test_declared_confirmation_kinds_cover_known_flows() -> None:
             "core.doc_pick", "core.doc_length", "core.doc_more", "core.doc_paused",
             "core.letter_author", "core.letter_dictation",
         },
+        "media_search": {"core.media_send"},
     }
     for name, kinds in expected.items():
         assert set(HANDLER_BY_NAME[name].confirmation_kinds) == kinds
