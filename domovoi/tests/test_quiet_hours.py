@@ -355,3 +355,40 @@ async def test_an_unreadable_choice_is_the_houses():
 
     assert await qh.is_quiet("kitchen", now=at(23), settings=HOUSE, scope=Boom)
     assert not await qh.is_quiet("kitchen", now=at(12), settings=HOUSE, scope=Boom)
+
+
+# ─── quiet_now: what a page says about quiet hours right now ─────────────
+
+
+def _rooms_scope(choices: dict[str, qh.RoomChoice], monkeypatch):
+    """A scope whose rooms have ``choices`` (no database)."""
+    import contextlib
+
+    async def choice(_s, room):
+        return choices.get(room, qh.RoomChoice())
+
+    monkeypatch.setattr(qh, "room_choice", choice)
+
+    @contextlib.asynccontextmanager
+    async def scope():
+        yield None
+
+    return scope
+
+
+async def test_quiet_now_says_all_some_or_none(monkeypatch) -> None:
+    on = SimpleNamespace(quiet_hours_enabled=True, quiet_hours_start="22:00", quiet_hours_end="07:00")
+    night, noon = datetime(2026, 11, 22, 23, 34), datetime(2026, 11, 22, 12, 0)
+    scope = _rooms_scope({"study": qh.RoomChoice("off"),
+                          "den": qh.RoomChoice("custom", "21:00", "06:30")}, monkeypatch)
+    # No room connected: the house's own hours.
+    assert await qh.quiet_now([], now=night, settings=on) == {"rooms": "all", "until": "07:00"}
+    assert await qh.quiet_now([], now=noon, settings=on) is None
+    assert await qh.quiet_now([], now=night, settings=SimpleNamespace(quiet_hours_enabled=False)) is None
+    # Every room quiet: until the first one may speak again.
+    assert await qh.quiet_now(["kitchen", "den"], now=night, settings=on, scope=scope) == {
+        "rooms": "all", "until": "06:30"}
+    # One room never quiet: some, until the last quiet one ends.
+    assert await qh.quiet_now(["kitchen", "den", "study"], now=night, settings=on, scope=scope) == {
+        "rooms": "some", "until": "07:00"}
+    assert await qh.quiet_now(["kitchen", "study"], now=noon, settings=on, scope=scope) is None
