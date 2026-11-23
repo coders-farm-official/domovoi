@@ -2918,6 +2918,44 @@ and videos → Recognize faces). The code is
   faces with its other results; deleting a person deletes their groups,
   and their faces become unnamed.
 
+## Photo locations
+
+Where a photo was taken says where the household lives, works and travels,
+so "Use photo locations" (1.5.0, Settings → Chat & AI → Photos and videos)
+is **off by default** and only an admin turns it on (owner answers,
+2026-11-22). The code is `domovoi/media_understanding/geocode.py` and the
+photo date stage in `photos.py`.
+
+* **What is stored.** Only while the switch is on: a photo's EXIF GPS
+  position (`media_items.gps`, latitude and longitude) and the town it is
+  in (`place_name`, e.g. "Portland, Oregon, United States"), which is also
+  in the photo's search text. With it off, the position is read from no
+  photo and nothing about where is kept. Videos keep no location.
+* **Where it is worked out.** On the server, in GeoNames' list of towns
+  (`cities1000`, with region and country names; CC BY 4.0,
+  [LICENSES.md](LICENSES.md#the-server)). No position is ever sent to an
+  online map or geocoding service. The list itself is downloaded once,
+  after the admin's switch, from the Internet Archive's copy, pinned by
+  size and SHA-256 ([INTERNET.md](INTERNET.md#egress-inventory)); under
+  internet access "No" it isn't, and places stay unnamed.
+* **"At home".** A search for "at home" keeps the photos within 10 km of
+  the Home location (Settings → Household, a town rather than the
+  house's address). The comparison happens inside the database query: the
+  Home location's point is never copied into a result or a photo's row.
+* **Who sees it.** Search answers (`/api/media/search`, the household
+  tier) carry the place's name and whether it was near home, never a
+  latitude or longitude, and no route returns `gps`. Guests get nothing
+  (401). A device marked as a shared screen gets no place and no "near
+  home", as Home leaves locations off there; that mark is the
+  self-asserted one described under [the device
+  tier](#device-tier-the-household-token).
+* **Turning it off** deletes every stored position and place name at once,
+  and rebuilds those photos' search text without them (the switch asks to
+  confirm when there are any). A position being saved at that moment is
+  dropped too (the save and the switch take the same row lock). The
+  downloaded town list stays: it is public data, and turning locations on
+  again then needs no download.
+
 ## Looking things up (chat lookups)
 
 A chat may look things up. Who decides, what goes where, and what can't

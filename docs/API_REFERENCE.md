@@ -1262,14 +1262,19 @@ The switches live in `household_settings` key `media_understanding`:
 an admin turns it on; `faces` and `places` are off by default. Turning
 faces off deletes every face and group (`confirm_delete_faces: true` when
 there are any; the denylist of forgotten faces stays); turning it on
-starts the one-time pinned model fetch (§3.5c1c). Excluding a folder deletes what was worked out about it; a file
+starts the one-time pinned model fetch (§3.5c1c). Turning `places`
+("Use photo locations") off deletes every stored GPS position and place
+name and rebuilds those photos' search text (`confirm_delete_places: true`
+when there are any); turning it on makes the core fetch the GeoNames town
+list once (pinned by SHA-256, never under internet access "No") and read
+the photos' positions again. Excluding a folder deletes what was worked out about it; a file
 deleted through Files loses its results at once. Changes fire
 `media_understanding.changed` on `/ws/state`.
 
 | Method & path | Auth | Request | Response / purpose |
 |---|---|---|---|
-| `GET /api/media-understanding` | **Device read** | — | `{settings: {enabled, faces, places, paused, run_now, frame_cap_mode: "auto"\|"manual", frame_cap}, frame_cap_range: [3, 1000], ai_on, progress: {photos: {total, done, left, failed}, videos: {…}, phase: "off"\|"paused"\|"idle"\|"working"\|"waiting_for_window"\|"waiting_for_memory", waiting_for_voice, rescan_requested, benchmark: {model, s_per_frame, frames_per_s, tier: "cpu"\|"gpu", vram_bytes, measured_at} \| null, updated_at}, estimate: {seconds, nights}, face_count, libraries: [{id, label, present}], excluded: [{library_id, prefix}]}` |
-| `PUT /api/media-understanding/settings` | **Admin** | any of `{enabled, faces, places, frame_cap_mode, frame_cap}`, plus `confirm_delete_faces` | `{settings}`. `422` malformed (a manual cap is 3–1000); `409` turning faces off while faces are saved, without `confirm_delete_faces`. |
+| `GET /api/media-understanding` | **Device read** | — | `{settings: {enabled, faces, places, paused, run_now, frame_cap_mode: "auto"\|"manual", frame_cap}, frame_cap_range: [3, 1000], ai_on, progress: {photos: {total, done, left, failed}, videos: {…}, phase: "off"\|"paused"\|"idle"\|"working"\|"waiting_for_window"\|"waiting_for_memory", waiting_for_voice, rescan_requested, benchmark: {model, s_per_frame, frames_per_s, tier: "cpu"\|"gpu", vram_bytes, measured_at} \| null, updated_at}, estimate: {seconds, nights}, face_count, places: {count, ready, problem, fetch_error}, libraries: [{id, label, present}], excluded: [{library_id, prefix}]}` |
+| `PUT /api/media-understanding/settings` | **Admin** | any of `{enabled, faces, places, frame_cap_mode, frame_cap}`, plus `confirm_delete_faces`, `confirm_delete_places` | `{settings}`. `422` malformed (a manual cap is 3–1000); `409` turning faces off while faces are saved, without `confirm_delete_faces`, or locations off while photos have one, without `confirm_delete_places`. |
 | `POST /api/media-understanding/pause` | **Admin** | `{paused: bool}` | `{settings}`. Pausing also ends Run now; the item under way stops at its next step and carries on later. |
 | `POST /api/media-understanding/run-now` | **Admin** | — | `{settings}`: ignore the night window until the backlog is done (still voice first, still capped). `409` while understanding is off. |
 | `POST /api/media-understanding/rescan` | **Device** | — | `{ok: true}`: the core walks the libraries at its next look (within a minute). |
@@ -1279,7 +1284,8 @@ deleted through Files loses its results at once. Changes fire
 **Photos (slice 2).** Each photo gets two stages: `photo_date` (EXIF
 `DateTimeOriginal`, with `OffsetTimeOriginal` when present, else the
 household's wall clock; else the file's time; EXIF GPS saved only while
-`places` is on) and `photo_caption` (one call to the vision slot,
+`places` is on, with the town it is in, named on the server from the
+GeoNames town list: `place_name`, in `search_doc` at weight B) and `photo_caption` (one call to the vision slot,
 `ollama_vision_model`, with Ollama structured output
 `{caption, tags, has_text}` on a 768 px copy; Tesseract reads the text
 only when `has_text` is true; with AI features off, Tesseract reads every
@@ -1294,7 +1300,7 @@ kept.
 
 | Method & path | Auth | Request | Response / purpose |
 |---|---|---|---|
-| `GET /api/media/search?q=&kind=&from=&to=&limit=&offset=` | **Device read** | `q` (≤ 300 chars): words, a kind ("photos", "videos") and a time ("last summer", "July 2024", "Christmas", "2023", "yesterday", "last month"; a month, season or holiday without a year means every year's); `kind` `image`\|`video`; `from`/`to` `YYYY-MM-DD` (household days, `to` included); `limit` 1–100 (40); `offset` | `{query: {words, kind, when}, items: [{id, library_id, path, name, kind, analysed, taken_at, date_from: "photo"\|"file", might_show, tags, has_text, text, score}], more}`. All words must match (`websearch_to_tsquery`: quotes for a phrase, `-word` to leave one out) in the captions, tags, text and names, or in the file and folder names by trigram (so a file not looked at yet is found by its name). Ranked by text score, then date taken, newest first. `might_show`, `tags` and `text` (≤ 500 chars) are untrusted text a model or OCR made: show them as text, never HTML, and a caption as "Might show: …". Thumbnails: `/api/images/thumb`. `422` for a bad `kind`, date, range or `limit`. |
+| `GET /api/media/search?q=&kind=&from=&to=&limit=&offset=` | **Device read** | `q` (≤ 300 chars): words, a kind ("photos", "videos") and a time ("last summer", "July 2024", "Christmas", "2023", "yesterday", "last month"; a month, season or holiday without a year means every year's); `kind` `image`\|`video`; `from`/`to` `YYYY-MM-DD` (household days, `to` included); `limit` 1–100 (40); `offset` | `{query: {words, kind, when, at_home}, items: [{id, library_id, path, name, kind, analysed, taken_at, date_from: "photo"\|"file", might_show, tags, has_text, text, place, near_home, score}], more}`. `place`: the town the photo was taken in ("Portland, Oregon, United States"), only while `places` is on, so "photos from Portland" finds it by its words; `near_home`: within 10 km of the Home location (null when locations are off or no Home location is set), and "at home" / "near home" in `q` keeps only those (`query.at_home`). Never a coordinate; a device marked as a shared screen gets `place` and `near_home` null and no "at home" filter. All words must match (`websearch_to_tsquery`: quotes for a phrase, `-word` to leave one out) in the captions, tags, text and names, or in the file and folder names by trigram (so a file not looked at yet is found by its name). Ranked by text score, then date taken, newest first. `might_show`, `tags` and `text` (≤ 500 chars) are untrusted text a model or OCR made: show them as text, never HTML, and a caption as "Might show: …". Thumbnails: `/api/images/thumb`. `422` for a bad `kind`, date, range or `limit`. |
 ### 3.5c1c Faces and people (1.5.0)
 
 `web/backend/api/faces.py`; the data and the grouping in

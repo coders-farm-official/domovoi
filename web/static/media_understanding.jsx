@@ -90,6 +90,11 @@ const MuHit = ({ hit }) => (
       <span style={{ color: 'var(--fg-muted)', fontSize: 12 }}>
         {muWhen(hit.taken_at)}{hit.date_from === 'file' ? ' (the file’s date)' : ''}
       </span>
+      {(hit.place || hit.near_home) && (
+        <span style={{ color: 'var(--fg-muted)', fontSize: 12 }}>
+          {hit.place || ''}{hit.near_home ? `${hit.place ? ' · ' : ''}near home` : ''}
+        </span>
+      )}
       {hit.might_show && <span>Might show: {hit.might_show}</span>}
       {hit.tags && hit.tags.length > 0 && (
         <span style={{ color: 'var(--fg-muted)', fontSize: 12 }}>{hit.tags.join(', ')}</span>
@@ -188,6 +193,15 @@ const MediaUnderstandingPanel = () => {
     }
   };
 
+  const pl = data.places || {};
+  const turnPlacesOff = () => {
+    if (!pl.count) { save({ places: false }, 'photo locations off'); return; }
+    if (window.confirm(
+      `Turning photo locations off deletes where ${muCount(pl.count)} photos were taken: their positions and place names. Turning it on again reads them from the photos afresh.`)) {
+      save({ places: false, confirm_delete_places: true }, 'photo locations off: every location deleted');
+    }
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {toastNode}
@@ -244,9 +258,12 @@ const MediaUnderstandingPanel = () => {
                     label="Recognize faces"
                     sub="Groups the same face across photos and videos so you can name people. Off by default. Turning it off deletes every face."/>
           <MuSwitch checked={s.places} disabled={locked || !s.enabled}
-                    onChange={(on) => save({ places: on }, on ? 'photo locations on' : 'photo locations off')}
+                    onChange={(on) => (on ? save({ places: true }, 'photo locations on') : turnPlacesOff())}
                     label="Use photo locations"
-                    sub="Reads where a photo was taken from the photo itself, on this server. Off by default."/>
+                    sub="Reads where a photo was taken from the photo itself and names the town on this server, so you can search “photos from Paris” or “at home”. Off by default. Turning it off deletes every location. Town names: GeoNames (CC BY 4.0)."/>
+          {s.places && pl.problem && (
+            <div role="status" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>{pl.problem}</div>
+          )}
         </div>
       </Card>
 

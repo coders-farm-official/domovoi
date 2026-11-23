@@ -4,6 +4,25 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Photo locations: places, offline
+
+- **What changed.** With **Use photo locations** on (Settings → Chat & AI
+  → Photos and videos; off by default, admin only), the server keeps each
+  photo's EXIF GPS position and names the town it was taken in, on the
+  server, from GeoNames' list of towns over 1,000 people. Search finds
+  photos by the place ("photos from Portland") and "at home" finds the
+  ones taken near the Home location (Settings → Household). Search
+  answers carry `place` and `near_home`, never a coordinate; a shared
+  screen gets neither.
+- **What to know.** Turning it on downloads the town list once, about
+  11 MB, from the Internet Archive's copy of GeoNames' files (CC BY 4.0;
+  pinned by SHA-256; never under internet access "No", where places stay
+  unnamed), then reads again where the photos already looked at were
+  taken (the first 256 KB of each, at night). No position is ever sent
+  anywhere. "At home" means within 10 km of the Home location, which is
+  a town, not your address. Turning it off deletes every stored position
+  and place name (it asks first). Videos keep no location.
+
 ## 1.5.0 (unreleased) — Photos: descriptions, text in pictures, dates, and search
 
 - **What changed.** The background runner now looks at each photo in

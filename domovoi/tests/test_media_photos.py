@@ -267,7 +267,7 @@ async def test_no_text_no_ocr_and_the_date_comes_from_exif(house, monkeypatch) -
     assert f["caption"] == "A dog running on a sandy beach." and f["tags"] == ["dog", "beach", "ball"]
     assert f["has_text"] is False and f["ocr_text"] is None
     assert await _doc_matches(item["id"], "dogs") and await _doc_matches(item["id"], "trips")
-    assert (await _stage(item["id"], "photo_date"))["progress"] == {"from": "exif", "gps": False}
+    assert (await _stage(item["id"], "photo_date"))["progress"] == {"from": "exif", "gps": False, "places": False}
 
 
 @requires_db
@@ -474,7 +474,7 @@ async def test_the_search_route_is_household_and_answers_untrusted_text_as_data(
             r = await c.get("/api/media/search", params={"q": "cat 2025"}, headers={**c.headers, **headers})
             assert r.status_code == 200, r.text
             body = r.json()
-            assert body["query"] == {"words": "cat", "kind": None, "when": "2025"}
+            assert body["query"] == {"words": "cat", "kind": None, "when": "2025", "at_home": False}
             hit = body["items"][0]
             assert hit["might_show"] == evil and hit["text"] == "<script>x</script>"
             assert hit["date_from"] == "photo" and hit["analysed"] is True
