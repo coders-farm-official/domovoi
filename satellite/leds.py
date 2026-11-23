@@ -270,9 +270,13 @@ class _WS2812XvfDriver:
     def _probe(self, path: str) -> list[str]:
         if shutil.which(path) is None and not path.startswith(("/", "./")):
             raise FileNotFoundError(f"xvf_host not found on PATH: {path!r}")
-        # Try plain, then sudo -n. `sudo -n` fails fast (no hang) when no
-        # passwordless rule exists, so neither branch blocks on a prompt.
-        for prefix in ([path], ["sudo", "-n", path]):
+        # Try plain, then sudo -n: the root-owned wrapper first (the one
+        # sudoers names since 1.5.0, satellite/xvf_guard.py), then the tool
+        # (a card not yet switched). `sudo -n` fails fast (no hang) when no
+        # passwordless rule exists, so no branch blocks on a prompt.
+        from satellite import xvf_guard
+
+        for prefix in ([path], *xvf_guard.sudo_prefixes(path)):
             try:
                 rc = subprocess.run(
                     [*prefix, "led_brightness", str(self._brightness)],
