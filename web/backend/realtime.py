@@ -19,6 +19,9 @@ Channels emitted (core; enabled plugins add their own via manifest
 * ``satellites.wifi`` — per-room WiFi telemetry from the admin snapshot
 * ``satellites.display`` — per-room screen/kiosk state video satellites
   report (display toggles, kiosk-browser death/recovery)
+* ``satellites.media`` — which rooms show photo and video results on a
+  screen now (1.5.0): ``{room: results id}``, a digest, never a caption;
+  the kiosk page reads ``GET /api/satellites/{room}/media``
 * ``satellites.pending`` — unprovisioned satellites presenting a USB
   adoption volume on the server (plug/unplug/status flips)
 * ``people.last_seen`` — fires when a person's ``last_seen_at`` advances
@@ -469,6 +472,11 @@ class StatePollLoop:
                 # kiosk-death/recovery; the satellites page (and the kiosk
                 # display page itself) refetch on it.
                 ("satellites.display", snapshot.get("satellite_display") or {}),
+                # Photo and video results on a room's screen (1.5.0,
+                # domovoi/room_media.py): a digest, {room: results id},
+                # never a caption. The kiosk page reads its room's results
+                # from GET /api/satellites/{room}/media on it.
+                ("satellites.media", room_media_digest(snapshot)),
                 # Support sessions open now (1.5.0, domovoi/support_sessions.py):
                 # ids, the satellite and when it ends. Every page's banner
                 # rides `support_sessions.changed`.
@@ -485,6 +493,17 @@ class StatePollLoop:
 
 
 # ─── Snapshot helpers ──────────────────────────────────────────────────────
+
+
+def room_media_digest(snapshot: dict[str, Any] | None) -> dict[str, Any]:
+    """``{room: results id}`` for the rooms whose screen shows photo and
+    video results now (the snapshot's ``room_media``): what the
+    ``satellites.media`` push carries, never a caption or a thumbnail."""
+    rooms = (snapshot or {}).get("room_media") or {}
+    if not isinstance(rooms, dict):
+        return {}
+    return {str(room): m.get("id") for room, m in rooms.items() if isinstance(m, dict)}
+
 
 
 async def _snapshot_acquisitions() -> list[dict[str, Any]]:

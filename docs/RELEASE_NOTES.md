@@ -4,6 +4,24 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Photo and video results as cards, and on a room's screen
+
+- **What changed.** The dashboard's chat draws a reply's photo and video
+  results as cards: a thumbnail, "Might show: …", the date and, on a video,
+  a time badge for its best moment. A photo opens the picture; a video
+  opens the player at that moment. Asked by voice in a room with a screen
+  (a phone or tablet in room mode, or a video satellite's kiosk), the
+  results show there for 90 seconds: the `room_display` frame has a new
+  `media` part (null otherwise), with thumbnails on the new open route
+  `GET /v1/room-media/{token}` (a random token, 10 minutes), and the kiosk
+  reads `GET /api/satellites/{room}/media` on the `satellites.media` push.
+- **What to know.** A room without a screen gets nothing new. A guest's
+  voice never puts photos filtered by a person's face on a screen. The
+  results go with the next frame sent for another reason (music, a timer),
+  newer results, or after 90 seconds. Room phones from before this ignore
+  `media`; the Android and iPhone room modes draw it in their own release.
+  Captions are a picture model's words and every screen draws them as text.
+
 ## 1.5.0 (unreleased) — Asking for photos and videos, in chat and by voice
 
 - **What changed.** "Show me photos of the beach from last summer", "find
@@ -22,10 +40,10 @@ a way that would otherwise get reported as a bug.
   a chat that isn't on a shared screen; a guest voice or a shared screen
   gets no person-based results. Captions, tags and text from pictures
   reach a later chat turn's model only inside a fenced block it is told
-  never to obey, and such a turn is not offered lookups. A room's screen
-  (room mode) doesn't show the results yet: its frame carries music and
-  timers only. Clients from before this ignore `media`; the dashboard and
-  apps draw the cards in their own slices.
+  never to obey, and such a turn is not offered lookups. Clients from
+  before this ignore `media`; the dashboard draws the cards and a room's
+  screen shows spoken results (see the entry above), the apps' chats in
+  their own release.
 
 ## 1.5.0 (unreleased) — Photos: descriptions, text in pictures, dates, and search
 

@@ -19,11 +19,12 @@ or a phone's chat mic (the household device tier). An unrecognized voice
 in a room is a guest here: naming a person gets "I can only look for
 photos of a person for someone I recognize." and no results.
 
-**Room screens.** A room display (``room_display``, a phone or tablet in
-room mode) takes only its fixed frame (music, timers, alarms;
-domovoi/room_display.py), so the results are not pushed there: the reply
-points to the Photos page on every device. Showing them on the room's
-screen needs a new declared ability and the apps' drawing of it.
+**Room screens.** Said in a room with a screen (a phone or tablet in room
+mode, or a video satellite's kiosk), the results are shown there as well
+for a while (domovoi/room_media.py: the ``room_display`` frame's ``media``
+and the kiosk page). A guest's results are never filtered by a person, so
+a guest never puts a person's photos on a screen. A phone's chat mic
+shows nothing on a room's screen: the chat has its own cards.
 
 Everything runs on the server (``requires_network = "no"``). The router
 logs the turn as every other (``router._persist_turn``); the search words
@@ -32,6 +33,7 @@ are never written to the log.
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
 
@@ -40,6 +42,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
 from domovoi.media_understanding import ask
 from domovoi.models import Context, Intent, Response
+
+log = logging.getLogger(__name__)
 
 
 def people_allowed(ctx: Context) -> bool:
@@ -108,10 +112,19 @@ class MediaSearchHandler(Handler):
         return await self._answer(req, ctx, session)
 
     async def _answer(self, req: ask.Request, ctx: Context, session: AsyncSession) -> Response:
-        found = await ask.find(session, req.q, people=people_allowed(ctx))
+        people = people_allowed(ctx)
+        found = await ask.find(session, req.q, people=people)
+        said = ask.answer_text(found, req)
+        if ctx.room_id and not ctx.from_phone and ctx.app is not None:
+            from domovoi import room_media
+
+            try:
+                room_media.show(ctx.app, ctx.room_id, found, said, people_ok=people)
+            except Exception as e:  # noqa: BLE001 — the spoken answer stands
+                log.warning("media_search: showing results in %s failed: %s", ctx.room_id, type(e).__name__)
         data = found.as_json()
         # A voice reply carries no captions or text from the pictures: the
         # count and the ids are enough for a client to open them.
         data["items"] = [{"id": c["id"], "kind": c["kind"], "at_s": c["at_s"]} for c in found.cards]
-        return Response(text=ask.answer_text(found, req), session_id=ctx.session_id,
+        return Response(text=said, session_id=ctx.session_id,
                         matched_handler=self.name, data={"media": data})
