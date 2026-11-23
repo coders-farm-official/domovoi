@@ -1021,3 +1021,14 @@ async def test_the_real_runner_re_encodes_images(tmp_path, docker) -> None:
         assert dec.state == "ready"
     finally:
         await dec.stop()
+
+
+def test_the_docker_cli_sees_none_of_the_core_s_secrets(monkeypatch) -> None:
+    # The container gets no environment at all (run_args has no -e); the
+    # docker CLI that starts it sees only what it needs to find Docker.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@h/db")
+    monkeypatch.setenv("DOMOVOI_ADMIN_TOKEN", "t")
+    monkeypatch.setenv("SOME_API_KEY", "k")
+    for env in (iso.docker_env(), iso.build_env()):
+        assert not {"DATABASE_URL", "DOMOVOI_ADMIN_TOKEN", "SOME_API_KEY"} & set(env)
+        assert set(env) <= set(iso._DOCKER_ENV) | {"LANG", "DOCKER_BUILDKIT"}

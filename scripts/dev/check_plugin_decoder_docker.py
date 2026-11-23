@@ -53,7 +53,7 @@ import domovoi_isolated
 
 
 def _facts():
-    facts = {"uid": os.getuid(), "gid": os.getgid(), "env": sorted(os.environ)}
+    facts = {"uid": os.getuid(), "gid": os.getgid(), "env": dict(os.environ)}
     try:
         with open("/written", "w") as f:
             f.write("x")
@@ -154,6 +154,43 @@ def _plugin(parent: Path) -> Path:
     return root
 
 
+# The only variables the container may have, and where each comes from:
+# PATH from the Debian base image's config (ENV PATH), HOSTNAME set by
+# Docker to the container's short ID, HOME set by Docker from the user's
+# passwd entry (nobody: /nonexistent; "/" when it has none), and LC_CTYPE
+# set by Python itself at start-up (PEP 538 locale coercion: the C locale
+# is coerced to C.UTF-8, -I doesn't turn that off). Nothing comes from the
+# core: run_args passes no -e/--env/--env-file, and the docker CLI's own
+# environment (docker_env) is never forwarded into a container.
+CONTAINER_ENV = {
+    "PATH": lambda v: v == "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "HOSTNAME": lambda v: len(v) == 12 and all(c in "0123456789abcdef" for c in v),
+    "HOME": lambda v: v in ("/nonexistent", "/"),
+    "LC_CTYPE": lambda v: v == "C.UTF-8",
+}
+_SECRET_WORDS = ("DATABASE", "DOMOVOI", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "KEY", "DOCKER", "PG")
+
+
+def _env_problems(env: dict) -> list[str]:
+    """Names only (never a value: a leaked value may be a secret)."""
+    import os
+
+    out = []
+    for name, value in sorted(env.items()):
+        if any(w in name.upper() for w in _SECRET_WORDS):
+            out.append(f"{name} (a core-like name)")
+        elif name not in CONTAINER_ENV:
+            out.append(f"{name} (not a container-standard name)")
+        elif not CONTAINER_ENV[name](str(value)):
+            out.append(f"{name} (not its container-standard value)")
+    # No value of this process's own environment (the core's stand-in)
+    # turns up under any name, standard ones included.
+    mine = {v for k, v in os.environ.items() if len(v) >= 8 and k not in ("PATH",)}
+    out += [f"{name} (a value from the core's environment)" for name, value in env.items()
+            if str(value) in mine and not (name == "LC_CTYPE" and value == "C.UTF-8")]
+    return out
+
+
 async def _check() -> list[str]:
     problems: list[str] = []
 
@@ -175,6 +212,16 @@ async def _check() -> list[str]:
                and "--cpu-shares" in bargs, "the build flags carry the memory cap and a low CPU weight")
         expect(await iso.builder_caps_honoured(),
                "this Docker's classic builder takes --memory (else the core refuses to build)")
+        # No database here: the container guard's record of the built image
+        # is the core's job, so this run notes it in memory instead.
+        from domovoi.container_guard import engine
+
+        noted: list[str] = []
+
+        async def note(slug: str, image_id: str) -> None:
+            noted.append(image_id)
+
+        engine.note_decoder_image = note
         dec = iso.IsolatedDecoder(SLUG, install_dir=root, manifest=manifest, timeout=10.0)
         await dec.start()
         expect(dec.state == "ready", f"the image builds and the container starts ({dec.problem})")
@@ -192,8 +239,9 @@ async def _check() -> list[str]:
             expect(f.get("network") is False and f.get("interfaces") == ["lo"],
                    f"no network {f.get('interfaces')}")
             expect(f.get("host_files") == [], f"no host files {f.get('host_files')}")
-            expect(set(f.get("env", [])) <= {"PATH", "HOSTNAME", "HOME", "LANG", "PWD", "SHLVL", "_"},
-                   f"no core environment {f.get('env')}")
+            env = f.get("env") or {}
+            leaks = _env_problems(env)
+            expect(not leaks, "no core environment in the container" + (f": {leaks}" if leaks else ""))
             for bad in (b"hang", b"crash", b"garbage", b"membomb"):
                 r = await dec.decode(bad)
                 expect(not r.ok, f"{bad.decode()} is refused ({r.reason})")
