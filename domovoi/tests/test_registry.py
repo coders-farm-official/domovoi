@@ -137,10 +137,11 @@ def test_fast_paths_are_normalized_and_compiled() -> None:
             )
             # A compiled regex, or (core only) documents' claiming pattern:
             # a regex whose match also asks the cached title index whether
-            # the turn is a document's (handlers/documents.py, D7 review).
+            # the turn is a document's (handlers/documents.py, D7 review),
+            # or Friend Houses' friend-led one (the friend names it last read).
             assert isinstance(fp.pattern, re.Pattern) or (
                 h.plugin_slug is None
-                and type(fp.pattern).__name__ in ("_ClaimingPattern", "GroupPlacePattern")
+                and type(fp.pattern).__name__ in ("_ClaimingPattern", "GroupPlacePattern", "_FriendLed")
                 and isinstance(fp.pattern.pattern, str)
             ), (h.name, fp.pattern)
             assert callable(fp.method)
