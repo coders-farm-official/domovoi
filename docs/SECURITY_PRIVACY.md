@@ -2278,6 +2278,7 @@ All of it on hardware you own. Locations, verified against the code:
 | **Postgres: listening history** (V051 `music_listens`, `music_room_listeners`, 2026-11-12) | One row per library song each room, browser and phone played: the song id, the room or device id, when, how long, how it ended, and the person it was for (or the household); and, per room, whose its music is now. Kept 1 year by default, 90 days, or not at all ("Keep listening history"); see [Listening history](#listening-history-whats-kept-for-how-long-who-clears-it). |
 | **Postgres: chat** (`chat_threads`, `chat_messages`, V034–V039; `help_deliveries`, V035) | The home-server chats of the dashboard and the app: each thread's title, whether you or the chat model named it, whether it is archived, and every message (what was typed or, for a chat-mic turn, transcribed; the dictation of a letter taken by voice; the reply; the model; the device it came from; who the voice was recognized as). A reply that looked something up keeps the search words or page address, the sources shown under it and whether the internet was used, and the thread keeps whether "Allow in this chat" is on. A message that carried documents keeps a one-line summary of each (name, kind, pages, word count, notes); a reply answered from documents keeps the passages the model was given, with their text; a reply about a letter photo keeps the text read from the photo beside it. A long summary's per-part notes (`chat_doc_jobs`, V038) are kept only until the summary is finished, or while a stopped one waits to carry on. Drafts (`chat_drafts`, `chat_draft_versions`, V039) keep every version of a letter or other document the chat wrote: the text, the instruction that produced it, whether the model or a person wrote it, the model, the files saved from it, and the device (and person, when known) that made it. A "send the steps to my phone" leaves a `help_deliveries` row: the person, the chat and its title, no text. **Kept until the thread is deleted** (any paired device can delete one): there is no age limit, and "Keep voice history" does not touch chat. Deleting a thread removes its messages, document jobs, drafts and delivery rows; copies in the pre-update database dumps and in a rolled-back database (the rows above) stay until those are replaced. |
 | **`~/.domovoi/chat_uploads/` on the server** | Pictures sent into a home-server chat, letter photos included (the upload and the smaller copy the vision model was sent; up to 20 MB each and 4 a message) and, under `documents/`, the documents attached to a chat or copied in by "Ask about this document" (PDF, Word, OpenDocument, Excel, CSV, text or markdown; up to 100 MB each and 4 a message): the original as `<token><ext>` and the text read from it as `<token>-parts.json`, under random names. They go with the thread they belong to; a document picked in the composer and never sent is cleared out after an hour. Readable by a paired device only. See [Documents in chat](#documents-in-chat). |
+| **Postgres: photos and videos** (V078 `media_items`, `media_frames`, `media_segments`, `media_summaries`, `media_faces`, `face_groups`, `face_denylist`, 1.5.0) | What Domovoi works out about the photos and videos in Pictures and Videos, once an admin turns it on: per file its path, size, a fingerprint, the date taken, a caption, tags, text found, a video's transcript with times and summary; with faces on, each face's box and 128-number embedding and the groups and names; with places on, a photo's GPS position and town. `face_denylist` holds anonymous patterns of people who asked to be forgotten and is kept when faces are turned off. See [Photos and videos](#photos-and-videos-understanding-the-library). |
 | **`domovoi/.env` in the repo checkout** | Settings changed from the dashboard's Settings page, persisted as plain text — **including secrets** (e.g. `ACOUSTID_API_KEY`, which the dashboard writes and never reads back: Settings → Advanced shows an admin only whether one is set). Protect it like `~/.domovoi/plugins/`. No value written there may hold a newline or another control character (the configuration page refuses it, and the writer refuses it for every key): the core reads a quoted newline as part of the value, but a line-based reader would see a second setting, which a value could smuggle past the core. The update unit (root) reads it through the checkout's own reader, as the core does. |
 | **Postgres: guests** (V023 `guests_seen`, `guest_bans`, `room_queue_items.guest_*`, 2026-10-10) | `guests_seen`: one row per (self-asserted browser id, source address) that a GUEST (no household credential) changed the music from — the id, the address, the user agent, the room, the last action, first and last seen. Written by the core each time it lets a guest act; at most 10 rows per address (newest kept), and a row not seen for 30 days is deleted by the core's hourly `guests_seen_pruner` worker. `guest_bans`: the admin's bans (an id and/or an address, an optional note), kept until lifted. `room_queue_items.guest_device_id` / `guest_source`: which guest queued an entry, gone with the entry's provenance row. All three are read only by an admin (`GET /api/music/guests`, `/api/music/guest-bans`, the admin's queue read); a guest never sees them. No transcript, no recording. |
 | **Postgres: satellite health** (V022 `satellite_health`, `satellite_outages`, 2026-10-09) | One row per health sample a satellite sends (about one a minute: its memory, fds, CPU, temperature and throttle flags, uptime, mic frames/s, queue depths, link rate and SSID, NetworkManager state, whether its gateway and this core answered; a spare laptop or phone may add its battery level and charging state and whether its mic is blocked), pruned to 24 h per room; and the last 20 outage reports per room (what the satellite's previous process life wrote down before it died: its last sample, the failed connects it saw, the self-check actions it took, why it exited). Numbers and short strings — never a transcript, a recording or a person. Household data on the device-read tier (`GET /v1/admin/satellite/{room}/health`): a paired device learns the room's SSID, uptime, whether a turn or call is open right now, and whether anyone has been reconnecting it, nothing more. The Open `/v1/admin/snapshot` carries only when the latest sample and report arrived, never their content. Written only from a session whose `hello` matched the room's pairing token. |
@@ -2850,6 +2851,46 @@ and what can't happen:
   out, so words from a video can't. A frame description is a small model's guess and
   is always shown as what a frame "might show"; no face is recognised and
   nobody is named.
+
+## Photos and videos (understanding the library)
+
+What Domovoi works out about the photos in Pictures and the videos in
+Videos (1.5.0; user guide [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md)).
+Faces and places have their own sections below.
+
+* **Everything stays on the server.** Descriptions come from the house's
+  own vision model through its Ollama, transcripts from its own speech
+  model, text in pictures from Tesseract. No photo, video, description or
+  search is sent anywhere. The only downloads are the pinned face models
+  and the GeoNames town list, each only after an admin's switch and never
+  under internet access "No" (`domovoi/egress.py`).
+* **What is kept** (`media_items`, `media_frames`, `media_segments`,
+  `media_summaries`, V078): per file its place in the library, size, time,
+  a fingerprint, the date taken, a caption, up to 12 tags, any text found,
+  the transcript of a video with times, and a summary. Nothing is written
+  into the library folders; the work files of a job are deleted when it
+  ends.
+* **Off until chosen.** "Understand photos and videos" is on for a new
+  install and **off** for a house that upgraded, until an admin turns it
+  on. Faces and places are off for everyone. Every switch is admin only.
+* **Who sees it.** Search and the Photos page are the household tier (a
+  paired phone or browser), the same tier that can already open the files.
+  A guest gets nothing (401). A device marked as a shared screen gets no
+  places and no person filters.
+* **Text from a model or a file is data, never instructions.** A caption,
+  tag, transcript or text found in a picture is drawn as text only (never
+  HTML). It reaches a chat model only inside a fenced block the model is
+  told never to obey, and a chat turn that carries it is not offered
+  lookups, so words in a photo can't send a search out.
+* **Caps.** One step at a time across the house, voice always first;
+  helper programs at the lowest priority with a memory cap; file reads at
+  most 20 MB/s; a time budget per video; three attempts per file
+  ([ARCHITECTURE.md](ARCHITECTURE.md#media-understanding-150)).
+* **Deleting.** Deleting a file through Files deletes its results at once;
+  the hourly look deletes the results of a file that has gone from a
+  library that is present (an unplugged drive keeps its rows). Excluding a
+  folder deletes its results. Turning faces or places off deletes theirs
+  (below).
 
 ## Faces and people
 

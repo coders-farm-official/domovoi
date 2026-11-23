@@ -3464,6 +3464,10 @@
      ]
     },
     {
+     "type": "p",
+     "text": "[More detail](doc:docs/FAQ.md#can-i-move-files-around-without-the-command-line) · [Photos and videos](doc:docs/PHOTOS_AND_VIDEOS.md)"
+    },
+    {
      "type": "label",
      "role": "say",
      "text": "Try saying"
@@ -3483,11 +3487,7 @@
       }
      ]
     }
-   ],
-   "more": {
-    "text": "More detail",
-    "target": "doc:docs/FAQ.md#can-i-move-files-around-without-the-command-line"
-   }
+   ]
   },
   {
    "id": "documents",
@@ -5291,7 +5291,11 @@
       }
      ]
     }
-   ]
+   ],
+   "more": {
+    "text": "More detail",
+    "target": "doc:docs/PHOTOS_AND_VIDEOS.md#faces"
+   }
   },
   {
    "id": "guests",

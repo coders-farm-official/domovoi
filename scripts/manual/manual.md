@@ -1318,6 +1318,7 @@ Podcasts, Audiobooks, and plugged-in drives.
   photos, for a voice Domovoi recognizes, never a guest's.
 
 [More detail](docs/FAQ.md#can-i-move-files-around-without-the-command-line)
+· [Photos and videos](docs/PHOTOS_AND_VIDEOS.md)
 
 **Try saying**
 
@@ -2192,6 +2193,8 @@ turning it off deletes every face.
   yours (**this is me**), or by an admin. It deletes every saved face of
   you and keeps a pattern tied to nobody, so new photos of you aren't
   grouped again. Your photos stay, and so do your voice and memories.
+
+[More detail](docs/PHOTOS_AND_VIDEOS.md#faces)
 
 ### Guests, household and admin
 

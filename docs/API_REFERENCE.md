@@ -1254,9 +1254,8 @@ walk an hour or after a rescan) and works through them in the background
 window (the household's quiet hours) and, by day, only new arrivals after
 10 minutes without a voice turn, at a 1:1 duty cycle. Every model step
 gives way to a voice turn; reads go through a 20 MB/s bucket; helper
-programs run at `nice 19` and `ionice -c 3`. Slice 1 ships the catalogue
-and the runner (fingerprints), slice 2 the photos (below); video
-transcripts and faces come with later 1.5.0 slices.
+programs run at `nice 19` and `ionice -c 3`. Photos, videos, faces and places are
+analysers on that runner (below and §3.5c1c).
 
 The switches live in `household_settings` key `media_understanding`:
 `enabled` is on for a new install and off for a house that upgraded until
@@ -1335,7 +1334,7 @@ under a person by the grouping, not yet confirmed.
 | `POST /api/faces/people/{person_id}/forget` | **Admin**, or **that person's own device** (`owner_person_id`, not a shared screen, claimed over 10 minutes ago) **with its claim key** in `X-Domovoi-Claim-Key` | — | `{person_id, faces, groups, denylisted}`: their faces and groups deleted, one averaged embedding (tied to nobody) added to the denylist so they aren't learned again. Photos and the `people` row stay. `404` unknown person; `403` anyone else. |
 
 The nightly re-group (in the night window, once a night) never moves a
-confirmed face. For slice 3 the core exposes
+confirmed face. The video analyser uses
 `faces.VideoFaces.start(item_id)` / `.frame(at_s, image, ctx=)` per
 keyframe; for search, `faces.items_for_person` and
 `faces.person_ids_with_faces(name)`.

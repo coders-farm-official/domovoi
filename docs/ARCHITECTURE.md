@@ -1088,6 +1088,44 @@ says which exchange the server speaks, so it cannot be stripped on the way.
 Threat model:
 [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#asking-every-house-an-approval-the-device-can-check-140).
 
+### Media understanding (1.5.0)
+
+What Domovoi works out about the photos and videos in Pictures and Videos
+(user guide: [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md)). Code in
+`domovoi/media_understanding/`, tables from V078.
+
+* **Catalogue.** The `media_catalog` poll worker walks the libraries by
+  `stat()` alone (hourly, and after a rescan) and keeps one `media_items`
+  row per image or video, with a fingerprint (size plus the first and last
+  1 MB) so a moved file keeps its results. Excluded folders
+  (`media_excluded`) are never entered.
+* **Runner.** `media_understanding` (`runner.py`) is the one background
+  job, built on `VoiceFirst`: chat videos first, then the backlog in the
+  night window, and by day only new arrivals. Each analyser is a registered
+  stage with saved progress (`media_item_stages`), so a restart carries on;
+  an item gets three attempts. `budget.py` times the vision model and sets
+  the frames per video (adaptive, or an admin's manual cap). Switches live
+  in `household_settings` key `media_understanding` (`switches.py`).
+* **Analysers.** Photos: `photo_date` (EXIF date and, with places on, GPS
+  and the town from the offline GeoNames list, `geocode.py`) and
+  `photo_caption` (caption, tags, text by Tesseract). Videos: scan, faces,
+  transcript, frames and summary (`videos.py`). Faces: `faces.py` and
+  `face_engine.py` (YuNet and SFace on ONNX Runtime), fetched once by
+  `face_models.py`.
+* **Tables.** `media_items`, `media_frames`, `media_segments`,
+  `media_summaries` (all deleted with the item), `media_faces`,
+  `face_groups`, `face_denylist` (tied to no person; kept when faces go
+  off), `media_runner_state`.
+* **Search.** Each item's words (tags, captions, text, names, transcript,
+  summary, place) are one `search_doc` tsvector with a GIN index, and file
+  and folder names have a trigram index. `search.py` turns a person, a time
+  and a place out of the question with plain code, not a model.
+  `GET /api/media/search`, the `media_search` voice handler (band 305), the
+  chat step (`ask.py`) and room screens all use it. There is no vector
+  extension; faces are compared in the core.
+
+Routes and fields: [API_REFERENCE.md](API_REFERENCE.md#35c1b-photos-and-videos-media-understanding-150).
+
 ---
 
 ## 7. Realtime: how a DB change reaches the dashboard
