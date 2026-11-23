@@ -267,6 +267,12 @@
     "tab": "chat"
    }
   },
+  "settings/photos-and-videos": {
+   "dashboard": "#settings/photos-and-videos",
+   "app": {
+    "dashboard": true
+   }
+  },
   "settings/internet": {
    "dashboard": "#settings/internet",
    "app": {
@@ -276,12 +282,6 @@
   },
   "settings/search": {
    "dashboard": "#settings/search",
-   "app": {
-    "dashboard": true
-   }
-  },
-  "settings/photos-and-videos": {
-   "dashboard": "#settings/photos-and-videos",
    "app": {
     "dashboard": true
    }
@@ -3457,6 +3457,29 @@
       {
        "text": "[Photos](route:photos) shows every photo and video, newest first, and finds them by what is in them and when: \"dog at the beach\", \"christmas 2023\", \"snow last winter\". A video found by a moment opens there. A description reads \"Might show: …\": it's a computer's guess, sometimes wrong. Domovoi looks at your photos on this server, at night, once **Understand photos and videos** is on in [Settings → Chat & AI → Photos and videos](route:settings/photos-and-videos); until it has looked at some, Photos says so.",
        "only": "dashboard"
+      },
+      {
+       "text": "With **Understand photos and videos** on ([Settings → Chat & AI → Photos and videos](route:settings/photos-and-videos)), ask for them by voice or in a chat. The answer says how many it found and that they're on the Photos page; a chat also shows them. With **Recognize faces** on, a name finds that person's photos, for a voice Domovoi recognizes, never a guest's."
+      }
+     ]
+    },
+    {
+     "type": "label",
+     "role": "say",
+     "text": "Try saying"
+    },
+    {
+     "type": "say",
+     "phrases": [
+      {
+       "text": "show me photos of the beach from last summer",
+       "handler": "media_search",
+       "path": "fast"
+      },
+      {
+       "text": "find the video where we sang happy birthday",
+       "handler": "media_search",
+       "path": "fast"
       }
      ]
     }

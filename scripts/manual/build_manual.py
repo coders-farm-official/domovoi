@@ -81,6 +81,7 @@ ROUTES: dict[str, dict] = {
     "settings/phones-and-browsers": {"dashboard": "#settings/phones-and-browsers", "app": {"dashboard": True}},
     "settings/models": {"dashboard": "#settings/models", "app": {"screen": "Settings", "tab": "models"}},
     "settings/chat": {"dashboard": "#settings/chat", "app": {"screen": "Settings", "tab": "chat"}},
+    "settings/photos-and-videos": {"dashboard": "#settings/photos-and-videos", "app": {"dashboard": True}},
     "settings/internet": {"dashboard": "#settings/internet", "app": {"screen": "Settings", "tab": "internet"}},
     "settings/search": {"dashboard": "#settings/search", "app": {"dashboard": True}},
     # Photos and videos (1.5.0, media understanding): dashboard only.
@@ -313,6 +314,8 @@ PHRASES: dict[str, tuple] = {
     "fix the wifi": ("wifi", "fast", {}),
     "how's domovoi doing": ("homelab", "fast", {}),
     "how many songs do I have": ("library", "fast", {}),
+    "show me photos of the beach from last summer": ("media_search", "fast", {}),
+    "find the video where we sang happy birthday": ("media_search", "fast", {}),
     "what did I add this week": ("library", "fast", {}),
     "let's chat": ("chat_mode", "fast", {}),
     "how do I change the wake word": ("help_desk", "fast", {}),

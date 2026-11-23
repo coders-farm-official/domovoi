@@ -45,6 +45,9 @@ Condensed band map — core handlers occupy exactly the design §4.2 table:
     290 playlist         before music's ^play catch-all
     295 music_alias      "when i say X i mean Y" names, before music's ^play
     300 music            greedy ^play catch-all (its "... in the garage" room paths first)
+    305 media_search     "show me photos of …", "find the video where …": an asking
+                         verb AND a photo/video word; leaves "… in my library"
+                         to library
     310 library          "find X in my library" before greedier "find X"
     900 (media-provider plugin)  greedy ^find catch-all — LAST band
 
@@ -78,6 +81,7 @@ from domovoi.handlers.household_calendar import CalendarHandler
 from domovoi.handlers.intercom import IntercomHandler
 from domovoi.handlers.library import LibraryHandler
 from domovoi.handlers.lists import ListsHandler
+from domovoi.handlers.media_search import MediaSearchHandler
 from domovoi.handlers.memory import MemoryHandler
 from domovoi.handlers.music import MusicHandler
 from domovoi.handlers.music_alias import MusicAliasHandler
@@ -112,6 +116,7 @@ _CORE_HANDLERS: list[Handler] = [
     IntercomHandler(),
     LibraryHandler(),
     ListsHandler(),
+    MediaSearchHandler(),
     MemoryHandler(),
     MusicHandler(),
     MusicAliasHandler(),
@@ -180,6 +185,7 @@ __all__ = [
     "IntercomHandler",
     "LibraryHandler",
     "ListsHandler",
+    "MediaSearchHandler",
     "MemoryHandler",
     "MusicAliasHandler",
     "MusicHandler",

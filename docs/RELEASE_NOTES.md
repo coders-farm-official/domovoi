@@ -28,6 +28,29 @@ a way that would otherwise get reported as a bug.
   core pages. Turning faces off in Settings now asks with the dashboard's
   own confirm dialog.
 
+## 1.5.0 (unreleased) — Asking for photos and videos, in chat and by voice
+
+- **What changed.** "Show me photos of the beach from last summer", "find
+  the video where we sang happy birthday", "do we have any pictures from
+  Christmas" work by voice (new core handler `media_search`, band 305,
+  offline) and in a home-server chat. The answer says how many were found
+  and that they're on the Photos page; a chat reply also carries result
+  cards (`stats.media` / the message's `media`: thumbnail, "might show",
+  date, a video's moment). In a chat that mentions photos or videos, the
+  model may ask for the search itself (`FIND_MEDIA: …`); the app runs it.
+- **What to know.** With "Understand photos and videos" off the answer is
+  "Photo understanding is off; an admin can turn it on in Settings.", and
+  before anything has been looked at, "I haven't looked through your
+  photos yet." A name finds that person's photos only with "Recognize
+  faces" on, and only for a voice Domovoi recognizes, a phone's chat mic or
+  a chat that isn't on a shared screen; a guest voice or a shared screen
+  gets no person-based results. Captions, tags and text from pictures
+  reach a later chat turn's model only inside a fenced block it is told
+  never to obey, and such a turn is not offered lookups. A room's screen
+  (room mode) doesn't show the results yet: its frame carries music and
+  timers only. Clients from before this ignore `media`; the dashboard and
+  apps draw the cards in their own slices.
+
 ## 1.5.0 (unreleased) — Photos: descriptions, text in pictures, dates, and search
 
 - **What changed.** The background runner now looks at each photo in
@@ -75,6 +98,7 @@ a way that would otherwise get reported as a bug.
   model card doesn't name its training data (docs/LICENSES.md). There is
   no export of face data; database backups include it. A face-only person
   appears on the People page like any other.
+
 ## 1.5.0 (unreleased) — Videos: scenes, what is said, keyframes, a summary
 
 - **What changed.** With "Understand photos and videos" on, the background
@@ -2614,6 +2638,7 @@ Stand By Me"). When a media-provider plugin finds nothing that carries the
 words you asked for, the answer is "I couldn't find anything called …";
 the media-provider plugin's next release stops streaming an unrelated
 result in that case.
+
 ## 2026-11-12 — Music keeps going after a streamed song
 
 When a song you don't have is streamed into a room (say "play" a song
@@ -8725,6 +8750,7 @@ In this order (`curl -s http://<server>:6370/v1/stats/latency?since=<restart tim
   again (`voiced_after_end_ms`, `listened_after_end_ms`). Its
   `utterance_end` for such a capture comes that much later; nothing waits
   for it. An older core ignores the fields.
+
 ## 2026-09-30 — Timers and reminders reach the whole house
 
 ### Do this once, after upgrading

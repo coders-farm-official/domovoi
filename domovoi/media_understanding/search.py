@@ -352,9 +352,11 @@ def _name_terms(words: str) -> list[str]:
 
 
 async def search(s: Any, query: Query, *, kind: str | None = None, start: datetime | None = None,
-                 end: datetime | None = None, limit: int = 40, offset: int = 0) -> dict[str, Any]:
-    """One page of hits for ``query`` (filters: ``kind``, and ``start``/
-    ``end`` as UTC instants on top of the query's own time)."""
+                 end: datetime | None = None, limit: int = 40, offset: int = 0,
+                 only_ids: list[int] | None = None) -> dict[str, Any]:
+    """One page of hits for ``query`` (filters: ``kind``, ``start``/``end``
+    as UTC instants on top of the query's own time, and ``only_ids``: only
+    these items, the person filter of :mod:`.ask`)."""
     from domovoi import household_time
 
     limit = max(1, min(int(limit), LIMIT_MAX))
@@ -365,6 +367,9 @@ async def search(s: Any, query: Query, *, kind: str | None = None, start: dateti
     if kind in ("image", "video"):
         where.append("m.kind = :kind")
         params["kind"] = kind
+    if only_ids is not None:
+        where.append("m.id = ANY(CAST(:only_ids AS bigint[]))")
+        params["only_ids"] = [int(i) for i in only_ids]
     if start is not None:
         where.append(f"{WHEN_SQL} >= :start")
         params["start"] = start

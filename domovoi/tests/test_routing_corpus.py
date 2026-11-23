@@ -94,6 +94,9 @@ GATED = {
     # friend_houses never: friend names and friend text stay out of the
     # model (handlers/friend_houses.py); its fast paths are the whole surface.
     "friend_houses",
+    # offered only when the turn says photo, picture, video or clip
+    # (handlers/media_search.py)
+    "media_search",
 }
 # Never offered to the routing model.
 NEVER_OFFERED = {"help", "help_desk", "friend_houses"}
@@ -552,7 +555,7 @@ def test_every_registered_handler_is_offered_for_a_plain_command() -> None:
     music_alias's on-request tool) in it must see every tool."""
     names = _offered(
         "double check the latest news about the 3 timers i set and their other names"
-        " on my calendar for the printer and write a letter on my list"
+        " on my calendar for the printer and write a letter on my list with the photos"
     )
     assert set(names) == {h.name for h in HANDLERS} - NEVER_OFFERED
 

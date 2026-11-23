@@ -1311,8 +1311,18 @@ Podcasts, Audiobooks, and plugged-in drives.
   once **Understand photos and videos** is on in
   [Settings → Chat & AI → Photos and videos](#settings/photos-and-videos);
   until it has looked at some, Photos says so.
+- With **Understand photos and videos** on
+  ([Settings → Chat & AI → Photos and videos](#settings/photos-and-videos)), ask for them by voice or in a chat. The answer says
+  how many it found and that they're on the Photos page; a chat also
+  shows them. With **Recognize faces** on, a name finds that person's
+  photos, for a voice Domovoi recognizes, never a guest's.
 
 [More detail](docs/FAQ.md#can-i-move-files-around-without-the-command-line)
+
+**Try saying**
+
+- "show me photos of the beach from last summer"
+- "find the video where we sang happy birthday"
 
 ### Documents and spreadsheets
 

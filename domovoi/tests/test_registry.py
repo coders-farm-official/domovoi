@@ -54,6 +54,7 @@ CORE_BANDS = {
     "playlist": 290,
     "music_alias": 295,
     "music": 300,
+    "media_search": 305,
     "library": 310,
     # 900 reserved: a media-provider plugin's greedy `^find (.+)$` catch-all.
 }
