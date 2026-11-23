@@ -268,12 +268,24 @@ async def test_a_large_library_regroup_does_not_block_the_event_loop(monkeypatch
             await asyncio.sleep(0.01)
             lag = max(lag, time.perf_counter() - t0 - 0.01)
 
-    tick = asyncio.ensure_future(ticker())
-    t0 = time.perf_counter()
-    out = await F.regroup(None, pause=None)
-    took = time.perf_counter() - t0
-    done = True
-    await tick
+    # The test process's own heap (earlier tests' garbage, coverage, xdist)
+    # is not the re-group's: collect it now and freeze what is left, so a
+    # full collection or a stray finalizer (seen in CI: an earlier test's
+    # subprocess transport) can't land in the window being measured. The
+    # re-group's own allocations are still collected as usual.
+    import gc
+
+    gc.collect()
+    gc.freeze()
+    try:
+        tick = asyncio.ensure_future(ticker())
+        t0 = time.perf_counter()
+        out = await F.regroup(None, pause=None)
+        took = time.perf_counter() - t0
+        done = True
+        await tick
+    finally:
+        gc.unfreeze()
     assert out == {"faces": n} and len(set(applied["labels"].tolist())) <= 400
     assert took > 0.2, "the pass should take long enough for the lag figure to mean something"
     assert lag < 0.25, f"the event loop stalled {lag:.3f}s during the re-group"
