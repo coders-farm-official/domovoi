@@ -24,6 +24,14 @@ Two analysers on the runner (:mod:`.runner`), cheap work first:
   (the Settings card says text in pictures still works), and the stage
   is skipped with ``ai-off``.
 
+**Out of date** (:meth:`PhotoCaptionAnalyser.requeue`): when AI is turned
+on, the photos done with it off (``ai-off``, or ``vision-model-missing``)
+go back in the queue for captions; when the vision model changes, every
+photo whose caption another model made does (``media_items.vision_model``
+records the model, so a restart doesn't do it twice). Only the caption
+stage reruns; the text Tesseract already read is kept. They go back as
+backlog: the night window, never the daytime trickle.
+
 Voice first: the vision call goes through ``ctx.model_step(vision=True)``
 (memory-gated, cancelled by a voice turn and asked again after it);
 Tesseract runs through ``ctx.hold()`` (held still during a turn) at the
@@ -397,6 +405,12 @@ async def _save_frame(item_id: int, *, caption: str, tags: list[str], has_text: 
         await search.refresh_doc(s, item_id)
 
 
+async def _ocr_text(item_id: int) -> str | None:
+    async with session_scope() as s:
+        return (await s.execute(text("SELECT ocr_text FROM media_frames WHERE item_id = :i AND idx = 0"),
+                                {"i": item_id})).scalar()
+
+
 # ─── the analysers ────────────────────────────────────────────────────────
 
 class PhotoDateAnalyser:
@@ -439,10 +453,32 @@ class PhotoCaptionAnalyser:
                  model_name: Callable[[], str] | None = None) -> None:
         self.vision = vision or ollama_vision
         self.ocr = ocr or Ocr()
-        self.model_name = model_name or vision_model
+        #: The vision model's name; None: the runner's (the configured slot).
+        self.model_name = model_name
 
     def wanted(self, item: Item, sw: dict[str, Any]) -> bool:
         return True
+
+    async def requeue(self, s: Any, model: str, ai_on: bool) -> int:
+        """Captions out of date for ``model`` / ``ai_on`` back in the queue."""
+        if not ai_on or not model:
+            return 0
+        ids = [int(r[0]) for r in (await s.execute(text(
+            "SELECT st.item_id FROM media_item_stages st JOIN media_items m ON m.id = st.item_id "
+            "WHERE st.analyser = :a AND m.kind = 'image' AND ("
+            "  (st.state = 'skipped' AND st.error_code IN (:off, :missing))"
+            "  OR (st.state = 'done' AND m.vision_model IS NOT NULL AND m.vision_model <> :model))"),
+            {"a": self.name, "off": "ai-off", "missing": CODE_VISION_MISSING, "model": model})).all()]
+        if not ids:
+            return 0
+        await s.execute(text(
+            "UPDATE media_item_stages SET state = 'pending', progress = '{}'::jsonb, attempts = 0, spent_s = 0, "
+            "error_code = NULL, updated_at = now() WHERE analyser = :a AND item_id = ANY(:ids)"),
+            {"a": self.name, "ids": ids})
+        await s.execute(text(
+            "UPDATE media_items SET state = 'pending', attempts = 0, error_code = NULL, new_arrival = false, "
+            "updated_at = now() WHERE id = ANY(:ids) AND state = 'done'"), {"ids": ids})
+        return len(ids)
 
     async def _load(self, item: Item, ctx: StepContext) -> bytes:
         if item.size_bytes > MAX_PHOTO_BYTES:
@@ -487,16 +523,21 @@ class PhotoCaptionAnalyser:
                 await ctx.save({"ocr_done": True, "ai_off": True})
             raise Skip("ai-off")
         seen = ctx.progress.get("vision")
+        # Text read on an earlier pass (AI off, or another vision model) is
+        # Tesseract's own reading: kept, not read again.
+        kept = await _ocr_text(item.id)
+        if kept and not ctx.progress.get("ocr_done"):
+            ctx.progress["ocr_done"] = True
         if not isinstance(seen, dict) or ctx.progress.get("ai_off"):
             try:
                 jpeg = await executors.run("pictures", vision_jpeg, data)
             except image_safety.PictureRefused:
                 raise Skip(CODE_UNREADABLE) from None
             reply = await ctx.model_step(lambda: self.vision(jpeg), vision=True)
-            seen = {**parse_reply(reply), "model": self.model_name() or None}
+            seen = {**parse_reply(reply), "model": (self.model_name or ctx.runner._vision_model)() or None}
             await _save_frame(item.id, caption=seen["caption"], tags=seen["tags"], has_text=seen["has_text"],
-                              ocr_text=None, model=seen["model"])
-            await ctx.save({"vision": seen})
+                              ocr_text=kept, model=seen["model"])
+            await ctx.save({"vision": seen, "ocr_done": bool(kept)})
         if seen.get("has_text") and not ctx.progress.get("ocr_done"):
             words = await self._ocr(data, ctx, OCR_KEEP_CONF)
             if words:

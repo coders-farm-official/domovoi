@@ -136,6 +136,11 @@ class Analyser(Protocol):
       household's switches (faces only when ``sw["faces"]``).
     * ``run(item, ctx)``: the work; save each result as it is done, and
       progress through ``ctx.save`` so a restart carries on.
+    * ``requeue(s, model, ai_on)`` (optional): called when the runner starts
+      and whenever the vision model or the AI switch changes; puts the
+      items whose results are out of date back in the queue (pending, as
+      backlog: the night window, never the daytime trickle) and returns
+      how many. It compares what is stored, so a restart doesn't redo it.
     """
 
     name: str
@@ -395,6 +400,8 @@ class Runner(VoiceFirst):
         self._last_pause_check = 0.0
         self._phase = None
         self.current: int | None = None
+        #: (vision model, AI on) the analysers' requeue last ran for.
+        self._requeue_key: tuple[str, bool] | None = None
 
     # ── collaborators ───────────────────────────────────────────────────
     @property
@@ -594,6 +601,7 @@ class Runner(VoiceFirst):
         if self.sw["paused"]:
             await self.set_phase("paused")
             return False
+        await self.requeue_if_changed()
         mode = self.mode()
         if mode is None:
             await self.release_after_batch()
@@ -619,6 +627,26 @@ class Runner(VoiceFirst):
             # 1:1 duty cycle: rest as long as the item took.
             self.rest_until = self.clock() + (self.clock() - t0)
         return True
+
+    async def requeue_if_changed(self) -> int:
+        """At start and after the vision model or the AI switch changed,
+        each analyser's ``requeue`` (out-of-date results back in the
+        backlog). The number of items requeued."""
+        key = (self._vision_model(), ai_features.enabled())
+        if key == self._requeue_key:
+            return 0
+        n = 0
+        for a in analysers():
+            hook = getattr(a, "requeue", None)
+            if hook is None:
+                continue
+            async with session_scope() as s:
+                n += int(await hook(s, key[0], key[1]) or 0)
+        self._requeue_key = key
+        if n:
+            log.info("media understanding: %d items queued again (vision model or AI switch changed)", n)
+            await self.notify(force=True)
+        return n
 
     async def _clear_run_now(self) -> None:
         async with session_scope() as s:

@@ -515,3 +515,69 @@ def test_the_dashboard_file_compiles(tmp_path) -> None:
     out = subprocess.run(["node", str(script), str(STATIC / "vendor" / "babel" / "babel.min.js"),
                           str(STATIC / "media_understanding.jsx")], capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
+
+
+# ─── out-of-date captions go back in the queue ────────────────────────────
+
+DAY = datetime(2026, 11, 22, 12, 0)
+
+
+@requires_db
+async def test_turning_ai_on_requeues_the_ai_off_photos_as_backlog(house, monkeypatch) -> None:  # noqa: F811
+    ai = {"on": False}
+    monkeypatch.setattr(ai_features, "turned_off", lambda: not ai["on"])
+    monkeypatch.setattr(ai_features, "enabled", lambda: ai["on"])
+    _put(house, "letter.jpg", _jpeg())
+    await _sync(house)
+    vision = FakeVision({"caption": "A letter on a table.", "tags": ["letter"], "has_text": True})
+    ocr = FakeOcr(words="Dear Alex", conf=91.0)
+    photos.install(vision=vision, ocr=ocr)
+    r = _runner(now=lambda: NIGHT)
+    await _drain(r)
+    item = (await _items())["letter.jpg"]
+    assert item["state"] == "done" and vision.calls == []
+    # AI on: in the daytime nothing runs (backlog, not the trickle) ...
+    ai["on"] = True
+    day = _runner(now=lambda: DAY)
+    assert not await day.step()
+    item = (await _items())["letter.jpg"]
+    assert item["state"] == "pending" and item["new_arrival"] is False
+    assert (await _stage(item["id"], "photo_caption"))["state"] == "pending"
+    # ... at night the caption is made once; Tesseract's text is kept, not read again.
+    await _drain(r)
+    item = (await _items())["letter.jpg"]
+    f = await _frame(item["id"])
+    assert item["state"] == "done" and len(vision.calls) == 1 and len(ocr.reads) == 1
+    assert f["caption"] == "A letter on a table." and f["ocr_text"] == "Dear Alex"
+    assert item["vision_model"] == "vision:2b"
+    # A restart doesn't do it again.
+    assert await _runner(now=lambda: NIGHT).requeue_if_changed() == 0
+
+
+@requires_db
+async def test_a_new_vision_model_reruns_captions_once(house, monkeypatch) -> None:  # noqa: F811
+    monkeypatch.setattr(ai_features, "turned_off", lambda: False)
+    monkeypatch.setattr(ai_features, "enabled", lambda: True)
+    _put(house, "a.jpg", _jpeg())
+    _put(house, "b.jpg", _jpeg(color="blue"))
+    await _sync(house)
+    vision = FakeVision({"caption": "A red wall.", "tags": ["wall"], "has_text": False})
+    photos.install(vision=vision, ocr=FakeOcr())
+    model = {"name": "vision:2b"}
+    r = _runner(now=lambda: NIGHT, vision_model=lambda: model["name"])
+    await _drain(r)
+    assert len(vision.calls) == 2
+    # Nothing changed: nothing requeued.
+    assert await r.requeue_if_changed() == 0
+    model["name"] = "vision:7b"
+    vision.reply = {"caption": "A painted red wall.", "tags": ["wall", "paint"], "has_text": False}
+    await _drain(r)
+    assert len(vision.calls) == 4
+    items = await _items()
+    assert all(i["vision_model"] == "vision:7b" and i["state"] == "done" for i in items.values())
+    assert (await _frame(items["a.jpg"]["id"]))["caption"] == "A painted red wall."
+    # The date stage did not run again; a restart with the same model requeues nothing.
+    assert (await _stage(items["a.jpg"]["id"], "photo_date"))["attempts"] == 1
+    assert await _runner(now=lambda: NIGHT, vision_model=lambda: "vision:7b").requeue_if_changed() == 0
+    await _drain(_runner(now=lambda: NIGHT, vision_model=lambda: "vision:7b"))
+    assert len(vision.calls) == 4

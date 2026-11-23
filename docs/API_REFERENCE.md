@@ -1285,7 +1285,11 @@ only when `has_text` is true; with AI features off, Tesseract reads every
 photo and keeps a reading of 70 % confidence or more, and the stage is
 `skipped` with `ai-off`). Results are in `media_frames` (`idx` 0,
 `at_s` null) and the item's `search_doc` (tags A, captions B, text C,
-names D, `english`).
+names D, `english`). Captions out of date go back in the backlog (night
+window only): when AI is turned on, the photos done with it off; when the
+vision model changes, those whose caption (`media_items.vision_model`)
+another model made. Only the caption stage reruns; Tesseract's text is
+kept.
 
 | Method & path | Auth | Request | Response / purpose |
 |---|---|---|---|

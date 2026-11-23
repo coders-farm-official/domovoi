@@ -20,7 +20,9 @@ a way that would otherwise get reported as a bug.
 - **What to know.** Descriptions come from a small model and are shown as
   "Might show: ..."; they are sometimes wrong. With the household's AI
   features off there are no descriptions: Tesseract then reads every
-  photo and keeps only a confident reading. A photo's location is kept
+  photo and keeps only a confident reading; turning AI on later, or
+  changing the vision model, queues the descriptions again for the next
+  nights. A photo's location is kept
   only while "Use photo locations" is on. Tesseract is the package the
   scan reader already installed (`tesseract-ocr`, `tesseract-ocr-eng`);
   nothing new to install.
