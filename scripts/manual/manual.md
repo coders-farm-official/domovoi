@@ -328,8 +328,8 @@ two-way call into a room.
 - "any messages"
 - "read my messages"
 
-**Friend Houses** (serverless messaging and friend system between
-households): friends are other Domovoi houses, made on the dashboard
+**Friend Houses** (message and share lists with friends’ houses, house
+to house, with no company server in between): friends are other Domovoi houses, made on the dashboard
 *(admin)*: [Settings → Household → Friend Houses](#settings/friend-houses).
 To send one a message, say "message" and its name with the message, like
 "message the Smiths dinner's at six" (or "tell the Smiths …" when AI
