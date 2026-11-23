@@ -163,7 +163,6 @@ ADMIN_TIER = [
     ("POST", "/api/music/library-tools/cover-art/{track_id}/undo"),
     ("POST", "/api/satellites/{room_id}/restart"),
     ("POST", "/api/satellites/{room_id}/display"),
-    ("PATCH", "/api/satellites/{room_id}/config"),
     ("POST", "/api/satellites/{room_id}/voice"),
     # the verbs that destroy something, or hand back a whole library in
     # one response. Widening SAVE to the household did not widen these.
@@ -249,6 +248,8 @@ def test_the_code_adjacent_mutations_are_on_the_admin_tier(method, path) -> None
 SECURITY_TIER = [
     ("POST", "/api/config/version/pull"),
     ("POST", "/api/containers/incidents/{incident_id}/clear"),
+    # A room's settings decide when and how long its microphone listens.
+    ("PATCH", "/api/satellites/{room_id}/config"),
 ]
 
 
@@ -330,8 +331,6 @@ ADMIN_FAMILIES = {
                           "satellites", "post_admin"),
     "satellite-display": ("POST", "/api/satellites/kitchen/display",
                           {"action": "off"}, "satellites", "post_admin"),
-    "satellite-config": ("PATCH", "/api/satellites/kitchen/config",
-                         {"changes": {"volume": 3}}, "satellites", "post_admin"),
     "people-rename": ("PATCH", "/api/people/1", {"name": "Sam"},
                       "people", "session_scope"),
 }
@@ -504,6 +503,8 @@ SECURITY_FAMILIES = {
     "version-pull": ("POST", "/api/config/version/pull", None, "config", "post_admin"),
     "incident-clear": ("POST", "/api/containers/incidents/1/clear", {"note": "ours"},
                        "containers", "post_admin"),
+    "satellite-config": ("PATCH", "/api/satellites/kitchen/config",
+                         {"changes": {"volume": 3}}, "satellites", "post_admin"),
 }
 
 

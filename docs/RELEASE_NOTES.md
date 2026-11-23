@@ -50,6 +50,10 @@ a way that would otherwise get reported as a bug.
   repository shown on the install screen.
 - **News feed discovery** reads only the first 256 KB of a page, scans
   it in a worker thread and in time that grows only with its length.
+- **A room's satellite settings** (how its microphone listens, among
+  others) can be changed only once an admin password exists, like
+  recording a wake word; before setup and after `--reset-admin` saving
+  them asks for the admin setup first.
 - **The dashboard logs it** if it can't keep its port-80 permission away
   from the programs it starts.
 - **Video poster frames**: every spelling of one file's path shares one

@@ -5501,9 +5501,11 @@ class _AdminSatelliteConfigBody(BaseModel):
 
 @app.post(
     "/v1/admin/satellite/{room_id}/config",
-    # Admin tier: this rewrites the Pi's config.toml and restarts it to
-    # apply — it decides whether that room has a working microphone.
-    dependencies=[Depends(require_admin_mutation)],
+    # Security tier: this rewrites the Pi's config.toml and restarts it to
+    # apply — it decides whether and how much that room's microphone
+    # hears, so like the wake-word take it waits for an admin (501 before
+    # setup and after --reset-admin).
+    dependencies=[Depends(require_admin_security)],
 )
 async def admin_update_satellite_config(
     room_id: str, body: _AdminSatelliteConfigBody
