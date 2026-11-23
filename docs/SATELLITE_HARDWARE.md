@@ -472,14 +472,15 @@ satellite, then the command right away, works best. Details:
 
 **An experiment: cleaning up the noise before transcribing.** Settings →
 Configuration → Speech-to-text → *Clean up noise before transcribing
-(experiment)* (`STT_DENOISE`) cleans a command's audio before Whisper
-hears it: *spectral* is a built-in filter, *rnnoise* uses RNNoise and
-needs `pip install --no-deps pyrnnoise` on the server. It is **off by
-default** and stays off until the measurements (and the XVF3800 room
-test) show it helps: noise cleanup can make clean speech harder to
-recognize, and it costs CPU on every command. The wake word and voice
-recognition always hear the room as it is, and anything that goes wrong
-uses the raw audio. Developers compare the modes with
+(experiment)* (`STT_DENOISE`) set to *spectral* cleans a command's audio
+with a built-in filter before Whisper hears it. It is **off by default**:
+on synthetic party noise it neither helped nor hurt (clean speech came
+through unharmed, for about 3% of Whisper's CPU). RNNoise, tried in the
+same test, cut off the start of commands ("pause the music" heard as "the
+music") and was dropped; a saved `rnnoise` reads as off. Whether
+*spectral* becomes the default waits for the XVF3800 room test. The wake
+word and voice recognition always hear the room as it is, and anything
+that goes wrong uses the raw audio. Developers compare the modes with
 `scripts/dev/denoise_ab.py`, on synthetic party noise or on a room's kept
 command recordings.
 

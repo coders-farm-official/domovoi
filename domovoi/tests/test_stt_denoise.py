@@ -9,8 +9,11 @@ Pinned here, DB-free:
     second hearing) and the phone app's (``phone_voice._transcribe``);
     nothing else in the core calls it (wake detection runs on the
     satellite; voice ID and the recordings read the raw capture);
-  * it fails safe: a filter that raises or returns junk, a missing
-    RNNoise, an unknown mode, a pool that won't run it: the raw audio;
+  * it fails safe: a filter that raises or returns junk, an unknown
+    mode, a pool that won't run it: the raw audio;
+  * RNNoise was dropped after the A/B (it clipped command starts): the
+    modes are off | spectral, an old stored ``rnnoise`` reads as off, and
+    pyrnnoise is no product dependency;
   * the setting round trip through ``POST /v1/admin/config`` (live value,
     ``.env``, the read back, a bad value refused).
 """
@@ -186,12 +189,28 @@ def test_junk_from_a_filter_gives_the_raw_audio(monkeypatch, junk) -> None:
     assert stt_denoise.denoise_pcm(pcm, "spectral") is pcm
 
 
-def test_rnnoise_missing_gives_the_raw_audio(monkeypatch) -> None:
-    monkeypatch.setattr(stt_denoise, "_rnn_lib", None)
-    monkeypatch.setattr(stt_denoise, "_rnn_error", None)
-    monkeypatch.setattr(stt_denoise.importlib.util, "find_spec", lambda _n, *a, **k: None)
+def test_an_old_rnnoise_value_reads_as_off(monkeypatch, tmp_path) -> None:
+    assert STT_DENOISE_MODES == ("off", "spectral")
+    assert Settings(stt_denoise="rnnoise").stt_denoise == "off"
+    assert Settings(stt_denoise=" Spectral ").stt_denoise == "spectral"
+    env = tmp_path / ".env"
+    env.write_text("STT_DENOISE=rnnoise\n", encoding="utf-8")
+    monkeypatch.delenv("STT_DENOISE", raising=False)
+    assert Settings(_env_file=str(env)).stt_denoise == "off"
+    # A live value that bypassed validation still reads as off.
+    monkeypatch.setattr(settings, "stt_denoise", "rnnoise")
+    assert stt_denoise.current_mode() == "off"
     pcm = _noisy_pcm()
+    assert asyncio.run(stt_denoise.for_stt(pcm)) is pcm
     assert stt_denoise.denoise_pcm(pcm, "rnnoise") is pcm
+
+
+def test_pyrnnoise_is_no_product_dependency() -> None:
+    shipped = [REPO / "pyproject.toml", *REPO.glob("requirements*"), *(REPO / "domovoi").rglob("*.py")]
+    for path in shipped:
+        if "tests" in path.parts or not path.is_file():
+            continue
+        assert "pyrnnoise" not in path.read_text(encoding="utf-8", errors="replace").lower(), path
 
 
 def test_an_unknown_mode_is_off(monkeypatch) -> None:
@@ -279,7 +298,7 @@ async def test_the_setting_round_trips(box) -> None:
 
 
 async def test_a_bad_mode_is_refused(box) -> None:
-    saved, row = await _post(box["app"], {"stt_denoise": "deepfilter"})
+    saved, row = await _post(box["app"], {"stt_denoise": "rnnoise"})
     assert saved.status_code == 200
-    assert saved.json()["rejected"] == {"stt_denoise": "must be one of: off, spectral, rnnoise"}
+    assert saved.json()["rejected"] == {"stt_denoise": "must be one of: off, spectral"}
     assert settings.stt_denoise == "off" and row["value"] == "off"

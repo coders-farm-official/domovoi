@@ -1121,15 +1121,12 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     FieldSpec(
         "stt_denoise", "Clean up noise before transcribing (experiment)",
         "Speech-to-text",
-        "Off by default. An experiment for noisy rooms: the audio of a "
-        "spoken command is cleaned up before Whisper hears it. 'spectral' "
-        "is a built-in filter; 'rnnoise' needs the pyrnnoise package "
-        "(installed with pip install --no-deps pyrnnoise) and passes the "
-        "audio through unchanged without it. Wake words and voice "
-        "recognition always hear the room as it is, and any error uses the "
-        "raw audio. Cleanup can make clean speech harder to recognize and "
-        "costs CPU on every command, so leave it off unless you are "
-        "comparing. Applies on the next command.",
+        "Off by default. An experiment for noisy rooms: 'spectral' cleans "
+        "up a spoken command's audio with a built-in filter before Whisper "
+        "hears it. Wake words and voice recognition always hear the room "
+        "as it is, and any error uses the raw audio. In a test with "
+        "synthetic party noise it neither helped nor hurt, so leave it off "
+        "unless you are comparing. Applies on the next command.",
         "choice", section="advanced", tier="hot",
         choices=list(STT_DENOISE_MODES), choice_labels=dict(STT_DENOISE_LABELS),
     ),
