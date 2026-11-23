@@ -962,3 +962,18 @@ def test_new_core_route_tiers() -> None:
         "POST", "/v1/admin/music/queue/{room_id}/play")
     assert guest_queue.require_device_read_or_active_room_guest in _gates_for(
         "GET", "/v1/admin/music/up-next/room/{room_id}")
+
+
+@requires_db
+async def test_unheard_songs_behind_are_capped_oldest_first(clean, room) -> None:
+    d = await _seed(260)
+    await _playing(room, [d["uri"][t] for t in d["ids"]])
+    await rooms.start(ROOM, mode="continue", seed=SeedRef(track_id=d["ids"][0], kind="ids",
+                      track_ids=tuple(d["ids"]), label="from this queue"), client=room)
+    ids = await _ids(room)
+    await room.play_id(ids[259])                           # one jump: none of them was heard
+    did = await _look(room)
+    left = await _ids(room)
+    cap = rooms.TRIM_MAX_BEHIND
+    assert did["trimmed"] == 259 - cap
+    assert left.index(ids[259]) == cap and left[0] == ids[259 - cap]   # the oldest went, 200 stay
