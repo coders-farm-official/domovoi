@@ -320,3 +320,13 @@ def test_the_card_nudges_a_carried_name_credits_geonames_and_saves_a_pick(driven
     assert "Pick your town from the list" in r["before"]
     assert "GeoNames" in r["before"] and "CC BY 4.0" in r["before"]
     assert {"method": "PUT", "path": "/api/household/home-location", "body": DENVER} in r["calls"]
+
+
+def test_the_home_location_card_pads_its_field_like_other_settings_cards():
+    """The town field, its "Now:" line and the attribution sit inside the
+    card's standard inner padding (12px 16px), not flush against its edges."""
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[2] / "web" / "static" / "home_location.jsx").read_text(encoding="utf-8")
+    block = src[src.index('data-settings-mark="home-location"'):]
+    assert block[:block.index(">")].count("padding: '12px 16px'") == 1
