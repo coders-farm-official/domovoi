@@ -32,6 +32,9 @@ a way that would otherwise get reported as a bug.
   changed since answer 404 as the by-path lookup already did, and asking
   for a read of a file over the 1 GB limit is refused before the file is
   hashed (an unchanged file is not hashed again).
+- **The phone app's speech-recognition libraries are rebuilt in CI** from
+  their recorded recipe, weekly and whenever they change, and must match
+  their committed checksums byte for byte.
 
 ## 1.4.1 (unreleased) — Dashboard update fixes
 
