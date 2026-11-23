@@ -15,28 +15,29 @@ Modes (``settings.stt_denoise``, env ``STT_DENOISE``):
   percentile over time, a cheap stand-in for minimum statistics); the gain
   never drops below :data:`GAIN_FLOOR_DB`, which keeps the "musical noise"
   that hurts recognition down. Nothing to install.
-* ``rnnoise``: RNNoise (Xiph, BSD-3-Clause), the small recurrent network
-  WebRTC-style apps use. The library comes from the ``pyrnnoise`` wheel
-  (Apache-2.0), installed WITHOUT its declared dependencies
-  (``pip install --no-deps pyrnnoise``: they include PyAV); only its
-  bundled shared library is loaded here, through ctypes. Not installed by
-  default: without it this mode logs once and passes the audio through.
 
-Fail safe: whatever goes wrong (the library missing, odd input, an
-exception in the filter), the raw audio goes to Whisper and the turn
-carries on. Which mode helps, if any, is decided by the offline A/B
-(``scripts/dev/denoise_ab.py``) together with the XVF3800 room test;
-until then the default stays off.
+Any other stored value (``rnnoise``, offered before the A/B below) reads
+as off.
+
+The A/B (``scripts/dev/denoise_ab.py``, 2026-11-22: Whisper small.en on
+synthetic six-talker party babble, 40 commands per noise level): spectral
+was neutral (WER and intent within a clip of off at every level, no harm
+in a quiet room, about 3 % of Whisper's CPU). RNNoise (Xiph, BSD-3)
+clipped the start of commands ("pause the music" heard as "the music";
+intent 47 % at 15 dB against 97.5 % off) and doubled the CPU, so it was
+dropped; the harness can still measure it as a dev-only comparison row
+when its Python wheel happens to be installed.
+
+Fail safe: whatever goes wrong (odd input, an exception in the filter),
+the raw audio goes to Whisper and the turn carries on. Whether spectral
+becomes the default waits for the XVF3800 room test's recordings; until
+then it stays off.
 """
 
 from __future__ import annotations
 
-import ctypes
 import hashlib
-import importlib.util
 import logging
-import os
-import sys
 import threading
 import time
 from typing import Any
@@ -99,92 +100,9 @@ def _spectral(x: np.ndarray) -> np.ndarray:
     return y[HOP:HOP + n].astype(np.float32)
 
 
-# ── RNNoise ─────────────────────────────────────────────────────────────────
-
-RNN_RATE = 48_000
-_rnn_lock = threading.Lock()
-_rnn_lib: Any = None
-_rnn_error: str | None = None
-
-
-def _rnnoise_lib_path() -> str:
-    """The shared library inside the installed pyrnnoise package, found
-    without importing the package (its __init__ imports dependencies
-    that aren't installed)."""
-    spec = importlib.util.find_spec("pyrnnoise")
-    if spec is None or not spec.submodule_search_locations:
-        raise RuntimeError("pyrnnoise isn't installed (pip install --no-deps pyrnnoise)")
-    folder = list(spec.submodule_search_locations)[0]
-    name = {"win32": "rnnoise.dll", "darwin": "librnnoise.dylib"}.get(sys.platform, "librnnoise.so")
-    path = os.path.join(folder, name)
-    if not os.path.isfile(path):
-        raise RuntimeError(f"pyrnnoise has no {name} for this platform")
-    return path
-
-
-def _load_rnnoise() -> Any:
-    global _rnn_lib, _rnn_error
-    with _rnn_lock:
-        if _rnn_lib is not None:
-            return _rnn_lib
-        if _rnn_error is not None:
-            raise RuntimeError(_rnn_error)
-        try:
-            lib = ctypes.CDLL(_rnnoise_lib_path())
-            lib.rnnoise_create.argtypes = [ctypes.c_void_p]
-            lib.rnnoise_create.restype = ctypes.c_void_p
-            lib.rnnoise_destroy.argtypes = [ctypes.c_void_p]
-            lib.rnnoise_get_frame_size.restype = ctypes.c_int
-            lib.rnnoise_process_frame.argtypes = [
-                ctypes.c_void_p, ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float),
-            ]
-            lib.rnnoise_process_frame.restype = ctypes.c_float
-        except Exception as e:  # noqa: BLE001 - remembered, reported once
-            _rnn_error = f"{type(e).__name__}: {e}"
-            raise RuntimeError(_rnn_error) from e
-        _rnn_lib = lib
-        return lib
-
-
-def _resample(x: np.ndarray, n_out: int) -> np.ndarray:
-    """Band-limited resampling by zero-padding / truncating the spectrum
-    (a whole capture at once: at most 30 s)."""
-    spec = np.fft.rfft(x)
-    out = np.zeros(n_out // 2 + 1, dtype=complex)
-    k = min(len(spec), len(out))
-    out[:k] = spec[:k]
-    return (np.fft.irfft(out, n_out) * (n_out / len(x))).astype(np.float32)
-
-
-def _rnnoise(x: np.ndarray) -> np.ndarray:
-    lib = _load_rnnoise()
-    n = len(x)
-    fs = int(lib.rnnoise_get_frame_size())  # 480: 10 ms at 48 kHz
-    up = _resample(x, n * 3) * 32768.0
-    m = -(-len(up) // fs) * fs + fs  # one extra frame: the network's delay
-    buf = np.zeros(m, np.float32)
-    buf[: len(up)] = up
-    out = np.empty_like(buf)
-    state = lib.rnnoise_create(None)
-    if not state:
-        raise RuntimeError("rnnoise_create failed")
-    try:
-        frame = np.empty(fs, np.float32)
-        ptr = frame.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
-        for i in range(0, m, fs):
-            frame[:] = buf[i:i + fs]
-            lib.rnnoise_process_frame(state, ptr, ptr)
-            out[i:i + fs] = frame
-    finally:
-        lib.rnnoise_destroy(state)
-    # RNNoise's output lags its input by one frame (10 ms).
-    out = out[fs:fs + len(up)] / 32768.0
-    return _resample(out, n)
-
-
 # ── entry points ────────────────────────────────────────────────────────────
 
-_FILTERS = {"spectral": _spectral, "rnnoise": _rnnoise}
+_FILTERS = {"spectral": _spectral}
 _warned: set[str] = set()
 _cache_lock = threading.Lock()
 # The second hearing and a speculative decode hand the same audio in again;

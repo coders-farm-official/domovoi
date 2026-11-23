@@ -79,11 +79,12 @@ ADMIN_RELOAD_WINDOW_DEFAULT_MIN = 60
 ADMIN_RELOAD_WINDOW_MAX_MIN = ADMIN_IDLE_TIMEOUT_MIN
 
 # The noise-cleanup experiment's modes (``stt_denoise``, domovoi/stt_denoise.py).
-STT_DENOISE_MODES = ("off", "spectral", "rnnoise")
+# Anything else stored (``rnnoise``, offered before the A/B dropped it)
+# reads as "off".
+STT_DENOISE_MODES = ("off", "spectral")
 STT_DENOISE_LABELS = {
     "off": "Off (as captured)",
-    "spectral": "Spectral filter (built in)",
-    "rnnoise": "RNNoise (needs pyrnnoise)",
+    "spectral": "Spectral filter",
 }
 
 # `voice_history_keep` (owner, 2026-10-17): how long what people say to
@@ -559,6 +560,14 @@ class Settings(BaseSettings):
     # offline/metered…) are accepted; anything else reads as unanswered.
     internet_access: str = ""
 
+    @field_validator("stt_denoise", mode="before")
+    @classmethod
+    def _stt_denoise_known(cls, v: object) -> str:
+        """An unknown mode, such as ``rnnoise`` saved before it was
+        dropped, reads as off."""
+        mode = str(v or "").strip().lower()
+        return mode if mode in STT_DENOISE_MODES else "off"
+
     @field_validator("internet_access", mode="before")
     @classmethod
     def _internet_access_known(cls, value: object) -> str:
@@ -865,10 +874,10 @@ class Settings(BaseSettings):
     # 1.5.0, noisy rooms (owner answer Q9): noise cleanup on a command's
     # audio before Whisper hears it, an A/B experiment
     # (domovoi/stt_denoise.py). "off" (the default) | "spectral" (a
-    # built-in Wiener filter) | "rnnoise" (needs pyrnnoise, installed with
-    # --no-deps). Never wake detection or voice ID. OFF until the offline
-    # A/B (scripts/dev/denoise_ab.py) and the XVF3800 room test say a mode
-    # helps. Applies on the next transcription.
+    # built-in Wiener filter). Never wake detection or voice ID. Any other
+    # value (an old "rnnoise") reads as off. OFF until the XVF3800 room
+    # test shows spectral helps (the synthetic A/B found it neutral).
+    # Applies on the next transcription.
     stt_denoise: str = "off"
     # A speech-to-text service on another machine in the house, used
     # before this machine's own Whisper (domovoi/clients/whisper_remote.py):

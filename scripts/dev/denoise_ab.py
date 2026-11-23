@@ -49,9 +49,18 @@ Run from the repo root, CPU only, at idle priority:
     python scripts/dev/denoise_ab.py --captures <room folder> --commands commands.txt --trial-log satellite.log
     options: --modes off,spectral,rnnoise --model small.en --threads 4 --draws 2 --json out.json
 
-``rnnoise`` needs pyrnnoise importable (``pip install --no-deps pyrnnoise``,
-or ``--no-deps --target DIR`` and DIR on PYTHONPATH); without it that mode
-falls back to the raw audio, which the report marks.
+``rnnoise`` is a dev-only comparison row (RNNoise was dropped from the
+product after the 2026-11-22 A/B: it clipped command starts). It runs only
+when pyrnnoise is importable (e.g. ``pip install --no-deps --target DIR
+pyrnnoise`` and DIR on PYTHONPATH), and is skipped otherwise; it is never
+a Domovoi dependency.
+
+Result of 2026-11-22 (small.en, 4 threads, 40 clips per level; WER /
+intent): quiet 0/100 for all; 15 dB off 0.4/97.5, spectral 0.4/97.5,
+rnnoise 26.8/47.5; 10 dB 3.5/92.5, 4.4/90.0, 41.7/37.5; 5 dB 6.6/87.5,
+3.5/90.0, 84.2/17.5; 0 dB 51.3/42.5, 51.7/42.5, 115/2.5. CPU per second
+of audio on an i9-14900KF: spectral 4.3 ms, rnnoise 153 ms, Whisper
+about 130 ms.
 """
 
 from __future__ import annotations
@@ -259,14 +268,79 @@ class Stt:
         return text.strip(), time.perf_counter() - t0
 
 
+# ── RNNoise: a dev-only comparison row ──────────────────────────────────────
+# Dropped from the product after the 2026-11-22 A/B (it clipped command
+# starts). Measured only when the pyrnnoise wheel (Apache-2.0, carrying
+# Xiph's BSD-3 RNNoise) happens to be importable; never a dependency of
+# Domovoi. Only its bundled shared library is loaded (its __init__ imports
+# packages that `pip install --no-deps pyrnnoise` leaves out).
+
+def rnnoise_filter():
+    """A float32 -> float32 RNNoise filter for 16 kHz audio, or None when
+    pyrnnoise isn't installed."""
+    import ctypes
+    import importlib.util
+
+    spec = importlib.util.find_spec("pyrnnoise")
+    if spec is None or not spec.submodule_search_locations:
+        return None
+    name = {"win32": "rnnoise.dll", "darwin": "librnnoise.dylib"}.get(sys.platform, "librnnoise.so")
+    path = Path(list(spec.submodule_search_locations)[0]) / name
+    if not path.is_file():
+        return None
+    lib = ctypes.CDLL(str(path))
+    lib.rnnoise_create.argtypes = [ctypes.c_void_p]
+    lib.rnnoise_create.restype = ctypes.c_void_p
+    lib.rnnoise_destroy.argtypes = [ctypes.c_void_p]
+    lib.rnnoise_get_frame_size.restype = ctypes.c_int
+    lib.rnnoise_process_frame.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_float),
+                                          ctypes.POINTER(ctypes.c_float)]
+    lib.rnnoise_process_frame.restype = ctypes.c_float
+    fs = int(lib.rnnoise_get_frame_size())  # 480: 10 ms at 48 kHz
+
+    def resample(x: np.ndarray, n_out: int) -> np.ndarray:
+        spec_ = np.fft.rfft(x)
+        out = np.zeros(n_out // 2 + 1, dtype=complex)
+        k = min(len(spec_), len(out))
+        out[:k] = spec_[:k]
+        return (np.fft.irfft(out, n_out) * (n_out / len(x))).astype(np.float32)
+
+    def run(x: np.ndarray) -> np.ndarray:
+        up = resample(x, len(x) * 3) * 32768.0
+        m = -(-len(up) // fs) * fs + fs  # one extra frame: the network's delay
+        buf = np.zeros(m, np.float32)
+        buf[: len(up)] = up
+        out = np.empty_like(buf)
+        frame = np.empty(fs, np.float32)
+        ptr = frame.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+        state = lib.rnnoise_create(None)
+        try:
+            for i in range(0, m, fs):
+                frame[:] = buf[i:i + fs]
+                lib.rnnoise_process_frame(state, ptr, ptr)
+                out[i:i + fs] = frame
+        finally:
+            lib.rnnoise_destroy(state)
+        return resample(out[fs:fs + len(up)] / 32768.0, len(x))  # output lags one frame
+
+    return run
+
+
+_DEV_FILTERS: dict = {}
+
+
 def clean(pcm: bytes, mode: str) -> tuple[bytes, float, bool]:
     """(audio Whisper hears, CPU seconds spent, fell back to raw?)"""
     from domovoi import stt_denoise
 
     if mode == "off":
         return pcm, 0.0, False
-    stt_denoise._cache = None  # time every clip, not the one-entry cache
     c0 = time.process_time()
+    if mode in _DEV_FILTERS:
+        x = np.frombuffer(pcm, "<i2").astype(np.float32) / 32768.0
+        out = to_pcm(_DEV_FILTERS[mode](x))
+        return out, time.process_time() - c0, False
+    stt_denoise._cache = None  # time every clip, not the one-entry cache
     out = stt_denoise.denoise_pcm(pcm, mode)
     return out, time.process_time() - c0, out is pcm
 
@@ -442,9 +516,16 @@ def main() -> None:
     modes = [m.strip() for m in a.modes.split(",") if m.strip()]
     from domovoi.stt_denoise import MODES
 
-    bad = [m for m in modes if m not in MODES]
+    if "rnnoise" in modes:
+        f = rnnoise_filter()
+        if f is None:
+            print("rnnoise: pyrnnoise isn't installed; that row is skipped", flush=True)
+            modes.remove("rnnoise")
+        else:
+            _DEV_FILTERS["rnnoise"] = f
+    bad = [m for m in modes if m not in MODES and m not in _DEV_FILTERS]
     if bad:
-        raise SystemExit(f"unknown mode(s) {bad}; known: {MODES}")
+        raise SystemExit(f"unknown mode(s) {bad}; known: {MODES} (+ rnnoise when pyrnnoise is installed)")
     low_priority()
     stt = Stt(a.model, a.threads)
     print(f"Whisper {a.model} cpu int8, {a.threads} threads; modes {modes}", flush=True)
