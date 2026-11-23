@@ -412,6 +412,12 @@ async def accept(space_hex: str, *, name: str | None = None) -> dict[str, Any]:
         space = await _space(s, space_id)
         if space is None or space["state"] != "invited":
             raise SharedListError("That shared list isn't waiting any more.")
+        from domovoi.friend_houses import blocking, store
+
+        friend = await store.friend_by_house(s, space["house_key"])
+        if (friend is None or friend.state != "active"
+                or await blocking.is_blocked(space["house_key"])):
+            raise SharedListError("The house that shared it isn't a friend any more.")
         try:
             created = await core_lists.create_list(s, name or space["title"])
         except core_lists.ListError as e:
