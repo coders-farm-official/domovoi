@@ -102,8 +102,8 @@ class ImageInfo:
         return None
 
 
-_GO_TIME = re.compile(r"^(\S+) (\S+) ([+-]\d{2})(\d{2})(?: \S+)?$")
-_FRACTION = re.compile(r"^(\d+)(.*)$")
+_GO_TIME = re.compile(r"^(\S+) (\S+) ([+-]\d{2})(\d{2})(?: \S+)?\Z")
+_FRACTION = re.compile(r"^(\d+)(.*)\Z", re.S)
 
 
 def _parse_created(text: str) -> datetime | None:
