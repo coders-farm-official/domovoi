@@ -1,0 +1,168 @@
+# Check the committed speech-recognition libraries are their recipe's build
+# (android/native/sherpa-onnx/README.md): each
+# jniLibs/<abi>/libsherpa-onnx-jni.so is rebuilt from source with
+# build-native.sh, the no-Docker build F-Droid runs, and every file it
+# writes (the four libraries, the Kotlin API, LICENSE and licenses/) must
+# match the folder's SHA256SUMS byte for byte. BUILD-INFO.txt is the
+# container build's record and is not rebuilt here.
+#
+# One job per ABI, side by side, on a plain Ubuntu 24.04 runner: Ubuntu's
+# own CMake 3.28.3 and Ninja (the versions the pinned container used), NDK
+# r29 and the ONNX Runtime AAR checked by the SHA-256s pinned in
+# build-native.sh, every source cloned at its pinned commit, scratch
+# directory /work (where it was built). The `compare` job then lists every
+# file that differs; a red run names each library that no longer
+# reproduces.
+#
+# Weekly (the pinned downloads must stay downloadable), by hand from the
+# Actions tab, and on a push to main or a pull request into it that changes
+# the folder or this workflow. Nothing else starts it.
+#
+# No secrets. Every action is pinned by commit SHA (the comment names its
+# release), as in ci.yml.
+name: sherpa-onnx rebuild
+
+on:
+  schedule:
+    - cron: "23 6 * * 2"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "android/native/sherpa-onnx/**"
+      - ".github/workflows/sherpa-onnx-rebuild.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "android/native/sherpa-onnx/**"
+      - ".github/workflows/sherpa-onnx-rebuild.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sherpa-onnx-rebuild-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build ${{ matrix.abi }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [arm64-v8a, x86_64, armeabi-v7a, x86]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build tools (Ubuntu's CMake and Ninja) and /work
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends cmake ninja-build unzip
+          sudo install -d -m 1777 /work
+          # The runner has its own newer CMake earlier on PATH; the
+          # container built with Ubuntu's.
+          /usr/bin/cmake --version | head -1
+          /usr/bin/ninja --version
+      - name: NDK r29 (the pinned zip, checked by SHA-256)
+        run: |
+          source android/native/sherpa-onnx/build-native.sh --pins
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$NDK_ZIP" "https://dl.google.com/android/repository/$NDK_ZIP"
+          echo "$NDK_SHA256  $RUNNER_TEMP/$NDK_ZIP" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/$NDK_ZIP" -d "$RUNNER_TEMP/ndk"
+          rm "$RUNNER_TEMP/$NDK_ZIP"
+          echo "NDK_DIR=$(echo "$RUNNER_TEMP"/ndk/android-ndk-*)" >>"$GITHUB_ENV"
+      - name: Build ${{ matrix.abi }} with build-native.sh
+        env:
+          ABI: ${{ matrix.abi }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          PATH=/usr/bin:$PATH ABIS="$ABI" ANDROID_NDK="$NDK_DIR" WORK=/work \
+            OUT="$RUNNER_TEMP/out" bash android/native/sherpa-onnx/build-native.sh
+      - name: Hash what it built
+        env:
+          ABI: ${{ matrix.abi }}
+        run: |
+          mkdir -p sums
+          (cd "$RUNNER_TEMP/out" && find . -type f | sed 's#^\./##' | LC_ALL=C sort | xargs sha256sum) >"sums/$ABI.txt"
+          cat "sums/$ABI.txt"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sherpa-sums-${{ matrix.abi }}
+          path: sums/
+          retention-days: 14
+
+  compare:
+    name: the libraries match SHA256SUMS
+    needs: build
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: android/native/sherpa-onnx/SHA256SUMS
+          sparse-checkout-cone-mode: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        # No artifact at all (every build failed) is reported below, per ABI.
+        continue-on-error: true
+        with:
+          pattern: sherpa-sums-*
+          path: sums
+          merge-multiple: true
+      - name: Compare with SHA256SUMS
+        run: |
+          python3 - android/native/sherpa-onnx/SHA256SUMS sums <<'PY'
+          import os, sys
+          from pathlib import Path
+
+          def read(p):
+              out = {}
+              for line in Path(p).read_text(encoding="utf-8").splitlines():
+                  if line.strip():
+                      digest, name = line.split(None, 1)
+                      out[name.lstrip("*")] = digest
+              return out
+
+          want = read(sys.argv[1])
+          want.pop("BUILD-INFO.txt", None)  # the container build's record, not rebuilt here
+          legs = {p.stem: read(p) for p in Path(sys.argv[2]).glob("*.txt")} if Path(sys.argv[2]).is_dir() else {}
+
+          bad_libs, bad_other, lines = [], [], []
+          for name, digest in sorted(want.items()):
+              if name.startswith("jniLibs/"):
+                  abi = name.split("/")[1]
+                  got = legs.get(abi, {}).get(name)
+                  if abi not in legs:
+                      bad_libs.append(name); lines.append(f"| `{name}` | not built (the {abi} job failed or is missing) |")
+                  elif got != digest:
+                      bad_libs.append(name); lines.append(f"| `{name}` | DIFFERS: built `{got}`, SHA256SUMS `{digest}` |")
+                  else:
+                      lines.append(f"| `{name}` | same |")
+              else:
+                  # Every ABI's build writes the Kotlin API and the licences.
+                  diffs = sorted(abi for abi, sums in legs.items() if sums.get(name) != digest)
+                  if not legs or diffs:
+                      bad_other.append(name)
+                      lines.append(f"| `{name}` | DIFFERS ({', '.join(diffs) or 'no build'}) |")
+                  else:
+                      lines.append(f"| `{name}` | same |")
+          for abi, sums in sorted(legs.items()):
+              for name in sorted(set(sums) - set(want)):
+                  bad_other.append(name); lines.append(f"| `{name}` | built by {abi}, not in SHA256SUMS |")
+
+          ok = not bad_libs and not bad_other
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
+              f.write("## sherpa-onnx rebuilt from its recipe\n\n")
+              f.write("Every file matches SHA256SUMS byte for byte.\n\n" if ok else "**Does not reproduce.**\n\n")
+              f.write("| File | Result |\n|---|---|\n" + "\n".join(lines) + "\n")
+          print("\n".join(lines))
+          if bad_libs:
+              print(f"::error file=android/native/sherpa-onnx/SHA256SUMS::these libraries do not reproduce SHA256SUMS (differ, or not built): {', '.join(bad_libs)}")
+          if bad_other:
+              print(f"::error file=android/native/sherpa-onnx/SHA256SUMS::these files differ from SHA256SUMS: {', '.join(bad_other)}")
+          sys.exit(0 if ok else 1)
+          PY
