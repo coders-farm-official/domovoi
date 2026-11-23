@@ -587,8 +587,8 @@ default `false`) plus free-text `warnings`. `satellite_root` is for a
 `[satellite]` below). `friend_houses` (core 1.5.0) is for a plugin that
 exchanges data with friend houses: it requires an `[isolated]` decoder and
 at least one `warnings` entry, and the install is refused without them
-(see `[isolated]` below). The SDK surface that uses it comes in a later
-SDK; until then the permission only fixes the rule.
+(see `[isolated]` below). The SDK surface that uses it comes with SDK
+1.18; until then the permission only fixes the rule.
 These are **not** a sandbox — an installed plugin runs with full access to
 the server (the install preview says exactly that). They are the trust
 screen: write them as if the user's trust depends on them, because it does.
@@ -945,9 +945,9 @@ containers still installs and runs; it simply isn't watched, and its card
 on the Plugins page says "containers not watched". A core older than SDK
 1.5 ignores the table.
 
-### `[isolated]` — the decode-only container (core 1.5.0)
+### `[isolated]` — the decode-only containers (core 1.5.0)
 
-A decoder that runs **outside the core's process**, in a container the core
+A decoder that runs **outside the core's process**, in containers the core
 builds and runs. Use it for any input you don't trust: everything a friend
 house sends (a `friend_houses` plugin must declare one), or a feed or file
 format whose parser you'd rather not run next to the database and the
@@ -955,74 +955,117 @@ house keys.
 
 ```toml
 [isolated]
-decoder = "domovoi_plugin_games.link.decode:main"   # <package>.<subpackage>.<module>:<function>
-debian = ["python3-pil"]                             # optional, from the list below
+decoder = "domovoi_isolated_games.decode:main"   # domovoi_isolated_<slug>.<module>:<function>
+debian = ["python3-pil"]                          # optional, from the list below
 ```
 
 | Key | Rules |
 |---|---|
-| `decoder` | A function in a **subpackage** of your own package: `domovoi_plugin_<slug>.<subpackage>[.<module>...]:<function>`. Only that subpackage goes into the container. |
-| `debian` | Extra Debian packages, only from the core's allowlist: `python3-pil` (Pillow), `python3-msgpack`, `python3-cbor2`. No pip, no other package. |
+| `decoder` | A function in the decoder's **own top-level package**, `domovoi_isolated_<slug>`, beside your `domovoi_plugin_<slug>` package: `domovoi_isolated_<slug>.<module>[.<module>...]:<function>`. Only that package goes into the container, so none of your in-process code (its `__init__` included) ever runs there. |
+| `debian` | Extra Debian packages, only from the core's allowlist: `python3-pil` (Pillow), `python3-msgpack`, `python3-cbor2`. No pip, no other package. `python3-pil` is what the core's image requests need. |
 
 **What the container holds.** The core writes the build context itself
 (you supply no Dockerfile): its own Dockerfile on the same digest-pinned
 Debian base as the core's other images, Python 3 and the listed packages
-from Debian, the core's small runner, and the `.py` files of your decoder
-subpackage (at most 200 files and 2 MB). Your package's top `__init__.py`
-in the image is an empty file the core writes, so none of your in-process
-code is in there. The decoder may import only the standard library, its
-own subpackage (relative imports included, never above it) and the
-modules of the Debian packages it lists; directory validation (`domovoi
-plugin pack`, install) refuses anything else.
+from Debian (installed before any of your files are in the image), the
+core's runner and image helper, and the `.py` files of your decoder
+package (at most 200 files and 2 MB). The package is Python only: any other
+file in it, or a symlink, fails validation. Your files are copied and
+byte-compiled; none of your code runs at build. The decoder may import
+only the standard library, its own package (relative imports included,
+never above it) and the modules of the Debian packages it lists; directory
+validation (`domovoi plugin pack`, install) refuses anything else.
 
-**What it can do.** Nothing but decode. The container has no network, a
-read-only root, no capabilities, no new privileges, runs as `nobody`, has
-256 MB of memory, 32 processes, half a CPU and an 8 MB `noexec` `/tmp`, no
-mounts, no environment and no logs. It talks to the core over stdin and
-stdout only.
+**One container per friend.** The core starts a container for a friend's
+first item and stops it after 2 minutes idle, so one friend's bytes never
+pass through a container that another friend's bytes have been in. At
+most 4 run per plugin and 8 in all; the least recently used idle one makes
+room, and when every one is busy the item waits. The friend is never named
+to the container: your decoder gets the bytes and the `meta` only.
+
+**What it can do.** Nothing but decode. Each container has no network, a
+read-only root with no writable `/tmp`, no mounts, no capabilities, no new
+privileges, runs as a fixed unprivileged user (`65534`), has 128 MB of
+memory (no swap beyond it), 16 processes, a quarter of a CPU, 64 open
+files, no environment and no logs. Its stderr goes nowhere. It talks to
+the core over stdin and stdout only.
 
 **The contract.** `main(payload: bytes, meta: dict) -> value`. The core
 sends one item at a time (payload up to 256 KiB, `meta` a small JSON object
-it chooses). Return anything JSON can carry, or an image (below); raise to
-refuse the item.
-`print()` is safe (it goes to stderr). The core checks every answer before
-your in-process code sees it: at most 64 KiB, UTF-8, nesting at most 16
-deep, no NaN or infinity, integers within 64 bits, no duplicate keys, and
-then re-serializes it, so your code only ever handles the core's own
-canonical JSON. An answer that fails a check is a refused item. A decoder
-that hangs (5 s), crashes, or writes anything but a well-formed reply is
-killed and restarted, with a backoff from 1 s doubling to 60 s; items
-meanwhile are refused.
+that may not name the friend). Return a JSON value; raise to refuse the
+item (the core keeps a short, cleaned copy of the message). `print()` is
+safe (it goes to stderr, which nobody reads). The core checks every answer
+before your in-process code sees it: at most 64 KiB, UTF-8, nesting at
+most 16 deep, at most 4,096 values, 256 keys per object, keys up to 128
+and strings up to 2,048 characters, integers within ±(2⁵³ − 1), no NaN or
+infinity, no duplicate keys, no NUL, control characters or lone
+surrogates. It then re-serializes the answer and checks it, **in the
+core's process**, against the schema your plugin registered
+(`isolated.set_schema(slug, schema)`; SDK 1.18 takes it with `on_mail`).
+Without a schema nothing is accepted. The schema language is a strict
+subset of JSON Schema: `type` (`object`, `array`, `string`, `integer`,
+`number`, `boolean`, `null`), `properties`, `required`,
+`additionalProperties` (default `false`), `items`, `minItems`, `maxItems`,
+`minLength`, `maxLength`, `minimum`, `maximum`, `enum`, `anyOf` and
+`description`; any other keyword is refused when you register it, so
+nothing you write is silently unenforced. Your in-process code only ever
+handles the core's own parsed copy.
 
-**Images.** Return `domovoi_isolated.Image(data, format="png"|"webp",
-lossless=True)` (or plain `bytes`, meaning a PNG) and the core's helper,
-inside the container, re-encodes it: the input must be PNG, JPEG or WebP
-(by its first bytes, and Pillow must agree), at most 12 million pixels by
-its header (a decompression bomb is refused before anything is decoded),
-one frame, not truncated. The EXIF orientation is applied, then only the
-pixels are copied into a fresh image, so EXIF (GPS included), XMP, ICC
-profiles and text chunks are all gone; it is scaled to at most 1024 pixels
-a side and must come out at most 512 KiB. Images need `debian =
-["python3-pil"]`; `import domovoi_isolated` is always allowed. The core
-reads the result's container format again without decoding it (PNG or
-WebP only, the size and dimensions, and no chunk but the pixels') and
-hands your in-process code the new bytes, never the ones a friend sent.
+**When it goes wrong.** A decoder that hangs (5 s; 10 s for an image),
+crashes, writes anything unasked or breaks the frame format is killed; the
+item is a *fault*. That friend's next container waits a backoff (1 s,
+doubling to 60 s); other friends are not affected. An item that faulted
+twice is dropped for good. Three faults from one friend within an hour
+pause that friend's items for this plugin for an hour (twice as long each
+time it happens again), and the core logs it (the admin's notice comes
+with the Friend Houses plugin mail, SDK 1.18); every other friend carries
+on. A refusal (your decoder raised, or a check failed) is final and is
+not a fault.
 
-Inside the decoder: never unpickle anything; decompress with a
-`max_length`; validate against your own schema before returning.
+**Images.** Your decoder never handles image bytes. The core puts an
+image's pieces back together itself, as opaque bytes, and sends the whole
+image to the friend's container as an image request, which the core's
+helper answers, not your code: it opens the bytes with the core's own
+`open_image`, trying only PNG, JPEG and WebP, refuses anything over 4
+megapixels by its header (a decompression bomb is refused before a pixel
+is decoded), takes the first frame of an animation, applies the EXIF
+orientation, scales to at most 768 pixels a side and answers **raw RGB or
+RGBA pixels**, never a file. The core checks that the pixel count matches
+the size and writes the PNG itself (a header, the pixels, the end: no
+metadata, colour profile or text can exist in it), at most 2.5 MB, and
+serves it as `image/png` with `nosniff` and a sandboxing
+`Content-Security-Policy`. The browser never gets a byte the container
+produced in a file format.
 
-**Lifecycle.** The core builds the image (when needed) and starts the
-container when the plugin loads (install, enable, boot); stops and
-removes it when the plugin is disabled, upgraded or uninstalled; and
-removes the image on uninstall. The image is rebuilt whenever your
-decoder's files change (an upgrade) and when it is 30 days old, so
-Debian's fixes get in. The build is capped at 1 GB of memory and a low CPU
-weight; Docker's BuildKit ignores those caps, so the core builds this
-image with Docker's classic builder, and refuses to build it at all on a
-Docker that no longer has one. The build runs in the background: until it is up,
-items are refused. The container is named `domovoi-plugin-dec-<slug>`, a
-name the container guard watches: it must run exactly the image the core
-built.
+**The SDK rule for friend data.** Nothing a friend supplied is forwarded
+opaquely: every payload you send on is rebuilt in process from the
+validated canonical values; images leave only as the core's PNGs; no
+bytes or base64 fields in your canonical JSON beyond the pinned string
+size. Never unpickle anything; decompress with a `max_length`.
+
+**Lifecycle.** The core registers the decoder when the plugin loads
+(install, enable, boot), after an admin confirmed the install. The image
+is built on first use, and only when the internet answer isn't "never"
+and, for a `friend_houses` plugin, Friend Houses is on and a friend has
+"Apps with this friend" on. The core tells the container guard the image
+ID before any container runs it, and rebuilds (never runs) an image the
+guard has no record of. The image is rebuilt whenever your decoder's
+files change (an upgrade) and when it is 30 days old, with `--pull
+--no-cache`, so Debian's fixes get in. The build is capped at 1 GB of
+memory and a low CPU weight; Docker's BuildKit ignores those caps, so the
+core builds this image with Docker's classic builder, and refuses to build
+it at all on a Docker that no longer has one. Until it is up, items are
+*unavailable* (tried again later, not counted). Disabling, upgrading or
+uninstalling the plugin stops its containers; uninstalling removes the
+image. The containers are named `domovoi-plugin-dec-<slug>-<n>`
+(`n` 0 to 3), names the container guard watches: they must run exactly
+the image the core built, and any other container under that prefix is
+reported as tampering.
+
+**Without Docker** the decoder is inert: nothing is decoded, and a
+`friend_houses` plugin exchanges nothing with friends (Friend Houses
+itself needs Docker on the server's Linux side). There is no in-process
+fallback, and no setting reaches the test kit's stand-ins.
 
 A core older than 1.5.0 ignores the table (and the `friend_houses` key).
 
@@ -1053,9 +1096,10 @@ screen never appears for a server nobody confirmed.
 * The declared lockfile must exist with hashes (see above).
 * A declared `help` file must exist inside the plugin, be UTF-8 and at most
   32 KB (SDK 1.8).
-* An `[isolated]` decoder's subpackage must exist with its module, hold no
-  symlinks, stay within 200 `.py` files and 2 MB, and import only what the
-  container has (core 1.5.0, see `[isolated]`).
+* An `[isolated]` decoder's package (`domovoi_isolated_<slug>`) must exist
+  with its module, hold only `.py` files (no symlinks), stay within 200
+  files and 2 MB, and import only what the container has (core 1.5.0, see
+  `[isolated]`).
 
 ---
 

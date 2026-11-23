@@ -48,9 +48,12 @@ RESERVED_CONTAINER_NAMES = frozenset({
     # its inbound listener (domovoi/friend_houses/listener_runtime.py).
     "domovoi-tor", "domovoi-fh-listener",
 })
-# A plugin's decode-only container (domovoi/plugins_runtime/isolated.py):
-# the core builds and runs it, one per plugin, named with this prefix.
+# A plugin's decode-only containers (domovoi/plugins_runtime/isolated.py):
+# the core builds the image and runs one container per friend, at most
+# DECODER_SLOTS at once, named ``<prefix><slug>-<slot>``. Any other running
+# container under the prefix is tampering.
 DECODER_CONTAINER_PREFIX = "domovoi-plugin-dec-"
+DECODER_SLOTS = 4
 RESERVED_CONTAINER_PREFIXES = ("domovoi-mpd-", DECODER_CONTAINER_PREFIX)
 # A Docker container name.
 CONTAINER_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}\Z")

@@ -7,26 +7,35 @@ a way that would otherwise get reported as a bug.
 ## 1.5.0 (unreleased) — Plugins: decode-only containers
 
 - **What changed.** A plugin can declare an `[isolated]` decoder: a
-  function that runs outside the core, in a container the core builds from
-  the plugin's decoder files on its own pinned Debian base (no network,
-  read-only, no capabilities, user `nobody`, memory, process and CPU caps)
-  and talks to over stdin and stdout only. The core checks and
-  re-serializes every answer. A plugin with the new `friend_houses`
-  permission must declare one (its install is refused otherwise); the
-  Friend Houses features for plugins come later. Images a decoder returns
-  are re-encoded inside the container (PNG or WebP out, at most 1024
-  pixels a side, metadata such as EXIF and GPS removed, decompression
-  bombs refused), and the core checks them again.
-- **What to know.** The container is named `domovoi-plugin-dec-<slug>`;
-  the container guard watches it and expects exactly the image the core
-  built. Its image is built (with Docker, downloading Debian packages) the
-  first time the plugin loads and again after an upgrade or when 30 days
-  old; it is removed with the plugin. The build is capped at 1 GB of
-  memory and a low CPU weight, which needs Docker's classic builder
-  (`DOCKER_BUILDKIT=0`, still in Docker 29; BuildKit ignores the caps): on
-  a Docker without it the image isn't built and the plugin's decoder
-  reports why. Plugins without the table are
-  unchanged.
+  function in its own `domovoi_isolated_<slug>` package that runs outside
+  the core, in containers the core builds from the plugin's decoder files
+  on its own pinned Debian base, one per friend (no network, read-only, no
+  mounts, no capabilities, a fixed unprivileged user, memory, process, CPU
+  and file caps), talking over stdin and stdout only. The core checks every
+  answer (size, depth, value counts, string and key lengths, characters,
+  numbers), re-serializes it and checks it against the schema the plugin
+  registered. A plugin with the new `friend_houses` permission must declare
+  one (its install is refused otherwise); the Friend Houses features for
+  plugins come with SDK 1.18. Images never come out of a container as
+  files: the container answers raw pixels (PNG, JPEG or WebP in, at most 4
+  megapixels, first frame, at most 768 pixels a side), and the core writes
+  the PNG itself.
+- **What to know.** The containers are named `domovoi-plugin-dec-<slug>-<n>`
+  (`n` 0 to 3); the container guard watches them, expects exactly the image
+  the core built, and reports any other container under that prefix. A
+  container starts for a friend's first item and stops after 2 minutes
+  idle; at most 8 run at once (128 MB each). A friend whose items keep
+  crashing a decoder is paused for that plugin for an hour, and the item
+  is dropped after two crashes; other friends carry on. The image is built
+  (with Docker, downloading Debian packages) the first time it is needed,
+  and only when the internet answer isn't "never" and, for a
+  `friend_houses` plugin, Friend Houses is on and a friend has "Apps with
+  this friend" on; again after an upgrade or when 30 days old; it is
+  removed with the plugin. The build is capped at 1 GB of memory and a low
+  CPU weight, which needs Docker's classic builder (`DOCKER_BUILDKIT=0`,
+  still in Docker 29; BuildKit ignores the caps): on a Docker without it
+  the image isn't built and the plugin's decoder reports why. Without
+  Docker nothing is decoded. Plugins without the table are unchanged.
 
 ## 1.5.0 (unreleased) — Photos and videos
 

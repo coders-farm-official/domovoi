@@ -1087,6 +1087,15 @@ async def note_decoder_image(slug: str, image_id: str) -> None:
         await store.set_baseline(s, DECODER_BASELINE_PREFIX + slug, image_id, "core-build")
 
 
+async def decoder_image_record(slug: str) -> str | None:
+    """The decode-only image ID on record for plugin ``slug``: the core
+    runs no decoder image the guard has no record of."""
+    guard = get_guard()
+    async with guard.session_factory() as s:
+        b = await store.get_baseline(s, DECODER_BASELINE_PREFIX + slug)
+    return (b or {}).get("value") or None
+
+
 async def note_mpd_image(image_id: str | None, *, built: bool) -> str:
     """Record or check the music player image the core runs rooms from.
 

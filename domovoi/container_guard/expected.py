@@ -255,14 +255,17 @@ def listener_expectation(*, image_id: str | None, hold: str | None = None) -> Ex
 # ─── plugins' decode-only containers ──────────────────────────────────────
 
 def decoder_expectations(rows: Iterable[Any], baselines: dict[str, str | None]) -> list[Expected]:
-    """One per installed plugin with an ``[isolated]`` decoder
-    (domovoi/plugins_runtime/isolated.py). The core starts and stops it
-    with the plugin, so, like the listener, there is no running rule:
-    STOPPED, meaning whenever it runs it must run the exact image the core
-    built (``baselines``: slug -> image ID,
-    :func:`domovoi.container_guard.engine.note_decoder_image`), and nothing
-    else may wear its name. An installer hold on the plugin holds it too."""
-    from domovoi.container_guard.model import DECODER_CONTAINER_PREFIX
+    """One per container slot of each installed plugin with an
+    ``[isolated]`` decoder (domovoi/plugins_runtime/isolated.py: one
+    container per friend, ``domovoi-plugin-dec-<slug>-<n>``). The core
+    starts and stops them on demand, so, like the listener, there is no
+    running rule: STOPPED, meaning whenever one runs it must run the exact
+    image the core built (``baselines``: slug -> image ID,
+    :func:`domovoi.container_guard.engine.note_decoder_image`, recorded
+    before the first run), and nothing else may wear the names. Any other
+    running container under the prefix is tampering (``detect``). An
+    installer hold on the plugin holds them too."""
+    from domovoi.container_guard.model import DECODER_CONTAINER_PREFIX, DECODER_SLOTS
 
     out: list[Expected] = []
     for row in rows:
@@ -270,19 +273,20 @@ def decoder_expectations(rows: Iterable[Any], baselines: dict[str, str | None]) 
         if not isinstance(manifest.get("isolated"), dict) or getattr(row, "status", "") == "uninstalled":
             continue
         slug = row.slug
-        out.append(
-            Expected(
-                name=f"{DECODER_CONTAINER_PREFIX}{slug}",
-                owner="core",
-                role="plugin-decoder",
-                label=f"the {getattr(row, 'name', slug)} plugin's decoder",
-                state=STOPPED,
-                required=False,
-                image_ref=f"{DECODER_CONTAINER_PREFIX}{slug}:latest",
-                image_id=baselines.get(slug) or None,
-                hold=holds.held(f"plugin:{slug}"),
+        for slot in range(DECODER_SLOTS):
+            out.append(
+                Expected(
+                    name=f"{DECODER_CONTAINER_PREFIX}{slug}-{slot}",
+                    owner="core",
+                    role="plugin-decoder",
+                    label=f"a decoder of the {getattr(row, 'name', slug)} plugin",
+                    state=STOPPED,
+                    required=False,
+                    image_ref=f"{DECODER_CONTAINER_PREFIX}{slug}:latest",
+                    image_id=baselines.get(slug) or None,
+                    hold=holds.held(f"plugin:{slug}"),
+                )
             )
-        )
     return out
 
 

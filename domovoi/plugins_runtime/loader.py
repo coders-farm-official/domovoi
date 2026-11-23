@@ -414,8 +414,9 @@ class PluginLoader:
         )
         self.loaded[slug] = lp
         if getattr(manifest, "isolated", None) is not None:
-            # Its decode-only container (core 1.5.0): built when needed and
-            # started in the background; never fails the load.
+            # Its decode-only containers (core 1.5.0): the pool is registered
+            # here; the image is built and a friend's container started on
+            # first use, through the build gate. Never fails the load.
             from domovoi.plugins_runtime import isolated
 
             isolated.start_for(slug, install_dir, manifest)
