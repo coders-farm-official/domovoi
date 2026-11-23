@@ -82,6 +82,7 @@ from web.backend.api import up_next as up_next_api
 from web.backend.api import up_next_history as up_next_history_api
 from web.backend.api import media_search as media_search_api
 from web.backend.api import media_understanding as media_understanding_api
+from web.backend.api import faces as faces_api
 from web.backend.api import music_mix as music_mix_api
 from web.backend.api import home_location as home_location_api
 from web.backend.api import videos as videos_api
@@ -456,6 +457,9 @@ app.include_router(up_next_history_api.router)
 app.include_router(music_mix_api.router)
 app.include_router(media_understanding_api.router)
 app.include_router(media_search_api.router)
+# Faces and people (1.5.0): household views and trains, admin merges named
+# people; guests and shared screens get nothing.
+app.include_router(faces_api.router)
 app.include_router(home_location_api.router)
 # Groups (V060): /api/music/groups — named sets of rooms and the shared
 # queues; its own literal prefix, proxied to the core.

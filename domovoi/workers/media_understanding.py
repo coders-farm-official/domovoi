@@ -50,8 +50,11 @@ class MediaUnderstandingWorker(LongRunWorker):
         self._runner = runner
 
     async def run(self, shutdown: asyncio.Event) -> None:
-        from domovoi.media_understanding import photos
+        from domovoi.media_understanding import faces, photos
         from domovoi.media_understanding.runner import Runner
 
         photos.install()     # slice 2: the photo date, caption and text analysers
+        # Faces (slice 4): the photo analyser and its housekeeping (model
+        # fetch on opt-in, the nightly re-group). Inert while faces are off.
+        faces.install()
         await (self._runner or Runner()).run_forever(shutdown)

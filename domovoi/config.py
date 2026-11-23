@@ -1272,6 +1272,10 @@ class Settings(BaseSettings):
     # looks whether a walk is due: a full stat()-only walk of Pictures and
     # Videos once an hour, sooner after "Rescan" or an upload.
     media_catalog_interval_sec: float = 60.0
+    # Where the two face models (YuNet, SFace; domovoi/media_understanding/
+    # face_models.py) are fetched, pinned by SHA-256, when an admin turns
+    # faces on. Never shipped; server-private, never served.
+    face_models_dir: str = str(Path.home() / ".domovoi" / "face_models")
 
     # ─── MPD (lazy per-room provisioning) ──────────────────────────────
     # An MPD daemon per voice-satellite room keeps playback queues / current

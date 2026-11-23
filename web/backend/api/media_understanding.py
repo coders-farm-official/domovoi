@@ -11,8 +11,10 @@ switches and folder exclusions are admin):
   estimate, the benchmark, the libraries and the excluded folders.
 * ``PUT  /api/media-understanding/settings`` (admin): change switches
   (``enabled``, ``faces``, ``places``, ``frame_cap_mode``, ``frame_cap``).
-  Turning faces off deletes every face, which needs
-  ``confirm_delete_faces: true`` when there are any (409 otherwise).
+  Turning faces off deletes every face and group
+  (``face_data.delete_all``), which needs ``confirm_delete_faces: true`` when
+  there are any (409 otherwise). Turning them on starts the one-time,
+  pinned model fetch on the core.
 * ``POST /api/media-understanding/pause`` (admin): ``{"paused": bool}``.
 * ``POST /api/media-understanding/run-now`` (admin): ignore the night
   window until the backlog is done (still voice first, still capped).
@@ -36,6 +38,7 @@ from sqlalchemy import text
 
 from domovoi.admin_auth import require_admin_mutation, require_device, require_device_read
 from domovoi.media_understanding import catalog, switches
+from domovoi.media_understanding import faces as face_data
 from domovoi.media_understanding.runner import estimate, progress
 from web.backend.db import session_scope
 
@@ -118,10 +121,16 @@ async def put_settings(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
                 raise HTTPException(status_code=409, detail=(
                     f"turning faces off deletes {n} saved faces and every group and name on them; "
                     "send confirm_delete_faces to go ahead"))
-            await s.execute(text("DELETE FROM media_faces"))
-            await s.execute(text("DELETE FROM face_groups"))
-            await s.execute(text("DELETE FROM media_item_stages WHERE analyser LIKE 'faces%'"))
+        # The switch first: its row lock makes a face the runner is storing
+        # right now either land before this delete or see faces off
+        # (domovoi/media_understanding/faces.py, _faces_on_locked).
         saved = await switches.write(s, new)
+        if current["faces"] and not new["faces"]:
+            await face_data.delete_all(s)
+        elif new["faces"] and not current["faces"]:
+            # Turned on: the runner fetches the models (only now), then
+            # queues the photos again for faces.
+            await face_data.write_state(s, requeued=False, fetch_error=None)
     return {"settings": saved}
 
 
