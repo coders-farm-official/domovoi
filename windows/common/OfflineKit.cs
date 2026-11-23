@@ -11,6 +11,14 @@
 //      a dying stick is caught here; it is not trust.
 //   2. kit.json: a kit format this Setup reads, made for a PC (not a Mac
 //      only).
+//   2b. What is on the stick (M12, review of 2026-11-23; Unaccounted): no
+//      link of any kind (symlink, junction, any reparse point), nothing
+//      kit.json doesn't account for (the rules and words of the Python
+//      checker, domovoi/offline_kit/checker.py _unlisted), and the apt
+//      suite and component folders named as provision.sh's kit_apt_name
+//      allows. Only when the kit is a drive's root are the folders and
+//      files an operating system puts there by itself let be (OsRootDirs,
+//      OsRootFiles), and only at that root.
 //   3. The release signature: release\DomovoiSetup.manifest.json signed with
 //      the release key this Setup pins (SshSig, the same check as the
 //      Windows update), naming the tag and commit kit.json names, and that
@@ -112,6 +120,11 @@ namespace Domovoi.Windows
     {
         public sealed class Entry { public string Path, Sha256; public long Size; public int Parts; }
 
+        // Every file as stored on the stick (whole files and parts, never a
+        // split file's joined name), and the split files' joined names.
+        public HashSet<string> Stored = new HashSet<string>(StringComparer.Ordinal);
+        public HashSet<string> Joined = new HashSet<string>(StringComparer.Ordinal);
+
         public int? Format;
         public string Version, Tag, Commit;
         public List<string> Targets = new List<string>();
@@ -139,6 +152,13 @@ namespace Domovoi.Windows
                     if (!OfflineKit.SafePath(p) || k.Files.ContainsKey(p)) continue;
                     var parts = Json.ObjList(f, "parts");
                     k.Files[p] = new Entry { Path = p, Sha256 = Json.Str(f, "sha256"), Size = Json.Long(f, "size") ?? -1, Parts = parts == null ? 0 : parts.Count };
+                    if (parts == null || parts.Count == 0) { k.Stored.Add(p); continue; }
+                    k.Joined.Add(p);
+                    foreach (var part in parts)
+                    {
+                        string pp = Json.Str(part, "path");
+                        if (OfflineKit.SafePath(pp)) k.Stored.Add(pp);
+                    }
                 }
             }
             return k;
@@ -408,6 +428,10 @@ namespace Domovoi.Windows
             }
             if (k.Commit == null || !Hex40.IsMatch(k.Commit) || !ReleaseNames.IsTag(k.Tag)) { r.Problems.Add("kit.json names no release." + Remake); return r; }
 
+            // 2b. What is on the stick: no links, nothing unaccounted for.
+            List<string> extra = Unaccounted(root, k, root.Length == 3);
+            if (extra.Count > 0) { r.Problems.Add(UnaccountedText(extra)); return r; }
+
             // 3. The release signature, and the release this Setup is.
             if (want.Key == null)
             {
@@ -485,6 +509,116 @@ namespace Domovoi.Windows
             bad = Damaged(root, sums, rest, ref hashed);
             if (bad.Count > 0) r.Problems.Add(DamagedText(bad));
             return r;
+        }
+
+        // What an operating system puts at a drive's root by itself
+        // (Windows, a Mac, Linux's fsck), let be only there, and only when
+        // the kit is the drive's root: the same names as the Python
+        // checker's OS_LITTER_DIRS and OS_LITTER_FILES
+        // (domovoi/offline_kit/format.py). Nothing else is let be.
+        public static readonly string[] OsRootDirs = {
+            "System Volume Information", "$RECYCLE.BIN", ".Trashes", ".Spotlight-V100",
+            ".fseventsd", ".TemporaryItems", ".DocumentRevisions-V100", "lost+found",
+        };
+        public static readonly string[] OsRootFiles = { ".DS_Store", "Thumbs.db", "desktop.ini", ".metadata_never_index" };
+
+        // An apt suite or component folder's name (provision.sh and
+        // install.sh kit_apt_name): it goes into apt's source stanza as is.
+        static readonly Regex AptName = new Regex("^[a-z0-9][a-z0-9.+-]{0,63}\\z");
+
+        static bool OsRootEntry(string name, bool dir)
+        {
+            foreach (string n in dir ? OsRootDirs : OsRootFiles)
+                if (string.Equals(n, name, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+
+        // A name as the household reads it: nothing that moves the text.
+        static string Shown(string rel)
+        {
+            var b = new StringBuilder(rel.Length);
+            foreach (char c in rel) b.Append(c < ' ' || c == '\u007f' ? '?' : c);
+            return b.ToString();
+        }
+
+        static List<string> Parents(string rel)
+        {
+            var l = new List<string>();
+            string[] parts = rel.Split('/');
+            for (int i = 1; i < parts.Length; i++) l.Add(string.Join("/", parts, 0, i));
+            return l;
+        }
+
+        // Everything on the stick kit.json doesn't account for, in the
+        // Python checker's words (checker.py _unlisted): links of any kind
+        // (a link to a folder is not walked into), files kit.json doesn't
+        // list, a split file here whole, folders that hold nothing of the
+        // kit; and apt suite or component folders (apt/<arch>/<source>/
+        // dists/<suite>[/<component>]) with a name apt's source stanza
+        // can't take. driveRoot: the kit is a drive's root, so the
+        // operating system's own entries there are let be. Read-only.
+        public static List<string> Unaccounted(string root, KitIndex k, bool driveRoot)
+        {
+            var listed = new HashSet<string>(k.Stored, StringComparer.Ordinal) { KitJson, Sums };
+            var listedDirs = new HashSet<string>(StringComparer.Ordinal);
+            foreach (string p in listed) foreach (string d in Parents(p)) listedDirs.Add(d);
+            var withFiles = new HashSet<string>(StringComparer.Ordinal);
+            var seenDirs = new List<string>();
+            var found = new List<string>();
+            var todo = new Stack<KeyValuePair<string, string>>();   // (kit path, full path); "" is the root
+            todo.Push(new KeyValuePair<string, string>("", root));
+            while (todo.Count > 0)
+            {
+                var at = todo.Pop();
+                List<FileSystemInfo> entries;
+                try { entries = new List<FileSystemInfo>(new DirectoryInfo(at.Value).EnumerateFileSystemInfos()); }
+                catch (Exception e)
+                {
+                    if (!(e is IOException || e is UnauthorizedAccessException || e is System.Security.SecurityException)) throw;
+                    found.Add((at.Key.Length == 0 ? "The kit's folder" : Shown(at.Key) + "/") + " can't be read, so what is in it can't be checked.");
+                    continue;
+                }
+                entries.Sort((a, b) => string.CompareOrdinal(a.Name, b.Name));
+                var subdirs = new List<KeyValuePair<string, string>>();
+                foreach (FileSystemInfo e in entries)
+                {
+                    string rel = at.Key.Length == 0 ? e.Name : at.Key + "/" + e.Name;
+                    bool dir = (e.Attributes & FileAttributes.Directory) != 0;
+                    bool link = (e.Attributes & FileAttributes.ReparsePoint) != 0;
+                    if (dir)
+                    {
+                        if (link) { found.Add(Shown(rel) + " is a link, which a kit never holds."); continue; }
+                        if (at.Key.Length == 0 && driveRoot && OsRootEntry(e.Name, true)) continue;
+                        string[] parts = rel.Split('/');
+                        if ((parts.Length == 5 || parts.Length == 6) && parts[0] == "apt" && parts[3] == "dists" && !AptName.IsMatch(e.Name))
+                            found.Add("The package folder " + Shown(rel) + "/ has a name a kit never uses.");
+                        seenDirs.Add(rel);
+                        subdirs.Add(new KeyValuePair<string, string>(rel, e.FullName));
+                        continue;
+                    }
+                    if (at.Key.Length == 0 && driveRoot && !link && OsRootEntry(e.Name, false)) continue;
+                    foreach (string d in Parents(rel)) withFiles.Add(d);
+                    if (link || (e.Attributes & FileAttributes.Device) != 0)
+                        found.Add(Shown(rel) + " is a link or not a plain file, which a kit never holds.");
+                    else if (listed.Contains(rel)) { }
+                    else if (k.Joined.Contains(rel))
+                        found.Add(Shown(rel) + " is here whole, but kit.json says it is stored in parts only.");
+                    else
+                        found.Add(Shown(rel) + " is not part of the kit (kit.json doesn't list it).");
+                }
+                for (int i = subdirs.Count - 1; i >= 0; i--) todo.Push(subdirs[i]);
+            }
+            foreach (string rel in seenDirs)
+                if (!listedDirs.Contains(rel) && !withFiles.Contains(rel))
+                    found.Add(Shown(rel) + "/ is not part of the kit (kit.json lists nothing in it).");
+            return found;
+        }
+
+        static string UnaccountedText(List<string> found)
+        {
+            string s = string.Join(" ", found.GetRange(0, Math.Min(5, found.Count)).ToArray());
+            if (found.Count > 5) s += " And " + Inv.S(found.Count - 5) + " more like these.";
+            return "This stick holds what a kit never does, so Setup used nothing from it. " + s + Remake;
         }
 
         // The files Setup itself reads off the stick.

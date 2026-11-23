@@ -116,6 +116,15 @@ static partial class Tests
         File.WriteAllText(p, edit(File.ReadAllText(p, new UTF8Encoding(false))), new UTF8Encoding(false));
     }
 
+    static KitIndex KitOf(string root)
+    {
+        return KitIndex.Parse(File.ReadAllText(Path.Combine(root, "kit.json"), new UTF8Encoding(false)));
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.I1)]
+    static extern bool CreateSymbolicLinkW(string link, string target, int flags);
+
     static string OneProblem(KitReport r)
     {
         True(r.Problems.Count >= 1, "refused");
@@ -163,6 +172,118 @@ static partial class Tests
             string k = KitCopy();
             EditKitJson(k, s => s.Replace("\"includes\": []", "\"includes\": [\"ai\"]"));
             Has(OneProblem(OfflineKit.Check(k, FixtureWant())), "damaged file: kit.json", "kit.json");
+        });
+        // M12 (review of 2026-11-23): what is on the stick, before anything
+        // on it is used.
+        Run("kit: a clean kit has nothing unaccounted for, as a folder or a drive's root", delegate
+        {
+            string k = KitCopy();
+            Eq(0, OfflineKit.Unaccounted(k, KitOf(k), false).Count, "a folder");
+            Eq(0, OfflineKit.Unaccounted(k, KitOf(k), true).Count, "a drive's root");
+            SplitBundle(k, 4000);
+            Eq(0, OfflineKit.Unaccounted(k, KitOf(k), false).Count, "split: its parts are listed");
+            File.WriteAllText(Path.Combine(k, @"source\domovoi.bundle"), "whole");
+            Resum(k);
+            Has(OneProblem(OfflineKit.Check(k, FixtureWant())), "source/domovoi.bundle is here whole, but kit.json says it is stored in parts only.", "whole beside its parts");
+        });
+        Run("kit: a symlink is refused, named", delegate
+        {
+            string k = KitCopy();
+            bool made = CreateSymbolicLinkW(Path.Combine(k, "speech-link"), Path.Combine(k, "speech"), 0x1 | 0x2);
+            if (!made && Environment.GetEnvironmentVariable("CI") == null)
+            {
+                Console.WriteLine("     (this account can't make a symlink here: skipped outside CI)");
+                return;
+            }
+            True(made, "made a folder symlink (CI runs as an administrator)");
+            string p = OneProblem(OfflineKit.Check(k, FixtureWant()));
+            Has(p, "speech-link is a link, which a kit never holds.", "the folder link");
+            Has(p, "Setup used nothing from it.", "nothing used");
+            string k2 = KitCopy();
+            string target = Path.Combine(k2, @"linux\provision.sh");
+            File.Move(target, target + ".real");
+            True(CreateSymbolicLinkW(target, target + ".real", 0x2), "made a file symlink");
+            Has(OneProblem(OfflineKit.Check(k2, FixtureWant())), "linux/provision.sh is a link or not a plain file, which a kit never holds.", "the file link, though kit.json lists its name");
+        });
+        Run("kit: a junction is refused, named, and not walked into", delegate
+        {
+            string k = KitCopy();
+            string outside = Path.Combine(Path.GetTempPath(), "domovoi-kit-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(outside);
+            File.WriteAllText(Path.Combine(outside, "Release"), "x");
+            string j = Path.Combine(k, @"apt\amd64\ubuntu\dists\noble");
+            var psi = new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c mklink /J \"" + j + "\" \"" + outside + "\"") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true };
+            using (var pr = System.Diagnostics.Process.Start(psi)) { pr.StandardOutput.ReadToEnd(); pr.WaitForExit(); Eq(0, pr.ExitCode, "mklink /J"); }
+            True((new DirectoryInfo(j).Attributes & FileAttributes.ReparsePoint) != 0, "a junction");
+            List<string> found = OfflineKit.Unaccounted(k, KitOf(k), true);
+            SeqEq(new[] { "apt/amd64/ubuntu/dists/noble is a link, which a kit never holds." }, found, "only the junction");
+            Has(OneProblem(OfflineKit.Check(k, FixtureWant())), "apt/amd64/ubuntu/dists/noble is a link, which a kit never holds.", "Check");
+        });
+        Run("kit: an unlisted folder and file are refused in the checker's words", delegate
+        {
+            string k = KitCopy();
+            Directory.CreateDirectory(Path.Combine(k, @"apt\amd64\ubuntu\dists\evil"));
+            File.WriteAllText(Path.Combine(k, @"speech\extra.onnx"), "x");
+            Directory.CreateDirectory(Path.Combine(k, @"notes\deeper"));
+            File.WriteAllText(Path.Combine(k, @"notes\deeper\a.txt"), "x");
+            SeqEq(new[] {
+                "notes/deeper/a.txt is not part of the kit (kit.json doesn't list it).",
+                "speech/extra.onnx is not part of the kit (kit.json doesn't list it).",
+                "apt/amd64/ubuntu/dists/evil/ is not part of the kit (kit.json lists nothing in it).",
+            }, OfflineKit.Unaccounted(k, KitOf(k), false), "named, folders after files");
+            string p = OneProblem(OfflineKit.Check(k, FixtureWant()));
+            Eq(1, OfflineKit.Check(k, FixtureWant()).Problems.Count, "one message");
+            True(p.StartsWith("This stick holds what a kit never does, so Setup used nothing from it. notes/deeper/a.txt is not part of the kit", StringComparison.Ordinal), "the words: " + p);
+            True(p.EndsWith("(kit.json lists nothing in it). Make the stick again.", StringComparison.Ordinal), "the advice: " + p);
+            for (int i = 0; i < 6; i++) File.WriteAllText(Path.Combine(k, "extra" + i + ".txt"), "x");
+            Has(OneProblem(OfflineKit.Check(k, FixtureWant())), "And 4 more like these. Make the stick again.", "a long list is cut");
+        });
+        Run("kit: an apt folder with a name apt doesn't use is refused, even listed", delegate
+        {
+            // Listed in kit.json (which no signature covers) and in SHA256SUMS.
+            string k = KitCopy();
+            string from = Path.Combine(k, @"apt\amd64\ubuntu\dists\resolute");
+            string to = Path.Combine(k, @"apt\amd64\ubuntu\dists\Noble_X");
+            Directory.Move(from, to);
+            EditKitJson(k, s2 => s2.Replace("apt/amd64/ubuntu/dists/resolute/", "apt/amd64/ubuntu/dists/Noble_X/"));
+            Resum(k);
+            SeqEq(new[] { "The package folder apt/amd64/ubuntu/dists/Noble_X/ has a name a kit never uses." }, OfflineKit.Unaccounted(k, KitOf(k), false), "the suite");
+            Has(OneProblem(OfflineKit.Check(k, FixtureWant())), "The package folder apt/amd64/ubuntu/dists/Noble_X/ has a name a kit never uses.", "Check");
+            string k2 = KitCopy();
+            Directory.CreateDirectory(Path.Combine(k2, @"apt\amd64\docker\dists\resolute\stable"));
+            Directory.CreateDirectory(Path.Combine(k2, @"apt\amd64\ubuntu\dists\resolute\main universe"));
+            File.WriteAllText(Path.Combine(k2, @"apt\amd64\docker\dists\resolute\stable\Packages"), "x");
+            File.WriteAllText(Path.Combine(k2, @"apt\amd64\ubuntu\dists\resolute\main universe\Packages"), "x");
+            List<string> found = OfflineKit.Unaccounted(k2, KitOf(k2), false);
+            True(found.Contains("The package folder apt/amd64/ubuntu/dists/resolute/main universe/ has a name a kit never uses."), "the component: " + string.Join(" | ", found.ToArray()));
+            True(!found.Exists(f => f.StartsWith("The package folder apt/amd64/docker", StringComparison.Ordinal)), "stable is a name apt uses");
+        });
+        Run("kit: the system's own folders are let be at a drive's root only", delegate
+        {
+            string k = KitCopy();
+            foreach (string d in new[] { "System Volume Information", "$RECYCLE.BIN", ".Spotlight-V100", ".fseventsd", ".Trashes" })
+                File.WriteAllText(Path.Combine(Directory.CreateDirectory(Path.Combine(k, d)).FullName, "IndexerVolumeGuid"), "x");
+            Directory.CreateDirectory(Path.Combine(k, "lost+found"));
+            File.WriteAllText(Path.Combine(k, ".DS_Store"), "x");
+            File.WriteAllText(Path.Combine(k, "desktop.ini"), "x");
+            Eq(0, OfflineKit.Unaccounted(k, KitOf(k), true).Count, "a drive's root: " + string.Join(" | ", OfflineKit.Unaccounted(k, KitOf(k), true).ToArray()));
+            List<string> asFolder = OfflineKit.Unaccounted(k, KitOf(k), false);
+            True(asFolder.Contains("System Volume Information/IndexerVolumeGuid is not part of the kit (kit.json doesn't list it)."), "a kit in a folder: " + string.Join(" | ", asFolder.ToArray()));
+            True(asFolder.Contains(".DS_Store is not part of the kit (kit.json doesn't list it)."), "the file too");
+            True(asFolder.Contains("lost+found/ is not part of the kit (kit.json lists nothing in it)."), "the empty one too");
+            // The same names deeper down are the kit's to explain.
+            string k2 = KitCopy();
+            File.WriteAllText(Path.Combine(Directory.CreateDirectory(Path.Combine(k2, @"speech\System Volume Information")).FullName, "x"), "x");
+            Directory.CreateDirectory(Path.Combine(k2, @"apt\$RECYCLE.BIN"));
+            File.WriteAllText(Path.Combine(k2, @"speech\.DS_Store"), "x");
+            SeqEq(new[] {
+                "speech/.DS_Store is not part of the kit (kit.json doesn't list it).",
+                "speech/System Volume Information/x is not part of the kit (kit.json doesn't list it).",
+                "apt/$RECYCLE.BIN/ is not part of the kit (kit.json lists nothing in it).",
+            }, OfflineKit.Unaccounted(k2, KitOf(k2), true), "deeper, even on a drive's root");
+            // Nothing else is let be at the root.
+            Directory.CreateDirectory(Path.Combine(k2, "System Volume Informatio"));
+            True(OfflineKit.Unaccounted(k2, KitOf(k2), true).Contains("System Volume Informatio/ is not part of the kit (kit.json lists nothing in it)."), "only the names listed");
         });
         Run("kit: no kit.json is no kit", delegate
         {
