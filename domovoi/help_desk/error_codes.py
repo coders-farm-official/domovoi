@@ -319,6 +319,13 @@ ERROR_CODES: dict[str, ErrorHelp] = {
         "won't do it.", "plugins"),
     "downgrade_requires_force": _e("That version is older",
                                    "Installing an older version needs the admin to confirm it.", "plugins"),
+    "checksum_mismatch": _e("The update didn't match its checksum",
+                            "The downloaded plugin file isn't the one its release lists, so nothing was "
+                            "installed. Try the update again later; if it keeps happening, tell the "
+                            "plugin's author.", "plugins"),
+    "checksum_missing": _e("The release has no checksum for this file",
+                           "The plugin's release lists no checksum for its zip, so Domovoi didn't install "
+                           "it." + _PLUGIN_AUTHOR, "plugins"),
     "endpoint_tier_conflict": _e("The plugin's routes disagree",
                                  "The plugin declares a route on two access levels." + _PLUGIN_AUTHOR, "plugins"),
     "github_download_failed": _e("The download from GitHub failed",

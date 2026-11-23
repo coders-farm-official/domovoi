@@ -2585,7 +2585,7 @@ const RoomDiagnosticsBody = ({ room, fire }) => {
           read-only checks · secrets taken out
         </span>
       </div>
-      {error && <div style={{ fontSize: 12, color: 'var(--err)' }}>{error}</div>}
+      {error && <div style={{ fontSize: 12, color: 'var(--err-ink)' }}>{error}</div>}
       {!any && !error && (
         <Empty glyph="sleeping" title="nothing run yet"
                sub="Run all checks the logs, network, disk and memory, audio devices, versions and restarts on the device itself"/>
