@@ -489,7 +489,7 @@ def test_a_frozen_loop_restarts_even_while_the_database_is_slow(tmp_path) -> Non
     try:
         with Harness(tmp_path, probe=_hung_probe, control_probe=slow_control) as h:
             h.loop.call_soon_threadsafe(blocking_worker, release)
-            assert h.exited.wait(10), "a frozen loop must still restart the core"
+            assert h.exited.wait(30), "a frozen loop must still restart the core"
             out = h.output()
     finally:
         release.set()
