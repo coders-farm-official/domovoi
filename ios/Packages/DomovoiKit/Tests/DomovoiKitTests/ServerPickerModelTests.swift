@@ -184,6 +184,145 @@ final class ServerPickerModelTests: XCTestCase {
         XCTAssertEqual(1, runs.current)
     }
 
+    // MARK: - coming back from the Local Network alert
+
+    /// A picker whose sweeps answer `outcomes` in turn (the last one again
+    /// once they run out), counting the runs. While `held` is true a sweep
+    /// waits, so a test can act during one.
+    private func makeScriptedPicker(
+        store: InMemoryShellStore,
+        outcomes: [SweepOutcome],
+        runs: Shared<Int>,
+        held: Shared<Bool> = Shared(false)
+    ) -> ServerPickerModel {
+        ServerPickerModel(
+            store: store,
+            sweep: { _ in
+                let run = runs.mutate { count -> Int in
+                    count += 1
+                    return count
+                }
+                for _ in 0..<settleYieldLimit where held.current { await Task.yield() }
+                return outcomes[min(run, outcomes.count) - 1]
+            },
+            probe: { _ in nil }
+        )
+    }
+
+    /// Let a sweep started by the code under test finish, and any sweep it
+    /// starts in turn.
+    private func settleAll(_ picker: ServerPickerModel) async {
+        for _ in 0..<4 {
+            for _ in 0..<settleYieldLimit where picker.isScanning { await Task.yield() }
+            for _ in 0..<64 { await Task.yield() }
+        }
+        XCTAssertFalse(picker.isScanning, "a sweep never finished")
+    }
+
+    /// **The device-test finding (2026-11-22).** The opening sweep runs under
+    /// Apple's alert and hears nothing; the person taps Allow and the app
+    /// becomes active again. That is when the picker sweeps again, so the
+    /// server they were asked about appears without a rescan tap.
+    func testComingBackFromTheAlertSweepsAgainAndFindsTheServer() async {
+        let runs = Shared<Int>(0)
+        let hit = FoundDomovoi(url: server, name: "kitchen-box", identity: nil)
+        let picker = makeScriptedPicker(
+            store: InMemoryShellStore(),
+            outcomes: [.swept(servers: []), .swept(servers: [hit])],
+            runs: runs
+        )
+        await sweepAndSettle(picker)
+        XCTAssertEqual(.nothingAnsweredYet(port: 6369), picker.notice)
+
+        picker.appBecameActive()
+        await settleAll(picker)
+
+        XCTAssertEqual(2, runs.current)
+        XCTAssertEqual([server], picker.found.map(\.url))
+        XCTAssertEqual(.nothing, picker.notice)
+    }
+
+    /// Once anything has answered on this install the permission is not the
+    /// question, so an empty sweep is the house's answer and a trip to the
+    /// background and back does not re-sweep 254 addresses.
+    func testComingBackDoesNotSweepAgainOnceTheNetworkHasAnswered() async {
+        let store = InMemoryShellStore()
+        store.noteLocalNetworkAnswered()
+        let runs = Shared<Int>(0)
+        let picker = makeScriptedPicker(store: store, outcomes: [.swept(servers: [])], runs: runs)
+        await sweepAndSettle(picker)
+
+        picker.appBecameActive()
+        await settleAll(picker)
+        XCTAssertEqual(1, runs.current)
+    }
+
+    /// A sweep that found something, one that is about the house rather than
+    /// the permission, and no sweep at all: none of them sweeps again.
+    func testComingBackLeavesEveryOtherOutcomeAlone() async {
+        let hit = FoundDomovoi(url: server, name: nil, identity: nil)
+        for outcome in [SweepOutcome.swept(servers: [hit]), .notOnLan, .noLocalNetwork] {
+            let runs = Shared<Int>(0)
+            let picker = makeScriptedPicker(store: InMemoryShellStore(), outcomes: [outcome], runs: runs)
+            await sweepAndSettle(picker)
+            picker.appBecameActive()
+            await settleAll(picker)
+            XCTAssertEqual(1, runs.current, "for \(outcome)")
+        }
+
+        let runs = Shared<Int>(0)
+        let unopened = makeScriptedPicker(store: InMemoryShellStore(), outcomes: [.swept(servers: [])], runs: runs)
+        unopened.appBecameActive()
+        await settleAll(unopened)
+        XCTAssertEqual(0, runs.current, "nothing had been swept, so there is nothing to sweep again")
+    }
+
+    /// A refusal is the permission talking on **any** install, and coming
+    /// back is the person returning from Settings, perhaps having turned it
+    /// on.
+    func testComingBackAfterARefusalSweepsAgainEvenOnASettledInstall() async {
+        let store = InMemoryShellStore()
+        store.noteLocalNetworkAnswered()
+        let runs = Shared<Int>(0)
+        let hit = FoundDomovoi(url: server, name: nil, identity: nil)
+        let picker = makeScriptedPicker(
+            store: store,
+            outcomes: [.localNetworkDenied, .swept(servers: [hit])],
+            runs: runs
+        )
+        await sweepAndSettle(picker)
+        XCTAssertEqual(.localNetworkDenied, picker.notice)
+
+        picker.appBecameActive()
+        await settleAll(picker)
+        XCTAssertEqual(2, runs.current)
+        XCTAssertEqual([server], picker.found.map(\.url))
+    }
+
+    /// The alert answered **while the opening sweep is still probing**: some
+    /// of its probes went out under the alert, so its empty answer is not
+    /// believed and it is run once more, and only once.
+    func testComingBackMidSweepSweepsOnceMoreWhenItEndsEmpty() async {
+        let runs = Shared<Int>(0)
+        let held = Shared(true)
+        let picker = makeScriptedPicker(
+            store: InMemoryShellStore(),
+            outcomes: [.swept(servers: [])],
+            runs: runs,
+            held: held
+        )
+        picker.rescan()
+        for _ in 0..<64 { await Task.yield() }
+        XCTAssertTrue(picker.isScanning)
+
+        picker.appBecameActive()
+        XCTAssertEqual(1, runs.current, "nothing is started over a running sweep")
+        held.mutate { $0 = false }
+        await settleAll(picker)
+
+        XCTAssertEqual(2, runs.current, "the empty sweep ran again, and the second one did not loop")
+    }
+
     // MARK: - §3.5, a typed address
 
     /// Blank is silently nothing.
