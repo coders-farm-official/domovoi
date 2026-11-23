@@ -732,3 +732,26 @@ async def test_voice_activity_says_busy_and_nothing_else_to_the_household_token(
         assert (await c.get("/v1/voice/activity")).status_code == 401
         r = await c.get("/v1/voice/activity", headers={HEADER: DEVICE_TOKEN})
     assert r.status_code == 200 and r.json() == {"busy": False}
+
+
+def _friend_apps_routes() -> list[tuple[str, str]]:
+    """Every core route for apps with friends (SDK 1.18): the per-friend
+    toggle, allow/revoke, resume and the list. None until the plugin mail
+    service (slice 4) adds them; then each must be here."""
+    from domovoi.tests.route_walk import iter_route_contexts
+
+    return sorted({(m, rc.path) for rc in iter_route_contexts(core_app.routes)
+                   if getattr(rc, "path", "").startswith("/v1/admin/friend-houses")
+                   and "/apps" in rc.path for m in (getattr(rc, "methods", None) or ())})
+
+
+def test_apps_with_friends_stays_on_the_security_tier() -> None:
+    # The design note §6.11: security tier at both hops; inviting and
+    # playing are on the plugin's own device-tier routes, never these.
+    household = DEVICE_READS + FRIEND_HOUSES_DEVICE_WRITES
+    assert not [r for r in household if "/apps" in r[1]]
+    for method, path in _friend_apps_routes():
+        gates = _gates_for(method, path)
+        assert (admin_auth.require_admin_security in gates
+                or admin_auth.require_admin_security_read in gates), (method, path)
+        assert admin_auth.require_device not in gates and admin_auth.require_device_read not in gates

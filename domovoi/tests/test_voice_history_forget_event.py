@@ -53,7 +53,7 @@ def test_the_event_is_in_the_core_catalog() -> None:
 def test_sdk_is_1_17() -> None:
     from domovoi import sdk
 
-    assert sdk.API_VERSION == "1.17.0"
+    assert tuple(int(p) for p in sdk.API_VERSION.split(".")) >= (1, 17, 0)
 
 
 @pytest.mark.parametrize(("raw", "read_as"), [

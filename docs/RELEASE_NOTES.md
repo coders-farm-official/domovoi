@@ -4,6 +4,22 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Plugins: SDK 1.18 for apps with friends
+
+- **What changed.** The plugin SDK is 1.18. A plugin with the
+  `friend_houses` permission gets `sdk.friend_houses` (its friends, sending
+  and receiving mail with the same plugin in friend houses), `FriendText`
+  for words a friend supplied (never kept in the chat history; filtered of
+  wake phrases before a room says them) and its own id for each friend.
+  The install screen now says what a `friend_houses` plugin does with
+  friend houses, and flags one that also has routes anyone on the network
+  can call; the core logs a warning when it loads one.
+- **What to know.** Nothing is exchanged yet: until the plugin mail
+  service arrives later in 1.5.0, a plugin's friend list is empty and
+  sending raises "Friend Houses for apps isn't available yet". "Apps with
+  this friend" is not on the Friend Houses page yet. A plugin that asks for
+  `domovoi_api = ">=1.18"` won't load on an older core.
+
 ## 1.5.0 (unreleased) — Friend Houses: plugin mail on the wire
 
 - **What changed.** Friend Houses learned the wire for plugin mail ("apps

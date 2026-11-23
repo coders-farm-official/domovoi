@@ -212,6 +212,12 @@ class StubSDK:
         self.state: dict[str, Any] = {}
         self.speech = RecordingSpeech()
         self.http = HttpFactory(self.version)
+        # SDK 1.18: the same stubs the core gives a friend_houses plugin
+        # until the plugin mail service exists (friends() is [], send_mail
+        # raises NotAllowed); on_mail records its handler and schema.
+        from domovoi.sdk.friend_houses import FriendHousesAPI
+
+        self.friend_houses = FriendHousesAPI(slug, permitted=True, register=False)
 
 
 def make_stub_sdk(slug: str = "testplugin", **kwargs: Any) -> StubSDK:

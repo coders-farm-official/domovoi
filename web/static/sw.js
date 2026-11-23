@@ -98,6 +98,7 @@ const SHELL_ASSETS = [
   '/music_mix.jsx',
   '/media_understanding.jsx',
   '/queue_history.jsx',
+  '/friend_apps.jsx',
   '/friend_houses.jsx',
   // Settings → Documents → Fonts, and the editors' font picker.
   '/fonts.jsx',

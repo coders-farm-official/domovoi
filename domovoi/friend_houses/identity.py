@@ -212,12 +212,39 @@ class HouseKeys:
             raise ValueError("an invite id is 16 bytes")
         return hmac.new(self.house_seed, CTX_INVITE_SECRET + invite_id, hashlib.sha256).digest()
 
+    def plugin_house_id(self, slug: str, friend_house_key: bytes) -> str:
+        """The id plugin ``slug`` knows ``friend_house_key`` by (SDK 1.18,
+        :func:`plugin_house_id`). Derived, never stored, never on the wire."""
+        return plugin_house_id(self.house_seed, slug, friend_house_key)
+
     def address_statement(self, onion_key: bytes, issued_at: int) -> AddressStatement:
         draft = AddressStatement(self.house_key, self.session_key, onion_key, issued_at, b"")
         return AddressStatement(
             draft.house_key, draft.session_key, onion_key, issued_at,
             self.sign(CTX_ADDRESS, draft.body()),
         )
+
+
+_PLUGIN_HOUSE_ID = b"fh-plugin-house-id"
+
+
+def plugin_house_id(house_secret: bytes, slug: str, friend_house_key: bytes) -> str:
+    """The id plugin ``slug`` knows a friend house by (SDK 1.18): hex of the
+    first 16 bytes of ``HMAC-SHA256(house secret, "fh-plugin-house-id" ||
+    0x00 || len(slug) || slug || friend house key)``. Two plugins get
+    unrelated ids for one friend, so they can't compare notes about this
+    house's friends; the id never goes on the wire or into a decoder."""
+    import hmac
+
+    raw = slug.encode("ascii") if isinstance(slug, str) and slug.isascii() else b""
+    if not raw or len(raw) > 255:
+        raise ValueError("a plugin slug")
+    if len(friend_house_key) != 32:
+        raise ValueError("a house key is 32 bytes")
+    if len(house_secret) < 32:
+        raise ValueError("a house secret is at least 32 bytes")
+    msg = _PLUGIN_HOUSE_ID + b"\x00" + bytes([len(raw)]) + raw + bytes(friend_house_key)
+    return hmac.new(bytes(house_secret), msg, hashlib.sha256).digest()[:16].hex()
 
 
 def keys_path() -> Path:
