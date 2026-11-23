@@ -400,6 +400,21 @@ def setup_code_whereabouts() -> str:
     )
 
 
+def _print_setup_qr(code: str) -> None:
+    """Under a banner that already shows ``code`` on a terminal: the same
+    code as a QR a phone opens the dashboard with (:mod:`domovoi.setup_qr`,
+    the code in the URL fragment only). Best effort: a failure here never
+    stops the boot, and says nothing about the code."""
+    try:
+        from domovoi import setup_qr
+
+        block = setup_qr.terminal_block(code)
+        if block:
+            print(block, flush=True)
+    except Exception as e:  # pragma: no cover — never fatal
+        log.info("setup-code QR not shown: %s", type(e).__name__)
+
+
 async def ensure_setup_code_if_unclaimed() -> str | None:
     """Core-boot hook (§7.2): when no admin credential exists yet, make
     sure a setup code file exists so the operator can complete first-run
@@ -439,6 +454,7 @@ async def ensure_setup_code_if_unclaimed() -> str | None:
             "============================================================\n"
         )
         print(banner, flush=True)
+        _print_setup_qr(code)
     # Never the code: this line reaches the journal either way.
     log.warning("admin setup pending - %s", setup_code_whereabouts())
     return code

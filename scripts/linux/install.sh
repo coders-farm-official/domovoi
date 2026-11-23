@@ -774,6 +774,9 @@ run_provision() {
   say ""
   say "and claim it with the setup code. To see the code on this computer:"
   say "    sudo cat ${home:-/home/$SVC_USER}/.domovoi/setup-code.txt"
+  say "Or show it with a QR code a phone on this network can scan (it opens"
+  say "the dashboard with the code filled in):"
+  say "    sudo -u $SVC_USER -H $CHECKOUT/.venv/bin/python -m domovoi.setup_qr"
 }
 
 main() {

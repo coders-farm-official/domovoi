@@ -4,6 +4,23 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — A QR code for the setup code
+
+- **What changed.** Where the setup code is shown (the core's terminal
+  banner and `--reset-admin` in a terminal, the Windows installer's last
+  page under **Set up from a phone**, and the new
+  `python -m domovoi.setup_qr` the Linux installer now names), a QR code
+  is shown with it. A phone's camera opens the dashboard with the code
+  already in the claim form. The code rides in the address's `#` part
+  only (`http://<server>:6369/#setup-code=<code>`), which no request
+  carries, and the page clears it from the address bar at once.
+- **What to know.** No endpoint returns the code, and its 24-hour window
+  and single use are unchanged; the claim still posts it to
+  `POST /api/auth/setup` as typing does. A phone app that opens
+  dashboard links itself needs to pass the `#setup-code=` fragment through
+  unchanged (and never move it into a path or query) for the form to fill
+  in.
+
 ## 1.5.0 (unreleased) — Security: pairing proof v2, chat reads, music-mix claim key
 
 - **What changed.** Three items of the 2026-11-22 security review (L9,

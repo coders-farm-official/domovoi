@@ -236,7 +236,8 @@ $manifestArg = '/win32manifest:' + $manifest
 # Domovoi's icon (installer\art\make_art.py makes it from docs/assets/domovoi-icon.png).
 $iconArg = '/win32icon:' + (Join-Path $here 'installer\art\domovoi.ico')
 Invoke-Csc (Join-Path $bin 'DomovoiHost.exe') ($common + @(Get-ChildItem -LiteralPath (Join-Path $here 'host') -Filter '*.cs' | ForEach-Object { $_.FullName })) (@($manifestArg, $iconArg) + $keyArg)
-Invoke-Csc (Join-Path $bin 'DomovoiSetupHelper.exe') ($common + @(Get-ChildItem -LiteralPath (Join-Path $here 'helper') -Filter '*.cs' | ForEach-Object { $_.FullName })) (@($manifestArg, $iconArg) + $keyArg)
+# The helper draws the setup-code QR (helper\SetupQr.cs) with the tray's encoder.
+Invoke-Csc (Join-Path $bin 'DomovoiSetupHelper.exe') ($common + @(Get-ChildItem -LiteralPath (Join-Path $here 'helper') -Filter '*.cs' | ForEach-Object { $_.FullName }) + @(Join-Path $here 'tray\Qr.cs')) (@($manifestArg, $iconArg) + $keyArg)
 # The tray: a Windows app (no console), its own manifest (DPI aware), the
 # icon embedded for the notification area too.
 $traySrc = @(Get-ChildItem -LiteralPath (Join-Path $here 'tray') -Filter '*.cs' | Sort-Object Name | ForEach-Object { $_.FullName })

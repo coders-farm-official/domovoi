@@ -138,7 +138,7 @@ namespace Domovoi.Windows.Helper
                     case "host-retry": Steps.HostRetry(o); return 0;
                     case "host-park": Steps.HostPark(o); return 0;
                     case "check-media": Steps.CheckMedia(o, a.Req("--root")); return 0;
-                    case "setup-code": return Steps.ReadSetupCode(o);
+                    case "setup-code": return Steps.ReadSetupCode(o, a.Opt("--lan-ip"));
                     case "saved-ai": Steps.SavedAi(o); return 0;
                     case "record-ai": Steps.RecordAi(o); return 0;
                     case "plan": Steps.Plan(o); return 0;

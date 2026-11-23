@@ -250,6 +250,17 @@ it when you started it in a terminal; run as a service, it never prints
 the code, so it stays out of the journal. The journal gets one line
 saying where the file is.
 
+**From a phone (1.5.0):** wherever the code is shown, a QR code is shown
+with it: under the core's terminal banner, on the Windows installer's last
+page (**Set up from a phone**), and from
+`python -m domovoi.setup_qr` run as the core's user in a terminal (the
+Linux installer's last message gives the exact command). Scan it with a
+phone on the same network: it opens the dashboard with the code already
+in the setup code field; choose the admin password there. The code rides
+in the address's `#` part only, which never reaches the server, and the
+page clears it from the address bar
+([SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#how-the-credential-works)).
+
 Open the dashboard: while nobody has claimed it, every page opens a
 welcome that asks for the code (it is also under **Settings → System →
 Advanced → Admin → "set up admin"**). (With the Windows installer,

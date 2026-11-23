@@ -3399,6 +3399,18 @@ const useFirstFieldFocus = (which) => {
   return ref;
 };
 
+/* The code a setup-code QR brought (setup_fragment.js: read from the
+ * address's #setup-code=... and already taken out of it), or ''. The
+ * claim form starts with it in its field and posts it exactly as a typed
+ * code. Never stored anywhere, never put in an address. */
+const setupFragmentCode = () => {
+  try { return (typeof window !== 'undefined' && window.SetupFragment) ? window.SetupFragment.code() : ''; }
+  catch { return ''; }
+};
+const forgetSetupFragment = () => {
+  try { if (typeof window !== 'undefined' && window.SetupFragment) window.SetupFragment.forget(); } catch { /* gone */ }
+};
+
 // The first-run form's own checks, before anything is sent: the same two
 // for the admin setup dialog and the welcome (FirstRunWelcome below).
 const setupFormError = (password, confirm) => {
@@ -3409,7 +3421,7 @@ const setupFormError = (password, confirm) => {
 
 const LoginModal = ({ onClose }) => {
   const [status, setStatus] = useState(Auth.status);
-  const [code, setCode] = useState('');
+  const [code, setCode] = useState(setupFragmentCode);
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [busy, setBusy] = useState(false);
@@ -3477,7 +3489,7 @@ const LoginModal = ({ onClose }) => {
     // First-run setup done: "you're all set" and the household token next
     // (FirstRun below), then the internet question, when nobody (the
     // Windows installer, env_bootstrap) has answered it yet.
-    if (needsSetup) FirstRun.claimed();
+    if (needsSetup) { forgetSetupFragment(); FirstRun.claimed(); }
     // Signed in: auth.js has already taken the modal down. A host whose
     // onClose does more than that still hears about it — unless a NEW
     // prompt opened meanwhile, which is not this one to close.
@@ -3839,7 +3851,9 @@ const copyToClipboard = async (text) => {
 const FirstRun = (() => {
   let claiming = false;   // a claim from the welcome is on its way
   let allSet = false;     // a claim just landed in this tab
-  let wanted = false;     // "claim it" asked for the welcome again
+  // "claim it" asked for the welcome again; so did scanning the setup-code
+  // QR (its code is in the form), past an earlier "Not now".
+  let wanted = setupFragmentCode() !== '';
   let putAway = null;     // "Not now" in this page (its key), whatever storage does
   let tokenVersion = 0;   // bumped by every household token saved from "you're all set"
   const subs = new Set();
@@ -3888,7 +3902,7 @@ const welcomeShows = (status, { dismissed = false, wanted = false, claiming = fa
 };
 
 const FirstRunWelcome = () => {
-  const [code, setCode] = useState('');
+  const [code, setCode] = useState(setupFragmentCode);
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [busy, setBusy] = useState(false);
@@ -3930,6 +3944,7 @@ const FirstRunWelcome = () => {
       setErr(loginErrorText(failed));
       return;
     }
+    forgetSetupFragment();
     FirstRun.claimed();
   };
   // Claimed elsewhere while this stood open: coming back to the tab asks
