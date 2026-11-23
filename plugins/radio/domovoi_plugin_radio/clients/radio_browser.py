@@ -180,7 +180,8 @@ class RealRadioBrowserClient:
                 response.raise_for_status()
                 payload = response.json()
         except Exception as e:
-            log.warning("radio-browser search failed (params=%s): %s", params, e)
+            # Never the parameters: they are what was said or typed.
+            log.warning("radio-browser search failed: %s", e)
             return []
 
         if not isinstance(payload, list):

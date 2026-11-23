@@ -102,6 +102,12 @@ _MARK = "_domovoi_log_scrub"
 _WORDS_RE = re.compile(
     r"(?P<lead>[?&](?:q|query|srsearch|search|term|pattern)=)(?P<value>[^&\s\"'#]+)", re.IGNORECASE,
 )
+#: The station directory's search fields (the radio plugin): only in a URL on
+#: its own host, where ``name`` / ``tag`` / ``language`` are what was said.
+_STATION_DIR_URL_RE = re.compile(r"radio-browser\.info/[^\s\"'<>]*", re.IGNORECASE)
+_STATION_DIR_WORDS_RE = re.compile(
+    r"(?P<lead>[?&](?:name|tag|language)=)(?P<value>[^&\s\"'#]+)", re.IGNORECASE,
+)
 #: A page title in a Wikipedia API or page path, derived from the words.
 _TITLE_PATH_RE = re.compile(r"(?P<lead>/(?:page/summary|wiki)/)(?P<value>[^?#\s\"']+)")
 WORDS_MASK = "<words>"
@@ -126,6 +132,13 @@ def scrub(text: str) -> str:
     if _words_hidden():
         out = _WORDS_RE.sub(lambda m: f"{m.group('lead')}{WORDS_MASK}", out)
         out = _TITLE_PATH_RE.sub(lambda m: f"{m.group('lead')}{WORDS_MASK}", out)
+        if "radio-browser" in out.lower():
+            out = _STATION_DIR_URL_RE.sub(
+                lambda u: _STATION_DIR_WORDS_RE.sub(
+                    lambda m: f"{m.group('lead')}{WORDS_MASK}", u.group(0)
+                ),
+                out,
+            )
     if "earer" in out:
         out = _BEARER_RE.sub(lambda m: f"{m.group('lead')}{MASK}", out)
     return out

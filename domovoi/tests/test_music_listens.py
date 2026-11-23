@@ -906,6 +906,26 @@ async def test_volume_caps(_db, clean, monkeypatch) -> None:
 
 @requires_db
 @pytest.mark.asyncio
+async def test_a_new_device_id_per_batch_still_meets_the_house_cap(_db, clean, monkeypatch) -> None:
+    ids = await _seed()
+    _, token = await _setup_household()
+    now = datetime.now(timezone.utc)
+    monkeypatch.setattr(listens_api, "HOUSE_DAILY_CAP", 3)
+    accepted = 0
+    for n in range(5):
+        dev = f"browser-h{n}"
+        async with _dev(token, dev) as c:
+            r = await c.post("/api/music/listens", json={"listens": [
+                _listen(ids["t1"], dev, played_sec=10,
+                        started_at=(now - timedelta(minutes=50 - n)).isoformat())]})
+            assert r.status_code == 200, r.text
+            accepted += r.json()["accepted"]
+    assert accepted == 3
+    assert len(await _listens()) == 3
+
+
+@requires_db
+@pytest.mark.asyncio
 async def test_a_rooms_listener_expires_with_its_music(clean, room_player) -> None:
     from domovoi.workers import listen_logger as ll
 
