@@ -583,9 +583,37 @@ internal data class AttentionRow(
 /** What the "needs attention" card shows. */
 internal sealed interface AttentionView {
     data object None : AttentionView
-    /** "something needs the admin's attention", with how many things. */
-    data class Summary(val count: Int) : AttentionView
+    /** "something needs the admin's attention", with how many things, and
+     *  under it the rows that aren't problems ([withRow]). */
+    data class Summary(val count: Int, val extra: List<AttentionRow> = emptyList()) : AttentionView
     data class Rows(val rows: List<AttentionRow>) : AttentionView
+}
+
+/**
+ * Friend Houses' unread messages (web HomeFriendHousesRow): one row, not a
+ * problem, a count only (no names, no text), opening Friend houses on its
+ * Messages. Null at 0, and null when [unread] is unknown (not read, a
+ * server without the count, or Friend Houses hidden here: nothing to open).
+ */
+internal fun fhUnreadRow(unread: Int?): AttentionRow? {
+    val n = unread ?: return null
+    if (n <= 0) return null
+    return AttentionRow(
+        key = "fh-unread",
+        tone = Tone.Brand,
+        text = plural(n, "unread Friend Houses message"),
+        target = HomeTarget.Screen(Route.FriendHouses),
+    )
+}
+
+/** [row] added to whatever the problems show (web HomeWithRow): after the
+ *  rows, below a summary line, or on its own. Not subject to the problem
+ *  rows' visibility setting: it is the household's own inbox. */
+internal fun withRow(view: AttentionView, row: AttentionRow?): AttentionView = when {
+    row == null -> view
+    view is AttentionView.Rows -> AttentionView.Rows(view.rows + row)
+    view is AttentionView.Summary -> view.copy(extra = view.extra + row)
+    else -> AttentionView.Rows(listOf(row))
 }
 
 /**
