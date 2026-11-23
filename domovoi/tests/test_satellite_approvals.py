@@ -118,6 +118,23 @@ def test_the_waiting_list_is_capped_for_new_rooms_only():
     assert len(_run(_pending())) == repositories.MAX_PENDING_APPROVALS
 
 
+def test_one_address_holds_only_its_share_of_the_waiting_list(monkeypatch):
+    from domovoi.db import repositories
+
+    monkeypatch.setattr(repositories, "_APPROVAL_SOURCES", {})
+    per = repositories.MAX_PENDING_APPROVALS_PER_SOURCE
+    for i in range(per):
+        assert _run(_request(room_id=f"room{i}", token_hash=f"{i:064x}",
+                             source="192.168.1.66"))[0] == "parked"
+    assert _run(_request(room_id="one-more", token_hash=HASH_B,
+                         source="192.168.1.66")) == ("full", None)
+    # Its own requests still refresh, and another device still gets in.
+    assert _run(_request(room_id="room0", token_hash=f"{0:064x}",
+                         source="192.168.1.66"))[0] == "parked"
+    assert _run(_request(room_id="den", token_hash=HASH_B,
+                         source="192.168.1.41"))[0] == "parked"
+
+
 def test_neither_the_hash_nor_the_code_is_listed():
     """The operator types the code in from the device. Printing it next to
     the approve button would make it a label again, and the hash has never

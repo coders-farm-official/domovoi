@@ -139,8 +139,16 @@ async def send(friend_id: str, body: str) -> dict[str, Any]:
             {"h": friend.house_key, "f": friend.id, "n": friend.local_name, "m": env.msg_id,
              "e": env.epoch, "q": env.seq, "t": env.sent_at, "b": env.text,
              "env": env.to_bytes(), "d": OUTBOX_DAYS})).first()
-    _service().spawn(flush(friend.house_key), "friend-houses-flush")
+    _service().spawn(_flush_now(friend.house_key), "friend-houses-flush")
     return {"id": int(row[0]), "state": "queued", "created_at": row[1].isoformat()}
+
+
+async def _flush_now(house_key: bytes) -> None:
+    """A send's own delivery try, under the retry pass's deadline."""
+    try:
+        await asyncio.wait_for(flush(house_key), FLUSH_DEADLINE_SEC)
+    except asyncio.TimeoutError:
+        log.info("Friend Houses: delivering to a friend took too long; next round")
 
 
 async def flush(house_key: bytes) -> int:
@@ -209,7 +217,9 @@ async def flush(house_key: bytes) -> int:
 
 async def _await_ack(sess: fs.Session, msg_id: bytes) -> tuple[fs.Kind | None, bytes]:
     """The friend's ack for ``msg_id``, answering pings meanwhile. None when
-    it doesn't come (the friend refused it, or is over its quota)."""
+    it doesn't come (the friend refused it, or is over its quota), or the
+    friend pings more than :data:`fs.PONGS_PER_WAIT` times meanwhile."""
+    answered = 0
     while True:
         try:
             kind, body = await sess.recv(timeout=45)
@@ -218,6 +228,9 @@ async def _await_ack(sess: fs.Session, msg_id: bytes) -> tuple[fs.Kind | None, b
         if kind is fs.Kind.MESSAGE_ACK and body == msg_id:
             return kind, body
         if kind is fs.Kind.PING:
+            answered += 1
+            if answered > fs.PONGS_PER_WAIT:
+                return None, b""
             await sess.send(fs.Kind.PONG, body)
         elif kind is fs.Kind.BYE:
             return None, b""

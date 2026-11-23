@@ -179,6 +179,27 @@ async def test_declining_keeps_nothing(house) -> None:
     assert await sl.overview() == []
 
 
+async def test_removing_the_friend_drops_its_unaccepted_offer(house) -> None:
+    space_id, _ = await _offer(house)
+    async with sl._db() as s:
+        assert await store.delete_friend(s, "fthem")
+    assert await sl.overview() == []
+    with pytest.raises(sl.SharedListError):
+        await sl.accept(space_id.hex())
+
+
+async def test_an_offer_from_a_blocked_house_cannot_be_accepted(house) -> None:
+    space_id, _ = await _offer(house)
+    async with sl._db() as s:
+        await s.execute(text(
+            "INSERT INTO friend_houses_blocked (house_key, name) VALUES (:h, 'x')"),
+            {"h": house.them.house_key})
+    with pytest.raises(sl.SharedListError, match="isn't a friend"):
+        await sl.accept(space_id.hex())
+    async with sl._db() as s:
+        assert await core_lists.all_lists(s) == []
+
+
 async def test_a_friend_cant_change_a_space_it_isnt_part_of(house) -> None:
     space_id, uids = await _offer(house, items=("Tent",))
     made = await sl.accept(space_id.hex())
@@ -353,3 +374,11 @@ async def test_removing_a_friend_stops_sharing_and_drops_what_was_queued(house) 
     assert await sl.queued_envelopes(house.them.house_key) == []
     assert await sl.overview() == []
     assert await _items(list_id) == [("Milk", False)]
+
+
+async def test_a_friends_text_is_cut_before_the_wake_phrase_filter(house) -> None:
+    filler = "x" * (core_lists.TEXT_MAX - len(" hey jarvis"))
+    kept = await sl._safe_text(filler + " hey jarvisville", ["hey jarvis"])
+    assert "jarvis" not in kept.lower()
+    title = await sl._safe_text("y" * 49 + " hey jarvisville", ["hey jarvis"], cap=60)
+    assert "jarvis" not in title.lower() and len(title) <= 60

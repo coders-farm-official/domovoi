@@ -196,6 +196,17 @@ def test_the_head_scan_is_linear() -> None:
     assert out.rstrip().endswith(b"</item>\n</channel></rss>")
 
 
+def test_stray_closing_tags_in_the_head_stay_linear() -> None:
+    import time
+
+    head = b"<rss><channel>" + b"<a>" * 20000 + b"</b>" * 20000 + b"</a>" * 20000
+    doc = head + b"<item><guid>a</guid></item>"
+    started = time.perf_counter()
+    out = feed_prefix.cut_to_last_item(doc)
+    assert time.perf_counter() - started < 0.5
+    assert out.endswith(b"</item>\n</channel></rss>\n")
+
+
 @pytest.mark.parametrize("head", [
     b'<a x="<" y="<" ' * 4096,
     b'<a x="' * 8192,

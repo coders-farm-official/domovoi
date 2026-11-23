@@ -2850,7 +2850,9 @@ rest of the server, like any container.
 at most 60 messages an hour; connects, "I'm back" and accepts are capped
 at 120 an hour per house, and one accept ends its connection; friend
 requests have their own 8 connection slots and only a request naming an
-open friend file counts toward the 20 an hour; the handshake must finish
+open friend file counts toward that file's 20 an hour; frames that ask
+nothing (a pong not asked for, "I'm back" again) are capped per
+connection; the handshake must finish
 within 20 seconds. The core handles at most 24 events from the listener
 at once and drops the rest (the other house simply tries again). A
 friend's offered lists (5 waiting at most), the changes waiting on an
@@ -2883,7 +2885,8 @@ until the code comes out the way it wants), so
 someone who swapped a friend file in transit can't make the codes match
 except by a 1-in-10,000 chance per try. A request broken off after the
 two houses' random values are out counts as a try: the inviting house
-closes the friend file after three, and the asking house stops retrying on
+closes the friend file after three (runs in parallel included: each
+holds a try until it ends), and the asking house stops retrying on
 its own after one and says so (withdraw and import the file again, or ask
 for a new one). Comparing codes (by phone, in person) is optional; a friend shows "Not verified" until someone does.
 
