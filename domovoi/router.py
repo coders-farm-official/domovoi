@@ -33,7 +33,7 @@ from domovoi.handlers import HANDLER_BY_NAME, HANDLERS
 from domovoi.handlers.base import FastPath, Handler, as_fast_path, satellite_setting_refusal
 from domovoi.handlers.shared.tool_gate import about_the_house, answers_without_tools
 from domovoi.models import Context, Intent, Response
-from domovoi.profile_context import about_the_speaker, build_profile_prefix
+from domovoi.profile_context import build_profile_prefix, wants_profile
 from domovoi.spoken_answer import SpokenAnswer, StreamedQA
 from domovoi.turn_timings import timings_for_row
 from domovoi import egress, weather
@@ -607,6 +607,27 @@ def _asks_for_information(transcript: str) -> bool:
     return looks_like_question(transcript) or bool(
         _INFORMATION_REQUEST_RE.match(transcript or "")
     )
+
+
+async def _food_safety_note(
+    ctx: Context, transcript: str, session: AsyncSession
+) -> str:
+    """The line after a food recommendation when someone in the house has
+    a remembered allergy or diet (domovoi/food_safety.py), else "". An
+    unrecognised speaker may be a guest: that line names no one and no
+    allergy. Best-effort: a failure here never blocks the answer."""
+    from domovoi import food_safety
+
+    if not food_safety.is_food_recommendation(transcript):
+        return ""
+    try:
+        rows = await MemoriesRepository(session).list_active_household()
+    except Exception as e:
+        log.warning("food safety note: couldn't read memories: %s", e)
+        return ""
+    mine = [b for pid, b in rows if pid == ctx.person_id]
+    others = [b for pid, b in rows if pid != ctx.person_id]
+    return food_safety.household_note(ctx.person_id is not None, mine, others)
 
 
 async def _maybe_offer_pending_memory(
@@ -1240,10 +1261,11 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
     # Failure here is non-fatal: log + proceed without personalization
     # rather than break QA for a profile-side bug.
     try:
-        # Only for a question about the speaker: a plain fact question
-        # gets the same prompt as anyone's (about_the_speaker).
+        # Only for a question about the speaker or a request for
+        # suggestions: a plain fact question gets the same prompt as
+        # anyone's (profile_context.wants_profile).
         profile_prefix = await build_profile_prefix(
-            ctx.person_id if about_the_speaker(intent.transcript) else None, session,
+            ctx.person_id if wants_profile(intent.transcript) else None, session,
         )
     except Exception as e:
         log.warning("profile_prefix build failed: %s", e)
@@ -1385,6 +1407,9 @@ async def _finish_qa(
             latency_ms=latency_ms(),
         )
         return response, response.text
+    # A food suggestion: a fixed line about the household's allergies and
+    # diets, added here by code (never left to the model).
+    note = await _food_safety_note(ctx, intent.transcript, session)
     # The model may already close with an offer of its own ("…can I look
     # that up for you?"): that counts as its doubt, and it is the offer —
     # parked below so a "yes" is kept, not asked a second time.
@@ -1460,6 +1485,8 @@ async def _finish_qa(
     # The conversation history the model reads next turn keeps the answer
     # without a memory offer: a history of answers ending "By the way,
     # <a fact about you>" teaches the model to tack facts on itself.
+    if note:
+        answer = _end_sentence(answer) + " " + note
     history_text = answer if (offer and memory_offer_made) else None
     if offer:
         answer = _end_sentence(answer) + " " + offer
@@ -1482,4 +1509,5 @@ async def _finish_qa(
         matched_path="qa",
         latency_ms=latency_ms(),
     )
-    return response, (offer if spoken else response.text)
+    rest = " ".join(part for part in (note, offer) if part)
+    return response, (rest if spoken else response.text)
