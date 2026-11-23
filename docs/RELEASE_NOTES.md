@@ -131,6 +131,11 @@ a way that would otherwise get reported as a bug.
 - A chat draft's changes view on the dashboard leaves a paragraph gap
   between a long removed passage and the added text after it, so the old
   last word no longer runs into the new first word.
+
+- A room device set up for a different Domovoi server (another house, or
+  this one before it was reinstalled) used to only blink "no server". Its
+  address is now listed under Settings → Rooms, with the advice to set it
+  up again for this server. The room still trusts only its own server.
 - Room devices looking for every house count a server only when its
   identity proof is bound to the address they dialled, and the server
   signs the approval-proof form only bound to one.
