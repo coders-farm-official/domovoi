@@ -22,7 +22,15 @@ A daemon thread, outside the event loop, checks two things:
   nothing that needs the database can finish (the thread-pool case). A
   probe that FAILS fast is not counted: the database answered "no" (it is
   down or restarting), and restarting the core can't fix that; it is
-  logged once per outage.
+  logged once per outage. A probe with no answer is checked by a
+  **control probe** (:func:`control_db_probe`): a fresh connection from a
+  thread of its own, outside the loop and its thread pools. When that one
+  answers in time (the database is fine, the core's path to it is stuck)
+  the no-answer counts. When it gets no answer either, the database or
+  the disk under it is slow (a busy machine: 2026-11-14, 2026-11-22),
+  which a restart can't fix and only adds load to: logged once per
+  episode, not counted. The heartbeat is checked first and never waits on
+  either probe, so a frozen loop still ends in a restart.
 
 On a stall it writes the reason and every thread's stack (thread names
 included, then the event loop's tasks) straight to the journal (stderr,
@@ -305,6 +313,49 @@ class Limits:
         )
 
 
+def control_db_probe(timeout: float) -> None:
+    """``SELECT 1`` on a fresh asyncpg connection, on the calling thread's
+    own event loop: nothing shared with the core's loop, its thread pools
+    or its engine. Raises when it can't."""
+    import asyncpg
+    from sqlalchemy.engine import make_url
+
+    from domovoi.config import settings
+    from domovoi.db.session import connect_url
+
+    dsn = (make_url(connect_url(settings.database_url)).set(drivername="postgresql")
+           .render_as_string(hide_password=False))
+
+    async def go() -> None:
+        conn = await asyncpg.connect(dsn, timeout=timeout)
+        try:
+            await conn.fetchval("SELECT 1", timeout=timeout)
+        finally:
+            await conn.close(timeout=timeout)
+
+    asyncio.run(asyncio.wait_for(go(), timeout))
+
+
+# Where the Linux pressure readings live (tests point it elsewhere).
+PROC_DIR = Path("/proc")
+
+
+def pressure() -> list[str]:
+    """The machine's I/O and memory pressure (PSI) and load average, one
+    line each, for a report: was the box itself starved? Empty where there
+    are none (not Linux, or a kernel without PSI)."""
+    out: list[str] = []
+    for label, rel in (("io pressure", "pressure/io"), ("memory pressure", "pressure/memory"),
+                       ("load average", "loadavg")):
+        try:
+            text = (PROC_DIR / rel).read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            continue
+        if text:
+            out.append(f"{label}: " + " | ".join(x.strip() for x in text.splitlines()))
+    return out
+
+
 async def db_probe() -> None:
     """``SELECT 1`` the way every request reaches the database."""
     from sqlalchemy import text
@@ -357,6 +408,7 @@ class LoopWatchdog:
         limits: Limits,
         *,
         probe: Callable[[], Awaitable[None]] = db_probe,
+        control_probe: Callable[[float], None] | None = None,
         notifier: Notifier | None = None,
         exit_fn: Callable[[int], Any] = os._exit,
         backstop: Callable[[float | None], None] = _faulthandler_backstop,
@@ -383,6 +435,11 @@ class LoopWatchdog:
         self._speech_restarted_at: float | None = None
         self._speech_hold_said: str | None = None
         self._probe = probe
+        # Asked when a probe gets no answer (see the module docstring).
+        # None: every no-answer counts, as before it existed.
+        self._control_probe = control_probe
+        self._control: dict[str, Any] | None = None
+        self._db_slow_said = False
         self._notifier = notifier or Notifier(None)
         self._exit = exit_fn
         self._backstop = backstop
@@ -455,6 +512,7 @@ class LoopWatchdog:
         self._attached_once = True
         self._hung = 0
         self._probe_fut = None
+        self._control = None
         self._probe_last = self._clock()
         self._beat()
         self._notifier.notify("READY=1\nSTATUS=serving")
@@ -568,16 +626,14 @@ class LoopWatchdog:
                         )
             elif now - (self._probe_started or now) >= self.limits.probe_timeout_sec:
                 self._drop_probe()
-                self._hung += 1
-                self._say(
-                    "WARNING",
-                    f"loop watchdog: database probe got no answer within "
-                    f"{self.limits.probe_timeout_sec:.0f} s ({self._hung} of "
-                    f"{self.limits.probe_failures} in a row)",
-                )
-                if self._hung >= self.limits.probe_failures:
-                    return (f"{self._hung} database probes in a row got no answer within "
-                            f"{self.limits.probe_timeout_sec:.0f} s")
+                if self._control_probe is None:
+                    return self._count_no_answer("")
+                self._start_control(now)
+        if self._control is not None:
+            # No new probe while the control probe decides on the last one.
+            reason = self._check_control(now)
+            if reason is not None or self._control is not None:
+                return reason
         if self._probe_fut is None and (
             self._probe_last is None or now - self._probe_last >= self.limits.probe_interval_sec
         ):
@@ -588,6 +644,79 @@ class LoopWatchdog:
                 self._probe_fut = asyncio.run_coroutine_threadsafe(self._probe_coro, loop)
             except RuntimeError:  # the loop closed under us
                 self._drop_probe()
+        return None
+
+    def _count_no_answer(self, why: str) -> str | None:
+        self._hung += 1
+        self._say(
+            "WARNING",
+            f"loop watchdog: database probe got no answer within "
+            f"{self.limits.probe_timeout_sec:.0f} s ({self._hung} of "
+            f"{self.limits.probe_failures} in a row){why}",
+        )
+        if self._hung >= self.limits.probe_failures:
+            return (f"{self._hung} database probes in a row got no answer within "
+                    f"{self.limits.probe_timeout_sec:.0f} s")
+        return None
+
+    def _start_control(self, now: float) -> None:
+        """Start the control probe on a daemon thread of its own;
+        :meth:`_check_control` reads its result on later looks (this thread
+        never waits on it, so the heartbeat is still checked every second)."""
+        box: dict[str, Any] = {"started": now, "done": threading.Event(), "error": None}
+        control, timeout = self._control_probe, self.limits.probe_timeout_sec
+
+        def run() -> None:
+            try:
+                control(timeout)  # type: ignore[misc]
+            except BaseException as e:  # noqa: BLE001 - reported, never raised here
+                box["error"] = e
+            finally:
+                box["done"].set()
+
+        self._control = box
+        try:
+            threading.Thread(target=run, name="loop-watchdog-control", daemon=True).start()
+        except RuntimeError as e:  # no thread to be had: as if it failed
+            box["error"] = e
+            box["done"].set()
+
+    def _check_control(self, now: float) -> str | None:
+        """The control probe's verdict on the probe that got no answer.
+        It answered: the core's own path is stuck, so it counts. It got no
+        answer in time either: the database itself is slow, so it doesn't.
+        It failed: unknown, so it counts, as before the control probe."""
+        box = self._control
+        assert box is not None
+        if box["done"].is_set():
+            self._control = None
+            exc = box["error"]
+            if exc is None:
+                if self._db_slow_said:
+                    self._say("INFO", "loop watchdog: the database answers a separate "
+                              "connection in time again")
+                self._db_slow_said = False
+                return self._count_no_answer("; a separate connection got an answer, so the "
+                                             "core's own path to the database is stuck")
+            return self._count_no_answer(f"; the separate check failed too "
+                                         f"({type(exc).__name__}: {str(exc)[:200]})")
+        if now - box["started"] < self.limits.probe_timeout_sec:
+            return None
+        # No answer on a connection that shares nothing with the core
+        # either: the database or the disk under it is slow. The thread is
+        # left (a daemon; asyncpg's own timeouts end it) and probing goes on.
+        self._control = None
+        if not self._db_slow_said:
+            self._db_slow_said = True
+            load = "; ".join(pressure())
+            self._say(
+                "WARNING",
+                f"loop watchdog: database probe got no answer within "
+                f"{self.limits.probe_timeout_sec:.0f} s, and neither did a separate connection: "
+                "the database itself (or the disk under it) is slow, which restarting the core "
+                "won't fix, so this doesn't count as a stall"
+                + (f" ({load})" if load else ""),
+            )
         return None
 
     def _check_speech(self, loop: asyncio.AbstractEventLoop, now: float) -> str | None:
@@ -670,6 +799,7 @@ class LoopWatchdog:
             f"{beat}, database probes without an answer in a row: {self._hung}",
             f"  thread pools: {self._pools()}",
         ]
+        lines.extend(f"  {x}" for x in pressure())
         names = {t.ident: t.name for t in threading.enumerate()}
         for ident, frame in sys._current_frames().items():  # noqa: SLF001
             tag = " (the event loop)" if ident == self._loop_thread else ""
@@ -864,7 +994,7 @@ def install(settings: Any) -> LoopWatchdog | None:
 
     _ACTIVE = LoopWatchdog(
         Limits.from_settings(settings), notifier=notifier, speech_check=speech_check,
-        speech_restart=self_restart.restart,
+        speech_restart=self_restart.restart, control_probe=control_db_probe,
     )
     _ACTIVE.start()
     return _ACTIVE

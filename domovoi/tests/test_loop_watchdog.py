@@ -24,6 +24,7 @@ import pytest
 from domovoi import lifecycle, loop_watchdog
 from domovoi.loop_watchdog import EXIT_CODE, Limits, LoopWatchdog
 from domovoi.sd_notify import Notifier
+from domovoi.tests.conftest import requires_db
 
 FAST = Limits(stall_sec=1.0, probe_interval_sec=0.3, probe_timeout_sec=0.4, probe_failures=3,
               startup_sec=0.0, heartbeat_sec=0.1, check_sec=0.05, backstop_extra_sec=5.0)
@@ -49,7 +50,8 @@ class Harness:
     """A loop on its own thread, and a watchdog on it whose exit records."""
 
     def __init__(self, tmp_path: Path, limits: Limits = FAST, probe=None, watchdog_usec=None,
-                 speech_check=None, speech_restart=None, speech_hold=lambda: None):
+                 speech_check=None, speech_restart=None, speech_hold=lambda: None,
+                 control_probe=None):
         self.loop = asyncio.new_event_loop()
         self.thread = threading.Thread(target=self.loop.run_forever, daemon=True)
         self.exited = threading.Event()
@@ -73,6 +75,7 @@ class Harness:
             backstop=self.backstops.append, report_file=tmp_path / "core-watchdog.log",
             last_file=tmp_path / "core-watchdog-last.json", out_fd=self.out_w,
             speech_check=speech_check, speech_restart=speech_restart, speech_hold=speech_hold,
+            control_probe=control_probe,
         )
         self.tmp_path = tmp_path
 
@@ -335,6 +338,107 @@ def test_a_database_that_refuses_is_not_a_stall(tmp_path) -> None:
         out = h.output()
     assert out.count("the database probe failed") == 1     # said once per outage
     assert "ConnectionRefusedError" in out
+
+
+async def _hung_probe() -> None:
+    await asyncio.Event().wait()
+
+
+def test_no_answer_counts_when_a_separate_connection_answers(tmp_path) -> None:
+    """The database answers a fresh connection of the watchdog's own: the
+    core's path to it is stuck, which a restart fixes."""
+    controls: list[float] = []
+
+    with Harness(tmp_path, probe=_hung_probe, control_probe=controls.append) as h:
+        assert h.exited.wait(10)
+        out = h.output()
+    assert h.code == EXIT_CODE
+    assert len(controls) == 3 and controls[0] == FAST.probe_timeout_sec
+    assert "3 database probes in a row got no answer" in out
+    assert out.count("a separate connection got an answer") == 3
+
+
+def test_no_answer_is_not_counted_when_the_database_itself_is_slow(tmp_path, monkeypatch) -> None:
+    """A fresh connection gets no answer either: the database or the disk
+    is slow (2026-11-22, a busy machine). No restart, said once, with the
+    machine's pressure readings."""
+    proc = tmp_path / "proc"
+    (proc / "pressure").mkdir(parents=True)
+    (proc / "pressure" / "io").write_text("some avg10=61.20 avg60=40.00 avg300=9.00 total=1\n"
+                                          "full avg10=55.00 avg60=30.00 avg300=7.00 total=1\n")
+    (proc / "loadavg").write_text("14.20 9.10 3.00 2/900 1234\n")
+    monkeypatch.setattr(loop_watchdog, "PROC_DIR", proc)
+    release = threading.Event()
+    controls: list[float] = []
+
+    def slow_control(timeout: float) -> None:
+        controls.append(timeout)
+        release.wait(30)
+
+    try:
+        with Harness(tmp_path, probe=_hung_probe, control_probe=slow_control) as h:
+            time.sleep(4.0)
+            assert not h.exited.is_set(), "a slow database must not restart the core"
+            out = h.output()
+            hung = h.wd._hung
+    finally:
+        release.set()
+    assert len(controls) >= 3      # several no-answers, none counted
+    assert hung == 0
+    assert out.count("neither did a separate connection") == 1     # once per episode
+    assert "io pressure: some avg10=61.20" in out and "load average: 14.20" in out
+    assert "in a row)" not in out          # nothing counted
+
+
+def test_a_failed_separate_check_counts_as_before(tmp_path) -> None:
+    """The control probe can't tell (it raised): the no-answer counts, so a
+    broken control probe never hides a stuck core."""
+    def broken(timeout: float) -> None:
+        raise RuntimeError("no driver")
+
+    with Harness(tmp_path, probe=_hung_probe, control_probe=broken) as h:
+        assert h.exited.wait(10)
+        out = h.output()
+    assert h.code == EXIT_CODE
+    assert out.count("the separate check failed too (RuntimeError: no driver)") == 3
+
+
+def test_a_frozen_loop_restarts_even_while_the_database_is_slow(tmp_path) -> None:
+    """The heartbeat never waits on either probe: a wedged loop is a stall
+    even when the slow-database rule holds every probe back."""
+    release = threading.Event()
+
+    def slow_control(timeout: float) -> None:
+        release.wait(30)
+
+    try:
+        with Harness(tmp_path, probe=_hung_probe, control_probe=slow_control) as h:
+            h.loop.call_soon_threadsafe(blocking_worker, release)
+            assert h.exited.wait(10), "a frozen loop must still restart the core"
+            out = h.output()
+    finally:
+        release.set()
+    assert h.code == EXIT_CODE
+    assert "the event loop has not run for" in out
+
+
+def test_the_report_carries_pressure_readings_only_where_there_are_some(tmp_path,
+                                                                        monkeypatch) -> None:
+    wd = LoopWatchdog(FAST, report_file=tmp_path / "w.log", last_file=tmp_path / "l.json",
+                      out_fd=os.open(os.devnull, os.O_WRONLY), exit_fn=lambda c: None)
+    monkeypatch.setattr(loop_watchdog, "PROC_DIR", tmp_path / "nothing-here")
+    bare = wd.report("a test stall")
+    assert "  io pressure:" not in bare and "  load average:" not in bare
+    proc = tmp_path / "proc"
+    (proc / "pressure").mkdir(parents=True)
+    (proc / "pressure" / "io").write_text("some avg10=12.00 avg60=1 avg300=0 total=5\n")
+    (proc / "pressure" / "memory").write_text("some avg10=0.00 avg60=0 avg300=0 total=0\n")
+    (proc / "loadavg").write_text("3.10 2.00 1.00 1/400 99\n")
+    monkeypatch.setattr(loop_watchdog, "PROC_DIR", proc)
+    full = wd.report("a test stall")
+    assert "  io pressure: some avg10=12.00" in full
+    assert "  memory pressure: some avg10=0.00" in full
+    assert "  load average: 3.10 2.00 1.00" in full
 
 
 def test_a_probe_that_recovers_resets_the_count(tmp_path) -> None:
@@ -753,3 +857,21 @@ def test_an_installed_core_survives_sigusr1_and_writes_its_stacks(tmp_path) -> N
         finally:
             child.kill()
             child.wait()
+
+
+@requires_db
+def test_the_control_probe_reaches_the_database_on_its_own_loop() -> None:
+    """The real control probe answers from a plain thread (no event loop
+    of the core's), against the database the core uses."""
+    errors: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            loop_watchdog.control_db_probe(10.0)
+        except BaseException as e:  # noqa: BLE001
+            errors.append(e)
+
+    t = threading.Thread(target=run)
+    t.start()
+    t.join(15)
+    assert not t.is_alive() and errors == []
