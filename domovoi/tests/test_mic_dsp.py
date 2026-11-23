@@ -49,6 +49,25 @@ def test_the_marker_is_sanitised():
     assert mic_dsp.clean_mark(7) == ""
 
 
+def test_the_marker_escapes_invisible_text_and_cuts_first():
+    import time
+
+    from satellite import mic_dsp as sat_mic_dsp
+
+    for clean in (mic_dsp.clean_mark, sat_mic_dsp.clean_mark):
+        assert clean("a" + chr(0x202E) + "b" + chr(0x200B)) == "a\\u202eb\\u200b"
+        started = time.perf_counter()
+        assert len(clean("\x1b" * (16 * 1024 * 1024))) == mic_dsp.MARK_MAX
+        assert time.perf_counter() - started < 0.5
+
+
+def test_huge_numbers_in_a_report_are_dropped():
+    state = mic_dsp.clean_state({"readback": {
+        "PP_A": [10 ** 400], "PP_B": ["9" * 20], "PP_C": [31.6, "0.05"],
+    }})
+    assert state["readback"] == {"PP_A": None, "PP_B": None, "PP_C": [31.6, "0.05"]}
+
+
 def test_a_reported_state_is_bounded():
     state = mic_dsp.clean_state({
         "preset": "C", "ok": True, "at": "2026-11-22T10:00:00+00:00",
