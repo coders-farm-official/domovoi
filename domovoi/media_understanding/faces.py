@@ -713,6 +713,15 @@ async def person_ids_with_faces(s: Any, name: str) -> list[int]:
     return [int(r[0]) for r in rows]
 
 
+
+async def named_people_with_faces(s: Any) -> list[tuple[int, str]]:
+    """Every named person with confirmed faces, as (id, name): what the
+    chat and voice search (:mod:`.ask`) match a name in a question against."""
+    rows = (await s.execute(text(
+        "SELECT DISTINCT p.id, p.name FROM people p JOIN media_faces f ON f.person_id = p.id AND f.confirmed "
+        "WHERE p.name IS NOT NULL AND btrim(p.name) <> ''"))).all()
+    return [(int(r[0]), str(r[1])) for r in rows]
+
 # ─── the analyser (photos) and the hook for video frames (slice 3) ───────
 
 

@@ -183,9 +183,9 @@ def _name_re(name: str) -> re.Pattern[str]:
 async def person_in(s: Any, q: str) -> tuple[str, list[int], str] | None:
     """A person with confirmed faces named in ``q``: (name as stored, their
     ids, ``q`` without the name), the longest name first. None: nobody."""
-    rows = (await s.execute(text(
-        "SELECT DISTINCT p.id, p.name FROM people p JOIN media_faces f ON f.person_id = p.id AND f.confirmed "
-        "WHERE p.name IS NOT NULL AND btrim(p.name) <> ''"))).all()
+    from domovoi.media_understanding import faces
+
+    rows = await faces.named_people_with_faces(s)
     by_name: dict[str, tuple[str, list[int]]] = {}
     for pid, name in rows:
         key = " ".join(str(name).lower().split())

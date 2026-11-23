@@ -157,6 +157,7 @@ const MediaUnderstandingPanel = () => {
   const [newPrefix, setNewPrefix] = React.useState('');
   // The shared confirm dialog (components.jsx useDeleteConfirm).
   const facesOff = useDeleteConfirm(() => save({ faces: false, confirm_delete_faces: true }, 'faces off: every face deleted'));
+  const placesOff = useDeleteConfirm(() => save({ places: false, confirm_delete_places: true }, 'photo locations off: every location deleted'));
   React.useEffect(() => {
     if (data && data.settings) setCap(data.settings.frame_cap == null ? '' : String(data.settings.frame_cap));
   }, [data && data.settings && data.settings.frame_cap]);
@@ -203,16 +204,19 @@ const MediaUnderstandingPanel = () => {
   const pl = data.places || {};
   const turnPlacesOff = () => {
     if (!pl.count) { save({ places: false }, 'photo locations off'); return; }
-    if (window.confirm(
-      `Turning photo locations off deletes where ${muCount(pl.count)} photos were taken: their positions and place names. Turning it on again reads them from the photos afresh.`)) {
-      save({ places: false, confirm_delete_places: true }, 'photo locations off: every location deleted');
-    }
+    placesOff.request(null, {
+      title: 'Turn photo locations off?', confirmLabel: 'Turn off and delete',
+      body: (
+        <div>This deletes where {muCount(pl.count)} photos were taken: their positions and place names. Turning it on again reads them from the photos afresh.</div>
+      ),
+    });
   };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {toastNode}
       {facesOff.node}
+      {placesOff.node}
       <div style={{ fontSize: 13, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
         Domovoi can look at your photos and videos on this server, so you can find them by what is in them.
         {' '}Nothing leaves the house and nothing is written into your files. It works at night, and pauses whenever someone talks to Domovoi.
