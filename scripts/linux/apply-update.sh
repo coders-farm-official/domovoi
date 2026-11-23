@@ -162,7 +162,10 @@
 #   archive (reconcile_added_packages). So such an update needs no
 #   internet, and runs under never too. A rollback puts back a copy of the
 #   venv made before the re-sync, and the music player image the update
-#   replaced, since neither can be fetched again offline. The copy goes at
+#   replaced, since neither can be fetched again offline. After a good
+#   update the rooms' files the kit carries (rooms/, P6) go where the core
+#   serves them, by the new release's domovoi.kit_rooms (offline_rooms, a
+#   soft step; a kit without rooms/ skips it with a note). The copy goes at
 #   the end of the run, whatever its result.
 #   On any failure in 3-9 (step 6 never fails a run, and what it set up
 #   stays): stop both again, `git reset --keep` back to the
@@ -3497,8 +3500,15 @@ offline_stage() {
   if ! as_src test -d "$OFFLINE_SOURCE"; then
     echo "the offline kit's folder $OFFLINE_SOURCE is not there"; return 1
   fi
-  for d in "python/cp314-$(uname -m)" images "apt/$arch/ubuntu"; do
+  for d in "python/cp314-$(uname -m)" images "apt/$arch/ubuntu" rooms; do
     if as_src test -d "$OFFLINE_SOURCE/$d"; then sub+=("$d"); fi
+  done
+  # For the rooms' files (offline_rooms): kit.json (the kit's release and
+  # tick boxes), the release's checksums the Windows room Setup is held to,
+  # and the wake-word models a room's card serves.
+  for d in kit.json release/SHA256SUMS wake/embedding_model.onnx wake/melspectrogram.onnx \
+           wake/silero_vad.onnx wake/hey_jarvis_v0.1.onnx; do
+    if as_src test -f "$OFFLINE_SOURCE/$d"; then sub+=("$d"); fi
   done
   if [ "${#sub[@]}" -gt 0 ]; then
     if ! { as_src tar -C "$OFFLINE_SOURCE" -cf - -- "${sub[@]}" \
@@ -3516,6 +3526,31 @@ offline_stage() {
   d=$OFFLINE_STAGE/images/$(kit_archive_name "$MPD_TAG")
   if [ -f "$d" ]; then OFFLINE_MPD_TAR=$d; fi
   echo "from the offline kit: ${sub[*]:-nothing to install}"
+}
+
+# offline_rooms: after a good update, the rooms' files the kit carries
+# (rooms/, offline kit P6) go where the core serves them, by this release's
+# domovoi.kit_rooms as the service user, each held to its pin in the
+# checkout (docs/OFFLINE_KIT.md, "Adding rooms with no internet"). The
+# version and tick boxes come from the kit's kit.json. A kit without
+# rooms/ (made without Rooms ticked, or the core already held every file)
+# skips it with a note. A soft step: never fails the run.
+offline_rooms() {
+  local out last
+  if [ ! -d "$OFFLINE_STAGE/rooms" ]; then
+    STEP_DETAIL="the offline kit brought no rooms' files (rooms/): the rooms' files on this server are left as they were"
+    echo "$STEP_DETAIL"
+    return 0
+  fi
+  if ! out=$(cd "$REPO_DIR" && as_user "$VENV_DIR/bin/python" -m domovoi.kit_rooms install "$OFFLINE_STAGE" 2>&1); then
+    printf '%s\n' "$out"
+    echo "the rooms' files from the offline kit couldn't be put on this server; adding a room needs internet until they are"
+    return 1
+  fi
+  printf '%s\n' "$out"
+  last=$(printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | tail -n 1 | cut -c1-300) || last=""
+  [ -n "$last" ] || last="the rooms' files"
+  STEP_DETAIL="from the offline kit: $last"
 }
 
 # The images the compose file at HEAD pins by digest (repo@sha256:hex, one a
@@ -3838,6 +3873,7 @@ full_update() {
     reconcile_os_jobs
     reconcile_added_packages
     reconcile_wake_trainer || true
+    if [ -n "$OFFLINE_STAGE" ]; then run_soft_step rooms offline_rooms; fi
     prune_python
     finish ok
     return

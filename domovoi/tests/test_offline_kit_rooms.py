@@ -426,6 +426,49 @@ def test_a_file_that_isn_t_its_pin_is_refused_and_named(room_home, monkeypatch, 
     assert "refused" in kit_rooms.summary(doc)
 
 
+# ─── an update from a newer kit (P5) refreshes them ─────────────────────
+
+def test_held_names_where_install_puts_each_rooms_file(room_home, monkeypatch, offline):
+    """The update from a kit sends only the rooms' files the server lacks
+    (kit_update.plan_need asks kit_rooms.held): every file install places
+    is held afterwards, none before, and a changed byte isn't."""
+    folder = build_kit(monkeypatch)
+    kit = json.loads((folder / "kit.json").read_text(encoding="utf-8"))
+    rooms = [f for c in kit["components"] for f in c["files"] if f["path"].startswith("rooms/")]
+    assert len(rooms) > 8
+    wipe_cache()
+    assert not any(kit_rooms.held(f["path"], f["sha256"], f["size"]) for f in rooms)
+    doc = install_from(folder)
+    assert doc["refused"] == []
+    for f in rooms:
+        assert kit_rooms.held(f["path"], f["sha256"], f["size"]), f["path"]
+    for n in kit_rooms.OWW_ON_KIT:
+        assert kit_rooms.held(f"wake/{n}", sha(OWW[n]), len(OWW[n]))
+    first = rooms[0]
+    assert not kit_rooms.held(first["path"], "0" * 64, first["size"])
+    for path in ("rooms/../etc/passwd", "rooms/satellite/etc/passwd", "wake/domovoi_v1.onnx", "kit.json",
+                 "rooms/other-13.2.0-amd64-netinst.iso"):
+        assert kit_rooms.server_copy(path) is None, path
+
+
+def test_the_command_line_takes_the_version_and_tick_boxes_from_kit_json(room_home, monkeypatch, offline,
+                                                                         capsys, tmp_path):
+    """apply-update.sh (offline_rooms) runs ``install <stage>`` alone after
+    an update from a kit: kit.json says which release and what was ticked."""
+    folder = build_kit(monkeypatch)
+    wipe_cache()
+    stage = tmp_path / "update-stage"
+    shutil.copytree(folder, stage)
+    assert kit_rooms._main(["install", str(stage), "--code-dir", str(room_home)]) == 0
+    rec = kit_rooms.read_record()
+    assert rec["version"] == VERSION and "rooms" in rec["includes"]
+    assert "room files from the offline kit" in capsys.readouterr().out
+    assert satellite_setup.cached_file() is not None
+    (stage / "kit.json").unlink()
+    assert kit_rooms._main(["install", str(stage), "--code-dir", str(room_home)]) == 1
+    assert "kit.json can't be read" in capsys.readouterr().err
+
+
 # ─── plain messages for what the kit didn't have ─────────────────────────
 
 def test_a_kit_without_rooms_says_so_where_internet_would_be_asked_for(room_home, monkeypatch, offline):

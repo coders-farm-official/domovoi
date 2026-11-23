@@ -45,7 +45,11 @@ what brings it.
 
 Command line (provision.sh): ``python -m domovoi.kit_rooms install DIR
 --version V --includes "ai rooms"`` and ``python -m domovoi.kit_rooms done
-V`` (status 0 when the record is that version's).
+V`` (status 0 when the record is that version's). An update from a newer
+kit (scripts/linux/apply-update.sh, ``offline_rooms``) runs ``install DIR``
+alone: the version and tick boxes come from ``DIR/kit.json``, and
+:func:`held` lets the upload (domovoi/kit_update.py) leave out what this
+server already has.
 """
 
 from __future__ import annotations
@@ -316,6 +320,66 @@ def install(root: Path, *, version: str, includes: list[str], code_dir: Path) ->
     return doc
 
 
+# ─── an update from a newer kit (P5) ─────────────────────────────────────
+
+def server_copy(path: str) -> Path | None:
+    """Where :func:`install` puts the kit's ``path`` on this server, or None
+    for a path it doesn't take. The update from a kit (domovoi/kit_update.py)
+    asks, so it sends only the rooms' files this server doesn't hold."""
+    from domovoi import satellite_setup
+    from domovoi.satellite_media import cache
+
+    parts = path.split("/")
+    if not all(_NAME_RE.match(p) for p in parts):
+        return None
+    c = cache.CACHE_ROOT
+    if len(parts) == 2 and parts[0] == "wake" and parts[1] in OWW_ON_KIT:
+        return c / "oww_models" / parts[1]
+    if parts[0] != "rooms" or len(parts) < 2:
+        return None
+    rest = parts[1:]
+    if rest == [SETUP_ASSET]:
+        return c / satellite_setup.CACHE_BUCKET / SETUP_ASSET
+    if rest[0] == "windows" and len(rest) == 3:
+        return c / "windows" / rest[1] / rest[2]
+    if rest[0] in ("linux-python", "linux-wheels") and len(rest) == 2:
+        return c / rest[0] / rest[1]
+    if rest[0] == "satellite" and len(rest) >= 3:
+        if rest[1] == "oww_models":
+            return c / "oww_models" / rest[2] if len(rest) == 3 else None
+        return c.joinpath(*rest[1:]) if rest[1] in _PI_BUCKETS and len(rest) <= 4 else None
+    if len(rest) == 1:
+        from domovoi.usb_stick import image as stick_image
+
+        try:
+            pin = stick_image.load_pin()
+        except stick_image.PinError:
+            return None
+        return c / "usb_stick" / pin["version"] / rest[0] if rest[0] == pin["name"] else None
+    return None
+
+
+def held(path: str, sha256: str, size: int) -> bool:
+    """Whether this server already holds the kit's ``path`` with these bytes."""
+    dest = server_copy(path)
+    if dest is None or not _regular(dest):
+        return False
+    try:
+        return dest.stat().st_size == size and _sha256(dest) == sha256
+    except OSError:
+        return False
+
+
+def from_kit_json(root: Path) -> tuple[str, list[str]]:
+    """The kit's release and tick boxes, from ``root/kit.json`` (an update
+    from a kit names neither on the command line)."""
+    doc = json.loads((Path(root) / "kit.json").read_text(encoding="utf-8"))
+    version, includes = doc.get("domovoi_version"), doc.get("includes")
+    if not isinstance(version, str) or not isinstance(includes, list):
+        raise ValueError("kit.json names no domovoi_version or includes")
+    return version, [str(i) for i in includes]
+
+
 def summary(doc: dict[str, Any]) -> str:
     """One line for the install's log."""
     placed = sum(doc.get("placed", {}).values())
@@ -332,7 +396,7 @@ def _main(argv: list[str]) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     i = sub.add_parser("install")
     i.add_argument("root", type=Path)
-    i.add_argument("--version", required=True)
+    i.add_argument("--version", default=None, help="default: kit.json's domovoi_version (and its includes)")
     i.add_argument("--includes", default="")
     i.add_argument("--code-dir", type=Path, default=None)
     d = sub.add_parser("done")
@@ -345,7 +409,14 @@ def _main(argv: list[str]) -> int:
         from domovoi.config import settings
 
         code_dir = Path(settings.repo_dir)
-    doc = install(args.root, version=args.version, includes=args.includes.split(), code_dir=code_dir)
+    version, includes = args.version, args.includes.split()
+    if version is None:
+        try:
+            version, includes = from_kit_json(args.root)
+        except (OSError, ValueError) as e:
+            print(f"the offline kit's kit.json can't be read: {e}", file=sys.stderr)
+            return 1
+    doc = install(args.root, version=version, includes=includes, code_dir=code_dir)
     for line in doc["refused"]:
         print("refused " + line)
     print(summary(doc))

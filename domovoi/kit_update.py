@@ -304,10 +304,22 @@ def _logical_entries(doc: dict[str, Any]) -> Iterator[tuple[dict[str, Any], dict
                 yield comp, entry
 
 
+def _rooms_file(kind: str, path: str) -> bool:
+    """A file of the kit's Rooms (P6), or one of the wake-word models every
+    kit carries that a room's card serves: the update refreshes them
+    (apply-update.sh, offline_rooms)."""
+    from domovoi import kit_rooms
+
+    return (kind == "rooms" and path.startswith("rooms/")) or (
+        path.startswith("wake/") and path[len("wake/"):] in kit_rooms.OWW_ON_KIT)
+
+
 def plan_need(doc: dict[str, Any], target: tuple[str, str, str]) -> list[dict[str, Any]]:
     """The files (as stored on the stick: parts, not joined files) this
     server needs from the kit, in the order to send them: the release's
     signed manifest, the source, then the rest."""
+    from domovoi import kit_rooms
+
     kit_target, py_machine, deb_arch = target
     manifest = fmt.RELEASE_MANIFESTS[kit_target]["manifest"]
     first = {manifest: 0, f"{manifest}.sig": 1, "source/domovoi.bundle": 2}
@@ -332,8 +344,15 @@ def plan_need(doc: dict[str, Any], target: tuple[str, str, str]) -> list[dict[st
             why = "packages"
         elif want_phone and kind == "phone-app" and path.startswith("phone/") and path.endswith(".apk"):
             why = "phone"
+        elif _rooms_file(kind, path) and not kit_rooms.held(path, entry["sha256"], entry["size"]):
+            why = "rooms"
         if why:
             picked.append((first.get(path, 3), path, {"entry": entry, "why": why}))
+    # The Windows room Setup is held to the release's SHA256SUMS on the stick.
+    if any(p == f"rooms/{kit_rooms.SETUP_ASSET}" for _o, p, _i in picked):
+        for _comp, entry in _logical_entries(doc):
+            if entry["path"] == "release/SHA256SUMS":
+                picked.append((3, entry["path"], {"entry": entry, "why": "rooms"}))
     picked.sort(key=lambda t: (t[0], t[1]))
     need = []
     for _o, _p, item in picked:
@@ -361,7 +380,7 @@ def _disk_needed(need: list[dict[str, Any]]) -> int:
     copy the update unit makes of the packages and images it installs, and
     a copy of the venv when the Python packages change."""
     to_come = sum(n["size"] - _received(n["path"], n["size"], n.get("file")) for n in need)
-    staged = sum(n["size"] for n in need if n["why"] in ("python", "images", "packages"))
+    staged = sum(n["size"] for n in need if n["why"] in ("python", "images", "packages", "rooms"))
     venv = _venv_bytes() if any(n["why"] == "python" for n in need) else 0
     return to_come + staged + venv + HEADROOM
 
@@ -381,7 +400,7 @@ def _public(state: dict[str, Any] | None) -> dict[str, Any]:
                 files_left=sum(1 for f in files if f["received"] < f["size"]),
                 chunk_max=CHUNK_MAX,
                 sends={w: sum(n["size"] for n in need if n["why"] == w)
-                       for w in ("release", "source", "python", "images", "packages", "phone")})
+                       for w in ("release", "source", "python", "images", "packages", "phone", "rooms")})
     return {"session": view, "running_version": running_version()}
 
 

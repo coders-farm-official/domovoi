@@ -462,9 +462,12 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
   and signed by an allowed signer while signing is enforced), moves the
   checkout to it and starts the update unit, which installs the wheels,
   images and Ubuntu packages from the uploaded copy, each against the
-  release's own pins, with no internet. After a good update the phone app
-  goes in through the same check as an admin's upload, and the uploaded
-  copy is removed; **cancel** removes it at any time but during the update.
+  release's own pins, with no internet. After a good update the rooms'
+  files of a kit made with Rooms ticked go in (`python -m domovoi.kit_rooms
+  install`, held to the new release's pins; only those the server lacks
+  are sent, and a kit without `rooms/` leaves them as they were), the phone
+  app goes in through the same check as an admin's upload, and the
+  uploaded copy is removed; **cancel** removes it at any time but during the update.
 - **What to know.** It works with internet access set to No. A kit never
   downgrades. Models, voices and the other files an install copies are not
   part of an update (an online update doesn't download them either). The

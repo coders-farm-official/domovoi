@@ -81,6 +81,21 @@ def _make_kit(tmp_path: Path, **kw) -> Path:
         Component("apt", "Ubuntu packages", "resolute", "LicenseRef-distro-archive",
                   [Source("apt/amd64/ubuntu/dists/resolute/InRelease", b"signed index")]),
     ]
+    if kw.pop("rooms", False):
+        comps += [
+            Component("release", "The release's SHA256SUMS", VERSION, "MIT",
+                      [Source("release/SHA256SUMS", b"sums  DomovoiSatelliteSetup.exe\n")]),
+            Component("wake-support", "embedding_model.onnx", "openWakeWord v0.5.1", "Apache-2.0",
+                      [Source("wake/embedding_model.onnx", b"emb" * 10)]),
+            Component("rooms", "DomovoiSatelliteSetup.exe", VERSION, "MIT",
+                      [Source("rooms/DomovoiSatelliteSetup.exe", b"MZ" + b"setup" * 1000)],
+                      pinned_by="the release's SHA256SUMS"),
+            Component("rooms", "A Linux room's Python packages", VERSION, "LicenseRef-mixed-see-sbom",
+                      [Source("rooms/linux-wheels/tqdm-4.67.1-py3-none-any.whl", b"tqdm" * 10),
+                       Source("rooms/linux-wheels/numpy-2.3.0-cp313-cp313-manylinux_2_28_x86_64.whl",
+                              b"numpy" * 10)],
+                      pinned_by="satellite/locks/pc-*.txt (hashes)"),
+        ]
     write_kit(root, version=kw.pop("version", VERSION), commit=COMMIT, components=comps,
               targets=kw.pop("targets", ["pc-x86_64"]), android_version_code=261120010,
               created_at="2026-11-22T10:15:00Z", part_size=PART)
@@ -125,6 +140,48 @@ def test_present_images_and_missing_packages(tmp_path, monkeypatch):
     paths = [f["path"] for f in _begin(_make_kit(tmp_path))["session"]["files"]]
     assert "images/postgres_16.tar" not in paths
     assert "apt/amd64/ubuntu/dists/resolute/InRelease" in paths
+
+
+def test_the_rooms_files_the_server_lacks_are_sent(tmp_path, monkeypatch):
+    """A kit made with Rooms (P6): the update sends the rooms' files this
+    server doesn't hold (kit_rooms.held), the release's SHA256SUMS with the
+    Windows room Setup, and the wake-word models only when missing; they
+    count in ``sends``."""
+    from domovoi import kit_rooms
+
+    have = {"rooms/linux-wheels/tqdm-4.67.1-py3-none-any.whl", "wake/embedding_model.onnx"}
+    monkeypatch.setattr(kit_rooms, "held", lambda path, sha256, size: path in have)
+    s = _begin(_make_kit(tmp_path, rooms=True))["session"]
+    paths = [f["path"] for f in s["files"]]
+    assert "rooms/DomovoiSatelliteSetup.exe.part01" in paths, "split like any file"
+    assert "rooms/linux-wheels/numpy-2.3.0-cp313-cp313-manylinux_2_28_x86_64.whl" in paths
+    assert "release/SHA256SUMS" in paths, "the Setup is held to it"
+    assert not any("tqdm" in p for p in paths) and "wake/embedding_model.onnx" not in paths
+    assert s["sends"]["rooms"] == sum(f["size"] for f in s["files"]
+                                      if f["path"].startswith(("rooms/", "release/SHA256SUMS")))
+    need = kit_update._load()["need"]
+    assert {n["why"] for n in need if n["path"].startswith("rooms/")} == {"rooms"}
+    # Every file held: nothing of Rooms is sent, not even the checksums.
+    monkeypatch.setattr(kit_rooms, "held", lambda path, sha256, size: True)
+    kit_update.cancel()
+    paths = [f["path"] for f in _begin(tmp_path / "stick" / "DOMOVOIKIT")["session"]["files"]]
+    assert not any(p.startswith(("rooms/", "wake/")) or p == "release/SHA256SUMS" for p in paths)
+
+
+def test_the_uploaded_rooms_files_are_joined_and_kept_for_the_update_unit(tmp_path, monkeypatch):
+    from domovoi import kit_rooms
+
+    monkeypatch.setattr(kit_rooms, "held", lambda path, sha256, size: False)
+    root = _make_kit(tmp_path, rooms=True)
+    view = _begin(root)
+    _send_all(root, view)
+    monkeypatch.setattr(kit_update, "move_checkout", lambda *a: {"prev_sha": None})
+    kit_update.prepare_apply(view["session"]["id"])
+    files = kit_update.files_dir()
+    assert (files / "rooms/DomovoiSatelliteSetup.exe").read_bytes() == b"MZ" + b"setup" * 1000
+    assert not list((files / "rooms").glob("*.part0*"))
+    assert (files / "release/SHA256SUMS").is_file() and (files / "kit.json").is_file()
+    assert (files / "wake/embedding_model.onnx").read_bytes() == b"emb" * 10
 
 
 def test_added_packages_match_apply_update():
@@ -565,6 +622,70 @@ def test_offline_stage_copies_files_and_refuses_a_link(tmp_path):
     assert r.returncode != 0 and "something other than files and folders" in r.stdout
 
 
+def _offline_rooms_body(stage: Path) -> str:
+    return ("set -euo pipefail\nas_user() { \"$@\"; }\n"
+            f"OFFLINE_STAGE={stage.as_posix()}\nREPO_DIR={stage.parent.as_posix()}\n"
+            f"VENV_DIR={stage.parent.as_posix()}/venv\nSTEP_DETAIL=\n"
+            + _functions("offline_rooms")
+            + '\nrc=0; offline_rooms || rc=$?\necho "rc=$rc"\necho "detail=$STEP_DETAIL"\n')
+
+
+def test_offline_rooms_installs_the_kits_rooms_with_the_new_release(tmp_path):
+    """After a good update, apply-update.sh hands root's copy of the kit to
+    this release's ``python -m domovoi.kit_rooms install`` (the version and
+    tick boxes from its kit.json); a kit without rooms/ skips with a note;
+    a failure says so and returns non-zero (a soft step)."""
+    stage = tmp_path / "offline-kit"
+    stage.mkdir()
+    log = tmp_path / "calls.log"
+    py = tmp_path / "venv" / "bin" / "python"
+    py.parent.mkdir(parents=True)
+    py.write_text(f"#!/usr/bin/env bash\necho \"$*\" >>{log.as_posix()}\n"
+                  "if [ -f \"$4/fail\" ]; then echo boom >&2; exit 1; fi\n"
+                  "echo '3 room files from the offline kit'\n", encoding="utf-8", newline="\n")
+    py.chmod(0o755)
+    r = _run_bash(_offline_rooms_body(stage), tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert "rc=0" in r.stdout and "brought no rooms' files (rooms/)" in r.stdout
+    assert not log.exists(), "no rooms/: kit_rooms isn't run"
+    (stage / "rooms").mkdir()
+    r = _run_bash(_offline_rooms_body(stage), tmp_path)
+    assert "rc=0" in r.stdout, r.stdout + r.stderr
+    assert log.read_text().split() == ["-m", "domovoi.kit_rooms", "install", stage.as_posix()]
+    assert "detail=from the offline kit: 3 room files from the offline kit" in r.stdout
+    (stage / "fail").write_text("x")
+    r = _run_bash(_offline_rooms_body(stage), tmp_path)
+    assert "rc=1" in r.stdout and "boom" in r.stdout and "couldn't be put on this server" in r.stdout
+
+
+def test_offline_stage_takes_the_rooms_files_and_kit_json(tmp_path):
+    src = tmp_path / "files"
+    (src / "rooms" / "linux-wheels").mkdir(parents=True)
+    (src / "rooms" / "linux-wheels" / "tqdm-4.67.1-py3-none-any.whl").write_bytes(b"t")
+    (src / "release").mkdir()
+    (src / "release" / "SHA256SUMS").write_bytes(b"s")
+    (src / "release" / "DomovoiSetup.exe").write_bytes(b"not needed")
+    (src / "wake").mkdir()
+    (src / "wake" / "silero_vad.onnx").write_bytes(b"v")
+    (src / "wake" / "domovoi_v1.onnx").write_bytes(b"not a room's")
+    (src / "kit.json").write_bytes(b"{}")
+    upd = tmp_path / "upd"
+    upd.mkdir()
+    body = ("set -euo pipefail\nuname() { echo x86_64; }\ndpkg() { echo amd64; }\n"
+            "as_user() { \"$@\"; }\n"
+            f"OFFLINE_SOURCE={src.as_posix()}\nOFFLINE_AS_USER=1\nUPDATE_DIR={upd.as_posix()}\n"
+            "MPD_TAG=domovoi-mpd:latest\nOFFLINE_WHEELS= OFFLINE_APT= OFFLINE_MPD_TAR=\n"
+            + _functions("as_src", "offline_deb_arch", "kit_archive_name", "offline_stage")
+            + "\noffline_stage\n")
+    r = _run_bash(body, tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    stage = upd / "offline-kit"
+    assert (stage / "rooms/linux-wheels/tqdm-4.67.1-py3-none-any.whl").read_bytes() == b"t"
+    assert (stage / "release/SHA256SUMS").is_file() and (stage / "kit.json").is_file()
+    assert (stage / "wake/silero_vad.onnx").is_file()
+    assert not (stage / "release/DomovoiSetup.exe").exists() and not (stage / "wake/domovoi_v1.onnx").exists()
+
+
 def test_apply_update_offline_wiring():
     """The parts of the run the kit changes, read from the script: the
     never refusal counts only what the kit doesn't carry, pip gets no index,
@@ -583,5 +704,8 @@ def test_apply_update_offline_wiring():
     assert "run_step rollback-deps restore_venv_dir" in rb and "IN_ROLLBACK=1" in rb
     assert "offline_cleanup" in re.search(r"^on_exit\(\) \{\n.*?^\}\n", text, re.M | re.S).group(0)
     assert "offline_mpd_image" in re.search(r"^rebuild_mpd\(\) \{\n.*?^\}\n", text, re.M | re.S).group(0)
+    ok = full[full.index('if [ -z "$failed" ]; then\n    write_atomic'):full.index("finish ok")]
+    assert 'if [ -n "$OFFLINE_STAGE" ]; then run_soft_step rooms offline_rooms; fi' in ok, \
+        "the rooms' files go in after a good update only, never failing it"
     added = re.search(r"^reconcile_added_packages\(\) \{\n.*?^\}\n", text, re.M | re.S).group(0)
     assert added.index('if [ -n "$OFFLINE_APT" ]') < added.index('if [ "$policy" = never ]')

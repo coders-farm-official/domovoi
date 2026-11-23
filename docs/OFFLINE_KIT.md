@@ -186,8 +186,10 @@ from an offline kit**.
    manifest and source first, then the Python packages it doesn't have at
    the kit's versions, the container images Docker doesn't hold by their
    pinned digests, the music player image, Ubuntu's packages when one the
-   update installs is missing, and the phone app when the kit's is newer.
-   A typical update sends 0.5 to 1.5 GB. If the page is closed or the
+   update installs is missing, the phone app when the kit's is newer,
+   and, from a kit made with Rooms ticked, the rooms' files (`rooms/`,
+   with the release's `SHA256SUMS` for the Windows room Setup) the server
+   doesn't already hold. A typical update sends 0.5 to 1.5 GB. If the page is closed or the
    connection drops, choose the folder again: it picks up where it
    stopped.
 4. Press **update now**. The server checks the release signature again,
@@ -200,9 +202,12 @@ from an offline kit**.
    the compose file pins) and installs Ubuntu's packages from the kit's
    copy of Ubuntu's signed archive. Nothing comes from the internet, so it
    works with internet access set to **No**.
-5. After a good update the phone app from the kit goes in (checked like an
-   admin's upload of the APKs) and the uploaded copy is removed from the
-   server. If the update fails it is rolled back as usual, including the
+5. After a good update the rooms' files go where the server serves them,
+   each held to the new release's pins as at install ("Adding rooms with
+   no internet" below; a kit without `rooms/` leaves them as they were,
+   and the update's log says so), the phone app from the kit goes in
+   (checked like an admin's upload of the APKs) and the uploaded copy is
+   removed from the server. If the update fails it is rolled back as usual, including the
    Python packages (from a copy made before the update) and the music
    player image; the uploaded files stay for another try, and **cancel**
    removes them.

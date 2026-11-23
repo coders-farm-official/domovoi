@@ -5969,6 +5969,7 @@ CASES=(
   case_offline_kit_request_for_another_commit_is_not_used
   case_offline_kit_link_refuses_the_run
   case_offline_kit_rollback_puts_the_venv_copy_back
+  case_offline_kit_rooms_go_in_after_a_good_update
 )
 
 # An update from an offline kit (1.5.0, P5): the core uploaded the kit into
@@ -6006,6 +6007,35 @@ case_offline_kit_deps_from_the_kit_under_never() {
   check "the step says so" grep -qF "installed from requirements-linux-py314.lock and the offline kit's packages" "$RESULT"
   check "the core's upload is left to the core" test -f "$kit/files/python/cp314-$(uname -m)/numpy-2.4.7-cp314-cp314-manylinux_2_28_x86_64.whl"
   check "applied_sha moves to B" file_is "$UPD/applied_sha" "$sha_b"
+  check "a kit without rooms/ skips the rooms step" step_is rooms ok
+  check "with a plain note" grep -qF "the offline kit brought no rooms' files (rooms/)" "$RESULT"
+  check "and no kit_rooms" not_called "domovoi.kit_rooms"
+  end_case
+}
+
+# A kit made with Rooms ticked (P6): after the good update, the new
+# release's kit_rooms takes root's copy of the kit (its rooms/, kit.json,
+# the release's checksums and the wake models) as the service user.
+case_offline_kit_rooms_go_in_after_a_good_update() {
+  new_case offline_kit_rooms_go_in_after_a_good_update
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  echo never >"$STATE/internet-policy"
+  write_linux_lock numpy==2.4.7 setuptools==81.0.0 wheel==0.48.0
+  local sha_b kit; sha_b=$(commit_all "B: a new lock, from a kit with Rooms")
+  kit=$(offline_kit_folder "$sha_b")
+  mkdir -p "$kit/files/rooms/linux-wheels" "$kit/files/release" "$kit/files/wake"
+  printf 'w' >"$kit/files/rooms/linux-wheels/tqdm-4.67.1-py3-none-any.whl"
+  printf 'sums' >"$kit/files/release/SHA256SUMS"
+  printf 'vad' >"$kit/files/wake/silero_vad.onnx"
+  printf '{"domovoi_version": "1.5.0", "includes": ["rooms"]}' >"$kit/files/kit.json"
+  OFFLINE_KIT_DIR=$kit run_update
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "the rooms step" step_is rooms ok
+  check "kit_rooms on root's copy of the kit" called "python -m domovoi.kit_rooms install $UPD/offline-kit"
+  check "after the update is healthy" before "pip " "domovoi.kit_rooms"
+  check "root's copy of the kit goes" test ! -e "$UPD/offline-kit"
+  check "the core's upload is left to the core" test -f "$kit/files/rooms/linux-wheels/tqdm-4.67.1-py3-none-any.whl"
   end_case
 }
 
