@@ -228,7 +228,7 @@ async def test_many_names_one_at_a_time_then_list_them(voice) -> None:
 async def test_a_taken_name_asks_to_replace_it(voice) -> None:
     await voice("when i say gramps i mean hearth ensemble")
     r = await voice("when i say gramps i mean ember choir")
-    assert r.text == "Gramps already means Hearth Ensemble. Replace it?"
+    assert r.text == "Gramps already means Hearth Ensemble. Should I replace it?"
     assert r.expect_followup is True
     pending = await _pending(voice)
     assert (pending["handler"], pending["kind"]) == ("music_alias", "core.alias_replace")
@@ -248,7 +248,7 @@ async def test_no_leaves_it_and_another_room_may_not_replace(voice) -> None:
     assert (await repo.find_alias(voice.db, "gramps")).target_key == "hearthensemble"
     # asked from another room, unrecognized: the question is asked, the yes refused
     r = await voice("when i say gramps i mean ember choir", room="den")
-    assert r.text.endswith("Replace it?")
+    assert r.text.endswith("Should I replace it?")
     r = await voice("yes", room="den")
     assert r.text == "Only an admin can change that one — someone else added it."
     assert (await repo.find_alias(voice.db, "gramps")).target_key == "hearthensemble"

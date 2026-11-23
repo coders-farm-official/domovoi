@@ -451,7 +451,7 @@ class NewsHandler(Handler):
         if action == "subject":
             subject = (args.get("subject") or "").strip()
             if not subject:
-                return self._reply(ctx, "News about what?")
+                return self._reply(ctx, "What should I get news about?")
             if args.get("fetch") and ctx.online:
                 return await self._confirm_subject_fetch(subject, n, ctx, session)
             return await self._read_subject(subject, n, ctx, session)
@@ -567,7 +567,7 @@ class NewsHandler(Handler):
     ) -> Response:
         subject = subject.strip()
         if not subject:
-            return self._reply(ctx, "News about what?")
+            return self._reply(ctx, "What should I get news about?")
         n = count or settings.news_items_per_ask
         items = await news_service.read_subject_items(
             session, subject, person_id=ctx.person_id, limit=n,
@@ -592,7 +592,7 @@ class NewsHandler(Handler):
     ) -> Response:
         subject = subject.strip()
         if not subject:
-            return self._reply(ctx, "Fetch news about what?")
+            return self._reply(ctx, "What should I fetch news about?")
         if not ctx.online:
             # Degrade: read cached instead of promising a fetch we can't do.
             cached = await self._read_subject(subject, count, ctx, session)
@@ -841,7 +841,7 @@ class NewsHandler(Handler):
         if ctx.session_id is not None:
             paragraphs = [
                 *paragraphs,
-                "Want more on any of them?" if len(items) > 1 else "Want more on it?",
+                "Do you want more on any of them?" if len(items) > 1 else "Do you want more on it?",
             ]
         text_ = "\n\n".join(p for p in paragraphs if p)
         await self._remember_read(ctx, session, items, text_)

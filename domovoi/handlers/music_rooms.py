@@ -1020,7 +1020,7 @@ class MusicRoomsMixin(RoomCommandsMixin):
             expired = True
         transcript = str(data.get("transcript") or "")
         if expired or not transcript:
-            return self._room_reply(ctx, "I've lost track of that one — what would you like to hear?")
+            return self._room_reply(ctx, "I've lost track of that one. What would you like to hear?")
         if not affirmative:
             response = await self._room_command(
                 transcript, ctx, session, str(data.get("family") or "play"), name_checked=True,

@@ -171,6 +171,13 @@ a way that would otherwise get reported as a bug.
 
 ## 1.4.1 (unreleased)
 
+- Spoken yes/no questions sound like questions: each one ends in its own
+  sentence that starts with "Should I", "Want me to" or "Do you want"
+  ("Should I delete your camping list?", "That's 2 pages to the office
+  printer. Should I print it?"), so the speech voice no longer reads them
+  flat as statements. Plugins should word theirs the same way
+  (docs/PLUGIN_DEVELOPMENT.md, section 4.8).
+
 - Radio 1.5.3 (SDK 1.13.1): station streams, for the song sampler and the
   browser player alike, are asked for uncompressed and read exactly as
   sent; a station that answers compressed is refused. Model, voice,

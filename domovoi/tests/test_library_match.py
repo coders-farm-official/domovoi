@@ -1218,7 +1218,7 @@ async def test_a_missing_song_while_offline_says_it_cant_look_it_up(db_session, 
         r = await _say(handler, "play vrtx by brass lantern", ctx, db_session)
         assert r.text == (
             "I don't have vrtx, and I can't look it up while Domovoi is offline. "
-            "Want Brass Lantern instead?"
+            "Want me to play Brass Lantern instead?"
         )
         assert r.expect_followup is True
         # No artist the library knows: no offer.

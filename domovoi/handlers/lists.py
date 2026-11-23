@@ -595,7 +595,8 @@ class ListsHandler(Handler):
         total = target.open_count + target.done_count
         if not total:
             return self._reply(ctx, f"{_cap(where)} is already empty.")
-        prompt = f"Clear all {_things(total)} off {where}?" if total > 1 else f"Clear the one thing on {where}?"
+        prompt = (f"Should I clear all {_things(total)} off {where}?" if total > 1
+                  else f"Should I clear the one thing on {where}?")
         asked = await self._ask(ctx, session, CLEAR_KIND, prompt, {"list_id": target.id, "name": target.name})
         if asked is not None:
             return asked
@@ -624,8 +625,8 @@ class ListsHandler(Handler):
             return why
         total = target.open_count + target.done_count
         what = f"your {L.spoken_name(target.name)} list"
-        prompt = (f"Delete {what} and the {_things(total)} on it?" if total
-                  else f"Delete {what}?")
+        prompt = (f"Should I delete {what} and the {_things(total)} on it?" if total
+                  else f"Should I delete {what}?")
         asked = await self._ask(ctx, session, DELETE_KIND, prompt, {"list_id": target.id, "name": target.name})
         if asked is not None:
             return asked

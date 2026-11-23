@@ -338,7 +338,7 @@ class MemoryHandler(Handler):
         body = (body or "").strip().rstrip(".,!?")
         if not body:
             return Response(
-                text="Remember what?",
+                text="What should I remember?",
                 session_id=ctx.session_id,
                 matched_handler=self.name,
             )
@@ -370,7 +370,7 @@ class MemoryHandler(Handler):
         fragment = (fragment or "").strip().rstrip(".,!?")
         if not fragment:
             return Response(
-                text="Forget what?",
+                text="What should I forget?",
                 session_id=ctx.session_id,
                 matched_handler=self.name,
             )
@@ -390,8 +390,8 @@ class MemoryHandler(Handler):
             # speaker to be more specific.
             return Response(
                 text=(
-                    f"I have a few things matching \"{fragment}\" — "
-                    f"can you be more specific?"
+                    f"I have a few things matching {fragment}. "
+                    f"Say a bit more of the one to forget."
                 ),
                 session_id=ctx.session_id,
                 matched_handler=self.name,
@@ -494,7 +494,7 @@ class MemoryHandler(Handler):
         kind = _singularize(kind)
         if not kind:
             return Response(
-                text="Forget which favorite?",
+                text="Which favorite should I forget?",
                 session_id=ctx.session_id,
                 matched_handler=self.name,
             )
