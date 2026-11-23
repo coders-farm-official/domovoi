@@ -22,7 +22,10 @@ struct MusicGenresView: View {
     let onOpen: (MusicGenreRow) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        // Lazy for the reason ``MusicLibraryList``'s is: this view is ONE
+        // child of the screen's `LazyVStack`, so a plain `VStack` here built
+        // every genre row at once and each page's last row asked for the next.
+        LazyVStack(alignment: .leading, spacing: 12) {
             filters
             if let line = genres.readingLine {
                 readingLine(line)
