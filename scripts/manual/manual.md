@@ -1303,6 +1303,14 @@ Podcasts, Audiobooks, and plugged-in drives.
   from Chat.
 - **App:** **Chat documents** holds drafts saved in a phone chat. Files
   shows it once it holds one.
+- **Dashboard:** [Photos](#photos) shows every photo and video, newest
+  first, and finds them by what is in them and when: "dog at the beach",
+  "christmas 2023", "snow last winter". A video found by a moment opens
+  there. A description reads "Might show: …": it's a computer's guess,
+  sometimes wrong. Domovoi looks at your photos on this server, at night,
+  once **Understand photos and videos** is on in
+  [Settings → Chat & AI → Photos and videos](#settings/photos-and-videos);
+  until it has looked at some, Photos says so.
 
 [More detail](docs/FAQ.md#can-i-move-files-around-without-the-command-line)
 
@@ -2149,6 +2157,31 @@ can be too little voice to tell; ask with a few more words ("who am I,
 Domovoi?"). It doesn't mean Domovoi has forgotten you.
 
 [More detail](docs/FAQ.md#does-it-support-multiple-people)
+
+### Faces in photos
+
+With **Recognize faces** on *(admin)*, Domovoi groups the same face across
+your photos and videos, on this server, so you can name the people you
+know. It's off until an admin turns it on in
+[Settings → Chat & AI → Photos and videos](#settings/photos-and-videos);
+turning it off deletes every face.
+
+**How to**
+
+- **Dashboard:** open [Faces](#faces). It's only there while faces are
+  on, and never for a guest or on a shared screen.
+- Name a group: open it, type a name (someone from People, or a new name)
+  and press **add name**.
+- Check a person's faces: on their page, **yes, Sarah** or **not this
+  person** on each face Domovoi suggested.
+- **hide this group** for a stranger. Groups of only a face or two stay
+  under **show more**, and Domovoi never asks who someone is.
+- *(admin)* merge two groups, split faces into a new group, move a
+  person's faces to someone else, and show a hidden group again.
+- **Forget my face**: on your own page, from the phone or browser that's
+  yours (**this is me**), or by an admin. It deletes every saved face of
+  you and keeps a pattern tied to nobody, so new photos of you aren't
+  grouped again. Your photos stay, and so do your voice and memories.
 
 ### Guests, household and admin
 

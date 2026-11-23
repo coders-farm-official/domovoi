@@ -5,9 +5,13 @@
   ``q`` (what someone typed: words, a kind like "photos", a time like
   "last summer" or "2023"), optional ``kind`` (``image`` | ``video``),
   ``from`` / ``to`` (``YYYY-MM-DD``, the household's days, ``to``
-  included), ``limit`` (1-100, default 40) and ``offset``.
+  included), ``limit`` (1-100, default 40) and ``offset`` (or ``cursor``,
+  the ``next_cursor`` of the page before: the dashboard's lists that load
+  as you scroll, data.js ``usePagedList``).
 
-  Answers ``{"query": {"words", "kind", "when"}, "items": [...], "more"}``.
+  Answers ``{"query": {"words", "kind", "when"}, "items": [...], "more",
+  "has_more", "next_cursor"}`` (``has_more`` is ``more``; ``next_cursor``
+  is null on the last page).
   Each item: ``id``, ``library_id``, ``path``, ``name``, ``kind``,
   ``analysed``, ``taken_at``, ``date_from`` (``photo``: its EXIF date;
   ``file``: the file's time), ``might_show`` (the caption: what the
@@ -58,6 +62,7 @@ async def media_search(
     date_to: str | None = Query(None, alias="to"),
     limit: int = Query(40, ge=1, le=search.LIMIT_MAX),
     offset: int = Query(0, ge=0, le=100_000),
+    cursor: str | None = Query(None, max_length=8),
 ) -> dict[str, Any]:
     from domovoi import household_time
 
@@ -71,7 +76,13 @@ async def media_search(
     if end_d:
         nxt = end_d + timedelta(days=1)
         end = household_time.to_utc(datetime(nxt.year, nxt.month, nxt.day))
+    if cursor:
+        if not cursor.isdigit() or int(cursor) > 100_000:
+            raise HTTPException(status_code=422, detail="cursor is the next_cursor of the page before")
+        offset = int(cursor)
     parsed = search.parse_query(q)
     async with session_scope() as s:
         page = await search.search(s, parsed, kind=kind or None, start=start, end=end, limit=limit, offset=offset)
-    return {"query": {"words": parsed.words, "kind": kind or parsed.kind, "when": parsed.when}, **page}
+    nxt = str(offset + len(page["items"])) if page["more"] else None
+    return {"query": {"words": parsed.words, "kind": kind or parsed.kind, "when": parsed.when}, **page,
+            "has_more": page["more"], "next_cursor": nxt}

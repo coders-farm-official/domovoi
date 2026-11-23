@@ -5438,6 +5438,7 @@ const PhoneBarCard = ({ fire }) => {
   const shared = useSharedScreen();
   const manifest = window.DomovoiPluginManifest || { plugins: [] };
   const ai = useAiFeatures();
+  useFacesPage();   // Faces comes and goes with the switch (navItemsFor reads it)
   const items = navItemsFor(manifest, { shared, ai });
   const saved = usePhoneBar();
   const bar = phoneBarRoutes(items, saved);
@@ -5577,6 +5578,7 @@ const NavLayoutCard = ({ fire }) => {
   const saved = useNavLayout();
   const shared = useSharedScreen();
   const ai = useAiFeatures();
+  useFacesPage();   // Faces comes and goes with the switch (navItemsFor reads it)
   const manifest = window.DomovoiPluginManifest || { plugins: [] };
   // Every page this server has (nothing hidden: the layout is the house's),
   // and the ones this screen shows (the preview, as this browser draws it).

@@ -486,6 +486,15 @@ async def test_the_search_route_is_household_and_answers_untrusted_text_as_data(
         r = await c.get("/api/media/search", params={"q": "cat", "from": "2025-05-05", "to": "2025-05-05"},
                         headers=h)
         assert [x["path"] for x in r.json()["items"]] == ["evil.jpg"]
+        # Load as you scroll (the Photos page, usePagedList): has_more and
+        # next_cursor, and a cursor stands in for the offset.
+        await _seed_item("evil2.jpg", taken=_utc(2025, 5, 4, 12), caption="Another cat.", tags=["cat"])
+        one = (await c.get("/api/media/search", params={"q": "cat", "limit": 1}, headers=h)).json()
+        assert one["has_more"] is True and one["more"] is True and one["next_cursor"] == "1"
+        two = (await c.get("/api/media/search", params={"q": "cat", "limit": 1, "cursor": "1"}, headers=h)).json()
+        assert two["has_more"] is False and two["next_cursor"] is None
+        assert {one["items"][0]["path"], two["items"][0]["path"]} == {"evil.jpg", "evil2.jpg"}
+        assert (await c.get("/api/media/search", params={"cursor": "x"}, headers=h)).status_code == 422
 
 
 def test_the_search_route_wears_the_household_read_gate() -> None:

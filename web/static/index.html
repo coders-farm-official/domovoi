@@ -92,6 +92,8 @@
   <script type="text/babel" data-presets="react" src="podcasts.jsx"></script>
   <script type="text/babel" data-presets="react" src="audiobooks.jsx"></script>
   <script type="text/babel" data-presets="react" src="videos.jsx"></script>
+  <!-- Photos and Faces (1.5.0): after videos.jsx, whose player a video hit opens. -->
+  <script type="text/babel" data-presets="react" src="photos.jsx"></script>
   <script type="text/babel" data-presets="react" src="chat_documents.jsx"></script>
   <script type="text/babel" data-presets="react" src="chat_drafts.jsx"></script>
   <script type="text/babel" data-presets="react" src="chat_lookups.jsx"></script>
@@ -166,6 +168,10 @@
       podcasts: () => window.PodcastsPage,
       audiobooks: () => window.AudiobooksPage,
       videos: () => window.VideosPage,
+      // Photos and the people in them (1.5.0, photos.jsx). Faces is on a
+      // launcher only while faces are on; the page says so by its address.
+      photos: () => window.PhotosPage,
+      faces: () => window.FacesPage,
       news: () => window.NewsPage,
       // Settings → Household → People since 2026-11-09: the shell turns
       // #people into #settings/people first (settingsTabRoute). Kept a core
