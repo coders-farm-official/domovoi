@@ -2904,10 +2904,15 @@ and videos → Recognize faces). The code is
   embedding tied to nobody goes on `face_denylist`, so new photos of them
   are neither stored nor grouped (any other stored face that matches it
   is deleted too). Their photos and their `people` row stay.
-* **Turning faces off** deletes every face and group at once (the switch
-  asks to confirm when there are any); turning it on again starts from
-  zero. The denylist stays: it is tied to no one, and it is what keeps a
-  "forget my face" holding if faces are turned on again. A face being
+* **Turning faces off** deletes every face, group and embedding at once
+  (the switch asks to confirm when there are any); turning it on again
+  starts from zero. The forget list (`face_denylist`) is **kept** (owner
+  decision, 2026-11-22): it is tied to no one, and it is what keeps a
+  "forget my face" permanent. Deleting it with the rest would quietly
+  undo every forget the next time faces are turned on, and a person who
+  asked to be forgotten would be learned again from the same photos. The
+  confirm says so, and the "Forget my face" confirm says the forget is
+  permanent even across faces off and on. A face being
   stored at the moment faces go off is deleted with the rest (the store
   and the switch take the same row lock).
 * **No export.** No route answers with an embedding or a group centroid,

@@ -4765,6 +4765,23 @@
               "default": 0,
               "title": "Offset"
             }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 8
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
           }
         ],
         "responses": {
@@ -4957,6 +4974,7 @@
           "faces"
         ],
         "summary": "Person Items",
+        "description": "``cursor`` (the ``next_cursor`` of the page before) stands in for\n``offset``: the dashboard's grid loads as it scrolls (usePagedList).",
         "operationId": "person_items_api_faces_people__person_id__items_get",
         "parameters": [
           {
@@ -5016,6 +5034,23 @@
               "minimum": 0,
               "default": 0,
               "title": "Offset"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 8
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
             }
           }
         ],

@@ -4,6 +4,30 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Photos and Faces pages on the dashboard
+
+- **What changed.** The Media group has two new pages. **Photos**
+  (`#photos`) shows every photo and video Domovoi has catalogued, newest
+  first, loading as you scroll, with a search box for words and times; a
+  photo opens its details (what it might show, its tags, the text found
+  in it, its date), a video opens the player at the moment the search
+  matched. **Faces** (`#faces`) lists the people named in the photos,
+  unnamed groups to name (the small ones behind "show more"), and each
+  person's photos and videos with **yes, <name>** / **not this person**
+  on the faces Domovoi suggested, and **Forget my face**. Merge, split,
+  moving a named person's faces and showing a hidden group again are for
+  an admin only. `GET /api/media/search` and
+  `GET /api/faces/people/{id}/items` also take `cursor` and answer
+  `has_more` / `next_cursor` (API_REFERENCE).
+- **What to know.** Faces is on the menu only while **Recognize faces**
+  is on, and never for a guest or on a shared screen (the page asks for
+  nothing there either). With understanding off, or nothing looked at
+  yet, Photos says so and links to Settings → Chat & AI → Photos and
+  videos. `photos` and `faces` are now core routes: a plugin page on
+  either route is refused at install, enable and boot, like the other
+  core pages. Turning faces off in Settings now asks with the dashboard's
+  own confirm dialog.
+
 ## 1.5.0 (unreleased) — Photos: descriptions, text in pictures, dates, and search
 
 - **What changed.** The background runner now looks at each photo in
@@ -39,7 +63,11 @@ a way that would otherwise get reported as a bug.
   and hides; merging or splitting a named person's faces is admin; guests
   and shared screens get nothing. "Forget my face" (admin, or the person's
   own claimed phone) deletes their faces and keeps them from being learned
-  again. Turning faces off deletes every face and group.
+  again. Turning faces off deletes every face, group and embedding, but
+  keeps the forget list (owner decision, 2026-11-22), so forgetting stays
+  permanent: deleting it too would let a forgotten person be learned again
+  from the same photos once faces were turned back on. Both confirms say
+  so.
 - **What to know.** Turning faces on makes the server download two models
   once, about 39 MB, from GitHub (OpenCV Zoo's YuNet, MIT, and SFace,
   Apache-2.0; pinned by SHA-256; never under internet access "No"); then
