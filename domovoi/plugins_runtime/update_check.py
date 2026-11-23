@@ -46,14 +46,19 @@ The repository's identity (M6, review 2026-11-23): ``owner/repo`` is only
 a name, which a renamed, transferred or deleted-and-re-registered repo
 hands to someone else. Each check first asks ``GET /repos/<owner>/<repo>``
 WITHOUT following a redirect and keeps the answer's numeric repository id
-and owner id per plugin (:func:`pins_path`, a small JSON file in
-``~/.domovoi``). The first answer for a plugin's repo pins them; a later
-answer that redirects (GitHub's answer for a renamed or transferred repo)
-or names another id reads ``repo_changed`` ("the repository moved or
-changed owner: reinstall from the new address"), and no update is
-offered. :func:`download_release_asset` holds the update's download to the
-same pin. Installing the plugin from another repo address (an admin's
-deliberate choice) pins that repo afresh.
+and owner id per plugin (the ``plugin_repo_pins`` table, V081; the
+``~/.domovoi/plugin_repo_pins.json`` file that held them before is
+imported once, :func:`pins_path`). They are read when a plugin is staged
+from GitHub and pinned when the install is confirmed
+(:func:`stage_pin`, :func:`record_install_pin`); a plugin installed
+before that is pinned by its first check's answer. A later answer that
+redirects (GitHub's answer for a renamed or transferred repo) or names
+another id reads ``repo_changed`` ("the repository moved or changed
+owner: reinstall from the new address"), and no update is offered.
+:func:`download_release_asset`, and the staging of any update from
+GitHub, hold the update to the same pin. Installing the plugin from
+another repo address (an admin's deliberate choice) pins that repo
+afresh.
 
 The answers live in this process's memory: a restart checks again on the
 worker's first tick.
@@ -275,28 +280,95 @@ def pick_latest(
 
 
 def pins_path() -> Path:
-    """Where each plugin's pinned repository identity is kept."""
+    """Where the pins were kept before the ``plugin_repo_pins`` table (V081):
+    read once, into the table, then renamed ``*.imported``."""
     override = os.environ.get("DOMOVOI_PLUGIN_REPO_PINS")
     return Path(override) if override else Path.home() / ".domovoi" / "plugin_repo_pins.json"
 
 
-def load_pins() -> dict[str, dict[str, Any]]:
-    try:
-        doc = json.loads(pins_path().read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    return {k: v for k, v in doc.items() if isinstance(v, dict)} if isinstance(doc, dict) else {}
+_json_imported = False
 
 
-def _save_pins(pins: dict[str, dict[str, Any]]) -> None:
+async def _import_json_pins(s: Any) -> None:
+    """Once per process: the old JSON file's pins into the table (a pin the
+    table already has wins), and the file renamed so it is read only once."""
+    global _json_imported
+    if _json_imported:
+        return
+    _json_imported = True
     path = pins_path()
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(f".{path.name}.tmp")
-        tmp.write_text(json.dumps(pins, indent=1, sort_keys=True) + "\n", encoding="utf-8")
-        os.replace(tmp, path)
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return
+    except (OSError, ValueError) as e:
+        log.warning("plugin update check: the old repository pins file can't be read (%s)",
+                    type(e).__name__)
+        return
+    from sqlalchemy import text
+
+    n = 0
+    for slug, pin in (doc.items() if isinstance(doc, dict) else []):
+        if not isinstance(pin, dict):
+            continue
+        rid, oid, repo = pin.get("repo_id"), pin.get("owner_id"), pin.get("repo")
+        if type(rid) is not int or type(oid) is not int or not isinstance(repo, str):
+            continue
+        await s.execute(text(
+            "INSERT INTO plugin_repo_pins (slug, repo, repo_id, owner_id, pinned_by) "
+            "VALUES (:s, :r, :i, :o, 'import') ON CONFLICT (slug) DO NOTHING"),
+            {"s": str(slug), "r": repo, "i": rid, "o": oid})
+        n += 1
+    try:
+        os.replace(path, path.with_name(path.name + ".imported"))
     except OSError as e:
-        log.warning("plugin update check: can't save repository pins (%s)", e)
+        log.warning("plugin update check: the old repository pins file stays (%s)", e)
+    log.info("plugin update check: %d repository pin(s) moved into the database", n)
+
+
+async def load_pins() -> dict[str, dict[str, Any]]:
+    """Every plugin's pin: ``{slug: {repo, repo_id, owner_id, pinned_by}}``."""
+    from sqlalchemy import text
+
+    from domovoi.db.session import session_scope
+
+    async with session_scope() as s:
+        await _import_json_pins(s)
+        rows = (await s.execute(text(
+            "SELECT slug, repo, repo_id, owner_id, pinned_by FROM plugin_repo_pins"))).all()
+    return {r[0]: {"repo": r[1], "repo_id": int(r[2]), "owner_id": int(r[3]),
+                   "pinned_by": r[4]} for r in rows}
+
+
+async def _get_pin(slug: str) -> dict[str, Any] | None:
+    from sqlalchemy import text
+
+    from domovoi.db.session import session_scope
+
+    async with session_scope() as s:
+        await _import_json_pins(s)
+        row = (await s.execute(text(
+            "SELECT repo, repo_id, owner_id FROM plugin_repo_pins WHERE slug = :s"),
+            {"s": slug})).first()
+    if row is None:
+        return None
+    return {"repo": row[0], "repo_id": int(row[1]), "owner_id": int(row[2])}
+
+
+async def save_pin(slug: str, full_name: str, ident: tuple[int, int], *, by: str) -> None:
+    """Pin ``slug`` to ``full_name``'s ids (replacing any pin it had)."""
+    from sqlalchemy import text
+
+    from domovoi.db.session import session_scope
+
+    async with session_scope() as s:
+        await _import_json_pins(s)
+        await s.execute(text(
+            "INSERT INTO plugin_repo_pins (slug, repo, repo_id, owner_id, pinned_by, pinned_at) "
+            "VALUES (:s, :r, :i, :o, :b, NOW()) ON CONFLICT (slug) DO UPDATE SET "
+            "repo = EXCLUDED.repo, repo_id = EXCLUDED.repo_id, owner_id = EXCLUDED.owner_id, "
+            "pinned_by = EXCLUDED.pinned_by, pinned_at = EXCLUDED.pinned_at"),
+            {"s": slug, "r": full_name, "i": ident[0], "o": ident[1], "b": by})
 
 
 class RepoChanged(Exception):
@@ -319,25 +391,31 @@ def _identity(data: Any) -> tuple[int, int] | None:
 _REDIRECTS = (301, 302, 303, 307, 308)
 
 
-def check_pin(slug: str, full_name: str, status: int, data: Any) -> None:
-    """Hold ``slug``'s repo answer (``GET /repos/<owner>/<repo>``, not
-    redirected) to its pin, pinning it when there is none for this
-    address. Raises :class:`RepoChanged`, or ``_Unreachable`` for an
+def answer_identity(status: int, data: Any) -> tuple[int, int]:
+    """The ids in a ``GET /repos/<owner>/<repo>`` answer (not redirected).
+    Raises :class:`RepoChanged` for a redirect, ``_Unreachable`` for an
     answer that names no repository."""
     if status in _REDIRECTS:
         raise RepoChanged("GitHub sends this address to another repository")
     ident = _identity(data) if status == 200 else None
     if ident is None:
         raise _Unreachable(f"GitHub answered {status}")
-    pins = load_pins()
-    pin = pins.get(slug)
+    return ident
+
+
+async def check_pin(slug: str, full_name: str, status: int, data: Any) -> None:
+    """Hold ``slug``'s repo answer (``GET /repos/<owner>/<repo>``, not
+    redirected) to its pin, pinning it when there is none for this
+    address (a plugin installed before pins were taken at install).
+    Raises :class:`RepoChanged`, or ``_Unreachable`` for an answer that
+    names no repository."""
+    ident = answer_identity(status, data)
+    pin = await _get_pin(slug)
     if pin and str(pin.get("repo", "")).lower() == full_name.lower():
         if (pin.get("repo_id"), pin.get("owner_id")) != ident:
             raise RepoChanged("a different repository now has this address")
         return
-    pins[slug] = {"repo": full_name, "repo_id": ident[0], "owner_id": ident[1],
-                  "pinned_at": int(time.time())}
-    _save_pins(pins)
+    await save_pin(slug, full_name, ident, by="check")
 
 
 # ─── the HTTP side ──────────────────────────────────────────────────────
@@ -457,7 +535,7 @@ class Checker:
         api = f"{API_BASE}/repos/{repo.owner}/{repo.repo}"
         try:
             status, info = await self._get_json(client, api, identity=True)
-            check_pin(record.slug, repo.full_name, status, info)
+            await check_pin(record.slug, repo.full_name, status, info)
             releases = await self._get_json(client, f"{api}/releases?per_page=30")
             if not isinstance(releases, list):
                 raise _Unreachable("unexpected answer")
@@ -652,6 +730,91 @@ async def _only_asset_hosts(request: Any) -> None:
         raise HostNotAllowed(f"release download refused a request to {host!r}")
 
 
+# ─── pinned at install (M6) ─────────────────────────────────────────────
+
+#: staged_id -> (owner/repo, (repo_id, owner_id)) read when a plugin was
+#: staged from GitHub, written as its pin once the install is confirmed.
+_STAGED_PINS: dict[str, tuple[str, tuple[int, int]]] = {}
+
+
+async def _read_identity(owner: str, repo: str) -> tuple[int, int]:
+    """``GET /repos/<owner>/<repo>`` on api.github.com, never following a
+    redirect: the repository's ids. Raises :class:`RepoChanged` or
+    ``_Unreachable``."""
+    kwargs: dict[str, Any] = {
+        "timeout": REQUEST_TIMEOUT_SEC, "follow_redirects": False,
+        "event_hooks": {"request": [_only_check_hosts]},
+    }
+    if _TRANSPORT is not None:
+        kwargs["transport"] = _TRANSPORT
+    try:
+        async with egress.async_client(**kwargs) as client:
+            resp = await client.get(
+                f"{API_BASE}/repos/{owner}/{repo}",
+                headers={"Accept": "application/vnd.github+json", "User-Agent": USER_AGENT})
+    except (RepoChanged, _Unreachable):
+        raise
+    except Exception as e:  # noqa: BLE001 - no answer: no pin now
+        raise _Unreachable(type(e).__name__) from e
+    try:
+        data = resp.json() if resp.status_code == 200 else None
+    except ValueError:
+        data = None
+    return answer_identity(resp.status_code, data)
+
+
+async def stage_pin(staged_id: str, slug: str, source_ref: str | None, *, upgrade: bool) -> None:
+    """When a plugin is staged from GitHub (an install or an update), read
+    its repository's ids now, to pin once the admin confirms
+    (:func:`record_install_pin`). An update from the address the plugin is
+    pinned to whose ids differ is refused here, whichever download it used
+    (the release's zip or the tag's source archive). The address
+    redirecting to another repository is refused too. No answer (offline,
+    rate limited) pins nothing now: the first update check pins it."""
+    from domovoi.plugins_runtime.installer import InstallError
+
+    found = _repo_from_url(source_ref)
+    if found is None or egress.internet_turned_off():
+        return
+    full_name = f"{found[0]}/{found[1]}"
+    try:
+        ident = await _read_identity(*found)
+    except RepoChanged as e:
+        raise InstallError(
+            "repo_changed",
+            f"{e}: install the plugin from the repository's new address if you trust it.")
+    except _Unreachable as e:
+        log.info("plugin %s: repository ids not read at install (%s); the first update "
+                 "check pins them", slug, e.reason)
+        return
+    if upgrade:
+        try:
+            pin = await _get_pin(slug)
+        except Exception as e:  # noqa: BLE001 - no pin table read: as before
+            log.warning("plugin %s: repository pin not read (%s)", slug, type(e).__name__)
+            pin = None
+        if pin and str(pin.get("repo", "")).lower() == full_name.lower() and (
+                pin.get("repo_id"), pin.get("owner_id")) != ident:
+            raise InstallError(
+                "repo_changed",
+                "a different repository now has this address: the repository moved or "
+                "changed owner, so the update was not installed. Reinstall the plugin "
+                "from its new address if you trust it.")
+    _STAGED_PINS[staged_id] = (full_name, ident)
+
+
+async def record_install_pin(staged_id: str, slug: str) -> None:
+    """The confirmed install's pin (see :func:`stage_pin`). Never raises."""
+    staged = _STAGED_PINS.pop(staged_id, None)
+    if staged is None:
+        return
+    try:
+        await save_pin(slug, staged[0], staged[1], by="install")
+    except Exception as e:  # noqa: BLE001 - the first update check pins it
+        log.warning("plugin %s: repository pin not saved at install (%s)", slug, type(e).__name__)
+
+
+
 class NoReleaseAsset(Exception):
     """The release has no ``<slug>-X.Y.Z.zip`` + ``SHA256SUMS`` pair: the
     caller falls back to the tag's source archive."""
@@ -717,7 +880,7 @@ async def download_release_asset(github_url: str, slug: str) -> tuple[bytes, str
         except ValueError:
             info_data = None
         try:
-            check_pin(slug, f"{owner}/{repo}", info.status_code, info_data)
+            await check_pin(slug, f"{owner}/{repo}", info.status_code, info_data)
         except RepoChanged as e:
             raise InstallError(
                 "repo_changed",

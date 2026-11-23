@@ -1808,9 +1808,27 @@ async def api_install(request: Request) -> dict:
             staged = await stage_zip(
                 data, source_ref=source_ref, install_source="github"
             )
+            await _stage_repo_pin(staged, staged.manifest.slug, source_ref, upgrade=False)
     except InstallError as e:
         raise _install_error_response(e)
     return {"staged_id": staged.staged_id, "preview": staged.preview}
+
+
+async def _stage_repo_pin(
+    staged: StagedInstall, slug: str, source_ref: str | None, *, upgrade: bool
+) -> None:
+    """M6: read a GitHub plugin's repository ids at staging, to pin when
+    the install is confirmed (update_check.stage_pin). A refusal drops the
+    staging."""
+    from domovoi.plugins_runtime import update_check
+
+    try:
+        await update_check.stage_pin(staged.staged_id, slug, source_ref, upgrade=upgrade)
+    except InstallError:
+        _STAGED.pop(staged.staged_id, None)
+        if getattr(staged, "root", None) is not None:
+            _drop_staged(staged)
+        raise
 
 
 @plugins_admin_router.post(
@@ -1825,10 +1843,17 @@ async def api_confirm(staged_id: str) -> dict:
     try:
         with _holding_plugin(slug, "upgraded" if upgrade else "installed"):
             if upgrade:
-                return await confirm_upgrade(staged_id)
-            return await confirm_install(staged_id)
+                out = await confirm_upgrade(staged_id)
+            else:
+                out = await confirm_install(staged_id)
     except InstallError as e:
         raise _install_error_response(e)
+    if slug is not None:
+        # M6: the repository ids read at staging become the plugin's pin.
+        from domovoi.plugins_runtime import update_check
+
+        await update_check.record_install_pin(staged_id, slug)
+    return out
 
 
 @plugins_admin_router.post(
@@ -1913,6 +1938,8 @@ async def api_upgrade(request: Request, slug: str) -> dict:
             data, source_ref=source_ref, upgrade_of=slug, force_downgrade=force,
             install_source=install_source,
         )
+        if install_source == "github":
+            await _stage_repo_pin(staged, slug, source_ref, upgrade=True)
     except InstallError as e:
         raise _install_error_response(e)
     out: dict[str, Any] = {"staged_id": staged.staged_id, "preview": staged.preview}

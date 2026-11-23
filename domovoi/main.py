@@ -612,10 +612,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Under INTERNET_ACCESS=never: a room's MPD resumes whatever its
         # state file holds after a container restart, internet stations
         # included. Take those out of every queue, in the background
-        # (a no-op for any other answer; domovoi/mpd_internet.py).
-        from domovoi import mpd_internet
+        # (a no-op for any other answer; domovoi/mpd_internet.py). Then,
+        # under every answer, an internet entry that isn't relayed is
+        # rewritten to a relay URL or removed (L20; domovoi/relay_queue.py,
+        # which runs the purge first, room by room).
+        from domovoi import relay_queue
 
-        mpd_internet.schedule_boot_purge()
+        relay_queue.schedule_boot_scan()
         # The same answer, by hand in .env: stop the search helper that
         # `restart: unless-stopped` brought back (background, cheap).
         from domovoi import searxng_service
@@ -1244,6 +1247,7 @@ app.include_router(music_groups_router)
 # A room's player fetching a remote stream or file through the core (SDK
 # 1.16, domovoi/player_relay.py): open, the one-use token is the credential.
 from domovoi.player_relay import router as player_relay_router  # noqa: E402
+from domovoi.player_relay import redact as redact_relay  # noqa: E402
 
 app.include_router(player_relay_router)
 
@@ -7767,7 +7771,9 @@ def _queue_entry_dict(entry: dict[str, Any]) -> dict[str, Any]:
     return {
         "song_id": int(entry["id"]),
         "pos": int(entry.get("pos") or 0),
-        "file": str(entry.get("file", "")),
+        # A relay entry's token never leaves the core (L23): the queue is
+        # read by guests too.
+        "file": redact_relay(str(entry.get("file", ""))),
         "title": entry.get("Title") or entry.get("title"),
         "artist": entry.get("Artist") or entry.get("artist"),
         "album": entry.get("Album") or entry.get("album"),

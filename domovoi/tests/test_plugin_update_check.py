@@ -76,9 +76,20 @@ REPO_INFO = {"id": 4242, "full_name": "acme/domovoi-plugin-weather", "owner": {"
 
 
 @pytest.fixture(autouse=True)
-def _pins(monkeypatch, tmp_path):
-    """Each test's repository pins (M6) in its own file."""
+async def _pins(monkeypatch, tmp_path):
+    """Each test starts with no repository pins (M6, the plugin_repo_pins
+    table, V081) and its own old-style pins file to import."""
+    from sqlalchemy import text
+
+    from domovoi.db.session import engine
+
     monkeypatch.setenv("DOMOVOI_PLUGIN_REPO_PINS", str(tmp_path / "pins.json"))
+    monkeypatch.setattr(uc, "_json_imported", False)
+    uc._STAGED_PINS.clear()
+    async with engine.begin() as conn:
+        await conn.execute(text("DELETE FROM plugin_repo_pins"))
+    yield
+    uc._STAGED_PINS.clear()
 
 
 def _releases(gh: "FakeGitHub") -> list[httpx.Request]:
@@ -584,7 +595,8 @@ async def test_a_moved_repo_is_flagged_not_offered(gh, checker):
     gh.set(REL, json=[_release("v1.2.0")])
     rec = Rec("weather", "1.0.0")
     assert (await checker.run([rec]))["weather"]["state"] == uc.UPDATE_AVAILABLE
-    assert uc.load_pins()["weather"]["repo_id"] == 4242
+    pins = await uc.load_pins()
+    assert pins["weather"]["repo_id"] == 4242 and pins["weather"]["pinned_by"] == "check"
 
     gh.set("/repos/acme/domovoi-plugin-weather", json={"id": 999, "owner": {"id": 1}})
     gh.set(REL, json=[_release("v999.0.0")])
@@ -605,13 +617,13 @@ async def test_a_reinstall_from_another_repo_pins_afresh(gh, checker):
     gh.set("/repos/acme/other-weather", json={"id": 5, "owner": {"id": 6}})
     gh.set("/repos/acme/other-weather/releases", json=[_release("v1.0.0")])
     assert (await checker.run([other], force=True))["weather"]["state"] == uc.UP_TO_DATE
-    assert uc.load_pins()["weather"]["repo"] == "acme/other-weather"
+    assert (await uc.load_pins())["weather"]["repo"] == "acme/other-weather"
 
 
 async def test_the_update_download_is_held_to_the_pin(monkeypatch):
     from domovoi.plugins_runtime.installer import InstallError
 
-    uc.check_pin("weather", "acme/domovoi-plugin-weather", 200, {"id": 1, "owner": {"id": 2}})
+    await uc.check_pin("weather", "acme/domovoi-plugin-weather", 200, {"id": 1, "owner": {"id": 2}})
     fake = FakeReleaseHost()
     monkeypatch.setattr(uc, "_TRANSPORT", httpx.MockTransport(fake.handler))
     with pytest.raises(InstallError) as e:
@@ -647,3 +659,93 @@ async def test_one_odd_answer_does_not_end_the_run(gh, checker, monkeypatch):
     ])
     assert out["weather"]["state"] == uc.UNREACHABLE
     assert out["other"]["state"] == uc.UPDATE_AVAILABLE
+
+
+# ─── M6: pinned at install, kept in the database (V081) ─────────────────
+
+SOURCE = "https://github.com/acme/domovoi-plugin-weather@v1.0.0"
+
+
+async def test_a_github_install_is_pinned_when_it_is_confirmed(gh, monkeypatch):
+    from domovoi.plugins_runtime import installer
+
+    await uc.stage_pin("st1", "weather", SOURCE, upgrade=False)
+    assert await uc.load_pins() == {}                 # staged only: nothing pinned yet
+    staged = installer.StagedInstall.__new__(installer.StagedInstall)
+    staged.staged_id, staged.upgrade_of = "st1", None
+    staged.manifest = type("M", (), {"slug": "weather"})()
+
+    async def confirmed(staged_id):
+        return {"slug": "weather"}
+
+    async def no_freeze(_op):
+        return None
+
+    monkeypatch.setitem(installer._STAGED, "st1", staged)
+    monkeypatch.setattr(installer, "confirm_install", confirmed)
+    monkeypatch.setattr(installer, "_require_unfrozen", no_freeze)
+    assert await installer.api_confirm("st1") == {"slug": "weather"}
+    pin = (await uc.load_pins())["weather"]
+    assert (pin["repo"], pin["repo_id"], pin["owner_id"], pin["pinned_by"]) == (
+        "acme/domovoi-plugin-weather", 4242, 77, "install")
+    # The identity read was never followed through a redirect.
+    assert [r.url.path for r in gh.requests] == ["/repos/acme/domovoi-plugin-weather"]
+
+
+async def test_a_moved_repo_is_flagged_after_an_install_pin(gh, checker):
+    await uc.stage_pin("st2", "weather", SOURCE, upgrade=False)
+    await uc.record_install_pin("st2", "weather")
+    gh.set("/repos/acme/domovoi-plugin-weather", json={"id": 999, "owner": {"id": 1}})
+    gh.set(REL, json=[_release("v9.0.0")])
+    u = (await checker.run([Rec("weather", "1.0.0")]))["weather"]
+    assert u["state"] == uc.REPO_CHANGED and "github_url" not in u
+    assert (await uc.load_pins())["weather"]["repo_id"] == 4242      # the pin stands
+
+
+async def test_an_update_from_the_pinned_address_with_other_ids_is_refused_at_staging(gh):
+    from domovoi.plugins_runtime.installer import InstallError
+
+    await uc.save_pin("weather", "acme/domovoi-plugin-weather", (1, 2), by="install")
+    with pytest.raises(InstallError) as e:
+        await uc.stage_pin("st3", "weather", SOURCE, upgrade=True)
+    assert e.value.code == "repo_changed" and "st3" not in uc._STAGED_PINS
+    gh.set("/repos/acme/domovoi-plugin-weather", status=301, json={"url": "x"},
+           headers={"Location": "https://api.github.com/repositories/4242"})
+    with pytest.raises(InstallError) as e:
+        await uc.stage_pin("st4", "weather", SOURCE, upgrade=False)
+    assert e.value.code == "repo_changed"
+
+
+async def test_no_answer_at_install_leaves_the_first_check_to_pin(monkeypatch, gh, checker):
+    def down(request):
+        raise httpx.ConnectError("offline")
+
+    monkeypatch.setattr(uc, "_TRANSPORT", httpx.MockTransport(down))
+    await uc.stage_pin("st5", "weather", SOURCE, upgrade=False)
+    await uc.record_install_pin("st5", "weather")
+    assert await uc.load_pins() == {}
+
+
+async def test_a_plugin_installed_before_install_pins_is_pinned_at_its_first_check(gh, checker):
+    gh.set(REL, json=[_release("v1.0.0")])
+    assert await uc.load_pins() == {}
+    assert (await checker.run([Rec("weather", "1.0.0")]))["weather"]["state"] == uc.UP_TO_DATE
+    pin = (await uc.load_pins())["weather"]
+    assert (pin["repo_id"], pin["pinned_by"]) == (4242, "check")
+
+
+async def test_the_old_pins_file_is_imported_once(gh, checker, tmp_path):
+    import json
+
+    old = tmp_path / "pins.json"
+    old.write_text(json.dumps({
+        "weather": {"repo": "acme/domovoi-plugin-weather", "repo_id": 1, "owner_id": 2,
+                    "pinned_at": 1},
+        "broken": {"repo": "acme/x", "repo_id": "nope"},
+    }), encoding="utf-8")
+    pins = await uc.load_pins()
+    assert set(pins) == {"weather"} and pins["weather"]["pinned_by"] == "import"
+    assert not old.exists() and (tmp_path / "pins.json.imported").exists()
+    # An imported pin holds like any other: GitHub's ids (4242) differ.
+    gh.set(REL, json=[_release("v1.2.0")])
+    assert (await checker.run([Rec("weather", "1.0.0")]))["weather"]["state"] == uc.REPO_CHANGED

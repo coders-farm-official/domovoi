@@ -94,7 +94,7 @@ def test_stub_play_id_and_the_queue_generation() -> None:
     _run(stub.queue_add_files(["A/3.flac"]))
     assert stub.queue_generation == g0 + 1
     for replace in (stub.prepare_tracks([{"title": "t"}]), stub.play_search({"title": "t"}),
-                    stub.prepare_url("http://radio.example/stream"), stub.queue_clear()):
+                    stub.prepare_url("http://192.168.1.20:8000/stream"), stub.queue_clear()):
         before = stub.queue_generation
         _run(replace)
         assert stub.queue_generation == before + 1
@@ -378,7 +378,7 @@ async def test_the_session_ends_when_the_queue_is_replaced(clean, room) -> None:
     d = await _seed()
     sid = await _library_start(room, d)
     assert (await _look(room))["ended"] is None
-    await room.prepare_url("http://radio.example/stream")   # a stream took the room
+    await room.prepare_url("http://192.168.1.20:8000/stream")   # a stream took the room
     await room.resume()
     assert (await _look(room))["ended"] == "the queue was replaced"
     assert await _active() is None
@@ -898,7 +898,7 @@ async def test_save_the_rooms_queue_as_a_playlist(_db, clean, room, dispatched, 
     token = await _household()
     await _playing(room, [d["uri"][d["ids"][3]], d["uri"][d["ids"][7]]])
     await room.queue_add_files([
-        "http://radio.example/stream",                 # a stream
+        "http://192.168.1.20:8000/stream",                 # a stream
         "Podcasts/Some Show/ep1.mp3",                  # a podcast: not a library song
         d["uri"][d["ids"][3]],                         # the same song again
         d["uri"][d["ids"][11]],
@@ -918,7 +918,7 @@ async def test_save_the_rooms_queue_as_a_playlist(_db, clean, room, dispatched, 
     assert [r[0] for r in rows] == [d["ids"][3], d["ids"][7], d["ids"][11]]
     # Nothing in the queue from the library: nothing to save.
     await room.queue_clear()
-    await room.queue_add_files(["http://radio.example/stream"])
+    await room.queue_add_files(["http://192.168.1.20:8000/stream"])
     async with _dev(token, "browser-w6") as c:
         r = await c.post(f"/api/music/queue/{ROOM}/save-playlist", json={"name": "Radio"})
         assert r.status_code == 422

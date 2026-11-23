@@ -214,6 +214,8 @@ TABLES_TO_TRUNCATE = [
     "media_plays",
     # Two-way drop-in call audit rows (event data).
     "dropin_calls",
+    # Plugin repositories' pinned ids (V081, M6).
+    "plugin_repo_pins",
     # Media understanding (V078): the catalogue and everything worked out
     # about it (media_items CASCADEs to the result tables), the excluded
     # folders, faces. media_runner_state keeps its one seeded row.

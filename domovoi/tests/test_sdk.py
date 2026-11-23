@@ -57,7 +57,11 @@ async def test_play_url_one_call(sdk) -> None:
     stamp = NOW_PLAYING.get("kitchen")
     assert stamp is not None
     assert stamp.source == "testplug"
-    assert stamp.data["stream_url"] == "http://stream.test/abc"
+    # An internet URL reaches the player only through the core's relay
+    # (L20): the stamp carries what the player holds, which stands for it.
+    from domovoi import player_relay
+
+    assert player_relay.target_for(stamp.data["stream_url"]) == "http://stream.test/abc"
     assert stamp.data["ref"] == "abc123"
 
     # The stub MPD client actually received the prepare_url — and the
@@ -65,7 +69,7 @@ async def test_play_url_one_call(sdk) -> None:
     # dossier §7 invariant 9).
     stub = mpd_mod._clients["kitchen"]
     assert stub._song is not None
-    assert stub._song["file"] == "http://stream.test/abc"
+    assert stub._song["file"] == stamp.data["stream_url"]
     assert stub._song["title"] == "Some Song"     # title stamping
     assert stub._state == "pause"
 

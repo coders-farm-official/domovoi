@@ -377,7 +377,7 @@ async def test_why_this_pick_and_more_like_it(clean, room) -> None:
 @requires_db
 async def test_more_like_a_stream_says_it_cant(clean, room) -> None:
     await _seed()
-    await room.prepare_url("http://radio.example/stream")
+    await room.prepare_url("http://192.168.1.20:8000/stream")
     await room.resume()
     resp = await _say("more like this", _ctx())
     assert resp.text == "This isn't a song from your library, so I can't find more like it."
