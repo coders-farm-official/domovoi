@@ -828,7 +828,7 @@ const ChatPageMain = () => {
 
   // The household's chats: a delete is for everyone (the app says the same).
   const deleteThread = async (t) => {
-    if (!window.confirm(`Delete "${t.title || 'new chat'}"? Deletes it for everyone in the house. `
+    if (!await askConfirm(`Delete "${t.title || 'new chat'}"? Deletes it for everyone in the house. `
       + "This can't be undone.")) return;
     try {
       await apiDelete(`/api/chat/threads/${t.id}`);
@@ -839,7 +839,7 @@ const ChatPageMain = () => {
 
   // A name set here is the person's: the model's title never replaces it.
   const renameThread = async (t) => {
-    const name = window.prompt('rename chat', t.title || '');
+    const name = await askPrompt('Rename chat', { value: t.title || '', confirmLabel: 'Rename' });
     if (name == null) return;
     const title = name.trim();
     if (!title || title === t.title) return;

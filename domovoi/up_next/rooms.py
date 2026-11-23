@@ -26,7 +26,8 @@ core keeps it going:
   - more than :data:`TRIM_KEEP_BEHIND` songs behind the current one: the
     oldest the room was heard playing go (a jump ahead leaves the songs it
     passed), so a day-long session keeps a small queue and "previous"
-    still works.
+    still works. Never more than :data:`TRIM_MAX_BEHIND` songs stay behind,
+    heard or not.
 
 * **After a stream** — a song from an external source (a streaming-search
   provider's ``sdk.playback.play_url``) arms the room's session as it is
@@ -67,6 +68,10 @@ log = logging.getLogger(__name__)
 
 #: Songs kept behind the current one before the oldest are trimmed (§5).
 TRIM_KEEP_BEHIND = 50
+#: Hard ceiling on songs behind the current one: past it the oldest go even if
+#: never heard (skipped fast, behind at a restart, queued before the session),
+#: so the behind-queue cannot grow without bound. A jump only moves the pointer.
+TRIM_MAX_BEHIND = 4 * TRIM_KEEP_BEHIND
 #: A session whose room has been paused or stopped this long ends (§5).
 IDLE_END_SEC = 2 * 3600.0
 #: After a refill that found nothing to add, wait this long before the next.
@@ -562,8 +567,10 @@ async def look(room_id: str, client: Any, snap: dict[str, Any], *,
     seen.heard.add(int(songid))
     seen.heard &= set(ids)
     if cur > TRIM_KEEP_BEHIND:
-        # "Behind" is not "played": only songs the room was heard playing go.
-        old = [i for i in ids[: cur - TRIM_KEEP_BEHIND] if i in seen.heard]
+        # "Behind" is not "played": only songs the room was heard playing go,
+        # plus whatever sits beyond the hard cap behind the current song.
+        old = [i for n, i in enumerate(ids[: cur - TRIM_KEEP_BEHIND])
+               if i in seen.heard or n < cur - TRIM_MAX_BEHIND]
         trimmed = await client.queue_remove(old) if old else []
         did["trimmed"] = len(trimmed)
         ids = [i for i in ids if i not in set(trimmed)]
