@@ -53,6 +53,16 @@ final class LimaTemplateTests: XCTestCase {
         XCTAssertEqual(Tier.forMac(memoryBytes: 25_769_803_776), .standard)
     }
 
+    /// provision.sh's tiers (1 / 2 from 24 GB / 3 from 48 GB), and 4 only
+    /// on a Mac of 64 GB or more: Macs as they are sold, in GiB.
+    func testOllamaAnswersMoreAtOnceOnBiggerMacs() {
+        let gib: UInt64 = 1 << 30
+        let want: [(UInt64, Int)] = [(8, 1), (16, 1), (18, 1), (24, 2), (32, 2), (36, 2), (48, 3), (64, 4), (96, 4), (128, 4)]
+        for (size, n) in want {
+            XCTAssertEqual(OllamaParallel.forMac(memoryBytes: size * gib), n, "\(size) GB")
+        }
+    }
+
     func testSocketRoom() throws {
         XCTAssertNoThrow(try Lima.checkSocketRoom(limaHome: Layout.system.limaHome.path, instance: "domovoi"))
         XCTAssertThrowsError(try Lima.checkSocketRoom(limaHome: "/Users/alex/" + String(repeating: "deep/", count: 12) + "lima", instance: "domovoi"))
@@ -67,7 +77,8 @@ final class LimaTemplateTests: XCTestCase {
 final class LaunchdTests: XCTestCase {
     let values = ["LABEL": Labels.ollama, "OLLAMA_BIN": "/Library/Application Support/Domovoi/ollama/0.34.4/ollama",
                   "OLLAMA_PORT": "11434", "OLLAMA_MODELS": "/Library/Application Support/Domovoi/ollama-models",
-                  "JOB_HOME": "/Library/Application Support/Domovoi/home", "LOG_FILE": "/Library/Logs/Domovoi/ollama.log"]
+                  "JOB_HOME": "/Library/Application Support/Domovoi/home", "LOG_FILE": "/Library/Logs/Domovoi/ollama.log",
+                  "OLLAMA_NUM_PARALLEL": "2"]
 
     func testOllamaPlistForTheSystemInstall() throws {
         let p = try LaunchdPlist.render(template: read("launchd/com.domovoi.mac.ollama.plist"), values: values, role: Names.roleAccount)
@@ -79,6 +90,7 @@ final class LaunchdTests: XCTestCase {
         XCTAssertEqual(p.programArguments, [values["OLLAMA_BIN"]!, "serve"])
         XCTAssertEqual(p.environment["OLLAMA_HOST"], "127.0.0.1:11434", "loopback only")
         XCTAssertEqual(p.environment["OLLAMA_MODELS"], values["OLLAMA_MODELS"])
+        XCTAssertEqual(p.environment["OLLAMA_NUM_PARALLEL"], "2")
         XCTAssertEqual(p.logFiles, ["/Library/Logs/Domovoi/ollama.log"])
     }
 

@@ -178,7 +178,7 @@ public enum RoomProtocol {
         } else {
             ws = base
         }
-        return ws + "/v1/stream/" + roomID
+        return ws + "/v1/stream/" + encodedRoomPathSegment(roomID)
     }
 
     // MARK: - what the core sends

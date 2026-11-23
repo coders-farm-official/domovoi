@@ -60,7 +60,7 @@ fun SatSettingsTab(room: String) {
     SatQuietHoursSection(room)
 
     val state = rememberApi(room) {
-        it.api.get("/api/satellites/$room/config").decode<SatConfigResponse>()
+        it.api.get(satPath(room, "/config")).decode<SatConfigResponse>()
     }
     val cfg = state.data
     var advOpen by remember(room) { mutableStateOf(false) }

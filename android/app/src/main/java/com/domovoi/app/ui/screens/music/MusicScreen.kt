@@ -42,6 +42,7 @@ import com.domovoi.app.net.toPage
 import com.domovoi.app.player.CastPlanner
 import com.domovoi.app.player.PlayItem
 import com.domovoi.app.player.PlayerController
+import com.domovoi.app.player.roomActionPath
 import com.domovoi.app.ui.components.DomovoiCard
 import com.domovoi.app.ui.components.ErrorState
 import com.domovoi.app.ui.components.LoadMoreNearEnd
@@ -178,7 +179,7 @@ fun MusicScreen() {
     // ── Room transport ────────────────────────────────────────────────
     fun roomCtl(action: String, room: String, failLabel: String) {
         scope.launchAction(
-            action = { app.api.post("/api/music/$action/$room") },
+            action = { app.api.post(roomActionPath(action, room)) },
             onSuccess = { nowPlaying.refresh() },
             onFailure = { toast("$failLabel failed: ${it.message}") },
         )
@@ -201,7 +202,7 @@ fun MusicScreen() {
     val onFavoriteNp: (String) -> Unit = { room ->
         scope.launchAction(
             action = {
-                app.api.post("/api/music/now-playing/$room/favorite").decode<NpFavoriteResponse>()
+                app.api.post("/api/music/now-playing/${encComponent(room)}/favorite").decode<NpFavoriteResponse>()
             },
             onSuccess = { r ->
                 val label = r.title ?: "track"

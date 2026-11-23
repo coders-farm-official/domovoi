@@ -83,8 +83,9 @@ import java.time.ZoneId
  * phone gets "everything".
  *
  * No home endpoint: the screen composes reads the dashboard already has,
- * all of them open. The app has no admin session, so the admin-only
- * problem rows are never asked for. Never on Home: transcripts, voice
+ * all of them open but one: Friend Houses' unread count, a household read
+ * (a count only, no names). The app has no admin session, so the
+ * admin-only problem rows are never asked for. Never on Home: transcripts, voice
  * notes, memories, people's names, chat titles, Wi-Fi names. A shared
  * screen (LocalSharedScreen) also hides calendar titles, reminder text and
  * the problem rows (one neutral line at most); the shell drops the personal
@@ -151,6 +152,15 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
     // the menus without a word.
     val musicGroups = rememberMusicGroups()
     val groupsNow = groupsFor(musicGroups.data, serverUrl, paired)
+    // Friend Houses' unread count (GET /api/friend-houses/unread), only
+    // where tapping its row can open the messages: paired, and Friend
+    // houses shown on this server (the shell's gate). Read again when the
+    // gate's own count moves, on the health tick and on coming back.
+    val fhGate by app.friendHouses.state.collectAsState()
+    val fhShown = paired && fhGate.shownFor(serverUrl) != null
+    val fhUnread = rememberApi(fhShown, fhGate.shownFor(serverUrl)?.unread) {
+        if (fhShown) it.friendHouses.api.unread() else null
+    }
 
     // When the rooms and the timers were last read (each read is a new object).
     val satsAt = remember(sats.data) { System.currentTimeMillis() }
@@ -212,6 +222,7 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
                 delay(HOME_HEALTH_MS)
                 health.refresh()
                 cfg.refresh()
+                fhUnread.refresh()
             }
         }
     }
@@ -221,7 +232,7 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
         val now = System.currentTimeMillis()
         if (now - lastFocus >= HOME_FOCUS_GAP_MS) {
             lastFocus = now
-            cfg.refresh(); health.refresh(); cal.refresh()
+            cfg.refresh(); health.refresh(); cal.refresh(); fhUnread.refresh()
             if (!live) {
                 roomsDirty = false; sats.refresh(); timers.refresh()
             } else if (roomsDirty) {
@@ -283,7 +294,10 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
     // The container guard's incidents, from the shell's one read (alerts/IncidentAlerts.kt).
     val guard by app.containerAlerts.state.collectAsState()
     val rows = attentionRows(health.data, rooms, plugins.data, acq.data, guard)
-    val attention = attentionView(rows, cfg.data?.home_problems_visibility, shared, cfg.answered())
+    val attention = withRow(
+        attentionView(rows, cfg.data?.home_problems_visibility, shared, cfg.answered()),
+        fhUnreadRow(if (fhShown) fhUnread.data else null),
+    )
 
     // First run: a house with nothing in it yet gets one hint, taken from
     // the manual. Only then is the manual asked for. The answer is wrapped

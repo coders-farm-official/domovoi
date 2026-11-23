@@ -1447,8 +1447,10 @@ def test_the_phone_launcher_lists_every_page_off_the_strip_with_badges(driven) -
     # grid, and Satellites and People are Settings sections, not pages.
     for r in ("home", "music", "videos", "chat", "satellites", "people"):
         assert f"#{r}" not in tiles, r
-    assert tiles["#radio"] == "Radio3"               # the plugin's own badge
-    assert tiles["#calendar"] == "Calendar5"         # App's counts, handed down
+    assert tiles["#radio"] == "Radio3"               # a plugin's own badge still shows
+    # ...but no core page shows a total (owner 2026-11-20: a number there
+    # reads as "something new"), even with App's counts handed down.
+    assert tiles["#calendar"] == "Calendar"
 
 
 def test_the_grid_uses_the_shells_badges_and_polls_none_itself(driven) -> None:

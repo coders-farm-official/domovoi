@@ -417,4 +417,35 @@ final class PlayerModelCastTests: XCTestCase {
         h.model.toggle()
         await h.settle(until: { PlayerHouse.paths.contains("/api/music/resume/office") }, "resume")
     }
+
+    // MARK: - the room is one path segment
+
+    func testTheRoomActionPathEscapesTheRoomAsOneSegment() {
+        XCTAssertEqual("/api/music/skip/office", PlayerModel.roomActionPath("skip", "office"))
+        XCTAssertEqual(
+            "/api/music/pause/a%2Fb%3Fc%20d%25e%23f",
+            PlayerModel.roomActionPath("pause", "a/b?c d%e#f")
+        )
+    }
+
+    /// What actually leaves the phone for a room whose id carries `/`, `?`,
+    /// a space and `%`: one escaped segment, nothing cut off into a query.
+    func testATransportControlSendsTheRoomEscaped() async {
+        let room = "front room/2?x%y"
+        let h = PlayerHarness()
+        h.model.play(three)
+        _ = await h.model.cast(to: room)
+        h.model.next()
+        let sent = "/api/music/skip/front%20room%2F2%3Fx%25y"
+        func encodedPaths() -> [String] {
+            StubURLProtocol.recorded.compactMap { request in
+                request.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.percentEncodedPath }
+            }
+        }
+        await h.settle(until: { encodedPaths().contains(sent) }, "skip")
+        XCTAssertFalse(
+            StubURLProtocol.recorded.contains { $0.url?.query != nil && $0.url?.path.hasPrefix("/api/music/skip") == true },
+            "nothing of the room spilled into a query"
+        )
+    }
 }

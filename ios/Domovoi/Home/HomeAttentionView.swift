@@ -47,8 +47,9 @@ struct HomeAttentionView: View {
     /// times would drift from the rest of the screen's.
     let nowMs: Int64
 
-    /// A row was tapped: ``AttentionRow/target`` is where it goes, which for
-    /// every Home row today is Settings → Health (``healthTarget``).
+    /// A row was tapped: ``AttentionRow/target`` is where it goes — Settings
+    /// → Health (``healthTarget``) for every problem row, Friend houses for
+    /// its unread row (``homeFriendHousesRow(unread:)``).
     let onRow: (AttentionRow) -> Void
 
     /// `+N more` — Android's `action` on the card, which expands the list in
@@ -90,6 +91,18 @@ struct HomeAttentionView: View {
     /// names" must not be on a wall (`HomeScreen.kt:84`), and a problem row
     /// names rooms.
     private func summary(_ count: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            summaryLine(count)
+            // Friend Houses' unread row, under the line (the dashboard's
+            // `extra`): a count with no names, so the summary rule has
+            // nothing to hide in it.
+            ForEach(state.extraRows) { row in
+                rowButton(row)
+            }
+        }
+    }
+
+    private func summaryLine(_ count: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             // ``HomeAttentionState/summaryTone`` — **grey**, as
             // `HomeSections.kt:282`'s `StatusDot(Tone.Idle)` is, and not a
@@ -116,39 +129,7 @@ struct HomeAttentionView: View {
     private var rows: some View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(state.shownRows) { row in
-                Button { onRow(row) } label: { rowBody(row) }
-                    .buttonStyle(.plain)
-                    // `heightIn(min = if (compact) 44.dp else 40.dp)`
-                    // (`HomeSections.kt:309`), which is also Apple's 44 pt
-                    // minimum. The label is a subheadline and a footnote —
-                    // about 20 pt at default type — on a control whose whole
-                    // job is to be tapped. The figure is
-                    // ``HomeAttentionState/rowMinHeight``'s, so a test holds
-                    // it; `contentShape` is what makes the whole of the frame
-                    // the tap target rather than just the text in it.
-                    .frame(minHeight: state.rowMinHeight, alignment: .leading)
-                    .contentShape(.rect)
-                    // **`accessibilityLabel` alone, and never
-                    // `accessibilityElement(children: .ignore)` on a
-                    // `Button`.** The `.ignore` was here to stop the dot, the
-                    // sentence and the `3h ago` being three stops; what it
-                    // actually did was make SwiftUI mint a *new* element
-                    // around a view that was already one, leaving the Button
-                    // inside it with the identical label. Train I004's kept
-                    // hierarchy for `testNews_PassesApplesAccessibilityAudit`
-                    // holds both of them — `Button, 0x10f86d510,
-                    // {{32.0, 258.7}, {329.0, 44.0}}, label: 'study is
-                    // offline …'` wrapping `Button, 0x10fec69e0` at the same
-                    // frame with the same words — so VoiceOver stopped on
-                    // every `needs attention` row twice and the `.ignore`
-                    // ignored nothing.
-                    //
-                    // A `Button` already merges its label content into one
-                    // element, so relabelling it is the whole job, the way
-                    // `Files/FileRowView.swift:54-68` does it. `.isButton`
-                    // went with the `.ignore`: it was only ever there because
-                    // the minted element was not a button, and this one is.
-                    .accessibilityLabel(state.spokenRow(row, nowMs: nowMs))
+                rowButton(row)
             }
             // Both of these live **inside** the rows branch on Android
             // (`:337-339`), which is why ``HomeAttentionState`` answers false
@@ -166,6 +147,44 @@ struct HomeAttentionView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+
+    /// One tappable row, in either branch.
+    private func rowButton(_ row: AttentionRow) -> some View {
+        Button { onRow(row) } label: { rowBody(row) }
+            .buttonStyle(.plain)
+            // `heightIn(min = if (compact) 44.dp else 40.dp)`
+            // (`HomeSections.kt:309`), which is also Apple's 44 pt
+            // minimum. The label is a subheadline and a footnote —
+            // about 20 pt at default type — on a control whose whole
+            // job is to be tapped. The figure is
+            // ``HomeAttentionState/rowMinHeight``'s, so a test holds
+            // it; `contentShape` is what makes the whole of the frame
+            // the tap target rather than just the text in it.
+            .frame(minHeight: state.rowMinHeight, alignment: .leading)
+            .contentShape(.rect)
+            // **`accessibilityLabel` alone, and never
+            // `accessibilityElement(children: .ignore)` on a
+            // `Button`.** The `.ignore` was here to stop the dot, the
+            // sentence and the `3h ago` being three stops; what it
+            // actually did was make SwiftUI mint a *new* element
+            // around a view that was already one, leaving the Button
+            // inside it with the identical label. Train I004's kept
+            // hierarchy for `testNews_PassesApplesAccessibilityAudit`
+            // holds both of them — `Button, 0x10f86d510,
+            // {{32.0, 258.7}, {329.0, 44.0}}, label: 'study is
+            // offline …'` wrapping `Button, 0x10fec69e0` at the same
+            // frame with the same words — so VoiceOver stopped on
+            // every `needs attention` row twice and the `.ignore`
+            // ignored nothing.
+            //
+            // A `Button` already merges its label content into one
+            // element, so relabelling it is the whole job, the way
+            // `Files/FileRowView.swift:54-68` does it. `.isButton`
+            // went with the `.ignore`: it was only ever there because
+            // the minted element was not a button, and this one is.
+            .accessibilityLabel(state.spokenRow(row, nowMs: nowMs))
+            .accessibilityIdentifier("home.attention.\(row.key)")
     }
 
     /// One row: the tone, the words, and when the check last had an answer.

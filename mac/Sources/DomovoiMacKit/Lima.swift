@@ -23,6 +23,26 @@ public enum Tier: String, Codable {
     }
 }
 
+/// How many requests Domovoi's own Ollama answers at once
+/// (OLLAMA_NUM_PARALLEL), so a voice turn needn't wait behind a chat reply.
+/// The tiers of `scripts/linux/provision.sh` (`ollama_parallel`), from the
+/// Mac's memory as ``Tier`` reads it: under 24 GB 1, from 24 GB 2, from
+/// 48 GB 3. Each slot is one more context window of every loaded model
+/// (about 1.1 GiB at the default windows), held in the unified memory the
+/// VM and the speech models share, so 4, which Linux gives only to GPUs
+/// that hold the models plus four windows, is for Macs of 64 GB or more.
+public enum OllamaParallel {
+    public static func forMac(memoryBytes: UInt64) -> Int {
+        let gb = Double(memoryBytes) / 1_000_000_000
+        switch gb {
+        case 64...: return 4
+        case 48...: return 3
+        case 24...: return 2
+        default: return 1
+        }
+    }
+}
+
 /// A media folder shared into the VM at /srv/media/<name>.
 public struct MediaMount: Equatable, Codable {
     public var name: String

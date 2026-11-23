@@ -298,7 +298,10 @@ struct HomeView: View {
             state: home.attention(
                 shared: shared,
                 compact: compact,
-                expanded: attentionExpanded
+                expanded: attentionExpanded,
+                // Friend Houses' unread row: the gate's count for this
+                // server, only while Friend houses can be opened here.
+                friendHousesUnread: model.friendHouses.homeUnread(model.inputs.serverURL)
             ),
             nowMs: home.nowMs,
             onRow: open,
