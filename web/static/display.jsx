@@ -95,6 +95,10 @@ const dpFmtDur = (s) => {
  * no embedded art (or the source is a stream). */
 const DP_GRADIENT = 'linear-gradient(135deg, oklch(0.86 0.06 75), oklch(0.62 0.14 50))';
 
+/* The cover fills most of the screen (up to 62vh), so it asks for the
+ * largest thumbnail, ?size=xl (768px long edge, a WebP) rather than the
+ * original picture. This page doesn't load components.jsx; its
+ * coverUrlAtSize is the dashboard's version of the same rule. */
 const DpCover = ({ trackId, size }) => {
   const [failed, setFailed] = React.useState(false);
   React.useEffect(() => setFailed(false), [trackId]);
@@ -106,7 +110,7 @@ const DpCover = ({ trackId, size }) => {
   if (trackId == null || failed) return <div style={style}/>;
   return (
     <img
-      src={`${API_BASE}/api/music/library/${trackId}/cover`}
+      src={`${API_BASE}/api/music/library/${trackId}/cover?size=xl`}
       alt=""
       style={style}
       onError={() => setFailed(true)}

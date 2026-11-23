@@ -28,6 +28,7 @@ import coil.compose.AsyncImage
 import coil.network.HttpException
 import coil.request.ImageRequest
 import com.domovoi.app.player.CoverArt
+import com.domovoi.app.player.CoverSize
 import com.domovoi.app.ui.theme.Domovoi
 
 /**
@@ -48,8 +49,11 @@ import com.domovoi.app.ui.theme.Domovoi
  * the caller passed, the old picture staying until the new one lands.
  *
  * [model] comes from [CoverArt.model]: an absolute URL or a content:// URI.
- * [placeholder] defaults to the quiet sunken tile; the player passes its
- * warm gradient.
+ * A library track's cover is asked for at [coverSize] ([CoverArt.sized]),
+ * by default the smallest copy sharp at [size] (CoverSize.forDp): a 40 dp
+ * row gets the 160 px copy, not the original picture. Other art is drawn as
+ * it is. [placeholder] defaults to the quiet sunken tile; the player passes
+ * its warm gradient.
  */
 @Composable
 fun CoverImage(
@@ -60,12 +64,14 @@ fun CoverImage(
     placeholder: Brush? = null,
     iconTint: Color? = null,
     iconSize: Dp = size * 0.42f,
+    coverSize: CoverSize = CoverSize.forDp(size.value),
 ) {
     val shape = RoundedCornerShape(corner)
     // A newer version `library.cover.changed` named than the row carried
-    // (V059): drawn at once, without the row being read again.
+    // (V059): drawn at once, without the row being read again. The size is
+    // part of the URL, so the memory key and Coil's disk key hold it too.
     val versions by CoverArt.versions.collectAsState()
-    val drawn = CoverArt.withKnownVersion(model, versions)
+    val drawn = CoverArt.sized(CoverArt.withKnownVersion(model, versions), coverSize)
     var shown by remember(drawn) { mutableStateOf(false) }
     // The memory key of the picture this box last showed: kept on screen
     // while a new version of the same cover loads.

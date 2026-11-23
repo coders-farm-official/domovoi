@@ -1119,8 +1119,14 @@ public final class PlayerModel {
         ))
         // At the newest cover version heard (V059): a cover that changed
         // while this song plays is a new URL, so the lock screen loads it.
+        // A library cover is asked for at the largest bucket
+        // (``MusicCoverSize/nowPlaying``) rather than the original, which
+        // can be a 1.5 MB scan; the item's own path stays unsized.
         nowPlaying.attachArtwork(
-            path: MusicCoverVersions.shared.versioned(info.artworkPath),
+            path: PlayerArtwork.sized(
+                MusicCoverVersions.shared.versioned(info.artworkPath),
+                MusicCoverSize.nowPlaying
+            ),
             absolute: absoluteForArtwork()
         )
     }

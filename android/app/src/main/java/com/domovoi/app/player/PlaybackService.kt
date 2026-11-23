@@ -105,7 +105,8 @@ class PlaybackService : MediaSessionService() {
 
     /**
      * Loads the notification / lock-screen artwork (each item's
-     * MediaMetadata.artworkUri: a library track's /api/music/library/{id}/cover)
+     * MediaMetadata.artworkUri: a library track's
+     * /api/music/library/{id}/cover?size=xl, SessionMedia.artwork)
      * through the app's one OkHttpClient, as playback itself does. Media3's
      * default loader opens its own connection, outside the cleartext policy
      * (net/CleartextPolicy.kt) and without the device token. content:// art

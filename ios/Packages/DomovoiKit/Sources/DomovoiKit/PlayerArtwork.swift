@@ -32,23 +32,58 @@ public enum PlayerArtwork {
     /// `/api/music/library/{id}/cover?v={cover_v}`), or the bare route for
     /// none. The server ignores `?v=`; it makes a changed cover a new URL.
     public static func libraryPath(trackID: Int64, coverV: Int?) -> String {
-        guard let coverV else { return libraryPath(trackID: trackID) }
-        return "\(libraryPath(trackID: trackID))?v=\(coverV)"
+        libraryPath(trackID: trackID, coverV: coverV, size: nil)
+    }
+
+    /// The same path at a cover version and a size bucket
+    /// (``MusicCoverSize``): `?v={cover_v}&size={s|m|l|xl}`, each part only
+    /// when there is one. No size is the original picture. The one place a
+    /// library cover's query is written.
+    public static func libraryPath(trackID: Int64, coverV: Int?, size: MusicCoverSize?) -> String {
+        var query: [String] = []
+        if let coverV { query.append("v=\(coverV)") }
+        if let size { query.append("size=\(size.rawValue)") }
+        let base = libraryPath(trackID: trackID)
+        return query.isEmpty ? base : "\(base)?\(query.joined(separator: "&"))"
+    }
+
+    /// `path` at `size` when it is a library cover path, its version kept;
+    /// anything else (a podcast's art, a phone file, nil) as it is.
+    public static func sized(_ path: String?, _ size: MusicCoverSize) -> String? {
+        guard let path, let parts = coverPathParts(path) else { return path }
+        return libraryPath(trackID: parts.trackID, coverV: parts.version, size: size)
     }
 
     /// A library cover path's track and version, or nil for anything else
     /// (a podcast's art, a phone file).
     public static func coverPathParts(_ path: String) -> (trackID: Int64, version: Int?)? {
+        coverPathPieces(path).map { ($0.trackID, $0.version) }
+    }
+
+    /// A library cover path's track, version and size bucket, or nil for
+    /// anything else. Query items are read in any order; an unknown one is
+    /// ignored.
+    public static func coverPathPieces(_ path: String) -> (trackID: Int64, version: Int?, size: MusicCoverSize?)? {
         let prefix = "/api/music/library/"
         guard path.hasPrefix(prefix) else { return nil }
         let rest = path.dropFirst(prefix.count)
         let pieces = rest.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
         guard let head = pieces.first, head.hasSuffix("/cover"),
               let id = Int64(head.dropLast("/cover".count)) else { return nil }
-        guard pieces.count == 2 else { return (id, nil) }
-        let query = pieces[1]
-        guard query.hasPrefix("v="), let version = Int(query.dropFirst(2)) else { return (id, nil) }
-        return (id, version)
+        var version: Int?
+        var size: MusicCoverSize?
+        if pieces.count == 2 {
+            for item in pieces[1].split(separator: "&") {
+                let pair = item.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+                guard pair.count == 2 else { continue }
+                switch pair[0] {
+                case "v": version = Int(pair[1])
+                case "size": size = MusicCoverSize(rawValue: String(pair[1]))
+                default: continue
+                }
+            }
+        }
+        return (id, version, size)
     }
 
     /// What to hand an image loader for a cover path: a server path resolved
