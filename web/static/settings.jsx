@@ -4689,6 +4689,7 @@ const AboutPanel = () => {
     const st = Auth.status;
     household = !!(Auth.isPaired() || Auth.isLoggedIn() || (st && (st.authenticated || st.setup_complete === false)));
   } catch { household = false; }
+  const KitUpdateCard = window.OfflineKitUpdateCard;
   return (
     <>
       <AboutCard/>
@@ -4701,6 +4702,9 @@ const AboutPanel = () => {
           </Card>
         )}
       </div>
+      {/* offline_kit.jsx registers it (1.5.0): a house with no internet
+          updates from a newer kit's stick. */}
+      {KitUpdateCard && <div data-settings-mark="offline-update"><KitUpdateCard/></div>}
     </>
   );
 };

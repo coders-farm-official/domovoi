@@ -19634,6 +19634,164 @@
         }
       }
     },
+    "/api/offline-kit/update": {
+      "get": {
+        "tags": [
+          "offline-kit"
+        ],
+        "summary": "Offline Kit Update Status",
+        "description": "The update from a kit: what was sent, its state, the last error.",
+        "operationId": "offline_kit_update_status_api_offline_kit_update_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "offline-kit"
+        ],
+        "summary": "Offline Kit Update Begin",
+        "description": "The body is the kit's kit.json. 409/422 ``{reason, message}`` when\nthe kit can't update this server; else the files to send.",
+        "operationId": "offline_kit_update_begin_api_offline_kit_update_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "offline-kit"
+        ],
+        "summary": "Offline Kit Update Cancel",
+        "description": "Stop the update from a kit and remove what was uploaded.",
+        "operationId": "offline_kit_update_cancel_api_offline_kit_update_delete",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/offline-kit/update/{sid}/file": {
+      "put": {
+        "tags": [
+          "offline-kit"
+        ],
+        "summary": "Offline Kit Update File",
+        "description": "One chunk of one kit file at ``offset`` (the raw body).",
+        "operationId": "offline_kit_update_file_api_offline_kit_update__sid__file_put",
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Sid"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 1024,
+              "title": "Path"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/offline-kit/update/{sid}/apply": {
+      "post": {
+        "tags": [
+          "offline-kit"
+        ],
+        "summary": "Offline Kit Update Apply",
+        "description": "Check the release, move to it and start the update.",
+        "operationId": "offline_kit_update_apply_api_offline_kit_update__sid__apply_post",
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Sid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/offline-kit/{build_id}/ticket": {
       "post": {
         "tags": [

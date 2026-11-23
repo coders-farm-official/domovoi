@@ -858,7 +858,7 @@ run_update() {
     -u DOMOVOI_UPSTREAM_URL -u DOMOVOI_UPSTREAM_BRANCH -u DOMOVOI_USE_LOCK -u DOMOVOI_MANAGE_OS_JOBS \
     -u DOMOVOI_MANAGE_GPU_RUNTIME -u DOMOVOI_MANAGE_WAKE_TRAINER -u DOMOVOI_WAKE_TRAINER_IMAGE \
     -u DOMOVOI_MANAGE_JOURNAL -u DOMOVOI_MANAGE_PACKAGES -u DOMOVOI_MANAGE_CACHE_TRIM \
-    -u DOMOVOI_MANAGE_OLLAMA_ACCESS PATH="$path" \
+    -u DOMOVOI_MANAGE_OLLAMA_ACCESS -u DOMOVOI_OFFLINE_SOURCE PATH="$path" \
     DOMOVOI_REPO_DIR="$REPO" \
     DOMOVOI_PROVISION_ROOT="$OSROOT" DOMOVOI_PROVISION_TEST_HARNESS=1 \
     ${venv_env[@]+"${venv_env[@]}"} \
@@ -872,6 +872,7 @@ run_update() {
     DOMOVOI_UPDATE_RUN_DIR="$CASE/run" \
     DOMOVOI_ALLOWED_SIGNERS="${SIGNERS:-$CASE/no-allowed-signers}" \
     DOMOVOI_UPDATE_DIR="$UPD" \
+    DOMOVOI_OFFLINE_KIT_DIR="${OFFLINE_KIT_DIR:-$CASE/no-offline-kit}" \
     DOMOVOI_USER=tester \
     DOMOVOI_CORE_STATE_DIR="$CORE_STATE" \
     DOMOVOI_CORE_DROPIN_DIR="$CASE/dropins" \
@@ -5964,7 +5965,109 @@ CASES=(
   case_verifier_update_and_rollback_through_the_copy
   case_verifier_mirror_checks_every_object
   case_verifier_refuses_a_state_dir_others_can_write
+  case_offline_kit_deps_from_the_kit_under_never
+  case_offline_kit_request_for_another_commit_is_not_used
+  case_offline_kit_link_refuses_the_run
+  case_offline_kit_rollback_puts_the_venv_copy_back
 )
+
+# An update from an offline kit (1.5.0, P5): the core uploaded the kit into
+# its folder (DOMOVOI_OFFLINE_KIT_DIR here) and left a request naming HEAD.
+# Under never, a dependency change then installs from the lock with no
+# index, from root's copy of the kit's wheels; the venv is copied first and
+# the copy goes after a good update, and so does root's copy of the kit.
+offline_kit_folder() {  # SHA: a kit folder with one wheel and a request for SHA
+  local kit=$CASE/kit
+  mkdir -p "$kit/files/python/cp314-$(uname -m)"
+  printf 'wheel' >"$kit/files/python/cp314-$(uname -m)/numpy-2.4.7-cp314-cp314-manylinux_2_28_x86_64.whl"
+  printf 'commit=%s\n' "$1" >"$kit/request"
+  printf '%s' "$kit"
+}
+
+case_offline_kit_deps_from_the_kit_under_never() {
+  new_case offline_kit_deps_from_the_kit_under_never
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  echo never >"$STATE/internet-policy"
+  write_linux_lock numpy==2.4.7 setuptools==81.0.0 wheel==0.48.0
+  local sha_b kit; sha_b=$(commit_all "B: a new lock, from a kit")
+  kit=$(offline_kit_folder "$sha_b")
+  OFFLINE_KIT_DIR=$kit run_update
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "a dependency change" eq "$(field deps_changed)" true
+  check "the offline-kit step" grep -q '"name": "offline-kit", "status": "ok"' "$RESULT"
+  check "the pins with no index, from root's copy of the kit's wheels" \
+    called "$PIP_RUN --no-index --find-links $UPD/offline-kit/python/cp314-$(uname -m) --require-hashes --no-build-isolation -r $REPO/requirements-linux-py314.lock"
+  check "the build tools from the kit too" called "$PIP_RUN --no-index --find-links $UPD/offline-kit/python/cp314-$(uname -m) --require-hashes -r $UPD/build-tools."
+  check "never the resolver" not_called "install -e .["
+  check "the venv copy step" grep -q '"name": "venv-copy", "status": "ok"' "$RESULT"
+  check "the venv copy goes after a good update" test ! -e "$CASE/venv.before-offline-kit"
+  check "root's copy of the kit goes" test ! -e "$UPD/offline-kit"
+  check "the step says so" grep -qF "installed from requirements-linux-py314.lock and the offline kit's packages" "$RESULT"
+  check "the core's upload is left to the core" test -f "$kit/files/python/cp314-$(uname -m)/numpy-2.4.7-cp314-cp314-manylinux_2_28_x86_64.whl"
+  check "applied_sha moves to B" file_is "$UPD/applied_sha" "$sha_b"
+  end_case
+}
+
+# A request for another commit (an earlier, failed try) is not used: under
+# never the dependency change is refused as before.
+case_offline_kit_request_for_another_commit_is_not_used() {
+  new_case offline_kit_request_for_another_commit_is_not_used
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  echo never >"$STATE/internet-policy"
+  write_linux_lock numpy==2.4.7 setuptools==81.0.0 wheel==0.48.0
+  local kit; commit_all "B: a new lock" >/dev/null
+  kit=$(offline_kit_folder "$SHA_A")
+  OFFLINE_KIT_DIR=$kit run_update
+  check "status aborted" eq "$(field status)" '"aborted"'
+  check "the internet refusal" eq "$(field error | grep -c 'internet access is turned off for this box')" 1
+  check "no offline-kit step" not grep -q '"name": "offline-kit"' "$RESULT"
+  check "no pip" not_called "pip "
+  end_case
+}
+
+# Root takes only files and folders out of the kit: a link refuses the run
+# before anything is touched.
+case_offline_kit_link_refuses_the_run() {
+  new_case offline_kit_link_refuses_the_run
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  echo never >"$STATE/internet-policy"
+  write_linux_lock numpy==2.4.7 setuptools==81.0.0 wheel==0.48.0
+  local sha_b kit; sha_b=$(commit_all "B: a new lock, from a kit")
+  kit=$(offline_kit_folder "$sha_b")
+  ln -s /etc/passwd "$kit/files/python/cp314-$(uname -m)/evil-1.0-py3-none-any.whl"
+  OFFLINE_KIT_DIR=$kit run_update
+  check "status aborted" eq "$(field status)" '"aborted"'
+  check "says the kit couldn't be used" eq "$(field error | grep -c "offline kit's files couldn't be used")" 1
+  check "nothing stopped" not_called "systemctl stop"
+  check "no backup" not_called "pg_dump"
+  check "no pip" not_called "pip "
+  check "root's copy goes" test ! -e "$UPD/offline-kit"
+  check "applied_sha untouched" file_is "$UPD/applied_sha" "$SHA_A"
+  end_case
+}
+
+# A failed update from a kit puts the venv copy back (the old packages
+# can't be fetched again offline), never a re-sync.
+case_offline_kit_rollback_puts_the_venv_copy_back() {
+  new_case offline_kit_rollback_puts_the_venv_copy_back
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  echo never >"$STATE/internet-policy"
+  write_linux_lock numpy==2.4.7 setuptools==81.0.0 wheel==0.48.0
+  printf 'raise SystemExit("broken")\n' >"$REPO/domovoi/app.py"
+  local sha_b kit; sha_b=$(commit_all "B: a new lock and broken code, from a kit")
+  echo "$sha_b" >"$STATE/curl-fail-when-head"
+  kit=$(offline_kit_folder "$sha_b")
+  printf 'before' >"$CASE/venv/marker"
+  OFFLINE_KIT_DIR=$kit run_update
+  check "status rolled_back" eq "$(field status)" '"rolled_back"'
+  check "the rollback put the copy back" grep -q '"name": "rollback-deps", "status": "ok"' "$RESULT"
+  check "the venv is the copy" file_is "$CASE/venv/marker" before
+  check "no copy left beside it" test ! -e "$CASE/venv.before-offline-kit"
+  check "one locked install only (no re-sync of A)" eq "$(grep -c -- '--no-build-isolation -r ' "$STATE/calls.log")" 1
+  check "checkout back at A" eq "$(g rev-parse HEAD)" "$SHA_A"
+  end_case
+}
 
 # --case / --list / ONLY=<regex> (case-filter.sh) pick what runs; the suite
 # runs them all.

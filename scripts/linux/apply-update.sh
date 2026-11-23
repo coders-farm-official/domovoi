@@ -146,6 +146,24 @@
 #   change (pip would download) or a Dockerfile.mpd change (docker build
 #   pulls the base image and runs apt). An mpd.conf-only change keeps the
 #   image and just recreates the rooms.
+#   From an offline kit (1.5.0, P5; docs/OFFLINE_KIT.md, "Updating from a
+#   kit"): when the core moved the checkout to a newer kit's release and
+#   left its request (~/.domovoi/offline_kit/update/request of the service
+#   user, "commit=<HEAD>"), or DOMOVOI_OFFLINE_SOURCE names a kit folder,
+#   that folder is the offline source (resolve_offline_source). Before
+#   anything is touched, root copies what it installs out of it into its
+#   own DOMOVOI_UPDATE_DIR/offline-kit (only folders and regular files),
+#   loads the kit's container images and holds every image the compose file
+#   pins to its digest (offline_prepare); then the venv re-syncs from the
+#   hash-pinned lock with pip --no-index --find-links on the kit's wheels
+#   (sync_deps_locked; the lock's hashes are the pins), the music player
+#   image is loaded from the kit instead of built (rebuild_mpd), and the
+#   added Ubuntu packages come from the kit's mirror of Ubuntu's signed
+#   archive (reconcile_added_packages). So such an update needs no
+#   internet, and runs under never too. A rollback puts back a copy of the
+#   venv made before the re-sync, and the music player image the update
+#   replaced, since neither can be fetched again offline. The copy goes at
+#   the end of the run, whatever its result.
 #   On any failure in 3-9 (step 6 never fails a run, and what it set up
 #   stays): stop both again, `git reset --keep` back to the
 #   previous SHA, undo the dependency and MPD changes, restore the dump if
@@ -455,6 +473,31 @@ added_package_needs() {
   local IFS=';'
   printf '%s' "${out[*]}" | sed 's/;/; /g'
 }
+
+# An update from an offline kit (1.5.0, P5; "From an offline kit" above).
+# DOMOVOI_OFFLINE_SOURCE: a kit folder an administrator names (root's own
+# word, used as root). Otherwise the folder the core uploaded a kit into,
+# DOMOVOI_OFFLINE_KIT_DIR (default ~/.domovoi/offline_kit/update of the
+# service user, read as that user): used only while its request file names
+# the commit this run applies.
+OFFLINE_SOURCE=${DOMOVOI_OFFLINE_SOURCE:-}
+OFFLINE_KIT_DIR=${DOMOVOI_OFFLINE_KIT_DIR:-}
+# 1 when OFFLINE_SOURCE is the service user's folder (read through runuser).
+OFFLINE_AS_USER=0
+OFFLINE_STAGE=""
+OFFLINE_WHEELS=""
+OFFLINE_APT=""
+# The kit's music player image archive in the stage, when it has one.
+OFFLINE_MPD_TAR=""
+# The music player image the update replaced, kept under this tag for a
+# rollback (offline_mpd_image).
+MPD_KEEP_TAG=""
+# A copy of the venv made before an offline re-sync, put back by a rollback.
+VENV_SNAP=""
+VENV_SNAP_MADE=0
+IN_ROLLBACK=0
+# pip's source for sync_deps_locked: the index, or the kit's wheels only.
+PIP_SRC=()
 
 # The wake-word trainer image (scripts/wake_word/docker), rebuilt when it is
 # out of date and only where a household built it (switched training on).
@@ -796,6 +839,7 @@ run_soft_step() {
 
 on_exit() {
   local rc=$?
+  offline_cleanup
   if [ "$FINAL_WRITTEN" != 1 ]; then
     if [ "$APPLIED_OK" = 1 ]; then
       # Stopped during the search-helper step, after the update itself was
@@ -1942,6 +1986,14 @@ sync_deps() {
   if [ ! -x "$VENV_DIR/bin/python" ]; then
     echo "no venv interpreter at $VENV_DIR/bin/python (set DOMOVOI_VENV)"; return 1
   fi
+  # From an offline kit: the lock (its hashes are the pins), from the kit's
+  # wheels only; the preflight made sure the lock is usable.
+  if [ -n "$OFFLINE_WHEELS" ]; then
+    PIP_SRC=(--no-index --find-links "$OFFLINE_WHEELS")
+    sync_deps_locked
+    return
+  fi
+  PIP_SRC=()
   if [ "$USE_LOCK" != 1 ]; then
     sync_deps_resolved || return 1
     if [ -n "$DEPS_LOCK" ] && [ -f "$REPO_DIR/$DEPS_LOCK" ]; then
@@ -2054,17 +2106,27 @@ sync_deps_locked() {
   echo "build tools from $DEPS_LOCK: $(printf '%s\n' "$tools" | sed -n 's/^\([A-Za-z0-9._-]*==[^ ]*\).*/\1/p' | tr '\n' ' ')"
   reqs=$(mktemp "$UPDATE_DIR/build-tools.XXXXXX") || return 1
   if ! { printf '%s\n' "$tools" >"$reqs" && chmod 0644 "$reqs"; }; then rm -f "$reqs"; return 1; fi
-  (cd "$REPO_DIR" && pip_as install --require-hashes -r "$reqs") || rc=$?
+  (cd "$REPO_DIR" && pip_as install ${PIP_SRC[@]+"${PIP_SRC[@]}"} --require-hashes -r "$reqs") || rc=$?
   rm -f "$reqs"
   [ "$rc" -eq 0 ] || return 1
-  (cd "$REPO_DIR" && pip_as install --require-hashes --no-build-isolation -r "$lock") || return 1
+  (cd "$REPO_DIR" && pip_as install ${PIP_SRC[@]+"${PIP_SRC[@]}"} --require-hashes --no-build-isolation -r "$lock") || return 1
   if [ -n "$DEPS_NODEPS_LOCK" ] && as_user test -f "$REPO_DIR/$DEPS_NODEPS_LOCK"; then
-    (cd "$REPO_DIR" && pip_as install --require-hashes --no-deps -r "$REPO_DIR/$DEPS_NODEPS_LOCK") || return 1
+    (cd "$REPO_DIR" && pip_as install ${PIP_SRC[@]+"${PIP_SRC[@]}"} --require-hashes --no-deps -r "$REPO_DIR/$DEPS_NODEPS_LOCK") || return 1
   fi
-  (cd "$REPO_DIR" && pip_as install --no-deps --no-build-isolation -e .) || return 1
+  (cd "$REPO_DIR" && pip_as install ${PIP_SRC[@]+"${PIP_SRC[@]}"} --no-deps --no-build-isolation -e .) || return 1
   DEPS_FROM_LOCK=1
   STEP_DETAIL="installed from $DEPS_LOCK, every package hash-checked"
   beyond=$(extras_beyond_lock)
+  if [ -n "$beyond" ] && [ "${#PIP_SRC[@]}" -gt 0 ]; then
+    # From an offline kit: nothing outside the lock can be fetched.
+    log "WARNING: extras outside $DEPS_LOCK ($beyond) are not on the offline kit; left as they were"
+    STEP_STATUS=warn
+    STEP_DETAIL="installed from $DEPS_LOCK and the offline kit's packages, every package hash-checked; extras outside it ($beyond) are not on a kit and were left as they were"
+    return 0
+  fi
+  if [ "${#PIP_SRC[@]}" -gt 0 ]; then
+    STEP_DETAIL="installed from $DEPS_LOCK and the offline kit's packages, every package hash-checked"
+  fi
   if [ -n "$beyond" ]; then
     log "WARNING: extras outside $DEPS_LOCK ($beyond) come from pip's resolver, without hash checks"
     (cd "$REPO_DIR" && pip_as install -e ".[$beyond]") || return 1
@@ -2290,7 +2352,11 @@ restore_pins() {
 # recreates each from its mpd_rooms row with the same named data volume.
 rebuild_mpd() {
   local names n built iiddir
-  if [ "$POLICY_AT_START" = never ] && [ "$MPD_IMAGE_CHANGED" = 0 ]; then
+  if [ -n "$OFFLINE_MPD_TAR" ] && [ "$MPD_IMAGE_CHANGED" = 1 ]; then
+    # From an offline kit: its image, loaded (or, in a rollback, the one it
+    # replaced), never a build (that downloads).
+    offline_mpd_image || return 1
+  elif [ "$POLICY_AT_START" = never ] && [ "$MPD_IMAGE_CHANGED" = 0 ]; then
     # Only mpd.conf changed, and the build would at most re-pull the base
     # image: keep the image (internet access is turned off) and just
     # recreate the rooms so they mount the new conf.
@@ -2601,6 +2667,26 @@ reconcile_added_packages() {
     dpkg-query -W -f='${Status}\n' "$p" 2>/dev/null | grep -q 'install ok installed' || missing+=("$p")
   done
   [ "${#missing[@]}" -gt 0 ] || return 0
+  if [ -n "$OFFLINE_APT" ]; then
+    # From an offline kit: its mirror of Ubuntu's signed archive and no
+    # other source, whatever the internet answer.
+    local -a kitopts=()
+    mapfile -t kitopts < <(offline_apt_args)
+    t0=$(now_ms)
+    log "step added-packages: ${missing[*]} (from the offline kit)"
+    set +e
+    out=$({ DEBIAN_FRONTEND=noninteractive "${apt[@]}" "${kitopts[@]}" update \
+      && DEBIAN_FRONTEND=noninteractive "${apt[@]}" "${kitopts[@]}" install -y --no-install-recommends "${missing[@]}"; } 2>&1)
+    rc=$?
+    set -e
+    if [ -n "$out" ]; then printf '%s\n' "$out" | tail -n 20 | sed 's/^/    /'; fi
+    if [ "$rc" -ne 0 ]; then
+      add_step added-packages warn "$t0" "not installed: ${missing[*]} (the offline kit's Ubuntu packages couldn't be installed, exit $rc; journalctl -u domovoi-update says why). $(added_package_needs "${missing[@]}")"
+    else
+      add_step added-packages ok "$t0" "installed ${missing[*]} from the offline kit"
+    fi
+    return 0
+  fi
   policy=$(internet_policy 2>/dev/null || true)
   if [ "$policy" = never ]; then
     log "not installed while internet access is turned off: ${missing[*]} ($(added_package_needs "${missing[@]}"))"
@@ -3362,6 +3448,190 @@ reconcile_update_unit() {
 
 # ─── The two paths ───────────────────────────────────────────────────────
 
+# ─── An update from an offline kit (1.5.0, P5) ───────────────────────────
+
+# resolve_offline_source: OFFLINE_SOURCE for this run, or empty. The core's
+# upload counts only while its request names HEAD: the folder of an
+# earlier, failed try is never taken for another commit.
+resolve_offline_source() {
+  local home="" req=""
+  if [ -n "$OFFLINE_SOURCE" ]; then OFFLINE_AS_USER=0; return 0; fi
+  if [ -z "$OFFLINE_KIT_DIR" ]; then
+    home=$(getent passwd "$SERVICE_USER" 2>/dev/null | cut -d: -f6) || home=""
+    [ -n "$home" ] || return 0
+    OFFLINE_KIT_DIR=$home/.domovoi/offline_kit/update
+  fi
+  req=$({ as_user head -c 100 -- "$OFFLINE_KIT_DIR/request" 2>/dev/null || true; } | tr -d '[:space:]')
+  if [ "$req" = "commit=$HEAD_SHA" ]; then
+    OFFLINE_SOURCE=$OFFLINE_KIT_DIR/files
+    OFFLINE_AS_USER=1
+  fi
+}
+
+# A command on the offline source: as the service user when it is that
+# user's folder, else as root.
+as_src() { if [ "$OFFLINE_AS_USER" = 1 ]; then as_user "$@"; else "$@" 8>&-; fi; }
+
+offline_deb_arch() { dpkg --print-architecture 2>/dev/null || echo amd64; }
+
+# The kit's archive name for an image tag (domovoi/kit_builder/images.py
+# archive_name): / becomes _, then anything but [A-Za-z0-9._-] becomes _.
+kit_archive_name() {
+  local repo=${1%%:*} tag=latest n
+  case $1 in *:*) tag=${1#*:} ;; esac
+  n="${repo//\//_}_$tag"
+  printf '%s.tar' "$(printf '%s' "$n" | sed 's/[^A-Za-z0-9._-]/_/g')"
+}
+
+# offline_stage: what this run installs from the kit, copied into root's own
+# folder: the wheels for this machine, the images, and Ubuntu's mirror for
+# this arch. Only folders and regular files come through: a link, a device
+# or a pipe in the source refuses the run.
+offline_stage() {
+  local d arch
+  local -a sub=()
+  arch=$(offline_deb_arch)
+  OFFLINE_STAGE=$UPDATE_DIR/offline-kit
+  rm -rf -- "$OFFLINE_STAGE"
+  install -d -m 0755 "$OFFLINE_STAGE"
+  if ! as_src test -d "$OFFLINE_SOURCE"; then
+    echo "the offline kit's folder $OFFLINE_SOURCE is not there"; return 1
+  fi
+  for d in "python/cp314-$(uname -m)" images "apt/$arch/ubuntu"; do
+    if as_src test -d "$OFFLINE_SOURCE/$d"; then sub+=("$d"); fi
+  done
+  if [ "${#sub[@]}" -gt 0 ]; then
+    if ! { as_src tar -C "$OFFLINE_SOURCE" -cf - -- "${sub[@]}" \
+           | tar -C "$OFFLINE_STAGE" -xf - --no-same-owner --no-same-permissions; }; then
+      echo "copying ${sub[*]} out of the offline kit failed"; return 1
+    fi
+  fi
+  if [ -n "$(find "$OFFLINE_STAGE" ! -type d ! -type f -print -quit)" ]; then
+    echo "the offline kit's folder holds something other than files and folders: refused"; return 1
+  fi
+  chmod -R u=rwX,go=rX "$OFFLINE_STAGE"
+  d=$OFFLINE_STAGE/python/cp314-$(uname -m)
+  if [ -d "$d" ] && [ -n "$(ls -A "$d")" ]; then OFFLINE_WHEELS=$d; fi
+  if [ -d "$OFFLINE_STAGE/apt/$arch/ubuntu/dists" ]; then OFFLINE_APT=$OFFLINE_STAGE/apt/$arch/ubuntu; fi
+  d=$OFFLINE_STAGE/images/$(kit_archive_name "$MPD_TAG")
+  if [ -f "$d" ]; then OFFLINE_MPD_TAR=$d; fi
+  echo "from the offline kit: ${sub[*]:-nothing to install}"
+}
+
+# The images the compose file at HEAD pins by digest (repo@sha256:hex, one a
+# line, the tag dropped), the search helper's aside: it is never on a kit.
+compose_pins() {
+  git_as show "$HEAD_SHA:$COMPOSE_PATH" 2>/dev/null \
+    | sed -n 's/^[[:space:]]*image:[[:space:]]*["]\{0,1\}\([^"[:space:]]*@sha256:[0-9a-f]\{64\}\).*/\1/p' \
+    | grep -v searxng \
+    | sed 's/^\([^@]*\):[^:@/]*@/\1@/' || true
+}
+
+# offline_load_images: docker load of every image archive the kit sent but
+# the music player's (offline_mpd_image loads it, with the services
+# stopped); then, when the compose file's pins moved, every image it pins
+# must be here by its digest.
+offline_load_images() {
+  local f ref
+  local -a missing=()
+  for f in "$OFFLINE_STAGE"/images/*.tar; do
+    [ -f "$f" ] || continue
+    [ "$f" != "$OFFLINE_MPD_TAR" ] || continue
+    echo "docker load ${f##*/}"
+    docker load -q -i "$f" || { echo "docker load of ${f##*/} failed"; return 1; }
+  done
+  if [ "$IMAGES_CHANGED" = 1 ]; then
+    while IFS= read -r ref; do
+      [ -n "$ref" ] || continue
+      docker image inspect "$ref" >/dev/null 2>&1 || missing+=("$ref")
+    done < <(compose_pins)
+    if [ "${#missing[@]}" -gt 0 ]; then
+      echo "the offline kit lacks the container image(s) this release pins: ${missing[*]}"
+      return 1
+    fi
+  fi
+}
+
+# offline_prepare: the offline-kit step, before anything is touched.
+offline_prepare() {
+  offline_stage || return 1
+  offline_load_images || return 1
+  STEP_DETAIL="from an offline kit:${OFFLINE_WHEELS:+ Python packages,}${OFFLINE_MPD_TAR:+ the music player image,}${OFFLINE_APT:+ the Ubuntu packages,} container images"
+}
+
+offline_cleanup() {
+  if [ -n "$OFFLINE_STAGE" ] && [ -d "$OFFLINE_STAGE" ]; then rm -rf -- "$OFFLINE_STAGE" || true; fi
+}
+
+# The venv copied beside itself before an offline re-sync: a rollback's
+# re-sync would need the old packages, which the kit doesn't carry.
+snapshot_venv_dir() {
+  VENV_SNAP=$VENV_DIR.before-offline-kit
+  as_user rm -rf -- "$VENV_SNAP" || return 1
+  as_user cp -a -- "$VENV_DIR" "$VENV_SNAP" || return 1
+  VENV_SNAP_MADE=1
+}
+
+restore_venv_dir() {
+  as_user rm -rf -- "$VENV_DIR" && as_user mv -- "$VENV_SNAP" "$VENV_DIR" && VENV_SNAP_MADE=0
+}
+
+# After a good update: the venv copy and the replaced music player image's
+# tag go.
+drop_venv_snapshot() {
+  if [ "$VENV_SNAP_MADE" = 1 ]; then as_user rm -rf -- "$VENV_SNAP" || true; VENV_SNAP_MADE=0; fi
+  if [ -n "$MPD_KEEP_TAG" ]; then docker rmi "$MPD_KEEP_TAG" >/dev/null 2>&1 || true; fi
+}
+
+# The music player image from the kit (rebuild_mpd): the image under
+# MPD_TAG now is kept as MPD_KEEP_TAG for a rollback, then the kit's is
+# loaded and recorded for the container guard. In the rollback, the kept
+# one goes back under MPD_TAG.
+offline_mpd_image() {
+  local id
+  MPD_KEEP_TAG=${MPD_TAG%%:*}:before-offline-kit
+  rm -f "$MPD_RECORD"
+  MPD_RECORD_STATE=""
+  if [ "$IN_ROLLBACK" = 1 ]; then
+    if docker image inspect "$MPD_KEEP_TAG" >/dev/null 2>&1; then
+      docker tag "$MPD_KEEP_TAG" "$MPD_TAG" || return 1
+      echo "the music player image from before the update is back under $MPD_TAG"
+    else
+      # The update failed before it replaced the image: it is still the old one.
+      echo "the music player image was not replaced: $MPD_TAG stays"
+    fi
+  else
+    if docker image inspect "$MPD_TAG" >/dev/null 2>&1; then docker tag "$MPD_TAG" "$MPD_KEEP_TAG" || return 1; fi
+    docker load -q -i "$OFFLINE_MPD_TAR" || { echo "docker load of the kit's music player image failed"; return 1; }
+    echo "the music player image from the offline kit (built by the house that made the kit)"
+  fi
+  id=$(docker image inspect -f '{{.Id}}' "$MPD_TAG" 2>/dev/null | tr -d '[:space:]') || id=""
+  record_mpd_image "$id"
+}
+
+# apt's options for the kit's mirror of Ubuntu's archive, and nothing else:
+# its suites, checked against the Ubuntu keyring this system has.
+offline_apt_args() {
+  local conf=$OFFLINE_STAGE/apt-conf arch d suite comps c key
+  arch=$(offline_deb_arch)
+  key=$(sed -n 's/^Signed-By:[[:space:]]*//p' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null | head -n 1)
+  [ -n "$key" ] || key=/usr/share/keyrings/ubuntu-archive-keyring.gpg
+  mkdir -p "$conf/sources.list.d" "$conf/lists/partial"
+  : >"$conf/sources.list"
+  : >"$conf/sources.list.d/offline-kit.sources"
+  for d in "$OFFLINE_APT/dists"/*/; do
+    [ -f "$d/InRelease" ] || continue
+    suite=$(basename "$d")
+    comps=""
+    for c in "$d"*/; do [ -d "$c/binary-$arch" ] && comps+=" $(basename "$c")"; done
+    [ -n "$comps" ] || continue
+    printf 'Types: deb\nURIs: file:%s\nSuites: %s\nComponents:%s\nArchitectures: %s\nSigned-By: %s\nCheck-Valid-Until: no\nCheck-Date: no\n\n' \
+      "$OFFLINE_APT" "$suite" "$comps" "$arch" "$key" >>"$conf/sources.list.d/offline-kit.sources"
+  done
+  printf '%s\n' -o "Dir::Etc::SourceList=$conf/sources.list" -o "Dir::Etc::SourceParts=$conf/sources.list.d" \
+    -o "Dir::State::Lists=$conf/lists" -o Acquire::Languages=none -o APT::Sandbox::User=root
+}
+
 plain_restart() {
   local failed=""
   MODE=restart
@@ -3450,11 +3720,30 @@ full_update() {
     # depends on it (the rollback's re-sync and rebuild use it too).
     POLICY_AT_START=$(internet_policy 2>/dev/null || true)
   fi
-  if [ "$POLICY_AT_START" = never ] && { [ "$DEPS_CHANGED" = 1 ] || [ "$MPD_IMAGE_CHANGED" = 1 ] || [ "$IMAGES_CHANGED" = 1 ]; }; then
+  # From an offline kit ("From an offline kit" above): its files copied out
+  # and its images loaded before anything is touched; what it carries
+  # needs no internet below.
+  resolve_offline_source
+  local net_deps=$DEPS_CHANGED net_mpd=$MPD_IMAGE_CHANGED net_images=$IMAGES_CHANGED
+  if [ -n "$OFFLINE_SOURCE" ]; then
+    if ! run_step offline-kit offline_prepare; then
+      finish aborted "the offline kit's files couldn't be used, so nothing was changed: $LAST_ERROR"
+      return
+    fi
+    if [ -n "$OFFLINE_WHEELS" ]; then net_deps=0; fi
+    if [ -n "$OFFLINE_MPD_TAR" ]; then net_mpd=0; fi
+    net_images=0
+    if [ "$DEPS_CHANGED" = 1 ] && [ -n "$OFFLINE_WHEELS" ] && ! why=$(lock_usable); then
+      add_step preflight refused "$t0" "$why"
+      finish aborted "an update from an offline kit installs the Python packages from the hash-pinned lock, and $why, so nothing was changed"
+      return
+    fi
+  fi
+  if [ "$POLICY_AT_START" = never ] && { [ "$net_deps" = 1 ] || [ "$net_mpd" = 1 ] || [ "$net_images" = 1 ]; }; then
     local -a what=()
-    if [ "$DEPS_CHANGED" = 1 ]; then what+=("the Python dependencies (pip would download them)"); fi
-    if [ "$MPD_IMAGE_CHANGED" = 1 ]; then what+=("the music player image (docker build downloads it)"); fi
-    if [ "$IMAGES_CHANGED" = 1 ]; then what+=("the container images (docker compose would pull them)"); fi
+    if [ "$net_deps" = 1 ]; then what+=("the Python dependencies (pip would download them)"); fi
+    if [ "$net_mpd" = 1 ]; then what+=("the music player image (docker build downloads it)"); fi
+    if [ "$net_images" = 1 ]; then what+=("the container images (docker compose would pull them)"); fi
     why="this update changes ${what[0]}"
     if [ "${#what[@]}" -eq 2 ]; then why="$why and ${what[1]}"; fi
     if [ "${#what[@]}" -eq 3 ]; then why="$why, ${what[1]} and ${what[2]}"; fi
@@ -3504,6 +3793,12 @@ full_update() {
   PLUGINS_BEFORE=$(plugin_states || true)
   if [ "$DEPS_CHANGED" = 1 ]; then
     run_step snapshot-venv snapshot_venv || rm -f "$FREEZE_FILE"
+    # From an offline kit, the rollback puts this copy back: the old
+    # packages can't be fetched again.
+    if [ -n "$OFFLINE_WHEELS" ] && ! run_step venv-copy snapshot_venv_dir; then
+      finish aborted "a copy of the venv to roll back to couldn't be made (is the disk full?), so nothing was changed: $LAST_ERROR"
+      return
+    fi
   fi
 
   SERVICES_STOPPED=1
@@ -3538,6 +3833,7 @@ full_update() {
     rm -f "$BAD_FILE"
     BAD_SHA=""
     APPLIED_OK=1
+    drop_venv_snapshot
     run_soft_step searxng reconcile_searxng
     reconcile_os_jobs
     reconcile_added_packages
@@ -3560,6 +3856,7 @@ rollback() {
   local failed_step=$1 cause=$2 rb="" rb_err="" now off
   local -a offs=()
   log "update failed at $failed_step; rolling back to ${PREV_SHA:0:12}"
+  IN_ROLLBACK=1
   SERVICES_STOPPED=1
   run_step rollback-stop stop_services || true
   # A git killed in the run (the stop above takes the core's down with it)
@@ -3574,7 +3871,10 @@ rollback() {
     if [ "$PY_MOVED" = 1 ]; then
       run_step rollback-python venv_onto "$PY_FROM" || rb_failed rollback-python
     fi
-    if [ "$DEPS_CHANGED" = 1 ]; then
+    if [ "$VENV_SNAP_MADE" = 1 ]; then
+      # From an offline kit: the copy made before the re-sync.
+      run_step rollback-deps restore_venv_dir || rb_failed rollback-deps
+    elif [ "$DEPS_CHANGED" = 1 ]; then
       run_step rollback-deps sync_deps || rb_failed rollback-deps
       # Best effort: a pin that can't be restored leaves a newer but
       # compatible version, which is what sync_deps alone would give.

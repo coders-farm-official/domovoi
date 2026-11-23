@@ -341,5 +341,185 @@ const OfflineKitPanel = () => {
   return <OfflineKitCard/>;
 };
 
+/* Update from an offline kit (About & updates; release 1.5.0, P5;
+ * domovoi/kit_update.py on the core). The admin plugs the newer kit's
+ * stick into this computer and chooses its folder. The page sends kit.json
+ * (the server refuses an older or the same release, another machine, or a
+ * disk without room, in one plain sentence), then each file the server
+ * lacks in pieces of at most chunk_max bytes, each at the offset the server
+ * already holds: a reload or a dropped connection picks up where it
+ * stopped once the folder is chosen again. Then "Update now" checks the
+ * release, moves to it and starts the update, with no internet. */
+const KIT_CHUNK = 8 * 1024 * 1024;
+
+const kitUpdateText = (e) => {
+  const d = e && e.detail && e.detail.detail;
+  return (d && typeof d === 'object' && typeof d.message === 'string') ? d.message : apiErrorText(e, 300);
+};
+
+/* The chosen folder's files by their path on the stick: the folder's own
+ * name (the first part of webkitRelativePath) is dropped. */
+const kitFilesByPath = (list) => {
+  const out = {};
+  for (const f of Array.from(list || [])) {
+    const rel = (f.webkitRelativePath || f.name).split('/').slice(1).join('/') || f.name;
+    out[rel] = f;
+  }
+  return out;
+};
+
+/* Send every file of the session the server doesn't hold yet. */
+const kitSendFiles = async (session, files, onProgress, stopped) => {
+  const chunk = Math.min(KIT_CHUNK, session.chunk_max || KIT_CHUNK);
+  let sent = session.bytes_received || 0;
+  for (const item of session.files) {
+    let at = item.received;
+    if (at >= item.size) continue;
+    const file = files[item.path];
+    if (!file) throw new Error(`The chosen folder has no ${item.path}. Choose the kit's own folder (the one with kit.json in it).`);
+    if (file.size !== item.size) throw new Error(`${item.path} on the stick is not the size kit.json says. Make the stick again.`);
+    while (at < item.size) {
+      if (stopped()) return;
+      const end = Math.min(item.size, at + chunk);
+      const q = new URLSearchParams({ path: item.path, offset: String(at) });
+      let r;
+      try {
+        r = await apiFetchRaw(`/api/offline-kit/update/${session.id}/file?${q}`, {
+          method: 'PUT', body: file.slice(at, end), headers: { 'Content-Type': 'application/octet-stream' },
+        });
+      } catch (e) {
+        const d = e && e.detail && e.detail.detail;
+        // The server holds another amount: carry on from there.
+        if (d && d.reason === 'offset' && typeof d.received === 'number') { sent += d.received - at; at = d.received; continue; }
+        throw e;
+      }
+      const doc = await r.json();
+      sent += doc.received - at;
+      at = doc.received;
+      onProgress(sent);
+    }
+  }
+};
+
+const OfflineKitUpdateBody = () => {
+  const [st, setSt] = React.useState(null);
+  const [error, setError] = React.useState(null);
+  const [busy, setBusy] = React.useState(null); // 'reading' | 'sending' | 'applying'
+  const [sent, setSent] = React.useState(0);
+  const inputRef = React.useRef(null);
+  const stopRef = React.useRef(false);
+
+  const load = React.useCallback(async () => {
+    try { setSt(await apiGet('/api/offline-kit/update')); } catch (e) { setError(kitUpdateText(e)); }
+  }, []);
+  React.useEffect(() => { load(); return () => { stopRef.current = true; }; }, [load]);
+  const session = st && st.session;
+  const applying = session && session.state === 'applying';
+  React.useEffect(() => {
+    if (!applying) return undefined;
+    const t = setInterval(load, 4000);
+    return () => clearInterval(t);
+  }, [applying, load]);
+
+  const choose = async (list) => {
+    const files = kitFilesByPath(list);
+    if (inputRef.current) inputRef.current.value = '';
+    setError(null);
+    const kitJson = files['kit.json'];
+    if (!kitJson) { setError('There is no kit.json in that folder. Choose the stick itself (DOMOVOIKIT), not a folder inside it.'); return; }
+    stopRef.current = false;
+    try {
+      setBusy('reading');
+      const view = await apiFetch('/api/offline-kit/update', { method: 'POST', body: await kitJson.text() });
+      setSt(view);
+      setBusy('sending');
+      setSent(view.session.bytes_received || 0);
+      await kitSendFiles(view.session, files, setSent, () => stopRef.current);
+      await load();
+    } catch (e) {
+      setError(kitUpdateText(e));
+      load();
+    } finally {
+      setBusy(null);
+    }
+  };
+  const apply = async () => {
+    setBusy('applying'); setError(null);
+    try { setSt(await apiPost(`/api/offline-kit/update/${session.id}/apply`, {})); }
+    catch (e) { setError(kitUpdateText(e)); load(); }
+    finally { setBusy(null); }
+  };
+  const cancel = async () => {
+    stopRef.current = true;
+    try { setSt(await apiDelete('/api/offline-kit/update')); setError(null); }
+    catch (e) { setError(kitUpdateText(e)); }
+  };
+
+  const note = { fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 };
+  const total = session ? session.bytes_total : 0;
+  const got = busy === 'sending' ? sent : (session ? session.bytes_received : 0);
+  const pct = total ? Math.min(100, Math.round(100 * got / total)) : 0;
+  const uploading = session && (session.state === 'uploading' || session.state === 'failed');
+  const allHere = session && session.files_left === 0;
+  return (
+    <div className="offline-kit-update" style={{ display: 'flex', flexDirection: 'column', gap: 10, fontSize: 13 }}>
+      <div style={note}>
+        Plug the newer kit’s stick into this computer and choose its folder. Only what this server lacks is
+        sent (often 0.5 to 1.5 GB), and nothing is downloaded from the internet.
+      </div>
+      <input ref={inputRef} type="file" multiple webkitdirectory="" directory="" style={{ display: 'none' }}
+             onChange={(e) => choose(e.target.files)}/>
+      {error && <div role="alert" style={{ color: 'var(--danger)', fontSize: 13 }}>{error}</div>}
+      {session && session.state === 'done' && (
+        <div>Updated to Domovoi {session.version} from the offline kit. The uploaded copy was removed.
+          {session.apps && session.apps.kept ? ` The phone app is on the server (${session.apps.kept} file${session.apps.kept === 1 ? '' : 's'}).` : ''}
+        </div>
+      )}
+      {session && session.state === 'refused' && session.error && <div role="alert">{session.error}</div>}
+      {session && uploading && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div>Domovoi {session.version} from the kit: {KIT_GB(got)} of {KIT_GB(total)}
+            {session.files_left && busy !== 'sending' ? ` · ${session.files_left} file${session.files_left === 1 ? '' : 's'} still to send: choose the folder again to go on` : ''}
+          </div>
+          <div role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}
+               style={{ height: 6, borderRadius: 9999, background: 'var(--sunken)', overflow: 'hidden' }}>
+            <div style={{ width: `${pct}%`, height: '100%', background: 'var(--brand)', transition: 'width 180ms cubic-bezier(0.2,0,0,1)' }}/>
+          </div>
+          {session.state === 'failed' && session.error && <div role="alert" style={note}>{session.error}</div>}
+        </div>
+      )}
+      {applying && <div>Updating to Domovoi {session.version}… The dashboard goes away for a minute or two while Domovoi restarts.</div>}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        {!applying && (
+          <Button variant={allHere && uploading ? 'secondary' : 'primary'} icon="usb" disabled={!!busy}
+                  onClick={() => inputRef.current && inputRef.current.click()}>
+            {busy === 'reading' ? 'reading the kit…' : busy === 'sending' ? 'sending…' : 'choose the kit folder'}
+          </Button>
+        )}
+        {uploading && allHere && !busy && (
+          <Button variant="primary" icon="refresh-cw" onClick={apply}>update now</Button>
+        )}
+        {busy === 'applying' && <span style={note}>checking the release…</span>}
+        {session && !applying && session.state !== 'done' && (
+          <Button variant="secondary" icon="x" onClick={cancel}>cancel</Button>
+        )}
+      </div>
+      {st && st.running_version && <div style={note}>This server runs Domovoi {st.running_version}. A kit can only update it to a newer release.</div>}
+    </div>
+  );
+};
+
+const OfflineKitUpdateCard = () => {
+  const admin = useAdminSignedIn();
+  return (
+    <Card title="Update from an offline kit" sub="A house with no internet updates from a newer kit’s USB stick." padded>
+      {admin ? <OfflineKitUpdateBody/> : (
+        <div style={{ fontSize: 13, color: 'var(--fg-muted)' }}>Admins only.</div>
+      )}
+    </Card>
+  );
+};
+window.OfflineKitUpdateCard = OfflineKitUpdateCard;
+
 window.DomovoiSettingsSections = window.DomovoiSettingsSections || {};
 window.DomovoiSettingsSections['offline-kit'] = { Panel: OfflineKitPanel };
