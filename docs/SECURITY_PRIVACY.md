@@ -3655,7 +3655,9 @@ server sign its identity for the address it dialled, and then opens no room
 socket for two and a half minutes, is a room set up for a different server
 (another house, or this one before a reinstall gave it a new key). It is
 text only: the device's pin is untouched, nothing the server says can move
-it, and the only way to bring it over is setting it up again.
+it, and the only way to bring it over is setting it up again. Only an IP
+address is ever named, and never a loopback address or a trusted proxy with
+no forwarded address, which stand for every device at once.
 
 **A signed list says when, not only who.** Every `manifest.sig` envelope
 carries `issued_at` and a per-channel `serial` that only grows when the

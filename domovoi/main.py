@@ -1465,6 +1465,23 @@ def _arrival_ports(request: Any) -> set[int] | None:
     return {port} if port else None
 
 
+def _room_device_source(conn: Any) -> str | None:
+    """The address one room device is calling from, for the "set up for a
+    different server" inference (join_problems.identity_checked), or None
+    when it can't be told. A trusted proxy with no forwarded address (the
+    web process, a host's forwarder) stands for every device at once, and
+    naming it would be wrong. Never raises."""
+    try:
+        if conn is None or conn.client is None:
+            return None
+        if (conn.client.host in admin_auth_mod.TRUSTED_PROXIES
+                and not conn.headers.get("x-forwarded-for")):
+            return None
+        return admin_auth_mod.request_source(conn)
+    except Exception:  # noqa: BLE001 — a hint must never break the caller
+        return None
+
+
 @app.get("/v1/health")
 async def health(
     challenge: str | None = None, addr: str | None = None,
@@ -1590,11 +1607,13 @@ async def health(
             doc["identity"] = identity.health_answer(
                 challenge, addr=addr, pairing_proof=signed_proof,
             )
-            if signed_proof is None and getattr(request, "client", None) is not None:
+            if signed_proof is None:
                 # A room device checking the server it is pinned to before
                 # it connects. One that never connects afterwards was set
                 # up for a different server (S3-4): said in Settings → Rooms.
-                join_problems.identity_checked(admin_auth_mod.request_source(request))
+                source = _room_device_source(request)
+                if source is not None:
+                    join_problems.identity_checked(source)
         else:
             log.warning(
                 "refused to sign the identity proof for %s: it is not an "
@@ -9174,17 +9193,27 @@ async def stream(ws: WebSocket, room_id: str) -> None:
     credential that actually authenticates a satellite is still the
     pairing token in its ``hello`` frame.
     """
-    if not origin_allowed(ws.headers.get("origin")):
-        await _refuse_ws(
-            ws, "cross_origin",
-            f"/v1/stream/{room_id} from Origin {ws.headers.get('origin')!r}",
-        )
-        return
-    if not room_ids.is_room_id(room_id):
-        await _refuse_ws(ws, "bad_room_id", f"/v1/stream/{room_id!r} is not a room id")
-        return
-    session = StreamSession(ws, room_id)
-    await session.run()
+    # Whatever opens a room socket talks to this server, even one refused
+    # below: it is not a device set up for a different one (S3-4,
+    # join_problems.identity_checked).
+    source = _room_device_source(ws)
+    if source is not None:
+        join_problems.stream_opened(source)
+    try:
+        if not origin_allowed(ws.headers.get("origin")):
+            await _refuse_ws(
+                ws, "cross_origin",
+                f"/v1/stream/{room_id} from Origin {ws.headers.get('origin')!r}",
+            )
+            return
+        if not room_ids.is_room_id(room_id):
+            await _refuse_ws(ws, "bad_room_id", f"/v1/stream/{room_id!r} is not a room id")
+            return
+        session = StreamSession(ws, room_id)
+        await session.run()
+    finally:
+        if source is not None:
+            join_problems.stream_closed(source)
 
 
 @app.websocket("/v1/dropin/{room_id}")

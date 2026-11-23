@@ -17,6 +17,7 @@ them, and the next attempt says it again.
 
 from __future__ import annotations
 
+import ipaddress
 import threading
 import time
 from typing import Any
@@ -93,12 +94,28 @@ _probes: dict[str, tuple[float, float]] = {}   # address -> (first, last)
 _streams: dict[str, int] = {}                   # address -> open room sockets
 
 
+def _device_address(source: object) -> str | None:
+    """``source`` as an IP address a room device could have, or None. Only
+    an address ever reaches a line: the source can come from a forwarded
+    header, and a header is any text. Loopback is the box itself (or what
+    forwards for every device), never one room."""
+    try:
+        ip = ipaddress.ip_address(str(source).strip())
+    except ValueError:
+        return None
+    if ip.is_loopback or ip.is_unspecified:
+        return None
+    return str(ip)
+
+
 def identity_checked(source: str) -> None:
     """A room device at ``source`` had this server prove its identity for
     the address it dialled. Never raises."""
     try:
         now = _clock()
-        source = str(source)[:120]
+        source = _device_address(source)
+        if source is None:
+            return
         with _lock:
             if _streams.get(source):
                 # A device already talking to this server (the clock helper,
@@ -122,7 +139,9 @@ def stream_opened(source: str) -> None:
     """A room socket opened from ``source``: whatever is there talks to this
     server, so it is not one that refuses it. Never raises."""
     try:
-        source = str(source)[:120]
+        source = _device_address(source)
+        if source is None:
+            return
         with _lock:
             _streams[source] = _streams.get(source, 0) + 1
             _probes.pop(source, None)
@@ -134,7 +153,9 @@ def stream_opened(source: str) -> None:
 
 def stream_closed(source: str) -> None:
     try:
-        source = str(source)[:120]
+        source = _device_address(source)
+        if source is None:
+            return
         with _lock:
             left = _streams.get(source, 0) - 1
             if left > 0:

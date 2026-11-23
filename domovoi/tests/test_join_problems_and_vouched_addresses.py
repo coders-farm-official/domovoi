@@ -409,22 +409,51 @@ def test_a_probe_not_repeated_starts_over(monkeypatch):
     join_problems.stream_closed("192.168.1.99")  # never opened: no error
 
 
-@pytest.mark.asyncio
-async def test_a_room_socket_counts_as_joined_while_it_is_open(monkeypatch):
-    """The stream route marks its address as talking to this server for as
-    long as the socket lives, even when the session ends in an error."""
-    from domovoi import streaming
+class _Socket:
+    def __init__(self, host, headers=None):
+        self.client = type("C", (), {"host": host})()
+        self.headers = headers or {}
 
+
+@pytest.mark.asyncio
+async def test_a_room_socket_refused_before_its_session_still_counts_as_joined(monkeypatch):
+    """The stream route marks the address as talking to this server for as
+    long as the socket lives, a socket it refuses before any session too."""
     seen = []
 
-    class _S:
-        _hello_source = lambda self: "192.168.1.45"  # noqa: E731
+    async def refuse(ws, code, detail):
+        seen.append((code, dict(join_problems._streams)))
 
-        async def _run(self):
-            seen.append(dict(join_problems._streams))
-            raise RuntimeError("socket dropped")
-
-    with pytest.raises(RuntimeError):
-        await streaming.StreamSession.run(_S())
-    assert seen == [{"192.168.1.45": 1}]
+    monkeypatch.setattr(main, "_refuse_ws", refuse)
+    await main.stream(_Socket("192.168.1.45"), "Not A Room!")
+    assert seen == [("bad_room_id", {"192.168.1.45": 1})]
     assert join_problems._streams == {}
+
+
+def test_a_source_that_is_not_an_address_gives_no_line(monkeypatch):
+    """A forwarded header is any text: only an IP address reaches a line."""
+    now = [1000.0]
+    monkeypatch.setattr(join_problems, "_clock", lambda: now[0])
+    for _ in range(4):
+        join_problems.identity_checked("<b>call 555-0100</b>")
+        join_problems.identity_checked("192.168.1.46")
+        now[0] += 60
+    assert [p["subject"] for p in join_problems.recent()] == ["192.168.1.46"]
+
+
+@pytest.mark.asyncio
+async def test_one_forwarder_for_every_device_gives_no_line(healthy_core, monkeypatch):
+    """Loopback with no forwarded address (the web process, a host's
+    forwarder) stands for every device: never named as one room."""
+    monkeypatch.setattr(server_identity, "VOUCHED_ADDRESS_SOURCES", [lambda: ["192.168.1.20"]])
+    now = [1000.0]
+    monkeypatch.setattr(join_problems, "_clock", lambda: now[0])
+    peer = _Peer("127.0.0.1")
+    for _ in range(5):
+        await main.health(challenge=sat_identity.new_challenge(),
+                          addr="192.168.1.20:6370", request=peer)
+        now[0] += 60
+    assert join_problems.recent() == []
+    assert main._room_device_source(_Socket("127.0.0.1")) is None
+    assert main._room_device_source(
+        _Socket("127.0.0.1", {"x-forwarded-for": "192.168.1.47"})) == "192.168.1.47"
