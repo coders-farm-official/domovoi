@@ -49,7 +49,7 @@ console.log(JSON.stringify([
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
-def test_the_chip_reads_never_always_this_chat_and_off(tmp_path) -> None:
+def test_the_chip_reads_never_always_this_chat_and_ask_first(tmp_path) -> None:
     script = tmp_path / "chip.js"
     script.write_text(_SCRIPT, encoding="utf-8")
     out = subprocess.run(
@@ -58,5 +58,6 @@ def test_the_chip_reads_never_always_this_chat_and_off(tmp_path) -> None:
     )
     assert out.returncode == 0, out.stderr
     assert json.loads(out.stdout) == [
-        "internet off", "internet always on", "internet on for this chat", "internet off", "allowed_chat",
+        # "internet off" only when it is off; a chat that asks first says so.
+        "internet off", "internet always on", "internet on for this chat", "internet: ask first", "allowed_chat",
     ]
