@@ -971,7 +971,9 @@ async def fetch_bytes(
             if not truncate and _declared_too_large(response, max_bytes):
                 raise ResponseTooLarge(str(response.url), max_bytes)
             body = _CappedBody(response, max_bytes, truncate)
-            chunks = response.aiter_raw(chunk_size) if body.raw else _consumed(response)
+            # No chunk size: each piece as it arrives, so the deadline is
+            # checked per read, not once per 64 KiB (``chunk_size`` is no longer used).
+            chunks = response.aiter_raw() if body.raw else _consumed(response)
             async for chunk in chunks:
                 if body.add(chunk):
                     break
@@ -1011,7 +1013,7 @@ def fetch_bytes_sync(
             if not truncate and _declared_too_large(response, max_bytes):
                 raise ResponseTooLarge(str(response.url), max_bytes)
             body = _CappedBody(response, max_bytes, truncate)
-            chunks = response.iter_raw(chunk_size) if body.raw else [response.content]
+            chunks = response.iter_raw() if body.raw else [response.content]
             for chunk in chunks:
                 if body.add(chunk):
                     # Stop reading: closing the response drops the rest.

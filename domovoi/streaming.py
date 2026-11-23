@@ -3136,6 +3136,7 @@ class StreamSession:
             board=satellite_abilities.clean_board(ctrl.get("board")),
             sat_type=ctrl.get("sat_type") or "voice",
             takeover_after_sec=APPROVAL_TAKEOVER_SEC,
+            source=self._hello_source(),
         )
         if outcome == "full":
             await self._approvals_full()
@@ -3286,6 +3287,7 @@ class StreamSession:
                     sat_type=ctrl.get("sat_type") or "voice",
                     takeover_after_sec=APPROVAL_TAKEOVER_SEC,
                     proof=True,
+                    source=source,
                 )
                 if outcome == "full":
                     await self._approvals_full()

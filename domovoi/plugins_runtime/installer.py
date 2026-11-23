@@ -93,10 +93,15 @@ _RESERVED_DEVICE_NAMES = frozenset(
     | {f"lpt{i}" for i in range(1, 10)}
 )
 
+# The words the dashboard's trust screen shows (web/static/plugins.jsx) and
+# docs/SECURITY_PRIVACY.md quotes: the browser half included.
 TRUST_STATEMENT = (
     "This plugin runs with full access to your Domovoi server. It can read "
     "and modify your library, database, configuration, and anything else "
-    "this machine can reach. Only install plugins from publishers you trust."
+    "this machine can reach. Its dashboard pages run as part of the dashboard "
+    "in every household browser that opens it, with the same access as whoever "
+    "is using it — a signed-in admin session and the household token included. "
+    "Only install plugins from publishers you trust."
 )
 
 _GITHUB_URL_RE = re.compile(
@@ -1136,6 +1141,21 @@ def _codeload_url(owner: str, repo: str, ref: str) -> str:
     return url
 
 
+#: The only hosts a GitHub install talks to, redirects included
+#: (docs/INTERNET.md).
+_GITHUB_INSTALL_HOSTS = frozenset({"api.github.com", "codeload.github.com"})
+
+
+async def _github_hosts_only(request: Any) -> None:
+    """httpx request hook: every hop, redirects included, stays on the
+    GitHub hosts an install uses."""
+    if request.url.scheme != "https" or request.url.host not in _GITHUB_INSTALL_HOSTS:
+        raise InstallError(
+            "github_download_failed",
+            "the download was sent to a host other than GitHub's; nothing was installed",
+        )
+
+
 async def download_github_zip(github_url: str) -> tuple[bytes, str]:
     """Resolve + download a repo archive with a streaming size cap.
     Returns (zip bytes, 'url@ref').
@@ -1164,7 +1184,10 @@ async def download_github_zip(github_url: str) -> tuple[bytes, str]:
     headers = {
         "User-Agent": "domovoi/1.4.0 (+github.com/coders-farm-official/domovoi)"
     }
-    async with egress.async_client(follow_redirects=True, timeout=60) as client:
+    async with egress.async_client(
+        follow_redirects=True, timeout=60,
+        event_hooks={"request": [_github_hosts_only]},
+    ) as client:
         if not ref:
             api = f"https://api.github.com/repos/{owner}/{repo}"
             r = await client.get(api, headers=headers)

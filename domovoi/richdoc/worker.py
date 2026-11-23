@@ -3,7 +3,8 @@
 Started by :mod:`domovoi.richdoc.runner` in a short-lived process. It caps
 itself first (the document reader's limits, :mod:`domovoi.doc_extract.limits`;
 it refuses to convert when it can't), reads ``DIR/input.html`` and
-``DIR/request.json`` (``{"title"}``), sanitises and converts, and writes
+``DIR/request.json`` (``{"title", "kind"}``), sanitises HTML (or reads
+Markdown or plain text with ``kind: "markdown"``) and converts, and writes
 ``DIR/out.docx`` or ``DIR/error.json``. It opens no network connection.
 """
 
@@ -29,12 +30,17 @@ def main(argv: list[str]) -> int:
                      int(req.get("cpu_seconds") or 60))
     except limits.LimitError as e:
         return fail("That document couldn't be converted.", type(e).__name__)
-    from domovoi.richdoc import sanitize_html
-    from domovoi.richdoc.word import html_to_docx
-
     try:
         markup = (d / "input.html").read_text(encoding="utf-8")
-        data = html_to_docx(sanitize_html(markup), str(req.get("title") or "")[:200])
+        if req.get("kind") == "markdown":
+            from domovoi.richdoc.markdown_word import markdown_to_docx
+
+            data = markdown_to_docx(markup)
+        else:
+            from domovoi.richdoc import sanitize_html
+            from domovoi.richdoc.word import html_to_docx
+
+            data = html_to_docx(sanitize_html(markup), str(req.get("title") or "")[:200])
     except MemoryError:
         return fail("That document needs more memory to convert than Domovoi allows.")
     except Exception as e:  # noqa: BLE001 - a bad document is a failed conversion

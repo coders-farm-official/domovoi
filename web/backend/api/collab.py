@@ -343,17 +343,35 @@ async def _serve_socket(ws: WebSocket, doc_id: str, token: Optional[str], source
     )
     peer.writer = asyncio.get_running_loop().create_task(peer.run_writer())
     room.join(peer)
+
+    async def _pump() -> None:
+        try:
+            while not peer.closed:
+                msg = await ws.receive()
+                if msg["type"] == "websocket.disconnect":
+                    break
+                data = msg.get("bytes")
+                if data is None:
+                    continue   # y-websocket sends binary frames only
+                await room.handle(peer, data)
+        except Exception as e:  # noqa: BLE001 — the socket dropped
+            log.debug("collab %s: socket ended: %s", doc_id, e)
+
+    async def _still() -> bool:
+        # The credential is read again while the socket lives, as the
+        # state socket's is: a rotated token or a sign-out ends it.
+        try:
+            now = await socket_access(ws, token)
+        except Refusal as r:
+            if r.code == rooms.CLOSE_BUSY:
+                raise RuntimeError("credentials could not be checked") from None
+            return False
+        return readonly or now == "write"
+
     try:
-        while not peer.closed:
-            msg = await ws.receive()
-            if msg["type"] == "websocket.disconnect":
-                break
-            data = msg.get("bytes")
-            if data is None:
-                continue   # y-websocket sends binary frames only
-            await room.handle(peer, data)
-    except Exception as e:  # noqa: BLE001 — the socket dropped
-        log.debug("collab %s: socket ended: %s", doc_id, e)
+        await admin_auth.run_while_admitted(
+            ws, None, _pump(), what=f"collab {doc_id}", still=_still,
+        )
     finally:
         room.leave(peer)
         # Shielded: this handler may be cancelled as the connection goes,

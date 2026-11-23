@@ -234,3 +234,49 @@ async def test_an_admin_add_by_url_is_not_capped(db_session, monkeypatch) -> Non
     for n in range(3):
         r = await _add(f"https://93.184.215.14/watch?v={n}")
         assert r.status_code == 200, r.text
+
+
+async def test_guests_and_household_devices_have_separate_link_caps(
+    db_session, open_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(settings, "acquisition_open_url_pending_cap", 1)
+    kind = {"v": "no-auth"}
+
+    async def _device(request, session=None):
+        return kind["v"]
+
+    monkeypatch.setattr(core_main.admin_auth_mod, "check_device_request", _device)
+    assert (await _add("https://93.184.215.14/watch?v=g1")).status_code == 200
+    assert (await _add("https://93.184.215.14/watch?v=g2")).status_code == 429
+    kind["v"] = "ok"
+    assert (await _add("https://93.184.215.14/watch?v=h1")).status_code == 200
+    rows = (
+        await db_session.execute(
+            text("SELECT requested_by, dedup_key FROM media_acquisitions ORDER BY id")
+        )
+    ).all()
+    assert [r[0] for r in rows] == ["web:guest", "web"]
+    assert rows[0][1].startswith("url:")
+
+
+async def test_a_guest_cannot_choose_the_dedup_key(db_session, open_path, monkeypatch) -> None:
+    async def _guest(request, session=None):
+        return "no-auth"
+
+    monkeypatch.setattr(core_main.admin_auth_mod, "check_device_request", _guest)
+    async with AsyncClient(
+        transport=ASGITransport(app=core_main.app, raise_app_exceptions=False),
+        base_url="http://test",
+    ) as c:
+        r = await c.post("/v1/admin/music/add-by-url", json={
+            "room_id": "kitchen", "url": "https://93.184.215.14/watch?v=k",
+            "dedup_key": "src:abc", "title": "t" * 301,
+        })
+        assert r.status_code == 422
+        r = await c.post("/v1/admin/music/add-by-url", json={
+            "room_id": "kitchen", "url": "https://93.184.215.14/watch?v=k",
+            "dedup_key": "src:abc",
+        })
+    assert r.status_code == 200, r.text
+    key = (await db_session.execute(text("SELECT dedup_key FROM media_acquisitions"))).scalar_one()
+    assert key != "src:abc" and key.startswith("url:")

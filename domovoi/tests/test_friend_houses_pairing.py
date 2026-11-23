@@ -309,3 +309,70 @@ async def test_runs_broken_off_after_the_nonce_close_the_friend_file(tmp_path, c
                 await fp.ask(r, w, file=f, keys=b_keys, statement=b_statement,
                              reach_private=b"\x00" * 32, name="B")
     assert caught.value.after_nonces is True
+
+
+def _listener_for(tmp_path, a_keys, f, extra_invites=()):
+    import json
+    import time
+
+    from domovoi.friend_houses import listener as fl
+
+    folder = tmp_path / "listener"
+    folder.mkdir(exist_ok=True)
+    invites = {i.hex(): time.time() + 86400 for i in (f.invite_id, *extra_invites)}
+    (folder / fl.INVITES_FILE).write_text(json.dumps(invites), encoding="utf-8")
+    return fl.State(folder, a_keys)
+
+
+async def _open_run(port, b_keys, f, invite_id=None):
+    """Send the first handshake message; return (reader, writer, got_nonce task)."""
+    import secrets as _s
+
+    from domovoi.friend_houses import session as fs
+    from domovoi.friend_houses.noise import Handshake
+
+    r, w = await asyncio.open_connection("127.0.0.1", port)
+    hs = Handshake("IKpsk2", initiator=True, prologue=fp.PROLOGUE, static=b_keys.session,
+                   remote_static=f.session_key, psk=f.invite_secret)
+    w.write(fp.PREFACE + fs.frame(hs.write_message(
+        (invite_id or f.invite_id) + fp.commitment(_s.token_bytes(32), b_keys.house_key))))
+    await w.drain()
+
+    async def nonce() -> bool:
+        try:
+            await fs.read_frame(r, max_size=fp._MSG2_SIZE, timeout=5)
+            return True
+        except (fs.SessionRefused, ConnectionError):
+            return False
+
+    return w, nonce
+
+
+async def test_parallel_runs_on_one_friend_file_get_only_its_tries(tmp_path, capsys) -> None:
+    from domovoi.friend_houses import listener as fl
+
+    a_keys, f = _file(tmp_path)
+    b_keys, _ = _asker(tmp_path)
+    state = _listener_for(tmp_path, a_keys, f)
+    server = await asyncio.start_server(lambda r, w: fl.handle_pairing(r, w, state), "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    async with server:
+        runs = [await _open_run(port, b_keys, f) for _ in range(fl.MAX_PAIRING_CONNECTIONS)]
+        got = await asyncio.gather(*(nonce() for _, nonce in runs))
+        for w, _ in runs:
+            w.close()
+        await asyncio.sleep(0.1)
+    assert sum(got) == fp.ABANDONED_MAX
+
+
+async def test_one_friend_file_cannot_spend_anothers_budget(tmp_path, monkeypatch) -> None:
+    from domovoi.friend_houses import listener as fl
+
+    monkeypatch.setattr(fl, "PAIRING_PER_HOUR", 2)
+    a_keys, f = _file(tmp_path)
+    b_keys, _ = _asker(tmp_path)
+    state = _listener_for(tmp_path, a_keys, f)
+    other = b"\x22" * 16
+    assert state.pairing_allowed(f.invite_id) and state.pairing_allowed(f.invite_id)
+    assert not state.pairing_allowed(f.invite_id)
+    assert state.pairing_allowed(other)

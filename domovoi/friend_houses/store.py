@@ -83,8 +83,9 @@ async def insert_friend(s: AsyncSession, *, id: str, house_key: bytes, session_k
 async def delete_friend(s: AsyncSession, friend_id: str) -> bool:
     """Remove a friend (unfriend or block). What was still waiting to go to
     that house never goes, even if it is friended again later: queued
-    messages are marked not delivered, and lists shared with it stop being
-    shared (both copies stay as ordinary lists)."""
+    messages are marked not delivered, lists shared with it stop being
+    shared (both copies stay as ordinary lists), and a list it offered that
+    was not accepted is dropped."""
     row = (await s.execute(text(
         "DELETE FROM friend_houses_friends WHERE id = :i RETURNING house_key"),
         {"i": friend_id})).first()
@@ -102,6 +103,10 @@ async def delete_friend(s: AsyncSession, friend_id: str) -> bool:
     await s.execute(text(
         "UPDATE friend_houses_spaces SET state = 'left', local_list_id = NULL "
         "WHERE house_key = :h AND state = 'active'"), {"h": house})
+    # A list it offered and nobody accepted yet goes with it.
+    await s.execute(text(
+        "DELETE FROM friend_houses_spaces WHERE house_key = :h AND state = 'invited'"),
+        {"h": house})
     return True
 
 

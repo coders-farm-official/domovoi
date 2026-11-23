@@ -478,7 +478,13 @@ class StatePollLoop:
 async def _snapshot_acquisitions() -> list[dict[str, Any]]:
     """Live media-acquisition queue rows (pending or claimed — design
     §4.8). Finished rows are stable enough that we don't stream their
-    changes; the Jobs readout's list call refreshes them on demand."""
+    changes; the Jobs readout's list call refreshes them on demand.
+
+    Every subscriber gets the same push, so the rows are redacted as for a
+    household device (no ``requested_by``, a fixed error sentence); an
+    admin reads the full rows from ``/api/acquisitions``."""
+    from domovoi.acquisitions import redact_for_household
+
     async with session_scope() as s:
         rows = await s.execute(
             text(
@@ -492,7 +498,7 @@ async def _snapshot_acquisitions() -> list[dict[str, Any]]:
             )
         )
         return [
-            {
+            redact_for_household({
                 "id": int(r[0]),
                 "kind": r[1],
                 "text": r[2],
@@ -503,7 +509,7 @@ async def _snapshot_acquisitions() -> list[dict[str, Any]]:
                 "error": r[7],
                 "requested_at": _isoformat(r[8]),
                 "completed_at": _isoformat(r[9]),
-            }
+            })
             for r in rows.all()
         ]
 

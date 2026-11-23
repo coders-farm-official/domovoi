@@ -34,6 +34,18 @@ a way that would otherwise get reported as a bug.
 
 ## 1.4.1 (unreleased) — Printing, videos, scans and Windows update hardening
 
+- **"Download as Word" for Markdown and text files** is built in the same
+  short-lived, time-limited process as the Word copy of a formatted
+  document, and its line limit counts every kind of line break.
+- **The sheet editor's grid read and the sheet export** run in the sheets
+  worker, not on the dashboard's main loop, and a .csv's grid is read from
+  its first 8 MB.
+- **A satellite's check of a server has one deadline for the whole answer**,
+  status line and headers included, and at most 8 addresses of a server
+  name are tried. This ships with the satellite code update.
+- **Up next keeps the songs a jump or a move passed**: on a long room queue
+  only songs the room was heard playing are trimmed after a jump, and the
+  200-song ceiling behind the current song no longer takes them.
 - **The list of a person's voice samples now needs a household device**, like the
   rest of their People page.
 - **Printer discovery on a Mac install** counts only the Mac's own home
@@ -254,6 +266,48 @@ a way that would otherwise get reported as a bug.
   and podcast log lines leave them out too.
 - Listens posted by phones and browsers have a house-wide daily cap beside
   the per-device one.
+- The core's per-room admin routes check the room id, as the dashboard's
+  already did. A room paired under an older id (capitals, spaces) can now
+  be removed from the dashboard instead of answering 422.
+- The satellite and drop-in sockets check the room id before anything
+  else, and refused requests are logged with the path quoted.
+- A satellite plugged in for USB adoption is listed only with a well-formed
+  device id. A satellite's log names a server that cannot prove an
+  approval, with the advice to type its address, only when that server
+  proved its identity at that address.
+- The core caps a WebSocket message at 4 MiB (or a little over the request
+  body limit, when that is set higher) instead of uvicorn's 16 MiB.
+- Satellite approvals: one network address can hold at most eight of the
+  32 waiting requests.
+- Add by link: callers without a household credential have their own cap
+  of links waiting, and their duplicate key is derived from the link. The
+  title and key are capped in length.
+- The co-editing socket reads its credential again every 30 s, like the
+  live-state socket: a rotated token or a sign-out ends it.
+- The open status snapshot lists which rooms have microphone presets, not
+  their state; the state is read on the admin tier. Microphone markers
+  are cut before escaping and escape invisible and direction characters,
+  and very large numbers in a satellite's preset report are dropped.
+- The podcast feed head scan stays linear with many stray closing tags,
+  and the whole-fetch deadline is checked after every read.
+- The realtime acquisitions push carries the same redacted rows a
+  household device reads (no requester, a fixed error sentence).
+- Friend Houses: a list offer from a house that was removed is dropped with
+  it, and one from a removed or blocked house can't be accepted. A friend
+  file's tries are counted before the nonce goes out, and its pairing
+  budget is its own. Frames that ask nothing, pongs answered while waiting
+  and closing a session are bounded, as is a send's own delivery try.
+  Replies that name one of a friend's list items, or a friend house, are
+  filtered as a whole sentence and kept as a stand-in in the chat history,
+  and shared text is cut before it is filtered.
+
+- A plugin installed from GitHub is downloaded from `api.github.com` and
+  `codeload.github.com` only, redirects included. The install screen's
+  trust statement from the server now also says that a plugin's dashboard
+  pages run in every household browser that opens them.
+- Resetting a room's pairing, or removing the room, closes its satellite's
+  live connection; a device that is still wanted reconnects and is checked
+  again.
 
 ## 1.4.1 (unreleased) — Sign-in, room pairing and drop-in checks
 
