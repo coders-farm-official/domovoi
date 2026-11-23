@@ -4,6 +4,24 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Every speaker in a room plays together
+
+- **What changed.** In a room with several satellites, music, radio,
+  podcasts, answers, timers, alarms, announcements and plugins' speech
+  play from every speaker at the same moment, and pause, skip, stop and
+  volume land on all of them together. A satellite on 1.5.0 plays the
+  room's music through the core's synced player (`/v1/room-audio`) even
+  when it is the room's only device; answers in a one-satellite room
+  still come straight down its own connection.
+- **What to know.** Music starts about half a second after it is asked
+  for (it used to buffer for a few seconds). The wake word during an
+  answer stops it on every speaker; the music plays on. An older
+  satellite or phone app that can't play in sync plays the room's sound
+  only when it is the room's only device. Satellites still install
+  `mpg123`: it plays the greetings and the offline clip, and music from a
+  core older than 1.5.0.
+  [SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md#a-room-with-several-speakers).
+
 ## 1.5.0 (unreleased) — Several satellites in one room, managed from Settings → Rooms
 
 - **What changed.** Settings → Rooms now lists each room with the

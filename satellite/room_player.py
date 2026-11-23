@@ -169,6 +169,7 @@ JUMP_SAMPLES = RATE * 50 // 1000        # 50 ms
 EMA_ALPHA = 0.02
 FADE_FRAMES = RATE * 5 // 1000          # 5 ms
 HOLE_FRAMES = RATE // 2                 # 500 ms
+SPEECH_SPANS = 32                       # spoken sounds remembered
 BURST_PINGS, BURST_INTERVAL_US, STEADY_INTERVAL_US = 20, 50_000, 250_000
 
 
@@ -190,6 +191,9 @@ class TimedPlayer:
         self._last_played: int | None = None
         self.ema = 0.0
         self._gain = (1.0, 1.0, 0.0, 0.0)   # from, to, at_us, ramp_us
+        # Spoken sounds on the timeline (server µs, start/end): a wake word
+        # before one ends is a barge-in, as over this device's own reply.
+        self._speech: deque[tuple[float, float]] = deque(maxlen=SPEECH_SPANS)
         self.pings_sent = 0
         self._next_ping = 0.0
         self.underruns = self.late = self.corrections = self.jumps = 0
@@ -233,6 +237,11 @@ class TimedPlayer:
                     self._clear()
                 elif kind == "flush":
                     self._flush(float(m["at_us"]))
+                    self._cut_speech_at(float(m["at_us"]))
+                elif kind == "speech":
+                    start, end = float(m["start_us"]), float(m["end_us"])
+                    if end > start:
+                        self._speech.append((start, end))
                 elif kind == "gain":
                     at = float(m["at_us"])
                     g = float(self._gain_at(np.array([at]))[0])
@@ -246,7 +255,25 @@ class TimedPlayer:
                 log.debug("room audio: malformed %s ignored", kind)
         return m
 
+    def _cut_speech_at(self, at_us: float) -> None:
+        kept = [(s, min(e, at_us)) for s, e in self._speech if min(e, at_us) > s]
+        self._speech.clear()
+        self._speech.extend(kept)
+
+    def speech_playing(self, local_us: float) -> bool:
+        """A spoken sound of the room is playing, or about to (queued on
+        the timeline and not yet ended). False before the clock fit has
+        converged: this device cannot say when "now" is on the server."""
+        with self.lock:
+            if not self.fit.converged:
+                return False
+            now = self.fit.to_server(local_us)
+            while self._speech and self._speech[0][1] <= now:
+                self._speech.popleft()
+            return any(e > now for _, e in self._speech)
+
     def _clear(self) -> None:
+        self._speech.clear()
         self._at[:] = -1
         self._have = 0
         self.pos = None
@@ -837,6 +864,21 @@ class RoomPlayer:
     @property
     def playing(self) -> bool:
         return self.output.is_open
+
+    def speech_playing(self) -> bool:
+        """The room is speaking (an answer, a timer, an announcement) on
+        the synced playout: a wake word now is a barge-in."""
+        return self.player.speech_playing(self.clock())
+
+    def seconds_until(self, server_us: float) -> float | None:
+        """How long from now until the server clock reads ``server_us``
+        (a timed room control outside the stream, such as the room's
+        ``set_volume``). None before the clock fit has converged."""
+        fit = self.player.fit
+        if not fit.converged:
+            return None
+        local = self.clock()
+        return (server_us - fit.to_server(local)) / 1e6
 
     # ── the socket thread ──────────────────────────────────────────────
     def _run(self) -> None:

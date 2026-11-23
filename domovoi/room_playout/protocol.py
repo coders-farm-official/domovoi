@@ -106,3 +106,10 @@ def flush_msg(at_us: int) -> dict[str, Any]:
 
 def gain_msg(at_us: int, gain: float, ramp_ms: int) -> dict[str, Any]:
     return {"type": "gain", "at_us": int(at_us), "gain": float(gain), "ramp_ms": int(ramp_ms)}
+
+
+def speech_msg(start_us: float, end_us: float) -> dict[str, Any]:
+    """A spoken sound (an answer, a timer, an announcement) is on the
+    timeline from ``start_us`` to ``end_us``: a wake word heard before it
+    ends is a barge-in. A later ``flush`` cuts it short."""
+    return {"type": "speech", "start_us": int(start_us), "end_us": int(end_us)}

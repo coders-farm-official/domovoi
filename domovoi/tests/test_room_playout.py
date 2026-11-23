@@ -428,8 +428,9 @@ def test_socket_hello_ready_timeline_pong_and_audio() -> None:
             time.sleep(0.002)
         # (the tick ran on this thread; the next ping wakes the sender)
         ws.send_text(P.encode_msg({"type": "ping", "t0": 1}))
-        got = [ws.receive(), ws.receive()]
-        assert [P.decode_msg(m["text"])["type"] for m in got if m.get("text")] == ["pong"]
+        got = [ws.receive(), ws.receive(), ws.receive()]
+        # The sound's `speech` span (slice 5b: a wake over it is a barge-in).
+        assert [P.decode_msg(m["text"])["type"] for m in got if m.get("text")] == ["speech", "pong"]
         f = P.decode_audio(next(m["bytes"] for m in got if m.get("bytes")))
         assert f.timeline_id == timeline["timeline_id"] and f.frames == 960
     assert playout.stats["kitchen_2"] == {"err_us": 80}

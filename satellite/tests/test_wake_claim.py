@@ -26,6 +26,7 @@ import json
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -446,3 +447,25 @@ def test_the_client_handles_every_frame_the_core_sends_a_claiming_device():
     for key in ("grant_owner", "grant_quiet", "capture_keep", "end_capture_quiet"):
         assert RT[key]["type"] in handled, key
     assert "room" in handled
+
+
+def test_a_wake_while_the_room_playout_speaks_says_barge_in(monkeypatch):
+    """1.5.0 slice 5b: the room's answer plays on the synced playout, not
+    down this device's reply path; a wake over it is still a barge-in."""
+    sat, loop = _claiming(monkeypatch, [*W, USER], [OWNER])
+    sat._room_player = SimpleNamespace(speech_playing=lambda: True, playing=True)
+    assert sat._reply_playing_here() is True
+    out = _wake_and_start(sat, loop)
+    assert _texts(out, "wake_claim")[0]["barge_in"] is True
+
+
+def test_a_room_volume_waits_for_its_server_time(monkeypatch):
+    sat, loop = _claiming(monkeypatch, [], [])
+    loop.close()
+    assert sat._room_control_delay(None) == 0.0               # today's frame: at once
+    sat._room_player = SimpleNamespace(seconds_until=lambda at: None)
+    assert sat._room_control_delay(123) == 0.0                # no clock yet: at once
+    sat._room_player = SimpleNamespace(seconds_until=lambda at: 0.08)
+    assert sat._room_control_delay(123) == pytest.approx(0.08)
+    sat._room_player = SimpleNamespace(seconds_until=lambda at: 30.0)
+    assert sat._room_control_delay(123) == 1.0                # a bad stamp holds nothing long
