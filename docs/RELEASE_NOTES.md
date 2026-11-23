@@ -237,6 +237,35 @@ a way that would otherwise get reported as a bug.
   be removed from the dashboard instead of answering 422.
 - The satellite and drop-in sockets check the room id before anything
   else, and refused requests are logged with the path quoted.
+- A satellite plugged in for USB adoption is listed only with a well-formed
+  device id. A satellite's log names a server that cannot prove an
+  approval, with the advice to type its address, only when that server
+  proved its identity at that address.
+- The core caps a WebSocket message at 4 MiB (or a little over the request
+  body limit, when that is set higher) instead of uvicorn's 16 MiB.
+- Satellite approvals: one network address can hold at most eight of the
+  32 waiting requests.
+- Add by link: callers without a household credential have their own cap
+  of links waiting, and their duplicate key is derived from the link. The
+  title and key are capped in length.
+- The co-editing socket reads its credential again every 30 s, like the
+  live-state socket: a rotated token or a sign-out ends it.
+- The open status snapshot lists which rooms have microphone presets, not
+  their state; the state is read on the admin tier. Microphone markers
+  are cut before escaping and escape invisible and direction characters,
+  and very large numbers in a satellite's preset report are dropped.
+- The podcast feed head scan stays linear with many stray closing tags,
+  and the whole-fetch deadline is checked after every read.
+- The realtime acquisitions push carries the same redacted rows a
+  household device reads (no requester, a fixed error sentence).
+- Friend Houses: a list offer from a house that was removed is dropped with
+  it, and one from a removed or blocked house can't be accepted. A friend
+  file's tries are counted before the nonce goes out, and its pairing
+  budget is its own. Frames that ask nothing, pongs answered while waiting
+  and closing a session are bounded, as is a send's own delivery try.
+  Replies that name one of a friend's list items, or a friend house, are
+  filtered as a whole sentence and kept as a stand-in in the chat history,
+  and shared text is cut before it is filtered.
 
 ## 1.4.1 (unreleased) — Sign-in, room pairing and drop-in checks
 
