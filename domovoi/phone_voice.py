@@ -87,6 +87,7 @@ from domovoi.clients.whisper import (
     transcribe_full_window,
     transcribe_with_window,
 )
+from domovoi import stt_denoise
 from domovoi.config import settings
 from domovoi.db.session import session_scope
 from domovoi.models import PHONE_ROOM_PREFIX, Context, Intent, Response
@@ -394,6 +395,9 @@ async def _transcribe(pcm: bytes, stages: dict[str, int]) -> str:
             "stt_unavailable",
         ) from e
     t0 = time.perf_counter()
+    # The noise-cleanup experiment (domovoi/stt_denoise.py), off by
+    # default: what Whisper hears, never what voice ID or the history keep.
+    pcm = await stt_denoise.for_stt(pcm)
     heard, window = await transcribe_with_window(whisper, pcm)
     heard = (heard or "").strip()
     # Decided on the request as it will be routed: a leading "hey Domovoi"
