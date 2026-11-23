@@ -1466,15 +1466,15 @@ async def _answer(
         proposal = lookup_answer.fast_path(question)
         if model_lookups:
             system["content"] += "\n\n" + lookup_answer.tool_prompt(internet=not egress.internet_turned_off())
+        async with session_scope() as s:
+            thread_allowed = bool((await s.execute(
+                text("SELECT internet_allowed FROM chat_threads WHERE id = :id"), {"id": thread_id},
+            )).scalar_one_or_none())
     # The photo and video search (chat_media.py): offered to the model only
     # when the message talks about photos or videos, as the voice tool gate.
     media_tool = lookups_offered and proposal is None and _ask.mentions_media(question)
     if media_tool:
         system["content"] += "\n\n" + _ask.TOOL_PROMPT
-        async with session_scope() as s:
-            thread_allowed = bool((await s.execute(
-                text("SELECT internet_allowed FROM chat_threads WHERE id = :id"), {"id": thread_id},
-            )).scalar_one_or_none())
     num_ctx = (core_settings.ollama_vision_num_ctx if vision_call else 0) or core_settings.ollama_num_ctx
     stream_knobs: dict[str, Any] = (
         {"think": False, "num_ctx": core_settings.ollama_vision_num_ctx} if vision_call else {}
