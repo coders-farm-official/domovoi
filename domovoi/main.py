@@ -9314,6 +9314,14 @@ async def phone_dropin(ws: WebSocket, room_id: str) -> None:
         ws, verdict, session.run(), what=f"drop-in {phone_id}->{room_id}")
 
 
+def ws_max_message_bytes() -> int:
+    """What ``ws_max_size`` is set to: a little over the body limit a
+    plugin socket enforces itself, and never under 4 MiB."""
+    from domovoi.transport_guard import default_body_limit
+
+    return max(4 * 1024 * 1024, default_body_limit() + 64 * 1024)
+
+
 def _reset_admin_cli() -> None:
     """``python -m domovoi.main --reset-admin`` (design §7.2 password
     recovery): drop the admin credential + every bearer session, then
@@ -9378,6 +9386,10 @@ def main() -> None:
             # buffer for as long as it is open, so "accept everything" is a
             # promise this box cannot keep.
             limit_concurrency=settings.max_concurrent_connections,
+            # The largest WebSocket message uvicorn buffers (its default is
+            # 16 MiB): a satellite's frames are audio, small JSON and 128 KiB
+            # log chunks, and a plugin socket is closed over the body limit.
+            ws_max_size=ws_max_message_bytes(),
         )
 
 
