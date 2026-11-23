@@ -1,6 +1,6 @@
 """Rooms and their satellites (1.5.0): the room drawer's API.
 
-A room is the place, a satellite a device in one room (V072). The core
+A room is the place, a satellite a device in one room (V073). The core
 owns the live registry of which device is in which room
 (domovoi/room_devices.py), so every route here proxies the core's
 ``/v1/admin/rooms…`` and ``/v1/admin/satellites/{id}/room|name`` at the

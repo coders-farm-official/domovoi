@@ -250,7 +250,7 @@ async def test_the_device_tier_music_routes_cannot_mint_a_room_either(
 @requires_db
 @pytest.mark.asyncio
 async def test_room_is_known_reads_the_three_tables() -> None:
-    """A room is known by its ``rooms`` row (V072), its music player, or a
+    """A room is known by its ``rooms`` row (V073), its music player, or a
     device's pairing."""
     from sqlalchemy import text
 

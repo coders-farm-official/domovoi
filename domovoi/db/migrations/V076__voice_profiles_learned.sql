@@ -1,4 +1,4 @@
--- V075: mark the voice samples a satellite learned on its own (1.5.0).
+-- V076: mark the voice samples a satellite learned on its own (1.5.0).
 --
 -- The identifier saves a sample in a room after a run of confident matches
 -- (domovoi/voice_identifier.py, job 4). Such a sample is the mic's: it

@@ -777,7 +777,7 @@ async def test_the_terminal_socket_needs_its_ticket_and_a_dashboard_origin(house
                 ws.receive_text()
 
 
-# ═══ Rooms (V072): a satellite whose id is not its room's ═════════════════
+# ═══ Rooms (V073): a satellite whose id is not its room's ═════════════════
 
 ROOM = "supportroom"
 SAT2 = "supportroom-pi-2"

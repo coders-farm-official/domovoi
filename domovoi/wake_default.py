@@ -458,7 +458,7 @@ async def word_payload(s, slugs: list[str]) -> list[dict[str, Any]]:
 # ─── rooms ───────────────────────────────────────────────────────────────
 
 #: A room's ``device_max``: the least any of its devices said it can run
-#: (V072 moved it to ``satellites.wake_max``); NULL when none said.
+#: (V073 moved it to ``satellites.wake_max``); NULL when none said.
 _DEVICE_MAX = (
     "(SELECT min(sat.wake_max) FROM satellites sat "
     "WHERE sat.room_id = room_wake_words.room_id)"
@@ -499,7 +499,7 @@ async def mark_chosen(s, room_id: str, slug: str, slugs: list[str] | None = None
 
 async def record_device_max(s, room_id: str, declared: int | None) -> None:
     """Keep what the device said it can run (None: it didn't say, an older
-    device). Kept on the device's row (V072 ``satellites.wake_max``);
+    device). Kept on the device's row (V073 ``satellites.wake_max``);
     ``room_id`` is the device's id. A room's ``device_max`` is the least
     any of its devices can run."""
     from domovoi.db.repositories import SatellitesRepository, ensure_satellite

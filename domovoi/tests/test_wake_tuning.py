@@ -528,7 +528,7 @@ async def _room_list(room: str, state: str, slugs: list[str], device_max: int | 
             "VALUES (:r, :st, :sl, :sls) ON CONFLICT (room_id) DO UPDATE SET "
             "state = EXCLUDED.state, slug = EXCLUDED.slug, slugs = EXCLUDED.slugs"),
             {"r": room, "st": state, "sl": slugs[0], "sls": slugs})
-        # The device's limit lives on its own row (V072).
+        # The device's limit lives on its own row (V073).
         await wake_default.record_device_max(s, room, device_max)
 
 

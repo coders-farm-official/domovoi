@@ -1,6 +1,6 @@
 """The live room registry: which satellites are in which room (1.5.0).
 
-A room is the place; a satellite is a device in one room (V072). A
+A room is the place; a satellite is a device in one room (V073). A
 satellite connects on ``/v1/stream/{satellite_id}`` and the server decides
 its room (``satellites.room_id``). Two live views sit on ``app.state``:
 

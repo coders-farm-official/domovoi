@@ -1,10 +1,10 @@
-"""V072 on a house from before 1.5.0: a pure re-key.
+"""V073 on a house from before 1.5.0: a pure re-key.
 
 Builds a throwaway database next to the test lane, migrates it to the last
-version before V072, fills it the way a 1.4 house looks (several one-device
+version before V073, fills it the way a 1.4 house looks (several one-device
 rooms, two of them sharing a label, a room known only by its pairing, one
 only by its music player, one only by its wake-word row, a phone's chat
-mic, a parked approval), runs V072 and checks that every room, id, token
+mic, a parked approval), runs V073 and checks that every room, id, token
 and label survived, and that rooms sharing a label were NOT merged.
 """
 from __future__ import annotations
@@ -22,7 +22,7 @@ from domovoi.tests.conftest import requires_db
 pytestmark = requires_db
 
 MIGRATIONS = Path(__file__).resolve().parents[1] / "db" / "migrations"
-V072 = 72
+V073 = 73
 
 
 def _version(p: Path) -> int:
@@ -76,7 +76,7 @@ async def legacy_db():
     conn = await asyncpg.connect(database=name, **kw)
     try:
         for f in _files():
-            if _version(f) < V072:
+            if _version(f) < V073:
                 await conn.execute(f.read_text(encoding="utf-8"))
         yield conn
     finally:
@@ -87,7 +87,7 @@ async def legacy_db():
 
 async def _migrate_from_v072(conn) -> None:
     for f in _files():
-        if _version(f) >= V072:
+        if _version(f) >= V073:
             await conn.execute(f.read_text(encoding="utf-8"))
 
 

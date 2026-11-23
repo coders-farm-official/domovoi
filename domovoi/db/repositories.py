@@ -1149,14 +1149,14 @@ class VoiceProfilesRepository:
         satellite_id: str | None = None,
         learned: bool = False,
     ) -> int:
-        """One sample. ``satellite_id``: the mic that heard it (V072;
+        """One sample. ``satellite_id``: the mic that heard it (V073;
         default: the device whose id is ``room_id``, as every device's
         was until rooms held several). ``claimed``: it is being added because the speaker
         said this person's name and "yes" (V029), in ``claim_room``, by a
         voice recognized as ``claimed_by`` (None: an unknown voice).
         ``claim_of``: a learned sample that rests on that claim.
         ``learned``: saved by the identifier on its own after confident
-        matches (job 4), not enrolled on purpose (V075); a device moved to
+        matches (job 4), not enrolled on purpose (V076); a device moved to
         another room drops its learned samples."""
         row = await self.s.execute(
             text(
@@ -1193,7 +1193,7 @@ class VoiceProfilesRepository:
         return int(row.scalar_one())
 
     async def drop_learned_by(self, satellite_id: str) -> int:
-        """Delete the samples a device's mic learned on its own (V075),
+        """Delete the samples a device's mic learned on its own (V076),
         when it moves to another room: they carry the old room's sound.
         Enrolled samples stay. Returns how many went."""
         result = await self.s.execute(
@@ -2459,7 +2459,7 @@ class SatellitePairingRepository:
     Only the sha256 of a satellite's pairing token is stored (``token_hash``);
     the raw token lives solely in the Pi's ``~/.domovoi/pairing_token`` sidecar.
     The streaming layer's hello-frame validation drives every method here.
-    Keyed by the DEVICE (V072: ``satellite_id``, the WebSocket path), never
+    Keyed by the DEVICE (V073: ``satellite_id``, the WebSocket path), never
     by its room: room playout's auth (domovoi/room_playout/session.py)
     reads it the same way."""
 
@@ -2489,7 +2489,7 @@ class SatellitePairingRepository:
         (room_id, token_hash) pair: a re-pair with the SAME hash refreshes
         paired_at/last_seen_at rather than erroring; a DIFFERENT hash would
         only reach here after the row was reset, so ON CONFLICT overwrites.
-        The device gets an inventory row and, when new, a room (V072)."""
+        The device gets an inventory row and, when new, a room (V073)."""
         await ensure_satellite(self.s, satellite_id)
         await self.s.execute(
             text(
@@ -2607,7 +2607,7 @@ class SatelliteApprovalRepository:
         A request nobody refreshed for :data:`APPROVAL_EXPIRY_SEC` is
         deleted first, so it holds its room name against nobody.
 
-        ``requested_room`` (V072): the room the device asked to join. The
+        ``requested_room`` (V073): the room the device asked to join. The
         first one on file stays while the same device refreshes (an
         operator's choice made meanwhile is kept); a takeover replaces it.
         ``mac`` and ``sat_type`` are the device's own words and are bounded
@@ -2840,7 +2840,7 @@ class SatelliteApprovalRepository:
     async def _bind(self, room_id: str, row: Any) -> None:
         """Write the pairing for a request just taken off the list (``row``:
         its token_hash, board, sat_type and requested_room). The device gets
-        an inventory row and, when new, a room of its own (V072), unless
+        an inventory row and, when new, a room of its own (V073), unless
         the request names an existing room: then it goes there (1.5.0), and
         a room of its own made a moment ago for it is not kept."""
         sats = SatellitesRepository(self.s)
@@ -3032,7 +3032,7 @@ class SatelliteApprovalRepository:
         return row is not None
 
 
-# ─── rooms and satellites (V072) ────────────────────────────────────────────
+# ─── rooms and satellites (V073) ────────────────────────────────────────────
 #
 # A room is the place (`rooms`); a satellite is a device in exactly one room
 # (`satellites`, keyed by `satellite_id`). Every device that existed before
@@ -3085,7 +3085,7 @@ async def ensure_satellite(
 
 
 class RoomsRepository:
-    """`rooms` (V072): the places of the house. A room keeps its id for
+    """`rooms` (V073): the places of the house. A room keeps its id for
     life; its ``name`` is what people call it. Empty rooms are kept until
     an admin deletes them. Room-level settings (voice, quiet hours,
     playout) live here; device facts live in :class:`SatellitesRepository`."""
@@ -3236,7 +3236,7 @@ class RoomsRepository:
 
 
 class SatellitesRepository:
-    """`satellites` (V003, re-keyed by V072): the device table. A row is a
+    """`satellites` (V003, re-keyed by V073): the device table. A row is a
     known device: preseeded by USB adoption, written by an accepted
     `hello`, or by a pairing. ``satellite_id`` is the device's identity
     (the WebSocket path); ``room_id`` the room it is in. sat_type /
@@ -3400,7 +3400,7 @@ class SatellitesRepository:
 
     async def set_wake_max(self, satellite_id: str, wake_max: int | None) -> None:
         """How many wake words the device can run at once (its hello's
-        ``wake_max``; was ``room_wake_words.device_max`` before V072)."""
+        ``wake_max``; was ``room_wake_words.device_max`` before V073)."""
         await self.s.execute(
             text(
                 "UPDATE satellites SET wake_max = :m "
@@ -3467,7 +3467,7 @@ class SatellitesRepository:
 
     async def room_voice(self, room_id: str) -> str | None:
         """The voice the server keeps for this room (V031, on `rooms` since
-        V072), or None (the server's own voice). See domovoi/room_voice.py."""
+        V073), or None (the server's own voice). See domovoi/room_voice.py."""
         return await RoomsRepository(self.s).voice(room_id)
 
     async def set_room_voice(self, room_id: str, voice: str | None) -> None:

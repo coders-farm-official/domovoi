@@ -96,7 +96,7 @@ Client → Server
                            more words than that, and a device without the
                            key is sent its main word only
                            (domovoi/wake_default.py). Kept in
-                           `satellites.wake_max` (V072).
+                           `satellites.wake_max` (V073).
                            `satellite_id` (optional, 1.5.0): the device's id;
                            when present it must equal the path's
                            (`error {reason:"satellite_id_mismatch"}` and 1008

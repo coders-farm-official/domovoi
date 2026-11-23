@@ -6,7 +6,7 @@ module answers two questions about it, without deciding anything about
 music:
 
 * :func:`household_rooms` — which rooms the house has: its ``rooms`` rows
-  (V072: a room is the place, holding zero or more satellites), any room
+  (V073: a room is the place, holding zero or more satellites), any room
   with an MPD row (a music player), plus the rooms connected right now. Room-mode phones and laptop satellites are
   rooms like any other; the app's chat mic (``phone-…`` ids) is not.
 * :func:`read_place` — what the words after "in"/"on"/... name: this room
@@ -151,7 +151,7 @@ class Room:
         return out
 
 
-# The house's rooms (V072 ``rooms``), plus any room a music player was
+# The house's rooms (V073 ``rooms``), plus any room a music player was
 # provisioned for that has no row yet. ``label``: the room's name when it
 # has one of its own (not just its id). ``sat_type``: its first device's.
 # ``seen``: it has a music player, or one of its devices has paired.

@@ -1,4 +1,4 @@
--- V076: satellite support sessions (1.5.0, docs/SECURITY_PRIVACY.md,
+-- V077: satellite support sessions (1.5.0, docs/SECURITY_PRIVACY.md,
 -- "Support sessions").
 --
 -- An admin may open a shell on one satellite, as the satellite's service

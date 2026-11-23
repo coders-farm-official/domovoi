@@ -1472,7 +1472,7 @@ down (rule F1): `deliveries: []`, `acked_at` / `acked_by` / `settled_at` null.
 ### 3.7a Rooms and satellites (1.5.0)
 
 A **room** is a place; a **satellite** is a device in one room. A room may
-hold several satellites (`rooms` and `satellites`, V072). A device keeps its
+hold several satellites (`rooms` and `satellites`, V073). A device keeps its
 `satellite_id` for life; which room it is in is the server's assignment. Every
 device from before 1.5.0 has `satellite_id` equal to its room's `room_id`.
 Each route below proxies the core route of the same name under `/v1/admin`

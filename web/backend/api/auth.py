@@ -523,7 +523,7 @@ async def auth_change_password(
     return {"ok": True, "revoked_sessions": revoked}
 
 
-# ─── Phone grants: admin on a phone for the rest of the day (V073) ────────
+# ─── Phone grants: admin on a phone for the rest of the day (V074) ────────
 #
 # docs/SECURITY_PRIVACY.md, "Admin on a phone: the day's grant". A phone
 # that has just signed in with the password asks for a grant (256 bits,

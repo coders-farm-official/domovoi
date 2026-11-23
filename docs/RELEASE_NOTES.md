@@ -123,7 +123,7 @@ a way that would otherwise get reported as a bug.
   key and the `support_*` frames (docs/uml/satellite-protocol.md), the
   routes under `/v1/admin/satellites/{id}/support/*` and
   `/v1/admin/support-sessions` with their `/api/...` twins, the state
-  socket's `support_sessions` channel, and migration V076.
+  socket's `support_sessions` channel, and migration V077.
 - **What to know.** Opening one needs a password sign-in in the last five
   minutes AND the password typed again; a phone's day grant never opens
   one. A session lasts at most 30 minutes, closes after 10 without typing,
@@ -175,7 +175,7 @@ a way that would otherwise get reported as a bug.
   the other house has updated, ask it for a new friend file. There is no
   fallback to 4 digits. Friends you already have are unaffected: they
   keep messaging, and keep the 4-digit code they were shown. Migration
-  V074 lets the stored code be 4 or 6 digits. SECURITY_PRIVACY.md,
+  V075 lets the stored code be 4 or 6 digits. SECURITY_PRIVACY.md,
   "Pairing versions, and no way back to 4 digits".
 
 ## 1.5.0 (unreleased) — Plugin update checks on the Plugins page
@@ -290,7 +290,7 @@ a way that would otherwise get reported as a bug.
   only within 5 minutes of a password sign-in) and later swaps it for a
   fresh admin sign-in (`POST /api/auth/phone-grant/exchange`). A grant is
   bound to the phone's device id and ends 24 hours after it was issued,
-  whatever happens. Migration V073 adds the `admin_phone_grants` table.
+  whatever happens. Migration V074 adds the `admin_phone_grants` table.
 - **What to know.** Settings → Advanced lists the phones under "Admin on
   phones", each with a revoke. Changing the admin password, or
   `--reset-admin`, ends every grant. The phone apps use it from their next

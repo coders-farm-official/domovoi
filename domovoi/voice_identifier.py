@@ -830,8 +830,8 @@ async def _learn_room(
                 room_id=room_id,
                 sample_seconds=voice.speech_sec,
                 claim_of=claim_of,
-                # The mic that learned it (V072), and marked learned
-                # (V075): a device moved to another room drops it.
+                # The mic that learned it (V073), and marked learned
+                # (V076): a device moved to another room drops it.
                 satellite_id=satellite_id,
                 learned=True,
             )

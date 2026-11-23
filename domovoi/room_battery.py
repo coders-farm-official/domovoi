@@ -182,7 +182,7 @@ class Switches:
 
 async def switches(s: AsyncSession, room_id: str) -> Switches:
     """The device's two switches; both on when it has no ``satellites`` row.
-    ``room_id``: the device's id (V072; the same as its room's for a phone
+    ``room_id``: the device's id (V073; the same as its room's for a phone
     in a room of its own)."""
     row = (await s.execute(
         text("SELECT battery_say, battery_notify FROM satellites WHERE satellite_id = :r"),

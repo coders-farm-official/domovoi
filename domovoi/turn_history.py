@@ -270,7 +270,7 @@ async def _open_row(
     satellite_id: str | None = None,
     mic_satellite_id: str | None = None,
 ) -> int | None:
-    """``satellite_id`` / ``mic_satellite_id`` (V072): the device that
+    """``satellite_id`` / ``mic_satellite_id`` (V073): the device that
     owned the turn and the one whose microphone was transcribed."""
     from domovoi.db.session import session_scope
 

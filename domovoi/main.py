@@ -6539,7 +6539,7 @@ async def admin_set_satellite_label(
 
 # ─── Rooms and their satellites (1.5.0) ─────────────────────────────────────
 #
-# A room is the place, a satellite a device in one room (V072,
+# A room is the place, a satellite a device in one room (V073,
 # domovoi/room_devices.py). The read is the household's (the Rooms screens
 # on the phones and the web); changing which device is in which room, and
 # naming or removing rooms, is the admin's. Spec: docs/API_REFERENCE.md,

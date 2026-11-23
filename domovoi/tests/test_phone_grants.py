@@ -1,4 +1,4 @@
-"""Phone grants: admin on a phone for the rest of the day (V073, 1.5.0).
+"""Phone grants: admin on a phone for the rest of the day (V074, 1.5.0).
 
 A phone that has just signed in with the password may ask for a grant
 (``POST /api/auth/phone-grant``): 256 random bits, bound to its device id,
