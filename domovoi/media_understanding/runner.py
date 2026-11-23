@@ -164,6 +164,21 @@ def analysers() -> list[Analyser]:
     return sorted(_ANALYSERS.values(), key=lambda a: (a.order, a.name))
 
 
+#: Work an analyser slice does around items rather than on one (faces:
+#: fetching its models on opt-in, the nightly re-group). Each is called with
+#: the runner at the start of every library step, once the switches say
+#: understanding is on and not paused; a failure is logged, never fatal.
+_HOUSEKEEPING: dict[str, Callable[["Runner"], Awaitable[None]]] = {}
+
+
+def register_housekeeping(name: str, fn: Callable[["Runner"], Awaitable[None]]) -> None:
+    _HOUSEKEEPING[name] = fn
+
+
+def unregister_housekeeping(name: str) -> None:
+    _HOUSEKEEPING.pop(name, None)
+
+
 class TimeCapReached(Exception):
     """The item's processing-time budget is used up."""
 
@@ -594,6 +609,11 @@ class Runner(VoiceFirst):
         if self.sw["paused"]:
             await self.set_phase("paused")
             return False
+        for name, fn in list(_HOUSEKEEPING.items()):
+            try:
+                await fn(self)
+            except Exception as e:  # noqa: BLE001 — the item work goes on
+                log.warning("media understanding: %s housekeeping failed: %s", name, type(e).__name__)
         mode = self.mode()
         if mode is None:
             await self.release_after_batch()

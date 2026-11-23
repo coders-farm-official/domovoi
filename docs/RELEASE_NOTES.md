@@ -4,6 +4,27 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Faces and people (server side)
+
+- **What changed.** With **Recognize faces** on (Settings → Chat & AI →
+  Photos and videos; off by default, admin only), the server finds faces
+  in the Pictures library (and, once video understanding lands, in video
+  keyframes, one row per appearance), and groups the same person's faces
+  as they arrive and again each night. Groups are named with the same
+  people voice ID knows. New routes under `/api/faces` (API_REFERENCE
+  §3.5c1c): the household views, names, confirms, says "not this person"
+  and hides; merging or splitting a named person's faces is admin; guests
+  and shared screens get nothing. "Forget my face" (admin, or the person's
+  own claimed phone) deletes their faces and keeps them from being learned
+  again. Turning faces off deletes every face and group.
+- **What to know.** Turning faces on makes the server download two models
+  once, about 39 MB, from GitHub (OpenCV Zoo's YuNet, MIT, and SFace,
+  Apache-2.0; pinned by SHA-256; never under internet access "No"); then
+  every photo already analysed is queued again for faces only. SFace's
+  model card doesn't name its training data (docs/LICENSES.md). There is
+  no export of face data; database backups include it. A face-only person
+  appears on the People page like any other.
+
 ## 1.5.0 (unreleased) — Photos and videos: the catalogue and the background runner
 
 - **What changed.** The core keeps a catalogue of the image and video

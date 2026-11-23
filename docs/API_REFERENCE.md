@@ -1260,8 +1260,9 @@ with later 1.5.0 slices.
 The switches live in `household_settings` key `media_understanding`:
 `enabled` is on for a new install and off for a house that upgraded until
 an admin turns it on; `faces` and `places` are off by default. Turning
-faces off deletes every face (`confirm_delete_faces: true` when there are
-any). Excluding a folder deletes what was worked out about it; a file
+faces off deletes every face and group (`confirm_delete_faces: true` when
+there are any; the denylist of forgotten faces stays); turning it on
+starts the one-time pinned model fetch (§3.5c1c). Excluding a folder deletes what was worked out about it; a file
 deleted through Files loses its results at once. Changes fire
 `media_understanding.changed` on `/ws/state`.
 
@@ -1274,6 +1275,44 @@ deleted through Files loses its results at once. Changes fire
 | `POST /api/media-understanding/rescan` | **Device** | — | `{ok: true}`: the core walks the libraries at its next look (within a minute). |
 | `POST /api/media-understanding/excluded` | **Admin** | `{library_id: "core:pictures"\|"core:videos", prefix: "Folder/Sub"}` (`""` = the whole library) | `{library_id, prefix, deleted}`: the rows (and results) deleted. `404` unknown library, `422` a path with `.`/`..`. |
 | `DELETE /api/media-understanding/excluded?library_id=&prefix=` | **Admin** | — | `{ok: true}`; the next walk catalogues the folder again. `404` when it wasn't excluded. |
+
+### 3.5c1c Faces and people (1.5.0)
+
+`web/backend/api/faces.py`; the data and the grouping in
+`domovoi/media_understanding/faces.py` (tables `media_faces`,
+`face_groups`, `face_denylist`, V078). Faces are found only while the
+`faces` switch is on (§3.5c1b; off by default, admin); turning it on makes
+the core fetch the two pinned models once and queue the photos again.
+Every route below answers `409` while faces are off (except `/status`),
+`401` to a guest, and `403` to a device marked as a shared screen (an
+admin's Bearer included). No answer carries an embedding or a centroid;
+there is no export route.
+
+A face row: `{face_id, item_id, library_id, rel_path, kind: "image"|"video",
+at_s (null for a photo), box: [x, y, w, h] (fractions of the picture),
+quality, group_id, person_id, confirmed, suggested}`. `suggested` = put
+under a person by the grouping, not yet confirmed.
+
+| Method & path | Auth | Request | Response / purpose |
+|---|---|---|---|
+| `GET /api/faces/status` | **Device read** | — | `{enabled, models_ready, fetch_error, faces, people}` |
+| `GET /api/faces/people?more=` | **Device read** | — | `{people: [{id, name, faces, confirmed, group_id}], groups: [{group_id, hidden: false, faces}], shown_min_faces: 3}`: named people, and unnamed groups of 3 or more faces (`more=true`: all of them). Never hidden groups. |
+| `GET /api/faces/hidden` | **Admin** (on the device tier) | — | `{groups}`: the hidden groups. |
+| `GET /api/faces/groups/{group_id}?limit=&offset=` | **Device read**; a hidden group **admin** | — | `{group_id, person_id, hidden, faces: [face row]}`, confirmed first then by quality. `404` unknown. |
+| `GET /api/faces/people/{person_id}/items?confirmed=&kind=&limit=&offset=` | **Device read** | — | `{person_id, items: [{item_id, library_id, rel_path, kind, taken_at, moments: [at_s…], confirmed, faces}]}`: every photo and video the person is in, newest first; `moments` are the video times they appear (the search hook for "photos of Sarah"). |
+| `POST /api/faces/groups/{group_id}/name` | **Device**; a group that already has another person **admin** | `{person_id}` or `{name}` (a new name makes a face-only person; an existing one, case aside, is that person) | `{group_id, person_id, faces}`: the group's faces become the person's, confirmed (except faces already said not to be them); a person who already has a group gets them in it. `409` a name two people share. |
+| `POST /api/faces/face/{face_id}/confirm` | **Device** | optional `{person_id}` | `{face_id, person_id, group_id}`: "yes, this is them". Without `person_id`, the face's suggested person; `409` when it has none. |
+| `POST /api/faces/face/{face_id}/not-this-person` | **Device** | — | `{face_id, rejected_person_id, group_id}`: the face leaves the person, is never suggested for them again, and is grouped again. `409` a face that is nobody's. |
+| `POST /api/faces/groups/{group_id}/hide` | **Device** to hide; **admin** to unhide | `{hidden: bool}` | `{group_id, hidden}`. `409` hiding a named person's group. |
+| `POST /api/faces/merge` | **Device**; **admin** when any group is a named person's | `{into: group_id, groups: [group_id…]}` (≤ 50) | `{group_id, person_id, merged}`: one group; two named people become `into`'s person (faces only: voice and memories untouched). |
+| `POST /api/faces/split` | **Device**; **admin** when the faces are a named person's | `{face_ids: [id…]}` (≤ 500, one group) | `{group_id, from_group_id, faces}`: a new unnamed group; the faces are pinned there, and never suggested again for the person they left. |
+| `POST /api/faces/people/{person_id}/forget` | **Admin**, or **that person's own device** (`owner_person_id`, not a shared screen, claimed over 10 minutes ago) **with its claim key** in `X-Domovoi-Claim-Key` | — | `{person_id, faces, groups, denylisted}`: their faces and groups deleted, one averaged embedding (tied to nobody) added to the denylist so they aren't learned again. Photos and the `people` row stay. `404` unknown person; `403` anyone else. |
+
+The nightly re-group (in the night window, once a night) never moves a
+confirmed face. For slice 3 the core exposes
+`faces.VideoFaces.start(item_id)` / `.frame(at_s, image, ctx=)` per
+keyframe; for search, `faces.items_for_person` and
+`faces.person_ids_with_faces(name)`.
 
 ### 3.5c2 Home location (1.4.1)
 

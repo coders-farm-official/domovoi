@@ -9,6 +9,10 @@ and videos, in the background, voice first.
   it stands on;
 * :mod:`.ratelimit` — the 20 MB/s read bucket and partial fingerprints;
 * :mod:`.switches` — the household's switches (household_settings).
+* :mod:`.faces` — faces and people (off by default): storage, grouping,
+  training, forget-my-face, the photo analyser and the video-frame hook;
+  :mod:`.face_engine` (YuNet + SFace on ONNX Runtime, in numpy) and
+  :mod:`.face_models` (the pinned fetch on opt-in).
 
 Design: MEDIA-UNDERSTANDING §5 and §7. Core-internal: not offered to
 plugins.
