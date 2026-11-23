@@ -2,10 +2,15 @@ package com.domovoi.app.friendhouses
 
 import com.domovoi.app.net.ApiClient
 import com.domovoi.app.net.DEVICE_TOKEN_HEADER
+import com.domovoi.app.ui.screens.friendhouses.FhDone
 import com.domovoi.app.ui.screens.friendhouses.FhThread
 import com.domovoi.app.ui.screens.friendhouses.FhThreadLoader
 import com.domovoi.app.ui.screens.friendhouses.FhWords
+import com.domovoi.app.ui.screens.friendhouses.fhAcceptList
+import com.domovoi.app.ui.screens.friendhouses.fhDeclineList
 import com.domovoi.app.ui.screens.friendhouses.fhMerge
+import com.domovoi.app.ui.screens.friendhouses.fhSharedSplit
+import com.domovoi.app.ui.screens.friendhouses.fhStopSharing
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -367,17 +372,17 @@ class FriendHousesApiTest {
     // ---- the admin-only words --------------------------------------------------
 
     @Test fun adminOnlyThingsAreWordsThatSayTheDashboard() {
-        listOf(FH_ADMIN_ONLY, FhWords.FRIENDS_ADMIN, FhWords.LISTS_ADMIN, FhWords.CONVERSATION_ADMIN).forEach {
-            assertTrue(it, it.startsWith("Only an admin can "))
-            assertTrue(it, it.contains("on the dashboard"))
-        }
+        // A 403 from any call still says so; the screen itself names no
+        // admin-only control (it shows none: the admin zone is hidden).
+        assertTrue(FH_ADMIN_ONLY.startsWith("Only an admin can "))
+        assertTrue(FH_ADMIN_ONLY.contains("on the dashboard"))
         assertEquals(
-            "The Smiths shared a list: Camping. An admin can accept it in the dashboard.",
-            FhWords.invited("The Smiths", "Camping"),
+            "The Smiths shared a list: “Camping”",
+            FhWords.offered("The Smiths", "Camping"),
         )
-        assertEquals("Serverless messaging and friend system between households", FH_DESCRIPTION)
-        val words = listOf(FH_DESCRIPTION, FH_ADMIN_ONLY, FhWords.FRIENDS_ADMIN, FhWords.LISTS_ADMIN,
-            FhWords.CONVERSATION_ADMIN, FhWords.PHONE_FOLLOWS, FhWords.NO_FRIENDS_SUB)
+        assertEquals("Message and share lists with friends’ houses, house to house, with no company server in between", FH_DESCRIPTION)
+        val words = listOf(FH_DESCRIPTION, FH_ADMIN_ONLY, FhWords.SHARE_EXPLAIN, FhWords.NO_MESSAGES_SUB,
+            FhWords.FORMER_FRIEND, FhWords.offered("The Smiths", "Camping"))
         assertTrue(words.none { it.contains("gam", ignoreCase = true) })
     }
 
@@ -409,10 +414,6 @@ class FriendHousesApiTest {
         }
     }
 
-    @Test fun blockingIsAnAdminsAndSaidSo() {
-        assertTrue(FhWords.FRIENDS_ADMIN.contains("block"))
-    }
-
     @Test fun alertLevelsAreWords() {
         assertEquals("New messages: only in the inbox", FhWords.alert("inbox"))
         assertEquals("New messages: the rooms say who it's from", FhWords.alert("sender"))
@@ -420,6 +421,150 @@ class FriendHousesApiTest {
         assertEquals("New messages: as set on the dashboard", FhWords.alert("loud"))
         assertEquals("1 change waiting to send", FhWords.waiting(1))
         assertEquals("2 changes waiting to send", FhWords.waiting(2))
+    }
+
+    // ---- quiet hours ------------------------------------------------------------
+
+    @Test fun quietHoursDecodeAndAnOlderServerHasNone() = runBlocking {
+        answer("GET", "/api/friend-houses/friends", """{"friends":[{"id":"f1","name":"A","house":"$house","alert":"read"}],
+            "quiet_hours":{"rooms":"some","until":"07:00","read_later":true}}""")
+        val r = api.roster()
+        assertEquals(FhQuietHours(rooms = "some", until = "07:00", readLater = true), fhQuietHours(r))
+        assertEquals("read", r.friends.single().alert)
+        // None now.
+        answer("GET", "/api/friend-houses/friends", """{"friends":[],"quiet_hours":null}""")
+        assertNull(fhQuietHours(api.roster()))
+        // An older server: no field at all.
+        answer("GET", "/api/friend-houses/friends", """{"friends":[]}""")
+        assertNull(fhQuietHours(api.roster()))
+        // No read_later: false. No rooms: all.
+        answer("GET", "/api/friend-houses/friends", """{"friends":[],"quiet_hours":{"until":"22:30"}}""")
+        assertEquals(FhQuietHours(rooms = "all", until = "22:30", readLater = false), fhQuietHours(api.roster()))
+        // Something this build can't read never fails the friends read.
+        for (odd in listOf("\"soon\"", "[1]", "{\"rooms\":\"all\"}", "{\"until\":7}")) {
+            answer("GET", "/api/friend-houses/friends", """{"friends":[{"id":"f1","name":"A","house":"$house"}],"quiet_hours":$odd}""")
+            val read = api.roster()
+            assertEquals(odd, 1, read.friends.size)
+            assertNull(odd, fhQuietHours(read))
+        }
+    }
+
+    @Test fun heldAndReadOutAtDecodeAndAreNullOnAnOlderServer() = runBlocking {
+        answer("GET", "/api/friend-houses/conversations/$house?limit=50", """{"messages":[
+            {"id":1,"direction":"in","body":"a","state":"read","held":"quiet_hours","read_out_at":"2026-11-18T07:00:04+00:00"},
+            {"id":2,"direction":"in","body":"b","state":"unread","held":"quiet_hours","read_out_at":null},
+            ${msg(3)}]}""")
+        val (a, b, c) = api.conversation(house)
+        assertEquals("quiet_hours", a.held)
+        assertEquals("2026-11-18T07:00:04+00:00", a.readOutAt)
+        assertEquals("quiet_hours", b.held)
+        assertNull(b.readOutAt)
+        assertNull(c.held)
+        assertNull(c.readOutAt)
+    }
+
+    // ---- Home's unread count --------------------------------------------------------
+
+    @Test fun theUnreadCountIsACountOnlyAndNothingOnAnOlderServer() = runBlocking {
+        answer("GET", "/api/friend-houses/unread", """{"unread":3}""")
+        assertEquals(3, api.unread())
+        answer("GET", "/api/friend-houses/unread", """{"unread":0}""")
+        assertEquals(0, api.unread())
+        assertEquals("GET /api/friend-houses/unread", seen.last().let { "${it.method} ${it.path}" })
+        assertEquals(token, seen.last().getHeader(DEVICE_TOKEN_HEADER))
+        // Older servers, or one that refuses the household token here: nothing.
+        for (code in listOf(404, 401, 403, 501)) {
+            answer("GET", "/api/friend-houses/unread", """{"detail":"x"}""", code)
+            assertNull("$code", api.unread())
+            assertFalse("$code never raises pairing", client.pairingRequired.value)
+        }
+        // Anything else is a failure the caller sees (Home keeps what it had).
+        answer("GET", "/api/friend-houses/unread", """{"detail":"core unreachable"}""", 502)
+        try {
+            api.unread()
+            fail("502 should throw")
+        } catch (e: com.domovoi.app.net.ApiException) {
+            assertEquals(502, e.status)
+        }
+    }
+
+    // ---- accept, decline, stop sharing (the household's) -------------------------
+
+    private val space = "0f".repeat(16)
+
+    @Test fun acceptDeclineAndStopSharingAreTheHouseholdsRoutes() = runBlocking {
+        answer("POST", "/api/friend-houses/shared-lists/$space/accept", """{"list_id":12,"name":"Camping trip"}""")
+        answer("POST", "/api/friend-houses/shared-lists/$space/decline", """{"ok":true}""")
+        answer("DELETE", "/api/friend-houses/shared-lists/$space", """{"ok":true}""")
+        assertEquals("Camping trip", api.acceptList(space, "  Camping trip "))
+        assertEquals("Camping trip", api.acceptList(space))
+        api.declineList(space)
+        api.stopSharing(space)
+        assertEquals(
+            listOf(
+                "POST /api/friend-houses/shared-lists/$space/accept",
+                "POST /api/friend-houses/shared-lists/$space/accept",
+                "POST /api/friend-houses/shared-lists/$space/decline",
+                "DELETE /api/friend-houses/shared-lists/$space",
+            ),
+            seen.map { "${it.method} ${it.path}" },
+        )
+        val bodies = seen.take(2).map { Json.parseToJsonElement(it.body.readUtf8()).jsonObject }
+        assertEquals("Camping trip", bodies[0]["name"]!!.jsonPrimitive.content)
+        assertEquals(emptySet<String>(), bodies[1].keys)
+        seen.forEach { assertEquals(it.path, token, it.getHeader(DEVICE_TOKEN_HEADER)) }
+    }
+
+    @Test fun theScreensListActionsSayHowItWent() = runBlocking {
+        val offer = FhSharedList(id = space, state = "invited", origin = "them", title = "Camping", friend = "The Smiths")
+        answer("POST", "/api/friend-houses/shared-lists/$space/accept", """{"list_id":12,"name":"Camping"}""")
+        assertEquals(FhDone.Ok("added to Lists as Camping"), fhAcceptList(api, offer))
+        // A name taken here: the server's sentence, and ask for another.
+        answer("POST", "/api/friend-houses/shared-lists/$space/accept", """{"detail":"There is already a list called Camping."}""", 400)
+        assertEquals(FhDone.Problem("There is already a list called Camping.", rename = true), fhAcceptList(api, offer))
+        answer("POST", "/api/friend-houses/shared-lists/$space/decline", "{}")
+        assertEquals(FhDone.Ok("list declined"), fhDeclineList(api, offer))
+        answer("DELETE", "/api/friend-houses/shared-lists/$space", "{}")
+        assertEquals(FhDone.Ok("stopped sharing — you both keep your own copy"), fhStopSharing(api, offer))
+        // An older server that still holds these for an admin: its words.
+        answer("DELETE", "/api/friend-houses/shared-lists/$space", """{"detail":"admin only"}""", 403)
+        assertEquals(FhDone.Problem(FH_ADMIN_ONLY), fhStopSharing(api, offer))
+    }
+
+    @Test fun onlyAThirtyTwoHexListIdGoesInAPath() = runBlocking {
+        assertTrue(FhPaths.isSpaceId(space))
+        for (bad in listOf("", "0F".repeat(16), "0f".repeat(15), "0f".repeat(17), "../" + "0".repeat(29), "0f".repeat(15) + "/x")) {
+            assertFalse(bad, FhPaths.isSpaceId(bad))
+            for (call in listOf<suspend () -> Unit>({ api.acceptList(bad) }, { api.declineList(bad) }, { api.stopSharing(bad) })) {
+                try {
+                    call()
+                    fail("$bad should be refused")
+                } catch (e: IllegalArgumentException) {
+                    assertEquals("not a shared list id", e.message)
+                }
+            }
+        }
+        assertTrue("nothing was sent", seen.isEmpty())
+        // A list the URL can't name isn't shown at all.
+        val (offers, now) = fhSharedSplit(listOf(
+            FhSharedList(id = space, state = "invited", origin = "them"),
+            FhSharedList(id = "nope", state = "active", origin = "us"),
+            FhSharedList(id = "1f".repeat(16), state = "invited", origin = "us"),
+            FhSharedList(id = "2f".repeat(16), state = "active", origin = "them"),
+        ))
+        assertEquals(listOf(space), offers.map { it.id })
+        assertEquals(listOf("1f".repeat(16), "2f".repeat(16)), now.map { it.id })
+    }
+
+    @Test fun thereIsNoWayToStartAShareOrAnyAdminRoute() {
+        // Starting a share (POST /shared-lists) and everything in the
+        // dashboard's admin zone stay admin: the phone's client has no call
+        // for them, so no screen can offer one.
+        val names = FriendHousesApi::class.java.declaredMethods.map { it.name.substringBefore('$') }.toSet()
+        for (admin in listOf("share", "shareList", "startShare", "requests", "acceptRequest", "block", "blocked",
+                "invites", "rename", "removeFriend", "verify", "setAlert", "deleteConversation", "saveCopy", "export")) {
+            assertFalse(admin, admin in names)
+        }
     }
 
     @Test fun anErrorBodyWithoutADetailFallsBack() {

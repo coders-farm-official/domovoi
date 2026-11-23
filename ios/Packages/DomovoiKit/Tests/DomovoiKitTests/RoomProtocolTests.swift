@@ -147,6 +147,11 @@ final class RoomProtocolTests: XCTestCase {
     func testTheStreamURLFollowsTheCoreURL() {
         XCTAssertEqual("ws://192.168.1.30:6370/v1/stream/kitchen", RoomProtocol.streamURL(coreURL: "http://192.168.1.30:6370", roomID: "kitchen"))
         XCTAssertEqual("wss://h:6370/v1/stream/a", RoomProtocol.streamURL(coreURL: "https://h:6370/", roomID: "a"))
+        XCTAssertEqual(
+            "ws://h:6370/v1/stream/a%2Fb%3Fc%20d%25e%23f",
+            RoomProtocol.streamURL(coreURL: "http://h:6370", roomID: "a/b?c d%e#f"),
+            "the room is one escaped path segment"
+        )
     }
 
     func testTheHealthSampleCarriesOnlyWhatTheCoreKeepsPlusTheBatteryPair() throws {

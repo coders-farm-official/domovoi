@@ -123,6 +123,7 @@ import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.StatusDot
 import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.components.openWebLink
+import com.domovoi.app.ui.screens.music.encComponent
 import com.domovoi.app.ui.shell.LocalOpenSettingsTab
 import com.domovoi.app.ui.shell.Route
 import com.domovoi.app.ui.theme.Domovoi
@@ -259,7 +260,7 @@ private fun rememberLive(): Live {
         val list = rooms.data ?: return@rememberApi null
         if (list.isEmpty()) return@rememberApi false
         list.take(3).any { r ->
-            runCatching { a.api.get("/api/satellites/${r.roomId}/sessions?limit=1").jsonArray.isNotEmpty() }.getOrDefault(false)
+            runCatching { a.api.get("/api/satellites/${encComponent(r.roomId)}/sessions?limit=1").jsonArray.isNotEmpty() }.getOrDefault(false)
         }
     }
     return Live(

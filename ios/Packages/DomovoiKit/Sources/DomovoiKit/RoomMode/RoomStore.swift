@@ -182,7 +182,36 @@ public final class RoomStore: RoomKeeping, @unchecked Sendable {
     /// and installed again while the household token in the Keychain does
     /// too. A phone that comes back that way opens as a room with nothing
     /// enrolled, and leaving it needs the device owner, as ever.
-    public var active: Bool { prefs.bool(Keys.active) || seal?.read() != nil }
+    ///
+    /// The Keychain copy is read to fail closed (security review 2026-11-22,
+    /// M20): only a clean "no such item" counts as unsealed. A Keychain that
+    /// will not say (locked, refused, an item it cannot decode) counts as
+    /// sealed, since the household token beside it may be there too. A
+    /// never-sealed phone gets the clean answer, so setting up still works.
+    ///
+    /// A seal kept only in the preference (rooms sealed before the Keychain
+    /// copy existed) gets its Keychain copy here, the first time it is read,
+    /// so a later reinstall comes back sealed; the room stays sealed whether
+    /// or not that write takes, and a failed write is tried again next read.
+    public var active: Bool {
+        guard let seal else { return prefs.bool(Keys.active) }
+        switch seal.lookup() {
+        case .found, .unreadable:
+            return true
+        case .absent:
+            guard prefs.bool(Keys.active) else { return false }
+            // Under the write lock, and only while the preference still
+            // says sealed: a leave racing this read must not be undone.
+            return writing.withLock { _ in
+                guard prefs.bool(Keys.active) else { return false }
+                seal.write(Self.sealMark)
+                return true
+            }
+        }
+    }
+
+    /// What the Keychain copy of the seal holds.
+    static let sealMark = "1"
 
     /// The room was listening (not stopped by the person) — what a return
     /// to Domovoi resumes by itself.
@@ -224,7 +253,7 @@ public final class RoomStore: RoomKeeping, @unchecked Sendable {
         // anything else happens (`RoomStore.kt:89-92`).
         onActiveChanged(on)
         writing.withLock { _ in
-            seal?.write(on ? "1" : nil)
+            seal?.write(on ? Self.sealMark : nil)
             prefs.setBool(on, Keys.active)
             if !on { prefs.setBool(false, Keys.running) }
         }

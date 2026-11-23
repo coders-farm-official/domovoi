@@ -1,54 +1,18 @@
 package com.domovoi.app.ui.shell
 
-import androidx.compose.runtime.Composable
-import com.domovoi.app.net.CAP_STATIONS
-import com.domovoi.app.net.LocalCapabilities
-import com.domovoi.app.net.rememberApi
-import com.domovoi.app.ui.screens.calendar.calendarRangePath
-import kotlinx.serialization.json.JsonArray
-
-/** No satellites count since 2026-10-11: Satellites is a Settings tab, and
- *  Settings carries no badge (the tab's own first line counts the rooms),
- *  as on the web. */
+/** The numbers beside nav items. Since 2026-11-20 no page shows a total
+ *  (people, calendar events, favourite stations): a number beside a nav
+ *  item reads as "something new here", and a total never is (the web's
+ *  CORE_NAV_ITEMS, components.jsx). What stays is something that really
+ *  is new: Friend houses' unread messages. Settings carries no badge (the
+ *  tab's own first line counts the rooms), as on the web. */
 data class SidebarCounts(
-    val people: Int? = null,
-    val calendar: Int? = null,
-    val stations: Int? = null,
     /** Unread messages in the house inbox (Friend houses' badge); null
      *  while it is hidden or there are none. */
     val friendHouses: Int? = null,
 ) {
     fun forRoute(r: Route): Int? = when (r) {
-        Route.People -> people
-        Route.Calendar -> calendar
-        Route.Stations -> stations
         Route.FriendHouses -> friendHouses
         else -> null
     }
-}
-
-/** useSidebarCounts analog — refetch only on the row-count-changing events.
- *  Capability-gated badges are skipped entirely when the backing plugin is
- *  absent (design §8): no fetch, no badge. */
-@Composable
-fun rememberSidebarCounts(): SidebarCounts {
-    val hasStations = LocalCapabilities.current.has(CAP_STATIONS)
-    val events = setOf("calendar.events.changed", "radio.stations.changed")
-    val state = rememberApi(hasStations, eventTypes = events, fetch = { app ->
-        suspend fun lenOf(path: String): Int? = runCatching {
-            (app.api.get(path) as? JsonArray)?.size
-        }.getOrNull()
-        SidebarCounts(
-            people = lenOf("/api/people"),
-            // The six weeks around this month, as the Calendar page asks
-            // for them: the whole list stopped at the server's 500 oldest.
-            calendar = lenOf(calendarRangePath(java.time.LocalDate.now())),
-            stations = if (hasStations) {
-                lenOf("/api/plugins/radio/stations?favorited_only=true&limit=1000")
-            } else {
-                null
-            },
-        )
-    })
-    return state.data ?: SidebarCounts()
 }

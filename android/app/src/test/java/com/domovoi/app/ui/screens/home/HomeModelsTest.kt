@@ -187,6 +187,41 @@ class HomeModelsTest {
         assertEquals(AttentionView.None, attentionView(emptyList(), "everyone", shared = true, settingKnown = true))
     }
 
+    // ─── Friend Houses' unread row ────────────────────────────────────────
+
+    @Test fun theFriendHousesRowIsACountThatOpensTheMessages() {
+        val one = fhUnreadRow(1)!!
+        assertEquals("1 unread Friend Houses message", one.text)
+        assertEquals("3 unread Friend Houses messages", fhUnreadRow(3)!!.text)
+        assertEquals(HomeTarget.Screen(Route.FriendHouses), one.target)
+        assertEquals(Tone.Brand, one.tone)
+        assertEquals("fh-unread", one.key)
+        assertNull(one.at)
+        // None at 0, and none when unknown (not read, an older server
+        // without the count, or Friend Houses hidden here).
+        assertNull(fhUnreadRow(0))
+        assertNull(fhUnreadRow(-2))
+        assertNull(fhUnreadRow(null))
+    }
+
+    @Test fun theRowJoinsWhateverTheProblemsShow() {
+        val row = fhUnreadRow(2)!!
+        assertEquals(AttentionView.Rows(twoRows + row), withRow(AttentionView.Rows(twoRows), row))
+        assertEquals(AttentionView.Summary(2, extra = listOf(row)), withRow(AttentionView.Summary(2), row))
+        // On its own where no problem shows, an "admins only" house and a
+        // setting not read yet included: it is the household's own inbox.
+        assertEquals(AttentionView.Rows(listOf(row)), withRow(AttentionView.None, row))
+        assertEquals(
+            AttentionView.Rows(listOf(row)),
+            withRow(attentionView(twoRows, "admins", shared = false, settingKnown = true), row),
+        )
+        assertEquals(AttentionView.Rows(listOf(row)), withRow(attentionView(twoRows, null, shared = false, settingKnown = false), row))
+        // No row: nothing changes.
+        assertEquals(AttentionView.Summary(2), withRow(AttentionView.Summary(2), null))
+        assertEquals(AttentionView.None, withRow(AttentionView.None, fhUnreadRow(0)))
+        assertTrue(attentionShown(withRow(AttentionView.None, row)))
+    }
+
     // ─── shared-screen masking ───────────────────────────────────────────
 
     @Test fun reminderWordsBecomeTheRoomOnASharedScreen() {
