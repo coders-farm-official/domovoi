@@ -41,6 +41,12 @@
 # Argv-less; it edits only domovoi-home, only from its own table - see
 # satellite/scripts/domovoi-wifi-adapt.
 @USER@ ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-wifi-adapt ""
-# The XVF3800's LED ring is driven over USB, which needs root. The client
-# tries a plain call first and falls back to `sudo -n` (PROVISIONING §E).
-@USER@ ALL=(root) NOPASSWD: /opt/xvf3800/xvf_host
+# The XVF3800's LED ring and DSP are driven over USB, which needs root. The
+# client tries a plain call first and falls back to `sudo -n` through this
+# root-owned wrapper (satellite/xvf_guard.py), which runs /opt/xvf3800/xvf_host
+# only for the exact operations the satellite makes (the LED verbs, the five
+# DSP parameters with plain numbers) and refuses anything else. Never the
+# tool itself: it has options that load a library and write the chip's
+# saved settings. (Cards before 1.5.0 named the tool; their update switches
+# them, satellite/root_code.py.)
+@USER@ ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-xvf
