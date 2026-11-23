@@ -1243,6 +1243,38 @@ as the core last did (null while it hasn't).
 | `GET /api/people/{id}/music-mix` | **Device read** | — | `{person_id, override: {discovery_favorites?, close_wander?} \| null, uses: {discovery_favorites, close_wander}}` (`null` = uses the household's). `404` for a person nobody has. |
 | `PUT /api/people/{id}/music-mix` | **Admin, or that person's own device** (`owner_person_id`, not a shared screen; `403` for any other) **with its claim key** in `X-Domovoi-Claim-Key` (since 1.5.0; an admin needs none) | `{override: {discovery_favorites, close_wander} \| null}` | As `GET`; `null` goes back to the household's. The person's device without a matching key (none sent, an old one, or a claim from before keys): `403` `{detail, code: "claim_key_required"}`. |
 
+### 3.5c1b Photos and videos: media understanding (1.5.0)
+
+Settings → Chat & AI → Photos and videos (`web/backend/api/media_understanding.py`,
+`domovoi/media_understanding/`, V078). The core catalogues the image and
+video files of Pictures and Videos by `stat()` alone (`media_catalog`, a
+walk an hour or after a rescan) and works through them in the background
+(`media_understanding`): chat videos first, then the backlog in the night
+window (the household's quiet hours) and, by day, only new arrivals after
+10 minutes without a voice turn, at a 1:1 duty cycle. Every model step
+gives way to a voice turn; reads go through a 20 MB/s bucket; helper
+programs run at `nice 19` and `ionice -c 3`. Slice 1 ships the catalogue
+and the runner (fingerprints only); captions, transcripts and faces come
+with later 1.5.0 slices.
+
+The switches live in `household_settings` key `media_understanding`:
+`enabled` is on for a new install and off for a house that upgraded until
+an admin turns it on; `faces` and `places` are off by default. Turning
+faces off deletes every face (`confirm_delete_faces: true` when there are
+any). Excluding a folder deletes what was worked out about it; a file
+deleted through Files loses its results at once. Changes fire
+`media_understanding.changed` on `/ws/state`.
+
+| Method & path | Auth | Request | Response / purpose |
+|---|---|---|---|
+| `GET /api/media-understanding` | **Device read** | — | `{settings: {enabled, faces, places, paused, run_now, frame_cap_mode: "auto"\|"manual", frame_cap}, frame_cap_range: [3, 1000], ai_on, progress: {photos: {total, done, left, failed}, videos: {…}, phase: "off"\|"paused"\|"idle"\|"working"\|"waiting_for_window"\|"waiting_for_memory", waiting_for_voice, rescan_requested, benchmark: {model, s_per_frame, frames_per_s, tier: "cpu"\|"gpu", vram_bytes, measured_at} \| null, updated_at}, estimate: {seconds, nights}, face_count, libraries: [{id, label, present}], excluded: [{library_id, prefix}]}` |
+| `PUT /api/media-understanding/settings` | **Admin** | any of `{enabled, faces, places, frame_cap_mode, frame_cap}`, plus `confirm_delete_faces` | `{settings}`. `422` malformed (a manual cap is 3–1000); `409` turning faces off while faces are saved, without `confirm_delete_faces`. |
+| `POST /api/media-understanding/pause` | **Admin** | `{paused: bool}` | `{settings}`. Pausing also ends Run now; the item under way stops at its next step and carries on later. |
+| `POST /api/media-understanding/run-now` | **Admin** | — | `{settings}`: ignore the night window until the backlog is done (still voice first, still capped). `409` while understanding is off. |
+| `POST /api/media-understanding/rescan` | **Device** | — | `{ok: true}`: the core walks the libraries at its next look (within a minute). |
+| `POST /api/media-understanding/excluded` | **Admin** | `{library_id: "core:pictures"\|"core:videos", prefix: "Folder/Sub"}` (`""` = the whole library) | `{library_id, prefix, deleted}`: the rows (and results) deleted. `404` unknown library, `422` a path with `.`/`..`. |
+| `DELETE /api/media-understanding/excluded?library_id=&prefix=` | **Admin** | — | `{ok: true}`; the next walk catalogues the folder again. `404` when it wasn't excluded. |
+
 ### 3.5c2 Home location (1.4.1)
 
 The household's town, Settings → Household → Home location

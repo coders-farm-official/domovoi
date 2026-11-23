@@ -4417,6 +4417,264 @@
         }
       }
     },
+    "/api/media-understanding": {
+      "get": {
+        "tags": [
+          "media-understanding"
+        ],
+        "summary": "Get State",
+        "operationId": "get_state_api_media_understanding_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get State Api Media Understanding Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/media-understanding/settings": {
+      "put": {
+        "tags": [
+          "media-understanding"
+        ],
+        "summary": "Put Settings",
+        "operationId": "put_settings_api_media_understanding_settings_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object",
+                "title": "Body"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Put Settings Api Media Understanding Settings Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/media-understanding/pause": {
+      "post": {
+        "tags": [
+          "media-understanding"
+        ],
+        "summary": "Pause",
+        "operationId": "pause_api_media_understanding_pause_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object",
+                "title": "Body"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Pause Api Media Understanding Pause Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/media-understanding/run-now": {
+      "post": {
+        "tags": [
+          "media-understanding"
+        ],
+        "summary": "Run Now",
+        "operationId": "run_now_api_media_understanding_run_now_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Run Now Api Media Understanding Run Now Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/media-understanding/rescan": {
+      "post": {
+        "tags": [
+          "media-understanding"
+        ],
+        "summary": "Rescan",
+        "operationId": "rescan_api_media_understanding_rescan_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "type": "object",
+                  "title": "Response Rescan Api Media Understanding Rescan Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/media-understanding/excluded": {
+      "post": {
+        "tags": [
+          "media-understanding"
+        ],
+        "summary": "Add Excluded",
+        "operationId": "add_excluded_api_media_understanding_excluded_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true,
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Add Excluded Api Media Understanding Excluded Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "media-understanding"
+        ],
+        "summary": "Remove Excluded",
+        "operationId": "remove_excluded_api_media_understanding_excluded_delete",
+        "parameters": [
+          {
+            "name": "library_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Library Id"
+            }
+          },
+          {
+            "name": "prefix",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Prefix"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Remove Excluded Api Media Understanding Excluded Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/household/home-location": {
       "get": {
         "tags": [

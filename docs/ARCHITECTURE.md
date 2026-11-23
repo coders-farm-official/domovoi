@@ -977,7 +977,9 @@ described here, which every paired device shares.
   process's memory and is deleted when it ends.
 * **Videos (V064).** A home-server chat takes one short video a message
   (`web/backend/api/chat_videos.py`: MP4, MOV or WebM, up to 3 minutes and
-  2 GB). The core's `chat_video` worker (`domovoi/chat_video/`) watches one
+  2 GB). The core's `media_understanding` worker (`domovoi/media_understanding/`,
+  which took over from the 1.4.0 `chat_video` worker in 1.5.0; the job
+  itself is `domovoi/chat_video/`) watches one
   video at a time in the house, at the lowest priority and pausing for any
   voice turn: it transcribes the sound with the server's speech-to-text and
   has the vision model describe a few frames, then writes a summary into

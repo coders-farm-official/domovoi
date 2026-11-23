@@ -179,8 +179,14 @@ def _windows_release(job: Any) -> None:
 
 def _argv(argv: list[str]) -> list[str]:
     """``argv`` at the lowest priority: ``nice -n 19`` where there is one
-    (Linux, macOS); Windows uses the idle priority class instead."""
+    (Linux, macOS), and the idle I/O class (``ionice -c 3``, Linux) so a
+    pass over a big video never starves the house's disk (media
+    understanding, design §5); Windows uses the idle priority class
+    instead."""
     if sys.platform != "win32":
+        ionice = shutil.which("ionice") if sys.platform.startswith("linux") else None
+        if ionice:
+            argv = [ionice, "-c", "3", *argv]
         nice = shutil.which("nice")
         if nice:
             return [nice, "-n", "19", *argv]

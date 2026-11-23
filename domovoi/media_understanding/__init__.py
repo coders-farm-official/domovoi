@@ -1,0 +1,15 @@
+"""Media understanding (1.5.0): what the house works out about its photos
+and videos, in the background, voice first.
+
+* :mod:`.catalog` — the ``media_catalog`` walker (stat() only);
+* :mod:`.runner` — the ``media_understanding`` runner (chat videos first,
+  then library work in the night window and the daytime trickle) and the
+  analyser hooks the photo, video and face slices register;
+* :mod:`.budget` — the adaptive per-video frame budget and the benchmark
+  it stands on;
+* :mod:`.ratelimit` — the 20 MB/s read bucket and partial fingerprints;
+* :mod:`.switches` — the household's switches (household_settings).
+
+Design: MEDIA-UNDERSTANDING §5 and §7. Core-internal: not offered to
+plugins.
+"""

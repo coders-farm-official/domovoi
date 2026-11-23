@@ -1268,6 +1268,10 @@ class Settings(BaseSettings):
     # How often the core deletes support-session transcripts past 30 days
     # and over 200 MB in all (domovoi/support_sessions.py).
     support_session_pruner_interval_sec: float = 3600.0
+    # How often the media catalogue (domovoi/media_understanding/catalog.py)
+    # looks whether a walk is due: a full stat()-only walk of Pictures and
+    # Videos once an hour, sooner after "Rescan" or an upload.
+    media_catalog_interval_sec: float = 60.0
 
     # ─── MPD (lazy per-room provisioning) ──────────────────────────────
     # An MPD daemon per voice-satellite room keeps playback queues / current

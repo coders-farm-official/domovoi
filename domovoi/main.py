@@ -946,11 +946,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from domovoi.workers.container_guard import ContainerGuardWorker
 
     WORKERS.add_worker(ContainerGuardWorker(), owner="core")
-    # Videos attached in chat (V064): watched one at a time, holding off
-    # while any voice turn is under way (domovoi/chat_video/runner.py).
-    from domovoi.workers.chat_video import ChatVideoWorker
+    # Media understanding (V078): the stat()-only catalogue of Pictures and
+    # Videos, and one runner for all understanding work, voice first. It
+    # runs the videos attached in chat (V064) first, then library work in
+    # the night window and the daytime trickle
+    # (domovoi/media_understanding/; it replaced the chat_video worker).
+    from domovoi.workers.media_understanding import MediaCatalogWorker, MediaUnderstandingWorker
 
-    WORKERS.add_worker(ChatVideoWorker(), owner="core")
+    WORKERS.add_worker(MediaCatalogWorker(), owner="core")
+    WORKERS.add_worker(MediaUnderstandingWorker(), owner="core")
     # Reading scans (V065): Tesseract OCR first, the vision model for a page
     # OCR can't read, one read at a time, holding off for voice the same way
     # (domovoi/scan_reader/runner.py). Registered as the scan reader the

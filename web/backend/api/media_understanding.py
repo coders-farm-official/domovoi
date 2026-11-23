@@ -1,0 +1,200 @@
+"""Settings → Chat & AI → Photos and videos: the media-understanding
+switches, progress and excluded folders (1.5.0, design
+MEDIA-UNDERSTANDING §5 and §8; owner answers 2026-11-22).
+
+Routes (tiers per the owner's answers: the household sees progress; all
+switches and folder exclusions are admin):
+
+* ``GET  /api/media-understanding`` (household, ``require_device_read``):
+  the switches, progress per kind (done, left, failed), the runner's phase
+  ("waiting_for_voice" while it holds off for a voice answer), the
+  estimate, the benchmark, the libraries and the excluded folders.
+* ``PUT  /api/media-understanding/settings`` (admin): change switches
+  (``enabled``, ``faces``, ``places``, ``frame_cap_mode``, ``frame_cap``).
+  Turning faces off deletes every face, which needs
+  ``confirm_delete_faces: true`` when there are any (409 otherwise).
+* ``POST /api/media-understanding/pause`` (admin): ``{"paused": bool}``.
+* ``POST /api/media-understanding/run-now`` (admin): ignore the night
+  window until the backlog is done (still voice first, still capped).
+* ``POST /api/media-understanding/rescan`` (household, ``require_device``):
+  walk the libraries at the core's next look (within a minute).
+* ``POST /api/media-understanding/excluded`` (admin):
+  ``{"library_id", "prefix"}``; the folder's results are deleted at once.
+* ``DELETE /api/media-understanding/excluded?library_id=&prefix=`` (admin).
+
+Everything is in Postgres; the core's runner and walker read it. Each
+change fires ``pg_notify('media_understanding_changed')``.
+"""
+
+from __future__ import annotations
+
+import unicodedata
+from typing import Any
+
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from sqlalchemy import text
+
+from domovoi.admin_auth import require_admin_mutation, require_device, require_device_read
+from domovoi.media_understanding import catalog, switches
+from domovoi.media_understanding.runner import estimate, progress
+from web.backend.db import session_scope
+
+router = APIRouter(tags=["media-understanding"])
+
+PREFIX_MAX = 1024
+LIBRARY_LABELS = {"core:pictures": "Pictures", "core:videos": "Videos"}
+
+
+def _libraries() -> list[dict[str, Any]]:
+    return [{"id": lib.id, "label": LIBRARY_LABELS.get(lib.id, lib.id), "present": catalog.is_present(lib)}
+            for lib in catalog.core_libraries()]
+
+
+def clean_prefix(raw: Any) -> str:
+    """A folder inside a library, as stored: forward slashes, no leading
+    or trailing slash, never ``..``; '' is the whole library."""
+    if not isinstance(raw, str):
+        raise HTTPException(status_code=422, detail="prefix must be text")
+    p = raw.replace("\\", "/").strip().strip("/")
+    if len(p) > PREFIX_MAX:
+        raise HTTPException(status_code=422, detail="the folder path is too long")
+    parts = [x for x in p.split("/") if x]
+    if any(x in (".", "..") for x in parts):
+        raise HTTPException(status_code=422, detail="the folder path can't contain . or ..")
+    if any(unicodedata.category(ch) == "Cc" for ch in p):
+        raise HTTPException(status_code=422, detail="the folder path has a control character")
+    return "/".join(parts)
+
+
+def _library_id(raw: Any) -> str:
+    ids = {lib.id for lib in catalog.core_libraries()}
+    if not isinstance(raw, str) or raw not in ids:
+        raise HTTPException(status_code=404, detail="no such library")
+    return raw
+
+
+async def _notify(s: Any, what: str) -> None:
+    await s.execute(text("SELECT pg_notify('media_understanding_changed', :w)"), {"w": what})
+
+
+@router.get("/api/media-understanding", dependencies=[Depends(require_device_read)])
+async def get_state() -> dict[str, Any]:
+    from domovoi import ai_features
+
+    async with session_scope() as s:
+        sw = await switches.read(s)
+        prog = await progress(s)
+        excluded = (await s.execute(text(
+            "SELECT library_id, prefix FROM media_excluded ORDER BY library_id, prefix"))).mappings().all()
+        faces = int((await s.execute(text("SELECT count(*) FROM media_faces"))).scalar() or 0)
+    est = estimate(prog["photos"]["left"], prog["videos"]["left"], prog["benchmark"])
+    return {
+        "settings": {k: sw[k] for k in ("enabled", "faces", "places", "paused", "run_now",
+                                        "frame_cap_mode", "frame_cap")},
+        "frame_cap_range": [switches.FRAME_CAP_MIN, switches.FRAME_CAP_MAX],
+        "ai_on": ai_features.enabled(),
+        "progress": prog,
+        "estimate": {"seconds": round(est.seconds), "nights": est.nights},
+        "face_count": faces,
+        "libraries": _libraries(),
+        "excluded": [dict(r) for r in excluded],
+    }
+
+
+@router.put("/api/media-understanding/settings", dependencies=[Depends(require_admin_mutation)])
+async def put_settings(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    body = dict(body)
+    confirm = bool(body.pop("confirm_delete_faces", False))
+    async with session_scope() as s:
+        current = await switches.read(s)
+        try:
+            new = switches.apply_changes(current, body)
+        except switches.InvalidSwitches as e:
+            raise HTTPException(status_code=422, detail=str(e)) from None
+        if current["faces"] and not new["faces"]:
+            n = int((await s.execute(text("SELECT count(*) FROM media_faces"))).scalar() or 0)
+            g = int((await s.execute(text("SELECT count(*) FROM face_groups"))).scalar() or 0)
+            if (n or g) and not confirm:
+                raise HTTPException(status_code=409, detail=(
+                    f"turning faces off deletes {n} saved faces and every group and name on them; "
+                    "send confirm_delete_faces to go ahead"))
+            await s.execute(text("DELETE FROM media_faces"))
+            await s.execute(text("DELETE FROM face_groups"))
+            await s.execute(text("DELETE FROM media_item_stages WHERE analyser LIKE 'faces%'"))
+        saved = await switches.write(s, new)
+    return {"settings": saved}
+
+
+@router.post("/api/media-understanding/pause", dependencies=[Depends(require_admin_mutation)])
+async def pause(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    paused = body.get("paused")
+    if not isinstance(paused, bool):
+        raise HTTPException(status_code=422, detail="paused must be true or false")
+    async with session_scope() as s:
+        sw = await switches.read(s)
+        sw["paused"] = paused
+        if paused:
+            sw["run_now"] = False
+        saved = await switches.write(s, sw)
+    return {"settings": saved}
+
+
+@router.post("/api/media-understanding/run-now", dependencies=[Depends(require_admin_mutation)])
+async def run_now() -> dict[str, Any]:
+    async with session_scope() as s:
+        sw = await switches.read(s)
+        if not sw["enabled"]:
+            raise HTTPException(status_code=409, detail="turn on Understand photos and videos first")
+        sw["run_now"] = True
+        sw["paused"] = False
+        saved = await switches.write(s, sw)
+    return {"settings": saved}
+
+
+@router.post("/api/media-understanding/rescan", dependencies=[Depends(require_device)])
+async def rescan() -> dict[str, bool]:
+    async with session_scope() as s:
+        await s.execute(text(
+            "UPDATE media_runner_state SET rescan_requested = true, updated_at = now() WHERE id = 1"))
+        await _notify(s, "rescan")
+    return {"ok": True}
+
+
+@router.post("/api/media-understanding/excluded", dependencies=[Depends(require_admin_mutation)])
+async def add_excluded(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    lib = _library_id(body.get("library_id"))
+    prefix = clean_prefix(body.get("prefix", ""))
+    async with session_scope() as s:
+        await s.execute(text(
+            "INSERT INTO media_excluded (library_id, prefix) VALUES (:l, :p) ON CONFLICT DO NOTHING"),
+            {"l": lib, "p": prefix})
+        deleted = await catalog.delete_under(s, lib, prefix)
+        await _notify(s, "excluded")
+    return {"library_id": lib, "prefix": prefix, "deleted": deleted}
+
+
+@router.delete("/api/media-understanding/excluded", dependencies=[Depends(require_admin_mutation)])
+async def remove_excluded(library_id: str = Query(...), prefix: str = Query("")) -> dict[str, Any]:
+    lib = _library_id(library_id)
+    p = clean_prefix(prefix)
+    async with session_scope() as s:
+        r = await s.execute(text("DELETE FROM media_excluded WHERE library_id = :l AND prefix = :p"),
+                            {"l": lib, "p": p})
+        if not r.rowcount:
+            raise HTTPException(status_code=404, detail="that folder isn't excluded")
+        await s.execute(text(
+            "UPDATE media_runner_state SET rescan_requested = true, updated_at = now() WHERE id = 1"))
+        await _notify(s, "excluded")
+    return {"ok": True}
+
+
+async def forget_deleted(library_id: str, rel_paths: list[str]) -> None:
+    """Files deleted through Files: their results go at once. Best effort:
+    the walker deletes them within the hour anyway."""
+    if library_id not in LIBRARY_LABELS or not rel_paths:
+        return
+    try:
+        async with session_scope() as s:
+            await catalog.forget_paths(s, library_id, rel_paths)
+    except Exception:  # noqa: BLE001 — never fails a delete the household made
+        pass

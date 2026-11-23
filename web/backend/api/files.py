@@ -1543,6 +1543,10 @@ async def delete(request: Request, req: DeleteRequest) -> DeleteResponse:
 
     if deleted:
         listing_cache.invalidate(lib.id)
+        # What media understanding worked out about them goes too (V078).
+        from web.backend.api import media_understanding
+
+        await media_understanding.forget_deleted(lib.id, deleted)
         if lib.id == DOCUMENTS_LIBRARY_ID:
             # Co-editing state and version history go with the documents.
             from web.backend.api import collab

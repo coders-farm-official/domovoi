@@ -244,6 +244,11 @@ NOTIFY_CHANNEL_TO_REALTIME: dict[str, str] = {
     # core's lists handler) or from the dashboard and the apps, fires
     # `lists_changed`; an open Lists page reads again on `lists.changed`.
     "lists_changed": "lists",
+    # Media understanding (V078, domovoi/media_understanding/): the
+    # runner's progress (at most every 10 s), its pause for a voice turn,
+    # a catalogue walk, a switch or an excluded folder. Settings → Photos
+    # and videos reads again on `media_understanding.changed`.
+    "media_understanding_changed": "media_understanding",
 }
 
 # Plugin NOTIFY → realtime channel entries, replaced wholesale on every

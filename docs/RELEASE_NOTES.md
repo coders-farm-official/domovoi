@@ -4,6 +4,25 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Photos and videos: the catalogue and the background runner
+
+- **What changed.** The core keeps a catalogue of the image and video
+  files in Pictures and Videos (migration V078), walked by `stat()` once an
+  hour, and one background runner for everything it works out about them,
+  which also runs the videos attached in chat (first, as before; the
+  `chat_video` worker is now `media_understanding`). The runner works at
+  night (the household's quiet hours) and, by day, only on new files,
+  after 10 quiet minutes; it gives way to every voice turn, waits for
+  memory before using the vision model, reads at most 20 MB/s, and caps
+  the time it spends on one video. Settings → Chat & AI → Photos and
+  videos shows the progress and the switches. This release's first part
+  only catalogues and fingerprints; descriptions, transcripts and faces
+  follow in later 1.5.0 work.
+- **What to know.** A house that upgrades starts with "Understand photos
+  and videos" **off** until an admin turns it on; a new install starts
+  with it on. Faces and photo locations are off for everyone. Nothing is
+  written into the media files.
+
 ## 1.5.0 (unreleased) — Security: pairing proof v2, chat reads, music-mix claim key
 
 - **What changed.** Three items of the 2026-11-22 security review (L9,
