@@ -76,6 +76,12 @@ internal object OpenSourceLicences {
             listOf(APACHE_TEXT, LIBYUV_LICENCE),
         ),
         LicenceRule(
+            "DataStore's Protocol Buffers", "androidx.datastore", "datastore-preferences-external-protobuf",
+            "BSD-3-Clause", "github.com/protocolbuffers/protobuf",
+            "Copyright Google Inc. Protocol Buffers, repackaged inside DataStore for its settings files (DataStore 1.3, " +
+                "whose POM says so); the library carries its own licence text.",
+        ),
+        LicenceRule(
             "AndroidX and Jetpack Compose", "androidx", licence = "Apache-2.0",
             source = "android.googlesource.com/platform/frameworks/support",
             note = "Copyright The Android Open Source Project. Media3, CameraX, WorkManager, DataStore and the rest.",
