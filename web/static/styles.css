@@ -2730,3 +2730,10 @@ table.qh-tbl td.mono, table.qh-tbl .qh-nowrap { white-space: nowrap; }
   .qh-line { grid-template-columns: 1fr; gap: 2px; }
   table.qh-tbl .qh-clip { min-width: 140px; max-width: 180px; }
 }
+
+/* A spinning icon (the Files page's "Preparing download…"). */
+@keyframes dv-spin { to { transform: rotate(360deg); } }
+.dv-spin { animation: dv-spin 1s linear infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .dv-spin { animation: none; }
+}

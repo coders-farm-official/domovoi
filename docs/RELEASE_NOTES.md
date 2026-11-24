@@ -34,6 +34,13 @@ a way that would otherwise get reported as a bug.
 
 ## 1.4.1 (unreleased) — Printing, videos, scans and Windows update hardening
 
+- **Files → Download is the browser's own download.** The page asks the
+  server for a one-use link that lasts a minute, then the browser saves
+  the file with its usual progress, instead of the page holding the whole
+  file in memory first. A folder's zip streams as it is built, and a
+  paired phone or browser can download a whole folder without the admin
+  password (up to 5000 files), the same as one file. A refused download
+  says what to do (pair this browser) instead of showing "401".
 - **"Download as Word" for Markdown and text files** is built in the same
   short-lived, time-limited process as the Word copy of a formatted
   document, and its line limit counts every kind of line break.

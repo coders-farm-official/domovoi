@@ -397,11 +397,12 @@ def test_other_files_download_and_nothing_else_reads_them(fake_auth, folder):
     assert pr.status_code == 409 and "only be downloaded" in pr.json()["detail"]
 
 
-def test_a_folder_zip_and_delete_in_other_keep_their_admin_tier(fake_auth, folder):
+def test_a_folder_zip_is_device_tier_and_delete_keeps_its_admin_tier(fake_auth, folder):
     with _client() as c:
         z = c.get("/api/files/download", params={"library_id": OTHER_LIBRARY_ID, "path": "Installers"})
         d = c.post("/api/files/delete", json={"library_id": OTHER_LIBRARY_ID, "paths": ["setup.exe"]})
-    assert z.status_code == 401 and d.status_code == 401
+    assert z.status_code == 200 and z.headers["content-type"] == "application/zip"
+    assert d.status_code == 401
     with _client(bearer(ADMIN_TOKEN)) as c:
         z = c.get("/api/files/download", params={"library_id": OTHER_LIBRARY_ID, "path": "Installers"})
         d = c.post("/api/files/delete", json={"library_id": OTHER_LIBRARY_ID, "paths": ["setup.exe"]})
@@ -422,7 +423,7 @@ OTHER_ROUTES = [
     ("POST", "/api/files/move", {"json": {"source_library_id": OTHER_LIBRARY_ID, "paths": ["todo"],
                                           "target_library_id": OTHER_LIBRARY_ID,
                                           "target_path": "Installers", "device_id": DEV}}, "device"),
-    ("GET", "/api/files/download", {"params": {"library_id": OTHER_LIBRARY_ID, "path": "Installers"}}, "admin"),
+    ("GET", "/api/files/download", {"params": {"library_id": OTHER_LIBRARY_ID, "path": "Installers"}}, "device"),
     ("POST", "/api/files/delete", {"json": {"library_id": OTHER_LIBRARY_ID, "paths": ["app.apk"]}}, "admin"),
 ]
 
