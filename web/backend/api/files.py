@@ -17,18 +17,18 @@ and a ``?device_token=`` query because an ``<img src>`` cannot set a
 header. The pre-setup grace is kept throughout, so a fresh install still
 works before an admin password exists.
 
-Three things sit a tier above that (resolved 2026-09-22, revised
-2026-09-24):
+Two things sit a tier above that (resolved 2026-09-22, revised
+2026-09-24 and 2026-11-24):
 
 * ``/delete`` — the one verb that destroys something;
-* a ``/download`` whose path is a **directory** — the server builds the
-  zip in memory, and handing a whole tree to anything on the LAN is not
-  an ordinary daily action;
 * any write whose target library is a **removable drive** — writing onto
   a stick somebody plugged into the server is a different risk from
   saving into the household's own libraries.
 
-Each of those takes the admin tier instead.
+Each of those takes the admin tier instead. A ``/download`` of a
+**directory** used to be a third (REV-1: the zip was built whole in
+memory); since 2026-11-24 the zip streams as it is built, member-capped,
+and a folder downloads at the device tier like a file (owner decision).
 
 **``core:documents`` is NOT one of them.** Saving a document, a
 spreadsheet, a drawing or an image is a household action (2026-09-24),
@@ -792,8 +792,7 @@ async def browse(
 # A ticket is the only credential on that GET, so it is kept narrow: random,
 # held in this process only, good for one request, gone after
 # :data:`_TICKET_TTL_SEC`, and bound to the one library + path it was minted
-# for, after the same checks a direct download makes (the folder tier
-# included). The query name ends in ``token`` so the log scrubber
+# for, after the same checks a direct download makes. The query name ends in ``token`` so the log scrubber
 # (domovoi/log_privacy.py) blanks it in the access log like any other.
 DOWNLOAD_TICKET_QUERY = "download_token"
 _TICKET_TTL_SEC = 60.0
@@ -839,11 +838,11 @@ async def _download_grant(
 
 
 async def _download_target(
-    request: Request, library_id: str, path: str, *, check_tier: bool
+    library_id: str, path: str
 ) -> tuple[Path, list[tuple[Path, str]] | None]:
     """The checks every download makes, ticket or not: the library, the
-    path's containment, the withheld names, and for a folder the admin tier
-    (REV-1) and the zip's member list (so a 404 / 413 is answered before
+    path's containment, the withheld names, and for a folder the zip's
+    member list (so a 404 / 413 is answered before
     the first byte). Returns the target and, for a folder, its members."""
     lib = await _resolve_library(library_id)
     root = lib.root_path
@@ -856,8 +855,6 @@ async def _download_target(
         raise HTTPException(status_code=404, detail="not found")
     if not target.is_dir():
         return target, None
-    if check_tier:
-        await require_admin_read(request)
     members = await anyio.to_thread.run_sync(_zip_members, target, root)
     return target, members
 
@@ -883,7 +880,7 @@ async def download_ticket(request: Request, req: DownloadTicketRequest) -> Downl
     """Mint a one-use, 60-second link for GET /download (see above). Makes
     every check the download makes, so a refusal is answered here rather
     than as an error page the browser navigates to."""
-    await _download_target(request, req.library_id, req.path, check_tier=True)
+    await _download_target(req.library_id, req.path)
     ticket = _mint_ticket(req.library_id, req.path)
     return DownloadTicketResponse(
         url=f"/api/files/download?{DOWNLOAD_TICKET_QUERY}={ticket}",
@@ -903,16 +900,13 @@ async def download(
     (Range/206); everything else is a plain attachment ``FileResponse``.
 
     Gate: ``?download_token=`` from POST /download-ticket, else the device
-    read tier. A FILE is device tier. A DIRECTORY hands back a whole tree in
-    one request, so it asks for an admin session (REV-1); a ticket for one
-    is only minted after that check."""
+    read tier, for a file and a folder alike (folders were admin tier until
+    2026-11-24, REV-1, while their zip was built whole in memory)."""
     if grant is not None:
         library_id, path = grant
     elif library_id is None or path is None:
         raise HTTPException(status_code=422, detail="library_id and path are required")
-    target, members = await _download_target(
-        request, library_id, path, check_tier=grant is None
-    )
+    target, members = await _download_target(library_id, path)
     if members is not None:
         return StreamingResponse(
             _zip_stream(members),

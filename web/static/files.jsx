@@ -613,13 +613,8 @@ const nativeFileDownload = async (libraryId, rel) => {
  * bare "401". */
 const downloadFailureText = (e, isDir) => {
   const status = e && e.status;
-  if (e && e.deviceTokenRequired) {
+  if ((e && e.deviceTokenRequired) || status === 401 || status === 403) {
     return 'This browser isn’t paired with the house yet. Pair it (or sign in as admin), then press Download again.';
-  }
-  if (status === 401 || status === 403) {
-    return isDir
-      ? 'Downloading a whole folder needs the admin sign-in. Sign in, then press Download again — or download the files one at a time.'
-      : 'This browser can’t download from the house yet. Pair it (or sign in as admin), then press Download again.';
   }
   if (status === 413) return 'That folder has too many files to download as one zip. Download the folders inside it instead.';
   if (status === 404) return isDir ? 'That folder is empty or no longer there.' : 'That file is no longer there.';

@@ -15437,7 +15437,7 @@
           "files"
         ],
         "summary": "Download",
-        "description": "Download a file (as an attachment) or a directory (a zip streamed as\nit is built, member-capped). Audio uses ``serve_audio_range``\n(Range/206); everything else is a plain attachment ``FileResponse``.\n\nGate: ``?download_token=`` from POST /download-ticket, else the device\nread tier. A FILE is device tier. A DIRECTORY hands back a whole tree in\none request, so it asks for an admin session (REV-1); a ticket for one\nis only minted after that check.",
+        "description": "Download a file (as an attachment) or a directory (a zip streamed as\nit is built, member-capped). Audio uses ``serve_audio_range``\n(Range/206); everything else is a plain attachment ``FileResponse``.\n\nGate: ``?download_token=`` from POST /download-ticket, else the device\nread tier, for a file and a folder alike (folders were admin tier until\n2026-11-24, REV-1, while their zip was built whole in memory).",
         "operationId": "download_api_files_download_get",
         "parameters": [
           {

@@ -11,8 +11,8 @@
   every SAVE in the Documents folder — create, upload, write a text file,
   write a sheet, save a drawing.
 * **Admin tier** — ``Authorization: Bearer``: deletes, the requests that
-  hand back a whole tree in one response (``/api/documents/download-zip``
-  and a directory ``/api/files/download``), writes onto a removable
+  hand back a selection in one response (``/api/documents/download-zip``),
+  writes onto a removable
   drive, and satellite media preparation.
 
 DB-FREE by construction: the auth primitives are faked
@@ -431,16 +431,20 @@ def test_deleting_needs_an_admin_session(claimed, libraries):
     assert not (libraries["music"] / "song.mp3").exists()
 
 
-def test_downloading_a_whole_directory_needs_an_admin_session(claimed, libraries):
-    """A single file is a daily action. A directory is a server-built zip
-    of a whole tree, which is not."""
+def test_downloading_a_whole_directory_is_device_tier(claimed, libraries):
+    """A folder downloads like a file (owner decision 2026-11-24): its zip
+    streams as it is built, member-capped. Still nothing without a
+    credential."""
     c = _client()
     params = {"library_id": "core:music", "path": "Beatles"}
     (libraries["music"] / "Beatles" / "b.mp3").write_bytes(b"b")
-    assert c.get("/api/files/download", params=params, headers=DEVICE).status_code == 401
-    ok = c.get("/api/files/download", params=params, headers=ADMIN)
-    assert ok.status_code == 200
-    assert ok.headers["content-type"] == "application/zip"
+    assert c.get("/api/files/download", params=params).status_code == 401
+    assert c.get("/api/files/download", params=params,
+                 headers={HEADER: "stale"}).status_code == 401
+    for who in (DEVICE, ADMIN, COOKIE_ONLY):
+        ok = c.get("/api/files/download", params=params, headers=who)
+        assert ok.status_code == 200
+        assert ok.headers["content-type"] == "application/zip"
 
 
 # ── Download tickets: the browser's own download, one use, one path ──
@@ -488,9 +492,9 @@ def test_minting_keeps_the_download_tiers(claimed, libraries):
     (libraries["music"] / "Beatles" / "b.mp3").write_bytes(b"b")
     assert _mint(c, "song.mp3").status_code == 401
     assert _mint(c, "song.mp3", {HEADER: "stale"}).status_code == 401
-    # A whole folder stays admin (REV-1), ticket or not.
-    assert _mint(c, "Beatles", DEVICE).status_code == 401
-    ok = _mint(c, "Beatles", ADMIN)
+    # A whole folder is device tier, like a file (owner decision 2026-11-24).
+    assert _mint(c, "Beatles").status_code == 401
+    ok = _mint(c, "Beatles", DEVICE)
     assert ok.status_code == 200
     z = TestClient(app).get(ok.json()["url"])
     assert z.status_code == 200 and z.headers["content-type"] == "application/zip"

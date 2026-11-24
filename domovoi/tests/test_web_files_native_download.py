@@ -95,8 +95,9 @@ def test_download_mints_a_link_and_hands_it_to_the_browser() -> None:
 def test_a_refused_download_says_what_to_do_never_a_bare_status() -> None:
     texts = _press("")["texts"]
     assert "isn’t paired" in texts["unpaired"] and "Pair it" in texts["unpaired"]
-    assert "admin sign-in" in texts["folder"]
-    assert "Pair it" in texts["file"] and "sign in as admin" in texts["file"]
+    # A folder is device tier like a file: the same sentence, never "admin only".
+    assert texts["folder"] == texts["file"] == texts["unpaired"]
+    assert "admin sign-in" not in texts["folder"]
     assert "too many files" in texts["big"]
     for key in ("unpaired", "folder", "file", "big"):
         assert not re.search(r"\b40[13]\b", texts[key]), texts[key]
