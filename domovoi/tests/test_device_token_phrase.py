@@ -778,7 +778,7 @@ def test_a_released_reservation_leaves_no_trace() -> None:
     before = b.retry_after("lan")
     b.reserve("lan")
     b.release("lan")
-    assert b.retry_after("lan") <= before
+    assert b.retry_after("lan") <= before + 1e-3  # clock readings, not an exact sum
     b.record_success("lan")
     b.reserve("lan")
     b.release("lan")

@@ -65,7 +65,7 @@ internal const val QUIET_HELP =
     "Quiet hours: Domovoi won't speak announcements in this room, like low battery or printer " +
         "problems. Alarms, timers and reminders still ring."
 
-internal fun quietPath(room: String): String = "/api/satellites/$room/quiet-hours"
+internal fun quietPath(room: String): String = satPath(room, "/quiet-hours")
 
 private val CLOCK = Regex("^([01]?\\d|2[0-3]):([0-5]\\d)$")
 

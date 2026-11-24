@@ -543,7 +543,7 @@ private fun ShellContent(
         LocalSettingsTabRequest provides settingsRequest,
         LocalSourceChoices provides sourceChoices,
     ) {
-        val counts = rememberSidebarCounts().copy(friendHouses = fhStatus?.unread?.takeIf { it > 0 })
+        val counts = SidebarCounts(friendHouses = fhStatus?.unread?.takeIf { it > 0 })
         val widthClass = currentWindowAdaptiveInfo().windowSizeClass.windowWidthSizeClass
 
         when (widthClass) {

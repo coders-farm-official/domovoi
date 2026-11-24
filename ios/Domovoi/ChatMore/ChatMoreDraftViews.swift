@@ -447,14 +447,15 @@ struct ChatMoreChangesView: View {
             .fixedSize(horizontal: false, vertical: true)
             .multilineTextAlignment(.leading)
             // One label, so a screen reader reads the passage rather than
-            // forty runs of it. The struck-out words are read out too: a
-            // reader listening to "what changed" needs both halves.
-            .accessibilityLabel(changes.map(\.text).joined())
+            // forty runs of it. The struck-out words are read out too, each
+            // run named "removed" or "added": a reader listening to "what
+            // changed" needs both halves and which is which.
+            .accessibilityLabel(ChatMoreDraftChange.spoken(changes))
     }
 
     private var marked: AttributedString {
         var out = AttributedString()
-        for change in changes {
+        for (index, change) in changes.enumerated() {
             var piece = AttributedString(change.text)
             if change.added {
                 piece.backgroundColor = Color.warnInk.opacity(0.22)
@@ -463,6 +464,9 @@ struct ChatMoreChangesView: View {
                 piece.foregroundColor = Color.fgMuted
             }
             out.append(piece)
+            // A paragraph gap between a long removed run and the added run
+            // after it (``ChatMoreDraftChange/gapAfter(_:_:)``).
+            if ChatMoreDraftChange.gapAfter(changes, index) { out.append(AttributedString("\n\n")) }
         }
         return out
     }

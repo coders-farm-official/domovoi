@@ -2,8 +2,9 @@ import Foundation
 import XCTest
 @testable import DomovoiKit
 
-/// The Friend houses screen's state against a fake dashboard: the three
-/// reads and their problems, the tabs, "message" and "open in lists"; and one
+/// The Friend houses screen's state against a fake dashboard: the two reads
+/// and their problems, the tabs, "open in Lists", and Accept, Decline and
+/// Stop sharing (1.4.1); and one
 /// conversation — read and marked read on open, marked again when a new one
 /// arrives, "Load earlier", the counter, send and its refusals, and that
 /// nothing for a house the phone has left lands on, or goes to, another.
@@ -197,46 +198,51 @@ final class FriendHousesModelTests: XCTestCase {
         fh.answer("GET", "/api/friend-houses/conversations", """
             {"conversations":[{"house":"\(smiths)","name":"The Smiths","friend_id":"fa1b2c3d4e5f6","unread":2,"last_id":5,"not_delivered":0}],"unread":2}
             """)
-        fh.answer("GET", "/api/friend-houses/friends", """
-            {"friends":[{"id":"fa1b2c3d4e5f6","name":"The Smiths","house":"\(smiths)","alert":"read","verified":true},
-            {"id":"f2","name":"The Patels","house":"\(stranger)","alert":"inbox","verified":false}]}
-            """)
         fh.answer("GET", "/api/friend-houses/shared-lists", """
-            {"shared_lists":[{"id":"a","state":"invited","origin":"them","title":"Camping","friend":"The Smiths"},
-            {"id":"b","state":"active","origin":"us","title":"Groceries","list_id":7,"list_name":"Groceries","friend":"The Smiths"}]}
+            {"shared_lists":[{"id":"\(offerId)","state":"invited","origin":"them","title":"Camping","friend":"The Smiths"},
+            {"id":"\(activeId)","state":"active","origin":"us","title":"Groceries","list_id":7,"list_name":"Groceries","friend":"The Smiths"}]}
             """)
         let (container, _) = fhContainer(fh, server: server)
         let gate = FriendHousesGate(container: container)
         let model = FriendHousesModel(container: container, gate: gate)
         await model.readAll()
         XCTAssertEqual([smiths], model.inbox?.value?.map(\.house))
-        XCTAssertEqual(2, model.friends?.value?.count)
-        XCTAssertEqual(["b", "a"], fhSharedOrder(model.shared?.value ?? []).map(\.id), "active first, then the offers")
+        let sections = fhSharedSections(model.shared?.value ?? [])
+        XCTAssertEqual([offerId], sections.offers.map(\.id), "the offers to this house first")
+        XCTAssertEqual([activeId], sections.current.map(\.id), "then what is shared now")
         XCTAssertEqual(15_000, FriendHousesModel.inboxPollMs)
+        // 1.4.1: Messages, then Shared lists; the friends are the admin
+        // zone's, hidden on the phone, and not even read.
+        XCTAssertEqual([.messages, .shared], FhTab.allCases)
+        XCTAssertEqual(
+            ["GET /api/friend-houses/conversations", "GET /api/friend-houses/shared-lists"],
+            fh.seen.current
+        )
 
-        // A friend never written to opens an empty conversation with them.
-        let patels = FhFriend(id: "f2", name: "The Patels", house: stranger)
-        model.tab = .friends
-        model.message(patels)
-        XCTAssertEqual(.messages, model.tab)
-        XCTAssertEqual(stranger, model.conversation?.house)
-        XCTAssertEqual("f2", model.conversation?.friendId)
+        // A conversation opens from the inbox; a house not in it doesn't.
+        model.openConversation(smiths)
+        XCTAssertEqual("fa1b2c3d4e5f6", model.conversation?.friendId)
         model.closeConversation()
         XCTAssertNil(model.conversation)
+        model.openConversation(stranger)
+        XCTAssertNil(model.conversation, "a friend never written to has no way in on the phone")
+        model.closeConversation()
 
-        // "open in lists": the list Lists opens next, for this server.
+        // "open in Lists": the list Lists opens next, for this server.
         let selection = ListsSelection(place: SavedStateBox())
         let active = model.shared?.value?.first { $0.state == "active" }
         let invited = model.shared?.value?.first { $0.state == "invited" }
         XCTAssertTrue(model.openInLists(active!, selection: selection))
         XCTAssertEqual(Int64(7), selection.read(server: server))
-        XCTAssertFalse(model.openInLists(invited!, selection: selection), "an offer is words, never a way in")
+        XCTAssertFalse(model.openInLists(invited!, selection: selection), "an offer has no list here yet")
+        // Ours, waiting for them to accept, is a list here already.
+        let ours = FhSharedList(id: activeId, state: "invited", origin: "us", listId: 9)
+        XCTAssertTrue(model.openInLists(ours, selection: selection))
 
         // The server moves: nothing of the last house's stays on screen.
         model.openConversation(smiths)
         model.serverChanged()
         XCTAssertNil(model.inbox)
-        XCTAssertNil(model.friends)
         XCTAssertNil(model.shared)
         XCTAssertNil(model.open)
     }
@@ -244,16 +250,176 @@ final class FriendHousesModelTests: XCTestCase {
     func testAReadTheHouseRefusesSaysWhoCan() async {
         let fh = FhHouse()
         fh.answer("GET", "/api/friend-houses/conversations", #"{"detail":"admin only"}"#, status: 403)
-        fh.answer("GET", "/api/friend-houses/friends", #"{"detail":"core unreachable"}"#, status: 502)
-        fh.answer("GET", "/api/friend-houses/shared-lists", #"{"shared_lists":[]}"#)
+        fh.answer("GET", "/api/friend-houses/shared-lists", #"{"detail":"core unreachable"}"#, status: 502)
         let (container, _) = fhContainer(fh, server: server)
         let model = FriendHousesModel(container: container, gate: FriendHousesGate(container: container))
         await model.readAll()
         XCTAssertEqual(FhRead<[FhConversation]>.problem("Only an admin can do that, on the dashboard."), model.inbox)
-        XCTAssertEqual(FhRead<[FhFriend]>.problem("load friends failed (502)"), model.friends)
-        XCTAssertEqual(FhRead<[FhSharedList]>.ok([]), model.shared)
+        XCTAssertEqual(FhRead<[FhSharedList]>.problem("load shared lists failed (502)"), model.shared)
         // Not a house key: nothing opens.
         model.openConversation("../etc")
         XCTAssertNil(model.open)
+    }
+
+    // MARK: - the shared lists' actions (household tier, 1.4.1)
+
+    private let offerId = String(repeating: "0f", count: 16)
+    private let activeId = String(repeating: "1e", count: 16)
+
+    private func offer(title: String = "Camping") -> FhSharedList {
+        FhSharedList(id: offerId, state: "invited", origin: "them", title: title, friend: "The Smiths")
+    }
+
+    /// The screen with its lists read (an action goes only to the server
+    /// the lists came from), and the house's log emptied after the read.
+    private func screen(_ fh: FhHouse) async -> (FriendHousesModel, InMemoryShellStore) {
+        let (container, store) = fhContainer(fh, server: server)
+        let model = FriendHousesModel(container: container, gate: FriendHousesGate(container: container))
+        fh.answer("GET", "/api/friend-houses/conversations", #"{"conversations":[],"unread":0}"#)
+        fh.answer("GET", "/api/friend-houses/shared-lists", #"{"shared_lists":[]}"#)
+        await model.readAll()
+        fh.seen.mutate { $0 = [] }
+        return (model, store)
+    }
+
+    func testNoListActionBeforeTheListsWereRead() async {
+        let fh = FhHouse()
+        let (container, _) = fhContainer(fh, server: server)
+        let model = FriendHousesModel(container: container, gate: FriendHousesGate(container: container))
+        let outcome = await model.accept(offer())
+        XCTAssertEqual(.dropped, outcome)
+        model.askDecline(offer())
+        XCTAssertNil(model.ask)
+        XCTAssertTrue(fh.seen.current.isEmpty)
+    }
+
+    func testAcceptTakesTheListAndSaysItsNameHere() async throws {
+        let fh = FhHouse()
+        fh.answer("POST", "/api/friend-houses/shared-lists/\(offerId)/accept", #"{"list_id":12,"name":"Camping"}"#)
+        fh.answer("GET", "/api/friend-houses/shared-lists", #"{"shared_lists":[]}"#)
+        let (model, _) = await screen(fh)
+        let outcome = await model.accept(offer())
+        XCTAssertEqual(.accepted, outcome)
+        XCTAssertEqual("added to Lists as Camping", model.takeToast())
+        XCTAssertNil(model.toast, "a toast is said once")
+        XCTAssertTrue(model.busyShared.isEmpty)
+        XCTAssertEqual(
+            ["POST /api/friend-houses/shared-lists/\(offerId)/accept", "GET /api/friend-houses/shared-lists"],
+            fh.seen.current,
+            "accepted, then the lists read again"
+        )
+        let body = try XCTUnwrap(StubURLProtocol.recorded.last { $0.httpMethod == "POST" }?.httpBody)
+        XCTAssertEqual("{}", String(decoding: body, as: UTF8.self), "no name: their title")
+    }
+
+    func testANameTakenHereAsksForAnotherAndSendsIt() async throws {
+        let fh = FhHouse()
+        let path = "/api/friend-houses/shared-lists/\(offerId)/accept"
+        fh.answer("POST", path, #"{"detail":"There's already a list called Camping here."}"#, status: 400)
+        let (model, _) = await screen(fh)
+        let first = await model.accept(offer())
+        XCTAssertEqual(.nameTaken("There's already a list called Camping here."), first)
+        XCTAssertNil(model.toast, "the row says it, not a toast")
+        fh.answer("POST", path, #"{"list_id":13,"name":"Camping 2"}"#)
+        fh.answer("GET", "/api/friend-houses/shared-lists", #"{"shared_lists":[]}"#)
+        let second = await model.accept(offer(), name: "  Camping 2 ")
+        XCTAssertEqual(.accepted, second)
+        XCTAssertEqual("added to Lists as Camping 2", model.takeToast())
+        let body = try XCTUnwrap(StubURLProtocol.recorded.last { $0.httpMethod == "POST" }?.httpBody)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: String])
+        XCTAssertEqual(["name": "Camping 2"], object)
+    }
+
+    func testDeclineAndStopSharingAskFirstThenAct() async {
+        let fh = FhHouse()
+        fh.answer("POST", "/api/friend-houses/shared-lists/\(offerId)/decline", #"{"ok":true}"#)
+        fh.answer("DELETE", "/api/friend-houses/shared-lists/\(activeId)", #"{"ok":true}"#)
+        fh.answer("GET", "/api/friend-houses/shared-lists", #"{"shared_lists":[]}"#)
+        let (model, _) = await screen(fh)
+        let active = FhSharedList(
+            id: activeId, state: "active", origin: "us", title: "Groceries", listId: 7, listName: "Groceries", friend: "The Smiths"
+        )
+
+        // Decline is for an offer only, and asks first.
+        model.askDecline(active)
+        XCTAssertNil(model.ask, "Decline on a list shared now")
+        model.askDecline(offer())
+        let decline = try? XCTUnwrap(model.ask)
+        XCTAssertEqual("Decline this list?", decline?.title)
+        XCTAssertEqual("Decline", decline?.confirm)
+        XCTAssertEqual("\u{201C}Camping\u{201D} won\u{2019}t be added here. The Smiths isn\u{2019}t told.", decline?.body)
+        model.cancelAsk()
+        XCTAssertNil(model.ask)
+        XCTAssertTrue(fh.seen.current.isEmpty, "a cancel sent something")
+        model.askDecline(offer())
+        await model.confirmAsk(model.ask!)
+        XCTAssertEqual("list declined", model.takeToast())
+
+        // Stop sharing is for a list shared now only.
+        model.askStop(offer())
+        XCTAssertNil(model.ask, "Stop sharing on an offer")
+        model.askStop(active)
+        XCTAssertEqual("Stop sharing?", model.ask?.title)
+        XCTAssertEqual("Stop sharing Groceries with The Smiths? You both keep your own copy.", model.ask?.body)
+        await model.confirmAsk(model.ask!)
+        XCTAssertEqual("stopped sharing \u{2014} you both keep your own copy", model.takeToast())
+        XCTAssertEqual(
+            [
+                "POST /api/friend-houses/shared-lists/\(offerId)/decline", "GET /api/friend-houses/shared-lists",
+                "DELETE /api/friend-houses/shared-lists/\(activeId)", "GET /api/friend-houses/shared-lists",
+            ],
+            fh.seen.current
+        )
+    }
+
+    func testARefusedListActionSaysWhyInTheToast() async {
+        let fh = FhHouse()
+        // An older server keeps these an admin's: the admin sentence.
+        fh.answer("DELETE", "/api/friend-houses/shared-lists/\(activeId)", #"{"detail":"admin"}"#, status: 403)
+        fh.answer("POST", "/api/friend-houses/shared-lists/\(offerId)/accept", #"{"detail":"x"}"#, status: 502)
+        let (model, _) = await screen(fh)
+        model.askStop(FhSharedList(id: activeId, state: "active", origin: "us"))
+        await model.confirmAsk(model.ask!)
+        XCTAssertEqual("Only an admin can do that, on the dashboard.", model.takeToast())
+        let outcome = await model.accept(offer())
+        XCTAssertEqual(.failed, outcome)
+        XCTAssertEqual("accept failed (502)", model.takeToast())
+        XCTAssertTrue(model.busyShared.isEmpty)
+    }
+
+    func testNothingForAHouseThePhoneLeftIsAcceptedOrSaid() async {
+        let fh = FhHouse()
+        fh.answer("POST", "/api/friend-houses/shared-lists/\(offerId)/accept", #"{"list_id":12,"name":"Camping"}"#)
+        let (model, store) = await screen(fh)
+        store.trustServer(other, identity: TestIdentity.real.pin)
+        store.setToken("household-token-9", for: other)
+        // The confirmation was asked on this house; the phone moves first.
+        model.askDecline(offer())
+        let asked = model.ask!
+        XCTAssertTrue(store.setServerURL(other))
+        let outcome = await model.accept(offer())
+        XCTAssertEqual(.dropped, outcome)
+        await model.confirmAsk(asked)
+        XCTAssertNil(model.toast)
+        XCTAssertTrue(fh.seen.current.isEmpty, "a list action for the house the phone left was sent: \(fh.seen.current)")
+    }
+
+    func testTheSharedListsWords() {
+        XCTAssertEqual("The Smiths shared a list: \u{201C}Camping\u{201D}", FhWords.invited("The Smiths", "Camping"))
+        XCTAssertEqual("Groceries \u{2014} shared with The Smiths", FhWords.sharedLine("Groceries", origin: "us", friend: "The Smiths"))
+        XCTAssertEqual("Camping \u{2014} from The Smiths", FhWords.sharedLine("Camping", origin: "them", friend: "The Smiths"))
+        XCTAssertEqual("added to Lists as a new list", FhWords.accepted(nil))
+        // Their title, only where it differs from the name here.
+        let theirs = FhSharedList(id: offerId, state: "active", origin: "them", title: "Camping", listName: "Trip")
+        XCTAssertEqual("they call it \u{201C}Camping\u{201D}", fhTheirTitle(theirs))
+        XCTAssertNil(fhTheirTitle(FhSharedList(id: offerId, state: "active", origin: "them", title: "Trip", listName: "Trip")))
+        XCTAssertNil(fhTheirTitle(FhSharedList(id: offerId, state: "active", origin: "us", title: "Camping", listName: "Trip")))
+        XCTAssertEqual("this list", fhListName(FhSharedList(id: offerId)))
+        // A list a URL can't name is not drawn at all.
+        XCTAssertTrue(fhSharedSections([FhSharedList(id: "nope", state: "active", origin: "us")]).current.isEmpty)
+        // The note left is the one thing still the admin's: starting a share.
+        XCTAssertFalse(FhWords.listsAdmin.contains("accept"))
+        XCTAssertFalse(FhWords.listsAdmin.contains("stop"))
+        XCTAssertFalse(FhWords.noMessagesSub.lowercased().contains("press message"), "no Message button on a phone")
     }
 }

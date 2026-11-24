@@ -155,6 +155,61 @@ final class FriendHousesGateTests: XCTestCase {
         XCTAssertEqual(0, statusReads(fh), "a phone that is a room asked anyway")
     }
 
+    /// Home's row (1.4.1): `/unread`'s count, read with the status while
+    /// Friend Houses is shown, filed under the server asked; nil at 0, on a
+    /// server without the route, while hidden, and for another server.
+    func testHomesUnreadCountIsThisServersWhileShown() async {
+        let fh = FhHouse()
+        fh.answer("GET", "/api/friend-houses", FhHouse.status("on", unread: 2))
+        fh.answer("GET", "/api/friend-houses/unread", #"{"unread":2}"#)
+        let (container, store) = fhContainer(fh, server: server)
+        let gate = FriendHousesGate(container: container)
+        defer { gate.stop() }
+        gate.start()
+        await settleUntil({ gate.reads == 1 }, "the first read")
+        XCTAssertEqual(2, gate.homeUnread(server))
+        XCTAssertNil(gate.homeUnread(other), "the count is this server's only")
+        XCTAssertEqual(1, fh.count("GET /api/friend-houses/unread"))
+
+        fh.answer("GET", "/api/friend-houses/unread", #"{"unread":0}"#)
+        gate.refresh()
+        await settleUntil({ gate.reads == 2 }, "the read at 0")
+        XCTAssertNil(gate.homeUnread(server), "no row for nothing unread")
+
+        // No answer keeps the last count; an old server's 404 drops it.
+        fh.answer("GET", "/api/friend-houses/unread", #"{"unread":4}"#)
+        gate.refresh()
+        await settleUntil({ gate.reads == 3 }, "the read at 4")
+        fh.answer("GET", "/api/friend-houses/unread", #"{"detail":"x"}"#, status: 502)
+        gate.refresh()
+        await settleUntil({ gate.reads == 4 }, "the 502")
+        XCTAssertEqual(4, gate.homeUnread(server), "a 5xx keeps the last count")
+        fh.forget("GET", "/api/friend-houses/unread")
+        gate.refresh()
+        await settleUntil({ gate.reads == 5 }, "the 404")
+        XCTAssertNil(gate.homeUnread(server), "a server before /unread: no row")
+
+        // Hidden: no row, and the count isn't even asked.
+        fh.answer("GET", "/api/friend-houses/unread", #"{"unread":7}"#)
+        fh.answer("GET", "/api/friend-houses", FhHouse.status("off", unread: 7))
+        let asked = fh.count("GET /api/friend-houses/unread")
+        gate.refresh()
+        await settleUntil({ gate.reads == 6 }, "the off")
+        XCTAssertNil(gate.homeUnread(server))
+        XCTAssertEqual(asked, fh.count("GET /api/friend-houses/unread"), "asked while hidden")
+
+        // Another server: its own count, never the last one's.
+        store.trustServer(other, identity: TestIdentity.real.pin)
+        store.setToken("household-token-9", for: other)
+        XCTAssertTrue(store.setServerURL(other))
+        fh.answer("GET", "/api/friend-houses", FhHouse.status("on", unread: 1))
+        fh.answer("GET", "/api/friend-houses/unread", #"{"unread":1}"#)
+        gate.inputsMayHaveChanged()
+        await settleUntil({ gate.reads == 7 }, "the other server's read")
+        XCTAssertEqual(1, gate.homeUnread(other))
+        XCTAssertNil(gate.homeUnread(server))
+    }
+
     func testReadsAreConflated() async {
         let fh = FhHouse()
         fh.answer("GET", "/api/friend-houses", FhHouse.status("on"))

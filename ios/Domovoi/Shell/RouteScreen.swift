@@ -178,8 +178,8 @@ struct RouteScreen: View {
             ListsScreenView(model: model)
         case .friendHouses:
             // slot: friend-houses
-            // ``FriendHousesScreenView``: "Serverless messaging and friend
-            // system between households" (Android 394473e2). The check above
+            // ``FriendHousesScreenView``: "Message and share lists with friends’
+            // houses, house to house" (Android 394473e2). The check above
             // is its gate: hidden unless `GET /api/friend-houses` says it is
             // on (``FriendHousesGate``, through ``ShellModel/visibility``).
             FriendHousesScreenView(model: model)

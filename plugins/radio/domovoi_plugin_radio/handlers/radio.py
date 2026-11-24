@@ -443,7 +443,7 @@ class RadioHandler(Handler):
             return self._reply(ctx, "I'm not sure what you're confirming.")
         candidates = data.get("candidates") or []
         if not candidates:
-            return self._reply(ctx, "I lost track of those stations — say it again?")
+            return self._reply(ctx, "I lost track of those stations. Please say it again.")
         if affirmative:
             return await self._play_candidate(candidates[0], ctx, session)
         return self._reply(ctx, "OK, never mind.")
@@ -565,7 +565,7 @@ class RadioHandler(Handler):
             names = [s["name"] for s in decision.stations]
             return await self._ask(
                 ctx, session, list(decision.stations), heard=query,
-                prompt=f"{_either(names)}?",
+                prompt=f"Do you want {_either(names)}?",
                 no_answer=f"I have {decision.close} stations like that: {_either(names)}.",
             )
         if decision.action == "ask":
@@ -607,7 +607,7 @@ class RadioHandler(Handler):
                 ctx, f"I don't have {query} saved. Online there's {_either(names)}."
             )
         if len(hits) == 1:
-            prompt = f"It's not in your stations. I found {names[0]} online. Play it?"
+            prompt = f"It's not in your stations. I found {names[0]} online. Should I play it?"
         else:
             prompt = f"It's not in your stations. Online there's {_either(names)}. Which one?"
         return await self._ask(ctx, session, hits, heard=query, prompt=prompt, no_answer=prompt)

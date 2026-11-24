@@ -59,7 +59,7 @@ and the core-signed identity answers.
 
 ## Friend houses
 
-"Serverless messaging and friend system between households", as Android
+"Message and share lists with friends’ houses, house to house, with no company server in between", as Android
 has it (`android/README.md`, "Friend houses"): the house inbox, a
 conversation and its composer, the friends and the shared lists, in Tools
 beside Lists with the inbox's unread count as its badge

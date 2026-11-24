@@ -3543,6 +3543,15 @@ class StreamSession:
                             return await self._park_for_approval(
                                 s, ctrl, token_hash=token_hash, code=code
                             )
+                        # Lenient only: while another socket for this room is
+                        # live, a first-use token would join that room and
+                        # hear it. Refused like any pairing refusal; the real
+                        # device retries once its old socket has dropped.
+                        state = getattr(getattr(self.ws, "app", None), "state", None)
+                        live = (getattr(state, "active_sessions", None) or {}).get(self.room_id)
+                        if live is not None and live is not self:
+                            return await _reject(
+                                "first-use token while the room's socket is live")
                         await repo.pair(self.room_id, token_hash)
                         log.info(
                             "pairing: room=%s paired (trust-on-first-use)",
@@ -8405,7 +8414,7 @@ async def ring_target_for_dropin(initiator_room: str, target: "StreamSession") -
     await target._suppress_music_for(target)
     try:
         await target.prompt_dropin(
-            f"The {peer_label} wants to drop in. Is that okay?"
+            f"The {peer_label} wants to drop in. Do you want to let them in?"
         )
     except Exception as e:
         log.warning(
