@@ -15389,31 +15389,103 @@
         }
       }
     },
+    "/api/files/download-ticket": {
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Download Ticket",
+        "description": "Mint a one-use, 60-second link for GET /download (see above). Makes\nevery check the download makes, so a refusal is answered here rather\nthan as an error page the browser navigates to.",
+        "operationId": "download_ticket_api_files_download_ticket_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DownloadTicketRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DownloadTicketResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/files/download": {
       "get": {
         "tags": [
           "files"
         ],
         "summary": "Download",
-        "description": "Download a file (as an attachment) or a directory (server-built zip with\na member cap). Audio uses ``serve_audio_range`` (Range/206); everything else\nis a plain attachment ``FileResponse``.\n\nA FILE is device tier. A DIRECTORY is not: the zip is built in memory\nand hands back a whole tree in one request, so it asks for an admin\nsession (REV-1).",
+        "description": "Download a file (as an attachment) or a directory (a zip streamed as\nit is built, member-capped). Audio uses ``serve_audio_range``\n(Range/206); everything else is a plain attachment ``FileResponse``.\n\nGate: ``?download_token=`` from POST /download-ticket, else the device\nread tier, for a file and a folder alike (folders were admin tier until\n2026-11-24, REV-1, while their zip was built whole in memory).",
         "operationId": "download_api_files_download_get",
         "parameters": [
           {
             "name": "library_id",
             "in": "query",
-            "required": true,
+            "required": false,
             "schema": {
-              "type": "string",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
               "title": "Library Id"
             }
           },
           {
             "name": "path",
             "in": "query",
-            "required": true,
+            "required": false,
             "schema": {
-              "type": "string",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
               "title": "Path"
+            }
+          },
+          {
+            "name": "download_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Download Token"
             }
           }
         ],
@@ -26525,6 +26597,42 @@
           "modified_at"
         ],
         "title": "DocumentRow"
+      },
+      "DownloadTicketRequest": {
+        "properties": {
+          "library_id": {
+            "type": "string",
+            "title": "Library Id"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          }
+        },
+        "type": "object",
+        "required": [
+          "library_id",
+          "path"
+        ],
+        "title": "DownloadTicketRequest"
+      },
+      "DownloadTicketResponse": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "expires_in": {
+            "type": "integer",
+            "title": "Expires In"
+          }
+        },
+        "type": "object",
+        "required": [
+          "url",
+          "expires_in"
+        ],
+        "title": "DownloadTicketResponse"
       },
       "DrawingReadRequest": {
         "properties": {

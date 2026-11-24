@@ -472,7 +472,7 @@ async def test_the_unread_route_is_a_count_only(house) -> None:
     assert await main.admin_friend_houses_unread() == {"unread": 0}
 
 
-GAP = 0.3  # the per-friend alert gap, shortened for the tests
+GAP = 1.5  # the per-friend alert gap, shortened for the tests (room for a slow CI runner)
 
 
 @pytest.fixture

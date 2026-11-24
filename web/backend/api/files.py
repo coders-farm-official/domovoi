@@ -17,18 +17,18 @@ and a ``?device_token=`` query because an ``<img src>`` cannot set a
 header. The pre-setup grace is kept throughout, so a fresh install still
 works before an admin password exists.
 
-Three things sit a tier above that (resolved 2026-09-22, revised
-2026-09-24):
+Two things sit a tier above that (resolved 2026-09-22, revised
+2026-09-24 and 2026-11-24):
 
 * ``/delete`` — the one verb that destroys something;
-* a ``/download`` whose path is a **directory** — the server builds the
-  zip in memory, and handing a whole tree to anything on the LAN is not
-  an ordinary daily action;
 * any write whose target library is a **removable drive** — writing onto
   a stick somebody plugged into the server is a different risk from
   saving into the household's own libraries.
 
-Each of those takes the admin tier instead.
+Each of those takes the admin tier instead. A ``/download`` of a
+**directory** used to be a third (REV-1: the zip was built whole in
+memory); since 2026-11-24 the zip streams as it is built, member-capped,
+and a folder downloads at the device tier like a file (owner decision).
 
 **``core:documents`` is NOT one of them.** Saving a document, a
 spreadsheet, a drawing or an image is a household action (2026-09-24),
@@ -76,20 +76,20 @@ podcasts/documents/removable reindex is a no-op.
 
 from __future__ import annotations
 
-import io
 import logging
 import os
 import re
 import secrets
 import shutil
+import time
 import zipfile
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, Iterator, Literal, Optional
 
 import anyio
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -781,19 +781,69 @@ async def browse(
 
 
 # ─── GET /download ───────────────────────────────────────────────────────────
-@router.get("/download", dependencies=[Depends(require_device_read)])
-async def download(
-    request: Request,
-    library_id: str = Query(...),
-    path: str = Query(...),
-):
-    """Download a file (as an attachment) or a directory (server-built zip with
-    a member cap). Audio uses ``serve_audio_range`` (Range/206); everything else
-    is a plain attachment ``FileResponse``.
+#
+# Two ways in. A caller that can set headers (the phone apps, scripts) sends
+# its credential and gets the bytes. The dashboard instead asks for a
+# download ticket first (POST /download-ticket, same tier) and then NAVIGATES
+# to ``/download?download_token=…``, so the browser's own download manager
+# streams the file to disk with progress, rather than the page buffering the
+# whole thing in memory before it can save it.
+#
+# A ticket is the only credential on that GET, so it is kept narrow: random,
+# held in this process only, good for one request, gone after
+# :data:`_TICKET_TTL_SEC`, and bound to the one library + path it was minted
+# for, after the same checks a direct download makes. The query name ends in ``token`` so the log scrubber
+# (domovoi/log_privacy.py) blanks it in the access log like any other.
+DOWNLOAD_TICKET_QUERY = "download_token"
+_TICKET_TTL_SEC = 60.0
+_TICKET_MAX = 256
+# ticket -> (expires at, on the monotonic clock; library_id; path)
+_tickets: dict[str, tuple[float, str, str]] = {}
 
-    A FILE is device tier. A DIRECTORY is not: the zip is built in memory
-    and hands back a whole tree in one request, so it asks for an admin
-    session (REV-1)."""
+
+def _mint_ticket(library_id: str, path: str) -> str:
+    now = time.monotonic()
+    for key in [k for k, v in _tickets.items() if v[0] <= now]:
+        _tickets.pop(key, None)
+    while len(_tickets) >= _TICKET_MAX:     # bounded: the oldest goes first
+        _tickets.pop(next(iter(_tickets)))
+    ticket = secrets.token_urlsafe(32)
+    _tickets[ticket] = (now + _TICKET_TTL_SEC, library_id, path)
+    return ticket
+
+
+def _redeem_ticket(ticket: str) -> tuple[str, str] | None:
+    """Single use: the ticket is gone whether or not it was still live."""
+    rec = _tickets.pop(ticket, None)
+    if rec is None or rec[0] <= time.monotonic():
+        return None
+    return rec[1], rec[2]
+
+
+async def _download_grant(
+    request: Request,
+    download_token: Optional[str] = Query(None, alias=DOWNLOAD_TICKET_QUERY),
+) -> tuple[str, str] | None:
+    """The gate on GET /download: a ticket, or the device-tier read."""
+    if download_token is not None:
+        grant = _redeem_ticket(download_token)
+        if grant is None:
+            raise HTTPException(
+                status_code=401,
+                detail="download link expired or already used — press Download again",
+            )
+        return grant
+    await require_device_read(request)
+    return None
+
+
+async def _download_target(
+    library_id: str, path: str
+) -> tuple[Path, list[tuple[Path, str]] | None]:
+    """The checks every download makes, ticket or not: the library, the
+    path's containment, the withheld names, and for a folder the zip's
+    member list (so a 404 / 413 is answered before
+    the first byte). Returns the target and, for a folder, its members."""
     lib = await _resolve_library(library_id)
     root = lib.root_path
     target = safe_join(root, path)
@@ -803,10 +853,66 @@ async def download(
     # withheld folder even though ``config`` is an ordinary name (REV-12).
     if is_sensitive_name(target.name) or has_sensitive_segment(path, target, root):
         raise HTTPException(status_code=404, detail="not found")
+    if not target.is_dir():
+        return target, None
+    members = await anyio.to_thread.run_sync(_zip_members, target, root)
+    return target, members
 
-    if target.is_dir():
-        await require_admin_read(request)
-        return _zip_directory(target, root)
+
+class DownloadTicketRequest(BaseModel):
+    library_id: str
+    path: str
+
+
+class DownloadTicketResponse(BaseModel):
+    url: str
+    expires_in: int
+
+
+@router.post(
+    "/download-ticket",
+    response_model=DownloadTicketResponse,
+    # A read's tier (the dashboard cookie may download what it can see),
+    # plus the preflight-forcing header so another origin cannot mint one.
+    dependencies=[Depends(require_device_read), Depends(require_requested_with)],
+)
+async def download_ticket(request: Request, req: DownloadTicketRequest) -> DownloadTicketResponse:
+    """Mint a one-use, 60-second link for GET /download (see above). Makes
+    every check the download makes, so a refusal is answered here rather
+    than as an error page the browser navigates to."""
+    await _download_target(req.library_id, req.path)
+    ticket = _mint_ticket(req.library_id, req.path)
+    return DownloadTicketResponse(
+        url=f"/api/files/download?{DOWNLOAD_TICKET_QUERY}={ticket}",
+        expires_in=int(_TICKET_TTL_SEC),
+    )
+
+
+@router.get("/download")
+async def download(
+    request: Request,
+    library_id: Optional[str] = Query(None),
+    path: Optional[str] = Query(None),
+    grant: tuple[str, str] | None = Depends(_download_grant),
+):
+    """Download a file (as an attachment) or a directory (a zip streamed as
+    it is built, member-capped). Audio uses ``serve_audio_range``
+    (Range/206); everything else is a plain attachment ``FileResponse``.
+
+    Gate: ``?download_token=`` from POST /download-ticket, else the device
+    read tier, for a file and a folder alike (folders were admin tier until
+    2026-11-24, REV-1, while their zip was built whole in memory)."""
+    if grant is not None:
+        library_id, path = grant
+    elif library_id is None or path is None:
+        raise HTTPException(status_code=422, detail="library_id and path are required")
+    target, members = await _download_target(library_id, path)
+    if members is not None:
+        return StreamingResponse(
+            _zip_stream(members),
+            media_type="application/zip",
+            headers=attachment_headers(f"{safe_download_name(target.name)}.zip"),
+        )
 
     if target.suffix.lower() in AUDIO_EXTENSIONS:
         return serve_audio_range(
@@ -819,47 +925,91 @@ async def download(
     )
 
 
-def _zip_directory(target: Path, root: Path) -> Response:
-    """Zip a directory subtree (member-capped, symlink-escapes skipped). Built
-    in memory with an explicit Content-Length — fine for a LAN dashboard."""
-    buf = io.BytesIO()
-    added = 0
+def _zip_members(target: Path, root: Path) -> list[tuple[Path, str]]:
+    """What a directory's zip holds (member-capped, symlink-escapes
+    skipped), as ``(file, name in the zip)``. 413 over the cap, 404 when
+    nothing is left."""
+    members: list[tuple[Path, str]] = []
     # rglob descends into a folder whose own entry is skipped below, so the
     # location check runs on every member: a library rooted above the
     # config dir must not zip up ~/.domovoi, nor any library the command
     # recordings.
     private = private_path_check()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        for child in target.rglob("*"):
-            if child.is_symlink():
-                continue
-            real = child.resolve(strict=False)
-            try:
-                real.relative_to(root)
-            except ValueError:
-                continue
-            if is_sensitive_name(child.name) or private(real):
-                continue
-            if not child.is_file():
-                continue
-            added += 1
-            if added > _MAX_TREE_MEMBERS:
-                raise HTTPException(
-                    status_code=413,
-                    detail=f"directory exceeds the {_MAX_TREE_MEMBERS}-file zip cap",
-                )
-            z.write(child, arcname=child.relative_to(target).as_posix())
-    if added == 0:
+    for child in target.rglob("*"):
+        if child.is_symlink():
+            continue
+        real = child.resolve(strict=False)
+        try:
+            real.relative_to(root)
+        except ValueError:
+            continue
+        if is_sensitive_name(child.name) or private(real):
+            continue
+        if not child.is_file():
+            continue
+        if len(members) >= _MAX_TREE_MEMBERS:
+            raise HTTPException(
+                status_code=413,
+                detail=f"directory exceeds the {_MAX_TREE_MEMBERS}-file zip cap",
+            )
+        members.append((child, child.relative_to(target).as_posix()))
+    if not members:
         raise HTTPException(status_code=404, detail="directory is empty")
-    data = buf.getvalue()
-    return Response(
-        content=data,
-        media_type="application/zip",
-        headers={
-            "Content-Disposition": f'attachment; filename="{safe_download_name(target.name)}.zip"',
-            "Content-Length": str(len(data)),
-        },
-    )
+    return members
+
+
+class _ZipSink:
+    """A write-only file the zip writes into; :func:`_zip_stream` hands on
+    what collected after each chunk. Not seekable, so zipfile writes each
+    member's sizes after its data (a data descriptor)."""
+
+    def __init__(self) -> None:
+        self.chunks: list[bytes] = []
+
+    def write(self, b: bytes) -> int:
+        self.chunks.append(bytes(b))
+        return len(b)
+
+    def flush(self) -> None:
+        pass
+
+    def take(self) -> bytes:
+        out = b"".join(self.chunks)
+        self.chunks.clear()
+        return out
+
+
+_ZIP_CHUNK = 1024 * 1024
+
+
+def _zip_stream(members: list[tuple[Path, str]]) -> Iterator[bytes]:
+    """The zip, a chunk at a time: about one chunk in memory however big
+    the folder (it used to be built whole before the first byte went out).
+    A sync generator, so Starlette runs it in a worker thread."""
+    sink = _ZipSink()
+    with zipfile.ZipFile(sink, "w", zipfile.ZIP_DEFLATED) as z:
+        for path, arcname in members:
+            try:
+                info = zipfile.ZipInfo.from_file(path, arcname)
+                src = open(path, "rb")
+            except OSError:
+                continue   # gone or unreadable since the list was made
+            info.compress_type = zipfile.ZIP_DEFLATED
+            with src, z.open(info, "w", force_zip64=True) as dst:
+                while chunk := src.read(_ZIP_CHUNK):
+                    dst.write(chunk)
+                    data = sink.take()
+                    if data:
+                        yield data
+        data = sink.take()
+        if data:
+            yield data
+    yield sink.take()   # the central directory, written on close
+
+
+def _zip_directory(target: Path, root: Path) -> bytes:
+    """A directory's whole zip at once (tests and small callers)."""
+    return b"".join(_zip_stream(_zip_members(target, root)))
 
 
 # ─── POST /upload ────────────────────────────────────────────────────────────

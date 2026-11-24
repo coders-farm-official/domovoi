@@ -11,8 +11,8 @@
   every SAVE in the Documents folder — create, upload, write a text file,
   write a sheet, save a drawing.
 * **Admin tier** — ``Authorization: Bearer``: deletes, the requests that
-  hand back a whole tree in one response (``/api/documents/download-zip``
-  and a directory ``/api/files/download``), writes onto a removable
+  hand back a selection in one response (``/api/documents/download-zip``),
+  writes onto a removable
   drive, and satellite media preparation.
 
 DB-FREE by construction: the auth primitives are faked
@@ -431,16 +431,97 @@ def test_deleting_needs_an_admin_session(claimed, libraries):
     assert not (libraries["music"] / "song.mp3").exists()
 
 
-def test_downloading_a_whole_directory_needs_an_admin_session(claimed, libraries):
-    """A single file is a daily action. A directory is a server-built zip
-    of a whole tree, which is not."""
+def test_downloading_a_whole_directory_is_device_tier(claimed, libraries):
+    """A folder downloads like a file (owner decision 2026-11-24): its zip
+    streams as it is built, member-capped. Still nothing without a
+    credential."""
     c = _client()
     params = {"library_id": "core:music", "path": "Beatles"}
     (libraries["music"] / "Beatles" / "b.mp3").write_bytes(b"b")
-    assert c.get("/api/files/download", params=params, headers=DEVICE).status_code == 401
-    ok = c.get("/api/files/download", params=params, headers=ADMIN)
+    assert c.get("/api/files/download", params=params).status_code == 401
+    assert c.get("/api/files/download", params=params,
+                 headers={HEADER: "stale"}).status_code == 401
+    for who in (DEVICE, ADMIN, COOKIE_ONLY):
+        ok = c.get("/api/files/download", params=params, headers=who)
+        assert ok.status_code == 200
+        assert ok.headers["content-type"] == "application/zip"
+
+
+# ── Download tickets: the browser's own download, one use, one path ──
+
+def _mint(c, path, headers=None, library_id="core:music"):
+    return c.post("/api/files/download-ticket",
+                  json={"library_id": library_id, "path": path}, headers=headers or {})
+
+
+@pytest.mark.parametrize("who", [DEVICE, ADMIN, COOKIE_ONLY], ids=["device", "admin", "cookie"])
+def test_a_ticket_downloads_the_file_once(claimed, libraries, who):
+    """Everyone who can list Files can download one: a paired browser, a
+    signed-in admin, and a browser holding only the dashboard cookie."""
+    c = _client()
+    r = _mint(c, "song.mp3", who)
+    assert r.status_code == 200, r.text
+    url = r.json()["url"]
+    bare = TestClient(app)     # the ticket is the ONLY credential on the GET
+    got = bare.get(url)
+    assert got.status_code == 200 and got.content == b"aa"
+    assert "attachment" in got.headers["content-disposition"]
+    again = bare.get(url)
+    assert again.status_code == 401 and "already used" in again.json()["detail"]
+
+
+def test_a_ticket_expires(claimed, libraries, monkeypatch):
+    monkeypatch.setattr(files_api, "_TICKET_TTL_SEC", -1.0)
+    url = _mint(_client(), "song.mp3", DEVICE).json()["url"]
+    assert TestClient(app).get(url).status_code == 401
+
+
+def test_a_ticket_is_bound_to_its_path(claimed, libraries):
+    """Naming another file beside the ticket does not move it."""
+    (libraries["music"] / "other.mp3").write_bytes(b"zz")
+    url = _mint(_client(), "song.mp3", DEVICE).json()["url"]
+    got = TestClient(app).get(url + "&library_id=core:music&path=other.mp3")
+    assert got.status_code == 200 and got.content == b"aa"
+    assert TestClient(app).get(
+        "/api/files/download", params={"download_token": "made-up"}
+    ).status_code == 401
+
+
+def test_minting_keeps_the_download_tiers(claimed, libraries):
+    c = _client()
+    (libraries["music"] / "Beatles" / "b.mp3").write_bytes(b"b")
+    assert _mint(c, "song.mp3").status_code == 401
+    assert _mint(c, "song.mp3", {HEADER: "stale"}).status_code == 401
+    # A whole folder is device tier, like a file (owner decision 2026-11-24).
+    assert _mint(c, "Beatles").status_code == 401
+    ok = _mint(c, "Beatles", DEVICE)
     assert ok.status_code == 200
-    assert ok.headers["content-type"] == "application/zip"
+    z = TestClient(app).get(ok.json()["url"])
+    assert z.status_code == 200 and z.headers["content-type"] == "application/zip"
+    # Same path checks as the download itself: refused at minting time.
+    assert _mint(c, "../outside", DEVICE).status_code in (400, 404)
+    assert _mint(c, "nope.mp3", DEVICE).status_code == 404
+    # Another origin cannot mint one (the preflight-forcing header).
+    assert _no_preflight_client().post(
+        "/api/files/download-ticket", json={"library_id": "core:music", "path": "song.mp3"},
+        headers=DEVICE,
+    ).status_code in (400, 403)
+
+
+def test_a_ticket_never_lands_in_the_access_log():
+    from domovoi.log_privacy import scrub
+    line = scrub(f'"GET /api/files/download?{files_api.DOWNLOAD_TICKET_QUERY}=Abc-123_x HTTP/1.1" 200')
+    assert "Abc-123_x" not in line
+
+
+def test_the_ticket_store_is_bounded(monkeypatch):
+    monkeypatch.setattr(files_api, "_tickets", {})
+    monkeypatch.setattr(files_api, "_TICKET_MAX", 3)
+    first = files_api._mint_ticket("core:music", "a")
+    for i in range(5):
+        files_api._mint_ticket("core:music", f"b{i}")
+    assert len(files_api._tickets) == 3
+    assert files_api._redeem_ticket(first) is None
 
 
 def test_a_paired_device_saves_into_documents_through_files(claimed, libraries):
