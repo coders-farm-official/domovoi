@@ -55,6 +55,16 @@ updates:
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
+      # Navigation 2.10 pulls Lifecycle 2.11, which needs AGP 9.1 and
+      # compileSdk 37: a toolchain move, done on a branch, not a bot bump.
+      - dependency-name: "androidx.navigation:*"
+        versions: [">= 2.10.0"]
+      # The sherpa-onnx JNI libraries are built against this exact ONNX
+      # Runtime AAR; it moves only together with a sherpa rebuild.
+      - dependency-name: "com.microsoft.onnxruntime:*"
+      # A new LiteRT-LM needs a check on a real phone before it ships.
+      - dependency-name: "com.google.ai.edge.litertlm:*"
+        versions: [">= 0.19.0"]
     groups:
       android:
         patterns: ["*"]

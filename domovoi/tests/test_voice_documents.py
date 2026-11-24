@@ -537,12 +537,17 @@ async def test_a_quiet_room_ends_the_letter(db_session, docs, model, monkeypatch
 @pytest.mark.asyncio
 async def test_nothing_dictated_saves_nothing(db_session, docs, model, monkeypatch):
     announced: list[str] = []
+    # The reply to "take a letter" is still going out until the turn is
+    # done (committed), as on a real satellite: the quiet-room timer is
+    # armed inside the turn, so without this a slow runner could look at
+    # the letter before the turn that started it was saved.
+    turn_done = False
 
     class _Live:
         room_id = "kitchen"
 
         def awaiting_reply(self):
-            return False
+            return not turn_done
 
         async def announce(self, text_, **kw):
             announced.append(text_)
@@ -552,6 +557,7 @@ async def test_nothing_dictated_saves_nothing(db_session, docs, model, monkeypat
 
     monkeypatch.setattr(speech, "_active_sessions_provider", lambda: app.state.active_sessions)
     monkeypatch.setattr(letters, "IDLE_SEC", 0.1)
+    monkeypatch.setattr(letters, "QUIET_POLL_SEC", 0.05)
     pid = await _person("Sam Lee")
     room = Room(db_session, person_id=pid)
     await room.say("take a letter to the landlord", trigger="wake_word")
@@ -560,6 +566,7 @@ async def test_nothing_dictated_saves_nothing(db_session, docs, model, monkeypat
     # The room goes quiet right after "take a letter": nothing saved either.
     room = Room(db_session, person_id=pid, app=app)
     await room.say("take a letter to the landlord", trigger="wake_word")
+    turn_done = True
     for _ in range(100):
         if announced:
             break
