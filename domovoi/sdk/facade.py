@@ -245,7 +245,7 @@ class PluginSDK:
         self.http = HttpFactory(version)
         self.household = HouseholdAPI()
         self.places = PlacesAPI()
-        # SDK 1.18: apps with friends (stubs until the plugin mail service).
+        # SDK 1.18: apps with friends (on_mail is delivered; friends()/send_mail later in 1.5.0).
         self.friend_houses = FriendHousesAPI(slug, permitted=friend_houses)
 
     def ensure_data_dir(self) -> Path:

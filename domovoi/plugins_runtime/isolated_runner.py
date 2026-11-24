@@ -7,8 +7,11 @@ The core copies this file into every decode-only image
 the core's image helper and the plugin's decoder package. It uses the
 standard library only (the image helper imports Pillow when it is used).
 
-It reads requests from stdin and writes one reply per request to stdout,
-each a frame: a 4-byte big-endian length, then the body.
+Once the decoder is imported it writes one byte, ``0x01`` (ready), to
+stdout: the core starts a request's timer only after it, so a slow start is
+never charged to a friend. Then it reads requests from stdin and writes one
+reply per request to stdout, each a frame: a 4-byte big-endian length,
+then the body.
 
 * request body: ``id u32 ‖ kind u8 ‖ meta_len u16 ‖ meta (JSON object) ‖
   payload``. Kind 0 asks the plugin's decoder; kind 1 is an image request
@@ -43,6 +46,7 @@ REASON_MAX = 120
 
 KIND_DECODE, KIND_IMAGE = 0, 1
 OK, REFUSED, PIXELS = 0, 1, 2
+READY = b""
 
 _UNSAFE = re.compile(r"[^A-Za-z0-9 .,:;_()'/-]")
 
@@ -119,6 +123,8 @@ def main() -> None:
     os.dup2(2, 1)
     sys.stdout = sys.stderr
     decode = getattr(importlib.import_module(spec["module"]), spec["function"])
+    out.write(READY)  # the core's timer starts after this (M3)
+    out.flush()
     serve(decode, sys.stdin.buffer, out)
 
 

@@ -558,6 +558,7 @@ class FakeProc:
         self.answer = answer
         self.argv = argv
         self.stdout = asyncio.StreamReader()
+        self.stdout.feed_data(iso.READY_BYTE)   # the runner says it is up (M3)
         self.returncode = None
         self.killed = False
         self.stdin = self
@@ -618,7 +619,8 @@ async def _pool(answer, *, docker: FakeDocker, timeout: float = 0.5, clock=None,
         return "sha256:img"
 
     pool = iso.DecoderPool(slug, install_dir=Path("."), manifest=None, spawn=spawn, prepare=prepare,
-                           gate=_no_gate, timeout=timeout, image_timeout=timeout, clock=clock or Clock())
+                           gate=_no_gate, timeout=timeout, image_timeout=timeout, clock=clock or Clock(),
+                           wall=clock or Clock(), host_event_sec=0.01)
     await pool.prepare()
     if schema is not None:
         pool.set_schema(schema)
@@ -717,9 +719,13 @@ async def test_the_schema_is_checked_in_process(docker) -> None:
 
 
 async def test_without_a_schema_nothing_is_accepted(docker) -> None:
-    pool, _ = await _pool(_ok({"a": 1}), docker=docker, schema=None)
+    # M4: no schema registered is not the friend's fault: the item waits
+    # ("unavailable", weight 0), it is never refused and deleted, and no
+    # container is started for it.
+    pool, procs = await _pool(_ok({"a": 1}), docker=docker, schema=None)
     r = await pool.decode("f", b"x")
-    assert r.outcome == "refused" and "no schema" in r.reason
+    assert r.outcome == "unavailable" and r.retry and "no schema" in r.reason
+    assert procs == [] and not pool.friends.get("f", iso._Friend()).breaker.events
     await pool.stop()
 
 
@@ -797,7 +803,7 @@ async def test_backoff_doubles_up_to_its_cap_for_that_friend_only(docker) -> Non
     for _ in range(9):
         st = pool.friends.get("a")
         if st is not None:
-            st.faults.clear()                    # the breaker has its own test
+            st.breaker.resume()                  # the breaker has its own test
         await pool.decode("a", b"bad")
         waits.append(pool.friends["a"].retry_at - clock.t)
         clock.t = pool.friends["a"].retry_at
@@ -938,25 +944,29 @@ async def test_an_item_that_keeps_faulting_is_dropped(docker) -> None:
 async def test_a_friend_that_keeps_faulting_is_paused_and_others_carry_on(docker) -> None:
     clock = Clock()
     told = []
-    iso.PAUSE_LISTENERS.append(lambda slug, friend, why: told.append((slug, friend, why)))
+    iso.PAUSE_LISTENERS.append(lambda *a: told.append(a))
     try:
-        pool, _ = await _pool(lambda rid, k, m, p: "crash" if p == b"bomb" else _frame(rid, 0, b"1"),
-                              docker=docker, clock=clock)
-        for i in range(iso.BREAKER_FAULTS):
+        pool, _ = await _pool(lambda rid, k, m, p: None if p == b"bomb" else _frame(rid, 0, b"1"),
+                              docker=docker, clock=clock, timeout=0.05)
+        # Weight 100 each (M4): three timeouts in flight on a ready container.
+        for i in range(3):
             assert (await pool.decode("bad", b"bomb", item_key=f"m{i}")).outcome == "fault"
             clock.t += iso.BACKOFF_MAX_SEC
-        assert pool.paused("bad") and len(told) == 1 and told[0][:2] == ("hostile", "bad")
+        assert pool.paused("bad") and told == [("hostile", "bad", 3600, "faults", False)]
         r = await pool.decode("bad", b"fine")
         assert r.outcome == "unavailable" and "paused" in r.reason
         assert (await pool.decode("good", b"fine")).ok          # every other friend carries on
         clock.t += iso.BREAKER_PAUSE_SEC + 1
         assert not pool.paused("bad") and (await pool.decode("bad", b"fine")).ok
-        # A repeat pauses for twice as long; an admin can lift it.
-        for i in range(iso.BREAKER_FAULTS):
+        # A repeat pauses for twice as long; an admin's Resume lifts it and
+        # starts the length over (L11).
+        for i in range(3):
             await pool.decode("bad", b"bomb", item_key=f"n{i}")
             clock.t += iso.BACKOFF_MAX_SEC
-        assert pool.friends["bad"].paused_until - clock.t > iso.BREAKER_PAUSE_SEC
+        assert told[-1][2] == 7200
+        assert pool.friends["bad"].breaker.paused_until - clock.t > iso.BREAKER_PAUSE_SEC
         pool.resume("bad")
+        assert pool.friends["bad"].breaker.next_pause == iso.BREAKER_PAUSE_SEC
         assert (await pool.decode("bad", b"fine")).ok
         await pool.stop()
     finally:
@@ -1380,27 +1390,30 @@ def test_the_core_serves_images_with_a_fixed_type_and_nosniff() -> None:
 def test_image_pieces_are_reassembled_by_the_core_within_bounds() -> None:
     clock = Clock()
     asm = iso.ImageChunks(max_bytes=10, max_parts=3, per_friend=2, total=3, ttl_sec=60, clock=clock)
-    assert asm.add("a", "k", 1, 2, b"cd") is None
-    assert asm.add("a", "k", 0, 2, b"ab") == b"abcd"
+    assert asm.add("games", "a", "k", 1, 2, b"cd") is None
+    # L13e: keyed by plugin too: another plugin's piece never joins it.
+    assert asm.add("other", "a", "k", 0, 2, b"zz") is None
+    assert asm.add("games", "a", "k", 0, 2, b"ab") == b"abcd"
+    asm.discard("other", "a", "k")
     with pytest.raises(ValueError):
-        asm.add("a", "k", 0, 4, b"x")                      # too many pieces
+        asm.add("games", "a", "k", 0, 4, b"x")                      # too many pieces
     with pytest.raises(ValueError):
-        asm.add("a", "k", 2, 2, b"x")                      # index out of range
-    asm.add("a", "big", 0, 2, b"123456")
+        asm.add("games", "a", "k", 2, 2, b"x")                      # index out of range
+    asm.add("games", "a", "big", 0, 2, b"123456")
     with pytest.raises(ValueError, match="too large"):
-        asm.add("a", "big", 1, 2, b"789012")
-    asm.add("a", "d", 0, 2, b"x")
+        asm.add("games", "a", "big", 1, 2, b"789012")
+    asm.add("games", "a", "d", 0, 2, b"x")
     with pytest.raises(ValueError, match="disagree"):
-        asm.add("a", "d", 0, 2, b"y")                      # a piece sent twice, differently
-    asm.add("a", "p", 0, 2, b"x")
-    asm.add("a", "q", 0, 2, b"x")
+        asm.add("games", "a", "d", 0, 2, b"y")                      # a piece sent twice, differently
+    asm.add("games", "a", "p", 0, 2, b"x")
+    asm.add("games", "a", "q", 0, 2, b"x")
     with pytest.raises(ValueError, match="in progress"):
-        asm.add("a", "r", 0, 2, b"x")                      # per friend
-    asm.add("b", "s", 0, 2, b"x")
+        asm.add("games", "a", "r", 0, 2, b"x")                      # per friend
+    asm.add("games", "b", "s", 0, 2, b"x")
     with pytest.raises(ValueError, match="in progress"):
-        asm.add("c", "t", 0, 2, b"x")                      # in all
+        asm.add("games", "c", "t", 0, 2, b"x")                      # in all
     clock.t += 61
-    assert asm.add("c", "t", 0, 2, b"x") is None           # the old ones expired
+    assert asm.add("games", "c", "t", 0, 2, b"x") is None           # the old ones expired
 
 
 def test_the_docker_cli_sees_none_of_the_core_s_secrets(monkeypatch) -> None:

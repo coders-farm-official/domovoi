@@ -133,6 +133,11 @@ ROUTES: dict[str, tuple[str, str, dict | None]] = {
               {"keep_messages": False, "new_address": True}),
     "blocked": ("GET", "/api/friend-houses/blocked", None),
     "unblock": ("DELETE", f"/api/friend-houses/blocked/{HOUSE}", None),
+    # Apps with friends (SDK 1.18): admin only, at both hops
+    "apps": ("GET", "/api/friend-houses/friends/fr0123abcd/apps", None),
+    "set-apps": ("PUT", "/api/friend-houses/friends/fr0123abcd/apps", {"on": True, "apps": ["games"]}),
+    "set-app": ("PUT", "/api/friend-houses/friends/fr0123abcd/apps/games", {"allowed": False}),
+    "resume-app": ("POST", "/api/friend-houses/friends/fr0123abcd/apps/games/resume", None),
 }
 _IDS = sorted(ROUTES)
 
@@ -152,6 +157,13 @@ HOUSEHOLD_ROUTES = {
     ("POST", "/api/friend-houses/shared-lists/{space_id}/decline"),
     ("DELETE", "/api/friend-houses/shared-lists/{space_id}"),
 }
+#: The dashboard mirrors the plugin mail service added (design note §6.11).
+FRIEND_APPS_ROUTES = {
+    ("GET", "/api/friend-houses/friends/{friend_id}/apps"),
+    ("PUT", "/api/friend-houses/friends/{friend_id}/apps"),
+    ("PUT", "/api/friend-houses/friends/{friend_id}/apps/{slug}"),
+    ("POST", "/api/friend-houses/friends/{friend_id}/apps/{slug}/resume"),
+}
 # What stays admin, named so a move is a decision, not a slip.
 ADMIN_ROUTES = {
     ("DELETE", "/api/friend-houses/notice"), ("PUT", "/api/friend-houses/settings"),
@@ -167,6 +179,7 @@ ADMIN_ROUTES = {
     ("POST", "/api/friend-houses/shared-lists"),
     ("POST", "/api/friend-houses/friends/{friend_id}/block"), ("GET", "/api/friend-houses/blocked"),
     ("DELETE", "/api/friend-houses/blocked/{house}"),
+    *FRIEND_APPS_ROUTES,
 }
 
 
@@ -790,13 +803,11 @@ async def test_an_unblock_needs_a_house_key(monkeypatch, forwarded) -> None:
 
 # ─── apps with friends (SDK 1.18): admin only, once the routes exist ─────
 
-#: The dashboard mirrors slice 4 adds (design note §6.11).
-FRIEND_APPS_PLANNED = [
-    ("GET", "/api/friend-houses/friends/{friend_id}/apps"),
-    ("PUT", "/api/friend-houses/friends/{friend_id}/apps"),
-    ("PUT", "/api/friend-houses/friends/{friend_id}/apps/{slug}"),
-    ("POST", "/api/friend-houses/friends/{friend_id}/apps/{slug}/resume"),
-]
+FRIEND_APPS_PLANNED = sorted(FRIEND_APPS_ROUTES)
+
+
+def test_the_apps_routes_exist_on_the_security_tier() -> None:
+    assert set(_apps_routes()) == FRIEND_APPS_ROUTES
 
 
 def test_no_apps_route_is_on_the_household_tier() -> None:

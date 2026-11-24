@@ -107,6 +107,19 @@ def house(tmp_path, monkeypatch):
     monkeypatch.setattr(svc, "spawn", no_spawn)
     monkeypatch.setattr(svc, "_wait_for_onion", fake_onion)
     monkeypatch.setattr(svc, "current_epoch", fake_epoch)
+
+    async def fake_epoch_locked(**kw):
+        return b"" * 8
+
+    async def no_apps(s):
+        return {}
+
+    from domovoi.friend_houses import plugin_mail
+
+    # The listener files' single writer (M2) reads the apps and the epoch
+    # under its own lock: no database here.
+    monkeypatch.setattr(svc, "_current_epoch_locked", fake_epoch_locked)
+    monkeypatch.setattr(plugin_mail, "listener_apps", no_apps)
     monkeypatch.setattr(svc, "_ensure_listener", fake_ensure)
     monkeypatch.setattr(svc, "_stop_listener", fake_stop)
     monkeypatch.setattr(svc, "RELOAD_MIN_INTERVAL_SEC", 0.0)

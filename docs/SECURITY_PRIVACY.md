@@ -3320,40 +3320,95 @@ then checks the signature; **the payload stays opaque there**, because the
 listener holds the house keys. Payloads are decoded only in the plugin's
 decode-only container, one per friend.
 
-**Plugin mail ("apps with friends", 1.5.0).** The wire is in place; the
-service that stores mail and hands it to plugins comes later in 1.5.0, and
-**until it does, every plugin mail is refused** (`MESSAGE_NACK`
-"unavailable") and none ever reaches the house inbox. Plugin mail is its
-own envelope kind on its own path: the listener sorts it by kind before
-spending any budget, sends it to the core as a separate event, and the
-core's message code accepts text and list changes only, refusing any other
-kind. A house tells a friend which of its apps that friend may mail in a
-`CAPS` frame: a protocol number and the apps' names, never their versions,
-and only to friends an admin turned "Apps with this friend" on for, so
-other friends don't learn that the house runs 1.5.0. The listener takes at
-most one `CAPS` per connection, only from a current friend (not from a
-house this one only asked), with its own budget of 12 an hour per friend.
-A house before 1.5.0 doesn't know `CAPS` and closes the connection; the
-calling house records that the friend was online before it sends `CAPS`,
-so an older house is marked "older", never "offline", and people's
-messages between a 1.5.0 house and an older one work as before. What a
-friend's `CAPS` said is forgotten after 6 hours without a fresh one, when
-the friend restores from a backup, and when it is removed or blocked. A
-friend refused plugin mail learns only a reason (full, not allowed, rate,
-unavailable) and a wait; `MESSAGE_NACK` goes only on a connection whose
-caller sent a `CAPS` with the plugin protocol number first, and people's
-messages keep the old silent refusal. The app list each friend may mail
-travels in the listener's friend list; a list it can't read opens no app
-and leaves people's messages alone, and any change to it closes that
-friend's open connection.
+**Plugin mail ("apps with friends", 1.5.0).** Two houses' copies of one
+plugin exchange mail, and only with friends an admin turned **"Apps with
+this friend"** on for, and per friend only the plugins allowed for it. A
+plugin installed later with the permission (or upgraded to gain it) is
+allowed for nobody until an admin confirms it. Turning the toggle on is
+announced like a new friend, and its text says the friend's house will see
+which of these apps this house has.
+
+Plugin mail is its own envelope kind on its own path, and **it never
+reaches people's messages**: the listener sorts it by kind before spending
+any budget and sends it to the core as a separate event; the core puts it
+on a lane of its own (64 waiting, 2 workers, apart from the 24 events
+above), and the core's message code accepts text and list changes only.
+The lane re-checks everything (friend, toggle, app allowed and installed,
+epoch and sequence, quotas) and stores the mail; **an acknowledgement
+means the mail is committed here**. No plugin code and no decoding runs in
+the lane: mail is decoded later, only in that plugin's decode-only
+container for that friend, and the plugin gets core's own checked value
+with **every piece of text as `FriendText`**, on every delivery.
+
+- **Replays.** Each (friend, app) has a sequence number inside the signed
+  envelope and a high-water mark here that outlives deleted mail: a mail
+  at or below the mark is acknowledged and dropped, so a resend or a
+  replay never reaches the plugin twice. The friend's sending epoch must
+  match the connection's, and the last 16 epochs a friend left behind are
+  never accepted again. The sending side can't go backwards either: a
+  sequence number is at least the clock in milliseconds, and the core
+  writes a fresh restore marker at every start, so a database restored
+  from a backup starts a new epoch instead of having its mail dropped as
+  replays.
+- **Quotas and expiry.** Inbox and outbox each hold at most 125 mails or
+  1 MiB per (friend, app), 1,000 or 8 MiB per app and 4,000 or 32 MiB for
+  the house; every (friend, app) keeps 16 mails / 128 KiB the totals can't
+  take, so friends who are offline for days can't fill an app for
+  everyone. Mail lives at most 3 days (the sender's choice, sent as the
+  time left) and is deleted when it expires.
+- **One friend can't break an app for the others.** Each (friend, app)
+  has a breaker kept in the database: a decoder fault while that friend's
+  own request was in flight, a reply that fails the core's re-check, or a
+  plugin handler that raises or runs past 10 seconds weighs 1; three in an
+  hour pause that friend's mail to that app for an hour, doubling up to a
+  day; 150 refusals of malformed mail in an hour pause it for an hour (the
+  two houses may run different versions). A mail that faults twice is
+  deleted. **Mail is marked as being worked on before the decoder or the
+  plugin's handler sees it**, so a mail whose handler takes the whole core
+  down is found at the next start, charged 3 (the pause starts at once,
+  and the notice says Domovoi restarted) and deleted the second time:
+  never a restart loop. A container that fails before it is ready, dies
+  while idle, or dies with others at once (Docker restarting) charges
+  nobody. The admin sees each pause on the Friend Houses page and can
+  resume it or turn apps off with that friend; it is logged, never spoken.
+- **Closing.** Turning the toggle off, revoking an app, disabling or
+  uninstalling the plugin (or an upgrade that drops the permission),
+  removing or blocking the friend each delete that app's queued and stored
+  mail in one transaction, cancel a running handler and close the
+  connection; the listener's friend list is rewritten at once by its only
+  writer, which reads the database under its own lock. Going dark ("never")
+  or turning Friend Houses off stops every sender (each closes its own
+  connection) and keeps queued mail until it expires.
+- **What a friend learns.** A house tells a friend which apps it may mail
+  in a `CAPS` frame: a protocol number and the apps' names, never their
+  versions, and only to friends with "Apps with this friend" on, so other
+  friends don't learn that the house runs 1.5.0; turning it off sends one
+  empty `CAPS`. The listener takes at most one `CAPS` per connection, only
+  from a current friend, and passes a changed one to the core at once
+  (repeats within 12 an hour). A house before 1.5.0 closes the connection
+  on `CAPS`; it is recorded as "older" only after two closes 5+ minutes
+  apart, never as offline, and people's messages work as before. A friend
+  refused plugin mail learns only a reason (full, not allowed, rate,
+  unavailable) and a wait; a wait caused by this house's overall budgets
+  is a fixed minute, so it says nothing about other friends. One
+  "not allowed" deletes only that mail; the rest waits until the friend's
+  `CAPS` confirms it. A friend that sends 16 mails for unlisted apps on one
+  connection is disconnected.
+- **Sending.** One mail at a time per friend, on one held connection (at
+  most 8 held for the house, 30 connects an hour per friend), with fixed
+  deadlines (an answer 30 seconds, a connection idle 110 seconds) and
+  backoffs that only an acknowledgement resets; the sending budgets match
+  the receiving ones and are kept in the database, so a restart refills
+  nothing. A plugin can't send to a friend it isn't allowed with.
 
 **Limits that keep one house from swamping this one.** A friend can send
 at most 60 messages an hour (text and list changes only: plugin mail
 never spends it); plugin mail has budgets of its own, each a sustained rate
 plus a burst: 2,400 an hour per friend and app (burst 120), 3,600 an hour
-per friend over all its apps (180), 7,200 an hour for the whole house
-(360), and 64 MiB an hour of it (4 MiB); mail for an app the friend isn't
-allowed is refused before any budget is spent; connects, "I'm back" and
+per friend over all its apps (180), 16 MiB an hour per friend (1 MiB),
+7,200 an hour for the whole house (360), and 64 MiB an hour of it
+(4 MiB); mail for an app the friend isn't allowed is refused before any
+budget is spent; connects, "I'm back" and
 accepts are capped at 120 an hour per house, and one accept ends its connection; friend
 requests have their own 8 connection slots and only a request naming an
 open friend file counts toward the 20 an hour; the handshake must finish

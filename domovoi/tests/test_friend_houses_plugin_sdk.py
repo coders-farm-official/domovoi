@@ -386,7 +386,7 @@ async def test_a_friend_line_of_only_a_wake_phrase_says_nothing(room) -> None:
     assert room.said == []
 
 
-# ─── LoopbackPair over slice 3's wire ────────────────────────────────────
+# ─── LoopbackPair (its end-to-end runs: test_friend_houses_plugin_mail_wire) ─
 
 
 async def test_loopback_caps_is_delivered(tmp_path) -> None:
@@ -395,19 +395,6 @@ async def test_loopback_caps_is_delivered(tmp_path) -> None:
     async with LoopbackPair(tmp_path, apps=("games",)) as pair:
         assert await pair.offer_caps(("games",)) is pw.Offer.DELIVERED
         assert [e["event"] for e in pair.events].count("caps") == 1
-
-
-async def test_loopback_mail_is_nacked_unavailable_until_the_mail_service(tmp_path, monkeypatch) -> None:
-    from domovoi.friend_houses import service as svc
-
-    async def must_not(event):
-        raise AssertionError("plugin mail reached people's messages")
-
-    monkeypatch.setattr(fm, "on_message", must_not)
-    async with LoopbackPair(tmp_path, apps=("games",)) as pair:
-        answer = await pair.mail("games", b'{"move":"e4"}')
-    assert answer is not None and not answer.acked
-    assert answer.reason is fs.Nack.UNAVAILABLE and answer.retry_after == svc.PLUGIN_MAIL_RETRY_SEC
 
 
 async def test_loopback_an_unlisted_app_is_not_allowed(tmp_path) -> None:
@@ -422,7 +409,9 @@ async def test_loopback_puts_the_core_back(tmp_path) -> None:
     from domovoi.friend_houses import presence
     from domovoi.friend_houses import service as svc
 
-    emit, saw, proc = fl.emit, presence.saw, svc._LISTENER["proc"]
+    from domovoi.friend_houses import identity as fid
+
+    emit, saw, proc, load = fl.emit, presence.saw, svc._LISTENER["proc"], fid.load
     async with LoopbackPair(tmp_path):
-        assert fl.emit is not emit
-    assert (fl.emit, presence.saw, svc._LISTENER["proc"]) == (emit, saw, proc)
+        assert fl.emit is not emit and fid.load is not load
+    assert (fl.emit, presence.saw, svc._LISTENER["proc"], fid.load) == (emit, saw, proc, load)

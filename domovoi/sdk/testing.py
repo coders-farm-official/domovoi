@@ -213,7 +213,7 @@ class StubSDK:
         self.speech = RecordingSpeech()
         self.http = HttpFactory(self.version)
         # SDK 1.18: the same stubs the core gives a friend_houses plugin
-        # until the plugin mail service exists (friends() is [], send_mail
+        # until their routing arrives (friends() is [], send_mail
         # raises NotAllowed); on_mail records its handler and schema.
         from domovoi.sdk.friend_houses import FriendHousesAPI
 

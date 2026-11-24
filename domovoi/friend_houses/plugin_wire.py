@@ -4,8 +4,8 @@ Friend Houses ("serverless messaging and friend system between households")
 lets two houses' copies of one plugin exchange mail ("apps with friends",
 1.5.0). This module is the wire part (build slice 3 of
 ``FRIEND-HOUSES-PLUGINS``); the mail service that stores, sends and hands
-mail to plugins comes with slice 4. **Until then core refuses every plugin
-mail** (``MESSAGE_NACK`` ``unavailable``) and never routes one into
+mail to plugins is :mod:`domovoi.friend_houses.plugin_mail` and
+:mod:`domovoi.friend_houses.plugin_sender`. Plugin mail never reaches
 people's messages (review D12).
 
 CAPS
@@ -22,10 +22,12 @@ the exact length. No plugin versions, ever (review D14).
 * The receiving listener takes it after its pending-friend check, at most
   one per connection (a second closes the connection), with its own event
   budget of :data:`CAPS_PER_HOUR` per friend.
-* What a friend's CAPS says is **soft state** (:class:`Known`): it is
-  forgotten after :data:`STALE_SEC` without a fresh one, on the friend's
-  epoch change (a restore), on remove or block, and per app on a
-  ``not_allowed`` refusal. Mail goes only to a fresh ``has_plugin``, so a
+* What a friend's CAPS says is **soft state**, kept in the friend's row
+  (``peer_proto``, ``peer_caps``, ``peer_caps_at``, ``peer_caps_epoch``):
+  it is ignored after :data:`STALE_SEC` without a fresh one and after the
+  friend's epoch changes (a restore), goes with the friend on remove or
+  block, and per app on the ``not_allowed`` rule (plugin_sender, M2).
+  :class:`Known` is the in-memory form the probe and the tests use. Mail goes only to a fresh ``has_plugin``, so a
   downgraded or restored friend never has plugin mail spend its people's
   budget.
 
@@ -35,17 +37,18 @@ A house before 1.5.0 doesn't know the CAPS kind and closes the connection.
 So :func:`offer` first records presence for the handshake that just worked
 (the house is online whatever it makes of CAPS), then sends CAPS and a
 PING in a ``try`` of their own: a PONG means the friend speaks plugin mail
-and has this house's CAPS (``caps_needed`` may be cleared, slice 4); a
-close means a house before 1.5.0 (:data:`~domovoi.friend_houses.session.PROTO_LEGACY`),
-never "offline"; no answer in time decides nothing. A legacy friend is
+and has this house's CAPS (``caps_needed`` may be cleared); a close is one
+sign of a house before 1.5.0 (:data:`~domovoi.friend_houses.session.PROTO_LEGACY`),
+never "offline", and the sender records it as such only after two closes
+5+ minutes apart (L8); no answer in time, or a send error, decides nothing. A legacy friend is
 asked again at most hourly, normally daily, and once after its epoch
 changes (:meth:`Known.probe_due`); its address statement changing doesn't
 count, because the friend controls that.
 
-Only the plugin sender's connections and the CAPS pass probe (slice 4).
-People's flushes and presence pings send CAPS only to friends already known
-to speak it, so a house before 1.5.0 is never sent a frame it doesn't know
-on a connection that carries people's messages.
+Only the plugin sender's connections and the CAPS pass probe. People's
+flushes never carry CAPS; presence pings carry it only to friends with apps
+on that already speak it (at most hourly), so a house before 1.5.0 is never
+sent a frame it doesn't know on a connection that carries people's messages.
 """
 
 from __future__ import annotations
@@ -244,7 +247,7 @@ async def offer(sess: fs.Session, caps_body: bytes, *,
             await sess.send(fs.Kind.CAPS, caps_body)
             await sess.send(fs.Kind.PING, token)
         except (ConnectionError, OSError, fs.SessionRefused):
-            return Offer.LEGACY
+            return Offer.NO_ANSWER  # L8: a send error is no answer, never a legacy sign
         while True:
             try:
                 kind, body = await sess.recv(timeout=deadline + 5, accept=fs.SENDER_ACCEPTS)
@@ -259,7 +262,10 @@ async def offer(sess: fs.Session, caps_body: bytes, *,
         outcome = await asyncio.wait_for(_round_trip(), deadline)
     except asyncio.TimeoutError:
         return Offer.NO_ANSWER
-    known.probed(house, fs.PROTO if outcome is Offer.DELIVERED else fs.PROTO_LEGACY)
+    if outcome is Offer.DELIVERED:
+        known.probed(house, fs.PROTO)
+    # A close is one legacy sign only: the caller records a friend as
+    # legacy after two closes 5+ minutes apart (L8, plugin_sender).
     return outcome
 
 

@@ -4,15 +4,16 @@ A plugin with ``[permissions] friend_houses = true`` exchanges mail with
 the same plugin in friend houses an admin turned "Apps with this friend"
 on for (design note ``FRIEND-HOUSES-PLUGINS`` §4).
 
-**Mail arrives with the plugin mail service (build slice 4).** Until then
-this is the surface without the service behind it, and nothing here
-queues, stores, delivers or routes a mail:
+**The plugin mail service** (:mod:`domovoi.friend_houses.plugin_mail`)
+stores friends' mail and delivers it to :meth:`FriendHousesAPI.on_mail`'s
+handler, with every string in the value as a :class:`FriendText`. The rest
+of the routing arrives later in 1.5.0; until then:
 
 * :meth:`FriendHousesAPI.friends` answers ``[]``;
 * :meth:`FriendHousesAPI.send_mail` checks its arguments, then raises
   :class:`NotAllowed` with :data:`NOT_AVAILABLE_YET`;
-* :meth:`FriendHousesAPI.on_mail` and :meth:`~FriendHousesAPI.on_friends_changed`
-  check and record the handler (and the schema), and nothing calls them.
+* :meth:`~FriendHousesAPI.on_friends_changed` records the handler, and
+  nothing calls it.
 
 What a friend sent reaches people only through :class:`FriendText`
 (review D13): ``str()`` of one is :data:`STAND_IN`, so it never lands in
@@ -29,7 +30,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Iterable
 
-#: What ``send_mail`` raises until the plugin mail service exists.
+#: What ``send_mail`` raises until its routing arrives (later in 1.5.0).
 NOT_AVAILABLE_YET = "Friend Houses for apps isn't available yet"
 #: What a friend's words become in the chat history and in ``str()``.
 STAND_IN = "[text from a friend house]"
@@ -248,15 +249,15 @@ class FriendHousesAPI:
 
     async def friends(self) -> list[FriendHouse]:
         """The friends this plugin may mail: "Apps with this friend" on and
-        this plugin allowed for them. ``[]`` until the plugin mail service
-        exists (and always without the permission)."""
+        this plugin allowed for them. ``[]`` until its routing arrives
+        (later in 1.5.0) (and always without the permission)."""
         return []
 
     async def send_mail(self, house_id: str, payload: bytes, *, ttl_s: int = TTL_MAX,
                         replace_key: str | None = None) -> str:
         """Queue ``payload`` for the friend ``house_id``; returns the mail's
         id. The arguments are checked first (``TypeError``, ``ValueError``,
-        :class:`TooLarge`); then, until the plugin mail service exists, it
+        :class:`TooLarge`); then, until its routing arrives, it
         raises :class:`NotAllowed` with :data:`NOT_AVAILABLE_YET`. Nothing
         is queued."""
         self._need_permission()
@@ -280,7 +281,14 @@ class FriendHousesAPI:
         decoder's answers must match (the core's strict subset; without one
         nothing is accepted). ``handler(house_id, mail_id, seq, value)`` is
         ``async``, idempotent by ``mail_id`` and returns within 10 s.
-        Recorded only, until the plugin mail service exists."""
+
+        The plugin mail service calls it for each decoded mail, in ``seq``
+        order per friend, **at least once**: again after it raised, timed
+        out or the core stopped while it ran, until the mail is quarantined
+        (its second fault). Every string in ``value`` is a
+        :class:`FriendText`. It must never block the event loop: core
+        can't stop a handler that never awaits; that takes the whole core
+        down, and the friend's mail is then charged as having done so."""
         self._need_permission()
         if not inspect.iscoroutinefunction(handler):
             raise TypeError("on_mail takes an async handler")
@@ -293,7 +301,7 @@ class FriendHousesAPI:
 
     def on_friends_changed(self, handler: FriendsHandler) -> None:
         """``async handler()`` runs when ``friends()`` may answer differently.
-        Recorded only, until the plugin mail service exists."""
+        Recorded only, until its routing arrives (later in 1.5.0)."""
         self._need_permission()
         if not inspect.iscoroutinefunction(handler):
             raise TypeError("on_friends_changed takes an async handler")

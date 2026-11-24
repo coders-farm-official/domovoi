@@ -39,14 +39,18 @@ by its signature. In order, for a ``MESSAGE`` frame:
    in this friend's ``apps`` list in ``friends.json``: an unlisted one gets
    ``MESSAGE_NACK not_allowed`` and **spends no budget**;
 4. the plugin buckets (:mod:`domovoi.friend_houses.budget`: per friend and
-   app, per friend, per house, bytes) or ``MESSAGE_NACK rate``;
+   app, per friend, per friend in bytes, per house, per house in bytes) or
+   ``MESSAGE_NACK rate`` (a house bucket answers a fixed 60 s, L7);
    people's 60 an hour is spent only on text and list changes;
 5. the full parse and the signature;
 6. a ``plugin_mail`` event for core (never ``message``), then the ACK or
    ``MESSAGE_NACK`` with core's reason (``refused <id> <reason> <secs>``).
 
-Until the plugin mail service exists (slice 4), core answers every
-``plugin_mail`` with ``refused <id> unavailable <secs>``.
+Core waits at most :data:`PLUGIN_STORE_WAIT_SEC` (20 s, under the sender's
+30, L10); after :data:`NOT_ALLOWED_PER_CONNECTION` refusals of unlisted
+apps the connection is closed (L9). A CAPS is reported to core whenever it
+differs from the last one reported for that friend; only a repeat spends
+the CAPS budget (L8).
 
 Two sockets:
 
@@ -101,6 +105,11 @@ EVENTS_PER_HOUR = 120      # per house: connected / I'm back / accepted (R6 FH-3
 HANDSHAKE_DEADLINE_SEC = 20.0  # preface + handshake, all of it (R6 FH-9)
 PAIRING_DEADLINE_SEC = 90.0    # a whole friend request, round trips over Tor
 STORE_WAIT_SEC = 30.0      # how long a message waits for core to store it
+# A plugin mail waits less than its sender (30 s), so core's "unavailable"
+# reaches the sender before it gives up (L10).
+PLUGIN_STORE_WAIT_SEC = 20.0
+# Refusals of unlisted apps on one connection before it is closed (L9).
+NOT_ALLOWED_PER_CONNECTION = 16
 # A plugin mail core didn't answer in time is refused as "unavailable".
 UNANSWERED_RETRY_SEC = 10
 
@@ -159,6 +168,8 @@ class State:
     _abandoned: dict[bytes, int] = field(default_factory=dict)
     _message_times: dict[bytes, deque] = field(default_factory=dict)
     _caps_times: dict[bytes, deque] = field(default_factory=dict)
+    # house -> (proto, slugs) of the last CAPS reported to core (L8)
+    _caps_reported: dict[bytes, tuple[int, tuple[str, ...]]] = field(default_factory=dict)
     # Plugin mail's own buckets, separate from people's (review D7).
     budgets: fb.PluginBudgets = field(default_factory=fb.PluginBudgets)
     # msg_id -> the future core's "stored"/"refused" line resolves
@@ -172,6 +183,17 @@ class State:
         """CAPS events have their own budget, not the shared 120."""
         return _within(self._caps_times.setdefault(house, deque()), pw.CAPS_PER_HOUR)
 
+    def caps_reportable(self, house: bytes, caps: pw.Caps) -> bool:
+        """L8: a CAPS that differs from the last one reported for this
+        friend is always reported; a repeat only within its budget."""
+        content = (caps.proto, tuple(caps.slugs))
+        if self._caps_reported.get(house) != content:
+            if house not in self._caps_reported and len(self._caps_reported) >= 4 * MAX_CONNECTIONS:
+                self._caps_reported.pop(next(iter(self._caps_reported)))
+            self._caps_reported[house] = content
+            return True
+        return self.caps_allowed(house)
+
     def event_allowed(self, house: bytes) -> bool:
         """Whether core hears about one more connected / I'm back / accept
         from this house this hour. Each becomes a task in core with its own
@@ -184,14 +206,14 @@ class State:
         and tries again later, so nothing is lost by saying no."""
         return (await self.answer_for(msg_id)).stored
 
-    async def answer_for(self, msg_id: bytes) -> Answer:
+    async def answer_for(self, msg_id: bytes, wait: float | None = None) -> Answer:
         """Core's whole answer; no answer in time is ``unavailable``."""
         if msg_id in self._waiting:  # the same id twice at once: refuse the second
             return Answer(False)
         fut = asyncio.get_running_loop().create_future()
         self._waiting[msg_id] = fut
         try:
-            return await asyncio.wait_for(fut, STORE_WAIT_SEC)
+            return await asyncio.wait_for(fut, STORE_WAIT_SEC if wait is None else wait)
         except asyncio.TimeoutError:
             return Answer(False)
         finally:
@@ -380,6 +402,7 @@ async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, sta
                  epoch=sess.peer.epoch.hex())
         said_back = False
         caps_seen = False
+        refusals = [0]  # not_allowed refusals on this connection (L9)
         proto: int | None = None  # what the caller's CAPS said, on THIS connection
         while True:
             kind, body = await sess.recv()
@@ -414,7 +437,7 @@ async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, sta
                 caps_seen = True
                 caps = pw.parse_caps(body)  # BadCaps closes the connection
                 proto = caps.proto
-                if state.caps_allowed(house_key):  # over its budget: not reported, still answered
+                if state.caps_reportable(house_key, caps):  # a repeat over its budget: not reported
                     emit("caps", house=house, proto=str(caps.proto), apps=",".join(caps.slugs),
                          epoch=sess.peer.epoch.hex())
             elif kind is fs.Kind.MESSAGE:
@@ -422,7 +445,9 @@ async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, sta
                 if head.kind == fe.KIND_PLUGIN:
                     if proto is None or proto < fs.PROTO:
                         break  # plugin mail only after a CAPS on this connection
-                    await _plugin_mail(sess, state, peer, head, body)
+                    await _plugin_mail(sess, state, peer, head, body, refusals)
+                    if refusals[0] >= NOT_ALLOWED_PER_CONNECTION:
+                        break  # L9: a friend looping unlisted apps is cut off
                     continue
                 if not state.message_allowed(sess.peer_house_key):
                     break  # over the hourly limit: the sender keeps it for later
@@ -448,13 +473,15 @@ async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, sta
 
 
 async def _plugin_mail(sess: fs.Session, state: State, peer: Peer, head: fe.Peek,
-                       body: bytes) -> None:
+                       body: bytes, refusals: list[int] | None = None) -> None:
     """One plugin mail, in the order in the module docstring (steps 3-6).
     Its payload is never looked at here."""
     house_key = sess.peer_house_key
     assert head.slug is not None
     if head.slug not in peer.apps:
         # Unlisted: refused before any bucket is spent (review D7).
+        if refusals is not None:
+            refusals[0] += 1
         await sess.send(fs.Kind.MESSAGE_NACK, fs.nack_body(head.msg_id, fs.Nack.NOT_ALLOWED, 0))
         return
     wait = state.budgets.spend(house_key, head.slug, len(body))
@@ -464,10 +491,12 @@ async def _plugin_mail(sess: fs.Session, state: State, peer: Peer, head: fe.Peek
     env = fe.parse(body, sender=house_key, recipient=state.keys.house_key)
     emit("plugin_mail", house=house_key.hex(), envelope=env.to_bytes().hex(),
          hello_epoch=sess.peer.epoch.hex())
-    answer = await state.answer_for(env.msg_id)
+    answer = await state.answer_for(env.msg_id, PLUGIN_STORE_WAIT_SEC)
     if answer.stored:
         await sess.send(fs.Kind.MESSAGE_ACK, env.msg_id)
     else:
+        if refusals is not None and answer.reason is fs.Nack.NOT_ALLOWED:
+            refusals[0] += 1
         await sess.send(fs.Kind.MESSAGE_NACK,
                         fs.nack_body(env.msg_id, answer.reason, answer.retry_after))
 

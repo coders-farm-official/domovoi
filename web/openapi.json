@@ -20499,6 +20499,182 @@
         }
       }
     },
+    "/api/friend-houses/friends/{friend_id}/apps": {
+      "get": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Apps",
+        "operationId": "friend_houses_apps_api_friend_houses_friends__friend_id__apps_get",
+        "parameters": [
+          {
+            "name": "friend_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Friend Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Set Apps",
+        "operationId": "friend_houses_set_apps_api_friend_houses_friends__friend_id__apps_put",
+        "parameters": [
+          {
+            "name": "friend_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Friend Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/friends/{friend_id}/apps/{slug}": {
+      "put": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Set App",
+        "operationId": "friend_houses_set_app_api_friend_houses_friends__friend_id__apps__slug__put",
+        "parameters": [
+          {
+            "name": "friend_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Friend Id"
+            }
+          },
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/friends/{friend_id}/apps/{slug}/resume": {
+      "post": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Resume App",
+        "operationId": "friend_houses_resume_app_api_friend_houses_friends__friend_id__apps__slug__resume_post",
+        "parameters": [
+          {
+            "name": "friend_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Friend Id"
+            }
+          },
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/friend-houses/conversations": {
       "get": {
         "tags": [

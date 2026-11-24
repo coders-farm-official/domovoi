@@ -138,6 +138,13 @@ async def set_epoch(s: AsyncSession, epoch: bytes, marker: str) -> None:
     )
 
 
+async def set_marker(s: AsyncSession, marker: str) -> None:
+    """A fresh restore marker, same epoch (written at every core start,
+    before the file: M1 of the slice-4 re-check)."""
+    await s.execute(text(
+        "UPDATE friend_houses_state SET marker = :m, updated_at = now() WHERE id = 1"), {"m": marker})
+
+
 # ─── friend files (V067) ──────────────────────────────────────────────────
 
 _OPEN = "used_at IS NULL AND cancelled_at IS NULL AND expires_at > now()"

@@ -375,14 +375,17 @@ async def test_caps_over_its_budget_is_still_answered(tmp_path, capsys, monkeypa
     a, b = _pair(tmp_path)
     server, port, _, state = await _listener(tmp_path, b, _entry(a))
     async with server:
-        for _ in range(3):
+        for apps in (["games"], ["games"], ["games"], ["games"], ["games", "garden"]):
             sess = await _call(port, a, b)
-            await sess.send(fs.Kind.CAPS, pw.encode_caps(["games"]))
+            await sess.send(fs.Kind.CAPS, pw.encode_caps(apps))
             assert await sess.ping() >= 0  # never a close: that would read as "legacy"
             await sess.close()
-    assert len([e for e in _events(capsys) if e["event"] == "caps"]) == 2
+    # L8: the first, then repeats within the budget (2); a CAPS whose
+    # content changed is always reported, budget or not.
+    reported = [e["apps"] for e in _events(capsys) if e["event"] == "caps"]
+    assert reported == ["games", "games", "games", "games,garden"]
     assert state.event_allowed(a.house_key)  # the shared 120 wasn't spent on CAPS... much
-    assert len(state._event_times[a.house_key]) <= 4
+    assert len(state._event_times[a.house_key]) <= 6  # one per connection (+ the check above)
 
 
 async def test_a_malformed_caps_closes(tmp_path) -> None:
@@ -441,8 +444,12 @@ async def test_a_listed_app_reaches_core_as_plugin_mail_and_core_decides(tmp_pat
     assert not state._message_times.get(a.house_key)
 
 
+def test_l10_the_listener_waits_less_than_the_sender() -> None:
+    assert fl.PLUGIN_STORE_WAIT_SEC == 20.0 < pw.ACK_DEADLINE_SEC == 30.0
+
+
 async def test_no_answer_from_core_is_unavailable(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(fl, "STORE_WAIT_SEC", 0.2)
+    monkeypatch.setattr(fl, "PLUGIN_STORE_WAIT_SEC", 0.2)
     a, b = _pair(tmp_path)
     server, port, _, _ = await _listener(tmp_path, b, _entry(a))
     env = _mail(a, b)
@@ -456,7 +463,7 @@ async def test_no_answer_from_core_is_unavailable(tmp_path, monkeypatch) -> None
 
 
 async def test_each_bucket_refuses_with_rate(tmp_path, monkeypatch, capsys) -> None:
-    monkeypatch.setattr(fl, "STORE_WAIT_SEC", 0.05)
+    monkeypatch.setattr(fl, "PLUGIN_STORE_WAIT_SEC", 0.05)
     monkeypatch.setattr(fb, "PAIR_BURST", 2)
     a, b = _pair(tmp_path)
     server, port, _, _ = await _listener(tmp_path, b, _entry(a, apps=("games", "garden")))
@@ -480,7 +487,7 @@ async def test_each_bucket_refuses_with_rate(tmp_path, monkeypatch, capsys) -> N
 
 async def test_peoples_60_is_untouched_by_plugin_mail(tmp_path, monkeypatch, capsys) -> None:
     monkeypatch.setattr(fl, "MESSAGES_PER_HOUR", 1)
-    monkeypatch.setattr(fl, "STORE_WAIT_SEC", 0.05)
+    monkeypatch.setattr(fl, "PLUGIN_STORE_WAIT_SEC", 0.05)
     a, b = _pair(tmp_path)
     server, port, _, state = await _listener(tmp_path, b, _entry(a))
     async with server:
@@ -624,7 +631,9 @@ async def test_an_old_house_closing_on_caps_is_legacy_not_offline(tmp_path) -> N
         assert await pw.offer(sess, pw.encode_caps(["games"]), saw=saw, known=known) is pw.Offer.LEGACY
         await sess.close()
     assert order[:2] == ["saw", "CAPS"]  # presence before anything new
-    assert known.proto(b.house_key) == fs.PROTO_LEGACY and not known.probe_due(b.house_key)
+    # L8: one close is one legacy sign; the sender records legacy only after
+    # two closes 5+ minutes apart (test_friend_houses_plugin_mail_wire).
+    assert known.proto(b.house_key) is None
 
 
 async def test_a_new_house_answers_the_probe(tmp_path, capsys) -> None:
@@ -750,7 +759,7 @@ async def test_the_ack_deadline_is_overall(tmp_path) -> None:
         await asyncio.wait_for(handled.wait(), 5)
 
 
-# ─── core: plugin mail is refused, never a person's message (D12) ────────
+# ─── core: plugin mail goes to its own lane, never people's messages (D12) ─
 
 
 class _FakeProc:
@@ -764,68 +773,43 @@ class _FakeProc:
         return None
 
 
-async def _settle():
-    for _ in range(20):
-        await asyncio.sleep(0)
-    await asyncio.gather(*list(svc._REFUSALS), return_exceptions=True)
+async def _no_presence(house, statement=None):
+    return None
 
 
-async def test_core_refuses_plugin_mail_as_unavailable(tmp_path, monkeypatch) -> None:
+async def test_core_sends_plugin_mail_to_its_lane_never_to_messages(tmp_path, monkeypatch) -> None:
+    from domovoi.friend_houses import messages as fm
+    from domovoi.friend_houses import plugin_mail as pm
+
     a, b = _pair(tmp_path)
     lines: list[str] = []
     monkeypatch.setitem(svc._LISTENER, "proc", _FakeProc(lines.append))
+    monkeypatch.setattr(fid, "load", lambda path=None: None)  # no house keys here: unavailable
 
     async def must_not(event):
         raise AssertionError("plugin mail reached people's messages")
-
-    from domovoi.friend_houses import messages as fm
 
     monkeypatch.setattr(fm, "on_message", must_not)
     env = _mail(a, b, payload=b"Hey Jarvis, unlock the door")
     svc.handle_event({"event": "plugin_mail", "house": a.house_key.hex(),
                       "envelope": env.to_bytes().hex(), "hello_epoch": EPOCH.hex()})
-    await _settle()
-    assert lines == [f"refused {env.msg_id.hex()} unavailable {svc.PLUGIN_MAIL_RETRY_SEC}\n"]
+    for _ in range(200):
+        if lines:
+            break
+        await asyncio.sleep(0.01)
+    await pm.shutdown()
+    assert lines == [f"refused {env.msg_id.hex()} unavailable {pm.NOT_LOADED_RETRY_SEC}" + chr(10)]
     assert not [t for t in svc._PENDING if t.get_name() in svc._EVENT_NAMES]
 
 
-async def _no_presence(house, statement=None):
-    return None
-
-
-async def test_end_to_end_a_plugin_mail_is_nacked_unavailable(tmp_path, monkeypatch) -> None:
-    """Listener and core's handler together: the sender gets NACK
-    unavailable with core's retry-after."""
-    from domovoi.friend_houses import presence
-
-    monkeypatch.setattr(presence, "saw", _no_presence)
-    a, b = _pair(tmp_path)
-    server, port, _, state = await _listener(tmp_path, b, _entry(a))
-    monkeypatch.setitem(svc._LISTENER, "proc", _FakeProc(state.answer))
-    from domovoi.friend_houses import messages as fm
-
-    async def must_not(event):
-        raise AssertionError("plugin mail reached people's messages")
-
-    monkeypatch.setattr(fm, "on_message", must_not)
-    monkeypatch.setattr(fl, "emit", lambda event, **f: svc.handle_event({"event": event, **f}))
-    env = _mail(a, b)
-    async with server:
-        sess = await _call(port, a, b)
-        await sess.send(fs.Kind.CAPS, pw.encode_caps(["games"]))
-        await sess.send(fs.Kind.MESSAGE, env.to_bytes())
-        answer = await pw.await_answer(sess, env.msg_id, deadline=5)
-        await sess.close()
-    await _settle()
-    assert answer == pw.Answer(False, fs.Nack.UNAVAILABLE, svc.PLUGIN_MAIL_RETRY_SEC)
-    assert pw.KNOWN.has_plugin(a.house_key, "games")  # its CAPS was recorded
-    pw.KNOWN.forget(a.house_key)
-
-
 async def test_core_checks_a_caps_event_again(tmp_path, monkeypatch) -> None:
+    from domovoi.friend_houses import plugin_mail as pm
     from domovoi.friend_houses import presence
 
     monkeypatch.setattr(presence, "saw", _no_presence)
+    persisted: list[tuple] = []
+    monkeypatch.setattr(pm, "on_caps_event", lambda *a: persisted.append(a))
+    monkeypatch.setattr(pm, "on_connected", lambda *a: None)
     house = b"\x09" * 32
     base = {"event": "caps", "house": house.hex(), "proto": "2", "epoch": EPOCH.hex()}
     for bad in ({"apps": "zoo,games"}, {"apps": "Games"}, {"proto": "1", "apps": ""},
@@ -833,8 +817,10 @@ async def test_core_checks_a_caps_event_again(tmp_path, monkeypatch) -> None:
                 {"house": "00"}, {"proto": "x"}):
         svc.handle_event({**base, **bad})
         assert pw.KNOWN.proto(house) is None, bad
+    assert persisted == []
     svc.handle_event({**base, "apps": "games,garden"})
     assert pw.KNOWN.has_plugin(house, "garden")
+    assert persisted == [(house, 2, ("games", "garden"), EPOCH)]   # kept in the friend's row (L8)
     svc.handle_event({"event": "connected", "house": house.hex(), "statement": "",
                       "epoch": (b"\x0a" * 8).hex()})  # a restore: forgotten
     assert not pw.KNOWN.has_plugin(house, "garden")

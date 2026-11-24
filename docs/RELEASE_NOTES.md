@@ -4,6 +4,32 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Friend Houses: apps with friends
+
+- **What changed.** Plugins with the `friend_houses` permission can now
+  receive mail from the same plugin in a friend's house ("apps with
+  friends"). An admin turns **"Apps with this friend"** on per friend and
+  allows each such plugin for that friend; a plugin installed later starts
+  allowed for nobody until an admin confirms it. Turning it on is
+  announced like a new friend. Mail is stored before it is acknowledged,
+  decoded only in that friend's own decode-only container, and handed to
+  the plugin with every piece of text marked as a friend's. A friend whose
+  mail keeps failing for one plugin is paused for that plugin only (an
+  hour, doubling to a day) and the admin is told why, including when a
+  mail made Domovoi restart; other friends carry on. Plugin mail also
+  gets a per-friend budget of 16 MiB an hour. New admin routes:
+  `GET`/`PUT /v1/admin/friend-houses/friends/{id}/apps`,
+  `PUT …/apps/{slug}` and `POST …/apps/{slug}/resume` (security tier at
+  both hops, and their `/api/friend-houses/...` mirrors on the dashboard).
+- **What to know.** Migration V084 adds the tables. Turning apps off with
+  a friend, revoking an app, disabling or uninstalling the plugin, or
+  removing or blocking the friend deletes that app's waiting mail with the
+  friend; going dark keeps it until it expires (3 days at most). Disabling
+  a plugin now waits for an install or upgrade in progress. The dashboard's
+  apps section and plugins sending mail come later in 1.5.0; a plugin's
+  friend list is still empty until then. The listener's image is rebuilt
+  once after the upgrade (its code changed).
+
 ## 1.5.0 (unreleased) — Plugins: SDK 1.18 for apps with friends
 
 - **What changed.** The plugin SDK is 1.18. A plugin with the
@@ -14,8 +40,8 @@ a way that would otherwise get reported as a bug.
   The install screen now says what a `friend_houses` plugin does with
   friend houses, and flags one that also has routes anyone on the network
   can call; the core logs a warning when it loads one.
-- **What to know.** Nothing is exchanged yet: until the plugin mail
-  service arrives later in 1.5.0, a plugin's friend list is empty and
+- **What to know.** Receiving works (see "apps with friends" above); until
+  sending arrives later in 1.5.0, a plugin's friend list is empty and
   sending raises "Friend Houses for apps isn't available yet". "Apps with
   this friend" is not on the Friend Houses page yet. A plugin that asks for
   `domovoi_api = ">=1.18"` won't load on an older core.
@@ -33,10 +59,8 @@ a way that would otherwise get reported as a bug.
   7,200 and 64 MiB per house); people's 60 messages an hour per friend now
   count text and list changes only. The listener's friend list carries
   each friend's allowed apps (`"apps"` in `friends.json`).
-- **What to know.** Nothing is sent or accepted yet: no friend has "Apps
-  with this friend" on until the plugin mail service and its page arrive
-  later in 1.5.0, and until then the core refuses every plugin mail as
-  "unavailable"; none reaches the house inbox. Houses before 1.5.0 are
+- **What to know.** Plugin mail never reaches the house inbox; what is
+  accepted is described under "apps with friends" above. Houses before 1.5.0 are
   unaffected: people's messages, lists and presence work as before in a
   mixed pair, an older house is never sent the new frames on a connection
   that carries people's messages, and one that closes on `CAPS` is

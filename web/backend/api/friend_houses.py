@@ -282,6 +282,68 @@ async def friend_houses_unfriend(friend_id: str, request: Request):
     )
 
 
+# ─── apps with friends (SDK 1.18): the security tier at both hops ────────
+# "Apps with this friend" (design FRIEND-HOUSES-PLUGINS §6.11): an admin's
+# toggle per friend, each plugin allowed or not, and Resume after a pause.
+# Never on the household tier.
+
+_SLUG = re.compile(r"^[a-z][a-z0-9_]{1,31}\Z")
+
+
+class AppsBody(BaseModel):
+    on: bool
+    apps: list[str] | None = Field(default=None, max_length=32)
+
+
+class AppBody(BaseModel):
+    allowed: bool
+
+
+def _slug(value: str) -> str:
+    if not _SLUG.match(value or ""):
+        raise HTTPException(status_code=404, detail="No such app.")
+    return value
+
+
+@router.get("/friends/{friend_id}/apps", dependencies=READ)
+async def friend_houses_apps(friend_id: str, request: Request):
+    fid = _id(friend_id, "friend house")
+    return bridge_response(
+        *await get_admin(f"{CORE}/friends/{fid}/apps", headers=auth_forward_headers(request))
+    )
+
+
+@router.put("/friends/{friend_id}/apps", dependencies=WRITE)
+async def friend_houses_set_apps(friend_id: str, request: Request):
+    fid = _id(friend_id, "friend house")
+    body = await _body(request, AppsBody)
+    if any(not isinstance(s, str) or not _SLUG.match(s) for s in body.get("apps") or []):
+        raise HTTPException(status_code=400, detail="That request wasn't understood.")
+    return bridge_response(
+        *await put_admin(f"{CORE}/friends/{fid}/apps", body, timeout=60.0,
+                         headers=auth_forward_headers(request))
+    )
+
+
+@router.put("/friends/{friend_id}/apps/{slug}", dependencies=WRITE)
+async def friend_houses_set_app(friend_id: str, slug: str, request: Request):
+    fid, app_slug = _id(friend_id, "friend house"), _slug(slug)
+    body = await _body(request, AppBody)
+    return bridge_response(
+        *await put_admin(f"{CORE}/friends/{fid}/apps/{app_slug}", body, timeout=60.0,
+                         headers=auth_forward_headers(request))
+    )
+
+
+@router.post("/friends/{friend_id}/apps/{slug}/resume", dependencies=WRITE)
+async def friend_houses_resume_app(friend_id: str, slug: str, request: Request):
+    fid, app_slug = _id(friend_id, "friend house"), _slug(slug)
+    return bridge_response(
+        *await post_admin(f"{CORE}/friends/{fid}/apps/{app_slug}/resume", {},
+                          headers=auth_forward_headers(request))
+    )
+
+
 # ─── messages (F3) ───────────────────────────────────────────────────────
 # A message body only ever travels in a POST body (send) or a response
 # body (a conversation, an export): never in a URL or a log line. A

@@ -48,12 +48,24 @@ tmpfs, no mounts, no capabilities, no new privileges, a fixed unprivileged
 uid, memory with swap equal to it, processes, CPU and file caps, no
 environment, no logs. Its stderr goes nowhere (D9).
 
-**Faults** (D3): a timeout, a crash or a broken stream refuses the item
-(``outcome`` ``fault``), kills that friend's container, and backs off that
-friend only. An item that faulted :data:`ITEM_FAULTS_MAX` times is dropped
-for good. :data:`BREAKER_FAULTS` faults from one friend within
-:data:`BREAKER_WINDOW_SEC` pause that friend's items for this plugin (the
-pause doubles on each repeat) and tell :data:`PAUSE_LISTENERS`; every other
+**Faults** (D3, after the slice-4 re-check M3/M4): the container writes
+:data:`READY_BYTE` once it is up, and the decode timer starts only after
+it. A timeout, a crash or a broken stream **while this friend's request is
+in flight on a ready container** refuses the item (``outcome`` ``fault``),
+kills that friend's container, backs off that friend only, and charges its
+breaker weight 1. A failure before readiness, a container that dies idle,
+or a host event (two or more containers dying within :data:`HOST_EVENT_SEC`,
+or Docker unreachable) charges nobody: ``unavailable``, and one notice
+about Docker (:data:`DOCKER_NOTICE`). The breaker (:class:`Breaker`) counts
+in integer hundredths: 300 within an hour pauses that friend's items for
+this plugin (the pause doubles, to a day); 150 refusals (the decoder said
+no, or the schema refused it) pause for a fixed hour, "versions". A reply
+that fails core's re-check, or pixels of the wrong length, weigh 1; no
+schema registered yet is ``unavailable``. With the Friend Houses service
+as :data:`CHARGE_SINK` the pair row is authoritative and the pool's
+breaker is its cache. At most :data:`MAX_DECODES_PER_FRIEND` decodes run
+for one friend across all plugins (L6), and an item over 80% of its
+deadline weighs 0.1. :data:`PAUSE_LISTENERS` hear every pause; every other
 friend carries on.
 
 **Replies** (D9, :func:`canonical`): size, UTF-8, depth, total nodes, keys
@@ -185,16 +197,132 @@ IMAGE_OUT_MAX = 2560 * 1024
 REPLY_FRAME_MAX = 5 + REPLY_MAX
 PIXELS_FRAME_MAX = 5 + 5 + IMAGE_MAX_SIDE * IMAGE_MAX_SIDE * 4
 
-# ── faults (D3) ──
+# ── faults (D3; weights and readiness after the slice-4 re-check, M3/M4) ──
 BACKOFF_FIRST_SEC = 1.0
 BACKOFF_MAX_SEC = 60.0
 ITEM_FAULTS_MAX = 2
-BREAKER_FAULTS = 3
 BREAKER_WINDOW_SEC = 3600.0
 BREAKER_PAUSE_SEC = 3600.0
 BREAKER_PAUSE_MAX_SEC = 24 * 3600.0
 BUILD_RETRY_SEC = 300.0
 GATE_RETRY_SEC = 30.0
+# M3: the container writes this one byte once it is up; the decode timer
+# starts only after it. A failure before it is "unavailable", weight 0.
+READY_BYTE = b"\x01"
+READY_TIMEOUT_SEC = 60.0
+# M3: two or more containers dying within this long of each other is a
+# host event (Docker restarted, the host ran out of memory): nobody is charged.
+HOST_EVENT_SEC = 5.0
+# L6: at most this many decodes at once for one friend, across all plugins.
+MAX_DECODES_PER_FRIEND = 2
+SLOW_FRACTION = 0.8
+
+# M4: the breaker's weights, in integer hundredths (no float sums).
+W_FAULT = 100            # decoder fault on a ready container, this request in flight
+W_RECHECK = 100          # the reply failed core's re-check, or the pixel length is wrong
+W_HANDLER = 100          # the plugin's handler raised or timed out
+W_RESTART_DECODING = 100  # core stopped uncleanly while the row was decoding
+W_RESTART_HANDLING = 300  # ...while the row was handling: it took the core down (H1)
+W_SLOW = 10              # an item used more than 80% of its decode deadline (L6)
+W_REFUSAL = 2            # the decoder said no, or a schema refusal (counted apart)
+BREAKER_THRESHOLD = 300  # hundredths within the last hour
+VERSIONS_REFUSALS = 150  # refusals within the last hour: the versions pause
+VERSIONS_PAUSE_SEC = 3600
+FAULT_EVENTS_MAX = 64
+REFUSALS_KEPT_MAX = 160
+PAUSE_RESET_AFTER_SEC = 24 * 3600
+#: Event kinds in the breaker's record: decoder, handler, restart, slow.
+KIND_DECODER, KIND_HANDLER, KIND_RESTART, KIND_SLOW = "d", "h", "r", "s"
+#: What a charge sink is told for a refusal (counted in refusal_times).
+KIND_REFUSAL = "refusal"
+PAUSE_CAUSES = ("faults", "restart", "versions", "handler")
+
+
+@dataclass
+class Breaker:
+    """One (friend, plugin)'s breaker on the wall clock (design §6.7): the
+    same rules whether it lives in a pool's memory or, authoritative, in
+    the Friend Houses pair row (``fault_events``, ``refusal_times``,
+    ``paused_until``, ``pause_cause``, ``next_pause_sec``, ``last_pause_at``)."""
+
+    events: list[list[Any]] = field(default_factory=list)   # [unix_ts, hundredths, kind]
+    refusals: list[float] = field(default_factory=list)
+    paused_until: float = 0.0
+    cause: str | None = None
+    next_pause: int = int(BREAKER_PAUSE_SEC)
+    last_pause_at: float | None = None
+
+    def paused(self, now: float) -> bool:
+        return now < self.paused_until
+
+    def _prune(self, now: float) -> None:
+        self.events = [e for e in self.events if now - float(e[0]) < BREAKER_WINDOW_SEC][-FAULT_EVENTS_MAX:]
+        self.refusals = [t for t in self.refusals if now - float(t) < BREAKER_WINDOW_SEC][-REFUSALS_KEPT_MAX:]
+
+    def _fresh_length(self, now: float) -> None:
+        if self.last_pause_at is not None and now - self.last_pause_at >= PAUSE_RESET_AFTER_SEC:
+            self.next_pause = int(BREAKER_PAUSE_SEC)
+
+    def charge(self, now: float, hundredths: int, kind: str) -> int | None:
+        """Record one event; the pause length in seconds when it trips."""
+        self._prune(now)
+        if hundredths <= 0:
+            return None
+        self.events.append([int(now), int(hundredths), kind])
+        self.events = self.events[-FAULT_EVENTS_MAX:]
+        if sum(int(e[1]) for e in self.events) < BREAKER_THRESHOLD:
+            return None
+        self._fresh_length(now)
+        cause = pause_cause(self.events)
+        pause = self.next_pause
+        self.paused_until, self.cause, self.last_pause_at = now + pause, cause, now
+        self.next_pause = min(2 * self.next_pause, int(BREAKER_PAUSE_MAX_SEC))
+        self.events = []
+        return pause
+
+    def refusal(self, now: float) -> int | None:
+        """Record one refusal (0.02 each); the versions pause when it trips.
+        That pause is a fixed hour and does not double."""
+        self._prune(now)
+        self.refusals.append(int(now))
+        self.refusals = self.refusals[-REFUSALS_KEPT_MAX:]
+        if len(self.refusals) < VERSIONS_REFUSALS:
+            return None
+        self.paused_until, self.cause, self.last_pause_at = now + VERSIONS_PAUSE_SEC, "versions", now
+        self.refusals = []
+        return VERSIONS_PAUSE_SEC
+
+    def resume(self) -> None:
+        """An admin's Resume: the pause ends and its length starts over (L11)."""
+        self.events, self.refusals = [], []
+        self.paused_until, self.cause, self.next_pause = 0.0, None, int(BREAKER_PAUSE_SEC)
+
+
+def pause_cause(events: list[list[Any]]) -> str:
+    """``restart`` if a weight-300 event is in the window, else ``handler``
+    if handler events make up most of the sum, else ``faults``."""
+    if any(int(e[1]) >= W_RESTART_HANDLING for e in events):
+        return "restart"
+    total = sum(int(e[1]) for e in events)
+    handler = sum(int(e[1]) for e in events if len(e) > 2 and e[2] == KIND_HANDLER)
+    return "handler" if total and handler * 2 > total else "faults"
+
+
+#: Set by the Friend Houses plugin mail service: every charge goes there
+#: (the pair row is authoritative), as ``await sink(slug, friend, item_key,
+#: hundredths, why, kind)``; it returns the friend's breaker after the
+#: charge, which the pool keeps as its cache. Unset, a pool keeps its own.
+ChargeSink = Callable[[str, str, "str | None", int, str, str], Awaitable["Breaker | None"]]
+CHARGE_SINK: ChargeSink | None = None
+
+#: The last host event or Docker problem, for one notice (M3).
+DOCKER_NOTICE: dict[str, Any] = {"at": None, "why": None}
+_DEATHS: collections.deque = collections.deque(maxlen=32)
+_DECODING: dict[str, int] = {}
+
+
+def note_docker_problem(why: str) -> None:
+    DOCKER_NOTICE.update(at=time.time(), why=why[:200])
 
 DOCKERFILE_TEMPLATE = """\
 # A plugin's decode-only container, written by the Domovoi core
@@ -786,32 +914,34 @@ class ImageChunks:
     """An image sent in pieces, put back together by the core as opaque
     bytes (D10): the plugin never holds them. :meth:`add` returns the whole
     image once its last piece is in; the core then makes one image request
-    (:meth:`DecoderPool.decode_image`). Bounded: pieces per image, bytes per
-    image, images in progress per friend and in all, and an expiry."""
+    (:meth:`DecoderPool.decode_image`). Keyed by ``(slug, friend, blob)``
+    (L13e), so two plugins' pieces from one friend never meet. Bounded:
+    pieces per image, bytes per image, images in progress per friend and in
+    all, and an expiry."""
 
     def __init__(self, *, max_bytes: int = PAYLOAD_MAX, max_parts: int = 32, per_friend: int = 4,
                  total: int = 32, ttl_sec: float = 600.0, clock: Callable[[], float] = time.monotonic) -> None:
         self.max_bytes, self.max_parts, self.per_friend, self.total = max_bytes, max_parts, per_friend, total
         self.ttl_sec, self._clock = ttl_sec, clock
-        self._sets: dict[tuple[str, str], tuple[float, int, dict[int, bytes]]] = {}
+        self._sets: dict[tuple[str, str, str], tuple[float, int, dict[int, bytes]]] = {}
 
     def _expire(self) -> None:
         now = self._clock()
         for k in [k for k, (born, _, _) in self._sets.items() if now - born > self.ttl_sec]:
             del self._sets[k]
 
-    def discard(self, friend: str, key: str) -> None:
-        self._sets.pop((friend, key), None)
+    def discard(self, slug: str, friend: str, key: str) -> None:
+        self._sets.pop((slug, friend, str(key)[:64]), None)
 
-    def add(self, friend: str, key: str, index: int, count: int, data: bytes) -> bytes | None:
+    def add(self, slug: str, friend: str, key: str, index: int, count: int, data: bytes) -> bytes | None:
         self._expire()
-        k = (friend, str(key)[:64])
+        k = (slug, friend, str(key)[:64])
         if not (1 <= count <= self.max_parts and 0 <= index < count) or not isinstance(data, bytes):
             self.discard(*k)
             raise ValueError("a bad piece")
         entry = self._sets.get(k)
         if entry is None:
-            if sum(1 for f, _ in self._sets if f == friend) >= self.per_friend or len(self._sets) >= self.total:
+            if sum(1 for s, f, _ in self._sets if f == friend) >= self.per_friend or len(self._sets) >= self.total:
                 raise ValueError("too many images in progress")
             entry = (self._clock(), count, {})
             self._sets[k] = entry
@@ -837,9 +967,16 @@ class DecodeResult:
 
     ``outcome``: ``ok``; ``refused`` (the decoder or a check said no:
     final); ``fault`` (the container hung, crashed or broke the stream on
-    this item: counted against it and its friend); ``dropped`` (the item
-    faulted :data:`ITEM_FAULTS_MAX` times: final); ``unavailable`` (not
-    tried: building, restarting, busy or the friend is paused)."""
+    this item while it was in flight on a ready container: counted against
+    the item and its friend); ``dropped`` (the item faulted
+    :data:`ITEM_FAULTS_MAX` times: final); ``unavailable`` (not tried, or
+    not this friend's fault: building, starting, not ready, busy, a host
+    event, no schema yet, or the friend is paused).
+
+    ``charge`` says what a refusal was charged as: ``refusal`` (the decoder
+    said no, or the schema refused it: 0.02, counted apart) or ``recheck``
+    (the reply failed core's own re-check, or the pixels don't match the
+    size: weight 1). ``elapsed_ms`` is how long the request ran."""
 
     ok: bool
     value: Any = None
@@ -849,6 +986,8 @@ class DecodeResult:
     # An image request's answer: the core's own PNG.
     image: bytes | None = None
     media_type: str = ""
+    charge: str = ""
+    elapsed_ms: int = 0
 
     @property
     def retry(self) -> bool:
@@ -859,15 +998,26 @@ def _unavailable(why: str) -> DecodeResult:
     return DecodeResult(False, reason=why, outcome="unavailable")
 
 
-def _refused(why: str) -> DecodeResult:
-    return DecodeResult(False, reason=why[:REASON_MAX * 2], outcome="refused")
+def _refused(why: str, charge: str = "refusal", elapsed_ms: int = 0) -> DecodeResult:
+    return DecodeResult(False, reason=why[:REASON_MAX * 2], outcome="refused", charge=charge,
+                        elapsed_ms=elapsed_ms)
 
 
 _SAFE_REASON = re.compile(r"[^A-Za-z0-9 .,:;_()'/-]")
 
 
 class _Broken(Exception):
-    """The stream can't be trusted any more: kill the container."""
+    """The stream can't be trusted any more: kill the container. ``died``:
+    the container's stream ended (an exit, an OOM kill, Docker restarting),
+    which may be a host event; otherwise it broke the protocol."""
+
+    def __init__(self, why: str, *, died: bool = False) -> None:
+        super().__init__(why)
+        self.died = died
+
+
+class _NotReady(Exception):
+    """The container never said it was ready (M3): not the friend's fault."""
 
 
 Spawn = Callable[[list[str]], Awaitable[Any]]
@@ -889,7 +1039,7 @@ async def _spawn_docker(argv: list[str]) -> Any:
 
 class _Instance:
     """One friend's container: one request at a time; a byte it writes
-    unasked kills it."""
+    unasked kills it. It must first write :data:`READY_BYTE` (M3)."""
 
     def __init__(self, pool: "DecoderPool", friend: str, slot: int) -> None:
         self.pool, self.friend, self.slot = pool, friend, slot
@@ -899,6 +1049,7 @@ class _Instance:
         self.last_used = pool._clock()
         self.dead: str | None = None
         self.gone = False            # evicted or reaped: its items aren't its fault
+        self.ready = asyncio.Event()
         self._reader: asyncio.Task | None = None
         self._waiter: asyncio.Future | None = None
         self._frame_max = REPLY_FRAME_MAX
@@ -912,14 +1063,31 @@ class _Instance:
         self.proc = await self.pool._spawn(run_args(self.pool.slug, self.slot, image_id))
         self._reader = asyncio.ensure_future(self._read())
 
+    async def wait_ready(self, timeout: float) -> None:
+        """Until the container said it is up (_NotReady otherwise)."""
+        if self.ready.is_set():
+            return
+        try:
+            await asyncio.wait_for(self.ready.wait(), timeout)
+        except asyncio.TimeoutError:
+            raise _NotReady("the decoder didn't start in time") from None
+        if self.dead is not None:
+            raise _NotReady(self.dead)
+
     def _die(self, why: str) -> None:
         if self.dead is None:
             self.dead = why
+            self.ready.set()  # wakes a waiter, which sees ``dead``
             asyncio.ensure_future(self.pool._unasked(self))
 
     async def _read(self) -> None:
         out = self.proc.stdout
         try:
+            first = await out.readexactly(1)
+            if first != READY_BYTE:
+                self._die("the decoder didn't start properly")
+                return
+            self.ready.set()
             while True:
                 first = await out.readexactly(1)
                 w = self._waiter
@@ -936,7 +1104,7 @@ class _Instance:
         except (asyncio.IncompleteReadError, ConnectionError, ValueError, OSError):
             w = self._waiter
             if w is not None and not w.done():
-                w.set_exception(_Broken("the decoder stopped"))
+                w.set_exception(_Broken("the decoder stopped", died=True))
             elif self.dead is None:
                 self._die("the decoder stopped")
 
@@ -946,9 +1114,11 @@ class _Instance:
         return await waiter
 
     async def request(self, kind: int, meta: bytes, payload: bytes, timeout: float) -> tuple[int, bytes]:
-        """``(status, data)``; TimeoutError or :class:`_Broken` otherwise."""
+        """``(status, data)``; TimeoutError or :class:`_Broken` otherwise.
+        Only called on a ready container, so the timer covers the request
+        alone, never the container's start (M3)."""
         if self.dead is not None:
-            raise _Broken(self.dead)
+            raise _Broken(self.dead, died=True)
         self._rid = (self._rid + 1) & 0xFFFFFFFF
         rid = self._rid
         self._frame_max = PIXELS_FRAME_MAX if kind == KIND_IMAGE else REPLY_FRAME_MAX
@@ -990,18 +1160,31 @@ class _Instance:
 
 @dataclass
 class _Friend:
-    """What the pool remembers about one friend (D3)."""
+    """What the pool remembers about one friend: the container's restart
+    backoff, and its breaker (a cache of the pair row when the Friend
+    Houses service is the charge sink)."""
 
     backoff: float = BACKOFF_FIRST_SEC
     retry_at: float = 0.0
-    faults: collections.deque = field(default_factory=collections.deque)
-    paused_until: float = 0.0
-    pause: float = BREAKER_PAUSE_SEC
+    breaker: Breaker = field(default_factory=Breaker)
 
 
-#: Told when a friend is paused for a plugin: ``listener(slug, friend, why)``.
-#: The Friend Houses plugin-mail service adds the admin's notice here.
-PAUSE_LISTENERS: list[Callable[[str, str, str], Any]] = []
+#: Told when a friend is paused for a plugin:
+#: ``listener(slug, friend, pause_sec, cause, after_restart)``; ``cause`` is
+#: one of :data:`PAUSE_CAUSES`. The Friend Houses service adds the admin's
+#: notice here.
+PAUSE_LISTENERS: list[Callable[[str, str, int, str, bool], Any]] = []
+
+
+def notify_pause(slug: str, friend: str, pause_sec: int, cause: str, after_restart: bool) -> None:
+    log.warning("plugin %s: a friend's items are paused for %d min (%s%s)", slug, pause_sec // 60,
+                cause, ", after a restart" if after_restart else "")
+    for listener in list(PAUSE_LISTENERS):
+        try:
+            listener(slug, friend, pause_sec, cause, after_restart)
+        except Exception as e:  # noqa: BLE001 — a listener never stops the pool
+            log.warning("plugin %s: a pause listener failed: %s", slug, e)
+
 
 _LIVE: list[_Instance] = []
 
@@ -1021,6 +1204,9 @@ class DecoderPool:
         timeout: float = DECODE_TIMEOUT_SEC,
         image_timeout: float = IMAGE_TIMEOUT_SEC,
         clock: Callable[[], float] = time.monotonic,
+        wall: Callable[[], float] = time.time,
+        ready_timeout: float = READY_TIMEOUT_SEC,
+        host_event_sec: float = HOST_EVENT_SEC,
     ) -> None:
         self.slug = slug
         self.install_dir = install_dir
@@ -1030,7 +1216,10 @@ class DecoderPool:
         self._gate = gate or default_gate
         self.timeout = timeout
         self.image_timeout = image_timeout
+        self.ready_timeout = ready_timeout
+        self.host_event_sec = host_event_sec
         self._clock = clock
+        self._wall = wall
         self.image_id: str | None = None
         self.image_state = "none"        # none | waiting | building | ready | failed
         self.problem: str | None = None
@@ -1094,7 +1283,7 @@ class DecoderPool:
     def set_schema(self, schema: Any) -> None:
         self.schema = compile_schema(schema)
 
-    # ── friends and faults (D3) ──
+    # ── friends and the breaker (D3, M3, M4) ──
     def _friend(self, friend: str) -> _Friend:
         st = self.friends.get(friend)
         if st is None:
@@ -1103,43 +1292,74 @@ class DecoderPool:
 
     def paused(self, friend: str) -> bool:
         st = self.friends.get(friend)
-        return st is not None and self._clock() < st.paused_until
+        return st is not None and st.breaker.paused(self._wall())
+
+    def adopt(self, friend: str, breaker: Breaker) -> None:
+        """The authoritative breaker (the pair row) replaces the cache."""
+        self._friend(friend).breaker = breaker
 
     def resume(self, friend: str) -> None:
-        """An admin let the friend's items through again."""
+        """An admin let the friend's items through again: the pause ends
+        and its length starts over (L11)."""
         st = self.friends.get(friend)
         if st is not None:
-            st.paused_until, st.retry_at, st.backoff = 0.0, 0.0, BACKOFF_FIRST_SEC
-            st.faults.clear()
+            st.retry_at, st.backoff = 0.0, BACKOFF_FIRST_SEC
+            st.breaker.resume()
 
-    async def _fault(self, inst: _Instance, item_key: str | None, why: str) -> DecodeResult:
+    async def charge(self, friend: str, item_key: str | None, hundredths: int, why: str,
+                     kind: str = KIND_DECODER) -> None:
+        """Charge ``friend``'s breaker for this plugin. Needs no live
+        container. With the Friend Houses service as the sink the pair row
+        is charged (and the pool adopts the result); else the pool keeps it."""
+        sink = CHARGE_SINK
+        if sink is not None:
+            try:
+                state = await sink(self.slug, friend, item_key, hundredths, why, kind)
+            except Exception as e:  # noqa: BLE001 — a failed charge never stops decoding
+                log.warning("plugin %s: charging a friend's breaker failed: %s", self.slug, e)
+                return
+            if state is not None:
+                self.adopt(friend, state)
+            return
+        b = self._friend(friend).breaker
+        now = self._wall()
+        pause = b.refusal(now) if kind == KIND_REFUSAL else b.charge(now, hundredths, kind)
+        if pause:
+            notify_pause(self.slug, friend, pause, b.cause or "faults", kind == KIND_RESTART)
+
+    async def _fault(self, inst: _Instance, item_key: str | None, why: str, *,
+                     charged: bool, elapsed_ms: int = 0) -> DecodeResult:
+        """The container is dropped and restarts after a backoff. Charged
+        only when this friend's request was in flight on a ready container
+        and it wasn't a host event (M3)."""
         await self._drop(inst)
         now = self._clock()
         st = self._friend(inst.friend)
         st.retry_at = now + st.backoff
         st.backoff = min(st.backoff * 2, BACKOFF_MAX_SEC)
         self.restarts += 1
-        st.faults.append(now)
-        while st.faults and now - st.faults[0] > BREAKER_WINDOW_SEC:
-            st.faults.popleft()
-        if len(st.faults) >= BREAKER_FAULTS:
-            note = (f"{len(st.faults)} decoder faults within an hour; this friend's items "
-                    f"are paused for {int(st.pause / 60)} min")
-            st.paused_until = now + st.pause
-            st.pause = min(st.pause * 2, BREAKER_PAUSE_MAX_SEC)
-            st.faults.clear()
-            log.warning("plugin %s: a friend's items are paused: %s", self.slug, note)
-            for listener in list(PAUSE_LISTENERS):
-                try:
-                    listener(self.slug, inst.friend, note)
-                except Exception as e:  # noqa: BLE001 — a listener never stops the pool
-                    log.warning("plugin %s: a pause listener failed: %s", self.slug, e)
+        if not charged:
+            return DecodeResult(False, reason=why, outcome="unavailable", elapsed_ms=elapsed_ms)
         if item_key is not None:
             self.item_faults[item_key] = self.item_faults.get(item_key, 0) + 1
             self.item_faults.move_to_end(item_key)
             while len(self.item_faults) > 4096:
                 self.item_faults.popitem(last=False)
-        return DecodeResult(False, reason=why, outcome="fault")
+        await self.charge(inst.friend, item_key, W_FAULT, why, KIND_DECODER)
+        return DecodeResult(False, reason=why, outcome="fault", elapsed_ms=elapsed_ms)
+
+    async def _host_event(self) -> bool:
+        """Whether a container's death was a host event: another container
+        died within :data:`HOST_EVENT_SEC` of it (waits that long to see)."""
+        token, died_at = object(), time.monotonic()
+        _DEATHS.append((token, died_at))
+        await asyncio.sleep(self.host_event_sec)
+        window = max(self.host_event_sec, 0.001)
+        if any(tok is not token and abs(t - died_at) <= window for tok, t in list(_DEATHS)):
+            note_docker_problem("several decoder containers stopped at once (Docker restarted, "
+                                "or the server ran short of memory); no friend was charged")
+            return True
+        return False
 
     # ── containers (D2) ──
     async def _drop(self, inst: _Instance) -> None:
@@ -1150,10 +1370,12 @@ class DecoderPool:
         await inst.kill()
 
     async def _unasked(self, inst: _Instance) -> None:
-        """The container wrote between requests: a fault of that friend's."""
+        """The container wrote between requests, or stopped while idle: it
+        is dropped and restarts after a backoff, and nobody is charged: no
+        request of the friend's was in flight (M3)."""
         async with inst.lock:
             if not inst.gone and self.instances.get(inst.friend) is inst:
-                await self._fault(inst, None, inst.dead or "the decoder broke its stream")
+                await self._fault(inst, None, inst.dead or "the decoder broke its stream", charged=False)
 
     async def _make_room(self) -> int | None:
         """A free slot, evicting the least recently used idle container
@@ -1206,6 +1428,7 @@ class DecoderPool:
                 st.retry_at = self._clock() + st.backoff
                 st.backoff = min(st.backoff * 2, BACKOFF_MAX_SEC)
                 await inst.kill()
+                note_docker_problem(f"a decoder container couldn't start: {e}")
                 return _unavailable(f"the decoder couldn't start: {e}"[:REASON_MAX * 2])
             self.instances[friend] = inst
             _LIVE.append(inst)
@@ -1233,59 +1456,103 @@ class DecoderPool:
 
     # ── requests ──
     async def _run(self, friend: str, kind: int, meta: bytes, payload: bytes,
-                   item_key: str | None) -> DecodeResult:
+                   item_key: str | None,
+                   on_start: Callable[[], Awaitable[None]] | None = None) -> DecodeResult:
         if not isinstance(friend, str) or not 1 <= len(friend) <= 128:
             return _refused("bad friend")
         if self.paused(friend):
-            return _unavailable("this friend's items are paused after repeated decoder faults")
+            return _unavailable("this friend's items are paused after repeated faults")
         if item_key is not None and self.item_faults.get(item_key, 0) >= ITEM_FAULTS_MAX:
             return DecodeResult(False, reason="the item faulted the decoder too often", outcome="dropped")
+        if kind == KIND_DECODE and self.schema is None and self.image_id is not None:
+            # M4: not this friend's fault; the item waits for the plugin.
+            return _unavailable("the plugin registered no schema for its decoder yet")
+        if _DECODING.get(friend, 0) >= MAX_DECODES_PER_FRIEND:
+            return _unavailable("this friend already has items decoding")  # L6
+        _DECODING[friend] = _DECODING.get(friend, 0) + 1
+        try:
+            return await self._run_counted(friend, kind, meta, payload, item_key, on_start)
+        finally:
+            _DECODING[friend] -= 1
+            if not _DECODING[friend]:
+                del _DECODING[friend]
+
+    async def _run_counted(self, friend: str, kind: int, meta: bytes, payload: bytes,
+                           item_key: str | None,
+                           on_start: Callable[[], Awaitable[None]] | None) -> DecodeResult:
         got = await self._instance_for(friend)
         if isinstance(got, DecodeResult):
             return got
         inst = got
+        deadline = self.image_timeout if kind == KIND_IMAGE else self.timeout
         async with inst.lock:
             if inst.gone or inst.proc is None:
                 return _unavailable("the decoder was stopped")
             try:
-                status, data = await inst.request(
-                    kind, meta, payload, self.image_timeout if kind == KIND_IMAGE else self.timeout)
+                await inst.wait_ready(self.ready_timeout)
+            except _NotReady as e:
+                # M3: a failure before readiness is weight 0.
+                return await self._fault(inst, item_key, f"not ready: {e}", charged=False)
+            if on_start is not None:
+                try:
+                    await on_start()  # H1: the attempt is recorded before the request goes
+                except Exception as e:  # noqa: BLE001 — core-side, weight 0
+                    return _unavailable(f"the item couldn't be marked as decoding ({type(e).__name__})")
+            started = self._clock()
+            try:
+                status, data = await inst.request(kind, meta, payload, deadline)
             except asyncio.TimeoutError:
-                return await self._fault(inst, item_key, "timed out")
+                return await self._fault(inst, item_key, "timed out", charged=True,
+                                         elapsed_ms=int(deadline * 1000))
             except _Broken as e:
-                return await self._fault(inst, item_key, str(e))
+                charged = not (e.died and await self._host_event())
+                return await self._fault(inst, item_key, str(e), charged=charged)
             except (ConnectionError, OSError, asyncio.IncompleteReadError):
-                return await self._fault(inst, item_key, "the decoder stopped")
+                charged = not await self._host_event()
+                return await self._fault(inst, item_key, "the decoder stopped", charged=charged)
             finally:
                 inst.last_used = self._clock()
+            elapsed = max(0.0, self._clock() - started)
+        elapsed_ms = int(elapsed * 1000)
         st = self._friend(friend)
         st.backoff = BACKOFF_FIRST_SEC
+        if elapsed > SLOW_FRACTION * deadline:
+            await self.charge(friend, item_key, W_SLOW, "a slow decode", KIND_SLOW)  # L6
         if status == STATUS_REFUSED:
             text = data[:REASON_MAX].decode("ascii", "replace")
-            return _refused("refused by the decoder: " + _SAFE_REASON.sub("?", text))
+            await self.charge(friend, item_key, W_REFUSAL, "refused", KIND_REFUSAL)
+            return _refused("refused by the decoder: " + _SAFE_REASON.sub("?", text), "refusal", elapsed_ms)
         if kind == KIND_IMAGE:
             try:
                 width, height, channels, pixels = check_pixels(data)
                 png = await asyncio.to_thread(encode_png, width, height, channels, pixels)
             except ValueError as e:
-                return _refused(f"bad image: {e}")
+                await self.charge(friend, item_key, W_RECHECK, "a bad image", KIND_DECODER)
+                return _refused(f"bad image: {e}", "recheck", elapsed_ms)
             info = {"format": "png", "width": width, "height": height, "bytes": len(png)}
-            return DecodeResult(True, value={"image": info}, image=png, media_type="image/png")
+            return DecodeResult(True, value={"image": info}, image=png, media_type="image/png",
+                                elapsed_ms=elapsed_ms)
         try:
             value, out = canonical(data)
         except ValueError as e:
-            return _refused(f"bad output: {e}")
-        if self.schema is None:
-            return _refused("bad output: the plugin registered no schema for its decoder")
-        problem = schema_problem(value, self.schema)
+            await self.charge(friend, item_key, W_RECHECK, "a reply that failed the re-check", KIND_DECODER)
+            return _refused(f"bad output: {e}", "recheck", elapsed_ms)
+        schema = self.schema
+        if schema is None:
+            return _unavailable("the plugin registered no schema for its decoder yet")
+        problem = schema_problem(value, schema)
         if problem:
-            return _refused(f"bad output: {problem}")
-        return DecodeResult(True, value=value, canonical=out)
+            await self.charge(friend, item_key, W_REFUSAL, "schema refusal", KIND_REFUSAL)
+            return _refused(f"bad output: {problem}", "refusal", elapsed_ms)
+        return DecodeResult(True, value=value, canonical=out, elapsed_ms=elapsed_ms)
 
     async def decode(self, friend: str, payload: bytes, meta: dict[str, Any] | None = None,
-                     *, item_key: str | None = None) -> DecodeResult:
+                     *, item_key: str | None = None,
+                     on_start: Callable[[], Awaitable[None]] | None = None) -> DecodeResult:
         """Decode one item from ``friend`` (the core's own name for it,
-        never sent to the container). Never raises."""
+        never sent to the container). ``on_start`` is awaited once the
+        container is ready, right before the request is written (H1: the
+        caller records the attempt there). Never raises."""
         if not isinstance(payload, (bytes, bytearray)) or len(payload) > PAYLOAD_MAX:
             return _refused("the item is too large")
         if meta and set(meta) & META_RESERVED:
@@ -1297,13 +1564,14 @@ class DecoderPool:
             return _refused("bad meta")
         if len(meta_bytes) > META_MAX:
             return _refused("the meta is too large")
-        return await self._run(friend, KIND_DECODE, meta_bytes, bytes(payload), item_key)
+        return await self._run(friend, KIND_DECODE, meta_bytes, bytes(payload), item_key, on_start)
 
-    async def decode_image(self, friend: str, data: bytes, *, item_key: str | None = None) -> DecodeResult:
+    async def decode_image(self, friend: str, data: bytes, *, item_key: str | None = None,
+                           on_start: Callable[[], Awaitable[None]] | None = None) -> DecodeResult:
         """Pixels from ``friend``'s image bytes, as the core's own PNG."""
         if not isinstance(data, (bytes, bytearray)) or not 0 < len(data) <= PAYLOAD_MAX:
             return _refused("the image is too large")
-        return await self._run(friend, KIND_IMAGE, b"", bytes(data), item_key)
+        return await self._run(friend, KIND_IMAGE, b"", bytes(data), item_key, on_start)
 
     async def stop(self) -> None:
         self._stopped = True
@@ -1368,6 +1636,18 @@ async def forget(slug: str) -> None:
         log.warning("plugin %s: its decoder image wasn't removed: %s", slug, e)
 
 
+async def charge(slug: str, friend: str, item_key: str | None, hundredths: int, why: str,
+                 *, kind: str = KIND_DECODER) -> None:
+    """Charge ``friend``'s breaker for plugin ``slug`` without a live
+    container (a handler fault, a restart found at start). Through the
+    plugin's pool when it has one, else straight to the charge sink."""
+    pool = POOLS.get(slug)
+    if pool is not None:
+        await pool.charge(friend, item_key, hundredths, why, kind)
+    elif CHARGE_SINK is not None:
+        await CHARGE_SINK(slug, friend, item_key, hundredths, why, kind)
+
+
 def set_schema(slug: str, schema: Any) -> None:
     """The plugin's schema for its decoder's answers (SchemaError, or
     KeyError when it has no decoder)."""
@@ -1375,11 +1655,12 @@ def set_schema(slug: str, schema: Any) -> None:
 
 
 async def decode(slug: str, friend: str, payload: bytes, meta: dict[str, Any] | None = None,
-                 *, item_key: str | None = None) -> DecodeResult:
+                 *, item_key: str | None = None,
+                 on_start: Callable[[], Awaitable[None]] | None = None) -> DecodeResult:
     pool = POOLS.get(slug)
     if pool is None:
         return _unavailable("the plugin has no decoder")
-    return await pool.decode(friend, payload, meta, item_key=item_key)
+    return await pool.decode(friend, payload, meta, item_key=item_key, on_start=on_start)
 
 
 async def decode_image(slug: str, friend: str, data: bytes, *, item_key: str | None = None) -> DecodeResult:

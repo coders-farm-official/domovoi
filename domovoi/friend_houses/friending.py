@@ -618,11 +618,14 @@ async def announce_held() -> int:
 
 async def recent_changes(days: int = 7) -> list[dict[str, Any]]:
     """Trust changes of the last week, newest first, for the dashboard's
-    and the phones' notice: new friends and lists shared with a friend."""
+    and the phones' notice: new friends, lists shared with a friend, and
+    friends an admin turned "Apps with this friend" on for (§6.11)."""
     async with _db() as s:
         rows = (await s.execute(text(
             "SELECT 'friend' AS kind, local_name, NULL AS list, added_at FROM friend_houses_friends "
             "WHERE added_at > now() - make_interval(days => :d) "
+            "UNION ALL SELECT 'apps', local_name, NULL, apps_on_at FROM friend_houses_friends "
+            "WHERE apps_on AND state = 'active' AND apps_on_at > now() - make_interval(days => :d) "
             "UNION ALL SELECT 'shared_list', f.local_name, sp.title, sp.created_at "
             "FROM friend_houses_spaces sp JOIN friend_houses_friends f ON f.id = sp.friend_id "
             "WHERE sp.origin = 'us' AND sp.state = 'active' "
@@ -665,14 +668,20 @@ async def rename(friend_id: str, local_name: str) -> bool:
 async def unfriend(friend_id: str) -> bool:
     """Remove a friend. The listener refuses it from the next connection;
     Tor's key is withdrawn at the next (batched) reload."""
+    from domovoi.friend_houses import plugin_mail
+
     async with _db() as s:
         row = await store.friend(s, friend_id)
+        # Apps with friends (§6.9): the closure in the same transaction; the
+        # friend row's delete then cascades to its pairs, mail and sender.
+        pairs = await plugin_mail.close_pairs(s, friend_id=friend_id) if row is not None else []
         done = await store.delete_friend(s, friend_id)
         if done and row is not None:
             # An accept still waiting to be delivered goes too (R6 FH-11).
             await store.delete_requests_for(s, row.house_key)
     if done:
         log.warning("Friend Houses: a friend house was removed")
+        await plugin_mail.after_close(pairs)
         await _service().reconcile()
     return done
 

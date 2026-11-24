@@ -588,8 +588,7 @@ default `false`) plus free-text `warnings`. `satellite_root` is for a
 exchanges data with friend houses: it requires an `[isolated]` decoder and
 at least one `warnings` entry, and the install is refused without them
 (see `[isolated]` below). The SDK surface that uses it is SDK 1.18's
-`sdk.friend_houses` (§4.22); its mail arrives with the plugin mail
-service, later in 1.5.0.
+`sdk.friend_houses` (§4.22).
 These are **not** a sandbox — an installed plugin runs with full access to
 the server (the install preview says exactly that). They are the trust
 screen: write them as if the user's trust depends on them, because it does.
@@ -1024,13 +1023,23 @@ handles the core's own parsed copy.
 **When it goes wrong.** A decoder that hangs (5 s; 10 s for an image),
 crashes, writes anything unasked or breaks the frame format is killed; the
 item is a *fault*. That friend's next container waits a backoff (1 s,
-doubling to 60 s); other friends are not affected. An item that faulted
-twice is dropped for good. Three faults from one friend within an hour
-pause that friend's items for this plugin for an hour (twice as long each
-time it happens again), and the core logs it (the admin's notice comes
-with the Friend Houses plugin mail, SDK 1.18); every other friend carries
-on. A refusal (your decoder raised, or a check failed) is final and is
-not a fault.
+doubling to 60 s); other friends are not affected. The runner the core
+ships writes one "ready" byte once your decoder is imported, and the
+5-second timer (10 for images) starts only after it: a slow first start
+is never held against the friend, and neither is a container that dies
+while idle or dies together with others (Docker restarting). An item that
+faulted twice is dropped for good. Each friend has a breaker counted in
+hundredths: a fault on that friend's own request, or an answer that fails
+the core's re-check, weighs 1; three in an hour pause that friend's items
+for this plugin for an hour (twice as long each time it happens again, up
+to a day). A refusal (your decoder raised, or the schema said no) is final
+and weighs 0.02: 150 in an hour pause the friend for a fixed hour, since
+two houses on different versions of your plugin refuse each other's new
+messages. With no schema registered yet, items wait rather than being
+refused. An item that takes more than 80% of its deadline weighs 0.1, and
+a friend has at most two items decoding at once across all plugins. The
+admin sees each pause on the Friend Houses page; every other friend
+carries on.
 
 **Images.** Your decoder never handles image bytes. The core puts an
 image's pieces back together itself, as opaque bytes, and sends the whole
@@ -2239,13 +2248,12 @@ the subscribe in `try`/`except ValueError` and rely on the trim.
 
 ### 4.22 Apps with friends — `sdk.friend_houses` (SDK 1.18)
 
-> **Mail arrives with the plugin mail service, later in 1.5.0.** On this
-> core the surface below exists and checks what you hand it, but nothing
-> is sent or received: `friends()` answers `[]`, and `send_mail` checks its
-> arguments and then raises `NotAllowed("Friend Houses for apps isn't
-> available yet")`. `on_mail` and `on_friends_changed` record your handler
-> (and the schema) and nothing calls them yet. Write against the contract
-> below; the same code starts working when the service lands.
+> **On this core mail is received and delivered** to your `on_mail`
+> handler by the plugin mail service. Sending and the friend list arrive
+> later in 1.5.0: until then `friends()` answers `[]`, `send_mail` checks
+> its arguments and then raises `NotAllowed("Friend Houses for apps isn't
+> available yet")`, and `on_friends_changed` records your handler without
+> calling it. Write against the contract below.
 
 A plugin with `[permissions] friend_houses = true` (which needs an
 `[isolated]` decoder and a `warnings` entry, §3) exchanges mail with **the
@@ -2291,7 +2299,7 @@ def register(ctx):
 |---|---|
 | `await friends()` | `[FriendHouse(house_id, name, online, has_plugin)]`: friends with "Apps with this friend" on and your plugin allowed. `name` is a `FriendText`. `has_plugin` is true while their house's last word (within 6 hours) said it has your plugin too. |
 | `await send_mail(house_id, payload, *, ttl_s=259200, replace_key=None)` | Queues `payload` (bytes, 1 to 16,384) for that friend; returns the mail's id. `ttl_s` 30 to 259,200 (3 days); time-sensitive mail (a move, a view) should use 600 or less. `replace_key` (up to 64 of `a-z 0-9 _ . : -`) replaces a mail with the same key that hasn't left yet (a newer view of the table); the new one gets a new id. Raises `NotAllowed`, `MailFull`, `TooLarge` or `RateLimited`. |
-| `on_mail(handler, schema)` | The one handler for your plugin's mail and the schema your decoder's answers must match (the core's strict subset, §3 `[isolated]`; without one nothing is accepted). |
+| `on_mail(handler, schema)` | The one handler for your plugin's mail and the schema your decoder's answers must match (the core's strict subset, §3 `[isolated]`; until you register one, mail waits). Every string in `value` arrives as a `FriendText`. |
 | `on_friends_changed(handler)` | `async handler()` runs when `friends()` may answer differently. |
 
 **The ids.** `house_id` is your plugin's own id for a friend house: the
@@ -2300,17 +2308,24 @@ so two plugins get different ids for the same friend and can't compare
 notes. It is never sent to the friend or shown to your decoder. Store it;
 it doesn't change while the friendship lasts.
 
-**The delivery contract.** Per friend, your mail arrives in the order it
-was sent and is never duplicated on the wire. Gaps are possible (a
-replaced, expired or refused mail) and `seq` shows them. Your handler is
-called at least once per decoded mail: a second call happens only after
-the core crashed mid-handler, so make it idempotent by `mail_id`.
-Handlers are `async` and must return within 10 seconds. A handler that
-raises or overruns counts against that friend, like a decoder crash: after
-three in an hour, that friend's mail to your plugin is paused (an hour,
-doubling each time, up to a day) and the admin is told. Other friends
-carry on. If your handler fails on valid mail, friends pause one by one,
-and the notice points at your plugin.
+**The delivery contract.** Per friend, your mail arrives in `seq` order
+and is never duplicated on the wire. Gaps are possible (a replaced,
+expired, quarantined or refused mail) and `seq` shows them. Your handler
+is called **at least once** per decoded mail, and **again** after it
+raised, ran past 10 seconds, or the core stopped while it ran, until the
+mail's second fault, when it is deleted. Make it idempotent by `mail_id`.
+Every string in `value` is a `FriendText`, on every call, retries
+included. Handlers are `async`, must return within 10 seconds and **must
+never block the event loop**: after 10 seconds the core stops waiting
+(your late result is ignored), but it can't stop code that never awaits.
+Such a handler takes the whole core down, and when the core comes back
+that friend's mail to your plugin is paused at once and the mail is
+deleted the second time. A handler that raises or overruns counts against
+that friend (weight 1, like a decoder crash): after three in an hour, that
+friend's mail to your plugin is paused (an hour, doubling each time, up to
+a day) and the admin is told. Other friends carry on. If your handler
+fails on valid mail, friends pause one by one, and the notice points at
+your plugin; an upgrade of your plugin ends those pauses.
 
 **The forwarding rule.** Nothing a friend supplied is passed on as it
 came. Every payload you send is rebuilt from validated values; images
@@ -2347,9 +2362,9 @@ logs a warning for one.
 
 **Testing.** `make_stub_sdk()` gives the same stubs. The core's test kit
 `domovoi.friend_houses.loopback.LoopbackPair` runs two houses over loopback
-with real sessions and the real listener (no Tor, no Docker); on this core
-it shows a plugin mail refused as unavailable, and end-to-end delivery to
-`on_mail` comes with the mail service.
+with real sessions and the real listener (no Tor, no Docker): house B with
+the real plugin mail service (the test database) storing, acknowledging and
+delivering a mail to your `on_mail`, or house A with the real sender.
 
 ## 5. Worked example — the bundled radio plugin
 

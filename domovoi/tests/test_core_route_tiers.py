@@ -207,6 +207,11 @@ FRIEND_HOUSES_SECURITY = [
     ("POST", "/v1/admin/friend-houses/friends/{friend_id}/block"),
     ("GET", "/v1/admin/friend-houses/blocked"),
     ("DELETE", "/v1/admin/friend-houses/blocked/{house}"),
+    # Apps with friends (SDK 1.18, design §6.11): the toggle, each app, Resume.
+    ("GET", "/v1/admin/friend-houses/friends/{friend_id}/apps"),
+    ("PUT", "/v1/admin/friend-houses/friends/{friend_id}/apps"),
+    ("PUT", "/v1/admin/friend-houses/friends/{friend_id}/apps/{slug}"),
+    ("POST", "/v1/admin/friend-houses/friends/{friend_id}/apps/{slug}/resume"),
 ]
 
 
@@ -736,8 +741,7 @@ async def test_voice_activity_says_busy_and_nothing_else_to_the_household_token(
 
 def _friend_apps_routes() -> list[tuple[str, str]]:
     """Every core route for apps with friends (SDK 1.18): the per-friend
-    toggle, allow/revoke, resume and the list. None until the plugin mail
-    service (slice 4) adds them; then each must be here."""
+    toggle, allow/revoke, resume and the list (the plugin mail service)."""
     from domovoi.tests.route_walk import iter_route_contexts
 
     return sorted({(m, rc.path) for rc in iter_route_contexts(core_app.routes)
@@ -750,6 +754,7 @@ def test_apps_with_friends_stays_on_the_security_tier() -> None:
     # playing are on the plugin's own device-tier routes, never these.
     household = DEVICE_READS + FRIEND_HOUSES_DEVICE_WRITES
     assert not [r for r in household if "/apps" in r[1]]
+    assert len(_friend_apps_routes()) == 4
     for method, path in _friend_apps_routes():
         gates = _gates_for(method, path)
         assert (admin_auth.require_admin_security in gates

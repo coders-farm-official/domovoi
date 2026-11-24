@@ -179,6 +179,11 @@ TABLES_TO_TRUNCATE = [
     "friend_houses_space_ops",
     "friend_houses_space_items",
     "friend_houses_blocked",
+    # Plugin mail (V084); they cascade from the friend row too.
+    "friend_houses_plugin_pairs",
+    "friend_houses_plugin_outbox",
+    "friend_houses_plugin_inbox",
+    "friend_houses_plugin_sender",
     "timers",
     # The owner's "say it like" changes (V027); the defaults are a data file.
     "pronunciations",

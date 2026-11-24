@@ -1095,6 +1095,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await LOADER.discover_and_load_all()
     except Exception as e:
         log.error("plugin discovery failed: %s", e)
+    if not settings.use_stubs:
+        # Friend Houses plugin mail (1.5.0): a fresh restore marker (M1),
+        # then mail found mid-work from an unclean stop is charged (H1)
+        # before the dispatcher runs. Background; never blocks startup.
+        from domovoi.friend_houses import plugin_mail as _fh_plugin_mail
+        from domovoi.friend_houses import service as _fh_service
+
+        async def _fh_plugin_mail_start() -> None:
+            await _fh_service.refresh_marker()
+            await _fh_plugin_mail.start()
+
+        app.state.fh_plugin_mail_task = asyncio.create_task(_fh_plugin_mail_start())
 
     # Chat-tool milestone (§12): boot performs no eager Letta resync —
     # the install/enable/disable pipeline resyncs on change and
@@ -4674,6 +4686,71 @@ async def admin_friend_houses_unfriend(friend_id: str) -> dict[str, Any]:
     if not await friending.unfriend(friend_id):
         raise HTTPException(status_code=404, detail="No such friend house.")
     return {"removed": True}
+
+
+# ─── Apps with friends (SDK 1.18, plugin mail): the security tier ─────────
+# "Apps with this friend" (design FRIEND-HOUSES-PLUGINS §6.11): an admin's
+# toggle per friend, then each plugin holding the permission allowed or not.
+# Reads and writes alike wear the security tier, here and at the dashboard.
+
+
+class _FhAppsBody(BaseModel):
+    on: bool
+    apps: list[str] | None = None
+
+
+class _FhAppBody(BaseModel):
+    allowed: bool
+
+
+@app.get("/v1/admin/friend-houses/friends/{friend_id}/apps", dependencies=_FH_READ)
+async def admin_friend_houses_apps(friend_id: str) -> dict[str, Any]:
+    """The toggle, each plugin with the permission (allowed, whether both
+    houses have it, paused and why), and the notices for this friend."""
+    from domovoi.friend_houses import plugin_mail
+
+    view = await plugin_mail.apps_view(friend_id)
+    if view is None:
+        raise HTTPException(status_code=404, detail="No such friend house.")
+    return view
+
+
+@app.put("/v1/admin/friend-houses/friends/{friend_id}/apps", dependencies=_FH_WRITE)
+async def admin_friend_houses_set_apps(friend_id: str, body: _FhAppsBody) -> dict[str, Any]:
+    """Turn "Apps with this friend" on (with the plugins the admin ticked;
+    the friend's house will see which of them this house has) or off (its
+    queued and stored app mail is deleted)."""
+    from domovoi.friend_houses import plugin_mail
+
+    view = await plugin_mail.set_apps(friend_id, body.on, body.apps, by="admin")
+    if view is None:
+        raise HTTPException(status_code=404, detail="No such friend house.")
+    return view
+
+
+@app.put("/v1/admin/friend-houses/friends/{friend_id}/apps/{slug}", dependencies=_FH_WRITE)
+async def admin_friend_houses_set_app(friend_id: str, slug: str, body: _FhAppBody) -> dict[str, Any]:
+    """Allow (or confirm, after a new install) or revoke one plugin with one friend."""
+    from domovoi.friend_houses import plugin_mail
+
+    try:
+        view = await plugin_mail.set_pair(friend_id, slug, body.allowed, by="admin")
+    except ValueError as e:
+        raise _fh_error(e) from e
+    if view is None:
+        raise HTTPException(status_code=404, detail="No such friend house or app.")
+    return view
+
+
+@app.post("/v1/admin/friend-houses/friends/{friend_id}/apps/{slug}/resume", dependencies=_FH_WRITE)
+async def admin_friend_houses_resume_app(friend_id: str, slug: str) -> dict[str, Any]:
+    """Resume mail from this friend to this plugin after a pause."""
+    from domovoi.friend_houses import plugin_mail
+
+    view = await plugin_mail.resume(friend_id, slug) if len(slug) <= 32 else None
+    if view is None:
+        raise HTTPException(status_code=404, detail="No such friend house or app.")
+    return view
 
 
 class _FhMessageBody(BaseModel):

@@ -42,9 +42,10 @@ not the house-wide one. The body, all of it under the signature::
     ttl_s       4   how long the mail may wait, 30..259,200 seconds
     payload     the rest: 1..16,384 bytes, opaque here
 
-consumed to the exact length. The payload is never parsed by the listener
-or by core's message code: it goes only to the plugin mail service (and,
-until that exists, is refused). People's messages and plugin mail never
+consumed to the exact length. ``ttl_s`` is the time the mail has LEFT when
+it is sent (a resend carries less, L13b). The payload is never parsed by
+the listener or by core's message code: it goes only to the plugin mail
+service (:mod:`domovoi.friend_houses.plugin_mail`). People's messages and plugin mail never
 share a path: :func:`peek` lets the listener sort them before it spends
 any budget, and core dispatches on the kind and refuses anything it has no
 handler for.
@@ -170,14 +171,17 @@ def parse_plugin_body(body: bytes) -> PluginBody:
 
 
 def plugin_mail(keys: fid.HouseKeys, *, to: bytes, slug: str, payload: bytes, ttl_s: int,
-                epoch: bytes, seq: int, sent_at: int) -> Envelope:
-    """A signed plugin mail. ValueError for a bad slug, TTL or payload."""
+                epoch: bytes, seq: int, sent_at: int, msg_id: bytes | None = None) -> Envelope:
+    """A signed plugin mail. ValueError for a bad slug, TTL or payload.
+    ``msg_id`` is the outbox row's mail id: a resend keeps it (with the
+    remaining ``ttl_s``, so a new signature), and the receiver ACKs it as
+    the duplicate it is."""
     if not valid_slug(slug):
         raise ValueError("bad plugin slug")
     body = PluginBody(slug, int(ttl_s), bytes(payload)).to_bytes()
     parse_plugin_body(body)  # the same rules the receiver applies
     return signed(keys, kind=KIND_PLUGIN, to=to, body=body, epoch=epoch, seq=seq,
-                  sent_at=sent_at)
+                  sent_at=sent_at, msg_id=msg_id)
 
 
 @dataclass(frozen=True)
@@ -236,7 +240,7 @@ def text_message(keys: fid.HouseKeys, *, to: bytes, text: str, epoch: bytes, seq
 
 
 def signed(keys: fid.HouseKeys, *, kind: int, to: bytes, body: bytes, epoch: bytes, seq: int,
-           sent_at: int) -> Envelope:
+           sent_at: int, msg_id: bytes | None = None) -> Envelope:
     """Any envelope, signed. Callers check their own body first."""
     if kind not in KINDS:
         raise ValueError("unknown kind")
@@ -244,7 +248,9 @@ def signed(keys: fid.HouseKeys, *, kind: int, to: bytes, body: bytes, epoch: byt
         raise ValueError("body too large")
     if kind == KIND_PLUGIN:
         parse_plugin_body(body)
-    draft = Envelope(kind, keys.house_key, to, secrets.token_bytes(16), epoch, seq,
+    if msg_id is not None and len(msg_id) != 16:
+        raise ValueError("msg_id is 16 bytes")
+    draft = Envelope(kind, keys.house_key, to, msg_id or secrets.token_bytes(16), epoch, seq,
                      sent_at, body)
     return Envelope(draft.kind, draft.sender, draft.recipient, draft.msg_id, draft.epoch,
                     draft.seq, draft.sent_at, draft.body,

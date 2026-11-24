@@ -1244,6 +1244,10 @@ async def confirm_install(
                 from_version=LOADER.imported_versions.get(slug) or result["version"],
                 to_version=result["version"],
             )
+        if result.get("installed") and staged is not None and _fh_permission(staged.manifest):
+            # Apps with friends (§6.11): a new plugin with the permission
+            # reaches no friend until an admin confirms it.
+            await _fh_hook("on_plugin_new", slug)
         return result
 
 
@@ -1469,6 +1473,38 @@ def _drop_staged(staged: StagedInstall) -> None:
     shutil.rmtree(staged.root, ignore_errors=True)
 
 
+# ─── apps with friends: the plugin mail service's lifecycle calls ──────────
+
+
+def _fh_permission(manifest: Any) -> bool:
+    perms = manifest.get("permissions") if isinstance(manifest, dict) else getattr(manifest, "permissions", None)
+    return bool((perms or {}).get("friend_houses"))
+
+
+async def _fh_hook(name: str, slug: str) -> None:
+    """Tell Friend Houses' plugin mail service (design §6.9, §6.11). Never
+    fails the lifecycle step."""
+    try:
+        from domovoi.friend_houses import plugin_mail
+
+        await getattr(plugin_mail, name)(slug)
+    except Exception as e:  # noqa: BLE001
+        log.warning("plugin %s: apps with friends wasn't told (%s): %s", slug, name, e)
+
+
+async def _fh_hook_upgrade(slug: str, old_manifest: Any, new_manifest: Any) -> None:
+    """An upgrade calls neither disable nor uninstall, so it tells the
+    service itself: the permission dropped is a closure (L12), gained is a
+    re-confirm, kept ends handler and restart pauses (L11)."""
+    had, has = _fh_permission(old_manifest), _fh_permission(new_manifest)
+    if had and not has:
+        await _fh_hook("on_plugin_off", slug)
+    elif has and not had:
+        await _fh_hook("on_plugin_new", slug)
+    elif has:
+        await _fh_hook("on_plugin_upgraded", slug)
+
+
 # ─── enable / disable (§3.4) ────────────────────────────────────────────────
 
 async def enable_plugin(slug: str) -> dict[str, Any]:
@@ -1493,17 +1529,24 @@ async def enable_plugin(slug: str) -> dict[str, Any]:
     except Exception as e:
         return {"enabled": False, "slug": slug, "status": "load_error", "error": str(e)}
     await _best_effort_resync()
+    if _fh_permission(manifest):
+        await _fh_hook("on_plugin_on", slug)
     return {"enabled": True, "slug": slug}
 
 
 async def disable_plugin(slug: str) -> dict[str, Any]:
-    row = await reg.get_plugin(slug)
-    if row is None:
-        raise InstallError("not_installed", f"plugin {slug!r} is not installed")
-    await LOADER.unload_plugin(slug)
-    await reg.set_enabled(slug, False)
-    await _best_effort_resync()
-    return {"enabled": False, "slug": slug}
+    """Disable ``slug``, under the lifecycle lock (the closure of its apps
+    with friends must not race an install or an upgrade, §6.9)."""
+    async with lifecycle_lock():
+        row = await reg.get_plugin(slug)
+        if row is None:
+            raise InstallError("not_installed", f"plugin {slug!r} is not installed")
+        await LOADER.unload_plugin(slug)
+        await reg.set_enabled(slug, False)
+        if _fh_permission(row.manifest):
+            await _fh_hook("on_plugin_off", slug)
+        await _best_effort_resync()
+        return {"enabled": False, "slug": slug}
 
 
 async def _best_effort_resync() -> None:
@@ -1547,6 +1590,8 @@ async def _uninstall_plugin_locked(slug: str, *, data: str) -> dict[str, Any]:
     # 1. Full disable teardown. A staged upgrade has nothing left to finish.
     await LOADER.unload_plugin(slug)
     LOADER.pending_restart.pop(slug, None)
+    if _fh_permission(row.manifest):
+        await _fh_hook("on_plugin_off", slug)  # one closure for its apps with friends
 
     manifest = row.manifest or {}
     if isinstance(manifest.get("isolated"), dict):
@@ -1689,6 +1734,7 @@ async def _confirm_upgrade_locked(staged_id: str) -> dict[str, Any]:
                 slug, from_version=old_row.version, to_version=manifest.version
             )
         result["upgraded_from"] = old_row.version
+        await _fh_hook_upgrade(slug, old_row.manifest, manifest)
         return result
     except BaseException as e:
         # Roll back: previous dir returns, old row returns, old version
