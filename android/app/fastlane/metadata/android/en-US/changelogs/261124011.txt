@@ -1,0 +1,9 @@
+Domovoi 1.4.1
+
+- Friend Houses on the phone: read messages, take or stop shared lists
+- Print a picture or file attached in a home-server chat
+- Chat says "internet: ask first" when it asks before going online
+- Music lists load faster with smaller cover pictures
+- Controls that only work on the dashboard now say so plainly
+- Clearer changes view for a chat draft, with screen-reader cues
+- Security fixes and library updates

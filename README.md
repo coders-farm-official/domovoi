@@ -17,7 +17,7 @@
   <a href="https://play.google.com/store/apps/details?id=com.domovoi.app"><img alt="Android app: the version on stable" src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fcoders-farm-official%2Fdomovoi%2Fstable%2Fandroid%2Frelease.json&query=%24.release.version_name&prefix=v&label=Android%20app&color=2EA043&style=flat-square&labelColor=1F1A14"></a>
   <img alt="iPhone app: coming soon" src="https://img.shields.io/badge/iPhone%20app-coming%20soon-8B8178?style=flat-square&labelColor=1F1A14">
   <br>
-  <a href="docs/CONTRIBUTING.md#running-the-tests"><img alt="tests: 30,000+ (server and rooms, Android app, Windows)" src="https://img.shields.io/badge/tests-30%2C000%2B-2EA043?style=flat-square&labelColor=1F1A14"></a>
+  <a href="docs/CONTRIBUTING.md#running-the-tests"><img alt="tests: 30,500+ (server and rooms, Android app, Windows)" src="https://img.shields.io/badge/tests-30%2C500%2B-2EA043?style=flat-square&labelColor=1F1A14"></a>
   <a href="https://github.com/coders-farm-official/domovoi/actions/workflows/ci.yml?query=branch%3Amain"><img alt="CI on main" src="https://img.shields.io/github/actions/workflow/status/coders-farm-official/domovoi/ci.yml?branch=main&label=CI&style=flat-square&labelColor=1F1A14"></a>
   <a href="https://scorecard.dev/viewer/?uri=github.com/coders-farm-official/domovoi"><img alt="OpenSSF Scorecard" src="https://img.shields.io/ossf-scorecard/github.com/coders-farm-official/domovoi?label=OpenSSF%20Scorecard&style=flat-square&labelColor=1F1A14"></a>
   <a href="LICENSE"><img alt="license: MIT" src="https://img.shields.io/badge/license-MIT-F2A618?style=flat-square&labelColor=1F1A14"></a>
@@ -100,7 +100,7 @@ The full picture, with ports and containers, is in
 [How the pieces fit together](#how-the-pieces-fit-together).
 
 > **Status: released and maintained.** 1.0.0 shipped in October 2026 and
-> the current release is **1.4.0**. The USB stick for old PCs has been
+> the current release is **1.4.1**. The USB stick for old PCs has been
 > tested in virtual machines only: see
 > [Status and roadmap](#status-and-roadmap). Ask questions in
 > [Discussions](https://github.com/coders-farm-official/domovoi/discussions).
@@ -220,26 +220,24 @@ changed when is in the [release notes](docs/RELEASE_NOTES.md).
   machines; real computers are next
   ([old computers](docs/SPARE_DEVICE_SATELLITES.md#old-computers-usb-stick)).
 
-**This release: Domovoi v1.4.0**
+**This release: Domovoi v1.4.1**
 
-Version 1.4.0 follows [v1.3.0](https://github.com/coders-farm-official/domovoi/releases/tag/v1.3.0).
+Version 1.4.1 follows [v1.4.0](https://github.com/coders-farm-official/domovoi/releases/tag/v1.4.0).
 It is the server, the Android app, a Windows Setup (with the Windows
-satellite Setup beside it) and, new, the Mac server's installer, with one
+satellite Setup beside it) and the Mac server's installer, with one
 `SHA256SUMS` for every file, software bills of materials, and GitHub build
 provenance for each file
 ([verifying a release](SECURITY.md#verifying-a-release)), published as
 described in [Releasing](docs/CONTRIBUTING.md#releasing). `stable` points
-at 1.4.0, and new installs follow it. A plain-language summary is in
-[docs/release/v1.4.0.md](docs/release/v1.4.0.md); every change is in the
-[release notes](docs/RELEASE_NOTES.md). Since 1.3.0: Friend Houses,
-messages and shared lists between Domovoi houses over Tor (off until an
-admin turns it on); a chat that watches a short video; scanned letters
-read and summed up on the server; up to five wake words per room, and
-"Domovoi" tuned to your household; a phone in room mode that shows its
-room; a new satellite that asks every Domovoi server and joins the one
-you approve it on; Queue history; radio stations found by how you say
-them; the dashboard at plain `domovoi.local`; admins signed out after an
-hour idle; a Mac as the server; and the round 6 security fixes.
+at 1.4.1, and new installs follow it. A plain-language summary is in
+[docs/release/v1.4.1.md](docs/release/v1.4.1.md); every change is in the
+[release notes](docs/RELEASE_NOTES.md). Since 1.4.0: chat lookups that
+reach the web when the offline library has nothing relevant; weather
+answers for a new Home location, and holiday questions answered offline;
+music that comes back after every question; Friend Houses open to the
+whole household and by voice; "print this" on a picture or file in a
+chat; a chime before announcements; microphone presets for XVF3800
+rooms; and many tighter security checks and limits.
 
 **Coming in 1.5.0**
 
