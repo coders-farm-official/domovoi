@@ -1182,7 +1182,7 @@ async def download_github_zip(github_url: str) -> tuple[bytes, str]:
             "expected https://github.com/<owner>/<repo>[@ref]",
         )
     headers = {
-        "User-Agent": "domovoi/1.4.0 (+github.com/coders-farm-official/domovoi)"
+        "User-Agent": "domovoi/1.4.1 (+github.com/coders-farm-official/domovoi)"
     }
     async with egress.async_client(
         follow_redirects=True, timeout=60,

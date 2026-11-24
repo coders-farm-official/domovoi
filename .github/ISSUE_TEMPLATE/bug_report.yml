@@ -11,8 +11,8 @@ body:
     id: version
     attributes:
       label: Domovoi version
-      description: Settings → System → About & updates shows it (for example `1.4.0`, or a `main` commit). For the Android app, its own version from the app's About.
-      placeholder: "1.4.0"
+      description: Settings → System → About & updates shows it (for example `1.4.1`, or a `main` commit). For the Android app, its own version from the app's About.
+      placeholder: "1.4.1"
     validations:
       required: true
   - type: dropdown

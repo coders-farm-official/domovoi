@@ -80,8 +80,8 @@ android {
         // an update that goes down, so it only ever goes up; the release
         // scripts, play-bundle and scripts/release/finish_release.py read
         // this line.
-        versionCode = 26112001
-        versionName = "1.4.0"
+        versionCode = 26112401
+        versionName = "1.4.1"
         // The ABIs above. One APK per ABI filters by splits (below)
         // instead of here.
         if (!apkPerAbi) {
