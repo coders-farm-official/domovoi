@@ -1159,7 +1159,7 @@ class MusicHandler(MusicRoomsMixin, MusicQueueMixin, MusicChoiceMixin, Handler):
         ``other``: the same song by another artist (a ``Candidate``; the
         resolver's "other_artist" answer), offered instead of the artist
         (owner, 2026-11-11): "I don't have Let Em Know by T.I. I have one
-        by Bryson Tiller. Want that instead?" — "yes" plays that one."""
+        by Bryson Tiller. Want me to play that instead?" — "yes" plays that one."""
         title = str(query.get("title") or "").strip()
         artist = str(query.get("artist") or "").strip()
         if other is not None and other.ref not in avoid:
@@ -1176,7 +1176,7 @@ class MusicHandler(MusicRoomsMixin, MusicQueueMixin, MusicChoiceMixin, Handler):
             have = f"I have one by {by}." if by else "I have another version."
             if allow_choice:
                 reply = await self.offer_instead(
-                    other, f"{statement} {have} Want that instead?",
+                    other, f"{statement} {have} Want me to play that instead?",
                     heard=f"{title} by {artist}", query=query, ctx=ctx, session=session,
                 )
                 if reply is not None:
@@ -1189,7 +1189,7 @@ class MusicHandler(MusicRoomsMixin, MusicQueueMixin, MusicChoiceMixin, Handler):
             name = await self._choice_phrase(offer, session)
             if why == "offline":
                 statement = f"I don't have {title}, and I can't look it up while Domovoi is offline."
-                question = f"Want {name} instead?"
+                question = f"Want me to play {name} instead?"
             elif why == "not_found":
                 statement = f"I couldn't find {title} anywhere."
                 question = f"Want me to shuffle {name} instead?"
@@ -1873,8 +1873,8 @@ class MusicHandler(MusicRoomsMixin, MusicQueueMixin, MusicChoiceMixin, Handler):
         # Exhausted — no more different-titled results.
         return Response(
             text=(
-                f"I've run out of fresh {query} results — that "
-                "was the last one I had. Want to try a different search?"
+                f"I've run out of fresh {query} results. That "
+                "was the last one I had. Do you want to try a different search?"
             ),
             session_id=ctx.session_id,
             matched_handler=self.name,

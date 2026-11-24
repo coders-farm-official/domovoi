@@ -268,7 +268,7 @@ on every reinstall, so phones only match. A person's phone-mic samples
 are a set of their own (V026): satellites never match them, so a phone
 cannot move the voice every satellite matches against. They are added
 only on purpose: "my name is X" said into the chat mic, for an X who
-exists, asks "Add this phone's voice to X?" and a "yes" adds that clip to
+exists, asks "Should I add this phone's voice to X?" and a "yes" adds that clip to
 X's phone samples (at most three by default, the oldest dropped) rather
 than enrolling a second X; a new name enrols into the phone set. Only the
 chat mic does this. An admin sees and deletes phone samples apart from

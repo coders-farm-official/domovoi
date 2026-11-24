@@ -5,7 +5,11 @@ domovoi/friend_houses/). Owner decision 18: voice commands for what the
 house already does with its friends.
 
 * **Send:** "message the Smiths dinner's at six", "send a message to the
-  Smiths saying see you soon". Domovoi reads it back and sends only on
+  Smiths saying see you soon", "send the Smiths a message saying …",
+  "text the Smiths …", "let the Smiths know that …", "ask the Smiths …".
+  The last four take a turn only when the name IS a friend house (a
+  pattern that knows the friends' names, :class:`_FriendLed`), so "ask
+  Google …" and "let me know …" never stop here. Domovoi reads it back and sends only on
   "yes" (a message can't be unsent). "Tell the Smiths …" works too, through
   the router: it is intercom's shape, and intercom hands a target that is
   no room but a friend house to :func:`offer_to_friend`. There is no "tell"
@@ -30,6 +34,7 @@ friend is declined, so the turn routes on as if this handler weren't here.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
@@ -59,7 +64,11 @@ _READ_RE = re.compile(
     r"^read (?:me )?(?:my |our |the |any |new )*(?:friend (?:house )?)?messages?"
     r"(?: from (?P<name>.+))?$"
 )
-_LEAD_IN_RE = re.compile(r"^(?:(?:saying|that|to say|and say)\b[\s:,]*|[:,]\s*)")
+_LEAD_IN_RE = re.compile(r"^[\s,:;-]*(?:(?:saying|that|to say|and say)\b[\s,:;]*)?")
+# How long the friend names the patterns below know are trusted before a
+# turn asks for them again (in the background; the turn uses what it has).
+NAMES_TTL_SEC = 60.0
+_NAMES: dict[str, Any] = {"forms": frozenset(), "at": float("-inf"), "task": None}
 
 
 def _fold(name: str) -> str:
@@ -75,12 +84,21 @@ def spoken_forms(name: str) -> set[str]:
     cores = {_fold(name)}
     if re.search(r"'s\b", name or ""):
         cores.add(_fold(re.sub(r"'s\b.*$", "", name)))  # "Nana's House" is also "Nana"
+    # The family: "Bassett House" is also "the Bassetts".
+    cores |= {f"{c}s" for c in cores if c and not c.endswith("s")}
     out: set[str] = set()
     for core in filter(None, cores):
         out |= {core, f"the {core}"}
         for base in (core, f"the {core}"):
             out |= {f"{base} house", f"{base}s house", f"{base} family", f"{base} home"}
     return out
+
+
+def _starts_with(said: str, form: str) -> bool:
+    """``said`` starts with ``form`` as whole words: what follows is the
+    end, a space, or the comma, colon or full stop a speech engine puts
+    after a name ("Bassett House, saying …")."""
+    return said.startswith(form) and (len(said) == len(form) or said[len(form)] in " ,:;.!?")
 
 
 def split_friend(rest: str, friends: list[Any]) -> tuple[Any, str] | None:
@@ -90,25 +108,128 @@ def split_friend(rest: str, friends: list[Any]) -> tuple[Any, str] | None:
     for f in friends:
         for form in spoken_forms(f.local_name):
             form = form.replace("'", "")
-            if said == form or said.startswith(form + " "):
+            if _starts_with(said, form):
                 if best is None or len(form) > best[0]:
                     best = (len(form), f, rest.strip()[len(form):] if said != form else "")
     if best is None:
         return None
-    body = _LEAD_IN_RE.sub("", best[2].strip()).strip()
-    return best[1], body
+    return best[1], _body(best[2])
+
+
+def _body(text_: str) -> str:
+    """The message: a leading "saying", "that", colon or comma off."""
+    return _LEAD_IN_RE.sub("", (text_ or "").strip()).strip()
+
+
+async def refresh_names(friends: list[Any] | None = None) -> None:
+    """Remember how this house's friends may be said, for :class:`_FriendLed`."""
+    if friends is None:
+        from domovoi.db.session import session_scope
+
+        async with session_scope() as s:
+            friends = await _friends(s)
+        return  # _friends remembered them
+    _NAMES["forms"] = frozenset(form.replace("'", "") for f in friends for form in spoken_forms(f.local_name))
+    _NAMES["at"] = time.monotonic()
+
+
+def _refresh_names_soon() -> None:
+    """A stale list of names is read again in the background."""
+    if time.monotonic() - _NAMES["at"] < NAMES_TTL_SEC or not _on():
+        return
+    task = _NAMES.get("task")
+    if task is not None and not task.done():
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+
+    async def read() -> None:
+        try:
+            await refresh_names()
+        except Exception as e:  # noqa: BLE001 — the names it had still apply
+            log.debug("Friend Houses: friend names unreadable: %s", e)
+            _NAMES["at"] = time.monotonic()
+
+    _NAMES["task"] = loop.create_task(read(), name="friend-houses-names")
+
+
+class _FriendLed:
+    """An anchored pattern whose ``rest`` group must start with (``exact``:
+    be) a friend house's name, as far as the names this process last read
+    say. "ask …", "text …" and "let … know" are everyday words: without
+    the name they would take, and then decline, every such turn, and a
+    declined fast path skips every later band (router.route). Quacks like
+    the ``re.Pattern`` a FastPath holds."""
+
+    def __init__(self, regex: str, *, exact: bool = False) -> None:
+        self._re = re.compile(regex)
+        self.pattern = regex
+        self.flags = self._re.flags
+        self.groupindex = self._re.groupindex
+        self.exact = exact
+
+    def _known(self, m: re.Match[str] | None) -> re.Match[str] | None:
+        if m is None:
+            return None
+        _refresh_names_soon()
+        said = " ".join(m.group("rest").lower().replace("'", "").split())
+        forms = _NAMES["forms"]
+        if self.exact:
+            return m if said in forms else None
+        return m if any(_starts_with(said, f) for f in forms) else None
+
+    def match(self, string: str, *args: Any) -> re.Match[str] | None:
+        return self._known(self._re.match(string, *args))
+
+    def fullmatch(self, string: str, *args: Any) -> re.Match[str] | None:
+        return self._known(self._re.fullmatch(string, *args))
+
+    def search(self, string: str, *args: Any) -> re.Match[str] | None:
+        return self._known(self._re.search(string, *args))
+
+    def __repr__(self) -> str:
+        return f"_FriendLed({self.pattern!r})"
+
+
+# "send Bassett House a message saying, How now", "let the Smiths know
+# that …": the name, then the message.
+_SEND_NAMED_RE = _FriendLed(r"^send (?P<rest>.+?),? an? (?:message|note)\b(?P<body>.*)$", exact=True)
+_LET_KNOW_RE = _FriendLed(r"^let (?P<rest>.+?),? know\b(?P<body>.*)$", exact=True)
+# "text the Smiths running late", "ask the Smiths if they're coming".
+_TEXT_ASK_RE = _FriendLed(r"^(?:text|ask) (?P<rest>.+)$")
 
 
 async def _friends(session: AsyncSession) -> list[Any]:
     from domovoi.friend_houses import store
 
-    return await store.active_friends(session)
+    friends = await store.active_friends(session)
+    await refresh_names(friends)
+    return friends
 
 
 def _on() -> bool:
     from domovoi.config import settings
 
     return bool(getattr(settings, "friend_houses_enabled", False))
+
+
+#: The longest read-back ("Your message to … says: …. Should I send it?").
+PROMPT_MAX = 200
+
+
+def read_back(name: str, body: str) -> str:
+    """The message read back as its own sentence, then the question; a long
+    one cut short at a word, so the question is always heard last."""
+    head, tail = f"Your message to {name} says: ", " Should I send it?"
+    said = " ".join(body.split())
+    room = PROMPT_MAX - len(head) - len(tail) - 1
+    if len(said) > room:
+        said = said[:room].rsplit(" ", 1)[0].rstrip(" ,;:") + "…"
+    elif not said.endswith((".", "!", "?", "…")):
+        said += "."
+    return head + said + tail
 
 
 class FriendHousesHandler(Handler):
@@ -126,6 +247,17 @@ class FriendHousesHandler(Handler):
         "any messages",
         "read my messages",
     )
+    # With a friend house called the Bassetts (test_friend_houses_voice):
+    # what each send form looks like. Not in example_phrases, which run
+    # on a house with no friends.
+    friend_send_examples = (
+        "message the Bassetts dinner's at six",
+        "send a message to the Bassetts saying see you soon",
+        "send Bassett House a message saying, how now, brown cow",
+        "text the Bassetts running late",
+        "let the Bassetts know that we're on our way",
+        "ask the Bassetts if they're coming on Sunday",
+    )
     requires_network = "no"  # sending queues; delivery is the outbox's job
     confirmation_kinds = (SEND_KIND,)
     tool_schema = {
@@ -139,6 +271,9 @@ class FriendHousesHandler(Handler):
             FastPath(_CHECK_RE, FriendHousesHandler._check),
             FastPath(_READ_RE, FriendHousesHandler._read),
             FastPath(_MESSAGE_RE, FriendHousesHandler._send),
+            FastPath(_SEND_NAMED_RE, FriendHousesHandler._send_named),
+            FastPath(_LET_KNOW_RE, FriendHousesHandler._send_named),
+            FastPath(_TEXT_ASK_RE, FriendHousesHandler._send),
         ]
 
     def offers_tool(self, transcript: str) -> bool:
@@ -162,6 +297,15 @@ class FriendHousesHandler(Handler):
             return None  # not a friend house: route on
         return await self._ask_to_send(found[0], found[1], ctx, session)
 
+    async def _send_named(self, m: re.Match[str], ctx: Context, session: AsyncSession) -> Response | None:
+        """The name, then the message ("send X a message saying …")."""
+        if not _on():
+            return None
+        found = split_friend(m.group("rest"), await _friends(session))
+        if found is None or found[1]:
+            return None  # not (only) a friend house's name: route on
+        return await self._ask_to_send(found[0], _body(m.group("body")), ctx, session)
+
     async def _ask_to_send(self, friend: Any, body: str, ctx: Context,
                            session: AsyncSession) -> Response:
         from domovoi.friend_houses import messages
@@ -176,9 +320,9 @@ class FriendHousesHandler(Handler):
             return self._reply(ctx, "That's too long for one message. Try a shorter one.")
         if ctx.session_id is None:
             return self._reply(ctx, "I can't ask you to check it from here. Send it from the dashboard.")
-        prompt = f"Send \"{body}\" to {name}?"
+        prompt = read_back(name, body)
         await request_confirmation(
-            session, ctx.session_id, kind=SEND_KIND, handler=self.name, prompt=prompt[:200],
+            session, ctx.session_id, kind=SEND_KIND, handler=self.name, prompt=prompt,
             data={"friend_id": friend.id, "name": friend.local_name, "text": body,
                   "expires_at": time.time() + CONFIRM_TTL_SEC},
         )

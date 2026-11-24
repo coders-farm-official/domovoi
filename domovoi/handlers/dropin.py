@@ -213,7 +213,7 @@ class DropInHandler(Handler):
         # None — a drop-in needs exactly one target.
         if len(targets) != 1:
             return self._say(
-                "You can only drop in on one room at a time — which one?", ctx
+                "You can only drop in on one room at a time. Which one?", ctx
             )
 
         target_room = targets[0]

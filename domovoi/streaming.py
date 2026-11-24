@@ -8414,7 +8414,7 @@ async def ring_target_for_dropin(initiator_room: str, target: "StreamSession") -
     await target._suppress_music_for(target)
     try:
         await target.prompt_dropin(
-            f"The {peer_label} wants to drop in. Is that okay?"
+            f"The {peer_label} wants to drop in. Do you want to let them in?"
         )
     except Exception as e:
         log.warning(

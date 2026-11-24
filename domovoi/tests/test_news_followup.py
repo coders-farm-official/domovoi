@@ -213,7 +213,7 @@ async def test_briefing_reads_each_headline_as_its_own_numbered_paragraph(
         "Nationally. First, County bridge closes for repairs.",
         "Second, Hot tub maker recalls heaters.",
         "Around the world. Third, Storm moves up the coast.",
-        "Want more on any of them?",
+        "Do you want more on any of them?",
     ]
     assert ";" not in r.text
     assert r.expect_followup  # the satellite listens on for "tell me more"
@@ -443,5 +443,5 @@ async def test_subject_readout_is_numbered_with_sources(db_session, monkeypatch)
         "Here's what I have on bridge.",
         "First, Bridge vote set, from Example News.",
         "Second, Bridge crews start work, from Example News.",
-        "Want more on any of them?",
+        "Do you want more on any of them?",
     ]

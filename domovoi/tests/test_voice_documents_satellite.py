@@ -5,10 +5,10 @@ pairing check accepted, Whisper scripted, TTS faked), with the real router,
 the lane database and a Documents folder of our own. What the satellite
 sees is the contract: the reply text in ``response_start``, the audio, and
 ``response_end`` with ``expect_followup`` set while the room keeps
-listening (dictation, "Shall I go on?").
+listening (dictation, "Should I go on?").
 
 * reading: a short document read whole; a long one says its length, reads
-  a part, "Shall I go on?" keeps the room listening, "stop" ends it;
+  a part, "Should I go on?" keeps the room listening, "stop" ends it;
 * a letter: "take a letter to the landlord" → "Who's it from?" (no voice
   ID on this satellite) → dictation → "end of letter" → "Writing it up
   now." → the room hears "Saved as …" as an announcement on the same socket
@@ -146,10 +146,10 @@ def test_read_me_from_a_satellite(satellite):
         assert end["expect_followup"] is False
 
         text, end = _say(ws, satellite, "Read me the lease.")
-        assert text == "Lease. It's 3 pages, about 7 minutes. The whole thing, or just the start?"
+        assert text == "Lease. It's 3 pages, about 7 minutes. Do you want the whole thing, or just the start?"
         assert end["expect_followup"] is True
         text, end = _say(ws, satellite, "The whole thing.", trigger="followup")
-        assert text.startswith("Clause 1. The tenant") and text.endswith("Shall I go on?")
+        assert text.startswith("Clause 1. The tenant") and text.endswith("Should I go on?")
         assert end["expect_followup"] is True
         text, end = _say(ws, satellite, "Stop.", trigger="barge_in")
         assert text == "Okay, I've stopped reading." and end["expect_followup"] is False

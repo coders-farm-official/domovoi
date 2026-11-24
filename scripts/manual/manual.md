@@ -1251,8 +1251,8 @@ Any room can read a document from your household's Documents out loud.
 - If two fit, it asks which one; if it only heard something close, it
   asks "Did you mean …?".
 - Over about a page, it says how long first ("It's 2 pages, about 3
-  minutes") and asks "The whole thing, or just the start?". Then it reads
-  about a page at a time and asks "Shall I go on?".
+  minutes") and asks "Do you want the whole thing, or just the start?". Then it reads
+  about a page at a time and asks "Should I go on?".
 - Say **stop**, **pause**, **start again** or **read that again**. Later,
   "continue reading" picks up where it stopped.
 - It reads only what's in the household's Documents, never a phone's own

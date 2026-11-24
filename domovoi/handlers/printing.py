@@ -4,7 +4,7 @@ What it owns (plan part 8), all anchored:
 
 * "print my cover letter", "print two copies of the lease, double-sided",
   "print a test page" — every voice print confirms first: "That's 2 pages
-  to the office printer. Print it?";
+  to the office printer. Should I print it?";
 * "print it" (or "print the letter", "print the draft") said into the
   app's chat mic in a home-server chat with a draft (documents plan D4):
   that chat's latest draft version, as its PDF, confirmed the same way;
@@ -281,7 +281,7 @@ class PrintingHandler(Handler):
             return self._reply(ctx, _said(str(e)))
         # Every voice print confirms first, a test page too (owner rule).
         return await self._ask(ctx, session, PRINT_TEST,
-                               _said("Print a test page on %s?" % devices.the(row["name"])),
+                               _said("Should I print a test page on %s?" % devices.the(row["name"])),
                                {"printer_id": row["id"]})
 
     async def _print_from_match(self, m, ctx, session):
@@ -343,7 +343,7 @@ class PrintingHandler(Handler):
             path.unlink(missing_ok=True)
         if over:
             return self._reply(ctx, _said(over))
-        text = "That's %s, %s, to %s. Print it?" % (title, ", ".join(self._settings_said(pages, r, row)),
+        text = "That's %s, %s, to %s. Should I print it?" % (title, ", ".join(self._settings_said(pages, r, row)),
                                                     self._printer_phrase(row))
         return await self._ask(ctx, session, PRINT_CONFIRM, _said(text),
                                {"draft": d.draft_id, "version": d.version, "printer_id": row["id"],
@@ -402,7 +402,7 @@ class PrintingHandler(Handler):
             names = e.names[:3]
             return await self._ask(
                 ctx, session, PRINT_PRINTER,
-                _said("To %s?" % " or ".join(devices.the(n) for n in names)),
+                _said("Which printer, %s?" % " or ".join(devices.the(n) for n in names)),
                 {"doc": doc_rel, "wanted": wanted, "printers": names},
             )
         except devices.DeviceError as e:
@@ -427,7 +427,7 @@ class PrintingHandler(Handler):
         if over:
             return self._reply(ctx, _said(over))
         parts = self._settings_said(pages, r, row)
-        text = "That's %s%s to %s. Print it?" % (", ".join(parts), "," if len(parts) > 1 else "",
+        text = "That's %s%s to %s. Should I print it?" % (", ".join(parts), "," if len(parts) > 1 else "",
                                                   self._printer_phrase(row))
         return await self._ask(ctx, session, PRINT_CONFIRM, _said(text),
                                {"doc": doc_rel, "printer_id": row["id"], "wanted": r.as_json(), "title": title})
@@ -551,7 +551,7 @@ class PrintingHandler(Handler):
         if len(fresh) == 1:
             f = fresh[0]
             return await self._ask(ctx, session, PRINTER_ADD,
-                                   _said("I found %s. Add it and print a test page?"
+                                   _said("I found %s. Should I add it and print a test page?"
                                          % _a(f["make_and_model"])),
                                    {"key": f["key"], "model": f["make_and_model"]})
         names = [f["make_and_model"] for f in fresh[:3]]

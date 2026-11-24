@@ -18,7 +18,7 @@ sentence ends:
 * anything longer is said first ("It's 2 pages, about 3 minutes. The whole
   thing, or just the start?");
 * "the whole thing" reads a page or so at a time (:data:`PART_WORDS`),
-  asking "Shall I go on?" between parts; "just the start" reads the first
+  asking "Should I go on?" between parts; "just the start" reads the first
   :data:`START_WORDS` words.
 
 A part is one reply, spoken through the ordinary TTS path sentence by
@@ -47,7 +47,7 @@ WORDS_PER_MINUTE = 160
 SHORT_WORDS = 250
 #: "Just the start": the first part, at most this many words.
 START_WORDS = 150
-#: "The whole thing": a page or so per part, then "Shall I go on?".
+#: "The whole thing": a page or so per part, then "Should I go on?".
 PART_WORDS = 400
 #: Words per page, for documents that have no pages of their own.
 WORDS_PER_PAGE = 400
@@ -387,7 +387,7 @@ async def load(rel: str, root: Path | None = None) -> Spoken:
     except OSError:
         key = None
     if key is not None and key in _CACHE:
-        # "Shall I go on?" → "yes" reads the same file again: once is enough.
+        # "Should I go on?" → "yes" reads the same file again: once is enough.
         return _CACHE[key]
     try:
         result = await runner.extract(path, kind)

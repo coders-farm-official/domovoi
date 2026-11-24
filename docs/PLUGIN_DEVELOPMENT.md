@@ -1304,6 +1304,19 @@ await sdk.sessions.request_confirmation(
 )
 ```
 
+**Word a spoken yes/no question as a real question.** The house's speech
+voice reads a statement that ends in "?" flat ("Delete the playlist?",
+"Play it?"), so it doesn't sound like a question. For every yes/no
+confirmation your handler speaks, the asked part is its own final
+sentence and starts with **"Should I"**, **"Want me to"** or **"Do you
+want"**: "That's 2 pages to the office printer. Should I print it?",
+"I found it online. Want me to play it?". Keep any read-back in the
+sentences before it. Don't put quote marks in the spoken text. A choice
+can be a wh-question ("Which one?") and a check on a fact an inverted
+one ("Did you mean KEXP?"), but never a bare statement with "?". Core
+enforces this for its own prompts and the bundled plugins in
+`domovoi/tests/test_confirm_question_wording.py`.
+
 ### 4.9 Events — `sdk.events`
 
 ```python

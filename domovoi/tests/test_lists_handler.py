@@ -280,7 +280,7 @@ async def test_cross_off_and_remove(voice) -> None:
 async def test_clear_asks_first_and_only_yes_clears(voice) -> None:
     await voice("add milk, eggs to the shopping list")
     r = await voice("clear the shopping list")
-    assert r.text == "Clear all 2 things off your shopping list?" and r.expect_followup
+    assert r.text == "Should I clear all 2 things off your shopping list?" and r.expect_followup
     r = await voice("no")
     assert r.text == "OK, I'll leave it."
     assert len(await _items(voice.db, "shopping")) == 2
@@ -354,7 +354,7 @@ async def test_lists_made_named_and_deleted(voice) -> None:
     r = await voice("what lists do I have")
     assert r.text == "You have 3 lists: to-do, shopping, and camping."
     r = await voice("delete the camping list")
-    assert r.text == "Delete your camping list?" and r.expect_followup
+    assert r.text == "Should I delete your camping list?" and r.expect_followup
     r = await voice("yes")
     assert r.text == "Deleted your camping list."
     assert await L.find_list(voice.db, "camping") is None

@@ -213,7 +213,7 @@ async def test_the_wrong_artist_with_no_provider_offers_the_other_version(
     ctx = await _ctx(db_session, online=True)
     r = await _say(handler, "play let e.m. know by t.i.", ctx, db_session)
     assert r.text == (
-        "I don't have Let Em' Know by t.i. I have one by Bryson Tiller. Want that instead?"
+        "I don't have Let Em' Know by t.i. I have one by Bryson Tiller. Want me to play that instead?"
     )
     assert r.expect_followup is True and r.music_action is None and mpd.files_calls == []
     parked = await _parked(db_session, ctx)
@@ -245,7 +245,7 @@ async def test_the_wrong_artist_offline_says_it_cant_look_it_up(
     assert provider.calls == []
     assert r.text == (
         "I don't have Let Em' Know by ti, and I can't look it up while Domovoi is offline. "
-        "I have one by Bryson Tiller. Want that instead?"
+        "I have one by Bryson Tiller. Want me to play that instead?"
     )
 
 

@@ -136,7 +136,7 @@ async def test_multi_candidate_parks_namespaced_confirmation(
     await _insert_station(db_session, name="KEXP Tacoma")
     h = RadioHandler(stub_sdk)
     resp = await h._stream_from_match(_STREAM_RE.match("stream kexp"), _ctx(), db_session)
-    assert resp.text == "KEXP Seattle or KEXP Tacoma?"
+    assert resp.text == "Do you want KEXP Seattle or KEXP Tacoma?"
     assert resp.expect_followup is True
     (conf,) = stub_sdk.sessions.confirmations
     assert conf["kind"] == "radio.station_choice"
