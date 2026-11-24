@@ -117,47 +117,6 @@ const downloadDocAsPdf = async (rel) => {
   ed.printDocument(window.sanitizeDocumentHtml(docBodyOf(await r.text())), docStem(rel));
 };
 
-/* Bulk download → server-built zip. Streams the response so we can report
- * real progress (download-zip sets Content-Length). `onProgress` gets a
- * 0..1 fraction, or null when the length is unknown. */
-const downloadDocsZip = async (relPaths, onProgress) => {
-  // Saving a document is device tier, but taking a zip of a whole
-  // selection in one request is still the admin tier — so this goes
-  // through apiFetchRaw: the same headers a plain apiFetch sends, the
-  // same sign-in prompt and replay on a 403, and the streamed Response
-  // handed back so the progress bar can still move.
-  const r = await apiFetchRaw('/api/documents/download-zip', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ rel_paths: relPaths }),
-  });
-  const total = Number(r.headers.get('Content-Length')) || 0;
-  const reader = r.body && r.body.getReader ? r.body.getReader() : null;
-  let blob;
-  if (reader) {
-    const chunks = [];
-    let received = 0;
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      chunks.push(value);
-      received += value.length;
-      if (onProgress) onProgress(total ? received / total : null);
-    }
-    blob = new Blob(chunks, { type: 'application/zip' });
-  } else {
-    blob = await r.blob();
-  }
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = 'documents.zip';
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-};
-
 /* ---- in-app text editor overlay --------------------------- */
 const TextEditorOverlay = ({ rel_path, onClose, fire, blockedReason = null }) => {
   const [state, setState] = React.useState({ status: 'loading' });
@@ -630,42 +589,42 @@ const LIBRARY_KIND_GROUPS = [
   ['removable', 'Removable'],
 ];
 
-/* Streaming download that attaches the admin bearer (so it works even when
- * the dashboard points at a cross-origin Domovoi server, where <a download>
- * can't carry the header). `onProgress` gets a 0..1 fraction, or null when
- * the length is unknown. Falls back to the filename in Content-Disposition. */
-const streamFileDownload = async (url, fallbackName, onProgress) => {
-  const full = url.startsWith('http') ? url : `${API_BASE}${url}`;
-  const r = await fetch(full, { credentials: 'include', headers: apiHeaders() });
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
-  const total = Number(r.headers.get('Content-Length')) || 0;
-  let name = fallbackName;
-  const cd = r.headers.get('Content-Disposition') || '';
-  const m = cd.match(/filename\*?=(?:UTF-8'')?["']?([^"';]+)/i);
-  if (m) { try { name = decodeURIComponent(m[1]); } catch { name = m[1]; } }
-  const reader = r.body && r.body.getReader ? r.body.getReader() : null;
-  let blob;
-  if (reader) {
-    const chunks = [];
-    let received = 0;
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      chunks.push(value);
-      received += value.length;
-      if (onProgress) onProgress(total ? received / total : null);
-    }
-    blob = new Blob(chunks);
-  } else {
-    blob = await r.blob();
-  }
-  const objUrl = URL.createObjectURL(blob);
+/* A download the BROWSER does: the page asks the server for a one-use,
+ * one-minute link (POST /api/files/download-ticket, the same tier as the
+ * download itself, through apiPost so a refusal opens the sign-in or pair
+ * prompt and is replayed after it), then hands that link to the browser.
+ * The browser's own download manager streams the file to disk and shows
+ * its progress; nothing is held in this page's memory, so a large file or
+ * a whole folder no longer runs a phone out of memory. Works against a
+ * cross-origin Domovoi too: the link carries the ticket, not a header, and
+ * the server answers it as an attachment. */
+const nativeFileDownload = async (libraryId, rel) => {
+  const t = await apiPost('/api/files/download-ticket', { library_id: libraryId, path: rel });
   const a = document.createElement('a');
-  a.href = objUrl; a.download = name;
+  a.href = `${API_BASE}${t.url}`;
+  a.download = '';      // the server's Content-Disposition names the file
+  a.rel = 'noopener';
   document.body.appendChild(a);
   a.click();
   a.remove();
-  URL.revokeObjectURL(objUrl);
+};
+
+/* What to say when a download could not start, in plain words: never a
+ * bare "401". */
+const downloadFailureText = (e, isDir) => {
+  const status = e && e.status;
+  if (e && e.deviceTokenRequired) {
+    return 'This browser isn’t paired with the house yet. Pair it (or sign in as admin), then press Download again.';
+  }
+  if (status === 401 || status === 403) {
+    return isDir
+      ? 'Downloading a whole folder needs the admin sign-in. Sign in, then press Download again — or download the files one at a time.'
+      : 'This browser can’t download from the house yet. Pair it (or sign in as admin), then press Download again.';
+  }
+  if (status === 413) return 'That folder has too many files to download as one zip. Download the folders inside it instead.';
+  if (status === 404) return isDir ? 'That folder is empty or no longer there.' : 'That file is no longer there.';
+  if (status === 410) return 'That drive was removed.';
+  return `Download failed: ${String((e && e.message) || e).slice(0, 80)}`;
 };
 
 /* Library selector chip — per-library glyph + a small kind badge. */
@@ -1471,7 +1430,6 @@ const FilesPage = () => {
   const [textRel, setTextRel] = React.useState(null);   // text editor
   const [drawing, setDrawing] = React.useState(null);   // excalidraw: {rel_path}
   const [busy, setBusy] = React.useState(null);         // 'deleting'|'downloading'|'importing'|null
-  const [dlPct, setDlPct] = React.useState(null);       // 0..1 or null
   const [confirmState, setConfirmState] = React.useState(null);   // {entries}
   const fileInputRef = React.useRef(null);
   const folderInputRef = React.useRef(null);
@@ -1650,23 +1608,23 @@ const FilesPage = () => {
   };
 
   // ── Download (file → attachment, folder → streamed zip) ──
+  // The browser downloads it (nativeFileDownload); this page only shows
+  // "Preparing download…" until the link is handed over, then says so.
   const downloadEntry = async (entry) => {
-    const url = `/api/files/download?library_id=${encodeURIComponent(activeId)}`
-      + `&path=${encodeURIComponent(entry.rel)}`;
-    const fname = entry.is_dir ? `${entry.name}.zip` : entry.name;
-    setBusy('downloading'); setDlPct(entry.is_dir ? null : 0);
+    setBusy('downloading');
     try {
-      await streamFileDownload(url, fname, (p) => setDlPct(p));
+      await nativeFileDownload(activeId, entry.rel);
+      fire(`Downloading ${entry.is_dir ? `${entry.name}.zip` : entry.name}: your browser shows the progress`);
     } catch (e) {
-      fire(`download failed: ${String(e.message || e).slice(0, 80)}`);
-    } finally { setBusy(null); setDlPct(null); }
+      fire(downloadFailureText(e, entry.is_dir));
+    } finally { setBusy(null); }
   };
   const downloadSelected = async () => {
     const rels = Array.from(selected);
     const list = entriesFor(new Set(rels));
     if (!list.length) return;
     for (const entry of list) {
-      // Sequential so the progress bar reflects one transfer at a time.
+      // One at a time: each needs its own link.
       // eslint-disable-next-line no-await-in-loop
       await downloadEntry(entry);
     }
@@ -1894,7 +1852,7 @@ const FilesPage = () => {
                 {nSel} selected{busy === 'moving' ? ' · moving…' : ''}
               </span>
               <Button icon="download" disabled={busy != null} onClick={downloadSelected}>
-                {busy === 'downloading' ? 'Downloading…' : 'Download'}
+                {busy === 'downloading' ? 'Preparing…' : 'Download'}
               </Button>
               {canUpload && (
                 <Button icon="trash-2" disabled={busy != null}
@@ -1937,11 +1895,12 @@ const FilesPage = () => {
         )}
 
         {busy === 'downloading' && (
-          <div style={{ height: 3, background: 'var(--sunken)', overflow: 'hidden' }}>
-            <div style={{ height: '100%',
-                          width: dlPct != null ? `${Math.round(dlPct * 100)}%` : '100%',
-                          opacity: dlPct != null ? 1 : 0.5,
-                          background: 'var(--brand)', transition: 'width .15s ease' }}/>
+          <div role="status" data-testid="files-download-preparing"
+               style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px',
+                        fontSize: 13, color: 'var(--fg-muted)',
+                        borderBottom: '1px solid var(--border-soft)' }}>
+            <Icon name="loader" size={15} className="dv-spin"/>
+            Preparing download…
           </div>
         )}
 

@@ -381,8 +381,8 @@ def test_the_tree_walks_leave_the_recordings_and_the_config_dir_out(monkeypatch,
     monkeypatch.setattr(fs, "CONFIG_DIR", config)
     monkeypatch.setattr(settings, "command_captures_dir", str(moved))
 
-    resp = files_api._zip_directory(home, home)
-    names = set(zipfile.ZipFile(io.BytesIO(resp.body)).namelist())
+    data = files_api._zip_directory(home, home)
+    names = set(zipfile.ZipFile(io.BytesIO(data)).namelist())
     assert names == {"Music/a.mp3"}, names
 
     dest = tmp_path / "imported"
