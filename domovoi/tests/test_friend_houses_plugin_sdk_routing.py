@@ -47,7 +47,13 @@ pytestmark = requires_db
 
 @pytest.fixture
 def gate_open(monkeypatch):
+    """Friend Houses on and connected, with no background sender: ``wake``
+    only records who it was for, so no real sender round races the test
+    for a queued row (a test that sends drives its own round)."""
     monkeypatch.setattr(ps, "gate_open", lambda: True)
+    woken: list[str] = []
+    monkeypatch.setattr(ps, "wake", woken.append)
+    return woken
 
 
 # ─── friends() ───────────────────────────────────────────────────────────
@@ -92,6 +98,7 @@ async def test_send_mail_queues_by_the_plugins_id_for_the_friend(house, tmp_path
     mail_id = await house.api.send_mail(hid, b'{"move":"e4"}', ttl_s=600, replace_key="view")
     assert re.fullmatch(r"[0-9a-f]{32}", mail_id)
     assert await _outbox() == [("fa", "games", 1, b'{"move":"e4"}', 600, "view")]
+    assert gate_open == ["fa"]  # the friend's sender is woken for it
 
 
 async def test_send_mail_to_a_stranger_or_a_disallowed_friend_is_not_allowed(house, tmp_path, gate_open) -> None:
@@ -119,6 +126,8 @@ async def test_the_sender_signs_an_image_mail_as_body_version_2(tmp_path, house,
     an image body (and its checked tag) under the same signature."""
     fa = await add_friend("fa", tmp=tmp_path, caps=True)
     await house.api.send_image(house.keys.plugin_house_id("games", fa.house_key), b"img", tag="t1")
+    assert gate_open == ["fa"]
+    assert await q("SELECT state FROM friend_houses_plugin_outbox") == [("queued",)]
     friend = await _friend_row("fa")
     mail = await ps._Sender("fa")._take(friend)
     assert isinstance(mail, dict) and mail["version"] == fe.PLUGIN_BODY_IMAGE
