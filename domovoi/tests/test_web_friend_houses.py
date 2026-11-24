@@ -138,6 +138,7 @@ ROUTES: dict[str, tuple[str, str, dict | None]] = {
     "set-apps": ("PUT", "/api/friend-houses/friends/fr0123abcd/apps", {"on": True, "apps": ["games"]}),
     "set-app": ("PUT", "/api/friend-houses/friends/fr0123abcd/apps/games", {"allowed": False}),
     "resume-app": ("POST", "/api/friend-houses/friends/fr0123abcd/apps/games/resume", None),
+    "app-notices": ("GET", "/api/friend-houses/apps/notices", None),
 }
 _IDS = sorted(ROUTES)
 
@@ -163,6 +164,7 @@ FRIEND_APPS_ROUTES = {
     ("PUT", "/api/friend-houses/friends/{friend_id}/apps"),
     ("PUT", "/api/friend-houses/friends/{friend_id}/apps/{slug}"),
     ("POST", "/api/friend-houses/friends/{friend_id}/apps/{slug}/resume"),
+    ("GET", "/api/friend-houses/apps/notices"),
 }
 # What stays admin, named so a move is a decision, not a slip.
 ADMIN_ROUTES = {

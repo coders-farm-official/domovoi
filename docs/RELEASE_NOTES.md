@@ -4,6 +4,34 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Friend Houses: apps with friends, sending and the page
+
+- **What changed.** Plugins can now send as well as receive: SDK 1.18's
+  `friends()` lists the friends a plugin may mail (by the plugin's own id
+  for each), `send_mail` queues mail for one, and the new `send_image`
+  sends a picture, which the friend's house opens only in that friend's
+  decode-only container and hands its plugin as a PNG Domovoi wrote itself
+  (at most 768 pixels a side, no metadata). `on_friends_changed` handlers
+  run when the list may have changed. The Friend Houses page has
+  **Apps with this friend** in each friend's row and a notices card in
+  "Friends and connections" (paused mail with **Resume now**, apps waiting
+  to be allowed, Docker problems); an admin's Home lists the same notices.
+  New route: `GET /v1/admin/friend-houses/apps/notices` and its dashboard
+  mirror (security tier).
+- **What to know.** Migration V085 adds the mail kind (data or image). A
+  plugin holding the `friend_houses` permission has every reply of its
+  voice handlers filtered before a room says it (wake phrases and the
+  assistant's name removed, at most 400 characters), and the chat history
+  and conversation log keep "[text from a friend house]" unless the plugin
+  gives its own history line; its plain `sdk.speech` lines get the same
+  cap. `friends()`, `send_mail` and `send_image` refuse a request that came
+  in on a route anyone on the network can call (an `@open_endpoint`, or a
+  GET that is neither `@device_endpoint` nor behind `admin_required`).
+  `friends()` is empty while Friend Houses is off or dark. Plugin ids for
+  friends are keyed by their own derived key now, so an id a 1.5.0
+  development build handed out before this change is different; nothing
+  stores them on the server.
+
 ## 1.5.0 (unreleased) — Friend Houses: apps with friends
 
 - **What changed.** Plugins with the `friend_houses` permission can now
@@ -25,10 +53,9 @@ a way that would otherwise get reported as a bug.
   a friend, revoking an app, disabling or uninstalling the plugin, or
   removing or blocking the friend deletes that app's waiting mail with the
   friend; going dark keeps it until it expires (3 days at most). Disabling
-  a plugin now waits for an install or upgrade in progress. The dashboard's
-  apps section and plugins sending mail come later in 1.5.0; a plugin's
-  friend list is still empty until then. The listener's image is rebuilt
-  once after the upgrade (its code changed).
+  a plugin now waits for an install or upgrade in progress. Sending and the
+  dashboard's apps section are in the entry above. The listener's image is
+  rebuilt once after the upgrade (its code changed).
 
 ## 1.5.0 (unreleased) — Plugins: SDK 1.18 for apps with friends
 
@@ -40,10 +67,8 @@ a way that would otherwise get reported as a bug.
   The install screen now says what a `friend_houses` plugin does with
   friend houses, and flags one that also has routes anyone on the network
   can call; the core logs a warning when it loads one.
-- **What to know.** Receiving works (see "apps with friends" above); until
-  sending arrives later in 1.5.0, a plugin's friend list is empty and
-  sending raises "Friend Houses for apps isn't available yet". "Apps with
-  this friend" is not on the Friend Houses page yet. A plugin that asks for
+- **What to know.** Receiving, sending and the Friend Houses page's "Apps
+  with this friend" are in the entries above. A plugin that asks for
   `domovoi_api = ">=1.18"` won't load on an older core.
 
 ## 1.5.0 (unreleased) — Friend Houses: plugin mail on the wire

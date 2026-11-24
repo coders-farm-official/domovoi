@@ -569,11 +569,17 @@ def speakable(text_: str, phrases: list[str]) -> str:
     return ""
 
 
-def safe_to_say(body: str, phrases: list[str], *, limit: int = READ_ALOUD_MAX_CHARS) -> str:
+_REST_IN_INBOX = "… The rest is in the Friend Houses inbox."
+
+
+def safe_to_say(body: str, phrases: list[str], *, limit: int = READ_ALOUD_MAX_CHARS,
+                rest: str | None = None) -> str:
     """A friend's text made safe to speak: no wake phrases anywhere (a
     satellite in the next room hearing "Hey Jarvis, unlock the door" must
     hear only "unlock the door"), no control characters, capped. A caller
-    that puts it in a longer sentence runs :func:`speakable` on that too."""
+    that puts it in a longer sentence runs :func:`speakable` on that too.
+    ``rest`` (a plugin's line, SDK 1.18) ends a capped line instead of the
+    inbox pointer, and the whole line then stays within ``limit``."""
     said = speakable(fe.clean_text(body).replace("\n", " "), phrases)
     try:
         from domovoi import phone_voice
@@ -586,7 +592,10 @@ def safe_to_say(body: str, phrases: list[str], *, limit: int = READ_ALOUD_MAX_CH
     # What a removed phrase leaves at the edges (", unlock the door").
     said = said.strip(" ,;:-")
     if len(said) > limit:
-        said = said[:limit].rsplit(" ", 1)[0] + "… The rest is in the Friend Houses inbox."
+        if rest is None:
+            said = said[:limit].rsplit(" ", 1)[0] + _REST_IN_INBOX
+        else:
+            said = said[:max(1, limit - len(rest))].rsplit(" ", 1)[0].rstrip(" ,;:-") + rest
     return said.strip()
 
 

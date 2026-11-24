@@ -295,7 +295,7 @@ class _Sender:
             return None
         async with pm._db() as s:
             row = (await s.execute(text(
-                "SELECT o.id, o.slug, o.mail_id, o.seq, o.payload, o.expires_at, o.attempts, o.size "
+                "SELECT o.id, o.slug, o.mail_id, o.seq, o.payload, o.expires_at, o.attempts, o.size, o.kind "
                 "FROM friend_houses_plugin_outbox o JOIN friend_houses_plugin_pairs p "
                 "ON p.friend_id = o.friend_id AND p.slug = o.slug JOIN friend_houses_friends f ON f.id = o.friend_id "
                 "WHERE o.friend_id = :f AND o.state = 'queued' AND o.generation = p.generation AND p.allowed "
@@ -321,7 +321,7 @@ class _Sender:
                 "UPDATE friend_houses_plugin_outbox SET state = 'inflight', attempts = attempts + 1 "
                 "WHERE id = :i"), {"i": row[0]})
         return {"id": int(row[0]), "slug": row[1], "mail_id": bytes(row[2]), "seq": int(row[3]),
-                "payload": bytes(row[4]), "ttl": min(left, fe.PLUGIN_TTL_MAX)}
+                "payload": bytes(row[4]), "ttl": min(left, fe.PLUGIN_TTL_MAX), "version": int(row[8])}
 
     async def _requeue(self, row_id: int) -> None:
         async with pm._db() as s:
@@ -437,7 +437,8 @@ class _Sender:
             return 30.0
         env = fe.plugin_mail(keys, to=friend["house_key"], slug=mail["slug"], payload=mail["payload"],
                              ttl_s=mail["ttl"], epoch=hello.epoch, seq=mail["seq"],
-                             sent_at=int(time.time()), msg_id=mail["mail_id"])
+                             sent_at=int(time.time()), msg_id=mail["mail_id"],
+                             version=mail.get("version", fe.PLUGIN_BODY_VERSION))
         try:
             await self.sess.send(fs.Kind.MESSAGE, env.to_bytes())
             answer = await pw.await_answer(self.sess, mail["mail_id"], deadline=ACK_SEC)

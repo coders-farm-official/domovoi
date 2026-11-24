@@ -20499,6 +20499,25 @@
         }
       }
     },
+    "/api/friend-houses/apps/notices": {
+      "get": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses App Notices",
+        "operationId": "friend_houses_app_notices_api_friend_houses_apps_notices_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/friend-houses/friends/{friend_id}/apps": {
       "get": {
         "tags": [

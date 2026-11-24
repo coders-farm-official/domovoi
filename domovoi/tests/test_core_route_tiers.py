@@ -212,6 +212,7 @@ FRIEND_HOUSES_SECURITY = [
     ("PUT", "/v1/admin/friend-houses/friends/{friend_id}/apps"),
     ("PUT", "/v1/admin/friend-houses/friends/{friend_id}/apps/{slug}"),
     ("POST", "/v1/admin/friend-houses/friends/{friend_id}/apps/{slug}/resume"),
+    ("GET", "/v1/admin/friend-houses/apps/notices"),
 ]
 
 
@@ -754,7 +755,7 @@ def test_apps_with_friends_stays_on_the_security_tier() -> None:
     # playing are on the plugin's own device-tier routes, never these.
     household = DEVICE_READS + FRIEND_HOUSES_DEVICE_WRITES
     assert not [r for r in household if "/apps" in r[1]]
-    assert len(_friend_apps_routes()) == 4
+    assert len(_friend_apps_routes()) == 5
     for method, path in _friend_apps_routes():
         gates = _gates_for(method, path)
         assert (admin_auth.require_admin_security in gates

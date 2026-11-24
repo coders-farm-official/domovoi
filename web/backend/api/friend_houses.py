@@ -305,6 +305,13 @@ def _slug(value: str) -> str:
     return value
 
 
+@router.get("/apps/notices", dependencies=READ)
+async def friend_houses_app_notices(request: Request):
+    return bridge_response(
+        *await get_admin(f"{CORE}/apps/notices", headers=auth_forward_headers(request))
+    )
+
+
 @router.get("/friends/{friend_id}/apps", dependencies=READ)
 async def friend_houses_apps(friend_id: str, request: Request):
     fid = _id(friend_id, "friend house")

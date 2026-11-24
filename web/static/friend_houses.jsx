@@ -906,9 +906,9 @@ const FhFriend = ({ friend, quiet, fire, onChanged, onMessage, onShare }) => {
         </div>
       )}
       <FhAlertChoice friend={friend} quiet={quiet} fire={fire} onChanged={onChanged}/>
-      {/* Apps with this friend (friend_apps.jsx): hidden until the plugin
-          mail service wires it; fhAppsShown() is off in production. */}
-      {typeof fhAppsShown === 'function' && fhAppsShown() && <FhFriendApps friend={friend}/>}
+      {/* Apps with this friend (friend_apps.jsx): the admin zone only, as
+          its routes are on the security tier. */}
+      {typeof FhFriendApps === 'function' && <FhFriendApps friend={friend} fire={fire} onChanged={onChanged}/>}
       <div style={fhRow}>
         <span style={fhMuted}>fingerprint</span>
         <FhFingerprint value={friend.fingerprint} fire={fire}/>
@@ -1558,6 +1558,7 @@ const FriendHousesPanel = ({ marks = [] }) => {
                            onChanged={() => { shared.refresh(); lists.refresh(); }}/>
       </div>
       <FhAdminZone open={zone} onOpen={() => setZoneOpen(true)} onClose={() => setZoneOpen(false)}>
+        {typeof FhAppsNoticesCard === 'function' && <FhAppsNoticesCard fire={fire} onChanged={() => { fr.refresh(); }}/>}
         <FhRequestsCard requests={req.data} fire={fire} onChanged={() => { req.refresh(); fr.refresh(); st.refresh(); }}/>
         <FhFriendsCard friends={fr.data} fire={fire}
                        onChanged={() => { fr.refresh(); st.refresh(); convs.refresh(); shared.refresh(); blockedHouses.refresh(); }}

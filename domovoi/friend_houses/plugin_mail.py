@@ -173,6 +173,18 @@ async def permitted_slugs() -> list[str]:
     return sorted(out)
 
 
+async def plugin_names() -> dict[str, str]:
+    """slug -> the plugin's display name (its manifest's), for the admin's
+    views and notices. Never raises."""
+    from domovoi.plugins_runtime import registry as reg
+
+    try:
+        rows = await reg.list_plugins()
+    except Exception:  # noqa: BLE001 — slugs stand in
+        return {}
+    return {r.slug: str(r.name or r.slug)[:80] for r in rows}
+
+
 # ─── what a plugin is told ────────────────────────────────────────────────
 
 
@@ -188,6 +200,21 @@ def wrap(value: Any) -> Any:
     if isinstance(value, dict):
         return {k: wrap(v) for k, v in value.items()}
     return value
+
+
+def delivered_value(canonical: bytes, kind: int, image_png: Any = None) -> Any:
+    """What the handler gets, made again on every delivery (retries after a
+    restart included): a data mail's value with every string a FriendText
+    (M5); an image mail's :class:`~domovoi.sdk.friend_houses.FriendImage`,
+    the core's own PNG with its tag as a FriendText (D1)."""
+    value = json.loads(canonical.decode("utf-8"))
+    if kind != fe.PLUGIN_BODY_IMAGE:
+        return wrap(value)
+    from domovoi.sdk.friend_houses import FriendImage, FriendText
+
+    info = value["image"]
+    return FriendImage(bytes(image_png or b""), int(info["width"]), int(info["height"]),
+                       FriendText(str(info.get("tag", ""))))
 
 
 def has_plugin(friend: dict[str, Any], slug: str, now: float | None = None) -> bool:
@@ -374,16 +401,24 @@ async def quota_ok(s, table: str, friend_id: str, slug: str, size: int) -> bool:
 
 
 async def send(slug: str, friend_id: str, payload: bytes, *, ttl_s: int = TTL_MAX,
-               replace_key: str | None = None) -> str:
+               replace_key: str | None = None, version: int = fe.PLUGIN_BODY_VERSION) -> str:
     """Queue one mail from plugin ``slug`` to friend ``friend_id``; its
     mail id (hex). Raises the SDK's NotAllowed, MailFull, TooLarge or
     RateLimited (and ValueError for a bad argument). ``replace_key``
     replaces the queued (never the in-flight) mail with that key, with a
-    new mail id and a new ``seq``."""
+    new mail id and a new ``seq``. ``version`` 2 is an image mail (its
+    payload made by :func:`envelope.image_payload`)."""
     from domovoi.sdk import friend_houses as sdk
 
     if not isinstance(payload, (bytes, bytearray)) or not payload:
         raise ValueError("payload is non-empty bytes")
+    if version not in fe.PLUGIN_BODY_VERSIONS:
+        raise ValueError("a data or an image mail")
+    if version == fe.PLUGIN_BODY_IMAGE:
+        try:
+            fe.split_image_payload(bytes(payload))
+        except fe.BadEnvelope as exc:
+            raise ValueError("not an image mail's payload") from exc
     if len(payload) > PAYLOAD_MAX:
         raise sdk.TooLarge(f"payload is {len(payload)} bytes; at most {PAYLOAD_MAX}")
     if isinstance(ttl_s, bool) or not isinstance(ttl_s, int) or not TTL_MIN <= ttl_s <= TTL_MAX:
@@ -416,14 +451,108 @@ async def send(slug: str, friend_id: str, payload: bytes, *, ttl_s: int = TTL_MA
             {"ms": int(_now() * 1000), "f": friend_id, "s": slug})).scalar_one()
         await s.execute(text(
             "INSERT INTO friend_houses_plugin_outbox (friend_id, slug, generation, mail_id, seq, "
-            "replace_key, payload, size, ttl_s, expires_at) VALUES (:f, :s, :g, :m, :q, :k, :p, :n, "
-            ":t, now() + make_interval(secs => CAST(:t AS integer)))"),
+            "replace_key, payload, size, ttl_s, expires_at, kind) VALUES (:f, :s, :g, :m, :q, :k, :p, "
+            ":n, :t, now() + make_interval(secs => CAST(:t AS integer)), :v)"),
             {"f": friend_id, "s": slug, "g": pair["generation"], "m": mail_id, "q": int(seq),
-             "k": replace_key, "p": bytes(payload), "n": len(payload), "t": ttl_s})
+             "k": replace_key, "p": bytes(payload), "n": len(payload), "t": ttl_s, "v": int(version)})
     from domovoi.friend_houses import plugin_sender
 
     plugin_sender.wake(friend_id)
     return mail_id.hex()
+
+
+# ─── what a plugin sees: friends() and its ids (§4, slice 5) ─────────────
+
+
+async def _plugin_friends(slug: str) -> list[dict[str, Any]]:
+    """The friends ``slug`` may mail: active, "Apps with this friend" on and
+    the pair allowed. Each with this plugin's id for it (never stored)."""
+    keys = fid.load()
+    if keys is None:
+        return []
+    async with _db() as s:
+        rows = [_friend(r) for r in await s.execute(text(
+            f"SELECT {_FRIEND_COLS} FROM friend_houses_friends WHERE state = 'active' AND apps_on "
+            "AND id IN (SELECT friend_id FROM friend_houses_plugin_pairs WHERE slug = :s AND allowed) "
+            "ORDER BY local_name, id"), {"s": slug})]
+    for f in rows:
+        f["house_id"] = keys.plugin_house_id(slug, f["house_key"])
+    return rows
+
+
+async def friends_for(slug: str) -> list[dict[str, Any]]:
+    """``sdk.friend_houses.friends()`` for plugin ``slug``: ``[{house_id,
+    name, online, has_plugin}]``. Empty while the plugin isn't running with
+    the permission, or while Friend Houses is off or dark (so a plugin
+    hides its "play with a friend" control then: nothing could reach
+    them)."""
+    from domovoi.friend_houses import plugin_sender, presence
+
+    if await plugin_state(slug) == "off" or not plugin_sender.gate_open():
+        return []
+    now = _now()
+    return [{"house_id": f["house_id"], "name": f["local_name"] or "",
+             "online": presence.online(f["last_seen_at"]), "has_plugin": has_plugin(f, slug, now)}
+            for f in await _plugin_friends(slug)]
+
+
+async def friend_for_house_id(slug: str, house_id: str) -> str | None:
+    """The friend row id behind plugin ``slug``'s ``house_id``, among the
+    friends it may mail; None otherwise."""
+    for f in await _plugin_friends(slug):
+        if secrets.compare_digest(f["house_id"], house_id):
+            return f["id"]
+    return None
+
+
+async def send_to(slug: str, house_id: str, payload: bytes, *, ttl_s: int = TTL_MAX,
+                  replace_key: str | None = None, version: int = fe.PLUGIN_BODY_VERSION) -> str:
+    """:func:`send` by the plugin's own id for the friend (SDK
+    ``send_mail`` / ``send_image``)."""
+    from domovoi.sdk import friend_houses as sdk
+
+    friend_id = await friend_for_house_id(slug, house_id)
+    if friend_id is None:
+        raise sdk.NotAllowed("not a friend this plugin may mail")
+    return await send(slug, friend_id, payload, ttl_s=ttl_s, replace_key=replace_key, version=version)
+
+
+#: slug -> its friends_changed call waiting to run (coalesced).
+_CHANGED: dict[str, asyncio.Task] = {}
+FRIENDS_CHANGED_DELAY_SEC = 0.5
+
+
+def friends_changed(slugs: list[str] | set[str] | tuple[str, ...] | None = None) -> None:
+    """``friends()`` may answer differently for these plugins (None: all
+    of them): their ``on_friends_changed`` handlers run once shortly after,
+    however many changes came together. Never raises."""
+    from domovoi.sdk.friend_houses import registered_all
+
+    for api in registered_all():
+        if not api.friends_handlers or (slugs is not None and api.slug not in slugs):
+            continue
+        pending = _CHANGED.get(api.slug)
+        if pending is not None and not pending.done():
+            continue
+        task = _track(_run_friends_changed(api.slug), "friend-houses-friends-changed")
+        if task is not None:
+            _CHANGED[api.slug] = task
+
+
+async def _run_friends_changed(slug: str) -> None:
+    from domovoi.sdk.friend_houses import HANDLER_DEADLINE_SEC as DEADLINE
+    from domovoi.sdk.friend_houses import registered
+
+    await asyncio.sleep(FRIENDS_CHANGED_DELAY_SEC)
+    _CHANGED.pop(slug, None)
+    api = registered(slug)
+    for handler in list(api.friends_handlers if api is not None else []):
+        try:
+            await asyncio.wait_for(handler(), DEADLINE)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — the plugin's own; the next change calls it again
+            log.warning("Friend Houses: %s's friends-changed handler failed", slug, exc_info=True)
 
 
 # ─── receiving: the lane (§6.6) ──────────────────────────────────────────
@@ -565,11 +694,12 @@ async def store_mail(event: dict) -> str | tuple[str, int] | None:
             return ("full", FULL_RETRY_SEC)
         await s.execute(text(
             "INSERT INTO friend_houses_plugin_inbox (friend_id, slug, generation, mail_id, epoch, seq, "
-            "payload, size, expires_at) VALUES (:f, :s, :g, :m, :e, :q, :p, :n, "
-            "now() + make_interval(secs => CAST(:t AS integer))) ON CONFLICT (friend_id, slug, mail_id) DO NOTHING"),
+            "payload, size, expires_at, kind) VALUES (:f, :s, :g, :m, :e, :q, :p, :n, "
+            "now() + make_interval(secs => CAST(:t AS integer)), :v) "
+            "ON CONFLICT (friend_id, slug, mail_id) DO NOTHING"),
             {"f": friend["id"], "s": body.slug, "g": pair["generation"], "m": env.msg_id,
              "e": env.epoch, "q": int(env.seq), "p": body.payload, "n": len(body.payload),
-             "t": min(body.ttl_s, TTL_MAX)})
+             "t": min(body.ttl_s, TTL_MAX), "v": int(body.version)})
         await s.execute(text(
             "UPDATE friend_houses_plugin_pairs SET in_mark = greatest(in_mark, :q) "
             "WHERE friend_id = :f AND slug = :s"), {"q": int(env.seq), "f": friend["id"], "s": body.slug})
@@ -646,6 +776,7 @@ async def on_caps(house: bytes, proto: int, slugs: tuple[str, ...], epoch: bytes
         from domovoi.friend_houses import plugin_sender
 
         plugin_sender.wake(wake_friend)
+        friends_changed()  # has_plugin may read differently
 
 
 async def caps_slugs(s, friend: dict[str, Any], permitted: list[str] | None = None) -> list[str]:
@@ -729,6 +860,7 @@ async def after_close(pairs: list[tuple[str, str]], *, write_files: bool = True)
             log.exception("Friend Houses: writing the listener files after a closure failed")
     for friend_id in sorted({f for f, _ in pairs}):
         plugin_sender.wake(friend_id)  # the CAPS that says so
+    friends_changed({slug for _, slug in pairs})
 
 
 # ─── the toggle and the pairs (§6.11) ────────────────────────────────────
@@ -748,11 +880,13 @@ async def apps_view(friend_id: str) -> dict[str, Any] | None:
             f"SELECT {_PAIR_COLS} FROM friend_houses_plugin_pairs WHERE friend_id = :i"),
             {"i": friend_id})]
         rows = {p["slug"]: p for p in pairs}
+    names = await plugin_names()
     apps = []
     for slug in sorted(set(permitted) | {k for k, p in rows.items() if p["allowed"]}):
         p = rows.get(slug)
         left = _paused(p, now) if p else 0
-        apps.append({"slug": slug, "allowed": bool(p and p["allowed"]) and slug in permitted,
+        apps.append({"slug": slug, "name": names.get(slug, slug),
+                     "allowed": bool(p and p["allowed"]) and slug in permitted,
                      "needs_confirm": bool(friend["apps_on"] and p is not None and not p["allowed"]
                                            and p["confirmed_at"] is None and slug in permitted),
                      "both_have_it": has_plugin(friend, slug, now),
@@ -792,6 +926,7 @@ async def set_apps(friend_id: str, on: bool, slugs: list[str] | None = None, *,
         from domovoi.friend_houses import plugin_sender
 
         plugin_sender.wake(friend_id)
+        friends_changed(wanted)
     else:
         async with _db() as s:
             friend = await friend_row(s, friend_id=friend_id, lock=True)
@@ -834,6 +969,7 @@ async def set_pair(friend_id: str, slug: str, allowed: bool, *, by: str = "admin
         from domovoi.friend_houses import plugin_sender
 
         plugin_sender.wake(friend_id)
+        friends_changed([slug])
     else:
         async with _db() as s:
             friend = await friend_row(s, friend_id=friend_id)
@@ -886,35 +1022,42 @@ async def notices() -> list[dict[str, Any]]:
             "p.confirmed_at, f.apps_on FROM friend_houses_plugin_pairs p JOIN friend_houses_friends f "
             "ON f.id = p.friend_id WHERE f.state = 'active' ORDER BY p.slug, f.local_name"))).all()
     now = _now()
+    names = await plugin_names()
     paused_by_slug: dict[str, int] = {}
     for fid_, name, slug, until, cause, allowed, confirmed, apps_on in rows:
         left = (until.timestamp() - now) if until else 0
+        app = names.get(slug, slug)
+        name = name or "A friend house"
         if left > 0 and cause:
             paused_by_slug[slug] = paused_by_slug.get(slug, 0) + 1
-            out.append({"kind": "paused", "friend_id": fid_, "friend": name, "slug": slug,
+            out.append({"kind": "paused", "friend_id": fid_, "friend": name, "slug": slug, "app": app,
                         "cause": cause, "paused_for_sec": int(left),
-                        "text": pause_text(name, slug, cause, int(left))})
+                        "text": pause_text(name, app, cause, int(left))})
         elif apps_on and not allowed and confirmed is None and slug in permitted:
-            out.append({"kind": "confirm", "friend_id": fid_, "friend": name, "slug": slug,
-                        "text": f"{slug} can use Apps with friends. Allow it with {name}?"})
+            out.append({"kind": "confirm", "friend_id": fid_, "friend": name, "slug": slug, "app": app,
+                        "text": f"{app} can use Apps with friends. Allow it with {name}?"})
     for slug, n in paused_by_slug.items():
         if n >= 2:
-            out.append({"kind": "plugin", "friend_id": None, "slug": slug,
-                        "text": f"{slug} has failed on mail from {n} friends; it may need an update."})
+            app = names.get(slug, slug)
+            out.append({"kind": "plugin", "friend_id": None, "slug": slug, "app": app,
+                        "text": f"{app} has failed on mail from {n} friends; it may need an update."})
     dn = _iso().DOCKER_NOTICE
     if dn.get("at") and now - float(dn["at"]) < 24 * 3600:
-        out.append({"kind": "docker", "friend_id": None, "slug": None, "text": str(dn["why"])})
+        out.append({"kind": "docker", "friend_id": None, "slug": None, "app": None,
+                    "text": str(dn["why"])})
     return out
 
 
-def pause_text(friend: str, slug: str, cause: str, secs: int) -> str:
+def pause_text(friend: str, app: str, cause: str, secs: int) -> str:
+    """The admin's notice for a pause (§6.7), naming the friend and the
+    plugin (``app``: its display name)."""
     span = "1 hour" if secs <= 3600 else f"{(secs + 3599) // 3600} hours"
     if cause == "restart":
-        return f"Mail from {friend} to {slug} is paused: a mail from {friend} made Domovoi restart " \
-               f"while {slug} handled it."
+        return f"Mail from {friend} to {app} is paused: a mail from {friend} made Domovoi restart " \
+               f"while {app} handled it."
     if cause == "versions":
-        return f"{slug} at this house and {friend} may be different versions: paused for 1 hour."
-    return f"Mail from {friend} to {slug} is paused for {span}: it kept failing. " \
+        return f"{app} at this house and {friend} may be different versions: paused for 1 hour."
+    return f"Mail from {friend} to {app} is paused for {span}: it kept failing. " \
            "Other friends aren't affected."
 
 
@@ -991,6 +1134,7 @@ async def on_plugin_on(slug: str) -> None:
     except Exception:  # noqa: BLE001
         log.exception("Friend Houses: noting %s's enable failed", slug)
     _refresh_apps_check()
+    friends_changed([slug])
 
 
 async def apps_check(slug: str) -> bool:
@@ -1129,7 +1273,7 @@ async def _decode_step(row_id: int, friend_id: str, slug: str) -> bool:
     iso = _iso()
     async with _db() as s:
         row = (await s.execute(text(
-            "SELECT state, payload, generation FROM friend_houses_plugin_inbox WHERE id = :i"),
+            "SELECT state, payload, generation, kind FROM friend_houses_plugin_inbox WHERE id = :i"),
             {"i": row_id})).first()
     if row is None:
         return False
@@ -1138,6 +1282,7 @@ async def _decode_step(row_id: int, friend_id: str, slug: str) -> bool:
     if row[0] != "stored" or row[1] is None:
         return False
     generation = int(row[2])
+    image = int(row[3]) == fe.PLUGIN_BODY_IMAGE
     api = registered(slug)
     pool = iso.POOLS.get(slug)
     if await plugin_state(slug) != "ready" or api is None or api.schema is None or pool is None:
@@ -1145,6 +1290,22 @@ async def _decode_step(row_id: int, friend_id: str, slug: str) -> bool:
         return False
     if pool.schema is None:
         pool.set_schema(api.schema)
+    tag, image_bytes = "", b""
+    if image:
+        # D1: an image goes to the core's image helper, never to the
+        # plugin's decoder; and only to a plugin that takes images.
+        try:
+            tag, image_bytes = fe.split_image_payload(bytes(row[1]))
+        except fe.BadEnvelope:
+            image_bytes = b""
+        if not api.images or not image_bytes:
+            async with _db() as s:
+                await s.execute(text("DELETE FROM friend_houses_plugin_inbox WHERE id = :i"), {"i": row_id})
+            await iso.charge(slug, friend_id, str(row_id), iso.W_REFUSAL,
+                             "an image this plugin doesn't take", kind=iso.KIND_REFUSAL)
+            log.info("Friend Houses: an image from a friend house to %s was refused: the plugin "
+                     "takes no images", slug)
+            return False
     attempt = str(uuid.uuid4())
 
     async def on_start() -> None:
@@ -1157,7 +1318,17 @@ async def _decode_step(row_id: int, friend_id: str, slug: str) -> bool:
             if not res.rowcount:
                 raise RuntimeError("the row changed")
 
-    result = await pool.decode(friend_id, bytes(row[1]), item_key=str(row_id), on_start=on_start)
+    if image:
+        result = await pool.decode_image(friend_id, image_bytes, item_key=str(row_id), on_start=on_start)
+        if result.ok:
+            info = dict((result.value or {}).get("image") or {})
+            result = iso.DecodeResult(
+                True, value=result.value, image=result.image, elapsed_ms=result.elapsed_ms,
+                canonical=json.dumps({"image": {"width": int(info.get("width", 0)),
+                                                "height": int(info.get("height", 0)), "tag": tag}},
+                                     sort_keys=True, separators=(",", ":")).encode())
+    else:
+        result = await pool.decode(friend_id, bytes(row[1]), item_key=str(row_id), on_start=on_start)
     if result.ok:
         async with _db() as s:
             res = await s.execute(text(
@@ -1208,10 +1379,10 @@ async def _handle_step(row_id: int, friend_id: str, slug: str) -> None:
             "UPDATE friend_houses_plugin_inbox i SET state = 'handling', attempt_id = CAST(:a AS uuid), "
             "started_at = now() FROM friend_houses_plugin_pairs p WHERE i.id = :i AND i.state = 'decoded' "
             "AND p.friend_id = i.friend_id AND p.slug = i.slug AND p.generation = i.generation AND p.allowed "
-            "RETURNING i.canonical, i.mail_id, i.seq"), {"a": attempt, "i": row_id})).first()
+            "RETURNING i.canonical, i.mail_id, i.seq, i.kind, i.image_png"), {"a": attempt, "i": row_id})).first()
     if row is None or friend is None or keys is None:
         return
-    value = wrap(json.loads(bytes(row[0]).decode("utf-8")))  # M5: on every delivery
+    value = delivered_value(bytes(row[0]), int(row[3]), row[4])  # M5: on every delivery
     house_id = keys.plugin_house_id(slug, friend["house_key"])
     key = (friend_id, slug)
     _CLOSED.discard(key)
@@ -1413,6 +1584,7 @@ async def shutdown(*, reset: bool | None = None) -> None:
         if not t.done():
             t.cancel()
     await asyncio.gather(*list(_TASKS), return_exceptions=True)
+    _CHANGED.clear()
     _RUN["started"] = False
     if not reset:
         return
@@ -1428,7 +1600,8 @@ async def shutdown(*, reset: bool | None = None) -> None:
         log.exception("Friend Houses: putting plugin mail back at shutdown failed")
 
 
-__all__ = ["after_close", "apps_view", "charge_sink", "close_pairs", "has_plugin", "notices",
+__all__ = ["after_close", "apps_view", "charge_sink", "close_pairs", "delivered_value", "friend_for_house_id",
+           "friends_changed", "friends_for", "has_plugin", "notices", "plugin_names", "send_to",
            "on_caps", "on_event", "on_plugin_new", "on_plugin_off", "on_plugin_on", "on_plugin_upgraded",
            "plugin_state", "recover_after_start", "resume", "send", "set_apps", "set_pair", "shutdown",
            "start", "store_mail", "sweep", "wrap"]

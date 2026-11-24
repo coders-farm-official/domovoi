@@ -527,6 +527,18 @@ def is_request_for_a_story(raw_transcript: str) -> bool:
     return bool(_QA_REQUEST_LOOSE_RE.match(strip_leading_filler(normalize_transcript(raw_transcript or ""))))
 
 
+def _friend_houses_plugin(*names: str | None) -> str | None:
+    """The slug of the plugin whose handler answered, when it holds
+    ``[permissions] friend_houses`` (SDK 1.18), else None."""
+    from domovoi.sdk.friend_houses import holds_permission
+
+    for name in names:
+        slug = getattr(HANDLER_BY_NAME.get(name or ""), "plugin_slug", None)
+        if slug and holds_permission(slug):
+            return slug
+    return None
+
+
 async def _persist_turn(
     *,
     session: AsyncSession,
@@ -554,6 +566,16 @@ async def _persist_turn(
     An unregistered value raises exactly where the CHECK used to abort.
     """
     registered_values.require("matched_path", matched_path)
+    # Friend words in a reply (M5, SDK 1.18): a plugin with the friend_houses
+    # permission may build its reply from a friend's text. The room hears it
+    # through the speech filter, and the chat history and this log keep the
+    # stand-in (or the plugin's own history_text, as friend_reply sets).
+    # In place: the caller speaks this same response.
+    friend_plugin = _friend_houses_plugin(matched_handler, response.matched_handler)
+    if friend_plugin is not None:
+        from domovoi.sdk.friend_houses import guard_response
+
+        await guard_response(response)
     # A voice turn's stage timings (speech-to-text, voice identification,
     # the capture length) go in with the row, in this same transaction;
     # the stages after routing are merged into it by id once the reply is
@@ -578,7 +600,9 @@ async def _persist_turn(
         room_id=ctx.room_id,
         person_id=ctx.person_id,
         user_text=intent.transcript,
-        assistant_text=heard_text(ctx, response.text),
+        assistant_text=heard_text(
+            ctx, response.history_text if friend_plugin is not None and response.history_text is not None
+            else response.text),
         matched_handler=matched_handler,
         matched_path=matched_path,
         presence_tier=ctx.presence_tier,

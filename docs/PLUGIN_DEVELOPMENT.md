@@ -1156,7 +1156,7 @@ from domovoi.sdk import (
 | 1.15 | `playback.player_route(room_id)`: the host and port a room's music player dials to reach the core, and the address the core sees it call from (`.url(path)`, `.admits(address)`), for a plugin that hands the player a URL on the core, such as a stream relay |
 | 1.16 | `playback.relay_url(room_id, remote_url, kind="file"\|"radio")` and `playback.relay_target(url)`: a room's music player plays a REMOTE URL through the core's checked relay instead of fetching it itself (§4.5, "A remote URL for a room's player"); `RelayUnavailable` |
 | 1.17 | the event `core.voice_history_deleted` `{person_id}` and `core_config.voice_history_keep`: **the hook every plugin that stores person-linked data must honour** (§4.21) |
-| 1.18 | `sdk.friend_houses` (apps with friends: `friends()`, `send_mail`, `on_mail`, `on_friends_changed`), `FriendText`, `friend_sentence`, `friend_reply` and per-plugin friend ids (§4.22). **Mail arrives with slice 4** (the plugin mail service, later in 1.5.0): until then `friends()` is `[]` and `send_mail` raises `NotAllowed` |
+| 1.18 | `sdk.friend_houses` (apps with friends: `friends()`, `send_mail`, `send_image`, `on_mail`, `on_friends_changed`), `FriendText`, `FriendImage`, `friend_sentence`, `friend_reply` and per-plugin friend ids (§4.22). A plugin holding the `friend_houses` permission has every handler reply filtered for speech, with a stand-in in the history |
 
 Ask for the version whose names you use (`">=1.4"` for 1.4's), or
 feature-test so an older core still loads you: call `ctx.add_container` only
@@ -2248,13 +2248,6 @@ the subscribe in `try`/`except ValueError` and rely on the trim.
 
 ### 4.22 Apps with friends — `sdk.friend_houses` (SDK 1.18)
 
-> **On this core mail is received and delivered** to your `on_mail`
-> handler by the plugin mail service. Sending and the friend list arrive
-> later in 1.5.0: until then `friends()` answers `[]`, `send_mail` checks
-> its arguments and then raises `NotAllowed("Friend Houses for apps isn't
-> available yet")`, and `on_friends_changed` records your handler without
-> calling it. Write against the contract below.
-
 A plugin with `[permissions] friend_houses = true` (which needs an
 `[isolated]` decoder and a `warnings` entry, §3) exchanges mail with **the
 same plugin** in friend houses: turn-based and event-based apps such as
@@ -2277,8 +2270,12 @@ decoder = "domovoi_isolated_games.decode:main"
 ```
 
 ```python
-from domovoi.sdk import FriendText, friend_reply, friend_sentence
+from fastapi import APIRouter, HTTPException
+
+from domovoi.sdk import FriendText, device_endpoint, friend_reply, friend_sentence
 from domovoi.sdk.friend_houses import NotAllowed, MailFull, TooLarge, RateLimited
+
+router = APIRouter()   # your plugin's core router
 
 MOVE = {"type": "object", "properties": {"card": {"type": "string", "maxLength": 3},
                                          "player": {"type": "string", "maxLength": 40}},
@@ -2293,20 +2290,31 @@ def register(ctx):
 
     fh.on_mail(on_move, MOVE)
     fh.on_friends_changed(refresh_invite_list)
+
+@router.post("/invite")
+@device_endpoint                     # never an @open_endpoint (Tiers, below)
+async def invite(body: Invite):
+    fh = SDK.friend_houses          # the ctx.sdk your register() kept
+    friend = next((f for f in await fh.friends() if f.house_id == body.house_id), None)
+    if friend is None or not friend.has_plugin:
+        raise HTTPException(404, "not a friend you can play with")
+    await fh.send_mail(friend.house_id, encode_invite(body), ttl_s=600, replace_key="invite")
 ```
 
 | Call | What it does |
 |---|---|
-| `await friends()` | `[FriendHouse(house_id, name, online, has_plugin)]`: friends with "Apps with this friend" on and your plugin allowed. `name` is a `FriendText`. `has_plugin` is true while their house's last word (within 6 hours) said it has your plugin too. |
+| `await friends()` | `[FriendHouse(house_id, name, online, has_plugin)]`: friends with "Apps with this friend" on and your plugin allowed. `name` is a `FriendText`. `has_plugin` is true while their house's last word (within 6 hours) said it has your plugin too. Empty while Friend Houses is off or dark (nothing could reach them): hide your "play with a friend" control then, and say why. |
 | `await send_mail(house_id, payload, *, ttl_s=259200, replace_key=None)` | Queues `payload` (bytes, 1 to 16,384) for that friend; returns the mail's id. `ttl_s` 30 to 259,200 (3 days); time-sensitive mail (a move, a view) should use 600 or less. `replace_key` (up to 64 of `a-z 0-9 _ . : -`) replaces a mail with the same key that hasn't left yet (a newer view of the table); the new one gets a new id. Raises `NotAllowed`, `MailFull`, `TooLarge` or `RateLimited`. |
-| `on_mail(handler, schema)` | The one handler for your plugin's mail and the schema your decoder's answers must match (the core's strict subset, §3 `[isolated]`; until you register one, mail waits). Every string in `value` arrives as a `FriendText`. |
-| `on_friends_changed(handler)` | `async handler()` runs when `friends()` may answer differently. |
+| `await send_image(house_id, image, *, tag, ttl_s=259200, replace_key=None)` | Queues a picture: a `FriendImage` a friend sent you (passed on as the core's PNG) or your plugin's own PNG, JPEG or WebP bytes. `tag` (up to 64 of `a-z 0-9 _ . : -`) tells the friend's copy what it is ("monster:7"). The tag and image are at most 16,384 bytes together (`TooLarge`). Raises like `send_mail`. |
+| `on_mail(handler, schema, *, images=False)` | The one handler for your plugin's mail and the schema your decoder's answers must match (the core's strict subset, §3 `[isolated]`; until you register one, mail waits). Every string in `value` arrives as a `FriendText`. With `images=True` the handler also gets friends' pictures: `value` is then a `FriendImage`; without it a friend's image is refused like a mail the schema refuses. |
+| `on_friends_changed(handler)` | `async handler()` runs shortly after `friends()` may answer differently: "Apps with this friend" or your plugin turned on or off for a friend, a friend removed or blocked, a friend's house saying which apps it has (`has_plugin`). Several changes together call it once; it gets 10 seconds. `online` changes don't call it: read `friends()` when you need it. |
 
 **The ids.** `house_id` is your plugin's own id for a friend house: the
 core derives it from this house's secret, your slug and the friend's key,
 so two plugins get different ids for the same friend and can't compare
-notes. It is never sent to the friend or shown to your decoder. Store it;
-it doesn't change while the friendship lasts.
+notes. It is derived with a key of its own (from the house's secret, never
+the secret itself). It is never sent to the friend or shown to your
+decoder. Store it; it doesn't change while the friendship lasts.
 
 **The delivery contract.** Per friend, your mail arrives in `seq` order
 and is never duplicated on the wire. Gaps are possible (a replaced,
@@ -2326,6 +2334,18 @@ friend's mail to your plugin is paused (an hour, doubling each time, up to
 a day) and the admin is told. Other friends carry on. If your handler
 fails on valid mail, friends pause one by one, and the notice points at
 your plugin; an upgrade of your plugin ends those pauses.
+
+**Images: `FriendImage`.** Your decoder never sees a friend's picture.
+The core's image helper opens it in that friend's decode-only container
+(PNG, JPEG or WebP, at most 4 megapixels, the first frame), scales it to at
+most 768 pixels a side and answers raw pixels; the core checks them and
+writes the PNG itself. Your handler gets `FriendImage(png, width, height,
+tag)`: `png` is that PNG (no metadata, colour profile or text can be in
+it), `tag` a `FriendText`. Serve it from your route with
+`return image.response()` (`image/png`, `nosniff`, a sandboxing
+Content-Security-Policy, never cached); store `image.png` in your own
+schema if you keep it. To show it to another friend, `send_image` the
+`FriendImage` itself.
 
 **The forwarding rule.** Nothing a friend supplied is passed on as it
 came. Every payload you send is rebuilt from validated values; images
@@ -2351,20 +2371,35 @@ await ctx.sdk.speech.announce("kitchen", line)   # filtered the same way
 
 For a plugin with the `friend_houses` permission, `sdk.speech.announce` and
 `render` filter **every** line, a plain `str` too, in case a friend's
-words reached it some other way. A `Response` won't take a `FriendText`
-as its text: use `friend_reply`.
+words reached it some other way, with the same rules as a friend's
+message read aloud: wake phrases and anything that sounds like the
+assistant's name are taken out, and the line stops at 400 characters
+(ending "…"). **The same goes for every reply your voice handlers give**:
+the room hears `Response.text` filtered, and unless you set
+`history_text` the chat history, the conversation log and the chat model
+keep "[text from a friend house]" instead of your words. `friend_reply`
+sets `history_text` for you, with the friend's words stood in for, so use
+it whenever a reply mixes your words and a friend's. A `Response` won't
+take a `FriendText` as its text.
 
-**Tiers.** Call `friends()` and `send_mail` only from `@device_endpoint`
-routes (any paired household device) or admin routes, never from an
-`@open_endpoint` route: anyone on the network can call those. The trust
-screen flags a `friend_houses` plugin that has open routes, and the loader
-logs a warning for one.
+**Tiers.** Call `friends()`, `send_mail` and `send_image` only from
+`@device_endpoint` routes (any paired household device) or admin routes.
+From a route that asked for no credential they raise `NotAllowed`: an
+`@open_endpoint` route, and a GET that is neither `@device_endpoint` nor
+behind `Depends(admin_required)` (an unmarked GET is open to anyone on the
+network). Voice handlers, workers and your mail handler aren't routes and
+may call them. The trust screen flags a `friend_houses` plugin that has
+open routes, and the loader logs a warning for one.
 
-**Testing.** `make_stub_sdk()` gives the same stubs. The core's test kit
-`domovoi.friend_houses.loopback.LoopbackPair` runs two houses over loopback
-with real sessions and the real listener (no Tor, no Docker): house B with
-the real plugin mail service (the test database) storing, acknowledging and
-delivering a mail to your `on_mail`, or house A with the real sender.
+**Testing.** `make_stub_sdk()` gives a `friend_houses` with no database
+and no friend: set `stub.friend_houses.friends_list` to what `friends()`
+should answer; `send_mail` and `send_image` check their arguments as the
+core does and record each call in `stub.friend_houses.sent`. The core's
+test kit `domovoi.friend_houses.loopback.LoopbackPair` runs two houses over
+loopback with real sessions and the real listener (no Tor, no Docker):
+house B with the real plugin mail service (the test database) storing,
+acknowledging and delivering a mail to your `on_mail`, or house A with
+your plugin's `send_mail` and the real sender.
 
 ## 5. Worked example — the bundled radio plugin
 

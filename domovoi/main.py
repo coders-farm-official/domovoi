@@ -4703,6 +4703,17 @@ class _FhAppBody(BaseModel):
     allowed: bool
 
 
+@app.get("/v1/admin/friend-houses/apps/notices", dependencies=_FH_READ)
+async def admin_friend_houses_app_notices() -> dict[str, Any]:
+    """Every notice about apps with friends, for the Friend Houses page and
+    Home: paused (friend, app) pairs with their cause, apps waiting for an
+    admin to allow them with a friend, an app failing with several friends,
+    and a Docker problem. Logged, never spoken."""
+    from domovoi.friend_houses import plugin_mail
+
+    return {"notices": await plugin_mail.notices()}
+
+
 @app.get("/v1/admin/friend-houses/friends/{friend_id}/apps", dependencies=_FH_READ)
 async def admin_friend_houses_apps(friend_id: str) -> dict[str, Any]:
     """The toggle, each plugin with the permission (allowed, whether both

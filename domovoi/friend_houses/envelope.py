@@ -36,13 +36,17 @@ Mail between two houses' copies of one plugin ("apps with friends"). It
 uses the same signed header; ``seq`` is the per-(friend, plugin) counter,
 not the house-wide one. The body, all of it under the signature::
 
-    ver         1   (1)
+    ver         1   (1: data mail; 2: image mail)
     slug_len    1
     slug        slug_len bytes: the manifest's rule, ^[a-z][a-z0-9_]{1,31}$
     ttl_s       4   how long the mail may wait, 30..259,200 seconds
     payload     the rest: 1..16,384 bytes, opaque here
 
-consumed to the exact length. ``ttl_s`` is the time the mail has LEFT when
+consumed to the exact length. An **image mail** (``ver`` 2, SDK 1.18
+``send_image``) has the same layout; its payload is ``tag_len u8``
+(1..64), ``tag`` (the plugin's label, ``^[a-z0-9_.:-]{1,64}$``) and at
+least one byte of an encoded image, which only the core's image helper in
+the friend's decoder container ever opens (D1). ``ttl_s`` is the time the mail has LEFT when
 it is sent (a resend carries less, L13b). The payload is never parsed by
 the listener or by core's message code: it goes only to the plugin mail
 service (:mod:`domovoi.friend_houses.plugin_mail`). People's messages and plugin mail never
@@ -77,6 +81,10 @@ _HEADER = struct.Struct(">BB32s32s16s8sQQH")
 SIGNATURE = 64
 
 PLUGIN_BODY_VERSION = 1
+#: An image mail (SDK 1.18 ``send_image``): the payload is a tag and an image.
+PLUGIN_BODY_IMAGE = 2
+PLUGIN_BODY_VERSIONS = frozenset({PLUGIN_BODY_VERSION, PLUGIN_BODY_IMAGE})
+IMAGE_TAG_RE = re.compile(r"^[a-z0-9_.:-]{1,64}\Z")
 PLUGIN_PAYLOAD_MAX = 16 * 1024
 PLUGIN_TTL_MIN = 30
 PLUGIN_TTL_MAX = 259_200          # 3 days (owner decision 10)
@@ -132,11 +140,49 @@ class PluginBody:
     slug: str
     ttl_s: int
     payload: bytes
+    #: PLUGIN_BODY_VERSION (data) or PLUGIN_BODY_IMAGE (a tag and an image).
+    version: int = PLUGIN_BODY_VERSION
 
     def to_bytes(self) -> bytes:
         slug = self.slug.encode("ascii")
-        return (bytes([PLUGIN_BODY_VERSION, len(slug)]) + slug + _PLUGIN_TTL.pack(self.ttl_s)
+        return (bytes([self.version, len(slug)]) + slug + _PLUGIN_TTL.pack(self.ttl_s)
                 + self.payload)
+
+    @property
+    def is_image(self) -> bool:
+        return self.version == PLUGIN_BODY_IMAGE
+
+    def image(self) -> tuple[str, bytes]:
+        """An image mail's ``(tag, image bytes)`` (checked when parsed)."""
+        if not self.is_image:
+            raise ValueError("not an image mail")
+        return split_image_payload(self.payload)
+
+
+def image_payload(tag: str, image: bytes) -> bytes:
+    """An image mail's payload (ValueError for a bad tag or no image)."""
+    if not isinstance(tag, str) or not IMAGE_TAG_RE.match(tag):
+        raise ValueError("an image tag is up to 64 of a-z 0-9 _ . : -")
+    if not isinstance(image, (bytes, bytearray)) or not image:
+        raise ValueError("an image is non-empty bytes")
+    raw = tag.encode("ascii")
+    return bytes([len(raw)]) + raw + bytes(image)
+
+
+def split_image_payload(payload: bytes) -> tuple[str, bytes]:
+    """``(tag, image)`` from an image mail's payload (BadEnvelope)."""
+    if len(payload) < 3:
+        raise BadEnvelope("image payload size")
+    n = payload[0]
+    if not 1 <= n <= 64 or len(payload) < 1 + n + 1:
+        raise BadEnvelope("image tag length")
+    try:
+        tag = bytes(payload[1:1 + n]).decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise BadEnvelope("image tag") from exc
+    if not IMAGE_TAG_RE.match(tag):
+        raise BadEnvelope("image tag")
+    return tag, bytes(payload[1 + n:])
 
 
 def valid_slug(slug: object) -> bool:
@@ -147,7 +193,7 @@ def parse_plugin_body(body: bytes) -> PluginBody:
     """A plugin mail body, checked to the exact length (BadEnvelope)."""
     if not 2 + 2 + _PLUGIN_TTL.size + 1 <= len(body) <= PLUGIN_BODY_MAX:
         raise BadEnvelope("plugin body size")
-    if body[0] != PLUGIN_BODY_VERSION:
+    if body[0] not in PLUGIN_BODY_VERSIONS:
         raise BadEnvelope("plugin body version")
     slug_len = body[1]
     if not 2 <= slug_len <= SLUG_MAX:
@@ -167,18 +213,23 @@ def parse_plugin_body(body: bytes) -> PluginBody:
     payload = bytes(body[end + _PLUGIN_TTL.size:])
     if not 1 <= len(payload) <= PLUGIN_PAYLOAD_MAX:
         raise BadEnvelope("payload size")
-    return PluginBody(slug, ttl_s, payload)
+    if body[0] == PLUGIN_BODY_IMAGE:
+        split_image_payload(payload)
+    return PluginBody(slug, ttl_s, payload, int(body[0]))
 
 
 def plugin_mail(keys: fid.HouseKeys, *, to: bytes, slug: str, payload: bytes, ttl_s: int,
-                epoch: bytes, seq: int, sent_at: int, msg_id: bytes | None = None) -> Envelope:
+                epoch: bytes, seq: int, sent_at: int, msg_id: bytes | None = None,
+                version: int = PLUGIN_BODY_VERSION) -> Envelope:
     """A signed plugin mail. ValueError for a bad slug, TTL or payload.
     ``msg_id`` is the outbox row's mail id: a resend keeps it (with the
     remaining ``ttl_s``, so a new signature), and the receiver ACKs it as
     the duplicate it is."""
     if not valid_slug(slug):
         raise ValueError("bad plugin slug")
-    body = PluginBody(slug, int(ttl_s), bytes(payload)).to_bytes()
+    if version not in PLUGIN_BODY_VERSIONS:
+        raise ValueError("bad plugin body version")
+    body = PluginBody(slug, int(ttl_s), bytes(payload), int(version)).to_bytes()
     parse_plugin_body(body)  # the same rules the receiver applies
     return signed(keys, kind=KIND_PLUGIN, to=to, body=body, epoch=epoch, seq=seq,
                   sent_at=sent_at, msg_id=msg_id)

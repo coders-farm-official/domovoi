@@ -78,8 +78,9 @@ from __future__ import annotations
 # 1.18.0: sdk.friend_houses (apps with friends, [permissions] friend_houses):
 #         friends(), send_mail(), on_mail(handler, schema),
 #         on_friends_changed(); FriendText, friend_sentence, friend_reply and
-#         per-plugin friend ids. Mail arrives with the plugin mail service:
-#         until then friends() is [] and send_mail raises NotAllowed.
+#         per-plugin friend ids; send_image() and FriendImage (a friend's
+#         picture as the core's own PNG); every reply of a friend_houses
+#         plugin's handlers filtered for speech, a stand-in in the history.
 API_VERSION = "1.18.0"
 
 from domovoi.capabilities import (  # noqa: E402,F401
@@ -119,6 +120,7 @@ from domovoi.sdk.facade import (  # noqa: E402,F401
 from domovoi.sdk.friend_houses import (  # noqa: E402,F401
     FriendHouse,
     FriendHousesAPI,
+    FriendImage,
     FriendText,
     friend_reply,
     friend_sentence,
@@ -182,6 +184,7 @@ __all__ = [
     "FastPath",
     "FriendHouse",
     "FriendHousesAPI",
+    "FriendImage",
     "FriendText",
     "friend_reply",
     "friend_sentence",

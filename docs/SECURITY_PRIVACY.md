@@ -3400,6 +3400,39 @@ with **every piece of text as `FriendText`**, on every delivery.
   backoffs that only an acknowledgement resets; the sending budgets match
   the receiving ones and are kept in the database, so a restart refills
   nothing. A plugin can't send to a friend it isn't allowed with.
+- **What a plugin sees of a friend.** `friends()` lists only the friends
+  with "Apps with this friend" on and that plugin allowed, each by an id
+  the core derives for that plugin alone (HMAC under a key derived with
+  HKDF from the house's signing key, never the signing key itself), so two
+  plugins can't compare notes about this house's friends; the id never
+  leaves the server. A friend's name reaches the plugin as `FriendText`.
+  The list is empty while Friend Houses is off or dark.
+- **Open routes can't reach friends.** `friends()`, `send_mail` and
+  `send_image` refuse a call made while serving a plugin route that asked
+  for no credential (an `@open_endpoint`, or a GET that is neither
+  `@device_endpoint` nor behind the admin check): the route gate records
+  the tier each request came in on, and the calls read it. Voice turns,
+  workers and mail handlers aren't routes and aren't affected.
+- **Images.** A plugin may send a picture (`send_image`): a short label
+  and the image bytes, at most 16 KiB together. The receiving house never
+  lets its plugin or its plugin's decoder touch those bytes: the core's
+  image helper in that friend's decode-only container opens them (PNG,
+  JPEG or WebP, 4 megapixels at most by the header, first frame) and
+  answers raw pixels at most 768 a side, which the core checks and writes
+  as its own PNG (no metadata, colour profile or text can exist in it),
+  kept with the mail until the plugin's handler has it, and counted in the
+  inbox quota. A plugin gets images only if it asked for them; otherwise
+  an image is refused like malformed mail. A pixel count that doesn't
+  match weighs 1 on the friend's breaker.
+- **Friend words in what a room says (M5).** For a plugin holding the
+  `friend_houses` permission, every reply its voice handlers give is
+  filtered before a room says it, exactly like a friend's message read
+  aloud: wake phrases and anything that sounds like the assistant's name
+  are taken out and the line is cut at 400 characters. The chat history,
+  the conversation log and the chat model (in a conversation) keep
+  "[text from a friend house]" instead, unless the plugin gives its own
+  history line (`friend_reply` does, with the friend's words stood in
+  for). The plugin's `sdk.speech` lines get the same filter and cap.
 
 **Limits that keep one house from swamping this one.** A friend can send
 at most 60 messages an hour (text and list changes only: plugin mail

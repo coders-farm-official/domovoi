@@ -357,6 +357,12 @@ const HomeWithRow = (view, row) => {
   return { mode: 'rows', rows: [row] };
 };
 
+/* Apps with friends (friend_apps.jsx fhAppsHomeRows): an admin's rows for
+ * paused mail, apps waiting to be allowed and a Docker problem, each
+ * linking to the Friend Houses page. Never on a shared screen. */
+const HOME_FH_APPS = '/api/friend-houses/apps/notices';
+const HomeAppsRows = (view, rows) => (rows || []).reduce((v, r) => HomeWithRow(v, r), view);
+
 /* ---- status line --------------------------------------------------- */
 
 const HomeHeader = ({ name, nowMs, line, lineReady, live, viewer, onPair }) => {
@@ -1351,6 +1357,9 @@ const HomePage = ({ counts, badges }) => {
   // Friend Houses' unread count: the inbox's own tier (device), so only a
   // paired browser or an admin asks.
   const fhInbox = useApiObject(viewer.paired || admin ? HOME_FH_INBOX : null, { quiet: true, refetchOnAuth: true });
+  // Apps with friends' notices (friend_apps.jsx): paused mail, apps waiting
+  // to be allowed, Docker. The security tier, so only an admin asks.
+  const fhApps = useApiObject(admin && !shared ? HOME_FH_APPS : null, { quiet: true, refetchOnAuth: true });
   const dayStart = HomeDayStart(Date.now());
   const calPath = React.useMemo(() => {
     const start = new Date(dayStart).toISOString();
@@ -1503,8 +1512,9 @@ const HomePage = ({ counts, badges }) => {
   const visibility = (cfg.data && cfg.data.home_problems_visibility) || 'everyone';
   // A household member's rows wait for the setting that decides them, so
   // an "admins only" house never flashes them while /api/config loads.
-  const view = HomeWithRow((!admin && !HomeAnswered(cfg)) ? { mode: 'none' }
-    : HomeAttentionView({ rows, viewer, visibility, shared }), HomeFriendHousesRow(fhInbox.data));
+  const view = HomeAppsRows(HomeWithRow((!admin && !HomeAnswered(cfg)) ? { mode: 'none' }
+    : HomeAttentionView({ rows, viewer, visibility, shared }), HomeFriendHousesRow(fhInbox.data)),
+    admin && !shared && typeof fhAppsHomeRows === 'function' ? fhAppsHomeRows(fhApps.data) : []);
   const [checkedAt, setCheckedAt] = React.useState(null);
   React.useEffect(() => { if (!checking) setCheckedAt(Date.now()); },
     [checking, health.data, sats.data, plugins.data, acq.data, approvals.data, pending.data,
