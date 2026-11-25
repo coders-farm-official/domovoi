@@ -88,7 +88,7 @@ Every Domovoi term you'll meet in these docs, in the dashboard, or in the code �
 
 **Ollama** — the local LLM server (port 11434). Domovoi runs up to three models through it: a small fast one for conversational Q&A, a larger schema-reliable one for *tool routing*, and a small vision model for pictures in chat (optional). With *AI features* off it runs none of them.
 
-**One Chat** — the app's Chat: a single list that holds the chats on the home server (shared with the household) and the ones on the phone itself, each marked with where it runs. The dashboard's chat is the home server's side of it.
+**One Chat** — the app's Chat: a single list that holds the chats on the home server (private to the device that started them unless shared with the household; the house's admins can read them all) and the ones on the phone itself, each marked with where it runs. The dashboard's chat is the home server's side of it.
 
 **openWakeWord** — the on-satellite wake-word engine. Ships prebuilt models (`hey_jarvis`, an older install's default and every room's word until its server gives it one) and supports custom models trained from your own recorded clips.
 

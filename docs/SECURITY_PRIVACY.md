@@ -2021,6 +2021,14 @@ restarted) it unlocks the grant and swaps it for a fresh admin session
   substitute. The exchange also needs the device id the grant was issued
   for: a copied grant presented under another id is refused like a wrong
   one (compared in constant time).
+* **Bound to the device key (1.5.0, V086).** Once the phone's device row
+  holds a device key ([Private chats](#private-chats)), a grant is issued
+  only to a request that presents that key (`X-Domovoi-Device-Key`; 403
+  otherwise), and swapped only by one (a missing or wrong key is refused
+  exactly like a wrong grant, and counted the same). The device id alone
+  is self-asserted; the key is a per-device secret, so a copied grant and
+  the phone's id are no longer enough without the key too. A device that
+  has no key yet is not held to it.
 * **The login's own throttle.** A wrong grant counts against the same
   per-source backoff as a wrong password, both ways (a run of wrong grants
   delays the password login from that address, and the reverse).
@@ -2736,8 +2744,10 @@ and from the system's own state (`domovoi/help_desk`, `/api/help`).
   matches. Reading the checks is household tier (`GET /api/help/checks`),
   and what Home shows only to an admin (the update's details, the internet
   question) is shown only to one, on that page — **never in a chat**: a
-  help chat on the home server is household-shared, so its answers use the
-  household view whoever asks, and say where an admin reads the rest. The
+  help answer in any chat, private ones included, uses the household view
+  whoever asks (a private chat is readable by every admin and by its
+  device, which may not be an admin's), and says where an admin reads the
+  rest. The
   passages and records reach a model only on this box, in a block marked
   as data with a marker no passage can know; a plugin's help file is quoted
   as third-party text with its web addresses removed, and a reply keeps
@@ -2765,6 +2775,115 @@ and from the system's own state (`domovoi/help_desk`, `/api/help`).
   help steps are offered, nothing more. The steps are a home-server chat
   (household-shared, like every server chat); the delivery row holds only
   the person, the chat and its title.
+
+## Private chats
+
+1.5.0, owner decisions 2026-11-25 (design-notes PRIVATE-CHATS.md). A
+home-server chat is **private to the phone or browser that started it**:
+only that device and the house's admins can see it. A **Share with
+household** switch shares it with every paired phone and browser, and can
+be turned back off. The phone apps' own chat (on the phone) stays the fully
+private option: it never leaves the phone.
+
+**The device key.** Without a per-device secret, "private to a device"
+could not be enforced: the device id every client sends is self-asserted,
+and the household token is the same for every device. So `POST
+/api/devices/register` mints a **device key** (256 bits) the first time a
+device row registers without one, and returns it once (`device_key`); only
+its SHA-256 is stored (`devices.device_key_hash`, unique). A browser gets
+it as the `domovoi-device-key` cookie, **HttpOnly** (no page script reads
+it) and **SameSite=Strict** (a page on another site can't make the browser
+present it); the apps keep it in their secure storage (Android Keystore,
+iPhone Keychain) and send `X-Domovoi-Device-Key`. A row that has a key is
+never given another: a client that lost its key (cleared storage, a
+reinstall) starts over under a new device id, and its old private chats
+stay, for the admins. Unlike the shared-screen flag or the device id, the
+key **is** a boundary between the house's devices.
+
+**Who sees what** (`domovoi/chat_access.py`, the one place the rule lives;
+both the web and the core use it):
+
+| Viewer ↓ / chat → | Private, mine | Private, another device's | Shared | Admin-only |
+|---|---|---|---|---|
+| The device that started it | everything | 404 | everything | 404 |
+| Another paired device, or one with no key | 404 | 404 | read and write (no share, no delete: 403) | 404 |
+| A shared screen | never owns one | 404 | read and write | 404 |
+| An admin (Bearer, or the cookie on reads) | as owner | read, share, delete; **never write** | everything | read, share, delete |
+| An unpaired browser | 401 | 401 | 401 | 401 |
+
+* **Identity comes from the key alone.** `X-Device-Id`, the
+  `domovoi-device-id` cookie, a body `device_id`, `?device_id=` and the
+  voice turn's `phone_id` are ignored for chats; a message's device is the
+  one the key resolved to. A wrong or missing key is a keyless household
+  caller: it sees shared chats only, and the chats it starts are shared
+  (a 1.4.x app, which already says "shared with the household").
+* **A hidden chat answers exactly like a missing one**: the same 404 and
+  body, on every route that names a thread or one of its children (drafts,
+  document and video jobs, messages). Lists and search filter in the SQL
+  itself, so a search can't match, or quote a snippet from, a chat the
+  caller can't see.
+* **Admins read everything, and write in nothing that isn't theirs.** For
+  parental oversight an admin can list every chat in the house
+  (`?scope=all`), read, share and delete any of them, but can't post in
+  another device's private chat (403 `admin_read_only`): oversight is
+  reading, not speaking as the child. Admin means a live Bearer (a phone's
+  day grant included) or the admin cookie on a read, **never the pre-setup
+  grace**: after `--reset-admin` anyone on the LAN would otherwise read
+  every private chat. Before setup chats work per device, with no admin
+  view.
+* **Shared screens.** A chat started on a shared screen is always shared.
+  A device marked a shared screen later owns nothing while it is one: its
+  earlier private chats are admin-only until it is unmarked (no row is
+  rewritten).
+* **Deleted or key-less owners.** A chat whose device is gone, or lost its
+  key, is admin-only: an admin can share or delete it. It never falls back
+  to shared. A device whose household token was rotated keeps its row and
+  key, and has its chats back once it is paired again.
+* **Sharing races.** A write takes a row lock on the thread, and the share
+  switch waits for it: a send that started before an unshare finishes, and
+  its reply is saved. Any request after the switch gets the 404; every open
+  client reads its list again.
+* **Room voice** (a letter taken by voice) makes a shared chat with no
+  owner: it was said aloud in a shared room and saved into household
+  Documents anyway. **Photos to a phone** make a chat private to one
+  phone, the person's most recently seen (when it holds a key; a phone
+  with no key yet gets a shared one), and only that phone's catch-up read
+  lists the delivery.
+* **The live events carry no chat content** (see *The state socket*).
+* **"My" actions use the key too.** Whatever acts for the person a device
+  says it is (`devices.owner_person_id`: clearing their listening history,
+  their mix, forgetting their face, whose mix a room follows, a draft
+  version's person, "this is me") finds the caller's device by its device
+  key (`web/backend/api/devices.py` `caller_device_row`). A device id alone
+  is accepted only for a device that holds no key yet (an app from before
+  1.5.0); a keyed device is never named by its id alone. The device key with
+  the device's own claim proves a claim as the claim key
+  (`X-Domovoi-Claim-Key`) does, and the claim key stays accepted for older
+  apps.
+
+**What is not a boundary, said plainly.**
+
+* **File tokens stay capabilities.** A chat's pictures and documents are
+  served by 128-bit random tokens, learned only from a chat the caller
+  could read, so an `<img>` and the apps' image loaders keep working. When
+  the request carries an identity (a key or an admin session) the server
+  also checks that the caller can read a chat that names the token. A
+  device that copied a file's address before a chat was unshared keeps
+  that one file.
+* **Printing and Save to Documents leave the chat.** A print job's name
+  shows on the household's printer list like any print, and Save to
+  Documents puts a copy where the household can see it (the button says
+  so).
+* **An in-process plugin is admin-installed code with database access**
+  ("full access to your Domovoi server"); it can read any chat. The plugin
+  SDK has no chat API and gets none.
+* **The migration can't be undone.** V086 made every existing chat
+  private to the device that wrote its first message, and admin-only when
+  none could be matched. Nothing records that they used to be shared, and
+  going back to 1.4.x would show every chat to everyone again. For a short
+  window after the upgrade a household member who knew another device's id
+  could register under it before that device did and read its migrated
+  chats, which every household device could read the day before anyway.
 
 ## Documents in chat
 

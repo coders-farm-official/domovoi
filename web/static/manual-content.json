@@ -589,7 +589,7 @@
     "ai-off",
     "help-desk"
    ],
-   "intro": "Type to Domovoi on the dashboard or in the app. A chat on your home server is shared with the household; a chat on the phone stays on the phone. Domovoi asks before anything goes online, and it answers questions about itself."
+   "intro": "Type to Domovoi on the dashboard or in the app. A chat on your home server is private to the phone or browser that started it, unless you share it with the household; a chat on the phone stays on the phone. Domovoi asks before anything goes online, and it answers questions about itself."
   },
   {
    "id": "documents-and-letters",
@@ -2258,7 +2258,7 @@
    "blocks": [
     {
      "type": "p",
-     "text": "Type to Domovoi in [Chat](route:chat). A chat on the dashboard runs on your home server, with its models, and everyone in the household can see it. The app also has chats that run on the phone itself: see [Chat on the phone](node:phone-chat)."
+     "text": "Type to Domovoi in [Chat](route:chat). A chat on the dashboard runs on your home server, with its models. It is private to the phone or browser that started it: only that device and the house's admins can see it. The app also has chats that run on the phone itself, which never leave the phone: see [Chat on the phone](node:phone-chat)."
     },
     {
      "type": "label",
@@ -2274,6 +2274,15 @@
       },
       {
        "text": "Beside each chat: **rename**, **archive** and **delete** (the bin). **search chats** is above the list, and **archived** is at its end."
+      },
+      {
+       "text": "**Share with household** (the chat's header) lets every phone and browser in the house read it and add to it. Turn it off and the other devices don't see it any more, including anything they wrote in it. Only the device that started a chat, or an admin, can share it, stop sharing it or delete it. On a shared screen (the kitchen tablet) every chat is shared."
+      },
+      {
+       "text": "**Admins** can read every chat in the house (**All chats in the house** above the list), and share or delete any of them, but can't write in another device's private chat."
+      },
+      {
+       "text": "**Save to Documents** from a private chat saves a copy to Documents, where the household can see it."
       },
       {
        "text": "**Pictures:** the paperclip adds up to 4 to a message (PNG, JPEG, GIF, WebP or BMP, 20 MB each). You can paste a screenshot too. The vision model reads them on your server."
@@ -3222,7 +3231,7 @@
        "text": "If a letter has text aimed at an AI assistant (\"ignore previous instructions…\"), Domovoi doesn't follow it and says so: genuine letters don't do this."
       },
       {
-       "text": "Everyone in the house can see a home-server chat, so a phone chat is the private place for personal mail. On a home server without a graphics card a letter takes about 2 minutes."
+       "text": "The house's admins can read every home-server chat, so a phone chat is the private place for personal mail. On a home server without a graphics card a letter takes about 2 minutes."
       },
       {
        "text": "In a phone chat, **+** → **take a photo** or **choose a photo** on phones that read photos themselves. The photo isn't kept; the text read from it stays with the answer, so you can ask about the letter again, and goes when you delete the chat. On a phone that can't read photos itself, **+** offers **a letter for the home server: take a photo** or **choose a photo** when a paired home server has its picture model: your home server reads the photo and keeps nothing, and the explanation is written on this phone.",
@@ -4166,7 +4175,7 @@
      "ordered": false,
      "items": [
       {
-       "text": "**on home server**: answered by your home server, and shared with the household. See [Chat](node:chat)."
+       "text": "**on home server**: answered by your home server, and private to this phone (and the house's admins) unless you share it with the household. See [Chat](node:chat)."
       },
       {
        "text": "**on this phone**: answered by the phone itself, with no server, and kept only on this phone. See [Domovoi on this phone](node:assistant)."
