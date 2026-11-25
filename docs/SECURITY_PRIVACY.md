@@ -2902,9 +2902,9 @@ refused.
 
 **Messages.** There is one inbox for the whole house; Domovoi has no
 per-person sign-in, so per-person inboxes wait for one. Every message is
-**signed** by the house that sent it. A house can therefore show exactly
-what a friend sent (the export carries each signed envelope), and the
-same holds the other way round: a friend can prove what this house said.
+**signed** by the house that sent it, and a saved copy of a conversation
+includes each message's signature. The same holds the other way round:
+the friend's house keeps this house's signed messages.
 The connection uses fresh keys each time, so a stolen house key doesn't
 unlock recorded traffic. A message waits in the sender's outbox until the
 friend confirms it is stored, and is shown as "Not delivered" after 7
