@@ -457,7 +457,7 @@
     }
   ],
   "manual": {
-    "intro": "Domovoi decides when to give you a heads-up from these measured results, never from the model's own opinion of itself. A heads-up comes before a task measured below {bar} or never measured; each one shows once per chat, and [Settings → Chat](#settings/chat) turns them off on a device.",
+    "intro": "Domovoi decides when to give you a heads-up from these measured results, never from the model's own opinion of itself. A heads-up comes before a task measured below {bar} or never measured; each one shows once per chat, and [Settings → Chat & AI → Chat](#settings/chat) turns them off on a device.",
     "verdicts": {
       "good": "good",
       "okay": "okay",
