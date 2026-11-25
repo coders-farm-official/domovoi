@@ -596,6 +596,25 @@ async def _persist_turn(
         await music_listens.note_voice_start(ctx.room_id, ctx.person_id)
 
 
+def tool_action_offered(handler: Any, args: Any) -> bool:
+    """Whether a tool call's ``action`` is one its schema lists (or one of
+    the handler's ``tool_action_aliases``). A tool without an ``action``
+    enum takes anything; a call with no action is left to the handler (it
+    has its own default); so is a plugin's tool, whose handler may take
+    spellings its schema doesn't list."""
+    if getattr(handler, "plugin_slug", None) is not None:
+        return True
+    props = ((getattr(handler, "tool_schema", None) or {}).get("parameters") or {}).get("properties") or {}
+    enum = (props.get("action") or {}).get("enum")
+    if not isinstance(enum, list) or not enum:
+        return True
+    action = (args or {}).get("action") if isinstance(args, dict) else None
+    if action is None or action == "":
+        return True
+    allowed = {str(a).lower() for a in enum} | {str(a).lower() for a in getattr(handler, "tool_action_aliases", ())}
+    return str(action).strip().lower() in allowed
+
+
 _INFORMATION_REQUEST_RE = re.compile(
     r"^\s*(?:tell me about|explain|define|describe)\b", re.IGNORECASE
 )
@@ -1061,6 +1080,15 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
             refusal = phone_refusal(handler, ctx)
             if refusal is not None:
                 response = refusal
+            elif not tool_action_offered(handler, tool_call.get("args")):
+                # An action the tool doesn't have ("add" on the library,
+                # live 2026-11-24): the handler could only answer "I don't
+                # know how to add the library". Declined: Q&A answers.
+                log.info(
+                    "tool model called %s with an action it doesn't have (%r) for %r — ignoring",
+                    handler.name, (tool_call.get("args") or {}).get("action"), said(intent.transcript),
+                )
+                response = None
             elif path == "llm_offline":
                 response = await handler.fallback_offline(intent, ctx, session)
             else:

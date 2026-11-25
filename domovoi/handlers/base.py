@@ -203,6 +203,11 @@ class Handler(ABC):
     # Plugin handlers get their slug stamped by the plugin loader (C3);
     # None marks a core handler (used by the registry tie-break).
     plugin_slug: str | None = None
+    # Tool-call actions this core handler takes beyond its schema's
+    # ``action`` enum. Any other action is declined before
+    # execute_from_tool (router.tool_action_offered), so a made-up one
+    # never becomes "I don't know how to <action> ...".
+    tool_action_aliases: tuple[str, ...] = ()
     # Exposed to conversational chat mode (#8) as a Letta-callable tool via the
     # proxy-tool bridge? Default off; a handler opts in only when its action fits
     # an ORGANIC conversational moment (e.g. play a song) rather than a
