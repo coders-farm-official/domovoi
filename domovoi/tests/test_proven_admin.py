@@ -44,6 +44,8 @@ ADD_ROOM_MEMBER = "An admin adds rooms, on the dashboard: Settings → Household
 UPDATE_MEMBER = "Yes. An admin updates Domovoi on the dashboard, in Settings → System → About & updates."
 PLUGINS_MEMBER = "Yes, on the dashboard: an admin installs plugins from the Plugins page."
 DELETE_MEMBER = "Deleting needs the admin: an admin deletes files on the dashboard, in Files."
+WAKE_MEMBER = "An admin changes the wake word, on the dashboard: Settings → Voice → Wake words."
+RESTART_MEMBER = "An admin restarts Domovoi, on the dashboard: Settings → System → About & updates."
 VIDEO_POINTER = "No, not on this house. An admin can add video downloads from the Plugins page."
 
 CASES = [
@@ -56,6 +58,11 @@ CASES = [
     ("8.6", "Can you install plugins?", "plugins", "admin"),
     ("8.7", "Can you change the admin password?", "admin_password", "admin"),
     ("8.8", "Can you delete this song?", "delete_files", "member"),
+    # F5: the manual's other admin-only how-tos.
+    ("F5a", "How do I change the wake word?", "wake_word", "member"),
+    ("F5b", "Can you change your wake word?", "wake_word", "admin"),
+    ("F5c", "How do I restart Domovoi?", "restart", "member"),
+    ("F5d", "Can you restart yourself?", "restart", "admin"),
 ]
 
 
@@ -130,6 +137,8 @@ def test_the_member_lines_say_who_and_where() -> None:
     assert by["update"].member == UPDATE_MEMBER
     assert by["plugins"].member == PLUGINS_MEMBER
     assert by["delete_files"].member == DELETE_MEMBER
+    assert by["wake_word"].member == WAKE_MEMBER
+    assert by["restart"].member == RESTART_MEMBER
     for t in admin_tasks.TASKS:
         assert "admin" in t.member.lower(), t.key
     # 8.7d/8.7e belong to the capability table, not here.
@@ -150,6 +159,18 @@ def test_the_admin_steps_name_only_real_places_and_buttons() -> None:
     for words in ("Install from zip", "install from GitHub", "fetch & preview"):
         assert words in by["plugins"].admin and words in plugins, words
     assert "Delete" in by["delete_files"].admin and ">Delete</Button>" in files
+    for words in ("Settings → Voice → Wake words", "Settings → Household → Rooms"):
+        assert words in by["wake_word"].admin, words
+    # (what the steps say, what the dashboard's source has)
+    for said, src in (("Household wake word", "Household wake word"), ("New rooms wake on", "New rooms wake on"),
+                      ("Use “…” here", "Use “{cur.name}” here"), ("Add another wake word", "Add another wake word"),
+                      ("press Add", ">Add</Button>"), ("with ↑", ">↑</Button>"), ("with ✕", ">✕</Button>"),
+                      ("press Save", "'Save'}</Button>")):
+        assert said in by["wake_word"].admin, said
+        assert src in settings_src + sats, src
+    assert "Settings → System → About & updates" in by["restart"].admin
+    for words in ("Restart Domovoi", "Restart the core"):
+        assert words in by["restart"].admin and words in settings_src + _src("components.jsx"), words
     # There is no password-change control on the dashboard: the steps say so
     # rather than invent one, and name the reset the manual documents.
     assert "/api/auth/password" not in "".join(_src(p.name) for p in STATIC.glob("*.jsx"))
@@ -167,6 +188,10 @@ def test_no_answer_names_a_plugin_or_a_provider() -> None:
     "can you play videos", "how do I delete a playlist", "can you remove the song from the queue",
     "can you delete this song from the playlist", "how do I download a video", "add a room",
     "can you update the shopping list", "how do I add a speaker to the kitchen",
+    # F5's neighbours: other restarts, and the room's wake settings.
+    "how can I restart my router", "restart the wifi", "can you restart the kitchen",
+    "how do I restart the kitchen satellite", "restart", "change the wake word sensitivity",
+    "how do I change the wake word sensitivity", "what's the wake word", "change the wake word",
 ])
 def test_neighbours_are_no_admin_task(question) -> None:
     assert admin_tasks.match(question) is None
@@ -200,7 +225,7 @@ def test_the_plan_answers_an_admin_task_with_no_model() -> None:
         assert help_answer.extractive_answer(turn) == want
     assert Never.calls == 0
     # Not an admin task: the turn is as it always was.
-    plain = help_answer.plan("how do I change the wake word", index, admin=True)
+    plain = help_answer.plan("how do I add a printer", index, admin=True)
     assert plain.task is None and plain.task_answer is None
 
 

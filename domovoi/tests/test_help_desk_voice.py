@@ -175,7 +175,8 @@ async def _pending(say, room="kitchen"):
 async def test_a_how_to_is_answered_from_the_manual_then_offered(voice) -> None:
     r = await voice("how do I change the wake word")
     assert (r.matched_handler, r.matched_path) == ("help_desk", "fast")
-    assert r.text.startswith("From the manual's ")
+    # An admin's job (F5): who and where, never the steps by voice.
+    assert r.text.startswith("An admin changes the wake word, on the dashboard: Settings → Voice → Wake words. ")
     assert r.text.endswith("Want me to send the steps to your phone?") and r.expect_followup
     assert (await _pending(voice))["kind"] == "core.help_send"
 
