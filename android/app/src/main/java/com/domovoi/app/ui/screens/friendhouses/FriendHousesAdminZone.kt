@@ -1,5 +1,7 @@
 package com.domovoi.app.ui.screens.friendhouses
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -35,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
 import com.domovoi.app.friendhouses.FhBlockedHouse
+import com.domovoi.app.friendhouses.FhConversation
 import com.domovoi.app.friendhouses.FhFriend
 import com.domovoi.app.friendhouses.FhRequest
 import com.domovoi.app.friendhouses.FriendHousesAdminApi
@@ -44,15 +47,20 @@ import com.domovoi.app.ui.components.ConfirmDialog
 import com.domovoi.app.ui.components.DomovoiCard
 import com.domovoi.app.ui.theme.Domovoi
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.time.LocalDate
 
 /*
  * Friends and connections on the phone (1.5.0; design §1's Friend Houses
  * jobs): accept or decline a friend request, remove or block a friend,
- * unblock a house. Only while this phone holds admin (net/AdminSession.kt):
- * the tab is not there otherwise ([fhTabsFor]). Making or adding friend
- * files, this house's name, renaming, verifying and apps stay on the
- * dashboard ([FhAdminWords.ON_DASHBOARD]).
+ * unblock a house, and save a copy of or delete a conversation (a friend's,
+ * or a former friend's). Only while this phone holds admin
+ * (net/AdminSession.kt): the tab is not there otherwise ([fhTabsFor]), and
+ * these are the only places a conversation is saved or deleted from. Making
+ * or adding friend files, this house's name, renaming, verifying and apps
+ * stay on the dashboard ([FhAdminWords.ON_DASHBOARD]).
  *
  * Every name and last_error came from another house: shown through FhPlain
  * (or a plain String), as the rest of the screen.
@@ -100,6 +108,41 @@ object FhAdminWords {
         if (moving) "$name is blocked · this house is moving to a new private address" else "$name is blocked"
 
     fun unblockBody(name: String): String = "Unblock $name? They aren’t friends again; they can ask with a new friend file."
+
+    // ---- a conversation: Save a copy, Delete (the dashboard's words) ----
+
+    const val SAVE_COPY = "Save a copy"
+    const val SAVE_FIRST = "Save a copy first"
+    const val DELETE = "Delete"
+    const val DELETE_TITLE = "Delete these messages?"
+    const val DELETED = "messages deleted"
+    const val SAVED = "copy saved"
+    const val NOT_SAVED = "couldn't save the copy"
+    const val FORMER = "Former friends"
+    const val FORMER_SUB = "Messages kept from houses that are no longer friends."
+
+    fun deleteBody(name: String): String =
+        "Delete every message with $name? This can’t be undone. Save a copy first if you might need it."
+}
+
+/** A file name of safe characters only (the dashboard's `fhSafe`). */
+internal fun fhSafe(s: String?): String =
+    s.orEmpty().replace(Regex("[^A-Za-z0-9 ._-]"), "").replace(Regex("\\s+"), " ").trim().take(60)
+
+/** The saved copy's file name, as the dashboard names it (`fhExportName`):
+ *  `Friend Houses - <name> - YYYY-MM-DD.json`, on this phone's date. */
+internal fun fhExportName(name: String?, today: LocalDate): String =
+    "Friend Houses - ${fhSafe(name).ifEmpty { "friend" }} - $today.json"
+
+/** The conversations an admin can save or delete here: each friend's (when
+ *  there are messages), then the former friends' (in the inbox with no
+ *  friend). Houses a URL can't name are left out. */
+internal fun fhConversationsByFriend(friends: List<FhFriend>, inbox: List<FhConversation>): Pair<Set<String>, List<FhConversation>> {
+    val named = inbox.filter { com.domovoi.app.friendhouses.FhPaths.isHouseKey(it.house) }
+    val friendHouses = friends.map { it.house }.toSet()
+    val withMessages = named.map { it.house }.filter { it in friendHouses }.toSet()
+    val former = named.filter { it.friendId == null && it.house !in friendHouses }
+    return withMessages to former
 }
 
 @Composable
@@ -114,6 +157,9 @@ internal fun FriendsAndConnectionsTab(onChanged: () -> Unit) {
     var requests by remember { mutableStateOf<List<FhRequest>?>(null) }
     var friends by remember { mutableStateOf<List<FhFriend>>(emptyList()) }
     var blocked by remember { mutableStateOf<List<FhBlockedHouse>>(emptyList()) }
+    var inbox by remember { mutableStateOf<List<FhConversation>>(emptyList()) }
+    /** A copy fetched and waiting for the file picker. */
+    var pendingCopy by remember { mutableStateOf<String?>(null) }
     var problem by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     var tick by remember { mutableIntStateOf(0) }
@@ -131,6 +177,7 @@ internal fun FriendsAndConnectionsTab(onChanged: () -> Unit) {
             requests = r
             blocked = b
             friends = app.friendHouses.api.friends()
+            inbox = runCatching { app.friendHouses.api.inbox().conversations }.getOrDefault(emptyList())
             problem = null
         } catch (e: CancellationException) {
             throw e
@@ -144,6 +191,43 @@ internal fun FriendsAndConnectionsTab(onChanged: () -> Unit) {
     }
 
     LaunchedEffect(live, tick) { if (live) load(viaAct = false) }
+
+    // Save a copy: the file is fetched first (Face/fingerprint when needed),
+    // then Android's picker asks where it goes; nothing is written until a
+    // file is picked.
+    val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        val text = pendingCopy
+        pendingCopy = null
+        if (uri == null || text == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val ok = runCatching {
+                withContext(Dispatchers.IO) {
+                    // "wt": a file picked to overwrite is cut to the copy.
+                    context.contentResolver.openOutputStream(uri, "wt")?.use { it.write(text.toByteArray()) } ?: error("no file")
+                }
+            }.isSuccess
+            toast(if (ok) FhAdminWords.SAVED else FhAdminWords.NOT_SAVED)
+        }
+    }
+
+    fun saveCopy(house: String, name: String?) {
+        busy = true
+        problem = null
+        scope.launch {
+            try {
+                pendingCopy = app.admin.act { h, srv -> adminApi.conversationFile(house, h, srv) }
+                pickFile.launch(fhExportName(name, LocalDate.now()))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: AdminSession.AdminUnavailable) {
+                problem = e.message
+            } catch (e: Exception) {
+                problem = fhProblem("save", e)
+            } finally {
+                busy = false
+            }
+        }
+    }
 
     /** One admin change: through act (the fingerprint first when needed). */
     fun change(action: String, work: suspend (Map<String, String>, String) -> String) {
@@ -166,6 +250,10 @@ internal fun FriendsAndConnectionsTab(onChanged: () -> Unit) {
         }
     }
 
+    fun deleteConversation(house: String) {
+        change("delete") { h, srv -> adminApi.deleteConversation(house, h, srv); FhAdminWords.DELETED }
+    }
+
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(FhAdminWords.SUB, style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted)
         if (!live) {
@@ -184,12 +272,29 @@ internal fun FriendsAndConnectionsTab(onChanged: () -> Unit) {
                     RequestRow(r, busy, change = ::change)
                 }
             }
+            val (withMessages, former) = fhConversationsByFriend(friends, inbox)
             DomovoiCard(Modifier.fillMaxWidth()) {
                 Text("Friends", style = MaterialTheme.typography.titleSmall, color = Domovoi.colors.fg)
                 if (friends.isEmpty()) FhPlain(FhAdminWords.NO_FRIENDS, style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted)
                 friends.forEachIndexed { i, f ->
                     if (i > 0) HorizontalDivider(color = Domovoi.colors.border)
                     FriendAdminRow(f, busy, adminApi, change = ::change)
+                    if (f.house in withMessages) {
+                        ConversationActions(f.name.ifBlank { "this house" }, busy,
+                            onSave = { saveCopy(f.house, f.name) }, onDelete = { deleteConversation(f.house) })
+                    }
+                }
+            }
+            if (former.isNotEmpty()) {
+                DomovoiCard(Modifier.fillMaxWidth()) {
+                    Text(FhAdminWords.FORMER, style = MaterialTheme.typography.titleSmall, color = Domovoi.colors.fg)
+                    Text(FhAdminWords.FORMER_SUB, style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted)
+                    former.forEachIndexed { i, c ->
+                        if (i > 0) HorizontalDivider(color = Domovoi.colors.border)
+                        val name = c.name?.takeIf { it.isNotBlank() } ?: "this house"
+                        FhPlain(name, modifier = Modifier.padding(top = 6.dp), maxLines = 1)
+                        ConversationActions(name, busy, onSave = { saveCopy(c.house, c.name) }, onDelete = { deleteConversation(c.house) })
+                    }
                 }
             }
             if (blocked.isNotEmpty()) {
@@ -341,6 +446,36 @@ private fun BlockedRow(
             confirmLabel = "unblock",
             onConfirm = { change("unblock") { h, srv -> adminApi.unblock(b.house, h, srv); "$name unblocked" } },
             onDismiss = { confirm = false },
+        )
+    }
+}
+
+/** A conversation's two admin actions: Save a copy, and Delete after the
+ *  dashboard's confirm, which offers Save a copy first. */
+@Composable
+private fun ConversationActions(name: String, busy: Boolean, onSave: () -> Unit, onDelete: () -> Unit) {
+    var confirm by remember { mutableStateOf(false) }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        TextButton(enabled = !busy, onClick = onSave) { Text(FhAdminWords.SAVE_COPY, color = Domovoi.colors.brand) }
+        TextButton(enabled = !busy, onClick = { confirm = true }) { Text(FhAdminWords.DELETE, color = Domovoi.colors.err) }
+    }
+    if (confirm) {
+        AlertDialog(
+            onDismissRequest = { confirm = false },
+            containerColor = Domovoi.colors.raised,
+            title = { Text(FhAdminWords.DELETE_TITLE, style = MaterialTheme.typography.titleMedium) },
+            text = { FhPlain(FhAdminWords.deleteBody(name), color = Domovoi.colors.fgMuted) },
+            confirmButton = {
+                TextButton(enabled = !busy, onClick = { confirm = false; onDelete() }) {
+                    Text(FhAdminWords.DELETE, color = Domovoi.colors.err)
+                }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(enabled = !busy, onClick = onSave) { Text(FhAdminWords.SAVE_FIRST, color = Domovoi.colors.brand) }
+                    TextButton(onClick = { confirm = false }) { Text("cancel", color = Domovoi.colors.fgMuted) }
+                }
+            },
         )
     }
 }

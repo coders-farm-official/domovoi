@@ -281,6 +281,13 @@ object FhPaths {
 
     /** DELETE unblocks the house. */
     fun blocked(house: String): String = "$BLOCKED/${house(house)}"
+
+    /** DELETE (admin security): every message with that house, gone. */
+    fun conversationWith(house: String): String = "$CONVERSATIONS/${house(house)}"
+
+    /** GET (admin security, read): every message with that house as a file
+     *  (`domovoi-friend-houses-export-v1`). */
+    fun conversationFile(house: String): String = "${conversationWith(house)}/export"
 }
 
 /** A friend request (admin read): in `waiting` (for an admin here) or
@@ -347,6 +354,16 @@ class FriendHousesAdminApi(private val api: ApiClient) {
 
     suspend fun unblock(house: String, headers: Map<String, String>, onlyTo: String) {
         api.delete(FhPaths.blocked(house), null, headers, onlyTo = onlyTo)
+    }
+
+    /** A conversation as the server's file, as it sent it (Save a copy). */
+    suspend fun conversationFile(house: String, headers: Map<String, String>, onlyTo: String): String =
+        api.raw("GET", FhPaths.conversationFile(house), headers = headers, onlyTo = onlyTo)
+
+    /** Delete every message with that house: how many went. */
+    suspend fun deleteConversation(house: String, headers: Map<String, String>, onlyTo: String): Int {
+        val r = api.delete(FhPaths.conversationWith(house), null, headers, onlyTo = onlyTo) as? JsonObject
+        return (r?.get("deleted") as? JsonPrimitive)?.content?.toIntOrNull() ?: 0
     }
 }
 

@@ -45,8 +45,8 @@ class FriendHousesHouseholdTest {
     }
 
     /** The admin zone, a conversation's save and delete, and starting a
-     *  share: none of them is on the screen, as a control or as words
-     *  standing in for one. */
+     *  share: none of them is on the household screen, as a control or as
+     *  words standing in for one; save and delete are in the admin tab. */
     @Test fun theScreenOffersNothingOnlyAnAdminMayDo() {
         val repo = File(System.getProperty("domovoi.repo.dir") ?: error("domovoi.repo.dir is not set"))
         val dir = File(repo, "android/app/src/main/java/com/domovoi/app/ui/screens/friendhouses")
@@ -63,12 +63,23 @@ class FriendHousesHouseholdTest {
             assertFalse(gone, code.contains(gone, ignoreCase = gone.first().isLowerCase()))
         }
         // The admin tab does design §1's Friend Houses jobs only: no friend
-        // files, renaming, verifying, this house's name, apps, save or delete.
+        // files, renaming, verifying, this house's name or apps. Saving a
+        // copy of a conversation and deleting one are admin jobs too (owner
+        // decision, 1.5.0), and this file is the only one that offers them.
         val zone = File(dir, "FriendHousesAdminZone.kt").readLines()
             .filterNot { it.trimStart().let { l -> l.startsWith("//") || l.startsWith("*") || l.startsWith("/*") } }
             .joinToString("\n")
-        for (gone in listOf("invites", "preview", "/verified", "PATCH", "settings", "/apps", "export", "Save a copy", "\"Delete\"")) {
+        for (gone in listOf("invites", "preview", "/verified", "PATCH", "settings", "/apps")) {
             assertFalse("admin tab: $gone", zone.contains(gone))
+        }
+        for (there in listOf("\"Save a copy\"", "\"Delete\"", "conversationFile", "deleteConversation")) {
+            assertTrue("admin tab: $there", zone.contains(there))
+        }
+        // Never worded as anything but a copy.
+        assertFalse(zone.contains("proof", ignoreCase = true))
+        // The household files never call either route.
+        for (gone in listOf("conversationFile", "deleteConversation", "fhExportName")) {
+            assertFalse(gone, code.contains(gone))
         }
         // The empty inbox no longer points at a friends list the phone doesn't show.
         assertFalse(FhWords.NO_MESSAGES_SUB.contains("friend to"))
