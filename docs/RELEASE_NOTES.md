@@ -4,6 +4,23 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Voice help no longer sends the steps to your phone
+
+- **What changed.** Ask "how do I add a room?" out loud and Domovoi says
+  the short answer and the page it came from, then "The full answer is in
+  the manual." (for a plugin's page: "The full answer is in that plugin's
+  help."). It no longer asks "Want me to send the steps to your phone?",
+  never asks "Who should I send it to?", and makes no "Help: …" chat. It
+  needed three things at once (Domovoi knowing your voice, a phone marked
+  as yours, and the app reaching the server), and the manual is a tap
+  away. The **?** panel, **ask Domovoi** and help in chat work as before.
+- **What to know.** Nothing to do, no migration. "Help: …" chats sent
+  before stay in Chat. Photos are unchanged: a voice photo search still
+  asks "Do you want them on your phone?" and sends a "Photos: …" chat.
+  `GET /api/help/deliveries` and the `help_deliveries` live channel stay,
+  for the photos and for the apps that read them; they just get no new
+  help rows.
+
 ## 1.5.0 (unreleased) — Update notices: Domovoi says when a new release is out
 
 - **What changed.** Domovoi looks for a new **signed release** by itself,

@@ -221,7 +221,6 @@ def test_choice_kinds_are_confirmation_kinds_with_a_reply_handler() -> None:
             "core.self_intro", "core.name_sound_alike", "core.room_check",
         },
         "printing": {"core.print_pick", "core.print_printer", "core.printer_pick", "core.scan_more"},
-        "help_desk": {"core.help_who"},
         "documents": {
             "core.doc_pick", "core.doc_length", "core.doc_more", "core.doc_paused",
             "core.letter_author", "core.letter_dictation",
@@ -252,7 +251,6 @@ def test_declared_confirmation_kinds_cover_known_flows() -> None:
             "core.printer_pick", "core.scan_ready", "core.scan_more", "core.scan_read", "core.scan_read_all",
                 "core.print_test",
         },
-        "help_desk": {"core.help_send", "core.help_who"},
         "lists": {"core.lists_create", "core.lists_clear", "core.lists_delete"},
         "documents": {
             "core.doc_pick", "core.doc_length", "core.doc_more", "core.doc_paused",

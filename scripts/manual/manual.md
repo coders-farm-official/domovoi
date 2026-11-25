@@ -1010,12 +1010,10 @@ says "The manual doesn't cover that." rather than guessing.
 - "how do I change the wake word"
 - "how do I add a printer"
 
-After the short answer, Domovoi asks "Want me to send the steps to your
-phone?" Say yes, and they arrive as a chat called "Help: …" on the phones
-marked as yours ([Settings → Household → Phones &
-browsers](#app/connection), **This phone belongs to**, in the app). If
-Domovoi doesn't know your voice, it asks who to send them to. It never
-sends them to every phone.
+Domovoi says the short answer and where it came from, then "The full
+answer is in the manual." Open the page with **?** on the dashboard, or
+in the app's manual. A plugin's own help ends "The full answer is in that
+plugin's help."
 
 **If something's wrong**
 

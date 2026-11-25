@@ -489,7 +489,7 @@ Everything stays on your network, and printing and scanning keep working when th
 
 ## How do I ask Domovoi for help?
 
-Ask it. In chat or by voice, "how do I add a room?" is answered from Domovoi's own manual, this FAQ, the troubleshooting guide, an entry for every dashboard error and your installed plugins' help; the answer names the section it came from, and when none covers the question it says "The manual doesn't cover that." The dashboard has a **?** in the top bar of every page, **ask Domovoi about this** on an error, and **report a problem**, which builds a summary with addresses, tokens and codes taken out for you to copy and post yourself: nothing is sent anywhere. By voice, Domovoi can offer to send the steps to the phone marked as yours (the app's Settings → Household → Phones & browsers → "This phone belongs to"). With AI chat and questions turned off, help is a plain search of the manual and the docs.
+Ask it. In chat or by voice, "how do I add a room?" is answered from Domovoi's own manual, this FAQ, the troubleshooting guide, an entry for every dashboard error and your installed plugins' help; the answer names the section it came from, and when none covers the question it says "The manual doesn't cover that." The dashboard has a **?** in the top bar of every page, **ask Domovoi about this** on an error, and **report a problem**, which builds a summary with addresses, tokens and codes taken out for you to copy and post yourself: nothing is sent anywhere. By voice, it says the short answer and that the full answer is in the manual. With AI chat and questions turned off, help is a plain search of the manual and the docs.
 
 ## How long is what we say kept, and can we delete it?
 
