@@ -182,4 +182,113 @@ final class RoomStoreTests: XCTestCase {
         store.forget()
         XCTAssertNil(seal.read())
     }
+
+    // MARK: - the Keychain copy fails closed (security review 2026-11-22, M20)
+
+    /// A Keychain copy of the seal whose answers and writes the test sets.
+    private final class ScriptedSeal: RoomKeyVault, @unchecked Sendable {
+        private let state = RoomLock<(value: String?, unreadable: Bool, refuseWrites: Bool, writes: [String?])>(
+            (nil, false, false, [])
+        )
+        init(value: String? = nil, unreadable: Bool = false, refuseWrites: Bool = false) {
+            state.withLock { $0 = (value, unreadable, refuseWrites, []) }
+        }
+        var writes: [String?] { state.withLock { $0.writes } }
+        func setUnreadable(_ on: Bool) { state.withLock { $0.unreadable = on } }
+        func read() -> String? {
+            if case .found(let v) = lookup() { return v }
+            return nil
+        }
+        func lookup() -> RoomVaultLookup {
+            state.withLock { s in
+                if s.unreadable { return .unreadable }
+                return s.value.map { .found($0) } ?? .absent
+            }
+        }
+        func write(_ key: String?) -> Bool {
+            state.withLock { s in
+                s.writes.append(key)
+                guard !s.refuseWrites else { return false }
+                s.value = key
+                return true
+            }
+        }
+    }
+
+    /// The app deleted and installed again (fresh preferences) while the
+    /// Keychain will not answer: that counts as sealed, never as not.
+    func testAKeychainThatWillNotSayCountsAsSealed() {
+        let seal = ScriptedSeal(unreadable: true)
+        let store = RoomStore(prefs: InMemoryRoomPreferences(), key: InMemoryRoomKey(), seal: seal) { _ in }
+        XCTAssertTrue(store.active)
+        XCTAssertEqual([], seal.writes, "a read that failed writes nothing")
+    }
+
+    /// A room sealed by a build that kept the seal only in the preference:
+    /// the first read writes the Keychain copy, so a reinstall comes back sealed.
+    func testAnOlderSealGetsItsKeychainCopy() {
+        let prefs = InMemoryRoomPreferences()
+        prefs.setBool(true, RoomStore.Keys.active)
+        let seal = ScriptedSeal()
+        let store = RoomStore(prefs: prefs, key: InMemoryRoomKey(), seal: seal) { _ in }
+        XCTAssertTrue(store.active)
+        XCTAssertEqual([RoomStore.sealMark], seal.writes)
+        XCTAssertNotNil(seal.read())
+        XCTAssertTrue(store.active)
+        XCTAssertEqual(1, seal.writes.count, "written once, then found")
+
+        let again = RoomStore(prefs: InMemoryRoomPreferences(), key: InMemoryRoomKey(), seal: seal) { _ in }
+        XCTAssertTrue(again.active, "the reinstall comes back sealed")
+    }
+
+    func testAnOlderSealStaysSealedWhenTheKeychainRefusesTheCopy() {
+        let prefs = InMemoryRoomPreferences()
+        prefs.setBool(true, RoomStore.Keys.active)
+        let seal = ScriptedSeal(refuseWrites: true)
+        let store = RoomStore(prefs: prefs, key: InMemoryRoomKey(), seal: seal) { _ in }
+        XCTAssertTrue(store.active)
+        XCTAssertTrue(store.active)
+        XCTAssertEqual([RoomStore.sealMark, RoomStore.sealMark], seal.writes, "tried again on the next read")
+    }
+
+    /// A phone that was never a room: the Keychain answers "no such item"
+    /// and the preference is off, so the household app opens and setup works.
+    func testAFreshInstallIsNotSealed() {
+        let seal = ScriptedSeal()
+        let store = RoomStore(prefs: InMemoryRoomPreferences(), key: InMemoryRoomKey(), seal: seal) { _ in }
+        XCTAssertFalse(store.active)
+        XCTAssertEqual([], seal.writes)
+        XCTAssertTrue(store.enrol(kitchen))
+        store.setActive(true)
+        XCTAssertTrue(store.active)
+    }
+
+    /// Leaving room mode (after the device owner's unlock) still lifts the
+    /// seal, an older one included; while the Keychain will not answer the
+    /// phone stays a room until it does.
+    func testLeavingStillUnseals() {
+        let prefs = InMemoryRoomPreferences()
+        prefs.setBool(true, RoomStore.Keys.active)
+        let seal = ScriptedSeal()
+        let store = RoomStore(prefs: prefs, key: InMemoryRoomKey(), seal: seal) { _ in }
+        XCTAssertTrue(store.active)
+        store.setActive(false)
+        XCTAssertFalse(store.active)
+        XCTAssertNil(seal.read())
+
+        store.setActive(true)
+        seal.setUnreadable(true)
+        store.setActive(false)
+        XCTAssertTrue(store.active, "fails closed while the Keychain will not say")
+        seal.setUnreadable(false)
+        XCTAssertFalse(store.active)
+    }
+
+    /// A vault that cannot fail answers through ``RoomKeyVault/read()``.
+    func testTheInMemoryKeyAnswersCleanly() {
+        let key = InMemoryRoomKey()
+        XCTAssertEqual(.absent, key.lookup())
+        key.write("abc")
+        XCTAssertEqual(.found("abc"), key.lookup())
+    }
 }

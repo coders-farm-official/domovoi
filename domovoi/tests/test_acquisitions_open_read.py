@@ -57,3 +57,20 @@ async def test_open_listings_hide_the_requester_and_raw_error(row, monkeypatch) 
             admin_row = _mine((await c.get(path, headers=bearer("live"))).json())
             assert admin_row["requested_by"] == "http:192.0.2.7"
             assert admin_row["error"] == RAW_ERROR
+
+
+async def test_the_realtime_push_carries_the_redacted_rows() -> None:
+    from web.backend import realtime
+
+    async with session_scope() as s:
+        await s.execute(text(
+            "INSERT INTO media_acquisitions (kind, text, requested_by, status, error) "
+            "VALUES ('query', :t, 'http:192.0.2.7', 'pending', :e)"
+        ), {"t": MARK, "e": RAW_ERROR})
+    try:
+        pushed = [a for a in await realtime._snapshot_acquisitions() if a["text"] == MARK]
+    finally:
+        async with session_scope() as s:
+            await s.execute(text("DELETE FROM media_acquisitions WHERE text = :t"), {"t": MARK})
+    assert pushed and pushed[0]["requested_by"] is None
+    assert RAW_ERROR not in str(pushed)

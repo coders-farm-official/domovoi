@@ -33,6 +33,10 @@ public struct InstallOptions {
     /// The account that ran Setup (the system install): it owns the media
     /// folders Setup makes, so the household can put files in them.
     public var mediaOwner: String? = nil
+    /// Domovoi's own Ollama's OLLAMA_NUM_PARALLEL (``OllamaParallel``), from
+    /// this Mac's memory; read again on every run, so a repair or an update
+    /// writes it into a job installed before it existed.
+    public var ollamaParallel: Int = OllamaParallel.forMac(memoryBytes: Machine.memoryBytes())
     /// "Keep this Mac awake" (system install): nil leaves the power settings alone.
     public var keepAwake: Bool? = nil
     /// "Start after a power failure" (system install, desktop Macs): nil leaves it alone.
@@ -440,6 +444,7 @@ public final class Installer {
             let plist = try LaunchdPlist.render(template: template("launchd/\(Labels.ollama).plist"), values: [
                 "LABEL": Labels.ollama, "OLLAMA_BIN": bin.path, "OLLAMA_PORT": String(port),
                 "OLLAMA_MODELS": layout.ollamaModels.path, "JOB_HOME": layout.jobHome.path, "LOG_FILE": logFile.path,
+                "OLLAMA_NUM_PARALLEL": String(min(4, max(1, options.ollamaParallel))),
             ], role: options.role)
             try record(.init(kind: .launchdJob, path: layout.plist(Labels.ollama).path, label: Labels.ollama, domain: launchd.domain, keep: .program, step: "ollama"))
             let st = try launchd.install(plist, at: layout.plist(Labels.ollama))

@@ -1033,3 +1033,19 @@ async def test_unheard_songs_behind_are_capped_oldest_first(clean, room) -> None
     cap = rooms.TRIM_MAX_BEHIND
     assert did["trimmed"] == 259 - cap
     assert left.index(ids[259]) == cap and left[0] == ids[259 - cap]   # the oldest went, 200 stay
+
+
+@requires_db
+async def test_a_jump_down_a_long_queue_keeps_what_it_passed(clean, room) -> None:
+    d = await _seed(260)
+    await _playing(room, [d["uri"][t] for t in d["ids"]])
+    await rooms.start(ROOM, mode="continue", seed=SeedRef(track_id=d["ids"][0], kind="ids",
+                      track_ids=tuple(d["ids"]), label="from this queue"), client=room)
+    ids = await _ids(room)
+    await _look(room)                                      # the first song is heard
+    await room.play_id(ids[259])                           # then straight to the last
+    did = await _look(room)
+    assert did["trimmed"] == 1                             # only the one it heard
+    left = await _ids(room)
+    assert all(i in left for i in ids[1:260])
+    assert (await _look(room))["trimmed"] == 0             # and not on the next look either

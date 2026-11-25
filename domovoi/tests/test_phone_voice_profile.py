@@ -207,7 +207,7 @@ async def test_my_name_from_the_phone_for_someone_known_asks_then_adds_a_phone_s
         asked = await _say(c, tid, whisper, "My name is Priya.", PRIYA_PHONE)
         # The phone mic's Priya is nobody yet: the satellite sample is too far.
         assert asked["speaker"] is None
-        assert asked["reply"] == "Add this phone's voice to Priya?"
+        assert asked["reply"] == "Should I add this phone's voice to Priya?"
         assert asked["expect_followup"] is True
         assert await _samples(priya) == [("satellite", "kitchen")]
 
@@ -270,7 +270,7 @@ async def test_phone_samples_are_capped_oldest_first(db_session, open_gate, whis
     async with _client() as c:
         for clip in clips:
             asked = await _say(c, tid, whisper, "My name is Priya.", clip)
-            assert asked["reply"] == "Add this phone's voice to Priya?"
+            assert asked["reply"] == "Should I add this phone's voice to Priya?"
             await _say(c, tid, whisper, "Yes.", clip)
     async with SessionLocal() as s:
         kept = (await s.execute(
@@ -394,7 +394,7 @@ async def test_add_this_phones_voice_answered_from_elsewhere_saves_nothing(
     tid = await _thread()
     async with _client() as c:
         asked = await _say(c, tid, whisper, "My name is Priya.", PRIYA_PHONE)
-        assert asked["reply"] == "Add this phone's voice to Priya?"
+        assert asked["reply"] == "Should I add this phone's voice to Priya?"
         replay = await c.post(
             "/v1/intent",
             json={"transcript": "yes", "room_id": "kitchen", "session_id": asked["session_id"]},
@@ -478,7 +478,7 @@ async def test_an_opted_out_voice_is_not_added_by_the_phones_yes(db_session, ope
     tid = await _thread()
     async with _client() as c:
         asked = await _say(c, tid, whisper, "My name is Priya.", PRIYA_PHONE)
-        assert asked["reply"] == "Add this phone's voice to Priya?"
+        assert asked["reply"] == "Should I add this phone's voice to Priya?"
         no = await _say(c, tid, whisper, "Yes.", PRIYA_PHONE)
     assert no["reply"] == "I wasn't able to save that voice profile."
     assert await _samples(priya) == [("satellite", "kitchen")]

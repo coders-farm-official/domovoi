@@ -215,13 +215,29 @@ async def test_fh3_im_back_is_once_per_connection_and_capped_per_hour(tmp_path, 
     async with main, pairing:
         for _ in range(4):
             sess = await _call(_port(main), them, their_hello, view)
-            for _ in range(50):
+            for _ in range(10):
                 await sess.send(fs.Kind.IM_BACK)
             await sess.ping()
             await sess.close()
         await asyncio.sleep(0.1)
     events = _events(capsys)
     assert len(events) == 5  # 4 connected + 4 I'm back, cut at the hour's 5
+
+
+async def test_a_stream_of_frames_that_ask_nothing_is_closed(tmp_path) -> None:
+    us, our_hello = _house(tmp_path, "us")
+    them, their_hello = _house(tmp_path, "them")
+    main, pairing, folder, _ = await _listener(tmp_path, us, our_hello)
+    _write_friends(folder, _entry(them))
+    view = fs.Friend(us.house_key, us.session_key)
+    async with main, pairing:
+        for kind in (fs.Kind.IM_BACK, fs.Kind.PONG):
+            sess = await _call(_port(main), them, their_hello, view)
+            with pytest.raises(fs.SessionRefused):
+                for _ in range(fl.IDLE_FRAMES_PER_CONNECTION + 3):
+                    await sess.send(kind, b"x" * 8 if kind is fs.Kind.PONG else b"")
+                await sess.ping(timeout=5)
+            await sess.close()
 
 
 async def test_fh9_silent_connections_give_their_slots_back(tmp_path, monkeypatch) -> None:

@@ -303,6 +303,10 @@ internal fun HomeAttention(
                     color = Domovoi.colors.fgFaint,
                 )
             }
+            view.extra.forEach { r ->
+                HorizontalDivider(color = Domovoi.colors.borderSoft)
+                AttentionLine(r, compact, onOpen)
+            }
         }
         is AttentionView.Rows -> {
             val rows = view.rows
@@ -318,40 +322,46 @@ internal fun HomeAttention(
                 rows.forEachIndexed { i, r ->
                     if (compact && i >= HOME_PHONE_ROWS && !expanded) return@forEachIndexed
                     if (i > 0) HorizontalDivider(color = Domovoi.colors.borderSoft)
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .clickable { onOpen(r.target) }
-                            .heightIn(min = if (compact) 44.dp else 40.dp)
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        StatusDot(r.tone)
-                        Text(
-                            r.text,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = Domovoi.colors.fg,
-                            // One line per problem on a phone, so three of
-                            // them and the timers leave the rooms above the fold.
-                            maxLines = if (compact) 1 else Int.MAX_VALUE,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
-                        r.at?.let {
-                            Text(
-                                relTime(it),
-                                style = MaterialTheme.typography.labelMedium,
-                                fontFamily = FontFamily.Monospace,
-                                color = Domovoi.colors.fgFaint,
-                            )
-                        }
-                    }
+                    AttentionLine(r, compact, onOpen)
                 }
                 if (checking) QuietLine("checking…")
             }
         }
         AttentionView.None -> Unit
+    }
+}
+
+/** One "needs attention" row: its dot, its words, when; a tap opens it. */
+@Composable
+private fun AttentionLine(r: AttentionRow, compact: Boolean, onOpen: (HomeTarget) -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable { onOpen(r.target) }
+            .heightIn(min = if (compact) 44.dp else 40.dp)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        StatusDot(r.tone)
+        Text(
+            r.text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = Domovoi.colors.fg,
+            // One line per problem on a phone, so three of
+            // them and the timers leave the rooms above the fold.
+            maxLines = if (compact) 1 else Int.MAX_VALUE,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        r.at?.let {
+            Text(
+                relTime(it),
+                style = MaterialTheme.typography.labelMedium,
+                fontFamily = FontFamily.Monospace,
+                color = Domovoi.colors.fgFaint,
+            )
+        }
     }
 }
 

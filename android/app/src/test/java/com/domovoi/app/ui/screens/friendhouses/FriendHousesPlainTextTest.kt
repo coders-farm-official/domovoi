@@ -75,17 +75,30 @@ class FriendHousesPlainTextTest {
     }
 
     @Test fun namesAndTitlesArePlain() {
-        val friend = render { FriendRow(FhFriend(id = "f1", name = hostile, house = "ab".repeat(32), alert = "read")) {} }
-        assertTrue(hostile in friend.texts)
-        assertTrue(FhWords.alert("read") in friend.texts)
-        friend.textElements.forEach { assertEquals("TextStringSimpleElement", it) }
-        val shared = render {
-            SharedRow(FhSharedList(id = "0f".repeat(16), state = "invited", origin = "them", title = hostile, friend = "The Smiths")) {}
+        val offer = render {
+            OfferRow(
+                FhSharedList(id = "0f".repeat(16), state = "invited", origin = "them", title = hostile, friend = hostile),
+                onAccept = { FhDone.Ok("") },
+                onDecline = { FhDone.Ok("") },
+            )
         }
-        assertTrue(FhWords.invited("The Smiths", hostile) in shared.texts)
+        assertTrue(offer.texts.toString(), FhWords.offered(hostile, hostile) in offer.texts)
+        offer.textElements.forEach { assertEquals("TextStringSimpleElement", it) }
+        // The controls are the household's own (rename, accept, decline);
+        // nothing in the other house's words is one.
+        assertEquals(3, offer.clickables.size)
+        val shared = render {
+            SharedRow(
+                FhSharedList(id = "0f".repeat(16), state = "active", origin = "them", title = hostile, listName = "Camping", friend = hostile, listId = 4),
+                onOpen = {},
+                onStop = { FhDone.Ok("") },
+            )
+        }
+        assertTrue(shared.texts.toString(), FhWords.shared("Camping", hostile, ours = false) in shared.texts)
+        assertTrue(FhWords.theyCallIt(hostile) in shared.texts)
         shared.textElements.forEach { assertEquals("TextStringSimpleElement", it) }
-        // An invited list is words, never a button: accepting is an admin's.
-        assertTrue(shared.clickables.isEmpty())
+        // Open in Lists and Stop sharing.
+        assertEquals(2, shared.clickables.size)
     }
 
     @Test fun outgoingStatesAreTheDashboardsWords() {

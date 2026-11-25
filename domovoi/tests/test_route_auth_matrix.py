@@ -190,6 +190,13 @@ ALLOWLIST: dict[tuple[str, str, str], str] = {
         "a read: converts the posted content to Word and returns it, writes nothing; "
         "require_device_read, the conversion runs in its own capped process"
     ),
+    # The Files page's Download (2026-11): a POST only so the link it mints
+    # cannot be made by another origin; it changes nothing on disk.
+    ("web", "POST", "/api/files/download-ticket"): (
+        "a read: mints a one-use, 60-second link for GET /api/files/download "
+        "after that download's own checks; require_device_read + "
+        "require_requested_with, a folder still needs the admin session"
+    ),
     # ── web: the video satellite's kiosk transport row (FE-3) ─────────
     # The owner's decision: the kiosk renders unattended, with nobody in the
     # room to hold a credential, so its four transport verbs stay open.

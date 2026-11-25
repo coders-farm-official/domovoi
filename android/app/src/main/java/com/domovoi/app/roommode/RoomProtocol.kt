@@ -1,5 +1,6 @@
 package com.domovoi.app.roommode
 
+import com.domovoi.app.ui.screens.music.encComponent
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -189,7 +190,7 @@ object RoomProtocol {
             base.startsWith("http://") -> "ws://" + base.removePrefix("http://")
             else -> base
         }
-        return "$ws/v1/stream/$roomId"
+        return "$ws/v1/stream/${encComponent(roomId)}"
     }
 
     // ── what the core sends ─────────────────────────────────────────────

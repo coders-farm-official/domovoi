@@ -6,7 +6,8 @@ import XCTest
 /// shown exactly as written with no link in it, marked read on open and
 /// again when a new one arrives, a send with its counter and its waiting
 /// state, a refusal in the server's words, a former friend with no composer,
-/// friends and shared lists as words, "open in lists" landing in Lists, the
+/// no friends zone on the phone (1.4.1: Messages, then Shared lists), an
+/// offer with Accept and Decline, "open in Lists" landing in Lists, the
 /// screen leaving when the server turns it off, and Apple's audit.
 ///
 /// The house is the stub's `fixtures/friendhouses.py`
@@ -21,7 +22,7 @@ extension StubHouseUITests {
     enum FriendHousesUnderTest {
         static let tile = "Friend houses"
         static let toolsHeading = "tools"
-        static let description = "Serverless messaging and friend system between households"
+        static let description = "Message and share lists with friends’ houses, house to house, with no company server in between"
         static let smiths = "The Smiths"
         static let joneses = "The Joneses"
         static let patels = "The Patels"
@@ -33,21 +34,16 @@ extension StubHouseUITests {
         static let waiting = "Waiting to send"
         static let conversationAdmin = "Only an admin can save a copy of these messages or delete them, on the dashboard."
         static let former = "No longer a friend: messages can't be sent to this house."
-        static let senderLevel = "New messages: the rooms say who it's from"
-        static let inboxLevel = "New messages: only in the inbox"
-        static let notVerified = "not verified"
         static let friendsAdmin =
             "Only an admin can add, remove or block friends, compare the codes, or change what a new message does, on the dashboard."
-        static let online = "Online"
-        static let notReachedYet = "Not reached yet"
-        static let lastSeen = "Last seen "
         static let thisWeek = "This week"
         static let okaforsBecame = "The Okafors became a friend house \u{00B7} "
         static let shoppingShared = "\u{201C}Shopping\u{201D} was shared with The Smiths \u{00B7} "
         static let notYou =
             "Not you? Only an admin can remove or block the house and change the admin password, on the dashboard."
-        static let invited = "The Patels shared a list: Camping trip. An admin can accept it in the dashboard."
-        static let listsAdmin = "Only an admin can share a list, accept one or stop sharing, on the dashboard."
+        static let invited = "The Patels shared a list: \u{201C}Camping trip\u{201D}"
+        static let listsAdmin = "Only an admin can share one of this house's lists with a friend house, on the dashboard."
+        static let declineTitle = "Decline this list?"
         static let refused = "That house isn't a friend any more."
         static let typed = "See you at six"
         static let typedCounter = "14 / 2000"
@@ -66,7 +62,7 @@ extension StubHouseUITests {
             "fh.title", "fh.description",
             // "This week" (server R6 FH-8), in the header on every tab.
             "fh.changes.title", "fh.change", "fh.changes.note",
-            "fh.tab.messages", "fh.tab.friends", "fh.tab.shared",
+            "fh.tab.messages", "fh.tab.shared",
             // The inbox row: the name, "no longer a friend" and the unread
             // and not-delivered pills are this one button's words.
             "fh.conversation",
@@ -82,14 +78,16 @@ extension StubHouseUITests {
             "fh.message.state",
             "fh.counter", "fh.send",
         ]
-        /// The Friends tab, audited since presence (2026-11-17) put a new
-        /// line under each friend.
-        static let friendsMeasured = [
+        /// The Shared lists tab, audited since 1.4.1 gave it controls
+        /// (Accept, Decline, Stop sharing) in place of the Friends tab, which
+        /// the phones hide with the dashboard's admin zone.
+        static let sharedMeasured = [
             "fh.title", "fh.description",
             "fh.changes.title", "fh.change", "fh.changes.note",
-            "fh.tab.messages", "fh.tab.friends", "fh.tab.shared",
-            "fh.friend.name", "fh.friend.verified", "fh.friend.presence", "fh.friend.alert",
-            "fh.friend.message", "fh.friends.note",
+            "fh.tab.messages", "fh.tab.shared",
+            "fh.shared.explain", "fh.shared.offer", "fh.shared.rename",
+            "fh.shared.accept", "fh.shared.decline",
+            "fh.shared.list", "fh.shared.open", "fh.shared.stop", "fh.shared.note",
         ]
     }
 
@@ -405,43 +403,39 @@ extension StubHouseUITests {
         evidence(app, "fh-08-former")
     }
 
-    /// Friends: names, verified or not, the alert level in words, the admin's
-    /// sentence; "message" on a friend never written to opens an empty
-    /// conversation with a composer.
+    /// No friends zone on the phone (1.4.1): two tabs, Messages then Shared
+    /// lists, and nothing of the dashboard's "Friends and connections" — no
+    /// friend rows, no Message on a friend, no admin sentence about them.
     @MainActor
-    func testFriendHouses_FriendsAreWordsAndMessageOpensTheirConversation() throws {
+    func testFriendHouses_NoFriendsZoneOnThePhone() throws {
         let (app, landed) = openFriendHouses()
         defer { friendHouses(nil) }
         XCTAssertTrue(landed, "Friend houses did not open")
-        let tab = app.buttons["fh.tab.friends"]
-        XCTAssertTrue(tab.waitForExistence(timeout: 10))
-        tab.tap()
-        XCTAssertTrue(friendHousesSays(app, FriendHousesUnderTest.senderLevel))
-        XCTAssertTrue(friendHousesSays(app, FriendHousesUnderTest.inboxLevel))
-        XCTAssertTrue(friendHousesSays(app, FriendHousesUnderTest.notVerified))
-        XCTAssertTrue(friendHousesSays(app, FriendHousesUnderTest.friendsAdmin), "no admin sentence")
-        // Presence, one of each: the Smiths online, the Patels last seen,
-        // the Okafors never reached.
-        XCTAssertTrue(friendHousesSays(app, FriendHousesUnderTest.online))
-        XCTAssertTrue(friendHousesSays(app, FriendHousesUnderTest.notReachedYet))
-        let seen = app.staticTexts.matching(NSPredicate(
-            format: "identifier == %@ AND label BEGINSWITH %@", "fh.friend.presence", FriendHousesUnderTest.lastSeen
-        )).firstMatch
-        XCTAssertTrue(seen.waitForExistence(timeout: 10), "no Last seen line")
-        XCTAssertEqual(3, app.staticTexts.matching(identifier: "fh.friend.presence").count, "one presence line per friend")
-        evidence(app, "fh-09-friends")
-        let messages = app.buttons.matching(identifier: "fh.friend.message")
-        XCTAssertEqual(3, messages.count, "one message button per friend, and no other control")
-        messages.element(boundBy: 1).tap()
-        XCTAssertTrue(app.buttons["fh.back"].waitForExistence(timeout: 20))
-        XCTAssertTrue(friendHousesSays(app, FriendHousesUnderTest.patels))
-        XCTAssertTrue(friendHousesComposer(app).waitForExistence(timeout: 10), "no composer for a friend")
+        let messages = app.buttons["fh.tab.messages"]
+        let shared = app.buttons["fh.tab.shared"]
+        XCTAssertTrue(messages.waitForExistence(timeout: 10))
+        XCTAssertTrue(shared.exists)
+        XCTAssertTrue(
+            messages.frame.minX < shared.frame.minX || messages.frame.minY < shared.frame.minY,
+            "Messages is not first"
+        )
+        evidence(app, "fh-09-no-friends")
+        XCTAssertFalse(app.buttons["fh.tab.friends"].exists, "a Friends tab on the phone")
+        XCTAssertEqual(0, app.buttons.matching(identifier: "fh.friend.message").count)
+        XCTAssertEqual(0, app.staticTexts.matching(identifier: "fh.friend.name").count)
+        shared.tap()
+        XCTAssertTrue(friendHousesSays(app, FriendHousesUnderTest.invited))
+        XCTAssertFalse(
+            app.staticTexts.matching(NSPredicate(format: "label == %@", FriendHousesUnderTest.friendsAdmin)).firstMatch.exists,
+            "the friends' admin sentence with no friends on screen"
+        )
     }
 
-    /// Shared lists: an offer is a sentence and never a button; "open in
-    /// lists" opens the shared list in Lists.
+    /// Shared lists (1.4.1): an offer has Accept and Decline (Decline asks
+    /// first), a list shared now has Stop sharing, and "open in Lists" opens
+    /// the shared list in Lists. Only starting a share is the admin's.
     @MainActor
-    func testFriendHouses_AnOfferIsASentenceAndOpenInListsLands() throws {
+    func testFriendHouses_AnOfferCanBeAcceptedOrDeclinedAndOpenInListsLands() throws {
         control("lists-reset", "{}", port: 6601, what: "the lists seed")
         let (app, landed) = openFriendHouses()
         defer { friendHouses(nil) }
@@ -451,9 +445,20 @@ extension StubHouseUITests {
         tab.tap()
         XCTAssertTrue(friendHousesSays(app, FriendHousesUnderTest.invited))
         XCTAssertTrue(friendHousesSays(app, FriendHousesUnderTest.listsAdmin))
+        let accept = app.buttons["fh.shared.accept"]
+        let decline = app.buttons["fh.shared.decline"]
+        XCTAssertTrue(accept.waitForExistence(timeout: 10), "no Accept on the offer")
+        XCTAssertTrue(accept.isEnabled)
+        XCTAssertTrue(decline.exists, "no Decline on the offer")
+        XCTAssertTrue(app.buttons["fh.shared.stop"].exists, "no Stop sharing on the list shared now")
+        // Decline asks first; Cancel sends nothing.
+        decline.tap()
+        XCTAssertTrue(app.alerts[FriendHousesUnderTest.declineTitle].waitForExistence(timeout: 10), "Decline did not ask")
+        app.alerts[FriendHousesUnderTest.declineTitle].buttons["Cancel"].tap()
+        XCTAssertTrue(friendHousesSays(app, FriendHousesUnderTest.invited), "the offer went on a Cancel")
         let open = app.buttons["fh.shared.open"]
         XCTAssertTrue(open.waitForExistence(timeout: 10))
-        XCTAssertEqual(1, app.buttons.matching(identifier: "fh.shared.open").count, "the offer has a button")
+        XCTAssertEqual(1, app.buttons.matching(identifier: "fh.shared.open").count, "the offer has an open in Lists")
         evidence(app, "fh-10-shared")
         open.tap()
         let title = app.staticTexts.matching(NSPredicate(format: "identifier == %@ AND label == %@", "lists.title", "Shopping"))
@@ -477,7 +482,7 @@ extension StubHouseUITests {
         XCTAssertFalse(app.buttons[FriendHousesUnderTest.tile].exists, "the tile stayed")
     }
 
-    /// Apple's audit on the inbox and on a conversation.
+    /// Apple's audit on the inbox, the shared lists and a conversation.
     ///
     /// **One finding, on measured ids only.** "Dynamic Type font sizes are
     /// partially unsupported" is excused on exactly the elements in
@@ -503,18 +508,18 @@ extension StubHouseUITests {
                 + " measured=\(inboxSplit.excused.count) ours=\(inboxSplit.rest.count)"
         )
         XCTAssertTrue(inboxSplit.rest.isEmpty, "Apple's audit on the inbox: " + inboxSplit.rest.joined(separator: " | "))
-        let friendsTab = app.buttons["fh.tab.friends"]
-        XCTAssertTrue(friendsTab.waitForExistence(timeout: 10))
-        friendsTab.tap()
-        XCTAssertTrue(friendHousesSays(app, FriendHousesUnderTest.online))
-        evidence(app, "fh-12-audit-friends")
-        let friends = Self.floorAndRest(try auditIssues(app, "friend-houses-friends"))
-        let friendsSplit = Self.friendHousesUnmeasured(friends.rest, ids: FriendHousesUnderTest.friendsMeasured)
+        let sharedTab = app.buttons["fh.tab.shared"]
+        XCTAssertTrue(sharedTab.waitForExistence(timeout: 10))
+        sharedTab.tap()
+        XCTAssertTrue(friendHousesSays(app, FriendHousesUnderTest.invited))
+        evidence(app, "fh-12-audit-shared")
+        let shared = Self.floorAndRest(try auditIssues(app, "friend-houses-shared"))
+        let sharedSplit = Self.friendHousesUnmeasured(shared.rest, ids: FriendHousesUnderTest.sharedMeasured)
         print(
-            "FRIEND HOUSES AUDIT friends floor=\(friends.floor) rest=\(friends.rest.count)"
-                + " measured=\(friendsSplit.excused.count) ours=\(friendsSplit.rest.count)"
+            "FRIEND HOUSES AUDIT shared floor=\(shared.floor) rest=\(shared.rest.count)"
+                + " measured=\(sharedSplit.excused.count) ours=\(sharedSplit.rest.count)"
         )
-        XCTAssertTrue(friendsSplit.rest.isEmpty, "Apple's audit on friends: " + friendsSplit.rest.joined(separator: " | "))
+        XCTAssertTrue(sharedSplit.rest.isEmpty, "Apple's audit on shared lists: " + sharedSplit.rest.joined(separator: " | "))
         app.buttons["fh.tab.messages"].tap()
         XCTAssertTrue(friendHousesOpen(app, FriendHousesUnderTest.smiths))
         evidence(app, "fh-12-audit-conversation")
@@ -550,9 +555,9 @@ extension StubHouseUITests {
             for id in FriendHousesUnderTest.inboxMeasured {
                 seen["inbox/" + id] = friendHousesSize(app, id)
             }
-            app.buttons["fh.tab.friends"].tap()
-            for id in FriendHousesUnderTest.friendsMeasured {
-                seen["friends/" + id] = friendHousesSize(app, id)
+            app.buttons["fh.tab.shared"].tap()
+            for id in FriendHousesUnderTest.sharedMeasured {
+                seen["shared/" + id] = friendHousesSize(app, id)
             }
             app.buttons["fh.tab.messages"].tap()
             guard friendHousesOpen(app, FriendHousesUnderTest.smiths) else {
@@ -574,7 +579,7 @@ extension StubHouseUITests {
         var stuck: [String] = []
         var missing: [String] = []
         let all = FriendHousesUnderTest.inboxMeasured.map { "inbox/" + $0 }
-            + FriendHousesUnderTest.friendsMeasured.map { "friends/" + $0 }
+            + FriendHousesUnderTest.sharedMeasured.map { "shared/" + $0 }
             + FriendHousesUnderTest.conversationMeasured.map { "conversation/" + $0 }
         for key in all {
             guard let was = small[key], let grown = big[key], was != .zero, grown != .zero else {

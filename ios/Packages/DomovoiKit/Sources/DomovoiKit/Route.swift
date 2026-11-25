@@ -39,8 +39,8 @@ public enum Route: String, CaseIterable, Sendable {
     /// Calendar's, so a workspace screen only: never a local tab
     /// (``localTabs(phoneCanChat:sharedScreen:savedBooks:)``).
     case lists = "Lists"
-    /// Friend Houses, "Serverless messaging and friend system between
-    /// households": the house inbox, the friends and the shared lists
+    /// Friend Houses, "Message and share lists with friends’
+    /// houses, house to house": the house inbox, the friends and the shared lists
     /// (`Routes.kt` `FriendHouses`, Android 394473e2). Household data like
     /// Lists, so a workspace screen only. Off by default on the server: on no
     /// launcher, and not rendered, unless `GET /api/friend-houses` says it

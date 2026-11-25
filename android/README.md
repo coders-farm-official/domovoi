@@ -1251,7 +1251,7 @@ leaves the home network). What the phone does, exactly:
 
 ## Friend houses
 
-"Serverless messaging and friend system between households": the
+"Message and share lists with friends’ houses, house to house, with no company server in between": the
 server's Friend Houses (off by default; an admin turns it on in the
 dashboard). The phone gets what a household phone may do with friends
 the house already has: read the house inbox (one for the whole house),

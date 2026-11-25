@@ -519,7 +519,7 @@ class MusicAliasHandler(Handler):
             existing = outcome.existing
             assert existing is not None
             other = await self._phrase(session, await self._row_target(session, existing), avoid=(alias,))
-            prompt = f"{_cap(alias)} already means {other}. Replace it?"
+            prompt = f"{_cap(alias)} already means {other}. Should I replace it?"
             if ctx.session_id is not None:
                 await request_confirmation(
                     session, ctx.session_id, kind=ALIAS_REPLACE_KIND, handler=self.name,

@@ -52,15 +52,16 @@ def _semaphore() -> asyncio.Semaphore:
     return gate
 
 
-async def to_docx(markup: str, title: str = "", *, timeout: float | None = None) -> bytes:
-    """``markup`` (sanitised in the worker) as .docx bytes. Raises
-    :class:`ConvertFailed`."""
+async def to_docx(markup: str, title: str = "", *, timeout: float | None = None,
+                  kind: str = "html") -> bytes:
+    """``markup`` as .docx bytes: HTML (sanitised in the worker), or with
+    ``kind="markdown"`` Markdown or plain text. Raises :class:`ConvertFailed`."""
     timeout = TIMEOUT_SEC if timeout is None else timeout
     async with _semaphore():
         work = Path(tempfile.mkdtemp(prefix="domovoi-docx-"))
         try:
             (work / "input.html").write_text(markup or "", encoding="utf-8")
-            request = {"title": title, "memory_bytes": limits.worker_memory_bytes(),
+            request = {"title": title, "kind": kind, "memory_bytes": limits.worker_memory_bytes(),
                        "cpu_seconds": int(timeout)}
             (work / "request.json").write_text(json.dumps(request), encoding="utf-8")
             env = dict(os.environ)

@@ -78,6 +78,10 @@ HELD_SAY_HOURS = 24
 ANNOUNCE_GAP_SEC = 60.0
 _FLUSHING: dict[bytes, asyncio.Lock] = {}
 _LAST_ANNOUNCED: dict[bytes, float] = {}
+# Friends with a flush already scheduled for the end of their alert gap.
+_GAP_FLUSH: set[bytes] = set()
+#: A held batch read aloud says at most this many of its messages.
+BATCH_READ_MAX = 3
 
 
 class MessageError(Exception):
@@ -139,8 +143,16 @@ async def send(friend_id: str, body: str) -> dict[str, Any]:
             {"h": friend.house_key, "f": friend.id, "n": friend.local_name, "m": env.msg_id,
              "e": env.epoch, "q": env.seq, "t": env.sent_at, "b": env.text,
              "env": env.to_bytes(), "d": OUTBOX_DAYS})).first()
-    _service().spawn(flush(friend.house_key), "friend-houses-flush")
+    _service().spawn(_flush_now(friend.house_key), "friend-houses-flush")
     return {"id": int(row[0]), "state": "queued", "created_at": row[1].isoformat()}
+
+
+async def _flush_now(house_key: bytes) -> None:
+    """A send's own delivery try, under the retry pass's deadline."""
+    try:
+        await asyncio.wait_for(flush(house_key), FLUSH_DEADLINE_SEC)
+    except asyncio.TimeoutError:
+        log.info("Friend Houses: delivering to a friend took too long; next round")
 
 
 async def flush(house_key: bytes) -> int:
@@ -209,7 +221,9 @@ async def flush(house_key: bytes) -> int:
 
 async def _await_ack(sess: fs.Session, msg_id: bytes) -> tuple[fs.Kind | None, bytes]:
     """The friend's ack for ``msg_id``, answering pings meanwhile. None when
-    it doesn't come (the friend refused it, or is over its quota)."""
+    it doesn't come (the friend refused it, or is over its quota), or the
+    friend pings more than :data:`fs.PONGS_PER_WAIT` times meanwhile."""
+    answered = 0
     while True:
         try:
             kind, body = await sess.recv(timeout=45)
@@ -218,6 +232,9 @@ async def _await_ack(sess: fs.Session, msg_id: bytes) -> tuple[fs.Kind | None, b
         if kind is fs.Kind.MESSAGE_ACK and body == msg_id:
             return kind, body
         if kind is fs.Kind.PING:
+            answered += 1
+            if answered > fs.PONGS_PER_WAIT:
+                return None, b""
             await sess.send(fs.Kind.PONG, body)
         elif kind is fs.Kind.BYE:
             return None, b""
@@ -639,6 +656,7 @@ def held_state(mark: Any) -> dict[str, Any] | None:
             state["said"] = sorted({r for r in got.get("said") or [] if isinstance(r, str)})
             at = got.get("read_out_at")
             state["read_out_at"] = at if isinstance(at, str) else None
+            state["gap"] = bool(got.get("gap", False))
     return state
 
 
@@ -663,6 +681,41 @@ def _alert_text(alert: str, name: str, bodies: list[str], phrases: list[str]) ->
     return speakable(sanitize_for_speech(spoken), phrases)
 
 
+def _more_text(alert: str, name: str, bodies: list[str], phrases: list[str]) -> str:
+    """What the rooms hear for messages that waited out a friend's alert
+    gap: one announcement for them all."""
+    from domovoi.speech_sanitize import sanitize_for_speech
+
+    name, n = safe_name(name, phrases), len(bodies)
+    if n == 1:
+        spoken = (f"Another message from {name}: {safe_to_say(bodies[0], phrases)}" if alert == "read"
+                  else f"Another message from {name}.")
+    elif alert == "read":
+        said = [safe_to_say(b, phrases).rstrip(" .!?") for b in bodies[:BATCH_READ_MAX]]
+        spoken = f"{n} more messages from {name}: " + ". ".join(t for t in said if t)
+        spoken += f", and {n - BATCH_READ_MAX} more in Friend Houses." if n > BATCH_READ_MAX else "."
+    else:
+        spoken = f"{n} more messages from {name}."
+    return speakable(sanitize_for_speech(spoken), phrases)
+
+
+def _schedule_gap_flush(house: bytes, delay: float) -> None:
+    """Say what waited in a friend's alert gap once the gap ends: one
+    flush per friend (the retry pass is the backstop after a restart)."""
+    if house in _GAP_FLUSH:
+        return
+    _GAP_FLUSH.add(house)
+
+    async def later() -> None:
+        try:
+            await asyncio.sleep(max(delay, 0.0) + 0.05)  # past the gap, never on its edge
+        finally:
+            _GAP_FLUSH.discard(house)
+        await say_held(house)
+
+    _service().spawn(later(), "friend-houses-gap")
+
+
 async def _announce(room: str | None, said: str) -> list[str]:
     try:
         from domovoi.sdk.speech import SpeechAPI
@@ -676,10 +729,6 @@ async def _announce(room: str | None, said: str) -> list[str]:
 async def _alert(house: bytes, name: str, alert: str, body: str, row_id: int | None = None) -> None:
     if alert == "inbox":
         return
-    now = time.monotonic()
-    if now - _LAST_ANNOUNCED.get(house, 0.0) < ANNOUNCE_GAP_SEC:
-        return  # spaced out: the inbox has the rest (finding 30)
-    _LAST_ANNOUNCED[house] = now
     from domovoi import quiet_hours
 
     rooms = _connected_rooms()
@@ -687,9 +736,21 @@ async def _alert(house: bytes, name: str, alert: str, body: str, row_id: int | N
         quiet = await quiet_hours.quiet_rooms(rooms)
     else:  # no room to say it in: the house's hours say whether it waits
         quiet = ["(house)"] if await quiet_hours.quiet_now([]) else []
+    now = time.monotonic()
+    waited = now - _LAST_ANNOUNCED.get(house, 0.0)
+    if waited < ANNOUNCE_GAP_SEC:
+        # Spaced out (finding 30): held, and said together when the gap
+        # ends (a quiet room says it after its quiet hours, as below).
+        if row_id is not None:
+            await _mark_held(row_id, {"held": len(quiet) >= max(len(rooms), 1), "said": [],
+                                      "read_out_at": None, "gap": True})
+            _schedule_gap_flush(house, ANNOUNCE_GAP_SEC - waited)
+        return
     reached: list[str] = []
     if len(quiet) < max(len(rooms), 1):
-        # A quiet room refuses it (StreamSession.announce); the others say it.
+        # A quiet room refuses it (StreamSession.announce); the others say
+        # it, and that starts the friend's gap.
+        _LAST_ANNOUNCED[house] = now
         reached = await _announce(None, _alert_text(alert, name, [body], await wake_phrases()))
     if quiet and row_id is not None:
         # Kept for the quiet rooms, said when their quiet hours end.
@@ -698,12 +759,13 @@ async def _alert(house: bytes, name: str, alert: str, body: str, row_id: int | N
                  "them to end" if not reached else "the quiet rooms' hours to end")
 
 
-async def say_held() -> int:
-    """Say the messages quiet hours held back, in each connected room that
-    isn't quiet now and hasn't said them: still unread, the friend's alert
-    still on, at most :data:`HELD_SAY_HOURS` old. One friend's messages go
-    together per room ("3 messages from ..." for more than one). Returns
-    how many times a room said something."""
+async def say_held(house: bytes | None = None) -> int:
+    """Say the messages quiet hours or a friend's alert gap held back, in
+    each connected room that isn't quiet now and hasn't said them: still
+    unread, the friend's alert still on, at most :data:`HELD_SAY_HOURS`
+    old, and that friend's gap over. One friend's messages go together per
+    room, and that counts as the friend's alert for the next gap. ``house``:
+    that friend only. Returns how many times a room said something."""
     from datetime import datetime, timezone
 
     from domovoi import quiet_hours
@@ -724,7 +786,11 @@ async def say_held() -> int:
             "AND m.created_at > now() - make_interval(hours => :h) ORDER BY m.id"),
             {"q": HELD_QUIET + "%", "h": HELD_SAY_HOURS})).all()
     by_friend: dict[bytes, list] = {}
+    now = time.monotonic()
     for r in rows:
+        key = bytes(r[1])
+        if (house is not None and key != house) or now - _LAST_ANNOUNCED.get(key, 0.0) < ANNOUNCE_GAP_SEC:
+            continue
         st = held_state(r[3])
         if st is not None:
             by_friend.setdefault(bytes(r[1]), []).append((r, st))
@@ -732,13 +798,18 @@ async def say_held() -> int:
         return 0
     phrases = await wake_phrases()
     spoke = 0
-    for group in by_friend.values():
+    for key, group in by_friend.items():
         name, alert = group[0][0][4], group[0][0][5]
         for room in awake:
             due = [(r, st) for r, st in group if room not in st["said"]]
-            if not due or not await _announce(room, _alert_text(alert, name, [r[2] for r, _ in due], phrases)):
+            if not due:
+                continue
+            words = (_more_text if any(st.get("gap") for _, st in due) else _alert_text)(
+                alert, name, [r[2] for r, _ in due], phrases)
+            if not await _announce(room, words):
                 continue
             spoke += 1
+            _LAST_ANNOUNCED[key] = time.monotonic()
             at = datetime.now(timezone.utc).isoformat()
             for r, st in due:
                 st["said"] = sorted(set(st["said"]) | {room})

@@ -679,7 +679,7 @@ class DoubleCheckHandler(Handler):
             response.text
             + " By the way, you've had me check a few "
             + category_phrase
-            + " questions — want me to do that automatically from now on?"
+            + " questions. Want me to do that automatically from now on?"
         )
         try:
             await prefs_repo.mark_prefs_offered(ctx.person_id or 0, category)

@@ -568,3 +568,19 @@ def test_a_version_with_content_restores_without_asking(client):
     r = client.post("/api/collab/restore", json={"path": "plan.md", "version_id": sid},
                     headers={HEADER: TOKEN, **RW})
     assert r.status_code == 200, r.text
+
+
+def test_an_open_socket_closes_once_its_credential_stops_opening_it(client, monkeypatch):
+    from domovoi import admin_auth
+
+    monkeypatch.setattr(admin_auth, "LIVE_MIC_RECHECK_SEC", 0.05)
+    did = doc_id(client)
+    with client.websocket_connect(f"/api/collab/{did}", headers={HEADER: TOKEN}) as ws:
+        assert hello(ws, SimClient())["readonly"] is False
+
+        async def gone(ws_, token):
+            raise collab_api.Refusal(rooms.CLOSE_UNAUTHORIZED, "rotated")
+
+        monkeypatch.setattr(collab_api, "socket_access", gone)
+        assert close_code(ws) == 1008
+    wait_closed(did)

@@ -2816,3 +2816,9 @@ table.qh-tbl td.mono, table.qh-tbl .qh-nowrap { white-space: nowrap; }
   .photos-search input, .faces-name-form input, .faces-name-form select { height: 44px; font-size: 16px; }
   .photos-person-chip { min-height: 44px; }
 }
+/* A spinning icon (the Files page's "Preparing download…"). */
+@keyframes dv-spin { to { transform: rotate(360deg); } }
+.dv-spin { animation: dv-spin 1s linear infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .dv-spin { animation: none; }
+}

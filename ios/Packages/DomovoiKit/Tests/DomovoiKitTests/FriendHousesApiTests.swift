@@ -484,10 +484,10 @@ final class FriendHousesApiTests: XCTestCase {
         // Blocking is an admin's too (2026-11-17), and the sentence says so.
         XCTAssertTrue(FhWords.friendsAdmin.contains("block"))
         XCTAssertEqual(
-            "The Smiths shared a list: Camping. An admin can accept it in the dashboard.",
+            "The Smiths shared a list: \u{201C}Camping\u{201D}",
             FhWords.invited("The Smiths", "Camping")
         )
-        XCTAssertEqual("Serverless messaging and friend system between households", fhDescription)
+        XCTAssertEqual("Message and share lists with friends’ houses, house to house, with no company server in between", fhDescription)
         let words = [
             fhDescription, fhAdminOnly, FhWords.friendsAdmin, FhWords.listsAdmin,
             FhWords.conversationAdmin, FhWords.phoneFollows, FhWords.phoneOpenOnly, FhWords.noFriendsSub,
@@ -620,5 +620,158 @@ final class FriendHousesApiTests: XCTestCase {
         // path takes it.
         let refused = DomovoiError.refused(ApiFailure(status: 401, message: "401: x", body: #"{"detail":"x"}"#))
         XCTAssertEqual("send failed (401)", fhProblem("send", refused))
+    }
+
+    // MARK: - quiet hours (1.4.1)
+
+    func testQuietHoursHeldAndReadOutParseAndOldServersMeanNone() async throws {
+        let (fh, _, api) = rig()
+        fh.answer("GET", "/api/friend-houses/friends", """
+            {"friends":[{"id":"a","name":"The Smiths","alert":"read"}],
+             "quiet_hours":{"rooms":"some","until":"07:00","read_later":true}}
+            """)
+        let page = try await api.friendsPage()
+        XCTAssertEqual(FhQuietHours(rooms: "some", until: "07:00", readLater: true), page.quietHours)
+        XCTAssertEqual(["a"], page.friends.map(\.id))
+        // Null, missing (an older server), not an object: not quiet now.
+        for body in [#"{"friends":[],"quiet_hours":null}"#, #"{"friends":[]}"#, #"{"friends":[],"quiet_hours":"yes"}"#] {
+            fh.answer("GET", "/api/friend-houses/friends", body)
+            let none = try await api.friendsPage()
+            XCTAssertNil(none.quietHours, body)
+        }
+        // read_later missing is false.
+        fh.answer("GET", "/api/friend-houses/friends", #"{"friends":[],"quiet_hours":{"rooms":"all","until":"22:30"}}"#)
+        let noLater = try await api.friendsPage()
+        XCTAssertEqual(FhQuietHours(rooms: "all", until: "22:30", readLater: false), noLater.quietHours)
+
+        fh.answer("GET", "/api/friend-houses/conversations/\(house)?limit=50", """
+            {"messages":[
+             {"id":1,"direction":"in","body":"a","state":"read","held":"quiet_hours","read_out_at":null},
+             {"id":2,"direction":"in","body":"b","state":"read","held":"quiet_hours","read_out_at":"2026-11-18T07:00:00+00:00"},
+             {"id":3,"direction":"in","body":"c","state":"read"},
+             {"id":4,"direction":"out","body":"d","state":"sent","held":null,"read_out_at":null}]}
+            """)
+        let rows = try await api.conversation(house)
+        XCTAssertEqual(["quiet_hours", "quiet_hours", nil, nil], rows.map(\.held))
+        XCTAssertEqual([nil, "2026-11-18T07:00:00+00:00", nil, nil], rows.map(\.readOutAt))
+    }
+
+    func testTheQuietHoursNoteHasEightWaysAndOnlyForAChoiceThatSpeaks() {
+        func note(_ rooms: String, _ later: Bool, _ alert: String) -> String? {
+            fhQuietNote(FhQuietHours(rooms: rooms, until: "07:00", readLater: later), alert: alert)
+        }
+        XCTAssertEqual("Quiet hours until 7:00am: new messages will be read out at 7:00am.", note("all", true, "read"))
+        XCTAssertEqual("Quiet hours until 7:00am: new messages will be announced at 7:00am.", note("all", true, "sender"))
+        XCTAssertEqual(
+            "Quiet hours in some rooms until 7:00am: new messages will be read out there at 7:00am.", note("some", true, "read")
+        )
+        XCTAssertEqual(
+            "Quiet hours in some rooms until 7:00am: new messages will be announced there at 7:00am.", note("some", true, "sender")
+        )
+        XCTAssertEqual(
+            "Quiet hours until 7:00am: new messages wait in the inbox and won\u{2019}t be read out later.", note("all", false, "read")
+        )
+        XCTAssertEqual(
+            "Quiet hours until 7:00am: new messages wait in the inbox and won\u{2019}t be announced later.", note("all", false, "sender")
+        )
+        XCTAssertEqual(
+            "Quiet hours in some rooms until 7:00am: new messages aren\u{2019}t read out there, and won\u{2019}t be later.",
+            note("some", false, "read")
+        )
+        XCTAssertEqual(
+            "Quiet hours in some rooms until 7:00am: new messages aren\u{2019}t announced there, and won\u{2019}t be later.",
+            note("some", false, "sender")
+        )
+        // Only the inbox: nothing is said anyway. No quiet hours: no note.
+        XCTAssertNil(note("all", true, "inbox"))
+        XCTAssertNil(note("some", false, "inbox"))
+        XCTAssertNil(fhQuietNote(nil, alert: "read"))
+        XCTAssertNil(fhQuietNote(FhQuietHours(rooms: "all", until: nil, readLater: true), alert: "read"))
+        XCTAssertNil(fhQuietNote(FhQuietHours(rooms: "all", until: "soon", readLater: true), alert: "read"))
+        // The house's clock, written as the app writes times.
+        XCTAssertEqual("12:00am", fhClock("00:00"))
+        XCTAssertEqual("12:30pm", fhClock("12:30"))
+        XCTAssertEqual("9:05pm", fhClock("21:05"))
+        XCTAssertEqual("7:00am", fhClock("7:00"))
+        for bad in ["24:00", "07:60", "7", "07:0", "aa:bb", "-1:00", "", "07:00:00"] {
+            XCTAssertNil(fhClock(bad), bad)
+        }
+    }
+
+    func testAHeldMessageSaysSoAfterItsTime() {
+        let utc = TimeZone(identifier: "UTC")!
+        let held = FhMessage(id: 1, direction: "in", held: "quiet_hours")
+        XCTAssertEqual("held for quiet hours", fhHeldText(held, zone: utc))
+        let readOut = FhMessage(id: 2, direction: "in", held: "quiet_hours", readOutAt: "2026-11-18T07:00:00+00:00")
+        XCTAssertEqual("held for quiet hours \u{00B7} read out at 7:00am", fhHeldText(readOut, zone: utc))
+        // A read-out time that isn't one: held, no time.
+        let garbled = FhMessage(id: 3, direction: "in", held: "quiet_hours", readOutAt: "+999999999-01-01T00:00:00Z")
+        XCTAssertEqual("held for quiet hours", fhHeldText(garbled, zone: utc))
+        // Not held, outgoing, or another kind of hold: nothing.
+        XCTAssertNil(fhHeldText(FhMessage(id: 4, direction: "in"), zone: utc))
+        XCTAssertNil(fhHeldText(FhMessage(id: 5, direction: "out", held: "quiet_hours"), zone: utc))
+        XCTAssertNil(fhHeldText(FhMessage(id: 6, direction: "in", held: "something"), zone: utc))
+    }
+
+    // MARK: - the unread count and the shared lists' routes (1.4.1)
+
+    func testUnreadIsACountNoneOnAnOldServerAndUnknownWithoutAnAnswer() async {
+        let (fh, container, api) = rig()
+        fh.answer("GET", "/api/friend-houses/unread", #"{"unread":3}"#)
+        let three = await api.unread()
+        XCTAssertEqual(.count(3), three)
+        fh.answer("GET", "/api/friend-houses/unread", #"{"unread":0}"#)
+        let zero = await api.unread()
+        XCTAssertEqual(.count(0), zero)
+        fh.answer("GET", "/api/friend-houses/unread", #"{"detail":"Not Found"}"#, status: 404)
+        let old = await api.unread()
+        XCTAssertEqual(.none, old, "a server before the route: no row")
+        fh.answer("GET", "/api/friend-houses/unread", #"{"detail":"x"}"#, status: 403)
+        let refused = await api.unread()
+        XCTAssertEqual(.none, refused)
+        XCTAssertFalse(container.client.pairingRequired, "Home's count never raises pairing")
+        fh.answer("GET", "/api/friend-houses/unread", #"{"detail":"core unreachable"}"#, status: 502)
+        let down = await api.unread()
+        XCTAssertEqual(.unknown, down)
+        fh.answer("GET", "/api/friend-houses/unread", "not json")
+        let garbled = await api.unread()
+        XCTAssertEqual(.none, garbled)
+        XCTAssertEqual(6, fh.count("GET /api/friend-houses/unread"))
+    }
+
+    func testTheSharedListRoutesCarryOnlyTheListsId() async throws {
+        let (fh, _, api) = rig()
+        let id = String(repeating: "0f", count: 16)
+        fh.answer("POST", "/api/friend-houses/shared-lists/\(id)/accept", #"{"list_id":12,"name":"Camping"}"#)
+        fh.answer("POST", "/api/friend-houses/shared-lists/\(id)/decline", #"{"ok":true}"#)
+        fh.answer("DELETE", "/api/friend-houses/shared-lists/\(id)", #"{"ok":true}"#)
+        let made = try await api.acceptSharedList(id, name: "Camping trip")
+        XCTAssertEqual(FhAccepted(listId: 12, name: "Camping"), made)
+        try await api.declineSharedList(id)
+        try await api.stopSharing(id)
+        XCTAssertEqual(
+            [
+                "POST /api/friend-houses/shared-lists/\(id)/accept",
+                "POST /api/friend-houses/shared-lists/\(id)/decline",
+                "DELETE /api/friend-houses/shared-lists/\(id)",
+            ],
+            fh.seen.current
+        )
+        for r in sent() {
+            XCTAssertEqual(token, r.value(forHTTPHeaderField: "X-Device-Token"))
+            XCTAssertNil(Self.parts(r)?.percentEncodedQuery)
+        }
+        // Only 32 lowercase hex goes in a path; the refusal never repeats it.
+        for bad in ["", "../x", String(repeating: "0F", count: 16), String(repeating: "0f", count: 15), id + "a"] {
+            XCTAssertFalse(FhPaths.isSharedListId(bad), bad)
+            do {
+                try await api.stopSharing(bad)
+                XCTFail("\(bad) should be refused")
+            } catch {
+                XCTAssertEqual(FhRefusal.notASharedList, error as? FhRefusal)
+                XCTAssertEqual("not a shared list", String(describing: error))
+            }
+        }
+        XCTAssertEqual(3, fh.seen.current.count, "a bad id was sent")
     }
 }

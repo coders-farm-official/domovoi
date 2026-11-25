@@ -615,11 +615,17 @@ public final class HomeModel {
     ///     conservative side and is already the iOS default.
     ///   - guardState: the container guard, which iOS does not read yet — see
     ///     ``ContainerGuardState``.
+    ///   - friendHousesUnread: ``FriendHousesGate/homeUnread(_:)`` — Friend
+    ///     Houses' unread count for this server, nil where it is hidden or
+    ///     the server has no `/unread`. Not one of this model's reads: the
+    ///     gate already reads Friend Houses on its own triggers, and the row
+    ///     must exist exactly where its tap can open Friend houses.
     public func attention(
         shared: Bool,
         compact: Bool = true,
         expanded: Bool = false,
-        guard guardState: ContainerGuardState? = nil
+        guard guardState: ContainerGuardState? = nil,
+        friendHousesUnread: Int? = nil
     ) -> HomeAttentionState {
         HomeAttentionState.from(
             health: health.data,
@@ -633,7 +639,8 @@ public final class HomeModel {
             checking: checking,
             isStale: attentionIsStale,
             compact: compact,
-            expanded: expanded
+            expanded: expanded,
+            friendHouses: homeFriendHousesRow(unread: friendHousesUnread)
         )
     }
 

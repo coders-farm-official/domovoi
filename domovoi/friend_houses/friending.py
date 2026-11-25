@@ -547,6 +547,12 @@ async def _new_friend(name: str) -> None:
 
     said = messages.safe_name(name, await messages.wake_phrases())
     await announce(f"{said} is now a Friend House.")
+    try:  # "ask <the new friend> …" works at once, not after the names' minute
+        from domovoi.handlers import friend_houses as voice
+
+        await voice.refresh_names()
+    except Exception as e:  # noqa: BLE001 — the voice patterns catch up within a minute
+        log.debug("Friend Houses: friend names not refreshed: %s", e)
 
 
 HELD_MAX = 20  # announcements waiting for quiet hours to end

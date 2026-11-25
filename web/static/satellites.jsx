@@ -2979,7 +2979,7 @@ const AdoptModal = ({ pending, sats, force, onClose, onAdopted, fire }) => {
     setBusy(true);
     setErr(null);
     try {
-      await apiPost(`/api/satellites/pending/${pending.pending_id}/adopt`, {
+      await apiPost(`/api/satellites/pending/${encodeURIComponent(pending.pending_id)}/adopt`, {
         room_id: roomId,
         room_label: roomLabel.trim() || null,
         wifi_ssid: ssid.trim(),

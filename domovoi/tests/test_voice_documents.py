@@ -6,7 +6,7 @@ folder of our own (``settings.documents_dir`` → tmp), the model faked at
 :func:`domovoi.voice_docs.letters.generate`:
 
 * "read me the house rules" reads a short document whole; a long one says
-  its length first, then reads a page or so at a time ("Shall I go on?"),
+  its length first, then reads a page or so at a time ("Should I go on?"),
   and stop / pause / start again / "continue reading" answer it;
 * two documents that fit → which one; nothing that fits → said plainly;
 * "take a letter to the landlord" → dictation → "end of letter" → a chat
@@ -213,10 +213,10 @@ async def test_a_short_document_is_read_whole(db_session, docs):
 async def test_a_long_document_says_its_length_then_reads_part_by_part(db_session, docs):
     room = Room(db_session)
     r = await room.say("read me the lease", trigger="wake_word")
-    assert r.text.startswith("Lease. It's ") and r.text.endswith("The whole thing, or just the start?")
+    assert r.text.startswith("Lease. It's ") and r.text.endswith("Do you want the whole thing, or just the start?")
     assert r.expect_followup
     r = await room.say("the whole thing")
-    assert r.text.startswith("Lease agreement. Clause 1.") and r.text.endswith("more. Shall I go on?")
+    assert r.text.startswith("Lease agreement. Clause 1.") and r.text.endswith("more. Should I go on?")
     assert r.expect_followup and r.matched_path == "confirmation"
     first = r.text
     words = len(first.split())
@@ -246,7 +246,7 @@ async def test_just_the_start_then_continue_reading_later(db_session, docs):
     r = await room.say("what time is it", trigger="wake_word")
     assert r.matched_handler == "clock"
     r = await room.say("continue reading", trigger="wake_word")
-    assert r.matched_handler == "documents" and r.text.endswith("Shall I go on?")
+    assert r.matched_handler == "documents" and r.text.endswith("Should I go on?")
     r = await room.say("pause")
     assert r.text == "Okay. Say continue reading when you want the rest."
     # Read to the end.
@@ -537,12 +537,17 @@ async def test_a_quiet_room_ends_the_letter(db_session, docs, model, monkeypatch
 @pytest.mark.asyncio
 async def test_nothing_dictated_saves_nothing(db_session, docs, model, monkeypatch):
     announced: list[str] = []
+    # The reply to "take a letter" is still going out until the turn is
+    # done (committed), as on a real satellite: the quiet-room timer is
+    # armed inside the turn, so without this a slow runner could look at
+    # the letter before the turn that started it was saved.
+    turn_done = False
 
     class _Live:
         room_id = "kitchen"
 
         def awaiting_reply(self):
-            return False
+            return not turn_done
 
         async def announce(self, text_, **kw):
             announced.append(text_)
@@ -552,6 +557,7 @@ async def test_nothing_dictated_saves_nothing(db_session, docs, model, monkeypat
 
     monkeypatch.setattr(speech, "_active_sessions_provider", lambda: app.state.active_sessions)
     monkeypatch.setattr(letters, "IDLE_SEC", 0.1)
+    monkeypatch.setattr(letters, "QUIET_POLL_SEC", 0.05)
     pid = await _person("Sam Lee")
     room = Room(db_session, person_id=pid)
     await room.say("take a letter to the landlord", trigger="wake_word")
@@ -560,6 +566,7 @@ async def test_nothing_dictated_saves_nothing(db_session, docs, model, monkeypat
     # The room goes quiet right after "take a letter": nothing saved either.
     room = Room(db_session, person_id=pid, app=app)
     await room.say("take a letter to the landlord", trigger="wake_word")
+    turn_done = True
     for _ in range(100):
         if announced:
             break
@@ -659,9 +666,9 @@ async def test_parked_questions_expire_and_never_take_a_later_command(db_session
     r = await room.say("play some jazz")
     assert r.matched_handler != "documents"
     assert (await room.say("the heating is broken")).matched_handler != "documents"
-    # "Shall I go on?" then "ok" with a fresh wake word: not the lease.
+    # "Should I go on?" then "ok" with a fresh wake word: not the lease.
     await room.say("read me the lease", trigger="wake_word")
-    assert (await room.say("the whole thing")).text.endswith("Shall I go on?")
+    assert (await room.say("the whole thing")).text.endswith("Should I go on?")
     r = await room.say("ok", trigger="wake_word")
     assert r.matched_handler != "documents"
     # "just the start" then "next" much later: not the lease either.

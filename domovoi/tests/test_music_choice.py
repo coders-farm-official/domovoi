@@ -697,7 +697,7 @@ async def test_the_playlist_choice_is_still_a_yes_no_question(db_session, fake_r
     assert (await _pending(db_session, sid))["kind"] == "core.playlist_choice"
     resp = await _say(db_session, sid, "yes")
     assert resp.matched_handler == "playlist" and resp.matched_path == "confirmation"
-    assert resp.text == "I lost track of those playlists — say it again?"
+    assert resp.text == "I lost track of those playlists. Please say it again."
 
 
 @requires_db

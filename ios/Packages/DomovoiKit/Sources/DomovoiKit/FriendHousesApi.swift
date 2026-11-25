@@ -1,18 +1,20 @@
 import Foundation
 
 // ---------------------------------------------------------------------------
-// Friend Houses on the iPhone: "Serverless messaging and friend system
-// between households" (the server's domovoi/friend_houses/, proxied by the
+// Friend Houses on the iPhone: "Message and share lists with friends’
+// houses, house to house" (the server's domovoi/friend_houses/, proxied by the
 // dashboard's web/backend/api/friend_houses.py).
 //
 // The port of Android's `friendhouses/FriendHousesApi.kt` (394473e2 on
 // wf/android-friend-houses), decision for decision and word for word.
 //
-// What a household phone may do (owner decision 17): read the house inbox
-// (one for the whole house), send a message, mark a conversation read, and
-// see the friends and the shared lists. Everything about who the house
-// trusts is an admin's, on the dashboard: the phone shows words for those,
-// never a control (no misleading controls).
+// What a household phone may do (owner decision 17, widened for 1.4.1): read
+// the house inbox (one for the whole house) and its unread count, send a
+// message, mark a conversation read, see the shared lists, and accept,
+// decline or stop sharing one. Everything about who the house trusts —
+// friends, requests, friend files, blocking, starting a share, saving or
+// deleting a conversation — is an admin's, on the dashboard: the phone
+// hides it (no misleading controls).
 //
 // The household token goes in the X-Device-Token header, as every request
 // of ``DomovoiClient`` does: no cookie (the session has no cookie storage),
@@ -27,7 +29,7 @@ import Foundation
 // ---------------------------------------------------------------------------
 
 /// How the app describes the feature, word for word, wherever it does.
-public let fhDescription = "Serverless messaging and friend system between households"
+public let fhDescription = "Message and share lists with friends’ houses, house to house, with no company server in between"
 
 /// The sentence a 403 shows, from any call: the household phone asked for
 /// something only an admin may do.
@@ -193,13 +195,60 @@ public struct FhFriend: Equatable, Sendable, Decodable {
 
 struct FhFriends: Decodable {
     let friends: [FhFriend]
+    let quietHours: FhQuietHours?
 
     init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         friends = c.fhOptional([FhFriend].self, .friends) ?? []
+        quietHours = c.fhOptional(FhQuietHours.self, .quietHours)
     }
 
-    enum CodingKeys: String, CodingKey { case friends }
+    enum CodingKeys: String, CodingKey {
+        case friends
+        case quietHours = "quiet_hours"
+    }
+}
+
+/// The friends page's `quiet_hours` (1.4.1): quiet hours are on now in all
+/// the connected rooms or in some of them, until `until` ("HH:MM", house
+/// time), and whether a held alert is said once they end. Nil on the page
+/// (null, or a server from before it): not quiet now.
+public struct FhQuietHours: Equatable, Sendable, Decodable {
+    /// all | some.
+    public let rooms: String
+    /// "HH:MM", the house's clock.
+    public let until: String?
+    /// Missing (an older server) is false.
+    public let readLater: Bool
+
+    public init(rooms: String = "all", until: String? = nil, readLater: Bool = false) {
+        self.rooms = rooms
+        self.until = until
+        self.readLater = readLater
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case rooms, until
+        case readLater = "read_later"
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        rooms = c.fhOptional(String.self, .rooms) ?? "all"
+        until = c.fhOptional(String.self, .until)
+        readLater = c.fhOptional(Bool.self, .readLater) ?? false
+    }
+}
+
+/// `GET /api/friend-houses/friends` whole: the friends and the quiet hours.
+public struct FhFriendsPage: Equatable, Sendable {
+    public let friends: [FhFriend]
+    public let quietHours: FhQuietHours?
+
+    public init(friends: [FhFriend] = [], quietHours: FhQuietHours? = nil) {
+        self.friends = friends
+        self.quietHours = quietHours
+    }
 }
 
 public struct FhConversation: Equatable, Sendable, Decodable {
@@ -282,6 +331,11 @@ public struct FhMessage: Equatable, Sendable, Decodable {
     public let createdAt: String?
     public let deliveredAt: String?
     public let lastError: String?
+    /// "quiet_hours": no room said this incoming message when it came, for
+    /// quiet hours. Nil otherwise, and from a server before 1.4.1.
+    public let held: String?
+    /// When a held message was said after all (ISO), or nil.
+    public let readOutAt: String?
 
     public init(
         id: Int64 = 0,
@@ -291,7 +345,9 @@ public struct FhMessage: Equatable, Sendable, Decodable {
         sentAt: Int64? = nil,
         createdAt: String? = nil,
         deliveredAt: String? = nil,
-        lastError: String? = nil
+        lastError: String? = nil,
+        held: String? = nil,
+        readOutAt: String? = nil
     ) {
         self.id = id
         self.direction = direction
@@ -301,14 +357,17 @@ public struct FhMessage: Equatable, Sendable, Decodable {
         self.createdAt = createdAt
         self.deliveredAt = deliveredAt
         self.lastError = lastError
+        self.held = held
+        self.readOutAt = readOutAt
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, direction, body, state
+        case id, direction, body, state, held
         case sentAt = "sent_at"
         case createdAt = "created_at"
         case deliveredAt = "delivered_at"
         case lastError = "last_error"
+        case readOutAt = "read_out_at"
     }
 
     public init(from decoder: any Decoder) throws {
@@ -323,6 +382,8 @@ public struct FhMessage: Equatable, Sendable, Decodable {
         createdAt = c.fhOptional(String.self, .createdAt)
         deliveredAt = c.fhOptional(String.self, .deliveredAt)
         lastError = c.fhOptional(String.self, .lastError)
+        held = c.fhOptional(String.self, .held)
+        readOutAt = c.fhOptional(String.self, .readOutAt)
     }
 
     public var incoming: Bool { direction != "out" }
@@ -341,7 +402,7 @@ struct FhMessages: Decodable {
 
 public struct FhSharedList: Equatable, Sendable, Decodable {
     public let id: String
-    /// active | invited (an admin hasn't accepted yet).
+    /// active | invited (not accepted yet: their offer here, or ours there).
     public let state: String
     /// us: our list, shared with them; them: their list, here.
     public let origin: String
@@ -431,6 +492,61 @@ public struct FhSent: Equatable, Sendable, Decodable {
     }
 }
 
+/// An accepted list: the new list here, and the name it was given.
+public struct FhAccepted: Equatable, Sendable, Decodable {
+    public let listId: Int64?
+    public let name: String?
+
+    public init(listId: Int64? = nil, name: String? = nil) {
+        self.listId = listId
+        self.name = name
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case listId = "list_id"
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        listId = c.fhInt64(.listId)
+        name = c.fhOptional(String.self, .name)
+    }
+}
+
+/// `{"name"}` when a name is given here, else `{}`.
+struct FhAcceptBody: Encodable {
+    let name: String?
+
+    func encode(to encoder: any Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(name, forKey: .name)
+    }
+
+    enum CodingKeys: String, CodingKey { case name }
+}
+
+/// `GET /api/friend-houses/unread` (1.4.1), as Home reads it: a count, or
+/// nothing to show.
+public enum FhUnread: Equatable, Sendable {
+    case count(Int)
+    /// Refused or not there (a server before the route: 404): no row.
+    case none
+    /// No answer, a 429 or a 5xx: the last count for that server stands.
+    case unknown
+}
+
+struct FhUnreadBody: Decodable {
+    let unread: Int?
+
+    enum CodingKeys: String, CodingKey { case unread }
+
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        unread = c.fhInt64(.unread).map { Int(clamping: $0) }
+    }
+}
+
 struct FhMarked: Decodable {
     let marked: Int
 
@@ -447,11 +563,13 @@ struct FhMarked: Decodable {
 public enum FhRefusal: Error, Equatable, Sendable, CustomStringConvertible {
     case notAHouseKey
     case notAFriendId
+    case notASharedList
 
     public var description: String {
         switch self {
         case .notAHouseKey: return "not a house key"
         case .notAFriendId: return "not a friend id"
+        case .notASharedList: return "not a shared list"
         }
     }
 }
@@ -464,6 +582,8 @@ public enum FhPaths {
     public static let conversations = "/api/friend-houses/conversations"
     public static let messages = "/api/friend-houses/messages"
     public static let sharedLists = "/api/friend-houses/shared-lists"
+    /// The inbox's unread count alone (1.4.1): Home's row.
+    public static let unread = "/api/friend-houses/unread"
 
     /// A conversation's page size (the dashboard's FH_PAGE).
     public static let page = 50
@@ -507,6 +627,36 @@ public enum FhPaths {
     public static func markRead(_ house: String) throws(FhRefusal) -> String {
         let key = try checkedHouse(house)
         return "\(conversations)/\(key)/read"
+    }
+
+    /// True for a shared list's id a URL may carry: exactly 32 lowercase hex
+    /// (the dashboard's `fhSpaceOk`).
+    public static func isSharedListId(_ value: String?) -> Bool {
+        guard let value else { return false }
+        let bytes = Array(value.utf8)
+        guard bytes.count == 32 else { return false }
+        return bytes.allSatisfy { (0x30...0x39).contains($0) || (0x61...0x66).contains($0) }
+    }
+
+    static func checkedSharedList(_ value: String) throws(FhRefusal) -> String {
+        guard isSharedListId(value) else { throw FhRefusal.notASharedList }
+        return value
+    }
+
+    /// One shared list: `DELETE` stops sharing it.
+    public static func sharedList(_ id: String) throws(FhRefusal) -> String {
+        let key = try checkedSharedList(id)
+        return "\(sharedLists)/\(key)"
+    }
+
+    public static func acceptList(_ id: String) throws(FhRefusal) -> String {
+        let path = try sharedList(id)
+        return "\(path)/accept"
+    }
+
+    public static func declineList(_ id: String) throws(FhRefusal) -> String {
+        let path = try sharedList(id)
+        return "\(path)/decline"
     }
 }
 
@@ -650,7 +800,52 @@ public struct FriendHousesApi: Sendable {
     }
 
     public func friends(server: String? = nil) async throws -> [FhFriend] {
-        try await get(FhPaths.friends, server: server, as: FhFriends.self).friends
+        try await friendsPage(server: server).friends
+    }
+
+    /// The friends page whole: the friends and `quiet_hours`.
+    public func friendsPage(server: String? = nil) async throws -> FhFriendsPage {
+        let page = try await get(FhPaths.friends, server: server, as: FhFriends.self)
+        return FhFriendsPage(friends: page.friends, quietHours: page.quietHours)
+    }
+
+    /// The inbox's unread count for Home (`GET /api/friend-houses/unread`,
+    /// household tier). Never throws and never raises the pairing screen:
+    /// a refusal or a server from before the route (404) is ``FhUnread/none``,
+    /// no answer ``FhUnread/unknown``.
+    public func unread(server: String? = nil) async -> FhUnread {
+        do throws(DomovoiError) {
+            let data = try await client.raw(method: "GET", path: FhPaths.unread, trackPairing: false, onlyTo: server)
+            guard let n = (try? DomovoiClient.decode(data, as: FhUnreadBody.self))?.unread else { return .none }
+            return .count(max(0, n))
+        } catch {
+            guard let failure = error.failure else { return .unknown }
+            if failure.status == 429 || failure.status >= 500 { return .unknown }
+            return .none
+        }
+    }
+
+    /// Accept a friend's list here: it becomes a new list, called `name`
+    /// when one is given, else what they call it. A 400 is a name already
+    /// taken here (the server's sentence says so).
+    public func acceptSharedList(_ id: String, name: String? = nil, server: String? = nil) async throws -> FhAccepted {
+        let path = try FhPaths.acceptList(id)
+        let named = name.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.flatMap { $0.isEmpty ? nil : $0 }
+        let body = try JSONEncoder().encode(FhAcceptBody(name: named))
+        let data = try await client.raw(method: "POST", path: path, body: body, onlyTo: server)
+        return (try? DomovoiClient.decode(data, as: FhAccepted.self)) ?? FhAccepted()
+    }
+
+    /// Decline a friend's list: it isn't added here, and they aren't told.
+    public func declineSharedList(_ id: String, server: String? = nil) async throws {
+        let path = try FhPaths.declineList(id)
+        _ = try await client.raw(method: "POST", path: path, body: DomovoiClient.emptyObject, onlyTo: server)
+    }
+
+    /// Stop sharing a list: both houses keep their own copy.
+    public func stopSharing(_ id: String, server: String? = nil) async throws {
+        let path = try FhPaths.sharedList(id)
+        _ = try await client.raw(method: "DELETE", path: path, onlyTo: server)
     }
 
     public func inbox(server: String? = nil) async throws -> FhInbox {

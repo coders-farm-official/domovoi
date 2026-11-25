@@ -886,8 +886,10 @@ async def delete_satellite(room_id: str, request: Request, purge: bool = False):
     any pending approval, and its MPD instance, which is what frees the name
     for reuse. The core refuses to purge a room whose satellite is connected
     right now."""
+    from urllib.parse import quote
+
     status, payload = await delete_admin(
-        f"/v1/admin/satellites/{room_id}" + ("?purge=true" if purge else ""),
+        f"/v1/admin/satellites/{quote(room_id, safe='')}" + ("?purge=true" if purge else ""),
         headers=auth_forward_headers(request),
     )
     return bridge_response(status, payload)
@@ -2625,7 +2627,7 @@ async def _satellite_for(
         board=board,
         supports=[str(x) for x in supports] if supports is not None else None,
         diagnostics=online and room_id in (snapshot.get("satellite_diagnostics") or ()),
-        mic_dsp=online and room_id in (snapshot.get("satellite_mic_dsp") or {}),
+        mic_dsp=online and room_id in (snapshot.get("satellite_mic_dsp") or ()),
         support_allowed=bool(meta_row.get("support_allowed")),
         support_shell=online and room_id in (snapshot.get("satellite_support_shell") or ()),
         support_key_pinned=bool(meta_row.get("support_key_pinned")),

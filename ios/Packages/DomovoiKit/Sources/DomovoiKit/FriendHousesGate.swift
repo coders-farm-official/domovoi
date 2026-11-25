@@ -25,6 +25,24 @@ public struct FhGateState: Equatable, Sendable {
     }
 }
 
+/// Home's unread count (`GET /api/friend-houses/unread`), for the server it
+/// came from (normalised). Nil: none to show.
+public struct FhUnreadState: Equatable, Sendable {
+    public let server: String
+    public let unread: Int?
+
+    public init(server: String = "", unread: Int? = nil) {
+        self.server = server
+        self.unread = unread
+    }
+
+    /// The count for `activeServer`, or nil: another server's, or none.
+    public func count(for activeServer: String) -> Int? {
+        guard !server.isEmpty, server == ServerCredentials.normalize(activeServer) else { return nil }
+        return unread
+    }
+}
+
 /// Friend Houses' availability gate and unread badge — Android's
 /// `friendhouses/FriendHouses.kt` (394473e2) without its notifier, which is
 /// ``FriendHouseAlerts`` here.
@@ -109,6 +127,17 @@ public final class FriendHousesGate {
     public func badge(_ activeServer: String) -> Int? {
         guard let unread = shownFor(activeServer)?.unread, unread > 0 else { return nil }
         return unread
+    }
+
+    /// Home's row's count (1.4.1), from `GET /api/friend-houses/unread`:
+    /// only while Friend Houses is shown for `activeServer` — the row opens
+    /// it, so it exists only where that tap can — and only above 0. Nil on a
+    /// server without the route (404): no row.
+    public private(set) var unread = FhUnreadState()
+
+    public func homeUnread(_ activeServer: String) -> Int? {
+        guard shownFor(activeServer) != nil, let n = unread.count(for: activeServer), n > 0 else { return nil }
+        return n
     }
 
     // MARK: - the triggers
@@ -208,6 +237,13 @@ public final class FriendHousesGate {
             availability = await api.status(server: server)
         }
         note(server, availability)
+        // Home's count, for the same server (read before the await, filed
+        // under it after): only while it is shown there.
+        if state.shownFor(server) != nil {
+            noteUnread(server, await api.unread(server: server))
+        } else {
+            noteUnread(server, .none)
+        }
         reads += 1
         // Notifications only while the app is on screen: the iPhone has no
         // background check, and a socket that comes back while the app sits
@@ -227,6 +263,7 @@ public final class FriendHousesGate {
         let alerts = self.alerts
         stop()
         note(container.store.serverURL, .hidden)
+        noteUnread(container.store.serverURL, .none)
         if let alerts { Task { await alerts.withdrawAll() } }
     }
 
@@ -240,6 +277,21 @@ public final class FriendHousesGate {
         started = true
         refresh()
         setForeground(on)
+    }
+
+    /// Record an unread answer for `server`: a count, none, or — no answer —
+    /// the last count for that server stands.
+    func noteUnread(_ server: String, _ answer: FhUnread) {
+        let key = ServerCredentials.normalize(server)
+        guard !key.isEmpty else { return }
+        let previous = unread.server == key ? unread.unread : nil
+        let next: FhUnreadState
+        switch answer {
+        case .count(let n): next = FhUnreadState(server: key, unread: n)
+        case .none: next = FhUnreadState(server: key, unread: nil)
+        case .unknown: next = FhUnreadState(server: key, unread: previous)
+        }
+        if next != unread { unread = next }
     }
 
     /// Record a status answer for `server`: the verdict that holds

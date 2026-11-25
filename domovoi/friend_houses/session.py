@@ -272,11 +272,15 @@ class Session:
 
         async def _round_trip() -> float:
             await self.send(Kind.PING, token)
+            answered = 0
             while True:
                 kind, body = await self.recv(timeout=timeout)
                 if kind is Kind.PONG and body == token:
                     return loop.time() - start
                 if kind is Kind.PING:
+                    answered += 1
+                    if answered > PONGS_PER_WAIT:
+                        raise SessionRefused("too many pings")
                     await self.send(Kind.PONG, body)
 
         try:
@@ -285,13 +289,15 @@ class Session:
             raise SessionRefused("no answer to the ping in time") from exc
 
     async def close(self) -> None:
+        # Bounded: a peer that stopped reading must not hold the closer
+        # (its BYE would wait on a full buffer for ever).
         try:
-            await self.send(Kind.BYE)
+            await asyncio.wait_for(self.send(Kind.BYE), CLOSE_DEADLINE_SEC)
         except Exception:  # noqa: BLE001 — closing a broken stream is fine
             pass
         self._writer.close()
         try:
-            await self._writer.wait_closed()
+            await asyncio.wait_for(self._writer.wait_closed(), CLOSE_DEADLINE_SEC)
         except Exception:  # noqa: BLE001 — already gone
             pass
 
@@ -299,6 +305,13 @@ class Session:
 def _max_body(kind: Kind) -> int:
     rule = _BODY_SIZES[kind]
     return rule if isinstance(rule, int) else rule[1]
+
+
+#: How long :meth:`Session.close` waits for its BYE and for the stream.
+CLOSE_DEADLINE_SEC = 5.0
+#: Pings a waiting side answers before it gives up on the wait: a friend
+#: that keeps pinging cannot keep a wait going for ever.
+PONGS_PER_WAIT = 16
 
 
 def _check_body(kind: Kind, body: bytes) -> None:

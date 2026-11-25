@@ -890,7 +890,139 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
   `--reset-admin`, ends every grant. The phone apps use it from their next
   release; until then the list stays empty.
 
-## 1.4.1 (unreleased) — Chat lookups reach the web
+## 2026-11-24 — 1.4.1
+
+Version 1.4.1: the server, the Windows Setup (1.4.1, with the Windows
+satellite Setup beside it), the Mac server's installer and, released with
+it under its own version, the Android app 1.4.1 (docs/CONTRIBUTING.md,
+"Releasing"): phones get Friend Houses' messages and shared lists,
+printing a file attached in a chat, and the "internet: ask first" chip. It
+follows 1.4.0 (2026-11-20) and holds every entry between this heading and
+"1.4.0", gathered here under one heading by area (each was written as
+"1.4.1 (unreleased)"). The plain-language summary is
+`docs/release/v1.4.1.md`.
+
+What a household notices:
+
+* **Chat finds answers on the web** when the offline library has nothing
+  relevant, and sources that don't fit the question are left out.
+* **Weather answers are back,** for the new **Home location** in Settings
+  → Household; holiday questions ("how many days until New Year's Day")
+  are answered offline.
+* **Voice:** a chime before announcements and broadcasts; yes/no
+  questions that sound like questions; a spoken question no longer waits
+  behind a bedtime story, a memory pass or a news briefing; "my name is …"
+  again replaces a short room sample, and only that person can answer
+  "Was that you?".
+* **Music** no longer goes silent after a question, and Up next keeps the
+  songs a jump passed.
+* **Friend Houses** is open to the whole household (messages and shared
+  lists; friends themselves stay with the admin), sends a message by
+  voice ("send the Bassetts a message saying …"), and says messages held
+  for quiet hours when they end.
+* **"Print this"** prints a picture or file attached to a chat.
+* **Rooms:** an XVF3800 satellite gets admin-only microphone presets; a
+  room set up for another server is listed with what to do.
+* **The dashboard:** a new plugin's page appears without a reload, every
+  confirmation is a dialog inside the page, the Version card refreshes
+  after a restart, and Settings search finds every setting.
+* **Plugins:** a slow start no longer switches a plugin off, and a
+  refused install names the clashing packages. SDK 1.12 and 1.13 (the
+  Home location, raw streams).
+* **The server:** a busy machine no longer restarts the core; bigger
+  servers answer more than one AI request at once; updates remove
+  packages Domovoi no longer uses.
+* **Security:** tighter checks and limits across sign-in, rooms and
+  satellites, Friend Houses, feeds, downloads, plugins and the
+  dashboard's live connections.
+
+**Migration V072**, run by the update: a partial index on the listens
+from phones and browsers, so the new house-wide daily cap is counted
+without reading the whole table. Nothing to do.
+
+By hand, after updating:
+
+* **Update the phone app** (Android 1.4.1) for Friend Houses on the phone,
+  printing a file attached in a chat, the "internet: ask first" chip and
+  the draft changes view's gap and screen-reader cues. Older apps keep
+  working without them.
+* **Upgrade each room** (Settings → Household → Rooms → the room's
+  **Overview** tab → **Upgrade satellite**): the satellite code changed.
+  It brings the server checks' deadlines and limits, music that won't
+  play reported to the server (and counted as playing only once sound
+  arrives), approvals and pushed wake-word names handled more strictly,
+  and, on an XVF3800 satellite, the **Microphone DSP** block. A room on
+  older software keeps working.
+* **Home location:** if Settings → Household → **Home location** asks you
+  to pick your town (an old Local news location that names more than
+  one), pick it; with none set, set one for a local weather answer.
+* **Plugins that ask for SDK 1.12 or 1.13** install only on this release:
+  update Domovoi first. Plugin authors: compile a plugin's lock with
+  `pip-compile -c requirements-linux-py314.lock`.
+
+Once, by itself, during the update: the AI model service restarts (to
+answer more than one request on a server with the memory), the bundled
+search service restarts (for the new weather source), and on a server
+with wake-word training turned on the trainer image is rebuilt (about
+4 GB more to download).
+
+Also in this release, without an entry of its own: music lists load
+smaller copies of each cover picture (`?size=` on the cover address)
+instead of the picture inside the file; in the Android app, controls
+that only work on the dashboard say so plainly, an admin refusal is said
+in plain words, and the AndroidX and kotlinx.serialization libraries are
+newer.
+
+### Chat, lookups, weather and the Home location
+
+- Holiday questions work offline: "how many days until New Year's Day",
+  "when is Thanksgiving", "what day is Easter next year" answer with the
+  date and the day count. The built-in table covers the common public
+  holidays and observances of the US, Canada, the UK, Ireland, Australia
+  and New Zealand, plus Easter and the days counted from it, and uses the
+  country of the Home location (the US when none is set). "This year" for
+  a holiday that already passed says how many days ago it was.
+- **News feed discovery** reads only the first 256 KB of a page, scans
+  it in a worker thread and in time that grows only with its length.
+
+#### Home location, in Settings → Household
+
+- **What changed.** The household's town has its own place: Settings →
+  Household → **Home location**, one field where you start typing and pick
+  your town from a list ("Denver, Colorado, US"). Weather answers and local
+  news use it. The list comes with Domovoi (GeoNames, CC BY 4.0), so what
+  you type never leaves the house. It replaces **Local news location** in
+  Settings → System → Advanced → News, which is gone.
+- **Carried over once.** On the first start of 1.4.1, the text you had in
+  Local news location becomes your Home location. When it clearly names one
+  town, that town is picked for you. When it doesn't ("Springfield": there
+  are several), the text is kept and the field asks you to pick your town
+  from the list; until then weather and news use the text as before. With
+  nothing there, Home location starts empty.
+- **What to know.** Only an admin can change it; every household device can
+  see it. Plugins: `core_config.news_location` still works and is now the
+  Home location's name; the whole place, coordinates included, is
+  `sdk.household.home_location()` (SDK 1.13,
+  [PLUGIN_DEVELOPMENT.md](PLUGIN_DEVELOPMENT.md)).
+
+#### Weather answers are back
+
+- **What changed.** "What's the weather today?" now has your server's own
+  search service look up your place with Open-Meteo (free for personal,
+  non-commercial use; data CC BY 4.0), or wttr.in when Open-Meteo has no
+  answer, and answers with the current temperature and conditions (in
+  Fahrenheit for a US place). The place is the
+  **Home location** in Settings → Household (above). With
+  Settings > Privacy > Internet on "always", Domovoi no longer asks "want me
+  to check?" first. With no place set it says where to set it. If the
+  weather sources return nothing, it falls back to a general web search as
+  before. It used to find encyclopedia pages and say it had no real-time
+  information.
+- **What to know.** Set your Home location to get a local answer. The bundled search service restarts once on update to pick
+  up the new weather source. An installed weather plugin takes over
+  weather questions and core steps aside.
+
+#### Chat lookups reach the web
 
 - **What changed.** A chat lookup with the internet allowed now reaches
   web search when the offline library has nothing relevant. Before, the
@@ -917,37 +1049,233 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
 - **For plugin authors.** `LookupHit.score` is a 0–1 relevance for plugin
   sources; `POST /v1/phone/lookup` takes an optional `web_only`.
 
-## 1.4.1 (unreleased) — Printing, videos, scans and Windows update hardening
+### Voice
 
+- Spoken yes/no questions sound like questions: each one ends in its own
+  sentence that starts with "Should I", "Want me to" or "Do you want"
+  ("Should I delete your camping list?", "That's 2 pages to the office
+  printer. Should I print it?"), so the speech voice no longer reads them
+  flat as statements. Plugins should word theirs the same way
+  (docs/PLUGIN_DEVELOPMENT.md, section 4.8).
+- A spoken "Should I remember that?" offer no longer rides on the answer
+  to a question. It comes after a remark or a chat, at most once a day per
+  person, and never for something Domovoi already knows (your name, a
+  fact it remembers). A one-word "yes" to it now saves the fact. A plain
+  fact question from someone Domovoi recognizes gets the same prompt as
+  anyone's; their remembered facts go in only when the question is about
+  them.
+- Spoken suggestions (meals, restaurants, gifts, music, things to do) for
+  someone Domovoi recognizes use their remembered tastes and diet again;
+  plain fact questions still don't. Remembered allergies and diets are
+  never cut when a profile is long. After a food suggestion, when someone
+  in the house has a remembered allergy or diet, Domovoi adds one line: to
+  a voice it doesn't recognize, that nobody's allergies were taken into
+  account (naming no one and no allergy); to someone it knows, what the
+  others need ("Heads up: not all of these are peanut-free."), naming no
+  one.
+- **Voice goes first with the house's AI model**: a bedtime story being
+  written, a memory pass or a news briefing stops when a room hears its
+  wake word and carries on after the answer, and a typed chat reply or a
+  chat title waits for a spoken answer in progress, so a question asked
+  out loud no longer waits behind them.
 - **The list of a person's voice samples now needs a household device**, like the
   rest of their People page.
+
+#### A chime before announcements and broadcasts
+
+A room now plays a short two-note chime before an announcement or a
+broadcast speaks, so people catch the first words. That covers "tell the
+kitchen dinner is ready", Broadcast, timers and reminders, and plugin
+announcements; normal answers never get it. It plays on every kind of room
+(Raspberry Pi, spare PC, phone in room mode) with no update on the room.
+To turn it off, untick "Chime before announcements" in Settings, Voice &
+speech (`announce_chime_enabled`).
+
+#### "My name is …" again replaces a short room sample
+
+Saying "my name is …" again in a room that doesn't recognize your voice,
+and answering yes to "Is that you?", now replaces your old short sample for
+that room instead of adding a second one beside it. It asks you to count to
+ten first, and your old sample stays unless the new recording holds more of
+your voice. Your samples from other rooms, and other people's, are never
+touched. A room that already has a good (4 seconds or longer) sample of you
+still adds, as before. The API docs also gave the wrong default for the
+voice match threshold: it is 0.58, not 0.75.
+
+A short room sample no longer stands in for your whole voice in that room.
+Before, if a room had any sample of you, even a one-second clip, you were
+judged against that room's samples alone. Now that only happens when one of
+them holds at least 4 seconds of speech; otherwise all your samples count,
+so a good sample from another room still helps you be recognized. A room
+with only short samples of you also learns again: it may ask "By the way,
+was that you?" when it nearly recognized you, and after three clear
+recognitions in a row it replaces the short sample, but only with a
+recording that holds more of your voice. A good sample is never changed.
+
+"Was that you?" can now only be answered by that person. The voice that
+says yes must sound at least about as much like them as the voice the
+question was about, and not like anyone else in the house. Otherwise
+nothing is saved and Domovoi says it will ask them itself next time. A bare
+"yes" is often too short to tell whose voice it is, so say "yes, that was
+me" instead.
+
+### Friend Houses
+
+- Friend Houses: the page is open to everyone in the household. Messages
+  and Shared lists (taking, declining and stopping a shared list with an
+  existing friend) need only the household's paired browser or phone;
+  starting a share stays with the admin. Requests, friend files, this
+  house, the friends list and blocking sit in a "Friends and connections"
+  section at the bottom that asks for the admin sign-in when opened.
+- Friend Houses by voice: "send the Bassetts a message saying …", "text
+  the Bassetts …", "let the Bassetts know that …" and "ask the Bassetts …"
+  now send a message (the last three only when the name is a friend house,
+  so "ask Google" and "let me know" are untouched), and the read-back is
+  "Your message to the Bassetts says: …. Should I send it?"
+- Friend Houses: a friend set to "say who it's from" or "read aloud" now
+  shows, during quiet hours, when new messages will be said (or that only
+  some rooms are quiet), and a message that wasn't said because of quiet
+  hours is marked "held for quiet hours" in Messages.
+- Friend Houses: messages that came during quiet hours are said in each
+  room when its own quiet hours end, if they are still unread (once per
+  room); Home's "needs attention" counts unread Friend Houses messages and
+  links to them; and the Friend Houses page now starts with Messages.
+- Friend Houses: messages from a friend that arrive within a minute of
+  the last one read aloud are no longer left to the inbox: they are said
+  together when the minute is up ("Another message from …", or "3 more
+  messages from …" with up to three read aloud), still unread only.
+- Friend Houses: a friend's messages and names read aloud stay out of the
+  chat model's history, and "double check that" declines such a reply.
+- **"Say that again" after a friend house's message or a shared list's
+  items** repeats them without adding them to the conversation the AI
+  model reads or to what the memory pass looks at; "double check that"
+  still declines them.
+- Friend Houses: wake phrases are taken out of a friend's text more
+  loosely, after the speech cleaner, and from the whole sentence read
+  aloud (messages and shared lists).
+- **Friend Houses read-outs** also leave out words that sound like a wake
+  word when the house says them, not only ones spelled like it, and the
+  stock wake words' names on their own.
+- Friend Houses: a friend request broken off partway counts as a try on
+  the friend file; the file closes after three, and the asking house stops
+  retrying on its own after one (the request says to withdraw it and try
+  again).
+- Friend Houses: the check that pings friends has one deadline per ping,
+  and each stage of the retry loop has a deadline, so one friend can't
+  hold up the others.
+- Friend Houses: a list offer from a house that was removed is dropped with
+  it, and one from a removed or blocked house can't be accepted. A friend
+  file's tries are counted before the nonce goes out, and its pairing
+  budget is its own. Frames that ask nothing, pongs answered while waiting
+  and closing a session are bounded, as is a send's own delivery try.
+  Replies that name one of a friend's list items, or a friend house, are
+  filtered as a whole sentence and kept as a stand-in in the chat history,
+  and shared text is cut before it is filtered.
+
+#### Friend Houses: tighter limits
+
+- **Friend Houses waits for an admin after a reset.** If the admin
+  password is reset (`--reset-admin`), phones and the dashboard can't read
+  or send friend messages, see the friend list or use shared lists until
+  someone signs in as admin again.
+- Friend Houses writes Tor's config and key files through a fresh,
+  exclusively created temp file, and a key file with an unexpected name
+  is ignored instead of stopping the update.
+- The Friend Houses listener closes the oldest connection that hasn't
+  finished its handshake when its slots fill up, and closes a connection
+  that sends far more pings than a house ever does.
+- The Friend Houses firewall drops every IPv6 packet from its network
+  (the network has no IPv6), and its state file says `ipv6=absent` where
+  `ip6tables` isn't installed.
+- With the internet answer "never", Friend Houses stops Tor before it
+  reads the database, so a database outage can't keep it running.
+- Shared lists: an offer withdrawn before it was accepted is forgotten,
+  and old applied changes are pruned by count. When a friend's edit to an
+  item wins, the item shows as from a friend house, not as the household
+  member who first added it.
+- **Removing or blocking a friend stops sharing lists with that house.**
+  Each house keeps its own copy as an ordinary list, and messages or list
+  changes still waiting to go to that house are dropped, so nothing goes
+  out if you become friends again later.
+- New-friend and shared-list announcements that no room heard (no room
+  connected, or all quiet or busy) wait and are tried again.
+- Docs: the friend list's 4-digit code is readable by household phones;
+  only marking it verified needs an admin.
+
+### Music, radio and podcasts
+
+- **Up next keeps the songs a jump or a move passed**: on a long room queue
+  only songs the room was heard playing are trimmed after a jump, and the
+  200-song ceiling behind the current song no longer takes them.
+- A guest's "play this one" on a room that stopped in the meantime is
+  refused, so a guest never starts a stopped room.
+- A room's queue looks up the songs it can't place by path in one query
+  instead of one per entry, and a guest's queue and Up next reads leave out
+  the "why this song?" text, which comes from a listener's history.
+- The privacy page no longer says the room-queue blocks stop a device that
+  calls the core directly: the dashboard checks them, the core doesn't.
+- Listens posted by phones and browsers have a house-wide daily cap beside
+  the per-device one.
+- The podcast list shows a feed URL without its query or user info (where
+  a private feed keeps its token) to a caller without the household token,
+  and podcast log lines leave them out too.
+- Radio 1.5.2: a failed station-directory search no longer logs what was
+  searched, and the log scrub blanks those search words in the directory's
+  URLs; a now-playing poll has a whole-poll deadline, so a station that
+  sends a byte now and then can't stall polling for every station.
+- Radio 1.5.3 (SDK 1.13.1): station streams, for the song sampler and the
+  browser player alike, are asked for uncompressed and read exactly as
+  sent; a station that answers compressed is refused. Model, voice,
+  lyrics, font and plugin downloads read their bodies the same way. New
+  for plugins: `net_safety.open_raw_stream` and `iter_raw`.
+
+#### Music no longer goes silent after a question
+
+- **What changed.** Music no longer goes silent after a question while it
+  plays. A room could end a voice turn with the dashboard saying "playing"
+  and nothing coming out of the speaker, and "play" didn't bring it back.
+  Now every turn brings the music back, including one the satellite
+  drops (nothing was said, it heard its own reply, it was too noisy). A
+  room whose satellite can't play the stream says "paused" on the
+  dashboard instead of "playing", and "play" there starts the satellite's
+  player again. A satellite that loses its connection to the server during
+  a question gets its music back once it reconnects.
+- **Satellites.** Update the satellites as well: they now tell the server
+  when music they were sent will not play, and count music as playing only
+  once sound actually arrives from the stream (a stream that connects and
+  sends nothing is given up on after 4 seconds instead of being counted as
+  playing).
+
+### Files, documents, printing, scans and video
+
+- **Files → Download is the browser's own download.** The page asks the
+  server for a one-use link that lasts a minute, then the browser saves
+  the file with its usual progress, instead of the page holding the whole
+  file in memory first. A folder's zip streams as it is built, and a
+  paired phone or browser can download a whole folder without the admin
+  password (up to 5000 files), the same as one file. A refused download
+  says what to do (pair this browser) instead of showing "401".
+- **"Download as Word" for Markdown and text files** is built in the same
+  short-lived, time-limited process as the Word copy of a formatted
+  document, and its line limit counts every kind of line break.
+- **The sheet editor's grid read and the sheet export** run in the sheets
+  worker, not on the dashboard's main loop, and a .csv's grid is read from
+  its first 8 MB.
+- The Documents editor runs on Tiptap 3 (3.33.1, was 2.27.3). Documents,
+  saving and co-editing work as before; the accepted Tiptap advisory
+  (GHSA-cp6q-959q-f8rh) is fixed in this version, so its exception is gone.
+  A span nested in a coloured span now keeps both styles when pasted.
+- The co-editing socket reads its credential again every 30 s, like the
+  live-state socket: a rotated token or a sign-out ends it.
+- A chat draft's changes view on the dashboard leaves a paragraph gap
+  between a long removed passage and the added text after it, so the old
+  last word no longer runs into the new first word.
 - **Printer discovery on a Mac install** counts only the Mac's own home
   network as home, and never dials the Mac itself through the VM's
   networks.
 - **Printer discovery reads network answers within limits**: a bounded
   amount of work per answer, at most 32 answers kept from any one
   address, and answers from outside the home network dropped.
-- **The Windows update copies the downloaded Setup more strictly**: each
-  file is opened without following a link and checked to be the file it
-  names, and a refused update removes every file it copied.
-- **Installing a plugin from GitHub** refuses a branch or tag name with
-  empty or `.`/`..` parts, so the download always comes from the
-  repository shown on the install screen.
-- **News feed discovery** reads only the first 256 KB of a page, scans
-  it in a worker thread and in time that grows only with its length.
-- **A room's satellite settings** (how its microphone listens, among
-  others) can be changed only once an admin password exists, like
-  recording a wake word; before setup and after `--reset-admin` saving
-  them asks for the admin setup first.
-- **Friend Houses read-outs** also leave out words that sound like a wake
-  word when the house says them, not only ones spelled like it, and the
-  stock wake words' names on their own.
-- **"Say that again" after a friend house's message or a shared list's
-  items** repeats them without adding them to the conversation the AI
-  model reads or to what the memory pass looks at; "double check that"
-  still declines them.
-- **The dashboard logs it** if it can't keep its port-80 permission away
-  from the programs it starts.
 - **Video poster frames**: every spelling of one file's path shares one
   cached poster, and the frame is made at low priority, at most two at a
   time, ended at its time limit.
@@ -960,23 +1288,81 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
   changed since answer 404 as the by-path lookup already did, and asking
   for a read of a file over the 1 GB limit is refused before the file is
   hashed (an unchanged file is not hashed again).
-- **The phone app's speech-recognition libraries are rebuilt in CI** from
-  their recorded recipe, weekly and whenever they change, and must match
-  their committed checksums byte for byte.
 
-- **Voice goes first with the house's AI model**: a bedtime story being
-  written, a memory pass or a news briefing stops when a room hears its
-  wake word and carries on after the answer, and a typed chat reply or a
-  chat title waits for a spoken answer in progress, so a question asked
-  out loud no longer waits behind them.
-- **The AI models answer more than one request at once on bigger
-  servers**: two with 24 GB of memory, three with 48 GB, four with NVIDIA
-  GPUs that have room, one below 24 GB as before. Each extra one takes
-  about 1.2 GB of memory (about twice that with an 8192-token routing
-  window; a server without the room stays a step lower). It takes effect
-  at the next update, which restarts the model service once.
+#### "Print this" works on a picture or file in a chat
 
-## 1.4.1 (unreleased) — Dashboard update fixes
+Attach a picture or a document to a chat and say "print this" (or "print
+it", "can you print this please?"): Domovoi now opens the Print dialog on
+that attachment instead of the chat model answering that it can't print.
+With both a draft and an attachment in the chat, the one you attached with
+that message is printed, otherwise the newer of the two. The chat model is
+also told that printing is Domovoi's job. The phone apps show this card
+once they update.
+
+### Rooms and satellites
+
+- A room device set up for a different Domovoi server (another house, or
+  this one before it was reinstalled) used to only blink "no server". Its
+  address is now listed under Settings → Rooms, with the advice to set it
+  up again for this server. The room still trusts only its own server.
+- **A room's satellite settings** (how its microphone listens, among
+  others) can be changed only once an admin password exists, like
+  recording a wake word; before setup and after `--reset-admin` saving
+  them asks for the admin setup first.
+- **A satellite's check of a server has one deadline for the whole answer**,
+  status line and headers included, and at most 8 addresses of a server
+  name are tried. This ships with the satellite code update.
+- Room devices looking for every house count a server only when its
+  identity proof is bound to the address they dialled, and the server
+  signs the approval-proof form only bound to one.
+- With strict satellite pairing turned off, a first-use pairing token for a
+  room is refused while that room's satellite is connected; once it has
+  disconnected, pairing works as before.
+- The core's per-room admin routes check the room id, as the dashboard's
+  already did. A room paired under an older id (capitals, spaces) can now
+  be removed from the dashboard instead of answering 422.
+- The satellite and drop-in sockets check the room id before anything
+  else, and refused requests are logged with the path quoted.
+- A satellite plugged in for USB adoption is listed only with a well-formed
+  device id. A satellite's log names a server that cannot prove an
+  approval, with the advice to type its address, only when that server
+  proved its identity at that address.
+- Satellite approvals: one network address can hold at most eight of the
+  32 waiting requests.
+- The open status snapshot lists which rooms have microphone presets, not
+  their state; the state is read on the admin tier. Microphone markers
+  are cut before escaping and escape invisible and direction characters,
+  and very large numbers in a satellite's preset report are dropped.
+- Resetting a room's pairing, or removing the room, closes its satellite's
+  live connection; a device that is still wanted reconnects and is checked
+  again.
+
+#### Microphone presets for XVF3800 satellites
+
+- **What changed.** Signed in as admin, an XVF3800 satellite's Settings tab
+  has a **Microphone DSP** block: factory settings or presets B, C and D for
+  noisy rooms, the values the array read back, and a **Mark** field that
+  stamps a note into the satellite's and the server's logs. Runtime only;
+  nothing is saved to the array.
+- **What to do.** Press **Upgrade satellite** on each XVF3800 satellite once
+  the server runs 1.4.1; the block appears after it reconnects. Other
+  satellites don't show it.
+
+#### Room names are checked more strictly when a satellite connects
+
+- **What changed.** Room names are checked more strictly when a satellite
+  connects: lowercase letters, digits, `_` and `-`, up to 32 characters,
+  starting with a letter or digit. The dashboard's room addresses take the
+  same rule.
+- **What to know.** Nothing to do. Every way of setting up a room already
+  makes names like these.
+
+### The dashboard
+
+- **The dashboard logs it** if it can't keep its port-80 permission away
+  from the programs it starts.
+
+#### Dashboard update fixes
 
 - **What changed.** Restarting the server for an update no longer makes
   open dashboard tabs say "plugins changed — reload to get the new pages"
@@ -990,18 +1376,28 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
   the server again after it restarts, so it shows the new version and a
   fresh update check without a manual reload.
 
-## 1.4.1 (unreleased) — A busy machine no longer restarts the core
+#### Settings search finds every setting
 
-- **What changed.** The core no longer restarts itself when the database
-  is slow to answer because the machine is busy; it still restarts when
-  the core itself is stuck. When the database probe gets no answer, the
-  core now asks again on a separate connection of its own: only if that
-  one answers does the miss count toward a restart. The core log says
-  when the database itself was slow, and a stall report now includes the
-  machine's I/O and memory pressure and load average on Linux.
+- **What changed.** Searching Settings for a word like "news", "town" or
+  "weather" now finds the Home location. The search also looks at each
+  setting's group, its help text and a few extra words it can be known by,
+  shows more results, and tries again if the list of settings was not ready
+  the first time you typed.
+- **What to know.** Nothing to do.
 
+### Plugins
 
-## 1.4.1 (unreleased) — A slow start no longer switches a plugin off
+- **Installing a plugin from GitHub** refuses a branch or tag name with
+  empty or `.`/`..` parts, so the download always comes from the
+  repository shown on the install screen.
+- A plugin installed from GitHub is downloaded from `api.github.com` and
+  `codeload.github.com` only, redirects included. The install screen's
+  trust statement from the server now also says that a plugin's dashboard
+  pages run in every household browser that opens them.
+- The open plugin list and manifest say only that a plugin's server web
+  module failed to load; the error text is shown to an admin.
+
+#### A slow start no longer switches a plugin off
 
 - **What changed.** A plugin that took a long time to load on a busy
   start (right after installing several plugins and restarting, say) was
@@ -1013,18 +1409,88 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
   the online song-identification service; they just say "an online
   song-identification service".
 
-## 1.4.1 (unreleased) — Microphone presets for XVF3800 satellites
+#### A new plugin's page shows up without a restart or reload
 
-- **What changed.** Signed in as admin, an XVF3800 satellite's Settings tab
-  has a **Microphone DSP** block: factory settings or presets B, C and D for
-  noisy rooms, the values the array read back, and a **Mark** field that
-  stamps a note into the satellite's and the server's logs. Runtime only;
-  nothing is saved to the array.
-- **What to do.** Press **Upgrade satellite** on each XVF3800 satellite once
-  the server runs 1.4.1; the block appears after it reconnects. Other
-  satellites don't show it.
+Installing or enabling a plugin from the Plugins page now adds its page and
+menu item to the dashboard right away, in every open tab. Nothing needs a
+restart, and no reload either. Before, the menu stayed as it was until the
+page was reloaded. An upgrade of a plugin whose page a tab already runs
+still asks for a reload (and a restart when its server side changed), as
+before.
 
-## 1.4.1 (unreleased) — Tighter checks on recording, live state and satellite setup
+#### A refused plugin install says which package clashes
+
+- **What changed.** When a plugin is refused because its requirements would
+  change a package Domovoi already uses, the Plugins page now names each
+  package ("certifi: the plugin wants 2026.6.17, Domovoi has 2026.10.23",
+  up to five, then "and N more") and says to ask the plugin's publisher for
+  a version built for this Domovoi. It used to give only a general sentence.
+- **What to know.** Nothing to do. Plugin authors: compile the lock with
+  `pip-compile -c requirements-linux-py314.lock`
+  ([PLUGIN_DEVELOPMENT.md](PLUGIN_DEVELOPMENT.md)).
+
+### The server and updates
+
+- **The AI models answer more than one request at once on bigger
+  servers**: two with 24 GB of memory, three with 48 GB, four with NVIDIA
+  GPUs that have room, one below 24 GB as before. Each extra one takes
+  about 1.2 GB of memory (about twice that with an 8192-token routing
+  window; a server without the room stays a step lower). It takes effect
+  at the next update, which restarts the model service once.
+- **The Windows update copies the downloaded Setup more strictly**: each
+  file is opened without following a link and checked to be the file it
+  names, and a refused update removes every file it copied.
+
+#### A busy machine no longer restarts the core
+
+- **What changed.** The core no longer restarts itself when the database
+  is slow to answer because the machine is busy; it still restarts when
+  the core itself is stuck. When the database probe gets no answer, the
+  core now asks again on a separate connection of its own: only if that
+  one answers does the miss count toward a restart. The core log says
+  when the database itself was slow, and a stall report now includes the
+  machine's I/O and memory pressure and load average on Linux.
+
+#### Updates remove more packages Domovoi no longer uses
+
+- **What changed.** A Linux, Windows or Mac server set up before
+  2026-10-15 still carries Python packages Domovoi stopped using then:
+  mutagen, python-mpd2, lameenc, librosa (with soxr, soundfile, numba,
+  llvmlite, lazy-loader, pooch, scikit-learn, joblib, threadpoolctl) and
+  PyAV (`av`). The update now uninstalls them, as it already did for
+  piper-tts, edge-tts and torch, even when the update itself changes no
+  dependency (once, the first time the list grows).
+- **What to know.** Nothing to do. The update's result
+  (`last-result.json`) has a `drop-retired-packages` step naming what went;
+  a server that never had them gets no step.
+
+#### The wake-word trainer image moves to torch 2.14
+
+The trainer image's pinned packages had known security advisories (torch
+2.4.1, pillow, urllib3, requests, certifi, brotli and others). Its base is
+now `pytorch/pytorch:2.14.1-cuda12.6-cudnn9-runtime` (by digest) and every
+pinned package is at a version with no open advisory; the advisory check
+now fails CI on the trainer's locks too. On a server that turned wake-word
+training on, the next update rebuilds the image once: about 4 GB more to
+download. It is still a CUDA 12 image (12.6, was 12.4). Nothing changes
+in how training is used.
+
+### Security and limits
+
+- Feed and page fetches have a deadline for the whole answer, not just per
+  read. The privacy page notes that a global IPv6 address of the server or
+  a neighbour counts as public for outbound fetches.
+- The podcast feed head scan stays linear with many stray closing tags,
+  and the whole-fetch deadline is checked after every read.
+- The core caps a WebSocket message at 4 MiB (or a little over the request
+  body limit, when that is set higher) instead of uvicorn's 16 MiB.
+- Add by link: callers without a household credential have their own cap
+  of links waiting, and their duplicate key is derived from the link. The
+  title and key are capped in length.
+- The realtime acquisitions push carries the same redacted rows a
+  household device reads (no requester, a fixed error sentence).
+
+#### Tighter checks on recording, live state and satellite setup
 
 - **Recording wake-word clips needs the admin sign-in.** Starting a
   wake-word recording take now needs an admin, also before setup and after
@@ -1042,105 +1508,7 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
   one deadline, and a network search can no longer be held open by one
   slow host. This ships with the satellite code update.
 
-## 1.4.1 (unreleased)
-
-- Radio 1.5.3 (SDK 1.13.1): station streams, for the song sampler and the
-  browser player alike, are asked for uncompressed and read exactly as
-  sent; a station that answers compressed is refused. Model, voice,
-  lyrics, font and plugin downloads read their bodies the same way. New
-  for plugins: `net_safety.open_raw_stream` and `iter_raw`.
-
-- Holiday questions work offline: "how many days until New Year's Day",
-  "when is Thanksgiving", "what day is Easter next year" answer with the
-  date and the day count. The built-in table covers the common public
-  holidays and observances of the US, Canada, the UK, Ireland, Australia
-  and New Zealand, plus Easter and the days counted from it, and uses the
-  country of the Home location (the US when none is set). "This year" for
-  a holiday that already passed says how many days ago it was.
-
-- A spoken "Should I remember that?" offer no longer rides on the answer
-  to a question. It comes after a remark or a chat, at most once a day per
-  person, and never for something Domovoi already knows (your name, a
-  fact it remembers). A one-word "yes" to it now saves the fact. A plain
-  fact question from someone Domovoi recognizes gets the same prompt as
-  anyone's; their remembered facts go in only when the question is about
-  them.
-
-- Spoken suggestions (meals, restaurants, gifts, music, things to do) for
-  someone Domovoi recognizes use their remembered tastes and diet again;
-  plain fact questions still don't. Remembered allergies and diets are
-  never cut when a profile is long. After a food suggestion, when someone
-  in the house has a remembered allergy or diet, Domovoi adds one line: to
-  a voice it doesn't recognize, that nobody's allergies were taken into
-  account (naming no one and no allergy); to someone it knows, what the
-  others need ("Heads up: not all of these are peanut-free."), naming no
-  one.
-
-- A chat draft's changes view on the dashboard leaves a paragraph gap
-  between a long removed passage and the added text after it, so the old
-  last word no longer runs into the new first word.
-
-- A room device set up for a different Domovoi server (another house, or
-  this one before it was reinstalled) used to only blink "no server". Its
-  address is now listed under Settings → Rooms, with the advice to set it
-  up again for this server. The room still trusts only its own server.
-
-- The Documents editor runs on Tiptap 3 (3.33.1, was 2.27.3). Documents,
-  saving and co-editing work as before; the accepted Tiptap advisory
-  (GHSA-cp6q-959q-f8rh) is fixed in this version, so its exception is gone.
-  A span nested in a coloured span now keeps both styles when pasted.
-- Room devices looking for every house count a server only when its
-  identity proof is bound to the address they dialled, and the server
-  signs the approval-proof form only bound to one.
-- Friend Houses: a friend request broken off partway counts as a try on
-  the friend file; the file closes after three, and the asking house stops
-  retrying on its own after one (the request says to withdraw it and try
-  again).
-- Friend Houses: the check that pings friends has one deadline per ping,
-  and each stage of the retry loop has a deadline, so one friend can't
-  hold up the others.
-- Friend Houses: wake phrases are taken out of a friend's text more
-  loosely, after the speech cleaner, and from the whole sentence read
-  aloud (messages and shared lists).
-- Friend Houses: a friend's messages and names read aloud stay out of the
-  chat model's history, and "double check that" declines such a reply.
-- Friend Houses: a friend set to "say who it's from" or "read aloud" now
-  shows, during quiet hours, when new messages will be said (or that only
-  some rooms are quiet), and a message that wasn't said because of quiet
-  hours is marked "held for quiet hours" in Messages.
-- Friend Houses: messages that came during quiet hours are said in each
-  room when its own quiet hours end, if they are still unread (once per
-  room); Home's "needs attention" counts unread Friend Houses messages and
-  links to them; and the Friend Houses page now starts with Messages.
-- Friend Houses: the page is open to everyone in the household. Messages
-  and Shared lists (taking, declining and stopping a shared list with an
-  existing friend) need only the household's paired browser or phone;
-  starting a share stays with the admin. Requests, friend files, this
-  house, the friends list and blocking sit in a "Friends and connections"
-  section at the bottom that asks for the admin sign-in when opened.
-- A guest's "play this one" on a room that stopped in the meantime is
-  refused, so a guest never starts a stopped room.
-- A room's queue looks up the songs it can't place by path in one query
-  instead of one per entry, and a guest's queue and Up next reads leave out
-  the "why this song?" text, which comes from a listener's history.
-- The privacy page no longer says the room-queue blocks stop a device that
-  calls the core directly: the dashboard checks them, the core doesn't.
-- Radio 1.5.2: a failed station-directory search no longer logs what was
-  searched, and the log scrub blanks those search words in the directory's
-  URLs; a now-playing poll has a whole-poll deadline, so a station that
-  sends a byte now and then can't stall polling for every station.
-- The open plugin list and manifest say only that a plugin's server web
-  module failed to load; the error text is shown to an admin.
-- Feed and page fetches have a deadline for the whole answer, not just per
-  read. The privacy page notes that a global IPv6 address of the server or
-  a neighbour counts as public for outbound fetches.
-- The podcast list shows a feed URL without its query or user info (where
-  a private feed keeps its token) to a caller without the household token,
-  and podcast log lines leave them out too.
-- Listens posted by phones and browsers have a house-wide daily cap beside
-  the per-device one.
-
-## 1.4.1 (unreleased) — Sign-in, room pairing and drop-in checks
+#### Sign-in, room pairing and drop-in checks
 
 - **Changing the admin password** checks the old password under the same
   backoff as the sign-in form: after a wrong old password, the next try
@@ -1171,37 +1539,7 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
   isn't a wake-word name is ignored, as is such a name saved earlier (the
   configured word is used).
 
-## 1.4.1 (unreleased) — Friend Houses: tighter limits
-
-- **Friend Houses waits for an admin after a reset.** If the admin
-  password is reset (`--reset-admin`), phones and the dashboard can't read
-  or send friend messages, see the friend list or use shared lists until
-  someone signs in as admin again.
-- Friend Houses writes Tor's config and key files through a fresh,
-  exclusively created temp file, and a key file with an unexpected name
-  is ignored instead of stopping the update.
-- The Friend Houses listener closes the oldest connection that hasn't
-  finished its handshake when its slots fill up, and closes a connection
-  that sends far more pings than a house ever does.
-- The Friend Houses firewall drops every IPv6 packet from its network
-  (the network has no IPv6), and its state file says `ipv6=absent` where
-  `ip6tables` isn't installed.
-- With the internet answer "never", Friend Houses stops Tor before it
-  reads the database, so a database outage can't keep it running.
-- Shared lists: an offer withdrawn before it was accepted is forgotten,
-  and old applied changes are pruned by count. When a friend's edit to an
-  item wins, the item shows as from a friend house, not as the household
-  member who first added it.
-- **Removing or blocking a friend stops sharing lists with that house.**
-  Each house keeps its own copy as an ordinary list, and messages or list
-  changes still waiting to go to that house are dropped, so nothing goes
-  out if you become friends again later.
-- New-friend and shared-list announcements that no room heard (no room
-  connected, or all quiet or busy) wait and are tried again.
-- Docs: the friend list's 4-digit code is readable by household phones;
-  only marking it verified needs an admin.
-
-## 1.4.1 (unreleased) — Queue, downloads, podcast and Word export hardening
+#### Queue, downloads, podcast and Word export hardening
 
 - **Up next** trims only songs a room was heard playing. Jumping ahead in a
   long queue no longer lets the songs it passed be trimmed as played.
@@ -1220,82 +1558,7 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
   draft's file, are built off the dashboard's main loop, and one longer
   than 20,000 lines is refused with `413`.
 
-## 1.4.1 (unreleased) — Home location, in Settings → Household
-
-- **What changed.** The household's town has its own place: Settings →
-  Household → **Home location**, one field where you start typing and pick
-  your town from a list ("Denver, Colorado, US"). Weather answers and local
-  news use it. The list comes with Domovoi (GeoNames, CC BY 4.0), so what
-  you type never leaves the house. It replaces **Local news location** in
-  Settings → System → Advanced → News, which is gone.
-- **Carried over once.** On the first start of 1.4.1, the text you had in
-  Local news location becomes your Home location. When it clearly names one
-  town, that town is picked for you. When it doesn't ("Springfield": there
-  are several), the text is kept and the field asks you to pick your town
-  from the list; until then weather and news use the text as before. With
-  nothing there, Home location starts empty.
-- **What to know.** Only an admin can change it; every household device can
-  see it. Plugins: `core_config.news_location` still works and is now the
-  Home location's name; the whole place, coordinates included, is
-  `sdk.household.home_location()` (SDK 1.13,
-  [PLUGIN_DEVELOPMENT.md](PLUGIN_DEVELOPMENT.md)).
-
-## 1.4.1 (unreleased) — Weather answers are back
-
-- **What changed.** "What's the weather today?" now has your server's own
-  search service look up your place with Open-Meteo (free for personal,
-  non-commercial use; data CC BY 4.0), or wttr.in when Open-Meteo has no
-  answer, and answers with the current temperature and conditions (in
-  Fahrenheit for a US place). The place is the
-  **Home location** in Settings → Household (above). With
-  Settings > Privacy > Internet on "always", Domovoi no longer asks "want me
-  to check?" first. With no place set it says where to set it. If the
-  weather sources return nothing, it falls back to a general web search as
-  before. It used to find encyclopedia pages and say it had no real-time
-  information.
-- **What to know.** Set your Home location to get a local answer. The bundled search service restarts once on update to pick
-  up the new weather source. An installed weather plugin takes over
-  weather questions and core steps aside.
-
-## 1.4.1 (unreleased) — "Print this" works on a picture or file in a chat
-
-Attach a picture or a document to a chat and say "print this" (or "print
-it", "can you print this please?"): Domovoi now opens the Print dialog on
-that attachment instead of the chat model answering that it can't print.
-With both a draft and an attachment in the chat, the one you attached with
-that message is printed, otherwise the newer of the two. The chat model is
-also told that printing is Domovoi's job. The phone apps show this card
-once they update.
-
-## 1.4.1 (unreleased) — A chime before announcements and broadcasts
-
-A room now plays a short two-note chime before an announcement or a
-broadcast speaks, so people catch the first words. That covers "tell the
-kitchen dinner is ready", Broadcast, timers and reminders, and plugin
-announcements; normal answers never get it. It plays on every kind of room
-(Raspberry Pi, spare PC, phone in room mode) with no update on the room.
-To turn it off, untick "Chime before announcements" in Settings, Voice &
-speech (`announce_chime_enabled`).
-
-## 1.4.1 (unreleased) — A new plugin's page shows up without a restart or reload
-
-Installing or enabling a plugin from the Plugins page now adds its page and
-menu item to the dashboard right away, in every open tab. Nothing needs a
-restart, and no reload either. Before, the menu stayed as it was until the
-page was reloaded. An upgrade of a plugin whose page a tab already runs
-still asks for a reload (and a restart when its server side changed), as
-before.
-
-## 1.4.1 (unreleased) — Settings search finds every setting
-
-- **What changed.** Searching Settings for a word like "news", "town" or
-  "weather" now finds the Home location. The search also looks at each
-  setting's group, its help text and a few extra words it can be known by,
-  shows more results, and tries again if the list of settings was not ready
-  the first time you typed.
-- **What to know.** Nothing to do.
-
-## 1.4.1 (unreleased) — Feed and download reads are bounded more tightly
+#### Feed and download reads are bounded more tightly
 
 - The part of a podcast or news feed before its first item is read in one
   pass and capped at 256 KiB; a feed with a longer head is reported as too
@@ -1308,94 +1571,11 @@ before.
   the budget ends as failed and its file is not kept. Adding by link without an
   admin session is limited to 10 waiting links at a time.
 
-## 1.4.1 (unreleased) — Room names are checked more strictly when a satellite connects
+### Android
 
-- **What changed.** Room names are checked more strictly when a satellite
-  connects: lowercase letters, digits, `_` and `-`, up to 32 characters,
-  starting with a letter or digit. The dashboard's room addresses take the
-  same rule.
-- **What to know.** Nothing to do. Every way of setting up a room already
-  makes names like these.
-
-## 1.4.1 (unreleased) — A refused plugin install says which package clashes
-
-- **What changed.** When a plugin is refused because its requirements would
-  change a package Domovoi already uses, the Plugins page now names each
-  package ("certifi: the plugin wants 2026.6.17, Domovoi has 2026.10.23",
-  up to five, then "and N more") and says to ask the plugin's publisher for
-  a version built for this Domovoi. It used to give only a general sentence.
-- **What to know.** Nothing to do. Plugin authors: compile the lock with
-  `pip-compile -c requirements-linux-py314.lock`
-  ([PLUGIN_DEVELOPMENT.md](PLUGIN_DEVELOPMENT.md)).
-
-## 1.4.1 (unreleased) — "My name is …" again replaces a short room sample
-
-Saying "my name is …" again in a room that doesn't recognize your voice,
-and answering yes to "Is that you?", now replaces your old short sample for
-that room instead of adding a second one beside it. It asks you to count to
-ten first, and your old sample stays unless the new recording holds more of
-your voice. Your samples from other rooms, and other people's, are never
-touched. A room that already has a good (4 seconds or longer) sample of you
-still adds, as before. The API docs also gave the wrong default for the
-voice match threshold: it is 0.58, not 0.75.
-
-A short room sample no longer stands in for your whole voice in that room.
-Before, if a room had any sample of you, even a one-second clip, you were
-judged against that room's samples alone. Now that only happens when one of
-them holds at least 4 seconds of speech; otherwise all your samples count,
-so a good sample from another room still helps you be recognized. A room
-with only short samples of you also learns again: it may ask "By the way,
-was that you?" when it nearly recognized you, and after three clear
-recognitions in a row it replaces the short sample, but only with a
-recording that holds more of your voice. A good sample is never changed.
-
-"Was that you?" can now only be answered by that person. The voice that
-says yes must sound at least about as much like them as the voice the
-question was about, and not like anyone else in the house. Otherwise
-nothing is saved and Domovoi says it will ask them itself next time. A bare
-"yes" is often too short to tell whose voice it is, so say "yes, that was
-me" instead.
-
-## 1.4.1 (unreleased) — Music no longer goes silent after a question
-
-- **What changed.** Music no longer goes silent after a question while it
-  plays. A room could end a voice turn with the dashboard saying "playing"
-  and nothing coming out of the speaker, and "play" didn't bring it back.
-  Now every turn brings the music back, including one the satellite
-  drops (nothing was said, it heard its own reply, it was too noisy). A
-  room whose satellite can't play the stream says "paused" on the
-  dashboard instead of "playing", and "play" there starts the satellite's
-  player again. A satellite that loses its connection to the server during
-  a question gets its music back once it reconnects.
-- **Satellites.** Update the satellites as well: they now tell the server
-  when music they were sent will not play, and count music as playing only
-  once sound actually arrives from the stream (a stream that connects and
-  sends nothing is given up on after 4 seconds instead of being counted as
-  playing).
-
-## 1.4.1 (unreleased) — The wake-word trainer image moves to torch 2.14
-
-The trainer image's pinned packages had known security advisories (torch
-2.4.1, pillow, urllib3, requests, certifi, brotli and others). Its base is
-now `pytorch/pytorch:2.14.1-cuda12.6-cudnn9-runtime` (by digest) and every
-pinned package is at a version with no open advisory; the advisory check
-now fails CI on the trainer's locks too. On a server that turned wake-word
-training on, the next update rebuilds the image once: about 4 GB more to
-download. It is still a CUDA 12 image (12.6, was 12.4). Nothing changes
-in how training is used.
-
-## 1.4.1 (unreleased) — Updates remove more packages Domovoi no longer uses
-
-- **What changed.** A Linux, Windows or Mac server set up before
-  2026-10-15 still carries Python packages Domovoi stopped using then:
-  mutagen, python-mpd2, lameenc, librosa (with soxr, soundfile, numba,
-  llvmlite, lazy-loader, pooch, scikit-learn, joblib, threadpoolctl) and
-  PyAV (`av`). The update now uninstalls them, as it already did for
-  piper-tts, edge-tts and torch, even when the update itself changes no
-  dependency (once, the first time the list grows).
-- **What to know.** Nothing to do. The update's result
-  (`last-result.json`) has a `drop-retired-packages` step naming what went;
-  a server that never had them gets no step.
+- **The phone app's speech-recognition libraries are rebuilt in CI** from
+  their recorded recipe, weekly and whenever they change, and must match
+  their committed checksums byte for byte.
 
 ## 2026-11-20 — 1.4.0
 
@@ -3348,7 +3528,6 @@ Stand By Me"). When a media-provider plugin finds nothing that carries the
 words you asked for, the answer is "I couldn't find anything called …";
 the media-provider plugin's next release stops streaming an unrelated
 result in that case.
-
 ## 2026-11-12 — Music keeps going after a streamed song
 
 When a song you don't have is streamed into a room (say "play" a song
@@ -9460,7 +9639,6 @@ In this order (`curl -s http://<server>:6370/v1/stats/latency?since=<restart tim
   again (`voiced_after_end_ms`, `listened_after_end_ms`). Its
   `utterance_end` for such a capture comes that much later; nothing waits
   for it. An older core ignores the fields.
-
 ## 2026-09-30 — Timers and reminders reach the whole house
 
 ### Do this once, after upgrading

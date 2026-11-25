@@ -98,7 +98,7 @@ _PARSERS = (
     "domovoi/timer_delivery.py", "domovoi/clients/ollama.py", "domovoi/clients/musicbrainz.py",
     "domovoi/workers/library_enricher.py", "domovoi/calendar_ics.py", "domovoi/calendar_feeds.py",
     "domovoi/host_memory.py", "domovoi/container_guard/compose.py", "domovoi/printing/templates.py",
-    "domovoi/printing/capabilities.py", "domovoi/richdoc/word.py", "domovoi/satellite_media/fetchers.py",
+    "domovoi/printing/capabilities.py", "domovoi/richdoc/word.py", "domovoi/richdoc/markdown_word.py", "domovoi/satellite_media/fetchers.py",
     "domovoi/plugins_runtime/lockfile.py", "domovoi/streaming.py",
     "web/backend/api/documents.py", "web/backend/api/files_security.py",
     "plugins/radio/domovoi_plugin_radio/handlers/",

@@ -226,8 +226,11 @@ final class FriendHousesPlainTextTests: XCTestCase {
     }
 
     func testNamesAndTitlesArePassedOnUnchanged() {
-        XCTAssertEqual("\(hostile) shared a list: \(hostile). An admin can accept it in the dashboard.",
+        XCTAssertEqual("\(hostile) shared a list: \u{201C}\(hostile)\u{201D}",
                        FhWords.invited(hostile, hostile))
+        XCTAssertEqual("\(hostile) \u{2014} from \(hostile)", FhWords.sharedLine(hostile, origin: "them", friend: hostile))
+        XCTAssertEqual("\u{201C}\(hostile)\u{201D} won\u{2019}t be added here. \(hostile) isn\u{2019}t told.",
+                       FhWords.declineBody(hostile, hostile))
         XCTAssertEqual(hostile, FhWords.friendName(hostile))
         XCTAssertEqual("a former friend", FhWords.friendName("  "))
         XCTAssertEqual("this house", FhWords.conversationName(nil))

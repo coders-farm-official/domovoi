@@ -141,6 +141,25 @@ def test_pending_surfaces_corrupt_volume(client, tmp_path, monkeypatch):
     assert items[0]["pending_id"].startswith("drive:")
 
 
+def test_pending_refuses_a_non_hex_device_id(client, tmp_path, monkeypatch):
+    vol = tmp_path / "oddid"
+    info = proto.build_device_info(
+        nonce="../../x?y=1",
+        mac="b8:27:eb:aa:bb:cd",
+        board="raspberry_pi_zero_2_w",
+        model="Raspberry Pi Zero 2 W Rev 1.0",
+        profiles_supported=["xvf3800_usb"],
+    )
+    vol.mkdir()
+    (vol / proto.DEVICE_INFO_NAME).write_text(json.dumps(info), encoding="utf-8")
+    monkeypatch.setenv("SATELLITE_ADOPTION_SCAN_DIRS", str(vol))
+    adoption.invalidate_cache()
+    items = client.get("/api/satellites/pending").json()
+    assert len(items) == 1
+    assert items[0]["pending_id"].startswith("drive:")
+    assert items[0]["parse_error"] == "malformed nonce"
+
+
 def test_pending_ignores_plain_volume(client, tmp_path, monkeypatch):
     vol = tmp_path / "justfiles"
     vol.mkdir()

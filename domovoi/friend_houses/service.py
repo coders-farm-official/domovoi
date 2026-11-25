@@ -851,7 +851,11 @@ async def _after_reconcile_then(fn) -> None:
 
 async def _retry_loop() -> None:
     from domovoi.friend_houses import friending, messages, presence
+    from domovoi.handlers import friend_houses as voice
 
+    # The friend names the voice patterns know ("ask the Smiths …"), read
+    # once at start; a turn reads them again when they're a minute old.
+    await _after_reconcile(voice.refresh_names)
     while True:
         await asyncio.sleep(RETRY_EVERY_SEC)
         await _after_reconcile(friending.deliver_pending)

@@ -220,7 +220,7 @@ async def test_two_close_favorites_are_offered_and_an_ordinal_picks(stub_sdk, db
     resp = await h._play_station_from_match(
         _PLAY_STATION_RE.match("play the station lofi"), _ctx(), db_session
     )
-    assert resp.text == "Lofi 24/7 or Lofi Hip Hop?"
+    assert resp.text == "Do you want Lofi 24/7 or Lofi Hip Hop?"
     data = stub_sdk.sessions.confirmations[-1]["data"]
     resp = await h.handle_choice_reply(KIND, data, "the second one", _ctx(), db_session)
     assert resp.text == "Streaming Lofi Hip Hop."
@@ -293,7 +293,7 @@ async def test_one_directory_hit_is_offered_as_a_yes_or_no(stub_sdk, db_session)
     )
     h = RadioHandler(stub_sdk)
     resp = await h._stream_by_name("nightwave plaza", _ctx(), db_session)
-    assert resp.text == "It's not in your stations. I found Nightwave Plaza online. Play it?"
+    assert resp.text == "It's not in your stations. I found Nightwave Plaza online. Should I play it?"
     data = stub_sdk.sessions.confirmations[-1]["data"]
     resp = await h.handle_choice_reply(KIND, data, "yes please", _ctx(), db_session)
     assert resp.text == "Streaming Nightwave Plaza."

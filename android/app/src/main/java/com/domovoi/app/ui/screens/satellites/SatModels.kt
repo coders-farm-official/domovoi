@@ -2,6 +2,7 @@ package com.domovoi.app.ui.screens.satellites
 
 import com.domovoi.app.net.ApiClient
 import com.domovoi.app.ui.components.Tone
+import com.domovoi.app.ui.screens.music.encComponent
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.buildJsonObject
@@ -360,7 +361,12 @@ internal const val TIMER_SCOPE_HELP =
         "and says which room they came from. On: it announces only the ones set in this room. " +
         "The room a timer or reminder was set in always announces it."
 
-internal fun timerScopePath(room: String): String = "/api/satellites/$room/timer-announcements"
+/** `/api/satellites/<room><tail>`, the room id escaped as ONE path segment:
+ *  a `/`, `?`, `#` or `%` in it must not change which URL this is. */
+internal fun satPath(room: String, tail: String = ""): String =
+    "/api/satellites/${encComponent(room)}$tail"
+
+internal fun timerScopePath(room: String): String = satPath(room, "/timer-announcements")
 
 internal fun timerScopeToast(room: String, on: Boolean): String =
     if (on) "$room now announces only its own timers and reminders"

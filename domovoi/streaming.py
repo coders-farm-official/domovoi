@@ -3377,6 +3377,7 @@ class StreamSession:
             # Pinned when the operator approves (support sessions, 1.5.0):
             # it rides the same hello as the token this approval binds.
             support_key=_hello_support_key(ctrl),
+            source=self._hello_source(),
         )
         if outcome == "full":
             await self._approvals_full()
@@ -3541,6 +3542,7 @@ class StreamSession:
                     proof=True,
                     requested_room=(_requested_room(ctrl)
                                 or await _invited_room(s, self.satellite_id)),
+                    source=source,
                 )
                 if outcome == "full":
                     await self._approvals_full()
@@ -3815,6 +3817,16 @@ class StreamSession:
                             return await self._park_for_approval(
                                 s, ctrl, token_hash=token_hash, code=code
                             )
+                        # Lenient only: while another socket for this device is
+                        # live, a first-use token would take its pairing and join
+                        # its room. Refused like any pairing refusal; the real
+                        # device retries once its old socket has dropped.
+                        state = getattr(getattr(self.ws, "app", None), "state", None)
+                        live = (getattr(state, "active_satellites", None) or {}).get(
+                            self.satellite_id)
+                        if live is not None and live is not self:
+                            return await _reject(
+                                "first-use token while the device's socket is live")
                         await repo.pair(self.satellite_id, token_hash)
                         log.info(
                             "pairing: room=%s paired (trust-on-first-use)",
@@ -9058,7 +9070,7 @@ async def ring_target_for_dropin(initiator_room: str, target: "StreamSession") -
     await target._suppress_music_for(target)
     try:
         await target.prompt_dropin(
-            f"The {peer_label} wants to drop in. Is that okay?"
+            f"The {peer_label} wants to drop in. Do you want to let them in?"
         )
     except Exception as e:
         log.warning(

@@ -458,3 +458,79 @@ async def test_reset_endpoint_noop_for_unpaired_room() -> None:
         )
     assert r.status_code == 200
     assert r.json() == {"room_id": "nowhere", "reset": False}
+
+
+class _LiveWS:
+    def __init__(self) -> None:
+        self.closed_with: int | None = None
+
+    async def close(self, code: int = 1000) -> None:
+        self.closed_with = code
+
+
+@pytest.mark.asyncio
+async def test_resetting_or_removing_a_room_closes_its_live_socket(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    await _seed_pairing("kitchen", TOKEN)
+    token = await _claim_admin()
+    live = _LiveWS()
+    monkeypatch.setattr(core_app.state, "active_satellites",
+                        {"kitchen": SimpleNamespace(ws=live)}, raising=False)
+    async with _core() as client:
+        r = await client.delete(
+            "/v1/admin/satellites/kitchen/pairing",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200
+        assert live.closed_with == 1008
+        other = _LiveWS()
+        core_app.state.active_satellites["den"] = SimpleNamespace(ws=other)
+        r = await client.delete(
+            "/v1/admin/satellites/den",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200, r.text
+        assert other.closed_with == 1008
+
+
+# ─── Lenient: a first-use token while the room's socket is live ────────────
+
+
+def _session_with(live: dict, room_id: str) -> StreamSession:
+    from types import SimpleNamespace
+
+    sess = _session(room_id)
+    sess.ws.app = SimpleNamespace(state=SimpleNamespace(active_satellites=live))
+    return sess
+
+
+@pytest.mark.asyncio
+async def test_lenient_first_use_token_is_refused_while_the_room_is_live(lenient) -> None:
+    live = {"kitchen": object()}
+    sess = _session_with(live, "kitchen")
+    assert await sess._validate_pairing({"pairing_token": TOKEN}) is False
+    assert _frame(sess)["reason"] == "pairing_rejected"
+    async with SessionLocal() as s:
+        assert await SatellitePairingRepository(s).get_pairing("kitchen") is None
+    # Once that socket has closed, the same token pairs as before.
+    live.pop("kitchen")
+    again = _session_with(live, "kitchen")
+    assert await again._validate_pairing({"pairing_token": TOKEN}) is True
+    async with SessionLocal() as s:
+        row = await SatellitePairingRepository(s).get_pairing("kitchen")
+    assert row is not None and row[0] == token_sha256(TOKEN)
+
+
+@pytest.mark.asyncio
+async def test_lenient_new_room_is_unaffected_by_another_live_room(lenient) -> None:
+    sess = _session_with({"kitchen": object()}, "den")
+    assert await sess._validate_pairing({"pairing_token": TOKEN}) is True
+
+
+@pytest.mark.asyncio
+async def test_strict_first_use_token_still_parks_while_the_room_is_live(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "satellite_pairing_strict", True)
+    sess = _session_with({"kitchen": object()}, "kitchen")
+    assert await sess._validate_pairing({"pairing_token": TOKEN}) is False
+    assert _frame(sess)["reason"] == "awaiting_approval"

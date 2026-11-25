@@ -494,3 +494,17 @@ def test_the_code_shape_is_the_one_the_core_mints() -> None:
 
     for _ in range(50):
         assert streaming_mod._is_approval_code(generate_approval_code())
+
+
+def test_the_core_caps_websocket_messages_below_uvicorns_default(monkeypatch) -> None:
+    import inspect
+
+    # satellite/client.py LOG_CHUNK_CHARS (it imports audio libraries).
+    log_chunk_chars = 128 * 1024
+    size = core_main.ws_max_message_bytes()
+    assert size < 16 * 1024 * 1024
+    # A log chunk, even with every character escaped, still fits.
+    assert size > log_chunk_chars * 6
+    monkeypatch.setattr(core_main.settings, "max_request_bytes", 8 * 1024 * 1024)
+    assert core_main.ws_max_message_bytes() > 8 * 1024 * 1024
+    assert "ws_max_size=ws_max_message_bytes()" in inspect.getsource(core_main.main)

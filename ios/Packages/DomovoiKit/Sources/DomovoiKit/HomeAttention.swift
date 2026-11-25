@@ -108,18 +108,28 @@ public struct HomeAttentionState: Equatable, Sendable {
     /// decision below stays testable.
     public let expanded: Bool
 
+    /// Friend Houses' unread row (``homeFriendHousesRow(unread:)``), or nil.
+    ///
+    /// **Not a problem, and not the setting's to hide**: the dashboard adds it
+    /// to whatever the problems show (`HomeWithRow`, `home.jsx`) — after the
+    /// rows, under the summary line, or on its own — because it is a count
+    /// for whoever may read the inbox, with no names in it.
+    public let friendHouses: AttentionRow?
+
     public init(
         view: AttentionView,
         checking: Bool = false,
         isStale: Bool = false,
         compact: Bool = true,
-        expanded: Bool = false
+        expanded: Bool = false,
+        friendHouses: AttentionRow? = nil
     ) {
         self.view = view
         self.checking = checking
         self.isStale = isStale
         self.compact = compact
         self.expanded = expanded
+        self.friendHouses = friendHouses
     }
 
     /// Build the card from the reads, with `rooms` **nullable** — trap 1.
@@ -140,7 +150,8 @@ public struct HomeAttentionState: Equatable, Sendable {
         checking: Bool,
         isStale: Bool = false,
         compact: Bool = true,
-        expanded: Bool = false
+        expanded: Bool = false,
+        friendHouses: AttentionRow? = nil
     ) -> HomeAttentionState {
         let rows = attentionRows(
             health: health, rooms: rooms, plugins: plugins, acq: acq, guard: guardState
@@ -152,17 +163,37 @@ public struct HomeAttentionState: Equatable, Sendable {
             checking: checking,
             isStale: isStale,
             compact: compact,
-            expanded: expanded
+            expanded: expanded,
+            friendHouses: friendHouses
         )
     }
 
-    /// Whether to draw anything.
-    public var shown: Bool { attentionShown(view) }
+    /// Whether to draw anything: a problem the setting lets this phone see,
+    /// or Friend Houses' row.
+    public var shown: Bool { attentionShown(view) || friendHouses != nil }
+
+    /// Every row of the rows branch: the problems, then Friend Houses' row.
+    /// With nothing for the problems (`.none`) it is that row on its own; in
+    /// the summary branch it is ``extraRows``' instead.
+    public var allRows: [AttentionRow] {
+        let extra = friendHouses.map { [$0] } ?? []
+        switch view {
+        case .rows(let rows): return rows + extra
+        case .none: return extra
+        case .summary: return []
+        }
+    }
+
+    /// The rows under the summary line: Friend Houses' row, or none.
+    public var extraRows: [AttentionRow] {
+        guard case .summary = view, let friendHouses else { return [] }
+        return [friendHouses]
+    }
 
     /// The rows actually drawn: every one on a wide pane, the first
     /// ``homePhoneRows`` on a phone until `+N more` is tapped.
     public var shownRows: [AttentionRow] {
-        guard case .rows(let rows) = view else { return [] }
+        let rows = allRows
         guard compact, !expanded else { return rows }
         return Array(rows.prefix(homePhoneRows))
     }
@@ -177,8 +208,8 @@ public struct HomeAttentionState: Equatable, Sendable {
     /// one. The *decision* — which cap, which panes, never after an expansion
     /// — stays here, because it is this card's.
     public var moreLabel: String? {
-        guard case .rows(let rows) = view, compact, !expanded else { return nil }
-        return homeMoreLabel(extra: rows.count - homePhoneRows)
+        guard summaryCount == nil, compact, !expanded else { return nil }
+        return homeMoreLabel(extra: allRows.count - homePhoneRows)
     }
 
     /// The dot beside the summary branch's one neutral line.
@@ -277,4 +308,22 @@ public enum HomeAttentionStrings {
     /// second home for one of them is how one gets reworded and the other
     /// does not.
     public static let stale = IOSOnlyStrings.attentionStale
+}
+
+// MARK: - Friend Houses' unread row (1.4.1)
+
+/// Home's Friend Houses row: "1 unread Friend Houses message", "3 unread
+/// Friend Houses messages" (the dashboard's `HomeFriendHousesRow`, word for
+/// word), opening Friend houses on its Messages. A count only: no names, no
+/// text. Nil — no row — for nothing unread or no count at all (a server
+/// before `/unread`, or Friend Houses hidden here, which is also where a tap
+/// could not open it).
+public func homeFriendHousesRow(unread: Int?) -> AttentionRow? {
+    guard let unread, unread > 0 else { return nil }
+    return AttentionRow(
+        key: "fh-unread",
+        tone: .brand,
+        text: "\(unread) unread Friend Houses \(unread == 1 ? "message" : "messages")",
+        target: .screen(.friendHouses)
+    )
 }
