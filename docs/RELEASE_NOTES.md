@@ -4,6 +4,18 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Phones: room media and update notices
+
+- **Room media on the phones.** A phone in room mode shows what the room
+  is playing on its screen, the same as other room displays (Android and
+  iPhone).
+- **Update notices on the phones.** Home on the Android and iPhone apps
+  says when a new signed Domovoi release is available, worded the same as
+  the dashboard. For now every phone gets the household row ("An admin
+  can install it."); the update itself is started from the dashboard.
+- **Photos sent to a phone** arrive under the chat's own title, no
+  longer prefixed with "Help: ".
+
 ## 1.5.0 (unreleased) — Voice help no longer sends the steps to your phone
 
 - **What changed.** Ask "how do I add a room?" out loud and Domovoi says
