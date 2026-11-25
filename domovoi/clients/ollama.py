@@ -499,6 +499,33 @@ VOICE_QA_SYSTEM_PROMPT = (
 )
 
 
+# "Tell me, how far away is Saturn from Earth?" opens like an order, and
+# the prompt's "you can only talk ... when asked to, say I can't" made the
+# QA model refuse it ("I can't do that. Maybe try a search engine?", live
+# 2026-11-24) where the bare question is answered. A polite lead-in before
+# a question is dropped from what the model reads; the question is kept
+# whole. Only before a question word: "tell me a joke", "tell me about
+# Mars" and "let me know when ..." stay as they are.
+_QUESTION_LEAD_IN_RE = re.compile(
+    r"^\s*(?:(?:so|okay|ok|hey|well|um|uh)\b[,.]?\s+)?"
+    r"(?:(?:can|could|would|will) you\s+)?(?:please\s+)?"
+    r"(?:tell me|do you know|i(?:'d| would) like to know|i want to know|i wonder|i was wondering)"
+    r"\s*(?:,|:|\.\.\.)?\s+"
+    r"(?P<q>(?:how|what|what's|whats|when|where|who|whom|whose|why|which|is|are|was|were|does|did|has)\b.*)\Z",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def plain_question(transcript: str) -> str:
+    """``transcript`` without a polite lead-in before its question ("tell
+    me, how far is Saturn?" → "how far is Saturn?"); else as it was."""
+    m = _QUESTION_LEAD_IN_RE.match(transcript or "")
+    if m is None:
+        return transcript
+    q = m.group("q").strip()
+    return q[:1].upper() + q[1:]
+
+
 def voice_qa_system_prompt(profile_prefix: str | None = None) -> str:
     """The spoken Q&A system prompt, with the speaker's profile blob (their
     memories, favorites, preferences) AFTER the fixed instructions. Ollama
@@ -1681,7 +1708,7 @@ class RealOllamaClient:
         context — AFTER the fixed instructions (``voice_qa_system_prompt``).
         """
         messages = self._build_messages(
-            transcript, voice_qa_system_prompt(profile_prefix), history
+            plain_question(transcript), voice_qa_system_prompt(profile_prefix), history
         )
         text, problem = "", "empty"
         for attempt in (1, 2):
@@ -1728,7 +1755,8 @@ class RealOllamaClient:
         stream into speakable sentences (retry on nothing usable, never a
         cut tail) are domovoi.spoken_answer's."""
         return self.stream_qa(
-            transcript, system_prompt=voice_qa_system_prompt(profile_prefix), history=history,
+            plain_question(transcript), system_prompt=voice_qa_system_prompt(profile_prefix),
+            history=history,
         )
 
     # ── cold starts: what's loaded, a long-timeout twin, the warm-up ─────

@@ -803,8 +803,12 @@ only** (no APKs). Either is made by the release workflow, behind the
 owner's approval, or, as the fallback, by the same scripts on the owner's
 PC. Release from a `main` whose CI run is green ("CI", above); pushing a
 tag starts no workflow. The `android/release.json` commit the app path
-makes is an ordinary commit and starts CI like any other (it changes only
-that file, so the run is quick).
+makes changes only that file, on top of the release commit whose CI
+passed. Pushed by the release scripts on the owner's PC, it starts CI
+like any other commit (a quick run). Pushed by the release workflow, it
+starts none: GitHub runs no workflow for a push made with a workflow's
+own token, so `main`'s tip after an Actions release shows no CI run, and
+that is expected (as for 1.4.0 and 1.4.1).
 
 ### With GitHub Actions (the usual way)
 

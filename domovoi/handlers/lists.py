@@ -14,6 +14,12 @@ off", "tick off"):
   does not, so "mac and cheese" stays one item); without the word "list"
   for the two lists every house has: "add eggs to the shopping", "add X
   to my to-do";
+* add, no list named: "add milk, eggs and bread" asks which list ("You
+  have To-do and Shopping. Which one should I add milk, eggs, and bread
+  to?") and keeps the items for the answer ("shopping", "the to-do
+  list"). Only the verb "add", and never what reads as another feature's:
+  a pronoun ("add it"), a song, the queue, a timer or a time, a printer, a
+  voice, "add X after this" (``_BARE_ADD_NOT_OURS``);
 * read: "what's on my to-do list", "read me the shopping list", "how many
   things are on my to-do list" — open items only, at most
   ``_MAX_SPOKEN``, then how many more;
@@ -56,6 +62,8 @@ from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
 from domovoi.models import Context, Intent, Response
 
 CREATE_KIND = "core.lists_create"
+# "Which one should I add X to?": the reply names a list (free text).
+ADD_WHICH_KIND = "core.lists_add_which"
 CLEAR_KIND = "core.lists_clear"
 DELETE_KIND = "core.lists_delete"
 # How long a "yes" still answers the question (a "yes" said much later, to
@@ -96,6 +104,36 @@ _ADD_KNOWN_RE = re.compile(
     rf"^{_ADD_VERB} (?P<item>.+?) (?:to|on|onto|in|into|on to|in to) (?:{_ART} )?"
     rf"(?P<list>to-?dos?|shopping|groceries){_END}"
 )
+
+# A bare "add ..." that is some other feature's turn: a destination or an
+# order ("add X to the queue", "add X after this"), a pronoun, media, a
+# device, a time. Kept out of the pattern itself, so the turn routes on to
+# the fast path that is its own.
+_BARE_ADD_PRONOUN = r"(?:it|this|that|these|those|them|one|another|more|some more|me|us)\b"
+_BARE_ADD_NOT_OURS = (
+    r"\b(?:to|on|onto|into|in|after|before|from|for)\b"
+    r"|\b(?:songs?|tracks?|albums?|artists?|music|episodes?|podcasts?|playlists?|queue|station|radio"
+    r"|videos?|movies?|shows?|books?|audiobooks?|library|printers?|voices?|wake ?words?|plugins?"
+    r"|timers?|alarms?|reminders?|events?|appointments?|calendar|notes?|memor(?:y|ies)|rooms?|satellites?"
+    r"|seconds?|minutes?|hours?|days?|weeks?|today|tonight|tomorrow"
+    r"|monday|tuesday|wednesday|thursday|friday|saturday|sunday|o'?clock|[ap]\.?m\.?)\b"
+    r"|\d"
+)
+# "add milk, eggs and bread", no list named (live 2026-11-24: "add seaweed,
+# water", a mis-hearing of a shopping list turn, reached the routing model,
+# which called the library). Only "add": "put the kettle", "throw a party"
+# and "write down that ..." are not list turns.
+_ADD_BARE_RE = re.compile(
+    rf"^add (?!{_BARE_ADD_PRONOUN})(?!.*(?:{_BARE_ADD_NOT_OURS}))(?P<item>[^,].*?){_END}"
+)
+
+
+# "the shopping list", "to the to-do", "shopping please": the list a reply
+# to "which one?" names.
+_WHICH_REPLY_RE = re.compile(
+    rf"^(?:(?:add (?:them|it|those|that) )?(?:to|on|onto) )?(?:{_ART} )?(?P<list>.+?)(?: list)?{_END}"
+)
+_NEVER_MIND_RE = re.compile(r"^(?:no|nope|never ?mind|cancel|forget it|none|neither|nothing)\b")
 
 _WHAT_IS = r"(?:what(?:'s| is| are)|whats)"
 _READ_RES = tuple(re.compile(p) for p in (
@@ -231,7 +269,10 @@ class ListsHandler(Handler):
         "cross milk off the shopping list",
     )
     requires_network = "no"
-    confirmation_kinds = (CREATE_KIND, CLEAR_KIND, DELETE_KIND)
+    confirmation_kinds = (CREATE_KIND, CLEAR_KIND, DELETE_KIND, ADD_WHICH_KIND)
+    choice_kinds = (ADD_WHICH_KIND,)
+    # Spellings of cross_off the tool model uses (router.tool_action_offered).
+    tool_action_aliases = ("check_off", "done")
 
     tool_schema = {
         "name": "lists",
@@ -265,6 +306,7 @@ class ListsHandler(Handler):
             FastPath(_ADD_LATE_RE, ListsHandler._add_from_match),
             FastPath(_ADD_KNOWN_RE, ListsHandler._add_known_from_match),
             FastPath(_DELETE_LIST_RE, ListsHandler._delete_list_from_match),
+            FastPath(_ADD_BARE_RE, ListsHandler._add_bare_from_match),
         ]
 
     def offers_tool(self, transcript: str) -> bool:
@@ -373,6 +415,9 @@ class ListsHandler(Handler):
             return None
         return await self._add(m.group("item"), m.group("list"), ctx, session)
 
+    async def _add_bare_from_match(self, m, ctx, session) -> Response | None:
+        return await self._add(m.group("item").strip(), None, ctx, session)
+
     async def _cross_from_match(self, m, ctx, session) -> Response | None:
         if self._declined_name(m):
             return None
@@ -429,10 +474,48 @@ class ListsHandler(Handler):
                 return self._reply(ctx, f"You don't have a {L.spoken_name(name)} list. "
                                         "Make it on the Lists page, then add to it.")
         else:
-            target, why = await self._which(None, ctx, session)
-            if target is None:
-                assert why is not None
-                return why
+            all_ = await L.all_lists(session)
+            if len(all_) == 1:
+                target = all_[0]
+            elif not all_:
+                return self._reply(ctx, "You don't have any lists yet. Say make a list called, and a name.")
+            else:
+                return await self._ask_which_to_add(items, all_, ctx, session)
+        return await self._add_to(target, items, ctx, session)
+
+    async def _ask_which_to_add(self, items: list[str], all_: list[L.ListRow], ctx: Context,
+                                session: AsyncSession) -> Response:
+        """No list named and more than one to choose from: ask which, and
+        keep the items for the answer."""
+        have = f"You have {_and_join([L.spoken_name(x.name) for x in all_])}."
+        prompt = f"{have} Which one should I add {_and_join([_said(i) for i in items])} to?"
+        if ctx.session_id is None:
+            return self._reply(ctx, f"{have} Say which list to add to.")
+        await request_confirmation(
+            session, ctx.session_id, kind=ADD_WHICH_KIND, handler=self.name, prompt=prompt[:200],
+            data={"items": items, "expires_at": time.time() + CONFIRM_TTL_SEC},
+        )
+        return self._reply(ctx, prompt, ask=True)
+
+    async def handle_choice_reply(self, kind, data, transcript, ctx, session) -> Response | None:
+        if kind != ADD_WHICH_KIND:
+            return None
+        items = [str(i) for i in (data.get("items") or []) if str(i).strip()]
+        if not items or float(data.get("expires_at") or 0) < time.time():
+            return None
+        said = " ".join((transcript or "").lower().replace(".", " ").replace("?", " ").split())
+        if _NEVER_MIND_RE.match(said):
+            return self._reply(ctx, "Okay, I didn't add anything.")
+        m = _WHICH_REPLY_RE.match(said)
+        if m is None:
+            return None
+        name = m.group("list").strip()
+        if not name or L.name_key(name) in {L.name_key(n) for n in _NOT_OURS}:
+            return None
+        target = await L.find_list(session, name)
+        if target is None:
+            # Not a list: an ordinary turn after all (the items are dropped).
+            return None
         return await self._add_to(target, items, ctx, session)
 
     async def _add_to(self, target: L.ListRow, items: list[str], ctx: Context, session: AsyncSession) -> Response:

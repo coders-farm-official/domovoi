@@ -5,6 +5,26 @@ needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
 
+## 1.5.0 (unreleased) — "Add milk, eggs and bread" asks which list; "tell me, how far …" is answered
+
+- **What changed.** "Add milk, eggs and bread" with no list named asks
+  which list and keeps the items: "You have to-do and shopping. Which one
+  should I add milk, eggs, and bread to?", and "shopping" (or "the to-do
+  list", or "never mind") answers it. "Add milk to my list" keeps the item
+  the same way. An "add" that belongs to another feature (a song, the
+  queue, a timer, a time, "add it") is left to that feature. Before, such
+  a turn could reach the wrong feature and get a reply like "I don't know
+  how to add the library."
+- **What changed.** When the routing model picks an action a feature
+  doesn't have, the turn is answered as a question instead of by that
+  feature, so the house never says a broken "I don't know how to …"
+  sentence.
+- **What changed.** A question that opens with "tell me", "can you tell
+  me", "do you know" or "I was wondering" ("Tell me, how far away is
+  Saturn from Earth?") is answered like the bare question. Before, the
+  answer model sometimes took the opening as a request to do something and
+  said it couldn't.
+
 ## 2026-11-24 — 1.4.1
 
 Version 1.4.1: the server, the Windows Setup (1.4.1, with the Windows
