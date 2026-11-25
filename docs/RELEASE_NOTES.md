@@ -4,6 +4,66 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Private chats on the home server
+
+- **Your existing server chats are now private to the phone or browser
+  that wrote the first message in them. Chats nobody can be matched to are
+  visible to admins only. An admin can share any of them again.** Migration
+  V086 does this on the first start of 1.5.0, and it can't be undone:
+  going back to 1.4.x would show every chat to everyone again.
+- **What changed.** A new home-server chat is private to the phone or
+  browser that started it. **Share with household** (the chat's header)
+  shares it with every phone and browser in the house and can be turned
+  off again. Admins can read, share and delete every chat (**All chats in
+  the house**), but not write in another device's private chat. On a
+  shared screen every chat is shared. A letter taken by voice in a room
+  makes a shared chat; photos sent to a phone make a chat private to that
+  phone (the person's most recently used one), and only that phone is
+  notified.
+- **How a device is known.** The server gives each phone and browser a
+  device key the first time it registers (a browser keeps it in a cookie
+  no page script can read; the apps in their secure storage). Only its
+  hash is stored. A browser whose site data was cleared starts again as a
+  new device; its old private chats stay, for the admins.
+- **Older apps (1.4.x)** send no key: they keep working on shared chats
+  only, and the chats they start are shared. Their own chats from before
+  the upgrade are private now and disappear from them until the app is
+  updated; the updated app gets its device key on its next start, with no
+  pairing, and has them back.
+- **Phone admin grants** are bound to the phone's device key too.
+- **"My" actions follow the key.** Whose mix a room follows and whose a
+  listen is, clearing a person's listening history, their mix, forgetting
+  their face and "this is me" find the phone or browser by its device key.
+  The key proves a claim as the claim key does, and the claim key is still
+  accepted, so an older app can still clear its person's history; but what
+  an older app plays counts as the household's until it is updated.
+- **For API readers:** thread JSON gains `shared`, `mine`, `can_write`,
+  `can_share`, `can_delete`, `admin_view` and `owner_name`;
+  `GET /api/chat/threads?scope=mine|all`; `POST /api/chat/threads` and
+  `PATCH` take `shared`; new refusals `403 not_yours`, `403
+  admin_read_only`, `403 admin_required`, `409 device_key_missing`, `409
+  shared_screen`; a chat the caller can't see is the same `404` as a
+  missing one. `POST /api/devices/register` answers `device_key` (once)
+  and `device_key_ok`; send it back as `X-Domovoi-Device-Key`. A message's
+  device is the one its key names: a body `device_id` is ignored.
+  docs/API_REFERENCE.md §3.18, docs/SECURITY_PRIVACY.md "Private chats".
+
+## 1.5.0 (unreleased) — Chat: the live events carry no chat content
+
+- **What changed.** Two live events on `/ws/state` went to every paired
+  phone and browser with chat content in them. `chat.changed` carried the
+  house's thread count and when a chat was last written; it is now
+  `{"changed": "<opaque digest>"}`, which only moves, and each client
+  reads its own thread list again, as the dashboard and both apps already
+  did. `help_deliveries.changed` carried each delivered chat's title
+  ("Photos: …"); its `title` is now "Photos from Domovoi" for a photo
+  search sent to a phone and empty otherwise, so a phone's notification
+  reads "Help: Photos from Domovoi". The full title is in the chat, and in
+  `GET /api/help/deliveries`.
+- **For API readers:** don't read `threads` or `latest` from `chat.changed`
+  (they are gone), or a title from a `help_deliveries.changed` row.
+  `person_id` and `thread_id` stay in the push for the apps that post from
+  it.
 ## 1.5.0 (unreleased) — Phones: room media and update notices
 
 - **Room media on the phones.** A phone in room mode shows what the room

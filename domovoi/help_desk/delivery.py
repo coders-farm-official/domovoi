@@ -182,9 +182,19 @@ async def deliver(
     ``person_id`` and not empty."""
     if not phones:
         raise ValueError("deliver needs the person's phones")
+    from domovoi import chat_access
+
+    # Private to ONE phone, the person's most recently seen (PRIVATE-CHATS
+    # §2.4, owner answer Q1): like a chat started there. A phone with no
+    # device key yet (an app from before 1.5.0) couldn't open a private
+    # chat, so it gets a shared one, as its own chats are.
+    target = phones[0].device_id
+    keyed = await chat_access.device_has_key(session, target)
+    owner, shared = (target, False) if keyed else (None, True)
+    cols, vals, extra = await chat_access.create_columns(session, owner, shared)
     thread_id = (await session.execute(
-        text("INSERT INTO chat_threads (title, person_id) VALUES (:t, :p) RETURNING id"),
-        {"t": title, "p": person_id},
+        text(f"INSERT INTO chat_threads (title, person_id{cols}) VALUES (:t, :p{vals}) RETURNING id"),
+        {"t": title, "p": person_id, **extra},
     )).scalar_one()
     await mark_title_kept(session, thread_id)
     await session.execute(
@@ -199,9 +209,12 @@ async def deliver(
              "VALUES (:t, 'assistant', :c, NULL, CAST(:st AS JSONB))"),
         {"t": thread_id, "c": reply, "st": json.dumps(stats)},
     )
+    # The phone it went to (V086), so only that phone's catch-up read lists it.
+    dev_col, dev_val = (", device_id", ", :dev") if cols and keyed else ("", "")
     delivery_id = (await session.execute(
-        text("INSERT INTO help_deliveries (person_id, thread_id, title) VALUES (:p, :t, :ti) RETURNING id"),
-        {"p": person_id, "t": thread_id, "ti": title},
+        text(f"INSERT INTO help_deliveries (person_id, thread_id, title{dev_col}) "
+             f"VALUES (:p, :t, :ti{dev_val}) RETURNING id"),
+        {"p": person_id, "t": thread_id, "ti": title, **({"dev": target} if dev_col else {})},
     )).scalar_one()
     await session.execute(text("SELECT pg_notify('chat_changed', 'phone-delivery')"))
     await session.execute(text("SELECT pg_notify(:c, :r)"), {"c": NOTIFY_CHANNEL, "r": str(delivery_id)})
@@ -209,9 +222,23 @@ async def deliver(
 
 
 async def recent(session: AsyncSession, *, person_id: int | None = None, since_id: int | None = None,
-                 limit: int = 20) -> list[dict[str, Any]]:
-    """Deliveries newest first (``since_id``: only newer ones, oldest first)."""
+                 limit: int = 20, viewer: Any = None) -> list[dict[str, Any]]:
+    """Deliveries newest first (``since_id``: only newer ones, oldest first).
+
+    With ``viewer`` (a chat_access.Viewer; the web route's caller) and
+    V086: a delivery made to one phone (``device_id``) is listed only to
+    that phone, by its device key, and to admins; one with no phone (sent
+    shared, or before 1.5.0) to every caller, as before."""
     where, params = [], {"l": max(1, min(int(limit), 100))}
+    if viewer is not None and not getattr(viewer, "admin", False):
+        from domovoi import chat_access
+
+        if await chat_access.has_private_columns(session):
+            if viewer.device_id is not None:
+                where.append("(device_id IS NULL OR device_id = :dev)")
+                params["dev"] = viewer.device_id
+            else:
+                where.append("device_id IS NULL")
     if person_id is not None:
         where.append("person_id = :p")
         params["p"] = person_id

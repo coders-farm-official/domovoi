@@ -1801,6 +1801,7 @@ const DeviceIdentity = (() => {
   const subscribeShared = (fn) => { sharedListeners.add(fn); return () => sharedListeners.delete(fn); };
 
   let registered = null;   // in-flight / resolved registration promise
+  let keyRetried = false;  // started over under a new id once (lost device key)
 
   const register = () => {
     if (registered) return registered;
@@ -1811,12 +1812,26 @@ const DeviceIdentity = (() => {
         name: suggestedName(),
         platform: 'browser',
         user_agent: (navigator.userAgent || '').slice(0, 400),
+        // Private chats (1.5.0): the server keeps this browser's device key
+        // in an HttpOnly cookie, so the browser always "keeps" it.
+        want_device_key: true,
       }),
       // Nobody pressed anything: a refusal (an unpaired browser, a
       // household token rotated since this one was stored) must not open
       // the pair prompt on whatever page is showing.
       noPrompt: true,
     }).then((row) => {
+      // Private chats (1.5.0): the server keeps this browser's device key in
+      // an HttpOnly cookie, minted at its first registration. A row that has
+      // a key this browser no longer presents (site data cleared, a cookie
+      // lost) can't be this browser's any more: start over under a new id,
+      // once. The old id's private chats stay, for the house's admins.
+      if (row && row.device_key_ok === false && !row.device_key && !keyRetried) {
+        keyRetried = true;
+        try { localStorage.removeItem(ID_KEY); } catch {}
+        registered = null;
+        return register();
+      }
       if (row && row.name) cacheName(row.name);
       return remember(row);
     }).catch((e) => {

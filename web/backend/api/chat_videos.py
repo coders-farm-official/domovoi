@@ -49,8 +49,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
-from domovoi import ai_features
+from domovoi import ai_features, chat_access
 from domovoi.admin_auth import require_device, require_device_read
+from domovoi.chat_access import VIEWER, Action, Viewer
 from domovoi.chat_video import context, limits, media, plan
 from domovoi.chat_video.runner import delete_files
 from web.backend.db import session_scope
@@ -431,7 +432,9 @@ async def thread_videos(thread_id: int) -> list[dict[str, Any]]:
     return [view(r, ahead.get(r["id"], 0)) for r in rows]
 
 
-async def _row(job_id: str) -> Any:
+async def _row(job_id: str, viewer: Viewer, action: Action = Action.READ) -> Any:
+    """The job's row, when ``viewer`` may ``action`` its chat (a hidden
+    chat's job is the same 404 as a missing one)."""
     if not limits.valid_job_id(job_id):
         raise HTTPException(status_code=404, detail="video job not found")
     async with session_scope() as s:
@@ -439,26 +442,27 @@ async def _row(job_id: str) -> Any:
                                {"id": job_id})).mappings().first()
         if row is None:
             raise HTTPException(status_code=404, detail="video job not found")
+        await chat_access.thread_for_child(s, row["thread_id"], viewer, action, not_found="video job not found")
         ahead = await _ahead(s) if row["state"] == "queued" else {}
     return row, ahead.get(row["id"], 0)
 
 
 @router.get("/video-jobs/{job_id}", dependencies=READ)
-async def get_video_job(job_id: str) -> dict[str, Any]:
+async def get_video_job(job_id: str, viewer: Viewer = VIEWER) -> dict[str, Any]:
     """One video's progress: ``state`` queued | running | done | failed |
     cancelled, ``line`` ("Watching your video… about 4 minutes left"),
     ``waiting_for_voice``, ``eta_s``, ``progress``, and once ended the
     summary or the error (``error_code`` has a help-desk entry)."""
-    row, ahead = await _row(job_id)
+    row, ahead = await _row(job_id, viewer)
     return view(row, ahead)
 
 
 @router.get("/video-jobs/{job_id}/results", dependencies=READ)
-async def get_video_results(job_id: str) -> dict[str, Any]:
+async def get_video_results(job_id: str, viewer: Viewer = VIEWER) -> dict[str, Any]:
     """What was kept from a watched video: the summary, the transcript
     pieces with their times, and the frame descriptions, each worded
     ``might_show`` (a small model's guess, never a fact)."""
-    row, ahead = await _row(job_id)
+    row, ahead = await _row(job_id, viewer)
     async with session_scope() as s:
         segs = (await s.execute(text(
             "SELECT start_s, end_s, text FROM chat_video_segments WHERE job_id = :id ORDER BY idx"),
@@ -477,11 +481,10 @@ async def get_video_results(job_id: str) -> dict[str, Any]:
 
 
 @router.post("/video-jobs/{job_id}/cancel", dependencies=DEVICE)
-async def cancel_video_job(job_id: str) -> dict[str, Any]:
+async def cancel_video_job(job_id: str, viewer: Viewer = VIEWER) -> dict[str, Any]:
     """Stop watching: a queued job ends now, a running one within about a
     second. The video, its frames and what was understood so far go."""
-    if not limits.valid_job_id(job_id):
-        raise HTTPException(status_code=404, detail="video job not found")
+    await _row(job_id, viewer, Action.WRITE)
     token = None
     async with session_scope() as s:
         # Queued: ended here, in one step the core's claim can't race
@@ -500,7 +503,7 @@ async def cancel_video_job(job_id: str) -> dict[str, Any]:
         await s.commit()
     if token is not None:
         delete_files(token, job_id)
-    row, ahead = await _row(job_id)
+    row, ahead = await _row(job_id, viewer)
     return view(row, ahead)
 
 

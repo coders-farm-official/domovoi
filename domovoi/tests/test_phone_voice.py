@@ -134,6 +134,12 @@ async def _thread(title: str | None = None) -> int:
                 text("INSERT INTO chat_threads (title) VALUES (:t) RETURNING id"), {"t": title}
             )
         ).scalar_one()
+        # Shared with the household (private chats, V086): these turns come
+        # from callers with no device key, which see shared chats only.
+        from domovoi import chat_access
+
+        if await chat_access.has_private_columns(s):
+            await s.execute(text("UPDATE chat_threads SET shared = true WHERE id = :t"), {"t": tid})
         await s.commit()
     return int(tid)
 
@@ -268,7 +274,9 @@ async def test_a_turn_is_answered_and_both_rows_land_in_the_thread(
 
     user, assistant = await _rows(tid)
     assert (user["role"], user["content"], user["source"]) == ("user", "What time is it?", "voice")
-    assert user["device_id"] == PHONE
+    # The row's device is the one the caller's device KEY names (private
+    # chats, 1.5.0), never phone_id: this caller presents none.
+    assert user["device_id"] is None
     assert user["speaker_person_id"] == ana
     assert user["speaker_confidence"] == pytest.approx(0.9)
     assert (assistant["role"], assistant["source"]) == ("assistant", "voice")
@@ -1270,6 +1278,7 @@ async def test_a_second_turn_from_a_busy_phone_is_refused(db_session, open_gate,
     assert ROOM not in phone_voice._BUSY
 
 
+@requires_db
 @pytest.mark.asyncio
 async def test_the_web_hop_forwards_the_callers_credential_and_never_its_own(monkeypatch) -> None:
     """The core must see who is calling: the caller's household token or
@@ -1292,11 +1301,14 @@ async def test_the_web_hop_forwards_the_callers_credential_and_never_its_own(mon
         lambda: httpx.AsyncClient(transport=httpx.MockTransport(_core), base_url="http://test"),
     )
     files = {"audio": ("turn.pcm", _pcm(0.5), "application/octet-stream")}
+    # A real thread: the web checks the caller may write in it
+    # (chat_access) before anything is forwarded.
+    tid = await _thread()
     async with _web() as web:
-        r = await web.post("/api/chat/threads/5/voice", data={"phone_id": PHONE}, files=files,
+        r = await web.post(f"/api/chat/threads/{tid}/voice", data={"phone_id": PHONE}, files=files,
                            headers={HEADER: "caller-token"})
         assert r.status_code == 200, r.text
-        r = await web.post("/api/chat/threads/5/voice", data={"phone_id": PHONE}, files=files,
+        r = await web.post(f"/api/chat/threads/{tid}/voice", data={"phone_id": PHONE}, files=files,
                            headers=bearer("admin-bearer"))
         assert r.status_code == 200, r.text
     by_token, by_bearer = seen

@@ -224,6 +224,19 @@ mode the phone also sends the room's health to the server: battery level,
 whether it is charging, Wi-Fi signal and speed, memory, temperature and
 whether the microphone is working.
 
+**Your chats on the server are private to your phone.** A chat you start
+with your home server (not "Domovoi on this phone") is kept on that server
+and is private to the phone or browser that started it: other phones and
+browsers in the house can't see it. The house's admins can read and delete
+every chat on the server (so a parent can see a child's), and can share
+one with the household; they can't write in yours. "Share with household"
+on a chat shares it with every phone and browser in the house, and you can
+turn it off again. To keep the server from storing the chat at all, chat
+with Domovoi on this phone. So the server can tell your phone from the
+others, it gives the app a device key the first time the app connects; the
+app keeps it in the phone's secure storage and sends it with your chats.
+The server keeps only a scrambled form (a hash) of it.
+
 **Wake-word recordings, only if your household makes them.** When an admin
 records clips for a wake word (Settings → Voice → Wake words), including
 "Tune Domovoi to your household", a room in room mode sends those clips of

@@ -21,16 +21,17 @@ import time
 from typing import Any
 
 import pytest
-from fastapi.testclient import TestClient
 
 import web.backend.api.chat as chat_api
 from domovoi import chat_titles
+from domovoi.tests.chat_devices import DeviceTestClient
 from domovoi.tests.conftest import requires_db
 from web.backend.main import app
 
 
 def _client():
-    return TestClient(app, headers={"X-Requested-With": "domovoi-tests"})
+    # A device of its own: its chats are private to it (chat_access, V086).
+    return DeviceTestClient(app)
 
 
 def _sse(body: str) -> list[tuple[str, Any]]:

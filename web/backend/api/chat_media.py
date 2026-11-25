@@ -67,14 +67,10 @@ async def shared_screen(request: Request | None) -> bool:
         return False
     from web.backend.api import devices as devices_api
 
-    dev = devices_api.caller_device(request)
-    if not dev:
-        return False
     async with session_scope() as s:
-        if not await devices_api._has_shared_screen(s):
-            return False
-        return bool((await s.execute(text("SELECT shared_screen FROM devices WHERE device_id = :d"),
-                                     {"d": dev})).scalar())
+        # The caller's own device: devices.caller_device_row.
+        device = await devices_api.caller_device_row(s, request)
+    return bool(device is not None and device.trusted and device.shared_screen)
 
 
 @dataclass

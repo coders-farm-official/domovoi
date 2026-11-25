@@ -48,11 +48,16 @@ Channels emitted (core; enabled plugins add their own via manifest
   (V024, docs/CONTAINER_GUARD.md); fires on every incident write
 * ``help_deliveries`` — results sent by voice to a person's phones in
   the last hour (a voice photo search's "Photos: …" chats; voice help's
-  "Help: …" steps before 1.5.0) (V035: ``{id, person_id, thread_id, title, created_at}``,
+  "Help: …" steps before 1.5.0) (V035: ``{id, person_id, thread_id,
+  title, created_at}``,
   newest first, at most 20); fires when one is sent. A phone posts a
   notification for a row whose person is its owner ("This phone belongs
-  to"); every other phone ignores it. The titles are those of chats every
-  household device can read already
+  to"); every other phone ignores it. Every socket gets it, so ``title``
+  is never the chat's: "Photos from Domovoi" for a photo search's, else
+  ``""`` (the app reads the rest from ``GET /api/help/deliveries``)
+* ``chat`` — ``{"changed": <opaque digest>}``: a chat was written
+  somewhere. Content-free (no count, time or id); each client reads its
+  own thread list again
 * ``lyrics`` — a digest of the lyrics tables (V021): counts, the newest
   ``updated_at`` and the lyrics workers' states. Never a title or a lyric:
   the words are household-tier HTTP reads (web/backend/api/lyrics.py); this
@@ -101,9 +106,12 @@ LISTEN/NOTIFY pipeline:
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
 import logging
 import re
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 
@@ -840,17 +848,26 @@ async def _snapshot_video_positions() -> dict[str, Any]:
     return {"count": int(row[0]), "latest": _isoformat(row[1])}
 
 
+# A secret of this process alone, so the chat digest below says "something
+# changed" and nothing else: not how many chats the house has, not when one
+# was last written (it can't be reversed or compared across devices).
+_CHAT_DIGEST_KEY = secrets.token_bytes(32)
+
+
 async def _snapshot_chat() -> dict[str, Any]:
-    """Thread count + newest thread ``updated_at``. Moves on every message
-    or thread mutation; the chat page refetches its thread list on the
-    event."""
+    """``{"changed": <opaque digest>}``: content-free (PRIVATE-CHATS.md
+    §2.4). It moves on every message or thread change, and every socket
+    gets it, so it carries no count, no time and no id: each client reads
+    its own list again (``GET /api/chat/threads``), which shows it only
+    the chats it may see."""
     async with session_scope() as s:
         row = (
             await s.execute(
-                text("SELECT COUNT(*)::bigint, MAX(updated_at) FROM chat_threads")
+                text("SELECT COUNT(*)::bigint, MAX(updated_at), MAX(id) FROM chat_threads")
             )
         ).one()
-    return {"threads": int(row[0]), "latest": _isoformat(row[1])}
+    raw = f"{int(row[0])}|{_isoformat(row[1])}|{row[2]}".encode()
+    return {"changed": hmac.new(_CHAT_DIGEST_KEY, raw, hashlib.sha256).hexdigest()[:16]}
 
 
 async def _snapshot_media_jobs() -> list[dict[str, Any]]:
@@ -1081,27 +1098,41 @@ def _fire_json(fire: dict[str, Any]) -> dict[str, Any]:
 
 HELP_DELIVERIES_PUSH_WINDOW_SEC = 3600
 HELP_DELIVERIES_PUSH_MAX = 20
+# What the push says in place of a "Photos: …" chat's title (the apps'
+# notification reads "Help: Photos from Domovoi" from it, as it read the
+# whole title before); any other delivery's title is "".
+HELP_DELIVERIES_PHOTOS_TITLE = "Photos from Domovoi"
 
 
 async def _snapshot_help_deliveries() -> list[dict[str, Any]]:
     """Results sent by voice to phones in the last hour, newest first
-    (``help_deliveries.changed``). ``[]`` when V035 is missing."""
+    (``help_deliveries.changed``). ``[]`` when V035 is missing.
+
+    Every socket gets this, so it carries no chat title (PRIVATE-CHATS.md
+    §2.4): ``title`` is only the kind, :data:`HELP_DELIVERIES_PHOTOS_TITLE`
+    for a "Photos: …" chat, else ``""``. ``person_id`` and ``thread_id``
+    stay for the 1.4.x / 1.5.0 apps, which only post from a row that has
+    them; the receiving app reads the title, and only what it may see,
+    from ``GET /api/help/deliveries``."""
     try:
         async with session_scope() as s:
             rows = (
                 await s.execute(
                     text(
-                        "SELECT id, person_id, thread_id, title, created_at FROM help_deliveries "
+                        "SELECT id, person_id, thread_id, created_at, "
+                        "CASE WHEN title LIKE 'Photos:%' THEN :photos ELSE '' END AS kind_title "
+                        "FROM help_deliveries "
                         "WHERE created_at > now() - make_interval(secs => :w) ORDER BY id DESC LIMIT :n"
                     ),
-                    {"w": HELP_DELIVERIES_PUSH_WINDOW_SEC, "n": HELP_DELIVERIES_PUSH_MAX},
+                    {"w": HELP_DELIVERIES_PUSH_WINDOW_SEC, "n": HELP_DELIVERIES_PUSH_MAX,
+                     "photos": HELP_DELIVERIES_PHOTOS_TITLE},
                 )
             ).mappings().all()
     except Exception:  # noqa: BLE001 — table missing (run Flyway, V035)
         return []
     return [
         {"id": int(r["id"]), "person_id": int(r["person_id"]), "thread_id": int(r["thread_id"]),
-         "title": r["title"], "created_at": _isoformat(r["created_at"])}
+         "title": r["kind_title"], "created_at": _isoformat(r["created_at"])}
         for r in rows
     ]
 
