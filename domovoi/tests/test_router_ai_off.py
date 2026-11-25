@@ -104,6 +104,9 @@ async def test_anything_no_command_takes_gets_the_home_commands_line(offline_rou
     ("tell me a bedtime story about a dragon", "AI is off on this house, so I can't tell stories."),
     ("tell me a joke", "AI is off on this house, so I can't tell jokes."),
     ("could you write me a poem", "AI is off on this house, so I can't write poems."),
+    ("tell me some stories", "AI is off on this house, so I can't tell stories."),
+    ("read me a poem", "AI is off on this house, so I can't read poems."),
+    ("give me a riddle", "AI is off on this house, so I can't tell riddles."),
 ])
 async def test_a_request_only_the_model_answers_says_ai_is_off_and_how_to_turn_it_on(
     offline_router, said, lead,

@@ -380,10 +380,14 @@ _AI_CHAT_REQUEST_RE = re.compile(
 )
 _AI_MAKE_REQUEST_RE = re.compile(
     r"^(?:(?:can|could|would|will) you |please )?"
-    r"(?:tell|read|make up|write|give)(?: me| us)? (?:a |an |another |one )?"
+    r"(?P<verb>tell|read|make up|write|give)(?: me| us)? (?:a |an |another |one |some )?"
     r"(?:(?:bedtime|short|funny|scary) )?(?P<what>story|stories|joke|jokes|poem|poems|riddle|riddles)\b"
 )
-_AI_MADE = {"story": "tell stories", "joke": "tell jokes", "poem": "write poems", "riddle": "tell riddles"}
+# The thing asked for, in the plural the reply uses ("so I can't tell jokes").
+_AI_MADE_PLURAL = {"story": "stories", "stories": "stories", "joke": "jokes", "jokes": "jokes",
+                   "poem": "poems", "poems": "poems", "riddle": "riddles", "riddles": "riddles"}
+# "give me a joke" is told; every other verb is said back as asked.
+_AI_MADE_VERB = {"give": "tell"}
 
 
 def off_request_line(transcript: str, *, admin: bool = False) -> str | None:
@@ -398,7 +402,8 @@ def off_request_line(transcript: str, *, admin: bool = False) -> str | None:
         )
     m = _AI_MAKE_REQUEST_RE.search(text)
     if m:
-        what = _AI_MADE[m.group("what").rstrip("s")]
+        verb = m.group("verb")
+        what = f"{_AI_MADE_VERB.get(verb, verb)} {_AI_MADE_PLURAL[m.group('what')]}"
         return off_answers.with_turn_on(f"{AI_OFF_LEAD}, so I can't {what}.", off_answers.AI, admin=admin)
     return None
 
