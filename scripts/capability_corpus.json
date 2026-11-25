@@ -1080,15 +1080,35 @@
       "utterance": "Can you update yourself?",
       "where": "voice",
       "house": "offline-kit",
-      "expect": "DEPENDS",
+      "expect": "ADMIN",
       "kind": "question",
       "must_include": [
-        "kit"
+        "offline kit",
+        "\badmin\b"
       ],
       "must_not_include": [
-        "download"
+        "I can't do that yet, I don't think",
+        "About & updates"
       ],
-      "note": "updates come from a newer kit, not the internet"
+      "note": "member: 'This house has no internet, so it updates from a newer offline kit. An admin needs to do it.' (1.5.0)",
+      "skip_reason": "1.5.0 only: the offline-kit update answer is built on next/1.5.0"
+    },
+    {
+      "id": "5.11b",
+      "utterance": "Can you update yourself?",
+      "where": "chat",
+      "house": "offline-kit-admin",
+      "expect": "CAN",
+      "kind": "question",
+      "must_include": [
+        "offline kit",
+        "Settings → System → About & updates → Update from an offline kit"
+      ],
+      "must_not_include": [
+        "I can't do that yet, I don't think"
+      ],
+      "note": "proven admin: '...Plug in the new kit's USB stick and open Settings → System → About & updates → Update from an offline kit.' (1.5.0)",
+      "skip_reason": "1.5.0 only: the offline-kit update answer is built on next/1.5.0"
     },
     {
       "id": "5.12",
