@@ -1,7 +1,7 @@
 import Foundation
 
 /// Settings' groups and sections, as pure data: the five group labels and the
-/// seventeen sections with their keys, labels, one-line descriptions, search
+/// eighteen sections with their keys, labels, one-line descriptions, search
 /// words, old keys and dashboard addresses.
 ///
 /// A port of `SettingsSection` and `SettingsGroup` in
@@ -96,7 +96,7 @@ public struct SettingsSection: Equatable, Sendable {
 
 public extension SettingsSection {
 
-    /// The seventeen sections, in the Kotlin's declaration order — which is
+    /// The eighteen sections, in the Kotlin's declaration order — which is
     /// the order they are listed in, so it is not incidental.
     static let all: [SettingsSection] = [
         SettingsSection(
@@ -168,6 +168,13 @@ public extension SettingsSection {
             sub: "Will this Domovoi have internet? It sets the defaults of the online extras.",
             words: "internet online offline network web",
             dashboard: "internet"
+        ),
+        // How long the house keeps what was said (1.5.0), read-only: an
+        // admin changes it on the dashboard (``KeepVoiceHistory``).
+        SettingsSection(
+            key: "keep-voice-history", label: "Keep voice history", group: .privacy,
+            sub: "How long what people say to Domovoi, and what it answered, is kept.",
+            words: "voice history keep kept retention how long days year forever conversations sessions said transcript privacy delete"
         ),
         // "Voice history" until 1.5.0: it is the opt-in command recordings
         // (the dashboard's Settings → Privacy → Command recordings). Its old
