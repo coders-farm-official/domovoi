@@ -225,6 +225,7 @@ def test_choice_kinds_are_confirmation_kinds_with_a_reply_handler() -> None:
             "core.doc_pick", "core.doc_length", "core.doc_more", "core.doc_paused",
             "core.letter_author", "core.letter_dictation",
         },
+        "memory": {"core.forget_what"},
     }
 
 
@@ -238,7 +239,7 @@ def test_declared_confirmation_kinds_cover_known_flows() -> None:
             "core.room_voice_add", "core.forget_me", "core.name_sound_alike", "core.room_check",
         },
         "double_check": {"core.self_doubt_offer", "core.prefs_offer"},
-        "memory": {"core.pending_memory_offer"},
+        "memory": {"core.pending_memory_offer", "core.forget_what"},
         "music": {"core.music_choice", "core.music_room_or_title"},
         "playlist": {"core.playlist_choice", "core.playlist_add_choice"},
         "news": {"core.news_fetch", "core.news_fetch_topics", "core.news_read_article"},

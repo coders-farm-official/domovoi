@@ -85,7 +85,7 @@ def test_the_other_phrases() -> None:
         # nobody else's phrase moves
         ("forget that i like jazz", "memory"),
         ("forget that name of my dog", "memory"),
-        ("forget that", "dismiss"),
+        ("forget that", "memory"),  # a bare forget (N15): memory's since 2026-11
         ("play gramps", "music"),
         ("play the album by the hearth", "music"),
         ("what is this song called", None),
