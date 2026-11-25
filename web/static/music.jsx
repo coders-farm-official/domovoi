@@ -3058,7 +3058,7 @@ const MusicPage = () => {
         actions={
           <>
             <input ref={fileInputRef} type="file" multiple
-                   accept=".mp3,.m4a,.mp4,.flac,.ogg,.oga,.opus,.wav,.wma,.aac,.alac,.zip,audio/*,application/zip"
+                   accept=".mp3,.m4a,.mp4,.flac,.ogg,.oga,.opus,.wav,.wma,.aac,.alac,.zip,audio/*,application/zip,application/x-zip-compressed,application/x-zip"
                    style={{ display: 'none' }}
                    onChange={e => onUploadFiles(e.target.files)}/>
             <Button variant="primary" icon="upload" disabled={uploading}

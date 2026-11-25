@@ -469,8 +469,15 @@ const useInstallFlow = (fire, refresh, dismissToast) => {
 
   const onFilePicked = (fileList) => {
     const file = fileList && fileList[0];
-    if (file) stageZip(file, upgradeSlugRef.current);
     if (fileInputRef.current) fileInputRef.current.value = '';
+    if (!file) return;
+    // The picker takes any binary (accept below), so a file that isn't a
+    // zip is turned away here, plainly; the server checks the rest.
+    if (!/\.zip$/i.test(file.name || '')) {
+      fire("That isn't a plugin zip. Pick the plugin's .zip file.");
+      return;
+    }
+    stageZip(file, upgradeSlugRef.current);
   };
 
   const modal = staged && (
@@ -482,7 +489,12 @@ const useInstallFlow = (fire, refresh, dismissToast) => {
       onDone={() => { setStaged(null); refresh(); }}/>
   );
   const fileInput = (
-    <input ref={fileInputRef} type="file" accept=".zip,application/zip"
+    // Android's picker filters by MIME type, and a zip saved on a phone is
+    // often application/x-zip-compressed, application/x-zip or
+    // application/octet-stream: accepting only application/zip greyed it
+    // out, so a plugin couldn't be installed from a phone.
+    <input ref={fileInputRef} type="file"
+           accept=".zip,application/zip,application/x-zip-compressed,application/x-zip,application/octet-stream"
            style={{ display: 'none' }} onChange={(e) => onFilePicked(e.target.files)}/>
   );
   return { pickZip, stageGithub, modal, fileInput };
