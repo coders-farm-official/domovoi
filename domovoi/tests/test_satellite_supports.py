@@ -117,12 +117,27 @@ def inventory(monkeypatch):
         async def room_voice(self, room):
             return None  # the server keeps no voice for the room (a read)
 
+        async def room_of(self, satellite_id):
+            return None  # in the room of its own id, as before 1.5.0
+
+    class Rooms:
+        """A room migrated from before 1.5.0 with no label: V073 named it by
+        its id, so the fixtures' `ready.room.name` is the id. (A room whose
+        row can't be read sends no name: test_rooms_fixtures.py.)"""
+
+        def __init__(self, _s):
+            pass
+
+        async def get(self, room_id):
+            return {"room_id": room_id, "name": room_id, "satellites": 1}
+
     @asynccontextmanager
     async def scope():
         yield None
 
     monkeypatch.setattr(streaming, "session_scope", scope)
     monkeypatch.setattr(streaming, "SatellitesRepository", Repo)
+    monkeypatch.setattr(streaming, "RoomsRepository", Rooms)
     return writes
 
 

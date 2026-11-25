@@ -29,6 +29,8 @@ import threading
 from dataclasses import dataclass
 from typing import Any
 
+from satellite.enrolment import is_in_room
+
 ABILITY = "wake_claim"
 #: No ``wake_grant`` within this: the device owns the turn (fail open).
 FAIL_OPEN_SEC = 0.150
@@ -53,6 +55,27 @@ def room_says_claim(room: Any) -> bool:
     """``ready.room`` / the ``room`` frame's payload: whether this device
     claims its wakes. Anything but a literal ``claim: true`` is no."""
     return isinstance(room, dict) and room.get("claim") is True
+
+
+def room_place(room: Any, before: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """``ready.room`` / the ``room`` frame's payload as this device keeps it:
+    ``{"room_id", "name", "shared", "claim"}``, or ``before`` when it names
+    no room id (an older core sends no ``room`` at all). ``name`` is the
+    server's, or None when it sent none (null, missing or blank: it could
+    not read the room's row). Then the name this device last had for the
+    SAME room id stays; after a move to another room it is None, and the
+    device says "this room". An id is never used as a name."""
+    if not isinstance(room, dict):
+        return before
+    rid = room.get("room_id")
+    if not is_in_room(rid):
+        return before
+    raw = room.get("name")
+    name = raw.strip() if isinstance(raw, str) and raw.strip() else None
+    if name is None and before is not None and before.get("room_id") == rid:
+        name = before.get("name")
+    return {"room_id": rid, "name": name, "shared": room.get("shared") is True,
+            "claim": room.get("claim") is True}
 
 
 def claim_frame(claim: int, word: str, score: float | None, floor_dbfs: float | None,

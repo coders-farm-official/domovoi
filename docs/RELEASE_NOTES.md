@@ -4,6 +4,33 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Rooms: satellites name themselves; press Upgrade satellite
+
+- **What to do.** Press **Upgrade satellite** on every Raspberry Pi and
+  spare-computer satellite (the room drawer's Overview tab) once the server
+  runs 1.5.0. Until then a Pi or spare computer learns only when it
+  connects whether its room takes one turn per wake word (a satellite
+  added to its room later goes unnoticed until it reconnects), and moving
+  it to another room closes its connection (it comes back in the new room
+  a few seconds later) instead of carrying on.
+- **What changed.** A satellite now names itself in its hello
+  (`satellite_id`, the id in its address), as the phone apps do since
+  1.5.0, so a move reaches it without a reconnect. The room it was asked
+  to join (an enrolment's `in=`, `[satellite] requested_room`) is sent only
+  until it is first accepted, then cleared from its `config.toml`. If the
+  server ever reads another device's name in its hello, the satellite says
+  so in plain words ("the Domovoi server did not recognise this device")
+  and changes nothing.
+- **"Add a satellite to the …" works for every room.** A room named by the
+  Wi-Fi setup portal (`living-room`, `2nd-bedroom`) was refused by the
+  dashboard's add-a-satellite code (422) and by a Pi or PC reading the code.
+  One rule now checks a room id everywhere (`domovoi/room_ids.py`
+  `is_room_id`).
+- **For API readers:** `ready.room.name` (and the `room` frame's) is `null`
+  when the server could not read the room's row; it used to be the room's
+  id. Clients keep the name they last had for that room, or say "this
+  room". docs/uml/satellite-protocol.md, "Rooms and satellites".
+
 ## 1.5.0 (unreleased) — Update notices: Domovoi says when a new release is out
 
 - **What changed.** Domovoi looks for a new **signed release** by itself,

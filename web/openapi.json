@@ -37477,7 +37477,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "pattern": "^[a-z][a-z0-9_]{0,31}$"
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
               },
               {
                 "type": "null"

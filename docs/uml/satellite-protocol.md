@@ -220,10 +220,12 @@ and the iPhone's (`ios/.../DomovoiKitTests/RoomProtocolTests.swift`), do too,
 so the implementations can't drift apart. The `android_room` entry
 is what the app's room mode sends on a phone with an echo canceller (one
 without leaves `full_duplex` out, and so gets no drop-ins); the iPhone's
-room mode sends the same hello with `board: ios_room`. Since 1.5.0 both
-name themselves (`satellite_id`, the path's id), and send `requested_room`
-until approved when the room code had an `in=` (the entry's code had none,
-so it leaves the key out); the `linux_pc`
+room mode sends the same hello with `board: ios_room`. Since 1.5.0 every
+device names itself (`satellite_id`, the path's id; the Pi and PC entries
+are the hellos from before 1.5.0, kept so an older device stays covered:
+a 1.5.0 one adds the `rooms` section's `hello_adds`), and sends
+`requested_room` until its first `ready` when its enrolment had an `in=`
+(the phone entry's code had none, so it leaves the key out); the `linux_pc`
 and `windows_pc` entries are what a spare Linux or Windows computer sends
 (`satellite/pc_engine.py` `hello_fields()`). Change them with the code that
 sends them. Tokens and codes in it are placeholders.
@@ -232,6 +234,44 @@ A phone in room mode runs openWakeWord on ONNX Runtime with the same
 models as a Pi; it fetches the base models from the core's signed
 `/v1/wake-base` channel (docs/API_REFERENCE.md) and a pushed wake word from
 `/v1/wake-models`, as a Pi does.
+
+## Rooms and satellites (`satellite_id`, `ready.room`, 1.5.0)
+
+A **room** is a place; a **satellite** is a device in one room, and several
+satellites can share a room. The path's id (`/v1/stream/{id}`, the hello's
+`room_id`) is the **device's** id for life; which room it is in is the
+server's assignment. Every device from before 1.5.0 has an id equal to its
+room's. The frames, the rule and their examples are the fixtures' `rooms`
+section (`docs/uml/satellite-fixtures.json`), read by the core's tests
+(`domovoi/tests/test_rooms_fixtures.py`) and the Pi and PC client's
+(`satellite/tests/test_rooms_client.py`).
+
+| Direction | Frame / key | Meaning |
+|---|---|---|
+| device → core | hello `satellite_id` | The device's id, exactly the path's. Every 1.5.0 device sends it: a Pi and a spare computer (`satellite/client.py`) and the phones' room mode. It marks a client that takes the `room` frame: an admin's move reaches it without a reconnect, and a change of `claim` reaches it at all. A hello without it (an older device) is closed 1001 on a move and comes back in its new room. Any other value: `error {reason: "satellite_id_mismatch"}` and close 1008. An older core ignores the key. |
+| device → core | hello `requested_room` | The room its enrolment's `in=` asked to join (Pi and PC: `[satellite] requested_room`). Sent only until the device's first `ready`; then the device forgets it (the Pi and PC clear it in `config.toml` too). Only a room id under the rule below; anything else is left out. |
+| core → device | `ready.satellite_id`, `ready.room` | `room`: `{room_id, name, shared, claim}`, the room the device is in. An older core sends neither; the device then carries on as before (no claims, nothing shown). |
+| core → device | `room` | `{"type": "room", "room": {...}}`: the device was moved, or its room's `claim` changed. The device carries on, connected; the core sends the new room's wake words, voice and sounds as for any room. |
+| core → device | `error` `satellite_id_mismatch` | Said to the person in plain words ("the Domovoi server did not recognise this device …"), retried like any refusal, nothing stored changed. |
+
+**One room-id rule** for every room id that comes in from outside: an
+enrolment's `in=`, the hello's `requested_room`, the dashboard's `in_room`,
+`ready.room.room_id`, an API path or body. It is `domovoi/room_ids.py`
+`is_room_id`: lowercase ASCII letters, digits, `_` and `-`, starting with a
+letter or digit, at most 32 characters (`^[a-z0-9][a-z0-9_-]{0,31}\Z`).
+The stricter `^[a-z][a-z0-9_]{0,31}` is only for an id a device MAKES from
+its name: the Wi-Fi setup portal named rooms like `living-room` and
+`2nd-bedroom`, and "Add a satellite to the Living-room" must work for them.
+An id from before either rule (capitals, spaces) is never a room a device
+can be added to; such a room can only be deleted.
+
+**The room's name.** `room.name` is the room's name, or `null` when the
+core could not read the room's row. A missing key, `null` and a blank
+string all mean "no name": keep the name last shown for the same `room_id`;
+after a move to another `room_id`, or with none known, say "this room" (a
+spare computer's tray falls back to the name it was set up with). Never
+show `room_id` as a name. The web dashboard reads names from `GET
+/api/rooms`, never from `ready`.
 
 ## One turn per wake word (`wake_claim`, 1.5.0)
 
@@ -516,7 +556,8 @@ it joins ("This phone will join the Kitchen", the name being `room` without
 the number the core added) and, from `ready.room` on, the server's name. A parser from before ignores it (unknown keys are
 ignored) and connects as `kitchen_2`; the server remembered the invitation
 and pre-selects the Kitchen on the approval card either way. A value that
-is not a room id is ignored like an unknown key.
+is not a room id under the one rule ("Rooms and satellites" above: the
+portal's `living-room` is one) is ignored like an unknown key.
 
 Spare-device satellites (S1, 2026-10-13). A Linux laptop or a phone in
 room mode is told which core it belongs to by an **enrolment payload**, a
