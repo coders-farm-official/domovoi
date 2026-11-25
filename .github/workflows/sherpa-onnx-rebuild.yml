@@ -9,8 +9,11 @@
 # One job per ABI, side by side, on a plain Ubuntu 24.04 runner: Ubuntu's
 # own CMake 3.28.3 and Ninja (the versions the pinned container used), NDK
 # r29 and the ONNX Runtime AAR checked by the SHA-256s pinned in
-# build-native.sh, every source cloned at its pinned commit, scratch
-# directory /work (where it was built). The `compare` job then lists every
+# build-native.sh, every source from its git submodule (src/, deps/<name>/:
+# checked out here, at the commits build-native.sh pins, which it checks;
+# F-Droid builds from them the same way), scratch directory /work (where it
+# was built). The container build (build.sh) still clones each by its pin,
+# so both ways of getting the sources must give these same bytes. The `compare` job then lists every
 # file that differs; a red run names each library that no longer
 # reproduces.
 #
@@ -57,6 +60,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # sherpa-onnx and the eight libraries its CMake would fetch (not
+          # their own submodules: none of them has any build-native.sh uses).
+          submodules: true
       - name: Build tools (Ubuntu's CMake and Ninja) and /work
         run: |
           sudo apt-get update -qq

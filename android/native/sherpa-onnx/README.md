@@ -17,6 +17,7 @@ phone speaks with Android's own `TextToSpeech` instead
 | `kotlin/` | The Kotlin API those libraries bind to, from the same commit. |
 | `LICENSE`, `licenses/` | sherpa-onnx's licence and every compiled-in dependency's. |
 | `BUILD-INFO.txt`, `SHA256SUMS` | What built it, and the hash of every file here. |
+| `src/`, `deps/<name>/` | Git submodules (from 1.5.0): sherpa-onnx and the eight libraries its CMake would download, at the pinned commits. Empty unless checked out; nothing in the app's build reads them. |
 
 The library's one native dependency, `libonnxruntime.so`, comes from the
 official `com.microsoft.onnxruntime:onnxruntime-android` AAR (MIT) through
@@ -30,8 +31,8 @@ against that same AAR.
 - NDK r29 (29.0.14206865), zip checked by SHA-256.
 - sherpa-onnx v1.13.8, commit `11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf`,
   and each library its CMake would download, by git commit (the list is
-  under "F-Droid" below). The build hands CMake those checkouts and lets it
-  download nothing.
+  under "F-Droid" below), each also a git submodule here at the same commit.
+  The build hands CMake those checkouts and lets it download nothing.
 - ONNX Runtime 1.28.0 AAR from Maven Central, checked by SHA-256.
 - Options: `SHERPA_ONNX_ENABLE_TTS=OFF`, speaker diarization, C API,
   binaries, websocket and Python off; Android API 26 (the app's minSdk).
@@ -69,8 +70,58 @@ Runtime version in `gradle/libs.versions.toml` and its hashes in
 sherpa-onnx commit can move the libraries its CMake fetches: read the
 version each `cmake/*.cmake` names at the new commit (kaldifst's is in
 kaldi-decoder's `cmake/kaldifst.cmake`, kissfft's in kaldi-native-fbank's
-`cmake/kissfft.cmake`), update `DEPS`, and give F-Droid the new srclib
-commits below.
+`cmake/kissfft.cmake`), update `DEPS`, move each submodule to its new commit
+(`git -C android/native/sherpa-onnx/deps/<name> checkout <commit>`, then
+`git add` it; `domovoi/tests/test_sherpa_submodules.py` fails until the
+submodules and `DEPS` agree), and F-Droid takes them with the next tag.
+
+## Submodules
+
+From 1.5.0 the sources are git submodules of this repository, for F-Droid
+(its reviewers prefer submodules to srclibs, and its scanner covers them):
+
+| Submodule | Repository | Commit |
+|---|---|---|
+| `src` | https://github.com/k2-fsa/sherpa-onnx | `11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf` |
+| `deps/eigen` | https://gitlab.com/libeigen/eigen.git | `bc3b39870ecb690a623a3f49149a358b95c5781d` |
+| `deps/json` | https://github.com/nlohmann/json | `55f93686c01528224f448c19128836e7df245f72` |
+| `deps/kaldi_decoder` | https://github.com/k2-fsa/kaldi-decoder | `62fda2d74246a90db9570e46fb16b012f813fae7` |
+| `deps/kaldi_native_fbank` | https://github.com/csukuangfj/kaldi-native-fbank | `b09e686fe2084732ddd30d1ef80acfc0f13eaf01` |
+| `deps/kaldifst` | https://github.com/k2-fsa/kaldifst | `ab5bdd013bdf13921e6aeee77db5722ebf9955fb` |
+| `deps/kissfft` | https://github.com/mborgerding/kissfft | `febd4caeed32e33ad8b2e0bb5ea77542c40f18ec` |
+| `deps/openfst` | https://github.com/csukuangfj/openfst | `f702a6317d600ac953fdbb4978674c3a28b6115c` |
+| `deps/simple-sentencepiece` | https://github.com/pkufool/simple-sentencepiece | `62dd423df1d51da5ea06f1c3a046fc04f01b4f39` |
+
+Each `deps/<name>` is named as in `DEPS` (CMake's FetchContent name). None
+has submodules of its own that the build uses, so a non-recursive update is
+enough:
+
+```bash
+git submodule update --init --depth 1 android/native/sherpa-onnx   # about 100 MB of sources
+```
+
+`build-native.sh` takes a source the environment doesn't give from its
+submodule when that is checked out, and stops if one is at another commit,
+has local changes, or isn't a git checkout at all. A clone without the
+submodules (their folders empty, as `git clone` leaves them, and as CI's
+other jobs check out) builds exactly as before: each source cloned by its
+pin. `SHERPA_SRC` / `SHERPA_DEP_*` still win over the submodules, and
+`SHERPA_SUBMODULES=no` ignores them (`build-in-container.sh` sets it: the
+container sees this folder alone, where a submodule's git data isn't
+reachable, so it clones by pin). Either way the files are the same commit's,
+and the libraries are the same bytes: the weekly rebuild
+(`sherpa-onnx-rebuild.yml`) builds from the submodules, `build.sh` from the
+clones, and both are held to `SHA256SUMS`.
+
+For F-Droid's 1.5.0 build the srclibs below give way to `submodules: true`,
+and the `build:` line needs no source variables:
+
+```yaml
+    submodules: true
+    build: ABIS=arm64-v8a ANDROID_NDK=$$NDK$$ bash ../native/sherpa-onnx/build-native.sh
+```
+
+The srclibs below are how 1.4.x builds (its tag has no submodules).
 
 ## F-Droid
 
