@@ -25,7 +25,8 @@ public enum AdminStrings {
         + "answer friend requests, remove, block or unblock friend houses, and save a copy of or delete a conversation "
         + "(Friend Houses → friends & connections), "
         + "acknowledge or clear Health incidents (Settings → Health), "
-        + "and install an update or restart the Domovoi server (Settings → About & updates). "
+        + "install an update or restart the Domovoi server (Settings → About & updates), "
+        + "and rename or forget someone (People). "
         + "Everything else is on the dashboard for now."
 
     /// `ADMIN_SHARED`.
