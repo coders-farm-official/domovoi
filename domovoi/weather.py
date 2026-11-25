@@ -13,29 +13,118 @@ town list is asked for by its town name; its coordinates go along in
 
 A weather plugin takes over by registering the ``WEATHER_PROVIDER``
 capability (``ctx.add_capability("weather", impl)``). While one is
-registered core steps aside completely: the router skips the weather offer
-and the lookup, and the plugin's own handler answers. (A plugin can also
-simply claim weather phrases in its handler's priority band; the capability
-is the explicit hand-off.)
+registered core steps aside: the router skips the weather offer and the
+lookup, and the plugin's own handler answers. (A plugin can also simply
+claim weather phrases in its handler's priority band; the capability is the
+explicit hand-off.)
+
+One source of truth (owner, 2026-11-24): a plugin that answers wins. Only
+when the plugin's handler FAILS on a weather question (raises, or gives no
+answer) does core weather step in, and only when the house's internet
+answer lets core look it up (:func:`core_may_step_in`); otherwise the turn
+gets :data:`FAILED_LINE`. The voice turn (router) and the web answer
+(double_check) both decide through this module: :func:`plugin_attempt`
+notes the failure, :func:`answer_for` is the shared plugin-then-core answer.
 """
 
 from __future__ import annotations
 
-from typing import Any
+import logging
+import re
+from typing import TYPE_CHECKING, Any, Awaitable
 
-from domovoi import home_location
+from domovoi import egress, home_location
 from domovoi.capabilities import CAPABILITIES, WEATHER_PROVIDER
 from domovoi.clients.searxng import get_searxng_client
-from domovoi.models import Context
+from domovoi.models import Context, Response
+from domovoi.uncertainty import CATEGORY_WEATHER, categorize_question
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from domovoi.handlers.base import Handler
+
+log = logging.getLogger(__name__)
+
+#: Where the Home location is set: an admin's job (its PUT is admin-only,
+#: web/backend/api/home_location.py), on the dashboard's Home location card.
+PLACE_HOME_LOCATION = "Settings → Household → Home location"
 
 NO_PLACE_LINE = (
-    "I don't know where home is yet. Set it in Settings → Household → "
-    "Home location, and I can tell you the weather there."
+    "I don't know where home is yet. An admin can set it in "
+    f"{PLACE_HOME_LOCATION}, and then I can tell you the weather there."
 )
+#: The same for a proven admin (``Context.proven_admin``): the steps, in
+#: the card's own words ("start typing your town").
+NO_PLACE_ADMIN_LINE = (
+    f"I don't know where home is yet. Set it in {PLACE_HOME_LOCATION}: start typing "
+    "your town and pick it from the list. Then I can tell you the weather there."
+)
+
+
+def no_place_line(*, admin: bool = False) -> str:
+    """What a weather question hears while no Home location is set."""
+    return NO_PLACE_ADMIN_LINE if admin else NO_PLACE_LINE
+
+
+# A weather question about somewhere named ("weather in Paris", "how cold
+# is it at the beach"): not about home, so no Home location is needed to
+# ask it. "in the morning", "for tomorrow", "this week" are times, not places.
+_TIME_WORDS = (
+    r"(?:the )?(?:morning|afternoon|evening|night|weekend|week|day|moment|next (?:few )?\w+)"
+    r"|today|tonight|tomorrow|this \w+|next \w+|an? (?:hour|bit|while|minute)|\d"
+    # Home itself.
+    r"|home|here|the house|(?:my|our) (?:place|house|town|area)"
+)
+_ELSEWHERE_RE = re.compile(rf"\b(?:in|at|for|near|around) (?!(?:{_TIME_WORDS})\b)[a-z]")
+
+
+# The weather plugin failed and core can't look it up instead: short, in
+# the "Sorry, that didn't work." style, and never names the plugin.
+FAILED_LINE = "Sorry, I couldn't get the weather just now."
 
 
 def plugin_handles_weather() -> bool:
     return not CAPABILITIES.absent(WEATHER_PROVIDER)
+
+
+def is_plugin_handler(handler: Any) -> bool:
+    """Whether ``handler`` belongs to a plugin registered as the weather provider."""
+    slug = getattr(handler, "plugin_slug", None)
+    return slug is not None and slug in CAPABILITIES.providers_for(WEATHER_PROVIDER)
+
+
+def core_may_step_in(ctx: Context) -> bool:
+    """Whether core weather may stand in for a failed weather plugin: the
+    house is online and its internet answer isn't No (the same answer that
+    starts and stops the search helper core's lookup goes through). Past
+    this, core's own path keeps its own gates: "Sometimes" still asks first."""
+    return bool(ctx.online) and egress.internet_allowed()
+
+
+def _no_answer(response: Response | None) -> bool:
+    return response is None or not (response.text or "").strip()
+
+
+async def plugin_attempt(
+    handler: "Handler", call: Awaitable[Response | None], question: str
+) -> tuple[Response | None, bool]:
+    """Await a handler's answer: ``(response, weather_plugin_failed)``.
+
+    Only a weather plugin's handler on a weather question is guarded: a
+    raise or an empty answer becomes ``(None, True)`` so core weather can
+    step in. Anything else is awaited as is (a raise propagates)."""
+    if not (is_plugin_handler(handler) and categorize_question(question) == CATEGORY_WEATHER):
+        return await call, False
+    try:
+        response = await call
+    except Exception as e:  # noqa: BLE001 — the failure core weather covers
+        log.warning("weather plugin %s failed: %s", getattr(handler, "plugin_slug", "?"), e)
+        return None, True
+    if _no_answer(response):
+        log.warning("weather plugin %s gave no answer", getattr(handler, "plugin_slug", "?"))
+        return None, True
+    return response, False
 
 
 async def household_place() -> dict[str, Any] | None:
@@ -64,5 +153,75 @@ async def answer_weather(question: str, ctx: Context) -> str | None:
         return None
     place = await household_place()
     if place is None:
-        return NO_PLACE_LINE
+        return no_place_line(admin=bool(getattr(ctx, "proven_admin", False)))
     return await lookup(place["query"])
+
+
+async def no_place_answer(question: str, ctx: Context) -> str | None:
+    """The no-place line for a weather question about home, said before
+    any model or search is asked (M9, case 7.11), or None.
+
+    Only when core would answer the weather: no weather plugin (a plugin
+    answers on its own terms), the internet answer isn't No and AI is on
+    (else their line is the reason, not the place), the question names no
+    other place ("weather in Paris"), and no Home location is set. Without
+    this a house with no Home location searched the web for "what's the
+    weather" ("The search didn't turn up a clear answer.")."""
+    if categorize_question(question) != CATEGORY_WEATHER or plugin_handles_weather():
+        return None
+    if not egress.internet_allowed():
+        return None
+    from domovoi import ai_features
+
+    if ai_features.turned_off():
+        # AI off answers every lookup with its own line (router): setting
+        # a place wouldn't make this one work.
+        return None
+    if _ELSEWHERE_RE.search((question or "").lower()):
+        return None
+    if await household_place() is not None:
+        return None
+    return no_place_line(admin=bool(getattr(ctx, "proven_admin", False)))
+
+
+async def _plugin_answer(question: str, ctx: Context, session: "AsyncSession") -> str | None:
+    """The weather plugin's spoken answer to ``question``, the way a voice
+    turn reaches it (its handler's fast path), or None when it fails or has
+    no fast path for the words."""
+    from domovoi.handlers import HANDLERS
+    from domovoi.router import first_fast_path, normalize_transcript, run_fast_path, strip_leading_filler
+
+    mine = [h for h in HANDLERS if is_plugin_handler(h)]
+    hit = first_fast_path(strip_leading_filler(normalize_transcript(question)), mine)
+    if hit is None:
+        return None
+    handler, fp, m = hit
+    response, failed = await plugin_attempt(
+        handler, run_fast_path(handler, fp, m, ctx, session), question
+    )
+    return None if failed or response is None else response.text
+
+
+async def answer_for(
+    question: str,
+    ctx: Context,
+    session: "AsyncSession",
+    *,
+    plugin_failed: bool = False,
+) -> str | None:
+    """THE weather answer for a weather question, from one decision point.
+
+    No weather plugin: core's lookup (:func:`answer_weather`), unchanged.
+    A weather plugin: its answer; if it fails (``plugin_failed``: it already
+    failed this turn, don't ask it twice), core's lookup when
+    :func:`core_may_step_in`, else :data:`FAILED_LINE`. None: nothing
+    usable from core, so the caller goes on to the general web search."""
+    if not plugin_handles_weather():
+        return await answer_weather(question, ctx)
+    if not plugin_failed:
+        spoken = await _plugin_answer(question, ctx, session)
+        if spoken:
+            return spoken
+    if not core_may_step_in(ctx):
+        return FAILED_LINE
+    return await answer_weather(question, ctx)

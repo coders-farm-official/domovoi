@@ -189,9 +189,11 @@ async def _pending(say, room="kitchen"):
 async def test_a_how_to_is_answered_from_the_manual_with_a_pointer(voice) -> None:
     r = await voice("how do I change the wake word")
     assert (r.matched_handler, r.matched_path) == ("help_desk", "fast")
-    assert r.text.startswith("From the manual's ")
+    # An admin's job (F5): who and where, never the steps by voice; then
+    # the pointer, and nothing offered (1.5.0).
+    assert r.text.startswith("An admin changes the wake word, on the dashboard: Settings → Voice → Wake words. ")
     assert r.text.endswith(" " + POINTER_TEXT) and not r.expect_followup
-    assert "phone" not in r.text.split(":", 1)[0] and "Want me to send" not in r.text
+    assert "Want me to send" not in r.text
     assert await _pending(voice) is None
 
 
@@ -227,6 +229,19 @@ async def test_a_phone_turn_gets_the_same_answer(voice) -> None:
     ctx = Context(room_id="phone-1", person_id=None, online=True, device_kind="phone")
     r = await route(Intent(transcript="how do I change the wake word"), ctx, voice.db)
     assert r.matched_handler == "help_desk" and r.text.endswith(POINTER_TEXT) and not r.expect_followup
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_surface_that_cant_answer_back_gets_the_same_answer(voice) -> None:
+    # G4 (case 8.7h, from 1.4.1): the dashboard's play box (Context.answerable
+    # False) gets the answer and the pointer, nothing parked, like any turn.
+    sid = (await voice("what time is it")).session_id
+    ctx = Context(room_id="kitchen", session_id=sid, online=True, answerable=False)
+    r = await route(Intent(transcript="how do I change the wake word", room_id="kitchen"), ctx, voice.db)
+    assert r.matched_handler == "help_desk" and r.text.endswith(POINTER_TEXT) and not r.expect_followup
+    data = await SessionRepository(voice.db).get_context(sid) or {}
+    assert data.get("pending_confirmation") is None
 
 
 @requires_db

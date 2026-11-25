@@ -74,7 +74,7 @@ async def test_play_url_refuses_an_internet_stream_under_never(sdk) -> None:
         )
     assert r.music_action is None
     assert r.data["status"] == "internet_off" and r.data["ok"] is False
-    assert r.text == "I'm set to stay off the internet, so I can't play KEXP."
+    assert r.text == "I'm set to stay off the internet, so I can't play KEXP. An admin can change that in Settings → Privacy → Internet."
     assert room.calls == []                       # MPD never saw the URL
     assert NOW_PLAYING.get("kitchen") is None     # nothing stamped
 

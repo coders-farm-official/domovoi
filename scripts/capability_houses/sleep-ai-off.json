@@ -1,0 +1,12 @@
+{
+  "extends": "base",
+  "note": "Sleep plugin working, AI off.",
+  "plugins": [
+    {
+      "slug": "sleep",
+      "enabled": true,
+      "status": "ok"
+    }
+  ],
+  "ai": false
+}

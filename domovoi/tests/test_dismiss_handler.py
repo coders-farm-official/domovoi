@@ -47,9 +47,6 @@ from domovoi.models import Context, Intent
         "nah thanks",
         "not now",
         "not right now",
-        "forget it",
-        "forget about it",
-        "forget that",
         "ignore that",
         "disregard",
         "disregard that",
@@ -97,6 +94,12 @@ def test_dismiss_matches(phrase: str) -> None:
         "cancel the timer",
         "forget that i like jazz",
         "forget my favorite team",
+        # A bare forget is the memory handler's since 2026-11 (N15): right
+        # after "remember that …" it forgets the fact, and it only stands
+        # down when there is nothing to forget (test_memory_forget_last).
+        "forget it",
+        "forget about it",
+        "forget that",
         "what time is it",
         "turn it up",
         # Substrings that merely contain a dismissal word.

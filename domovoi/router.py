@@ -43,6 +43,7 @@ from domovoi.uncertainty import (
     answer_admits_staleness,
     answer_offers_lookup,
     categorize_question,
+    is_local_lookup,
     looks_like_question,
 )
 from domovoi.log_privacy import said
@@ -83,6 +84,12 @@ _LLM_UNREACHABLE_TEXT = (
 _NO_ANSWER_TEXT = "Sorry, I don't have an answer for that."
 
 _ONLINE_CHECK_OFFER = "Want me to check that online?"
+
+#: Said when the turn itself raised: a handler's or a plugin's bug, a
+#: database that went away mid-turn (capability N5: a failure is said out
+#: loud, never silence and never a fake success). Short and honest: no
+#: handler or plugin name and no exception text, which go to the log.
+TURN_FAILED_TEXT = "Sorry, that didn't work."
 
 # Said the moment a voice turn needs a model Ollama hasn't loaded, so the
 # room isn't silent through the load (~54 s on an all-CPU host).
@@ -135,7 +142,7 @@ async def _ready_for(client, ctx: Context, role: str):
         if missing:
             log.warning(
                 "room=%s: the %s model %s isn't installed in Ollama — not "
-                "waking it (Settings → Models installs it)",
+                "waking it (Settings → Chat & AI → Models installs it)",
                 ctx.room_id, role, ", ".join(missing),
             )
             return None
@@ -274,8 +281,18 @@ def normalize_transcript(raw: str) -> str:
 
 def strip_leading_filler(transcript: str) -> str:
     """Drop leading politeness ("please", "can you", "yeah,") so the
-    anchored fast-path regexes still match (see _LEADING_FILLER_RE)."""
-    return _LEADING_FILLER_RE.sub("", transcript)
+    anchored fast-path regexes still match (see _LEADING_FILLER_RE).
+    A "can you <X>?" question whose X is in the capability table, and no
+    command's, keeps its "can you" (house_facts.kept_question): it is
+    answered, not carried out."""
+    stripped = _LEADING_FILLER_RE.sub("", transcript)
+    if stripped != transcript:
+        from domovoi import house_facts
+
+        kept = house_facts.kept_question(transcript, stripped)
+        if kept is not None:
+            return kept
+    return stripped
 
 
 def first_fast_path(
@@ -307,7 +324,22 @@ _REQUEST_PREAMBLE_RE = re.compile(
 def strip_request_preamble(transcript: str, handlers: Iterable[Handler] | None = None) -> str:
     """``transcript`` (normalized, filler-stripped) without a leading "is
     there a way to" when what follows is a fast-path command (of
-    ``handlers``, the live registry by default); else as is."""
+    ``handlers``, the live registry by default); else as is.
+
+    Likewise a role claim in front of a command ("I'm the owner, set a
+    timer for 5 minutes"): saying it grants nothing, so the command is
+    the turn, with its own rules (domovoi/role_claims.py). A claim whose
+    rest no fast path takes stays whole: the voice profile handler
+    answers it."""
+    from domovoi import role_claims
+
+    claim = role_claims.split_claim(transcript)
+    if claim is not None and claim[1]:
+        cmd = strip_leading_filler(claim[1])
+        hit = first_fast_path(cmd, handlers)
+        if hit is not None and hit[0].name != "voice_profile":
+            return cmd
+        return transcript
     m = _REQUEST_PREAMBLE_RE.match(transcript)
     if not m:
         return transcript
@@ -379,6 +411,24 @@ def phone_refusal(handler: Handler, ctx: Context) -> Response | None:
     return None
 
 
+def ai_off_refusal(handler: Handler, fp: FastPath, ctx: Context) -> Response | None:
+    """The reply a fast path gets instead of running when it needs AI
+    (``Handler.needs_ai``, or the path's own ``needs_ai``) and the
+    household's AI switch is off; None when it may run. A plugin that
+    makes pictures on its own engine never asks this box's Ollama, so the
+    SDK's Ollama refusal alone would let it run (owner, Q6)."""
+    needs = fp.needs_ai if fp.needs_ai is not None else getattr(handler, "needs_ai", False)
+    if not needs or ai_features.enabled():
+        return None
+    decl = ai_features.plugin_ai(getattr(handler, "plugin_slug", None))
+    return Response(
+        text=ai_features.off_feature_line(decl.does if decl is not None else None, admin=ctx.proven_admin),
+        session_id=ctx.session_id,
+        matched_handler=handler.name,
+        expect_followup=False,
+    )
+
+
 def offline_blocked(handler: Handler, fp: FastPath, ctx: Context) -> bool:
     """Whether the offline gate sends this fast path to the handler's
     ``fallback_offline`` instead (see route(), step 1)."""
@@ -400,7 +450,7 @@ async def run_fast_path(
     that hands a reply on to another command (a parked choice answered
     "no, play X"). The caller stamps and records the turn. None: the path
     declined the turn (see ``FastPath``)."""
-    refusal = phone_refusal(handler, ctx)
+    refusal = phone_refusal(handler, ctx) or ai_off_refusal(handler, fp, ctx)
     if refusal is not None:
         return refusal
     if offline_blocked(handler, fp, ctx):
@@ -635,6 +685,25 @@ async def _persist_turn(
         await music_listens.note_voice_start(ctx.room_id, ctx.person_id)
 
 
+def tool_action_offered(handler: Any, args: Any) -> bool:
+    """Whether a tool call's ``action`` is one its schema lists (or one of
+    the handler's ``tool_action_aliases``). A tool without an ``action``
+    enum takes anything; a call with no action is left to the handler (it
+    has its own default); so is a plugin's tool, whose handler may take
+    spellings its schema doesn't list."""
+    if getattr(handler, "plugin_slug", None) is not None:
+        return True
+    props = ((getattr(handler, "tool_schema", None) or {}).get("parameters") or {}).get("properties") or {}
+    enum = (props.get("action") or {}).get("enum")
+    if not isinstance(enum, list) or not enum:
+        return True
+    action = (args or {}).get("action") if isinstance(args, dict) else None
+    if action is None or action == "":
+        return True
+    allowed = {str(a).lower() for a in enum} | {str(a).lower() for a in getattr(handler, "tool_action_aliases", ())}
+    return str(action).strip().lower() in allowed
+
+
 _INFORMATION_REQUEST_RE = re.compile(
     r"^\s*(?:tell me about|explain|define|describe)\b", re.IGNORECASE
 )
@@ -858,6 +927,124 @@ async def _answer_loud(
 
 
 async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response:
+    """Route one turn and record it (`_route_turn`). A turn that raises —
+    a handler's or a plugin's bug, the database gone mid-turn — is
+    answered with :data:`TURN_FAILED_TEXT` and recorded as
+    ``matched_path="error"`` (`_record_failed_turn`) instead of reaching
+    the caller as an exception: every caller (a satellite's turn, ``POST
+    /v1/intent``, the phone's voice turn, a room display's button) then
+    says something true, through its own ordinary reply path.
+
+    Only ``Exception``: a cancelled turn (a barge-in, the reply limit)
+    raises ``asyncio.CancelledError``, a ``BaseException``, and goes on
+    being a cancellation, never a spoken failure."""
+    t0 = time.monotonic()
+    try:
+        return await _route_turn(intent, ctx, session)
+    except Exception:
+        log.exception("turn %r failed while routing; saying so", said(intent.transcript))
+        return await _record_failed_turn(
+            intent, ctx, session, latency_ms=int((time.monotonic() - t0) * 1000),
+        )
+
+
+async def _rollback_quietly(session: AsyncSession | None) -> None:
+    if session is None:
+        return
+    try:
+        await session.rollback()
+    except Exception as e:  # noqa: BLE001 — the reply goes out regardless
+        log.warning("rolling back a failed turn failed too: %s", e)
+
+
+async def _record_failed_turn(
+    intent: Intent, ctx: Context, session: AsyncSession | None, *, latency_ms: int,
+) -> Response:
+    """The reply to a turn that raised, recorded like any other turn.
+
+    What the turn wrote before it failed is rolled back first: a half-made
+    change is not kept, and a database error leaves the transaction
+    unusable until it is. The turn is then written in the same session
+    (``_persist_turn``: one intents_log and one conversation_log row, the
+    session's history), and the caller's commit keeps it as before. When
+    even that fails (the database is down), the line is still returned:
+    the room hears it, and the log says what wasn't recorded."""
+    await _rollback_quietly(session)
+    if ctx.timings is not None:
+        # A row the failed turn wrote is gone with the rollback.
+        ctx.timings.intents_log_id = None
+    response = Response(
+        text=TURN_FAILED_TEXT,
+        session_id=ctx.session_id,
+        matched_handler=None,
+        matched_path="error",
+        online=ctx.online,
+        expect_followup=False,
+    )
+    try:
+        session_id = await SessionRepository(session).get_or_create(ctx.session_id, ctx.room_id)
+        response.session_id = session_id
+        await _persist_turn(
+            session=session,
+            session_id=session_id,
+            intent=intent,
+            ctx=ctx.model_copy(update={"session_id": session_id}),
+            response=response,
+            matched_handler=None,
+            matched_path="error",
+            latency_ms=latency_ms,
+        )
+    except Exception:
+        log.exception("the failed turn %r could not be recorded", said(intent.transcript))
+        await _rollback_quietly(session)
+    return response
+
+
+def _claim_line_for(unstripped: str, transcript: str, ctx: Context) -> str | None:
+    """The easter-egg line for an authority claim the router dropped from
+    in front of a command (``strip_request_preamble``), or None."""
+    if unstripped == transcript:
+        return None
+    from domovoi import owner_easter_eggs, role_claims
+
+    claim = role_claims.split_claim(unstripped)
+    if claim is None or not claim[1] or not role_claims.is_authority(claim[0]):
+        return None
+    return owner_easter_eggs.claim_line(ctx.session_id or ctx.room_id or "")
+
+
+def _after_claim(response: Response, line: str | None) -> None:
+    """"<claim line> <the command's own reply>"."""
+    if line and response.text:
+        response.text = f"{line} {response.text}"
+    elif line:
+        response.text = line
+
+
+async def _settings_answer(transcript: str, ctx: Context) -> str | None:
+    """A fixed answer for a turn no fast path took, when the house's own
+    settings already decide it; None otherwise (the turn goes on to the
+    models). ``transcript`` is normalized and filler-stripped.
+
+    * A weather question about home with no Home location set: where an
+      admin sets it (domovoi/weather.py, ``no_place_answer``), not a web
+      search for "what's the weather".
+    * A local lookup ("restaurants near me") on a house set to never use
+      the internet: it needs the internet, and where an admin changes that
+      (M10, case 5.9), not the model's hedge and "try a mapping service"."""
+    if ctx.capped_capture:
+        return None
+    if egress.internet_turned_off() and is_local_lookup(transcript):
+        from domovoi import off_answers
+
+        return off_answers.with_turn_on(
+            "I'd need the internet for that, and this house is set to never use it.",
+            off_answers.INTERNET, admin=ctx.proven_admin,
+        )
+    return await weather.no_place_answer(transcript, ctx)
+
+
+async def _route_turn(intent: Intent, ctx: Context, session: AsyncSession) -> Response:
     # Conversational chat mode (Feature 8) is bypassed UPSTREAM of this
     # function. When a session is in ``conversational_mode`` (set by
     # ChatModeHandler into ``sessions.context``), the streaming layer reads
@@ -1032,7 +1219,13 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
     # tool-call and QA fallback paths below intentionally use
     # `intent.transcript` (raw) so the LLM sees the user's natural
     # phrasing, not the stripped version.
-    transcript = strip_request_preamble(strip_leading_filler(transcript))
+    unstripped = strip_leading_filler(transcript)
+    transcript = strip_request_preamble(unstripped)
+    # "I'm the owner, set a timer for 10 minutes": the claim was dropped and
+    # the command is the turn. It grants nothing (Context.proven_admin is
+    # untouched); its reply is a joke line, then the command's own reply
+    # (domovoi/owner_easter_eggs.py).
+    claim_line = _claim_line_for(unstripped, transcript, ctx)
 
     # 1. Fast paths (with offline gate), over the band-sorted registry.
     #
@@ -1043,6 +1236,9 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
     # True), so a degraded handler's offline-capable paths keep running
     # and its `fallback_offline` is genuinely reachable for the rest.
     hit = first_fast_path(transcript)
+    # A weather plugin's handler failed this turn: core weather may step in
+    # at the Q&A step below (domovoi/weather.py).
+    weather_plugin_failed = False
     if hit is not None and ctx.capped_capture:
         from domovoi.overheard import NOT_OVER_THE_TV
 
@@ -1056,6 +1252,7 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
         handler, fp, m = hit
         if offline_blocked(handler, fp, ctx) and phone_refusal(handler, ctx) is None:
             response = await handler.fallback_offline(intent, ctx, session)
+            _after_claim(response, claim_line)
             response.matched_handler = handler.name
             response.matched_path = "fast_offline"
             response.session_id = session_id
@@ -1089,15 +1286,18 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
             )
             return response
         try:
-            response = phone_refusal(handler, ctx)
+            response = phone_refusal(handler, ctx) or ai_off_refusal(handler, fp, ctx)
             if response is None:
-                response = await fp.method(handler, m, ctx, session)
+                response, weather_plugin_failed = await weather.plugin_attempt(
+                    handler, fp.method(handler, m, ctx, session), transcript
+                )
         except MPDNotProvisioned:
             response = _no_speakers_yet(session_id, ctx)
         if response is not None and ctx.loud_command:
             # Read-only: answered, after what was heard.
             response.text = loud_room.with_heard_line(transcript, response.text)
         if response is not None:
+            _after_claim(response, claim_line)
             response.matched_handler = handler.name
             response.matched_path = "fast"
             response.session_id = session_id
@@ -1120,16 +1320,51 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
         # path had matched.
         log.info("fast path %s declined %r; routing on", handler.name, said(transcript))
 
-    # AI features off (Settings → Models, domovoi/ai_features.py): no
+    # Answers the house's settings decide, before any model is asked: what
+    # Domovoi can't do here, and why, never depends on the small model.
+    fixed = await _settings_answer(transcript, ctx)
+    if fixed is not None:
+        response = Response(
+            text=fixed,
+            session_id=session_id,
+            matched_handler=None,
+            matched_path="qa",
+            online=ctx.online,
+            expect_followup=False,
+        )
+        await _persist_turn(
+            session=session,
+            session_id=session_id,
+            intent=intent,
+            ctx=ctx,
+            response=response,
+            matched_handler=None,
+            matched_path="qa",
+            latency_ms=_elapsed_ms(),
+        )
+        return response
+
+    # AI features off (Settings → Chat & AI → Models, domovoi/ai_features.py): no
     # language model is asked anything — not the tool router, not the
     # volatile gate's subject extraction, not Q&A. Whatever no fast path
     # took gets a fixed line, in the voice's own words, that says what
     # this home is set up for. Not an outage line: nothing is broken.
     if ai_features.turned_off():
         category = categorize_question(transcript)
+        # A request for what an installed plugin makes with a model and
+        # has no voice handler for ("make a picture of a cat", the image
+        # plugin): say that AI being off is why (owner, Q6).
+        from domovoi.capabilities import CAPABILITIES
+
+        asked = ai_features.known_capability_request(transcript, CAPABILITIES.names())
+        model_only = ai_features.off_request_line(transcript, admin=ctx.proven_admin)
         response = Response(
             text=(
-                ai_features.OFF_LOOKUP_LINE
+                ai_features.off_feature_line(asked.does, admin=ctx.proven_admin)
+                if asked is not None
+                else model_only
+                if model_only is not None
+                else ai_features.off_lookup_line(admin=ctx.proven_admin)
                 if category is not None and category in VOLATILE_CATEGORIES
                 else ai_features.OFF_LINE
             ),
@@ -1160,7 +1395,7 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
     # A capped capture (domovoi/overheard.py) never reaches the tool model:
     # an action must come from a fast path said at its start, not from
     # whatever the TV said after it. (A long one that ended on a pause does.)
-    if not answers_without_tools(transcript) and not ctx.capped_capture:
+    if not answers_without_tools(transcript) and not ctx.capped_capture and not weather_plugin_failed:
         tool_schemas = offered_tool_schemas(transcript)
         tool_client = await _ready_for(ollama_client, ctx, "tool")
         # None: the router model isn't installed — the Q&A model below
@@ -1189,12 +1424,23 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
             refusal = phone_refusal(handler, ctx)
             if refusal is not None:
                 response = refusal
+            elif not tool_action_offered(handler, tool_call.get("args")):
+                # An action the tool doesn't have ("add" on the library,
+                # live 2026-11-24): the handler could only answer "I don't
+                # know how to add the library". Declined: Q&A answers.
+                log.info(
+                    "tool model called %s with an action it doesn't have (%r) for %r — ignoring",
+                    handler.name, (tool_call.get("args") or {}).get("action"), said(intent.transcript),
+                )
+                response = None
             elif path == "llm_offline":
                 response = await handler.fallback_offline(intent, ctx, session)
             else:
                 try:
-                    response = await handler.execute_from_tool(
-                        tool_call.get("args", {}), ctx, session
+                    response, weather_plugin_failed = await weather.plugin_attempt(
+                        handler,
+                        handler.execute_from_tool(tool_call.get("args", {}), ctx, session),
+                        transcript,
                     )
                 except MPDNotProvisioned:
                     response = _no_speakers_yet(session_id, ctx)
@@ -1230,9 +1476,33 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
     # opted in) or speak-then-offer.
     category = categorize_question(transcript)
     if category == CATEGORY_WEATHER and weather.plugin_handles_weather():
-        # A weather plugin is installed: core's weather path (the offer and
-        # the lookup) steps aside and the plugin's handler answers.
-        category = None
+        if not weather_plugin_failed:
+            # A weather plugin is installed: core's weather path (the offer
+            # and the lookup) steps aside and the plugin's handler answers.
+            category = None
+        elif not weather.core_may_step_in(ctx):
+            # It failed, and core may not look it up instead: say so.
+            response = Response(
+                text=weather.FAILED_LINE,
+                session_id=session_id,
+                matched_handler=None,
+                matched_path="qa",
+                online=ctx.online,
+                expect_followup=False,
+            )
+            await _persist_turn(
+                session=session,
+                session_id=session_id,
+                intent=intent,
+                ctx=ctx,
+                response=response,
+                matched_handler=None,
+                matched_path="qa",
+                latency_ms=_elapsed_ms(),
+            )
+            return response
+        # Else it failed and core's weather path below steps in, with its
+        # own gates ("Always" looks it up, "Sometimes" asks first).
     # "Always" means the household already said yes to the internet: a
     # weather question goes straight to the lookup, no "want me to check?".
     always_weather = (
@@ -1263,7 +1533,8 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
             dc = HANDLER_BY_NAME.get("double_check")
             if dc is not None and hasattr(dc, "answer_question_from_web"):
                 response = await dc.answer_question_from_web(
-                    intent.transcript, ctx, session
+                    intent.transcript, ctx, session,
+                    weather_plugin_failed=weather_plugin_failed,
                 )
                 response.matched_handler = dc.name
                 response.matched_path = "auto_search"
@@ -1398,6 +1669,33 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
     except Exception as e:
         log.warning("profile_prefix build failed: %s", e)
         profile_prefix = ""
+    # A privacy-worded question the closed set didn't take: a fixed answer
+    # from the house's facts, never the model's (house_facts.privacy_fallback;
+    # never fails). Measured 2026-11-25: given the facts, the model still
+    # made up wrong privacy claims.
+    from domovoi import house_facts
+
+    privacy_text = await house_facts.privacy_fallback(intent.transcript, ctx)
+    if privacy_text is not None:
+        response = Response(
+            text=privacy_text,
+            session_id=session_id,
+            matched_handler="house_facts",
+            matched_path="qa",
+            online=ctx.online,
+            expect_followup=False,
+        )
+        await _persist_turn(
+            session=session,
+            session_id=session_id,
+            intent=intent,
+            ctx=ctx,
+            response=response,
+            matched_handler="house_facts",
+            matched_path="qa",
+            latency_ms=_elapsed_ms(),
+        )
+        return response
 
     # Plain QA path. The answer is spoken exactly as the model wrote it.
     # The "want me to check that online?" offer rides on it only for a

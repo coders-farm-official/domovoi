@@ -1,0 +1,5 @@
+{
+  "extends": "base",
+  "note": "Home location not set.",
+  "home_location": null
+}

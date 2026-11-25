@@ -79,19 +79,20 @@ _OFFLINE_REPLY = "I can't check that right now — I don't have internet."
 _UNREACHABLE_LOGGED = False
 
 
-def _offline_reply() -> str:
+def _offline_reply(*, admin: bool = False) -> str:
     """The can't-check reply while there's no internet: today's wording,
-    or the turned-off one when the box is set to stay off the internet."""
+    or the turned-off one when the box is set to stay off the internet
+    (``admin``: the turn's ``Context.proven_admin``, words only)."""
     if egress.internet_turned_off():
-        return f"{egress.spoken_offline_phrase()}, so I can't check that."
+        return egress.spoken_offline_reply("check that", admin=admin)
     return _OFFLINE_REPLY
 
 
-def _unsearched_reply(status: str) -> str | None:
+def _unsearched_reply(status: str, *, admin: bool = False) -> str | None:
     """The reply for a search that never ran, or None when it did run
     (``ok`` / ``no_results``: the caller's own wording applies)."""
     if status == "internet_off":
-        return f"{egress.spoken_offline_phrase()}, so I can't check that."
+        return egress.spoken_offline_reply("check that", admin=admin)
     if status == "unreachable":
         return _UNREACHABLE_REPLY
     if status == "error":
@@ -526,7 +527,7 @@ class DoubleCheckHandler(Handler):
         self, intent: Intent, ctx: Context, session: AsyncSession
     ) -> Response:
         return Response(
-            text=_offline_reply(),
+            text=_offline_reply(admin=ctx.proven_admin),
             session_id=ctx.session_id,
             matched_handler=self.name,
             matched_path="fast_offline",
@@ -625,7 +626,7 @@ class DoubleCheckHandler(Handler):
             # fall back to the standard offline message rather than
             # claiming to have searched.
             return Response(
-                text=_offline_reply(),
+                text=_offline_reply(admin=ctx.proven_admin),
                 session_id=ctx.session_id,
                 matched_handler=self.name,
             )
@@ -736,7 +737,8 @@ class DoubleCheckHandler(Handler):
 
     # ─── Question-mode answer-from-web (proactive offer + auto-search) ─
     async def answer_question_from_web(
-        self, question: str, ctx: Context, session: AsyncSession
+        self, question: str, ctx: Context, session: AsyncSession,
+        *, weather_plugin_failed: bool = False,
     ) -> Response:
         """Public entry for the router's auto-search short-circuit.
 
@@ -744,9 +746,13 @@ class DoubleCheckHandler(Handler):
         public name. The router calls this when ``web_search_prefs.
         auto_search = TRUE`` for the matched category; the
         ``self_doubt_offer`` confirmation path calls the underscore
-        version internally.
+        version internally. ``weather_plugin_failed``: the weather plugin
+        already failed this turn, so a weather question goes straight to
+        core's lookup (domovoi/weather.py, ``answer_for``).
         """
-        return await self._answer_question_from_web(question, ctx, session)
+        return await self._answer_question_from_web(
+            question, ctx, session, weather_plugin_failed=weather_plugin_failed
+        )
 
     def _ai_off(self, ctx: Context) -> Response | None:
         """The fixed reply while AI features are off: a fact-check or a
@@ -755,19 +761,24 @@ class DoubleCheckHandler(Handler):
         if ai_features.enabled():
             return None
         return Response(
-            text=ai_features.OFF_LOOKUP_LINE,
+            text=ai_features.off_lookup_line(admin=ctx.proven_admin),
             session_id=ctx.session_id,
             matched_handler=self.name,
         )
 
     async def _answer_question_from_web(
-        self, question: str, ctx: Context, session: AsyncSession
+        self, question: str, ctx: Context, session: AsyncSession,
+        *, weather_plugin_failed: bool = False,
     ) -> Response:
         off = self._ai_off(ctx)
         if off is not None:
             return off
         if categorize_question(question) == CATEGORY_WEATHER:
-            spoken = await weather.answer_weather(question, ctx)
+            # The same source the voice turn uses: a weather plugin first,
+            # core's lookup only when it fails (domovoi/weather.py).
+            spoken = await weather.answer_for(
+                question, ctx, session, plugin_failed=weather_plugin_failed
+            )
             if spoken:
                 return Response(
                     text=spoken,
@@ -779,7 +790,7 @@ class DoubleCheckHandler(Handler):
         results = outcome.results
         if not results:
             return Response(
-                text=_unsearched_reply(outcome.status) or (
+                text=_unsearched_reply(outcome.status, admin=ctx.proven_admin) or (
                     "I checked online but couldn't find a clear answer to that."
                 ),
                 session_id=ctx.session_id,
@@ -873,7 +884,7 @@ class DoubleCheckHandler(Handler):
         results = outcome.results
         if not results:
             return Response(
-                text=_unsearched_reply(outcome.status) or (
+                text=_unsearched_reply(outcome.status, admin=ctx.proven_admin) or (
                     "I couldn't find anything about that to confirm or "
                     "deny it."
                 ),

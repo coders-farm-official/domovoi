@@ -147,6 +147,45 @@ async def send(friend_id: str, body: str) -> dict[str, Any]:
     return {"id": int(row[0]), "state": "queued", "created_at": row[1].isoformat()}
 
 
+#: How long a spoken "yes, send it" waits for the friend's ack before it
+#: says the message is waiting instead of "Sent".
+SEND_WAIT_SEC = 4.0
+_SEND_POLL_SEC = 0.25
+
+
+async def delivery_state(row_id: int) -> str | None:
+    """An outgoing message's state now: ``queued``, ``sent`` (the friend
+    acknowledged it) or ``failed``; None when it's gone."""
+    async with _db() as s:
+        return (await s.execute(text(
+            "SELECT state FROM friend_houses_messages WHERE id = :i AND direction = 'out'"),
+            {"i": int(row_id)})).scalar_one_or_none()
+
+
+async def wait_delivered(row_id: int, timeout: float | None = None) -> str | None:
+    """Wait up to ``timeout`` seconds (:data:`SEND_WAIT_SEC`) for the send's
+    own delivery try; returns the state then. Only ``sent`` means delivered."""
+    deadline = time.monotonic() + (SEND_WAIT_SEC if timeout is None else timeout)
+    while True:
+        state = await delivery_state(row_id)
+        if state != "queued" or time.monotonic() >= deadline:
+            return state
+        await asyncio.sleep(_SEND_POLL_SEC)
+
+
+async def last_sent(house_key: bytes | None = None) -> dict[str, Any] | None:
+    """The newest message this house sent (to one friend, or to any), with
+    the friend's name: what "did my message send?" answers from."""
+    async with _db() as s:
+        r = (await s.execute(text(
+            "SELECT id, state, friend_name, last_error FROM friend_houses_messages "
+            "WHERE direction = 'out' AND (CAST(:h AS BYTEA) IS NULL OR house_key = :h) "
+            "ORDER BY id DESC LIMIT 1"), {"h": house_key})).first()
+    if r is None:
+        return None
+    return {"id": int(r[0]), "state": r[1], "name": r[2] or "", "last_error": r[3]}
+
+
 async def _flush_now(house_key: bytes) -> None:
     """A send's own delivery try, under the retry pass's deadline."""
     try:

@@ -90,10 +90,7 @@ class PlaybackAPI:
         if egress.check_destination(player_relay.target_for(stream_url) or stream_url) is not None:
             egress.log_refusal(f"music stream {player_relay.url_hash(stream_url)}")
             return Response(
-                text=(
-                    f"{egress.spoken_offline_phrase()}, so I can't play "
-                    f"{title or 'that'}."
-                ),
+                text=egress.spoken_offline_reply(f"play {title or 'that'}"),
                 data={"stream_url": stream_url, "ok": False, "status": "internet_off"},
             )
         # A raw internet URL never reaches the room's queue (L20): it is

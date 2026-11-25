@@ -670,6 +670,7 @@ from domovoi.router import (
     is_question_about_the_world,
     is_request_for_a_story,
     route,
+    TURN_FAILED_TEXT,
 )
 from domovoi import announce_chime, quiet_hours, room_battery, satellite_abilities, satellite_health, satellite_upgrades
 from domovoi import satellite_diagnostics
@@ -5765,25 +5766,48 @@ class StreamSession:
         turn_at: datetime,
         wake_score: float | None = None,
         wake_word: str | None = None,
+        reply_begun: bool = False,
     ) -> None:
-        """The turn raised: error + response_end, the history entry closed
-        ("no answer — something went wrong"; a request that never got a
-        transcript is recorded as not made out), what got done timed."""
+        """The turn raised: the failure said out loud, the history entry
+        closed ("no answer — something went wrong"; a request that never
+        got a transcript is recorded as not made out), what got done timed.
+
+        Said out loud (capability N5: never silence): when no reply had
+        begun, :data:`TURN_FAILED_TEXT` is spoken (response_start … audio …
+        response_end) within turn_watchdog.APOLOGY_TTS_SEC. A handler's or a
+        plugin's failure doesn't get here — route() answers it with the same
+        line, recorded — this is the rest (the database gone, the commit).
+        A barge-in turn says nothing (its capture may be the speaker's own
+        echo), and a reply already under way isn't talked over: those, and
+        a line that can't be said (TTS down too), end as before with
+        ``error`` + ``response_end``."""
         log.error("stream %s: response task failed", self.room_id, exc_info=e)
-        await self._safe_send_text({"type": "error", "message": str(e)})
-        # Pair the error with a terminal response_end so the
-        # satellite's mic thread unblocks `_await_response_with_barge`
-        # and returns to wake-word listen. Without this pairing the
-        # Pi can hang on a single backend hiccup (DB unreachable
-        # mid-turn, handler exception, etc.); see the 2026-05-08
-        # 19:09 incident — DB went down, sat got `error` only, mic
-        # stayed parked until the WS dropped. `interrupted=True`
-        # because the user didn't get a real response.
-        await self._safe_send_text({
-            "type": "response_end",
-            "interrupted": True,
-            "expect_followup": False,
-        })
+        if not reply_begun and trigger != "barge_in":
+            try:
+                async with asyncio.timeout(turn_watchdog.APOLOGY_TTS_SEC):
+                    spoken = await self._speak_system_line(
+                        TURN_FAILED_TEXT, matched_handler="turn_failed",
+                    )
+            except TimeoutError:
+                log.warning("stream %s: the failure could not be said in time", self.room_id)
+                spoken = False
+        else:
+            spoken = False
+        if not spoken:
+            await self._safe_send_text({"type": "error", "message": str(e)})
+            # Pair the error with a terminal response_end so the
+            # satellite's mic thread unblocks `_await_response_with_barge`
+            # and returns to wake-word listen. Without this pairing the
+            # Pi can hang on a single backend hiccup (DB unreachable
+            # mid-turn, handler exception, etc.); see the 2026-05-08
+            # 19:09 incident — DB went down, sat got `error` only, mic
+            # stayed parked until the WS dropped. `interrupted=True`
+            # because the user didn't get a real response.
+            await self._safe_send_text({
+                "type": "response_end",
+                "interrupted": True,
+                "expect_followup": False,
+            })
         if history is None:
             if stage == STAGE_STT and trigger != "barge_in":
                 self._track_history_write(turn_history.record_unheard(
@@ -5841,6 +5865,9 @@ class StreamSession:
     ) -> None:
         interrupted = False
         response = None
+        # The reply has started going out (`_fail_turn` then doesn't talk
+        # over it with the failure line).
+        reply_begun = False
         transcript = ""
         # What speech recognition hears: the whole capture, or for one cut
         # off at its cap in a loud room, from where its speech began
@@ -6181,6 +6208,7 @@ class StreamSession:
                         )
                 self.session_id = response.session_id
 
+                reply_begun = True
                 if streamed:
                     # A Q&A answer: its first sentence is spoken while the model
                     # is still writing the rest. route_ms ends at that sentence.
@@ -6223,6 +6251,7 @@ class StreamSession:
                     e, timings=timings, trigger=trigger, response=response,
                     history=history,
                     stage=stage, audio_ms=audio_ms, turn_at=turn_at, wake_score=wake_score, wake_word=wake_word,
+                    reply_begun=reply_begun,
                 )
             return
         except Exception as e:
@@ -6230,6 +6259,7 @@ class StreamSession:
                 e, timings=timings, trigger=trigger, response=response,
                 history=history,
                 stage=stage, audio_ms=audio_ms, turn_at=turn_at, wake_score=wake_score, wake_word=wake_word,
+                reply_begun=reply_begun,
             )
             return
         finally:

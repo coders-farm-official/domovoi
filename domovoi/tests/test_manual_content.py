@@ -266,6 +266,11 @@ def test_every_settings_tab_a_link_names_is_one_the_dashboard_has() -> None:
         tab = rid.split("/", 1)[1] if rid.startswith("settings/") else r["app"]["tab"]
         if group not in set(group_of.values()):
             continue  # no group named: the loop below checks the tab
+        if rid.startswith("app/"):
+            # The app's own groups (SettingsScreen.kt): checked by
+            # test_every_settings_path_the_manual_cites_is_a_real_place.
+            assert app_label[tab] == label, (label, rid)
+            continue
         assert group_of[tab] == group, (group, label, rid)
         want = label_of[tab] if rid.startswith("settings/") else app_label[tab]
         assert want == label, (label, rid)
@@ -277,6 +282,140 @@ def test_every_settings_tab_a_link_names_is_one_the_dashboard_has() -> None:
             assert label_of[rid.split("/", 1)[1]] == label, (label, rid)
         elif rid.startswith("app/"):
             assert app_label[r["app"]["tab"]] == label, (label, rid)
+
+
+def _dashboard_settings_tree() -> dict:
+    """The dashboard's Settings as settings.jsx defines them: group label →
+    {section label: section id}, and each section's search cards (the
+    things a path may name after the section)."""
+    src = (STATIC / "settings.jsx").read_text(encoding="utf-8")
+    sections = dict(re.findall(
+        r"\{ id: '([\w-]+)', label: '([^']+)'",
+        re.search(r"const SETTINGS_SECTIONS = \[(.*?)\n\];", src, re.S).group(1)))
+    groups = re.search(r"const SETTINGS_GROUPS = \[(.*?)\n\];", src, re.S).group(1)
+    tree = {g_label: {sections[sid]: sid for sid in re.findall(r"'([\w-]+)'", secs)}
+            for g_label, secs in re.findall(r"label: '([^']+)'.*?sections: \[([^\]]*)\]", groups, re.S)}
+    items = re.search(r"const SETTINGS_SEARCH_ITEMS = \[(.*?)\n\];", src, re.S).group(1)
+    cards: dict[str, set[str]] = {}
+    for label, sid in re.findall(r"label: '([^']+)', section: '([\w-]+)'", items):
+        cards.setdefault(sid, set()).add(label)
+    return {"groups": tree, "cards": cards}
+
+
+def _app_settings_tree() -> dict:
+    """The app's Settings as SettingsScreen.kt defines them (SettingsGroup,
+    SettingsSection): group label → {section label: section key}."""
+    src = (ANDROID / "ui" / "screens" / "settings" / "SettingsScreen.kt").read_text(encoding="utf-8")
+    gblock = re.search(r"enum class SettingsGroup\(.*?\) \{(.*?)\n\}", src, re.S).group(1)
+    group_label = dict(re.findall(r"^\s+(\w+)\(\"[\w-]+\", \"([^\"]+)\"", gblock, re.M))
+    sblock = re.search(r"enum class SettingsSection\(.*?\) \{(.*?)\n\}", src, re.S).group(1)
+    tree: dict[str, dict[str, str]] = {lbl: {} for lbl in group_label.values()}
+    for key, label, grp in re.findall(
+            r"^\s+\w+\(\"([\w-]+)\", \"([^\"]+)\", SettingsGroup\.(\w+)", sblock, re.M):
+        tree[group_label[grp]][label] = key
+    return {"groups": tree, "cards": {}}
+
+
+def _strings(node):
+    if isinstance(node, str):
+        yield node
+    elif isinstance(node, dict):
+        for v in node.values():
+            yield from _strings(v)
+    elif isinstance(node, list):
+        for v in node:
+            yield from _strings(v)
+
+
+_PATH_LINK = re.compile(r"\[(Settings → [^\]]+)\]\(route:([a-z0-9/-]+)\)")
+
+
+def _resolve(path: str, tree: dict) -> tuple[str | None, str | None]:
+    """(section id, None) when "Settings → Group[ → Section[ → card…]]"
+    is a real place in ``tree`` ("" for a group alone); (None, why) when
+    not."""
+    steps = [s.strip() for s in path.split("→")]
+    assert steps[0] == "Settings", path
+    steps = steps[1:]
+    if not steps or steps[0] not in tree["groups"]:
+        return None, f"no Settings group {steps[:1]} (groups: {sorted(tree['groups'])})"
+    sections = tree["groups"][steps[0]]
+    if len(steps) == 1:
+        return "", None
+    if steps[1] not in sections:
+        return None, f"no section {steps[1]!r} in {steps[0]} ({sorted(sections)})"
+    sid = sections[steps[1]]
+    for card in steps[2:]:
+        # The app has no parseable list of a section's cards: its steps
+        # after the section aren't checked.
+        if tree["cards"] and card not in tree["cards"].get(sid, set()):
+            return None, f"no {card!r} in {steps[0]} → {steps[1]}"
+    return sid, None
+
+
+def _plain_paths(text: str, tree: dict) -> list[str]:
+    """A "Settings → …" outside a link (a phrase's note): the longest run
+    of known group and section labels after it."""
+    out = []
+    for m in re.finditer(r"Settings → ", text):
+        rest = text[m.end():]
+        group = max((g for g in tree["groups"] if rest.startswith(g)), key=len, default=None)
+        if group is None:
+            out.append("Settings → " + rest[:30])
+            continue
+        path = "Settings → " + group
+        rest = rest[len(group):]
+        if rest.startswith(" → "):
+            rest = rest[3:]
+            sec = max((s for s in tree["groups"][group] if rest.startswith(s)), key=len, default=None)
+            path += " → " + (sec if sec is not None else rest[:30])
+        out.append(path)
+    return out
+
+
+def test_every_settings_path_the_manual_cites_is_a_real_place() -> None:
+    """Capability finding N16: "Settings → Chat" and "Settings → Phone
+    calendars" named places that don't exist (Chat is under Chat & AI,
+    Phone calendars under Household). Every "Settings → Group → Section"
+    the manual cites must be a group, then a section in that group, taken
+    from the Settings definitions themselves (settings.jsx for dashboard
+    routes and plain text, SettingsScreen.kt for the app's own routes),
+    and the section must be the one the link opens. A step after the
+    section must be one of that section's search cards on the dashboard
+    (bold UI words after the link aren't part of the path)."""
+    dash, app = _dashboard_settings_tree(), _app_settings_tree()
+    assert {"Household", "Chat & AI", "System"} <= set(dash["groups"])  # the parse found them
+    assert "Phone calendars" in app["groups"]["Household"]
+    bad, seen = [], 0
+    for text in _strings(DOC):
+        for path, rid in _PATH_LINK.findall(text):
+            seen += 1
+            tree = app if rid.startswith("app/") else dash
+            sid, why = _resolve(path, tree)
+            if why:
+                bad.append(f"{path} ({rid}): {why}")
+                continue
+            want = DOC["routes"][rid]["app"].get("tab") if rid.startswith("app/") else rid.split("/", 1)[1]
+            if sid != want:
+                bad.append(f"{path} ({rid}): names {sid or 'a group'}, the link opens {want}")
+        for path in _plain_paths(_PATH_LINK.sub("", text), dash):
+            seen += 1
+            _, why = _resolve(path, dash)
+            if why:
+                bad.append(f"{path} (no link): {why}")
+    assert seen > 50
+    assert not bad, "\n".join(bad)
+
+
+def test_the_settings_path_check_catches_a_wrong_path() -> None:
+    dash, app = _dashboard_settings_tree(), _app_settings_tree()
+    assert _resolve("Settings → Chat", dash)[1]
+    assert _resolve("Settings → Phone calendars", app)[1]
+    assert _resolve("Settings → Household → Models", dash)[1]
+    assert _resolve("Settings → Household → Phones & browsers → Nope", dash)[1]
+    assert _resolve("Settings → Chat & AI → Chat", dash) == ("chat", None)
+    assert _resolve("Settings → Household → Phone calendars", app) == ("phone-calendars", None)
+    assert _plain_paths("named in Settings → Household → Rooms", dash) == ["Settings → Household → Rooms"]
 
 
 # ── doc links ─────────────────────────────────────────────────────────────

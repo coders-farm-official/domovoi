@@ -200,7 +200,7 @@ async def test_internet_off_replies_on_both_paths(monkeypatch) -> None:
     with egress.override_policy("never"):
         q = await handler._answer_question_from_web("weather tomorrow", _ctx(), None)
         c = await handler._verify_claim_directly("x is true", _ctx(), None)
-    want = "I'm set to stay off the internet, so I can't check that."
+    want = "I'm set to stay off the internet, so I can't check that. An admin can change that in Settings → Privacy → Internet."
     assert q.text == want and c.text == want
     assert CHECKED_ONLINE not in q.text.lower()
 
@@ -261,7 +261,7 @@ async def test_fallback_offline_wording() -> None:
     assert unset.text == "I can't check that right now — I don't have internet."
     with egress.override_policy("never"):
         off = await handler.fallback_offline(intent, ctx, None)
-    assert off.text == "I'm set to stay off the internet, so I can't check that."
+    assert off.text == "I'm set to stay off the internet, so I can't check that. An admin can change that in Settings → Privacy → Internet."
     with egress.override_policy("always"):
         down = await handler.fallback_offline(intent, ctx, None)
     assert down.text == unset.text
@@ -276,7 +276,7 @@ async def test_yes_to_an_offer_while_offline_uses_the_same_wording() -> None:
     assert unset.text == "I can't check that right now — I don't have internet."
     with egress.override_policy("never"):
         off = await handler._handle_self_doubt_offer(data, True, ctx, None)
-    assert off.text == "I'm set to stay off the internet, so I can't check that."
+    assert off.text == "I'm set to stay off the internet, so I can't check that. An admin can change that in Settings → Privacy → Internet."
 
 
 def test_news_offline_lead() -> None:

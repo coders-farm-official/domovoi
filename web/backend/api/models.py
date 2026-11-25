@@ -555,7 +555,7 @@ async def cancel_pull(job_id: int) -> dict[str, Any]:
 
 
 # ─── The household's AI switch ──────────────────────────────────────────────
-# Settings → Models' "AI chat and questions" card (domovoi/ai_features.py).
+# Settings → Chat & AI → Models' "AI chat and questions" card (domovoi/ai_features.py).
 # The switch itself is the core's ``ai_features`` setting, written through
 # the same config path as every other setting; these two routes add what
 # the card needs around it: the live answer (read from .env like the core

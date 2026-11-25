@@ -335,11 +335,13 @@ async def test_an_unknown_list_is_asked_about_never_made_silently(voice) -> None
 @pytest.mark.asyncio
 async def test_a_bare_list_goes_to_the_only_list_else_asks(voice) -> None:
     r = await voice("add milk to my list")
-    assert r.text == "Which list? You have to-do and shopping."
+    assert r.text == "You have to-do and shopping. Which one should I add milk to?"
+    r = await voice("to-do")
+    assert r.text == "Added milk to your to-do list."
     todo = await L.find_list(voice.db, "todo")
     await L.delete_list(voice.db, todo.id)
-    r = await voice("add milk to my list")
-    assert r.text == "Added milk to your shopping list."
+    r = await voice("add eggs to my list")
+    assert r.text == "Added eggs to your shopping list."
 
 
 @requires_db
@@ -435,3 +437,85 @@ async def test_replies_about_one_friend_item_are_filtered_and_kept_as_a_stand_in
     # The person's own words stay; the replies keep the stand-in.
     assert "Yes, something a friend house added is on your to-do list." in remembered
     assert "Crossed something a friend house added off your to-do list." in remembered
+
+
+# ─── "add milk, eggs and bread" with no list named (live 2026-11-24) ──────
+# "Add seaweed, water." (a mis-hearing of a shopping-list turn) reached the
+# routing model, which called the library: "I don't know how to add the
+# library." A bare "add <items>" now asks which list and keeps the items.
+
+
+@pytest.mark.parametrize("said", [
+    "add seaweed, water", "Add seaweed, water.", "add milk, eggs and bread",
+    "add bananas", "add paper towels please",
+])
+def test_a_bare_add_is_the_lists_fast_path(said: str) -> None:
+    assert fast_path_winner(said) == "lists", said
+
+
+@pytest.mark.parametrize("said", [
+    "add it", "add this one", "add that", "add another five minutes", "add 10 minutes",
+    "add this song", "add the next episode", "add a printer", "add the dentist tomorrow",
+    "add soccer on friday", "add bohemian rhapsody after this", "add a timer",
+    "add a reminder", "add more",
+])
+async def test_a_bare_add_that_is_another_features_is_not_lists(said: str) -> None:
+    assert fast_path_winner(said) != "lists", said
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_bare_add_asks_which_list_and_keeps_the_items(voice) -> None:
+    r = await voice("Add seaweed, water.")
+    assert (r.matched_handler, r.matched_path) == ("lists", "fast")
+    assert r.text == "You have to-do and shopping. Which one should I add seaweed and water to?"
+    assert r.expect_followup
+    r = await voice("the shopping list")
+    assert r.matched_handler == "lists"
+    assert r.text == "Added seaweed and water to your shopping list."
+    assert await _items(voice.db, "shopping") == [("Seaweed", False), ("Water", False)]
+
+
+@requires_db
+@pytest.mark.asyncio
+@pytest.mark.parametrize("answer", ["shopping", "to the shopping list", "Shopping, please.", "groceries"])
+async def test_the_which_list_answer_can_be_said_many_ways(voice, answer: str) -> None:
+    await voice("add milk, eggs and bread")
+    r = await voice(answer)
+    assert r.text == "Added milk, eggs, and bread to your shopping list.", answer
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_never_mind_adds_nothing_and_another_turn_routes_on(voice) -> None:
+    await voice("add bananas")
+    r = await voice("never mind")
+    assert r.text == "Okay, I didn't add anything."
+    assert await _items(voice.db, "shopping") == [] and await _items(voice.db, "to-do") == []
+    await voice("add bananas")
+    r = await voice("what's on my to-do list")      # not a list name: an ordinary turn
+    assert r.matched_handler == "lists" and "bananas" not in r.text.lower()
+    assert await _items(voice.db, "shopping") == []
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_bare_add_with_one_list_goes_to_it(voice) -> None:
+    await voice.db.execute(text("DELETE FROM lists WHERE name_key = 'todo'"))
+    await voice.db.commit()
+    r = await voice("add bananas")
+    assert r.text == "Added bananas to your shopping list."
+
+
+@pytest.mark.parametrize("said", [
+    "add things to my list", "add stuff to the shopping list", "put things on my list",
+    "add stuff to the shopping", "add to my list stuff", "add stuff", "remove things from my list",
+    "take stuff off the shopping list", "cross things off my list", "cross off stuff", "tick things off",
+])
+def test_a_generic_item_is_never_a_list_command(said: str) -> None:
+    # G1: "can you add things to my list?" asks about the ability (the
+    # capability table answers); no item called "things" is ever written.
+    from domovoi.handlers.lists import ListsHandler
+
+    for fp in ListsHandler().fast_paths:
+        assert not fp.pattern.match(said), (said, fp.pattern.pattern)

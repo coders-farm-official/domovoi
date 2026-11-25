@@ -1,0 +1,11 @@
+{
+  "extends": "base",
+  "note": "The video-downloads plugin installed, switched off by an admin.",
+  "plugins": [
+    {
+      "slug": "video-downloads",
+      "enabled": false,
+      "status": "ok"
+    }
+  ]
+}

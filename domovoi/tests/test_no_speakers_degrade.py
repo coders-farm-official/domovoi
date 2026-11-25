@@ -76,10 +76,13 @@ async def test_music_request_degrades_when_no_room_is_provisioned(
 
 @requires_db
 @pytest.mark.asyncio
-async def test_unrelated_runtime_error_still_propagates(monkeypatch, db_session):
+async def test_unrelated_runtime_error_is_not_no_speakers(monkeypatch, db_session):
     """The catch is narrow on purpose: a genuine MPD fault must NOT be
     reported as 'no speakers yet', which would hide real breakage behind a
-    reassuring message."""
+    reassuring message. It is the plain failure line instead (route()'s
+    catch-all, capability N5), recorded as an error."""
+    from domovoi.router import TURN_FAILED_TEXT
+
     def exploded(_room_id=None):
         raise RuntimeError("mpd socket exploded")
 
@@ -87,9 +90,11 @@ async def test_unrelated_runtime_error_still_propagates(monkeypatch, db_session)
         "domovoi.handlers.music.get_mpd_client_for", exploded
     )
 
-    with pytest.raises(RuntimeError, match="exploded"):
-        await route(
-            Intent(transcript=PLAY, room_id="kitchen"),
-            Context(room_id="kitchen", online=True),
-            db_session,
-        )
+    resp = await route(
+        Intent(transcript=PLAY, room_id="kitchen"),
+        Context(room_id="kitchen", online=True),
+        db_session,
+    )
+    assert resp.text == TURN_FAILED_TEXT
+    assert resp.matched_path == "error"
+    assert "no rooms have been set up" not in resp.text.lower()

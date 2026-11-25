@@ -73,7 +73,7 @@ async def _say(text: str, *, online: bool = True, spoken: list | None = None):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("said", [
     "what is the capital of mongolia",
-    "tell me a joke",
+    "tell me a fun fact",
     "how many ounces are in one hundred grams",
     "could you please start a five minute countdown for me",
     "put on something from the hearth cats",
@@ -98,11 +98,45 @@ async def test_anything_no_command_takes_gets_the_home_commands_line(offline_rou
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("said", "lead"), [
+    ("can I chat with you", "AI chat is off on this house, but home commands like timers and music still work."),
+    ("tell me a story", "AI is off on this house, so I can't tell stories."),
+    ("tell me a bedtime story about a dragon", "AI is off on this house, so I can't tell stories."),
+    ("tell me a joke", "AI is off on this house, so I can't tell jokes."),
+    ("could you write me a poem", "AI is off on this house, so I can't write poems."),
+    ("tell me some stories", "AI is off on this house, so I can't tell stories."),
+    ("read me a poem", "AI is off on this house, so I can't read poems."),
+    ("give me a riddle", "AI is off on this house, so I can't tell riddles."),
+])
+async def test_a_request_only_the_model_answers_says_ai_is_off_and_how_to_turn_it_on(
+    offline_router, said, lead,
+) -> None:
+    """Cases 6.2 and 6.6 (owner Q2): a chat, a story, a joke or a poem
+    asked with AI off says AI is off and where it's turned on, not the
+    general "set up for home commands" line."""
+    with ai_features.override(False):
+        r = await _say(said)
+    assert r.text == f"{lead} An admin can turn it on in Settings → Chat & AI → Models."
+    assert r.matched_path == "qa" and r.matched_handler is None
+    assert len(offline_router) == 2
+
+
+@pytest.mark.parametrize("said", [
+    "what time is it", "tell me about saturn", "tell me a fun fact", "read me the news",
+    "tell me the story so far", "who wrote that poem",
+])
+def test_other_words_keep_the_general_line(said) -> None:
+    assert ai_features.off_request_line(said) is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("online", [True, False])
 async def test_the_weather_and_the_news_of_the_day_get_the_lookup_line(offline_router, online) -> None:
     with ai_features.override(False):
         r = await _say("what's the weather going to be like tomorrow", online=online)
-    assert r.text == ai_features.OFF_LOOKUP_LINE == "I can't look that up with AI turned off."
+    assert r.text == ai_features.OFF_LOOKUP_LINE == (
+        "I can't look that up with AI turned off. An admin can turn it on in Settings → Chat & AI → Models."
+    )
 
 
 @pytest.mark.asyncio
@@ -238,7 +272,7 @@ async def test_a_timer_and_a_question_with_ai_off(db_session, monkeypatch) -> No
     with ai_features.override(False):
         timer = await route(Intent(transcript="set a timer for 5 minutes", room_id="kitchen"),
                             Context(room_id="kitchen", online=True), db_session)
-        question = await route(Intent(transcript="tell me a story about a dragon", room_id="kitchen"),
+        question = await route(Intent(transcript="tell me about dragons", room_id="kitchen"),
                                Context(room_id="kitchen", online=True), db_session)
     await db_session.commit()
     assert timer.matched_handler == "timer" and timer.matched_path == "fast"

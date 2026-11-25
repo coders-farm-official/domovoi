@@ -554,6 +554,7 @@ system = [
 | `tone` | UI tone slug (`neutral` \| `media` \| `device` \| `info` \| `comms`); default `neutral`. |
 | `icon` | Optional asset path (point into your `web/static/`). |
 | `corpus` | Canonical utterances this handler must win — fed into the collision test at every load, yours and everyone else's. |
+| `needs_ai` | Default `false`. Cross-checked against `Handler.needs_ai` (SDK 1.14). `true` when what the handler does is a model's work; see `[ai]` below. |
 
 ### `[[workers]]` — one table per worker or startup hook
 
@@ -715,7 +716,7 @@ order = 50
   frame, no "needs attention" row — so catch your own errors and return
   `null`. A disabled or uninstalled plugin shows no cards. Home has no
   per-household card settings yet, so a card with `default_on = false` is
-  not shown. A core before 1.14 ignores the table.
+  not shown. A core before 1.14 ignores the table, and so does Domovoi 1.4.1 (its SDK 1.14.0 predates home cards): ask for `">=1.15"` to be sure.
 
   "Household-tier data only" is a rule for you to follow, not something
   the dashboard enforces. A card is your plugin's script running in the
@@ -1087,6 +1088,52 @@ itself needs Docker on the server's Linux side). There is no in-process
 fallback, and no setting reaches the test kit's stand-ins.
 
 A core older than 1.5.0 ignores the table (and the `friend_houses` key).
+### `[ai]` — work that is a model's (SDK 1.14)
+
+The household can turn AI off (Settings → Chat & AI → Models). Your
+`sdk.http` requests to this box's Ollama are refused then (§4.14), but a
+plugin whose feature runs a model of its own — pictures made on a local
+diffusion engine, say — never asks Ollama, so nothing would stop it. Say
+so, and core turns that feature off with the switch and answers for you:
+
+```toml
+[ai]
+does = "make pictures"     # spoken: "AI is off on this house, so I can't make pictures."
+routes = ["/generate"]     # web and core routes that make something
+
+[[handlers]]
+name = "my_pictures"
+band = 400
+label = "Pictures"
+needs_ai = true            # also set needs_ai = True on the Handler class
+```
+
+| Field | Rules |
+|---|---|
+| `does` | Optional phrase, at most 60 characters, finishing "AI is off on this house, so I can't …". Name the feature, never your plugin. Empty: "do that". |
+| `routes` | Optional list of route paths under your prefix, as you declared them (`"/generate"`, `"/jobs/{job_id}/redo"`). |
+
+While AI is off:
+
+- **Voice.** A fast path of a `needs_ai` handler (or one whose
+  `FastPath(needs_ai=True)`) is answered by core with that line and
+  "An admin can turn it on in Settings → Chat & AI → Models."; your
+  method never runs. `FastPath(needs_ai=False)` keeps a read-only path
+  ("is my picture ready?") working on a `needs_ai` handler. With AI off
+  there is no tool model, so tool calls never reach you either.
+- **HTTP.** A non-GET request to a listed route, on the web process
+  (`/api/plugins/<slug>/…`) or the core (`/v1/plugins/<slug>/…`), is
+  refused before your function runs: status **423**, `detail` = the same
+  line, header `X-Domovoi-Refusal: ai-off`. Read the header, not the
+  status, in your page; the dashboard also shows the line in its own
+  notice. GET requests always pass, so what was made before stays
+  browsable.
+
+An older core ignores the table and the field (nothing is gated there);
+ask for `domovoi_api = ">=1.14"` to be sure. A plugin released before
+SDK 1.14 that provides a capability core knows to be a model's work
+(`imagegen`: the routes and requests above) is gated by that capability
+until its manifest carries an `[ai]` table, which then wins.
 
 ### `[android]`
 
@@ -1150,9 +1197,9 @@ from domovoi.sdk import (
 | 1.9 | `sdk.speech.render` (§4.17); `core_config.ollama_url` / `ollama_model` (§4.13) |
 | 1.10 | `spoken_names` and `choices` (§4.20); `choice_kinds` on plugin handlers (§4.2); `playback.ensure_room` (§4.5); the player source's `room_play_template` (§3) |
 | 1.11 | `@device_endpoint` websocket routes on the core router (§4.15) |
-| 1.12 | `core_config.news_location` (the household's place); a plugin registering the `"weather"` capability takes weather questions over from core |
+| 1.12 | `core_config.news_location` (the household's place); a plugin registering the `"weather"` capability takes weather questions over from core (since 1.4.1, when its handler raises or answers nothing on a weather question, core's own lookup stands in if the internet answer allows; "check that online" asks the plugin first too) |
 | 1.13 | `sdk.household.home_location()` (async: the Home location `{name, lat, lon, country}` or `None`; `lat`/`lon`/`country` are `None` for a name that matched no town) and `sdk.places.suggest(text, limit=8)` (the bundled GeoNames town list, offline, biggest first; same shape); `core_config.news_location` is now the Home location's name (§4.13). 1.13.1: `net_safety.open_raw_stream` / `iter_raw` and their `_sync` twins (a stream read as it came, never decoded) |
-| 1.14 | `[[web.home_cards]]`: a plugin card on the dashboard Home page (§3) |
+| 1.14 | "needs AI": `Handler.needs_ai`, `FastPath.needs_ai`, the manifest's `[[handlers]] needs_ai` and the `[ai]` table — work that IS a model's goes off with the household's AI switch (§3, "`[ai]`"); on 1.5.0 also `[[web.home_cards]]`, a plugin card on the dashboard Home page (§3). Domovoi 1.4.1's 1.14.0 has no home cards, so a plugin with one asks for `">=1.15"` |
 | 1.15 | `playback.player_route(room_id)`: the host and port a room's music player dials to reach the core, and the address the core sees it call from (`.url(path)`, `.admits(address)`), for a plugin that hands the player a URL on the core, such as a stream relay |
 | 1.16 | `playback.relay_url(room_id, remote_url, kind="file"\|"radio")` and `playback.relay_target(url)`: a room's music player plays a REMOTE URL through the core's checked relay instead of fetching it itself (§4.5, "A remote URL for a room's player"); `RelayUnavailable` |
 | 1.17 | the event `core.voice_history_deleted` `{person_id}` and `core_config.voice_history_keep`: **the hook every plugin that stores person-linked data must honour** (§4.21) |
@@ -1514,8 +1561,8 @@ result = await sdk.acquisition.enqueue(
 
 `requested_by` defaults to `plugin:<slug>`. With no fulfiller installed the
 row simply sits `pending` and `result.user_message` carries the canonical
-graceful-absence copy ("I've noted that down, but no media provider is
-installed to fetch it."). Watch `core.acquisition_completed` /
+graceful-absence copy ("I've noted that down, but downloading isn't set up
+on this house."). Watch `core.acquisition_completed` /
 `core.acquisition_failed` events and correlate by `origin_ref` — **and**
 pair the subscription with a periodic reconciliation sweep, because the bus
 is fire-and-forget (see [§6.4](#64-the-offline-contract-and-the-bus-is-not-durable)).
@@ -1733,7 +1780,7 @@ is `auto`, which the core resolves to its current LAN address.
   "the network is unavailable" (which it is) rather than letting a
   `ValueError` escape as a 500.
   **It honours the household's AI switch** (SDK 1.7): while AI chat and
-  questions are off (Settings → Models, `AI_FEATURES=false`), every request
+  questions are off (Settings → Chat & AI → Models, `AI_FEATURES=false`), every request
   to this box's Ollama (any host on port 11434, or the core's `OLLAMA_URL`)
   raises `ai_features.AITurnedOffConnectError` (an `AITurnedOff` and an
   `httpx.ConnectError`) before anything is sent, except its read-only

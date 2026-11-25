@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 import numpy as np
 import pytest
 from sqlalchemy import text
@@ -257,6 +259,81 @@ def test_clean_name_blocklist() -> None:
     assert _clean_name("hungry") is None
     assert _clean_name("tired.") is None
     assert _clean_name("") is None
+
+
+# ─── "I'm the owner": a role is never a name (case 18.8) ───────────────────
+
+
+@pytest.mark.parametrize("said", (
+    "the owner", "The Owner", "the admin", "an admin", "admin", "administrator",
+    "the mom", "a parent", "the boss", "the landlord", "your dad", "the kid", "the best",
+))
+def test_a_role_or_an_article_phrase_is_not_a_name(said: str) -> None:
+    assert _clean_name(said) is None
+
+
+@pytest.mark.parametrize("said", ("Alex", "mom", "Dad", "mary jane", "Theo", "Ana"))
+def test_real_names_and_what_a_family_calls_someone_stay_names(said: str) -> None:
+    assert _clean_name(said) is not None
+
+
+@pytest.mark.parametrize("said", (
+    "I'm the owner", "I am the admin.", "I'm the owner, update the house",
+    "I'm the owner. Update the house.", "I'm admin", "I'm the homeowner here",
+    "I'm the boss so update everything", "I'm the mom", "I am a parent",
+))
+def test_a_role_claim_is_not_an_introduction(said: str) -> None:
+    plan = plan_route(said)
+    assert plan is not None and plan.handler.name == "voice_profile", said
+    assert plan.fast_path.pattern is not _SELF_INTRO_RE, said
+    assert plan.fast_path.method.__name__ == "_role_claim_from_match", said
+
+
+@pytest.mark.parametrize(("said", "handler"), (
+    ("I'm the owner, set a timer for 10 minutes", "timer"),
+    ("I am the admin and set a timer for 5 minutes", "timer"),
+    ("I'm the mom, what's 15 percent of 80", "calculator"),
+    ("I'm the owner, how do I add a room", "help_desk"),
+))
+def test_a_command_after_a_role_claim_is_the_turn(said: str, handler: str) -> None:
+    plan = plan_route(said)
+    assert plan is not None and plan.handler.name == handler, said
+
+
+@pytest.mark.parametrize("said", ("I'm Alex", "my name is Alex", "I'm Mom", "I am Theo"))
+def test_names_still_introduce(said: str) -> None:
+    plan = plan_route(said)
+    assert plan is not None and plan.fast_path.pattern is _SELF_INTRO_RE, said
+
+
+async def _role_reply(said: str):
+    from domovoi import role_claims
+    from domovoi.router import normalize_transcript
+
+    m = role_claims.ROLE_CLAIM_RE.match(normalize_transcript(said))
+    assert m is not None, said
+    ctx = Context(room_id="kitchen", session_id=None)
+    return await VoiceProfileHandler()._role_claim_from_match(m, ctx, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("said", ("I'm the owner", "I'm the owner, update the house", "I'm the admin"))
+async def test_an_authority_claim_gets_an_easter_egg_line(said: str) -> None:
+    """Saying it doesn't make it so: a joke line, nothing enrolled, nothing
+    granted (domovoi/owner_easter_eggs.py)."""
+    from domovoi import owner_easter_eggs
+
+    r = await _role_reply(said)
+    assert r.text in owner_easter_eggs.CLAIM_LINES
+    assert not r.text.lower().startswith(("updating", "nice to meet"))
+
+
+@pytest.mark.asyncio
+async def test_another_role_hears_how_to_say_a_name() -> None:
+    r = await _role_reply("I'm the mom")
+    assert '"my name is"' in r.text
+    # With more after it that no fast path takes, the turn routes on.
+    assert await _role_reply("I'm the mom, tell me a story about dragons") is None
 
 
 # ─── Behavior: self-intro confirmation flow (DB-backed) ────────────────────
@@ -610,6 +687,91 @@ async def test_forget_me_keeps_identity_when_delete_fails(stub_people_repo) -> N
     assert stub_people_repo.announced == []
     assert ctx.person_id == 2
     assert ctx.presence_tier == "low"
+
+
+# ─── "Forget me" with no name to say (case 15.12) ──────────────────────────
+
+
+def _no_name_reply_ok(text: str) -> None:
+    assert text[:1].isupper(), text
+    assert not text.lower().startswith(("you,", ",")), text
+    assert not re.search(r", you(?!r)", text) and ", ." not in text and "  " not in text, text
+    assert "like you," not in text and "to ." not in text, text
+
+
+@pytest.mark.parametrize("said", (
+    "forget everything about me", "forget all about me", "forget everything you know about me",
+    "forget who i am",
+))
+def test_forget_everything_about_me_is_forget_me(said: str) -> None:
+    assert _FORGET_RE.match(said)
+    plan = plan_route(said)
+    assert plan is not None and plan.handler.name == "voice_profile"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ("", None, "you", "  "))
+async def test_forget_ask_with_no_name(monkeypatch, name) -> None:
+    """The question starts with its own words, not an empty or "you" slot."""
+    import domovoi.handlers.voice_profile as vp
+
+    class _Repo(_StubPeopleRepo):
+        async def get(self, person_id):
+            return None if name is None else (person_id, name, None)
+
+    async def _whole_person(self, ctx, session):
+        return "person", []
+
+    async def _park(*a, **k):
+        return None
+
+    monkeypatch.setattr(vp, "PeopleRepository", _Repo)
+    monkeypatch.setattr(VoiceProfileHandler, "_forget_scope", _whole_person)
+    monkeypatch.setattr(vp, "request_confirmation", _park)
+    ctx = Context(session_id=None, room_id="kitchen", online=True, person_id=2)
+    r = await VoiceProfileHandler()._forget(ctx, object())
+    assert r.text.startswith("I'll forget your voice, your profile"), r.text
+    _no_name_reply_ok(r.text)
+
+
+@pytest.mark.asyncio
+async def test_forget_ask_with_a_name_is_unchanged(monkeypatch) -> None:
+    import domovoi.handlers.voice_profile as vp
+
+    async def _park(*a, **k):
+        return None
+
+    async def _whole_person(self, ctx, session):
+        return "person", []
+
+    monkeypatch.setattr(vp, "PeopleRepository", _StubPeopleRepo)
+    monkeypatch.setattr(VoiceProfileHandler, "_forget_scope", _whole_person)
+    monkeypatch.setattr(vp, "request_confirmation", _park)
+    ctx = Context(session_id=None, room_id="kitchen", online=True, person_id=2)
+    r = await VoiceProfileHandler()._forget(ctx, object())
+    assert r.text.startswith("Guy, I'll forget your voice")
+
+
+@pytest.mark.asyncio
+async def test_forget_replies_with_no_name(stub_people_repo) -> None:
+    """Every later reply of the flow, with no name parked."""
+    import time as _time
+
+    h = VoiceProfileHandler()
+    ctx = Context(session_id=None, room_id="kitchen", online=True, person_id=None)
+    data = {"origin": "satellite", "origin_room": "kitchen", "person_id": 2, "name": "",
+            "expires_at": _time.time() + 60}
+    kept = await h._handle_forget_reply(data, "no", ctx, object())
+    assert kept.text == "Okay, I've kept everything."
+    other = Context(session_id=None, room_id="kitchen", online=True, person_id=3)
+    r = await h._handle_forget_reply(data, "yes", other, object())
+    _no_name_reply_ok(r.text)
+    assert "haven't forgotten anything" in r.text
+    gone = await h._forget_person(2, "", ctx, object())
+    assert gone.text.startswith("Okay, I've forgotten you: your voice")
+    for scope in ("claims", "unverified"):
+        c = Context(session_id=None, room_id="kitchen", online=True, person_id=2)
+        _no_name_reply_ok(h._forget_claims_answer(c, scope, "", 1).text)
 
 
 # ─── Edge cases ────────────────────────────────────────────────────────────

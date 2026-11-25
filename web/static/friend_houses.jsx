@@ -1112,7 +1112,7 @@ const FhConversation = ({ conv, fire, admin, onChanged, onClose }) => {
           {name}{former ? ' (no longer a friend)' : ''}
         </strong>
         {/* Saving a copy and deleting stay admin (the security tier). */}
-        {admin && msgs.length > 0 && <Button icon="download" onClick={save}>Save a copy (with proof of what was sent)</Button>}
+        {admin && msgs.length > 0 && <Button icon="download" onClick={save}>Save a copy</Button>}
         {admin && msgs.length > 0 && <Button icon="trash-2" disabled={busy} onClick={() => setConfirm(true)}>Delete</Button>}
       </div>
       {more && <div><Button variant="ghost" onClick={earlier}>Load earlier</Button></div>}

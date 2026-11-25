@@ -132,7 +132,7 @@ class RecordingAcquisition:
         self.failed.append({"id": acq_id, **kwargs})
 
     def friendly_absence_message(self, kind: str) -> str:
-        return "I've noted that down, but no media provider is installed to fetch it."
+        return "I've noted that down, but downloading isn't set up on this house."
 
 
 @dataclass

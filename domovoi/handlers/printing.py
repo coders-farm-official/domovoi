@@ -109,6 +109,12 @@ def _said(text: str) -> str:
     return sanitize_for_speech(text)
 
 
+def _how_to_add_printer() -> str:
+    """Where a printer (or scanner) is added: the one line every "none set
+    up" answer ends with."""
+    return "An admin can add one in Settings → Household → Printers & scanners."
+
+
 def _list_words(names: list[str]) -> str:
     if len(names) == 1:
         return names[0]
@@ -288,6 +294,9 @@ class PrintingHandler(Handler):
         what = (m.group("what") or "").strip()
         if _NOT_SCAN_RE.search(what):
             return None
+        # No printer: say so first, not "which document?" (finding N14).
+        if not await self._any_printer():
+            return self._reply(ctx, self._no_printer_text("No printer"))
         wanted: dict[str, Any] = {}
         copies = m.group("copies")
         if copies:
@@ -371,10 +380,22 @@ class PrintingHandler(Handler):
     # ─── printing ────────────────────────────────────────────────────────
 
     @staticmethod
+    async def _any_printer() -> bool:
+        """A printer is set up that can print. A failed read says yes: the
+        print path then answers with what it finds."""
+        from domovoi.printing import store
+
+        try:
+            return any(r.get("ipp_address") for r in await store.list_printers())
+        except Exception as e:  # noqa: BLE001
+            log.warning("printing: the printers could not be read: %s", e)
+            return True
+
+    @staticmethod
     def _no_printer_text(reason: str) -> str:
         if reason.startswith("No printer"):
-            return ("There's no printer set up. Say set up the printer, or add one in Settings, "
-                    "Printers and scanners.")
+            return ("There's no printer set up. " + _how_to_add_printer()
+                    + " Or say set up the printer to look for one.")
         return reason
 
     async def _print(self, what: str, wanted: dict, ctx: Context, session: AsyncSession,
@@ -590,8 +611,7 @@ class PrintingHandler(Handler):
                                           "I can scan on %s." % " or ".join(devices.the(n) for n in e.names[:3])))
         except devices.DeviceError as e:
             if "no scanner" in str(e).lower():
-                return self._reply(ctx, "There's no scanner set up. You can add one in Settings, Printers and "
-                                        "scanners.")
+                return self._reply(ctx, "There's no scanner set up. " + _how_to_add_printer())
             return self._reply(ctx, _said(str(e)))
         except (escl.EsclError, http11.HttpError):
             return self._reply(ctx, "The scanner isn't answering. Is it switched on?")

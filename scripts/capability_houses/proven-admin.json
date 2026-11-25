@@ -1,0 +1,6 @@
+{
+  "extends": "base",
+  "note": "A dashboard chat with a live admin session.",
+  "asker": "proven_admin",
+  "admin_session": "live"
+}

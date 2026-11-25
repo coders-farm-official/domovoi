@@ -11,6 +11,10 @@ Three concerns live here:
 3. **Anonymous-speaker guard** — anything that wants `person_id`
    produces a clear "I don't know who you are yet" prompt rather
    than silently failing or writing orphan rows.
+4. **A bare "forget that"** (N15) — see :data:`_FORGET_LAST_RE` and
+   :meth:`MemoryHandler._forget_last` for the rule that decides between
+   forgetting the memory just saved, dropping a question, standing down,
+   and asking "Forget what?".
 
 The implicit-extraction worker writes into the
 same ``memories`` table with ``source='implicit', status='pending'``.
@@ -25,16 +29,22 @@ from __future__ import annotations
 
 import logging
 import re
+import time
+from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from domovoi.confirmations import PENDING_CONFIRMATION_KEY, request_confirmation
 from domovoi.db.repositories import (
     FavoritesRepository,
     MemoriesRepository,
+    SessionRepository,
 )
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
+from domovoi.handlers.dismiss import _ack
+from domovoi.house_facts import FORGET_YES, GENERIC_OBJECT, MEMORY_YES, is_generic_object
 from domovoi.models import Context, Intent, Response
-from domovoi.voice_identifier import unheard_text
+from domovoi.voice_identifier import UNHEARD, unheard_text
 
 log = logging.getLogger(__name__)
 
@@ -45,9 +55,17 @@ log = logging.getLogger(__name__)
 # "remember I'm allergic to peanuts". Negative lookahead on "to " carves
 # out reminder territory ("remember to call mom" → ReminderHandler's
 # domain, not ours).
+#
+# A generic object is not a fact (G1): "(can you) remember things about me"
+# is a question about the ability, and the capability table answers it
+# (house_facts, row "memory"). The lookahead keeps this fast path off it, so
+# the router keeps the question whole; _add_memory refuses one too (the
+# tool router and typed chat reach it without this regex).
+_GENERIC_BODY = rf"(?:{GENERIC_OBJECT})(?:,? (?:please|for me|for us|thanks|thank you))?$"
 _REMEMBER_RE = re.compile(
     r"^(?:i want you to |i'd like you to |)"
     r"remember (?!to )"
+    rf"(?!(?:that |this[:\-]?\s*|the (?:fact|thing) that )?{_GENERIC_BODY})"
     r"(?:that |this[:\-]?\s*|the (?:fact|thing) that )?"
     r"(?P<body>.+)$"
 )
@@ -63,8 +81,118 @@ _FORGET_MEMORY_RE = re.compile(
     r"^(?:"
     r"forget (?:that (?!(?:alias|name|nickname)$)|the (?:fact|thing|memory|note) (?:about |that ))"
     r"|stop (?:saving|remembering) (?:that |)"
-    r")(?P<body>.+)$"
+    # "forget that stuff", "stop remembering things": no one memory (G1).
+    rf")(?!{_GENERIC_BODY})(?P<body>.+)$"
 )
+
+# A BARE forget — no "that <fact>" after it (N15): "forget that", "forget
+# it", "forget about it", "forget what I just said", "never mind, forget
+# that". Until 2026-11 these were the dismiss handler's ("No worries.") and
+# nothing was forgotten, though the person who had just said "remember
+# that …" thought it was. Memory owns them now; `_forget_last` decides what
+# each one means (the rule is written there). ``lead``: a "never mind" in
+# front makes it a brush-off when there is nothing to forget. Listed ahead
+# of _FORGET_MEMORY_RE in fast_paths so "forget that i said that" is this.
+_FORGET_LAST_RE = re.compile(
+    r"^(?P<lead>(?:never ?mind|nvm)[,\s]+)?(?:(?:no|oh|actually|wait|sorry)[,\s]+)?(?:just )?"
+    r"forget (?P<what>it|about it|that|about that|this|"
+    r"what i (?:just )?(?:said|told you)|(?:that )?i (?:just )?said (?:that|anything))"
+    r"(?:,? (?:please|thanks|thank you))?$"
+)
+# The idiom "forget it" / "forget about it": with nothing to forget, a
+# brush-off ("never mind"), as it always was.
+_BRUSH_OFF_WHAT = frozenset({"it", "about it"})
+
+# Session-context key: the memory the last "remember that …" (or a "yes" to
+# a memory offer) saved in this conversation, so a bare "forget that" on the
+# very next turn can forget exactly it. ``at`` is when it was saved; the
+# conversation's recent turns say whether that save is the previous turn.
+LAST_SAVED_KEY = "last_memory_saved"
+# "Forget what?": a parked choice whose reply names the memory.
+FORGET_WHAT_KIND = "core.forget_what"
+_FORGET_WHAT_TTL_SEC = 120
+_SAVED_REPLY = "Got it — I'll remember that."
+# The last line of a memory list (G2): how to take one back. Voice and typed
+# chat (web/backend/api/chat_memory.py, via _list_memories) say the same.
+FORGET_HINT = 'Say "forget that …" to remove one.'
+
+
+def forgotten_text(body: str) -> str:
+    """"OK, forgotten: <fact>." — one wording, one closing period, on every
+    path (G5): "forget that <fact>", a bare "forget that", the answer to
+    "Forget what?", by voice and in typed chat."""
+    return f"OK, forgotten: {(body or '').rstrip(' .!?')}."
+_FORGET_WHAT_TEXT = 'Forget what? Tell me which thing, like "that I like jazz".'
+# A reply to "Forget what?" that drops the question.
+_NEVER_MIND_RE = re.compile(
+    r"^(?:no|nope|nah|nothing|never ?mind|nvm|forget it|forget about it|cancel|"
+    r"nothing,? never ?mind|no,? never ?mind|that's all|i'm good)(?:,? thanks|,? thank you)?$"
+)
+# What leads the fact in a reply to "Forget what?": "that I like jazz",
+# "the one about my dog", "I meant that I like jazz".
+_FORGET_WHAT_LEAD_RE = re.compile(
+    r"^(?:(?:i mean|i meant|i said)[,\s]+)?"
+    r"(?:that |about |the (?:one|fact|thing|memory|note) (?:about |that )|the )?"
+)
+
+
+def _parse_at(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        at = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return at if at.tzinfo is not None else at.replace(tzinfo=timezone.utc)
+
+
+def _saved_last_turn(context: dict) -> dict | None:
+    """The memory the PREVIOUS turn of this conversation saved, or None.
+
+    The handler marks a save in the session context (:data:`LAST_SAVED_KEY`,
+    with when it happened) before the router records the turn; the router
+    then appends that turn to ``recent_turns``. So the save is the previous
+    turn exactly when the newest recorded exchange came after the mark, the
+    one before it came before the mark, and what was said last is the save's
+    own reply. Any turn in between — a song, a question, a second "forget
+    that" — fails one of the three, and nothing is forgotten on a guess."""
+    mark = context.get(LAST_SAVED_KEY)
+    if not isinstance(mark, dict):
+        return None
+    if not isinstance(mark.get("memory_id"), int) or not isinstance(mark.get("person_id"), int):
+        return None
+    saved_at = _parse_at(mark.get("at"))
+    if saved_at is None:
+        return None
+    if context.get("last_assistant_response") != mark.get("reply"):
+        return None
+    turns = [t for t in (context.get("recent_turns") or []) if isinstance(t, dict)]
+    if len(turns) < 2:
+        return None
+    newest = _parse_at(turns[-1].get("at"))
+    if newest is None or newest < saved_at:
+        return None
+    if len(turns) >= 3:
+        before = _parse_at(turns[-3].get("at"))
+        if before is None or before >= saved_at:
+            return None
+    return mark
+
+
+def _same_speaker(ctx: Context, owner: int) -> bool:
+    """Whether this turn may forget a memory saved for ``owner``.
+
+    A recognised voice must BE the owner. A turn whose voice was never
+    scored — a bare "forget that" is usually too short to tell who's
+    talking (``voice_identifier.UNHEARD``) — or a typed one with no voice
+    at all, is the owner's: it is the very next turn of the same
+    conversation, which is how a one-word "yes" to a memory offer is taken
+    as the person it was offered to. A voice that WAS scored and matched
+    nobody, or was too close to call between people, is not."""
+    if ctx.person_id is not None:
+        return ctx.person_id == owner
+    return ctx.voice_outcome is None or ctx.voice_outcome in UNHEARD
+
 
 # "my favorite team is the Mariners" / "favorite genre is jazz" /
 # "my favorite sports are basketball and tennis".
@@ -139,14 +267,18 @@ class MemoryHandler(Handler):
     name = "memory"
     # band rationale: after voice_notes (230) so "jot down ___" / "what was my last note"
     #   win their canonical phrasing; memory vocabulary starts with
-    #   "remember", "forget", "my favorite" — none collide.
+    #   "remember", "forget", "my favorite" — none collide. Its bare
+    #   "forget that" / "forget it" (N15) moved here from dismiss (100):
+    #   nothing in 100-239 takes a "forget" turn but voice_profile's
+    #   "forget me", which these never are.
     priority_band = 240
     display = HandlerDisplay(label="Memory", tone="info")
     example_phrases = (
         "remember that I parked on level 3",
         "what do you remember about me",
     )
-    confirmation_kinds = ("core.pending_memory_offer",)
+    confirmation_kinds = ("core.pending_memory_offer", FORGET_WHAT_KIND)
+    choice_kinds = (FORGET_WHAT_KIND,)
     requires_network = "no"
     tool_schema = {
         "name": "memory",
@@ -195,6 +327,10 @@ class MemoryHandler(Handler):
         # blows up with a TypeError on every turn (F-V002).
         self.fast_paths = [
             FastPath(_REMEMBER_RE, MemoryHandler._add_memory_from_match),
+            # Tier B, as these phrases were under dismiss: "forget that" is
+            # also how "forget that I like jazz" starts, so a pause after it
+            # gets the longer hold (domovoi/early_commit.py).
+            FastPath(_FORGET_LAST_RE, MemoryHandler._forget_last_from_match, early_commit="B"),
             FastPath(_FORGET_MEMORY_RE, MemoryHandler._forget_memory_from_match),
             FastPath(_FAVORITE_ADD_RE, MemoryHandler._add_favorite_from_match),
             FastPath(_FAVORITE_FORGET_RE, MemoryHandler._forget_favorite_from_match),
@@ -232,6 +368,16 @@ class MemoryHandler(Handler):
           ``rejected`` so the extractor won't surface the same fact
           again.
         """
+        if kind == FORGET_WHAT_KIND:
+            # A yes/no to "Forget what?" names nothing: a "no" drops it, a
+            # "yes" gets the question again.
+            if affirmative:
+                return Response(
+                    text=_FORGET_WHAT_TEXT,
+                    session_id=ctx.session_id,
+                    matched_handler=self.name,
+                )
+            return Response(text=_ack(), session_id=ctx.session_id, matched_handler=self.name)
         if kind != "core.pending_memory_offer":
             return Response(
                 text="Got it.",
@@ -260,8 +406,11 @@ class MemoryHandler(Handler):
                 matched_handler=self.name,
             )
         if affirmative:
+            # The extractor's fact is a saved memory now: a "forget that"
+            # on the next turn takes it back.
+            await self._mark_saved(ctx, session, memory_id, person_id)
             return Response(
-                text="Got it — I'll remember that.",
+                text=_SAVED_REPLY,
                 session_id=ctx.session_id,
                 matched_handler=self.name,
                 data={"memory_id": memory_id, "status": "active"},
@@ -332,6 +481,10 @@ class MemoryHandler(Handler):
     async def _add_memory(
         self, body: str, ctx: Context, session: AsyncSession
     ) -> Response:
+        if is_generic_object(body):
+            # "things about me" is no fact (G1): the ability is explained,
+            # nothing is saved.
+            return Response(text=MEMORY_YES, session_id=ctx.session_id, matched_handler=self.name)
         guard = await self._ensure_person(ctx)
         if guard is not None:
             return guard
@@ -349,8 +502,9 @@ class MemoryHandler(Handler):
             source="explicit",
             status="active",
         )
+        await self._mark_saved(ctx, session, memory_id, ctx.person_id)  # type: ignore[arg-type]
         return Response(
-            text="Got it — I'll remember that.",
+            text=_SAVED_REPLY,
             session_id=ctx.session_id,
             matched_handler=self.name,
             data={"memory_id": memory_id, "body": body},
@@ -364,6 +518,9 @@ class MemoryHandler(Handler):
     async def _forget_memory(
         self, fragment: str, ctx: Context, session: AsyncSession
     ) -> Response:
+        if is_generic_object(fragment):
+            # "stuff" would fuzzy-match any memory (G1): nothing is deleted.
+            return Response(text=FORGET_YES, session_id=ctx.session_id, matched_handler=self.name)
         guard = await self._ensure_person(ctx)
         if guard is not None:
             return guard
@@ -400,11 +557,169 @@ class MemoryHandler(Handler):
         memory_id, body = matches[0]
         await repo.delete(memory_id, ctx.person_id)  # type: ignore[arg-type]
         return Response(
-            text=f"OK, forgotten: {body}",
+            text=forgotten_text(body),
             session_id=ctx.session_id,
             matched_handler=self.name,
             data={"deleted_memory_id": memory_id, "body": body},
         )
+
+    # ─── A bare "forget that" (N15) ────────────────────────────────────
+
+    async def _mark_saved(
+        self, ctx: Context, session: AsyncSession, memory_id: int, person_id: int
+    ) -> None:
+        """Note the memory this turn saved, for a "forget that" next turn
+        (:func:`_saved_last_turn`)."""
+        if ctx.session_id is None:
+            return
+        await SessionRepository(session).set_context_key(
+            ctx.session_id,
+            LAST_SAVED_KEY,
+            {
+                "memory_id": memory_id,
+                "person_id": person_id,
+                "reply": _SAVED_REPLY,
+                "at": datetime.now(tz=timezone.utc).isoformat(),
+            },
+        )
+
+    async def _forget_last_from_match(
+        self, m: re.Match[str], ctx: Context, session: AsyncSession
+    ) -> Response:
+        brush_off = bool(m.group("lead")) or m.group("what") in _BRUSH_OFF_WHAT
+        return await self._forget_last(brush_off, ctx, session)
+
+    async def _forget_last(
+        self, brush_off: bool, ctx: Context, session: AsyncSession
+    ) -> Response:
+        """A bare "forget that" / "forget it" / "forget what I just said" /
+        "never mind, forget that". The rule, in this order:
+
+        1. The previous turn of this conversation saved a memory ("remember
+           that …", or a yes to a memory the extractor offered): forget
+           exactly that one — "OK, forgotten: <fact>." — when this turn is
+           its owner's (:func:`_same_speaker`); another recognised person
+           is told it isn't theirs to forget, and nothing is deleted.
+        2. The previous turn asked a question that is still waiting (a
+           parked confirmation, and the reply ended in "?"): the forget
+           drops the question. A memory offer ("…Should I remember that?")
+           is turned down exactly as a "no" would; any other question is
+           cleared so a later "yes" can't act on it, and gets a plain
+           "Okay." A parked CHOICE never gets here: its own reply reader
+           has the turn first (router).
+        3. "forget it" / "forget about it" / a "never mind" in front, with
+           nothing above: a brush-off, as the dismiss handler always
+           answered it.
+        4. Anything else ("forget that", "forget what I just said"): asks
+           "Forget what?" — never "No worries.", which would let the person
+           think something was forgotten. The reply is read as the thing to
+           forget (:meth:`handle_choice_reply`).
+        """
+        repo = SessionRepository(session)
+        context: dict = {}
+        if ctx.session_id is not None:
+            context = await repo.get_context(ctx.session_id) or {}
+
+        mark = _saved_last_turn(context)
+        if mark is not None:
+            owner = int(mark["person_id"])
+            memory_id = int(mark["memory_id"])
+            memories = MemoriesRepository(session)
+            body = next(
+                (b for i, b, _t, _s in await memories.list_active(owner) if i == memory_id),
+                None,
+            )
+            if body is not None:
+                if not _same_speaker(ctx, owner):
+                    return Response(
+                        text=(
+                            "I can only forget that for the person who asked me "
+                            "to remember it."
+                        ),
+                        session_id=ctx.session_id,
+                        matched_handler=self.name,
+                    )
+                await memories.delete(memory_id, owner)
+                await repo.set_context_key(ctx.session_id, LAST_SAVED_KEY, None)  # type: ignore[arg-type]
+                return Response(
+                    text=forgotten_text(body),
+                    session_id=ctx.session_id,
+                    matched_handler=self.name,
+                    data={"deleted_memory_id": memory_id, "body": body},
+                )
+
+        pending = context.get(PENDING_CONFIRMATION_KEY)
+        last_reply = str(context.get("last_assistant_response") or "").rstrip()
+        if isinstance(pending, dict) and pending.get("kind") and last_reply.endswith("?"):
+            await repo.set_context_key(
+                ctx.session_id, PENDING_CONFIRMATION_KEY, None  # type: ignore[arg-type]
+            )
+            if pending.get("kind") == "core.pending_memory_offer" and pending.get("handler") == self.name:
+                return await self.handle_confirmation(
+                    "core.pending_memory_offer", pending, False, ctx, session
+                )
+            return Response(
+                text=_ack(),
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+                data={"dropped_question": pending.get("kind")},
+            )
+
+        if brush_off:
+            return Response(text=_ack(), session_id=ctx.session_id, matched_handler=self.name)
+
+        if ctx.session_id is not None:
+            await request_confirmation(
+                session,
+                ctx.session_id,
+                kind=FORGET_WHAT_KIND,
+                handler=self.name,
+                data={"person_id": ctx.person_id, "expires_at": time.time() + _FORGET_WHAT_TTL_SEC},
+                prompt="What should I forget?",
+            )
+        return Response(
+            text=_FORGET_WHAT_TEXT,
+            session_id=ctx.session_id,
+            matched_handler=self.name,
+            expect_followup=ctx.session_id is not None,
+        )
+
+    async def handle_choice_reply(
+        self,
+        kind: str,
+        data: dict,
+        transcript: str,
+        ctx: Context,
+        session: AsyncSession,
+    ) -> Response | None:
+        """The reply to "Forget what?". A "never mind" drops it; a fact the
+        speaker has saved is forgotten (the same match "forget that <fact>"
+        makes: one match deletes, several ask for more). A whole forget
+        command, or a reply that matches none of their memories ("what
+        time is it"), is not an answer to the question: it is routed as a
+        new turn (None)."""
+        if kind != FORGET_WHAT_KIND or float(data.get("expires_at") or 0) < time.time():
+            return None
+        said = (transcript or "").strip()
+        if _NEVER_MIND_RE.match(said):
+            return Response(text=_ack(), session_id=ctx.session_id, matched_handler=self.name)
+        if said.startswith("forget "):
+            # A whole forget command: the fast paths take it as one.
+            return None
+        asked_by = data.get("person_id")
+        if not isinstance(asked_by, int):
+            # Asked of nobody we know: nothing of theirs to look in.
+            return None
+        if ctx.person_id is None and _same_speaker(ctx, asked_by):
+            ctx = ctx.model_copy(update={"person_id": asked_by})
+        if ctx.person_id != asked_by:
+            return None
+        fragment = _FORGET_WHAT_LEAD_RE.sub("", said, count=1).strip().rstrip(".,!?")
+        if not fragment:
+            return None
+        if not await MemoriesRepository(session).find_fuzzy(asked_by, fragment, limit=1):
+            return None
+        return await self._forget_memory(fragment, ctx, session)
 
     async def _list_memories_from_match(
         self, m: re.Match[str], ctx: Context, session: AsyncSession
@@ -439,7 +754,7 @@ class MemoryHandler(Handler):
         if len(bodies) > 5:
             suffix = f" And {len(bodies) - 5} more — check the web UI for the full list."
         return Response(
-            text="Here's what I remember: " + ". ".join(spoken) + "." + suffix,
+            text="Here's what I remember: " + ". ".join(spoken) + "." + suffix + " " + FORGET_HINT,
             session_id=ctx.session_id,
             matched_handler=self.name,
             data={"memories": [{"id": i, "body": b} for i, b, _t, _s in rows]},

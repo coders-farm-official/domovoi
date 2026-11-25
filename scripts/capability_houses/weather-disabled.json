@@ -1,0 +1,11 @@
+{
+  "extends": "base",
+  "note": "The weather plugin installed, switched off by an admin.",
+  "plugins": [
+    {
+      "slug": "weather",
+      "enabled": false,
+      "status": "ok"
+    }
+  ]
+}

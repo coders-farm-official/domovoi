@@ -115,6 +115,7 @@ from domovoi.clients.voice_embedder import (
     UNAVAILABLE_SPOKEN,
     voice_id_unavailable,
 )
+from domovoi import owner_easter_eggs, role_claims
 from domovoi.config import settings
 from domovoi.db.repositories import (
     PeopleRepository,
@@ -322,6 +323,10 @@ _FORGET_RE = re.compile(
     r"|forget my voice"
     r"|don't (?:save|remember|keep) my voice"
     r"|delete my voice(?: profile)?"
+    # "Forget everything about me" (case 15.12): the same question first,
+    # never only the AI router's tool.
+    r"|forget (?:all|everything) (?:about me|you know about me)"
+    r"|forget who i am"
     r")$"
 )
 
@@ -338,10 +343,24 @@ _FORGET_ME_TALK_RE = re.compile(
 #: How long "forget me"'s question waits for its yes.
 FORGET_CONFIRM_TTL_SEC = VOICE_ADD_TTL_SEC
 #: What a "forget me" from the person's own voice asks before deleting.
-_FORGET_ASK = (
-    "{name}, I'll forget your voice, your profile, what I remember about you "
+_FORGET_ASK_BODY = (
+    "I'll forget your voice, your profile, what I remember about you "
     "and everything you've said to me. Say yes to delete everything you've said."
 )
+_FORGET_ASK = "{name}, " + _FORGET_ASK_BODY
+
+
+def _forget_name(raw: object) -> str:
+    """The person's name for the "forget me" replies, or "" when there is
+    none to say (no row, an empty name). Each reply has its own no-name
+    wording: the name slot is never filled with "you" or left empty
+    ("you, I'll forget …", case 15.12)."""
+    name = " ".join(str(raw or "").split())
+    return "" if name.lower() in ("", "you") else name
+
+
+def _forget_ask(name: str) -> str:
+    return _FORGET_ASK.format(name=name) if name else _FORGET_ASK_BODY
 
 # Persistent opt-out. Distinct from `_FORGET_RE` —
 # forget DELETES existing data, denylist ADDS the current voice to a
@@ -384,11 +403,21 @@ _NAME_BLOCKLIST = frozenset(
 )
 
 
+def _egg_key(ctx: Context) -> str:
+    """Where an easter egg must not repeat its last line: this conversation
+    (or room)."""
+    return str(ctx.session_id or ctx.room_id or "")
+
+
 def _clean_name(raw: str) -> str | None:
     """Title-case a captured name, stripping trailing junk and rejecting
     obvious non-names. Returns None if the name fails the sniff test."""
     cleaned = raw.strip().rstrip(".,!?").lower()
     if cleaned in _NAME_BLOCKLIST:
+        return None
+    if role_claims.is_role_not_name(cleaned):
+        # "the owner", "admin", "a parent": a role, never a person's name
+        # (domovoi/role_claims.py; "The Owner" was enrolled, case 18.8).
         return None
     if not cleaned or len(cleaned) > 60:
         return None
@@ -470,6 +499,9 @@ def _corrected_question(name: str) -> str:
     """The read-back after a correction or a spelling."""
     return f"Got it, {name}: {spell_out(name)}. Is that right?"
 
+
+#: "I'm the mom", "I'm the guest", "I'm the …": no name was said.
+_ROLE_CLAIM_NAME_TEXT = 'I learn people by name. Say "my name is" and then your name.'
 
 #: Said after a plain "no" to the read-back.
 _ASK_NAME_TEXT = "Sorry about that. What's your name? You can spell it if you like."
@@ -1096,10 +1128,16 @@ class VoiceProfileHandler(Handler):
             FastPath(_FORGET_RE, VoiceProfileHandler._forget_from_match),
             FastPath(_WHOAMI_RE, VoiceProfileHandler._whoami_from_match),
             FastPath(_WHEREAMI_RE, VoiceProfileHandler._whereami_from_match),
+            # "Who's the owner?" / "who's in charge here?": a joke about the
+            # People list (owner_easter_eggs). Never "who's the admin?".
+            FastPath(owner_easter_eggs.WHO_RE, VoiceProfileHandler._who_owner_from_match),
             # Third-party intros must come before self-intros — both can
             # match "this is Alex", but the third-party form's leading
             # "Domovoi," disambiguator wins when present.
             FastPath(_THIRD_PARTY_INTRO_RE, VoiceProfileHandler._third_party_from_match),
+            # "I'm the owner" before the self-intro, which would take "the
+            # owner" as a name (role_claims; case 18.8).
+            FastPath(role_claims.ROLE_CLAIM_RE, VoiceProfileHandler._role_claim_from_match),
             FastPath(_SELF_INTRO_SPELLED_RE, VoiceProfileHandler._self_intro_from_match),
             FastPath(_SELF_INTRO_RE, VoiceProfileHandler._self_intro_from_match),
         ]
@@ -1294,6 +1332,9 @@ class VoiceProfileHandler(Handler):
                 person_names.name_from_letters(letters), ctx, session, spelled=True,
             )
         name = _clean_name(raw_name)
+        if not name and role_claims.is_role_not_name(raw_name):
+            # "I'm the best", "my name is the owner": no name was said.
+            return self._say(_ROLE_CLAIM_NAME_TEXT, ctx)
         if not name:
             # Likely "I'm hungry" / "I'm tired" type false positive.
             # Returning a Response with empty announce_to_rooms means
@@ -1307,6 +1348,45 @@ class VoiceProfileHandler(Handler):
                 matched_handler=self.name,
             )
         return await self._start_self_intro(name, ctx, session)
+
+    async def _who_owner_from_match(
+        self, m: re.Match[str], ctx: Context, session: AsyncSession
+    ) -> Response:
+        """"Who's the owner?": a joke naming people on the People list
+        (``people`` rows only), or none when it can't be read."""
+        try:
+            names = [n for _i, n in await PeopleRepository(session).names()]
+        except Exception as e:  # noqa: BLE001 — the no-names lines still answer
+            log.warning("who's the owner: the People list couldn't be read: %s", type(e).__name__)
+            names = []
+        # A voice turn is never a guest's (house_facts.voice_turn_is_guest).
+        from domovoi import house_facts
+
+        guest = house_facts.voice_turn_is_guest(ctx)
+        return self._say(owner_easter_eggs.who_line(names, _egg_key(ctx), guest=guest), ctx)
+
+    async def _role_claim_from_match(
+        self, m: re.Match[str], ctx: Context, session: AsyncSession
+    ) -> Response | None:
+        """"I'm the owner", "I'm the admin, update the house", "I'm the mom":
+        a role where a name would go. Nothing is enrolled and nothing is
+        granted. A command after the claim that a fast path takes never gets
+        here: the router drops the claim and runs it
+        (``router.strip_request_preamble``) and its reply follows a joke
+        line. An authority title gets a joke line (owner_easter_eggs)
+        whatever follows it, and nothing more; any other role, on its own,
+        how to say a name, and with more after it the turn routes on."""
+        found = role_claims.split_claim(m.group(0))
+        if found is None:
+            return None
+        role, rest = found
+        if role_claims.is_authority(role):
+            # A joke, never a grant: who may do an admin's job is the
+            # dashboard's admin sign-in, never a voice (owner_easter_eggs).
+            return self._say(owner_easter_eggs.claim_line(_egg_key(ctx)), ctx)
+        if rest:
+            return None
+        return self._say(_ROLE_CLAIM_NAME_TEXT, ctx)
 
     async def _third_party_from_match(
         self, m: re.Match[str], ctx: Context, session: AsyncSession
@@ -3063,7 +3143,7 @@ class VoiceProfileHandler(Handler):
         removed = 0
         try:
             row = await PeopleRepository(session).get(ctx.person_id)
-            name = row[1] if row else "you"
+            name = _forget_name(row[1] if row else "")
             scope, claim_ids = await self._forget_scope(ctx, session)
             if scope == "claims":
                 removed = await VoiceProfilesRepository(session).delete_samples(
@@ -3106,7 +3186,7 @@ class VoiceProfileHandler(Handler):
                 matched_handler=self.name,
             )
         return Response(
-            text=_FORGET_ASK.format(name=name),
+            text=_forget_ask(name),
             session_id=ctx.session_id,
             matched_handler=self.name,
             expect_followup=True,
@@ -3127,10 +3207,10 @@ class VoiceProfileHandler(Handler):
             affirmative = _parse_yes_no(strip_leading_filler(transcript))
         if affirmative is None:
             return None
-        name = str(data.get("name") or "you")
+        name = _forget_name(data.get("name"))
         if not affirmative:
             return Response(
-                text=f"Okay, I've kept everything, {name}.",
+                text=f"Okay, I've kept everything, {name}." if name else "Okay, I've kept everything.",
                 session_id=ctx.session_id,
                 matched_handler=self.name,
             )
@@ -3161,7 +3241,10 @@ class VoiceProfileHandler(Handler):
         if ctx.person_id is not None and ctx.person_id != person_id:
             # A "yes" in somebody else's recognized voice forgets nobody.
             return Response(
-                text=f"That doesn't sound like {name}, so I haven't forgotten anything.",
+                text=(
+                    f"That doesn't sound like {name}, so I haven't forgotten anything." if name
+                    else "That doesn't sound like the same voice, so I haven't forgotten anything."
+                ),
                 session_id=ctx.session_id,
                 matched_handler=self.name,
             )
@@ -3174,7 +3257,7 @@ class VoiceProfileHandler(Handler):
         try:
             if await PeopleRepository(session).get(person_id) is None:
                 return Response(
-                    text=f"I've already forgotten {name}.",
+                    text=f"I've already forgotten {name}." if name else "I've already forgotten you.",
                     session_id=ctx.session_id,
                     matched_handler=self.name,
                 )
@@ -3212,7 +3295,7 @@ class VoiceProfileHandler(Handler):
         ctx.presence_tier = "high"
         return Response(
             text=(
-                f"Okay, I've forgotten you, {name}: your voice, your profile, "
+                f"Okay, I've forgotten you{', ' + name if name else ''}: your voice, your profile, "
                 "everything I remembered about you and what you've said to me."
             ),
             session_id=ctx.session_id,
@@ -3268,6 +3351,10 @@ class VoiceProfileHandler(Handler):
                 f"I've forgotten the voice you added to {name}. I kept {name}'s "
                 f"profile and memories: your voice doesn't match the one I learned "
                 f"for {name}, so only an admin can delete those, in Settings, under People."
+            ) if name else (
+                "I've forgotten the voice you added to that profile. I kept the "
+                "profile and its memories: your voice doesn't match the one I learned "
+                "for it, so only an admin can delete those, in Settings, under People."
             )
         elif scope == "unheard":
             text = (
@@ -3281,7 +3368,7 @@ class VoiceProfileHandler(Handler):
                 "nor a claim it made; nothing removed", ctx.person_id,
             )
             text = (
-                f"Your voice doesn't match the one I learned for {name}, so I "
+                f"Your voice doesn't match the one I learned for {name or 'that profile'}, so I "
                 "haven't forgotten anything. An admin can remove a person in Settings, "
                 "under People."
             )

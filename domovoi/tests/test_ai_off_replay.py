@@ -63,7 +63,8 @@ async def _replay(utterances: list[str], monkeypatch) -> dict:
 
     monkeypatch.setattr(router_mod, "get_ollama_client", lambda: _NoModel())
     _NoModel.calls = []
-    out = {"fast": Counter(), "off_line": [], "lookup_line": [], "wrong": [], "model_calls": []}
+    out = {"fast": Counter(), "off_line": [], "lookup_line": [], "request_line": [], "wrong": [],
+           "model_calls": []}
     with ai_features.override(False):
         for said in utterances:
             plan = router_mod.plan_route(said)
@@ -80,6 +81,10 @@ async def _replay(utterances: list[str], monkeypatch) -> dict:
                     await s.rollback()
             if r.text == ai_features.OFF_LINE:
                 out["off_line"].append(said)
+            elif r.matched_handler is None and r.text == ai_features.off_request_line(said):
+                # A chat, a story, a joke, a poem: AI is off, and how to
+                # turn it on (capability cases 6.2 and 6.6).
+                out["request_line"].append(said)
             elif r.text == ai_features.OFF_LOOKUP_LINE and r.matched_handler in (None, "double_check"):
                 out["lookup_line"].append(said)
             elif plan is not None and r.matched_handler == plan.handler.name and r.matched_path in (
@@ -106,7 +111,7 @@ async def test_the_routing_corpus_with_ai_off(db_session, monkeypatch) -> None:
     _check(result)
     fast = sum(result["fast"].values())
     # Every case is accounted for: a command on its fast path, or the line.
-    assert fast + len(result["off_line"]) + len(result["lookup_line"]) == len(said)
+    assert fast + len(result["off_line"]) + len(result["lookup_line"]) + len(result["request_line"]) == len(said)
     assert fast > 0 and result["off_line"]
 
 

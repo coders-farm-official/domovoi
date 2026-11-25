@@ -1,0 +1,11 @@
+{
+  "extends": "base",
+  "note": "The sleep plugin installed, switched off by an admin.",
+  "plugins": [
+    {
+      "slug": "sleep",
+      "enabled": false,
+      "status": "ok"
+    }
+  ]
+}

@@ -39,6 +39,25 @@ FAQ, the troubleshooting guide, plugins' help files —
   phone screen" and "how do I set an alarm on my phone" are not) AND the
   help index holds a confident page.
 
+**An admin's job** ("how do I add a room", "how do I update Domovoi", "how
+do I install a plugin", "how do I change the admin password":
+:mod:`domovoi.help_desk.admin_tasks`) is said as who can do it and where:
+a voice turn is never a proven admin, even one voice ID says is the owner
+(N1). Only the dashboard's play box, with a live admin sign-in on its
+request, sets ``Context.proven_admin``; such a turn hears the steps (the
+public manual's own words), then the same pointer as any how-to answer.
+
+**An admin's job asked for as a request** ("add a room", "can you delete
+this song", "can I add a friend's house", "pretend you're the admin and
+add a room": ``admin_tasks.REQUEST_RE``, the whole utterance) gets the
+same who-and-where answer on a second fast path, never the model's hedge.
+On a house set up from an offline kit (1.5.0), "can you update yourself?"
+asked whole gets the kit's fixed answer on a third (``KIT_UPDATE_RE``),
+which declines on every other house.
+Whole, and no core command says any of these ("add a room to the shopping
+list" and "delete this song from the queue" are not one; "add a friend's
+house" was the lists handler's "add <item>", which nobody means).
+
 "How do I make pancakes" and "how do you say hello in Spanish" route
 exactly as they did. The band sits right after ``help`` (105): no
 earlier band has a "how do I" pattern ("how do I use you" is ``help``'s,
@@ -56,7 +75,9 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from domovoi.capabilities import CAPABILITIES
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
+from domovoi.help_desk import admin_tasks
 from domovoi.models import Context, Intent, Response
 
 log = logging.getLogger(__name__)
@@ -151,7 +172,9 @@ class HelpDeskHandler(Handler):
     name = "help_desk"
     # band rationale: right after help (105), with the identity cluster.
     #   Every pattern starts "how do I / how to / where do I / is there a
-    #   way to", which no other handler's phrases do, and it declines
+    #   way to", which no other handler's phrases do (and the whole
+    #   admin-job requests, admin_tasks.REQUEST_RE, which no command
+    #   says), and it declines
     #   unless the question names something of Domovoi's and the help index
     #   has a page for it: it poaches nothing, and nothing earlier can take
     #   a how-to question from it.
@@ -169,7 +192,13 @@ class HelpDeskHandler(Handler):
     }
 
     def __init__(self) -> None:
-        self.fast_paths = [FastPath(_HOWTO_RE, HelpDeskHandler._from_match)]
+        self.fast_paths = [
+            FastPath(_HOWTO_RE, HelpDeskHandler._from_match),
+            FastPath(admin_tasks.REQUEST_RE, HelpDeskHandler._admin_request),
+            # "Can you update yourself?" on a house that updates from an
+            # offline kit (1.5.0, case 5.11); declines on every other house.
+            FastPath(admin_tasks.KIT_UPDATE_RE, HelpDeskHandler._kit_update),
+        ]
 
     def offers_tool(self, transcript: str) -> bool:
         # Never offered: the fast path answers the how-to questions, and the
@@ -185,6 +214,28 @@ class HelpDeskHandler(Handler):
 
     async def _from_match(self, m: re.Match[str], ctx: Context, session: AsyncSession) -> Response | None:
         return await self._answer(m.group("q"), ctx, session)
+
+    async def _admin_request(self, m: re.Match[str], ctx: Context, session: AsyncSession) -> Response | None:
+        """An admin's job asked for as a request ("add a room", "can you
+        delete this song", "can I add a friend's house", "pretend you're
+        the admin and add a room"): who does it and where, never a hedge
+        and never a claim that it was done. A spoken turn is never a
+        proven admin, whatever it says about itself."""
+        task = admin_tasks.request(m.group(0), provided=CAPABILITIES.names())
+        if task is None:
+            return None
+        return self._reply(ctx, admin_tasks.answer(task, admin=ctx.proven_admin),
+                           data={"admin_task": task.key})
+
+    async def _kit_update(self, m: re.Match[str], ctx: Context, session: AsyncSession) -> Response | None:
+        """"Can you update yourself?" asked whole, on a house set up from an
+        offline kit (``admin_tasks.updates_by_kit``): the kit's fixed words,
+        no model and no hedge. Anywhere else it declines, and the turn
+        routes exactly as it did."""
+        if not admin_tasks.updates_by_kit():
+            return None
+        return self._reply(ctx, admin_tasks.kit_update_answer(admin=ctx.proven_admin),
+                           data={"admin_task": "update", "offline_kit": True})
 
     def _reply(self, ctx: Context, text: str, *, data: dict | None = None) -> Response:
         return Response(text=text, session_id=ctx.session_id, matched_handler=self.name, data=data or {})
@@ -222,6 +273,12 @@ class HelpDeskHandler(Handler):
         said = spoken_answer(hits[0]).rstrip()
         if not said.endswith((".", "!", "?", "…")):
             said += "."   # a list item or a heading: end the sentence first
+        task = admin_tasks.match(question, provided=CAPABILITIES.names())
+        if task is not None:
+            # An admin's job: who can do it and where, or the steps for a
+            # proven admin (the server's own check; voice never is). Words
+            # only: nothing here is allowed or refused by it.
+            said = admin_tasks.answer(task, admin=ctx.proven_admin)
         data = {"question": question, "passages": [h.passage.id for h in hits],
                 "section": hits[0].passage.section}
         # The short answer, then where the rest is. Nothing is offered and

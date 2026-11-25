@@ -1,0 +1,11 @@
+{
+  "extends": "base",
+  "note": "The imagegen plugin installed and working.",
+  "plugins": [
+    {
+      "slug": "imagegen",
+      "enabled": true,
+      "status": "ok"
+    }
+  ]
+}

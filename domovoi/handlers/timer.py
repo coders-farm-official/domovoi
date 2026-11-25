@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from domovoi.db.repositories import TimerRepository, utcnow
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
+from domovoi.handlers.shared import ask_detail
 from domovoi.handlers.shared.number_words import DURATION_PATTERN, parse_duration_seconds
 from domovoi.handlers.shared.tool_gate import is_timer_statement
 from domovoi.models import Context, Intent, Response
@@ -32,6 +33,29 @@ _CANCEL_RE = re.compile(
     r"(?P<everywhere> everywhere| in every room| in all rooms| in the whole house)?$"
 )
 _STATUS_RE = re.compile(r"^(?:how much time|how long) (?:left |)on (?:the |)timer$")
+# "what timers do I have" / "do I have any timers" / "is there a timer
+# running": the room's plain timers, read from the table (N11). Closed
+# phrasings only: "do I have any X" is the library's shape (band 310) for
+# anything that isn't "timers".
+_RUNNING = r"(?: (?:running|set|going|on))?(?: (?:right )?now)?"
+_LIST_RE = re.compile(
+    r"^(?:"
+    rf"(?:what|which|how many) timers (?:do (?:i|we) have|are (?:there|running|set|going|on)){_RUNNING}"
+    r"|what are (?:my|our|the) timers"
+    rf"|(?:do (?:i|we) have|have (?:i|we) got|are there|is there|any) (?:any |an? )?timers?{_RUNNING}"
+    r"|(?:list|show me) (?:my |our |the |all (?:my |the )?)?timers"
+    r")$"
+)
+
+# "Set a timer" / "can you set a timer?" (filler-stripped to "set a timer"):
+# no duration, so the answer asks for one (M2, case 10.6) and the reply
+# ("five minutes") finishes it as "timer for five minutes". Whole turn only.
+_ASK_RE = re.compile(
+    r"^(?:(?:just |now )?(?:set|start|make|create|put on|get|give|do) (?:(?:me|us) )?)?"
+    r"(?:a |an |another |one more )?(?:new |quick )?timer(?: for (?:me|us))?(?:,? please)?\Z"
+)
+ASK_DURATION_KIND = "core.timer_how_long"
+ASK_DURATION_TEXT = "Sure. How long should it be?"
 
 # "timer for 10 minutes for the pasta" stores the label "the pasta". Every
 # line that puts its own word in front of the label ("the pasta timer",
@@ -101,8 +125,12 @@ class TimerHandler(Handler):
         "set a timer for 10 minutes",
         "how much time left on the timer",
         "cancel the timer",
+        "what timers do I have",
     )
     requires_network = "no"
+    # "Sure. How long should it be?": the reply is the duration (ask_detail).
+    confirmation_kinds = (ASK_DURATION_KIND,)
+    choice_kinds = (ASK_DURATION_KIND,)
 
     tool_schema = {
         "name": "timer",
@@ -130,6 +158,8 @@ class TimerHandler(Handler):
             FastPath(_CREATE_RE, TimerHandler._create_from_match, early_commit="B"),
             FastPath(_CANCEL_RE, TimerHandler._cancel_from_match, early_commit="B"),
             FastPath(_STATUS_RE, TimerHandler._status_from_match, early_commit="A"),
+            FastPath(_LIST_RE, TimerHandler._list_from_match, early_commit="A"),
+            FastPath(_ASK_RE, TimerHandler._ask_duration),
         ]
 
     def offers_tool(self, transcript: str) -> bool:
@@ -183,6 +213,31 @@ class TimerHandler(Handler):
             matched_handler=self.name,
         )
 
+    async def _ask_duration(
+        self, m: re.Match[str], ctx: Context, session: AsyncSession
+    ) -> Response:
+        return await ask_detail.ask(
+            self, ctx, session, kind=ASK_DURATION_KIND, question=ASK_DURATION_TEXT,
+            prefixes=("timer for ",),
+        )
+
+    async def handle_choice_reply(
+        self, kind: str, data: dict, transcript: str, ctx: Context, session: AsyncSession,
+    ) -> Response | None:
+        """The reply to "How long should it be?": "five minutes" sets the timer."""
+        if kind != ASK_DURATION_KIND:
+            return None
+        return await ask_detail.answer(self, kind, data, transcript, ctx, session)
+
+    async def handle_confirmation(
+        self, kind: str, data: dict, affirmative: bool, ctx: Context, session: AsyncSession,
+    ) -> Response:
+        # A choice: the router hands its replies to handle_choice_reply. A
+        # bare yes/no reaching here still gets an answer.
+        return await ask_detail.answer(
+            self, kind, data, "yes" if affirmative else "no", ctx, session,
+        ) or Response(text="Okay.", session_id=ctx.session_id, matched_handler=self.name)
+
     # Fast-path adapters.
     async def _create_from_match(
         self, m: re.Match[str], ctx: Context, session: AsyncSession
@@ -221,6 +276,11 @@ class TimerHandler(Handler):
         self, m: re.Match[str], ctx: Context, session: AsyncSession
     ) -> Response:
         return await self._status(ctx=ctx, session=session)
+
+    async def _list_from_match(
+        self, m: re.Match[str], ctx: Context, session: AsyncSession
+    ) -> Response:
+        return await self._list(ctx=ctx, session=session)
 
     # Core actions.
     async def _create(
@@ -329,3 +389,41 @@ class TimerHandler(Handler):
         else:
             text = f"{spoken} left on the timer."
         return Response(text=text, session_id=ctx.session_id, matched_handler=self.name)
+
+    async def _list(self, *, ctx: Context, session: AsyncSession) -> Response:
+        """Every plain timer in the room, from the table: the count, then
+        each with its time left, soonest first (N11). Scoped as "how long
+        left on the timer" is: the room said in, or the roomless ones."""
+        rows = await TimerRepository(session).list_active(ctx.satellite_room_id)
+        if not rows:
+            return Response(
+                text="You don't have any timers.",
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
+        now = utcnow()
+        said: list[str] = []
+        for expires_at, created_at, label in rows[:_LIST_MAX]:
+            if label:
+                name = f"the {spoken_label(label)} timer"
+            else:
+                total = int((expires_at - created_at).total_seconds())
+                name = f"a {duration_adjective(total)} timer" if total > 0 else "a timer"
+            remaining = int((expires_at - now).total_seconds())
+            left = (
+                "about to go off" if remaining <= 0
+                else f"with {_format_duration(remaining)} left"
+            )
+            said.append(f"{name} {left}")
+        if len(rows) == 1:
+            text = f"You have one timer: {said[0]}."
+        else:
+            more = len(rows) - len(said)
+            items = ", ".join(said[:-1]) + (", " if len(said) > 2 else " ") + "and " + said[-1]
+            tail = f" There {'is' if more == 1 else 'are'} {more} more." if more > 0 else ""
+            text = f"You have {len(rows)} timers: {items}.{tail}"
+        return Response(text=text, session_id=ctx.session_id, matched_handler=self.name)
+
+
+#: "What timers do I have" reads this many aloud, then says how many more.
+_LIST_MAX = 4

@@ -107,10 +107,12 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-from domovoi import ai_features, chat_access, chat_titles, egress, executors, image_safety, live_env, lookup_answer, uncertainty
-from domovoi.admin_auth import require_device, require_device_read
+from domovoi import (ai_features, chat_access, chat_titles, egress, executors, house_facts, image_safety, live_env,
+                     lookup_answer, uncertainty)
+from domovoi.admin_auth import request_is_guest, require_device, require_device_read
 from domovoi.chat_access import VIEWER, Action, Viewer
 from domovoi.clients import ollama as ollama_client
+from domovoi.help_desk import admin_tasks as help_admin_tasks
 from domovoi.help_desk import answer as help_answer
 from domovoi.help_desk import delivery as help_delivery
 from domovoi.config import settings as core_settings
@@ -125,8 +127,10 @@ from web.backend.api import chat_drafts as _drafts
 from web.backend.api import chat_videos as _videos
 from web.backend.api import chat_media as _media
 from domovoi.media_understanding import ask as _ask
+from web.backend.api import chat_memory
+from web.backend.api.devices import valid_device_id
 from web.backend.db import session_scope
-from web.backend.domovoi_client import auth_forward_headers, domovoi_url
+from web.backend.domovoi_client import auth_forward_headers, domovoi_url, get_cached_snapshot
 
 log = logging.getLogger(__name__)
 
@@ -138,7 +142,7 @@ READ = [Depends(require_device_read)]
 
 def _require_ai() -> None:
     """A message to the model, or a picture for one, while the household's
-    AI features are off (Settings → Models, domovoi/ai_features.py): the 409
+    AI features are off (Settings → Chat & AI → Models, domovoi/ai_features.py): the 409
     ai-off refusal, before anything is stored or Ollama is asked. Reading
     the threads already there stays open."""
     if ai_features.turned_off():
@@ -550,7 +554,7 @@ ERR_TIMEOUT = "model_timeout"                      # Ollama took too long to tak
 ERR_MODEL = "model_error"                          # anything else Ollama reported
 ERR_EMPTY = "empty_reply"                          # the model answered with nothing
 
-_SETTINGS_MODELS = "Settings → Models"
+_SETTINGS_MODELS = "Settings → Chat & AI → Models"
 
 
 def vision_missing_text(model: str) -> str:
@@ -1028,16 +1032,108 @@ async def _help_turn(
 
     help_thread = (thread_title or "").startswith(help_delivery.TITLE_PREFIX)
     try:
-        if not help_thread and not help_answer.looks_like_help(content):
+        if (not help_thread and not help_answer.looks_like_help(content)
+                and help_admin_tasks.match(content) is None):
             return None
         extra = await _describe_screenshot(history, model) if vision_call else ""
-        # The household view, even for an admin: this chat is shared.
+        # Who is asking, checked by the server on THIS request, every turn,
+        # never cached (N1): a live admin sign-in (the Bearer) is a proven
+        # admin; the dashboard cookie alone, a box with no admin yet, or a
+        # check that can't run is a member. A session that ended mid-thread
+        # gets the member answer from its next turn. Words only.
+        proven_admin = await help_api.request_is_proven_admin(request)
+        # This chat is shared with every paired device (owner D1,
+        # 2026-11-25): (a) the steps of an admin's job (add a room, update,
+        # install a plugin, the admin password; the public manual's words)
+        # are shown to a proven admin here; (b) what Home shows only to an
+        # admin (an update's failure details, the internet question,
+        # approvals) never is, even to a proven admin: help_turn_for keeps
+        # the household view of the records.
         return await help_api.help_turn_for(
-            content, help_thread=help_thread, has_screenshot=vision_call, extra_query=extra,
+            content, help_thread=help_thread, admin=proven_admin, has_screenshot=vision_call,
+            extra_query=extra,
         )
     except Exception as e:  # noqa: BLE001
         log.warning("chat help: the help could not be read: %s: %s", type(e).__name__, str(e)[:200])
         return None
+
+
+async def _house_fact_reply(thread_id: int, content: str, user_row_id: int,
+                            request: Request | None = None, chat_state: str | None = None) -> str | None:
+    """The house's own answer to ``content`` (domovoi/house_facts.py), or
+    None. Settings come from the core's snapshot (this process's copy goes
+    stale on a save); one it doesn't hold is "unknown", never a guess.
+    "Am I signed in as admin?" is answered from THIS request's own admin
+    check (help.request_is_proven_admin), never from the words; "who lives
+    here?" from its guest check (admin_auth.request_is_guest).
+    Never fails the send."""
+    from web.backend.api import help as help_api
+
+    async def previous_assistant() -> dict[str, Any] | None:
+        async with session_scope() as s:
+            row = (await s.execute(text(
+                "SELECT stats FROM chat_messages WHERE thread_id = :t AND role = 'assistant' "
+                "AND id < :u ORDER BY id DESC LIMIT 1"
+            ), {"t": thread_id, "u": user_row_id})).first()
+        return None if row is None else {"stats": row[0] or {}}
+
+    try:
+        return await house_facts.chat_reply(
+            content, get_setting=house_facts.snapshot_setting(get_cached_snapshot()),
+            scope=session_scope, previous_assistant=previous_assistant,
+            admin_check=lambda: help_api.request_is_proven_admin(request),
+            guest_check=lambda: request_is_guest(request),
+            # "Is this chat private?" by this chat's own state (1.5.0).
+            chat_state=chat_state,
+        )
+    except Exception as e:  # noqa: BLE001 — the chat answers as before
+        log.warning("chat: house facts failed: %s: %s", type(e).__name__, str(e)[:200])
+        return None
+
+
+async def _owner_egg_reply(thread_id: int, content: str, request: Request | None = None) -> str | None:
+    """The ownership easter egg for ``content``, or None; a guest's
+    (``admin_auth.request_is_guest``) names no one. Never fails the send."""
+    from domovoi import owner_easter_eggs
+
+    try:
+        return await owner_easter_eggs.chat_reply(
+            content, scope=session_scope, key=f"chat:{thread_id}",
+            guest_check=lambda: request_is_guest(request),
+        )
+    except Exception as e:  # noqa: BLE001 — the chat answers as before
+        log.warning("chat: owner easter egg failed: %s", type(e).__name__)
+        return None
+
+
+#: Said when a memory command couldn't be done (the database failed): the
+#: model never gets the turn, so nothing claims it was saved or forgotten.
+MEMORY_FAILED_TEXT = "I couldn't reach the saved memories just now, so nothing was saved or forgotten. Try again in a moment."
+
+
+async def _memory_reply(
+    thread_id: int, content: str, before_id: int, request: Request, body_device_id: str | None = None,
+) -> chat_memory.Reply | None:
+    """The memory step (web/backend/api/chat_memory.py) for ``content``,
+    whose row is ``before_id``: done and committed, or None (not a memory
+    command: the model answers). It acts for the person of the device that
+    PROVES itself on ``request`` (its device key, or an older app's claim
+    key: chat_memory.caller_asker), never a self-asserted id. A failure on
+    a memory command is said as one, never handed to the model."""
+    try:
+        async with session_scope() as s:
+            r = await chat_memory.reply(s, thread_id=thread_id, content=content,
+                                        before_id=before_id, request=request,
+                                        body_device_id=body_device_id)
+            if r is not None:
+                await s.commit()
+            return r
+    except Exception as e:  # noqa: BLE001
+        log.warning("chat: memory step failed: %s: %s", type(e).__name__, str(e)[:200])
+        if chat_memory.command(content) is None:
+            return None
+        return chat_memory.Reply(MEMORY_FAILED_TEXT, {"model_role": chat_memory.MODEL_ROLE,
+                                                      "memory": {"action": "failed"}})
 
 
 @router.post("/threads/{thread_id}/messages", dependencies=SEND)
@@ -1072,7 +1168,11 @@ async def send_message(
     question the help doesn't cover is answered "The manual doesn't cover
     that." with no model asked. A screenshot in a help turn is read by the
     vision model first (which page, what error), and that reading is
-    searched too.
+    searched too. A question about an admin's job ("how do I add a room?",
+    "can you update yourself?": domovoi/help_desk/admin_tasks.py), in any
+    thread, gets a fixed answer with no model asked: the steps when THIS
+    request carries a live admin sign-in (``help.request_is_proven_admin``,
+    checked every turn), else who can do it and where. Words only.
     """
     images = [
         {"token": i.get("token", ""), "name": str(i.get("name", ""))[:200]}
@@ -1142,6 +1242,30 @@ async def send_message(
             {"model_role": "video", "video_job": video_jobs[0]["job_id"]},
         )
 
+    if not images and not documents and body.revise_draft is None:
+        # "remember that …", "forget that", "what do you remember about
+        # me?": done by the memory step for the person this device belongs
+        # to, and said by it; the model never claims a memory
+        # (web/backend/api/chat_memory.py). The device proves itself with
+        # its key (or an older app's claim key); the body's device_id only
+        # names the row that claim key is checked against.
+        mem = await _memory_reply(thread_id, body.content, user_row_id, request,
+                                  valid_device_id(body.device_id))
+        if mem is not None:
+            return await _immediate_reply(thread_id, mem.text, mem.stats)
+        # A privacy or "can you …?" question this house answers from its
+        # own state (domovoi/house_facts.py), the same as by voice: said by
+        # the app, no model asked.
+        fact = await _house_fact_reply(thread_id, body.content, user_row_id, request,
+                                       chat_state=getattr(thread, "state", None))
+        if fact is not None:
+            return await _immediate_reply(thread_id, fact, {"model_role": "house_facts"})
+        # "I'm the owner" / "who's in charge?": a fixed joke, as by voice
+        # (domovoi/owner_easter_eggs.py). Grants nothing.
+        egg = await _owner_egg_reply(thread_id, body.content, request)
+        if egg is not None:
+            return await _immediate_reply(thread_id, egg, {"model_role": "owner_easter_egg"})
+
     return await _answer(
         thread_id, thread.person_id, has_images=bool(images), override=body.model,
         question=body.content, thread_title=thread.title, request=request,
@@ -1193,7 +1317,7 @@ def _retry_refused(code: str, detail: str) -> JSONResponse:
                                     "writer's reply, not the chat model's), `already_retried` (another try again "
                                     "on this reply is running, or has replaced it)"}},
 )
-async def retry_reply(thread_id: int, viewer: Viewer = VIEWER) -> StreamingResponse:
+async def retry_reply(thread_id: int, request: Request, viewer: Viewer = VIEWER) -> StreamingResponse:
     """"Try again": a new reply to the thread's last question, in place of
     the reply it got. Streams as ``POST .../messages`` does; the old row is
     deleted and the new one written in one transaction once the new reply
@@ -1207,14 +1331,19 @@ async def retry_reply(thread_id: int, viewer: Viewer = VIEWER) -> StreamingRespo
     reply (the core may have set a timer with it) or another writer's, 409
     ``nothing_to_retry`` when the thread doesn't end with a reply to a
     question, 409 ``already_retried`` when another try again is replacing
-    it. The model doesn't see the reply being replaced."""
+    it. The model doesn't see the reply being replaced.
+
+    A memory command ("remember that …") whose reply was the model's (a
+    thread from before the memory step) is done by the memory step now,
+    for the person the retrying device belongs to, and its words replace
+    the model's (web/backend/api/chat_memory.py)."""
     async with session_scope() as s:
         thread = await chat_access.thread_for(s, thread_id, viewer, Action.WRITE)
         last = (
             await s.execute(
                 text(
                     """
-                    SELECT id, role, content, images, source, stats FROM chat_messages
+                    SELECT id, role, content, images, source, stats, device_id FROM chat_messages
                      WHERE thread_id = :id ORDER BY id DESC LIMIT 2
                     """
                 ),
@@ -1230,13 +1359,67 @@ async def retry_reply(thread_id: int, viewer: Viewer = VIEWER) -> StreamingRespo
     asked_images = [
         i for i in (last[1].images or []) if _upload_path((i or {}).get("token", "")) is not None
     ]
+    if not asked_images and chat_memory.command(last[1].content or "") is not None:
+        return await _memory_retry(thread_id, last[0].id, last[1].id, last[1].content or "", request)
     stop_title_jobs()
     # The thread is marked as retrying by the stream itself (_answer), so a
     # client that drops before the first byte leaves no mark behind.
     return await _answer(
         thread_id, thread.person_id, has_images=bool(asked_images), replace_id=last[0].id,
         question=last[1].content or "", thread_title=thread.title,
+        # Who is asking is checked again for the new reply (N1).
+        request=request,
     )
+
+
+async def _memory_retry(
+    thread_id: int, old_id: int, question_id: int, question: str, request: Request,
+) -> StreamingResponse:
+    """"Try again" on the model's reply to a memory command: the memory
+    step does it, for the person of the device retrying (proven as for a
+    send: chat_memory.caller_asker), and its reply replaces the model's in
+    the same transaction (``done`` carries ``replaces``, as a retry's
+    does)."""
+    if thread_id in _retrying:
+        return _retry_refused("already_retried", "this reply is already being tried again")
+    _retrying.add(thread_id)
+    try:
+        async with session_scope() as s:
+            mem = await chat_memory.reply(s, thread_id=thread_id, content=question,
+                                          before_id=question_id, request=request)
+            if mem is None:  # pragma: no cover - the caller checked it is a command
+                mem = chat_memory.Reply(MEMORY_FAILED_TEXT, {"model_role": chat_memory.MODEL_ROLE,
+                                                             "memory": {"action": "failed"}})
+            gone = (await s.execute(
+                text("DELETE FROM chat_messages WHERE id = :id AND thread_id = :t AND role = 'assistant' "
+                     "RETURNING id"),
+                {"id": old_id, "t": thread_id},
+            )).first()
+            if gone is None:
+                await s.rollback()
+                return _retry_refused("already_retried", "this reply was already tried again")
+            row = (await s.execute(
+                text(
+                    """
+                    INSERT INTO chat_messages AS m (thread_id, role, content, model, error, stats)
+                    VALUES (:t, 'assistant', :c, NULL, NULL, CAST(:st AS JSONB))
+                    RETURNING {cols}, NULL::text AS device_name, NULL::text AS speaker_name
+                    """.format(cols=_MSG_COLUMNS)
+                ),
+                {"t": thread_id, "c": mem.text, "st": json.dumps(mem.stats)},
+            )).mappings().first()
+            await s.execute(text("UPDATE chat_threads SET updated_at = now() WHERE id = :t"), {"t": thread_id})
+            await _notify_chat(s, "message")
+            await s.commit()
+    finally:
+        _retrying.discard(thread_id)
+
+    async def sse() -> AsyncIterator[str]:
+        yield f"event: delta\ndata: {json.dumps({'text': mem.text})}\n\n"
+        yield f"event: done\ndata: {json.dumps(_msg_dict(row) | {'replaces': old_id}, default=str)}\n\n"
+
+    return StreamingResponse(sse(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 class HeadsUpAnswer(BaseModel):
@@ -1482,8 +1665,26 @@ async def _answer(
             }
             if not help_turn.covered:
                 fixed_reply = help_answer.not_covered_answer(help_turn)
+            elif help_turn.task_answer is not None:
+                # An admin's job: its fixed answer, by who is asking (the
+                # steps for a proven admin, else who and where); no model.
+                fixed_reply = help_turn.task_answer
     if plan is not None and plan.immediate is None:
         system["content"] += "\n\n" + plan.rules
+    if (refusal is None and plan is None and dturn is None and fixed_reply is None
+            and house_facts.wants_facts(question)):
+        # A privacy-worded question the closed set didn't take: a fixed
+        # answer from the house's facts, no model (house_facts.privacy_summary;
+        # the model given the facts still made up privacy claims, 2026-11-25).
+        try:
+            facts = await house_facts.read(
+                chat=True, get_setting=house_facts.snapshot_setting(get_cached_snapshot()),
+                scope=session_scope,
+            )
+            fixed_reply = house_facts.privacy_summary(facts)
+        except Exception as e:  # noqa: BLE001 — still an honest answer
+            log.warning("chat: house facts read failed: %s: %s", type(e).__name__, str(e)[:200])
+            fixed_reply = f"{house_facts.CANT_CHECK} {house_facts.PRIVACY_POINTER}"
     # A chat with videos (chat_videos.py): a plain text turn is told what
     # was heard and what the frames might show, and answers from that.
     video_rules: str | None = None
@@ -1631,7 +1832,8 @@ async def _answer(
             code, error = refusal
             log.info("chat refused up front (thread %s, model %r): %s", thread_id, model, code)
         elif fixed_reply is not None:
-            # Help that found nothing: the honest line, no model asked.
+            # Help that found nothing, or an admin's job (admin_tasks): the
+            # fixed line, no model asked.
             chunks.append(fixed_reply)
             yield f"event: delta\ndata: {json.dumps({'text': fixed_reply})}\n\n"
         elif proposal is not None:
@@ -1777,6 +1979,11 @@ async def _answer(
                 "sources": [src.as_dict() for src in help_turn.sources],
                 "model_asked": fixed_reply is None,
             }
+            if help_turn.task is not None:
+                # For debugging only (N1): which admin job, and whether the
+                # steps (a proven admin) or the member line was given.
+                stats["help"]["admin_task"] = help_turn.task.key
+                stats["help"]["admin_steps"] = help_turn.admin
         if replace_id is not None:
             async for event in _finish_retry(replace_id, content, error, code, stats):
                 yield event

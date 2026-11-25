@@ -474,3 +474,35 @@ async def test_router_no_prefix_for_anon_speaker(db_session) -> None:
     response = await route(intent, ctx, db_session)
     await db_session.commit()
     assert "[profile:" not in response.text
+
+
+# ─── G1: a generic object is never saved or forgotten ─────────────────────
+
+
+@pytest.mark.parametrize("transcript", [
+    "remember things about me", "remember stuff", "remember that stuff", "remember what i tell you",
+    "remember everything", "remember things like my birthday", "remember stuff for me",
+])
+def test_remember_regex_refuses_a_generic_object(transcript: str) -> None:
+    assert _REMEMBER_RE.match(transcript) is None
+
+
+@pytest.mark.parametrize("transcript", [
+    "forget that stuff", "stop remembering things", "forget that everything", "stop saving that stuff",
+])
+def test_forget_regex_refuses_a_generic_object(transcript: str) -> None:
+    assert _FORGET_MEMORY_RE.match(transcript) is None
+
+
+@pytest.mark.asyncio
+async def test_the_tool_path_saves_and_forgets_no_generic_object() -> None:
+    # The tool router and typed chat reach the methods without the regex:
+    # they refuse too, before any database work (no session needed).
+    from domovoi.house_facts import FORGET_YES, MEMORY_YES
+
+    h = MemoryHandler()
+    ctx = Context(person_id=1)
+    r = await h.execute_from_tool({"action": "add_memory", "body": "things about me"}, ctx, None)
+    assert r.text == MEMORY_YES and not (r.data or {}).get("memory_id")
+    r = await h.execute_from_tool({"action": "forget_memory", "body": "stuff"}, ctx, None)
+    assert r.text == FORGET_YES and not (r.data or {}).get("deleted_memory_id")

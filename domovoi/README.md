@@ -326,7 +326,9 @@ only). Holidays come from `clients/holidays.py` (Christmas, New Year's,
 July 4th, Halloween, Valentine's Day; Thanksgiving is computed as the
 4th Thursday of November rather than hard-coded). `next_occurrence`
 always returns the next future date — December 26th asks for next
-year's Christmas.
+year's Christmas. Dates follow the Home location's country; a holiday that country
+doesn't keep says so first ("Thanksgiving isn't a UK holiday. In the US
+it's …").
 
 | Ask | Behavior |
 |---|---|
@@ -907,7 +909,7 @@ chat that goes quiet for `chat_silence_timeout_sec` (30 s) with a
 ### LLM fallthrough (general Q&A)
 
 This path exists only while the household's AI switch is on (`AI_FEATURES`,
-Settings → Models; `domovoi/ai_features.py`). With it off nothing in
+Settings → Chat & AI → Models; `domovoi/ai_features.py`). With it off nothing in
 Domovoi asks a language model: voice commands still run on their fixed
 phrases, and a question gets "I can't answer that one — I'm set up for home
 commands. Say 'what can you do' to hear them."
@@ -1029,7 +1031,7 @@ All config is env-driven via `.env` (see `.env.example`):
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama server |
 | `SEARXNG_URL` | `http://localhost:6888` | SearxNG (DoubleCheckHandler) |
 | `INTERNET_ACCESS` | *(unset)* | `always` \| `sometimes` \| `never`: whether this box uses the internet, which sets the defaults of the online extras (docs/INTERNET.md). Unset = the behaviour before the setting existed. Settings → Privacy → Internet in the dashboard |
-| `AI_FEATURES` | `true` | Whether Domovoi may use its chat models at all (AI chat and questions). `false`: voice commands still run on their fixed phrases, speech recognition and the voices stay, a question gets a fixed "set up for home commands" answer and Chat is hidden. Settings → Models |
+| `AI_FEATURES` | `true` | Whether Domovoi may use its chat models at all (AI chat and questions). `false`: voice commands still run on their fixed phrases, speech recognition and the voices stay, a question gets a fixed "set up for home commands" answer and Chat is hidden. Settings → Chat & AI → Models |
 | `CONNECTIVITY_PROBE_TARGET` | `1.1.1.1:443` | `host:port` probed every 30 s (not dialed at all under `INTERNET_ACCESS=never`). Keep it on an internet address |
 | `CONNECTIVITY_PROBE_INTERVAL_SEC` | `30` | Poll interval |
 | `CONNECTIVITY_PROBE_TIMEOUT_SEC` | `2` | Per-probe timeout |

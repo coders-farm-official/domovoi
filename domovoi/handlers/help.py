@@ -9,8 +9,13 @@ The answer comes from the live handler registry — the same list behind GET
 /v1/handlers and the dashboard's user manual (``/api/capabilities/manual``)
 — so it is only ever what this server can do: a few areas, each with one
 thing to say (``Handler.example_phrases``), the household's enabled plugins
-included, then "the rest is in the manual". In memory, no database, no
-model, offline.
+included, then "the rest is in the manual". No model, offline; one
+database read (the Home location).
+
+Only what this house can do right now: an area whose prerequisite is a
+setting (the internet answer, AI features, the Home location) is left out
+when the setting rules it out (``_NEEDS``, ``HouseState``). With the
+internet set to No, news isn't offered (capability finding N13).
 
 Telling the question apart from a real one: every pattern is the WHOLE
 utterance (``^...$``), with nothing after the question but "for me" / "for
@@ -22,7 +27,9 @@ routing model (``offers_tool``): it would only be bait for those questions.
 
 from __future__ import annotations
 
+import logging
 import re
+from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -50,10 +57,64 @@ _HELP_RE = re.compile(
     r")$"
 )
 
+log = logging.getLogger(__name__)
+
 # The areas the answer names, in order, when the handler is registered and
-# has a phrase. A plugin's handlers follow (up to _MAX_PLUGINS of them).
+# has a phrase and this house can use it right now (``_NEEDS``). A
+# plugin's handlers follow (up to _MAX_PLUGINS of them).
 _CORE_AREAS = ("timer", "reminder", "music", "calendar", "lists", "news")
 _MAX_PLUGINS = 2
+
+# What a core area needs beyond being registered. Every area not named
+# here works on any house (no internet, AI off, no Home location).
+# "internet": the internet answer isn't No and the server is online now
+# (news with no internet only reads what it already has).
+_NEEDS: dict[str, frozenset[str]] = {
+    "news": frozenset({"internet"}),
+}
+
+# Weather isn't a handler: core answers it with a web lookup read by the
+# answer model, for the Home location (domovoi/weather.py). So it needs
+# all three; a weather plugin, when installed, is offered as a plugin.
+_WEATHER = ("Weather", "what's the weather")
+_WEATHER_NEEDS = frozenset({"internet", "ai", "home"})
+
+
+@dataclass(frozen=True)
+class HouseState:
+    """What this house can do right now, for the answer's filter."""
+
+    internet: bool = True   # internet answer isn't No, and online now
+    ai: bool = True         # AI features on
+    home: bool = False      # a Home location is set
+
+
+def _settings_state(*, online: bool = True, home: bool | None = None) -> HouseState:
+    from domovoi import ai_features, egress, home_location
+
+    if home is None:
+        home = bool((home_location.cached() or {}).get("name"))
+    return HouseState(
+        internet=online and egress.internet_allowed(),
+        ai=ai_features.enabled(),
+        home=home,
+    )
+
+
+async def house_state(ctx: Context, session: AsyncSession) -> HouseState:
+    """The settings the offered areas depend on, read now."""
+    from domovoi import home_location
+
+    try:
+        home = bool((await home_location.load(session) or {}).get("name"))
+    except Exception as e:  # noqa: BLE001 - an unreadable row: the last copy
+        log.debug("help: home location read failed: %s", e)
+        home = None
+    return _settings_state(online=ctx.online, home=home)
+
+
+def _has(state: HouseState, needs: frozenset[str]) -> bool:
+    return all(getattr(state, n) for n in needs)
 
 
 class HelpHandler(Handler):
@@ -86,27 +147,29 @@ class HelpHandler(Handler):
         return False
 
     async def execute(self, intent: Intent, ctx: Context, session: AsyncSession) -> Response:
-        return self._answer(ctx)
+        return await self._answer(ctx, session)
 
     async def execute_from_tool(self, args: dict, ctx: Context, session: AsyncSession) -> Response:
-        return self._answer(ctx)
+        return await self._answer(ctx, session)
 
     async def _from_match(
         self, m: re.Match[str], ctx: Context, session: AsyncSession
     ) -> Response:
-        return self._answer(ctx)
+        return await self._answer(ctx, session)
 
-    def _answer(self, ctx: Context) -> Response:
+    async def _answer(self, ctx: Context, session: AsyncSession) -> Response:
         return Response(
-            text=capabilities_summary(),
+            text=capabilities_summary(await house_state(ctx, session)),
             session_id=ctx.session_id,
             matched_handler=self.name,
         )
 
 
-def _areas() -> list[tuple[str, str]]:
+def _areas(state: HouseState) -> list[tuple[str, str]]:
     """(label, phrase) for the areas the answer names: the core ones in
-    ``_CORE_AREAS`` order, then enabled plugins', from the live registry."""
+    ``_CORE_AREAS`` order, then enabled plugins', from the live registry;
+    only what ``state`` lets this house do right now."""
+    from domovoi import weather
     from domovoi.handlers import HANDLER_BY_NAME, HANDLERS
 
     out: list[tuple[str, str]] = []
@@ -114,12 +177,20 @@ def _areas() -> list[tuple[str, str]]:
         h = HANDLER_BY_NAME.get(name)
         if h is None or getattr(h, "plugin_slug", None) is not None:
             continue
+        if not _has(state, _NEEDS.get(name, frozenset())):
+            continue
         phrases = example_phrases_of(h)
         if phrases:
             out.append((h.display.label, phrases[0]))
+    if _has(state, _WEATHER_NEEDS) and not weather.plugin_handles_weather():
+        out.append(_WEATHER)
     plugins = 0
     for h in HANDLERS:
         if getattr(h, "plugin_slug", None) is None or plugins >= _MAX_PLUGINS:
+            continue
+        # A plugin that only works online (downloads, web services) isn't
+        # offered with no internet.
+        if getattr(h, "requires_network", "no") == "yes" and not state.internet:
             continue
         try:
             phrases = example_phrases_of(h)
@@ -132,10 +203,11 @@ def _areas() -> list[tuple[str, str]]:
     return out
 
 
-def capabilities_summary() -> str:
+def capabilities_summary(state: HouseState | None = None) -> str:
     """The spoken answer: a few areas with one thing to say for each, then
-    where the rest is."""
-    areas = _areas()
+    where the rest is. ``state`` None: the settings as this process last
+    read them (online, the cached Home location)."""
+    areas = _areas(state if state is not None else _settings_state())
     if not areas:
         return (
             "I can do quite a lot around the house. The manual on the "

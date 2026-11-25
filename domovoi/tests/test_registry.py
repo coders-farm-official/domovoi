@@ -27,6 +27,7 @@ CORE_BANDS = {
     "support_session": 101,
     "help": 105,
     "help_desk": 106,
+    "house_facts": 107,
     "voice_profile": 110,
     "wifi": 120,
     "voice": 130,
@@ -221,10 +222,15 @@ def test_choice_kinds_are_confirmation_kinds_with_a_reply_handler() -> None:
             "core.self_intro", "core.name_sound_alike", "core.room_check",
         },
         "printing": {"core.print_pick", "core.print_printer", "core.printer_pick", "core.scan_more"},
+        "lists": {"core.lists_add_which"},
         "documents": {
             "core.doc_pick", "core.doc_length", "core.doc_more", "core.doc_paused",
             "core.letter_author", "core.letter_dictation",
         },
+        "memory": {"core.forget_what"},
+        # M2: "How long should it be?" / "What time should it go off?" (ask_detail).
+        "timer": {"core.timer_how_long"},
+        "reminder": {"core.alarm_what_time", "core.reminder_what_when"},
     }
 
 
@@ -238,7 +244,7 @@ def test_declared_confirmation_kinds_cover_known_flows() -> None:
             "core.room_voice_add", "core.forget_me", "core.name_sound_alike", "core.room_check",
         },
         "double_check": {"core.self_doubt_offer", "core.prefs_offer"},
-        "memory": {"core.pending_memory_offer"},
+        "memory": {"core.pending_memory_offer", "core.forget_what"},
         "music": {"core.music_choice", "core.music_room_or_title"},
         "playlist": {"core.playlist_choice", "core.playlist_add_choice"},
         "news": {"core.news_fetch", "core.news_fetch_topics", "core.news_read_article"},
@@ -251,12 +257,14 @@ def test_declared_confirmation_kinds_cover_known_flows() -> None:
             "core.printer_pick", "core.scan_ready", "core.scan_more", "core.scan_read", "core.scan_read_all",
                 "core.print_test",
         },
-        "lists": {"core.lists_create", "core.lists_clear", "core.lists_delete"},
+        "lists": {"core.lists_create", "core.lists_clear", "core.lists_delete", "core.lists_add_which"},
         "documents": {
             "core.doc_pick", "core.doc_length", "core.doc_more", "core.doc_paused",
             "core.letter_author", "core.letter_dictation",
         },
         "media_search": {"core.media_send"},
+        "timer": {"core.timer_how_long"},
+        "reminder": {"core.alarm_what_time", "core.reminder_what_when"},
     }
     for name, kinds in expected.items():
         assert set(HANDLER_BY_NAME[name].confirmation_kinds) == kinds

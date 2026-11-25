@@ -497,46 +497,92 @@ def test_stream_records_resumable_but_skips_start_when_expect_followup(
         assert app.state.resumable_music.get("garage") == "http://test.local:8004"
 
 
-def test_response_task_failure_emits_error_then_response_end(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """When the response task throws (e.g. DB unreachable mid-turn),
-    the core must emit BOTH an `error` frame AND a terminal
-    `response_end` so the satellite's mic thread unblocks. Without
-    the response_end pairing, the Pi hangs forever waiting for the
-    end-of-turn signal and stays out of wake-word listen.
+class _DeadTTS:
+    async def synthesize(self, text, *, engine=None, voice=None) -> bytes:
+        raise RuntimeError("tts is down too")
 
-    Regression test for the 2026-05-08 19:09 incident: docker postgres
-    went down, the core's response task threw, only `error` was sent, sat
-    was stuck.
-    """
+
+def _until_response_end(ws) -> list:
+    """Every frame up to and including the turn's response_end (audio as
+    bytes)."""
+    frames: list = []
+    while True:
+        msg = ws.receive()
+        if msg.get("bytes") is not None:
+            frames.append(msg["bytes"])
+            continue
+        frame = json.loads(msg["text"])
+        frames.append(frame)
+        if frame.get("type") == "response_end":
+            return frames
+
+
+def _run_failing_turn(monkeypatch, *, tts, trigger: str = "wake_word") -> list:
     async def boom_route(intent, ctx, session):
         raise RuntimeError("simulated DB unreachable")
 
     monkeypatch.setattr("domovoi.streaming.get_whisper_client", lambda: _FakeWhisper("anything"))
     monkeypatch.setattr("domovoi.streaming.session_scope", _fake_session_scope)
-    monkeypatch.setattr("domovoi.streaming.get_tts_client", lambda: _FakeTTS())
+    monkeypatch.setattr("domovoi.streaming.get_tts_client", lambda: tts)
     monkeypatch.setattr("domovoi.streaming.route", boom_route)
 
     with TestClient(app) as client:
         with client.websocket_connect("/v1/stream/kitchen") as ws:
             _hello(ws)
-            ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word"}))
+            ws.send_text(json.dumps({"type": "utterance_start", "trigger": trigger}))
             ws.send_bytes(b"\x00" * 1024)
             ws.send_text(json.dumps({"type": "utterance_end"}))
+            assert ws.receive_json()["type"] == "transcript"
+            return _until_response_end(ws)
 
-            ws.receive_json()  # transcript
-            err = ws.receive_json()
-            assert err["type"] == "error"
-            assert "simulated DB unreachable" in err["message"]
-            # The new behavior: response_end follows the error so the
-            # protocol stays balanced — every utterance gets terminated.
-            end = ws.receive_json()
-            assert end == {
-                "type": "response_end",
-                "interrupted": True,
-                "expect_followup": False,
-            }
+
+def test_response_task_failure_is_said_out_loud(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Capability N5: a turn that raises (here route() itself, as when the
+    database goes away mid-turn) says a short honest line through the
+    room's TTS — response_start, its audio, response_end — never silence.
+    No exception text in what is said."""
+    from domovoi.router import TURN_FAILED_TEXT
+
+    frames = _run_failing_turn(monkeypatch, tts=_FakeTTS())
+    start = frames[0]
+    assert start["type"] == "response_start"
+    assert start["text"] == TURN_FAILED_TEXT
+    assert "DB" not in start["text"]
+    assert any(isinstance(f, bytes) for f in frames), "the line is spoken, not just sent"
+    assert not any(isinstance(f, dict) and f.get("type") == "error" for f in frames)
+    assert frames[-1]["type"] == "response_end"
+
+
+def test_response_task_failure_emits_error_then_response_end_when_it_cannot_speak(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the failure can't be said either (TTS down too), the core
+    still emits an `error` frame AND a terminal `response_end` so the
+    satellite's mic thread unblocks. Without the response_end pairing,
+    the Pi hangs forever waiting for the end-of-turn signal and stays out
+    of wake-word listen.
+
+    Regression test for the 2026-05-08 19:09 incident: docker postgres
+    went down, the core's response task threw, only `error` was sent, sat
+    was stuck.
+    """
+    frames = _run_failing_turn(monkeypatch, tts=_DeadTTS())
+    errors = [f for f in frames if isinstance(f, dict) and f.get("type") == "error"]
+    assert any("simulated DB unreachable" in e["message"] for e in errors)
+    assert not any(isinstance(f, dict) and f.get("type") == "response_start" for f in frames)
+    assert frames[-1] == {
+        "type": "response_end",
+        "interrupted": True,
+        "expect_followup": False,
+    }
+
+
+def test_barge_in_failure_is_not_spoken(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A barge-in turn's capture may be the speaker's own echo: its
+    failure ends with error + response_end, as before, and says nothing."""
+    frames = _run_failing_turn(monkeypatch, tts=_FakeTTS(), trigger="barge_in")
+    assert [f["type"] for f in frames if isinstance(f, dict)] == ["error", "response_end"]
+    assert "simulated DB unreachable" in frames[0]["message"]
 
 
 def test_stream_no_resume_when_resumable_empty(monkeypatch: pytest.MonkeyPatch) -> None:

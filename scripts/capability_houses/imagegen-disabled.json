@@ -1,0 +1,11 @@
+{
+  "extends": "base",
+  "note": "The imagegen plugin installed, switched off by an admin.",
+  "plugins": [
+    {
+      "slug": "imagegen",
+      "enabled": false,
+      "status": "ok"
+    }
+  ]
+}

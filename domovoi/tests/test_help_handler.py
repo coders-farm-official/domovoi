@@ -10,7 +10,7 @@ import pytest
 
 from domovoi.handlers import HANDLER_BY_NAME, register_handler, unregister_handler
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
-from domovoi.handlers.help import HelpHandler, capabilities_summary
+from domovoi.handlers.help import HelpHandler, HouseState, capabilities_summary
 from domovoi.models import Context
 from domovoi.tests.conftest import fast_path_winner, requires_db
 
@@ -74,7 +74,7 @@ def test_the_tool_is_never_offered() -> None:
 
 
 def test_the_answer_is_the_live_feature_list() -> None:
-    text_ = capabilities_summary()
+    text_ = capabilities_summary(HouseState(internet=True, ai=True, home=False))
     assert text_.startswith("Here are a few things I can do.")
     for name in ("timer", "reminder", "music", "calendar", "lists", "news"):
         h = HANDLER_BY_NAME[name]
@@ -140,5 +140,115 @@ async def test_route_answers_it_on_the_fast_path_with_no_model(db_session, monke
     ctx = Context(session_id=uuid4(), room_id="kitchen", online=False)
     r = await router.route(Intent(transcript="What can you do?", room_id="kitchen"), ctx, db_session)
     assert (r.matched_handler, r.matched_path) == ("help", "fast")
-    assert r.text == capabilities_summary()
+    # offline right now: no news offered
+    assert r.text == capabilities_summary(HouseState(internet=False, ai=True, home=False))
+    assert "News:" not in r.text
     assert isinstance(HANDLER_BY_NAME["help"], HelpHandler)
+
+
+# ─── N13: only what this house can do right now ──────────────────────────
+
+
+def _labels(state: HouseState) -> str:
+    return capabilities_summary(state)
+
+
+@pytest.fixture
+def no_weather_plugin(monkeypatch):
+    from domovoi import weather
+
+    monkeypatch.setattr(weather, "plugin_handles_weather", lambda: False)
+
+
+def test_internet_no_leaves_out_news_and_weather(no_weather_plugin) -> None:
+    text_ = _labels(HouseState(internet=False, ai=True, home=True))
+    assert "News:" not in text_
+    assert "Weather:" not in text_
+    for label in ("Timers:", "Lists:", "Music:"):
+        assert label in text_
+
+
+def test_ai_off_and_internet_no_still_offers_the_house_commands(no_weather_plugin) -> None:
+    """Capability case 12.1: still useful, and nothing it can't do."""
+    text_ = _labels(HouseState(internet=False, ai=False, home=False))
+    assert text_.startswith("Here are a few things I can do.")
+    for label in ("Timers:", "Reminders:", "Music:", "Lists:"):
+        assert label in text_
+    for gone in ("News:", "Weather:", "chat"):
+        assert gone not in text_
+
+
+def test_weather_needs_a_home_location(no_weather_plugin) -> None:
+    assert "Weather:" not in _labels(HouseState(internet=True, ai=True, home=False))
+    assert """Weather: try "what's the weather".""" in _labels(
+        HouseState(internet=True, ai=True, home=True))
+
+
+def test_weather_needs_ai(no_weather_plugin) -> None:
+    """With AI off a weather question gets the lookup refusal (router)."""
+    text_ = _labels(HouseState(internet=True, ai=False, home=True))
+    assert "Weather:" not in text_
+    assert "News:" in text_      # headlines need no model
+
+
+def test_a_weather_plugin_takes_over_the_weather_area(monkeypatch) -> None:
+    from domovoi import weather
+
+    monkeypatch.setattr(weather, "plugin_handles_weather", lambda: True)
+    assert "Weather:" not in _labels(HouseState(internet=True, ai=True, home=True))
+
+
+def test_internet_answer_no_reads_from_the_setting(no_weather_plugin) -> None:
+    from domovoi import ai_features, egress
+
+    with egress.override_policy("never"), ai_features.override(True):
+        assert "News:" not in capabilities_summary()
+    with egress.override_policy("always"), ai_features.override(True):
+        assert "News:" in capabilities_summary()
+
+
+class _OnlinePlugin(_PluginHandler):
+    name = "fetch_test"
+    requires_network = "yes"
+    display = HandlerDisplay(label="Downloads", tone="media")
+    tool_schema = {
+        "name": "fetch_test",
+        "description": "Fetch a video. Example: 'download the cat video'.",
+        "parameters": {"type": "object", "properties": {}},
+    }
+
+    async def fallback_offline(self, intent, ctx, session):  # pragma: no cover
+        return None
+
+
+def test_an_online_only_plugin_is_left_out_with_no_internet() -> None:
+    """Capability case 12.2: plugins that need the internet aren't offered."""
+    plugin = _OnlinePlugin()
+    plugin.plugin_slug = "fetch-test"
+    register_handler(plugin)
+    try:
+        assert "Downloads:" in _labels(HouseState(internet=True, ai=True, home=False))
+        assert "Downloads:" not in _labels(HouseState(internet=False, ai=True, home=False))
+    finally:
+        unregister_handler(plugin)
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_the_spoken_answer_reads_the_home_location(db_session, no_weather_plugin) -> None:
+    from domovoi import ai_features, egress, home_location
+    from domovoi.handlers.help import house_state
+
+    ctx = Context(session_id=uuid4(), room_id="kitchen", online=True)
+    with egress.override_policy("always"), ai_features.override(True):
+        await home_location.save(db_session, None)
+        r = await HANDLER_BY_NAME["help"].execute(None, ctx, db_session)
+        assert "Weather:" not in r.text
+        await home_location.save(db_session, {"name": "Springfield"})
+        assert (await house_state(ctx, db_session)).home is True
+        r = await HANDLER_BY_NAME["help"].execute(None, ctx, db_session)
+        assert "Weather:" in r.text
+        assert "News:" in r.text
+    with egress.override_policy("never"), ai_features.override(True):
+        r = await HANDLER_BY_NAME["help"].execute(None, ctx, db_session)
+        assert "News:" not in r.text and "Weather:" not in r.text

@@ -1,0 +1,6 @@
+{
+  "extends": "base",
+  "note": "No video downloads, asked by a proven admin.",
+  "asker": "proven_admin",
+  "admin_session": "live"
+}

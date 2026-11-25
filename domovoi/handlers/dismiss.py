@@ -57,8 +57,12 @@ _DISMISS_RE = re.compile(
     r"|no(?:pe)?(?: (?:thanks|thank you|not now|i'?m good|i'?m fine))?"
     r"|nah(?: (?:i'?m good|thanks))?"
     r"|not (?:now|right now|anymore|at the moment)"
-    # forget it / ignore / disregard / cancel / drop it
-    r"|forget (?:it|about it|that)"
+    # ignore / disregard / cancel / drop it. NOT "forget it" / "forget
+    # that" / "forget about it": those are the memory handler's (N15) — a
+    # bare "forget that" right after "remember that …" must forget the
+    # fact, not answer "No worries." It stands down on them exactly as
+    # here when there is nothing to forget (handlers/memory.py,
+    # MemoryHandler._forget_last).
     r"|ignore (?:that|me|it)"
     r"|disregard(?: that| it)?"
     r"|cancel(?: that| it)?"

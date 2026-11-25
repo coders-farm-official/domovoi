@@ -117,6 +117,10 @@ class FastPath:
     method: FastPathMethod
     offline_ok: bool | None = None
     early_commit: EarlyCommitTier | None = None
+    # Overrides the handler's ``needs_ai`` for this one path: False for a
+    # path that only reads ("is my picture ready?") on a handler that
+    # makes things with a model; None (the default) inherits it.
+    needs_ai: bool | None = None
 
     def __iter__(self) -> Iterator[Any]:
         # 2-tuple unpacking sugar: `for pattern, method in handler.fast_paths`.
@@ -203,6 +207,11 @@ class Handler(ABC):
     # Plugin handlers get their slug stamped by the plugin loader (C3);
     # None marks a core handler (used by the registry tie-break).
     plugin_slug: str | None = None
+    # Tool-call actions this core handler takes beyond its schema's
+    # ``action`` enum. Any other action is declined before
+    # execute_from_tool (router.tool_action_offered), so a made-up one
+    # never becomes "I don't know how to <action> ...".
+    tool_action_aliases: tuple[str, ...] = ()
     # Exposed to conversational chat mode (#8) as a Letta-callable tool via the
     # proxy-tool bridge? Default off; a handler opts in only when its action fits
     # an ORGANIC conversational moment (e.g. play a song) rather than a
@@ -228,6 +237,13 @@ class Handler(ABC):
     # every other one (plugins included, unless they say so) the room asks
     # "Should I ...?" first, unless the command is phrased as a question.
     read_only: bool = False
+    # What this handler does IS a model's work (a plugin that makes
+    # pictures on its own engine, not through this box's Ollama): while
+    # the household's AI switch is off (domovoi/ai_features.py) the router
+    # answers its turns with ``ai_features.off_feature_line`` and its code
+    # never runs. A fast path can say otherwise (``FastPath.needs_ai``).
+    # Plugins declare it in the manifest too ([[handlers]] needs_ai).
+    needs_ai: bool = False
 
     @abstractmethod
     async def execute(self, intent: Intent, ctx: Context, session: AsyncSession) -> Response:

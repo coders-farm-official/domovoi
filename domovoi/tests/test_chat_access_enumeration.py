@@ -111,6 +111,11 @@ SQL_ALLOWED: dict[str, tuple[str, str]] = {
     "web/backend/api/chat.py::_letter_reply": (HELPER, "the checked send's pictures"),
     "web/backend/api/chat.py::_picture_heads_up": (HELPER, "the checked send's pictures"),
     "web/backend/api/chat.py::_previous_lookup_query": (HELPER, "the checked thread's last lookup"),
+    # 1.4.1's typed-chat memory step and house facts (main merge 2026-11-25):
+    # each runs inside send_message / retry_reply, after their thread_for.
+    "web/backend/api/chat.py::_house_fact_reply.previous_assistant": (HELPER, "the checked send's thread's last reply"),
+    "web/backend/api/chat.py::_memory_retry": (HELPER, "a memory reply replacing the model's, in a checked retry's thread"),
+    "web/backend/api/chat_memory.py::_previous": (HELPER, "the checked send's or retry's thread's previous row"),
     "web/backend/api/chat.py::_write_title": (WORKER, "the title job, for a thread a checked send named"),
     "web/backend/api/chat.py::sweep_unsent_pictures": (AGGREGATE, "upload tokens still referenced, no content"),
     "web/backend/api/chat_doc_jobs.py::_checked_job": (GATED, "a job's chat, checked before the job is loaded"),

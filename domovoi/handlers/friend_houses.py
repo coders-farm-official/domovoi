@@ -17,6 +17,9 @@ house already does with its friends.
   change how every such turn is planned (router.plan_route), not just ours.
 * **Check:** "any messages?", "do we have any new messages from friends?"
   says how many are unread, and from whom. Never the text.
+* **Did it send:** "did my message send?", "was my message to the Smiths
+  delivered?" says whether the newest message this house sent went:
+  delivered (the friend acknowledged it), still waiting, or not delivered.
 * **Read:** "read my messages", "read the messages from the Smiths" reads
   the unread ones aloud, oldest first, and marks them read. Only on
   request, whatever a friend's alert level: anyone in the room hears them.
@@ -42,6 +45,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from domovoi import off_answers
 from domovoi.confirmations import request_confirmation
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
 from domovoi.models import Context, Intent, Response
@@ -63,6 +67,25 @@ _CHECK_RE = re.compile(
 _READ_RE = re.compile(
     r"^read (?:me )?(?:my |our |the |any |new )*(?:friend (?:house )?)?messages?"
     r"(?: from (?P<name>.+))?$"
+)
+_STATUS_RE = re.compile(
+    r"^(?:did|has|have|was|is) (?:my|our|the) (?:last |latest )?(?:friend (?:house )?)?"
+    r"(?:message|note)(?: to (?P<name>.+?))?"
+    r" (?:send|sent|go|go through|gone|gone through|get sent|get delivered|been sent|been delivered"
+    r"|delivered|arrive|arrived|get there)$"
+)
+# "Send my friend a message", "message a friend", "send a message to my
+# friend's house": a friend, but no friend house named (M8, cases 7.20 and
+# 7.21). Answered here, never by the model: Friend Houses off, no friend
+# house added yet (who adds one, and where), or which one. Before
+# _MESSAGE_RE, which would take "send a message to my friend" and decline.
+_FRIEND = r"(?:my|a|our|one of (?:my|our)) friends?(?:'s|s')?(?: house)?"
+_TO_A_FRIEND_RE = re.compile(
+    r"^(?:"
+    rf"send {_FRIEND} (?:a |an )?(?:message|note)"
+    rf"|send (?:a |an )?(?:message|note) to {_FRIEND}"
+    rf"|(?:message|text) {_FRIEND}"
+    r")(?:,?\s+(?P<body>(?:saying|that|to say)\b.*))?\Z"
 )
 _LEAD_IN_RE = re.compile(r"^[\s,:;-]*(?:(?:saying|that|to say|and say)\b[\s,:;]*)?")
 # How long the friend names the patterns below know are trusted before a
@@ -215,6 +238,35 @@ def _on() -> bool:
     return bool(getattr(settings, "friend_houses_enabled", False))
 
 
+#: "Any messages?" while Friend Houses is off, and where it is turned on.
+def _off_no_messages(*, admin: bool = False) -> str:
+    """``admin``: the turn's ``Context.proven_admin`` (words only)."""
+    return off_answers.with_turn_on(
+        "Friend Houses isn't turned on, so there are no messages.", off_answers.FRIEND_HOUSES, admin=admin,
+    )
+
+
+_OFF_NO_MESSAGES = _off_no_messages()
+
+
+def off_cant_send(*, admin: bool = False) -> str:
+    """"Send my friend a message" while Friend Houses is off."""
+    return off_answers.with_turn_on(
+        "Friend Houses isn't turned on, so I can't send a message to a friend's house.",
+        off_answers.FRIEND_HOUSES, admin=admin,
+    )
+
+
+def no_friends_yet(*, admin: bool = False) -> str:
+    """Friend Houses is on, but no friend's house is added: who adds one,
+    and where (the cards on Settings → Household → Friend Houses)."""
+    place = off_answers.FEATURES[off_answers.FRIEND_HOUSES].place
+    if admin:
+        return ("No friend's house is added yet. In " + place + ": press Make on the Make a "
+                "friend file card and give the file to your friend's house, or open the file "
+                "they gave you on the Add a friend from their file card.")
+    return f"No friend's house is added yet. An admin adds one in {place}."
+
 #: The longest read-back ("Your message to … says: …. Should I send it?").
 PROMPT_MAX = 200
 
@@ -270,6 +322,8 @@ class FriendHousesHandler(Handler):
         self.fast_paths = [
             FastPath(_CHECK_RE, FriendHousesHandler._check),
             FastPath(_READ_RE, FriendHousesHandler._read),
+            FastPath(_STATUS_RE, FriendHousesHandler._status),
+            FastPath(_TO_A_FRIEND_RE, FriendHousesHandler._send_to_a_friend),
             FastPath(_MESSAGE_RE, FriendHousesHandler._send),
             FastPath(_SEND_NAMED_RE, FriendHousesHandler._send_named),
             FastPath(_LET_KNOW_RE, FriendHousesHandler._send_named),
@@ -296,6 +350,32 @@ class FriendHousesHandler(Handler):
         if found is None:
             return None  # not a friend house: route on
         return await self._ask_to_send(found[0], found[1], ctx, session)
+
+    async def _send_to_a_friend(
+        self, m: re.Match[str], ctx: Context, session: AsyncSession,
+    ) -> Response:
+        """"Send my friend a message": no friend house named."""
+        if not _on():
+            return self._reply(ctx, off_cant_send(admin=ctx.proven_admin))
+        from sqlalchemy import text as sql_text
+
+        count = (await session.execute(sql_text(
+            "SELECT count(*) FROM friend_houses_friends WHERE state = 'active'"))).scalar()
+        if not count:
+            return self._reply(ctx, no_friends_yet(admin=ctx.proven_admin))
+        friends = await _friends(session)
+        body = _body(m.group("body") or "")
+        if len(friends) == 1:
+            return await self._ask_to_send(friends[0], body, ctx, session)
+        from domovoi.friend_houses import messages
+
+        phrases = await messages.wake_phrases()
+        names = [messages.safe_name(f.local_name, phrases) for f in friends[:5]]
+        names = [n for n in names if n]
+        which = (", ".join(names[:-1]) + " or " + names[-1]) if len(names) > 1 else "".join(names)
+        lead = f"Which friend house: {which}? " if which else "Which friend house? "
+        return self._reply(ctx, lead + 'Say "message", the name, then your message.',
+                           history_text="I asked which friend house to message.")
 
     async def _send_named(self, m: re.Match[str], ctx: Context, session: AsyncSession) -> Response | None:
         """The name, then the message ("send X a message saying …")."""
@@ -339,17 +419,56 @@ class FriendHousesHandler(Handler):
         from domovoi.friend_houses import messages
 
         try:
-            await messages.send(str(data.get("friend_id")), str(data.get("text") or ""))
+            row = await messages.send(str(data.get("friend_id")), str(data.get("text") or ""))
         except messages.MessageError as e:
             return self._reply(ctx, str(e))
         name = messages.safe_name(str(data.get("name") or ""), await messages.wake_phrases())
-        return self._reply(ctx, f"Sent to {name or 'them'}.",
-                           history_text="I sent it to the friend house.")
+        # "Sent" only once the friend acknowledged it (N6): send() queues and
+        # tries at once; a house that's offline keeps it in the outbox.
+        if await messages.wait_delivered(int(row["id"])) == "sent":
+            return self._reply(ctx, f"Sent to {name or 'them'}.",
+                               history_text="I sent it to the friend house.")
+        return self._reply(ctx, f"Queued for {name or 'them'}. It'll go when their house is reachable.",
+                           history_text="I queued it for the friend house; it isn't delivered yet.")
+
+    # ─── did it send ──────────────────────────────────────────────────
+    async def _status(self, m: re.Match[str], ctx: Context, session: AsyncSession) -> Response | None:
+        if not _on():
+            return self._reply(ctx, "Friend Houses isn't turned on, so no messages were sent.")
+        from domovoi.friend_houses import messages
+
+        phrases = await messages.wake_phrases()
+        named = (m.groupdict().get("name") or "").strip()
+        house: bytes | None = None
+        if named:
+            for c in await messages.conversations():
+                if any(_fold(named) == _fold(form) for form in spoken_forms(c["name"]) | {c["name"]}):
+                    house = bytes.fromhex(c["house"])
+                    break
+            if house is None:
+                found = split_friend(named, await _friends(session))
+                if found is None or found[1]:
+                    return None  # not a friend house: route on
+                return self._reply(
+                    ctx, f"You haven't sent {messages.safe_name(found[0].local_name, phrases)} any messages.")
+        last = await messages.last_sent(house)
+        if last is None:
+            return self._reply(ctx, "You haven't sent any friend house messages.")
+        name = messages.safe_name(last["name"], phrases) or "them"
+        if last["state"] == "sent":
+            text_ = f"Yes. Your last message to {name} was delivered."
+        elif last["state"] == "failed":
+            text_ = f"No. Your last message to {name} wasn't delivered: their house was offline too long."
+        else:
+            text_ = (f"Not yet. Your last message to {name} is waiting to send. "
+                     "It'll go when their house is reachable.")
+        return self._reply(ctx, text_,
+                           history_text="I said whether the last friend house message was delivered.")
 
     # ─── check ────────────────────────────────────────────────────────
     async def _check(self, m: re.Match[str], ctx: Context, session: AsyncSession) -> Response:
         if not _on():
-            return self._reply(ctx, "Friend Houses isn't turned on, so there are no messages.")
+            return self._reply(ctx, _off_no_messages(admin=ctx.proven_admin))
         from domovoi.friend_houses import messages
 
         convos = [c for c in await messages.conversations() if c["unread"]]
@@ -369,7 +488,7 @@ class FriendHousesHandler(Handler):
     # ─── read ─────────────────────────────────────────────────────────
     async def _read(self, m: re.Match[str], ctx: Context, session: AsyncSession) -> Response:
         if not _on():
-            return self._reply(ctx, "Friend Houses isn't turned on, so there are no messages.")
+            return self._reply(ctx, _off_no_messages(admin=ctx.proven_admin))
         from domovoi.friend_houses import messages
 
         convos = [c for c in await messages.conversations() if c["unread"]]

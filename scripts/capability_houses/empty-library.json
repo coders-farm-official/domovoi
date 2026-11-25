@@ -1,0 +1,5 @@
+{
+  "extends": "base",
+  "note": "No music in the library.",
+  "music_library": "empty"
+}

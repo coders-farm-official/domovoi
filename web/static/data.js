@@ -742,7 +742,24 @@ const apiFetch = (path, opts = {}) => {
       ...(init.headers || {}),
     },
   });
-  return _sendWithAuthRetry(send, { method: init.method, body: init.body, quiet, noPrompt });
+  return _sendWithAuthRetry(send, { method: init.method, body: init.body, quiet, noPrompt })
+    .catch((e) => { _announcePluginAiOff(path, e); throw e; });
+};
+
+/* A plugin's action refused because the household's AI switch is off
+ * (owner, 2026-11-25: AI off turns image generation off too). The core
+ * answers it with X-Domovoi-Refusal: ai-off and the whole line ("AI is
+ * off on this house, so I can't make pictures. An admin can turn it on
+ * in …"); a plugin page released before that gate only knows its own
+ * failure words, so the shell says the line (PluginAiOffNotice,
+ * components.jsx) beside whatever the page says. */
+const PLUGIN_AI_OFF_EVENT = 'domovoi-plugin-ai-off';
+const _announcePluginAiOff = (path, e) => {
+  if (!e || e.refusal !== 'ai-off' || !String(path || '').startsWith('/api/plugins/')) return;
+  const d = e.detail && typeof e.detail === 'object' ? e.detail.detail : null;
+  if (typeof d !== 'string' || !d) return;
+  try { window.dispatchEvent(new CustomEvent(PLUGIN_AI_OFF_EVENT, { detail: { text: d } })); }
+  catch { /* no window events (test harness) */ }
 };
 
 /* apiFetch's raw-Response twin, for the calls that read the body
@@ -2027,4 +2044,5 @@ Object.assign(window, {
   useDebouncedValue,
   liveNow, liveRelTime,
   isGuestViewer, useGuestViewer, RoomQueueIntent, openRoomQueue,
+  PLUGIN_AI_OFF_EVENT,
 });

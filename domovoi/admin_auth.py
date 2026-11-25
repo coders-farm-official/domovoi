@@ -1888,6 +1888,26 @@ async def check_admin_request(
         raise AuthCheckUnavailable() from e
 
 
+async def request_is_proven_admin(request: Request | None) -> bool:
+    """Whether ``request`` comes from a PROVEN admin, for an answer's
+    wording only (``Context.proven_admin``, N1): True exactly when
+    :func:`check_admin_request` says ``"ok"`` — a live Bearer session.
+
+    Never ``"cookie-only"`` (the cookie only renders), never
+    ``"pre-setup"`` (no admin exists yet: nobody has proven anything), and
+    a check that can't run (:class:`AuthCheckUnavailable`, anything else)
+    is False. Asked once per turn and never cached, so a session that
+    ended is a member from the next turn. It moves no idle clock (the
+    check runs with ``activity=False``). It authorizes nothing: every
+    admin action keeps its own gate."""
+    if request is None:
+        return False
+    try:
+        return await check_admin_request(request) == "ok"
+    except Exception:  # noqa: BLE001 — can't tell: a member
+        return False
+
+
 async def require_admin_mutation(request: Request) -> None:
     """Dependency for gated MUTATING endpoints (§7.3 list): Bearer-only.
     Keeps the pre-setup LAN-trust grace (daily surfaces work on a fresh
@@ -2879,6 +2899,30 @@ async def check_queue_guest(
         status_code=401,
         detail=f"{DEVICE_TOKEN_HEADER} or admin session required",
     )
+
+
+async def request_is_guest(request: Any) -> bool:
+    """Whether ``request`` comes from a GUEST, for an answer's wording only
+    ("who lives here?", "who's the owner?": domovoi/house_facts.py,
+    domovoi/owner_easter_eggs.py). The same rule as
+    :func:`check_queue_guest`: after setup, a caller presenting NO
+    household credential at all (no device token, no Bearer, no dashboard
+    cookie). Anyone presenting one is the household's (a bad one is
+    refused by its route's own gate first); before setup everyone on the
+    LAN is (the pre-setup grace). A check that can't run is a guest: the
+    answers it words hold back the household's names, so they fail
+    closed. It authorizes nothing.
+
+    The chat's routes are household-only (``require_device``), so there
+    this is False unless that gate ever lets a guest in."""
+    if request is None:
+        return False
+    if presents_household_credential(request):
+        return False
+    try:
+        return await check_admin_request(request) == "no-auth"
+    except Exception:  # noqa: BLE001 — can't tell: hold the names back
+        return True
 
 
 def assert_guest_same_site(request: Any) -> None:

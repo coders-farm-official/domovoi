@@ -401,7 +401,7 @@ def test_the_page_says_the_message_states_and_choices_plainly() -> None:
     src = _page()
     for words in ("Waiting to send", "Still trying: ", "Delivered", "Not delivered",
                   "(their clock)", "(no longer a friend)", "Load earlier",
-                  "Save a copy (with proof of what was sent)",
+                  ">Save a copy</Button>",
                   "Delete every message with ${name}? This can’t be undone. Save a copy first if you might need it.",
                   "Only in the inbox", "Say who it’s from in the rooms",
                   "Read new messages aloud in the rooms",

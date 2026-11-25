@@ -64,8 +64,13 @@ from __future__ import annotations
 # 1.13.1: net_safety.open_raw_stream / iter_raw (and _sync twins):
 #         open_stream that asks for identity and refuses an encoded
 #         answer, read raw with no total cap (a live stream).
-# 1.14.0: [[web.home_cards]]: a plugin card on the dashboard's Home page
-#         (window.DomovoiPlugins.<slug>.homeCards.<Component>).
+# 1.14.0: "needs AI": Handler.needs_ai / FastPath.needs_ai and the
+#         manifest's [[handlers]] needs_ai and [ai] table (does, routes):
+#         off with the household's AI switch, answered by core. (Released
+#         with Domovoi 1.4.1.) On 1.5.0 also [[web.home_cards]]: a plugin
+#         card on the dashboard's Home page
+#         (window.DomovoiPlugins.<slug>.homeCards.<Component>); 1.4.1's
+#         1.14.0 has no home cards, so ask for >=1.15 to be sure of them.
 # 1.15.0: playback.player_route(room_id): how a room's music player reaches
 #         the core and the address it calls from (the radio relay).
 # 1.16.0: playback.relay_url(room_id, remote_url, kind="file"|"radio") and

@@ -38,7 +38,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from domovoi import bootstrap
+from domovoi import ai_features, bootstrap
 from domovoi.config import settings
 from domovoi.handlers import register_handler, unregister_handler, HANDLERS
 from domovoi.handlers.base import Handler
@@ -394,6 +394,9 @@ class PluginLoader:
         # Every router at once: mounting is per slug (each call replaces
         # the slug's previous mount — on a re-enable, the torn-down load's
         # routes), so a router-at-a-time loop would leave only the last.
+        # What it makes with a model ([ai]): read by the router for a
+        # needs_ai handler's line and by the route gate (plugin_http).
+        ai_features.set_plugin_ai(slug, manifest.ai)
         if self._app is not None:
             mount_plugin_routers(self._app, slug, ctx.routers)
         set_plugin_enabled(slug, True)
@@ -453,6 +456,7 @@ class PluginLoader:
         hangs on the way out cannot hold a disable, an upgrade or the
         core's shutdown open."""
         set_plugin_enabled(slug, False)
+        ai_features.set_plugin_ai(slug, None)
         lp = self.loaded.pop(slug, None)
         if lp is None:
             return

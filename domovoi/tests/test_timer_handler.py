@@ -12,6 +12,7 @@ from domovoi.handlers.timer import (
     TimerHandler,
     _CANCEL_RE,
     _CREATE_RE,
+    _LIST_RE,
     _STATUS_RE,
     spoken_label,
 )
@@ -157,10 +158,10 @@ def test_spoken_durations_reach_the_timer_fast_path(transcript: str) -> None:
     assert fast_path_winner(transcript) == "timer"
 
 
-def test_bare_set_a_timer_does_not_fast_path() -> None:
-    # No duration → no fast path anywhere in the registry; the utterance
-    # falls through to LLM tool routing, which can ask for the duration.
-    assert fast_path_winner("set a timer") is None
+def test_bare_set_a_timer_asks_how_long() -> None:
+    # No duration: the timer asks for one (M2, test_ask_detail.py), never
+    # the model. A cut-off "set a timer for" still falls through.
+    assert fast_path_winner("set a timer") == "timer"
     assert fast_path_winner("set a timer for") is None
 
 
@@ -959,3 +960,77 @@ async def test_the_acknowledgement_is_asked_only_for_a_plain_room_cancel(monkeyp
         m = _CANCEL_RE.match(transcript)
         await TimerHandler()._cancel_from_match(m, _ctx(room), None)  # type: ignore[arg-type]
     assert calls == ["kitchen"]
+
+
+# ─── "What timers do I have" (N11) ──────────────────────────────────────────
+
+@pytest.mark.parametrize("said", [
+    "what timers do I have", "what timers do we have", "what timers are running",
+    "do I have any timers", "do we have any timers going", "are there any timers",
+    "is there a timer running", "any timers", "how many timers do I have",
+    "what are my timers", "list my timers", "show me all the timers",
+])
+def test_timer_list_phrasings_reach_the_timer(said: str) -> None:
+    assert _LIST_RE.match(said.lower())
+    assert fast_path_winner(said) == "timer"
+
+
+@pytest.mark.parametrize("said,winner", [
+    ("how much time left on the timer", "timer"),
+    ("how long left on my timer", None),  # as before: the tool model
+    ("set a timer for 5 minutes", "timer"),
+    ("cancel the timer", "timer"),
+    ("set an alarm for 7", "reminder"),
+    ("what reminders do I have", "reminder"),
+    ("do I have any beatles", "library"),
+    ("do I have any timer songs", "library"),
+])
+def test_timer_neighbours_route_as_before(said: str, winner: str | None) -> None:
+    assert fast_path_winner(said) == winner
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_timer_list_reads_the_rooms_timers_exactly(db_session) -> None:
+    room = f"kitchen-{uuid4().hex[:6]}"
+    handler = TimerHandler()
+    m = _LIST_RE.match("what timers do i have")
+
+    r = await handler._list_from_match(m, _ctx(room), db_session)
+    assert r.text == "You don't have any timers." and r.matched_handler == "timer"
+
+    now = utcnow()
+    repo = TimerRepository(db_session)
+    await repo.create(expires_at=now + timedelta(minutes=10, seconds=30), created_at=now,
+                      label="the pasta", message=None, room_id=room)
+    await db_session.commit()
+    r = await handler._list_from_match(m, _ctx(room), db_session)
+    assert r.text == "You have one timer: the pasta timer with 10 minutes left."
+
+    await repo.create(expires_at=now + timedelta(minutes=3, seconds=30),
+                      created_at=now - timedelta(minutes=1, seconds=30),
+                      label=None, message=None, room_id=room)
+    # Not timers, or not this room's: a reminder here, a timer elsewhere.
+    await repo.create(expires_at=now + timedelta(minutes=1), created_at=now,
+                      label="call mom", message="call mom", room_id=room)
+    await repo.create(expires_at=now + timedelta(minutes=1), created_at=now,
+                      label=None, message=None, room_id=f"{room}-other")
+    await db_session.commit()
+    r = await handler._list_from_match(m, _ctx(room), db_session)
+    assert r.text == ("You have 2 timers: a 5 minute timer with 3 minutes left "
+                      "and the pasta timer with 10 minutes left.")
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_timer_list_reads_four_then_counts_the_rest(db_session) -> None:
+    room = f"den-{uuid4().hex[:6]}"
+    now = utcnow()
+    for n in range(6):
+        await TimerRepository(db_session).create(
+            expires_at=now + timedelta(minutes=n + 1, seconds=30), created_at=now,
+            label=f"t{n}", message=None, room_id=room)
+    await db_session.commit()
+    r = await TimerHandler()._list_from_match(_LIST_RE.match("any timers"), _ctx(room), db_session)
+    assert r.text.startswith("You have 6 timers: the t0 timer with 1 minute left, ")
+    assert r.text.endswith("and the t3 timer with 4 minutes left. There are 2 more.")

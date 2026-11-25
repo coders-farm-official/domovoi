@@ -253,6 +253,17 @@ def strip_near_here(text: str) -> str:
     return " ".join(_NEAR_HERE_RE.sub(" ", (text or "").lower()).split())
 
 
+def is_local_lookup(text: str) -> bool:
+    """True for a question about somewhere near home: "near me" and the
+    like, or a local business or its hours asked as a question
+    ("restaurants near me", "is the pharmacy open now"). Only the live web
+    answers these; no model knows them."""
+    if not text:
+        return False
+    t = text.lower()
+    return bool(_NEAR_ME_RE.search(t)) or (bool(_LOCAL_BUSINESS_RE.search(t)) and looks_like_question(t))
+
+
 def needs_internet(text: str) -> bool:
     """True when only the live web can answer: the time-sensitive
     categories above, or something local (a business, its hours, "near

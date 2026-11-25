@@ -333,6 +333,23 @@ const AdminSignedOutNotice = () => {
   );
 };
 
+/* "AI is off on this house, so I can't make pictures. An admin can turn it
+ * on in Settings → Chat & AI → Models." (2026-11-25): a plugin's action the
+ * core refused because the household's AI switch is off (data.js,
+ * PLUGIN_AI_OFF_EVENT). Said here, in the shared toast stack, because a
+ * plugin page released before the refusal existed shows only its own
+ * failure words. Stays until dismissed; a second refusal replaces it. */
+const PluginAiOffNotice = () => {
+  const [text, setText] = React.useState(null);
+  React.useEffect(() => {
+    const on = (ev) => setText((ev && ev.detail && ev.detail.text) || null);
+    window.addEventListener(PLUGIN_AI_OFF_EVENT, on);
+    return () => window.removeEventListener(PLUGIN_AI_OFF_EVENT, on);
+  }, []);
+  if (!text) return null;
+  return <ToastNotice text={text} tone="warn" onDismiss={() => setText(null)}/>;
+};
+
 /* ---- the internet answer (INTERNET_ACCESS, Settings → Privacy → Internet) ----
  * The household says once whether this box has internet: '' (not
  * answered yet — today's behaviour), 'always', 'sometimes' or 'never'.
@@ -2341,7 +2358,7 @@ const CapabilitiesStore = (() => {
   };
 })();
 
-/* The household's AI switch (Settings → Models; features.ai in
+/* The household's AI switch (Settings → Chat & AI → Models; features.ai in
  * /api/capabilities, domovoi/ai_features.py). Off hides Chat from every
  * launcher (navItemsFor) — a page that can't work is not offered. Until
  * the server answers, this browser's last answer (localStorage, a per-
@@ -5483,6 +5500,7 @@ Object.assign(window, {
   satCan, satBoardLabel, SAT_BOARD_LABELS,
   DeleteConfirmDialog, useDeleteConfirm, askConfirm, askPrompt, TrustServerPrompt, WriteBlockedNotice,
   CaptureChip, useAdminSignedIn, adminReloadState, useAdminReloadState, AdminSignedOutNotice,
+  PluginAiOffNotice,
   TimerFireAlerts,
   CoverArt, libraryCoverUrl, coverMisses, coverVersions, creditedWith,
   coverBucket, coverUrlAtSize, coverMissKey, coverMissed,

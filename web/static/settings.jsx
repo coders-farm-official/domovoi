@@ -6684,6 +6684,7 @@ const SETTINGS_SEARCH_ITEMS = [
   { label: 'Short address', section: 'advanced', mark: 'short-address', words: 'short address port 80 6369 domovoi.local without port redirect url link' },
   { label: 'Updates', section: 'about', mark: 'updates', words: 'update check pull restart version channel' },
   { label: 'User manual', section: 'about', mark: 'manual', words: 'manual help guide' },
+  { label: 'Update from an offline kit', section: 'about', mark: 'offline-update', words: 'offline kit usb stick update no internet newer kit' },
   { label: 'Admin account', section: 'advanced', mark: 'admin', words: 'admin password sign in sign out claim setup' },
   { label: 'Containers', section: 'health', mark: 'containers', words: 'container containers guard incident tamper music player image rebuild' },
 ];

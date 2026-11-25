@@ -197,6 +197,25 @@ class Context(BaseModel):
     # (domovoi/phone_voice.py), so "print it" there means that chat's draft
     # (handlers/printing.py, documents plan D4). None everywhere else.
     chat_thread_id: int | None = None
+    # Whether the server proved, for THIS turn, that the asker holds a live
+    # admin sign-in (N1, owner 2026-11-25). Set True in one place only, the
+    # dashboard's play box (main._admin_route_intent), from
+    # ``admin_auth.request_is_proven_admin(request)`` on that request: a
+    # live Bearer session ("ok"), never the cookie alone, never "no admin
+    # set up yet". (A dashboard chat, which builds no Context, asks the same
+    # check per message: web/backend/api/chat.py _help_turn; 1.5.0's phone
+    # admin grant sets this field on its own server path.)
+    # Checked per turn and never cached, so a sign-in that
+    # ended is a member from the next turn on. Never set by a voice turn
+    # (a satellite, room mode, the phone chat mic — even one voice ID says
+    # is the owner), /v1/intent, Friend Houses mail, timers or any
+    # background work. It is not a field of Intent or any request body:
+    # nothing a client sends can set it.
+    #
+    # WORDS ONLY: it picks the admin wording of an answer (the exact steps,
+    # off_answers.turn_on_line), never whether anything may be done. Every
+    # admin action keeps its own endpoint gate.
+    proven_admin: bool = False
 
     @property
     def from_phone(self) -> bool:

@@ -1,0 +1,5 @@
+{
+  "extends": "base",
+  "note": "No rooms (satellites) set up yet.",
+  "rooms": []
+}

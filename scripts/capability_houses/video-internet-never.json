@@ -1,0 +1,12 @@
+{
+  "extends": "base",
+  "note": "Video downloads working, internet never.",
+  "plugins": [
+    {
+      "slug": "video-downloads",
+      "enabled": true,
+      "status": "ok"
+    }
+  ],
+  "internet": "never"
+}

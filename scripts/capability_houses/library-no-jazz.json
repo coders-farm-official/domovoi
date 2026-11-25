@@ -1,0 +1,5 @@
+{
+  "extends": "base",
+  "note": "A music library with no jazz.",
+  "music_library": "no_jazz"
+}

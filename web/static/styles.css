@@ -2426,7 +2426,7 @@ a.home-att-row:hover { background: var(--brand-soft); }
   .nav-layout-group-items { padding-left: 12px; }
 }
 
-/* Settings → Models, the Installed list (models.jsx InstalledRow): name and
+/* Settings → Chat & AI → Models, the Installed list (models.jsx InstalledRow): name and
    chips on one line on a wide screen; on a phone the name gets its own line
    and wraps, the chips go under it and the delete button stays at the
    right edge. */
