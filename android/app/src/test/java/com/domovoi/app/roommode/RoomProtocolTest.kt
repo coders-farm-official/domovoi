@@ -1,5 +1,6 @@
 package com.domovoi.app.roommode
 
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -332,6 +333,58 @@ class RoomProtocolTest {
         assertEquals(null, old.room)
     }
 
+    // ── rooms (1.5.0): satellite-fixtures.json `rooms` ─────────────────
+
+    private val rooms get() = fixtures["rooms"]!!.jsonObject
+
+    /** One room-id rule for an id from outside (`in=`, `requested_room`,
+     *  `ready.room.room_id`): the core's `in_room_rule`. */
+    @Test
+    fun theRoomIdRuleIsTheCoresInRoomRule() {
+        assertEquals("^[a-z0-9][a-z0-9_-]{0,31}\\Z", rooms["in_room_rule"]!!.jsonPrimitive.content)
+        val valid = rooms["in_room_valid"]!!.jsonArray.map { it.jsonPrimitive.content }
+        val invalid = rooms["in_room_invalid"]!!.jsonArray.map { it.jsonPrimitive.content }
+        assertTrue(valid.isNotEmpty() && invalid.isNotEmpty())
+        valid.forEach { assertTrue(it, RoomEnrolment.isRoomId(it)) }
+        invalid.forEach { assertFalse(it, RoomEnrolment.isRoomId(it)) }
+        // The same rule for requested_room in the hello and ready.room.room_id.
+        valid.forEach { assertEquals(it, hello(it)["requested_room"]!!.jsonPrimitive.content) }
+        invalid.forEach { assertFalse(it, "requested_room" in hello(it)) }
+        valid.forEach { id ->
+            val r = RoomProtocol.parse("""{"type":"room","room":{"room_id":${Json.encodeToString(String.serializer(), id)},"name":"Den"}}""")
+            assertEquals(id, (r as RoomProtocol.ServerFrame.Room).room?.roomId)
+        }
+        invalid.forEach { id ->
+            val r = RoomProtocol.parse("""{"type":"room","room":{"room_id":${Json.encodeToString(String.serializer(), id)},"name":"Den"}}""")
+            assertEquals(id, RoomProtocol.ServerFrame.Room(null), r)
+        }
+        // An id the phone MAKES from its own name keeps the stricter rule.
+        assertEquals("room_2nd_bedroom", RoomEnrolment.roomIdFor("2nd bedroom"))
+        assertFalse(RoomEnrolment.ROOM_ID.matches("living-room"))
+    }
+
+    /** The core could not read the room's row: `name` is null, never the id. */
+    @Test
+    fun anUnnamedRoomHasNoName() {
+        val ready = buildJsonObject {
+            put("type", "ready")
+            put("satellite_id", "kitchen_2")
+            put("room_id", "kitchen")
+            put("room", rooms["ready_room_unnamed"]!!)
+        }
+        val r = RoomProtocol.parse(ready.toString()) as RoomProtocol.ServerFrame.Ready
+        assertEquals(RoomProtocol.RoomPlace("kitchen", null, shared = false, claim = false), r.room)
+        assertEquals(
+            RoomProtocol.ServerFrame.Room(RoomProtocol.RoomPlace("den", null, shared = false, claim = false)),
+            RoomProtocol.parse(rooms["room_move_unnamed"]!!.toString()),
+        )
+        // The named ones, for contrast.
+        assertEquals(
+            RoomProtocol.ServerFrame.Room(RoomProtocol.RoomPlace("den", "Den", shared = false, claim = false)),
+            RoomProtocol.parse(rooms["room_move"]!!.toString()),
+        )
+    }
+
     /** An admin moved the phone: it carries on, connected, in the new room. */
     @Test
     fun theRoomFrameIsTheNewRoom() {
@@ -339,12 +392,15 @@ class RoomProtocolTest {
             RoomProtocol.ServerFrame.Room(RoomProtocol.RoomPlace("den", "Den", shared = true, claim = true)),
             RoomProtocol.parse("""{"type":"room","room":{"room_id":"den","name":"Den","shared":true,"claim":true}}"""),
         )
-        // `claim` is optional; a blank name is the id, as the core says it
-        // for a room it could not read.
-        assertEquals(
-            RoomProtocol.ServerFrame.Room(RoomProtocol.RoomPlace("den", "den", shared = false)),
-            RoomProtocol.parse("""{"type":"room","room":{"room_id":"den","name":" ","shared":false}}"""),
-        )
+        // `claim` is optional; a blank, null or missing name is no name,
+        // never the id.
+        for (name in listOf("\"name\":\" \",", "\"name\":null,", "")) {
+            assertEquals(
+                name,
+                RoomProtocol.ServerFrame.Room(RoomProtocol.RoomPlace("den", null, shared = false)),
+                RoomProtocol.parse("""{"type":"room","room":{"room_id":"den",$name"shared":false}}"""),
+            )
+        }
         // No room, or no room id: nothing to carry on in.
         assertEquals(RoomProtocol.ServerFrame.Room(null), RoomProtocol.parse("""{"type":"room"}"""))
         assertEquals(RoomProtocol.ServerFrame.Room(null), RoomProtocol.parse("""{"type":"room","room":{"name":"Den"}}"""))

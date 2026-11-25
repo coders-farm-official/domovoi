@@ -120,9 +120,9 @@ class RoomModeActivity : ComponentActivity() {
                 }
                 // The room's name and where this phone is, in household
                 // words: never the room's or the phone's id.
-                val roomName = RoomStatusText.roomName(status, store.roomName, store.enrolment?.roomLabel ?: "room")
+                val roomName = RoomStatusText.roomName(status, store.roomName, store.roomNameRoom, store.enrolment?.roomLabel)
                 RoomDisplay(
-                    label = roomName,
+                    label = RoomStatusText.title(roomName),
                     where = RoomStatusText.whereLine(status, roomName, store.approvedOnce),
                     status = status,
                     running = running && engine != null,

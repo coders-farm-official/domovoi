@@ -211,8 +211,11 @@ object RoomProtocol {
      * Kitchen"; never the id), whether other devices share it, and `claim`
      * (another satellite is in it or a linked room: the one-turn-per-wake
      * claims, which this phone does not declare yet, so it is only kept).
+     * [name] is null when the core could not read the room's row (it sends
+     * null, never the id): the phone then keeps the name it last showed for
+     * the same room, or says "this room" (RoomStatusText.roomName).
      */
-    data class RoomPlace(val roomId: String, val name: String, val shared: Boolean, val claim: Boolean = false)
+    data class RoomPlace(val roomId: String, val name: String?, val shared: Boolean, val claim: Boolean = false)
 
     sealed class ServerFrame {
         /** [roomVoice]: the voice the server keeps for this room and renders
@@ -319,14 +322,15 @@ object RoomProtocol {
     }
 
     /** `ready.room` / the `room` frame's room: null unless it names a room
-     *  id; a missing or blank name falls back to the id, as the core's own
-     *  `_room_info` does for a room it cannot read. */
+     *  id (the one rule, [RoomEnrolment.isRoomId]). A missing, null or blank
+     *  name is no name (null), never the id: the core sends null for a room
+     *  whose row it cannot read (satellite-fixtures.json rooms.name_about). */
     internal fun place(e: JsonElement?): RoomPlace? {
         val o = e as? JsonObject ?: return null
         fun s(k: String): String? = (o[k] as? JsonPrimitive)?.takeIf { it.isString }?.content
         fun b(k: String): Boolean = (o[k] as? JsonPrimitive)?.booleanOrNull ?: false
         val id = s("room_id")?.takeIf { RoomEnrolment.isRoomId(it) } ?: return null
-        val name = s("name")?.trim()?.takeIf { it.isNotEmpty() } ?: id
+        val name = s("name")?.trim()?.takeIf { it.isNotEmpty() }
         return RoomPlace(id, name, b("shared"), b("claim"))
     }
 

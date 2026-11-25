@@ -117,7 +117,7 @@ class RoomService : Service() {
         }
         RoomNotifications.createChannels(this)
         RoomNotifications.cancelResume(this)
-        val label = store.roomName ?: store.enrolment?.roomLabel ?: "room"
+        val label = RoomStatusText.title(RoomStatusText.roomName(null, store.roomName, store.roomNameRoom, store.enrolment?.roomLabel))
         val types = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -137,7 +137,10 @@ class RoomService : Service() {
             statusJob = scope.launch {
                 // The room's name follows the server's (a move to another
                 // room renames the notification too).
-                e.status.map { RoomStatusText.roomName(it, null, label) to RoomStatusText.notificationLine(it) }
+                e.status.map {
+                    val name = RoomStatusText.roomName(it, store.roomName, store.roomNameRoom, store.enrolment?.roomLabel)
+                    RoomStatusText.title(name) to RoomStatusText.notificationLine(it)
+                }
                     .distinctUntilChanged().collect { (name, line) ->
                         RoomNotifications.update(this@RoomService, name, line)
                     }
@@ -229,7 +232,9 @@ object RoomNotifications {
     fun showResume(context: Context) {
         createChannels(context)
         val nm = context.getSystemService(NotificationManager::class.java) ?: return
-        val label = RoomStore(context).let { it.roomName ?: it.enrolment?.roomLabel } ?: "room"
+        val label = RoomStore(context).let {
+            RoomStatusText.title(RoomStatusText.roomName(null, it.roomName, it.roomNameRoom, it.enrolment?.roomLabel))
+        }
         val n = NotificationCompat.Builder(context, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_room)
             .setContentTitle("Domovoi Room · $label is not listening")
