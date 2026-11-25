@@ -1,0 +1,11 @@
+{
+  "extends": "base",
+  "note": "Weather plugin whose handler raises.",
+  "plugins": [
+    {
+      "slug": "weather",
+      "enabled": true,
+      "status": "crash"
+    }
+  ]
+}

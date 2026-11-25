@@ -1,0 +1,11 @@
+{
+  "extends": "base",
+  "note": "The sleep plugin installed and working.",
+  "plugins": [
+    {
+      "slug": "sleep",
+      "enabled": true,
+      "status": "ok"
+    }
+  ]
+}

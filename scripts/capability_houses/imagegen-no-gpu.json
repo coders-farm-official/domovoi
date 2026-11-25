@@ -1,0 +1,11 @@
+{
+  "extends": "base",
+  "note": "Picture plugin enabled, its image service (no GPU) missing.",
+  "plugins": [
+    {
+      "slug": "imagegen",
+      "enabled": true,
+      "status": "error"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "extends": "base",
+  "note": "Weather plugin working, Home location unset.",
+  "plugins": [
+    {
+      "slug": "weather",
+      "enabled": true,
+      "status": "ok"
+    }
+  ],
+  "home_location": null
+}

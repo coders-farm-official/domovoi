@@ -1,0 +1,6 @@
+{
+  "extends": "base",
+  "note": "A shared screen (the kitchen tablet).",
+  "asker": "shared_screen",
+  "voice_id": "off"
+}

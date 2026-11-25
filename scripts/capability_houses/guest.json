@@ -1,0 +1,6 @@
+{
+  "extends": "base",
+  "note": "An unpaired guest browser.",
+  "asker": "guest",
+  "voice_id": "off"
+}

@@ -1,0 +1,11 @@
+{
+  "extends": "base",
+  "note": "The weather plugin installed and working.",
+  "plugins": [
+    {
+      "slug": "weather",
+      "enabled": true,
+      "status": "ok"
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "extends": "base",
+  "note": "The kiwix plugin installed and working.",
+  "plugins": [
+    {
+      "slug": "kiwix",
+      "enabled": true,
+      "status": "ok"
+    }
+  ]
+}

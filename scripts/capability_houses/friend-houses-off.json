@@ -1,0 +1,6 @@
+{
+  "extends": "base",
+  "note": "Friend Houses off.",
+  "friend_houses": "off",
+  "friends": []
+}

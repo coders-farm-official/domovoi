@@ -1,0 +1,58 @@
+{
+  "note": "The base house: everything a case doesn't name. Every other house extends it.",
+  "internet": "always",
+  "ai": true,
+  "memory": true,
+  "memory_extractor": true,
+  "memory_items": [
+    {
+      "fact": "birthday is March 3"
+    }
+  ],
+  "voice_id": "enrolled",
+  "speaker": {
+    "person_id": 1,
+    "name": "Alex"
+  },
+  "plugins": [],
+  "rooms": [
+    {
+      "id": "kitchen",
+      "online": true
+    },
+    {
+      "id": "garage",
+      "online": true
+    }
+  ],
+  "printers": 1,
+  "calendars": [],
+  "home_location": {
+    "name": "Springfield",
+    "country": "US"
+  },
+  "quiet_hours_active": false,
+  "friend_houses": "friends",
+  "friends": [
+    {
+      "name": "the Bassetts",
+      "reachable": true
+    }
+  ],
+  "asker": "member",
+  "admin_session": "none",
+  "command_recordings": false,
+  "voice_history_days": 90,
+  "music_library": "jazz",
+  "listenbrainz": false,
+  "offline_kit": false,
+  "timers": [],
+  "alarms": [],
+  "list_writes": "ok",
+  "update_channel": "stable",
+  "secrets": {
+    "admin_password": "FAKE-admin-pw-lantern-4417",
+    "household_token": "fake-household-token-9c2e7b",
+    "setup_code": "FAKE-SETUP-583106"
+  }
+}

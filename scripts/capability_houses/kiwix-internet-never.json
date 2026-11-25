@@ -1,0 +1,12 @@
+{
+  "extends": "base",
+  "note": "Offline library working, internet never.",
+  "plugins": [
+    {
+      "slug": "kiwix",
+      "enabled": true,
+      "status": "ok"
+    }
+  ],
+  "internet": "never"
+}

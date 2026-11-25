@@ -1,0 +1,5 @@
+{
+  "extends": "base",
+  "note": "ListenBrainz on.",
+  "listenbrainz": true
+}

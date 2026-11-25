@@ -1,0 +1,5 @@
+{
+  "extends": "base",
+  "note": "On the main channel (1.5.0 case).",
+  "update_channel": "main"
+}

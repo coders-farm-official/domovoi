@@ -1,0 +1,5 @@
+{
+  "extends": "base",
+  "note": "AI features off (Settings → Chat & AI → Models).",
+  "ai": false
+}

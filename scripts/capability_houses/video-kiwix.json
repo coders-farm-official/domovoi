@@ -1,0 +1,16 @@
+{
+  "extends": "base",
+  "note": "Video downloads and the offline library working.",
+  "plugins": [
+    {
+      "slug": "video-downloads",
+      "enabled": true,
+      "status": "ok"
+    },
+    {
+      "slug": "kiwix",
+      "enabled": true,
+      "status": "ok"
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+{
+  "extends": "base",
+  "note": "Voice history kept until deleted.",
+  "voice_history_days": 0
+}

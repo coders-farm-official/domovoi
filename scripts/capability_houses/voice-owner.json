@@ -1,0 +1,9 @@
+{
+  "extends": "base",
+  "note": "Voice, recognised as the owner (voice is never a proven admin).",
+  "speaker": {
+    "person_id": 1,
+    "name": "Alex",
+    "owner": true
+  }
+}

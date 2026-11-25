@@ -1,0 +1,11 @@
+{
+  "extends": "base",
+  "note": "The video-downloads plugin installed and working.",
+  "plugins": [
+    {
+      "slug": "video-downloads",
+      "enabled": true,
+      "status": "ok"
+    }
+  ]
+}

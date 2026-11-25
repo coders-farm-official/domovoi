@@ -1,0 +1,108 @@
+{
+  "_doc": [
+    "Stand-ins for the plugins a house fixture can list (scripts/eval_capabilities.py).",
+    "The real plugins live in their own repos; a stand-in carries only what core",
+    "reads from an installed plugin: its feature label and example phrase (the",
+    "'what can you do' answer), its tool (the router's list), its capability seams",
+    "(a weather plugin makes core's weather step aside) and APPROXIMATE fast paths.",
+    "A stand-in's reply is a marker ('[stand-in: the X feature handled this]'):",
+    "it says the plugin took the turn, never what the real plugin would say.",
+    "  feature   - the feature name a reply may use (never the plugin's own name)",
+    "  names     - extra words a reply must not say (global no-plugin-names check)",
+    "  fast_paths  - regexes, or {pattern, uses_ai}: uses_ai marks a path the real plugin",
+    "              answers with the model, so with AI off the stand-in can't speak for it",
+    "  status in a house: ok (works), error (its service is missing: the stand-in",
+    "              can't speak for the plugin, the case reports 'needs plugin'),",
+    "              crash (its handler raises, as a broken plugin would)"
+  ],
+  "plugins": {
+    "video-downloads": {
+      "feature": "Video downloads",
+      "handler": "video_downloads",
+      "band": 480,
+      "requires_network": "yes",
+      "example_phrases": [
+        "download that video"
+      ],
+      "tool_description": "Download a video from a link or the last one mentioned into the Videos library.",
+      "fast_paths": [
+        "^(?:download|save|grab) (?:that|this|the|a) video\\b.*$"
+      ],
+      "names": []
+    },
+    "imagegen": {
+      "feature": "Pictures",
+      "handler": "imagegen",
+      "band": 480,
+      "example_phrases": [
+        "make a picture of a cat"
+      ],
+      "tool_description": "Make a picture from a description.",
+      "fast_paths": [
+        "^(?:make|draw|create|generate|paint) (?:me )?(?:a |an )?(?:picture|image|drawing|painting) of .+$"
+      ],
+      "names": []
+    },
+    "romm": {
+      "feature": "Retro games",
+      "handler": "retro_games",
+      "band": 480,
+      "example_phrases": [
+        "open the game library"
+      ],
+      "tool_description": "Find a retro game in the household's game library.",
+      "fast_paths": [],
+      "names": []
+    },
+    "sleep": {
+      "feature": "Sleep",
+      "handler": "sleep",
+      "band": 300,
+      "example_phrases": [
+        "play rain sounds",
+        "tell me a bedtime story"
+      ],
+      "tool_description": "Sleep sounds and bedtime stories.",
+      "fast_paths": [
+        "^(?:play )?(?:some )?(?:rain|ocean|wave|forest|white noise|brown noise|sleep) (?:sounds?|noise)$",
+        {
+          "pattern": "^tell (?:me|us) a bedtime story(?: about .+)?$",
+          "uses_ai": true
+        }
+      ],
+      "names": [
+        "storytime"
+      ]
+    },
+    "weather": {
+      "feature": "Weather",
+      "handler": "weather_plugin",
+      "band": 300,
+      "requires_network": "yes",
+      "example_phrases": [
+        "what's the weather"
+      ],
+      "tool_description": "The weather forecast for the household's town.",
+      "fast_paths": [
+        "^(?:what'?s|what is|how'?s|how is) the weather\\b.*$"
+      ],
+      "capabilities": [
+        "weather"
+      ],
+      "names": []
+    },
+    "kiwix": {
+      "feature": "Offline library",
+      "handler": "offline_library",
+      "band": 480,
+      "example_phrases": [
+        "look up the eiffel tower"
+      ],
+      "tool_description": "Look something up in the offline encyclopedia.",
+      "fast_paths": [
+        "^look up (?!today'?s news)(?!the news).+$"
+      ],
+      "names": []
+    }
+  }
+}

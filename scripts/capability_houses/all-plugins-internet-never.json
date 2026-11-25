@@ -1,0 +1,37 @@
+{
+  "extends": "base",
+  "note": "All six plugins working, internet never.",
+  "plugins": [
+    {
+      "slug": "video-downloads",
+      "enabled": true,
+      "status": "ok"
+    },
+    {
+      "slug": "imagegen",
+      "enabled": true,
+      "status": "ok"
+    },
+    {
+      "slug": "romm",
+      "enabled": true,
+      "status": "ok"
+    },
+    {
+      "slug": "sleep",
+      "enabled": true,
+      "status": "ok"
+    },
+    {
+      "slug": "weather",
+      "enabled": true,
+      "status": "ok"
+    },
+    {
+      "slug": "kiwix",
+      "enabled": true,
+      "status": "ok"
+    }
+  ],
+  "internet": "never"
+}
