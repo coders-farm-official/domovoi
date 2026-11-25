@@ -108,6 +108,12 @@ that only work on the dashboard say so plainly, an admin refusal is said
 in plain words, and the AndroidX and kotlinx.serialization libraries are
 newer.
 
+### Highlights
+
+- Friend Houses is open to everyone in the household, by voice too.
+- Voice ID learns better from short samples.
+- Music keeps playing after you ask a question.
+
 ### Chat, lookups, weather and the Home location
 
 - Holiday questions work offline: "how many days until New Year's Day",
