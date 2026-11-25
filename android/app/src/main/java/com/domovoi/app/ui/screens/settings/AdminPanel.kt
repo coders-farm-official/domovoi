@@ -59,8 +59,9 @@ internal const val ADMIN_PANEL_SUB =
 /** The jobs that work from the phone so far (design §1's list, one area
  *  at a time); everything else stays on the dashboard for now. */
 internal const val ADMIN_JOBS =
-    "As admin on this phone you can approve or turn away a room device asking to join (Settings → Rooms). " +
-        "Everything else is on the dashboard for now."
+    "As admin on this phone you can approve or turn away a room device asking to join (Settings → Rooms), " +
+        "answer friend requests and remove, block or unblock friend houses (Friend Houses → friends & connections), " +
+        "and acknowledge or clear Health incidents (Settings → Health). Everything else is on the dashboard for now."
 
 internal const val ADMIN_SHARED =
     "This is a shared screen, so it never holds admin. Sign in on your own phone."
