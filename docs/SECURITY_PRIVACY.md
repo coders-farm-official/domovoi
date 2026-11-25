@@ -2545,7 +2545,7 @@ letter and write drafts. Who may, where it lives, and what can't happen:
   name; the chat keeps a one-line summary of each file and, with a reply,
   the passages the model was given. All of it goes when the chat is deleted,
   and a file picked in the composer and never sent is cleared out after an
-  hour. The text goes to the server's language model (Settings → Models) and
+  hour. The text goes to the server's language model (Settings → Chat & AI → Models) and
   nowhere else; a model that runs off the box (an `OLLAMA_URL` elsewhere,
   or a cloud model) takes the passages with it, the case the internet
   switch warns about. Documents are outside "Keep voice history", and the
@@ -2726,7 +2726,7 @@ and what can't happen:
   deletes them; stopping a job deletes what it had understood so far.
 * **On the household's server only.** What was said is transcribed by the
   server's own speech model; the frames are described by the chat's vision
-  model (Settings → Models) and the summary written by the chat model, all
+  model (Settings → Chat & AI → Models) and the summary written by the chat model, all
   through the server's Ollama. Nothing goes anywhere else, unless the house
   points `OLLAMA_URL` at a model off the box, the case the internet switch
   warns about. Videos are outside "Keep voice history", and the copies in
@@ -3477,7 +3477,7 @@ lists every outbound touchpoint, and [INTERNET.md](INTERNET.md) covers a
 server that has internet, one that only sometimes does, and one that never
 does.
 
-**If you turn AI features off** (Settings → Models), nothing in Domovoi
+**If you turn AI features off** (Settings → Chat & AI → Models), nothing in Domovoi
 asks a language model. Chat takes no new text, picture or document; a
 question no command answers gets a fixed line; the web-answer row above
 ("check that online", the weather) says "I can't look that up with AI

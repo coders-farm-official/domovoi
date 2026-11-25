@@ -14,6 +14,7 @@ from sqlalchemy import text
 
 from domovoi.clients import ollama
 from domovoi.handlers import memory as mem_handler
+from domovoi.house_facts import FORGET_YES, MEMORY_YES
 from domovoi.tests.conftest import requires_db
 from web.backend.api import chat_memory as cm
 
@@ -46,6 +47,34 @@ def test_the_voice_commands_are_recognised(said: str, kind: str, arg: str) -> No
 ])
 def test_everything_else_is_not_a_memory_command(said: str) -> None:
     assert cm.command(said) is None
+
+
+@pytest.mark.parametrize("said", [
+    "Can you remember things about me?", "could you remember stuff", "can you remember facts",
+    "Can you remember anything?", "can you remember everything", "can you remember what I tell you",
+    "can you remember what I say", "can you remember things about us", "can you remember stuff like that",
+    "would you please remember things for me", "can you forget that stuff", "can you stop remembering things",
+    "remember things about me", "forget that stuff",
+])
+def test_a_generic_object_is_never_a_memory_command(said: str) -> None:
+    # G1: the question about the ability, never "things about me" saved.
+    assert cm.command(said) is None
+
+
+@requires_db
+@pytest.mark.parametrize("said, expected", [
+    ("Can you remember things about me?", MEMORY_YES),
+    ("Could you remember stuff?", MEMORY_YES),
+    ("can you forget stuff about me", FORGET_YES),
+])
+def test_a_memory_capability_question_is_answered_and_nothing_saved(house, model, said, expected) -> None:
+    with _client() as c:
+        t = _thread(c)
+        reply, done = _send(c, t, said, house["dev"]["ana"])
+    assert reply == expected
+    assert done["stats"]["model_role"] == "house_facts"
+    assert _memories(house["ana"]) == []
+    assert model == []
 
 
 def test_forget_it_is_a_brush_off_and_forget_that_is_not() -> None:
@@ -247,8 +276,8 @@ def test_list_and_forget_touch_only_the_askers_memories(house, model) -> None:
         # "locker" matches Ben's too, but only Ana's is looked at.
         forgot, done = _send(c, t, "forget that my locker", house["dev"]["ana"])
         nothing, _ = _send(c, t, "forget that I like jazz", house["dev"]["ana"])
-    assert listed == "Here's what I remember: my locker is 12."
-    assert forgot == "OK, forgotten: my locker is 12"
+    assert listed == "Here's what I remember: my locker is 12. " + mem_handler.FORGET_HINT
+    assert forgot == "OK, forgotten: my locker is 12."
     assert done["stats"]["memory"]["action"] == "forgotten"
     assert nothing == 'I don\'t have anything saved about "I like jazz".'
     assert _memories(house["ana"]) == []
@@ -304,7 +333,7 @@ def test_the_answer_to_forget_what_forgets_or_goes_to_the_model(house, model) ->
         said, _ = _send(c, t, "that I like jazz", house["dev"]["ana"])
         assert _send(c, t, "forget that", house["dev"]["ana"])[0] == FORGET_WHAT
         _send(c, t, "the weather", house["dev"]["ana"])
-    assert said == "OK, forgotten: I like jazz"
+    assert said == "OK, forgotten: I like jazz."
     assert _memories(house["ana"]) == []
     assert len(model) == 2
 

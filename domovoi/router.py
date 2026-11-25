@@ -141,7 +141,7 @@ async def _ready_for(client, ctx: Context, role: str):
         if missing:
             log.warning(
                 "room=%s: the %s model %s isn't installed in Ollama — not "
-                "waking it (Settings → Models installs it)",
+                "waking it (Settings → Chat & AI → Models installs it)",
                 ctx.room_id, role, ", ".join(missing),
             )
             return None
@@ -1124,7 +1124,7 @@ async def _route_turn(intent: Intent, ctx: Context, session: AsyncSession) -> Re
         # path had matched.
         log.info("fast path %s declined %r; routing on", handler.name, said(transcript))
 
-    # AI features off (Settings → Models, domovoi/ai_features.py): no
+    # AI features off (Settings → Chat & AI → Models, domovoi/ai_features.py): no
     # language model is asked anything — not the tool router, not the
     # volatile gate's subject extraction, not Q&A. Whatever no fast path
     # took gets a fixed line, in the voice's own words, that says what

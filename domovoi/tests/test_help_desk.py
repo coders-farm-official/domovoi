@@ -135,9 +135,10 @@ def test_nothing_found_means_no_model_and_the_honest_line(index) -> None:
 
 
 def test_the_model_gets_only_the_passages_marked_as_data(index) -> None:
-    # Not an admin's job ("how do I add a room" is: admin_tasks answers it
-    # with no model, test_proven_admin.py).
-    turn = answer.plan("how do I change the wake word", index)
+    # Not an admin's job ("how do I add a room" and "how do I change the
+    # wake word" are: admin_tasks answers them with no model,
+    # test_proven_admin.py).
+    turn = answer.plan("how do I pair my phone", index)
     model = FakeModel("From the manual's Wake word page: 1. Say it.")
     out = _run(answer.answer(turn, ai_on=True, ask_model=model))
     system = model.calls[0][0]["content"]
@@ -147,7 +148,7 @@ def test_the_model_gets_only_the_passages_marked_as_data(index) -> None:
     assert "The manual doesn't cover that." in system
     for h in turn.hits:
         assert h.passage.text in system
-    assert model.calls[0][-1] == {"role": "user", "content": "how do I change the wake word"}
+    assert model.calls[0][-1] == {"role": "user", "content": "how do I pair my phone"}
     # The sources under it are the code's: the sections actually given.
     assert "*From:*" in out.text
     for h in turn.hits:
@@ -170,12 +171,12 @@ def test_the_models_own_not_covered_is_kept_whole(index) -> None:
 
 
 def test_with_ai_off_it_is_a_plain_manual_search(index) -> None:
-    turn = answer.plan("how do I change the wake word", index)
+    turn = answer.plan("how do I pair my phone", index)
     model = FakeModel("never asked")
     out = _run(answer.answer(turn, ai_on=False, ask_model=model))
     assert model.calls == [] and out.covered and not out.used_model
     assert out.text.startswith("Here's what Domovoi's help says:")
-    assert "#manual/wake-word" in out.text
+    assert "#manual/connect" in out.text
 
 
 def test_a_screen_question_asks_for_a_screenshot(index) -> None:

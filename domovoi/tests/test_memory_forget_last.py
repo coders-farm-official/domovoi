@@ -327,5 +327,5 @@ async def test_forget_that_fact_is_unchanged(db_session) -> None:
     await talk("remember that I like jazz", person_id=alex)
     await talk("remember that my dog is named Max", person_id=alex)
     r = await talk("forget that I like jazz", person_id=alex)
-    assert r.text == "OK, forgotten: i like jazz"
+    assert r.text == "OK, forgotten: i like jazz."
     assert await _bodies(db_session, alex) == ["my dog is named max"]

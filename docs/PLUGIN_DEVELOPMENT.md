@@ -1523,7 +1523,7 @@ is `auto`, which the core resolves to its current LAN address.
   "the network is unavailable" (which it is) rather than letting a
   `ValueError` escape as a 500.
   **It honours the household's AI switch** (SDK 1.7): while AI chat and
-  questions are off (Settings → Models, `AI_FEATURES=false`), every request
+  questions are off (Settings → Chat & AI → Models, `AI_FEATURES=false`), every request
   to this box's Ollama (any host on port 11434, or the core's `OLLAMA_URL`)
   raises `ai_features.AITurnedOffConnectError` (an `AITurnedOff` and an
   `httpx.ConnectError`) before anything is sent, except its read-only

@@ -133,19 +133,19 @@ def test_the_vision_refusal_names_the_model_and_where_to_fix_it():
                                    "qwen2.5vl:7b", "vision")
     assert text == (
         "Pictures need the vision model qwen2.5vl:7b, which isn't installed on this Domovoi. "
-        "An admin can install it in Settings → Models, or pick another vision model there."
+        "An admin can install it in Settings → Chat & AI → Models, or pick another vision model there."
     )
     assert text == chat_api.vision_missing_text("qwen2.5vl:7b")
     assert chat_api.vision_missing_text("") == (
         "Pictures need a vision model, and none is set on this Domovoi. "
-        "An admin can pick one in Settings → Models."
+        "An admin can pick one in Settings → Chat & AI → Models."
     )
 
 
 def test_a_missing_text_model_is_named_too():
     code, text = chat_api._failure(ollama.OllamaChatError(404, "not found"), "llama3.2:3b", "chat")
     assert code == "model_missing"
-    assert "llama3.2:3b isn't installed" in text and "Settings → Models" in text
+    assert "llama3.2:3b isn't installed" in text and "Settings → Chat & AI → Models" in text
 
 
 @pytest.mark.parametrize("raw,role,model,code", [

@@ -173,3 +173,16 @@ async def test_read_latest_when_empty(db_session) -> None:
     assert m
     response = await handler._latest_from_match(m, ctx, db_session)
     assert "haven't taken any notes" in response.text.lower()
+
+
+@pytest.mark.parametrize("said", [
+    "jot down things", "jot things down", "note things down", "write things down", "save stuff",
+    "write down stuff", "note down stuff",
+])
+def test_a_generic_object_is_never_a_note(said: str) -> None:
+    # G1: "can you jot down things?" asks about the ability; no note
+    # called "things" is ever saved.
+    from domovoi.handlers.voice_notes import _ADD_RE
+
+    assert _ADD_RE.match(said) is None
+    assert _ADD_RE.match("jot down buy milk and eggs") is not None

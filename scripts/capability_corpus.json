@@ -1966,7 +1966,7 @@
       "kind": "question",
       "handler": "memory",
       "must_include": [
-        "^Here's what I remember: birthday is March 3\\.$"
+        "^Here's what I remember: birthday is March 3\\. Say \"forget that …\" to remove one\\.$"
       ],
       "note": "there is no memory switch: the only one (memory_extractor_enabled) stops background offers; reading memories still works (= 15.19)",
       "stub": true

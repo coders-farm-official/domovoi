@@ -2,7 +2,8 @@
 
 "How do I add a room?", "can you update yourself?", "can you install
 plugins?", "can I change the admin password?", "can you delete this
-song?" and, with nothing on this house that downloads, "can you download
+song?", "how do I change the wake word?", "how do I restart Domovoi?" and,
+with nothing on this house that downloads, "can you download
 videos?": each is something only an admin does. So the answer is fixed,
 written here, and no model is asked:
 
@@ -112,6 +113,32 @@ TASKS: tuple[AdminTask, ...] = (
         "Deleting needs the admin: an admin deletes files on the dashboard, in Files.",
         "On the dashboard, in Files: open the library it's in (Music for a song), tick it, press "
         "Delete and confirm. It's gone from the server, for everyone.",
+    ),
+    AdminTask(
+        "wake_word",
+        # A how-to or can-you question only: no voice command changes the
+        # wake word, and "wake word sensitivity" is the room's Settings tab.
+        re.compile(rf"\b(?:{_ASK}|{_YOU}) (?:change|switch|set|pick|choose|swap) "
+                   r"(?:the |my |your |our |a |a new |a different |the room's |this room's |its )?"
+                   r"wake ?(?:up )?(?:words?|phrase)\b(?! sensitivity)"),
+        "An admin changes the wake word, on the dashboard: Settings → Voice → Wake words.",
+        "In Settings → Voice → Wake words, on the Household wake word card: pick the word under New "
+        "rooms wake on, then press Use “…” here beside each room that should switch; the room "
+        "restarts to load it. Rooms you already have keep their word until you do. For one room, "
+        "open it in Settings → Household → Rooms: on its Overview tab press Add another wake word, "
+        "pick the word and press Add, move it to the top with ↑ (the main word), remove the old one "
+        "with ✕ and press Save.",
+    ),
+    AdminTask(
+        "restart",
+        re.compile(rf"\b(?:{_YOU} restart (?:yourself|itself|domovoi|the server|this server|the domovoi server)"
+                   rf"|{_ASK} restart (?:domovoi|you|yourself|the server|this server|the domovoi server"
+                   r"|the core))\b"),
+        "An admin restarts Domovoi, on the dashboard: Settings → System → About & updates.",
+        "In Settings → System → About & updates, press Restart Domovoi; it's offline for a moment "
+        "and comes back by itself. If every room is offline but the dashboard opens, the core has "
+        "stopped answering: it restarts itself within about a minute, and if it doesn't, press "
+        "Restart the core, on Home or in Settings → System → About & updates.",
     ),
     # "Can you download videos?" (8.7d/8.7e) is the capability table's
     # (domovoi/house_facts.py, video_downloads), which knows the plugin's

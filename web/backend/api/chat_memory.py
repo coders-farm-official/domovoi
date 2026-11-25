@@ -88,7 +88,9 @@ NOT_YOURS_TEXT = "I can only forget that for the person who asked me to remember
 
 # The router's "can you …" lead (router._LEADING_FILLER_RE), which
 # house_facts.normalize keeps for its own questions: "can you remember
-# that my locker is 12" is the command, as it is by voice.
+# that my locker is 12" is the command, as it is by voice. "Can you remember
+# things about me?" is not: the memory regexes refuse a generic object (G1),
+# so it goes on to house_facts.chat_reply, which answers the question.
 _ASK_LEAD_RE = re.compile(r"^(?:(?:can|could|would|will) you(?:[,\s]+please)?[,\s]+)+")
 
 
@@ -270,7 +272,7 @@ async def _forget_last(s: Any, *, thread_id: int, before_id: int, pid: int, brus
         memories = MemoriesRepository(s)
         body = next((b for i, b, _t, _s in await memories.list_active(pid) if i == memory_id), None)
         if body is not None and await memories.delete(memory_id, pid):
-            return _reply(f"OK, forgotten: {body}.", "forgotten", pid, memory_id=memory_id)
+            return _reply(_mem.forgotten_text(body), "forgotten", pid, memory_id=memory_id)
     if brush_off:
         return _reply(_ack(), "dismissed", pid)
     return _reply(_mem._FORGET_WHAT_TEXT, "forget_what", pid)

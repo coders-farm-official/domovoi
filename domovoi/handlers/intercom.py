@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from domovoi.clients import mpd as _mpd
 from domovoi.dropin_common import room_may_reach_other_rooms
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
+from domovoi.house_facts import GENERIC_OBJECT
 from domovoi.models import Context, Intent, Response
 
 log = logging.getLogger(__name__)
@@ -116,11 +117,14 @@ def _resolve_target_rooms(room_phrase: str | None) -> list[str] | None:
 #    explicit colon dodges the ambiguity entirely.
 # 2. Bare broadcast — no recipient, no colon required. Just "announce
 #    pizza is here" or "broadcast: dinner's ready".
+# "(can you) announce stuff", "tell everyone things": a question about the
+# ability, never a broadcast of the word "things" (G1; house_facts answers it).
+_NOT_GENERIC = rf"(?!(?:{GENERIC_OBJECT})(?:,? (?:please|for me|for us))?$)"
 _ANNOUNCE_TO_RE = re.compile(
     r"^(?:announce|broadcast) (?:to|in) (?P<room>.+?)\s*[:,]\s*(?P<message>.+)$"
 )
 _ANNOUNCE_BARE_RE = re.compile(
-    r"^(?:announce|broadcast)(?:\s*[:,]\s*|\s+)(?P<message>.+)$"
+    rf"^(?:announce|broadcast)(?:\s*[:,]\s*|\s+){_NOT_GENERIC}(?P<message>.+)$"
 )
 
 # "tell the house dinner's ready" / "tell everyone the package is here"
@@ -131,7 +135,7 @@ _ANNOUNCE_BARE_RE = re.compile(
 # and avoids the "tell the time" / "tell the truth" overlap.
 _TELL_RE = re.compile(
     r"^tell (?P<room>everyone|everybody|everywhere|the house|the whole house|all rooms|all the rooms)"
-    r"(?:\s*[:,]\s*|\s+)(?P<message>.+)$"
+    rf"(?:\s*[:,]\s*|\s+){_NOT_GENERIC}(?P<message>.+)$"
 )
 
 

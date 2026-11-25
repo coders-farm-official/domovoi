@@ -718,6 +718,34 @@ CAP_PREFIX = (
     r"(?:can you|are you able to|do you know how to|is it possible (?:for you )?to|can domovoi|do you)"
 )
 
+# A generic object: what "can you remember THINGS about me?" names instead
+# of a real one (G1). A question about an ability, never a command: the
+# memory, lists, notes and announcement fast paths refuse such a body (a
+# lookahead on GENERIC_OBJECT), so "can you remember things about me" is
+# never saved as a memory called "things about me", and the capability
+# table answers it (the rows with ``generic=True``). Whole-body only:
+# "remember that things like keys go in the bowl" is a fact.
+GENERIC_OBJECT = (
+    r"(?:(?:some|any|all|all the|all of the|the|those|these|that|this|other|such|different"
+    r"|lots of|a lot of|a few|many|personal) )?"
+    r"(?:things?|stuff|facts?|items?|details|info|information|memories|anything|everything"
+    r"|something|whatever)"
+    r"(?: (?:about|for|on|of) (?:me|us|you|people|everyone|everybody|them|my family|the family))?"
+    r"(?: like (?:that|this|(?:my |our )?[\w']+(?: (?:and|or) (?:my |our )?[\w']+)?))?"
+    r"|what(?:ever)? (?:i|we|people|anyone|someone|everyone) (?:tell|told|say|said|ask|asked)(?: you)?"
+)
+GENERIC_OBJECT_RE = re.compile(
+    rf"^(?:that |this |the (?:fact|thing) that )?(?:{GENERIC_OBJECT})"
+    r"(?:,? (?:please|for me|for us|thanks|thank you))?$"
+)
+
+
+def is_generic_object(body: str) -> bool:
+    """Whether ``body`` (lower case, as the fast paths see it) is only a
+    generic object ("things about me", "stuff", "what I tell you"): the
+    words of a capability question, never a thing to save or act on."""
+    return bool(GENERIC_OBJECT_RE.match((body or "").strip().lower().rstrip(".,!?")))
+
 
 @dataclass(frozen=True)
 class Capability:
@@ -725,17 +753,45 @@ class Capability:
 
     key: str
     pattern: str
-    kind: str                      # core | chat | no | plugin | internet | news | print
+    kind: str                      # core | yes | chat | no | plugin | internet | news | print
     handler: str | None = None     # core: the handler whose phrase is said
     phrase: str | None = None      # core: which of its example phrases
-    text: str | None = None        # no: the reply; chat / plugin: the feature
+    text: str | None = None        # no / yes: the reply; chat / plugin: the feature
     slugs: tuple[str, ...] = ()    # plugin: the plugin slugs that bring it
     provides: str | None = None    # plugin: or the capability one declares
     needs_internet: bool = False
     needs_ai: bool = False
+    # X is a generic object ("remember things about me"): no command takes
+    # it, so any "can / could / would / will you" in front keeps the
+    # question (kept_question, chat_capability), not only "can you".
+    generic: bool = False
 
+
+_G = f"(?:{GENERIC_OBJECT})"
+_ANY_LIST = r"(?:(?:my|the|our|your|a|all|all my|all the) )?(?:[\w-]+ )?lists?|(?:the |my )?(?:shopping|to-?dos?|groceries)"
+MEMORY_YES = ("Yes. Say \"remember that …\" and I'll keep it for you; "
+              "\"what do you remember about me?\" lists it.")
+FORGET_YES = ("Yes. Say \"forget that …\" and I'll drop it; "
+              "\"what do you remember about me?\" lists what I keep.")
 
 CAPABILITIES: tuple[Capability, ...] = (
+    # A generic object (G1): the question, never the command. First, so
+    # the old rows below ("announce things") don't take them.
+    Capability("memory", rf"remember {_G}", "yes", text=MEMORY_YES, generic=True),
+    Capability("forget", rf"(?:forget|stop remembering) {_G}", "yes", text=FORGET_YES, generic=True),
+    Capability("list_add",
+               rf"(?:add|put|write|jot down|stick) {_G} (?:to|on|onto|in|into) (?:{_ANY_LIST})",
+               "core", "lists", "add milk to the shopping list", generic=True),
+    Capability("list_remove",
+               rf"(?:remove|delete|take|cross|tick|check|strike) {_G} (?:off|from|off of|out of) (?:{_ANY_LIST})",
+               "core", "lists", "cross milk off the shopping list", generic=True),
+    Capability("note_things",
+               rf"(?:jot|write|note|save) (?:down )?{_G}(?: down)?",
+               "core", "voice_notes", "jot down buy milk and eggs", generic=True),
+    Capability("announce_things",
+               rf"(?:tell|announce to) (?:everyone|everybody|the (?:whole )?house|all (?:the )?rooms) {_G}"
+               rf"|(?:announce|broadcast) {_G}",
+               "core", "intercom", "tell everyone dinner's ready", generic=True),
     # Things Domovoi does: "Yes. Say '<the handler's own phrase>'."
     Capability("timers", r"(?:set|do|use|make) timers|time things", "core", "timer",
                "set a timer for 10 minutes"),
@@ -833,6 +889,9 @@ CAP_RE = re.compile(
 )
 _CAP_BY_KEY = {c.key: c for c in CAPABILITIES}
 _CAN_YOU_TAIL_RE = re.compile(r"(?:^|[,\s])can you(?:[,\s]+please)?[,\s]+$")
+# Any "… you" lead the router strips: kept only for a generic-object row.
+_ANY_ASK_TAIL_RE = re.compile(r"(?:^|[,\s])(?:can|could|would|will) you(?:[,\s]+please)?[,\s]+$")
+_OTHER_ASK_LEAD_RE = re.compile(r"^(?:can|could|would|will) you(?:[,\s]+please)?[,\s]+")
 
 
 def capability_of(transcript: str) -> tuple[Capability, str] | None:
@@ -861,15 +920,40 @@ def kept_question(transcript: str, stripped: str) -> str | None:
     a leading "can you" on its way to ``stripped``. When what is left is a
     capability-table X that no command takes, the question is kept whole
     ("can you <X>"), so this module's fast path answers it; else None (the
-    stripping stands: "can you set a timer for 10 minutes" sets it)."""
+    stripping stands: "can you set a timer for 10 minutes" sets it). A
+    generic-object row (``generic=True``) is kept after any "can / could /
+    would / will you", even where a command's pattern would match too."""
     prefix = transcript[: len(transcript) - len(stripped)] if transcript.endswith(stripped) else ""
-    if not prefix or not _CAN_YOU_TAIL_RE.search(prefix):
+    if not prefix or not _ANY_ASK_TAIL_RE.search(prefix):
         return None
     candidate = f"can you {stripped}"
     found = capability_of(candidate)
-    if found is None or _command_takes(found[1]):
+    if found is None:
+        return None
+    if found[0].generic:
+        # A generic object ("could you remember things?", "can you put
+        # things on my list?") is always the question, whatever the lead,
+        # and never a command's: no handler may act on "things" (G1).
+        return candidate
+    if _command_takes(found[1]) or not _CAN_YOU_TAIL_RE.search(prefix):
+        # "could you order pizza" stays "order pizza", as before.
         return None
     return candidate
+
+
+def chat_capability(t: str) -> tuple[Capability, str] | None:
+    """:func:`capability_of` for a typed message (normalized, its "can
+    you" kept): also "could / would / will / can you (please) <generic
+    object>", which
+    the router keeps whole by voice (:func:`kept_question`)."""
+    found = capability_of(t)
+    if found is not None:
+        return found
+    m = _OTHER_ASK_LEAD_RE.match(t or "")
+    if m is None:
+        return None
+    found = capability_of("can you " + t[m.end():])
+    return found if found is not None and found[0].generic else None
 
 
 async def _plugin_state(cap: Capability, scope: Any) -> str | None:
@@ -937,7 +1021,7 @@ async def capability_answer(cap: Capability, f: HouseFacts, *, scope: Any = None
     the turn goes on as before)."""
     scope = scope or _default_scope()
     chat = f.device in CHAT_DEVICES
-    if cap.kind == "no":
+    if cap.kind in ("no", "yes"):
         return cap.text
     if cap.kind == "core":
         phrase = _phrase(cap.handler, cap.phrase)
@@ -1123,7 +1207,7 @@ async def chat_reply(
     if qid == "internet_for_that":
         prev = await previous_assistant() if previous_assistant is not None else None
         return chat_internet_answer(prev)
-    cap = capability_of(t) if qid is None else None
+    cap = chat_capability(t) if qid is None else None
     if qid is None and cap is None:
         return None
     f = await read(chat=True, get_setting=get_setting, scope=scope)

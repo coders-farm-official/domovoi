@@ -330,7 +330,7 @@ def test_a_picture_without_the_vision_model_is_refused_up_front(uploads_dir, stu
         assert err == {
             "code": "vision_model_missing", "model": "qwen2.5vl:7b",
             "detail": "Pictures need the vision model qwen2.5vl:7b, which isn't installed on this "
-                      "Domovoi. An admin can install it in Settings → Models, or pick another "
+                      "Domovoi. An admin can install it in Settings → Chat & AI → Models, or pick another "
                       "vision model there.",
         }
         done = dict(events)["done"]

@@ -3,7 +3,7 @@
 * ``GET /api/capabilities`` publishes ``features.ai`` (live, from .env like
   the core) for the dashboard and the app, which hide Chat when it is
   false; voice chat mode (``features.chat``) needs it too.
-* Settings → Models: ``GET /api/models/ai`` says whether AI is on and what
+* Settings → Chat & AI → Models: ``GET /api/models/ai`` says whether AI is on and what
   turning it on would download (the role models Ollama doesn't have, with
   their sizes); ``POST /api/models/ai`` saves the switch through the
   core's config path and, asked to, starts those downloads as ordinary
