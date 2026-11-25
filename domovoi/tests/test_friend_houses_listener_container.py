@@ -343,11 +343,15 @@ def test_the_real_listener_answers_on_its_socket_and_ends_with_core(image, mount
         # listener carries on.
         s = socket.socket(socket.AF_UNIX)
         s.connect(str(sockets / "main.sock"))
-        s.sendall(b"x" * 100)
         s.settimeout(30)
         try:
+            # The listener may refuse and close before all 100 bytes are
+            # written: the send then breaks (EPIPE) or is reset. Either is
+            # the refusal this checks, not a fault (main CI flaked on
+            # BrokenPipeError here twice, 2026-11-25).
+            s.sendall(b"x" * 100)
             assert s.recv(10) == b""
-        except ConnectionResetError:
+        except (BrokenPipeError, ConnectionResetError):
             pass
         s.close()
         assert proc.poll() is None
