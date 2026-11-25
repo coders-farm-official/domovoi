@@ -3226,6 +3226,10 @@ async def admin_snapshot() -> dict[str, Any]:
 
     return {
         "active_rooms": list(app.state.active_sessions.keys()),
+        # Every connected satellite by its own id (1.5.0): a room may hold
+        # several, and the room drawer picks one of them for its
+        # per-device checks. A device from before 1.5.0 has its room's id.
+        "active_satellites": sorted(getattr(app.state, "active_satellites", None) or {}),
         "resumable_music": dict(app.state.resumable_music),
         "wifi_status": dict(app.state.wifi_status),
         # A DIGEST of the health state per room — when the latest sample
@@ -3265,10 +3269,12 @@ async def admin_snapshot() -> dict[str, Any]:
             for room, sess in app.state.active_sessions.items()
             if (declared := satellite_abilities.session_abilities(sess).declared_list()) is not None
         },
-        # Rooms whose connected device declared `diagnostics` (1.5.0): the
-        # dashboard offers the Diagnostics tab for these only.
+        # Connected satellites that declared `diagnostics` (1.5.0), by
+        # SATELLITE id: each device of a shared room is checked on its own
+        # (the drawer's device picker). A device from before 1.5.0 has its
+        # room's id, so an older reader looking a room up still finds it.
         "satellite_diagnostics": sorted(
-            room for room, sess in app.state.active_sessions.items()
+            sid for sid, sess in (getattr(app.state, "active_satellites", None) or {}).items()
             if satellite_abilities.session_abilities(sess).allows("diagnostics")
         ),
         # Rooms whose connected device declared `support_shell` (1.5.0),
@@ -6268,7 +6274,9 @@ DIAG_LIMITER = satellite_diagnostics.RateLimiter()
 
 
 def _diag_target(room_id: str, runs: int) -> Any:
-    target = app.state.active_sessions.get(room_id)
+    # A satellite by its own id first, else the speaker of the room by
+    # that id (an older dashboard addresses the room).
+    target = _live_device(room_id)
     if target is None:
         raise HTTPException(status_code=404, detail=f"room {room_id!r} not connected")
     _require_declared(target, "diagnostics", "diagnostics")
@@ -6299,8 +6307,9 @@ async def admin_run_satellite_diagnostics(room_id: str) -> dict[str, Any]:
     """Run every probe on a connected satellite that declared
     ``diagnostics``. 404 offline, 409 not declared, 429 over the
     per-satellite rate limit. A probe that gets no answer is in the list
-    with ``ok: false``."""
-    target = app.state.active_sessions.get(room_id)
+    with ``ok: false``. ``room_id`` is a satellite id (1.5.0), or a room
+    id for the room's speaker."""
+    target = _live_device(room_id)
     probes = satellite_diagnostics.probes_for(satellite_abilities.session_abilities(target))
     target = _diag_target(room_id, len(probes))
     results = await asyncio.gather(*(_run_diag(target, p) for p in probes))
