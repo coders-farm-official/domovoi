@@ -41,6 +41,7 @@ from domovoi.tests.fh_plugin_mail_kit import (  # noqa: F401  (fixtures)
     settle,
 )
 from domovoi.tests.friend_houses_testkit import no_tasks_left_behind  # noqa: F401  (autouse)
+from domovoi.tests.test_png_compact import SMALL_PNG, decoded, drawing_pixels, old_style_png, rgb
 
 pytestmark = requires_db
 
@@ -115,17 +116,32 @@ async def test_send_mail_to_a_stranger_or_a_disallowed_friend_is_not_allowed(hou
 async def test_send_image_queues_an_image_mail(house, tmp_path, gate_open) -> None:
     fa = await add_friend("fa", tmp=tmp_path, caps=True)
     hid = house.keys.plugin_house_id("games", fa.house_key)
-    await house.api.send_image(hid, b"\x89PNG\r\n\x1a\nbytes", tag="monster:7", ttl_s=600)
+    await house.api.send_image(hid, SMALL_PNG, tag="monster:7", ttl_s=600)
     (row,) = await _outbox()
     assert row[:3] == ("fa", "games", fe.PLUGIN_BODY_IMAGE)
-    assert fe.split_image_payload(row[3]) == ("monster:7", b"\x89PNG\r\n\x1a\nbytes")
+    assert fe.split_image_payload(row[3]) == ("monster:7", SMALL_PNG)
+
+
+async def test_a_forwarded_friend_image_is_re_encoded_to_fit(house, tmp_path, gate_open) -> None:
+    """A FriendImage too big for a mail (a 768 px drawing written before the
+    compact encoder, unfiltered) is passed on as the core's compact PNG."""
+    fa = await add_friend("fa", tmp=tmp_path, caps=True)
+    pixels = drawing_pixels()
+    image = sdk.FriendImage(old_style_png(768, 768, 3, pixels), 768, 768, sdk.FriendText("cat"))
+    assert len(image.png) > sdk.PAYLOAD_MAX
+    await house.api.send_image(house.keys.plugin_house_id("games", fa.house_key), image, tag="draw:1")
+    (row,) = await _outbox()
+    tag, png = fe.split_image_payload(row[3])
+    assert tag == "draw:1" and len(row[3]) <= sdk.PAYLOAD_MAX
+    w, h, c, back = decoded(png)
+    assert (w, h) == (768, 768) and rgb(w, h, c, back) == pixels   # lossless at full size
 
 
 async def test_the_sender_signs_an_image_mail_as_body_version_2(tmp_path, house, gate_open) -> None:
     """The outbox row's kind reaches the wire: the receiving listener sees
     an image body (and its checked tag) under the same signature."""
     fa = await add_friend("fa", tmp=tmp_path, caps=True)
-    await house.api.send_image(house.keys.plugin_house_id("games", fa.house_key), b"img", tag="t1")
+    await house.api.send_image(house.keys.plugin_house_id("games", fa.house_key), SMALL_PNG, tag="t1")
     assert gate_open == ["fa"]
     assert await q("SELECT state FROM friend_houses_plugin_outbox") == [("queued",)]
     friend = await _friend_row("fa")
@@ -135,7 +151,7 @@ async def test_the_sender_signs_an_image_mail_as_body_version_2(tmp_path, house,
                          ttl_s=mail["ttl"], epoch=EPOCH_F, seq=mail["seq"], sent_at=int(time.time()),
                          msg_id=mail["mail_id"], version=mail["version"])
     back = fe.parse(env.to_bytes(), sender=house.keys.house_key, recipient=fa.house_key).plugin
-    assert back.is_image and back.image() == ("t1", b"img")
+    assert back.is_image and back.image() == ("t1", SMALL_PNG)
 
 
 async def _friend_row(friend_id: str) -> dict:

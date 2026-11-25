@@ -69,6 +69,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
@@ -279,6 +280,8 @@ internal fun HomeAttention(
     checking: Boolean,
     compact: Boolean,
     onOpen: (HomeTarget) -> Unit,
+    /** The update row's admin Update (UpdateNoticeLine); null on every phone today. */
+    onUpdate: (() -> Unit)? = null,
 ) {
     if (!attentionShown(view)) return
     var expanded by rememberSaveable { mutableStateOf(false) }
@@ -305,7 +308,7 @@ internal fun HomeAttention(
             }
             view.extra.forEach { r ->
                 HorizontalDivider(color = Domovoi.colors.borderSoft)
-                AttentionLine(r, compact, onOpen)
+                AttentionLine(r, compact, onOpen, onUpdate)
             }
         }
         is AttentionView.Rows -> {
@@ -322,7 +325,7 @@ internal fun HomeAttention(
                 rows.forEachIndexed { i, r ->
                     if (compact && i >= HOME_PHONE_ROWS && !expanded) return@forEachIndexed
                     if (i > 0) HorizontalDivider(color = Domovoi.colors.borderSoft)
-                    AttentionLine(r, compact, onOpen)
+                    AttentionLine(r, compact, onOpen, onUpdate)
                 }
                 if (checking) QuietLine("checking…")
             }
@@ -333,11 +336,21 @@ internal fun HomeAttention(
 
 /** One "needs attention" row: its dot, its words, when; a tap opens it. */
 @Composable
-private fun AttentionLine(r: AttentionRow, compact: Boolean, onOpen: (HomeTarget) -> Unit) {
+private fun AttentionLine(
+    r: AttentionRow,
+    compact: Boolean,
+    onOpen: (HomeTarget) -> Unit,
+    onUpdate: (() -> Unit)? = null,
+) {
+    r.update?.let {
+        UpdateNoticeLine(it, compact, onUpdate)
+        return
+    }
+    val target = r.target
     Row(
         Modifier
             .fillMaxWidth()
-            .clickable { onOpen(r.target) }
+            .then(if (target != null) Modifier.clickable { onOpen(target) } else Modifier)
             .heightIn(min = if (compact) 44.dp else 40.dp)
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -364,6 +377,73 @@ private fun AttentionLine(r: AttentionRow, compact: Boolean, onOpen: (HomeTarget
         }
     }
 }
+
+/**
+ * The update notice's row (web HomeUpdateNoticeRow): the words, the muted
+ * "An admin can install it.", and the release's highlights as plain-text
+ * bullets. Nothing here is a link and nothing is cut short: every line
+ * wraps at whatever width the card has (no maxLines, no fixed widths), a
+ * version can't split (digits and dots never break), and the lines break
+ * balanced rather than greedy ([UPDATE_LINE_BREAK]), so the narrowest phone
+ * gets "Domovoi 1234.5678.9012 / is available", not a lone last word.
+ *
+ * [onUpdate] is the admin's Update, shown only when the row allows it
+ * ([UpdateNoticeLines.canUpdate]) AND the screen wired one: no phone does
+ * yet (phone admin sign-in is on another branch).
+ */
+@Composable
+internal fun UpdateNoticeLine(u: UpdateNoticeLines, compact: Boolean, onUpdate: (() -> Unit)? = null) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = if (compact) 44.dp else 40.dp)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        // The dot sits on the title's first line, as on every other row.
+        Box(Modifier.heightIn(min = 20.dp), contentAlignment = Alignment.Center) { StatusDot(Tone.Brand) }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                u.title,
+                style = MaterialTheme.typography.bodyMedium.copy(lineBreak = UPDATE_LINE_BREAK),
+                fontWeight = FontWeight.SemiBold,
+                color = Domovoi.colors.fg,
+            )
+            u.sub?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall.copy(lineBreak = UPDATE_LINE_BREAK),
+                    color = Domovoi.colors.fgMuted,
+                )
+            }
+            u.highlights.forEach { h ->
+                Row(Modifier.padding(top = 2.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("•", style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted)
+                    Text(
+                        h,
+                        style = MaterialTheme.typography.bodySmall.copy(lineBreak = UPDATE_LINE_BREAK),
+                        color = Domovoi.colors.fg,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+            if (u.canUpdate && onUpdate != null) {
+                Button(onClick = onUpdate, modifier = Modifier.padding(top = 4.dp).heightIn(min = 44.dp)) {
+                    Text("Update")
+                }
+            }
+        }
+    }
+}
+
+/** The update row's line breaking: balanced lines (LineBreak.Heading's
+ *  strategy, for short text in a narrow column) with the normal rules of
+ *  where a line may break, so a wrapped line never leaves one word alone. */
+internal val UPDATE_LINE_BREAK = LineBreak(
+    strategy = LineBreak.Strategy.Balanced,
+    strictness = LineBreak.Strictness.Normal,
+    wordBreak = LineBreak.WordBreak.Default,
+)
 
 // ─── timers ───────────────────────────────────────────────────────────────
 

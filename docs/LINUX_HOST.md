@@ -2364,11 +2364,17 @@ it. Settings → System → About & updates shows:
 - the release label of the code that runs: `1.0.0` on a release, `1.0.0 +
   14 (abc1234)` past one (`git describe --tags --match "v[0-9]*"`);
 - **updates**: the channel, and for an admin a choice between the two;
+- **Check for updates by itself** (ticked by default, an admin's): with the
+  internet answer **Yes**, the server checks once a day and at start, and a
+  newer **signed** release shows on Home and here with its three
+  highlights. Never under Sometimes or No. On `main`, new commits never
+  make a notice; the card says how many changes the box is past the latest
+  release instead;
 - after **Check for updates**, on `stable`: "Domovoi 1.0.1 is available",
   "the latest release", or, on a box that runs code newer than the latest
   release (switched from `main`), that updates resume with the next
-  release that includes it; on `main`: how many commits behind, and the
-  latest release.
+  release that includes it; on `main`: how many commits behind, and how
+  far past the latest release it is.
 
 **Switching** (an admin, security tier: `POST /api/config/version/channel`)
 makes the local branch of that name at the commit the box already runs and

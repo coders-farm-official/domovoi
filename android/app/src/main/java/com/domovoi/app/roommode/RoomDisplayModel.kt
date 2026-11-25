@@ -70,10 +70,35 @@ object RoomDisplayModel {
         /** How to lock the phone so the room stays on over the lock screen;
          *  null while it is locked (or has no lock). */
         val lockHint: String? = null,
+        /** Photo and video results asked for here (1.5.0); null: none. */
+        val media: Media? = null,
     ) {
         /** Anything for the second column of a landscape screen. */
-        val hasCards: Boolean get() = ringing != null || nowPlaying != null || timers.isNotEmpty() || nextAlarm != null
+        val hasCards: Boolean get() =
+            ringing != null || nowPlaying != null || timers.isNotEmpty() || nextAlarm != null || media != null
     }
+
+    /** The results card (the kiosk's DpMedia at phone size): the spoken
+     *  answer, up to six tiles, and "and more" when there are more. */
+    data class Media(
+        val id: Long,
+        val said: String,
+        val tiles: List<MediaTile>,
+        /** "and more on the Photos page"; null when all are shown. */
+        val more: String?,
+    )
+
+    data class MediaTile(
+        val thumb: String?,
+        val video: Boolean,
+        /** "0:42": a video's best moment, on its tile; null: none. */
+        val at: String?,
+        /** "Might show: …", plain text; null: no caption. */
+        val caption: String?,
+        /** "Jul 14, 2025", the phone's own way; null: unknown. */
+        val date: String?,
+        val description: String,
+    )
 
     data class NowPlaying(
         val title: String,
@@ -173,7 +198,45 @@ object RoomDisplayModel {
             },
             timersFirst = timers.firstOrNull()?.let { it.second < URGENT_TIMER_MS } == true,
             lockHint = RoomStatusText.LOCK_HINT.takeIf { i.lockHint && !i.needsLock },
+            media = feed?.media?.takeIf { since < it.expiresInMs }?.let { media(it, i.locale) },
         )
+    }
+
+    /** "and more on the Photos page" (the results not sent are there). */
+    const val MEDIA_MORE = "and more on the Photos page"
+
+    /** A caption as every screen draws it: a guess, plain text. */
+    fun mightShow(caption: String): String = "Might show: $caption"
+
+    private fun media(m: FeedMedia, locale: Locale): Media = Media(
+        id = m.id,
+        said = m.said,
+        tiles = m.items.map {
+            val date = mediaDate(it.date, locale)
+            // Whole seconds, as the kiosk's time badge rounds them.
+            val at = it.atS?.let { s -> countdown(Math.round(s.coerceAtLeast(0.0)) * 1000) }
+            val video = it.kind == MediaKind.VIDEO
+            MediaTile(
+                thumb = it.thumb,
+                video = video,
+                at = at,
+                caption = it.caption?.let(::mightShow),
+                date = date,
+                description = listOfNotNull(
+                    if (video) "video" + (at?.let { a -> " at $a" } ?: "") else "photo",
+                    it.caption?.let(::mightShow), date,
+                ).joinToString(", "),
+            )
+        },
+        more = MEDIA_MORE.takeIf { m.more || m.count > m.items.size },
+    )
+
+    /** `2025-07-14` → "Jul 14, 2025" (the phone's medium date); null for
+     *  anything that is not a date. */
+    fun mediaDate(iso: String?, locale: Locale): String? = iso?.let {
+        runCatching {
+            java.time.LocalDate.parse(it).format(java.time.format.DateTimeFormatter.ofLocalizedDate(java.time.format.FormatStyle.MEDIUM).withLocale(locale))
+        }.getOrNull()
     }
 
     private fun nowPlaying(np: FeedNowPlaying, since: Long, linked: Boolean, volume: Int?): NowPlaying? {

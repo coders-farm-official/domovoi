@@ -1172,8 +1172,9 @@ const DenylistView = ({ count, onBack }) => (
  *                                          since when, the latest cleanup and
  *                                          delete (counts and dates only)
  *   PATCH /api/config/editable           — { changes: { voice_history_keep } }
- *                                          (admin; also Settings → Advanced
- *                                          → Privacy)
+ *                                          (admin; Settings → Privacy → Keep
+ *                                          voice history since 1.5.0: this
+ *                                          view and Advanced link there)
  *   POST  /api/voice-history/delete-all  — admin; runs as a job on the server,
  *                                          its progress is read back here
  */
@@ -1203,19 +1204,42 @@ const VoiceHistoryJobLine = ({ job }) => {
   );
 };
 
-const VoiceHistoryView = ({ vh, onBack, fire }) => {
+/* What is kept now, and the latest daily cleanup and delete: counts and
+ * dates only (both the Privacy section and People → Voice history). */
+const VoiceHistoryCounts = ({ data }) => {
+  const cleanup = data && data.last_cleanup;
+  const cleaned = cleanup && cleanup.deleted ? (cleanup.deleted.conversation_log || 0) : 0;
+  const job = data && data.delete_all;
+  return (
+    <div className="mono" style={{ fontSize: 12, color: 'var(--fg-muted)', display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <span>
+        {!data ? 'reading…'
+          : data.turns === 0 ? 'nothing kept yet'
+          : `${data.turns} turn${data.turns === 1 ? '' : 's'} kept · the oldest from ${new Date(data.oldest_at).toLocaleDateString()}`}
+      </span>
+      {data && data.keep === 'forever' && <span>Forever: nothing is deleted on its own.</span>}
+      {data && data.keep !== 'forever' && cleanup && cleanup.finished_at && (
+        cleanup.state === 'failed'
+          ? <span style={{ color: 'var(--err-ink)' }}>the last cleanup, {relTime(cleanup.finished_at)}, stopped ({cleanup.error}); the server tries again within the hour</span>
+          : <span>last cleanup {relTime(cleanup.finished_at)}: {cleaned} turn{cleaned === 1 ? '' : 's'} deleted</span>
+      )}
+      {job && <VoiceHistoryJobLine job={job}/>}
+    </div>
+  );
+};
+
+/* Settings → Privacy → Keep voice history (1.5.0): the one place the
+ * setting is changed. An admin changes it: the save goes through the
+ * config-edit route at the admin security tier, so a tab without the
+ * admin sign-in is asked for it, as Keep listening history is. People →
+ * Voice history and Settings → Advanced → Privacy show its value and
+ * link here. */
+const VoiceHistoryKeepPanel = () => {
+  const [fire, toastNode] = useToast();
+  const vh = useApiObject('/api/voice-history', { quiet: true, refetchOnAuth: true });
   const { data, error, refresh } = vh;
   const [pendingKeep, setPendingKeep] = React.useState(null);   // a shorter keep, awaiting confirm
-  const [askDelete, setAskDelete] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
-  const job = data && data.delete_all;
-  const running = !!job && (job.state === 'queued' || job.state === 'running');
-  React.useEffect(() => {
-    if (!running) return undefined;
-    const t = setInterval(refresh, 1500);
-    return () => clearInterval(t);
-  }, [running, refresh]);
-
   const refused = error && (error.status === 401 || error.status === 403);
   const keep = data ? data.keep : null;
   const choices = (data && data.choices) || [];
@@ -1247,6 +1271,62 @@ const VoiceHistoryView = ({ vh, onBack, fire }) => {
     if (next !== null && (now === null || next < now)) setPendingKeep(value);
     else saveKeep(value);
   };
+
+  return (
+    <Card title="Keep voice history"
+          sub="What people say to Domovoi, and what it answered, in every room and on every phone.">
+      {refused && !data ? <PairedOnlyEmpty what="how long the house keeps what was said"/> : (
+        <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 16, fontSize: 13, lineHeight: 1.55 }}>
+          <div style={{ color: 'var(--fg-muted)', maxWidth: 560 }}>
+            Domovoi keeps what people say to it, and what it answered, so the Conversations and Sessions
+            tabs can show them. Anything older than you choose here is deleted every day, and right away
+            when you save. Memories, voice samples, notes, timers, the music played and chat threads are
+            not affected. Deleting all of it is in Settings → Household → People → Voice history.
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <label htmlFor="voice-history-keep" style={{ fontWeight: 500 }}>Keep voice history</label>
+            <select id="voice-history-keep" value={keep || ''} disabled={!data || busy}
+                    onChange={e => onKeepChange(e.target.value)}
+                    style={{ ..._cfgInput, minWidth: 150 }}>
+              {!keep && <option value="" disabled>…</option>}
+              {choices.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+            </select>
+            <span style={{ fontSize: 12, color: 'var(--fg-faint)' }}>an admin changes this</span>
+          </div>
+          <VoiceHistoryCounts data={data}/>
+        </div>
+      )}
+      {pendingKeep && (
+        <DeleteConfirmDialog title={`Keep voice history for ${labelOf(pendingKeep)}?`} busy={busy}
+                             confirmLabel={`Keep ${labelOf(pendingKeep)}`}
+                             onCancel={() => setPendingKeep(null)} onConfirm={() => saveKeep(pendingKeep)}>
+          <div>Everything said more than {labelOf(pendingKeep)} ago is deleted now, and every day from then on. This can’t be undone.</div>
+        </DeleteConfirmDialog>
+      )}
+      {toastNode}
+    </Card>
+  );
+};
+
+window.VoiceHistoryKeepPanel = VoiceHistoryKeepPanel;
+
+/* People → Voice history: how long it is kept (read here, changed in
+ * Settings → Privacy → Keep voice history), what is kept, and deleting
+ * all of it (an admin). */
+const VoiceHistoryView = ({ vh, onBack, fire }) => {
+  const { data, error, refresh } = vh;
+  const [askDelete, setAskDelete] = React.useState(false);
+  const [busy, setBusy] = React.useState(false);
+  const job = data && data.delete_all;
+  const running = !!job && (job.state === 'queued' || job.state === 'running');
+  React.useEffect(() => {
+    if (!running) return undefined;
+    const t = setInterval(refresh, 1500);
+    return () => clearInterval(t);
+  }, [running, refresh]);
+
+  const refused = error && (error.status === 401 || error.status === 403);
+
   const deleteAll = async () => {
     setBusy(true);
     try {
@@ -1261,9 +1341,6 @@ const VoiceHistoryView = ({ vh, onBack, fire }) => {
     }
   };
 
-  const cleanup = data && data.last_cleanup;
-  const cleaned = cleanup && cleanup.deleted ? (cleanup.deleted.conversation_log || 0) : 0;
-
   return (
     <Card>
       <div style={{ padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 8, borderBottom: '1px solid var(--border-soft)' }}>
@@ -1275,34 +1352,17 @@ const VoiceHistoryView = ({ vh, onBack, fire }) => {
         <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 16, fontSize: 13, lineHeight: 1.55 }}>
           <div style={{ color: 'var(--fg-muted)', maxWidth: 560 }}>
             Domovoi keeps what people say to it, and what it answered, so the Conversations and Sessions
-            tabs can show them. Anything older than you choose here is deleted every day.
+            tabs can show them. Anything older than “Keep voice history” is deleted every day.
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-            <label htmlFor="voice-history-keep" style={{ fontWeight: 500 }}>Keep voice history</label>
-            <select id="voice-history-keep" value={keep || ''} disabled={!data || busy}
-                    onChange={e => onKeepChange(e.target.value)}
-                    style={{ ..._cfgInput, minWidth: 150 }}>
-              {!keep && <option value="" disabled>…</option>}
-              {choices.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
-            </select>
-            <span style={{ fontSize: 12, color: 'var(--fg-faint)' }}>an admin changes this</span>
+          <div className="people-keep-voice-pointer" style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            <span style={{ fontWeight: 500 }}>Keep voice history:</span>
+            <span>{!data ? '…' : data.keep_label}</span>
+            <span style={{ color: 'var(--fg-muted)' }}>· change it in</span>
+            <a href="#settings/keep-voice-history" className="home-link">Settings → Privacy → Keep voice history</a>
           </div>
 
-          <div className="mono" style={{ fontSize: 12, color: 'var(--fg-muted)', display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <span>
-              {!data ? 'reading…'
-                : data.turns === 0 ? 'nothing kept yet'
-                : `${data.turns} turn${data.turns === 1 ? '' : 's'} kept · the oldest from ${new Date(data.oldest_at).toLocaleDateString()}`}
-            </span>
-            {data && data.keep === 'forever' && <span>Forever: nothing is deleted on its own.</span>}
-            {data && data.keep !== 'forever' && cleanup && cleanup.finished_at && (
-              cleanup.state === 'failed'
-                ? <span style={{ color: 'var(--err-ink)' }}>the last cleanup, {relTime(cleanup.finished_at)}, stopped ({cleanup.error}); the server tries again within the hour</span>
-                : <span>last cleanup {relTime(cleanup.finished_at)}: {cleaned} turn{cleaned === 1 ? '' : 's'} deleted</span>
-            )}
-            {job && <VoiceHistoryJobLine job={job}/>}
-          </div>
+          <VoiceHistoryCounts data={data}/>
 
           <div style={{ paddingTop: 14, borderTop: '1px solid var(--border-soft)', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
             <Button icon="trash-2" disabled={!data || busy || running} onClick={() => setAskDelete(true)}
@@ -1316,13 +1376,6 @@ const VoiceHistoryView = ({ vh, onBack, fire }) => {
         </div>
       )}
 
-      {pendingKeep && (
-        <DeleteConfirmDialog title={`Keep voice history for ${labelOf(pendingKeep)}?`} busy={busy}
-                             confirmLabel={`Keep ${labelOf(pendingKeep)}`}
-                             onCancel={() => setPendingKeep(null)} onConfirm={() => saveKeep(pendingKeep)}>
-          <div>Everything said more than {labelOf(pendingKeep)} ago is deleted now, and every day from then on. This can’t be undone.</div>
-        </DeleteConfirmDialog>
-      )}
       {askDelete && (
         <DeleteConfirmDialog title="Delete all voice history?" busy={busy}
                              confirmLabel="Delete all voice history"

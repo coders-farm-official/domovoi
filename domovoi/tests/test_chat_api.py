@@ -15,10 +15,11 @@ from typing import Any
 
 import httpx
 import pytest
-from fastapi.testclient import TestClient
 
 import web.backend.api.chat as chat_api
 from domovoi.clients import ollama as ollama_mod
+from domovoi.tests.chat_devices import DeviceTestClient, new_device_id
+from fastapi.testclient import TestClient
 from domovoi.tests.conftest import requires_db
 from web.backend.main import app
 
@@ -42,7 +43,8 @@ _LEAKS = ("localhost", "127.0.0.1", ":11434", "http", "mozilla", "api/chat", "Cl
 
 
 def _client():
-    return TestClient(app, headers={"X-Requested-With": "domovoi-tests"})
+    # A device of its own: its chats are private to it (chat_access, V086).
+    return DeviceTestClient(app)
 
 
 @pytest.fixture
@@ -168,11 +170,14 @@ def test_a_reply_keeps_its_stats_and_the_sender_its_device(monkeypatch):
             })
 
     monkeypatch.setattr(chat_api.ollama_client, "chat_stream", _stream)
-    with _client() as c:
-        assert c.post("/api/devices/register", json={"device_id": "chat-test-phone", "name": "Kitchen tablet"}).status_code == 200
+    phone = new_device_id("chat-test-phone")
+    with DeviceTestClient(app, device_id=phone) as c:
+        assert c.patch(f"/api/devices/{phone}", json={"name": "Kitchen tablet"}).status_code == 200
         t = c.post("/api/chat/threads", json={}).json()
+        # The body's device_id is self-asserted and ignored: the row gets
+        # the device the key resolved to (private chats, 1.5.0).
         r = c.post(f"/api/chat/threads/{t['id']}/messages",
-                   json={"content": "hello", "device_id": "chat-test-phone"})
+                   json={"content": "hello", "device_id": "chat-test-someone-else"})
         done = next(d for ev, d in _sse_events(r.text) if ev == "done")
         st = done["stats"]
         assert st["prompt_tokens"] == 50 and st["output_tokens"] == 20
@@ -186,9 +191,9 @@ def test_a_reply_keeps_its_stats_and_the_sender_its_device(monkeypatch):
         assert st["first_token_ms"] >= 0 and st["wall_ms"] >= st["first_token_ms"]
 
         # L39 (1.5.0): reads carry no device ids — ``mine`` against the
-        # caller's own X-Device-Id, and the device's name.
+        # caller's own device (its key), and the device's name.
         msgs = c.get(f"/api/chat/threads/{t['id']}/messages",
-                     headers={"X-Device-Id": "chat-test-phone"}).json()["messages"]
+                     headers={"X-Device-Id": "chat-test-other"}).json()["messages"]
         user, reply = msgs
         assert "device_id" not in user and "device_id" not in reply
         assert user["mine"] is True and reply["mine"] is False
@@ -196,28 +201,34 @@ def test_a_reply_keeps_its_stats_and_the_sender_its_device(monkeypatch):
         assert user["stats"] is None
         assert reply["stats"] == st
         assert "device_id" not in done and done["mine"] is False
-        other = c.get(f"/api/chat/threads/{t['id']}/messages",
-                      headers={"X-Device-Id": "chat-test-other"}).json()["messages"]
+        # Shared, so other devices read it: never theirs, even naming the
+        # phone's id.
+        assert c.patch(f"/api/chat/threads/{t['id']}", json={"shared": True}).status_code == 200
+        with DeviceTestClient(app) as o:
+            other = o.get(f"/api/chat/threads/{t['id']}/messages",
+                          headers={"X-Device-Id": phone}).json()["messages"]
         assert [m["mine"] for m in other] == [False, False]
-        bare = c.get(f"/api/chat/threads/{t['id']}/messages").json()["messages"]
+        with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as keyless:
+            bare = keyless.get(f"/api/chat/threads/{t['id']}/messages").json()["messages"]
         assert [m["mine"] for m in bare] == [False, False]
         assert all("device_id" not in m for m in other + bare)
-        assert "chat-test-phone" not in c.get(f"/api/chat/threads/{t['id']}/messages").text
+        assert phone not in c.get(f"/api/chat/threads/{t['id']}/messages").text
 
 
 @requires_db
 @pytest.mark.parametrize("bad", ["../../etc", "a b", "<img src=x>", "x"])
 def test_a_malformed_device_id_is_not_kept(stub_stream, bad):
     """Security review 2026-09-30: the id is self-asserted (like queue
-    provenance) and was stored as sent; now only a well-formed one is kept,
-    as every other route that reads a device id does."""
+    provenance) and was stored as sent. Since 1.5.0 the body's id is never
+    kept at all: the row records the device its key resolved to."""
     with _client() as c:
         t = c.post("/api/chat/threads", json={}).json()
         r = c.post(f"/api/chat/threads/{t['id']}/messages",
                    json={"content": "hello", "device_id": bad})
         assert r.status_code == 200
         user = c.get(f"/api/chat/threads/{t['id']}/messages").json()["messages"][0]
-        assert user["role"] == "user" and "device_id" not in user and user["mine"] is False
+        assert user["role"] == "user" and "device_id" not in user and user["mine"] is True
+        assert user["device_name"] == c.device_id
 
 
 def test_reply_stats_leave_out_what_is_unknown() -> None:

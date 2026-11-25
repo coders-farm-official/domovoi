@@ -73,6 +73,8 @@ final class ShellStringsTests: XCTestCase {
         "ui/screens/settings/LocalSettingsScreen.kt",
         "ui/screens/settings/DeveloperOptionsSection.kt",
         "ui/screens/settings/ConnectionPanel.kt",
+        // Settings → Privacy → Keep voice history (1.5.0).
+        "ui/screens/settings/KeepVoiceHistoryPanel.kt",
         "alerts/ContainerIncidents.kt",
         // Home's header (I1-D part 1). The rest of `ui/screens/home/` comes
         // with part 2's sections.
@@ -90,6 +92,8 @@ final class ShellStringsTests: XCTestCase {
         "ui/components/Format.kt",
         // Part 3a: the toasts of the four writes, which live with the calls.
         "ui/screens/home/HomeIo.kt",
+        // Update notices (1.5.0): the Home row's words.
+        "ui/screens/home/HomeUpdateNotice.kt",
         // I1-H part 1: Chat. All six files, because Chat's words are spread
         // across all six — the list's in `ChatHome.kt`, the constants in
         // `ChatPlace.kt`, the conversation's in `ChatScreen.kt`, the server
@@ -979,11 +983,23 @@ final class ShellStringsTests: XCTestCase {
         XCTAssertEqual("rooms", SettingsSection.named("satellites")?.key)
         XCTAssertEqual("phones-and-browsers", SettingsSection.named("connection")?.key)
         XCTAssertEqual("advanced", SettingsSection.named("configuration")?.key)
+        // "Voice history" until 1.5.0, and "recordings" before that.
+        XCTAssertEqual("command-recordings", SettingsSection.named("voice-history")?.key)
+        XCTAssertEqual("command-recordings", SettingsSection.named("recordings")?.key)
         XCTAssertNil(SettingsSection.named("nope"))
         XCTAssertNil(SettingsSection.named(nil))
         // Two of the subs carry a character worth protecting.
-        XCTAssertTrue(SettingsSection.named("voice-history")!.sub.contains("—"), "em dash")
+        XCTAssertTrue(SettingsSection.named("command-recordings")!.sub.contains("—"), "em dash")
         XCTAssertTrue(SettingsSection.named("advanced")!.sub.contains("—"), "em dash")
+    }
+
+    /// Keep voice history (1.5.0), against `KeepVoiceHistoryPanel.kt`.
+    func testKeepVoiceHistorySaysWhatTheKotlinSays() {
+        assertKotlinSaysWhole(KeepVoiceHistory.valueLabel)
+        assertKotlinSaysWhole(KeepVoiceHistory.adminChangesIt)
+        assertKotlinSaysWhole(KeepVoiceHistory.unpaired)
+        assertKotlinSaysWhole(KeepVoiceHistory.olderServer, "a curly apostrophe")
+        assertKotlinSaysWhole(KeepVoiceHistory.dashboard)
     }
 
     // MARK: - §7.10 toasts
@@ -1300,6 +1316,17 @@ final class ShellStringsTests: XCTestCase {
             Self.wholeStrings.contains(HomeAttentionStrings.stale),
             "if Android ever grows this string, port it and drop it from IOSOnlyStrings"
         )
+    }
+
+    /// The update notice's row (1.5.0), against `HomeUpdateNotice.kt` —
+    /// whose words are the dashboard's `HomeUpdateRow`'s. The title has the
+    /// version interpolated, so it is checked around it.
+    func testTheUpdateNoticeSaysWhatTheKotlinSays() {
+        assertKotlinSaysWhole(HomeUpdateNoticeStrings.restarting, "U+2026 ellipsis, not three dots")
+        assertKotlinSaysWhole(HomeUpdateNoticeStrings.adminCanInstall)
+        assertKotlinSaysWhole(HomeUpdateNoticeStrings.update)
+        assertKotlinSaysAround(HomeUpdateNoticeStrings.available("\u{1}"))
+        XCTAssertEqual("Domovoi 1.5.0 is available", HomeUpdateNoticeStrings.available("1.5.0"))
     }
 
     /// `+N more`, which is built rather than stored.

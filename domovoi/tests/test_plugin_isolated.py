@@ -1241,7 +1241,8 @@ def test_only_pixels_come_out_of_the_container(fmt, safety_module) -> None:
     png = iso.encode_png(w, h, c, pixels)
     for marker in (b"SecretCam", b"SecretSoftware", b"SecretText", b"SecretIcc", b"Exif", b"GPS"):
         assert marker not in png
-    assert _chunks(png) == [b"IHDR", b"IDAT", b"IEND"]       # no iCCP, eXIf, tEXt: nothing but pixels
+    # no iCCP, eXIf, tEXt: nothing but the pixels (and their palette when few colours)
+    assert _chunks(png) in ([b"IHDR", b"IDAT", b"IEND"], [b"IHDR", b"PLTE", b"IDAT", b"IEND"])
     with PILImage.open(io.BytesIO(png)) as im:
         assert im.size == (64, 48) and "icc_profile" not in im.info and dict(im.getexif()) == {}
 
@@ -1366,7 +1367,10 @@ async def test_the_real_runner_answers_image_requests_with_pixels(tmp_path, dock
         r = await pool.decode_image("a", src)
         assert r.ok and r.media_type == "image/png", r
         assert (r.value["image"]["width"], r.value["image"]["height"]) == (768, 576)
-        assert b"SecretCam" not in r.image and _chunks(r.image) == [b"IHDR", b"IDAT", b"IEND"]
+        # The core writes only these chunks; a picture with few colours adds a
+        # palette (PLTE), never metadata.
+        assert b"SecretCam" not in r.image
+        assert _chunks(r.image) in ([b"IHDR", b"IDAT", b"IEND"], [b"IHDR", b"PLTE", b"IDAT", b"IEND"])
         r = await pool.decode_image("a", _bomb_png(20000, 20000))
         assert r.outcome == "refused" and "too large" in r.reason
         r = await pool.decode_image("a", b"GIF89a....")

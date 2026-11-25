@@ -171,9 +171,10 @@ async def caps_pass() -> None:
             {"r": CAPS_REFRESH_SEC})).all()
         if not rows:
             # Friends no longer told anything: their stale flag goes quietly.
-            await s.execute(text(
-                "UPDATE friend_houses_friends SET caps_needed = FALSE WHERE caps_needed AND NOT apps_on "
-                "AND coalesce(peer_proto, 0) < 2"))
+            ids = await pm.lock_friends(s, "caps_needed AND NOT apps_on AND coalesce(peer_proto, 0) < 2")
+            if ids:
+                await s.execute(text(
+                    "UPDATE friend_houses_friends SET caps_needed = FALSE WHERE id = ANY(:i)"), {"i": ids})
     for (friend_id,) in rows:
         wake(friend_id)
 
@@ -294,6 +295,9 @@ class _Sender:
         if not slugs:
             return None
         async with pm._db() as s:
+            # Lock order: sender + house budgets (a resend spends them) before
+            # the outbox row.
+            await pm.lock_send_budget(s, self.friend_id)
             row = (await s.execute(text(
                 "SELECT o.id, o.slug, o.mail_id, o.seq, o.payload, o.expires_at, o.attempts, o.size, o.kind "
                 "FROM friend_houses_plugin_outbox o JOIN friend_houses_plugin_pairs p "
@@ -304,7 +308,7 @@ class _Sender:
                 "AND (p.na_hold_until IS NULL OR p.na_hold_until <= now()) "
                 "AND f.state = 'active' AND f.apps_on AND f.peer_proto >= 2 AND o.slug = ANY(f.peer_caps) "
                 "AND f.peer_caps_at > now() - make_interval(secs => CAST(:fresh AS integer)) AND f.peer_caps_epoch = f.peer_epoch "
-                "AND o.slug = ANY(:ready) ORDER BY o.id LIMIT 1 FOR UPDATE OF o SKIP LOCKED"),
+                "AND o.slug = ANY(:ready) ORDER BY o.id LIMIT 1 FOR NO KEY UPDATE OF o SKIP LOCKED"),
                 {"f": self.friend_id, "fresh": pm.CAPS_FRESH_SEC, "ready": slugs})).first()
             if row is None:
                 return None
@@ -370,7 +374,7 @@ class _Sender:
                 "INSERT INTO friend_houses_plugin_sender (friend_id) VALUES (:f) ON CONFLICT DO NOTHING"),
                 {"f": self.friend_id})
             row = (await s.execute(text(
-                "SELECT dials FROM friend_houses_plugin_sender WHERE friend_id = :f FOR UPDATE"),
+                "SELECT dials FROM friend_houses_plugin_sender WHERE friend_id = :f FOR NO KEY UPDATE"),
                 {"f": self.friend_id})).first()
             dials = row[0] if isinstance(row[0], list) else json.loads(row[0] or "[]")
             dials = [float(t) for t in dials if now - float(t) < 3600][-DIALS_PER_HOUR:]
@@ -417,7 +421,7 @@ class _Sender:
                 "INSERT INTO friend_houses_plugin_sender (friend_id) VALUES (:f) ON CONFLICT DO NOTHING"),
                 {"f": self.friend_id})
             cur = (await s.execute(text(
-                "SELECT backoff_sec FROM friend_houses_plugin_sender WHERE friend_id = :f FOR UPDATE"),
+                "SELECT backoff_sec FROM friend_houses_plugin_sender WHERE friend_id = :f FOR NO KEY UPDATE"),
                 {"f": self.friend_id})).scalar_one()
             nxt = next_friend_backoff(int(cur), retry_after)
             await s.execute(text(
@@ -451,13 +455,14 @@ class _Sender:
             return await self._friend_backoff()
         if answer.acked:
             async with pm._db() as s:
-                await s.execute(text("DELETE FROM friend_houses_plugin_outbox WHERE id = :i"), {"i": mail["id"]})
-                await s.execute(text(
-                    "UPDATE friend_houses_plugin_sender SET backoff_sec = 0, retry_at = NULL WHERE friend_id = :f"),
-                    {"f": self.friend_id})
+                # Lock order: pair, sender, then the outbox row.
                 await s.execute(text(
                     "UPDATE friend_houses_plugin_pairs SET pair_backoff_sec = 0, pair_retry_at = NULL "
                     "WHERE friend_id = :f AND slug = :s"), {"f": self.friend_id, "s": mail["slug"]})
+                await s.execute(text(
+                    "UPDATE friend_houses_plugin_sender SET backoff_sec = 0, retry_at = NULL WHERE friend_id = :f"),
+                    {"f": self.friend_id})
+                await s.execute(text("DELETE FROM friend_houses_plugin_outbox WHERE id = :i"), {"i": mail["id"]})
             return None
         reason, secs = answer.reason, int(answer.retry_after)
         if reason is fs.Nack.NOT_ALLOWED:
@@ -471,7 +476,7 @@ class _Sender:
         async with pm._db() as s:
             cur = (await s.execute(text(
                 "SELECT pair_backoff_sec FROM friend_houses_plugin_pairs WHERE friend_id = :f AND slug = :s "
-                "FOR UPDATE"), {"f": self.friend_id, "s": mail["slug"]})).scalar_one_or_none()
+                "FOR NO KEY UPDATE"), {"f": self.friend_id, "s": mail["slug"]})).scalar_one_or_none()
             if cur is not None:
                 nxt = next_pair_backoff(int(cur), reason, secs)
                 await s.execute(text(
@@ -486,8 +491,10 @@ class _Sender:
         other mail and forgets that the friend has the plugin."""
         slug = mail["slug"]
         async with pm._db() as s:
-            await s.execute(text("DELETE FROM friend_houses_plugin_outbox WHERE id = :i"), {"i": mail["id"]})
+            # Lock order: friend (peer_caps may change), pair, then the outbox.
+            await pm.friend_row(s, friend_id=self.friend_id, lock=True)
             pair = await pm.pair_row(s, self.friend_id, slug, lock=True)
+            await s.execute(text("DELETE FROM friend_houses_plugin_outbox WHERE id = :i"), {"i": mail["id"]})
             if pair is None:
                 return
             first = pm._ts(pair["na_first_at"])

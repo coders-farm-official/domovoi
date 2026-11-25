@@ -14,20 +14,26 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import io
+import os
 
 import pytest
 from fastapi import APIRouter
+from PIL import Image as PILImage
 
 from domovoi.friend_houses import envelope as fe
 from domovoi.friend_houses import identity as fid
 from domovoi.friend_houses import messages as fm
 from domovoi.friend_houses import session as fs
 from domovoi.friend_houses.loopback import LoopbackPair
-from domovoi.plugins_runtime import contracts
+from domovoi.plugins_runtime import contracts, png_compact
 from domovoi.plugins_runtime.manifest import ManifestError, parse_manifest
 from domovoi.sdk import friend_houses as sfh
 from domovoi.tests.friend_houses_testkit import no_tasks_left_behind  # noqa: F401  (autouse)
 from domovoi.tests.test_plugin_isolated import _toml
+
+#: A real (tiny) picture: send_image opens and rewrites what it's given.
+SMALL_PNG = png_compact.encode_png(2, 2, 3, bytes([255, 255, 255, 0, 0, 0, 0, 0, 0, 255, 255, 255]))
 
 PHRASES = ["hey jarvis", "jarvis", "domovoi"]
 FH_PERMS = 'friend_houses = true\nwarnings = ["Plays cards with friends"]'
@@ -210,7 +216,8 @@ async def test_an_open_route_is_refused(nothing_moves, tier) -> None:
     ((HOUSE_ID, "text"), {"tag": "a"}, TypeError),
     ((HOUSE_ID, b"img"), {"tag": "Has Space"}, ValueError),
     ((HOUSE_ID, b"img"), {"tag": "t" * 65}, ValueError),
-    ((HOUSE_ID, b"x" * (16 * 1024 - 2)), {"tag": "ab"}, sfh.TooLarge),
+    ((HOUSE_ID, b"x" * (16 * 1024 - 2)), {"tag": "ab"}, ValueError),    # not a picture
+    ((HOUSE_ID, b"\x89PNGrest"), {"tag": "ab"}, ValueError),            # a broken one
     (("nope", b"img"), {"tag": "a"}, ValueError),
 ])
 async def test_send_image_checks_its_arguments_first(args, kwargs, error, nothing_moves) -> None:
@@ -220,10 +227,33 @@ async def test_send_image_checks_its_arguments_first(args, kwargs, error, nothin
 
 
 async def test_send_image_sends_a_tagged_image_mail(nothing_moves) -> None:
-    await _api().send_image(HOUSE_ID, b"\x89PNGrest", tag="monster:7", ttl_s=600)
+    await _api().send_image(HOUSE_ID, SMALL_PNG, tag="monster:7", ttl_s=600)
     (_, slug, house, payload, kw), = nothing_moves
     assert (slug, house, kw["version"]) == ("games", HOUSE_ID, fe.PLUGIN_BODY_IMAGE)
-    assert fe.split_image_payload(payload) == ("monster:7", b"\x89PNGrest")
+    assert fe.split_image_payload(payload) == ("monster:7", SMALL_PNG)    # already compact: kept
+
+
+async def test_send_image_rewrites_a_plugin_s_picture_as_the_core_s_png(nothing_moves) -> None:
+    """A JPEG with metadata leaves as the core's PNG, the same size, no EXIF."""
+    exif = PILImage.Exif()
+    exif[0x010F] = "SecretCam"
+    buf = io.BytesIO()
+    PILImage.new("RGB", (40, 30), (10, 120, 200)).save(buf, "JPEG", exif=exif.tobytes())
+    await _api().send_image(HOUSE_ID, buf.getvalue(), tag="pic")
+    (_, _, _, payload, _), = nothing_moves
+    tag, png = fe.split_image_payload(payload)
+    assert tag == "pic" and png.startswith(png_compact.PNG_MAGIC) and b"SecretCam" not in png
+    with PILImage.open(io.BytesIO(png)) as im:
+        assert im.format == "PNG" and im.size == (40, 30)
+
+
+async def test_send_image_too_big_even_scaled_is_too_large(nothing_moves) -> None:
+    """Noise doesn't compress: TooLarge, and nothing is queued."""
+    buf = io.BytesIO()
+    PILImage.frombytes("RGB", (300, 300), os.urandom(300 * 300 * 3)).save(buf, "PNG")
+    with pytest.raises(sfh.TooLarge, match="even at 128 px"):
+        await _api().send_image(HOUSE_ID, buf.getvalue(), tag="noise")
+    assert nothing_moves == []
 
 
 @pytest.mark.parametrize(("args", "kwargs", "error"), [
@@ -330,9 +360,12 @@ async def test_the_testkit_stub_records_what_a_plugin_sends() -> None:
     fh.friends_list = [sfh.FriendHouse(HOUSE_ID, sfh.FriendText("Sam"), True, True)]
     assert (await fh.friends())[0].house_id == HOUSE_ID
     assert len(await fh.send_mail(HOUSE_ID, b"move", ttl_s=600)) == 32
-    await fh.send_image(HOUSE_ID, b"\x89PNG", tag="card")
+    await fh.send_image(HOUSE_ID, SMALL_PNG, tag="card")
     assert [(k, h, p) for k, h, p, _ in fh.sent] == [("mail", HOUSE_ID, b"move"),
-                                                      ("image", HOUSE_ID, b"\x89PNG")]
+                                                      ("image", HOUSE_ID, SMALL_PNG)]
+    assert fh.sent[-1][3]["png"] == SMALL_PNG
+    with pytest.raises(ValueError):
+        await fh.send_image(HOUSE_ID, b"\x89PNG", tag="card")      # not a picture
     with pytest.raises(sfh.TooLarge):
         await fh.send_mail(HOUSE_ID, b"x" * (16 * 1024 + 1))
     with pytest.raises(ValueError):

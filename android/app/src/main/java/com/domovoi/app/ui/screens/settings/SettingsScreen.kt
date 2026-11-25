@@ -159,9 +159,20 @@ internal enum class SettingsSection(
     Internet("internet", "Internet", SettingsGroup.Privacy,
         "Will this Domovoi have internet? It sets the defaults of the online extras.",
         "internet online offline network web", dashboard = "internet"),
-    VoiceHistory("voice-history", "Voice history", SettingsGroup.Privacy,
+    // How long the house keeps what was said (1.5.0), read-only: an admin
+    // changes it on the dashboard (KeepVoiceHistoryPanel).
+    KeepVoiceHistory("keep-voice-history", "Keep voice history", SettingsGroup.Privacy,
+        "How long what people say to Domovoi, and what it answered, is kept.",
+        "voice history keep kept retention how long days year forever conversations sessions said transcript privacy delete"),
+    // "Voice history" until 1.5.0: it is the opt-in command recordings (the
+    // dashboard's Settings → Privacy → Command recordings). Its old keys
+    // still land here. The dashboard is opened at `recordings`, the address
+    // every dashboard version understands: a 1.4.x dashboard has no
+    // `command-recordings`, and a 1.5.0 one redirects `recordings` to it.
+    CommandRecordings("command-recordings", "Command recordings", SettingsGroup.Privacy,
         "Commands kept from the rooms an admin opted in — reviewed on the dashboard.",
-        "recordings voice history captures commands kept privacy", dashboard = "recordings"),
+        "command commands recordings recording captures kept audio privacy tuning",
+        listOf("voice-history", "recordings"), dashboard = "recordings"),
     About("about", "About & updates", SettingsGroup.System,
         "What Domovoi is, the user manual, this app's version and updates, and this phone's problem reports.",
         "about version update updates manual licences privacy problem reports"),
@@ -309,6 +320,7 @@ fun SettingsScreen(navigate: (Route) -> Unit) {
                     SettingsSection.About -> AboutPanel(navigate)
                     SettingsSection.Health -> HealthPanel(navigate)
                     SettingsSection.Chat -> ChatSettingsPanel(navigate)
+                    SettingsSection.KeepVoiceHistory -> KeepVoiceHistoryPanel()
                     else -> DashboardPanel(place.section)
                 }
             }

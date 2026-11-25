@@ -4,6 +4,168 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Private chats on the home server
+
+- **Your existing server chats are now private to the phone or browser
+  that wrote the first message in them. Chats nobody can be matched to are
+  visible to admins only. An admin can share any of them again.** Migration
+  V086 does this on the first start of 1.5.0, and it can't be undone:
+  going back to 1.4.x would show every chat to everyone again.
+- **What changed.** A new home-server chat is private to the phone or
+  browser that started it. **Share with household** (the chat's header)
+  shares it with every phone and browser in the house and can be turned
+  off again. Admins can read, share and delete every chat (**All chats in
+  the house**), but not write in another device's private chat. On a
+  shared screen every chat is shared. A letter taken by voice in a room
+  makes a shared chat; photos sent to a phone make a chat private to that
+  phone (the person's most recently used one), and only that phone is
+  notified.
+- **How a device is known.** The server gives each phone and browser a
+  device key the first time it registers (a browser keeps it in a cookie
+  no page script can read; the apps in their secure storage). Only its
+  hash is stored. A browser whose site data was cleared starts again as a
+  new device; its old private chats stay, for the admins.
+- **Older apps (1.4.x)** send no key: they keep working on shared chats
+  only, and the chats they start are shared. Their own chats from before
+  the upgrade are private now and disappear from them until the app is
+  updated; the updated app gets its device key on its next start, with no
+  pairing, and has them back.
+- **Phone admin grants** are bound to the phone's device key too.
+- **"My" actions follow the key.** Whose mix a room follows and whose a
+  listen is, clearing a person's listening history, their mix, forgetting
+  their face and "this is me" find the phone or browser by its device key.
+  The key proves a claim as the claim key does, and the claim key is still
+  accepted, so an older app can still clear its person's history; but what
+  an older app plays counts as the household's until it is updated.
+- **For API readers:** thread JSON gains `shared`, `mine`, `can_write`,
+  `can_share`, `can_delete`, `admin_view` and `owner_name`;
+  `GET /api/chat/threads?scope=mine|all`; `POST /api/chat/threads` and
+  `PATCH` take `shared`; new refusals `403 not_yours`, `403
+  admin_read_only`, `403 admin_required`, `409 device_key_missing`, `409
+  shared_screen`; a chat the caller can't see is the same `404` as a
+  missing one. `POST /api/devices/register` answers `device_key` (once)
+  and `device_key_ok`; send it back as `X-Domovoi-Device-Key`. A message's
+  device is the one its key names: a body `device_id` is ignored.
+  docs/API_REFERENCE.md §3.18, docs/SECURITY_PRIVACY.md "Private chats".
+
+## 1.5.0 (unreleased) — Chat: the live events carry no chat content
+
+- **What changed.** Two live events on `/ws/state` went to every paired
+  phone and browser with chat content in them. `chat.changed` carried the
+  house's thread count and when a chat was last written; it is now
+  `{"changed": "<opaque digest>"}`, which only moves, and each client
+  reads its own thread list again, as the dashboard and both apps already
+  did. `help_deliveries.changed` carried each delivered chat's title
+  ("Photos: …"); its `title` is now "Photos from Domovoi" for a photo
+  search sent to a phone and empty otherwise, so a phone's notification
+  reads "Help: Photos from Domovoi". The full title is in the chat, and in
+  `GET /api/help/deliveries`.
+- **For API readers:** don't read `threads` or `latest` from `chat.changed`
+  (they are gone), or a title from a `help_deliveries.changed` row.
+  `person_id` and `thread_id` stay in the push for the apps that post from
+  it.
+## 1.5.0 (unreleased) — Phones: room media and update notices
+
+- **Room media on the phones.** A phone in room mode shows what the room
+  is playing on its screen, the same as other room displays (Android and
+  iPhone).
+- **Update notices on the phones.** Home on the Android and iPhone apps
+  says when a new signed Domovoi release is available, worded the same as
+  the dashboard. For now every phone gets the household row ("An admin
+  can install it."); the update itself is started from the dashboard.
+- **Photos sent to a phone** arrive under the chat's own title, no
+  longer prefixed with "Help: ".
+
+## 1.5.0 (unreleased) — Voice help no longer sends the steps to your phone
+
+- **What changed.** Ask "how do I add a room?" out loud and Domovoi says
+  the short answer and the page it came from, then "The full answer is in
+  the manual." (for a plugin's page: "The full answer is in that plugin's
+  help."). It no longer asks "Want me to send the steps to your phone?",
+  never asks "Who should I send it to?", and makes no "Help: …" chat. It
+  needed three things at once (Domovoi knowing your voice, a phone marked
+  as yours, and the app reaching the server), and the manual is a tap
+  away. The **?** panel, **ask Domovoi** and help in chat work as before.
+- **What to know.** Nothing to do, no migration. "Help: …" chats sent
+  before stay in Chat. Photos are unchanged: a voice photo search still
+  asks "Do you want them on your phone?" and sends a "Photos: …" chat.
+  `GET /api/help/deliveries` and the `help_deliveries` live channel stay,
+  for the photos and for the apps that read them; they just get no new
+  help rows.
+
+## 1.5.0 (unreleased) — Settings → Privacy: Keep voice history, Command recordings
+
+- **What changed.** "What's kept and for how long" is in one place,
+  Settings → Privacy. **Keep voice history** (`voice_history_keep`: 30
+  days, 90 days by default, 1 year or Forever) has its own section there,
+  `#settings/keep-voice-history`; an admin changes it, through the same
+  config edit as before (`PATCH /api/config/editable`). Settings →
+  Household → People → Voice history (which keeps **Delete all voice
+  history**) and Settings → System → Advanced → Privacy now show its value
+  and link there instead of a second control.
+- **Renamed.** The page that was called **Voice history** in Settings →
+  Privacy holds the opt-in command recordings, so it is now **Command
+  recordings**, at `#settings/command-recordings`. Its old addresses,
+  `#settings/voice-history` and `#settings/recordings`, still open it. The
+  room drawer's capture hint, the manual, the FAQ and SECURITY_PRIVACY.md
+  use the new names.
+
+## 1.5.0 (unreleased) — Rooms: satellites name themselves; press Upgrade satellite
+
+- **What to do.** Press **Upgrade satellite** on every Raspberry Pi and
+  spare-computer satellite (the room drawer's Overview tab) once the server
+  runs 1.5.0. Until then a Pi or spare computer learns only when it
+  connects whether its room takes one turn per wake word (a satellite
+  added to its room later goes unnoticed until it reconnects), and moving
+  it to another room closes its connection (it comes back in the new room
+  a few seconds later) instead of carrying on.
+- **What changed.** A satellite now names itself in its hello
+  (`satellite_id`, the id in its address), as the phone apps do since
+  1.5.0, so a move reaches it without a reconnect. The room it was asked
+  to join (an enrolment's `in=`, `[satellite] requested_room`) is sent only
+  until it is first accepted, then cleared from its `config.toml`. If the
+  server ever reads another device's name in its hello, the satellite says
+  so in plain words ("the Domovoi server did not recognise this device")
+  and changes nothing.
+- **"Add a satellite to the …" works for every room.** A room named by the
+  Wi-Fi setup portal (`living-room`, `2nd-bedroom`) was refused by the
+  dashboard's add-a-satellite code (422) and by a Pi or PC reading the code.
+  One rule now checks a room id everywhere (`domovoi/room_ids.py`
+  `is_room_id`).
+- **For API readers:** `ready.room.name` (and the `room` frame's) is `null`
+  when the server could not read the room's row; it used to be the room's
+  id. Clients keep the name they last had for that room, or say "this
+  room". docs/uml/satellite-protocol.md, "Rooms and satellites".
+
+## 1.5.0 (unreleased) — Update notices: Domovoi says when a new release is out
+
+- **What changed.** Domovoi looks for a new **signed release** by itself,
+  once a day and a couple of minutes after it starts, and Home says
+  "Domovoi 1.5.0 is available" to every paired phone and browser and to
+  the admin (an admin gets **Update**, which opens Settings → System →
+  About & updates and runs that card's own update; everyone else reads
+  "An admin can install it."). About & updates shows the release's three
+  **Highlights**, has a **Check for updates by itself** box, and on a
+  house following `main` says how many changes it is past the latest
+  release instead of "main channel: not a signed release (expected)" and
+  "latest release: X". Commits on `main` never make a notice. Nothing is
+  ever installed by itself.
+- **What to know.** The automatic check is **on by default, but only when
+  the house's internet answer is Yes**: a house answered Yes starts
+  looking at its first 1.5.0 start (a `git fetch`, and for a new release
+  two small signed files from the GitHub release); Sometimes, No, not
+  answered and the offline kit never look by themselves. An admin turns it
+  off by unticking the box (`update_auto_check` / `UPDATE_AUTO_CHECK`);
+  that also drops a notice the automatic check found. **Check for
+  updates** now also checks the release's signature and returns the new
+  `updates` key, which `GET /v1/admin/version` and `GET /api/config/version`
+  carry too; new route `GET /v1/updates/notice` and its dashboard mirror
+  `GET /api/updates/notice` (device tier: paired phones and browsers and
+  the admin, never an unpaired guest). No migration: the state is the
+  `household_settings` row `update_check`. Release notes now carry three
+  **Highlights** (`docs/release/v<version>.md` and the dated section here),
+  which the release script checks from 1.5.0 on.
+
 ## 1.5.0 (unreleased) — Rooms: diagnostics and support sessions per satellite
 
 - **A room with several satellites is checked one device at a time.** The
@@ -20,6 +182,7 @@ a way that would otherwise get reported as a bug.
   facts; `diagnostics` is true when any of them offers checks. The core's
   diagnostics routes take a satellite id, or a room id for its speaker.
 
+
 ## 1.5.0 (unreleased) — Rooms: mic presets per satellite, older rooms removable
 
 - **Every XVF3800 in a shared room gets its own Microphone DSP block** in
@@ -33,6 +196,23 @@ a way that would otherwise get reported as a bug.
   the Rooms drawer (`DELETE /v1/admin/rooms/{room_id}`), as 1.4.1 allowed
   for satellites. Such an id that names no room is still refused (422);
   every other rooms route keeps refusing it.
+
+## 1.5.0 (unreleased) — Friend Houses: pictures fit an image mail
+
+- **What changed.** `send_image` now writes every picture as Domovoi's own
+  compact PNG before it is queued (exact palette for 256 colours or fewer,
+  PNG filtering, maximum compression): a plugin's own drawing and a
+  friend's picture passed on to another friend alike. A picture that still
+  doesn't fit the 16,384-byte image mail loses colours, then size (768,
+  512, 384, 256, 192, 128 px on the long side); one that doesn't fit even
+  at 128 px is refused with `TooLarge`. Pictures a plugin receives are
+  written the same way, losslessly, at their own size. A typical drawing
+  (a few colours on a plain background) goes at the full 768 px; a photo
+  arrives smaller, around 256 px.
+- **What to know.** Nothing changes on the receiving side or in the wire
+  format: it is still a plain PNG, opened only in the friend's decode-only
+  container. A plugin's own JPEG or WebP now leaves as a PNG, without its
+  metadata.
 
 ## 1.5.0 (unreleased) — Friend Houses: apps with friends, sending and the page
 
@@ -378,7 +558,11 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
   moves into a room, only while the room is idle and never in quiet hours
   (it waits for them to end), and **Settings → Rooms → Tune speakers on
   their own** turns that off. The phone apps say "the Kitchen", never
-  "satellite".
+  "satellite": the Android and iPhone apps' room mode is **Use this phone
+  in a room**, its screen says **This phone is in the Kitchen**, a code from
+  **Add a satellite to the Kitchen** says **This phone will join the
+  Kitchen** (and asks for that room on the approval card), and a phone
+  moved to another room on the dashboard follows it without reconnecting.
 - **Also in rooms.** **Add a satellite to the Kitchen** in a room's drawer
   makes the setup code for one more satellite there ("Kitchen 2"), and
   its approval card has the Kitchen pre-selected, older phone apps

@@ -131,4 +131,74 @@ class RoomEnrolmentTest {
             assertTrue(h, !RoomEnrolment.isHomeNetworkHost(h))
         }
     }
+
+    // ── `in=` (1.5.0): "Add a satellite to the Kitchen" ────────────────
+
+    private val base: String
+        get() = (fixture["valid"] as JsonArray).first { it.jsonObject["name"]!!.jsonPrimitive.content == "basic" }
+            .jsonObject["payload"]!!.jsonPrimitive.content.substringBefore("&room=")
+
+    private fun ok(payload: String): Enrolment {
+        val r = RoomEnrolment.parse(payload)
+        if (r !is RoomEnrolment.Result.Ok) fail("$payload refused: $r")
+        return (r as RoomEnrolment.Result.Ok).enrolment
+    }
+
+    @Test
+    fun noValidCaseOfTheContractAsksForARoom() {
+        for (case in fixture["valid"] as JsonArray) {
+            val e = ok(case.jsonObject["payload"]!!.jsonPrimitive.content)
+            assertNull(e.inRoom)
+            assertNull(e.inRoomName)
+        }
+    }
+
+    /** What the dashboard's "Add a satellite to the Kitchen" makes
+     *  (docs/uml/satellite-protocol.md, "Enrolling a spare device"): the
+     *  device's own name in `room`, the room it joins in `in`. */
+    @Test
+    fun inNamesTheRoomThePhoneJoins() {
+        val e = ok("$base&room=Kitchen%202&in=kitchen")
+        assertEquals("Kitchen 2", e.roomLabel)
+        assertEquals("kitchen_2", e.roomId)
+        assertEquals("kitchen", e.inRoom)
+        assertEquals("Kitchen", e.inRoomName)
+        // In a join link too, and in any order.
+        val core = e.coreUrl
+        val link = ok("$core/join#" + base.replace("domovoi-room:1?", "domovoi-room:1?in=kitchen&") + "&room=Kitchen%202")
+        assertEquals("kitchen", link.inRoom)
+        assertEquals(e, link)
+    }
+
+    /** A room id as domovoi/room_ids.py `is_room_id` takes one from outside:
+     *  lowercase letters, digits, `_` and `-`, a letter or digit first, at
+     *  most 32. Anything else is ignored like an unknown key: the code still
+     *  works, as a room of its own. */
+    @Test
+    fun anInThatIsNotARoomIdIsIgnored() {
+        for (good in listOf("kitchen", "room_2nd", "2nd-bedroom", "a", "k".repeat(32))) {
+            assertEquals(good, ok("$base&room=Kitchen%202&in=$good").inRoom)
+        }
+        for (bad in listOf("", "Kitchen", "_kitchen", "-kitchen", "k".repeat(33), "kit%20chen", "kit.chen", "k%C3%BCche")) {
+            val e = ok("$base&room=Kitchen%202&in=$bad")
+            assertNull(bad, e.inRoom)
+            assertNull(bad, e.inRoomName)
+            assertEquals("kitchen_2", e.roomId)
+        }
+        // Given twice is refused, like any other key.
+        assertEquals(
+            RoomEnrolment.Reason.MALFORMED,
+            (RoomEnrolment.parse("$base&room=Den&in=den&in=kitchen") as RoomEnrolment.Result.Invalid).reasonCode,
+        )
+    }
+
+    @Test
+    fun theRoomsNameIsTheDevicesNameWithoutItsNumber() {
+        assertEquals("Kitchen", RoomEnrolment.invitedRoomName("Kitchen 2"))
+        assertEquals("Kids' Room", RoomEnrolment.invitedRoomName("Kids' Room 12"))
+        assertEquals("Kitchen phone", RoomEnrolment.invitedRoomName("Kitchen phone"))
+        // Only a number: nothing left to name a room by, so it stays.
+        assertEquals("2", RoomEnrolment.invitedRoomName("2"))
+        assertEquals("Room2", RoomEnrolment.invitedRoomName("Room2"))
+    }
 }

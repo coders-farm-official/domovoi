@@ -1334,8 +1334,12 @@ class SpareDeviceEnrolRequest(BaseModel):
     core: str | None = Field(default=None, max_length=256)
     # "Add a satellite to the Kitchen" (1.5.0): the existing room's id. The
     # server then names the device itself ("Kitchen 2", or `room` again
-    # when it names a code made before) and the payload carries `in=`.
-    in_room: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_]{0,31}$")
+    # when it names a code made before) and the payload carries `in=`. The
+    # core's rule for a room id from outside (domovoi/room_ids.py
+    # ACCEPTED_RE), so a room the Wi-Fi setup portal named ("living-room")
+    # can be joined too. Pydantic's pattern engine reads `$` as the end of
+    # the text (no trailing-newline match).
+    in_room: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9_-]{0,31}$")
 
 
 class SatelliteApproveRequest(BaseModel):

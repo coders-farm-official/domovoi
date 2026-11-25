@@ -86,15 +86,10 @@ NOT_YOURS_DETAIL = ("only an admin, or {name}'s own phone or browser, can forget
 
 async def refuse_shared_screen(request: Request) -> None:
     """403 for a device marked as a shared screen."""
-    dev = devices_api.caller_device(request)
-    if not dev:
-        return
     async with session_scope() as s:
-        if not await devices_api._has_shared_screen(s):
-            return
-        shared = (await s.execute(text("SELECT shared_screen FROM devices WHERE device_id = :d"),
-                                  {"d": dev})).scalar()
-    if shared:
+        # The caller's own device: devices.caller_device_row.
+        device = await devices_api.caller_device_row(s, request)
+    if device is not None and device.trusted and device.shared_screen:
         raise HTTPException(status_code=403, detail=SHARED_SCREEN_DETAIL)
 
 
@@ -327,23 +322,21 @@ async def forget(person_id: int, request: Request) -> dict[str, Any]:
     from web.backend.api.music_listens import FRESH_CLAIM
 
     admin = await devices_api.caller_is_admin(request)
-    caller = devices_api.caller_device(request)
     async with session_scope() as s:
         row = (await s.execute(text("SELECT name FROM people WHERE id = :p"), {"p": person_id})).first()
         if row is None:
             raise HTTPException(status_code=404, detail=f"person {person_id} not found")
         name = row[0]
         if not admin:
-            device = (await s.execute(text(
-                "SELECT owner_person_id, shared_screen, claim_key_hash, owner_claimed_at "
-                "FROM devices WHERE device_id = :id"), {"id": caller})).first() if caller else None
-            if device is None or device[0] != person_id or device[1]:
+            # The caller's own device: devices.caller_device_row.
+            device = await devices_api.caller_device_row(s, request)
+            if device is None or device.owner_person_id != person_id or device.shared_screen:
                 raise HTTPException(status_code=403, detail=NOT_YOURS_DETAIL.format(name=name))
-            if not device[2]:
-                raise HTTPException(status_code=403, detail=devices_api.RECLAIM_DETAIL.format(name=name))
-            if not devices_api.claim_key_matches(device[2], devices_api.presented_claim_key(request)):
-                raise HTTPException(status_code=403, detail=devices_api.WRONG_KEY_DETAIL.format(name=name))
-            claimed = device[3]
+            if not devices_api.proves_claim(device, request):
+                raise HTTPException(status_code=403, detail=(
+                    devices_api.WRONG_KEY_DETAIL if device.claim_key_hash else devices_api.RECLAIM_DETAIL
+                ).format(name=name))
+            claimed = device.owner_claimed_at
             if claimed is None or claimed > datetime.now(timezone.utc) - FRESH_CLAIM:
                 raise HTTPException(status_code=403, detail=FRESH_DETAIL.format(name=name))
             # The claim must be older than the faces it would forget: a

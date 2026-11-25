@@ -1,7 +1,7 @@
 import XCTest
 
 /// Settings → **Voices**, and the three signpost sections beside it (Wake
-/// words, Greetings, Voice history).
+/// words, Greetings, Command recordings: "Voice history" until 1.5.0).
 ///
 /// The fixture is `design-notes/ios/stubhouse/fixtures/voicesettings.py`, and
 /// every value in its seed was chosen so a case here can only pass if the
@@ -66,7 +66,7 @@ extension StubHouseUITests {
         static let voicesSection = "Voices"
         static let wakeWordsSection = "Wake words"
         static let greetingsSection = "Greetings"
-        static let voiceHistorySection = "Voice history"
+        static let commandRecordingsSection = "Command recordings"
         static let onTheDashboard = "On the dashboard"
     }
 
@@ -582,42 +582,40 @@ extension StubHouseUITests {
         )
     }
 
-    /// Voice history's address is **`#settings/recordings`**.
-    ///
-    /// The one section whose key and whose dashboard page differ
-    /// (`SettingsScreen.kt:140`, ported to `SettingsSections.swift`). A
-    /// builder who reached for `section.key` passes every other section and
-    /// sends this one to a page that does not exist — so both halves are
-    /// asserted, the right page present and the key's page absent.
+    /// Command recordings' address is **`#settings/recordings`** (1.5.0; the
+    /// section was "Voice history" until then). Its key is
+    /// `command-recordings`, but `recordings` is the page every dashboard
+    /// version has (a 1.5.0 one redirects it), so both halves are asserted:
+    /// the right page present, the key's page absent.
     @MainActor
-    func testVoiceSettings_VoiceHistorySignpostsRecordings() throws {
-        control("reset-fixtures", "{}", port: 6601, what: "the fixtures before the voice-history signpost")
+    func testVoiceSettings_CommandRecordingsSignpostsRecordings() throws {
+        control("reset-fixtures", "{}", port: 6601, what: "the fixtures before the command-recordings signpost")
         let app = launch()
         let open = app.buttons["voicesettings-open-dashboard"]
         XCTAssertTrue(
             reachVoiceSettings(
                 app,
                 group: VoiceSettingsStub.privacyGroup,
-                section: VoiceSettingsStub.voiceHistorySection,
+                section: VoiceSettingsStub.commandRecordingsSection,
                 marker: open
             ),
-            "never reached Settings → Voice history with a dashboard link on it"
+            "never reached Settings → Command recordings with a dashboard link on it"
         )
-        evidence(app, "voicesettings-21-voice-history")
+        evidence(app, "voicesettings-21-command-recordings")
 
         XCTAssertTrue(
-            containing(app, "\(VoiceSettingsStub.voiceHistorySection) is changed on the Domovoi dashboard").exists,
-            "the signpost does not name Voice history"
+            containing(app, "\(VoiceSettingsStub.commandRecordingsSection) is changed on the Domovoi dashboard").exists,
+            "the signpost does not name Command recordings"
         )
         let address = app.descendants(matching: .any)["voicesettings-dashboard-address"]
         XCTAssertTrue(address.exists, "the signpost prints no address")
         XCTAssertTrue(
             address.label.hasSuffix("#settings/recordings"),
-            "Voice history does not point at the recordings page: \(address.label)"
+            "Command recordings does not point at the recordings page: \(address.label)"
         )
         XCTAssertFalse(
-            address.label.contains("#settings/voice-history"),
-            "Voice history points at its own key, which is not a dashboard page: \(address.label)"
+            address.label.contains("#settings/command-recordings") || address.label.contains("#settings/voice-history"),
+            "Command recordings points at a key, not a page every dashboard has: \(address.label)"
         )
     }
 

@@ -172,7 +172,7 @@ final class RoomModeScene: ObservableObject {
         return made
     }
 
-    /// "Use this device as a room", or a `domovoi-room:` link (D14: a link
+    /// "Use this phone in a room", or a `domovoi-room:` link (D14: a link
     /// only fills the room-code form).
     func openSetup(payload: String? = nil) {
         guard !roomActive else { return }

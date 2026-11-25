@@ -16,8 +16,10 @@
 * ``POST /api/help/report`` — household tier: "Report a problem", the
   redacted summary the person reviews, then copies or saves. Nothing is
   sent anywhere and nothing is kept.
-* ``GET /api/help/deliveries`` — household READ: help steps sent by voice
-  to a person's phones (V035), for the app's catch-up read.
+* ``GET /api/help/deliveries`` — household READ: results sent by voice
+  to a person's phones (V035), for the app's catch-up read. Since 1.5.0
+  only a voice photo search sends ("Photos: …"); voice help answers aloud
+  and sends nothing. The path keeps its name for the apps that read it.
 
 Chat answers help questions through the same pieces
 (``web/backend/api/chat.py``, :func:`help_turn_for`): a thread titled
@@ -38,6 +40,7 @@ from sqlalchemy import text
 
 from domovoi import admin_auth, ai_features, egress
 from domovoi.admin_auth import require_device, require_device_read
+from domovoi.chat_access import VIEWER, Viewer
 from domovoi.help_desk import answer as help_answer
 from domovoi.help_desk import delivery, diagnostics
 from domovoi.help_desk import facts as help_facts
@@ -310,13 +313,16 @@ async def report(body: ReportBody, request: Request) -> dict[str, Any]:
 
 @router.get("/deliveries", dependencies=READ)
 async def deliveries(person_id: int | None = Query(None, ge=1), since_id: int | None = Query(None, ge=0),
-                     limit: int = Query(20, ge=1, le=100)) -> dict[str, Any]:
-    """Help steps sent by voice (V035): newest first, or after ``since_id``
-    oldest first. The app reads its owner's on start and after a
-    ``help_deliveries.changed`` event."""
+                     limit: int = Query(20, ge=1, le=100),
+                     viewer: Viewer = VIEWER) -> dict[str, Any]:
+    """Results sent by voice to a person's phones (V035; a voice photo
+    search's since 1.5.0): newest first, or after ``since_id`` oldest
+    first. The app reads its owner's on start and after a
+    ``help_deliveries.changed`` event. A delivery made to one phone (1.5.0,
+    V086) is listed only to that phone (by its device key) and to admins."""
     try:
         async with session_scope() as s:
-            rows = await delivery.recent(s, person_id=person_id, since_id=since_id, limit=limit)
+            rows = await delivery.recent(s, person_id=person_id, since_id=since_id, limit=limit, viewer=viewer)
     except Exception as e:  # noqa: BLE001 — V035 missing: nothing was ever sent
         log.info("help: deliveries unreadable: %s", e)
         rows = []

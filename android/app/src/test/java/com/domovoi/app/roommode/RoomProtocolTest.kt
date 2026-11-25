@@ -1,5 +1,6 @@
 package com.domovoi.app.roommode
 
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -44,7 +45,11 @@ class RoomProtocolTest {
             wakeWords = want["wake_words"]!!.jsonArray.map { it.jsonPrimitive.content },
             wakeWordsMax = WakeWords.limitFor(is64Bit = true, totalRamBytes = 6L shl 30),
         )
+        // 1.5.0: the phone also names itself, the path's id (the fixture's
+        // hello carries it, as the iPhone's does).
         assertEquals(want, ours)
+        assertEquals(want["room_id"], want["satellite_id"])
+        assertFalse("requested_room" in ours)
         assertEquals(listOf("hey_jarvis"), want["wake_words"]!!.jsonArray.map { it.jsonPrimitive.content })
         assertEquals(5, want["wake_words_max"]!!.jsonPrimitive.content.toInt())
         assertEquals(RoomProtocol.BOARD, device["expect"]!!.jsonObject["board"]!!.jsonPrimitive.content)
@@ -277,5 +282,140 @@ class RoomProtocolTest {
         // Only after a wake word, and only when there is one.
         assertFalse("wake_score" in RoomProtocol.utteranceStart("followup", 5, 0, null, 0.9f))
         assertFalse("wake_score" in RoomProtocol.utteranceStart("wake_word", 6, 0, 10, null))
+    }
+
+    // ── rooms and satellites (1.5.0) ────────────────────────────────────
+
+    private fun hello(requestedRoom: String?) = RoomProtocol.hello(
+        roomId = "kitchen_2", wakeWord = "hey_jarvis", pairingToken = "t", approvalCode = "305117",
+        echoCanceller = true, requestedRoom = requestedRoom,
+    )
+
+    /** The hello names the phone (`satellite_id`, the path's id: the core
+     *  refuses any other) and, while it waits to be approved, the room its
+     *  room code's `in=` asked for. */
+    @Test
+    fun theHelloNamesThePhoneAndTheRoomItAskedFor() {
+        val h = hello("kitchen")
+        assertEquals("kitchen_2", h["room_id"]!!.jsonPrimitive.content)
+        assertEquals("kitchen_2", h["satellite_id"]!!.jsonPrimitive.content)
+        assertEquals("kitchen", h["requested_room"]!!.jsonPrimitive.content)
+        assertEquals(RoomProtocol.streamUrl("http://192.168.1.20:6370", "kitchen_2").substringAfterLast('/'), h["satellite_id"]!!.jsonPrimitive.content)
+        // Approved (no room asked for), or a value that is not a room id: no key.
+        assertFalse("requested_room" in hello(null))
+        assertFalse("requested_room" in hello("Kitchen"))
+        assertEquals("2nd-floor", hello("2nd-floor")["requested_room"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun readyNamesThePhoneAndItsRoom() {
+        // The fixture's `ready` (what a 1.5.0 core sends the room phone).
+        val ready = RoomProtocol.parse(device["ready"]!!.toString()) as RoomProtocol.ServerFrame.Ready
+        assertEquals("nursery", ready.satelliteId)
+        assertEquals(RoomProtocol.RoomPlace("nursery", "nursery", shared = false, claim = false), ready.room)
+        // A room that other devices share, with its own name and wake claims
+        // (room_turns.ready_room): the claim flag is kept, the phone does
+        // not claim yet (no `wake_claim` in its supports).
+        val roomTurns = fixtures["room_turns"]!!.jsonObject
+        val shared = buildJsonObject {
+            put("type", "ready")
+            put("satellite_id", "kitchen_2")
+            put("room_id", "kitchen")
+            put("room", roomTurns["ready_room"]!!)
+        }
+        val r = RoomProtocol.parse(shared.toString()) as RoomProtocol.ServerFrame.Ready
+        assertEquals(RoomProtocol.RoomPlace("kitchen", "Kitchen", shared = true, claim = true), r.room)
+        assertEquals("kitchen_2", r.satelliteId)
+        assertFalse(roomTurns["hello_supports_adds"]!!.jsonPrimitive.content in RoomProtocol.supports(true))
+        // An older core says neither.
+        val old = RoomProtocol.parse("""{"type":"ready","room_id":"kitchen","features":[]}""") as RoomProtocol.ServerFrame.Ready
+        assertEquals(null, old.satelliteId)
+        assertEquals(null, old.room)
+    }
+
+    // ── rooms (1.5.0): satellite-fixtures.json `rooms` ─────────────────
+
+    private val rooms get() = fixtures["rooms"]!!.jsonObject
+
+    /** One room-id rule for an id from outside (`in=`, `requested_room`,
+     *  `ready.room.room_id`): the core's `in_room_rule`. */
+    @Test
+    fun theRoomIdRuleIsTheCoresInRoomRule() {
+        assertEquals("^[a-z0-9][a-z0-9_-]{0,31}\\Z", rooms["in_room_rule"]!!.jsonPrimitive.content)
+        val valid = rooms["in_room_valid"]!!.jsonArray.map { it.jsonPrimitive.content }
+        val invalid = rooms["in_room_invalid"]!!.jsonArray.map { it.jsonPrimitive.content }
+        assertTrue(valid.isNotEmpty() && invalid.isNotEmpty())
+        valid.forEach { assertTrue(it, RoomEnrolment.isRoomId(it)) }
+        invalid.forEach { assertFalse(it, RoomEnrolment.isRoomId(it)) }
+        // The same rule for requested_room in the hello and ready.room.room_id.
+        valid.forEach { assertEquals(it, hello(it)["requested_room"]!!.jsonPrimitive.content) }
+        invalid.forEach { assertFalse(it, "requested_room" in hello(it)) }
+        valid.forEach { id ->
+            val r = RoomProtocol.parse("""{"type":"room","room":{"room_id":${Json.encodeToString(String.serializer(), id)},"name":"Den"}}""")
+            assertEquals(id, (r as RoomProtocol.ServerFrame.Room).room?.roomId)
+        }
+        invalid.forEach { id ->
+            val r = RoomProtocol.parse("""{"type":"room","room":{"room_id":${Json.encodeToString(String.serializer(), id)},"name":"Den"}}""")
+            assertEquals(id, RoomProtocol.ServerFrame.Room(null), r)
+        }
+        // An id the phone MAKES from its own name keeps the stricter rule.
+        assertEquals("room_2nd_bedroom", RoomEnrolment.roomIdFor("2nd bedroom"))
+        assertFalse(RoomEnrolment.ROOM_ID.matches("living-room"))
+    }
+
+    /** The core could not read the room's row: `name` is null, never the id. */
+    @Test
+    fun anUnnamedRoomHasNoName() {
+        val ready = buildJsonObject {
+            put("type", "ready")
+            put("satellite_id", "kitchen_2")
+            put("room_id", "kitchen")
+            put("room", rooms["ready_room_unnamed"]!!)
+        }
+        val r = RoomProtocol.parse(ready.toString()) as RoomProtocol.ServerFrame.Ready
+        assertEquals(RoomProtocol.RoomPlace("kitchen", null, shared = false, claim = false), r.room)
+        assertEquals(
+            RoomProtocol.ServerFrame.Room(RoomProtocol.RoomPlace("den", null, shared = false, claim = false)),
+            RoomProtocol.parse(rooms["room_move_unnamed"]!!.toString()),
+        )
+        // The named ones, for contrast.
+        assertEquals(
+            RoomProtocol.ServerFrame.Room(RoomProtocol.RoomPlace("den", "Den", shared = false, claim = false)),
+            RoomProtocol.parse(rooms["room_move"]!!.toString()),
+        )
+    }
+
+    /** An admin moved the phone: it carries on, connected, in the new room. */
+    @Test
+    fun theRoomFrameIsTheNewRoom() {
+        assertEquals(
+            RoomProtocol.ServerFrame.Room(RoomProtocol.RoomPlace("den", "Den", shared = true, claim = true)),
+            RoomProtocol.parse("""{"type":"room","room":{"room_id":"den","name":"Den","shared":true,"claim":true}}"""),
+        )
+        // `claim` is optional; a blank, null or missing name is no name,
+        // never the id.
+        for (name in listOf("\"name\":\" \",", "\"name\":null,", "")) {
+            assertEquals(
+                name,
+                RoomProtocol.ServerFrame.Room(RoomProtocol.RoomPlace("den", null, shared = false)),
+                RoomProtocol.parse("""{"type":"room","room":{"room_id":"den",$name"shared":false}}"""),
+            )
+        }
+        // No room, or no room id: nothing to carry on in.
+        assertEquals(RoomProtocol.ServerFrame.Room(null), RoomProtocol.parse("""{"type":"room"}"""))
+        assertEquals(RoomProtocol.ServerFrame.Room(null), RoomProtocol.parse("""{"type":"room","room":{"name":"Den"}}"""))
+        assertEquals(RoomProtocol.ServerFrame.Room(null), RoomProtocol.parse("""{"type":"room","room":{"room_id":"Den Room"}}"""))
+    }
+
+    @Test
+    fun aMismatchedIdIsARefusal() {
+        val f = RoomProtocol.parse(
+            """{"type":"error","reason":"satellite_id_mismatch","message":"the hello's satellite_id is not the one in the path"}""",
+        ) as RoomProtocol.ServerFrame.Error
+        val v = RoomSessionRules.verdict(f.reason, f.code, "305117")
+        assertEquals(RoomEngine.Link.Rejected(RoomSessionRules.MISMATCH_TEXT), v.link)
+        assertEquals("satellite_id_mismatch", v.outcome)
+        assertEquals(RoomSessionRules.REFUSED_RETRY_MS, RoomSessionRules.retryAfterMs("satellite_id_mismatch", 1_000))
+        assertFalse("household words", "satellite" in RoomSessionRules.MISMATCH_TEXT.lowercase())
     }
 }

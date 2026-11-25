@@ -149,8 +149,19 @@ struct HomeAttentionView: View {
         }
     }
 
-    /// One tappable row, in either branch.
+    /// One tappable row, in either branch — or the update notice, which
+    /// opens nothing and is not a button (``HomeUpdateNoticeRowView``).
+    @ViewBuilder
     private func rowButton(_ row: AttentionRow) -> some View {
+        if let update = row.update {
+            HomeUpdateNoticeRowView(tone: row.tone, lines: update, minHeight: state.rowMinHeight)
+                .accessibilityIdentifier("home.attention.\(row.key)")
+        } else {
+            tappableRow(row)
+        }
+    }
+
+    private func tappableRow(_ row: AttentionRow) -> some View {
         Button { onRow(row) } label: { rowBody(row) }
             .buttonStyle(.plain)
             // `heightIn(min = if (compact) 44.dp else 40.dp)`
@@ -242,5 +253,69 @@ struct HomeAttentionView: View {
             .font(.footnote)
             .foregroundStyle(Color.fgMuted)
             .monospacedDigit()
+    }
+}
+
+/// The update notice's row — the dashboard's `HomeUpdateNoticeRow` and
+/// Android's `UpdateNoticeLine`: the words, the muted "An admin can install
+/// it.", and the release's highlights as plain-text bullets.
+///
+/// **Every line is `Text(verbatim:)`**, the highlights above all: they are
+/// the server's text and untrusted, and a `Text` given a string literal or a
+/// `LocalizedStringKey` parses Markdown, so `[x](http://y)` would become a
+/// link and `**z**` bold. Verbatim draws the characters as they came, and
+/// SwiftUI's `Text` has no data detectors, so a URL is words.
+///
+/// **Nothing is cut short.** No `lineLimit`, a vertical `fixedSize`, and no
+/// fixed width anywhere: every line wraps at whatever width the card has. A
+/// version never splits (digits and full stops are one run, and the server
+/// lets through at most 14 characters), and each line's last two words are
+/// held together (``UpdateNoticeLines/drawnTitle``) so the narrowest phone
+/// gets "Domovoi 1234.5678.9012 / is available", not a lone last word.
+/// `HomeUpdateNoticeTests` measures that with TextKit at 240 pt, the text
+/// column of a 320 pt screen.
+///
+/// No Update button: no phone can sign an admin in on this branch, so
+/// ``UpdateNoticeLines/canUpdate`` is false on every phone. When it is not,
+/// the button belongs here, labelled ``HomeUpdateNoticeStrings/update``.
+struct HomeUpdateNoticeRowView: View {
+
+    let tone: HealthTone
+    let lines: UpdateNoticeLines
+    let minHeight: Double
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            ToneDot(tone: tone)
+            VStack(alignment: .leading, spacing: 4) {
+                plain(lines.drawnTitle, font: .subheadline.weight(.semibold), colour: .primary)
+                if let sub = lines.drawnSub {
+                    plain(sub, font: .footnote, colour: .fgMuted)
+                }
+                ForEach(Array(lines.drawnHighlights.enumerated()), id: \.offset) { _, item in
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(verbatim: "•")
+                            .font(.footnote)
+                            .foregroundStyle(Color.fgMuted)
+                            .accessibilityHidden(true)
+                        plain(item, font: .footnote, colour: .primary)
+                    }
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(minHeight: minHeight, alignment: .leading)
+        // One VoiceOver stop for the row, every line in order.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(lines.spoken)
+    }
+
+    private func plain(_ text: String, font: Font, colour: Color) -> some View {
+        Text(verbatim: text)
+            .font(font)
+            .foregroundStyle(colour)
+            .lineLimit(nil)
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }

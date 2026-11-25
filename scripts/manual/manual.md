@@ -739,16 +739,18 @@ pick the room next to it, or send it to a room from the player.
 ## Chat and help
 
 **Intro:** Type to Domovoi on the dashboard or in the app. A chat on your
-home server is shared with the household; a chat on the phone stays on
-the phone. Domovoi asks before anything goes online, and it answers
-questions about itself.
+home server is private to the phone or browser that started it, unless
+you share it with the household; a chat on the phone stays on the phone.
+Domovoi asks before anything goes online, and it answers questions about
+itself.
 
 ### Chat
 
 Type to Domovoi in [Chat](#chat). A chat on the dashboard runs on your
-home server, with its models, and everyone in the household can see it.
-The app also has chats that run on the phone itself: see [Chat on the
-phone](#node:phone-chat).
+home server, with its models. It is private to the phone or browser that
+started it: only that device and the house's admins can see it. The app
+also has chats that run on the phone itself, which never leave the phone:
+see [Chat on the phone](#node:phone-chat).
 
 **How to**
 
@@ -757,6 +759,17 @@ phone](#node:phone-chat).
   give it stays.
 - Beside each chat: **rename**, **archive** and **delete** (the bin).
   **search chats** is above the list, and **archived** is at its end.
+- **Share with household** (the chat's header) lets every phone and
+  browser in the house read it and add to it. Turn it off and the other
+  devices don't see it any more, including anything they wrote in it. Only
+  the device that started a chat, or an admin, can share it, stop sharing
+  it or delete it. On a shared screen (the kitchen tablet) every chat is
+  shared.
+- **Admins** can read every chat in the house (**All chats in the house**
+  above the list), and share or delete any of them, but can't write in
+  another device's private chat.
+- **Save to Documents** from a private chat saves a copy to Documents,
+  where the household can see it.
 - **Pictures:** the paperclip adds up to 4 to a message (PNG, JPEG, GIF,
   WebP or BMP, 20 MB each). You can paste a screenshot too. The vision
   model reads them on your server.
@@ -1010,12 +1023,10 @@ says "The manual doesn't cover that." rather than guessing.
 - "how do I change the wake word"
 - "how do I add a printer"
 
-After the short answer, Domovoi asks "Want me to send the steps to your
-phone?" Say yes, and they arrive as a chat called "Help: …" on the phones
-marked as yours ([Settings → Household → Phones &
-browsers](#app/connection), **This phone belongs to**, in the app). If
-Domovoi doesn't know your voice, it asks who to send them to. It never
-sends them to every phone.
+Domovoi says the short answer and where it came from, then "The full
+answer is in the manual." Open the page with **?** on the dashboard, or
+in the app's manual. A plugin's own help ends "The full answer is in that
+plugin's help."
 
 **If something's wrong**
 
@@ -1202,8 +1213,8 @@ say out loud in a room.
 - If a letter has text aimed at an AI assistant ("ignore previous
   instructions…"), Domovoi doesn't follow it and says so: genuine letters
   don't do this.
-- Everyone in the house can see a home-server chat, so a phone chat is the
-  private place for personal mail. On a home server without a graphics
+- The house's admins can read every home-server chat, so a phone chat is
+  the private place for personal mail. On a home server without a graphics
   card a letter takes about 2 minutes.
 - **App:** in a phone chat, **+** → **take a photo** or **choose a photo**
   on phones that read photos themselves. The photo isn't kept; the text
@@ -1630,8 +1641,9 @@ the 32-bit app from the same page. [More detail](docs/ANDROID_COMPATIBILITY.md)
 **Chat** holds all your chats with Domovoi in one list. Each one is marked
 with where it runs:
 
-- **on home server**: answered by your home server, and shared with the
-  household. See [Chat](#node:chat).
+- **on home server**: answered by your home server, and private to this
+  phone (and the house's admins) unless you share it with the household.
+  See [Chat](#node:chat).
 - **on this phone**: answered by the phone itself, with no server, and
   kept only on this phone. See [Domovoi on this phone](#node:assistant).
 
@@ -2024,7 +2036,7 @@ word, answers, plays the room's music, and takes announcements.
 5. Approve the six-digit code on the dashboard.
 
 **App:** a phone that already has the app can do this from [Settings →
-Household → Rooms](#settings/rooms) → **Use this device as a room**,
+Household → Rooms](#settings/rooms) → **Use this phone in a room**,
 or from the **Domovoi Room** icon. A phone you also use every day needs a
 screen lock, and while it's in room mode, the rest of the app is locked.
 
@@ -2272,7 +2284,7 @@ Everything stays on your server, or on your phone.
 
 | What | Kept |
 |---|---|
-| What you said to Domovoi by voice, and its replies | 90 days, or what **Keep voice history** says |
+| What you said to Domovoi by voice, and its replies | 90 days, or what [Settings → Privacy → Keep voice history](#settings/keep-voice-history) says |
 | Chats on the home server, with the pictures, documents and letter photos attached | until you delete the chat |
 | Every version of a draft in a chat | until you delete the chat |
 | A draft or a letter you saved | a file in Documents → From Chat, until you delete it |
@@ -2295,12 +2307,13 @@ each room's **Conversations** tab.
 
 - "forget me", in your own voice: deletes your profile, voice samples,
   memories and everything you said to Domovoi.
-- *(admin)* [Settings → Household → People](#settings/people) → **Voice history** → **Keep voice
-  history**: 30 days, 90 days (the default), 1 year or Forever. Older
-  turns are deleted every day. It's also in [Settings → System →
-  Advanced](#settings/advanced) → **show the settings** → **Privacy**.
-- *(admin)* **Delete all voice history**, on the same page, deletes it all
-  at once. People, voice samples, memories, notes, timers and chats stay.
+- How long what you say is kept: [Settings → Privacy → Keep voice
+  history](#settings/keep-voice-history). *(admin)* choose 30 days,
+  90 days (the default), 1 year or Forever. Older turns are deleted every
+  day, and at once when you save. Everyone else sees what it is set to.
+- *(admin)* **Delete all voice history**, on [Settings → Household →
+  People](#settings/people) → **Voice history**, deletes it all at once.
+  People, voice samples, memories, notes, timers and chats stay.
 - Clear your own listening history: your name on
   [Settings → Household → People](#settings/people) → **listening history**
   → **clear**, from your own phone or browser, from 10 minutes after you
@@ -2315,12 +2328,12 @@ each room's **Conversations** tab.
 - Delete a chat: the bin icon in [Chat](#chat). Its pictures, documents,
   letters and draft versions go with it.
 - *(admin)* turn recordings off in a room's **Settings** tab (**Stop and
-  delete**); the commands kept so far are in [Settings → Privacy → Voice
-  history](#settings/voice-history).
+  delete**); the commands kept so far are in [Settings → Privacy → Command
+  recordings](#settings/command-recordings).
 - *(admin)* listen to a room's command recordings, mark whether each one
-  ended at the right moment, and delete them: [Settings → Privacy → Voice
-  history](#settings/voice-history). A room keeps them only while an admin
-  has turned them on for it.
+  ended at the right moment, and delete them: [Settings → Privacy → Command
+  recordings](#settings/command-recordings). A room keeps them only while
+  an admin has turned them on for it.
 
 An admin can change play history, news and timer history in [Settings →
 System → Advanced](#settings/advanced). [More detail](docs/SECURITY_PRIVACY.md#data-at-rest)
@@ -2359,9 +2372,14 @@ answer doesn't reach it there.
 [Settings → System → About & updates](#settings/about) shows the release
 you run.
 
+With the internet setting **Yes**, Domovoi looks by itself once a day and
+Home says *Domovoi 1.5.0 is available*. Untick **Check for updates by
+itself** to look only when you ask. Only a signed release makes this
+notice, with its three highlights; nothing installs by itself.
+
 **How to** *(admin)*
 
-1. **Check for updates**.
+1. **Check for updates** (or **Update** on Home).
 2. **Update Domovoi**. It pulls the update, then restarts with it.
 3. On a server that can't restart itself, **Restart to apply changes**
    comes next.

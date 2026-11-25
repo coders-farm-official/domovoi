@@ -278,6 +278,20 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "choice", tier="hot", choices=list(HOME_PROBLEMS_VISIBILITY_CHOICES),
     ),
 
+    # ─── Updates ───────────────────────────────────────────────────────
+    # The About & updates card owns this checkbox (the Configuration list
+    # leaves the group out; Settings search lands on the card). 'hot': the
+    # update-notice worker and the notice read look at it every time.
+    FieldSpec(
+        "update_auto_check", "Check for updates by itself", "Updates",
+        "Look for a new signed Domovoi release once a day and when Domovoi "
+        "starts, and say so on Home and in About & updates. Only when the "
+        "house's internet setting is Yes. It never installs anything by "
+        "itself. Off = Domovoi looks only when someone presses Check for "
+        "updates. Applies immediately.",
+        "bool", tier="hot", keywords=("update", "updates", "release", "new version", "automatic"),
+    ),
+
     # ─── Models (LLM role slots) ───────────────────────────────────────
     # Managed richly on the Models page; also editable here. 'reapply' tier:
     # Ollama swaps models per-request, so clearing the cached client
@@ -528,7 +542,8 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     ),
 
     # ─── Privacy ───────────────────────────────────────────────────────
-    # Also on People → Voice history, beside "Delete all voice history"
+    # Edited in Settings → Privacy → Keep voice history (1.5.0); People →
+    # Voice history and Advanced → Privacy show it and link there
     # (domovoi/voice_history.py). 'reapply': a save prunes at once.
     FieldSpec(
         "voice_history_keep", "Keep voice history", "Privacy",

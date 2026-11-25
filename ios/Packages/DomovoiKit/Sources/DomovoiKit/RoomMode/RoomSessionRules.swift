@@ -37,6 +37,14 @@ public enum RoomSessionRules {
         "minutes and this phone takes its place."
     public static let throttledText = "too many approval requests from this network; trying again shortly"
 
+    /// `satellite_id_mismatch` (1.5.0): the server read another device's
+    /// name in this phone's hello. The phone always names itself, so this is
+    /// a fault (an old server copy, a proxy rewriting the path): said in
+    /// household words, retried like a refusal (`MISMATCH_TEXT`).
+    public static let mismatchText =
+        "The server did not recognise this phone. Hold Exit to leave room mode and forget this room, then set the "
+        + "phone up again with a new code from the dashboard."
+
     /// `RoomSessionRules.kt:279-292`.
     public static func verdict(reason: String?, code: String?, current: String?, approvedBefore: Bool = false) -> Verdict {
         switch reason {
@@ -54,6 +62,8 @@ public enum RoomSessionRules {
             return Verdict(link: .offline(reason: throttledText), outcome: "approval_throttled")
         case "approval_code_invalid":
             return Verdict(link: nil, outcome: "approval_code_invalid")
+        case "satellite_id_mismatch":
+            return Verdict(link: .rejected(reason: mismatchText), outcome: "satellite_id_mismatch")
         case "hello_required":
             return Verdict(link: nil, outcome: "hello_required")
         default:
@@ -67,7 +77,7 @@ public enum RoomSessionRules {
         switch outcome {
         case "ready": return 1_000
         case "awaiting_approval": return approvalRetryMS
-        case "pairing_rejected", "approval_conflict", "approval_throttled": return refusedRetryMS
+        case "pairing_rejected", "approval_conflict", "approval_throttled", "satellite_id_mismatch": return refusedRetryMS
         case "approval_code_invalid": return 1_000
         default: return backoff
         }

@@ -1309,9 +1309,9 @@ Python. Package `roommode/` (not `satellite/`, which would sit beside
 
 | File | What |
 |---|---|
-| `RoomSetupActivity.kt` | The way in: the "Domovoi Room" launcher alias, Settings → Rooms → "Use this device as a room", a `domovoi-room:` link. The explainer (scrolled to its end), the mic and notification permissions, the room code (scanned with `RoomScanner.kt`, CameraX + ZXing, or pasted) |
-| `RoomEnrolment.kt` | The room code: `domovoi-room:1?core=…&fp=…&room=…`, percent-encoded UTF-8; the room name to a room id (`^[a-z][a-z0-9_]{0,31}$`) |
-| `RoomStore.kt` | What a room phone keeps; the room key sealed under its own Keystore key; `active` (the normal app is locked) and `running` (resume after a reboot) |
+| `RoomSetupActivity.kt` | The way in: the "Domovoi Room" launcher alias, Settings → Rooms → "Use this phone in a room", a `domovoi-room:` link. The explainer (scrolled to its end), the mic and notification permissions, the room code (scanned with `RoomScanner.kt`, CameraX + ZXing, or pasted); a code with `in=` says "This phone will join the Kitchen" |
+| `RoomEnrolment.kt` | The room code: `domovoi-room:1?core=…&fp=…&room=…[&in=…]`, percent-encoded UTF-8; the room name to the phone's id (`^[a-z][a-z0-9_]{0,31}$`); `in=` (1.5.0) the existing room it joins, a room id by `domovoi/room_ids.py`'s rule or ignored |
+| `RoomStore.kt` | What a room phone keeps; the room key sealed under its own Keystore key; `active` (the normal app is locked) and `running` (resume after a reboot); the room asked for by `in=` until the first `ready`, and the room's name as the server last said it |
 | `RoomIdentity.kt` | `verify_server`'s port (the address-bound `/v1/health` proof, before every connect) and signed file lists (`signature_v2`, freshness) |
 | `RoomProtocol.kt`, `CaptureMachine.kt`, `HealthSample.kt`, `RoomSessionRules.kt` | Frames, the capture loop frame by frame (pause hints, `end_capture`, follow-ups), the health sample, what the refusals mean. Pure |
 | `WakeDetector.kt`, `OrtModels.kt` | openWakeWord's streaming pipeline (melspectrogram → embedding → wake models) and Silero VAD, on ONNX Runtime: the runtime the phone voice already ships for all four ABIs |
@@ -1341,6 +1341,16 @@ Rules it keeps:
 - **One mic owner** (`audio/MicArbiter.kt`): room mode, the phone drop-in
   call, the chat mic and the assistant; room mode excludes the others for
   as long as it is on.
+- **Rooms and satellites (1.5.0).** The phone's id (the socket path,
+  `satellite_id` in the hello) never changes; the server decides its room.
+  The hello adds `requested_room` (the code's `in=`) until the phone is
+  approved; `ready.room` and the `room` frame say the room it is in, and a
+  `room` frame after a move keeps the socket (no reconnect). `room.claim`
+  is kept, not acted on: the phone does not declare `wake_claim` yet.
+  `error{reason:"satellite_id_mismatch"}` is a refusal the screen explains.
+- **Household words.** The phone says "This phone is in the Kitchen"
+  (`RoomStatusText.whereLine`) and never shows a room or device id or the
+  word "satellite" (`RoomRulesTest` reads the sources for it).
 - **`supports` says exactly what it handles** (`RoomProtocol.supports`):
   `speech_pause`, `capture_control`, `announce_after_session_end`,
   `wake_models`, `sounds`, `room_display`, and `full_duplex` and

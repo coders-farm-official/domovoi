@@ -1315,6 +1315,69 @@ const HostSideNotes = ({ host, kind = 'windows', channel, busy, onRetry, request
   );
 };
 
+// Update notices (1.5.0, domovoi/update_notice.py): the `updates` key of the
+// version read and the check. Versions are held to x.y.z (at most 14
+// characters, so they can't break a line) and highlights to three short
+// strings, shown only as text. A highlight is 8 to 80 Unicode code points,
+// the server parser's own rule (domovoi/release_highlights.py, MIN_CHARS and
+// MAX_CHARS): counted with Array.from, not .length (UTF-16 units), so an
+// emoji counts once.
+const UPDATE_VERSION_RE = /^\d{1,4}\.\d{1,4}\.\d{1,4}$/;
+const UPDATE_HIGHLIGHT_MIN = 8;
+const UPDATE_HIGHLIGHT_MAX = 80;
+const updateVersion = (v) => (typeof v === 'string' && UPDATE_VERSION_RE.test(v) ? v : null);
+const updateHighlightOk = (t) => {
+  if (typeof t !== 'string') return false;
+  const n = Array.from(t).length;
+  return n >= UPDATE_HIGHLIGHT_MIN && n <= UPDATE_HIGHLIGHT_MAX;
+};
+const updateHighlights = (list) => (Array.isArray(list) ? list : []).filter(updateHighlightOk).slice(0, 3);
+
+// "Check for updates by itself": the line under the box, by why it's off.
+const AUTO_CHECK_LINES = {
+  setting_off: 'Off. Domovoi looks only when you press Check for updates.',
+  internet_sometimes: 'Off while the house’s internet setting is Sometimes.',
+  internet_never: 'Off while the house’s internet setting is No.',
+  internet_unanswered: 'Off until the house’s internet setting is Yes.',
+};
+// "3 hours ago", in words.
+const agoWords = (iso) => {
+  const t = Date.parse(iso || '');
+  if (!Number.isFinite(t)) return null;
+  const s = Math.max(0, (Date.now() - t) / 1000);
+  const n = (v, unit) => `${v} ${unit}${v === 1 ? '' : 's'} ago`;
+  if (s < 60) return 'a moment ago';
+  if (s < 3600) return n(Math.round(s / 60), 'minute');
+  if (s < 48 * 3600) return n(Math.round(s / 3600), 'hour');
+  return n(Math.round(s / 86400), 'day');
+};
+const autoCheckLine = (auto, admin) => {
+  const why = auto.why_off || null;
+  let line = why ? (AUTO_CHECK_LINES[why] || '') : 'Once a day and when Domovoi starts. It never installs anything by itself.';
+  if (!why && auto.last_at) {
+    line += auto.last_ok === false
+      ? ' The last look didn’t get through. It tries again within the hour.'
+      : ` Last looked ${agoWords(auto.last_at) || 'recently'}.`;
+  }
+  if (!admin) line += ' Only an admin can change this.';
+  return line;
+};
+
+// A list of highlights, plain text only (a React text node each).
+const UpdateHighlights = ({ title, items }) => (items.length ? (
+  <div className="version-highlights">
+    <div className="version-highlights-title">{title}</div>
+    <ul>{items.map((t, i) => <li key={i}>{t}</li>)}</ul>
+  </div>
+) : null);
+
+// Home's Update lands here: #settings/about/update-now.
+const UPDATE_NOW_MARK = 'update-now';
+const updateNowAsked = () => {
+  const parts = routeParts(currentRoute());
+  return parts[0] === 'settings' && parts[1] === 'about' && parts[2] === UPDATE_NOW_MARK;
+};
+
 const VersionSection = () => {
   const { data: cfg } = useApiObject('/api/config');
   // Checking and pulling talk to the git remote: greyed under "No"
@@ -1655,6 +1718,75 @@ const VersionSection = () => {
     onSettled: () => { setUnderway(false); setStatus(null); return refreshCore(); },
   }).finally(() => { setUnderway(false); setRestarting(null); setRuns(null); });
 
+  // "Check for updates by itself": the admin's config write (the registry's
+  // update_auto_check). Editable only while it is the setting that decides
+  // (on, or off by the admin's choice), never while the internet answer is
+  // what keeps it off.
+  const [savingAuto, setSavingAuto] = React.useState(false);
+  const autoWhy = core && core.updates && core.updates.auto_check ? core.updates.auto_check.why_off : null;
+  const autoEditable = !autoWhy || autoWhy === 'setting_off';
+  const setAutoCheck = async (on) => {
+    setSavingAuto(true);
+    try {
+      const res = await apiPatch('/api/config/editable', { changes: { update_auto_check: !!on } });
+      const rejected = (res && res.rejected) || {};
+      if ('update_auto_check' in rejected) {
+        fire(`not saved: ${rejected.update_auto_check}`);
+      } else {
+        fire(on ? 'Domovoi looks by itself once a day now.' : 'Domovoi won’t look by itself now.');
+        setStatus(null);
+      }
+    } catch (e) {
+      reportMutationFailure(fire, 'the setting', e);
+    } finally {
+      setSavingAuto(false);
+      refreshCore();
+    }
+  };
+
+  // Home's Update (#settings/about/update-now): a quiet check when there is
+  // none, then this card's own one update action, with its usual
+  // confirmation. Nothing to press: said so.
+  const [updateAsked, setUpdateAsked] = React.useState(() => updateNowAsked());
+  React.useEffect(() => {
+    const follow = () => { if (updateNowAsked()) setUpdateAsked(true); };
+    window.addEventListener('hashchange', follow);
+    return () => window.removeEventListener('hashchange', follow);
+  }, []);
+  React.useEffect(() => {
+    if (!updateAsked || !core) return;
+    setUpdateAsked(false);
+    try { window.history.replaceState(null, '', '#settings/about/updates'); } catch { /* the address stays */ }
+    if (!admin) return;
+    (async () => {
+      const bad = core.bad_sha;
+      if (pendingRestart(core).any) {
+        if (core.restart_capable) await restart(false);
+        else fire('Restart Domovoi to finish the update.');
+        return;
+      }
+      let res = status;
+      if (res == null && !internetOff) {
+        setChecking(true);
+        try {
+          res = await apiPost('/api/config/version/check', {});
+          setStatus(res);
+        } catch { res = null; } finally {
+          setChecking(false);
+        }
+      }
+      const behindNow = !!(res && res.upstream && !res.error && (res.behind || 0) > 0
+                           && !(bad && res.upstream_sha === bad));
+      if (behindNow && !internetOff) {
+        await (onePress ? updateOnePress() : pull());
+      } else if (host && host.step_needed && !windowsStepFailed(host) && !host.request) {
+        await updateWindowsSide();
+      } else {
+        fire('Already up to date.');
+      }
+    })();
+  }, [updateAsked, core]);
+
   const webVer = cfg && cfg.web_version;
   // `sha` is the RUNNING code (captured at the core's boot), not whatever is
   // checked out right now — those diverge after a pull without a restart,
@@ -1727,7 +1859,23 @@ const VersionSection = () => {
   // file. One badge: signed (verified); else what it is, and whether that
   // stops an update (enforced) or only means signing isn't set up yet.
   const sig = core && core.signature;
-  const sigBadge = sig && sig.status && sig.status !== 'unknown' ? (
+  // Update notices: the latest signed release and how this code relates to
+  // it (a fresh check's answer first, else the version read's).
+  const updates = (status && status.updates) || (core && core.updates) || null;
+  const auto = updates && updates.auto_check ? updates.auto_check : null;
+  const latest = updates && updates.latest_release && updates.latest_release.signed
+    && updateVersion(updates.latest_release.version) ? updates.latest_release : null;
+  const latestVersion = latest ? latest.version : null;
+  const latestHighlights = latest ? updateHighlights(latest.highlights) : [];
+  const relation = updates && latest ? updates.relation : 'unknown';
+  const notice = updates && updates.notice && updates.notice.available === true
+    && updateVersion(updates.notice.version) ? updates.notice : null;
+  // On main, line (c) below says where this code stands against the latest
+  // release: it replaces the "not a signed release" badge and the "latest
+  // release" words, so nothing is said twice. Unknown keeps the badge.
+  const mainLine = channel === 'main' && (relation === 'ahead' || relation === 'same' || relation === 'behind');
+  const sigBadge = sig && sig.status && sig.status !== 'unknown'
+    && !(mainLine && !sig.enforced && sig.status !== 'verified') ? (
     sig.status === 'verified'
       ? { tone: 'ok', label: 'signed',
           title: `the checked-out commit is signed by ${sig.signer || 'an allowed key'} (${sig.allowed_signers})` }
@@ -1746,7 +1894,10 @@ const VersionSection = () => {
   return (
     <Card title="Version"
           sub="The Domovoi release this server runs, which updates it follows, and the update check.">
-      <div style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '140px 1fr',
+      {/* minmax(0, 1fr): the value column may shrink below its content's
+          width, so at 360 px the channel switch fits the card instead of
+          pushing past its edge. */}
+      <div style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '140px minmax(0, 1fr)',
                     rowGap: 8, fontSize: 13, alignItems: 'center' }}>
         <div className="label">web build</div>
         <div className="mono" style={{ color: webVer ? 'var(--fg)' : 'var(--fg-faint)' }}>{webVer || '—'}</div>
@@ -1824,7 +1975,7 @@ const VersionSection = () => {
                         title={internetOff ? NEEDS_INTERNET_TEXT : 'which updates this server follows; switching moves no code'}
                         style={{ font: 'inherit', fontSize: 12, height: 28, padding: '0 8px',
                                  borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
-                                 background: 'var(--card)', color: 'var(--fg)', maxWidth: 280 }}>
+                                 background: 'var(--card)', color: 'var(--fg)', maxWidth: 'min(280px, 100%)', minWidth: 0 }}>
                   {!channelChoices.includes(channel) && (
                     <option value={channel || ''} disabled>{channel ? `${channel} (not a channel)` : 'no branch followed'}</option>
                   )}
@@ -1949,12 +2100,13 @@ const VersionSection = () => {
           </Button>
         )}
         {internetOff && mode !== 'restart' && mode !== 'busy' && <NeedsInternetNote compact/>}
-        {mode !== 'restart' && mode !== 'busy' && behind != null && (
+        {mode !== 'restart' && mode !== 'busy' && behind != null && !(notice && status.channel === 'stable' && behind > 0) && (
+          // On stable the notice below says "Domovoi X is available": not twice.
           <span className="version-check-result" style={{ fontSize: 12, color: behind > 0 ? 'var(--warn-ink)' : 'var(--ok-ink)' }}>
             {versionCheckWords(status)}
           </span>
         )}
-        {mode !== 'restart' && mode !== 'busy' && behind != null && status.channel !== 'stable' && status.latest_release && (
+        {mode !== 'restart' && mode !== 'busy' && behind != null && status.channel !== 'stable' && status.latest_release && !mainLine && (
           <span className="version-latest-release" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
             latest release: {status.latest_release}
           </span>
@@ -1969,6 +2121,63 @@ const VersionSection = () => {
           </span>
         )}
       </div>
+      {auto && auto.why_off !== 'no_git' && (
+        // (a) Check for updates by itself. Unticked and greyed whenever
+        // nothing is checking (no misleading controls); the admin's saved
+        // choice comes back with the internet answer Yes.
+        <div className="version-auto-check" style={{ padding: '0 16px 12px', fontSize: 13 }}>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8,
+                          cursor: admin && autoEditable ? 'pointer' : 'default',
+                          color: admin && autoEditable ? 'var(--fg)' : 'var(--fg-muted)' }}>
+            <input type="checkbox" checked={!auto.why_off}
+                   disabled={!admin || !autoEditable || savingAuto}
+                   onChange={(e) => setAutoCheck(e.target.checked)}/>
+            Check for updates by itself
+          </label>
+          <div className="version-auto-check-line" style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 4 }}>
+            {autoCheckLine(auto, admin)}
+          </div>
+        </div>
+      )}
+      {notice && mode !== 'busy' && (
+        // (b) A newer signed release: its words, from the stored notice too
+        // (no press needed), and its highlights.
+        <div className="version-notice" style={{ padding: '0 16px 12px', fontSize: 13, overflowWrap: 'anywhere' }}>
+          <div className="version-notice-title" style={{ fontWeight: 600, color: 'var(--warn-ink)' }}>
+            Domovoi {notice.version} is available
+          </div>
+          <UpdateHighlights title="Highlights" items={updateHighlights(notice.highlights)}/>
+          {channel === 'main' && (
+            <div className="version-notice-main" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+              Updating brings this house to the newest change on main, which includes {notice.version}.
+            </div>
+          )}
+        </div>
+      )}
+      {mainLine && relation !== 'behind' && (
+        // (c) On main: where this code stands against the latest release.
+        <div className="version-main-line" style={{ padding: '0 16px 12px', fontSize: 13, overflowWrap: 'anywhere' }}
+             title="this server follows main, whose commits are not signed releases; switch to stable for signed releases">
+          {relation === 'ahead' ? (
+            <>
+              {updates.changes_since != null && (
+                <div style={{ fontWeight: 600 }}>
+                  {updates.changes_since} change{updates.changes_since === 1 ? '' : 's'} since {latestVersion}
+                </div>
+              )}
+              <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+                You are ahead of the latest release on unsigned changes.
+              </div>
+              <UpdateHighlights title={`Highlights of ${latestVersion}`} items={latestHighlights}/>
+            </>
+          ) : (
+            <>
+              <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>This is {latestVersion}, the latest release.</div>
+              <UpdateHighlights title="Highlights" items={latestHighlights}/>
+            </>
+          )}
+        </div>
+      )}
       {underway && (
         <div style={{ padding: '0 16px 14px' }}>
           <RestartUnderwayNote updating={!!(runs && runs.updating)} plain={!!(runs && runs.plain)}/>
@@ -2285,7 +2494,21 @@ const ConfigPanel = ({ setupAsked = false, mark = null, startFolded = false }) =
     // The media paths have their own section (media_folders.jsx), which
     // shows the folder a person can open on every kind of install.
     const paths = list.some((f) => f.group === 'Paths');
-    const grouped = _groupBy(list.filter((f) => f.group !== 'Internet' && f.group !== 'Paths'));
+    // "Keep voice history" is edited in Settings → Privacy (1.5.0): its
+    // group here says what it is and links there, no second control.
+    const keepVoice = list.find((f) => f.name === 'voice_history_keep');
+    // "Updates" is the About & updates card's own checkbox.
+    const grouped = _groupBy(list.filter((f) => f.group !== 'Internet' && f.group !== 'Paths' && f.group !== 'Updates'
+                                               && f.name !== 'voice_history_keep'));
+    if (keepVoice && !grouped[keepVoice.group || 'Privacy']) grouped[keepVoice.group || 'Privacy'] = [];
+    const keepVoiceLine = keepVoice && (
+      <div key="keep-voice-history-pointer" className="config-keep-voice-pointer" style={{ fontSize: 13, padding: '6px 0 8px' }}>
+        <span style={{ fontWeight: 500 }}>{keepVoice.label}: </span>
+        <span>{(keepVoice.choice_labels || {})[keepVoice.value] || keepVoice.value}</span>
+        <span style={{ color: 'var(--fg-muted)' }}> · change it in </span>
+        <a href="#settings/keep-voice-history" className="home-link">Settings → Privacy → Keep voice history</a>
+      </div>
+    );
     const pointer = paths && (
       <div key="media-folders-pointer" className="config-media-pointer" style={{ fontSize: 13, padding: '6px 0 12px' }}>
         <span style={{ fontWeight: 500 }}>Media folders: </span>
@@ -2297,6 +2520,7 @@ const ConfigPanel = ({ setupAsked = false, mark = null, startFolded = false }) =
       <div key={group} style={{ marginBottom: 14 }}>
         <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em',
                       color: 'var(--fg-muted)', fontWeight: 600, marginBottom: 2 }}>{group}</div>
+        {keepVoice && group === (keepVoice.group || 'Privacy') && keepVoiceLine}
         {grouped[group].map(f => (f.name === 'acoustid_api_key'
           ? <AcoustidKeyField key={f.name} f={f} value={valueOf(f)} internetOff={internetOff}
                               marked={marked === f.name} onChange={v => setEdit(f.name, v)}/>
@@ -4694,6 +4918,8 @@ const AboutPanel = () => {
     <>
       <AboutCard/>
       <div data-settings-mark="updates">
+        {/* Home's Update lands on the card itself (VersionSection runs its one update action). */}
+        <div data-settings-mark="update-now"/>
         {household ? <VersionSection/> : (
           <Card title="Version and updates" padded>
             <div style={{ fontSize: 13, color: 'var(--fg-muted)' }}>
@@ -6324,7 +6550,7 @@ const SETTINGS_GROUPS = [
     sections: ['rooms', 'people', 'phones-and-browsers', 'home-location', 'calendars', 'media-folders', 'music-mix', 'queue-history', 'printers', 'friend-houses'] },
   { id: 'voice', label: 'Voice', icon: 'audio-lines', sections: ['wake-words', 'voices', 'greetings'] },
   { id: 'chat-and-ai', label: 'Chat & AI', icon: 'sparkles', sections: ['models', 'search', 'chat', 'photos-and-videos'] },
-  { id: 'privacy', label: 'Privacy', icon: 'shield', sections: ['internet', 'voice-history', 'listening-history'] },
+  { id: 'privacy', label: 'Privacy', icon: 'shield', sections: ['internet', 'keep-voice-history', 'command-recordings', 'listening-history'] },
   { id: 'documents', label: 'Documents', icon: 'file-text', sections: ['fonts'] },
   { id: 'system', label: 'System', icon: 'server', sections: ['about', 'offline-kit', 'health', 'app-layout', 'advanced', 'support-sessions'] },
 ];
@@ -6405,9 +6631,17 @@ const SETTINGS_SECTIONS = [
   { id: 'internet', label: 'Internet',
     sub: 'Will this Domovoi have internet? It sets the defaults of the online extras.',
     words: 'internet online offline network web connection search helper' },
-  { id: 'voice-history', label: 'Voice history', aliases: ['recordings'],
+  // people.jsx draws it (VoiceHistoryKeepPanel), 1.5.0: "Keep voice
+  // history" (voice_history_keep), here so what is kept and for how long
+  // is in one place; People → Voice history and Advanced point here.
+  { id: 'keep-voice-history', label: 'Keep voice history',
+    sub: 'How long what people say to Domovoi, and what it answered, is kept.',
+    words: 'voice history keep kept retention how long days year forever conversations sessions said transcript privacy delete' },
+  // "Voice history" until 1.5.0 (it is the command recordings): its old
+  // address, and the one before it, still open it.
+  { id: 'command-recordings', label: 'Command recordings', aliases: ['voice-history', 'recordings'],
     sub: 'Commands kept from the rooms you opted in, to tune when Domovoi stops listening — admins only.',
-    words: 'voice history recordings recording captures commands kept audio transcript privacy delete' },
+    words: 'command commands recordings recording captures kept audio transcript privacy delete tuning' },
   // people.jsx draws it (ListeningHistoryPanel), V051 (2026-11-12).
   { id: 'listening-history', label: 'Listening history',
     sub: 'The songs each room, browser and phone played, and for whom: how long they are kept, and deleting them.',
@@ -6478,7 +6712,11 @@ const settingsPanel = (id, marks) => {
     case 'greetings': return <GreetingsPanel/>;
     case 'models': return <ModelsPanel/>;
     case 'internet': return <InternetPanel/>;
-    case 'voice-history': return <CapturesPanel/>;
+    case 'command-recordings': return <CapturesPanel/>;
+    case 'keep-voice-history': {
+      const Panel = window.VoiceHistoryKeepPanel;
+      return typeof Panel === 'function' ? <Panel/> : null;
+    }
     case 'listening-history': {
       const Panel = window.ListeningHistoryPanel;
       return typeof Panel === 'function' ? <Panel/> : null;
@@ -6532,6 +6770,15 @@ const settingsSearchIndex = (groups, fields) => {
   if (shown.has('advanced')) {
     (fields || []).forEach((f) => {
       if (!f || !f.name || !f.label || f.group === 'Internet') return;
+      // "Check for updates by itself" lives on the About & updates card.
+      if (f.group === 'Updates' && shown.has('about')) {
+        out.push({ key: `about/${f.name}`, label: f.label, where: shown.get('about'),
+                   route: 'settings/about/updates',
+                   words: `${f.name.replace(/_/g, ' ')} updates ${(f.keywords || []).join(' ')} ${f.help || ''}` });
+        return;
+      }
+      // "Keep voice history" is its own section in Privacy (1.5.0).
+      if (f.name === 'voice_history_keep' && shown.has('keep-voice-history')) return;
       // The media paths are edited in Household → Media folders.
       if (f.group === 'Paths' && shown.has('media-folders')) {
         out.push({ key: `media-folders/${f.name}`, label: f.label, where: shown.get('media-folders'),

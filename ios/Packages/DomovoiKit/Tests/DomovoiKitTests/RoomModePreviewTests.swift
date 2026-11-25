@@ -25,7 +25,7 @@ final class RoomModePreviewTests: XCTestCase {
             "It works, but it has been tried on fewer phones than the rest of Domovoi, and it may still change.",
             RoomModeStrings.previewMeans
         )
-        XCTAssertEqual("Use this device as a room", RoomModeStrings.entryTitle)
+        XCTAssertEqual("Use this phone in a room", RoomModeStrings.entryTitle)
         XCTAssertEqual(RoomModeStrings.entryTitle, RoomModeStrings.entryButton, "named twice, as Android's card")
     }
 

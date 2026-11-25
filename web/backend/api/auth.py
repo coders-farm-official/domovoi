@@ -55,7 +55,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from domovoi import admin_auth, calendar_feeds
+from domovoi import admin_auth, calendar_feeds, chat_access
 from domovoi.config import settings as core_settings
 from domovoi.host_kind import host_kind
 from web.backend.api.csrf_guard import require_requested_with
@@ -549,6 +549,10 @@ _PHONE_GRANT_STALE_DETAIL = (
     "password sign-in"
 )
 _PHONE_GRANT_INVALID_DETAIL = "phone grant not valid — sign in with the password"
+_PHONE_GRANT_KEY_DETAIL = (
+    "this phone can't prove it is that device (its device key is missing or out of date) "
+    "— register it again, then sign in with the password"
+)
 _PHONE_GRANT_EXPIRED_DETAIL = "phone grant has expired — sign in with the password"
 _PHONE_GRANT_PRE_SETUP_DETAIL = (
     "auth not configured — complete the first-run admin setup first"
@@ -620,6 +624,10 @@ async def auth_phone_grant(body: PhoneGrantRequest, request: Request) -> JSONRes
     async with session_scope() as s:
         if not await admin_auth.signed_in_recently(s, admin_auth.bearer_token(request)):
             raise HTTPException(status_code=403, detail=_PHONE_GRANT_STALE_DETAIL)
+        # Bound to the device KEY (V086) once the device has one: a grant
+        # is only issued to, and only swapped by, the phone holding it.
+        if await chat_access.device_key_state(s, body.device_id, request) == "mismatch":
+            raise HTTPException(status_code=403, detail=_PHONE_GRANT_KEY_DETAIL)
         grant, expires_at = await admin_auth.issue_phone_grant(s, body.device_id, body.label)
     log.info("phone grant issued (device %r, label %r)", body.device_id, body.label)
     return _no_store({"grant": grant, "expires_at": expires_at.isoformat()})
@@ -649,7 +657,11 @@ async def auth_phone_grant_exchange(
         if not await admin_auth.has_admin_auth(s):
             admin_auth.LOGIN_BACKOFF.release(source)
             raise HTTPException(status_code=501, detail=_PHONE_GRANT_PRE_SETUP_DETAIL)
-        outcome = await admin_auth.exchange_phone_grant(s, body.grant, body.device_id)
+        if await chat_access.device_key_state(s, body.device_id, request) == "mismatch":
+            # Refused exactly as a wrong grant is (and counted the same).
+            outcome: Any = "invalid"
+        else:
+            outcome = await admin_auth.exchange_phone_grant(s, body.grant, body.device_id)
         idle = (
             await admin_auth.session_idle_clock(s, token=outcome[0])
             if isinstance(outcome, tuple) else None

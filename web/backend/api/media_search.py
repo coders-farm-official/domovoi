@@ -51,7 +51,6 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import text
 
 from domovoi.admin_auth import require_device_read
 from domovoi.media_understanding import geocode, moments, search, switches
@@ -76,11 +75,9 @@ def _day(raw: str | None, name: str) -> date | None:
 
 
 async def _shared_screen(request: Request, s: Any) -> bool:
-    dev = devices_api.caller_device(request)
-    if not dev or not await devices_api._has_shared_screen(s):
-        return False
-    return bool((await s.execute(text("SELECT shared_screen FROM devices WHERE device_id = :d"),
-                                 {"d": dev})).scalar())
+    # The caller's own device: devices.caller_device_row.
+    device = await devices_api.caller_device_row(s, request)
+    return bool(device is not None and device.trusted and device.shared_screen)
 
 
 @router.get("/api/media/search", dependencies=[Depends(require_device_read)])

@@ -220,13 +220,14 @@ async def room_listener_for(
     (plan §2.3): the "listening as" it sent, else its claimed person unless
     it is a shared screen, else the household. Self-asserted within the
     household, like every listener choice. A person nobody has is a 422."""
-    from web.backend.api import files as files_api
 
-    caller = files_api.caller_device_id(request, device_id) or devices_api.caller_device(request)
     body = SessionIn(target=TargetIn(kind="room", room_id="x"), start=StartIn(track_id=1),
                      listener_person_id=listener_person_id, as_household=as_household)
     async with session_scope() as s:
-        return await _listener(s, caller, body)
+        # The caller's own device (its key; an id only for a device from
+        # before 1.5.0): devices.caller_device_row.
+        device = await devices_api.caller_device_row(s, request, device_id)
+        return await _listener(s, device.device_id if device is not None and device.trusted else None, body)
 
 
 async def _seed(s: Any, start: "StartIn") -> tuple[SeedRef, str | None]:

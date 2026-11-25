@@ -677,6 +677,9 @@ async def unfriend(friend_id: str) -> bool:
     from domovoi.friend_houses import plugin_mail
 
     async with _db() as s:
+        # The row is deleted below: lock it FOR UPDATE first, so the delete
+        # is never an upgrade (plugin_mail's lock order).
+        await plugin_mail.lock_friend_for_delete(s, friend_id)
         row = await store.friend(s, friend_id)
         # Apps with friends (§6.9): the closure in the same transaction; the
         # friend row's delete then cascades to its pairs, mail and sender.

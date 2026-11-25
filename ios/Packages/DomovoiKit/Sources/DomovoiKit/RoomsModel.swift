@@ -50,7 +50,7 @@ import Observation
 ///   opens is this phone's own into one room.
 /// * **Display controls and logs** — `:1597-1602` and `:1679-1684`, both
 ///   admin; Android's phone screen draws neither either.
-/// * **"Use this device as a room"** (`SatellitesScreen.kt:169`) — the
+/// * **"Use this phone in a room"** (`SatellitesScreen.kt:169`) — the
 ///   `roommode` item's card, not this one's.
 @MainActor
 @Observable

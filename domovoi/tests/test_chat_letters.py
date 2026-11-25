@@ -17,13 +17,13 @@ import json
 from typing import Any
 
 import pytest
-from fastapi.testclient import TestClient
 from PIL import Image, ImageDraw
 
 import web.backend.api.chat as chat_api
 import web.backend.api.chat_documents as docs_api
 import web.backend.api.chat_letters as letters_api
 from domovoi.doc_qa import letter as L
+from domovoi.tests.chat_devices import DeviceTestClient
 from domovoi.tests.conftest import requires_db
 from web.backend.main import app
 
@@ -39,7 +39,8 @@ INJECTED = ("NORTHWIND REFUND SERVICES\nYou may be owed a refund of $250.00. Ret
 
 
 def _client():
-    return TestClient(app, headers={"X-Requested-With": "domovoi-tests"})
+    # A device of its own: its chats are private to it (chat_access, V086).
+    return DeviceTestClient(app)
 
 
 @pytest.fixture(autouse=True)

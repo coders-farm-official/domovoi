@@ -58,6 +58,7 @@ from satellite import (
     diagnostics,
     discovery,
     display_power,
+    enrolment,
     engine_platform,
     kiosk,
     health,
@@ -225,6 +226,14 @@ LOG_CHUNK_CHARS = 128 * 1024
 
 CONFIG_DIR = Path.home() / ".domovoi"
 CONFIG_PATH = CONFIG_DIR / "config.toml"
+
+#: `error {reason: "satellite_id_mismatch"}` (1.5.0), in plain words: the
+#: journal and a spare computer's tray say this (at most 200 characters,
+#: the tray's limit).
+MISMATCH_TEXT = (
+    "the Domovoi server did not recognise this device: the name in its hello "
+    "and in its address differ. Remove it on the dashboard and set it up again."
+)
 
 # The offline spool beside the ring (satellite/log_spool.py): every line
 # the ring receives while the WebSocket is down also lands in this bounded
@@ -1059,7 +1068,9 @@ class Config:
     room_name: str = ""
     # [satellite] requested_room (1.5.0): the existing room it was enrolled
     # into ("Add a satellite to the Kitchen", the payload's `in=`); sent in
-    # the hello so the approval card pre-selects that room.
+    # the hello so the approval card pre-selects that room, until the first
+    # `ready` (the core accepted it: the room is the server's to say from
+    # then on). Cleared here and in config.toml then.
     requested_room: str = ""
     # [pc] permissions: "automatic" (updates and restarts from the core run
     # on arrival, like a Pi) or "ask" (they wait for the person's OK).
@@ -8567,6 +8578,11 @@ class Satellite(pc_engine.SpareDeviceEngine):
     # device's room says `claim` (`ready.room`, the `room` frame); false
     # between sessions.
     _room_claim: bool = False
+    # The room this device is in, as the core last said (`ready.room`, the
+    # `room` frame; satellite/wake_claim.py `room_place`): {room_id, name,
+    # shared, claim}, name None when the core sent none. Kept between
+    # sessions (the tray shows it); None until a 1.5.0 core says.
+    _room_place: dict[str, Any] | None = None
     # The claim this device owns the coming capture by, for its
     # `utterance_start` (taken once), and the claim the running capture was
     # opened by (a late `quiet` grant for it ends the capture).
@@ -8680,6 +8696,15 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 # Whether this room claims its wakes (1.5.0): `ready.room`,
                 # updated later by the `room` frame. False on an older core.
                 self._room_claim = wake_claim.room_says_claim(payload.get("room"))
+                # Which room this device is in and its name (1.5.0; an older
+                # core sends none and the last one known stays).
+                self._room_place = wake_claim.room_place(
+                    payload.get("room"), getattr(self, "_room_place", None))
+                # Accepted: the room code's `in=` is asked for no more.
+                try:
+                    self._forget_requested_room()
+                except Exception:  # noqa: BLE001 — never keeps the mic shut
+                    log.exception("rooms: could not forget the requested room")
                 try:
                     self._start_room_player()
                 except Exception:  # noqa: BLE001 — never keeps the mic shut
@@ -9131,7 +9156,15 @@ class Satellite(pc_engine.SpareDeviceEngine):
                     "".join("*" for _ in code) if code else "unknown",
                 )
                 return
-            if payload.get("reason") in pc_engine.REFUSALS:
+            if payload.get("reason") == "satellite_id_mismatch":
+                # 1.5.0: the core read another device's name in this hello
+                # than in the address it dialled. This device names itself
+                # by the same id it connects as, so something between the
+                # two rewrote one of them. Retried like any refusal.
+                self._approval_pending = False
+                self._set_conn("refused", MISMATCH_TEXT)
+                log.error("server refused this device: %s", MISMATCH_TEXT)
+            elif payload.get("reason") in pc_engine.REFUSALS:
                 self._approval_pending = False
                 self._set_conn("refused", str(payload.get("message") or payload.get("reason")))
             self._leds.set_state("error")
@@ -9302,8 +9335,17 @@ class Satellite(pc_engine.SpareDeviceEngine):
             else:
                 log.warning("get_logs: no request_id in payload; ignoring")
         elif t == "room":
-            # This device's room changed (1.5.0): today only `claim` matters
-            # here — another satellite joined or left its group.
+            # This device's room changed (1.5.0): an admin moved it to
+            # another room (it carries on, connected: the core sends that
+            # room's wake words, voice and sounds as for any room), or
+            # another satellite joined or left its group (`claim`). Only a
+            # hello that named `satellite_id` gets this frame.
+            before = getattr(self, "_room_place", None)
+            place = wake_claim.room_place(payload.get("room"), before)
+            if place is not None and (before or {}).get("room_id") != place["room_id"]:
+                log.info("room: this device is now in %s",
+                         f"the {place['name']}" if place["name"] else "another room")
+            self._room_place = place
             claim = wake_claim.room_says_claim(payload.get("room"))
             if claim != self._room_claim:
                 log.info("room: wake claims %s", "on" if claim else "off")
@@ -9356,6 +9398,24 @@ class Satellite(pc_engine.SpareDeviceEngine):
             pass
         else:
             log.debug("unknown text frame type=%r", t)
+
+    def _forget_requested_room(self) -> None:
+        """The first `ready` (1.5.0): the core accepted this device, so the
+        room its enrolment asked to join (`[satellite] requested_room`, the
+        payload's `in=`) is sent no more. Cleared in memory at once and in
+        config.toml (the same merge + backup as a dashboard set_config). A
+        failed write is logged; the next start then sends it once more and
+        tries again (harmless: the core reads it only for a device it
+        parks)."""
+        if not getattr(self.cfg, "requested_room", ""):
+            return
+        self.cfg.requested_room = ""
+        log.info("rooms: approved; the room from the enrolment is no longer asked for")
+        threading.Thread(
+            target=_merge_into_config,
+            args=(CONFIG_PATH, {"satellite.requested_room": ""}, self.cfg, "requested room"),
+            daemon=True, name="forget-requested-room",
+        ).start()
 
     def _hello_frame(self) -> dict[str, Any]:
         """The `hello` this device opens every session with."""
@@ -9469,10 +9529,17 @@ class Satellite(pc_engine.SpareDeviceEngine):
         # default instead): the dashboard's row says so from the hello on.
         if getattr(self.cfg, "settings_ignored", ()):
             hello["settings_ignored"] = list(self.cfg.settings_ignored)
-        # The room it was enrolled into (`in=`), until it is approved: an
-        # older core ignores the key.
-        if getattr(self.cfg, "requested_room", ""):
-            hello["requested_room"] = self.cfg.requested_room
+        # Rooms (1.5.0): the device names itself, the path's id, as the
+        # phones do. A core that knows rooms then moves it with a `room`
+        # frame instead of closing it (1001), and re-sends that frame when
+        # its room's wake claims change. An older core ignores the key.
+        hello["satellite_id"] = self.cfg.room_id
+        # The room it was enrolled into (`in=`), until its first `ready`
+        # (`_forget_requested_room`): an older core ignores the key. Only a
+        # room id the core accepts (satellite/enrolment.py `is_in_room`).
+        requested = getattr(self.cfg, "requested_room", "")
+        if requested and enrolment.is_in_room(requested):
+            hello["requested_room"] = requested
         return hello
 
     async def _run_session(self) -> None:

@@ -2021,6 +2021,14 @@ restarted) it unlocks the grant and swaps it for a fresh admin session
   substitute. The exchange also needs the device id the grant was issued
   for: a copied grant presented under another id is refused like a wrong
   one (compared in constant time).
+* **Bound to the device key (1.5.0, V086).** Once the phone's device row
+  holds a device key ([Private chats](#private-chats)), a grant is issued
+  only to a request that presents that key (`X-Domovoi-Device-Key`; 403
+  otherwise), and swapped only by one (a missing or wrong key is refused
+  exactly like a wrong grant, and counted the same). The device id alone
+  is self-asserted; the key is a per-device secret, so a copied grant and
+  the phone's id are no longer enough without the key too. A device that
+  has no key yet is not held to it.
 * **The login's own throttle.** A wrong grant counts against the same
   per-source backoff as a wrong password, both ways (a run of wrong grants
   delays the password login from that address, and the reverse).
@@ -2411,7 +2419,7 @@ All of it on hardware you own. Locations, verified against the code:
 | **The systemd journal on the server** (Linux; the Windows install keeps one inside its WSL distro) | What the core and the dashboard print to stdout: start-ups and shut-downs, warnings and errors, the loop watchdog's stall reports, one line per HTTP request but the routine polls (method, path, status, the caller's address), which room a turn came from and which handler answered it, and voice identification's scores (person ids and numbers). **Since 2026-10-16 no line holds a credential or what was said** at the default level: both processes blank the value of every credential-named parameter in every log line, whatever logger wrote it (`?device_token=` in the URLs the dashboard builds, a WebSocket's `?token=`, a Bearer: `device_token=***`, `domovoi/log_privacy.py`; in a query string the whole value is blanked, whatever characters a chosen household token holds), and a transcript, a search, an announcement or a reply appears only as a word count (`<5 words>`); with `LOG_LEVEL=DEBUG` the words are written too, for as long as it is set. Kept **on disk** (`Storage=persistent`, installed by `provision.sh` and every update so a freeze's record survives a power cycle, [LINUX_HOST.md](LINUX_HOST.md#the-loop-watchdog)) within journald's own limits: by default at most 10% of the file system, capped at 4 GB, with **no time limit** — the oldest entries go only when the cap is reached, which on a quiet box can be months. Readable by root and members of `adm` / `systemd-journal`. **"Forget me", deleting a person or a chat conversation, "Keep voice history", "Delete all voice history" and "never save my voice" do not reach it**: lines already written stay until journald rotates them out. To remove them sooner, as root: `journalctl --vacuum-time=7d` (or set `MaxRetentionSec=` in a drop-in of your own). A journal from before 2026-10-16 can hold the household token (the dashboard's access log printed `?device_token=` URLs) and transcripts (the core logged some at INFO) until it rotates: rotate the household token (Settings → Phones & browsers) and vacuum the journal if that matters to you. Setup's **Copy logs** on Windows copies the last 200 journal lines of a failed start into `provision.log`, with `device_token=` blanked there too (`Redact.KeyValue`). |
 | **Media directories on the server** | Your music (`~/Music` by default) and documents (`~/Documents` by default), plus flat podcast and audiobook directories under the config dir (`~/.domovoi/podcasts` and `~/.domovoi/audiobooks` by default; all paths configurable). A page scanned through Domovoi is saved as a PDF in `Documents/Scans/` (its words, as the server read them, are in the database: [Reading scans](#reading-scans)); a draft saved from a chat, a draft a phone sent home and a letter taken by voice are saved as files in `Documents/From Chat/`, and stay there until someone deletes them (deleting the chat does not). |
 | **Postgres: listening history** (V051 `music_listens`, `music_room_listeners`, 2026-11-12) | One row per library song each room, browser and phone played: the song id, the room or device id, when, how long, how it ended, and the person it was for (or the household); and, per room, whose its music is now. Kept 1 year by default, 90 days, or not at all ("Keep listening history"); see [Listening history](#listening-history-whats-kept-for-how-long-who-clears-it). |
-| **Postgres: chat** (`chat_threads`, `chat_messages`, V034–V039; `help_deliveries`, V035) | The home-server chats of the dashboard and the app: each thread's title, whether you or the chat model named it, whether it is archived, and every message (what was typed or, for a chat-mic turn, transcribed; the dictation of a letter taken by voice; the reply; the model; the device it came from; who the voice was recognized as). A reply that looked something up keeps the search words or page address, the sources shown under it and whether the internet was used, and the thread keeps whether "Allow in this chat" is on. A message that carried documents keeps a one-line summary of each (name, kind, pages, word count, notes); a reply answered from documents keeps the passages the model was given, with their text; a reply about a letter photo keeps the text read from the photo beside it. A long summary's per-part notes (`chat_doc_jobs`, V038) are kept only until the summary is finished, or while a stopped one waits to carry on. Drafts (`chat_drafts`, `chat_draft_versions`, V039) keep every version of a letter or other document the chat wrote: the text, the instruction that produced it, whether the model or a person wrote it, the model, the files saved from it, and the device (and person, when known) that made it. A "send the steps to my phone" leaves a `help_deliveries` row: the person, the chat and its title, no text. **Kept until the thread is deleted** (any paired device can delete one): there is no age limit, and "Keep voice history" does not touch chat. Deleting a thread removes its messages, document jobs, drafts and delivery rows; copies in the pre-update database dumps and in a rolled-back database (the rows above) stay until those are replaced. |
+| **Postgres: chat** (`chat_threads`, `chat_messages`, V034–V039; `help_deliveries`, V035) | The home-server chats of the dashboard and the app: each thread's title, whether you or the chat model named it, whether it is archived, and every message (what was typed or, for a chat-mic turn, transcribed; the dictation of a letter taken by voice; the reply; the model; the device it came from; who the voice was recognized as). A reply that looked something up keeps the search words or page address, the sources shown under it and whether the internet was used, and the thread keeps whether "Allow in this chat" is on. A message that carried documents keeps a one-line summary of each (name, kind, pages, word count, notes); a reply answered from documents keeps the passages the model was given, with their text; a reply about a letter photo keeps the text read from the photo beside it. A long summary's per-part notes (`chat_doc_jobs`, V038) are kept only until the summary is finished, or while a stopped one waits to carry on. Drafts (`chat_drafts`, `chat_draft_versions`, V039) keep every version of a letter or other document the chat wrote: the text, the instruction that produced it, whether the model or a person wrote it, the model, the files saved from it, and the device (and person, when known) that made it. A voice photo search sent to a phone ("Do you want them on your phone?") leaves a `help_deliveries` row: the person, the chat and its title, no text (voice help wrote these too before 1.5.0; it no longer sends anything). **Kept until the thread is deleted** (any paired device can delete one): there is no age limit, and "Keep voice history" does not touch chat. Deleting a thread removes its messages, document jobs, drafts and delivery rows; copies in the pre-update database dumps and in a rolled-back database (the rows above) stay until those are replaced. |
 | **`~/.domovoi/chat_uploads/` on the server** | Pictures sent into a home-server chat, letter photos included (the upload and the smaller copy the vision model was sent; up to 20 MB each and 4 a message) and, under `documents/`, the documents attached to a chat or copied in by "Ask about this document" (PDF, Word, OpenDocument, Excel, CSV, text or markdown; up to 100 MB each and 4 a message): the original as `<token><ext>` and the text read from it as `<token>-parts.json`, under random names. They go with the thread they belong to; a document picked in the composer and never sent is cleared out after an hour. Readable by a paired device only. See [Documents in chat](#documents-in-chat). |
 | **Postgres: photos and videos** (V078 `media_items`, `media_frames`, `media_segments`, `media_summaries`, `media_faces`, `face_groups`, `face_denylist`, 1.5.0) | What Domovoi works out about the photos and videos in Pictures and Videos, once an admin turns it on: per file its path, size, a fingerprint, the date taken, a caption, tags, text found, a video's transcript with times and summary; with faces on, each face's box and 128-number embedding and the groups and names; with places on, a photo's GPS position and town. `face_denylist` holds anonymous patterns of people who asked to be forgotten and is kept when faces are turned off. See [Photos and videos](#photos-and-videos-understanding-the-library). |
 | **`domovoi/.env` in the repo checkout** | Settings changed from the dashboard's Settings page, persisted as plain text — **including secrets** (e.g. `ACOUSTID_API_KEY`, which the dashboard writes and never reads back: Settings → Advanced shows an admin only whether one is set). Protect it like `~/.domovoi/plugins/`. No value written there may hold a newline or another control character (the configuration page refuses it, and the writer refuses it for every key): the core reads a quoted newline as part of the value, but a line-based reader would see a second setting, which a value could smuggle past the core. The update unit (root) reads it through the checkout's own reader, as the core does. |
@@ -2433,16 +2441,18 @@ Owner, 2026-10-17 (before 1.0): what people say to Domovoi was kept with no
 limit, forgetting a person only took their name off it, and there was no
 delete. Now there is a limit, a delete, and forgetting someone removes what
 they said. Everything below is `domovoi/voice_history.py`,
-`domovoi/workers/voice_history_pruner.py`, V030 and Settings → Household → People → **Voice
-history** on the dashboard (the same "Keep voice history" setting is also
-under Settings → Advanced → Privacy; Settings → Privacy → Voice history is
-the page for command recordings, below). Chat is not voice history: a
+`domovoi/workers/voice_history_pruner.py`, V030, Settings → Privacy → **Keep voice
+history** on the dashboard (the setting's one control since 1.5.0; Settings → Household →
+People → **Voice history**, which holds Delete all, and Settings → Advanced → Privacy show
+it and link there) and Settings → Privacy → **Command recordings** (the opt-in command
+recordings, below; it was called "Voice history" before 1.5.0, and its old address
+`#settings/voice-history` still opens it). Chat is not voice history: a
 home-server chat is kept until it is deleted (see [Data at rest](#data-at-rest)).
 
 | | |
 |---|---|
 | **What voice history is** | Every routed turn — what was said and what Domovoi answered (`conversation_log`: the Conversations and Sessions tabs read it) and its routing record with the transcript (`intents_log`; the dashboard's `[ui]` actions are rows there too, and so is the fast lane's own hearing, inside `timings`) — plus each room's short-term conversation (`sessions.context`: the last exchanges, the last answer for "say that again", what a turn parked waiting for a "yes") and the satellites' logs kept on the server (`~/.domovoi/satellite-logs/`, a `heard:` line for every utterance and the text of every reply). A turn said into the app's chat mic is one of these too (room `phone-<device id>`). |
-| **How long** | **Keep voice history**: 30 days, **90 days (the default)**, 1 year, or forever. Once a day the core deletes everything older: both logs' rows, a session idle that long, the older exchanges of a room that is still talking, and the older lines of the satellites' logs. Saving a shorter setting does it at once (Settings → Household → People → Voice history asks first). Forever deletes nothing on its own. The setting is `VOICE_HISTORY_KEEP` (`30`, `90`, `365`, `forever`); a value written in `.env` by hand rounds **up** to the next choice, never down (45 keeps 90 days; 0 or more than a year keeps everything), and anything unreadable (`6 months`, `2y`, a typo) deletes nothing: it reads as forever until it is fixed, and the log says so once. **The first run after the update that brings this deletes everything older than 90 days** unless `VOICE_HISTORY_KEEP` says otherwise. A run is skipped, with a warning in the log, when the server's clock looks wrong: earlier than the newest turn, or so far ahead that every turn would go; so a house that has said nothing for longer than the setting keeps its last turns until somebody speaks again. |
+| **How long** | **Keep voice history**: 30 days, **90 days (the default)**, 1 year, or forever. Once a day the core deletes everything older: both logs' rows, a session idle that long, the older exchanges of a room that is still talking, and the older lines of the satellites' logs. Saving a shorter setting does it at once (Settings → Privacy → Keep voice history asks first). Forever deletes nothing on its own. The setting is `VOICE_HISTORY_KEEP` (`30`, `90`, `365`, `forever`); a value written in `.env` by hand rounds **up** to the next choice, never down (45 keeps 90 days; 0 or more than a year keeps everything), and anything unreadable (`6 months`, `2y`, a typo) deletes nothing: it reads as forever until it is fixed, and the log says so once. **The first run after the update that brings this deletes everything older than 90 days** unless `VOICE_HISTORY_KEEP` says otherwise. A run is skipped, with a warning in the log, when the server's clock looks wrong: earlier than the newest turn, or so far ahead that every turn would go; so a house that has said nothing for longer than the setting keeps its last turns until somebody speaks again. |
 | **Deleting it all** | Settings → Household → People → Voice history → **Delete all voice history** (an admin), after a confirmation that names what goes and what stays. Everything said until that moment goes, everywhere: the rows of both logs, every room's short-term conversation and the satellites' logs. It runs on the server as a job (`voice_history_jobs`), in the same small batches as the daily run; the page shows its progress, a restart in the middle finishes it at the next start, and a failure is retried within the hour. Something said after the press stays. |
 | **Forgetting one person** | "Forget me" in the person's own voice, answered **yes** to "Say yes to delete everything you've said" (the very next turn, within a minute, in the same room or on the same phone, and not in somebody else's recognized voice; anything else deletes nothing), or People → a person → **forget person** (an admin), deletes **what they said**: every turn voice identification attributed to them as the **speaker** (the turn's `person_id`), with Domovoi's answers, and the short-term conversation of each session they spoke in (those entries name no speaker, so the whole of it goes); then the person, their voice samples, memories, favorites and preferences — one transaction. **A turn in which somebody else said their name is not theirs and stays**: it carries the other speaker's id, or none, and the text is never searched. A voice that only *claimed* their name loses only the samples it added and deletes no turns (S1 above); what that voice said while it was recognized as them stays filed under them, and goes with their own "forget me". The "forget me" and the question are theirs and go with the rest; the "yes" is written with nobody's id on it and goes when the setting's window passes. The tool router never offers the forget command on talk about forgetting something else ("forget about it", "forget that"). |
 | **Who can read it** | Unchanged (the 2026-10-16 delta review left this tier as it is): any **paired device** — one holding the household token (a header, or `?device_token=`), or an admin's session (the Bearer, or the dashboard's cookie) — reads a room's Conversations and Sessions (`GET /api/satellites/{room}/conversations`, `/sessions`) and a person's (`GET /api/people/{id}/conversations`, `/sessions`); anything else on the LAN gets `401`. Before first-run setup everything is open to the LAN, as everywhere. `GET /api/voice-history` — the setting, how many turns are kept and since when, the last cleanup and delete, never a word — is the same tier. Changing the setting and deleting it all are an admin's (Bearer; `501` before setup); forgetting a person from the dashboard is an admin's (Bearer; the pre-setup grace kept, like every person and profile delete). |
@@ -2736,8 +2746,10 @@ and from the system's own state (`domovoi/help_desk`, `/api/help`).
   matches. Reading the checks is household tier (`GET /api/help/checks`),
   and what Home shows only to an admin (the update's details, the internet
   question) is shown only to one, on that page — **never in a chat**: a
-  help chat on the home server is household-shared, so its answers use the
-  household view whoever asks, and say where an admin reads the rest. The
+  help answer in any chat, private ones included, uses the household view
+  whoever asks (a private chat is readable by every admin and by its
+  device, which may not be an admin's), and says where an admin reads the
+  rest. The
   passages and records reach a model only on this box, in a block marked
   as data with a marker no passage can know; a plugin's help file is quoted
   as third-party text with its web addresses removed, and a reply keeps
@@ -2753,18 +2765,137 @@ and from the system's own state (`domovoi/help_desk`, `/api/help`).
   a value Domovoi never saw can still be in a free-text line. The server
   keeps no copy; the person reads it, then copies or saves it and posts it
   themselves.
-* **Sending help steps is limited.** At most 3 sends an hour to a person
+* **Voice help sends nothing.** Voice "how do I…" speaks the best page's
+  first sentences and says the full answer is in the manual. Since 1.5.0
+  it no longer offers to send the steps to a phone, so it writes no chat
+  and no delivery row. Rows an older version wrote stay where they were
+  (the person, the chat and its title) until the chat is deleted.
+* **Results sent to a phone go to one of the asker's own phones.** The one
+  voice feature that still sends (a photo search's "Do you want them on
+  your phone?", [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md)) sends only to
+  the most recently seen of the phones marked "This phone belongs to
+  <person>" for the speaker voice ID recognised (1.5.0), never to every phone, at most 3 sends an hour to a person
   (their phones share it) and 3 from one asking session, and the same
-  steps to the same person once an hour; after "Who should I send it
-  to?", only a name the household knows counts as the answer.
-* **Help steps go to the asker's own phones.** Voice "how do I…" sends
-  steps only to the phones marked "This phone belongs to <person>" for the
-  recognised speaker, or for the person named when asked; never to every
-  phone. The app now tells the server that mark (`devices.owner_person_id`,
-  V035), self-asserted like the rest of the device row: it decides where
-  help steps are offered, nothing more. The steps are a home-server chat
-  (household-shared, like every server chat); the delivery row holds only
-  the person, the chat and its title.
+  search to the same person once an hour. That mark
+  (`devices.owner_person_id`, V035) is self-asserted like the rest of the
+  device row. The results are a home-server chat private to that phone
+  (by its device key; shared when the phone has no key yet, an app from
+  before 1.5.0), see [Private chats](#private-chats); the delivery row holds
+  the person, the chat, its title and that phone, and only that phone's
+  catch-up read lists it.
+
+## Private chats
+
+1.5.0, owner decisions 2026-11-25 (design-notes PRIVATE-CHATS.md). A
+home-server chat is **private to the phone or browser that started it**:
+only that device and the house's admins can see it. A **Share with
+household** switch shares it with every paired phone and browser, and can
+be turned back off. The phone apps' own chat (on the phone) stays the fully
+private option: it never leaves the phone.
+
+**The device key.** Without a per-device secret, "private to a device"
+could not be enforced: the device id every client sends is self-asserted,
+and the household token is the same for every device. So `POST
+/api/devices/register` mints a **device key** (256 bits) the first time a
+device row without one registers asking for it (`want_device_key`: a client
+that keeps it; an app from before 1.5.0 never asks, so no key is minted that
+nobody keeps), and returns it once (`device_key`); only
+its SHA-256 is stored (`devices.device_key_hash`, unique). A browser gets
+it as the `domovoi-device-key` cookie, **HttpOnly** (no page script reads
+it) and **SameSite=Strict** (a page on another site can't make the browser
+present it); the apps keep it in their secure storage (Android Keystore,
+iPhone Keychain) and send `X-Domovoi-Device-Key`. A row that has a key is
+never given another: a client that lost its key (cleared storage, a
+reinstall) starts over under a new device id, and its old private chats
+stay, for the admins. Unlike the shared-screen flag or the device id, the
+key **is** a boundary between the house's devices.
+
+**Who sees what** (`domovoi/chat_access.py`, the one place the rule lives;
+both the web and the core use it):
+
+| Viewer ↓ / chat → | Private, mine | Private, another device's | Shared | Admin-only |
+|---|---|---|---|---|
+| The device that started it | everything | 404 | everything | 404 |
+| Another paired device, or one with no key | 404 | 404 | read and write (no share, no delete: 403) | 404 |
+| A shared screen | never owns one | 404 | read and write | 404 |
+| An admin (Bearer, or the cookie on reads) | as owner | read, share, delete; **never write** | everything | read, share, delete |
+| An unpaired browser | 401 | 401 | 401 | 401 |
+
+* **Identity comes from the key alone.** `X-Device-Id`, the
+  `domovoi-device-id` cookie, a body `device_id`, `?device_id=` and the
+  voice turn's `phone_id` are ignored for chats; a message's device is the
+  one the key resolved to. A wrong or missing key is a keyless household
+  caller: it sees shared chats only, and the chats it starts are shared
+  (a 1.4.x app, which already says "shared with the household").
+* **A hidden chat answers exactly like a missing one**: the same 404 and
+  body, on every route that names a thread or one of its children (drafts,
+  document and video jobs, messages). Lists and search filter in the SQL
+  itself, so a search can't match, or quote a snippet from, a chat the
+  caller can't see.
+* **Admins read everything, and write in nothing that isn't theirs.** For
+  parental oversight an admin can list every chat in the house
+  (`?scope=all`), read, share and delete any of them, but can't post in
+  another device's private chat (403 `admin_read_only`): oversight is
+  reading, not speaking as the child. Admin means a live Bearer (a phone's
+  day grant included) or the admin cookie on a read, **never the pre-setup
+  grace**: after `--reset-admin` anyone on the LAN would otherwise read
+  every private chat. Before setup chats work per device, with no admin
+  view.
+* **Shared screens.** A chat started on a shared screen is always shared.
+  A device marked a shared screen later owns nothing while it is one: its
+  earlier private chats are admin-only until it is unmarked (no row is
+  rewritten).
+* **Deleted or key-less owners.** A chat whose device is gone, or lost its
+  key, is admin-only: an admin can share or delete it. It never falls back
+  to shared. A device whose household token was rotated keeps its row and
+  key, and has its chats back once it is paired again.
+* **Sharing races.** A write takes a row lock on the thread, and the share
+  switch waits for it: a send that started before an unshare finishes, and
+  its reply is saved. Any request after the switch gets the 404; every open
+  client reads its list again.
+* **Room voice** (a letter taken by voice) makes a shared chat with no
+  owner: it was said aloud in a shared room and saved into household
+  Documents anyway. **Photos to a phone** make a chat private to one
+  phone, the person's most recently seen (when it holds a key; a phone
+  with no key yet gets a shared one), and only that phone's catch-up read
+  lists the delivery.
+* **The live events carry no chat content** (see *The state socket*).
+* **"My" actions use the key too.** Whatever acts for the person a device
+  says it is (`devices.owner_person_id`: clearing their listening history,
+  their mix, forgetting their face, whose mix a room follows, a draft
+  version's person, "this is me") finds the caller's device by its device
+  key (`web/backend/api/devices.py` `caller_device_row`). A device id alone
+  is accepted only for a device that holds no key yet (an app from before
+  1.5.0); a keyed device is never named by its id alone. The device key with
+  the device's own claim proves a claim as the claim key
+  (`X-Domovoi-Claim-Key`) does, and the claim key stays accepted for older
+  apps.
+
+**What is not a boundary, said plainly.**
+
+* **File tokens stay capabilities.** A chat's pictures and documents are
+  served by 128-bit random tokens, learned only from a chat the caller
+  could read, so an `<img>` and the apps' image loaders keep working. When
+  the request carries an identity (a key or an admin session) the server
+  also checks that the caller can read a chat that names the token. A
+  device that copied a file's address before a chat was unshared keeps
+  that one file.
+* **Printing and Save to Documents leave the chat.** A print job's name
+  shows on the household's printer list like any print, and Save to
+  Documents puts a copy where the household can see it (the button says
+  so).
+* **An in-process plugin is admin-installed code with database access**
+  ("full access to your Domovoi server"); it can read any chat. The plugin
+  SDK has no chat API and gets none.
+* **The migration can't be undone.** V086 made every existing chat
+  private to the device that wrote its first message, and admin-only when
+  none could be matched. Nothing records that they used to be shared, and
+  going back to 1.4.x would show every chat to everyone again. Until a
+  device's own updated app (or browser) registers and takes its key, a
+  household member who knew that device's id could register under it first
+  and read its migrated chats, which every household device could read the
+  day before anyway; the device then finds its key taken
+  (`device_key_ok: false`) and starts over under a new id.
 
 ## Documents in chat
 
@@ -4037,7 +4168,7 @@ watch the server's traffic under **No**.
 | **Face models** — one-time fetch of OpenCV Zoo's YuNet (face detection, MIT) and SFace (face embedding, Apache-2.0) from `media.githubusercontent.com`, each pinned to one commit, its size and its SHA-256; a file that doesn't match is never used ([Faces and people](#faces-and-people)) | Only after an admin turns on **Recognize faces** (off by default), and only while the files aren't on the server | Leave faces off. Under `never` nothing is fetched and faces stay unavailable; or place the two pinned files in `~/.domovoi/face_models/` yourself. |
 | **Satellite setup AP** — a portal-onboarded satellite hosts a WPA2 network with a per-device key until it is provisioned | Only while unprovisioned; it drops the moment credentials are accepted | The key is printed on the device. Plain HTTP over WPA2 is deliberate: a self-signed certificate would train customers through a security warning while typing their Wi-Fi password. The house PSK goes phone→device and never transits the server. The portal's server-address field takes a `ws://`/`wss://` address on an RFC 1918 range or a `.local` name only (the satellite hands its pairing token to whatever it dials), its form body is capped at 8 KB and refused with a 413 before it is read, and the confirmation page shows the resolved address. The network name is checked on both join paths (1-32 bytes, no control characters, no quote or brace) before it touches a root-owned configuration; the wpa_supplicant fallback (used only where NetworkManager is absent) writes `ssid=` as hex and `psk=` as the derived key, and never the passphrase. |
 | **Satellite approval** — a portal-onboarded satellite waits for a human before it is paired | Every first connection from a device presenting a setup code | Type the satellite's six-digit code into the approval card. The dashboard never shows you the code — it is on the device, which is what ties the request on screen to the unit in the room. The server compares it and allows five attempts per room per five minutes. A device that brings a code must bring six digits (or the four that satellites set up before 2026-09-22 were given and still say), or nothing is parked (a request no code could ever approve would only take the name away from the real device). The first device to park holds that room name for three minutes, or until someone approves or rejects it; a different device asking for the same name inside that window is refused as a conflict (`approval_conflict`), and after it the newcomer's request **replaces** the parked one — its token and its own code together, so the code the operator hears from the device in the room is still the only one that approves anything. Being first with an unapprovable request therefore delays onboarding by minutes; it no longer blocks it until someone presses Reject (CORE-22). This is what replaces trust-on-first-use for that path; `SATELLITE_PAIRING_STRICT` still governs tokenless connects. A device set up with the server address left blank never sends its code at all: it checks the approval itself ([Asking every house](#asking-every-house-an-approval-the-device-can-check-140)). |
-| **Version check / pull** — `git fetch`/`pull` against the GitHub repo | Only when an admin clicks check/update in the dashboard | Don't click it. Nothing runs automatically. Under `never` both buttons are greyed and the core answers with the turned-off reason without running git. The follow-up **restart** is admin-gated and can only work if you granted the sudoers line in [LINUX_HOST.md](LINUX_HOST.md). A plain restart bounces systemd units and reaches no network. With the update unit installed it also re-syncs Python dependencies from PyPI (and the PyTorch CPU index) when the pull changed them, and rebuilds the MPD image (Debian's package mirrors) when that changed; it rebuilds the wake-word trainer image when that changed (on a box that built one) and, on an NVIDIA box, installs the NVIDIA Container Toolkit while it is missing (rows below). |
+| **Version check / pull** — `git fetch`/`pull` against the GitHub repo; for a new release, its signed `DomovoiSetup.manifest.json` and `.sig` from the GitHub release (each at most 64 KiB, github.com and its release-asset hosts only) | The check: once a day and at start when the internet answer is **Yes** and **Check for updates by itself** is ticked (the default), else only when someone presses **Check for updates**. The pull: only when an admin presses **Update Domovoi** | Untick **Check for updates by itself**, or answer Sometimes or No, and don't click. Nothing is ever installed by itself. Under `never` both buttons are greyed and the core answers with the turned-off reason without running git. The follow-up **restart** is admin-gated and can only work if you granted the sudoers line in [LINUX_HOST.md](LINUX_HOST.md). A plain restart bounces systemd units and reaches no network. With the update unit installed it also re-syncs Python dependencies from PyPI (and the PyTorch CPU index) when the pull changed them, and rebuilds the MPD image (Debian's package mirrors) when that changed; it rebuilds the wake-word trainer image when that changed (on a box that built one) and, on an NVIDIA box, installs the NVIDIA Container Toolkit while it is missing (rows below). |
 | **Media acquisition** — provider plugins fetching from external sources; add-by-URL fetches the URL you gave | When you ask for something the library doesn't have, or add by URL | Don't install provider plugins / uninstall them; add-by-URL is governed by the outbound-fetch tier above. |
 | **Radio streams** — fetched by the core, for a room's music player (MPD container) or the dashboard's browser player | While you're listening to an internet station (bundled radio plugin, or a plugin that plays a URL through `sdk.playback`). MPD also resumes whatever it had queued after its container restarts | Don't play internet radio; FM/SDR paths in the same plugin are local RF. Under `never` no internet URL is handed to MPD, a room playing one is stopped and internet entries are removed from every queue (at the switch and at every core start), and an open relay is cut off. Since 1.5.0 a room's player never fetches an internet station itself: the radio plugin hands it a one-use relay URL on the core (`/v1/player-relay/<token>`, the core's player relay any plugin can use, SDK 1.16), and the core makes the only request to the station, through the outbound-URL check with every redirect hop checked and pinned to the address its check judged, and passes the audio on. A station that answers the core's first look with audio and a later request with a redirect into the house is refused at the relay, and nothing plays (M11, review of 2026-11-22; before 1.5.0 the player made its own request and followed its own redirects). The token is random, good for one connection, opened within 30 seconds, bound to one room and one station, and served only to the address that room's player calls from; a new play in the room ends the old relay. The relay passes audio only (no playlist, which the player would open entry by entry), reads no faster than 512 KiB/s after an 8 MiB start, ends after 24 hours, and passes the station's ICY title blocks through unchanged so "now playing" still names the song. **No raw internet URL sits in a room's queue** (L20, review of 2026-11-23): every add to a player's queue, whatever asks for it, refuses an internet address that is not a relay URL the core minted (the tuner's stream and anything else on this network still go in), and `sdk.playback.play_url` puts a raw internet URL through the relay first. At core start, after every start of a room's player and when a player is seen to have restarted, each room's queue is checked: an internet entry that isn't relayed is rewritten to a fresh relay URL for that room when the core can tell what it was (its relay record, or the room's play history: a station or a plugin-played file), else removed; a relay URL with no record (it can never play) is removed, and one made for another room is made again for this one. The log names a hash of an address, never the address. A group hand-off makes each relay entry again for the receiving room (tokens are bound to one room and never copied) and refuses a raw internet URL. A relay URL stays in a queue longer than a token lives, so each minted token leaves a record core-side (room, station or file address, kind; in memory and in an owner-only file under `~/.domovoi/player_relay/`, keyed by a hash of the token): when the token's grant is gone (its one connection spent, a file's hours up, a core restart), the request is admitted again only from that room's player's address while that player has this very entry as its current song, playing or paused. So a station resumed after a restart, or after a long pause, plays through the relay again, and a stop still ends the stream at once. The open reads (the status snapshot, the dashboard's now-playing, the room queue a guest can read) show a relay entry with the token replaced by a hash of it (L23), and the play history records the station's own address, not the token. FM is not relayed: the player reads the tuner's own listener on this machine. On a development box running the core natively on Windows or macOS (Docker Desktop) the player's connection arrives from loopback, so there the token alone binds it. A plugin playing a finite file through the same relay (`kind="file"`) gets a token good for byte-range requests (a seek, a resume) for 6 hours from minting rather than one connection, the first within 30 seconds; every request re-checks the room's token, the caller's address and the internet answer, a newer request ends the token's earlier stream, and no ICY is asked for. A request from another address, or one carrying a forwarding header (`X-Forwarded-For`, `Forwarded`, `X-Real-IP`; a local process could otherwise claim the player's address through the server's loopback-trusting rewrite), is answered 404 and changes nothing (L23, L24 of the review of 2026-11-23: the token is readable on the open now-playing reads, so a stranger presenting it no longer ends the room's stream; the access log blanks it). The relay asks for identity and refuses any `Content-Encoding`, reading the station's raw bytes in chunks of at most 16 KiB, so a few kilobytes of nested gzip can't become hundreds of megabytes in the core (H2). The station has 15 seconds to answer with its headers and first bytes (else 504), a running stream ends after 30 seconds without bytes, and a stop or internet set to No ends a stalled read within 2 seconds (M4). A relay is minted only for a room that has a music player, after the outbound check (L25). |
 | **Radio detectors and lookups** — ICY "now playing" polls of favorited internet stations, short clips of them to Shazam, station-directory searches (radio-browser.info), an FM favorite's call sign to find its simulcast, the FCC import | While favorited internet stations exist (detectors), and when you search, favorite FM or import | `RADIO_SAMPLER_ENABLED=false` / `RADIO_ICY_POLLER_ENABLED=false` in `~/.domovoi/plugins/radio.env`. Offline the sampler samples only house-network streams, against your own library. |
@@ -5844,6 +5975,18 @@ socket only — the HTTP reads of the same presence, calendar and satellite
 state still answered the LAN, so polling them was the feed this gate
 denied. They take the household tier now (see *Device tier*, "So is who is
 home"), so the socket and the reads beside it answer the same callers.
+
+**Chats are not on the socket (1.5.0).** Every paired phone and browser gets
+every event, so the two that concern chats carry no chat content.
+`chat.changed` is an opaque digest (an HMAC under a key that lives only in
+the web process's memory) that moves when any chat is written: no thread
+count, no time, no id. Each client then reads its own list over HTTP,
+which shows it only the chats it may see (`domovoi/chat_access.py`).
+`help_deliveries.changed` rows carry ids and a time, and as the title only
+the kind ("Photos from Domovoi", or nothing), never the chat's own title;
+`person_id` and `thread_id` stay so the phone apps can tell which rows are
+theirs. Until 1.5.0 the first carried the house's chat count and last-write
+time, and the second each delivered chat's title.
 
 ## A room phone (Android room mode)
 

@@ -310,7 +310,6 @@ async def clear_person(person_id: int, request: Request) -> dict[str, Any]:
     nobody has; 403, saying why and who may, for anything else (the
     dashboard answers it with the admin sign-in)."""
     admin = await devices_api.caller_is_admin(request)
-    caller = devices_api.caller_device(request)
     async with session_scope() as s:
         person = (
             await s.execute(text("SELECT name FROM people WHERE id = :p"), {"p": person_id})
@@ -319,24 +318,16 @@ async def clear_person(person_id: int, request: Request) -> dict[str, Any]:
             raise HTTPException(status_code=404, detail=f"person {person_id} not found")
         name = person[0]
         if not admin:
-            device = (
-                await s.execute(
-                    text(
-                        "SELECT owner_person_id, shared_screen, claim_key_hash, owner_claimed_at "
-                        "FROM devices WHERE device_id = :id"
-                    ),
-                    {"id": caller},
-                )
-            ).first() if caller else None
-            if device is None or device[0] != person_id or device[1]:
+            # The caller's own device, by its device key (or, for an app
+            # from before 1.5.0, its id): devices.caller_device_row.
+            device = await devices_api.caller_device_row(s, request)
+            if device is None or device.owner_person_id != person_id or device.shared_screen:
                 raise HTTPException(status_code=403, detail=NOT_YOURS_DETAIL.format(name=name))
-            if not device[2]:
-                raise HTTPException(
-                    status_code=403, detail=devices_api.RECLAIM_DETAIL.format(name=name))
-            if not devices_api.claim_key_matches(device[2], devices_api.presented_claim_key(request)):
-                raise HTTPException(
-                    status_code=403, detail=devices_api.WRONG_KEY_DETAIL.format(name=name))
-            claimed = device[3]
+            if not devices_api.proves_claim(device, request):
+                raise HTTPException(status_code=403, detail=(
+                    devices_api.WRONG_KEY_DETAIL if device.claim_key_hash else devices_api.RECLAIM_DETAIL
+                ).format(name=name))
+            claimed = device.owner_claimed_at
             if claimed is None or claimed > datetime.now(timezone.utc) - FRESH_CLAIM:
                 raise HTTPException(status_code=403, detail=FRESH_CLAIM_DETAIL.format(name=name))
         deleted = await music_listens.delete_person(s, person_id)
@@ -362,24 +353,15 @@ async def note_room_start(request: Request, body_device_id: str | None, room_id:
     music is for that device's claimed person from now on (the household
     when it has none, is a shared screen, or didn't name itself).
     Best-effort: a failure here never fails the play."""
-    from web.backend.api import files as files_api
 
-    caller = files_api.caller_device_id(request, body_device_id) or devices_api.caller_device(request)
     try:
         async with session_scope() as s:
-            person = None
-            if caller:
-                row = (
-                    await s.execute(
-                        text(
-                            "SELECT owner_person_id, shared_screen FROM devices "
-                            "WHERE device_id = :id"
-                        ),
-                        {"id": caller},
-                    )
-                ).first()
-                if row is not None and not row[1]:
-                    person = row[0]
+            # The caller's own device (its key; an id only for a device
+            # from before 1.5.0): devices.caller_device_row.
+            device = await devices_api.caller_device_row(s, request, body_device_id)
+            device = device if device is not None and device.trusted else None
+            person = device.owner_person_id if device is not None and not device.shared_screen else None
+            caller = device.device_id if device is not None else None
             await music_listens.set_room_listener(s, room_id, person, caller)
     except Exception as e:  # noqa: BLE001 — attribution is a nicety
         log.debug("listens: room listener for %s not recorded: %s", room_id, e)

@@ -13303,6 +13303,26 @@
         }
       }
     },
+    "/api/updates/notice": {
+      "get": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Updates Notice",
+        "description": "Home's update row (1.5.0): ``{available, version, highlights,\nfound_by, found_at, updating}``, or ``{available: false, updating:\nfalse}``. Proxy of the core's ``GET /v1/updates/notice``: only a signed\nrelease makes a notice, never a commit on main; nothing here installs.",
+        "operationId": "updates_notice_api_updates_notice_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/config/version/check": {
       "post": {
         "tags": [
@@ -23365,6 +23385,7 @@
           "chat"
         ],
         "summary": "List Threads",
+        "description": "The threads this caller may see (domovoi/chat_access.py), newest\nfirst, each with ``shared``, ``mine``, ``can_write``, ``can_share``,\n``can_delete``, ``admin_view`` and ``owner_name`` (the owning device's\nname, for an admin; else null).",
         "operationId": "list_threads_api_chat_threads_get",
         "parameters": [
           {
@@ -23403,6 +23424,22 @@
               "title": "Q"
             },
             "description": "Search: threads whose title or any message contains this (case ignored), newest first, at most 100, each with `match_snippet` (the words around the first match in a message)."
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "mine",
+                "all"
+              ],
+              "type": "string",
+              "description": "mine (the default, for everyone): this device's chats and the shared ones. all: every chat in the house, for an admin only (403 `admin_required` otherwise).",
+              "default": "mine",
+              "title": "Scope"
+            },
+            "description": "mine (the default, for everyone): this device's chats and the shared ones. all: every chat in the house, for an admin only (403 `admin_required` otherwise)."
           }
         ],
         "responses": {
@@ -23478,7 +23515,7 @@
           "chat"
         ],
         "summary": "Patch Thread",
-        "description": "Rename and/or archive a thread. A title set here is the person's\n(``title_by_user``): the model's title job never writes over it. A\nblank title is refused (400).",
+        "description": "Rename and/or archive a thread, its internet chip, or share it with\nthe household (``shared``). A title set here is the person's\n(``title_by_user``): the model's title job never writes over it. A\nblank title is refused (400). Answers the thread as the list gives it.\n\nSharing is the owning device's or an admin's (403 ``not_yours``);\nrenaming, archiving and the chip are a write (an admin can't write in\nanother device's private chat: 403 ``admin_read_only``); 404 for a\nchat the caller can't see, the body a missing one gets. A shared\nscreen's chats stay shared (409 ``shared_screen``). The switch waits\nfor a send that started before it (chat_access: the row lock).",
         "operationId": "patch_thread_api_chat_threads__thread_id__patch",
         "parameters": [
           {
@@ -23576,7 +23613,7 @@
           "chat"
         ],
         "summary": "List Messages",
-        "description": "The thread's messages, oldest first. No device ids: a user row says\n``mine`` (sent from the ``X-Device-Id`` the caller names) and\n``device_name``.",
+        "description": "The thread's messages, oldest first, and ``thread``: the thread as\nthe list gives it (its access fields: ``can_write``, ``admin_view``\u2026).\nNo device ids: a user row says ``mine`` (sent from this caller's\ndevice, by its device key) and ``device_name``.",
         "operationId": "list_messages_api_chat_threads__thread_id__messages_get",
         "parameters": [
           {
@@ -24342,7 +24379,7 @@
           "chat"
         ],
         "summary": "List All Drafts",
-        "description": "Every chat's drafts, newest first (the Chat page lists them even with\nAI features off, so a draft can still be saved).",
+        "description": "The drafts of every chat the caller can see, newest first (the Chat\npage lists them even with AI features off, so a draft can still be\nsaved).",
         "operationId": "list_all_drafts_api_chat_drafts_get",
         "parameters": [
           {
@@ -24434,7 +24471,7 @@
           "chat"
         ],
         "summary": "Get Draft",
-        "description": "The draft and every version (oldest first): its markdown, the plain\ntext the changes view shows (``display``), and ``changes`` against the\nversion before (``[[op, text]]``: ``=`` kept, ``+`` added, ``-``\nremoved; null for v1). No device ids: each version says ``mine``\n(made from the ``X-Device-Id`` the caller names) and ``device_name``.",
+        "description": "The draft and every version (oldest first): its markdown, the plain\ntext the changes view shows (``display``), and ``changes`` against the\nversion before (``[[op, text]]``: ``=`` kept, ``+`` added, ``-``\nremoved; null for v1). No device ids: each version says ``mine``\n(made on this caller's device, by its device key) and ``device_name``.",
         "operationId": "get_draft_api_chat_drafts__draft_id__get",
         "parameters": [
           {
@@ -25617,7 +25654,7 @@
           "help"
         ],
         "summary": "Deliveries",
-        "description": "Help steps sent by voice (V035): newest first, or after ``since_id``\noldest first. The app reads its owner's on start and after a\n``help_deliveries.changed`` event.",
+        "description": "Results sent by voice to a person's phones (V035; a voice photo\nsearch's since 1.5.0): newest first, or after ``since_id`` oldest\nfirst. The app reads its owner's on start and after a\n``help_deliveries.changed`` event. A delivery made to one phone (1.5.0,\nV086) is listed only to that phone (by its device key) and to admins.",
         "operationId": "deliveries_api_help_deliveries_get",
         "parameters": [
           {
@@ -29309,6 +29346,28 @@
               }
             ],
             "title": "Claim Key"
+          },
+          "device_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Key"
+          },
+          "device_key_ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Key Ok"
           }
         },
         "type": "object",
@@ -29391,6 +29450,11 @@
               }
             ],
             "title": "Owner Person Id"
+          },
+          "want_device_key": {
+            "type": "boolean",
+            "title": "Want Device Key",
+            "default": false
           }
         },
         "type": "object",
@@ -30147,6 +30211,17 @@
             "maxLength": 4096,
             "minLength": 1,
             "title": "Rel Path"
+          },
+          "shared": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shared"
           }
         },
         "type": "object",
@@ -37457,7 +37532,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "pattern": "^[a-z][a-z0-9_]{0,31}$"
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
               },
               {
                 "type": "null"
@@ -37669,6 +37744,17 @@
               }
             ],
             "title": "Title"
+          },
+          "shared": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shared"
           }
         },
         "type": "object",
@@ -37709,6 +37795,17 @@
               }
             ],
             "title": "Internet Allowed"
+          },
+          "shared": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shared"
           }
         },
         "type": "object",

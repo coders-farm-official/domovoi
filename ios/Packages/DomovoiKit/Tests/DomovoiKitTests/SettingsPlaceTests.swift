@@ -102,7 +102,7 @@ final class SettingsPlaceTests: XCTestCase {
                  "Admin on this phone"],
                 ["Wake words", "Voices", "Greetings"],
                 ["Models", "Chat"],
-                ["Internet", "Voice history"],
+                ["Internet", "Keep voice history", "Command recordings"],
                 ["About & updates", "Health", "App layout", "Advanced"],
             ],
             SettingsGroup.allCases.map { sections(of: $0).map(\.label) }

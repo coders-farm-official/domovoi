@@ -34,3 +34,15 @@ def test_switching_to_the_channel_already_followed_records_the_choice():
     gv = (_P(__file__).resolve().parents[1] / "git_version.py").read_text(encoding="utf-8")
     early = gv[gv.index('if track["branch"] == channel and track["channel"] == channel:'):]
     assert early.splitlines()[1].strip() == '_run("config", "domovoi.intendedChannel", channel)'
+
+
+def test_on_main_the_update_line_replaces_the_badge_and_the_latest_release_words():
+    """Update notices (1.5.0): once the card knows where this code stands
+    against the latest signed release, its line says so, and neither the
+    badge nor "latest release: X" repeats it (test_web_update_notices.py
+    drives it). Unknown keeps the badge, once."""
+    src = SETTINGS.read_text(encoding="utf-8")
+    badge = src[src.index("const sigBadge"):src.index("return (", src.index("const sigBadge"))]
+    assert "!(mainLine && !sig.enforced && sig.status !== 'verified')" in badge
+    latest = src[src.index('className="version-latest-release"') - 300:src.index('className="version-latest-release"')]
+    assert "!mainLine" in latest

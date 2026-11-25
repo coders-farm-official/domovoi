@@ -38,9 +38,11 @@ from sqlalchemy import text  # noqa: E402
 
 from domovoi import admin_auth as admin_auth_mod  # noqa: E402
 from domovoi import git_version  # noqa: E402
+from domovoi import update_notice  # noqa: E402
 from domovoi import self_restart  # noqa: E402
 from domovoi import local_peer, windows_side  # noqa: E402
 from domovoi import voice_activity  # noqa: E402
+from domovoi import chat_access  # noqa: E402
 from domovoi import turn_watchdog  # noqa: E402
 from domovoi import join_problems, server_identity  # noqa: E402
 from domovoi import room_ids  # noqa: E402
@@ -911,6 +913,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from domovoi.workers.plugin_update_check import PluginUpdateChecker
 
     WORKERS.add_worker(PluginUpdateChecker(), owner="core")
+    # Update notices (1.5.0): a new signed Domovoi release, looked for once
+    # a day and at start, only under the internet answer Yes and with
+    # "Check for updates by itself" ticked (workers/update_notice_check.py).
+    # Its own settings source: the first wait is the 2-minute start delay.
+    from domovoi.workers.update_notice_check import UpdateNoticeChecker
+
+    _update_notice_worker = UpdateNoticeChecker()
+    WORKERS.add_worker(_update_notice_worker, owner="core", settings_source=_update_notice_worker)
     WORKERS.add_worker(AudiobookIndexer(), owner="core")
     # The place in the book of a room playing one, every 30 s
     # (domovoi/workers/room_book_positions.py).
@@ -1361,6 +1371,7 @@ async def phone_voice_turn(
     # False: the phone speaks the reply itself (its own voice pick), so no
     # audio is rendered for it. Default true, as before.
     speak: bool = Form(True),
+    viewer: Any = chat_access.VIEWER,
 ) -> Any:
     """One push-to-talk turn from the app's chat mic: speech-to-text, voice
     identification, the router satellites use, text-to-speech (unless
@@ -1378,6 +1389,7 @@ async def phone_voice_turn(
             audio=data,
             player=phone_voice.parse_player(player),
             speak=speak,
+            viewer=viewer,
         )
     except phone_voice.PhoneTurnRefused as e:
         return JSONResponse(status_code=e.status, content={"detail": e.detail, "code": e.code})
@@ -3797,6 +3809,14 @@ async def admin_version() -> dict[str, Any]:
     except Exception as e:  # noqa: BLE001 — the version card must still render
         log.warning("windows side unreadable: %s", e)
         state["windows_side"] = {"present": False}
+    # Update notices (1.5.0, domovoi/update_notice.py): the automatic check,
+    # the latest signed release and its highlights, how this code relates
+    # to it, and the notice Home shows. No fetch here.
+    try:
+        state["updates"] = await update_notice.updates_state()
+    except Exception as e:  # noqa: BLE001 — the version card must still render
+        log.warning("update notice state unreadable: %s", e)
+        state["updates"] = None
     return state
 
 
@@ -3809,8 +3829,30 @@ async def admin_version() -> dict[str, Any]:
 async def admin_version_check() -> dict[str, Any]:
     """Fetch the upstream and report how far behind/ahead HEAD is. Best-effort
     — offline / no tracking branch comes back with upstream=False and an error
-    string rather than a 500. Read-only: never mutates the tree."""
-    return await git_version.commits_behind()
+    string rather than a 500. Read-only: never mutates the tree.
+
+    Since 1.5.0 it is the update notice's check too
+    (``update_notice.run_check``): after the fetch, the latest release's
+    signed manifest, and the answer carries ``updates`` (as the version
+    read does), freshly computed. A press during the automatic check waits
+    for it and answers its result."""
+    return await update_notice.run_check("manual")
+
+
+@app.get(
+    "/v1/updates/notice",
+    # The device tier's read half: every paired phone and browser, and an
+    # admin (the dashboard cookie after a reload too), never an unpaired
+    # guest: an open read would tell any device on the network that this
+    # house runs an older release (owner decision 2026-11-25).
+    dependencies=[Depends(require_device_read)],
+)
+async def updates_notice() -> dict[str, Any]:
+    """Home's "Domovoi 1.5.0 is available": ``{available, version,
+    highlights, found_by, found_at, updating}``, or ``{available: false,
+    updating: false}``. Only a signed release makes one; hidden under the
+    internet answer No. No SHA, no channel, no error text."""
+    return await update_notice.notice()
 
 
 @app.post(

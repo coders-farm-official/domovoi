@@ -1023,7 +1023,7 @@ const VideoControls = ({ s, fire }) => {
  * Off for every room until an admin turns it on here. While on, each
  * wake-word or follow-up command said to this satellite is kept on the
  * Domovoi server (audio + transcript) for tuning when Domovoi stops
- * listening; Settings → Voice history plays and labels them. Turning it off
+ * listening; Settings → Command recordings plays and labels them. Turning it off
  * deletes what was kept, so both directions confirm first. The server's
  * security tier decides every call; the admin check here only picks
  * which controls to show. */
@@ -1111,7 +1111,7 @@ const SatCaptureControl = ({ s, fire, refresh }) => {
       </div>
       <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 6 }}>
         {admin
-          ? `for tuning when domovoi stops listening · kept ${days} days · review in Settings → Voice history`
+          ? `for tuning when domovoi stops listening · kept ${days} days · review in Settings → Command recordings`
           : 'admins turn this on or off · sign in to change it'}
       </div>
     </div>

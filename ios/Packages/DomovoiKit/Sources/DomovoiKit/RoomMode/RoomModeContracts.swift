@@ -38,13 +38,54 @@ public struct RoomEnrolment: Equatable, Sendable, Codable {
     /// The room id the phone connects as: `^[a-z][a-z0-9_]{0,31}$`.
     public let roomID: String
     /// The room's name exactly as the payload carried it (or as typed).
+    /// With ``inRoom`` set it is this phone's own name ("Kitchen 2").
     public let roomLabel: String
+    /// `in=` (1.5.0): the existing room this phone joins ("Add a satellite
+    /// to the Kitchen" on the dashboard makes `room=Kitchen%202&in=kitchen`);
+    /// nil: a room of its own. Sent in the hello as `requested_room` until
+    /// the phone is approved. A value that is not a room id
+    /// (``RoomEnrolmentParser/isRoomID(_:)``) is ignored, like an unknown key.
+    /// `Enrolment.inRoom` (`RoomEnrolment.kt`).
+    public let inRoom: String?
+    /// The name of the room ``inRoom`` names, as far as the payload tells
+    /// (``RoomEnrolmentParser/invitedRoomName(_:)``); nil without ``inRoom``.
+    /// What the phone says it joins until the server names the room.
+    public let inRoomName: String?
 
-    public init(coreURL: String, fingerprint: String, roomID: String, roomLabel: String) {
+    public init(
+        coreURL: String, fingerprint: String, roomID: String, roomLabel: String,
+        inRoom: String? = nil, inRoomName: String? = nil
+    ) {
         self.coreURL = coreURL
         self.fingerprint = fingerprint
         self.roomID = roomID
         self.roomLabel = roomLabel
+        self.inRoom = inRoom
+        self.inRoomName = inRoomName
+    }
+}
+
+/// The room this phone is in (1.5.0, `ready.room` and the `room` frame):
+/// its id, its NAME (what the phone shows: "This phone is in the Kitchen";
+/// never the id), whether other devices share it, and `claim` (another
+/// device is in it or a linked room: the one-turn-per-wake claims, which
+/// this phone does not declare yet, so it is only kept).
+/// `RoomProtocol.RoomPlace` (`RoomProtocol.kt`).
+public struct RoomPlace: Equatable, Sendable {
+    public let roomID: String
+    /// The room's name; nil when the core could not read the room's row (it
+    /// sends null, never the id). The phone then keeps the name it last
+    /// showed for the same room, or says "this room"
+    /// (``RoomStatusText/roomName(_:kept:keptFor:label:)``).
+    public let name: String?
+    public let shared: Bool
+    public let claim: Bool
+
+    public init(roomID: String, name: String?, shared: Bool, claim: Bool = false) {
+        self.roomID = roomID
+        self.name = name
+        self.shared = shared
+        self.claim = claim
     }
 }
 
@@ -102,6 +143,10 @@ public struct RoomStatus: Equatable, Sendable {
     public var musicPlaying: Bool
     /// iOS has taken the microphone (``RoomMicStop``); nil while it has not.
     public var stoppedByIOS: RoomMicStop?
+    /// The room this phone is in, as the server said it (`ready.room`, the
+    /// `room` frame; 1.5.0); nil before that, or from an older core. The
+    /// screen says its name, never its id.
+    public var place: RoomPlace?
 
     public init(
         link: RoomLink = .connecting,
@@ -114,7 +159,8 @@ public struct RoomStatus: Equatable, Sendable {
         wakeProblem: String? = nil,
         peerRoom: String? = nil,
         musicPlaying: Bool = false,
-        stoppedByIOS: RoomMicStop? = nil
+        stoppedByIOS: RoomMicStop? = nil,
+        place: RoomPlace? = nil
     ) {
         self.link = link
         self.phase = phase
@@ -127,6 +173,7 @@ public struct RoomStatus: Equatable, Sendable {
         self.peerRoom = peerRoom
         self.musicPlaying = musicPlaying
         self.stoppedByIOS = stoppedByIOS
+        self.place = place
     }
 }
 
@@ -221,6 +268,51 @@ public protocol RoomKeeping: RoomModelBook {
     func setWakeWords(_ words: [RoomWakeWord])
     var muted: Bool { get }
     func setMuted(_ on: Bool)
+    /// The room this phone asked to join (the room code's `in=`, 1.5.0),
+    /// sent in every hello as `requested_room` until the server accepts the
+    /// phone (its first `ready`, ``clearRequestedRoom()``); nil: none asked
+    /// for, or already approved. It only pre-selects the approval card's room.
+    var requestedRoom: String? { get }
+    /// Approved: the server decides the room from here on.
+    func clearRequestedRoom()
+    /// The name of the room this phone is in, as the server last said it
+    /// (`ready.room` / the `room` frame), or before that the room the room
+    /// code said it joins or makes; nil: none known. Kept WITH the room it
+    /// names (``roomNameRoom``): a name is only ever shown for that room.
+    var roomName: String? { get }
+    /// The room id ``roomName`` belongs to; nil for a name kept before 1.5.0.
+    var roomNameRoom: String? { get }
+    /// The server said where this phone is (``RoomNameKeeping/nameToKeep(_:keptName:keptFor:)``):
+    /// a name is kept with its room; no name writes nothing.
+    func noteRoom(_ place: RoomPlace)
+}
+
+/// The kept room name's one rule (`RoomStore.nameToKeep`), here so the real
+/// store and the in-memory one cannot differ.
+public enum RoomNameKeeping {
+    /// What ``RoomKeeping/noteRoom(_:)`` writes for `place`: its (room id,
+    /// name) when it has a name that is not already the one kept for that
+    /// room; nil (write nothing) for no name, so a room the core could not
+    /// read never overwrites the last name.
+    public static func nameToKeep(_ place: RoomPlace, keptName: String?, keptFor: String?) -> (roomID: String, name: String)? {
+        guard let name = place.name, !name.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        if name == keptName && place.roomID == keptFor { return nil }
+        return (place.roomID, name)
+    }
+
+    /// The name an enrolment knows, kept with its room: the room `in=` joins
+    /// (``RoomEnrolment/inRoomName``), else the room the code makes (its own
+    /// name, ``RoomEnrolment/roomLabel``).
+    public static func enrolled(_ e: RoomEnrolment) -> (roomID: String, name: String)? {
+        func shown(_ v: String?) -> String? {
+            guard let v, !v.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+            return v
+        }
+        if let asked = e.inRoom.flatMap({ RoomEnrolmentParser.isRoomID($0) ? $0 : nil }) {
+            return shown(e.inRoomName).map { (asked, $0) }
+        }
+        return shown(e.roomLabel).map { (e.roomID, $0) }
+    }
 }
 
 /// The store's rules every implementation shares (`RoomStore.kt:185-208`),
@@ -282,12 +374,20 @@ public final class InMemoryRoomStore: RoomKeeping, @unchecked Sendable {
         var muted = false
         var seen: [String: RoomSeenList] = [:]
         var trained: [String: String] = [:]
+        var requested: String?
+        var roomName: String?
+        var roomNameRoom: String?
     }
 
     private let state: RoomLock<State>
 
     public init(enrolment: RoomEnrolment? = nil, pairingToken: String? = nil, approvalCode: String? = nil) {
-        state = RoomLock(State(enrolment: enrolment, token: pairingToken, code: approvalCode))
+        state = RoomLock(State(
+            enrolment: enrolment, token: pairingToken, code: approvalCode,
+            requested: enrolment?.inRoom.flatMap { RoomEnrolmentParser.isRoomID($0) ? $0 : nil },
+            roomName: enrolment.flatMap(RoomNameKeeping.enrolled)?.name,
+            roomNameRoom: enrolment.flatMap(RoomNameKeeping.enrolled)?.roomID
+        ))
     }
 
     public var enrolment: RoomEnrolment? { state.withLock { $0.enrolment } }
@@ -322,6 +422,19 @@ public final class InMemoryRoomStore: RoomKeeping, @unchecked Sendable {
     }
     public func trainedSHA(_ name: String) -> String? { state.withLock { $0.trained[name] } }
     public func setTrainedSHA(_ name: String, _ sha: String) { state.withLock { $0.trained[name] = sha } }
+    public var requestedRoom: String? { state.withLock { $0.requested } }
+    public func clearRequestedRoom() { state.withLock { $0.requested = nil } }
+    public var roomName: String? {
+        state.withLock { $0.roomName.flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 } }
+    }
+    public var roomNameRoom: String? { state.withLock { $0.roomNameRoom } }
+    public func noteRoom(_ place: RoomPlace) {
+        state.withLock {
+            guard let kept = RoomNameKeeping.nameToKeep(place, keptName: $0.roomName, keptFor: $0.roomNameRoom) else { return }
+            $0.roomName = kept.name
+            $0.roomNameRoom = kept.roomID
+        }
+    }
 }
 
 // MARK: - the listening networks (R1 implements, R2 consumes)

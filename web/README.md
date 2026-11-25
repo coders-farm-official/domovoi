@@ -33,7 +33,7 @@ device on the LAN). Hash routing, so deep links like `#music` and
 had before the 1.0 regroup still work (`#satellites` and
 `#settings/satellites` open Settings → Rooms, `#settings/devices` opens
 Phones & browsers, `#settings/configuration` opens Advanced, `#settings/recordings`
-opens Voice history).
+and `#settings/voice-history` open Command recordings, its name before 1.5.0).
 
 The web backend runs on its own — read pages still render straight
 from Postgres with the core down. Anything needing live core state
@@ -73,7 +73,7 @@ web/
 `static/settings.jsx` builds Settings from `SETTINGS_GROUPS`: Household
 (Rooms, People, Phones & browsers, Media folders, Printers & scanners),
 Voice (Wake words, Voices, Greetings), Chat & AI (Models, Search, Chat),
-Privacy (Internet, Voice history, Listening history), Documents (Fonts) and System (About & updates,
+Privacy (Internet, Keep voice history, Command recordings, Listening history), Documents (Fonts) and System (About & updates,
 Health, App layout, Advanced). People is the People page (`people.jsx`),
 drawn inside its section; `#people` opens it there, and a shared screen
 doesn't list it.
