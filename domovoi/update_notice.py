@@ -495,6 +495,10 @@ def _highlights(state: dict[str, Any], tag: str, commit: str, channel: str | Non
 
 
 def _updating() -> bool:
+    """Blocking. Whether a restart or update of Domovoi is under way now:
+    the version read's ``restart_in_progress`` (self_restart.underway),
+    whether or not a notice is stored, so a house on main or an update
+    started by hand reads as updating too."""
     try:
         last = git_version.read_last_update()
         return bool(self_restart.underway(last))
@@ -503,8 +507,10 @@ def _updating() -> bool:
 
 
 def _payload(notice: dict[str, Any] | None, highlights: list[str], updating: bool) -> dict[str, Any]:
+    """The notice object; ``updating`` is the real update state, with or
+    without a notice (design note §8)."""
     if not notice:
-        return {"available": False, "updating": False}
+        return {"available": False, "updating": updating}
     return {"available": True, "version": notice["version"], "highlights": list(highlights),
             "found_by": notice["found_by"], "found_at": notice["found_at"], "updating": updating}
 
@@ -550,11 +556,12 @@ async def notice() -> dict[str, Any]:
     head = await asyncio.to_thread(head_sha)
     bad = await asyncio.to_thread(_bad_sha)
     n = await _live_notice(state, head, bad)
+    updating = await asyncio.to_thread(_updating)
     if not n:
-        return _payload(None, [], False)
+        return _payload(None, [], updating)
     channel = await asyncio.to_thread(lambda: git_version.tracking()["channel"])
     hl = await asyncio.to_thread(_highlights, state, n["tag"], n["commit"], channel)
-    return _payload(n, hl, await asyncio.to_thread(_updating))
+    return _payload(n, hl, updating)
 
 
 async def updates_state() -> dict[str, Any]:
@@ -568,7 +575,7 @@ async def updates_state() -> dict[str, Any]:
         "auto_check": {"enabled": bool(settings.update_auto_check), "active": why is None, "why_off": why,
                        "last_at": last.get("at"), "last_ok": last.get("ok") if last else None},
         "latest_release": None, "relation": "unknown", "changes_since": None,
-        "notice": {"available": False, "updating": False},
+        "notice": _payload(None, [], await asyncio.to_thread(_updating)),
     }
     if head is None:
         return out
@@ -590,7 +597,7 @@ async def updates_state() -> dict[str, Any]:
         nh = out["latest_release"]["highlights"] if (out["latest_release"] and
                                                      out["latest_release"]["tag"] == n["tag"]) else \
             await asyncio.to_thread(_highlights, state, n["tag"], n["commit"], channel)
-        out["notice"] = _payload(n, nh, await asyncio.to_thread(_updating))
+        out["notice"] = _payload(n, nh, out["notice"]["updating"])
     return out
 
 

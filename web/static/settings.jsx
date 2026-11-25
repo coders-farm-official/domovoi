@@ -1318,11 +1318,20 @@ const HostSideNotes = ({ host, kind = 'windows', channel, busy, onRetry, request
 // Update notices (1.5.0, domovoi/update_notice.py): the `updates` key of the
 // version read and the check. Versions are held to x.y.z (at most 14
 // characters, so they can't break a line) and highlights to three short
-// strings, shown only as text.
+// strings, shown only as text. A highlight is 8 to 80 Unicode code points,
+// the server parser's own rule (domovoi/release_highlights.py, MIN_CHARS and
+// MAX_CHARS): counted with Array.from, not .length (UTF-16 units), so an
+// emoji counts once.
 const UPDATE_VERSION_RE = /^\d{1,4}\.\d{1,4}\.\d{1,4}$/;
+const UPDATE_HIGHLIGHT_MIN = 8;
+const UPDATE_HIGHLIGHT_MAX = 80;
 const updateVersion = (v) => (typeof v === 'string' && UPDATE_VERSION_RE.test(v) ? v : null);
-const updateHighlights = (list) => (Array.isArray(list) ? list : [])
-  .filter((t) => typeof t === 'string' && t.length > 0 && t.length <= 80).slice(0, 3);
+const updateHighlightOk = (t) => {
+  if (typeof t !== 'string') return false;
+  const n = Array.from(t).length;
+  return n >= UPDATE_HIGHLIGHT_MIN && n <= UPDATE_HIGHLIGHT_MAX;
+};
+const updateHighlights = (list) => (Array.isArray(list) ? list : []).filter(updateHighlightOk).slice(0, 3);
 
 // "Check for updates by itself": the line under the box, by why it's off.
 const AUTO_CHECK_LINES = {

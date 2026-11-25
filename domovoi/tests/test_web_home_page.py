@@ -385,6 +385,15 @@ SCENARIOS["updating_notice"] = scenario(
     house(**{"GET /api/auth/status": STATUS_ADMIN, "GET /api/updates/notice": {**NOTICE, "updating": True}}),
     SNAP, ls=PAIRED_LS,
 )
+# An update under way with no notice stored (a house on main, an update
+# started by hand): `updating` is the real update state on its own.
+SCENARIOS["updating_without_notice"] = scenario(
+    house(**{"GET /api/auth/status": STATUS_ADMIN,
+             "GET /api/updates/notice": {"available": False, "updating": True}}), SNAP, ls=PAIRED_LS,
+)
+SCENARIOS["member_updating_without_notice"] = scenario(
+    house(**{"GET /api/updates/notice": {"available": False, "updating": True}}), SNAP, ls=PAIRED_LS,
+)
 SCENARIOS["no_notice"] = scenario(
     house(**{"GET /api/updates/notice": {"available": False, "updating": False}}), SNAP, ls=PAIRED_LS,
 )
@@ -1185,6 +1194,13 @@ def test_while_updating_anyone_reads_updating_and_no_button(driven) -> None:
     snap = driven["updating_notice"]
     assert _update_row(snap)["text"] == "Domovoi is updating…"
     assert not any(b["text"] == "Update" for b in snap["buttons"])
+
+
+def test_any_update_under_way_reads_updating_even_without_a_notice(driven) -> None:
+    for name in ("updating_without_notice", "member_updating_without_notice"):
+        snap = driven[name]
+        assert _update_row(snap)["text"] == "Domovoi is updating…", name
+        assert not any(b["text"] == "Update" for b in snap["buttons"]), name
 
 
 def test_no_notice_no_row_and_a_refusal_is_quiet(driven) -> None:

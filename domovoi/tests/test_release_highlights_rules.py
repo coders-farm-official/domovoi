@@ -92,6 +92,20 @@ def test_bad_highlights_are_refused(text, why):
     assert problems and any(why in p for p in problems), problems
 
 
+CAT = "🐱"   # one code point, two UTF-16 units
+
+
+def test_an_emoji_highlight_is_counted_in_code_points():
+    """The release check's rule is the house's: 8 to 80 code points, so an
+    emoji counts once (the web and the phones count the same way)."""
+    at_80, at_8 = CAT + "a" * 79, CAT + "a" * 7
+    assert fr.release_doc_problems(_doc([at_80, at_8, HL[2]]), "1.5.0") == []
+    assert fr.release_highlights_of(_doc([at_80, at_8, HL[2]])) == [at_80, at_8, HL[2]]
+    for bad in (CAT + "a" * 80, CAT + "a" * 6):
+        problems = fr.release_doc_problems(_doc([bad, HL[1], HL[2]]), "1.5.0")
+        assert problems and any("exactly 3 items" in p for p in problems), (len(bad), problems)
+
+
 def test_every_markdown_character_is_refused():
     for c in "`*_[]<>|#\\":
         assert fr.release_highlights.markdown_problems([f"Words {c} and more."]), c

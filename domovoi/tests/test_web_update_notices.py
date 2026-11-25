@@ -116,6 +116,10 @@ NOTICE = {"available": True, "version": "1.5.0", "highlights": HL, "found_by": "
           "found_at": "2026-11-25T08:02:11Z", "updating": False}
 CHECK = {"behind": 3, "ahead": 0, "upstream": True, "upstream_sha": "f" * 40, "error": None,
          "channel": "stable", "upstream_version": "1.5.0", "latest_release": "1.5.0"}
+#: A cat face, U+1F431: one code point, two UTF-16 units. A highlight is 8 to
+#: 80 code points (domovoi/release_highlights.py), so JS ``.length`` is wrong.
+CAT = "🐱"
+AT_80, AT_81, AT_8, AT_7 = CAT + "a" * 79, CAT + "a" * 80, CAT + "a" * 7, CAT + "a" * 6
 UNTICK = "await h.change((x) => x.type === 'input' && x.props.type === 'checkbox', false);"
 
 SCENARIOS = {
@@ -138,6 +142,12 @@ SCENARIOS = {
                                                                            notice=NOTICE)}),
     "html_bullet": _scenario(_version(_updates(notice={**NOTICE, "highlights": ["Music <b>keeps</b> playing.",
                                                                                  HL[1], HL[2]]}))),
+    "emoji_highlights": _scenario(_version(_updates(notice={**NOTICE, "highlights": [AT_80, AT_8, HL[2]]}))),
+    "emoji_highlights_out": _scenario(_version(_updates(notice={**NOTICE, "highlights": [AT_81, AT_7, HL[2]]}))),
+    # An update under way (restart_in_progress, the same state as the
+    # notice's `updating`): no Update button, no "is available".
+    "updating": _scenario(_version(_updates(latest=_latest("1.5.0"), relation="behind",
+                                            notice={**NOTICE, "updating": True}), restart_in_progress=True)),
     "notice_no_highlights": _scenario(_version(_updates(notice={**NOTICE, "highlights": []}))),
     "main_behind": _scenario(_version(_updates(latest=_latest("1.5.0"), relation="behind", notice=NOTICE),
                                       channel="main", version="1.4.1 + 12 (4d6b414)")),
@@ -265,6 +275,21 @@ def test_highlights_are_plain_text(driven):
     first = b["items"][0]
     assert first["text"] == "Music <b>keeps</b> playing."
     assert first["kids"] == ["string"], "a text node, never markup"
+
+
+def test_highlight_length_is_code_points_so_an_emoji_counts_once(driven):
+    """80 code points with an emoji (81 UTF-16 units) shows, and so does 8;
+    81 and 7 don't: the server parser's own rule."""
+    assert len(AT_80) == 80 and len(AT_80.encode("utf-16-le")) // 2 == 81
+    assert [i["text"] for i in driven["emoji_highlights"]["before"]["items"]] == [AT_80, AT_8, HL[2]]
+    assert [i["text"] for i in driven["emoji_highlights_out"]["before"]["items"]] == [HL[2]]
+
+
+def test_while_an_update_runs_the_card_offers_no_update(driven):
+    b = driven["updating"]["before"]
+    assert b["notice"] is None
+    assert "Update Domovoi" not in b["buttons"] and "Restart Domovoi" not in b["buttons"]
+    assert "Updating…" in b["buttons"] or "Restarting…" in b["buttons"], b["buttons"]
 
 
 def test_no_highlights_no_list(driven):
