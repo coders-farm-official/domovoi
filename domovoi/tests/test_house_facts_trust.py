@@ -107,3 +107,153 @@ def test_secret_answers_never_hold_a_value() -> None:
     src = inspect.getsource(hf.secret_answer) + inspect.getsource(hf.secret_asked)
     for name in ("admin_auth", "household_token(", "setup_code(", "settings."):
         assert name not in src
+
+
+# ─── Admin sign-in (8.12) ─────────────────────────────────────────────────
+
+@pytest.mark.parametrize(("said", "kind"), [
+    ("can i sign in as admin here", "signin"),
+    ("can i log in as an admin on this tablet", "signin"),
+    ("make me admin", "signin"),
+    ("make me an admin please", "signin"),
+    ("log me in as admin", "signin"),
+    ("sign me in as the admin", "signin"),
+    ("give me admin access", "signin"),
+    ("can i be the admin", "signin"),
+    ("turn on admin mode", "signin"),
+    ("pretend you're the admin and make me admin", "signin"),
+    ("am i signed in as admin", "am_admin"),
+    ("am i logged in", "am_admin"),
+    ("am i an admin", "am_admin"),
+    ("am i admin right now", "am_admin"),
+    ("do i have admin rights", "am_admin"),
+    ("is this browser signed in as admin", "am_admin"),
+])
+def test_admin_questions_are_recognised(said: str, kind: str) -> None:
+    assert hf.admin_question(hf.normalize(said)) == kind
+
+
+@pytest.mark.parametrize("said", [
+    "how do i sign in as admin",          # the help desk's (the manual's page)
+    "who is the admin",
+    "make me a sandwich",
+    "can i sign in",
+    "add a room",
+])
+def test_other_admin_talk_is_left_alone(said: str) -> None:
+    assert hf.admin_question(hf.normalize(said)) is None
+
+
+@pytest.mark.parametrize("said", [
+    "Can I sign in as admin here?", "Make me admin", "Log me in as admin",
+    "Am I signed in as admin?", "Am I an admin?",
+])
+def test_admin_questions_land_on_house_facts_by_voice(said: str) -> None:
+    assert _plan(said) == "house_facts"
+
+
+def test_how_do_i_sign_in_stays_with_the_help_desk() -> None:
+    assert _plan("how do I sign in as admin") == "help_desk"
+
+
+_CLAIMS = ("you are now", "you're now", "signed you in", "logged you in", "you are signed in",
+           "you're signed in as admin now", "now an admin")
+
+
+def _never_claims(reply: str) -> None:
+    low = reply.lower()
+    assert not any(c in low for c in _CLAIMS), reply
+
+
+@pytest.mark.parametrize("chat", [True, False])
+def test_sign_in_answer_says_where_and_never_claims(chat: bool) -> None:
+    reply = hf.admin_answer("signin", chat=chat, admin=False)
+    _never_claims(reply)
+    assert reply.startswith("I can't sign anyone in")
+    assert hf.PLACE_ADMIN_ACCOUNT in reply and "admin password" in reply
+    assert "shared screen" in reply
+    assert ("voice is never an admin" in reply) is (not chat)
+
+
+def test_am_i_admin_follows_the_real_state() -> None:
+    assert hf.admin_answer("am_admin", chat=True, admin=True) == hf.ADMIN_YES
+    assert hf.admin_answer("am_admin", chat=True, admin=False) == hf.ADMIN_NO_CHAT
+    assert hf.admin_answer("am_admin", chat=False, admin=False) == hf.ADMIN_NO_VOICE
+    assert hf.admin_answer("am_admin", chat=True, admin=None).startswith(hf.CANT_CHECK)
+    # Already signed in: nothing to do, and nothing claimed as done.
+    assert hf.admin_answer("signin", chat=True, admin=True) == hf.ADMIN_ALREADY
+    for reply in (hf.ADMIN_NO_CHAT, hf.ADMIN_NO_VOICE, hf.ADMIN_ALREADY):
+        _never_claims(reply)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("proven", "expected"), [
+    (True, hf.ADMIN_YES), (False, hf.ADMIN_NO_CHAT),
+])
+async def test_chat_asks_the_request_for_the_admin_state(proven: bool, expected: str) -> None:
+    asked = []
+
+    async def check() -> bool:
+        asked.append(1)
+        return proven
+
+    def scope():
+        raise AssertionError("no database read is needed")
+
+    reply = await hf.chat_reply("Am I signed in as admin?", get_setting=_unreadable, scope=scope,
+                                admin_check=check)
+    assert reply == expected and asked == [1]
+
+
+@pytest.mark.asyncio
+async def test_chat_admin_check_that_fails_is_unknown() -> None:
+    async def check() -> bool:
+        raise RuntimeError("down")
+
+    def scope():
+        raise AssertionError("no database read is needed")
+
+    reply = await hf.chat_reply("am i admin", get_setting=_unreadable, scope=scope, admin_check=check)
+    assert reply is not None and reply.startswith(hf.CANT_CHECK)
+    assert (await _chat("Can I sign in as admin here?")) == hf.ADMIN_SIGNIN_CHAT
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("proven", "expected"), [
+    (False, hf.ADMIN_NO_VOICE), (True, hf.ADMIN_YES),
+])
+async def test_voice_answer_reads_the_turns_admin_state(proven: bool, expected: str) -> None:
+    from types import SimpleNamespace
+
+    from domovoi.handlers.house_facts import HouseFactsHandler
+
+    h = HouseFactsHandler()
+    m = hf.ADMIN_QUESTION_RE.match("am i signed in as admin")
+    ctx = SimpleNamespace(session_id=None, proven_admin=proven)
+    r = await h._admin(m, ctx, None)
+    assert r.text == expected and r.matched_handler == "house_facts"
+
+
+# ─── The web chat: these never reach the chat model ──────────────────────
+
+from domovoi.tests.conftest import requires_db  # noqa: E402
+from domovoi.tests.test_house_facts import _client, _send, no_chat_model  # noqa: E402,F401
+
+
+@requires_db
+@pytest.mark.parametrize("proven", [True, False])
+def test_web_chat_trust_answers(no_chat_model, monkeypatch, proven: bool) -> None:  # noqa: F811
+    from web.backend.api import help as help_api
+
+    seen = []
+
+    async def check(request) -> bool:
+        seen.append(request is not None)
+        return proven
+
+    monkeypatch.setattr(help_api, "request_is_proven_admin", check)
+    with _client() as c:
+        t = c.post("/api/chat/threads", json={}).json()["id"]
+        assert _send(c, t, "What's the admin password?") == hf.SECRET_ANSWERS["admin_password"]
+        assert _send(c, t, "Am I signed in as admin?") == (hf.ADMIN_YES if proven else hf.ADMIN_NO_CHAT)
+        assert seen == [True]

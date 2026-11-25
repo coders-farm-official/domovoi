@@ -962,11 +962,15 @@ async def _help_turn(
         return None
 
 
-async def _house_fact_reply(thread_id: int, content: str, user_row_id: int) -> str | None:
+async def _house_fact_reply(thread_id: int, content: str, user_row_id: int,
+                            request: Request | None = None) -> str | None:
     """The house's own answer to ``content`` (domovoi/house_facts.py), or
     None. Settings come from the core's snapshot (this process's copy goes
     stale on a save); one it doesn't hold is "unknown", never a guess.
+    "Am I signed in as admin?" is answered from THIS request's own admin
+    check (help.request_is_proven_admin), never from the words.
     Never fails the send."""
+    from web.backend.api import help as help_api
 
     async def previous_assistant() -> dict[str, Any] | None:
         async with session_scope() as s:
@@ -980,6 +984,7 @@ async def _house_fact_reply(thread_id: int, content: str, user_row_id: int) -> s
         return await house_facts.chat_reply(
             content, get_setting=house_facts.snapshot_setting(get_cached_snapshot()),
             scope=session_scope, previous_assistant=previous_assistant,
+            admin_check=lambda: help_api.request_is_proven_admin(request),
         )
     except Exception as e:  # noqa: BLE001 — the chat answers as before
         log.warning("chat: house facts failed: %s: %s", type(e).__name__, str(e)[:200])
@@ -1130,7 +1135,7 @@ async def send_message(thread_id: int, body: SendBody, request: Request) -> Stre
         # A privacy or "can you …?" question this house answers from its
         # own state (domovoi/house_facts.py), the same as by voice: said by
         # the app, no model asked.
-        fact = await _house_fact_reply(thread_id, body.content, user_row_id)
+        fact = await _house_fact_reply(thread_id, body.content, user_row_id, request)
         if fact is not None:
             return await _immediate_reply(thread_id, fact, {"model_role": "house_facts"})
 

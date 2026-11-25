@@ -1192,6 +1192,82 @@ def secret_answer(which: str) -> str:
     return SECRET_ANSWERS.get(which, CANT_SHARE)
 
 
+# Admin sign-in (8.12): "can I sign in as admin here?", "make me admin",
+# "log me in as admin" — the model once answered "You are now signed in as
+# admin". Nothing here signs anyone in or out, and no answer says it did:
+# it says where the admin signs in (the admin password, on the dashboard)
+# and that a shared screen is not the place. "Am I signed in as admin?"
+# is answered from the turn's real state (``Context.proven_admin``; in
+# chat the server's own check on the request), never from what was said.
+_ADMIN = r"(?:an |the |your )?admin(?:istrator)?"
+_HERE = (r"(?: here| now| right now| please| on this (?:screen|device|tablet|phone|computer|browser"
+         r"|chat))?")
+ADMIN_QUESTIONS: tuple[tuple[str, str], ...] = (
+    ("signin",
+     rf"(?:{OVERRIDE_LEAD})?(?:"
+     rf"(?:can|could|may) (?:i|we) (?:sign|log) ?in as {_ADMIN}"
+     rf"|(?:sign|log) (?:me|us) in as {_ADMIN}"
+     rf"|make (?:me|us) {_ADMIN}"
+     rf"|(?:give|grant) (?:me|us) admin(?:istrator)?(?: (?:access|rights|powers|mode))?"
+     rf"|(?:can|could|may) (?:i|we) (?:be|become|have) {_ADMIN}(?: (?:access|rights|powers))?"
+     rf"|(?:turn on|enter|switch to|go into|go to) admin(?:istrator)? mode"
+     rf"|i want to (?:be|become|sign in as|log in as) {_ADMIN}"
+     rf"|let (?:me|us) be {_ADMIN}"
+     rf"){_HERE}"),
+    ("am_admin",
+     rf"am i (?:signed|logged) in(?: as {_ADMIN})?{_HERE}"
+     rf"|am i {_ADMIN}{_HERE}"
+     rf"|(?:do|have) i (?:have|got) admin(?:istrator)? (?:access|rights|powers){_HERE}"
+     rf"|are you in admin(?:istrator)? mode{_HERE}"
+     rf"|is this (?:browser|device|phone|screen|chat|tablet) signed in(?: as {_ADMIN})?"),
+)
+ADMIN_QUESTION_RE = re.compile(
+    r"^(?:" + "|".join(f"(?P<admin_{k}>{rx})" for k, rx in ADMIN_QUESTIONS) + r")\Z"
+)
+
+_SIGN_IN_WHERE = (
+    f"The admin signs in with the admin password on the dashboard, in {PLACE_ADMIN_ACCOUNT}, "
+    "on their own phone or computer, never on a shared screen like a kitchen tablet."
+)
+ADMIN_SIGNIN_VOICE = f"I can't sign anyone in, and a voice is never an admin. {_SIGN_IN_WHERE}"
+ADMIN_SIGNIN_CHAT = f"I can't sign anyone in from a chat. {_SIGN_IN_WHERE}"
+ADMIN_ALREADY = "You're already signed in as admin here, so there's nothing to do."
+ADMIN_YES = "Yes: this has a live admin sign-in right now."
+ADMIN_NO_VOICE = (
+    f"No. A voice is never an admin: the admin signs in with the admin password on the "
+    f"dashboard, in {PLACE_ADMIN_ACCOUNT}."
+)
+ADMIN_NO_CHAT = (
+    f"No. This chat isn't signed in as admin right now. The admin signs in with the admin "
+    f"password in {PLACE_ADMIN_ACCOUNT}."
+)
+
+
+def admin_question(transcript: str) -> str | None:
+    """"signin" or "am_admin" for an admin sign-in question
+    (``transcript`` normalized), else None."""
+    m = ADMIN_QUESTION_RE.match(transcript or "")
+    if not m or m.lastgroup is None:
+        return None
+    return m.lastgroup[len("admin_"):]
+
+
+def admin_answer(kind: str, *, chat: bool, admin: bool | None) -> str:
+    """The fixed answer. ``admin``: the turn's real admin state (the
+    server's own check: ``Context.proven_admin``, or in chat
+    ``request_is_proven_admin``), None when it couldn't be asked. Words
+    only: it never changes who is signed in."""
+    if kind == "am_admin":
+        if admin:
+            return ADMIN_YES
+        if admin is None:
+            return f"{CANT_CHECK} {_SIGN_IN_WHERE}"
+        return ADMIN_NO_CHAT if chat else ADMIN_NO_VOICE
+    if admin:
+        return ADMIN_ALREADY
+    return ADMIN_SIGNIN_CHAT if chat else ADMIN_SIGNIN_VOICE
+
+
 # ─── The fallback: a fixed privacy answer, never a model's ────────────────
 
 _PRIVACY_WORDS_RE = re.compile(
@@ -1288,14 +1364,27 @@ async def chat_reply(
     get_setting: SettingGetter,
     scope: Any,
     previous_assistant: Callable[[], Any] | None = None,
+    admin_check: Callable[[], Any] | None = None,
 ) -> str | None:
     """The deterministic reply to a typed chat message, or None (the chat
     answers as before). ``previous_assistant`` is an async callable giving
-    the thread's last assistant row (``{"stats": ...}``) or None."""
+    the thread's last assistant row (``{"stats": ...}``) or None;
+    ``admin_check`` an async callable giving whether THIS request carries
+    a live admin sign-in (the server's own check), asked only for an
+    admin sign-in question; without it the state is unknown."""
     t = normalize(message)
     secret = secret_asked(t)
     if secret is not None:
         return secret_answer(secret)
+    admin_kind = admin_question(t)
+    if admin_kind is not None:
+        admin: bool | None = None
+        if admin_check is not None:
+            try:
+                admin = bool(await admin_check())
+            except Exception as e:  # noqa: BLE001 — unknown, said as such
+                log.debug("house facts: the admin check failed: %s", e)
+        return admin_answer(admin_kind, chat=True, admin=admin)
     qid = question_id(t)
     if qid == "internet_for_that":
         prev = await previous_assistant() if previous_assistant is not None else None

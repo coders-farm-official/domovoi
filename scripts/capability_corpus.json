@@ -1815,7 +1815,8 @@
       "kind": "question",
       "must_include": [
         "shared|this screen"
-      ]
+      ],
+      "stub": true
     },
     {
       "id": "9.1",
