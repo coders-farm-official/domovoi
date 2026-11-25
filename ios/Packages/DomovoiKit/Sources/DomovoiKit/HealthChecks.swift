@@ -161,17 +161,30 @@ public struct AttentionRow: Equatable, Sendable, Identifiable {
     public let key: String
     public let tone: HealthTone
     public let text: String
-    public let target: HomeTarget
+    /// Where a tap goes; nil for a row that opens nothing (the update
+    /// notice, ``homeUpdateNoticeRow(notice:paired:admin:shared:)``).
+    public let target: HomeTarget?
     public let at: String?
+    /// The update notice's lines, drawn as its own wrapping row rather than
+    /// one line; nil for every other row.
+    public let update: UpdateNoticeLines?
 
     public var id: String { key }
 
-    public init(key: String, tone: HealthTone, text: String, target: HomeTarget, at: String? = nil) {
+    public init(
+        key: String,
+        tone: HealthTone,
+        text: String,
+        target: HomeTarget?,
+        at: String? = nil,
+        update: UpdateNoticeLines? = nil
+    ) {
         self.key = key
         self.tone = tone
         self.text = text
         self.target = target
         self.at = at
+        self.update = update
     }
 }
 
