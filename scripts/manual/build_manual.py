@@ -165,7 +165,7 @@ PIECES: dict[str, tuple] = {
     "Look things up": ("lookups", "online only when you say yes", ["look up", "search", "internet", "wikipedia", "web", "allow once", "always allow internet", "searxng", "brave", "sources", "kiwix"], {}),
     "What Domovoi is good and not so good at": ("good-and-not", "where to trust the answers, and where to check", ["trust", "accurate", "accuracy", "reliable", "wrong", "mistakes", "heads-up", "warning", "limits", "good at", "bad at", "weak"], {}),
     "When AI is off": ("ai-off", "what still works without the AI models", ["ai off", "no ai", "without ai", "turn off ai", "ai features", "optional", "commands only", "set up for home commands"], {}),
-    "Asking Domovoi for help": ("help-desk", "ask it, show it, report it", ["help", "how do i", "ask domovoi", "screenshot", "report a problem", "diagnostics", "send the steps", "question mark"], {}),
+    "Asking Domovoi for help": ("help-desk", "ask it, show it, report it", ["help", "how do i", "ask domovoi", "screenshot", "report a problem", "diagnostics", "full answer", "question mark"], {}),
     # Documents and letters
     "Ask about a document": ("ask-document", "attach a file, ask what it says", ["document", "pdf", "word", "docx", "odt", "excel", "csv", "attach a document", "ask about", "sources", "pages", "couldn't find"], {}),
     "Summaries of long documents": ("long-documents", "read in parts, with stop", ["summary", "summarize", "long document", "progress", "carry on", "stop", "use home server"], {}),

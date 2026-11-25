@@ -46,8 +46,9 @@ Channels emitted (core; enabled plugins add their own via manifest
 * ``containers`` — the container guard's open and recent incidents in
   plain words, the banner every page shows and whether the freeze is on
   (V024, docs/CONTAINER_GUARD.md); fires on every incident write
-* ``help_deliveries`` — help steps sent by voice to a person's phones in
-  the last hour (V035: ``{id, person_id, thread_id, title, created_at}``,
+* ``help_deliveries`` — results sent by voice to a person's phones in
+  the last hour (a voice photo search's "Photos: …" chats; voice help's
+  "Help: …" steps before 1.5.0) (V035: ``{id, person_id, thread_id, title, created_at}``,
   newest first, at most 20); fires when one is sent. A phone posts a
   notification for a row whose person is its owner ("This phone belongs
   to"); every other phone ignores it. The titles are those of chats every
@@ -227,9 +228,10 @@ NOTIFY_CHANNEL_TO_REALTIME: dict[str, str] = {
     # `containers.changed` event (the household view: plain words, no
     # image references — an admin reads those over HTTP).
     "container_incidents_changed": "containers",
-    # Help steps sent by voice to a person's phones (V035,
-    # domovoi/help_desk/delivery.py). The app's notification rides the
-    # resulting `help_deliveries.changed` event.
+    # Results sent by voice to a person's phones (V035,
+    # domovoi/help_desk/delivery.py: a voice photo search's since 1.5.0).
+    # The app's notification rides the resulting `help_deliveries.changed`
+    # event.
     "help_deliveries_changed": "help_deliveries",
     # A phone room's battery (V040, domovoi/room_battery.py): a new report
     # the core kept, a low-battery warning opening or closing, a room's
@@ -1082,7 +1084,7 @@ HELP_DELIVERIES_PUSH_MAX = 20
 
 
 async def _snapshot_help_deliveries() -> list[dict[str, Any]]:
-    """Help steps sent by voice in the last hour, newest first
+    """Results sent by voice to phones in the last hour, newest first
     (``help_deliveries.changed``). ``[]`` when V035 is missing."""
     try:
         async with session_scope() as s:
@@ -1186,7 +1188,7 @@ StatePollLoop._CHANNEL_HELPERS = {
     # The container guard's open and recent incidents, the banner and the
     # freeze state (web/backend/api/containers.py: the household view).
     "containers": _snapshot_containers,
-    # Help steps sent by voice to a person's phones (V035).
+    # Results sent by voice to a person's phones (V035).
     "help_deliveries": _snapshot_help_deliveries,
     # Phone rooms' open low-battery warnings (V040).
     "room_battery": _snapshot_room_battery,

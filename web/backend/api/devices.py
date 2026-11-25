@@ -144,11 +144,12 @@ class DeviceRegistration(BaseModel):
     platform: str | None = Field(default=None, max_length=32)
     user_agent: str | None = Field(default=None, max_length=400)
     # "This phone belongs to" (V035): the person (people.id) the app's
-    # Settings → Connection names, so voice help can send steps to the
-    # asker's own phones. Only applied when SENT (null clears it; leaving it
+    # Settings names. Whose listens, mixes, drafts and calendars a device's
+    # are, and where a voice photo search's results may be sent. Only
+    # applied when SENT (null clears it; leaving it
     # out keeps it): a browser, or an app from before, never touches it. An
     # id no person has is stored as nobody. Self-asserted like the rest of
-    # the row: it decides where help steps go, nothing more.
+    # the row.
     owner_person_id: int | None = Field(default=None, ge=1)
 
 

@@ -1085,7 +1085,8 @@ async def send_message(thread_id: int, body: SendBody, request: Request) -> Stre
 #: Who wrote a reply that "try again" may replace: the chat model, for a
 #: typed message (``stats.model_role``). A spoken turn's reply ("voice":
 #: the core answered it, maybe with an action such as a timer) and any
-#: other writer's (``"help"``: the help desk's delivered steps) are not
+#: other writer's (``"help"``: voice help's sent steps, before 1.5.0;
+#: ``"media"``: a voice photo search sent to a phone) are not
 #: the chat model's to write again. A row with no ``model_role`` (from
 #: before V017) counts as the chat model's when it was typed.
 RETRYABLE_ROLES = frozenset({"chat", "vision", "override"})

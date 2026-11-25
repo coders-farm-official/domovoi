@@ -2820,7 +2820,7 @@
     "screenshot",
     "report a problem",
     "diagnostics",
-    "send the steps",
+    "full answer",
     "question mark"
    ],
    "blocks": [
@@ -2884,7 +2884,7 @@
     },
     {
      "type": "p",
-     "text": "After the short answer, Domovoi asks \"Want me to send the steps to your phone?\" Say yes, and they arrive as a chat called \"Help: …\" on the phones marked as yours ([Settings → Household → Phones & browsers](route:app/connection), **This phone belongs to**, in the app). If Domovoi doesn't know your voice, it asks who to send them to. It never sends them to every phone."
+     "text": "Domovoi says the short answer and where it came from, then \"The full answer is in the manual.\" Open the page with **?** on the dashboard, or in the app's manual. A plugin's own help ends \"The full answer is in that plugin's help.\""
     },
     {
      "type": "label",
