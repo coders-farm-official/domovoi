@@ -411,6 +411,8 @@ _RIGHT_NOW = r"(?: right now| now| all the time| at the moment)?"
 _ME = r"(?: me| us| everything| what i say| what we say)?"
 _HOUSE = r"(?:the|this|my|our) house"
 _FRIEND = r"(?:my |a |our )?friends?(?:'s|s'|s)? houses?"
+_FRIEND_SEES = (r"(?:hear|see|listen to|read) (?:me|us|my stuff|my things|what i say|anything|my messages"
+                r"|what we say|our stuff|our things|everything)")
 
 QUESTIONS: tuple[tuple[str, str], ...] = (
     ("internet_for_that",
@@ -452,8 +454,10 @@ QUESTIONS: tuple[tuple[str, str], ...] = (
      r"|can (?:other people|anyone else|anyone|others|everyone|people) (?:see|read|hear) my "
      r"(?:messages|chats?|chat history|conversations)"
      r"|are my (?:chats|messages|conversations) private"),
+    # "Can my friend's house hear me OR see my stuff?" (15.15): one or two
+    # of the verbs, joined by "or" / "and".
     ("friend_houses",
-     rf"can {_FRIEND} (?:hear|see|listen to|read) (?:me|us|my stuff|my things|what i say|anything|my messages)"
+     rf"can {_FRIEND} {_FRIEND_SEES}(?:,? (?:or|and) {_FRIEND_SEES})?"
      rf"|what can {_FRIEND} see"
      rf"|what does {_FRIEND} see"),
     ("private",
@@ -646,8 +650,9 @@ def _friend_houses(f: HouseFacts) -> str:
         return CANT_CHECK
     if not f.friend_houses:
         return "No. Friend Houses is off, so no other house can reach this one."
-    return ("No. A friend's house only sees that this house is running and reachable, never "
-            "who's home, and only the messages and lists you send or share with it.")
+    return ("No. A friend's house never hears this house and can't see who's in it. It only "
+            "sees that this house is reachable, and only the messages and lists you send or "
+            "share with it.")
 
 
 def _private(f: HouseFacts) -> str:

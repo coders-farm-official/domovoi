@@ -2665,7 +2665,8 @@
       "must_not_include": [
         "who'?s (?:at )?home"
       ],
-      "note": "SECURITY_PRIVACY.md:2804-2811"
+      "note": "SECURITY_PRIVACY.md:2804-2811",
+      "stub": true
     },
     {
       "id": "15.16",
