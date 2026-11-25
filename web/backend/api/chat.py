@@ -117,6 +117,8 @@ from web.backend.api import chat_letters as _letters
 from domovoi.doc_qa import letter as _letter
 from web.backend.api import chat_drafts as _drafts
 from web.backend.api import chat_videos as _videos
+from web.backend.api import chat_memory
+from web.backend.api import devices as devices_api
 from web.backend.api.devices import valid_device_id
 from web.backend.db import session_scope
 from web.backend.domovoi_client import auth_forward_headers, domovoi_url, get_cached_snapshot
@@ -984,6 +986,33 @@ async def _house_fact_reply(thread_id: int, content: str, user_row_id: int) -> s
         return None
 
 
+#: Said when a memory command couldn't be done (the database failed): the
+#: model never gets the turn, so nothing claims it was saved or forgotten.
+MEMORY_FAILED_TEXT = "I couldn't reach the saved memories just now, so nothing was saved or forgotten. Try again in a moment."
+
+
+async def _memory_reply(
+    thread_id: int, content: str, before_id: int, device_id: str | None,
+) -> chat_memory.Reply | None:
+    """The memory step (web/backend/api/chat_memory.py) for ``content``,
+    whose row is ``before_id``: done and committed, or None (not a memory
+    command: the model answers). A failure on a memory command is said as
+    one, never handed to the model."""
+    try:
+        async with session_scope() as s:
+            r = await chat_memory.reply(s, thread_id=thread_id, content=content,
+                                        before_id=before_id, device_id=device_id)
+            if r is not None:
+                await s.commit()
+            return r
+    except Exception as e:  # noqa: BLE001
+        log.warning("chat: memory step failed: %s: %s", type(e).__name__, str(e)[:200])
+        if chat_memory.command(content) is None:
+            return None
+        return chat_memory.Reply(MEMORY_FAILED_TEXT, {"model_role": chat_memory.MODEL_ROLE,
+                                                      "memory": {"action": "failed"}})
+
+
 @router.post("/threads/{thread_id}/messages", dependencies=SEND)
 async def send_message(thread_id: int, body: SendBody, request: Request) -> StreamingResponse:
     """Persist the user turn, stream the assistant reply as SSE, persist the
@@ -1090,6 +1119,14 @@ async def send_message(thread_id: int, body: SendBody, request: Request) -> Stre
         )
 
     if not images and not documents and body.revise_draft is None:
+        # "remember that …", "forget that", "what do you remember about
+        # me?": done by the memory step for the person this device belongs
+        # to, and said by it; the model never claims a memory
+        # (web/backend/api/chat_memory.py).
+        mem = await _memory_reply(thread_id, body.content, user_row_id,
+                                  device_id or devices_api.caller_device(request))
+        if mem is not None:
+            return await _immediate_reply(thread_id, mem.text, mem.stats)
         # A privacy or "can you …?" question this house answers from its
         # own state (domovoi/house_facts.py), the same as by voice: said by
         # the app, no model asked.
@@ -1147,7 +1184,7 @@ def _retry_refused(code: str, detail: str) -> JSONResponse:
                                     "writer's reply, not the chat model's), `already_retried` (another try again "
                                     "on this reply is running, or has replaced it)"}},
 )
-async def retry_reply(thread_id: int, request: Request) -> StreamingResponse:
+async def retry_reply(thread_id: int, request: Request = None) -> StreamingResponse:  # type: ignore[assignment]
     """"Try again": a new reply to the thread's last question, in place of
     the reply it got. Streams as ``POST .../messages`` does; the old row is
     deleted and the new one written in one transaction once the new reply
@@ -1161,7 +1198,12 @@ async def retry_reply(thread_id: int, request: Request) -> StreamingResponse:
     reply (the core may have set a timer with it) or another writer's, 409
     ``nothing_to_retry`` when the thread doesn't end with a reply to a
     question, 409 ``already_retried`` when another try again is replacing
-    it. The model doesn't see the reply being replaced."""
+    it. The model doesn't see the reply being replaced.
+
+    A memory command ("remember that …") whose reply was the model's (a
+    thread from before the memory step) is done by the memory step now,
+    for the person the retrying device belongs to, and its words replace
+    the model's (web/backend/api/chat_memory.py)."""
     async with session_scope() as s:
         thread = (
             await s.execute(text("SELECT person_id, title FROM chat_threads WHERE id = :id"), {"id": thread_id})
@@ -1172,7 +1214,7 @@ async def retry_reply(thread_id: int, request: Request) -> StreamingResponse:
             await s.execute(
                 text(
                     """
-                    SELECT id, role, content, images, source, stats FROM chat_messages
+                    SELECT id, role, content, images, source, stats, device_id FROM chat_messages
                      WHERE thread_id = :id ORDER BY id DESC LIMIT 2
                     """
                 ),
@@ -1188,6 +1230,10 @@ async def retry_reply(thread_id: int, request: Request) -> StreamingResponse:
     asked_images = [
         i for i in (last[1].images or []) if _upload_path((i or {}).get("token", "")) is not None
     ]
+    if not asked_images and chat_memory.command(last[1].content or "") is not None:
+        return await _memory_retry(thread_id, last[0].id, last[1].id, last[1].content or "",
+                                   (devices_api.caller_device(request) if request is not None else None)
+                                   or valid_device_id(last[1].device_id))
     stop_title_jobs()
     # The thread is marked as retrying by the stream itself (_answer), so a
     # client that drops before the first byte leaves no mark behind.
@@ -1197,6 +1243,54 @@ async def retry_reply(thread_id: int, request: Request) -> StreamingResponse:
         # Who is asking is checked again for the new reply (N1).
         request=request,
     )
+
+
+async def _memory_retry(
+    thread_id: int, old_id: int, question_id: int, question: str, device_id: str | None,
+) -> StreamingResponse:
+    """"Try again" on the model's reply to a memory command: the memory
+    step does it, and its reply replaces the model's in the same
+    transaction (``done`` carries ``replaces``, as a retry's does)."""
+    if thread_id in _retrying:
+        return _retry_refused("already_retried", "this reply is already being tried again")
+    _retrying.add(thread_id)
+    try:
+        async with session_scope() as s:
+            mem = await chat_memory.reply(s, thread_id=thread_id, content=question,
+                                          before_id=question_id, device_id=device_id)
+            if mem is None:  # pragma: no cover - the caller checked it is a command
+                mem = chat_memory.Reply(MEMORY_FAILED_TEXT, {"model_role": chat_memory.MODEL_ROLE,
+                                                             "memory": {"action": "failed"}})
+            gone = (await s.execute(
+                text("DELETE FROM chat_messages WHERE id = :id AND thread_id = :t AND role = 'assistant' "
+                     "RETURNING id"),
+                {"id": old_id, "t": thread_id},
+            )).first()
+            if gone is None:
+                await s.rollback()
+                return _retry_refused("already_retried", "this reply was already tried again")
+            row = (await s.execute(
+                text(
+                    """
+                    INSERT INTO chat_messages AS m (thread_id, role, content, model, error, stats)
+                    VALUES (:t, 'assistant', :c, NULL, NULL, CAST(:st AS JSONB))
+                    RETURNING {cols}, NULL::text AS device_name, NULL::text AS speaker_name
+                    """.format(cols=_MSG_COLUMNS)
+                ),
+                {"t": thread_id, "c": mem.text, "st": json.dumps(mem.stats)},
+            )).mappings().first()
+            await s.execute(text("UPDATE chat_threads SET updated_at = now() WHERE id = :t"), {"t": thread_id})
+            await _notify_chat(s, "message")
+            await s.commit()
+    finally:
+        _retrying.discard(thread_id)
+
+    async def sse() -> AsyncIterator[str]:
+        yield f"event: delta\ndata: {json.dumps({'text': mem.text})}\n\n"
+        yield f"event: done\ndata: {json.dumps(_msg_dict(row) | {'replaces': old_id}, default=str)}\n\n"
+
+    return StreamingResponse(sse(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 class HeadsUpAnswer(BaseModel):
