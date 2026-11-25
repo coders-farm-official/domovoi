@@ -247,20 +247,8 @@ ROUTES_ALLOWED: dict[tuple[str, str], str] = {
 }
 
 
-class _Route:
-    """A route as the guard reads it: its full path, methods and dependant."""
-
-    def __init__(self, path: str, methods: Any, dependant: Any) -> None:
-        self.path, self.methods, self.dependant = path, methods, dependant
-
-
-#: The web modules whose ``router`` serves chats: chat.py (prefix
-#: ``/api/chat``), the routers chat.py includes into it (their own paths
-#: get that prefix) and help.py (``/api/help/deliveries``). Read straight
-#: from the modules, not from the global web app's route table, which a
-#: test elsewhere in a CI shard can leave changed (two CI runs saw part or
-#: all of the chat routes missing from it). test_the_guard_reads_every_router_chat_py_includes
-#: keeps the list in step with chat.py.
+#: The routers chat.py includes into its own (``/api/chat``); kept in
+#: step with chat.py by test_the_guard_reads_every_router_chat_py_includes.
 CHAT_SUBROUTERS = ("chat_documents", "chat_drafts", "chat_doc_jobs", "chat_letters", "chat_videos")
 
 
@@ -268,41 +256,22 @@ def _is_chat_path(path: str) -> bool:
     return path.startswith("/api/chat") or path == "/api/help/deliveries" or path == "/v1/phone/voice"
 
 
-def _shaped(r: Any) -> bool:
-    return hasattr(r, "dependant") and bool(getattr(r, "methods", None)) and isinstance(getattr(r, "path", None), str)
+def _contexts(app: Any) -> list[Any]:
+    """Every route of ``app``, nested routers included, with its effective
+    path, methods and dependant. From FastAPI 0.139 (the pinned version)
+    ``include_router`` keeps an included router as ONE entry in
+    ``app.routes``, so a one-level walk misses everything nested; the
+    shared walker resolves them (domovoi/tests/route_walk.py)."""
+    from domovoi.tests.route_walk import iter_route_contexts
 
-
-def _module_routes() -> list[_Route]:
-    """The web's chat routes, from the routers the modules define."""
-    import importlib
-
-    out: list[_Route] = []
-    chat = importlib.import_module("web.backend.api.chat")
-    for r in chat.router.routes:
-        if _shaped(r):
-            out.append(_Route(r.path, r.methods, r.dependant))
-    prefix = chat.router.prefix
-    for name in CHAT_SUBROUTERS:
-        sub = importlib.import_module(f"web.backend.api.{name}").router
-        for r in sub.routes:
-            if _shaped(r):
-                path = r.path if r.path.startswith(prefix) else prefix + r.path
-                out.append(_Route(path, r.methods, r.dependant))
-    for r in importlib.import_module("web.backend.api.help").router.routes:
-        if _shaped(r):
-            out.append(_Route(r.path, r.methods, r.dependant))
-    return out
+    return [rc for rc in iter_route_contexts(app.routes)
+            if getattr(rc, "methods", None) and isinstance(getattr(rc, "path", None), str)]
 
 
 def _chat_routes(app: Any) -> list[Any]:
-    """The chat routes: for the web, its modules' routers (plus whatever the
-    app's table also has); for the core, its app's table. One per
-    (methods, path)."""
-    sources: list[Any] = [_Route(r.path, r.methods, r.dependant) for r in app.routes if _shaped(r)]
-    if app is _web_app():
-        sources = _module_routes() + sources
+    """``app``'s chat routes, one per (methods, path)."""
     out, seen = [], set()
-    for r in sources:
+    for r in _contexts(app):
         if not _is_chat_path(r.path):
             continue
         key = (tuple(sorted(r.methods or ())), r.path)
@@ -498,15 +467,6 @@ def _fresh_web_app() -> Any:
     app = FastAPI()
     for mod in ("auth", "devices", "chat", "help"):
         app.include_router(importlib.import_module(f"web.backend.api.{mod}").router)
-    chat = importlib.import_module("web.backend.api.chat")
-    have = {(m, r.path) for r in app.routes if _shaped(r) for m in r.methods}
-    for name in CHAT_SUBROUTERS:
-        # chat.py includes these into its router at import; should that
-        # router have lost them in this process, they are added here.
-        sub = importlib.import_module(f"web.backend.api.{name}").router
-        paths = {(m, chat.router.prefix + r.path) for r in sub.routes if _shaped(r) for m in r.methods}
-        if not paths <= have:
-            app.include_router(sub, prefix=chat.router.prefix)
 
     async def _refused(request: Any, exc: ChatAccessRefused) -> Any:
         return refusal_response(exc)
@@ -524,12 +484,14 @@ def _fresh_client() -> Any:
 
 def test_the_global_web_app_serves_every_chat_route() -> None:
     """ROUTE TABLE LEAK, not a privacy failure: the web app the server runs
-    serves every chat route the modules define. Two CI shards saw routes
+    serves every chat route a fresh app built from the same routers does. Two CI shards saw routes
     missing from it, left so by some other test in the same process; a
     failure here is that leak (find the test that changes
     web.backend.main.app's routes), not a chat seen by the wrong device."""
-    served = {(m, r.path) for r in _web_app().routes if _shaped(r) for m in r.methods}
-    lost = sorted({(m, r.path) for r in _module_routes() if _is_chat_path(r.path) for m in r.methods} - served)
+    served = {(m, r.path) for r in _chat_routes(_web_app()) for m in r.methods}
+    wanted = {(m, r.path) for r in _chat_routes(_fresh_web_app()) for m in r.methods}
+    assert len(wanted) >= 40, sorted(wanted)
+    lost = sorted(wanted - served)
     assert not lost, f"ROUTE TABLE LEAK: the global web app lost chat routes: {lost}"
 
 
