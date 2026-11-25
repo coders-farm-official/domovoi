@@ -11,12 +11,15 @@ import SwiftUI
 /// ### What is not here, and why there is no control for it
 ///
 /// * **`restart`** and **`upgrade`** (`satellites.py:1576-1581`, `:1618-1623`
-///   — admin, and admin security). The two **pills** stay, because
-///   ``roomsNeedsUpgrade(coreSha:roomVersion:)`` and
-///   ``roomsRebootNeeded(_:)`` are facts computed from two device-tier reads,
-///   and ``RoomsStrings/upgradeIsOnTheDashboard`` says where the buttons are.
-///   Android's confirm dialogs, its press ledger, its six-minute upgrade clock
-///   and its outcome sentences (`SatUpgrade.kt`) go with them.
+///   — admin, and admin security) are drawn only while this phone holds
+///   admin and the screen is not a shared one (``roomAdminHeld(_:sharedScreen:)``),
+///   each after the dashboard's own confirm and through
+///   ``AdminSession/act(_:)``. Otherwise one line says where they are
+///   (``RoomAdminWords/maintenanceOrPhone``, or on a shared screen
+///   ``RoomsStrings/upgradeIsOnTheDashboard``). Android's press ledger, its
+///   six-minute upgrade clock and its outcome sentences (`SatUpgrade.kt`) are
+///   not ported: the server's own record of an upgrade running holds the
+///   buttons and says so.
 /// * **Starting a drop-in between two ROOMS**: the peer picker and `start`
 ///   (`SatOverviewTab.kt:467-560`). The core's `/v1/admin/dropin/start` is
 ///   admin *security* (`domovoi/main.py:2649-2658`), so from this phone it
@@ -44,6 +47,14 @@ struct RoomsOverviewView: View {
     let room: RoomsSatellite
 
     @Environment(\.dynamicTypeSize) private var typeSize
+
+    /// Restart and upgrade as admin (``RoomAdminModel``), built in `.task`.
+    @State private var roomAdmin: RoomAdminModel?
+    @State private var confirming: RoomMaintenanceConfirm?
+
+    private var adminHeld: Bool {
+        roomAdminHeld(shell.admin.state, sharedScreen: shell.visibility.sharedScreen)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -535,11 +546,119 @@ struct RoomsOverviewView: View {
                     }
                 }
             }
-            // The one line that replaces Android's two buttons.
-            Text(RoomsStrings.upgradeIsOnTheDashboard)
-                .font(.footnote)
+            if adminHeld {
+                maintenanceButtons
+            } else {
+                // A shared screen never holds admin: its words stay.
+                Text(shell.visibility.sharedScreen ? RoomsStrings.upgradeIsOnTheDashboard : RoomAdminWords.maintenanceOrPhone)
+                    .font(.footnote)
+                    .foregroundStyle(Color.fgMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .task(id: adminHeld) {
+            if roomAdmin == nil { roomAdmin = RoomAdminModel(admin: shell.container.admin) }
+            if !adminHeld { roomAdmin?.forget() }
+        }
+        .alert(
+            confirming?.title ?? "",
+            isPresented: Binding(get: { confirming != nil }, set: { if !$0 { confirming = nil } }),
+            presenting: confirming
+        ) { what in
+            Button(what.button) { run(what) }
+            Button(RoomAdminWords.cancel, role: .cancel) {}
+        } message: { what in
+            Text(what.body)
+        }
+    }
+
+    /// `Restart room` and `Upgrade room`, as Android draws them
+    /// (``RoomMaintenanceButtons``), the line for a device that restarts or
+    /// updates itself, and why the last one didn't work.
+    @ViewBuilder
+    private var maintenanceButtons: some View {
+        let b = RoomMaintenanceButtons(
+            room: room, coreSha: model.coreSha,
+            restarting: roomAdmin?.restarting == true, asking: roomAdmin?.asking == true
+        )
+        let restart = Button(RoomAdminWords.restart) {
+            confirming = .restart(room: room.roomID)
+        }
+        .buttonStyle(InkOutlineButtonStyle())
+        .font(.subheadline)
+        .frame(minHeight: 44)
+        .disabled(!b.restartEnabled)
+        let upgrade = Group {
+            if b.upgradePrimary {
+                Button(b.upgradeLabel) { confirming = .upgrade(room: room.roomID, coreSha: model.coreSha) }
+                    .buttonStyle(BrandFillButtonStyle())
+            } else {
+                Button(b.upgradeLabel) { confirming = .upgrade(room: room.roomID, coreSha: model.coreSha) }
+                    .buttonStyle(InkOutlineButtonStyle())
+            }
+        }
+        .font(.subheadline)
+        .frame(minHeight: 44)
+        .disabled(!b.upgradeEnabled)
+        if typeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: 8) { restart; upgrade }
+        } else {
+            HStack(spacing: 8) { restart; upgrade }
+        }
+        if let why = b.notOffered {
+            Text(why)
+                .font(.caption)
                 .foregroundStyle(Color.fgMuted)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+        if let problem = roomAdmin?.problem, room.upgrade?.running != true {
+            Text(problem)
+                .font(.footnote)
+                .foregroundStyle(Color.errInk)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// One confirmed action: its toast, and for an upgrade the room list
+    /// read again so the server's record of it holds the buttons.
+    private func run(_ what: RoomMaintenanceConfirm) {
+        guard let zone = roomAdmin else { return }
+        Task { @MainActor in
+            switch what {
+            case .restart(let id):
+                model.setToast(await zone.restart(id))
+            case .upgrade(let id, _):
+                let out = await zone.upgrade(id)
+                model.setToast(out.said)
+                if out.reread { model.roster.refresh() }
+            }
+        }
+    }
+}
+
+/// Which confirm is up, with the dashboard's words.
+enum RoomMaintenanceConfirm: Equatable {
+    case restart(room: String)
+    case upgrade(room: String, coreSha: String?)
+
+    var title: String {
+        switch self {
+        case .restart: return RoomAdminWords.restart
+        case .upgrade: return RoomAdminWords.upgrade
+        }
+    }
+
+    var body: String {
+        switch self {
+        case .restart(let room): return RoomAdminWords.restartConfirm(room)
+        case .upgrade(let room, let sha): return RoomAdminWords.upgradeConfirm(room, coreSha: sha)
+        }
+    }
+
+    var button: String {
+        switch self {
+        case .restart: return RoomAdminWords.restartConfirmButton
+        case .upgrade: return RoomAdminWords.upgradeConfirmButton
         }
     }
 }

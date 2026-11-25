@@ -20,7 +20,8 @@ public enum AdminStrings {
     /// `ADMIN_JOBS`: the jobs that work from the phone so far (design §1's
     /// list, one area at a time); everything else stays on the dashboard.
     public static let jobs =
-        "As admin on this phone you can approve or turn away a room device asking to join (Settings → Rooms), "
+        "As admin on this phone you can approve or turn away a room device asking to join, and restart, upgrade "
+        + "or change the settings of a room (Settings → Rooms), "
         + "answer friend requests and remove, block or unblock friend houses (Friend Houses → friends & connections), "
         + "and acknowledge or clear Health incidents (Settings → Health). Everything else is on the dashboard for now."
 
