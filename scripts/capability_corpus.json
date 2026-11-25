@@ -2279,13 +2279,15 @@
       "expect": "EXACT",
       "kind": "question",
       "must_include": [
-        "manual|chat"
+        "The full answer is in the manual\\."
       ],
       "must_not_include": [
-        "send the steps to your phone"
+        "send the steps",
+        "to your phone",
+        "[Ww]ant me to send"
       ],
       "skip_reason": "1.5.0 only: added when 1.5.0 is on main",
-      "note": "short steps plus a manual/chat pointer, no send-to-phone offer (on main the offer is still expected)"
+      "note": "1.5.0 (wf/help-send-removal d7cddae1): short steps ending 'The full answer is in the manual.', no question asked; on main the send-to-phone offer is still expected"
     },
     {
       "id": "13.12",
@@ -2295,13 +2297,15 @@
       "expect": "EXACT",
       "kind": "question",
       "must_include": [
-        "manual|chat"
+        "The full answer is in the manual\\."
       ],
       "must_not_include": [
-        "send the steps to your phone"
+        "send the steps",
+        "to your phone",
+        "[Ww]ant me to send"
       ],
       "skip_reason": "1.5.0 only: added when 1.5.0 is on main",
-      "note": "same as 13.11"
+      "note": "1.5.0 (wf/help-send-removal d7cddae1): short steps ending 'The full answer is in the manual.', no question asked; on main the send-to-phone offer is still expected"
     },
     {
       "id": "13.13",
