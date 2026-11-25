@@ -323,6 +323,10 @@ _FORGET_RE = re.compile(
     r"|forget my voice"
     r"|don't (?:save|remember|keep) my voice"
     r"|delete my voice(?: profile)?"
+    # "Forget everything about me" (case 15.12): the same question first,
+    # never only the AI router's tool.
+    r"|forget (?:all|everything) (?:about me|you know about me)"
+    r"|forget who i am"
     r")$"
 )
 
@@ -339,10 +343,24 @@ _FORGET_ME_TALK_RE = re.compile(
 #: How long "forget me"'s question waits for its yes.
 FORGET_CONFIRM_TTL_SEC = VOICE_ADD_TTL_SEC
 #: What a "forget me" from the person's own voice asks before deleting.
-_FORGET_ASK = (
-    "{name}, I'll forget your voice, your profile, what I remember about you "
+_FORGET_ASK_BODY = (
+    "I'll forget your voice, your profile, what I remember about you "
     "and everything you've said to me. Say yes to delete everything you've said."
 )
+_FORGET_ASK = "{name}, " + _FORGET_ASK_BODY
+
+
+def _forget_name(raw: object) -> str:
+    """The person's name for the "forget me" replies, or "" when there is
+    none to say (no row, an empty name). Each reply has its own no-name
+    wording: the name slot is never filled with "you" or left empty
+    ("you, I'll forget …", case 15.12)."""
+    name = " ".join(str(raw or "").split())
+    return "" if name.lower() in ("", "you") else name
+
+
+def _forget_ask(name: str) -> str:
+    return _FORGET_ASK.format(name=name) if name else _FORGET_ASK_BODY
 
 # Persistent opt-out. Distinct from `_FORGET_RE` —
 # forget DELETES existing data, denylist ADDS the current voice to a
@@ -3103,7 +3121,7 @@ class VoiceProfileHandler(Handler):
         removed = 0
         try:
             row = await PeopleRepository(session).get(ctx.person_id)
-            name = row[1] if row else "you"
+            name = _forget_name(row[1] if row else "")
             scope, claim_ids = await self._forget_scope(ctx, session)
             if scope == "claims":
                 removed = await VoiceProfilesRepository(session).delete_samples(
@@ -3146,7 +3164,7 @@ class VoiceProfileHandler(Handler):
                 matched_handler=self.name,
             )
         return Response(
-            text=_FORGET_ASK.format(name=name),
+            text=_forget_ask(name),
             session_id=ctx.session_id,
             matched_handler=self.name,
             expect_followup=True,
@@ -3167,10 +3185,10 @@ class VoiceProfileHandler(Handler):
             affirmative = _parse_yes_no(strip_leading_filler(transcript))
         if affirmative is None:
             return None
-        name = str(data.get("name") or "you")
+        name = _forget_name(data.get("name"))
         if not affirmative:
             return Response(
-                text=f"Okay, I've kept everything, {name}.",
+                text=f"Okay, I've kept everything, {name}." if name else "Okay, I've kept everything.",
                 session_id=ctx.session_id,
                 matched_handler=self.name,
             )
@@ -3201,7 +3219,10 @@ class VoiceProfileHandler(Handler):
         if ctx.person_id is not None and ctx.person_id != person_id:
             # A "yes" in somebody else's recognized voice forgets nobody.
             return Response(
-                text=f"That doesn't sound like {name}, so I haven't forgotten anything.",
+                text=(
+                    f"That doesn't sound like {name}, so I haven't forgotten anything." if name
+                    else "That doesn't sound like the same voice, so I haven't forgotten anything."
+                ),
                 session_id=ctx.session_id,
                 matched_handler=self.name,
             )
@@ -3214,7 +3235,7 @@ class VoiceProfileHandler(Handler):
         try:
             if await PeopleRepository(session).get(person_id) is None:
                 return Response(
-                    text=f"I've already forgotten {name}.",
+                    text=f"I've already forgotten {name}." if name else "I've already forgotten you.",
                     session_id=ctx.session_id,
                     matched_handler=self.name,
                 )
@@ -3249,7 +3270,7 @@ class VoiceProfileHandler(Handler):
         ctx.presence_tier = "high"
         return Response(
             text=(
-                f"Okay, I've forgotten you, {name}: your voice, your profile, "
+                f"Okay, I've forgotten you{', ' + name if name else ''}: your voice, your profile, "
                 "everything I remembered about you and what you've said to me."
             ),
             session_id=ctx.session_id,
@@ -3305,6 +3326,10 @@ class VoiceProfileHandler(Handler):
                 f"I've forgotten the voice you added to {name}. I kept {name}'s "
                 f"profile and memories: your voice doesn't match the one I learned "
                 f"for {name}, so only an admin can delete those, in Settings, under People."
+            ) if name else (
+                "I've forgotten the voice you added to that profile. I kept the "
+                "profile and its memories: your voice doesn't match the one I learned "
+                "for it, so only an admin can delete those, in Settings, under People."
             )
         elif scope == "unheard":
             text = (
@@ -3318,7 +3343,7 @@ class VoiceProfileHandler(Handler):
                 "nor a claim it made; nothing removed", ctx.person_id,
             )
             text = (
-                f"Your voice doesn't match the one I learned for {name}, so I "
+                f"Your voice doesn't match the one I learned for {name or 'that profile'}, so I "
                 "haven't forgotten anything. An admin can remove a person in Settings, "
                 "under People."
             )
