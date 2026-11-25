@@ -800,7 +800,8 @@ async def test_a_device_replacing_a_rooms_queue_makes_it_theirs(_db, clean, monk
         # A 1.5.0 browser: it keeps its device key (the cookie), which is how
         # the room's music is known to be its person's (caller_device_row;
         # an id alone names no keyed device).
-        r = await c.post("/api/devices/register", json={"device_id": "browser-alex", "platform": "browser"})
+        r = await c.post("/api/devices/register", json={"device_id": "browser-alex", "platform": "browser",
+                                                             "want_device_key": True})
         assert r.status_code == 200 and r.json()["device_key"]
         await c.put("/api/devices/browser-alex/person", json={"person_id": ids["alex"]})
         monkeypatch.setattr(music_api, "post_admin", _refused)

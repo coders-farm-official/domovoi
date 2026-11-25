@@ -152,6 +152,14 @@ class DeviceRegistration(BaseModel):
     # id no person has is stored as nobody. Self-asserted like the rest of
     # the row.
     owner_person_id: int | None = Field(default=None, ge=1)
+    # "I keep a device key" (private chats, 1.5.0): a client that stores
+    # the key it is answered with (an app from 1.5.0 on, in its secure
+    # storage; the dashboard, which gets it as an HttpOnly cookie) says so,
+    # and only then is a key minted for a row that has none. An app from
+    # before 1.5.0 never asks, so its row stays keyless until the updated
+    # app registers: no key is minted that nobody keeps, and its chats come
+    # back to it then, without pairing again.
+    want_device_key: bool = False
 
 
 class DeviceRename(BaseModel):
@@ -701,7 +709,7 @@ async def register_device(
         minted: str | None = None
         # The device key first: a registration presenting it proves an
         # existing claim as the claim key does (claim_decision key_proven).
-        device_key, device_key_ok = await _device_key(s, ident, request)
+        device_key, device_key_ok = await _device_key(s, ident, request, want=payload.want_device_key)
         if (
             "owner_person_id" in payload.model_fields_set
             and await _has_claim_keys(s)
@@ -743,12 +751,17 @@ async def register_device(
     return out
 
 
-async def _device_key(s: Any, ident: str, request: Request) -> tuple[str | None, bool | None]:
-    """Mint ``ident``'s device key when its row has none (PRIVATE-CHATS
-    §2.1), else check the one presented. Returns ``(new key or None,
-    presented key matches)``; ``(None, None)`` without V086. The mint is
-    one conditional UPDATE, so two first registrations racing mint one
-    key, and only the winner is answered with it."""
+async def _device_key(
+    s: Any, ident: str, request: Request, *, want: bool = True,
+) -> tuple[str | None, bool | None]:
+    """Mint ``ident``'s device key when its row has none and the client
+    keeps one (``want``; PRIVATE-CHATS §2.1), else check the one
+    presented. Returns ``(new key or None, presented key matches)``;
+    ``(None, None)`` without V086, or for a keyless row whose client
+    didn't ask. A repeat registration with the stored key changes
+    nothing. The mint is one conditional UPDATE, so two first
+    registrations racing mint one key, and only the winner is answered
+    with it."""
     if not await chat_access.has_device_keys(s):
         return None, None
     stored = (
@@ -758,6 +771,8 @@ async def _device_key(s: Any, ident: str, request: Request) -> tuple[str | None,
     ).scalar_one_or_none()
     if stored:
         return None, chat_access.key_matches(stored, chat_access.presented_device_key(request))
+    if not want:
+        return None, None
     key = secrets.token_urlsafe(32)
     won = (
         await s.execute(

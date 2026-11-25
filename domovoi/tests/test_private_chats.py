@@ -150,7 +150,7 @@ def test_the_migration() -> None:
 async def _device(c, base: dict[str, str], prefix: str = "dev") -> dict[str, str]:
     """A fresh device: register it and return its headers (with its key)."""
     dev = f"{prefix}-{uuid.uuid4().hex[:10]}"
-    r = await c.post("/api/devices/register", json={"device_id": dev}, headers=base)
+    r = await c.post("/api/devices/register", json={"device_id": dev, "want_device_key": True}, headers=base)
     assert r.status_code == 200, r.text
     key = r.json()["device_key"]
     assert key, "V086 is applied in this test database"
@@ -186,7 +186,7 @@ async def test_the_device_key_is_minted_once_and_only_its_hash_kept(caplog) -> N
     caplog.set_level(logging.DEBUG)
     dev = f"dev-{uuid.uuid4().hex[:10]}"
     async with web_client() as c:
-        r = await c.post("/api/devices/register", json={"device_id": dev})
+        r = await c.post("/api/devices/register", json={"device_id": dev, "want_device_key": True})
         key = r.json()["device_key"]
         assert key and r.json()["device_key_ok"] is True
         cookie = [h for h in r.headers.get_list("set-cookie") if h.startswith(chat_access.DEVICE_KEY_COOKIE + "=")]
@@ -195,16 +195,54 @@ async def test_the_device_key_is_minted_once_and_only_its_hash_kept(caplog) -> N
         assert "httponly" in flags and "samesite=strict" in flags and "path=/" in flags
         c.cookies.clear()
         # Registered again without it: no new key, and it says the key is lost.
-        again = (await c.post("/api/devices/register", json={"device_id": dev})).json()
+        again = (await c.post("/api/devices/register", json={"device_id": dev, "want_device_key": True})).json()
         assert again["device_key"] is None and again["device_key_ok"] is False
         # With it: fine, and still no new key.
-        ok = (await c.post("/api/devices/register", json={"device_id": dev}, headers={**RW, KEY: key})).json()
+        ok = (await c.post("/api/devices/register", json={"device_id": dev, "want_device_key": True}, headers={**RW, KEY: key})).json()
         assert ok["device_key"] is None and ok["device_key_ok"] is True
     async with session_scope() as s:
         stored = (await s.execute(text("SELECT device_key_hash, device_key_at FROM devices WHERE device_id = :d"),
                                   {"d": dev})).one()
     assert stored[0] == hashlib.sha256(key.encode()).hexdigest() and stored[1] is not None
     assert key not in caplog.text
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_an_upgraded_app_gets_its_key_on_its_next_start_without_pairing_again() -> None:
+    """An app registers on every start. A row from before 1.5.0 (no key):
+    a registration that doesn't ask for a key (a 1.4.x app) mints none, so
+    nothing is minted that nobody keeps; the first one that asks (the
+    updated app, or any browser) gets it, with no pairing; a repeat
+    registration with the stored key changes nothing."""
+    dev = f"android-{uuid.uuid4().hex[:10]}"
+    async with session_scope() as s:
+        await s.execute(text("INSERT INTO devices (device_id, name) VALUES (:d, 'old phone')"), {"d": dev})
+        # Its chat from before the upgrade (V086 made it private to this id).
+        tid = (await s.execute(text("INSERT INTO chat_threads (title, owner_device_id, shared) "
+                                    "VALUES ('mine', :d, false) RETURNING id"), {"d": dev})).scalar_one()
+    try:
+        async with web_client() as c:
+            old = (await c.post("/api/devices/register", json={"device_id": dev})).json()
+            assert old["device_key"] is None and old["device_key_ok"] is None
+            assert chat_access.DEVICE_KEY_COOKIE not in c.cookies
+            new = (await c.post("/api/devices/register", json={"device_id": dev, "want_device_key": True})).json()
+            key = new["device_key"]
+            assert key and new["device_key_ok"] is True
+            c.cookies.clear()
+            for _ in range(2):
+                again = (await c.post("/api/devices/register", json={"device_id": dev, "want_device_key": True},
+                                      headers={**RW, KEY: key})).json()
+                assert again["device_key"] is None and again["device_key_ok"] is True
+            async with session_scope() as s:
+                stored = (await s.execute(text("SELECT device_key_hash FROM devices WHERE device_id = :d"),
+                                          {"d": dev})).scalar_one()
+            assert stored == hashlib.sha256(key.encode()).hexdigest()
+            # Its chat from before the upgrade is its own again.
+            r = await c.get(f"/api/chat/threads/{tid}/messages", headers={**RW, KEY: key})
+            assert r.status_code == 200 and r.json()["thread"]["mine"] is True
+    finally:
+        await _cleanup(tid)
 
 
 @requires_db

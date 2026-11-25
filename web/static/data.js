@@ -1812,6 +1812,9 @@ const DeviceIdentity = (() => {
         name: suggestedName(),
         platform: 'browser',
         user_agent: (navigator.userAgent || '').slice(0, 400),
+        // Private chats (1.5.0): the server keeps this browser's device key
+        // in an HttpOnly cookie, so the browser always "keeps" it.
+        want_device_key: true,
       }),
       // Nobody pressed anything: a refusal (an unpaired browser, a
       // household token rotated since this one was stored) must not open

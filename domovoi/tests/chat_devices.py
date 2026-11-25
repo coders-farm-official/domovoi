@@ -37,7 +37,7 @@ class DeviceTestClient(TestClient):
         kw.setdefault("headers", dict(RW))
         super().__init__(app, **kw)
         self.device_id = device_id or new_device_id()
-        r = self.post("/api/devices/register", json={"device_id": self.device_id})
+        r = self.post("/api/devices/register", json={"device_id": self.device_id, "want_device_key": True})
         assert r.status_code == 200, r.text
         self.device_key = r.json().get("device_key")
 
@@ -58,7 +58,7 @@ class DeviceAsyncClient(AsyncClient):
 
     async def __aenter__(self) -> "DeviceAsyncClient":
         await super().__aenter__()
-        r = await self.post("/api/devices/register", json={"device_id": self.device_id})
+        r = await self.post("/api/devices/register", json={"device_id": self.device_id, "want_device_key": True})
         assert r.status_code == 200, r.text
         self.device_key = r.json().get("device_key")
         return self

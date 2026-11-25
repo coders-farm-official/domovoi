@@ -465,7 +465,7 @@ async def test_another_device_asking_for_a_chat_by_id(_db, tmp_path, monkeypatch
         base = {"X-Requested-With": "domovoi-tests", **({HEADER: token} if token else {})}
 
         async def device(dev: str) -> dict[str, str]:
-            r = await c.post("/api/devices/register", json={"device_id": dev}, headers=base)
+            r = await c.post("/api/devices/register", json={"device_id": dev, "want_device_key": True}, headers=base)
             assert r.status_code == 200, r.text
             key = r.json().get("device_key")
             c.cookies.clear()  # the key cookie: each device presents its own header
@@ -521,7 +521,7 @@ async def test_lists_and_search_follow_the_mode(_db) -> None:
         base = {"X-Requested-With": "domovoi-tests", **({HEADER: token} if token else {})}
 
         async def device(dev: str) -> dict[str, str]:
-            r = await c.post("/api/devices/register", json={"device_id": dev}, headers=base)
+            r = await c.post("/api/devices/register", json={"device_id": dev, "want_device_key": True}, headers=base)
             key = r.json().get("device_key")
             c.cookies.clear()
             return {**base, **({chat_access.DEVICE_KEY_HEADER: key} if key else {})}
