@@ -176,7 +176,9 @@ struct WorkspaceView: View {
                         crumb: screenTitle(for: startRoute),
                         pill: model.chrome.pill,
                         onPill: { model.openConnection() },
-                        drawn: AuditStrip.active != .topBar
+                        drawn: AuditStrip.active != .topBar,
+                        admin: model.admin.badge(sharedScreen: model.visibility.sharedScreen),
+                        onAdmin: { model.openSettingsTab("admin-on-phone") }
                     )
                     .navigationDestination(for: Route.self) { route in
                         destination(route)
@@ -298,7 +300,9 @@ struct WorkspaceView: View {
             crumb: screenTitle(for: route),
             pill: model.chrome.pill,
             onPill: { model.openConnection() },
-            drawn: AuditStrip.active != .topBar
+            drawn: AuditStrip.active != .topBar,
+            admin: model.admin.badge(sharedScreen: model.visibility.sharedScreen),
+            onAdmin: { model.openSettingsTab("admin-on-phone") }
         )
         // The `navBar` variant hides the bar the chrome above now lives in,
         // which is what that variant is for: it takes one piece of the shell

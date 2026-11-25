@@ -9,8 +9,10 @@ import SwiftUI
 ///
 /// Reached only while the server says it is on (``FriendHousesGate``, read
 /// by ``RouteScreen``'s check). What the household token may do is a
-/// control. 1.4.1: the dashboard's order, Messages then Shared lists; its
-/// admin zone ("Friends and connections") is not on the phone at all.
+/// control. 1.4.1: the dashboard's order, Messages then Shared lists. Its
+/// admin zone is a third tab, "friends & connections", only while this phone
+/// also holds admin (1.5.0, ``FhConnectionsTab``: requests, remove, block,
+/// unblock), and never on a shared screen (``fhTabsFor(_:sharedScreen:)``).
 ///
 /// Every name, body, title and `last_error` came from another house: shown
 /// only through ``FhPlainText`` (no links, no markup, line breaks kept), and
@@ -123,8 +125,10 @@ struct FhTabsScreen: View {
             VStack(alignment: .leading, spacing: 12) {
                 FhHeader(status: fh?.status)
                 if let fh {
-                    FhTabBar(fh: fh)
-                    FhTabContent(model: model, fh: fh)
+                    // The admin tab only while this phone holds admin.
+                    let tabs = fhTabsFor(model.admin.state, sharedScreen: model.visibility.sharedScreen)
+                    FhTabBar(fh: fh, tabs: tabs)
+                    FhTabContent(model: model, fh: fh, shown: tabs.contains(fh.tab) ? fh.tab : .messages)
                 } else {
                     FhLoading()
                 }
@@ -197,14 +201,15 @@ struct FhChangesSection: View {
 struct FhTabBar: View {
 
     let fh: FriendHousesModel
+    let tabs: [FhTab]
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(FhTab.allCases, id: \.self) { tab in
+                ForEach(tabs, id: \.self) { tab in
                     FhTabChip(
                         tab: tab,
-                        selected: fh.tab == tab,
+                        selected: (tabs.contains(fh.tab) ? fh.tab : .messages) == tab,
                         unread: tab == .messages ? (fh.status?.unread ?? 0) : 0
                     ) { fh.tab = tab }
                 }
@@ -249,15 +254,19 @@ struct FhTabContent: View {
 
     let model: ShellModel
     let fh: FriendHousesModel
+    /// The open tab, or messages when the open one has gone (admin ended).
+    let shown: FhTab
 
     var body: some View {
-        switch fh.tab {
+        switch shown {
         case .messages:
             FhInboxList(read: fh.inbox) { fh.openConversation($0) }
         case .shared:
             FhSharedListsList(fh: fh) { shared in
                 if fh.openInLists(shared) { model.navigate(.lists) }
             }
+        case .connections:
+            FhConnectionsTab(model: model, onChanged: { Task { await fh.readAll() } })
         }
     }
 }

@@ -128,25 +128,35 @@ struct AdminBadgeView: View {
 
     var body: some View {
         if let badge = model.admin.badge(sharedScreen: model.visibility.sharedScreen) {
-            Button {
-                model.openSettingsTab("admin-on-phone")
-            } label: {
-                Text(AdminStrings.badge)
-                    .font(.caption2)
-                    .foregroundStyle(badge == .filled ? Color.brandFg : Color.fgMuted)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(
-                        badge == .filled ? AnyShapeStyle(Color.brand) : AnyShapeStyle(.quaternary),
-                        in: Capsule()
-                    )
-                    // The frame is the space and `contentShape` the target, as
-                    // the pill's toolbar twin and the phone bar's tabs have it.
-                    .frame(minWidth: 44, minHeight: 44)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(AdminStrings.badgeAccessibility)
+            AdminBadgeButton(badge: badge) { model.openSettingsTab("admin-on-phone") }
         }
+    }
+}
+
+/// The badge itself, for the bar and for the toolbar at the accessibility
+/// sizes (``ShellScrollAwayChrome``).
+struct AdminBadgeButton: View {
+
+    let badge: AdminBadge
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            Text(AdminStrings.badge)
+                .font(.caption2)
+                .foregroundStyle(badge == .filled ? Color.brandFg : Color.fgMuted)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(
+                    badge == .filled ? AnyShapeStyle(Color.brand) : AnyShapeStyle(.quaternary),
+                    in: Capsule()
+                )
+                // The frame is the space and `contentShape` the target, as
+                // the pill's toolbar twin and the phone bar's tabs have it.
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(AdminStrings.badgeAccessibility)
     }
 }
