@@ -156,9 +156,14 @@ internal enum class SettingsSection(
     Internet("internet", "Internet", SettingsGroup.Privacy,
         "Will this Domovoi have internet? It sets the defaults of the online extras.",
         "internet online offline network web", dashboard = "internet"),
-    VoiceHistory("voice-history", "Voice history", SettingsGroup.Privacy,
+    // "Voice history" until 1.5.0: it is the opt-in command recordings (the
+    // dashboard's Settings → Privacy → Command recordings). Its old keys
+    // still land here, and the dashboard opens it at its new address (the
+    // old ones redirect there on a 1.5.0 dashboard).
+    CommandRecordings("command-recordings", "Command recordings", SettingsGroup.Privacy,
         "Commands kept from the rooms an admin opted in — reviewed on the dashboard.",
-        "recordings voice history captures commands kept privacy", dashboard = "recordings"),
+        "command commands recordings recording captures kept audio privacy tuning",
+        listOf("voice-history", "recordings"), dashboard = "command-recordings"),
     About("about", "About & updates", SettingsGroup.System,
         "What Domovoi is, the user manual, this app's version and updates, and this phone's problem reports.",
         "about version update updates manual licences privacy problem reports"),
