@@ -62,3 +62,14 @@ def test_next_occurrence_rolls_over_and_today_counts() -> None:
     assert next_occurrence("christmas", date(2026, 12, 26)) == date(2027, 12, 25)
     assert next_occurrence("christmas", date(2026, 12, 25)) == date(2026, 12, 25)
     assert next_occurrence("dragonday", date(2026, 1, 1)) is None
+
+
+def test_where_it_is_kept() -> None:
+    gb = find("thanksgiving", "GB")
+    assert (gb.kept_here, gb.rule_country, gb.kept_in) == (False, "US", frozenset({"US", "CA"}))
+    assert find("thanksgiving", "ca").kept_here is True
+    assert find("thanksgiving").kept_here is None and find("thanksgiving").rule_country == "US"
+    assert find("boxing day", "US").kept_here is False and find("boxing day", "US").rule_country is None
+    assert find("bonfire night", "GB").kept_here is True
+    assert find("christmas", "FR").kept_here is True and find("christmas", "FR").kept_in == frozenset()
+    assert find("mother's day", "US").kept_here is True   # "*" plus country rules: everywhere

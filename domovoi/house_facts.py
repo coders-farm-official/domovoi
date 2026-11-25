@@ -52,13 +52,20 @@ log = logging.getLogger(__name__)
 
 PLACE_INTERNET = "Settings → Privacy → Internet"
 PLACE_ROOMS = "Settings → Household → Rooms"
-PLACE_VOICE_HISTORY = "Settings → Household → People → Voice history"
+# "Keep voice history" is behind the Voice history button on the People
+# page (people.jsx), not a settings section of its own: Settings → Privacy
+# → Voice history is the command recordings. Said as the real path, then
+# the button, so every path a reply names is one the registry knows.
+PLACE_VOICE_HISTORY = "Settings → Household → People, then Voice history"
 PLACE_MUSIC_MIX = "Settings → Household → Music mix"
 PLACE_FRIEND_HOUSES = "Settings → Household → Friend Houses"
 PLACE_PRINTERS = "Settings → Household → Printers & scanners"
 PLACE_MODELS = "Settings → Chat & AI → Models"
 PLACE_ADVANCED = "Settings → System → Advanced"
 PLACE_PLUGINS = "the Plugins page"
+# The offline library's own page (its plugin's nav label), where an admin
+# downloads a library.
+PLACE_LIBRARY = "the Library page"
 
 # What the backstop tells the model to say when the facts don't cover it.
 NOT_SURE_LINE = "I'm not sure — Settings → Privacy shows exactly what's kept."
@@ -915,6 +922,15 @@ def _ai_off_line(feature: str) -> str:
             + _how_to_turn_on("AI features", place=PLACE_MODELS))
 
 
+def _instead(cap: Capability, f: HouseFacts) -> str:
+    """What a "no" for a plugin's feature offers instead, the same whether
+    the plugin is missing, switched off or not ready: an offline library's
+    lookups go to the web while the internet answer and AI allow it."""
+    if cap.key == "offline_library" and f.internet in ("always", "sometimes", "") and f.ai_on:
+        return " I can look things up on the web instead."
+    return ""
+
+
 async def capability_answer(cap: Capability, f: HouseFacts, *, scope: Any = None) -> str | None:
     """The answer to "can you <X>?" for row ``cap``, or None (no answer:
     the turn goes on as before)."""
@@ -949,8 +965,18 @@ async def capability_answer(cap: Capability, f: HouseFacts, *, scope: Any = None
         if not f.news_on:
             return "No, the news briefing is off on this house. " + _how_to_turn_on(
                 "the news briefing", place=PLACE_ADVANCED)
-        when = ", when the connection is up" if f.internet == "sometimes" else ""
-        return f'Yes{when}. Say "{phrase}".'
+        # "Sometimes" changes no ask at the moment of asking (it only sets
+        # the online extras' defaults, config.PROFILE_DEFAULTS): the
+        # headlines are the ones the news worker fetched, and what does ask
+        # first, here as under "always", is reading a whole article online
+        # (unless "Always allow internet" is on, handlers/news.py).
+        out = f'Yes. Say "{phrase}".'
+        if f.internet == "sometimes":
+            out = (f'Yes. Say "{phrase}": I read the headlines from the last time the '
+                   "connection was up.")
+        if f.lookups_ask_first:
+            out += " I ask before reading a whole article online."
+        return out
     if cap.kind == "internet":
         if f.internet is None:
             return CANT_CHECK
@@ -960,11 +986,10 @@ async def capability_answer(cap: Capability, f: HouseFacts, *, scope: Any = None
             return _ai_off_line("looking things up")
         if chat:
             ask = " I'll ask before each lookup leaves the house." if f.lookups_ask_first else ""
-            when = ", when the connection is up" if f.internet == "sometimes" else ""
-            return f'Yes{when}. Type "look up" and what you want to find.{ask}'
-        if f.internet == "sometimes":
-            return ("Yes, when the connection is up, and I ask before I go online. Ask me a "
-                    'question, then say "are you sure?" to have me check it.')
+            return f'Yes. Type "look up" and what you want to find.{ask}'
+        # A spoken lookup goes online only when asked ("are you sure?", or
+        # yes to "want me to check that online?"), under "sometimes" exactly
+        # as under "always": that answer only sets defaults.
         return 'Yes. Ask me a question, then say "are you sure?" to have me check it online.'
     if cap.kind == "chat":
         if f.ai_on is None:
@@ -984,12 +1009,17 @@ async def capability_answer(cap: Capability, f: HouseFacts, *, scope: Any = None
             return CANT_CHECK
         feature = cap.text or "it"
         if state == "absent":
-            out = f"No, not on this house. {_how_to_turn_on(feature, add=True)}"
-            if cap.key == "offline_library" and f.internet in ("always", "sometimes", "") and f.ai_on:
-                out += " I can look things up on the web instead."
-            return out
+            return f"No, not on this house. {_how_to_turn_on(feature, add=True)}" + _instead(cap, f)
         if state == "off":
-            return f"No, {feature} is switched off on this house. {_how_to_turn_on(feature)}"
+            return (f"No, {feature} is switched off on this house. {_how_to_turn_on(feature)}"
+                    + _instead(cap, f))
+        if state == "broken" and cap.key == "offline_library":
+            # Installed and on, but not answering: on a new install that is
+            # most often a library with nothing downloaded yet, which the
+            # core can't tell from a fault, so both are said.
+            return ("Not right now: no offline library is set up yet, or it isn't working. "
+                    f"An admin can download one on {PLACE_LIBRARY}, or check it on {PLACE_PLUGINS}."
+                    + _instead(cap, f))
         if state == "broken":
             return f"Not right now: {feature} isn't working. An admin can check it on {PLACE_PLUGINS}."
         if cap.needs_internet and f.internet == "never":

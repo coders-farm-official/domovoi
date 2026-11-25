@@ -34,7 +34,7 @@ BASE = hf.HouseFacts(
     vision_model=True, news_on=True,
 )
 
-ADMIN_VH = "An admin can change how long in Settings → Household → People → Voice history."
+ADMIN_VH = "An admin can change how long in Settings → Household → People, then Voice history."
 NO_REC = "No recordings of your voice are kept."
 INET_CHANGE = "An admin can change that in Settings → Privacy → Internet."
 
@@ -326,18 +326,23 @@ async def test_web_search_follows_the_internet_answer() -> None:
     assert await _cap("can you search the web") == (
         'Yes. Ask me a question, then say "are you sure?" to have me check it online.')
     assert await _cap("can you search the web", R(BASE, internet="sometimes")) == (
-        'Yes, when the connection is up, and I ask before I go online. Ask me a question, then say '
-        '"are you sure?" to have me check it.')
+        'Yes. Ask me a question, then say "are you sure?" to have me check it online.')
+    assert await _cap("can you search the web", R(BASE, internet="sometimes", device=hf.WEB_CHAT)) == (
+        'Yes. Type "look up" and what you want to find. I\'ll ask before each lookup leaves the house.')
     assert await _cap("can you search the web", R(BASE, internet="never")) == (
         f"No. This house is set to never use the internet. {INET_CHANGE}")
     assert await _cap("can you search the web", R(BASE, device=hf.WEB_CHAT)) == (
         'Yes. Type "look up" and what you want to find. I\'ll ask before each lookup leaves the house.')
     # §5.4-5.6
-    assert await _cap("can you check the news") == 'Yes. Say "what\'s the news".'
+    assert await _cap("can you check the news") == (
+        'Yes. Say "what\'s the news". I ask before reading a whole article online.')
     assert await _cap("can you check the news", R(BASE, internet="never")) == (
         f"No. This house is set to never use the internet. {INET_CHANGE}")
     assert await _cap("can you check the news", R(BASE, internet="sometimes")) == (
-        'Yes, when the connection is up. Say "what\'s the news".')
+        'Yes. Say "what\'s the news": I read the headlines from the last time the connection was '
+        "up. I ask before reading a whole article online.")
+    assert await _cap("can you check the news", R(BASE, lookups_ask_first=False)) == (
+        'Yes. Say "what\'s the news".')
     assert await _cap("can you check the news", R(BASE, news_on=False)) == (
         "No, the news briefing is off on this house. An admin can turn on the news briefing in "
         "Settings → System → Advanced.")
@@ -505,6 +510,37 @@ async def test_plugin_features_by_state(db_session) -> None:
         # §4.25: never "yes" while the house stays off the internet.
         assert await _cap("can you download videos", R(BASE, internet="never")) == (
             f"Not right now: this house is set to never use the internet. {INET_CHANGE}")
+    finally:
+        await db_session.execute(text("DELETE FROM plugins"))
+        await db_session.commit()
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_offline_library_offers_the_web_in_every_no(db_session) -> None:
+    """§4.21-4.24: missing or switched off, the web is offered instead the
+    same way (while the internet answer and AI allow it)."""
+    web = " I can look things up on the web instead."
+    await db_session.execute(text("DELETE FROM plugins"))
+    await db_session.commit()
+    try:
+        assert await _cap("can you look things up offline") == (
+            "No, not on this house. An admin can add an offline library from the Plugins page." + web)
+        await _plugin_row(db_session, "kiwix", enabled=False)
+        assert await _cap("can you look things up offline") == (
+            "No, an offline library is switched off on this house. An admin can turn on an offline "
+            "library from the Plugins page." + web)
+        assert await _cap("can you look things up offline", R(BASE, internet="never")) == (
+            "No, an offline library is switched off on this house. An admin can turn on an offline "
+            "library from the Plugins page.")
+        assert (await _cap("can you look things up offline", R(BASE, ai_on=False))).endswith(
+            "from the Plugins page.")
+        # On, but nothing to answer from: most often no library downloaded yet.
+        await db_session.execute(text("UPDATE plugins SET enabled = true, status = 'load_error'"))
+        await db_session.commit()
+        assert await _cap("can you look things up offline") == (
+            "Not right now: no offline library is set up yet, or it isn't working. An admin can "
+            "download one on the Library page, or check it on the Plugins page." + web)
     finally:
         await db_session.execute(text("DELETE FROM plugins"))
         await db_session.commit()

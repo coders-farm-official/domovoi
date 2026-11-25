@@ -326,7 +326,9 @@ only). Holidays come from `clients/holidays.py` (Christmas, New Year's,
 July 4th, Halloween, Valentine's Day; Thanksgiving is computed as the
 4th Thursday of November rather than hard-coded). `next_occurrence`
 always returns the next future date — December 26th asks for next
-year's Christmas.
+year's Christmas. Dates follow the Home location's country; a holiday that country
+doesn't keep says so first ("Thanksgiving isn't a UK holiday. In the US
+it's …").
 
 | Ask | Behavior |
 |---|---|

@@ -613,6 +613,40 @@ def test_unknown_country_falls_back() -> None:
     assert "December 25th" in _holiday("christmas", date(2026, 1, 1), country="FR")
 
 
+@pytest.mark.parametrize(
+    ("label", "country", "today", "expected"),
+    [
+        # §7.13: a holiday the house's country doesn't keep says so first.
+        ("thanksgiving", "GB", date(2026, 11, 25),
+         "Thanksgiving isn't a UK holiday. In the US it's Thursday, November 26th, 2026 — tomorrow."),
+        ("thanksgiving", "FR", date(2026, 11, 25),
+         "Thanksgiving isn't a holiday here. In the US it's Thursday, November 26th, 2026 — tomorrow."),
+        ("independence day", "GB", date(2026, 7, 1),
+         "Independence Day isn't a UK holiday. In the US it's Saturday, July 4th, 2026 — 3 days from now."),
+        ("boxing day", "US", date(2026, 12, 20),
+         "Boxing Day isn't a US holiday. In the UK it's Saturday, December 26th, 2026 — 6 days from now."),
+        ("bonfire night", "US", date(2026, 11, 1),
+         "Guy Fawkes Night isn't a US holiday. In the UK it's Thursday, November 5th, 2026 — 4 days from now."),
+        ("early may bank holiday", "US", date(2026, 5, 1),
+         "The early May bank holiday isn't a US holiday. In the UK it's Monday, May 4th, 2026 — 3 days from now."),
+        # Kept here: the plain answer, by the country's own rule.
+        ("thanksgiving", "US", date(2026, 11, 25), "Thanksgiving is Thursday, November 26th, 2026 — tomorrow."),
+        ("thanksgiving", "CA", date(2026, 9, 1), "Thanksgiving is Monday, October 12th, 2026 — 41 days from now."),
+        ("boxing day", "CA", date(2026, 12, 20), "Boxing Day is Saturday, December 26th, 2026 — 6 days from now."),
+        ("christmas", "FR", date(2026, 12, 20), "Christmas is Friday, December 25th, 2026 — 5 days from now."),
+        # No country known: today's answer, saying whose date a one-country date is.
+        ("thanksgiving", None, date(2026, 11, 25),
+         "In the US, Thanksgiving is Thursday, November 26th, 2026 — tomorrow."),
+        ("veterans day", None, date(2026, 11, 10),
+         "In the US, Veterans Day is Wednesday, November 11th, 2026 — tomorrow."),
+        ("canada day", None, date(2026, 6, 30), "Canada Day is Wednesday, July 1st, 2026 — tomorrow."),
+        ("boxing day", None, date(2026, 12, 25), "Boxing Day is Saturday, December 26th, 2026 — tomorrow."),
+    ],
+)
+def test_holiday_by_the_house_country(label: str, country, today: date, expected: str) -> None:
+    assert _holiday(label, today, country=country) == expected
+
+
 @pytest.mark.asyncio
 async def test_fast_path_reads_the_home_country() -> None:
     m = _HOLIDAY_WHEN_RE.match("when is thanksgiving")

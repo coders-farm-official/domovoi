@@ -35,6 +35,7 @@ from simpleeval import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from domovoi import home_location
+from domovoi.clients.holidays import COUNTRY_ADJECTIVE, COUNTRY_PLACE
 from domovoi.clients.holidays import find as find_holiday, spoken_names
 from domovoi.clients.units import UNITS, convert as unit_convert, lookup as unit_lookup
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
@@ -1114,7 +1115,13 @@ class CalculatorHandler(Handler):
     ) -> Response:
         """The holiday's date and how far away it is. No year: the next
         one (today counts). "this year" / "next year" / "2027": that
-        year's, which may already have passed ("... was ..., N days ago")."""
+        year's, which may already have passed ("... was ..., N days ago").
+
+        By the house's country (its Home location): a holiday that country
+        doesn't keep says so, then gives the date where it is kept
+        ("Thanksgiving isn't a UK holiday. In the US it's …"); with no
+        country known, a date that is one country's says whose ("In the
+        US, Thanksgiving is …")."""
         today = self._today(ctx)
         holiday = find_holiday(label, country)
         if holiday is None:
@@ -1129,13 +1136,33 @@ class CalculatorHandler(Handler):
         name = holiday.name[0].upper() + holiday.name[1:]
         when = f"{_WEEKDAY_NAMES[target.weekday()]}, {_format_date_spoken(target)}"
         if delta == 0:
-            text = f"{name} is today, {when}."
+            verb, rest = "is", f"today, {when}"
         elif delta > 0:
-            rel = "tomorrow" if delta == 1 else f"{delta:,} days from now"
-            text = f"{name} is {when} — {rel}."
+            verb, rest = "is", f"{when} — {'tomorrow' if delta == 1 else f'{delta:,} days from now'}"
         else:
-            rel = "yesterday" if delta == -1 else f"{-delta:,} days ago"
-            text = f"{name} was {when} — {rel}."
+            verb, rest = "was", f"{when} — {'yesterday' if delta == -1 else f'{-delta:,} days ago'}"
+        text = f"{name} {verb} {rest}."
+        if holiday.kept_here is False:
+            # Its date where it IS kept: the rule's country, else the first
+            # of the table's countries that keeps it.
+            where = holiday.rule_country or next(
+                (c for c in COUNTRY_PLACE if c in holiday.kept_in), None)
+            adjective = COUNTRY_ADJECTIVE.get((country or "").upper())
+            not_here = (f"{name} isn't a {adjective} holiday." if adjective
+                        else f"{name} isn't a holiday here.")
+            if where in COUNTRY_PLACE:
+                it = "it's" if verb == "is" else "it was"
+                text = f"{not_here} In {COUNTRY_PLACE[where]} {it} {rest}."
+            else:
+                text = f"{not_here} {text}"
+        elif holiday.kept_here is None:
+            # No country known: say whose date it is, when it is one
+            # country's (not for Canada Day, whose name says it).
+            whose = holiday.rule_country or (
+                next(iter(holiday.kept_in)) if len(holiday.kept_in) == 1 else None)
+            place = COUNTRY_PLACE.get(whose or "")
+            if place and place.removeprefix("the ") not in holiday.name:
+                text = f"In {place}, {holiday.name} {verb} {rest}."
         return Response(
             text=text,
             session_id=ctx.session_id,
@@ -1143,6 +1170,7 @@ class CalculatorHandler(Handler):
             data={
                 "target": target.isoformat(), "days": delta,
                 "holiday": holiday.name, "country": country,
+                "kept_here": holiday.kept_here, "rule_country": holiday.rule_country,
             },
         )
 
