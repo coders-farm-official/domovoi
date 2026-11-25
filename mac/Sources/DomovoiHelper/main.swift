@@ -10,7 +10,7 @@ import Foundation
 let usage = """
 usage:
   sudo DomovoiHelper install --system [--answers FILE | --internet X --media-root DIR --ollama own|existing]
-                             [--repair] [--for-uid UID --code-to FILE]
+                             [--repair] [--for-uid UID --code-to FILE] [--kit DIR | --no-kit]
   DomovoiHelper preflight [--json]                  check this Mac (changes nothing; any account)
   DomovoiHelper status [--json]                     the installed Domovoi's jobs, VM and health
   sudo DomovoiHelper setup-code --for-uid UID --code-to FILE
@@ -44,6 +44,10 @@ the menu-bar icon's actions (root, the system install):
                makes, and gets the setup code
   --code-to    a new file (in that account's own temporary folder) for the
                setup code, 0600, never in a log
+  --kit DIR    install from the offline kit at DIR (docs/OFFLINE_KIT.md),
+               with no internet; without --kit or --no-kit the helper uses a
+               kit plugged in (/Volumes/<name>/kit.json), checked first
+  --no-kit     never an offline kit: install with internet
 
 user mode (tests, no root):
   DomovoiHelper install --user-mode --prefix DIR --web-port N --core-port N [options]
@@ -230,10 +234,10 @@ func main() -> Int32 {
         switch a.command! {
         case "install", "plan":
             let parseOnly = a.flag("parse-only")
-            let o = try installOptions(&a)
+            var o = try installOptions(&a)
             if parseOnly { _ = a.value("code-to"); _ = try a.int("for-uid") }
             try a.checkAllUsed()
-            if parseOnly { print("\(SetupCommands.parseOnlyLine) install \(o.layout.mode.rawValue) internet=\(o.internet) media=\(o.mediaNames.count)"); return 0 }
+            if parseOnly { print("\(SetupCommands.parseOnlyLine) install \(o.layout.mode.rawValue) internet=\(o.internet) media=\(o.mediaNames.count) kit=\(o.kitRequest)"); return 0 }
             if a.command == "plan" {
                 try o.check()
                 print("would install into \(o.layout.root.path) (launchd \(o.launchdDomain)):")
@@ -266,6 +270,9 @@ func main() -> Int32 {
                     if !r.conflicts.isEmpty {
                         throw HelperError("Domovoi's ports are in use: " + r.conflicts.map { "\($0.owner) (\(Preflight.portList($0.ports)))" }.joined(separator: "; "))
                     }
+                    // The offline kit, checked again as root before anything
+                    // from it is used (OfflineKit.swift).
+                    try SetupCommands.resolveKit(&o, log: progress.log)
                 }
                 let inst = try Installer(options: o, runner: ProcessRunner(), fileOps: LocalFileOps(), http: URLSessionHTTP(),
                                          sleeper: RealSleeper(), progress: progress)
@@ -285,7 +292,11 @@ func main() -> Int32 {
             try a.checkAllUsed()
             let share = try? Machine.findShare(nil)
             let pins = share.flatMap { try? Pins.load($0.appendingPathComponent("installer/pins.conf")) }
-            let r = Preflight(layout: layout, runner: ProcessRunner(), http: URLSessionHTTP()).run(pins: pins, ollamaMinimum: pins?.ollamaMinimum)
+            let pre = Preflight(layout: layout, runner: ProcessRunner(), http: URLSessionHTTP())
+            // An offline kit plugged in: checked (read-only) and shown in
+            // place of the internet check, which then asks nothing outside.
+            let kit = share.flatMap { KitPreflight.report(share: $0, layout: layout) }
+            let r = pre.run(pins: pins, ollamaMinimum: pins?.ollamaMinimum, kit: kit)
             if json {
                 let enc = JSONEncoder()
                 enc.outputFormatting = [.sortedKeys]

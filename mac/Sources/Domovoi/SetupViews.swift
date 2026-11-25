@@ -34,10 +34,10 @@ struct SetupView: View {
         .onAppear { if m.report == nil { m.runPreflight() } }
         .alert(m.conflict?.sheetTitle ?? "", isPresented: $m.showConflict, presenting: m.conflict) { c in
             Button("Retry") { m.runPreflight() }
-            if c.ollamaUsable { Button("Use this Ollama") { m.useExistingOllama() } }
+            if c.ollamaUsable && m.kit == nil { Button("Use this Ollama") { m.useExistingOllama() } }
             Button("Cancel Setup", role: .cancel) { NSApp.terminate(nil) }
         } message: { c in
-            Text(c.sheetText)
+            Text(c.sheetText(offlineKit: m.kit != nil))
         }
     }
 
@@ -168,9 +168,13 @@ struct ConsentPage: View {
                 Bullet("Keeps Domovoi in /Library/Application Support/Domovoi: a Linux virtual machine (it grows to about 15-20 GB)\(m.ollama == "own" ? ", the AI models (5-9 GB)" : "")\(packageHasSpeechService ? ", the speech model (0.5 GB)" : ""), and its downloads, all left out of Time Machine. Logs go to /Library/Logs/Domovoi.")
                 Bullet("Time Machine doesn't back up Domovoi's settings and database yet: they live inside its virtual machine, which Time Machine skips. A backup tool for them is planned.")
                 Bullet("Lets Domovoi read and write the media folder you choose next (an access entry on the folder). Your files there are never deleted, not even by uninstalling.")
-                Bullet(packageHasSpeechService
-                       ? "Downloads about 10.5-13.5 GB, which takes 20-40 minutes on a typical connection."
-                       : "Downloads about 10-13 GB, which takes 20-40 minutes on a typical connection.")
+                if let k = m.kit {
+                    Bullet(KitText.consent(k))
+                } else {
+                    Bullet(packageHasSpeechService
+                           ? "Downloads about 10.5-13.5 GB, which takes 20-40 minutes on a typical connection."
+                           : "Downloads about 10-13 GB, which takes 20-40 minutes on a typical connection.")
+                }
                 Bullet("Opens Domovoi on this Mac at http://localhost:6369.\(m.ollama == "own" ? " Its AI engine listens on this Mac only (port 11434)." : "")")
                 // The icon's LaunchAgent: listed under its program, the app
                 // (unsigned build: "Domovoi", an unidentified developer; to
@@ -257,7 +261,8 @@ struct InternetPage: View {
     @EnvironmentObject var m: SetupModel
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Setup needs the internet right now to download Domovoi (about 10-13 GB). After that, Domovoi works with or without it. Your voice and recordings never leave this Mac either way.")
+            Text(m.kit.map { KitText.internetQuestion($0) }
+                 ?? "Setup needs the internet right now to download Domovoi (about 10-13 GB). After that, Domovoi works with or without it. Your voice and recordings never leave this Mac either way.")
                 .fixedSize(horizontal: false, vertical: true)
             Text("Pick one answer to continue.").foregroundStyle(.secondary)
             Choice(value: "always", title: "Yes, always. It's on our home internet.",
@@ -483,6 +488,9 @@ struct InstalledPage: View {
                 SetupCodeQRView(code: code)
             } else if let n = m.setupCodeNote { Text(n).font(.callout) }
             Text("Repair runs every step of Setup again with the answers you gave, and fixes what it finds.").font(.callout).foregroundStyle(.secondary)
+            if let k = m.report?.kit {
+                Text(KitText.repair(k)).font(.callout).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+            }
             Divider().padding(.vertical, 6)
             Text("Uninstall").bold()
             Button { removeEverything = false } label: { radio(!removeEverything, "Keep my data", "Removes Domovoi's programs and its background services. Keeps the virtual machine, the AI models, the logs, your answers and the hidden account that owns them, so installing again picks up where it left off.") }.buttonStyle(.plain)
