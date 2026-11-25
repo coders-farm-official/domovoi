@@ -1,0 +1,27 @@
+{
+  "extends": "base",
+  "note": "Seven remembered facts about the asker.",
+  "memory_items": [
+    {
+      "fact": "fact 1"
+    },
+    {
+      "fact": "fact 2"
+    },
+    {
+      "fact": "fact 3"
+    },
+    {
+      "fact": "fact 4"
+    },
+    {
+      "fact": "fact 5"
+    },
+    {
+      "fact": "fact 6"
+    },
+    {
+      "fact": "fact 7"
+    }
+  ]
+}

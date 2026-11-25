@@ -1,0 +1,12 @@
+{
+  "extends": "base",
+  "note": "One ICS calendar with events today.",
+  "calendars": [
+    {
+      "kind": "ics",
+      "events_today": [
+        "Dentist 3pm"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "extends": "base",
+  "note": "A phone in room mode (a satellite room).",
+  "asker": "room_mode_phone",
+  "rooms": [
+    {
+      "id": "bedroom",
+      "online": true
+    },
+    {
+      "id": "kitchen",
+      "online": true
+    }
+  ]
+}

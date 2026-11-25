@@ -1,0 +1,21 @@
+{
+  "extends": "base",
+  "note": "Two plugins working, one switched off.",
+  "plugins": [
+    {
+      "slug": "sleep",
+      "enabled": true,
+      "status": "ok"
+    },
+    {
+      "slug": "kiwix",
+      "enabled": true,
+      "status": "ok"
+    },
+    {
+      "slug": "imagegen",
+      "enabled": false,
+      "status": "ok"
+    }
+  ]
+}

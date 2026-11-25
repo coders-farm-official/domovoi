@@ -1,0 +1,5 @@
+{
+  "extends": "base",
+  "note": "The list database write fails.",
+  "list_writes": "error"
+}

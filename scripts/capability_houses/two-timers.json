@@ -1,0 +1,14 @@
+{
+  "extends": "base",
+  "note": "Two timers running.",
+  "timers": [
+    {
+      "label": "pasta",
+      "minutes_left": 4
+    },
+    {
+      "label": "eggs",
+      "minutes_left": 9
+    }
+  ]
+}

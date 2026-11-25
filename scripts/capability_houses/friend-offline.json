@@ -1,0 +1,10 @@
+{
+  "extends": "base",
+  "note": "Friend Houses on; the friend's house is unreachable (messages queue).",
+  "friends": [
+    {
+      "name": "the Bassetts",
+      "reachable": false
+    }
+  ]
+}

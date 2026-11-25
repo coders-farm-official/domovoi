@@ -1,0 +1,5 @@
+{
+  "extends": "room-mode-phone",
+  "note": "Quiet hours active, asked from a room-mode phone.",
+  "quiet_hours_active": true
+}

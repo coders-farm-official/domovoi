@@ -1,0 +1,5 @@
+{
+  "extends": "base",
+  "note": "The background memory extractor off (memory itself on).",
+  "memory_extractor": false
+}

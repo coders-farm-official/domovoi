@@ -1,0 +1,9 @@
+{
+  "extends": "base",
+  "note": "One alarm set.",
+  "alarms": [
+    {
+      "at": "07:00"
+    }
+  ]
+}
