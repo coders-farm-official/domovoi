@@ -219,11 +219,21 @@ async def test_failed_speech_recognition_is_recorded_as_not_made_out(
     sess = StreamSession(ws, "wd-attic")  # type: ignore[arg-type]
     await sess._process_utterance(PCM_1S, trigger="wake_word")
     await _drain_history_writes()
-    assert ws.types()[-2:] == ["error", "response_end"]
+    # Said out loud (capability N5), not an error frame alone.
+    assert ws.types()[-2:] == ["response_start", "response_end"]
+    assert _said_failure(ws)
     rows = await _rows("wd-attic")
     assert [(r["turn_status"], r["no_answer_reason"], r["audio_ms"]) for r in rows] == [
         ("unheard", "error", 1000),
     ]
+
+
+def _said_failure(ws) -> bool:
+    """The turn's failure line went out as a spoken reply (`_fail_turn`)."""
+    from domovoi.router import TURN_FAILED_TEXT
+
+    return any(f.get("type") == "response_start" and f.get("text") == TURN_FAILED_TEXT
+               for f in ws.sent_text)
 
 
 # ── the room's decode slot ────────────────────────────────────────────
@@ -328,8 +338,8 @@ async def test_the_first_reply_frame_disarms_the_guard(
     sess = StreamSession(ws, "wd-study")  # type: ignore[arg-type]
     await asyncio.wait_for(sess._process_utterance(PCM_1S, trigger="wake_word"), 10)
     await _drain_history_writes()
-    errors = [f for f in ws.sent_text if f.get("type") == "error"]
-    assert errors and errors[0]["message"] == "model load failed"
+    # The ordinary failure, said (capability N5): not the timeout apology.
+    assert _said_failure(ws)
     assert turn_watchdog.last_stall() is None
     rows = await _rows("wd-study")
     assert [(r["turn_status"], r["no_answer_reason"]) for r in rows] == [("no_answer", "error")]
@@ -575,8 +585,8 @@ async def test_routing_gets_the_longer_limit(
     sess = StreamSession(ws, "wd-route")  # type: ignore[arg-type]
     await asyncio.wait_for(sess._process_utterance(PCM_1S, trigger="wake_word"), 10)
     await _drain_history_writes()
-    errors = [f for f in ws.sent_text if f.get("type") == "error"]
-    assert errors and errors[0]["message"] == "tool model failed"
+    # The router's own failure, said (capability N5): not the timeout apology.
+    assert _said_failure(ws)
     assert turn_watchdog.last_stall() is None
 
 

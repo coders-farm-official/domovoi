@@ -84,6 +84,12 @@ _NO_ANSWER_TEXT = "Sorry, I don't have an answer for that."
 
 _ONLINE_CHECK_OFFER = "Want me to check that online?"
 
+#: Said when the turn itself raised: a handler's or a plugin's bug, a
+#: database that went away mid-turn (capability N5: a failure is said out
+#: loud, never silence and never a fake success). Short and honest: no
+#: handler or plugin name and no exception text, which go to the log.
+TURN_FAILED_TEXT = "Sorry, that didn't work."
+
 # Said the moment a voice turn needs a model Ollama hasn't loaded, so the
 # room isn't silent through the load (~54 s on an all-CPU host).
 _COLD_START_TEXT = "Just a moment, I'm waking up my language model."
@@ -790,6 +796,80 @@ def offered_tool_schemas(transcript: str) -> list[dict]:
 
 
 async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response:
+    """Route one turn and record it (`_route_turn`). A turn that raises —
+    a handler's or a plugin's bug, the database gone mid-turn — is
+    answered with :data:`TURN_FAILED_TEXT` and recorded as
+    ``matched_path="error"`` (`_record_failed_turn`) instead of reaching
+    the caller as an exception: every caller (a satellite's turn, ``POST
+    /v1/intent``, the phone's voice turn, a room display's button) then
+    says something true, through its own ordinary reply path.
+
+    Only ``Exception``: a cancelled turn (a barge-in, the reply limit)
+    raises ``asyncio.CancelledError``, a ``BaseException``, and goes on
+    being a cancellation, never a spoken failure."""
+    t0 = time.monotonic()
+    try:
+        return await _route_turn(intent, ctx, session)
+    except Exception:
+        log.exception("turn %r failed while routing; saying so", said(intent.transcript))
+        return await _record_failed_turn(
+            intent, ctx, session, latency_ms=int((time.monotonic() - t0) * 1000),
+        )
+
+
+async def _rollback_quietly(session: AsyncSession | None) -> None:
+    if session is None:
+        return
+    try:
+        await session.rollback()
+    except Exception as e:  # noqa: BLE001 — the reply goes out regardless
+        log.warning("rolling back a failed turn failed too: %s", e)
+
+
+async def _record_failed_turn(
+    intent: Intent, ctx: Context, session: AsyncSession | None, *, latency_ms: int,
+) -> Response:
+    """The reply to a turn that raised, recorded like any other turn.
+
+    What the turn wrote before it failed is rolled back first: a half-made
+    change is not kept, and a database error leaves the transaction
+    unusable until it is. The turn is then written in the same session
+    (``_persist_turn``: one intents_log and one conversation_log row, the
+    session's history), and the caller's commit keeps it as before. When
+    even that fails (the database is down), the line is still returned:
+    the room hears it, and the log says what wasn't recorded."""
+    await _rollback_quietly(session)
+    if ctx.timings is not None:
+        # A row the failed turn wrote is gone with the rollback.
+        ctx.timings.intents_log_id = None
+    response = Response(
+        text=TURN_FAILED_TEXT,
+        session_id=ctx.session_id,
+        matched_handler=None,
+        matched_path="error",
+        online=ctx.online,
+        expect_followup=False,
+    )
+    try:
+        session_id = await SessionRepository(session).get_or_create(ctx.session_id, ctx.room_id)
+        response.session_id = session_id
+        await _persist_turn(
+            session=session,
+            session_id=session_id,
+            intent=intent,
+            ctx=ctx.model_copy(update={"session_id": session_id}),
+            response=response,
+            matched_handler=None,
+            matched_path="error",
+            latency_ms=latency_ms,
+        )
+    except Exception:
+        log.exception("the failed turn %r could not be recorded", said(intent.transcript))
+        await _rollback_quietly(session)
+    return response
+
+
+async def _route_turn(intent: Intent, ctx: Context, session: AsyncSession) -> Response:
     # Conversational chat mode (Feature 8) is bypassed UPSTREAM of this
     # function. When a session is in ``conversational_mode`` (set by
     # ChatModeHandler into ``sessions.context``), the streaming layer reads

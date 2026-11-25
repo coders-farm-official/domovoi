@@ -104,7 +104,7 @@ from domovoi.models import (  # noqa: E402
 from domovoi.acquisitions import ACQUISITIONS, redact_for_household  # noqa: E402
 from domovoi.capabilities import CAPABILITIES  # noqa: E402
 from domovoi.now_playing import NOW_PLAYING  # noqa: E402
-from domovoi.router import route  # noqa: E402
+from domovoi.router import TURN_FAILED_TEXT, route  # noqa: E402
 from domovoi.streaming import StreamSession  # noqa: E402
 from domovoi.transport_guard import (  # noqa: E402
     BodyLimitMiddleware,
@@ -1223,8 +1223,23 @@ async def post_intent(intent: Intent):
     # A voice turn in progress for its routing (voice_activity.py): a
     # home-server document job waits between its parts while it runs.
     async with voice_activity.turn("intent"):
-        async with session_scope() as s:
-            response = await route(intent, ctx, s)
+        try:
+            async with session_scope() as s:
+                response = await route(intent, ctx, s)
+        except Exception:
+            # route() answers a handler's or a plugin's failure itself; this
+            # is what is left (the commit, the database gone): the same
+            # honest line in the ordinary reply, not a 500 with a traceback
+            # (capability N5). Not a cancellation: that stays one.
+            log.exception("POST /v1/intent: the turn %r failed", log_privacy.said(intent.transcript))
+            response = Response(
+                text=TURN_FAILED_TEXT,
+                session_id=intent.session_id,
+                matched_handler=None,
+                matched_path="error",
+                online=ctx.online,
+                expect_followup=False,
+            )
 
     if not intent.synthesize:
         return response

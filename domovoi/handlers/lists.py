@@ -50,9 +50,10 @@ the turn says "list", "to-do" or "shopping" (``offers_tool``).
 
 from __future__ import annotations
 
+import logging
 import re
 import time
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -69,6 +70,14 @@ DELETE_KIND = "core.lists_delete"
 # How long a "yes" still answers the question (a "yes" said much later, to
 # something else, must never clear a list).
 CONFIRM_TTL_SEC = 120.0
+
+log = logging.getLogger(__name__)
+
+# The end of every "I couldn't ..." line: a write that failed is said, never
+# silence and never "Added" (capability N5).
+_WENT_WRONG = "Something went wrong."
+# `_write`'s answer for a write that failed.
+_FAILED: Any = object()
 
 # Said at most, then "and N more".
 _MAX_SPOKEN = 8
@@ -318,6 +327,22 @@ class ListsHandler(Handler):
         return Response(text=text_, session_id=ctx.session_id, matched_handler=self.name,
                         expect_followup=ask, data=data or {}, history_text=history_text)
 
+    @staticmethod
+    async def _write(session: AsyncSession, write: Callable[[], Awaitable[Any]]) -> Any:
+        """One list change, in a savepoint: its result, or ``_FAILED`` when
+        the database refused it. Rolled back alone, so nothing of it is
+        kept and the turn can still be recorded in the same transaction;
+        the caller says it couldn't. A ``ListError`` (a full list, a name
+        taken) is the caller's to answer and goes on up."""
+        try:
+            async with session.begin_nested():
+                return await write()
+        except L.ListError:
+            raise
+        except Exception:
+            log.exception("lists: a change by voice failed")
+            return _FAILED
+
     async def _item_reply(self, ctx: Context, item: L.ItemRow, words: Any,
                           data: dict | None = None) -> Response:
         """A reply naming one item, ``words(item_text)``. An item a friend
@@ -522,19 +547,31 @@ class ListsHandler(Handler):
         added: list[str] = []
         back: list[str] = []
         already: list[str] = []
-        try:
+        where = f"your {L.spoken_name(target.name)} list"
+
+        async def add_all() -> list[str]:
+            outcomes = []
             for i in items:
                 _row, outcome = await L.add_item(
                     session, target.id, i, person_id=ctx.person_id,
                     room=ctx.satellite_room_id, via="voice",
                 )
-                {"added": added, "reopened": back, "already": already}[outcome].append(_said(i))
+                outcomes.append(outcome)
+            return outcomes
+
+        try:
+            outcomes = await self._write(session, add_all)
         except L.ListError as e:
             if e.code == "list_full":
                 return self._reply(ctx, f"Your {L.spoken_name(target.name)} list is full. "
                                         "Clear some things off it first.")
             raise
-        where = f"your {L.spoken_name(target.name)} list"
+        if outcomes is _FAILED:
+            # All or nothing: the savepoint took every item of this turn back.
+            return self._reply(ctx, f"I couldn't add {_and_join([_said(i) for i in items])} "
+                                    f"to {where}. {_WENT_WRONG}")
+        for i, outcome in zip(items, outcomes):
+            {"added": added, "reopened": back, "already": already}[outcome].append(_said(i))
         parts: list[str] = []
         if added:
             parts.append(f"Added {_and_join(added)} to {where}.")
@@ -643,7 +680,9 @@ class ListsHandler(Handler):
         where = f"your {L.spoken_name(target.name)} list"
         if item.done:
             return await self._item_reply(ctx, item, lambda it: f"{_cap(it)} is already crossed off {where}.")
-        await L.update_item(session, target.id, item.id, done=True)
+        if await self._write(session, lambda: L.update_item(session, target.id, item.id, done=True)) is _FAILED:
+            return await self._item_reply(
+                ctx, item, lambda it: f"I couldn't cross {it} off {where}. {_WENT_WRONG}")
         return await self._item_reply(ctx, item, lambda it: f"Crossed {it} off {where}.",
                                       data={"list_id": target.id})
 
@@ -652,8 +691,10 @@ class ListsHandler(Handler):
         if why is not None:
             return why
         assert target is not None and item is not None
-        await L.delete_item(session, target.id, item.id)
         where = f"your {L.spoken_name(target.name)} list"
+        if await self._write(session, lambda: L.delete_item(session, target.id, item.id)) is _FAILED:
+            return await self._item_reply(
+                ctx, item, lambda it: f"I couldn't remove {it} from {where}. {_WENT_WRONG}")
         return await self._item_reply(ctx, item, lambda it: f"Removed {it} from {where}.",
                                       data={"list_id": target.id})
 
@@ -664,7 +705,9 @@ class ListsHandler(Handler):
             assert why is not None
             return why
         where = f"your {L.spoken_name(target.name)} list"
-        n = await L.clear_items(session, target.id, done_only=True)
+        n = await self._write(session, lambda: L.clear_items(session, target.id, done_only=True))
+        if n is _FAILED:
+            return self._reply(ctx, f"I couldn't clear the crossed-off things off {where}. {_WENT_WRONG}")
         if not n:
             return self._reply(ctx, f"Nothing on {where} is crossed off.")
         return self._reply(ctx, f"Removed {_things(n)} you'd crossed off {where}.")
@@ -690,7 +733,7 @@ class ListsHandler(Handler):
         if not name:
             return self._reply(ctx, "What should it be called? Say make a list called, and its name.")
         try:
-            made = await L.create_list(session, name)
+            made = await self._write(session, lambda: L.create_list(session, name))
         except L.ListError as e:
             if e.code == "name_taken":
                 existing = await L.find_list(session, name)
@@ -699,6 +742,9 @@ class ListsHandler(Handler):
             if e.code == "too_many_lists":
                 return self._reply(ctx, "You have as many lists as I can keep. Delete one on the Lists page first.")
             return self._reply(ctx, "That's not a name I can give a list.")
+        if made is _FAILED:
+            return self._reply(ctx, f"I couldn't make your {L.spoken_name(L.clean_name(name))} list. "
+                                    f"{_WENT_WRONG}")
         return self._reply(ctx, f"Made your {L.spoken_name(made.name)} list.", data={"list_id": made.id})
 
     async def _delete_list(self, spoken_list: str, ctx: Context, session: AsyncSession) -> Response:
@@ -728,13 +774,15 @@ class ListsHandler(Handler):
             name = str(data.get("name") or "")
             items = [str(i) for i in (data.get("items") or []) if str(i).strip()]
             try:
-                made = await L.create_list(session, name)
+                made = await self._write(session, lambda: L.create_list(session, name))
             except L.ListError as e:
                 if e.code != "name_taken":
                     return self._reply(ctx, "I couldn't make that list.")
                 made = await L.find_list(session, name)   # made meanwhile, elsewhere
                 if made is None:
                     return self._reply(ctx, "I couldn't make that list.")
+            if made is _FAILED:
+                return self._reply(ctx, f"I couldn't make that list. {_WENT_WRONG}")
             if not items:
                 return self._reply(ctx, f"Made your {L.spoken_name(made.name)} list.")
             return await self._add_to(made, items, ctx, session)
@@ -744,9 +792,11 @@ class ListsHandler(Handler):
             return self._reply(ctx, "That list is gone already.")
         where = f"your {L.spoken_name(target.name)} list"
         if kind == CLEAR_KIND:
-            await L.clear_items(session, target.id, done_only=False)
+            if await self._write(session, lambda: L.clear_items(session, target.id, done_only=False)) is _FAILED:
+                return self._reply(ctx, f"I couldn't clear {where}. {_WENT_WRONG}")
             return self._reply(ctx, f"Done. {_cap(where)} is empty.", data={"list_id": target.id})
-        await L.delete_list(session, target.id)
+        if await self._write(session, lambda: L.delete_list(session, target.id)) is _FAILED:
+            return self._reply(ctx, f"I couldn't delete {where}. {_WENT_WRONG}")
         return self._reply(ctx, f"Deleted {where}.")
 
 
