@@ -1527,8 +1527,10 @@ class Settings(BaseSettings):
     # core deletes everything older from intents_log and conversation_log,
     # the rooms' short-term conversations (sessions idle that long; older
     # exchanges in a room still talking) and the satellites' logs kept on
-    # this server. "Keep voice history" on People → Voice history and in
-    # Settings → Advanced (Privacy); a save prunes at once.
+    # this server. "Keep voice history" is on the dashboard's Settings →
+    # Household → People → Voice history and in Settings → System →
+    # Advanced (Privacy); a save prunes at once. (Settings → Privacy →
+    # Voice history is the command recordings, not this.)
     # Never fatal and never shorter than asked: see the validator.
     voice_history_keep: str = VOICE_HISTORY_KEEP_DEFAULT
     # How often the pruner looks (workers/voice_history_pruner.py): it

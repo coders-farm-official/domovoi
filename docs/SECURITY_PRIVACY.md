@@ -2226,7 +2226,7 @@ delete. Now there is a limit, a delete, and forgetting someone removes what
 they said. Everything below is `domovoi/voice_history.py`,
 `domovoi/workers/voice_history_pruner.py`, V030 and Settings → Household → People → **Voice
 history** on the dashboard (the same "Keep voice history" setting is also
-under Settings → Advanced → Privacy; Settings → Privacy → Voice history is
+under Settings → System → Advanced → Privacy; Settings → Privacy → Voice history is
 the page for command recordings, below). Chat is not voice history: a
 home-server chat is kept until it is deleted (see [Data at rest](#data-at-rest)).
 
