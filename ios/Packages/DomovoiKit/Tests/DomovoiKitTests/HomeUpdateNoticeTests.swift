@@ -119,6 +119,23 @@ final class HomeUpdateNoticeTests: XCTestCase {
         XCTAssertEqual([at80, "fine words"], parsed?.highlights)
     }
 
+    func testHighlightsCountCodePointsNotUTF16Units() {
+        // As the server and the dashboard count: an emoji is one code point
+        // (two UTF-16 units), so 80 with an emoji is kept and 81 is dropped.
+        let at80 = String(repeating: "x", count: 79) + "\u{1F600}"
+        let at81 = String(repeating: "x", count: 80) + "\u{1F600}"
+        let emoji80 = String(repeating: "\u{1F600}", count: 80)
+        XCTAssertEqual(80, at80.unicodeScalars.count)
+        XCTAssertEqual(81, at80.utf16.count)
+        XCTAssertEqual(81, at81.unicodeScalars.count)
+        XCTAssertEqual(160, emoji80.utf16.count)
+        let list = [at81, at80, emoji80, emoji80 + "x"]
+        XCTAssertEqual(
+            [at80, emoji80],
+            parse(#"{"available": true, "version": "1.5.0", "highlights": \#(json(list))}"#)?.highlights
+        )
+    }
+
     func testMarkupInAHighlightStaysText() {
         let odd = [#"<b>bold</b> & <a href="x">a link</a>"#, "[docs](https://example.com)", "**not bold**"]
         let parsed = parse(#"{"available": true, "version": "1.5.0", "highlights": \#(json(odd))}"#)

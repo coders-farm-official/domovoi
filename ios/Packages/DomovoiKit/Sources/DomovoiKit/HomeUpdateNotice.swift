@@ -44,10 +44,10 @@ public enum UpdateNotices {
 
     public static let path = "/api/updates/notice"
     public static let highlightsMax = 3
-    /// The dashboard's `updateHighlights` limit, counted as it counts
-    /// (JavaScript's `length`, UTF-16 units), so the three apps keep or drop
-    /// the same highlight.
-    public static let highlightMaxUTF16 = 80
+    /// The highlight limit, counted in code points (Unicode scalars: an emoji
+    /// is one), as the server and the dashboard count it, so the three keep
+    /// or drop the same highlight.
+    public static let highlightMaxScalars = 80
 
     /// The read, lenient. **Whatever the server answers decides**: an older
     /// server's 404, a refusal (401/403), any other 4xx, or a body that is
@@ -103,7 +103,7 @@ public enum UpdateNotices {
                 .compactMap { $0 as? String }
                 .filter { text in
                     !text.trimmingCharacters(in: .whitespaces).isEmpty
-                        && text.utf16.count <= highlightMaxUTF16
+                        && text.unicodeScalars.count <= highlightMaxScalars
                         && !text.unicodeScalars.contains(where: isControl)
                 }
                 .prefix(highlightsMax)
