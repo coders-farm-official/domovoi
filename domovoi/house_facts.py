@@ -63,6 +63,9 @@ PLACE_PRINTERS = "Settings → Household → Printers & scanners"
 PLACE_MODELS = "Settings → Chat & AI → Models"
 PLACE_ADVANCED = "Settings → System → Advanced"
 PLACE_PLUGINS = "the Plugins page"
+# The offline library's own page (its plugin's nav label), where an admin
+# downloads a library.
+PLACE_LIBRARY = "the Library page"
 
 # What the backstop tells the model to say when the facts don't cover it.
 NOT_SURE_LINE = "I'm not sure — Settings → Privacy shows exactly what's kept."
@@ -1009,6 +1012,13 @@ async def capability_answer(cap: Capability, f: HouseFacts, *, scope: Any = None
             return f"No, not on this house. {_how_to_turn_on(feature, add=True)}" + _instead(cap, f)
         if state == "off":
             return (f"No, {feature} is switched off on this house. {_how_to_turn_on(feature)}"
+                    + _instead(cap, f))
+        if state == "broken" and cap.key == "offline_library":
+            # Installed and on, but not answering: on a new install that is
+            # most often a library with nothing downloaded yet, which the
+            # core can't tell from a fault, so both are said.
+            return ("Not right now: no offline library is set up yet, or it isn't working. "
+                    f"An admin can download one on {PLACE_LIBRARY}, or check it on {PLACE_PLUGINS}."
                     + _instead(cap, f))
         if state == "broken":
             return f"Not right now: {feature} isn't working. An admin can check it on {PLACE_PLUGINS}."

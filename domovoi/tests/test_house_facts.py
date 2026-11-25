@@ -535,6 +535,12 @@ async def test_offline_library_offers_the_web_in_every_no(db_session) -> None:
             "library from the Plugins page.")
         assert (await _cap("can you look things up offline", R(BASE, ai_on=False))).endswith(
             "from the Plugins page.")
+        # On, but nothing to answer from: most often no library downloaded yet.
+        await db_session.execute(text("UPDATE plugins SET enabled = true, status = 'load_error'"))
+        await db_session.commit()
+        assert await _cap("can you look things up offline") == (
+            "Not right now: no offline library is set up yet, or it isn't working. An admin can "
+            "download one on the Library page, or check it on the Plugins page." + web)
     finally:
         await db_session.execute(text("DELETE FROM plugins"))
         await db_session.commit()
