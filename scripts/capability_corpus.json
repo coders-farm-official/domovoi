@@ -1478,7 +1478,8 @@
         "friend houses",
         "admin"
       ],
-      "note": "Friend Houses isn't set up; an admin turns it on (Q2)"
+      "note": "Friend Houses isn't set up; an admin turns it on (Q2)",
+      "stub": true
     },
     {
       "id": "7.21",
@@ -1490,7 +1491,8 @@
       "must_include": [
         "no friend|haven'?t added|isn'?t added|not added",
         "admin"
-      ]
+      ],
+      "stub": true
     },
     {
       "id": "7.22",
