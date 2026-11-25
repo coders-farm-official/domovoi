@@ -78,6 +78,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from domovoi import household_time
 from domovoi.db.repositories import TimerRepository, notify_timers_changed, utcnow
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
+from domovoi.handlers.shared import ask_detail
 from domovoi.handlers.shared.clock_time import (
     ALARM_WHEN_PATTERN,
     TIME_PATTERN,
@@ -353,6 +354,23 @@ _LIST_ALARMS_RE = re.compile(
     r")$"
 )
 
+# "Set an alarm" / "can you set an alarm?" with no time, "set a reminder" /
+# "remind me" with neither task nor time: Domovoi does these, so the answer
+# asks for what is missing (M2) and the reply finishes the command
+# (ask_detail): "7 am" is "set an alarm for 7 am", "to call mom in 10
+# minutes" is "remind me to call mom in 10 minutes". Whole turn only.
+_ASK_ALARM_RE = re.compile(
+    rf"^(?:(?:just |now )?{_SET_VERB} (?:(?:me|us) )?(?:an |a |my |the |another |one more )?"
+    rf"|(?:an |a |another )?)(?:new )?alarm{_FOR_ME}{_POLITE}\Z"
+)
+_ASK_REMINDER_RE = re.compile(
+    rf"^(?:{_LEAD}{_MODIFIER}reminder|remind (?:me|us)){_FOR_ME}{_POLITE}\Z"
+)
+ASK_ALARM_KIND = "core.alarm_what_time"
+ASK_REMINDER_KIND = "core.reminder_what_when"
+ASK_ALARM_TEXT = "Sure. What time should it go off?"
+ASK_REMINDER_TEXT = "Sure. What should I remind you about, and when?"
+
 #: "What alarms do I have" reads this many aloud, then says how many more.
 _ALARMS_SAID = 4
 
@@ -627,6 +645,10 @@ class ReminderHandler(Handler):
         "is my alarm set",
     )
     requires_network = "no"
+    # "Sure. What time should it go off?" / "What should I remind you about, and when?":
+    # the reply finishes the command (ask_detail).
+    confirmation_kinds = (ASK_ALARM_KIND, ASK_REMINDER_KIND)
+    choice_kinds = (ASK_ALARM_KIND, ASK_REMINDER_KIND)
 
     tool_schema = {
         "name": "reminder",
@@ -687,7 +709,43 @@ class ReminderHandler(Handler):
             FastPath(_CREATE_ALARM_RE, ReminderHandler._alarm_from_match),
             FastPath(_CANCEL_ALARM_RE, ReminderHandler._cancel_alarm_from_match),
             FastPath(_LIST_ALARMS_RE, ReminderHandler._list_alarms_from_match, early_commit="A"),
+            FastPath(_ASK_ALARM_RE, ReminderHandler._ask_alarm_time),
+            FastPath(_ASK_REMINDER_RE, ReminderHandler._ask_reminder),
         ]
+
+    async def _ask_alarm_time(
+        self, m: re.Match[str], ctx: Context, session: AsyncSession
+    ) -> Response:
+        return await ask_detail.ask(
+            self, ctx, session, kind=ASK_ALARM_KIND, question=ASK_ALARM_TEXT,
+            prefixes=("set an alarm for ",),
+        )
+
+    async def _ask_reminder(
+        self, m: re.Match[str], ctx: Context, session: AsyncSession
+    ) -> Response:
+        return await ask_detail.ask(
+            self, ctx, session, kind=ASK_REMINDER_KIND, question=ASK_REMINDER_TEXT,
+            prefixes=("remind me ", "remind me to "),
+        )
+
+    async def handle_choice_reply(
+        self, kind: str, data: dict, transcript: str, ctx: Context, session: AsyncSession,
+    ) -> Response | None:
+        """The reply to "What time should it go off?" or "What should I remind you
+        about, and when?"."""
+        if kind not in self.choice_kinds:
+            return None
+        return await ask_detail.answer(self, kind, data, transcript, ctx, session)
+
+    async def handle_confirmation(
+        self, kind: str, data: dict, affirmative: bool, ctx: Context, session: AsyncSession,
+    ) -> Response:
+        # Choices: the router hands their replies to handle_choice_reply. A
+        # bare yes/no reaching here still gets an answer.
+        return await ask_detail.answer(
+            self, kind, data, "yes" if affirmative else "no", ctx, session,
+        ) or Response(text="Okay.", session_id=ctx.session_id, matched_handler=self.name)
 
     def offers_tool(self, transcript: str) -> bool:
         # A statement about a reminder ("my reminder for 10 minutes didn't

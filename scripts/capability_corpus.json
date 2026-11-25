@@ -2054,7 +2054,8 @@
       "kind": "command",
       "must_include": [
         "how long"
-      ]
+      ],
+      "stub": true
     },
     {
       "id": "10.7",
