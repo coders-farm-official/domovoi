@@ -12,19 +12,20 @@ import json
 from typing import Any
 
 import pytest
-from fastapi.testclient import TestClient
 from sqlalchemy import text
 
 import web.backend.api.chat as chat_api
 import web.backend.api.help as help_api
 from domovoi.admin_auth import require_device, require_device_read
 from domovoi.help_desk import answer
+from domovoi.tests.chat_devices import DeviceTestClient
 from domovoi.tests.conftest import requires_db
 from web.backend.main import app
 
 
 def _client():
-    return TestClient(app, headers={"X-Requested-With": "domovoi-tests"})
+    # A device of its own: its chats are private to it (chat_access, V086).
+    return DeviceTestClient(app)
 
 
 def _sse(body: str) -> list[tuple[str, Any]]:
@@ -233,9 +234,11 @@ def test_deliveries_are_read_per_person() -> None:
 
 @requires_db
 def test_an_admins_help_chat_holds_no_admin_only_details(quiet_state, stub_stream, monkeypatch) -> None:
-    """A help chat is household-shared: even asked by an admin (here, the
-    pre-setup grace counts as one), the update's error and the internet
-    question stay out of it; the finding says where an admin reads them."""
+    """D1: a help answer in any chat uses the household view. Even in a
+    PRIVATE chat (1.5.0: this client's own, by its device key), which every
+    admin can read but whose device needn't be an admin's, the update's
+    error and the internet question stay out of it; the finding says where
+    an admin reads them."""
     async def failed_update():
         return {"status": "failed", "error": "pip exploded in /srv/secret-build-dir",
                 "steps": [{"name": "deps", "status": "failed"}]}
@@ -244,6 +247,7 @@ def test_an_admins_help_chat_holds_no_admin_only_details(quiet_state, stub_strea
     monkeypatch.setattr(help_api.egress, "policy", lambda: "")
     with _client() as c:
         t = c.post("/api/chat/threads", json={"title": "Help: Settings"}).json()
+        assert t.get("shared") in (False, None)  # private where the server has V086
         c.post(f"/api/chat/threads/{t['id']}/messages", json={"content": "why did the update fail?"})
         system = stub_stream[-1]["messages"][0]["content"]
         assert "secret-build-dir" not in system and "the step that failed" not in system

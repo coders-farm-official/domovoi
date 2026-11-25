@@ -507,10 +507,8 @@ async def get_draft(
     text the changes view shows (``display``), and ``changes`` against the
     version before (``[[op, text]]``: ``=`` kept, ``+`` added, ``-``
     removed; null for v1). No device ids: each version says ``mine``
-    (made from the ``X-Device-Id`` the caller names) and ``device_name``."""
-    from web.backend.api.chat import caller_id
-
-    me = caller_id(request)
+    (made on this caller's device, by its device key) and ``device_name``."""
+    me = viewer.device_id
     async with session_scope() as s:
         d = await _draft(s, draft_id)
         if d is None:
@@ -554,13 +552,9 @@ async def edit_draft(
     text_ = blocks.xml_safe(body.text)
     if not blocks.parse(text_):
         raise HTTPException(status_code=422, detail="a draft needs some words")
-    from web.backend.api.devices import valid_device_id
-
-    device = valid_device_id(body.device_id)
-    if device is None and request is not None:
-        from web.backend.api.files import caller_device_id
-
-        device = valid_device_id(caller_device_id(request))
+    # The device its key resolved to (chat_access); the body's
+    # self-asserted device_id is ignored.
+    device = viewer.device_id
     try:
         async with session_scope() as s:
             owner = (await s.execute(text("SELECT thread_id FROM chat_drafts WHERE id = :d"),
@@ -575,9 +569,7 @@ async def edit_draft(
             if latest is not None and latest["version"] != body.base_version:
                 return _stale(latest["version"])
             if latest is not None and latest["body"] == text_:
-                from web.backend.api.chat import caller_id
-
-                latest = await _version(s, draft_id, None, caller_id(request) or device)
+                latest = await _version(s, draft_id, None, device)
                 return {"version": latest, "unchanged": True}
             version = (latest["version"] if latest else 0) + 1
             await s.execute(text(

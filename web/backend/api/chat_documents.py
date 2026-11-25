@@ -428,6 +428,8 @@ def attach_reply(docs: list[dict[str, Any]]) -> str:
 
 class FromDocument(BaseModel):
     rel_path: str = Field(..., min_length=1, max_length=4096)
+    # As POST /threads: private to this device by default (chat_access).
+    shared: bool | None = None
 
 
 @router.post("/threads/from-document", dependencies=SEND, responses=_REFUSALS)
@@ -438,6 +440,9 @@ async def thread_from_document(body: FromDocument, viewer: Viewer = VIEWER) -> A
     the chat's uploads so the chat doesn't change when the file does."""
     from web.backend.api import documents as documents_api
 
+    # Who owns it, decided first: a private chat that can't be kept private
+    # is refused (409) before anything is copied.
+    owner, shared = chat_access.new_thread(viewer, body.shared)
     target = documents_api._readable_target(body.rel_path)
     if not target.is_file():
         raise HTTPException(status_code=404, detail=f"{body.rel_path} not found")
@@ -466,7 +471,6 @@ async def thread_from_document(body: FromDocument, viewer: Viewer = VIEWER) -> A
     docs = [{k: meta.get(k) for k in _META_KEYS}]
     reply = attach_reply(docs)
     doc = {"mode": "attached", "found": True, "sources": [], "notes": list(meta.get("notes") or [])}
-    owner, shared = chat_access.new_thread(viewer)
     async with session_scope() as s:
         cols, vals, extra = await chat_access.create_columns(s, owner, shared)
         thread = (await s.execute(text(
@@ -485,6 +489,9 @@ async def thread_from_document(body: FromDocument, viewer: Viewer = VIEWER) -> A
     row = dict(thread) | {"created_at": thread["created_at"].isoformat(),
                           "updated_at": thread["updated_at"].isoformat(),
                           "message_count": 2, "last_snippet": reply[:120]}
+    row |= chat_access.flags(viewer, chat_access.Thread(
+        id=int(thread["id"]), owner_device_id=owner, shared=shared, private_columns=bool(cols)))
+    row["owner_name"] = None
     return {"thread": row, "document": docs[0]}
 
 

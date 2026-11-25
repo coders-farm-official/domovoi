@@ -315,10 +315,11 @@ async def deliveries(person_id: int | None = Query(None, ge=1), since_id: int | 
                      viewer: Viewer = VIEWER) -> dict[str, Any]:
     """Help steps sent by voice (V035): newest first, or after ``since_id``
     oldest first. The app reads its owner's on start and after a
-    ``help_deliveries.changed`` event."""
+    ``help_deliveries.changed`` event. A delivery made to one phone (1.5.0,
+    V086) is listed only to that phone (by its device key) and to admins."""
     try:
         async with session_scope() as s:
-            rows = await delivery.recent(s, person_id=person_id, since_id=since_id, limit=limit)
+            rows = await delivery.recent(s, person_id=person_id, since_id=since_id, limit=limit, viewer=viewer)
     except Exception as e:  # noqa: BLE001 — V035 missing: nothing was ever sent
         log.info("help: deliveries unreadable: %s", e)
         rows = []

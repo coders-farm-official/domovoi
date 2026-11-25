@@ -16,12 +16,12 @@ import json
 from typing import Any
 
 import pytest
-from fastapi.testclient import TestClient
 
 import web.backend.api.chat as chat_api
 import web.backend.api.chat_documents as docs_api
 from domovoi.doc_qa import answer as qa
 from domovoi.tests import doc_fixtures as fx
+from domovoi.tests.chat_devices import DeviceTestClient
 from domovoi.tests.conftest import requires_db
 from web.backend.main import app
 
@@ -33,7 +33,8 @@ LEASE = [
 
 
 def _client():
-    return TestClient(app, headers={"X-Requested-With": "domovoi-tests"})
+    # A device of its own: its chats are private to it (chat_access, V086).
+    return DeviceTestClient(app)
 
 
 @pytest.fixture(autouse=True)

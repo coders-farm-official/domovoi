@@ -75,11 +75,15 @@ Message details (V017): an assistant row keeps ``stats`` — Ollama's token
 counts and durations for the reply, the server's own first-token and wall
 times, how much of the thread was sent as context and which model setting
 answered (:func:`_reply_stats`). A user row keeps the ``device_id`` of the
-install that sent it — self-asserted, like queue provenance, and kept only
-when it is a well-formed id (``devices.valid_device_id``) — and reads join
+device that sent it — since 1.5.0 the one its device KEY resolved to
+(domovoi/chat_access.py), never an id the caller names — and reads join
 ``devices`` for its current name. Reads never return the stored id (1.5.0,
 L39 of the 2026-11 review): a row says ``mine`` instead — true when it was
-sent with the id the caller names in ``X-Device-Id`` (:func:`caller_id`).
+sent from the caller's own device.
+
+Private chats (1.5.0, V086): every route here goes through
+:mod:`domovoi.chat_access` (who may see, read, write, share and delete a
+thread); docs/SECURITY_PRIVACY.md "Private chats".
 """
 
 from __future__ import annotations
@@ -121,7 +125,6 @@ from web.backend.api import chat_drafts as _drafts
 from web.backend.api import chat_videos as _videos
 from web.backend.api import chat_media as _media
 from domovoi.media_understanding import ask as _ask
-from web.backend.api.devices import valid_device_id
 from web.backend.db import session_scope
 from web.backend.domovoi_client import auth_forward_headers, domovoi_url
 
@@ -182,6 +185,10 @@ async def _notify_chat(s: Any, what: str) -> None:
 # ─── Threads ────────────────────────────────────────────────────────────────
 class ThreadCreate(BaseModel):
     title: Optional[str] = Field(None, max_length=200)
+    # Private to this device (the default for a caller with a device key)
+    # or shared with the household (the default without one, and always on
+    # a shared screen). chat_access.new_thread has the rule.
+    shared: Optional[bool] = None
 
 
 class ThreadPatch(BaseModel):
@@ -189,6 +196,63 @@ class ThreadPatch(BaseModel):
     archived: Optional[bool] = None
     # The header chip: "Allow in this chat" on or off (V037).
     internet_allowed: Optional[bool] = None
+    # "Share with household" on or off: the owning device or an admin.
+    shared: Optional[bool] = None
+
+
+_THREAD_COLUMNS = (
+    "t.id, t.title, t.archived, t.title_by_user, t.created_at, t.updated_at, "
+    "t.internet_allowed, t.used_internet"
+)
+
+
+async def _select_threads(
+    s: Any, viewer: Viewer, where: list[str], params: dict[str, Any], *,
+    match_col: str = "NULL::text AS match_content", limit: str = "",
+) -> list[dict[str, Any]]:
+    """Thread rows as the list gives them, each with its access fields
+    (chat_access.flags) and, for an admin, the owning device's name."""
+    flags = await chat_access.thread_flags_sql(s, "t")
+    rows = (
+        await s.execute(
+            text(
+                f"""
+                SELECT {_THREAD_COLUMNS},
+                       COUNT(m.id) AS message_count,
+                       (SELECT LEFT(content, 120) FROM chat_messages
+                         WHERE thread_id = t.id ORDER BY id DESC LIMIT 1) AS last_snippet,
+                       {flags},
+                       {match_col}
+                  FROM chat_threads t
+                  LEFT JOIN chat_messages m ON m.thread_id = t.id
+                 WHERE {' AND '.join(where) or 'TRUE'}
+                 GROUP BY t.id
+                 ORDER BY t.updated_at DESC
+                 {limit}
+                """
+            ),
+            params,
+        )
+    ).mappings().all()
+    return [_thread_json(r, viewer) for r in rows]
+
+
+def _thread_json(r: Any, viewer: Viewer) -> dict[str, Any]:
+    d = {k: v for k, v in dict(r).items() if not k.startswith("ca_")}
+    d |= chat_access.flags(viewer, chat_access.thread_from_row(r))
+    d["owner_name"] = r.get("ca_owner_name") if viewer.admin else None
+    for key in ("created_at", "updated_at"):
+        if d.get(key) is not None and not isinstance(d[key], str):
+            d[key] = d[key].isoformat()
+    return d
+
+
+async def _one_thread(s: Any, thread_id: int, viewer: Viewer) -> dict[str, Any]:
+    rows = await _select_threads(s, viewer, ["t.id = :tid"], {"tid": thread_id})
+    if not rows:
+        raise HTTPException(status_code=404, detail=chat_access.THREAD_NOT_FOUND)
+    rows[0].pop("match_content", None)
+    return rows[0]
 
 
 # The longest search a client may send, and the most threads it returns.
@@ -234,8 +298,19 @@ async def list_threads(
         description="Search: threads whose title or any message contains this (case ignored), newest first, "
                     "at most 100, each with `match_snippet` (the words around the first match in a message).",
     ),
+    scope: Literal["mine", "all"] = Query(
+        "mine",
+        description="mine (the default, for everyone): this device's chats and the shared ones. all: every "
+                    "chat in the house, for an admin only (403 `admin_required` otherwise).",
+    ),
     viewer: Viewer = VIEWER,
 ) -> dict[str, Any]:
+    """The threads this caller may see (domovoi/chat_access.py), newest
+    first, each with ``shared``, ``mine``, ``can_write``, ``can_share``,
+    ``can_delete``, ``admin_view`` and ``owner_name`` (the owning device's
+    name, for an admin; else null)."""
+    if scope == "all" and not viewer.admin:
+        raise chat_access.ADMIN_REQUIRED.http()
     query = (q or "").strip()
     where: list[str] = []
     params: dict[str, Any] = {}
@@ -258,35 +333,13 @@ async def list_threads(
     async with session_scope() as s:
         # Only the threads this caller may see, and so only their
         # snippets and search matches (chat_access).
-        visible, vparams = await chat_access.visible_sql(s, "t", viewer)
+        visible, vparams = await chat_access.visible_sql(s, "t", viewer, scope=scope)
         where.append(visible)
         params |= vparams
-        rows = (
-            await s.execute(
-                text(
-                    f"""
-                    SELECT t.id, t.title, t.archived, t.title_by_user, t.created_at, t.updated_at,
-                           t.internet_allowed, t.used_internet,
-                           COUNT(m.id) AS message_count,
-                           (SELECT LEFT(content, 120) FROM chat_messages
-                             WHERE thread_id = t.id ORDER BY id DESC LIMIT 1) AS last_snippet,
-                           {match_col}
-                      FROM chat_threads t
-                      LEFT JOIN chat_messages m ON m.thread_id = t.id
-                     WHERE {' AND '.join(where)}
-                     GROUP BY t.id
-                     ORDER BY t.updated_at DESC
-                     {limit}
-                    """
-                ),
-                params,
-            )
-        ).mappings().all()
+        rows = await _select_threads(s, viewer, where, params, match_col=match_col, limit=limit)
     out = []
-    for r in rows:
-        d = dict(r)
+    for d in rows:
         match = d.pop("match_content", None)
-        d |= {"created_at": r["created_at"].isoformat(), "updated_at": r["updated_at"].isoformat()}
         if query:
             d["match_snippet"] = match_snippet(match, query)
         out.append(d)
@@ -296,7 +349,7 @@ async def list_threads(
 @router.post("/threads", dependencies=DEVICE)
 async def create_thread(body: ThreadCreate, viewer: Viewer = VIEWER) -> dict[str, Any]:
     title = chat_titles.plain_title(body.title) or None
-    owner, shared = chat_access.new_thread(viewer)
+    owner, shared = chat_access.new_thread(viewer, body.shared)
     async with session_scope() as s:
         cols, vals, extra = await chat_access.create_columns(s, owner, shared)
         row = (
@@ -318,19 +371,22 @@ async def create_thread(body: ThreadCreate, viewer: Viewer = VIEWER) -> dict[str
             await help_delivery.mark_title_kept(s, row["id"])
         await _notify_chat(s, "thread-created")
         await s.commit()
-    return dict(row) | {
-        "created_at": row["created_at"].isoformat(),
-        "updated_at": row["updated_at"].isoformat(),
-        "message_count": 0,
-        "last_snippet": None,
-    }
+        return await _one_thread(s, row["id"], viewer)
 
 
 @router.patch("/threads/{thread_id}", dependencies=DEVICE)
 async def patch_thread(thread_id: int, body: ThreadPatch, viewer: Viewer = VIEWER) -> dict[str, Any]:
-    """Rename and/or archive a thread. A title set here is the person's
+    """Rename and/or archive a thread, its internet chip, or share it with
+    the household (``shared``). A title set here is the person's
     (``title_by_user``): the model's title job never writes over it. A
-    blank title is refused (400)."""
+    blank title is refused (400). Answers the thread as the list gives it.
+
+    Sharing is the owning device's or an admin's (403 ``not_yours``);
+    renaming, archiving and the chip are a write (an admin can't write in
+    another device's private chat: 403 ``admin_read_only``); 404 for a
+    chat the caller can't see, the body a missing one gets. A shared
+    screen's chats stay shared (409 ``shared_screen``). The switch waits
+    for a send that started before it (chat_access: the row lock)."""
     sets, params = [], {"id": thread_id}
     if body.title is not None:
         title = chat_titles.plain_title(body.title)
@@ -345,22 +401,34 @@ async def patch_thread(thread_id: int, body: ThreadPatch, viewer: Viewer = VIEWE
     if body.internet_allowed is not None:
         sets.append("internet_allowed = :ia")
         params["ia"] = body.internet_allowed
-    if not sets:
+    if not sets and body.shared is None:
         raise HTTPException(status_code=400, detail="nothing to change")
+    what = "thread-patched"
     async with session_scope() as s:
-        await chat_access.thread_for(s, thread_id, viewer, Action.WRITE)
-        r = await s.execute(
-            text(f"UPDATE chat_threads SET {', '.join(sets)} WHERE id = :id"),
-            params,
-        )
-        if r.rowcount == 0:
-            raise HTTPException(status_code=404, detail="thread not found")
-        await _notify_chat(s, "thread-patched")
+        if body.shared is not None:
+            thread = await chat_access.thread_for(s, thread_id, viewer, Action.SHARE, lock=True)
+            if sets:
+                await chat_access.thread_for(s, thread_id, viewer, Action.WRITE, lock=False)
+            if await chat_access.set_shared(s, thread, body.shared):
+                what = "thread-shared" if body.shared else "thread-unshared"
+        else:
+            await chat_access.thread_for(s, thread_id, viewer, Action.WRITE)
+        if sets:
+            r = await s.execute(
+                text(f"UPDATE chat_threads SET {', '.join(sets)} WHERE id = :id"),
+                params,
+            )
+            if r.rowcount == 0:
+                raise HTTPException(status_code=404, detail="thread not found")
+        await _notify_chat(s, what)
         await s.commit()
+        # Whoever may patch a thread may still read it afterwards (only its
+        # device or an admin can unshare it).
+        out = await _one_thread(s, thread_id, viewer)
     if body.title is not None:
         # A model title still being written would only be thrown away.
         cancel_title_job(thread_id)
-    return {"ok": True}
+    return {"ok": True} | out
 
 
 @router.delete("/threads/{thread_id}", dependencies=DEVICE)
@@ -428,18 +496,6 @@ _MSG_COLUMNS = (
     "m.id, m.role, m.content, m.images, m.model, m.error, m.created_at, m.stats, m.device_id, "
     "m.source, m.speaker_person_id, m.speaker_confidence, m.documents, m.doc, m.draft"
 )
-
-
-def caller_id(request: Request | None) -> str | None:
-    """The device id a chat read compares rows with: the caller's own
-    ``X-Device-Id`` header, when it is a well-formed id. Self-asserted,
-    and only ever used for the ``mine`` display hint."""
-    if request is None:
-        return None
-    try:
-        return valid_device_id(request.headers.get("X-Device-Id"))
-    except Exception:  # noqa: BLE001 — no header, no "mine"
-        return None
 
 
 def _msg_dict(r: Any, me: str | None = None) -> dict[str, Any]:
@@ -648,12 +704,14 @@ def _reply_stats(
 async def list_messages(
     thread_id: int, request: Request = None, viewer: Viewer = VIEWER,  # type: ignore[assignment]
 ) -> dict[str, Any]:
-    """The thread's messages, oldest first. No device ids: a user row says
-    ``mine`` (sent from the ``X-Device-Id`` the caller names) and
-    ``device_name``."""
-    me = caller_id(request)
+    """The thread's messages, oldest first, and ``thread``: the thread as
+    the list gives it (its access fields: ``can_write``, ``admin_view``…).
+    No device ids: a user row says ``mine`` (sent from this caller's
+    device, by its device key) and ``device_name``."""
+    me = viewer.device_id
     async with session_scope() as s:
         await chat_access.thread_for(s, thread_id, viewer, Action.READ)
+        thread_json = await _one_thread(s, thread_id, viewer)
         rows = (
             await s.execute(
                 text(
@@ -682,7 +740,7 @@ async def list_messages(
     except Exception as e:  # noqa: BLE001 — the messages still show
         log.warning("chat: the videos of thread %s are unreadable: %s", thread_id, type(e).__name__)
         videos = []
-    return {"messages": [_msg_dict(r, me) for r in rows], "jobs": jobs, "videos": videos}
+    return {"messages": [_msg_dict(r, me) for r in rows], "jobs": jobs, "videos": videos, "thread": thread_json}
 
 
 class SendBody(BaseModel):
@@ -1030,8 +1088,9 @@ async def send_message(
         raise HTTPException(status_code=404, detail="the attached video is no longer on this Domovoi; attach it again")
     if not body.content.strip() and not documents and not videos:
         raise HTTPException(status_code=422, detail="a message needs some words, or a document attached")
-    # Well-formed or nothing, as every other route that reads a device id.
-    device_id = valid_device_id(body.device_id)
+    # The device its KEY resolved to (chat_access), never the body's
+    # self-asserted device_id: a keyless caller's message has no device.
+    device_id = viewer.device_id
 
     async with session_scope() as s:
         # Checked, and the row locked until the user turn is in
@@ -2711,6 +2770,13 @@ async def send_voice(
     if len(data) > _VOICE_MAX_BYTES:
         raise HTTPException(status_code=413, detail="a voice turn is at most 30 seconds")
     form = {"phone_id": phone_id, "thread_id": str(thread_id)}
+    # The core checks the thread again, from this caller's device key: the
+    # one hop the key is forwarded on (an app's header; a browser's cookie
+    # rides in the forwarded Cookie).
+    forward = auth_forward_headers(request)
+    key = chat_access.presented_device_key(request)
+    if key and request.headers.get(chat_access.DEVICE_KEY_HEADER):
+        forward[chat_access.DEVICE_KEY_HEADER] = key
     if player:
         form["player"] = player
     if not speak:
@@ -2725,7 +2791,7 @@ async def send_voice(
     _reply_started()
     try:
         async with _core_client() as client:
-            r = await client.post(url, data=form, files=files, headers=auth_forward_headers(request))
+            r = await client.post(url, data=form, files=files, headers=forward)
     except httpx.TimeoutException:
         log.warning("chat voice: the core took longer than %.0f s (thread %s)", _VOICE_TIMEOUT_SEC, thread_id)
         return JSONResponse(

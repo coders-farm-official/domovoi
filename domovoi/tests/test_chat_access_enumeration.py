@@ -34,11 +34,11 @@ from domovoi import ai_features, chat_access
 ROOT = Path(__file__).resolve().parents[2]
 
 # ════════════════════════════════════════════════════════════════════════
-# THE SWITCH. "private": another device gets the 404 a missing chat gets,
-# and an admin's GET gets 200 (V086 and the device key). "shared": the
-# 1.4.x rule (every chat is the household's), kept for a database or
-# build without the device key.
-MODE = "shared"
+# THE SWITCH. "private" (since V086 and the device key, 1.5.0): another
+# device gets the 404 a missing chat gets, and an admin's GET gets 200.
+# "shared": the 1.4.x rule (every chat is the household's), what this
+# check asserted before the device key landed.
+MODE = "private"
 # ════════════════════════════════════════════════════════════════════════
 
 # ─── (a) SQL ────────────────────────────────────────────────────────────
@@ -100,6 +100,8 @@ SQL_ALLOWED: dict[str, tuple[str, str]] = {
     "web/backend/api/chat.py::retry_reply": (GATED, "try again"),
     "web/backend/api/chat.py::answer_heads_up": (GATED, "a heads-up card's pick"),
     "web/backend/api/chat.py::decide_lookup": (GATED, "a lookup card's answer"),
+    "web/backend/api/chat.py::_select_threads": (HELPER, "the list's SELECT: list_threads hands it visible_sql, "
+                                                         "_one_thread a thread its route checked"),
     "web/backend/api/chat.py::_answer": (HELPER, "the reply stream of a checked send"),
     "web/backend/api/chat.py::_answer._finish_retry": (HELPER, "the reply stream of a checked retry"),
     "web/backend/api/chat.py::_answer._reply_events": (HELPER, "the reply stream of a checked send"),
@@ -456,6 +458,9 @@ async def test_another_device_asking_for_a_chat_by_id(_db, tmp_path, monkeypatch
 
     async with web_client() as c:
         admin = await claim_admin(c)
+        # The admin cookie the claim set would make every later request an
+        # admin's read: the devices below speak with their own keys only.
+        c.cookies.clear()
         token = await db_device_token()
         base = {"X-Requested-With": "domovoi-tests", **({HEADER: token} if token else {})}
 
@@ -463,6 +468,7 @@ async def test_another_device_asking_for_a_chat_by_id(_db, tmp_path, monkeypatch
             r = await c.post("/api/devices/register", json={"device_id": dev}, headers=base)
             assert r.status_code == 200, r.text
             key = r.json().get("device_key")
+            c.cookies.clear()  # the key cookie: each device presents its own header
             return {**base, "X-Device-Id": dev, **({chat_access.DEVICE_KEY_HEADER: key} if key else {})}
 
         owner = await device(f"browser-own{uuid.uuid4().hex[:8]}")
@@ -492,8 +498,8 @@ async def test_another_device_asking_for_a_chat_by_id(_db, tmp_path, monkeypatch
                     assert gone[0] == 404, (method, path, gone)
                     assert hidden, (method, path, got, gone)
                     if method == "GET":
-                        seen = await c.get(_fill(path, ids, missing=False), headers=admin_h)
-                        assert seen.status_code == 200, (path, seen.status_code, seen.text)
+                        seen = await _ask(c, method, _fill(path, ids, missing=False), admin_h, body)
+                        assert seen[0] == 200, (path, seen)
                 else:
                     assert not hidden, (method, path, got)
                 checked += 1
@@ -517,6 +523,7 @@ async def test_lists_and_search_follow_the_mode(_db) -> None:
         async def device(dev: str) -> dict[str, str]:
             r = await c.post("/api/devices/register", json={"device_id": dev}, headers=base)
             key = r.json().get("device_key")
+            c.cookies.clear()
             return {**base, **({chat_access.DEVICE_KEY_HEADER: key} if key else {})}
 
         owner = await device(f"browser-own{uuid.uuid4().hex[:8]}")

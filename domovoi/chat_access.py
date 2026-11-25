@@ -469,8 +469,11 @@ async def visible_sql(s: Any, alias: str, viewer: Viewer, *, scope: str = "mine"
 async def thread_flags_sql(s: Any, alias: str) -> str:
     """The select-list columns :func:`thread_from_row` reads back."""
     if await has_private_columns(s):
-        return f"{alias}.owner_device_id AS ca_owner, {alias}.shared AS ca_shared, TRUE AS ca_private"
-    return "NULL::text AS ca_owner, TRUE AS ca_shared, FALSE AS ca_private"
+        return (
+            f"{alias}.owner_device_id AS ca_owner, {alias}.shared AS ca_shared, TRUE AS ca_private, "
+            f"(SELECT d.name FROM devices d WHERE d.device_id = {alias}.owner_device_id) AS ca_owner_name"
+        )
+    return "NULL::text AS ca_owner, TRUE AS ca_shared, FALSE AS ca_private, NULL::text AS ca_owner_name"
 
 
 def thread_from_row(r: Any) -> Thread:
@@ -593,3 +596,31 @@ async def device_key_state(s: Any, device_id: str, request: Request) -> str:
     if not stored:
         return "unkeyed"
     return "match" if key_matches(stored, presented_device_key(request)) else "mismatch"
+
+
+# ─── The share switch ───────────────────────────────────────────────────
+
+
+async def set_shared(s: Any, thread: Thread, shared: bool) -> bool:
+    """Share ``thread`` with the household or stop sharing it (the caller
+    holds :func:`thread_for` with ``Action.SHARE`` and the row lock).
+    Returns whether it changed. A chat started on a shared screen, or
+    owned by a device that is one now, stays shared (409
+    ``shared_screen``); a chat with no owner that stops being shared is
+    admin-only."""
+    if not thread.private_columns or thread.shared == shared:
+        return False
+    if not shared and thread.owner_device_id:
+        row = (
+            await s.execute(
+                text("SELECT COALESCE(shared_screen, false) FROM devices WHERE device_id = :d"),
+                {"d": thread.owner_device_id},
+            )
+        ).first()
+        if row is not None and row[0]:
+            raise SHARED_SCREEN_PRIVATE.http()
+    await s.execute(
+        text("UPDATE chat_threads SET shared = :sh, shared_changed_at = now() WHERE id = :id"),
+        {"sh": bool(shared), "id": thread.id},
+    )
+    return True

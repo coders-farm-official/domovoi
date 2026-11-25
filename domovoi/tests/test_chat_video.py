@@ -36,6 +36,7 @@ from domovoi import admin_auth, ai_features, voice_activity
 from domovoi.chat_video import context, limits, media, plan
 from domovoi.chat_video import runner as runner_mod
 from domovoi.db.session import session_scope
+from domovoi.tests.chat_devices import DeviceTestClient
 from domovoi.tests.conftest import requires_db
 from domovoi.tests.route_walk import iter_route_contexts
 
@@ -283,7 +284,8 @@ def test_every_video_code_has_help() -> None:
 def _client() -> TestClient:
     from web.backend.main import app
 
-    return TestClient(app, headers={"X-Requested-With": "domovoi-tests"})
+    # A device of its own: its chats are private to it (chat_access, V086).
+    return DeviceTestClient(app)
 
 
 def _upload(c: TestClient, path: Path, name: str | None = None):

@@ -238,9 +238,23 @@ async def deliver(
 
 
 async def recent(session: AsyncSession, *, person_id: int | None = None, since_id: int | None = None,
-                 limit: int = 20) -> list[dict[str, Any]]:
-    """Deliveries newest first (``since_id``: only newer ones, oldest first)."""
+                 limit: int = 20, viewer: Any = None) -> list[dict[str, Any]]:
+    """Deliveries newest first (``since_id``: only newer ones, oldest first).
+
+    With ``viewer`` (a chat_access.Viewer; the web route's caller) and
+    V086: a delivery made to one phone (``device_id``) is listed only to
+    that phone, by its device key, and to admins; one with no phone (sent
+    shared, or before 1.5.0) to every caller, as before."""
     where, params = [], {"l": max(1, min(int(limit), 100))}
+    if viewer is not None and not getattr(viewer, "admin", False):
+        from domovoi import chat_access
+
+        if await chat_access.has_private_columns(session):
+            if viewer.device_id is not None:
+                where.append("(device_id IS NULL OR device_id = :dev)")
+                params["dev"] = viewer.device_id
+            else:
+                where.append("device_id IS NULL")
     if person_id is not None:
         where.append("person_id = :p")
         params["p"] = person_id

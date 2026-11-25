@@ -116,6 +116,7 @@ from domovoi.admin_auth import (
     require_admin_read,
     require_device,
 )
+from domovoi import chat_access
 from web.backend.db import session_scope
 
 log = logging.getLogger(__name__)
@@ -189,6 +190,18 @@ class Device(BaseModel):
     # device keeps it and sends it as X-Domovoi-Claim-Key to act as its
     # person. The server keeps its SHA-256 alone and never shows it again.
     claim_key: str | None = None
+    # The DEVICE key (V086, private chats), ONLY in the registration answer
+    # that minted it: the first registration of a row that has none. The
+    # app keeps it in its secure storage and sends it as
+    # X-Domovoi-Device-Key; a browser gets it as the HttpOnly
+    # domovoi-device-key cookie as well. Only its SHA-256 is stored, and a
+    # row that has one is never given another.
+    device_key: str | None = None
+    # Whether the key this registration presented is this row's. False on
+    # a row that has a key means the caller lost it: it should start over
+    # under a new device id (its private chats stay, for the admins).
+    # Null on a database without V086.
+    device_key_ok: bool | None = None
 
 
 def _clean_name(raw: str | None) -> str | None:
@@ -392,6 +405,93 @@ def caller_device(request: Request) -> str | None:
     )
 
 
+@dataclass
+class CallerDevice:
+    """The caller's own device row, as :func:`caller_device_row` found it.
+    ``proof``:
+
+    * ``"device_key"``: the request presented this device's key (V086);
+    * ``"claim_key"``: a keyed device named by its id, with its claim key
+      (an app from before 1.5.0, which never kept the device key);
+    * ``"asserted"``: a device that holds no device key, named by its id,
+      as before 1.5.0;
+    * ``"unproven"``: a keyed device named by its id alone. Only a claim
+      check looks at it (to say why it is refused); :attr:`trusted` is
+      false, so nothing is done for it."""
+
+    device_id: str
+    owner_person_id: int | None
+    shared_screen: bool
+    owner_claimed_at: Any
+    claim_key_hash: str | None
+    proof: str
+
+    @property
+    def trusted(self) -> bool:
+        return self.proof != "unproven"
+
+
+async def caller_device_row(
+    s: Any, request: Request, body_device_id: str | None = None,
+) -> CallerDevice | None:
+    """THE CALLER'S device, for every "my" read or write that acts for
+    ``devices.owner_person_id`` (whose listens, mixes, drafts, faces, up
+    next; and, from main, chat memory): design-notes PRIVATE-CHATS.md, "My
+    surfaces".
+
+    1. The device KEY the request presents (``X-Domovoi-Device-Key`` or
+       the HttpOnly cookie; domovoi/chat_access.py): that device, proven.
+    2. Otherwise the self-asserted id (body, ``X-Device-Id``,
+       ``?device_id=``, the registration cookie, ``X-Domovoi-Device-Id``),
+       but ONLY when that row holds no key (a device from before 1.5.0
+       keeps working as it did), or presents its claim key (an app from
+       before 1.5.0 whose row was given a key it didn't keep). A keyed row
+       named by its id alone comes back ``"unproven"``: never trusted.
+
+    None for no device at all, and on a database without the rows."""
+    owner = "owner_person_id" if await _has_owner(s) else "NULL"
+    claimed = "owner_claimed_at, claim_key_hash" if await _has_claim_keys(s) else "NULL, NULL"
+    flag = "shared_screen" if await _has_shared_screen(s) else "FALSE"
+    cols = f"device_id, {owner}, COALESCE({flag}, false), {claimed}"
+    found = await chat_access.device_for_key(s, chat_access.presented_device_key(request))
+    if found is not None:
+        row = (await s.execute(text(f"SELECT {cols} FROM devices WHERE device_id = :d"),
+                               {"d": found[0]})).first()
+        return CallerDevice(row[0], row[1], bool(row[2]), row[3], row[4], "device_key") if row else None
+    from web.backend.api import files as files_api
+
+    asserted = files_api.caller_device_id(request, body_device_id) or caller_device(request)
+    if not asserted:
+        return None
+    keyed = "device_key_hash IS NOT NULL" if await chat_access.has_device_keys(s) else "FALSE"
+    row = (await s.execute(text(f"SELECT {cols}, {keyed} FROM devices WHERE device_id = :d"),
+                           {"d": asserted})).first()
+    if row is None:
+        return None
+    if not row[5]:
+        proof = "asserted"
+    elif claim_key_matches(row[4], presented_claim_key(request)):
+        proof = "claim_key"
+    else:
+        proof = "unproven"
+    return CallerDevice(row[0], row[1], bool(row[2]), row[3], row[4], proof)
+
+
+def proves_claim(device: CallerDevice | None, request: Request) -> bool:
+    """Whether this request proves it is the device that said "this is me"
+    for its person. The device KEY with a self-made claim
+    (``owner_claimed_at`` is set only by a claim that minted a claim key,
+    and cleared when an admin changes the person) proves it; so does the
+    claim key itself (``X-Domovoi-Claim-Key``), which apps from before
+    1.5.0 send. The two say the same thing: the device key replaces the
+    claim key, which stays accepted for those apps."""
+    if device is None:
+        return False
+    if device.proof == "device_key" and device.owner_claimed_at is not None:
+        return True
+    return claim_key_matches(device.claim_key_hash, presented_claim_key(request))
+
+
 async def caller_is_admin(request: Request) -> bool:
     """A live admin Bearer, or a box nobody has claimed yet (everything is
     the household's before setup). The dashboard cookie alone is not: it
@@ -448,7 +548,7 @@ class ClaimDecision:
 
 async def claim_decision(
     s: Any, device_id: str, person_id: int | None, *, admin: bool, caller: str | None,
-    key: str | None,
+    key: str | None, key_proven: bool = False,
 ) -> ClaimDecision:
     """Whether ``caller`` may set ``device_id``'s person to ``person_id``
     (None = release). The rules are the module docstring's; this is the
@@ -501,7 +601,9 @@ async def claim_decision(
             # same person is how it gets one; anything else waits for that.
             if person_id != current:
                 return ClaimDecision((403, RECLAIM_DETAIL.format(name=cur_name)))
-        elif not claim_key_matches(stored, key):
+        elif not (key_proven or claim_key_matches(stored, key)):
+            # The device key (V086) proves it as well as the claim key:
+            # ``key_proven`` is the caller presenting THIS device's key.
             return ClaimDecision((403, WRONG_KEY_DETAIL.format(name=cur_name)))
     if person_id is None:
         return ClaimDecision(None, mint=False)
@@ -596,6 +698,9 @@ async def register_device(
         )
         result = row.first()
         minted: str | None = None
+        # The device key first: a registration presenting it proves an
+        # existing claim as the claim key does (claim_decision key_proven).
+        device_key, device_key_ok = await _device_key(s, ident, request)
         if (
             "owner_person_id" in payload.model_fields_set
             and await _has_claim_keys(s)
@@ -612,7 +717,7 @@ async def register_device(
             owner = payload.owner_person_id
             decision = await claim_decision(
                 s, ident, owner, admin=await caller_is_admin(request), caller=ident,
-                key=presented_claim_key(request),
+                key=presented_claim_key(request), key_proven=device_key_ok is True and device_key is None,
             )
             if decision.refusal is None:
                 try:
@@ -628,9 +733,59 @@ async def register_device(
     # From here the browser carries its own name on every request, including
     # the ones whose body has no field for it. See DEVICE_ID_COOKIE.
     _remember_device(response, ident)
+    if device_key is not None:
+        _remember_device_key(response, device_key)
     out = _row_to_device(result)
     out.claim_key = minted
+    out.device_key = device_key
+    out.device_key_ok = device_key_ok
     return out
+
+
+async def _device_key(s: Any, ident: str, request: Request) -> tuple[str | None, bool | None]:
+    """Mint ``ident``'s device key when its row has none (PRIVATE-CHATS
+    §2.1), else check the one presented. Returns ``(new key or None,
+    presented key matches)``; ``(None, None)`` without V086. The mint is
+    one conditional UPDATE, so two first registrations racing mint one
+    key, and only the winner is answered with it."""
+    if not await chat_access.has_device_keys(s):
+        return None, None
+    stored = (
+        await s.execute(
+            text("SELECT device_key_hash FROM devices WHERE device_id = :id"), {"id": ident},
+        )
+    ).scalar_one_or_none()
+    if stored:
+        return None, chat_access.key_matches(stored, chat_access.presented_device_key(request))
+    key = secrets.token_urlsafe(32)
+    won = (
+        await s.execute(
+            text(
+                "UPDATE devices SET device_key_hash = :h, device_key_at = now() "
+                "WHERE device_id = :id AND device_key_hash IS NULL"
+            ),
+            {"h": chat_access.device_key_hash(key), "id": ident},
+        )
+    ).rowcount
+    if not won:
+        return None, False
+    log.info("device %s: device key minted", ident)
+    return key, True
+
+
+def _remember_device_key(response: Response, key: str) -> None:
+    """The browser's copy of its device key: HttpOnly (no page script ever
+    reads it) and SameSite=Strict (a page on another site can't make the
+    browser present it). It rides on every same-origin request, <img> and
+    WebSocket upgrades included. No ``secure``: v1 runs over LAN HTTP."""
+    response.set_cookie(
+        chat_access.DEVICE_KEY_COOKIE,
+        key,
+        max_age=DEVICE_ID_COOKIE_MAX_AGE_SEC,
+        httponly=True,
+        samesite="strict",
+        path="/",
+    )
 
 
 @router.patch("/{device_id}", response_model=Device, dependencies=DEVICE)
@@ -680,10 +835,16 @@ async def set_device_person(device_id: str, payload: DevicePerson, request: Requ
                 status_code=503,
                 detail="this database has no devices.claim_key_hash column yet — run the migrations (V051)",
             )
+        # The caller's own device by its device key (an id only for a device
+        # from before 1.5.0): caller_device_row.
+        me = await caller_device_row(s, request)
         decision = await claim_decision(
             s, ident, payload.person_id,
-            admin=await caller_is_admin(request), caller=caller_device(request),
+            # A keyed device named by its id alone is still the caller here
+            # (as before 1.5.0); the claim rules then ask for its key.
+            admin=await caller_is_admin(request), caller=me.device_id if me is not None else None,
             key=presented_claim_key(request),
+            key_proven=me is not None and me.device_id == ident and me.proof == "device_key",
         )
         if decision.refusal is not None:
             raise HTTPException(status_code=decision.refusal[0], detail=decision.refusal[1])

@@ -26,6 +26,7 @@ from fastapi.testclient import TestClient
 
 import web.backend.api.chat as chat_api
 from domovoi.clients import ollama
+from domovoi.tests.chat_devices import DeviceTestClient
 from domovoi.tests.conftest import requires_db
 from web.backend.main import app
 
@@ -41,7 +42,8 @@ def _png(color=(200, 30, 30), size=(64, 48)) -> bytes:
 
 
 def _client() -> TestClient:
-    return TestClient(app, headers={"X-Requested-With": "domovoi-tests"})
+    # A device of its own: its chats are private to it (chat_access, V086).
+    return DeviceTestClient(app)
 
 
 class _FakeOllama:

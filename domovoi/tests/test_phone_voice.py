@@ -274,7 +274,9 @@ async def test_a_turn_is_answered_and_both_rows_land_in_the_thread(
 
     user, assistant = await _rows(tid)
     assert (user["role"], user["content"], user["source"]) == ("user", "What time is it?", "voice")
-    assert user["device_id"] == PHONE
+    # The row's device is the one the caller's device KEY names (private
+    # chats, 1.5.0), never phone_id: this caller presents none.
+    assert user["device_id"] is None
     assert user["speaker_person_id"] == ana
     assert user["speaker_confidence"] == pytest.approx(0.9)
     assert (assistant["role"], assistant["source"]) == ("assistant", "voice")
