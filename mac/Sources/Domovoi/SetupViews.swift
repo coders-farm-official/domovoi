@@ -319,11 +319,69 @@ struct MediaPage: View {
                 Text("This folder is on another disk. Such a disk may not be there until someone signs in to this Mac, and Domovoi can't see the files until it is.")
                     .font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
             }
+            IdentityChoice()
             ErrorText(text: m.failure)
             Footer {
                 Button("Back") { m.page = .internet }
             } right: {
                 Button("Install") { m.startInstall(repair: false) }.keyboardShortcut(.defaultAction).disabled(m.busy)
+            }
+        }
+    }
+}
+
+/// The house identity (S3-4): a new one by default, or the backup of the
+/// house this Mac replaces, so its rooms still know it. A Mac that kept
+/// Domovoi's data has its identity already; nothing replaces it.
+struct IdentityChoice: View {
+    @EnvironmentObject var m: SetupModel
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("House identity").bold()
+            if m.report?.installState == "kept" {
+                Text(IdentityBackup.keptNote).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            } else if let sum = m.identitySummary {
+                HStack(alignment: .firstTextBaseline) {
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Restoring the house identity backup\(sum.createdAt.map { " made \($0)" } ?? "").")
+                        Text("Fingerprint \(sum.fingerprint)").font(.system(.callout, design: .monospaced)).foregroundStyle(.secondary).textSelection(.enabled)
+                    }
+                    Spacer()
+                    Button("Don't Restore") { m.forgetIdentityBackup() }
+                }
+                Text("The rooms set up with that house keep working. If this Mac already has a different identity, Setup stops and replaces nothing.")
+                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            } else {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Replacing a Domovoi that is gone, or installing again after Remove everything? Restore its house identity backup, and the rooms set up with it still know this house. Otherwise Setup makes a new one.")
+                        .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                    Button("Restore from a Backup...") { m.chooseIdentityBackup() }
+                }
+            }
+            ErrorText(text: m.identityError)
+        }
+        .padding(.top, 6)
+    }
+}
+
+/// The setup code as a QR (1.5.0, SetupQR): a phone on the home network
+/// scans it and opens the dashboard with the code filled in. Shown only
+/// when this Mac has a home-network address (a phone can't reach
+/// localhost).
+struct SetupCodeQRView: View {
+    let code: String
+    var body: some View {
+        if let url = SetupQR.claimURL(lan: LanAddress.current()?.ipv4, code: code), let cg = SetupQR.image(for: url) {
+            HStack(alignment: .center, spacing: 14) {
+                Image(decorative: cg, scale: 1)
+                    .interpolation(.none)
+                    .resizable()
+                    .frame(width: 148, height: 148)
+                    .accessibilityLabel("QR code: the dashboard's setup address with the code")
+                Text("Or scan this with a phone on your home network: it opens Domovoi's dashboard with the code already filled in.")
+                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -373,6 +431,7 @@ struct FinishedPage: View {
                 .padding(10).background(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.4)))
                 Text("The dashboard asks for it once, to make you Domovoi's first admin. Keep it to yourself; it isn't saved in any log.")
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                SetupCodeQRView(code: code)
             } else if let n = m.setupCodeNote {
                 Text("Setup code: \(n)").font(.callout)
             }
@@ -421,13 +480,18 @@ struct InstalledPage: View {
                     Text(code).font(.system(.body, design: .monospaced)).textSelection(.enabled)
                     Button("Copy") { m.copy(code) }
                 }
+                SetupCodeQRView(code: code)
             } else if let n = m.setupCodeNote { Text(n).font(.callout) }
             Text("Repair runs every step of Setup again with the answers you gave, and fixes what it finds.").font(.callout).foregroundStyle(.secondary)
             Divider().padding(.vertical, 6)
             Text("Uninstall").bold()
             Button { removeEverything = false } label: { radio(!removeEverything, "Keep my data", "Removes Domovoi's programs and its background services. Keeps the virtual machine, the AI models, the logs, your answers and the hidden account that owns them, so installing again picks up where it left off.") }.buttonStyle(.plain)
-            Button { removeEverything = true } label: { radio(removeEverything, "Remove everything", "Also deletes the virtual machine (Domovoi's settings, rooms and users), the AI models, the logs and Domovoi's hidden account. Time Machine has no copy of Domovoi's settings, so they can't be brought back.") }.buttonStyle(.plain)
+            Button { removeEverything = true } label: { radio(removeEverything, "Remove everything", "Also deletes the virtual machine (Domovoi's settings, rooms and users, and the house identity), the AI models, the logs and Domovoi's hidden account. Time Machine has no copy of Domovoi's settings, so they can't be brought back.") }.buttonStyle(.plain)
             if removeEverything {
+                // S3-4: the rooms trust this house by its identity, which
+                // goes with the VM; the backup brings it back.
+                Label(IdentityBackup.removeEverythingWarning, systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
                 HStack {
                     Text("Type DELETE to confirm:")
                     TextField("", text: $typed).frame(width: 120)

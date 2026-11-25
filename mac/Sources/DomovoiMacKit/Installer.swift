@@ -42,6 +42,10 @@ public struct InstallOptions {
     /// "Start after a power failure" (system install, desktop Macs): nil leaves it alone.
     /// Turned on only while FeatureGates.startAfterPowerFailure is on.
     public var startAfterPowerFailure: Bool? = nil
+    /// A house identity backup to restore (S3-4; IdentityBackup): its
+    /// bytes, read once by the helper. Not part of the answers (never in
+    /// the install record).
+    public var restoreIdentity: Data? = nil
 
     public init(layout: Layout, ports: Ports, ollama: OllamaChoice, internet: String, tier: Tier, size: VMSize,
                 mediaRoot: String, mediaNames: [String], timezone: String?, share: URL, provision: ProvisionSource?,
@@ -659,13 +663,19 @@ public final class Installer {
     func guestInstall(_ local: URL, _ guestPath: String) throws {
         let data: Data
         do { data = try Data(contentsOf: local) } catch { throw HelperError("can't read \(local.path): \(error.localizedDescription)") }
-        let script = "set -e; t=$(mktemp); trap 'rm -f \"$t\"' EXIT; cat > \"$t\"; install -o root -g root -m 0644 \"$t\" '\(guestPath)'"
+        try guestInstall(data: data, name: local.lastPathComponent, guestPath)
+    }
+
+    /// `mode` 0600 for a secret (the identity backup): the temporary copy
+    /// is made under umask 077, so it is never readable by others either.
+    func guestInstall(data: Data, name: String, _ guestPath: String, mode: String = "0644") throws {
+        let script = "set -e; umask 077; t=$(mktemp); trap 'rm -f \"$t\"' EXIT; cat > \"$t\"; install -o root -g root -m \(mode) \"$t\" '\(guestPath)'"
         let r = try lima.shell(Names.instance, ["sudo", "sh", "-c", script], stdin: data, timeout: 900)
-        guard r.ok else { throw HelperError("can't put \(local.lastPathComponent) at \(guestPath) in the VM: \(r.tail)") }
+        guard r.ok else { throw HelperError("can't put \(name) at \(guestPath) in the VM: \(r.tail)") }
         let check = try lima.shell(Names.instance, ["sudo", "sha256sum", guestPath])
         let want = Data(SHA256Hex.of(data).utf8)
         guard check.ok, check.stdout.hasPrefix(String(decoding: want, as: UTF8.self)) else {
-            throw HelperError("\(guestPath) in the VM is not the Mac's \(local.lastPathComponent): \(check.tail)")
+            throw HelperError("\(guestPath) in the VM is not the Mac's \(name): \(check.tail)")
         }
     }
 
@@ -713,8 +723,19 @@ public final class Installer {
         try guestInstall(src.script, ProvisionSource.guestScript)
         if let b = src.repoBundle { try guestInstall(b, ProvisionSource.guestBundle) }
         if let s = src.allowedSigners { try guestInstall(s, ProvisionSource.guestSigners) }
+        // The identity backup: root's only, for this one run, then gone
+        // (provision.sh reads it as root and hands it to the core's python,
+        // which refuses to replace a different identity already there).
+        var restore: String?
+        if let id = options.restoreIdentity {
+            try guestInstall(data: id, name: "the house identity backup", IdentityBackup.guestFile, mode: "0600")
+            restore = IdentityBackup.guestFile
+        }
+        defer {
+            if restore != nil { _ = try? lima.shell(Names.instance, ["sudo", "rm", "-f", IdentityBackup.guestFile]) }
+        }
         let args = ProvisionArgs.build(source: src, answers: options.answers, ollamaURL: ollamaURL,
-                                       sttURL: store.record.sttURL, sttModel: store.record.sttModel)
+                                       sttURL: store.record.sttURL, sttModel: store.record.sttModel, restoreIdentity: restore)
         let logFile = layout.logs.appendingPathComponent("provision.log")
         if !store.record.has(.file, path: logFile.path) {
             try record(.init(kind: .file, path: logFile.path, keep: .logs, step: "provision"))

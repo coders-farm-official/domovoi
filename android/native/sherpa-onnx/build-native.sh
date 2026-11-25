@@ -22,11 +22,16 @@
 #                    checkouts of the libraries sherpa-onnx's CMake would
 #                    otherwise download, at the commits in DEPS below
 #   ORT_AAR          the onnxruntime-android AAR below (default: download)
-#   OUT              where jniLibs/<abi>/, kotlin/, LICENSE and licenses/ go
+#   SHERPA_OUT       where jniLibs/<abi>/, kotlin/, LICENSE and licenses/ go
 #                    (default: this script's directory, which is where the
 #                    app's Gradle build reads them)
-#   WORK             scratch directory (default /work, which must exist and
+#   SHERPA_WORK      scratch directory (default /work, which must exist and
 #                    be writable: `sudo install -d -m 1777 /work`)
+#
+# The two directories have their own names, not the generic OUT and WORK
+# (until 1.5.0): a build that happened to have OUT set for something else
+# wrote the library there, and the APK went out without it. OUT and WORK
+# are ignored now, with a note when they are set.
 #
 # Any source left unset is cloned here at its pinned commit. A given one
 # that is a git checkout must be at that commit. Each is copied into WORK at
@@ -115,17 +120,21 @@ for abi in "${abis[@]}"; do
   case " ${ALL_ABIS[*]} " in *" $abi "*) ;; *) die "unknown ABI $abi (one of: ${ALL_ABIS[*]})" ;; esac
 done
 
-OUT=${OUT:-$here}
+# SHERPA_OUT and SHERPA_WORK only; a generic OUT or WORK from the caller's
+# environment is not read (see Environment above).
+[ -z "${OUT:-}" ] || echo "   note: OUT is set ($OUT) and ignored; this script writes to SHERPA_OUT (default: $here)"
+[ -z "${WORK:-}" ] || echo "   note: WORK is set ($WORK) and ignored; this script's scratch is SHERPA_WORK (default: /work)"
+OUT=${SHERPA_OUT:-$here}
 mkdir -p "$OUT"
 OUT=$(cd "$OUT" && pwd -P)
 
 WORK_CANONICAL=/work
-WORK=${WORK:-$WORK_CANONICAL}
+WORK=${SHERPA_WORK:-$WORK_CANONICAL}
 mkdir -p "$WORK" 2>/dev/null && [ -w "$WORK" ] \
   || die "cannot write to $WORK (create it first: sudo install -d -m 1777 $WORK)"
 WORK=$(cd "$WORK" && pwd -P)
 if [ "$WORK" != "$WORK_CANONICAL" ]; then
-  echo "   note: WORK is $WORK, not $WORK_CANONICAL: the build IDs will differ from SHA256SUMS"
+  echo "   note: SHERPA_WORK is $WORK, not $WORK_CANONICAL: the build IDs will differ from SHA256SUMS"
 fi
 # Only what this script makes there is cleared (clone and copy_tree below
 # clear their own targets).
@@ -298,6 +307,9 @@ done
 TTS_MARKERS='espeak-ng|eSpeak-ng|ESPEAK_DATA_PATH|espeakXXXXXX|phontab|phonindex|phondata|piper-phonemize|PiperPhonemes|OfflineTts'
 for abi in "${abis[@]}"; do
   so=$OUT/jniLibs/$abi/libsherpa-onnx-jni.so
+  # Every ABI asked for has its library, or the build fails here (not at
+  # an APK comparison much later).
+  [ -s "$so" ] || die "no library at $so after the build"
   if grep -a -q -E "$TTS_MARKERS" "$so"; then
     echo "text-to-speech code found in $so:" >&2
     grep -a -o -E "$TTS_MARKERS" "$so" | sort | uniq -c >&2
@@ -306,6 +318,9 @@ for abi in "${abis[@]}"; do
 done
 
 echo "== done (cmake $(cmake --version | head -1 | awk '{print $3}'), ninja $(ninja --version))"
+if [ "$OUT" != "$(cd "$here" && pwd -P)" ]; then
+  echo "   note: the libraries are in $OUT (SHERPA_OUT), not in $here where the app's Gradle build reads them"
+fi
 for abi in "${abis[@]}"; do
   rel=jniLibs/$abi/libsherpa-onnx-jni.so
   sum=$(sha256sum "$OUT/$rel" | cut -d' ' -f1)

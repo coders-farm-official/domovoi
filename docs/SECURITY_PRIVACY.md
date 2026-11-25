@@ -4414,8 +4414,9 @@ ways keep it:
   a shell on the server: `python -m domovoi.server_identity --write-backup FILE`
   (a new file, mode 0600).
 - **A restore at install**: `install.sh --restore-identity FILE` (and
-  `provision.sh --restore-identity FILE`), or Windows Setup's **Restore the
-  house identity from a backup file**. The backup is checked completely
+  `provision.sh --restore-identity FILE`), Windows Setup's **Restore the
+  house identity from a backup file**, or Mac Setup's **Restore from a
+  Backup...** (on its media-folder page). The backup is checked completely
   before anything is written: its kind and schema, the algorithm, a 32-byte
   private key, that the public key and fingerprint are the ones the private
   key makes, and a signature over a fresh message that verifies. A damaged,
@@ -4426,6 +4427,15 @@ ways keep it:
   first start; on Windows Setup checks the file's shape, DomovoiHost copies
   it into the distro root-only, and the same check runs there (the copy is
   deleted once used, and a later repair or update never restores it again).
+  On a Mac, Setup checks the file's shape and copies it into the account's
+  own private work folder (0600); the root helper reads it there once,
+  refusing a link or a file another account owns, and puts it in the VM
+  root-only (0600) for that one `provision.sh` run, deleting it afterwards
+  whether the run worked or not. The answer is never saved in the install
+  record, so a repair never restores it again. A Mac that kept Domovoi's
+  data from an earlier install offers no restore: its identity is there.
+  Mac Setup's **Remove everything** says the rooms will need setting up
+  again and where the backup is.
   A restore never replaces a **different** identity already in place: the
   install stops instead (by hand, `--restore-identity FILE
   --replace-existing` retires the current key beside the new one, never

@@ -36513,6 +36513,13 @@
             "type": "array",
             "title": "Mic Dsp Satellites"
           },
+          "devices": {
+            "items": {
+              "$ref": "#/components/schemas/SatelliteDevice"
+            },
+            "type": "array",
+            "title": "Devices"
+          },
           "upgrade": {
             "anyOf": [
               {
@@ -36627,6 +36634,61 @@
         ],
         "title": "SatelliteApproveRequest",
         "description": "Approve a parked satellite by the code it is showing and saying.\n\nThe dashboard never renders the code, so this is the operator copying\nit off the device in the room \u2014 which is what makes the approval a\nstatement about a device rather than about a room name. The core\ncompares it in constant time and counts the attempt."
+      },
+      "SatelliteDevice": {
+        "properties": {
+          "satellite_id": {
+            "type": "string",
+            "title": "Satellite Id"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "connected": {
+            "type": "boolean",
+            "title": "Connected",
+            "default": false
+          },
+          "diagnostics": {
+            "type": "boolean",
+            "title": "Diagnostics",
+            "default": false
+          },
+          "support_allowed": {
+            "type": "boolean",
+            "title": "Support Allowed",
+            "default": false
+          },
+          "support_shell": {
+            "type": "boolean",
+            "title": "Support Shell",
+            "default": false
+          },
+          "support_key_pinned": {
+            "type": "boolean",
+            "title": "Support Key Pinned",
+            "default": false
+          },
+          "support_key_changed": {
+            "type": "boolean",
+            "title": "Support Key Changed",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "satellite_id"
+        ],
+        "title": "SatelliteDevice",
+        "description": "One satellite of a room (1.5.0: a room may hold several), for the\ndrawer's device picker: its Diagnostics checks and support session are\naddressed to it by ``satellite_id``. Every field but the id and name is\nabout the CONNECTED device (false while it is offline), except\n``support_allowed`` / ``support_key_pinned``, which are stored."
       },
       "SatelliteDisplay": {
         "properties": {

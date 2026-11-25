@@ -146,8 +146,54 @@ def test_the_rate_limit_is_per_satellite_and_books_all_or_nothing():
 def sessions(monkeypatch):
     found: dict = {}
     monkeypatch.setattr(core_main.app.state, "active_sessions", found, raising=False)
+    monkeypatch.setattr(core_main.app.state, "active_satellites", {}, raising=False)
     monkeypatch.setattr(core_main, "DIAG_LIMITER", sd.RateLimiter())
     return found
+
+
+@pytest.mark.asyncio
+async def test_a_shared_rooms_devices_are_checked_by_their_own_id(sessions):
+    # 1.5.0: the office's speaker is one device; a second satellite in the
+    # office is addressed by its own id and gets the probes itself.
+    speaker, second = answering(text="speaker"), answering(text="second")
+    sessions["office"] = speaker
+    core_main.app.state.active_satellites.update({"office": speaker, "office_b": second})
+    body = await core_main.admin_run_satellite_diagnostics("office_b")
+    assert body["room_id"] == "office_b"
+    assert all(r["text"] == "second" for r in body["results"])
+    assert second.ws.sent and speaker.ws.sent == []
+    one = await core_main.admin_run_satellite_diagnostic("office_b", "versions")
+    assert one["results"][0]["text"] == "second" and speaker.ws.sent == []
+    # The room's id still reaches its speaker (an older dashboard).
+    body = await core_main.admin_run_satellite_diagnostic("office", "versions")
+    assert body["results"][0]["text"] == "speaker"
+
+
+@pytest.mark.asyncio
+async def test_the_snapshot_lists_diagnostics_by_satellite(monkeypatch):
+    async def sha():
+        return "abc1234"
+
+    monkeypatch.setattr(core_main.git_version, "cached_current_sha", sha)
+    state = core_main.app.state
+    for name in ("resumable_music", "wifi_status", "current_playlist", "active_dropins",
+                 "satellite_full_duplex", "satellite_display", "satellite_voice",
+                 "satellite_volume", "satellite_synced_sha", "satellite_sat_type",
+                 "satellite_mic_enabled", "satellite_upgrades", "satellite_health",
+                 "satellite_last_outage", "satellite_wake_word", "satellite_mic_dsp"):
+        if not hasattr(state, name):
+            monkeypatch.setattr(state, name, {}, raising=False)
+    plain = session(hello={"supports": ["logs"]})
+    checks = session()
+    # A shared office whose speaker didn't declare diagnostics; its second
+    # device did. The snapshot names the device, not the room.
+    monkeypatch.setattr(state, "active_sessions", {"office": plain}, raising=False)
+    monkeypatch.setattr(state, "active_satellites", {"office": plain, "office_b": checks},
+                        raising=False)
+    snap = await core_main.admin_snapshot()
+    assert snap["satellite_diagnostics"] == ["office_b"]
+    assert snap["active_satellites"] == ["office", "office_b"]
+    assert snap["active_rooms"] == ["office"]
 
 
 @pytest.mark.asyncio

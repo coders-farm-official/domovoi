@@ -52,7 +52,7 @@ public enum ProvisionArgs {
     /// on the Mac's graphics chip beside Ollama, which the core is told
     /// (`--host-stt-shares-gpu`: WHISPER_REMOTE_SHARES_GPU=true in .env).
     public static func build(source: ProvisionSource, answers: InstallRecord.Answers, ollamaURL: String,
-                             sttURL: String? = nil, sttModel: String? = nil) -> [String] {
+                             sttURL: String? = nil, sttModel: String? = nil, restoreIdentity: String? = nil) -> [String] {
         var a: [String] = []
         if source.repoBundle != nil {
             a += ["--repo-url", ProvisionSource.guestBundle]
@@ -72,6 +72,9 @@ public enum ProvisionArgs {
         }
         if source.allowedSigners != nil { a += ["--allowed-signers", ProvisionSource.guestSigners] }
         if source.noVisionModel { a.append("--no-vision-model") }
+        // S3-4: a house identity backup (IdentityBackup.guestFile), made this
+        // server's identity before the core first starts.
+        if let f = restoreIdentity { a += ["--restore-identity", f] }
         return a + source.extraArgs
     }
 }
