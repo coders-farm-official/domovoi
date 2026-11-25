@@ -620,12 +620,18 @@ public final class HomeModel {
     ///     the server has no `/unread`. Not one of this model's reads: the
     ///     gate already reads Friend Houses on its own triggers, and the row
     ///     must exist exactly where its tap can open Friend houses.
+    ///   - update: the update notice's row
+    ///     (``homeUpdateNoticeRow(notice:paired:admin:shared:)`` over
+    ///     ``UpdateNoticeModel/notice``). Not one of this model's reads
+    ///     either: it is device tier, read only on a paired phone, on its own
+    ///     ten-minute gap.
     public func attention(
         shared: Bool,
         compact: Bool = true,
         expanded: Bool = false,
         guard guardState: ContainerGuardState? = nil,
-        friendHousesUnread: Int? = nil
+        friendHousesUnread: Int? = nil,
+        update: AttentionRow? = nil
     ) -> HomeAttentionState {
         HomeAttentionState.from(
             health: health.data,
@@ -640,7 +646,8 @@ public final class HomeModel {
             isStale: attentionIsStale,
             compact: compact,
             expanded: expanded,
-            friendHouses: homeFriendHousesRow(unread: friendHousesUnread)
+            friendHouses: homeFriendHousesRow(unread: friendHousesUnread),
+            update: update
         )
     }
 
