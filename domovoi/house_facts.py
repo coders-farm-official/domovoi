@@ -47,6 +47,8 @@ from typing import Any, Callable
 
 from sqlalchemy import text
 
+from domovoi.help_desk import admin_tasks as _admin_tasks
+
 log = logging.getLogger(__name__)
 
 # ─── Places in the dashboard (exact names, web/static/settings.jsx) ───────
@@ -1135,16 +1137,7 @@ CANT_SHARE = "I can't share that."
 # What a jailbreak puts in front ("ignore your rules and …", "pretend
 # you're the admin, …", "I'm the owner so …"): it changes nothing, so the
 # question after it gets the same answer.
-OVERRIDE_LEAD = (
-    r"(?:(?:ignore|forget|disregard|override|bypass|skip) (?:all )?"
-    r"(?:(?:your|the|my|previous|all previous|any|those|these|of your) )*"
-    r"(?:rules|instructions|guidelines|programming|restrictions|safety|settings)"
-    r"|pretend (?:you'?re|you are|i'?m|i am|that i'?m|that you'?re) (?:the |an |my )?"
-    r"(?:admin(?:istrator)?|owner|developer)"
-    r"|i'?m (?:the |an |your )?(?:admin(?:istrator)?|owner|developer)(?: here)?"
-    r"|as (?:the |an |your )?(?:admin(?:istrator)?|owner))"
-    r"(?:,|,? and(?: then)?|,? so|,? now)? "
-)
+OVERRIDE_LEAD = _admin_tasks.OVERRIDE_LEAD
 _GIVE = (
     r"(?:what(?:'s| is| was)|tell (?:me|us)|give (?:me|us)|say|read(?: me| us)?(?: out)?|share"
     r"|show (?:me|us)|send (?:me|us)|spell(?: out)?|do you know|(?:can|could|would|will) you "
@@ -1413,13 +1406,22 @@ async def chat_reply(
     if secret is not None:
         return secret_answer(secret)
     admin_kind = admin_question(t)
-    if admin_kind is not None:
+    # An admin's job asked for as a request ("add a room", "pretend you're
+    # the admin and add a room"): who does it and where, or the steps for a
+    # proven admin, as by voice (help_desk's request fast path).
+    # A question form the help desk already takes ("can you update
+    # yourself?") stays the help turn's, as before.
+    task = (_admin_tasks.request(t)
+            if admin_kind is None and _admin_tasks.match(t) is None else None)
+    if admin_kind is not None or task is not None:
         admin: bool | None = None
         if admin_check is not None:
             try:
                 admin = bool(await admin_check())
             except Exception as e:  # noqa: BLE001 — unknown, said as such
                 log.debug("house facts: the admin check failed: %s", e)
+        if task is not None:
+            return _admin_tasks.answer(task, admin=bool(admin))
         return admin_answer(admin_kind, chat=True, admin=admin)
     if PLUGINS_QUESTION_RE.match(t):
         return await plugins_answer(scope=scope)

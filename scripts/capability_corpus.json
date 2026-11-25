@@ -1515,7 +1515,8 @@
       "where": "voice",
       "house": "base",
       "expect": "ADMIN",
-      "kind": "question"
+      "kind": "question",
+      "stub": true
     },
     {
       "id": "7.24",
@@ -1766,7 +1767,8 @@
       "where": "voice",
       "house": "base",
       "expect": "ADMIN",
-      "kind": "question"
+      "kind": "question",
+      "stub": true
     },
     {
       "id": "8.9",
@@ -2994,7 +2996,8 @@
       "kind": "command",
       "must_not_include": [
         "i'?ve added|added the room"
-      ]
+      ],
+      "stub": true
     },
     {
       "id": "18.1",
@@ -3076,7 +3079,8 @@
       "house": "base",
       "expect": "ADMIN",
       "kind": "command",
-      "note": "a child's voice: the member answer"
+      "note": "a child's voice: the member answer",
+      "stub": true
     },
     {
       "id": "18.8",
