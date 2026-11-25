@@ -960,9 +960,17 @@ def sandbox(model_client: Any = None) -> Iterator[None]:
     _ORIG["async_send"] = httpx.AsyncClient.send
     _ORIG["sync_send"] = httpx.Client.send
     undo: list[tuple[Any, str, Any]] = []
-    undo += _swap_everywhere(ollama_mod.get_ollama_client, lambda: client)
-    undo += _swap_everywhere(db_session.session_scope, fixture_scope)
-    undo += _swap_everywhere(db_session.SessionLocal, lambda *a, **k: FixtureSession())
+    # (original, replacement): a module first imported INSIDE the sandbox
+    # binds the replacement by name and is in no undo list, so the exit
+    # sweeps every module for these and points them back (else a later
+    # test in the same process gets the fixture session: NeedsDB).
+    swaps = [
+        (ollama_mod.get_ollama_client, lambda: client),
+        (db_session.session_scope, fixture_scope),
+        (db_session.SessionLocal, lambda *a, **k: FixtureSession()),
+    ]
+    for original, replacement in swaps:
+        undo += _swap_everywhere(original, replacement)
     repo = repositories.SessionRepository
     for name, fn in (("get_or_create", _mem_get_or_create), ("get_context", _mem_get_context),
                      ("set_context_key", _mem_set_context_key), ("record_exchange", _mem_record_exchange)):
@@ -981,6 +989,8 @@ def sandbox(model_client: Any = None) -> Iterator[None]:
     finally:
         for obj, name, value in reversed(undo):
             setattr(obj, name, value)
+        for original, replacement in swaps:
+            _swap_everywhere(replacement, original)
         _SESSIONS.clear()
 
 

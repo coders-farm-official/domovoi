@@ -467,7 +467,7 @@ QUESTIONS: tuple[tuple[str, str], ...] = (
 )
 
 QUESTION_RE = re.compile(
-    r"^(?:" + "|".join(f"(?P<{qid}>{rx})" for qid, rx in QUESTIONS) + r")$"
+    r"^(?:" + "|".join(f"(?P<{qid}>{rx})" for qid, rx in QUESTIONS) + r")\Z"
 )
 
 
@@ -736,7 +736,7 @@ GENERIC_OBJECT = (
 )
 GENERIC_OBJECT_RE = re.compile(
     rf"^(?:that |this |the (?:fact|thing) that )?(?:{GENERIC_OBJECT})"
-    r"(?:,? (?:please|for me|for us|thanks|thank you))?$"
+    r"(?:,? (?:please|for me|for us|thanks|thank you))?\Z"
 )
 
 
@@ -885,12 +885,12 @@ CAPABILITIES: tuple[Capability, ...] = (
 CAP_RE = re.compile(
     rf"^{CAP_PREFIX}\s+(?P<x>"
     + "|".join(f"(?P<cap_{c.key}>{c.pattern})" for c in CAPABILITIES)
-    + r")(?: for (?:me|us))?$"
+    + r")(?: for (?:me|us))?\Z"
 )
 _CAP_BY_KEY = {c.key: c for c in CAPABILITIES}
-_CAN_YOU_TAIL_RE = re.compile(r"(?:^|[,\s])can you(?:[,\s]+please)?[,\s]+$")
+_CAN_YOU_TAIL_RE = re.compile(r"(?:^|[,\s])can you(?:[,\s]+please)?[,\s]+\Z")
 # Any "… you" lead the router strips: kept only for a generic-object row.
-_ANY_ASK_TAIL_RE = re.compile(r"(?:^|[,\s])(?:can|could|would|will) you(?:[,\s]+please)?[,\s]+$")
+_ANY_ASK_TAIL_RE = re.compile(r"(?:^|[,\s])(?:can|could|would|will) you(?:[,\s]+please)?[,\s]+\Z")
 _OTHER_ASK_LEAD_RE = re.compile(r"^(?:can|could|would|will) you(?:[,\s]+please)?[,\s]+")
 
 
@@ -1135,6 +1135,13 @@ _ABOUT_THIS_HOUSE_RE = re.compile(
     r"\b(?:you|you're|youre|your|yours|domovoi|domo|here"
     r"|this (?:house|home|thing|device|speaker|server|assistant))\b"
 )
+# This house as the one acting on the data: "do you share/sell/give/send my
+# data with/to X", "does your server upload …", "will domovoi pass …".
+_WE_DO_IT_RE = re.compile(
+    r"\b(?:you|your (?:server|house|speaker|assistant)|domovoi|domo|this (?:house|server|thing|device))"
+    r" (?:\w+ )?(?:share|sell|give|send|upload|pass|leak|hand)s?\b"
+)
+_ASKED_RE = re.compile(r"^(?:do|does|did|will|would|are|is|have|has)\b")
 # Someone else named as the subject ("with Google", "on my phone", "by
 # apps"): not this house, even with "you" in the sentence.
 _SOMEONE_ELSE_RE = re.compile(
@@ -1153,6 +1160,13 @@ def wants_facts(transcript: str) -> bool:
     text = raw.lower()
     if not (_PRIVACY_WORDS_RE.search(text) and _ABOUT_THIS_HOUSE_RE.search(text)):
         return False
+    # This house is the one doing it: "do you share my data with Google?",
+    # "does Domovoi send my voice to the cloud?" — whoever it's shared with,
+    # the question is about this house (finding H1).
+    # Asked, not requested: "can you send my data to my email" is a request
+    # for something, not a question about what the house does.
+    if _ASKED_RE.match(text) and _WE_DO_IT_RE.search(text):
+        return True
     # A named other subject (case kept: "with Google") makes it not ours.
     return not _SOMEONE_ELSE_RE.search(raw) and not _SOMEONE_ELSE_RE.search(text)
 

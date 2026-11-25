@@ -349,7 +349,6 @@ def test_privacy_scope_matches_the_corpus() -> None:
     assert len(group) == 13
     wrong = {c.id for c in group
              if house_facts.wants_facts(c.utterance) is not any("Settings" in p for p in c.must_include)}
-    # Known finding (H1): "do you share my data with Google?" is about this
-    # house, but _SOMEONE_ELSE_RE's "with Google" sends it to the model.
-    # Drop 22.13 from this set when that's fixed.
-    assert wrong <= {"22.13"}, sorted(wrong)
+    # H1 (22.13, "do you share my data with Google?") is fixed: this house
+    # is the one sharing, whoever with.
+    assert wrong == set(), sorted(wrong)

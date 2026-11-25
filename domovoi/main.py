@@ -1231,7 +1231,9 @@ async def post_intent(intent: Intent):
             # is what is left (the commit, the database gone): the same
             # honest line in the ordinary reply, not a 500 with a traceback
             # (capability N5). Not a cancellation: that stays one.
-            log.exception("POST /v1/intent: the turn %r failed", log_privacy.said(intent.transcript))
+            from domovoi.log_privacy import said
+
+            log.exception("POST /v1/intent: the turn %r failed", said(intent.transcript))
             response = Response(
                 text=TURN_FAILED_TEXT,
                 session_id=intent.session_id,

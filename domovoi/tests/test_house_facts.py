@@ -714,6 +714,9 @@ def test_wants_facts_is_narrow() -> None:
     # About this house: the fixed answer.
     "is my data safe with you", "do you sell my data", "is my privacy protected here",
     "is domovoi private", "do you share my data with google",
+    # H1: this house is the one sharing, whoever with.
+    "Do you share my data with Google?", "does domovoi send my voice to the cloud",
+    "will you sell my data to advertisers",
 ])
 def test_wants_facts_about_this_house(said) -> None:
     assert hf.wants_facts(said)
