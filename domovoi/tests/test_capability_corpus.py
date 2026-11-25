@@ -59,16 +59,10 @@ STUB_CASES = [c for c in CASES if c.stub]
 # expectation and aren't an open N item, reported for triage (test tooling
 # never changes the product to make a case pass). Expected failures here so
 # CI stays green; remove a line once fixed (it shows up as XPASS first).
-_NO_MEMORY_SWITCH = (
-    "the list expects a memory on/off switch ('memory is off'); there is none "
-    "(chat_memory.py: only the implicit offers can be turned off)"
-)
 STUB_FINDINGS = {
     "6.9": "'can you remember things about me?' is SAVED as a memory ('things about me'): "
            "handlers/memory.py _REMEMBER_RE takes the question after the router strips 'can you'",
-    "6.10": "the same save as 6.9; and " + _NO_MEMORY_SWITCH,
     "9.9": "the memory list doesn't say how to forget one (handlers/memory.py _list_memories)",
-    "9.10": _NO_MEMORY_SWITCH,
     "21.10": "the AI-off chat refusal names 'Settings → Models' (ai_features.TURNED_OFF_REASON); "
              "the place is Settings → Chat & AI → Models",
 }
