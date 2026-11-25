@@ -124,6 +124,12 @@ class SatUpgradeTest {
         assertEquals(t0 + 7, p.atMs)
     }
 
+    @Test fun theRoomGoesOnTheWireAsOneEscapedSegment() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"requested":true,"room_id":"x","expected_sha":"new1234"}"""))
+        requestSatUpgrade(api, "a/b?c d%e")
+        assertEquals("/api/satellites/a%2Fb%3Fc%20d%25e/upgrade", server.takeRequest().path)
+    }
+
     @Test fun anOlderServersAnswerHasNoRecord() = runBlocking {
         server.enqueue(MockResponse().setBody("""{"requested":true,"room_id":"kitchen","expected_sha":"new1234"}"""))
         val p = requestSatUpgrade(api, "kitchen")

@@ -16,6 +16,7 @@ import com.domovoi.app.data.Prefs
 import com.domovoi.app.net.ApiClient
 import com.domovoi.app.net.DomovoiJson
 import com.domovoi.app.ui.screens.music.NowPlayingGroup
+import com.domovoi.app.ui.screens.music.encComponent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -920,7 +921,7 @@ class PlayerController(
     //    it has taken the queue, so a failed cast changes nothing.
     private fun roomAction(action: String, roomId: String) {
         scope.launch(Dispatchers.IO) {
-            runCatching { api.post("/api/music/$action/$roomId") }
+            runCatching { api.post(roomActionPath(action, roomId)) }
         }
     }
 
@@ -932,7 +933,7 @@ class PlayerController(
      * room for paused — and so is a 2xx that says `ok: false`.
      */
     private suspend fun roomActionNow(action: String, roomId: String): Boolean = runCatching {
-        val answer = api.post("/api/music/$action/$roomId")
+        val answer = api.post(roomActionPath(action, roomId))
         (answer as? JsonObject)?.get("ok")?.jsonPrimitive?.booleanOrNull != false
     }.getOrDefault(false)
 
@@ -1220,3 +1221,8 @@ class PlayerController(
         }
     }
 }
+
+/** `/api/music/<action>/<room>`, the room id escaped as ONE path segment: a
+ *  `/`, `?`, `#` or `%` in it must not change which URL this is. */
+internal fun roomActionPath(action: String, roomId: String): String =
+    "/api/music/$action/${encComponent(roomId)}"

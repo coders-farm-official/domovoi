@@ -265,7 +265,7 @@ async def test_forget_with_ambiguous_match_asks_to_specify(db_session) -> None:
     m = _FORGET_MEMORY_RE.match("forget the fact about my dog")
     assert m is not None
     response = await handler._forget_memory_from_match(m, ctx, db_session)
-    assert "more specific" in response.text.lower()
+    assert "say a bit more of the one to forget" in response.text.lower()
     # Nothing deleted.
     rows = await repo.list_active(person_id)
     assert len(rows) == 2

@@ -1,10 +1,10 @@
 import DomovoiKit
 import SwiftUI
 
-// The three tabs' lists — Android's `InboxTab`, `FriendsTab` and
-// `SharedTab` (394473e2). Read only, except "message" on a friend and "open
-// in lists" on an active shared list; everything an admin does is a line of
-// words.
+// The two tabs' lists — Android's `InboxTab` and `SharedTab` (394473e2),
+// with the dashboard's Shared lists card's controls (1.4.1): Accept and
+// Decline on an offer, "open in Lists" and Stop sharing on a list shared
+// now. The Friends tab went with the admin zone, which the phones hide.
 
 // MARK: - the inbox
 
@@ -90,122 +90,153 @@ struct FhConversationPills: View {
     }
 }
 
-// MARK: - friends (read only)
+// MARK: - shared lists (the dashboard's `FhSharedListsCard`)
 
-struct FhFriendsList: View {
+/// What sharing does, the offers to this house, then what is shared now;
+/// starting a share is an admin's, said in one line.
+struct FhSharedListsList: View {
 
-    let read: FhRead<[FhFriend]>?
-    let onMessage: (FhFriend) -> Void
+    let fh: FriendHousesModel
+    let onOpen: (FhSharedList) -> Void
 
     var body: some View {
-        switch read {
+        switch fh.shared {
         case nil:
             FhLoading()
         case .problem(let text)?:
             FhProblemLine(text: text)
         case .ok(let rows)?:
-            if rows.isEmpty {
-                FhEmptyNote(title: FhWords.noFriends, detail: FhWords.noFriendsSub)
+            let sections = fhSharedSections(rows)
+            FhMutedLine(text: FhWords.shareExplain)
+                .accessibilityIdentifier("fh.shared.explain")
+            if !sections.offers.isEmpty {
+                FhSectionLabel(text: FhWords.offeredHeading)
+                ForEach(sections.offers, id: \.id) { offer in
+                    FhOfferRow(fh: fh, offer: offer)
+                    Divider()
+                }
             }
-            ForEach(rows, id: \.id) { friend in
-                FhFriendRow(friend: friend) { onMessage(friend) }
-                Divider()
+            if !sections.current.isEmpty {
+                FhSectionLabel(text: FhWords.sharedNowHeading)
+                ForEach(sections.current, id: \.id) { shared in
+                    FhSharedRow(fh: fh, shared: shared) { onOpen(shared) }
+                    Divider()
+                }
             }
-            FhFriendsAdminWords()
+            if sections.offers.isEmpty && sections.current.isEmpty {
+                FhEmptyNote(title: FhWords.noShared)
+            }
+            FhMutedLine(text: FhWords.listsAdmin)
+                .padding(.top, 8)
+                .accessibilityIdentifier("fh.shared.note")
         }
     }
 }
 
-/// A friend: the name this house gave them, verified or not, what a new
-/// message from them does (the admin's choice, in words), and "message".
-struct FhFriendRow: View {
+/// A group's small lowercase heading.
+struct FhSectionLabel: View {
 
-    let friend: FhFriend
-    let onMessage: () -> Void
+    let text: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            // Name and pill side by side, or stacked at an accessibility size.
-            FhRowOrColumn {
-                FhPlainText(text: friend.name, weight: .semibold)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .accessibilityIdentifier("fh.friend.name")
-            } trailing: {
-                HomeTonePill(
-                    label: friend.verified ? FhWords.verified : FhWords.notVerified,
-                    tone: friend.verified ? .ok : .warn
-                )
-                .accessibilityIdentifier("fh.friend.verified")
-            }
-            // Online / Last seen … / Not reached yet; nothing from a server
-            // that sends no presence.
-            if let presence = fhPresence(friend, nowMs: Int64((Date().timeIntervalSince1970 * 1000).rounded())) {
-                FhMutedLine(text: presence)
-                    .accessibilityIdentifier("fh.friend.presence")
-            }
-            FhMutedLine(text: FhWords.alert(friend.alert))
-                .accessibilityIdentifier("fh.friend.alert")
-            if FhPaths.isHouseKey(friend.house) {
-                Button(action: onMessage) {
-                    FhPlainText(text: FhWords.message, colour: Color.brandInk)
+        FhPlainText(text: text, font: .footnote, weight: .semibold, colour: Color.fgMuted)
+            .padding(.top, 8)
+            .accessibilityAddTraits(.isHeader)
+    }
+}
+
+/// A friend's list offered to this house: who and what, "give it another
+/// name here", Accept and Decline. A name taken here (a 400) opens the name
+/// field with the server's sentence, as the dashboard does.
+struct FhOfferRow: View {
+
+    let fh: FriendHousesModel
+    let offer: FhSharedList
+
+    @State private var naming = false
+    @State private var name = ""
+    @State private var problem: String?
+
+    private var busy: Bool { fh.busyShared.contains(offer.id) }
+    private var named: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            FhPlainText(text: FhWords.invited(FhWords.friendName(offer.friend), offer.title ?? ""))
+                .accessibilityIdentifier("fh.shared.offer")
+            if naming {
+                // Typing clears the last refusal (the dashboard's onChange);
+                // the name set when a refusal opens the field does not.
+                TextField(
+                    text: Binding(get: { name }, set: { name = $0; problem = nil }),
+                    prompt: Text(verbatim: FhWords.callItHere)
+                ) {
+                    Text(verbatim: FhWords.callItHere)
+                }
+                .textFieldStyle(.roundedBorder)
+                .disabled(busy)
+                .accessibilityIdentifier("fh.shared.name")
+            } else {
+                Button {
+                    name = offer.title ?? ""
+                    naming = true
+                } label: {
+                    FhPlainText(text: FhWords.rename, font: .footnote, colour: Color.brandInk)
                         .frame(minHeight: 44)
                         .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
-                .accessibilityIdentifier("fh.friend.message")
+                .disabled(busy)
+                .accessibilityIdentifier("fh.shared.rename")
+            }
+            if let problem {
+                FhProblemLine(text: problem)
+                    .accessibilityIdentifier("fh.shared.problem")
+            }
+            FhRowOrColumn {
+                Button {
+                    Task { await accept() }
+                } label: {
+                    Text(verbatim: FhWords.accept)
+                }
+                .buttonStyle(BrandFillButtonStyle())
+                .disabled(busy || (naming && named.isEmpty))
+                .accessibilityIdentifier("fh.shared.accept")
+            } trailing: {
+                Button {
+                    fh.askDecline(offer)
+                } label: {
+                    Text(verbatim: FhWords.decline)
+                }
+                .buttonStyle(InkOutlineButtonStyle())
+                .disabled(busy)
+                .accessibilityIdentifier("fh.shared.decline")
             }
         }
         .padding(.vertical, 4)
     }
-}
 
-/// What the phone follows, and what only an admin may change.
-struct FhFriendsAdminWords: View {
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            FhMutedLine(text: FhWords.phoneFollows)
-                .accessibilityIdentifier("fh.friends.note")
-            FhMutedLine(text: FhWords.phoneOpenOnly)
-                .accessibilityIdentifier("fh.friends.note")
-            FhMutedLine(text: FhWords.friendsAdmin)
-                .accessibilityIdentifier("fh.friends.note")
-        }
-        .padding(.top, 8)
-    }
-}
-
-// MARK: - shared lists (read only here; the list itself is an ordinary list)
-
-struct FhSharedListsList: View {
-
-    let read: FhRead<[FhSharedList]>?
-    let onOpen: (FhSharedList) -> Void
-
-    var body: some View {
-        switch read {
-        case nil:
-            FhLoading()
-        case .problem(let text)?:
-            FhProblemLine(text: text)
-        case .ok(let rows)?:
-            let lists = fhSharedOrder(rows)
-            if lists.isEmpty {
-                FhEmptyNote(title: FhWords.noShared)
+    private func accept() async {
+        problem = nil
+        switch await fh.accept(offer, name: naming ? named : nil) {
+        case .nameTaken(let said):
+            if !naming {
+                name = offer.title ?? ""
+                naming = true
             }
-            ForEach(lists, id: \.id) { shared in
-                FhSharedRow(shared: shared) { onOpen(shared) }
-                Divider()
-            }
-            FhMutedLine(text: FhWords.listsAdmin)
-                .padding(.top, 8)
+            problem = said
+        case .accepted, .failed, .dropped:
+            break
         }
     }
 }
 
-/// An active list: its name, whose it is, changes waiting, and "open in
-/// lists". An offer an admin hasn't accepted: one sentence, never a button.
+/// A list shared now: its name and whose it is, whether they have accepted
+/// ours yet, their name for theirs, changes waiting, "open in Lists" and
+/// Stop sharing.
 struct FhSharedRow: View {
 
+    let fh: FriendHousesModel
     let shared: FhSharedList
     let onOpen: () -> Void
 
@@ -213,14 +244,18 @@ struct FhSharedRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
+            FhPlainText(text: FhWords.sharedLine(fhListName(shared), origin: shared.origin, friend: friend), weight: .semibold)
+                .accessibilityIdentifier("fh.shared.list")
             if shared.state == "invited" {
-                FhPlainText(text: FhWords.invited(friend, shared.title ?? ""))
-            } else {
-                FhPlainText(text: shared.listName ?? shared.title ?? "", weight: .semibold)
-                FhMutedLine(text: shared.origin == "us" ? FhWords.ourList(friend) : FhWords.theirList(friend))
-                if shared.waitingToSend > 0 {
-                    FhMutedLine(text: FhWords.waiting(shared.waitingToSend))
-                }
+                FhMutedLine(text: FhWords.waitingForThem)
+            }
+            if let theirs = fhTheirTitle(shared) {
+                FhMutedLine(text: theirs)
+            }
+            if shared.waitingToSend > 0 {
+                FhMutedLine(text: FhWords.waiting(shared.waitingToSend))
+            }
+            FhRowOrColumn {
                 if let id = shared.listId, id > 0 {
                     Button(action: onOpen) {
                         FhPlainText(text: FhWords.openInLists, colour: Color.brandInk)
@@ -230,6 +265,15 @@ struct FhSharedRow: View {
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("fh.shared.open")
                 }
+            } trailing: {
+                Button {
+                    fh.askStop(shared)
+                } label: {
+                    Text(verbatim: FhWords.stopSharing)
+                }
+                .buttonStyle(InkOutlineButtonStyle())
+                .disabled(fh.busyShared.contains(shared.id))
+                .accessibilityIdentifier("fh.shared.stop")
             }
         }
         .padding(.vertical, 4)

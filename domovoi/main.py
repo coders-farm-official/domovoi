@@ -1794,7 +1794,10 @@ async def room_media_thumb(token: str) -> Any:
     return await room_media.serve(token)
 
 
-@app.get("/v1/admin/room-media/{room_id}", dependencies=[Depends(require_device_read)])
+@app.get(
+    "/v1/admin/room-media/{room_id}",
+    dependencies=[Depends(require_device_read), Depends(room_ids.require_room_id_path)],
+)
 async def admin_room_media(room_id: str) -> dict[str, Any]:
     """Photo and video results on a room's screen now (1.5.0,
     domovoi/room_media.py :func:`web_media`): ``{"media": null | {id, said,
@@ -3305,14 +3308,17 @@ async def admin_snapshot() -> dict[str, Any]:
         # open; the results themselves are device-read
         # (GET /v1/admin/room-media/{room_id}).
         "room_media": _room_media_snapshot(),
-        # Rooms whose connected satellite declared mic_dsp (an XVF3800 with
-        # xvf_host), with the preset state it last reported ({} until it
-        # does). Only these get the Settings tab's Microphone DSP block.
-        "satellite_mic_dsp": {
-            room: (getattr(app.state, "satellite_mic_dsp", {}) or {}).get(room) or {}
-            for room, sess in app.state.active_sessions.items()
+        # Connected satellites that declared mic_dsp (an XVF3800 with
+        # xvf_host), by SATELLITE id (1.5.0): each one in a shared room gets
+        # its own Microphone DSP block, not just the room's speaker. Every
+        # device from before 1.5.0 has its room's id, so older readers that
+        # look a room up here still find it. The preset state itself is read
+        # on the admin tier (GET /v1/admin/satellite/{satellite}/mic_dsp),
+        # not here.
+        "satellite_mic_dsp": sorted(
+            sid for sid, sess in (getattr(app.state, "active_satellites", None) or {}).items()
             if "mic_dsp" in satellite_abilities.session_abilities(sess).names
-        },
+        ),
         # Per-room active TTS voice (what each Pi reported via voice_status),
         # so the web UI can show which voice a device is actually speaking in.
         # None for a room means it's on the registry default.
@@ -5864,7 +5870,7 @@ _BACKGROUND_TASKS: set = set()
     # Device READ tier (2026-10-08, REV-11), like the dashboard's proxy:
     # a 200 or 404 says whether the room's satellite is connected, and the
     # body is the hardware it reported (mic, Wi-Fi, audio devices).
-    dependencies=[Depends(require_device_read)],
+    dependencies=[Depends(require_device_read), Depends(room_ids.require_room_id_path)],
 )
 async def admin_get_satellite_config(room_id: str) -> dict[str, Any]:
     """Editable satellite config (the schema joined with the values the Pi
@@ -5935,7 +5941,7 @@ def _mic_dsp_target(room_id: str) -> Any:
 @app.get(
     "/v1/admin/satellite/{room_id}/mic_dsp",
     # Admin tier, like the rest of the room's settings.
-    dependencies=[Depends(require_admin_read)],
+    dependencies=[Depends(require_admin_read), Depends(room_ids.require_room_id_path)],
 )
 async def admin_get_satellite_mic_dsp(room_id: str) -> dict[str, Any]:
     """The room's XVF3800 DSP preset as its satellite last reported it
@@ -5955,7 +5961,7 @@ async def admin_get_satellite_mic_dsp(room_id: str) -> dict[str, Any]:
 @app.post(
     "/v1/admin/satellite/{room_id}/mic_dsp",
     # Admin tier: it changes how the room's microphone hears the house.
-    dependencies=[Depends(require_admin_mutation)],
+    dependencies=[Depends(require_admin_mutation), Depends(room_ids.require_room_id_path)],
 )
 async def admin_set_satellite_mic_dsp(room_id: str, body: _AdminMicDspBody) -> dict[str, Any]:
     """Send a DSP preset NAME to an XVF3800 satellite (set_mic_dsp). The
@@ -5980,7 +5986,7 @@ async def admin_set_satellite_mic_dsp(room_id: str, body: _AdminMicDspBody) -> d
 @app.post(
     "/v1/admin/satellite/{room_id}/mic_dsp/mark",
     # Admin tier: it writes into the satellite's and the server's logs.
-    dependencies=[Depends(require_admin_mutation)],
+    dependencies=[Depends(require_admin_mutation), Depends(room_ids.require_room_id_path)],
 )
 async def admin_mark_satellite_mic_dsp(room_id: str, body: _AdminMicDspMarkBody) -> dict[str, Any]:
     """Stamp a test marker ("block 2, 1m") into this server's log and the
@@ -6014,7 +6020,7 @@ class _AdminSatelliteVoiceBody(BaseModel):
     "/v1/admin/satellite/{room_id}/voice",
     # Admin tier, as the room's other settings (/config): it changes what
     # a room sounds like for the whole household.
-    dependencies=[Depends(require_admin_mutation)],
+    dependencies=[Depends(require_admin_mutation), Depends(room_ids.require_room_id_path)],
 )
 async def admin_set_satellite_voice(
     room_id: str, body: _AdminSatelliteVoiceBody
@@ -6046,7 +6052,7 @@ class _AdminSatelliteConfigBody(BaseModel):
     # apply — it decides whether and how much that room's microphone
     # hears, so like the wake-word take it waits for an admin (501 before
     # setup and after --reset-admin).
-    dependencies=[Depends(require_admin_security)],
+    dependencies=[Depends(require_admin_security), Depends(room_ids.require_room_id_path)],
 )
 async def admin_update_satellite_config(
     room_id: str, body: _AdminSatelliteConfigBody
@@ -6133,7 +6139,7 @@ SATELLITE_LOG_MAX_BYTES = 10 * 1024 * 1024
     # so this returns room conversation, not just diagnostics. The
     # dashboard hop has always been gated; this is the same gate on the
     # route that actually holds the data. Bearer or the dashboard cookie.
-    dependencies=[Depends(require_admin_read)],
+    dependencies=[Depends(require_admin_read), Depends(room_ids.require_room_id_path)],
 )
 async def admin_get_satellite_logs(
     room_id: str,
@@ -6287,7 +6293,7 @@ async def _run_diag(target: Any, probe: str) -> dict[str, Any]:
 
 @app.post(
     "/v1/admin/satellite/{room_id}/diagnostics",
-    dependencies=[Depends(require_admin_mutation)],
+    dependencies=[Depends(require_admin_mutation), Depends(room_ids.require_room_id_path)],
 )
 async def admin_run_satellite_diagnostics(room_id: str) -> dict[str, Any]:
     """Run every probe on a connected satellite that declared
@@ -6303,7 +6309,7 @@ async def admin_run_satellite_diagnostics(room_id: str) -> dict[str, Any]:
 
 @app.post(
     "/v1/admin/satellite/{room_id}/diagnostics/{probe}",
-    dependencies=[Depends(require_admin_mutation)],
+    dependencies=[Depends(require_admin_mutation), Depends(room_ids.require_room_id_path)],
 )
 async def admin_run_satellite_diagnostic(room_id: str, probe: str) -> dict[str, Any]:
     """Run one probe by name. 404 for a name not in the allowlist (nothing
@@ -6325,7 +6331,7 @@ async def admin_run_satellite_diagnostic(room_id: str, probe: str) -> dict[str, 
     # reported config under REV-11): memory, CPU, temperature, link and
     # reachability numbers, never speech. A paired device or a signed-in
     # dashboard reads it; nothing less.
-    dependencies=[Depends(require_device_read)],
+    dependencies=[Depends(require_device_read), Depends(room_ids.require_room_id_path)],
 )
 async def admin_get_satellite_health(room_id: str) -> dict[str, Any]:
     """The room's latest health sample, its last outage report and a 24 h
@@ -6484,7 +6490,7 @@ def approval_throttled_detail() -> str:
     # pairing the default, the pre-setup grace let any LAN host that parked
     # its own satellite on an unclaimed core approve it — the one pre-setup
     # write that minted a lasting trust relationship.
-    dependencies=[Depends(require_admin_security)],
+    dependencies=[Depends(require_admin_security), Depends(room_ids.require_room_id_path)],
 )
 async def admin_satellite_approve(
     room_id: str, body: _ApproveSatelliteBody
@@ -6636,7 +6642,7 @@ async def admin_satellite_join_problems() -> dict[str, Any]:
     "/v1/admin/satellites/approvals/{room_id}/reject",
     # Security tier like approve: the two decisions on a parked device take
     # the same credential, and neither has a pre-setup grace.
-    dependencies=[Depends(require_admin_security)],
+    dependencies=[Depends(require_admin_security), Depends(room_ids.require_room_id_path)],
 )
 async def admin_satellite_reject(room_id: str) -> dict[str, Any]:
     """Drop a pending request.
@@ -6646,6 +6652,24 @@ async def admin_satellite_reject(room_id: str) -> dict[str, Any]:
     async with session_scope() as s:
         ok = await SatelliteApprovalRepository(s).reject(room_id)
     return {"rejected": bool(ok), "room_id": room_id}
+
+
+async def _close_room_session(room_id: str) -> bool:
+    """Close the satellite's live socket, if one is open: a device whose
+    pairing or record was just removed must not keep its room's audio and
+    announcements until its socket happens to drop. ``room_id`` is the
+    satellite id (the path segment of these routes since 1.5.0), so the
+    device is looked up in ``active_satellites``, not the room's speaker
+    slot. Its own teardown unregisters it; a device that is still wanted
+    reconnects and is checked like any other."""
+    sess = (getattr(app.state, "active_satellites", None) or {}).get(room_id)
+    if sess is None:
+        return False
+    try:
+        await sess.ws.close(code=1008)
+    except Exception:  # noqa: BLE001 — already gone
+        pass
+    return True
 
 
 @app.delete(
@@ -6661,15 +6685,18 @@ async def admin_reset_satellite_pairing(room_id: str) -> dict[str, Any]:
     that room re-pairs trust-on-first-use. Needed after re-flashing a Pi or
     moving a room to a new device (the old device's token no longer matches).
 
-    Works whether or not the room is currently connected — the pairing lives
-    in the DB, not the live session. Returns whether a row was actually
-    removed (``reset``: false means the room had no pairing to clear)."""
+    Works whether or not the room is currently connected; a live socket for
+    the room is closed, so the device that held it reconnects and is checked
+    against the reset pairing. Returns whether a row was actually removed
+    (``reset``: false means the room had no pairing to clear)."""
     from domovoi.db.repositories import SatellitePairingRepository
 
     async with session_scope() as s:
         removed = await SatellitePairingRepository(s).reset_pairing(room_id)
+    closed = await _close_room_session(room_id)
     log.info(
-        "pairing: admin reset room=%s (row_existed=%s)", room_id, removed
+        "pairing: admin reset room=%s (row_existed=%s, closed_live=%s)",
+        room_id, removed, closed,
     )
     # An unpaired satellite's support session ends with its pairing.
     from domovoi import support_sessions
@@ -6698,7 +6725,7 @@ class _PreseedPairingBody(BaseModel):
     # Pre-seeding mints the room's WS-auth token — a SECURITY op like the
     # reset above: Bearer-only, 501 before setup, credentials forwarded by
     # the web.
-    dependencies=[Depends(require_admin_security)],
+    dependencies=[Depends(require_admin_security), Depends(room_ids.require_room_id_path)],
 )
 async def admin_preseed_satellite_pairing(
     room_id: str, body: _PreseedPairingBody
@@ -6836,6 +6863,7 @@ async def admin_delete_satellite(
         if purge:
             removed_approval = await SatelliteApprovalRepository(s).reject(room_id)
 
+    await _close_room_session(room_id)
     if removed_meta:
         from domovoi import room_devices
 
@@ -6883,7 +6911,7 @@ class _RoomLabelBody(BaseModel):
 @app.post(
     "/v1/admin/satellites/{room_id}/label",
     # Device tier: cosmetic grouping label.
-    dependencies=[Depends(require_device)],
+    dependencies=[Depends(require_device), Depends(room_ids.require_room_id_path)],
 )
 async def admin_set_satellite_label(
     room_id: str, body: _RoomLabelBody
@@ -7060,9 +7088,16 @@ async def admin_rename_room(room_id: str, body: _RoomNameBody) -> dict[str, Any]
 @app.delete("/v1/admin/rooms/{room_id}", dependencies=_ROOM_ADMIN)
 async def admin_delete_room(room_id: str) -> dict[str, Any]:
     """Delete an EMPTY room (409 while it has satellites: move them
-    first). Its history keeps the id."""
+    first). Its history keeps the id.
+
+    An older id from before the one id rule (domovoi/room_ids.py) passes
+    the path check here only (so a room re-keyed from such a satellite can
+    still be removed) and is refused 422 when it names no room."""
     async with session_scope() as s:
-        result = await RoomsRepository(s).delete(room_id)
+        repo = RoomsRepository(s)
+        if not room_ids.is_room_id(room_id) and await repo.get(room_id) is None:
+            raise HTTPException(status_code=422, detail="not a room id")
+        result = await repo.delete(room_id)
     if result == "missing":
         raise HTTPException(status_code=404, detail=f"no room {room_id!r}")
     if result == "has_satellites":
@@ -8129,7 +8164,7 @@ async def _log_queue_edit(room_id: str, what: str) -> None:
     # it starts a room's player first. The web hop forwards the caller's
     # token and cookie. A guest reads it only while the room is playing,
     # and then nothing is started (domovoi/guest_queue.py).
-    dependencies=[Depends(require_device_read_or_active_room_guest)],
+    dependencies=[Depends(require_device_read_or_active_room_guest), Depends(room_ids.require_room_id_path)],
 )
 async def admin_music_queue(room_id: str, request: Request) -> dict[str, Any]:
     """The room's live MPD queue, in order, plus which entry is playing.
@@ -8201,7 +8236,7 @@ async def _insert_position(room_id: str, mpd: Any, where: str) -> int | None:
     # its own or a blocked device just calls :6370 instead. A guest
     # (no credential) adds only while the room is playing, throttled
     # per address (domovoi/guest_queue.py).
-    dependencies=[Depends(require_device_or_active_room_guest)],
+    dependencies=[Depends(require_device_or_active_room_guest), Depends(room_ids.require_room_id_path)],
 )
 async def admin_music_queue_add(
     room_id: str, body: _AdminQueueAddBody, request: Request
@@ -8335,7 +8370,7 @@ async def admin_music_queue_add(
     # The queue's "play this one" (Up next P4): a jump, on the tier of the
     # skip it is a kind of — the device tier, and a guest while the room is
     # playing, unless an admin banned it (domovoi/guest_queue.py).
-    dependencies=[Depends(require_device_or_active_room_guest)],
+    dependencies=[Depends(require_device_or_active_room_guest), Depends(room_ids.require_room_id_path)],
 )
 async def admin_music_queue_play(
     room_id: str, body: _AdminQueuePlayBody, request: Request
@@ -8398,7 +8433,7 @@ async def admin_music_queue_play(
 @app.post(
     "/v1/admin/music/queue/{room_id}/remove",
     # Device tier (ADD-3), like queue add — and a guest the same way.
-    dependencies=[Depends(require_device_or_active_room_guest)],
+    dependencies=[Depends(require_device_or_active_room_guest), Depends(room_ids.require_room_id_path)],
 )
 async def admin_music_queue_remove(
     room_id: str, body: _AdminQueueRemoveBody, request: Request
@@ -8443,7 +8478,7 @@ async def admin_music_queue_remove(
 @app.post(
     "/v1/admin/music/queue/{room_id}/move",
     # Device tier (ADD-3), like queue add — and a guest the same way.
-    dependencies=[Depends(require_device_or_active_room_guest)],
+    dependencies=[Depends(require_device_or_active_room_guest), Depends(room_ids.require_room_id_path)],
 )
 async def admin_music_queue_move(
     room_id: str, body: _AdminQueueMoveBody, request: Request
@@ -8476,7 +8511,7 @@ async def admin_music_queue_move(
     "/v1/admin/music/queue/{room_id}/clear",
     # Device tier (ADD-3), like queue add. NOT a guest's: clearing stops
     # the room (domovoi/guest_queue.py).
-    dependencies=[Depends(require_device)],
+    dependencies=[Depends(require_device), Depends(room_ids.require_room_id_path)],
 )
 async def admin_music_queue_clear(room_id: str) -> dict[str, Any]:
     """Empty the queue and stop the room. The satellite gets its music_stop
@@ -8504,7 +8539,7 @@ async def admin_music_queue_clear(room_id: str) -> dict[str, Any]:
     "/v1/admin/music/up-next/room/{room_id}",
     # Read like the room's queue: the device tier's read half, and a guest
     # while the room is playing (domovoi/guest_queue.py).
-    dependencies=[Depends(require_device_read_or_active_room_guest)],
+    dependencies=[Depends(require_device_read_or_active_room_guest), Depends(room_ids.require_room_id_path)],
 )
 async def admin_up_next_room(room_id: str, request: Request) -> dict[str, Any]:
     """``{session}``: the room's active Up next session (the ``Session``
@@ -8578,8 +8613,8 @@ async def admin_music_add_by_query(body: _AdminAddByQueryBody) -> dict[str, Any]
 class _AdminAddByUrlBody(BaseModel):
     room_id: str
     url: str = Field(..., min_length=1, max_length=2000)
-    title: str | None = None
-    dedup_key: str | None = None
+    title: str | None = Field(None, max_length=300)
+    dedup_key: str | None = Field(None, max_length=200)
     attach_to_playlist_id: int | None = Field(None, ge=1)
 
 
@@ -8633,6 +8668,17 @@ async def admin_music_add_by_url(
             status_code=400, detail=f"refusing this URL — {reason}"
         )
 
+    requested_by = "web"
+    dedup_key = body.dedup_key
+    if not decision.admin:
+        # A caller with no household credential is counted on its own, so
+        # it cannot fill the household's share of waiting link adds, and
+        # its dedup key is the link itself (a chosen key could claim
+        # another add's place in the queue).
+        if await admin_auth_mod.check_device_request(request) not in ("ok", "pre-setup"):
+            requested_by = "web:guest"
+            dedup_key = "url:" + hashlib.sha256(body.url.encode("utf-8")).hexdigest()
+
     async with session_scope() as s:
         if not decision.admin:
             # Without an admin session this adds one song at a time, never
@@ -8643,9 +8689,10 @@ async def admin_music_add_by_url(
                 await s.execute(
                     text(
                         "SELECT COUNT(*) FROM media_acquisitions "
-                        "WHERE kind = 'url' AND requested_by = 'web' "
+                        "WHERE kind = 'url' AND requested_by = :by "
                         "AND status IN ('pending', 'claimed')"
-                    )
+                    ),
+                    {"by": requested_by},
                 )
             ).scalar_one()
             if int(waiting) >= settings.acquisition_open_url_pending_cap:
@@ -8661,8 +8708,8 @@ async def admin_music_add_by_url(
             kind="url",
             text=body.url,
             metadata={"title": body.title} if body.title else {},
-            requested_by="web",
-            dedup_key=body.dedup_key,
+            requested_by=requested_by,
+            dedup_key=dedup_key,
             attach_to_playlist_id=body.attach_to_playlist_id,
             skip_library_dedup=True,
         )
@@ -10033,7 +10080,7 @@ def _music_failure_detail(failure: str, room_id: str, response: Response) -> str
     # credential) may pause, resume, skip and go back while the room is
     # playing — never stop — unless an admin banned it, throttled per
     # address (domovoi/guest_queue.py).
-    dependencies=[Depends(require_device_or_active_room_guest)],
+    dependencies=[Depends(require_device_or_active_room_guest), Depends(room_ids.require_room_id_path)],
 )
 async def admin_music_action(
     action: str,
@@ -10328,7 +10375,8 @@ async def _refuse_ws(ws: WebSocket, code: str, detail: str) -> None:
         await ws.close(code=1008)
     except Exception:  # noqa: BLE001
         pass
-    log.warning("ws upgrade refused (%s): %s", code, detail)
+    # %r: the detail carries the decoded path, which the caller chose.
+    log.warning("ws upgrade refused (%s): %r", code, detail)
 
 
 @app.websocket("/v1/stream/{room_id}")
@@ -10351,14 +10399,14 @@ async def stream(ws: WebSocket, room_id: str) -> None:
     if source is not None:
         join_problems.stream_opened(source)
     try:
+        if not room_ids.is_room_id(room_id):
+            await _refuse_ws(ws, "bad_room_id", f"/v1/stream/{room_id!r} is not a room id")
+            return
         if not origin_allowed(ws.headers.get("origin")):
             await _refuse_ws(
                 ws, "cross_origin",
                 f"/v1/stream/{room_id} from Origin {ws.headers.get('origin')!r}",
             )
-            return
-        if not room_ids.is_room_id(room_id):
-            await _refuse_ws(ws, "bad_room_id", f"/v1/stream/{room_id!r} is not a room id")
             return
         session = StreamSession(ws, room_id)
         await session.run()
@@ -10411,6 +10459,9 @@ async def phone_dropin(ws: WebSocket, room_id: str) -> None:
     """
     from domovoi.phone_dropin import PhoneDropinSession
 
+    if not room_ids.is_room_id(room_id):
+        await _refuse_ws(ws, "bad_room_id", f"/v1/dropin/{room_id!r} is not a room id")
+        return
     if not origin_allowed(ws.headers.get("origin")):
         await _refuse_ws(
             ws, "cross_origin",
@@ -10454,6 +10505,14 @@ async def phone_dropin(ws: WebSocket, room_id: str) -> None:
     # a rotated token, a sign-out or an idled-out session ends it (1008).
     await admin_auth_mod.run_while_admitted(
         ws, verdict, session.run(), what=f"drop-in {phone_id}->{room_id}")
+
+
+def ws_max_message_bytes() -> int:
+    """What ``ws_max_size`` is set to: a little over the body limit a
+    plugin socket enforces itself, and never under 4 MiB."""
+    from domovoi.transport_guard import default_body_limit
+
+    return max(4 * 1024 * 1024, default_body_limit() + 64 * 1024)
 
 
 def _reset_admin_cli() -> None:
@@ -10521,6 +10580,10 @@ def main() -> None:
             # buffer for as long as it is open, so "accept everything" is a
             # promise this box cannot keep.
             limit_concurrency=settings.max_concurrent_connections,
+            # The largest WebSocket message uvicorn buffers (its default is
+            # 16 MiB): a satellite's frames are audio, small JSON and 128 KiB
+            # log chunks, and a plugin socket is closed over the body limit.
+            ws_max_size=ws_max_message_bytes(),
         )
 
 

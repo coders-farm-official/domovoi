@@ -781,7 +781,10 @@ models plus two windows. A GPU box gets its 4 at the update after Ollama
 has first started there. The setting is written by the installer and by
 every update's re-provision, which restarts Ollama only when the unit's
 text changed. On a Mac server, Ollama's setting comes from the Mac
-installer.
+installer, by the Mac's memory: the same 1, 2 and 3, and 4 on a Mac of
+64 GB or more (the models and their windows share the Mac's unified
+memory with the VM, so 4 waits for the room a GPU box gets from its
+cards). Setup, a repair and a Mac update each write it into Ollama's job.
 
 ---
 

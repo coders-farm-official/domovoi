@@ -74,8 +74,8 @@ enum class Route(val label: String, val icon: ImageVector) {
      *  local tab, [localTabs]). */
     Lists("Lists", Icons.Filled.Checklist),
 
-    /** Friend Houses, "Serverless messaging and friend system between
-     *  households": the house inbox, the friends and the shared lists
+    /** Friend Houses, "Message and share lists with friends’
+     *  houses, house to house": the house inbox, the friends and the shared lists
      *  (ui/screens/friendhouses/). Household data like Lists, so a server
      *  screen only. Off by default on the server: on no launcher, and not
      *  rendered, unless `GET /api/friend-houses` says it is on there

@@ -2258,10 +2258,18 @@ const RoomQuietHoursSettings = ({ room, fire }) => {
  * An XVF3800 satellite that declared mic_dsp, admins only: pick a preset by
  * name (the satellite applies it from its fixed table, at runtime only),
  * see what the chip read back, and stamp a test marker into the
- * satellite's and the server's logs. Nothing here for any other device. */
+ * satellite's and the server's logs. Nothing here for any other device.
+ * One block per XVF3800 (1.5.0): a shared room lists each of its devices
+ * that declared mic_dsp (s.mic_dsp_satellites), addressed by satellite id. */
 const SAT_MIC_DSP_MARK_MAX = 120;
-const SatMicDspControl = ({ s, fire }) => {
-  const room = s.room_id;
+const satMicDspTargets = (s) => {
+  const ids = Array.isArray(s.mic_dsp_satellites) ? s.mic_dsp_satellites : [];
+  if (ids.length) return ids;
+  return s.mic_dsp ? [s.room_id] : [];  // an older server: the room's speaker
+};
+const SatMicDspControl = ({ s, satId, fire }) => {
+  const room = satId || s.room_id;
+  const named = room !== s.room_id;  // a device of a shared room: say which
   const path = `/api/satellites/${encodeURIComponent(room)}/mic_dsp`;
   const { data, error, refresh } = useApiObject(path, { quiet: true });
   const [busy, setBusy] = React.useState(false);
@@ -2302,7 +2310,7 @@ const SatMicDspControl = ({ s, fire }) => {
   const params = state ? Object.keys(state.readback || {}) : [];
   return (
     <div className="sat-mic-dsp" style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-soft)' }}>
-      <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--fg-muted)', fontWeight: 600, marginBottom: 6 }}>microphone dsp · admin</div>
+      <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--fg-muted)', fontWeight: 600, marginBottom: 6, overflowWrap: 'anywhere' }}>microphone dsp · admin{named && <> · <span className="mono" style={{ textTransform: 'none' }}>{room}</span></>}</div>
       {error && !data && <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginBottom: 6 }}>couldn’t read the mic preset: {error}</div>}
       {presets.map((p) => (
         <label key={p.name} className="sat-timer-scope" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13,
@@ -2689,7 +2697,7 @@ const SatDrawer = ({ s, sats, onClose, fire, refresh }) => {
           {tab === 'settings'      && <SatHealthCard room={s.room_id} online={s.status === 'online'}/>}
           {tab === 'settings'      && <RoomQuietHoursSettings room={s.room_id} fire={fire}/>}
           {tab === 'settings'      && s.board === 'android_room' && <RoomBatterySettings room={s.room_id} fire={fire}/>}
-          {tab === 'settings'      && s.mic_dsp && s.status === 'online' && adminSignedIn && <SatMicDspControl s={s} fire={fire}/>}
+          {tab === 'settings'      && s.status === 'online' && adminSignedIn && satMicDspTargets(s).map((id) => <SatMicDspControl key={id} s={s} satId={id} fire={fire}/>)}
           {tab === 'settings'      && (satCan(s, 'config')
             ? <RoomSettingsBody room={s.room_id} fire={fire}/>
             : s.board === 'android_room'
@@ -2979,7 +2987,7 @@ const AdoptModal = ({ pending, sats, force, onClose, onAdopted, fire }) => {
     setBusy(true);
     setErr(null);
     try {
-      await apiPost(`/api/satellites/pending/${pending.pending_id}/adopt`, {
+      await apiPost(`/api/satellites/pending/${encodeURIComponent(pending.pending_id)}/adopt`, {
         room_id: roomId,
         room_label: roomLabel.trim() || null,
         wifi_ssid: ssid.trim(),

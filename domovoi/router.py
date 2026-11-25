@@ -1304,8 +1304,8 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
                 category, "that"
             )
             answer = (
-                "I'd need the internet to get you that — "
-                f"want me to check {phrase}?"
+                "I'd need the internet to get you that. "
+                f"Want me to check {phrase}?"
             )
             parked = False
             try:

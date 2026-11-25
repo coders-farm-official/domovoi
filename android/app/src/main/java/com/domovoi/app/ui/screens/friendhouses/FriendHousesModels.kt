@@ -5,6 +5,7 @@ import com.domovoi.app.friendhouses.FhConversation
 import com.domovoi.app.friendhouses.FhFriend
 import com.domovoi.app.friendhouses.FhMessage
 import com.domovoi.app.friendhouses.FhPaths
+import com.domovoi.app.friendhouses.FhQuietHours
 import com.domovoi.app.friendhouses.FhSharedList
 import com.domovoi.app.friendhouses.FhStatus
 import com.domovoi.app.friendhouses.fhChanges
@@ -14,42 +15,73 @@ import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.components.parseInstant
 import com.domovoi.app.ui.components.relTime
 import com.domovoi.app.ui.screens.home.plural
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import com.domovoi.app.net.ApiException
 import kotlinx.coroutines.CancellationException
+import java.time.LocalTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 import kotlin.math.abs
 
 // ---------------------------------------------------------------------------
 // The Friend houses screen's words and logic, apart from Compose so the JVM
 // tests can pin them. The words are the dashboard's (web/static/
-// friend_houses.jsx), at phone width. Everything an admin does there is a
-// line of words here, never a control: the household token is refused it.
+// friend_houses.jsx), at phone width. The phone holds the household token,
+// so it shows the dashboard's Messages and Shared lists, and none of its
+// admin zone ("Friends and connections": requests, friends, friend files,
+// this house, blocked houses), nor a conversation's "Save a copy" and
+// "Delete", nor "share a list": no control, and no words for one.
 // ---------------------------------------------------------------------------
 
 object FhWords {
     const val TITLE = "Friend houses"
 
-    const val FRIENDS_ADMIN =
-        "Only an admin can add, remove or block friends, compare the codes, or change what a new message does, on the dashboard."
-    const val LISTS_ADMIN =
-        "Only an admin can share a list, accept one or stop sharing, on the dashboard."
-    const val CONVERSATION_ADMIN =
-        "Only an admin can save a copy of these messages or delete them, on the dashboard."
     const val FORMER_FRIEND = "No longer a friend: messages can't be sent to this house."
-    const val PHONE_FOLLOWS =
-        "This phone follows the same choice: a badge for the inbox, a notification saying who it's from, or one with the message."
 
     const val NO_MESSAGES = "no messages yet"
-    const val NO_MESSAGES_SUB = "press message on a friend to write one"
-    const val NO_FRIENDS = "no friends yet"
-    const val NO_FRIENDS_SUB = "An admin can add friend houses on the dashboard."
-    const val NO_SHARED = "no shared lists"
-    const val NOT_VERIFIED = "not verified"
-    const val VERIFIED = "verified"
+    const val NO_MESSAGES_SUB = "messages with your friend houses arrive here"
+    const val NO_SHARED = "no shared lists yet"
     const val LOAD_EARLIER = "Load earlier"
 
-    /** A list a friend shared that an admin hasn't accepted yet. */
-    fun invited(friend: String, title: String) = "$friend shared a list: $title. An admin can accept it in the dashboard."
+    // ---- shared lists (the dashboard's FhSharedListsCard) ----
+
+    const val SHARE_EXPLAIN =
+        "Changes either house makes show up in both, usually within a minute. Each house keeps its own copy and its own name for it."
+    const val OFFERED = "offered to this house"
+    const val SHARED_NOW = "shared now"
+    const val ACCEPT = "Accept"
+    const val DECLINE = "Decline"
+    const val STOP_SHARING = "Stop sharing"
+    const val RENAME = "give it another name here"
+    const val CALL_IT = "Call it here"
+    const val OPEN_IN_LISTS = "open in Lists"
+    const val WAITING_FOR_THEM = "waiting for them to accept"
+    const val DECLINE_TITLE = "Decline this list?"
+    const val STOP_TITLE = "Stop sharing?"
+    const val DECLINED = "list declined"
+    const val STOPPED = "stopped sharing — you both keep your own copy"
+
+    /** A list a friend offered this house: "The Smiths shared a list: “Camping”". */
+    fun offered(friend: String, title: String) = "$friend shared a list: “$title”"
+
+    /** A list shared now: "Groceries — shared with The Smiths" (ours) or
+     *  "Camping — from The Smiths" (theirs). */
+    fun shared(listName: String, friend: String, ours: Boolean) =
+        if (ours) "$listName — shared with $friend" else "$listName — from $friend"
+
+    /** Theirs, when its title there isn't its name here. */
+    fun theyCallIt(title: String) = "they call it “$title”"
+
+    fun declineBody(title: String?, friend: String) =
+        "“${title?.takeIf { it.isNotEmpty() } ?: "This list"}” won’t be added here. $friend isn’t told."
+
+    fun stopBody(listName: String, friend: String) =
+        "Stop sharing $listName with $friend? You both keep your own copy."
+
+    fun added(name: String) = "added to Lists as $name"
 
     /** What a new message from this friend does, as words (the dashboard's
      *  three choices). The admin sets it; the phone only says it. */
@@ -157,17 +189,151 @@ fun fhTheirClock(m: FhMessage, zone: ZoneId = ZoneId.systemDefault()): String? {
 }
 
 /** A conversation as the screen opens it: from the inbox, else a friend
- *  never written to yet. Null when [house] is not a key a URL may carry. */
-fun fhOpenConversation(house: String?, inbox: List<FhConversation>, friends: List<FhFriend>): FhConversation? {
+ *  never written to yet (none on the phone for now: its friends list is
+ *  in the admin zone). Null when [house] is not a key a URL may carry. */
+fun fhOpenConversation(house: String?, inbox: List<FhConversation>, friends: List<FhFriend> = emptyList()): FhConversation? {
     if (!FhPaths.isHouseKey(house)) return null
     inbox.firstOrNull { it.house == house }?.let { return it }
     val f = friends.firstOrNull { it.house == house } ?: return null
     return FhConversation(house = f.house, name = f.name, friendId = f.id)
 }
 
-/** The shared lists the screen shows: active first, then the offers. */
-fun fhSharedOrder(lists: List<FhSharedList>): List<FhSharedList> =
-    lists.filter { it.state == "active" } + lists.filter { it.state == "invited" }
+/** A list a friend offered this house and nobody here has answered yet. */
+fun fhIsOffer(s: FhSharedList): Boolean = s.origin == "them" && s.state == "invited"
+
+/** The shared lists as the dashboard splits them: the offers to this house
+ *  first, then the ones shared now (ours waiting for them among these);
+ *  only those whose id a URL may carry. */
+fun fhSharedSplit(lists: List<FhSharedList>): Pair<List<FhSharedList>, List<FhSharedList>> =
+    lists.filter { FhPaths.isSpaceId(it.id) }.partition(::fhIsOffer)
+
+/** The name a shared list goes by here: its list's name, else its title. */
+fun fhListName(s: FhSharedList): String =
+    s.listName?.takeIf { it.isNotEmpty() } ?: s.title?.takeIf { it.isNotEmpty() } ?: "this list"
+
+/** How an accept, decline or stop sharing went: a toast to show, or a
+ *  problem to show by the list ([rename]: the name is taken here, so ask
+ *  for another, as the dashboard does on a 400). */
+sealed interface FhDone {
+    data class Ok(val toast: String) : FhDone
+    data class Problem(val text: String, val rename: Boolean = false) : FhDone
+}
+
+private suspend fun fhDo(action: String, block: suspend () -> String): FhDone = try {
+    FhDone.Ok(block())
+} catch (e: CancellationException) {
+    throw e
+} catch (e: Exception) {
+    FhDone.Problem(fhProblem(action, e), rename = e is ApiException && e.status == 400)
+}
+
+/** Accept [s] (a list offered to this house), as [name] when given. */
+suspend fun fhAcceptList(api: FriendHousesApi, s: FhSharedList, name: String? = null): FhDone =
+    fhDo("accept") {
+        val added = api.acceptList(s.id, name)
+        FhWords.added(
+            added?.takeIf { it.isNotBlank() } ?: name?.trim()?.takeIf { it.isNotEmpty() }
+                ?: s.title?.takeIf { it.isNotBlank() } ?: "a new list",
+        )
+    }
+
+/**
+ * A list offered to this house, as its row holds it: Accept under its own
+ * title, or (by choice, or once the server says that name is taken here)
+ * under the name typed; Decline. [busy] while either is in flight.
+ */
+class FhOffer(title: String?) {
+    var naming by mutableStateOf(false)
+    var name by mutableStateOf(title.orEmpty())
+    var problem by mutableStateOf<String?>(null)
+    var busy by mutableStateOf(false)
+        private set
+
+    /** Accept may be pressed: not in flight, and a name when naming. */
+    val canAccept: Boolean get() = !busy && !(naming && name.isBlank())
+
+    suspend fun accept(send: suspend (name: String?) -> FhDone) {
+        if (!canAccept) return
+        busy = true
+        problem = null
+        try {
+            val done = send(if (naming) name.trim() else null)
+            if (done is FhDone.Problem) {
+                problem = done.text
+                if (done.rename) naming = true
+            }
+        } finally {
+            busy = false
+        }
+    }
+
+    suspend fun decline(send: suspend () -> FhDone) {
+        if (busy) return
+        busy = true
+        problem = null
+        try {
+            (send() as? FhDone.Problem)?.let { problem = it.text }
+        } finally {
+            busy = false
+        }
+    }
+}
+
+suspend fun fhDeclineList(api: FriendHousesApi, s: FhSharedList): FhDone =
+    fhDo("decline") { api.declineList(s.id); FhWords.DECLINED }
+
+suspend fun fhStopSharing(api: FriendHousesApi, s: FhSharedList): FhDone =
+    fhDo("stop sharing") { api.stopSharing(s.id); FhWords.STOPPED }
+
+// ---------------------------------------------------------------------------
+// Quiet hours (the dashboard's fhClock, fhHeldText and fhQuietNote).
+// ---------------------------------------------------------------------------
+
+private val FH_CLOCK = DateTimeFormatter.ofPattern("h:mm a", Locale.US)
+private val FH_HHMM = Regex("""(\d{1,2}):(\d{2})""")
+
+/** "7:00am", the app's clock words (Home's and the calendar's). */
+private fun clockWords(t: LocalTime): String = t.format(FH_CLOCK).lowercase(Locale.US).replace(" ", "")
+
+/** "07:00" (the house's clock) as the app shows a time: "7:00am"; null
+ *  when it isn't one. */
+fun fhClock(hhmm: String?): String? {
+    val (h, m) = FH_HHMM.matchEntire(hhmm.orEmpty())?.destructured ?: return null
+    return runCatching { clockWords(LocalTime.of(h.toInt(), m.toInt())) }.getOrNull()
+}
+
+/** A server time on the phone's clock: "7:00am"; null when it can't be shown. */
+fun fhClockOf(iso: String?, zone: ZoneId = ZoneId.systemDefault()): String? =
+    parseInstant(fhIso(iso))?.let { clockWords(it.atZone(zone).toLocalTime()) }
+
+/** What an incoming message says about quiet hours: "held for quiet hours"
+ *  or "held for quiet hours · read out at 7:00am"; null otherwise. */
+fun fhHeldText(m: FhMessage, zone: ZoneId = ZoneId.systemDefault()): String? {
+    if (!m.incoming || m.held != "quiet_hours") return null
+    val at = fhClockOf(m.readOutAt, zone)
+    return if (at != null) "held for quiet hours · read out at $at" else "held for quiet hours"
+}
+
+/**
+ * Why a friend's messages aren't being said right now, for under a friend's
+ * "when a message comes from them" choice: only a choice that speaks in
+ * the rooms (`read`, `sender`), and only while quiet hours hold. Null
+ * otherwise. The phone shows no friend card for now (the friends list is in
+ * the admin zone), so nothing draws it yet.
+ */
+fun fhQuietNote(quiet: FhQuietHours?, alert: String?): String? {
+    if (quiet == null || (alert != "read" && alert != "sender")) return null
+    val until = fhClock(quiet.until) ?: return null
+    val said = if (alert == "read") "read out" else "announced"
+    return when {
+        quiet.rooms == "some" && quiet.readLater ->
+            "Quiet hours in some rooms until $until: new messages will be $said there at $until."
+        quiet.rooms == "some" ->
+            "Quiet hours in some rooms until $until: new messages aren’t $said there, and won’t be later."
+        quiet.readLater -> "Quiet hours until $until: new messages will be $said at $until."
+        else -> "Quiet hours until $until: new messages wait in the inbox and won’t be $said later."
+    }
+}
 
 /** What a read gives the screen: the data, or a sentence to show (a 403's
  *  is [com.domovoi.app.friendhouses.FH_ADMIN_ONLY]). */

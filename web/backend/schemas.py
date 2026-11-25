@@ -777,6 +777,11 @@ class Satellite(BaseModel):
     # xvf_host, 1.4.1): only then does its Settings tab offer the admin
     # Microphone DSP presets (GET/POST /api/satellites/{room}/mic_dsp).
     mic_dsp: bool = False
+    # The room's connected satellites that declared mic_dsp, by satellite id
+    # (1.5.0: a shared room may hold several XVF3800s, each with its own
+    # presets at /api/satellites/{satellite_id}/mic_dsp). ``mic_dsp`` is
+    # whether this list is non-empty.
+    mic_dsp_satellites: list[str] = Field(default_factory=list)
     # A code upgrade under way or just finished (SatelliteUpgrade), from the
     # Domovoi server snapshot; null when there is none. While ``state`` is
     # ``running`` the dashboard and the app keep the room's Upgrade button

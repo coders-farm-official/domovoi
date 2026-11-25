@@ -43,7 +43,7 @@ from web.backend.schemas import ConfigResponse, ConfigUpdateRequest
 
 router = APIRouter(prefix="/api", tags=["config"])
 
-WEB_VERSION = "1.4.0"
+WEB_VERSION = "1.4.1"
 
 # The core's git calls that reach the update server (the check, the pull,
 # a channel switch) each stop at their own timeout, and one route can run

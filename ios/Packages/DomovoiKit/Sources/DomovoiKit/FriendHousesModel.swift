@@ -13,23 +13,63 @@ func fhRead<T: Sendable & Equatable>(_ action: String, _ block: () async throws 
     }
 }
 
+/// A shared list's Decline or Stop sharing, waiting for its confirmation.
+public struct FhSharedAsk: Equatable, Sendable, Identifiable {
+    public enum Kind: Equatable, Sendable { case decline, stop }
+
+    public let kind: Kind
+    public let shared: FhSharedList
+    /// The server the list was read from: the action goes there or nowhere.
+    public let server: String
+
+    public var id: String { "\(kind)-\(shared.id)" }
+
+    public var title: String { kind == .decline ? FhWords.declineTitle : FhWords.stopTitle }
+    public var confirm: String { kind == .decline ? FhWords.decline : FhWords.stopSharing }
+    public var body: String {
+        let friend = FhWords.friendName(shared.friend)
+        switch kind {
+        case .decline: return FhWords.declineBody(shared.title, friend)
+        case .stop: return FhWords.stopBody(fhListName(shared), friend)
+        }
+    }
+}
+
+/// How an Accept ended, for the offer's row.
+public enum FhAcceptOutcome: Equatable, Sendable {
+    case accepted
+    /// A 400: a name already taken here. The row asks for another name and
+    /// says the server's sentence.
+    case nameTaken(String)
+    /// Anything else went wrong: the toast says so.
+    case failed
+    /// The phone moved house meanwhile: nothing to say here.
+    case dropped
+}
+
 /// The Friend houses screen's state: which tab, which conversation is open,
-/// and the three reads — Android's `FriendHousesScreen` composable's
-/// `remember`s and its 15-second `LaunchedEffect`, as a type the package
-/// tests drive.
+/// the two reads, and the shared lists' Accept, Decline and Stop sharing —
+/// Android's `FriendHousesScreen` composable's `remember`s and its 15-second
+/// `LaunchedEffect`, as a type the package tests drive.
 ///
 /// ### Every answer is keyed by its server
 ///
-/// Each read captures the server before it sends (and the call is held to
-/// it, ``FriendHousesApi``'s `server:`), and what comes back is dropped when
-/// the phone has moved house meanwhile — the read-after-await rule of this
-/// track. A server change clears everything and starts again.
+/// Each read and each action captures the server before it sends (and the
+/// call is held to it, ``FriendHousesApi``'s `server:`), and what comes back
+/// is dropped when the phone has moved house meanwhile — the read-after-await
+/// rule of this track. A server change clears everything and starts again.
+///
+/// ### No friends read (1.4.1)
+///
+/// The friends list is the dashboard's admin zone, which the phones hide, so
+/// this screen no longer reads `/friends` at all; a conversation opens from
+/// the inbox.
 @MainActor
 @Observable
 public final class FriendHousesModel {
 
-    /// How often the inbox, friends and shared lists are read again while the
-    /// screen is up (nothing pushes them).
+    /// How often the inbox and shared lists are read again while the screen
+    /// is up (nothing pushes them).
     public static let inboxPollMs: Int64 = 15_000
 
     public var tab: FhTab = .messages
@@ -37,8 +77,17 @@ public final class FriendHousesModel {
     public var open: String?
 
     public private(set) var inbox: FhRead<[FhConversation]>?
-    public private(set) var friends: FhRead<[FhFriend]>?
     public private(set) var shared: FhRead<[FhSharedList]>?
+
+    /// The shared lists with an action in flight, by id.
+    public private(set) var busyShared: Set<String> = []
+    /// A Decline or Stop sharing waiting for its confirmation.
+    public private(set) var ask: FhSharedAsk?
+    /// A line for the shell's toast, taken by ``takeToast()``.
+    public private(set) var toast: String?
+    /// The server ``shared`` was read from: every list action goes there,
+    /// and only while the phone is still on it.
+    @ObservationIgnored private var sharedServer: String?
 
     public let gate: FriendHousesGate
 
@@ -63,9 +112,9 @@ public final class FriendHousesModel {
     /// The status the header carries, or nil while hidden.
     public var status: FhStatus? { gate.shownFor(server) }
 
-    /// The conversation open, from the inbox or a friend never written to.
+    /// The conversation open, from the inbox.
     public var conversation: FhConversation? {
-        fhOpenConversation(open, inbox: inbox?.value ?? [], friends: friends?.value ?? [])
+        fhOpenConversation(open, inbox: inbox?.value ?? [], friends: [])
     }
 
     // MARK: - lifecycle
@@ -100,29 +149,42 @@ public final class FriendHousesModel {
     public func serverChanged() {
         readFor = ServerCredentials.normalize(server)
         inbox = nil
-        friends = nil
         shared = nil
+        sharedServer = nil
         open = nil
+        busyShared = []
+        ask = nil
+        toast = nil
         if loop != nil {
             stop()
             start()
         }
     }
 
-    /// The three reads, once; and the gate's, for the badge.
+    /// The phone is still on `asked`.
+    private func still(_ asked: String) -> Bool {
+        ServerCredentials.normalize(container.store.serverURL) == ServerCredentials.normalize(asked)
+    }
+
+    /// The two reads, once, in the page's order; and the gate's, for the
+    /// badge and Home's row.
     public func readAll() async {
         let asked = server
         let api = gate.api
         let newInbox = await fhRead("load messages") { try await api.inbox(server: asked).newestFirst() }
-        guard ServerCredentials.normalize(container.store.serverURL) == ServerCredentials.normalize(asked) else { return }
+        guard still(asked) else { return }
         inbox = newInbox
-        let newFriends = await fhRead("load friends") { try await api.friends(server: asked) }
-        guard ServerCredentials.normalize(container.store.serverURL) == ServerCredentials.normalize(asked) else { return }
-        friends = newFriends
-        let newShared = await fhRead("load shared lists") { try await api.sharedLists(server: asked) }
-        guard ServerCredentials.normalize(container.store.serverURL) == ServerCredentials.normalize(asked) else { return }
-        shared = newShared
+        await readShared(asked)
+        guard still(asked) else { return }
         gate.refresh()
+    }
+
+    private func readShared(_ asked: String) async {
+        let api = gate.api
+        let newShared = await fhRead("load shared lists") { try await api.sharedLists(server: asked) }
+        guard still(asked) else { return }
+        shared = newShared
+        sharedServer = asked
     }
 
     // MARK: - moving about
@@ -132,23 +194,91 @@ public final class FriendHousesModel {
         open = house
     }
 
-    /// "message" on a friend: the Messages tab, on their conversation.
-    public func message(_ friend: FhFriend) {
-        guard FhPaths.isHouseKey(friend.house) else { return }
-        tab = .messages
-        open = friend.house
-    }
-
     public func closeConversation() {
         open = nil
     }
 
-    /// "open in lists": the list this phone opens next in Lists, for this
-    /// server. The shell then navigates there.
+    /// "open in Lists": the list this phone opens next in Lists, for this
+    /// server. The shell then navigates there. Never for an offer: it has no
+    /// list here yet.
     public func openInLists(_ shared: FhSharedList, selection: ListsSelection = ListsSelection()) -> Bool {
-        guard let id = shared.listId, id > 0, shared.state == "active" else { return false }
+        guard let id = shared.listId, id > 0, !fhIsOffer(shared) else { return false }
         selection.save(server: server, id: id)
         return true
+    }
+
+    // MARK: - the shared lists' actions (household tier, 1.4.1)
+
+    /// Accept a friend's list. `name`: what to call it here, or nil for
+    /// their title. On a 400 (a name taken here) the row asks for another.
+    @discardableResult
+    public func accept(_ offer: FhSharedList, name: String? = nil) async -> FhAcceptOutcome {
+        guard fhIsOffer(offer), FhPaths.isSharedListId(offer.id), !busyShared.contains(offer.id),
+              let asked = sharedServer, still(asked)
+        else { return .dropped }
+        let api = gate.api
+        busyShared.insert(offer.id)
+        defer { if still(asked) { busyShared.remove(offer.id) } }
+        do {
+            let made = try await api.acceptSharedList(offer.id, name: name, server: asked)
+            guard still(asked) else { return .dropped }
+            toast = FhWords.accepted(made.name ?? name ?? offer.title)
+            await readShared(asked)
+            return .accepted
+        } catch {
+            guard still(asked) else { return .dropped }
+            if let failure = (error as? DomovoiError)?.failure, failure.status == 400 {
+                return .nameTaken(fhProblem("accept", error))
+            }
+            toast = fhProblem("accept", error)
+            return .failed
+        }
+    }
+
+    /// Decline (an offer) or Stop sharing (anything shared now): asks first.
+    public func askDecline(_ offer: FhSharedList) {
+        guard fhIsOffer(offer), FhPaths.isSharedListId(offer.id), let asked = sharedServer, still(asked) else { return }
+        ask = FhSharedAsk(kind: .decline, shared: offer, server: asked)
+    }
+
+    public func askStop(_ shared: FhSharedList) {
+        guard !fhIsOffer(shared), FhPaths.isSharedListId(shared.id), let asked = sharedServer, still(asked) else { return }
+        ask = FhSharedAsk(kind: .stop, shared: shared, server: asked)
+    }
+
+    public func cancelAsk() {
+        ask = nil
+    }
+
+    /// The confirmation said yes: decline it or stop sharing it.
+    public func confirmAsk(_ confirmed: FhSharedAsk) async {
+        guard ask == confirmed else { return }
+        ask = nil
+        let id = confirmed.shared.id
+        let asked = confirmed.server
+        guard !busyShared.contains(id), still(asked) else { return }
+        let api = gate.api
+        busyShared.insert(id)
+        defer { if still(asked) { busyShared.remove(id) } }
+        let action = confirmed.kind == .decline ? "decline" : "stop sharing"
+        do {
+            switch confirmed.kind {
+            case .decline: try await api.declineSharedList(id, server: asked)
+            case .stop: try await api.stopSharing(id, server: asked)
+            }
+            guard still(asked) else { return }
+            toast = confirmed.kind == .decline ? FhWords.declined : FhWords.stopped
+            await readShared(asked)
+        } catch {
+            guard still(asked) else { return }
+            toast = fhProblem(action, error)
+        }
+    }
+
+    /// The toast's line, once.
+    public func takeToast() -> String? {
+        defer { toast = nil }
+        return toast
     }
 }
 

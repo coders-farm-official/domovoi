@@ -76,9 +76,18 @@ def findings(exp, v, **kw):
 
 @pytest.fixture(autouse=True)
 def _clean_holds():
-    holds.clear()
+    # The plugin timers are module-wide: a resolver one test left failing
+    # would show up in another test's failing_resolvers().
+    from domovoi.container_guard import expected as _exp
+
+    def _reset():
+        holds.clear()
+        _exp._BUSY_SINCE.clear()
+        _exp._FAILING_SINCE.clear()
+
+    _reset()
     yield
-    holds.clear()
+    _reset()
 
 
 # ─── H1: the update unit's music player rebuild is adopted ────────────────

@@ -202,6 +202,9 @@ _TEXT_MAX_BYTES = 2 * 1024 * 1024
 # not data warehouses. Reads truncate to this window; writes reject beyond.
 _SHEET_MAX_ROWS = 1000
 _SHEET_MAX_COLS = 60
+#: The most of a .csv the grid read looks at: the window above fits in far
+#: less, and a file past it shows its first rows, as a long one always did.
+_SHEET_READ_MAX_CSV_BYTES = 8 * 1024 * 1024
 
 
 def _doc_category(ext: str) -> str:
@@ -1020,13 +1023,18 @@ def _read_sheet_grid(target: Path) -> list[list[dict[str, Any]]]:
     ext = target.suffix.lower()
     grid: list[list[dict[str, Any]]] = []
     if ext == ".csv":
-        with target.open("r", encoding="utf-8-sig", errors="replace", newline="") as fh:
-            for r, row in enumerate(csv.reader(fh)):
-                if r >= _SHEET_MAX_ROWS:
-                    break
-                grid.append(
-                    [{"v": cell, "f": None} for cell in row[:_SHEET_MAX_COLS]]
-                )
+        with target.open("rb") as fh:
+            raw = fh.read(_SHEET_READ_MAX_CSV_BYTES + 1)
+        cut = len(raw) > _SHEET_READ_MAX_CSV_BYTES
+        if cut:  # the last line may be partial: it is left out
+            raw = raw[: raw.rfind(b"\n", 0, _SHEET_READ_MAX_CSV_BYTES) + 1]
+        text_ = raw.decode("utf-8-sig", errors="replace")
+        for r, row in enumerate(csv.reader(io.StringIO(text_, newline=""))):
+            if r >= _SHEET_MAX_ROWS:
+                break
+            grid.append(
+                [{"v": cell, "f": None} for cell in row[:_SHEET_MAX_COLS]]
+            )
         return grid
     if ext == ".xlsx":
         from openpyxl import load_workbook
@@ -1301,7 +1309,7 @@ async def read_sheet(rel_path: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=f"{rel_path} not found")
     return {
         "rel_path": _rel_of(target),
-        "rows": _read_sheet_grid(target),
+        "rows": await executors.run("sheets", _read_sheet_grid, target),
         "max_rows": _SHEET_MAX_ROWS,
         "max_cols": _SHEET_MAX_COLS,
     }
@@ -1667,27 +1675,6 @@ async def sheet_presence(request: Request, rel_path: str, req: PresenceRequest) 
 
 
 # ─── Exports (docx from markdown · csv/xlsx from sheets) ────────────
-_MD_INLINE = re.compile(r"(\*\*.+?\*\*|\*.+?\*|`.+?`)")
-
-
-def _md_runs(paragraph, text_: str) -> None:
-    """Split ``text_`` on **bold** / *italic* / `code` markers and add the
-    corresponding python-docx runs. Deliberately minimal — the doc editor
-    is markdown-first with a basic toolbar, and the export mirrors it."""
-    for part in _MD_INLINE.split(text_):
-        if not part:
-            continue
-        if part.startswith("**") and part.endswith("**") and len(part) > 4:
-            paragraph.add_run(part[2:-2]).bold = True
-        elif part.startswith("*") and part.endswith("*") and len(part) > 2:
-            paragraph.add_run(part[1:-1]).italic = True
-        elif part.startswith("`") and part.endswith("`") and len(part) > 2:
-            run = paragraph.add_run(part[1:-1])
-            run.font.name = "Consolas"
-        else:
-            paragraph.add_run(part)
-
-
 #: The most lines a Markdown or text file may have to be made into Word:
 #: building the copy costs more per line the longer it gets.
 DOCX_MAX_LINES = 20_000
@@ -1695,61 +1682,13 @@ DOCX_MAX_LINES = 20_000
 
 def assert_docx_lines(text_: str) -> None:
     """Refuse (``413``) a text past :data:`DOCX_MAX_LINES` lines before any
-    Word copy of it is built."""
-    if text_.count("\n") >= DOCX_MAX_LINES:
+    Word copy of it is built. Lines as the builder splits them: ``\r``,
+    U+2028 and the other line breaks count, not only ``\n``."""
+    if len(text_.splitlines()) >= DOCX_MAX_LINES:
         raise HTTPException(
             status_code=413,
             detail=f"that is more than {DOCX_MAX_LINES:,} lines, too long to make into Word",
         )
-
-
-def _markdown_to_docx(text_: str) -> bytes:
-    """Markdown → .docx with the structures the editor's toolbar can
-    produce: headings, bullet/numbered lists, fenced code blocks, plain
-    paragraphs with bold/italic/code inline."""
-    from docx import Document
-
-    from domovoi.richdoc.word import xml_safe
-
-    doc = Document()
-    in_code = False
-    code_lines: list[str] = []
-    # A character XML doesn't allow (a control character) would stop the
-    # whole conversion: it is left out (DOC-14).
-    for line in xml_safe(text_).splitlines():
-        stripped = line.strip()
-        if stripped.startswith("```"):
-            if in_code:
-                p = doc.add_paragraph()
-                run = p.add_run("\n".join(code_lines))
-                run.font.name = "Consolas"
-                code_lines = []
-            in_code = not in_code
-            continue
-        if in_code:
-            code_lines.append(line)
-            continue
-        m = re.match(r"^(#{1,6})\s+(.*)$", stripped)
-        if m:
-            doc.add_heading(m.group(2), level=min(len(m.group(1)), 6))
-            continue
-        if re.match(r"^[-*]\s+", stripped):
-            p = doc.add_paragraph(style="List Bullet")
-            _md_runs(p, re.sub(r"^[-*]\s+", "", stripped))
-            continue
-        if re.match(r"^\d+\.\s+", stripped):
-            p = doc.add_paragraph(style="List Number")
-            _md_runs(p, re.sub(r"^\d+\.\s+", "", stripped))
-            continue
-        if not stripped:
-            continue
-        _md_runs(doc.add_paragraph(), stripped)
-    if in_code and code_lines:  # unterminated fence
-        p = doc.add_paragraph()
-        p.add_run("\n".join(code_lines)).font.name = "Consolas"
-    buf = io.BytesIO()
-    doc.save(buf)
-    return buf.getvalue()
 
 
 @router.get("/export/doc/{rel_path:path}", dependencies=DAILY)
@@ -1770,7 +1709,7 @@ async def export_doc(rel_path: str, fmt: Literal["docx"] = Query("docx")) -> Res
         data = await _word_copy(richdoc.document_body(text_), target.stem)
     else:
         assert_docx_lines(text_)
-        data = await executors.run("documents", _markdown_to_docx, text_)
+        data = await _word_copy(text_, target.stem, kind="markdown")
     return Response(
         content=data,
         media_type=(
@@ -1807,6 +1746,18 @@ async def export_sheet(
     target = _readable_target(rel_path)
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail=f"{rel_path} not found")
+    data, media, name = await executors.run("sheets", _sheet_export_bytes, target, fmt)
+    return Response(
+        content=data,
+        media_type=media,
+        headers={**_download_headers(target.stem, "." + name.rsplit(".", 1)[-1]),
+                 "Content-Length": str(len(data))},
+    )
+
+
+def _sheet_export_bytes(target: Path, fmt: str) -> tuple[bytes, str, str]:
+    """The export's file, read and built in the sheets pool, never on the
+    event loop."""
     grid = _read_sheet_grid(target)  # 415s for non-editable types
 
     if fmt == "csv":
@@ -1839,12 +1790,7 @@ async def export_sheet(
         data = buf.getvalue()
         media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         name = f"{target.stem}.xlsx"
-    return Response(
-        content=data,
-        media_type=media,
-        headers={**_download_headers(target.stem, "." + name.rsplit(".", 1)[-1]),
-                 "Content-Length": str(len(data))},
-    )
+    return data, media, name
 
 
 # ─── The live document editor (.html / .md / .docx) ─────────────────
@@ -1973,14 +1919,15 @@ class DocConvertRequest(BaseModel):
     title: str = Field("", max_length=200)
 
 
-async def _word_copy(markup: str, title: str) -> bytes:
-    """``markup`` as Word, converted (and sanitised) in its own capped,
-    time-limited process (domovoi.richdoc.runner): a hostile document costs
-    that one conversion, never the web process or its documents pool."""
+async def _word_copy(markup: str, title: str, *, kind: str = "html") -> bytes:
+    """``markup`` (HTML, or Markdown/text with ``kind="markdown"``) as Word,
+    converted (HTML sanitised) in its own capped, time-limited process
+    (domovoi.richdoc.runner): a hostile document costs that one conversion,
+    never the web process or its documents pool."""
     from domovoi.richdoc import runner
 
     try:
-        return await runner.to_docx(markup, title)
+        return await runner.to_docx(markup, title, kind=kind)
     except runner.ConvertFailed as e:
         raise HTTPException(status_code=422, detail=str(e)) from None
 

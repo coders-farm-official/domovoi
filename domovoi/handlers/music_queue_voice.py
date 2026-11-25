@@ -392,7 +392,7 @@ class MusicQueueMixin:
 
     async def add_to_queue(self, query: str, where: str, ctx: Context, session: AsyncSession) -> Response:
         if not query:
-            return self._q_reply(ctx, "Add what to the queue?")
+            return self._q_reply(ctx, "What should I add to the queue?")
         room = await self._read_room(ctx)
         if isinstance(room, Response):
             return room

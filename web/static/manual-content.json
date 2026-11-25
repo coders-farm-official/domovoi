@@ -3329,7 +3329,7 @@
        "text": "If two fit, it asks which one; if it only heard something close, it asks \"Did you mean …?\"."
       },
       {
-       "text": "Over about a page, it says how long first (\"It's 2 pages, about 3 minutes\") and asks \"The whole thing, or just the start?\". Then it reads about a page at a time and asks \"Shall I go on?\"."
+       "text": "Over about a page, it says how long first (\"It's 2 pages, about 3 minutes\") and asks \"Do you want the whole thing, or just the start?\". Then it reads about a page at a time and asks \"Should I go on?\"."
       },
       {
        "text": "Say **stop**, **pause**, **start again** or **read that again**. Later, \"continue reading\" picks up where it stopped."
@@ -3459,7 +3459,7 @@
        "only": "dashboard"
       },
       {
-       "text": "With **Understand photos and videos** on ([Settings → Chat & AI → Photos and videos](route:settings/photos-and-videos)), ask for them by voice or in a chat. The answer says how many it found and that they're on the Photos page; a chat also shows them. By voice, when it knows your voice and a phone is marked as yours, it asks \"Want them on your phone?\" and a yes sends them there as a chat. With **Recognize faces** on, a name finds that person's photos, for a voice Domovoi recognizes, never a guest's."
+       "text": "With **Understand photos and videos** on ([Settings → Chat & AI → Photos and videos](route:settings/photos-and-videos)), ask for them by voice or in a chat. The answer says how many it found and that they're on the Photos page; a chat also shows them. By voice, when it knows your voice and a phone is marked as yours, it asks \"Do you want them on your phone?\" and a yes sends them there as a chat. With **Recognize faces** on, a name finds that person's photos, for a voice Domovoi recognizes, never a guest's."
       }
      ]
     },

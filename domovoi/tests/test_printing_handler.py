@@ -163,7 +163,7 @@ async def test_print_by_voice_confirms_first(voice):
         await _add_printer(voice, fake)
         (voice.docs / "Cover letter.pdf").write_bytes(_pdf(2))
         r = await voice("print my cover letter")
-        assert r.text == "That's 2 pages to the office printer. Print it?"
+        assert r.text == "That's 2 pages to the office printer. Should I print it?"
         assert r.expect_followup
         assert await store.list_jobs() == []          # nothing until yes
         r = await voice("yes")
@@ -172,7 +172,7 @@ async def test_print_by_voice_confirms_first(voice):
         assert job["state"] == "done" and job["source"] == "voice" and job["room_id"] == "kitchen"
         assert job["who"] == "kitchen (voice)"
         r = await voice("print two copies of my cover letter, double-sided")
-        assert r.text == "That's 2 pages, two copies, double-sided, to the office printer. Print it?"
+        assert r.text == "That's 2 pages, two copies, double-sided, to the office printer. Should I print it?"
         r = await voice("no")
         assert r.text == "OK, not printing."
         assert len(await store.list_jobs()) == 1
@@ -190,7 +190,7 @@ async def test_two_documents_match_and_a_choice_picks_one(voice):
         r = await voice("print the bread")
         assert r.text == "I found two: Banana bread and Bread rolls. Which one?"
         r = await voice("the rolls")
-        assert r.text == "That's 1 page to the office printer. Print it?"
+        assert r.text == "That's 1 page to the office printer. Should I print it?"
     finally:
         await fake.close()
 
@@ -259,7 +259,7 @@ async def test_set_up_the_printer_by_voice(voice, monkeypatch):
     monkeypatch.setattr(discovery, "browse_mdns", answer)
     try:
         r = await voice("set up the printer")
-        assert r.text == "I found an HP OfficeJet Pro 8020. Add it and print a test page?"
+        assert r.text == "I found an HP OfficeJet Pro 8020. Should I add it and print a test page?"
         r = await voice("yes")
         assert r.text == "Added as the kitchen printer. Printing a test page now."
         [row] = await store.list_printers()
@@ -338,7 +338,7 @@ async def test_a_test_page_by_voice_asks_first(voice):
     try:
         await _add_printer(voice, fake)
         r = await voice("print a test page")
-        assert r.text == "Print a test page on the office printer?" and r.expect_followup
+        assert r.text == "Should I print a test page on the office printer?" and r.expect_followup
         assert await store.list_jobs() == []
         r = await voice("no")
         assert r.text == "OK, no test page."

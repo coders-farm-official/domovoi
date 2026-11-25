@@ -74,7 +74,7 @@ async def test_print_it_in_a_chat_with_a_draft_confirms_then_prints_the_latest_v
     try:
         await _printer(phone, fake)
         r = await phone("print it")
-        assert r.text == "That's Letter to my landlord v2, 1 page, to the office printer. Print it?"
+        assert r.text == "That's Letter to my landlord v2, 1 page, to the office printer. Should I print it?"
         assert r.expect_followup and await store.list_jobs() == []
         r = await phone("yes")
         assert r.text == "Printing."
@@ -100,7 +100,7 @@ async def test_the_drafts_confirmation_says_the_copies_and_double_sided_too(phon
         await _printer(phone, fake)
         r = await phone("print two copies of it, double-sided")
         assert r.text == ("That's Letter to my landlord v2, 1 page, two copies, double-sided, "
-                          "to the office printer. Print it?")
+                          "to the office printer. Should I print it?")
         assert (await phone("no")).text == "OK, not printing."
     finally:
         await fake.close()

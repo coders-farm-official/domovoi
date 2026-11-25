@@ -199,7 +199,7 @@ class PlaylistHandler(Handler):
             candidates = data.get("candidates") or []
             mode = data.get("mode") or "ordered"
             if not candidates:
-                return self._reply(ctx, "I lost track of those playlists — say it again?")
+                return self._reply(ctx, "I lost track of those playlists. Please say it again.")
             if affirmative:
                 chosen = candidates[0]
                 return await self._play_resolved(
@@ -214,7 +214,7 @@ class PlaylistHandler(Handler):
             candidates = data.get("candidates") or []
             track_id = data.get("track_id")
             if not candidates or track_id is None:
-                return self._reply(ctx, "I lost track of that — say it again?")
+                return self._reply(ctx, "I lost track of that. Please say it again.")
             if affirmative:
                 chosen = candidates[0]
                 return await self._append_track(
@@ -273,7 +273,7 @@ class PlaylistHandler(Handler):
         await self._park_play_confirmation(ctx, session, candidates, mode)
         names = " or ".join(c["name"] for c in candidates[:2])
         return Response(
-            text=f"I have {len(candidates)} playlists matching — {names}?",
+            text=f"I have {len(candidates)} playlists matching. Do you want {names}?",
             session_id=ctx.session_id,
             matched_handler=self.name,
             expect_followup=True,
@@ -536,7 +536,7 @@ class PlaylistHandler(Handler):
         library once a registered fulfiller downloads it; with none
         installed the row waits and the reply is the graceful-absence copy."""
         if not query:
-            return self._reply(ctx, "Add what after this?")
+            return self._reply(ctx, "What should I add after this?")
         if ctx.from_phone or not ctx.room_id:
             return self._reply(
                 ctx, "On a phone, add songs after this one from the queue screen.",

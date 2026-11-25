@@ -54,5 +54,7 @@ class FriendHousesNavTest {
         assertEquals(3, SidebarCounts(friendHouses = 3).forRoute(Route.FriendHouses))
         assertNull(SidebarCounts().forRoute(Route.FriendHouses))
         assertNull(SidebarCounts(friendHouses = 3).forRoute(Route.Lists))
+        // No page shows a total (owner 2026-11-20): only unread messages count.
+        for (r in listOf(Route.People, Route.Calendar, Route.Stations, Route.Music)) assertNull(SidebarCounts(friendHouses = 3).forRoute(r))
     }
 }

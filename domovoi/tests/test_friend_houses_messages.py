@@ -359,9 +359,13 @@ class _Rooms:
 
         monkeypatch.setattr(quiet_hours, "quiet_rooms", quiet_rooms)
 
+        self.at: list[float] = []
+
         async def announce(room, said):
             heard = [r for r in ([room] if room else self.rooms) if r not in self.quiet]
             self.said += [(r, said) for r in heard]
+            if heard:
+                self.at.append(time.monotonic())
             return heard
 
         monkeypatch.setattr(fm, "_announce", announce)
@@ -381,7 +385,9 @@ async def test_held_messages_are_read_out_when_quiet_hours_end_once_per_room(hou
     [row] = await fm.conversation(house.them.house_key)
     assert row["held"] == "quiet_hours" and row["read_out_at"]
     rooms.quiet = set()
+    fm._LAST_ANNOUNCED.clear()  # a later hour: the den's alert gap is long over
     assert await fm.say_held() == 1  # the kitchen now; the den not again
+    fm._LAST_ANNOUNCED.clear()
     assert await fm.say_held() == 0  # kept in the database: not after a restart either
     assert [r for r, _ in rooms.said] == ["den", "kitchen"]
 
@@ -397,6 +403,7 @@ async def test_a_room_awake_on_arrival_says_it_then_and_the_quiet_one_later(hous
     [row] = await fm.conversation(house.them.house_key)
     assert row["held"] is None and row["read_out_at"] is None  # the den said it on arrival
     rooms.quiet = set()
+    fm._LAST_ANNOUNCED.clear()  # the kitchen's quiet hours end long after the den's alert
     assert await fm.say_held() == 1
     assert rooms.said[-1] == ("kitchen", "A message from The Smiths.")
 
@@ -465,14 +472,90 @@ async def test_the_unread_route_is_a_count_only(house) -> None:
     assert await main.admin_friend_houses_unread() == {"unread": 0}
 
 
-@requires_db
-async def test_announcements_from_one_friend_are_spaced_out(house) -> None:
-    await fm.set_alert("fthem", "sender")
-    for seq in range(3):
-        _, event = _incoming(house, seq=seq)
+GAP = 1.5  # the per-friend alert gap, shortened for the tests (room for a slow CI runner)
+
+
+@pytest.fixture
+def short_gap(monkeypatch):
+    monkeypatch.setattr(fm, "ANNOUNCE_GAP_SEC", GAP)
+    monkeypatch.setattr(fm, "_GAP_FLUSH", set())
+
+
+async def _arrive(house, *bodies, start=1):
+    """Messages arrive; their alerts run, but a gap's flush doesn't yet."""
+    pending = list(house.spawned)
+    house.spawned.clear()
+    for i, body in enumerate(bodies):
+        _, event = _incoming(house, body=body, seq=start + i)
         await fm.on_message(event)
+    alerts, house.spawned[:] = list(house.spawned), pending
+    for coro in alerts:
+        await coro
+
+
+@requires_db
+async def test_a_message_inside_the_gap_is_said_when_it_ends(house, monkeypatch, short_gap) -> None:
+    rooms = _Rooms(monkeypatch, ["kitchen"])
+    await fm.set_alert("fthem", "read")
+    await _arrive(house, "Dinner at six?", "Bring the cat.")
+    assert rooms.said == [("kitchen", "A message from The Smiths: Dinner at six?")]
+    await house.drain()  # the gap's flush
+    assert rooms.said[-1] == ("kitchen", "Another message from The Smiths: Bring the cat.")
+    assert await fm.say_held() == 0  # said once: the backstop pass has nothing left
+
+
+@requires_db
+async def test_five_in_the_gap_read_three_and_count_the_rest(house, monkeypatch, short_gap) -> None:
+    rooms = _Rooms(monkeypatch, ["kitchen"])
+    await fm.set_alert("fthem", "read")
+    await _arrive(house, "zero", "one", "two", "three", "four", "five")
     await house.drain()
-    assert len(house.spoken) == 1  # the inbox has all three
+    assert rooms.said[-1] == ("kitchen", "5 more messages from The Smiths: one. two. three, "
+                                         "and 2 more in Friend Houses.")
+    await fm.set_alert("fthem", "sender")
+    fm._LAST_ANNOUNCED.clear()
+    await _arrive(house, "six", "seven", "eight", start=10)
+    await house.drain()
+    assert rooms.said[-1] == ("kitchen", "2 more messages from The Smiths.")
+
+
+@requires_db
+async def test_a_message_read_meanwhile_is_skipped(house, monkeypatch, short_gap) -> None:
+    rooms = _Rooms(monkeypatch, ["kitchen"])
+    await fm.set_alert("fthem", "read")
+    await _arrive(house, "first", "seen on a phone", "third")
+    async with fm._db() as s:
+        await s.execute(text("UPDATE friend_houses_messages SET state = 'read' WHERE body = 'seen on a phone'"))
+    await house.drain()
+    assert rooms.said[-1] == ("kitchen", "Another message from The Smiths: third")
+
+
+@requires_db
+async def test_a_quiet_room_says_the_gap_batch_after_its_quiet_hours(house, monkeypatch, short_gap) -> None:
+    rooms = _Rooms(monkeypatch, ["den", "kitchen"], quiet={"den"})
+    await fm.set_alert("fthem", "sender")
+    await _arrive(house, "one", "two")
+    await house.drain()
+    assert rooms.said == [("kitchen", "A message from The Smiths."), ("kitchen", "Another message from The Smiths.")]
+    rooms.quiet = set()
+    fm._LAST_ANNOUNCED.clear()
+    assert await fm.say_held() == 1
+    assert rooms.said[-1] == ("den", "2 more messages from The Smiths.")
+    assert await fm.say_held() == 0
+
+
+@requires_db
+async def test_one_announcement_per_gap(house, monkeypatch, short_gap) -> None:
+    rooms = _Rooms(monkeypatch, ["kitchen"])
+    await fm.set_alert("fthem", "sender")
+    await _arrive(house, "one", "two", "three")
+    await _arrive(house, "four", start=4)  # still inside the gap: the same batch
+    await house.drain()
+    await _arrive(house, "five", start=5)  # right after the batch: a new gap
+    await house.drain()
+    assert [w for _, w in rooms.said] == ["A message from The Smiths.", "3 more messages from The Smiths.",
+                                          "Another message from The Smiths."]
+    assert all(b - a >= GAP for a, b in zip(rooms.at, rooms.at[1:])), rooms.at
 
 
 @requires_db

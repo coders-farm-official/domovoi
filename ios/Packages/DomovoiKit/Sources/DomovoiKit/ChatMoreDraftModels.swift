@@ -23,6 +23,41 @@ public struct ChatMoreDraftChange: Equatable, Sendable {
 
     public var added: Bool { op == "+" }
     public var removed: Bool { op == "-" }
+
+    /// A removed run long enough to stand as its own block: a line break in
+    /// it, or ``gapWords`` words or more (the web's `chat_drafts.jsx`,
+    /// Android's `longRun`).
+    public static let gapWords = 8
+
+    static func longRun(_ text: String) -> Bool {
+        text.contains("\n") || text.split(whereSeparator: \.isWhitespace).count >= gapWords
+    }
+
+    /// A paragraph gap after run `index`: a long removed run with an added
+    /// run straight after it (the server's over-budget diff puts everything
+    /// between the shared start and end there, old then new), unless the line
+    /// already breaks at the join. Inline, the old last word ran into the new
+    /// first one. For the eye only: ``spoken(_:)`` leaves it out.
+    public static func gapAfter(_ changes: [ChatMoreDraftChange], _ index: Int) -> Bool {
+        guard changes.indices.contains(index), changes.indices.contains(index + 1) else { return false }
+        let run = changes[index], next = changes[index + 1]
+        return run.removed && next.added && longRun(run.text)
+            && !run.text.hasSuffix("\n") && !next.text.hasPrefix("\n")
+    }
+
+    /// What a screen reader says for the changes: every run, the removed and
+    /// added ones named as such (the strike-through and the wash aren't read
+    /// out), as Android's `changesSpoken`.
+    public static func spoken(_ changes: [ChatMoreDraftChange]) -> String {
+        changes.compactMap { change -> String? in
+            let s = change.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let last = s.last else { return nil }
+            let end = ".!?,;:".contains(last) ? "" : "."
+            if change.added { return "added: \(s)\(end)" }
+            if change.removed { return "removed: \(s)\(end)" }
+            return s
+        }.joined(separator: " ")
+    }
 }
 
 /// One version of a draft (`chat_drafts.py:105`, `_version_row`, plus

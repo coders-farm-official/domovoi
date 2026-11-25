@@ -162,7 +162,7 @@ async def test_a_stranger_claims_priya_then_forget_me_takes_only_the_strangers_v
     tid = await _thread()
     async with _client() as c:
         asked = await _say(c, tid, whisper, "My name is Priya.", STRANGER)
-        assert asked["reply"] == "Add this phone's voice to Priya?"
+        assert asked["reply"] == "Should I add this phone's voice to Priya?"
         await _say(c, tid, whisper, "Yes.", STRANGER)
         rows = await _rows(priya)
         assert [(r["source"], r["claimed_at"] is not None) for r in rows] == [
@@ -242,7 +242,7 @@ async def test_a_known_voice_claiming_someone_else_is_recorded_as_who_claimed(
     tid = await _thread()
     async with _client() as c:
         assert (await _say(c, tid, whisper, "My name is Priya.", STRANGER))["reply"] == (
-            "Add this phone's voice to Priya?"
+            "Should I add this phone's voice to Priya?"
         )
         await _say(c, tid, whisper, "Yes.", STRANGER)
     claim = (await _rows(priya))[-1]

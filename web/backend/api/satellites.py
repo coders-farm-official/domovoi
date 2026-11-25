@@ -886,8 +886,10 @@ async def delete_satellite(room_id: str, request: Request, purge: bool = False):
     any pending approval, and its MPD instance, which is what frees the name
     for reuse. The core refuses to purge a room whose satellite is connected
     right now."""
+    from urllib.parse import quote
+
     status, payload = await delete_admin(
-        f"/v1/admin/satellites/{room_id}" + ("?purge=true" if purge else ""),
+        f"/v1/admin/satellites/{quote(room_id, safe='')}" + ("?purge=true" if purge else ""),
         headers=auth_forward_headers(request),
     )
     return bridge_response(status, payload)
@@ -2302,7 +2304,7 @@ async def _list_satellite_meta() -> dict[str, dict[str, Any]]:
                 text(
                     "SELECT s.satellite_id, s.sat_type, NULLIF(r.name, r.room_id), "
                     "s.hardware, s.board, s.mac, s.adopted_at, r.voice, s.support_allowed, "
-                    "s.support_key IS NOT NULL "
+                    "s.support_key IS NOT NULL, s.room_id "
                     "FROM satellites s JOIN rooms r ON r.room_id = s.room_id"
                 )
             )
@@ -2317,6 +2319,7 @@ async def _list_satellite_meta() -> dict[str, dict[str, Any]]:
                 "voice": r[7],
                 "support_allowed": bool(r[8]),
                 "support_key_pinned": bool(r[9]),
+                "room_id": r[10],
             }
             for r in rows.all()
         }
@@ -2479,6 +2482,13 @@ async def _satellite_for(
     wifi_dict = (snapshot.get("wifi_status") or {}).get(room_id) if snapshot else None
 
     online = room_id in active_rooms
+    # The room's connected XVF3800s (1.5.0): the snapshot names satellites,
+    # and a room may hold several, each with its own mic presets. A device
+    # from before 1.5.0 has its room's id.
+    mic_dsp_satellites = sorted(
+        sid for sid in (snapshot.get("satellite_mic_dsp") or ())
+        if sid == room_id or ((meta or {}).get(sid) or {}).get("room_id") == room_id
+    ) if online else []
     # Null ports = adopted but never connected ("waiting"): no MPD instance
     # exists yet, so there's nothing to read now-playing from.
     waiting = room["control_port"] is None or room["http_port"] is None
@@ -2625,7 +2635,8 @@ async def _satellite_for(
         board=board,
         supports=[str(x) for x in supports] if supports is not None else None,
         diagnostics=online and room_id in (snapshot.get("satellite_diagnostics") or ()),
-        mic_dsp=online and room_id in (snapshot.get("satellite_mic_dsp") or {}),
+        mic_dsp=bool(mic_dsp_satellites),
+        mic_dsp_satellites=mic_dsp_satellites,
         support_allowed=bool(meta_row.get("support_allowed")),
         support_shell=online and room_id in (snapshot.get("satellite_support_shell") or ()),
         support_key_pinned=bool(meta_row.get("support_key_pinned")),

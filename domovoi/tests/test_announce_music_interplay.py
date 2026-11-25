@@ -258,7 +258,7 @@ async def test_a_drop_in_prompt_holds_the_room_like_an_announcement(monkeypatch)
     monkeypatch.setattr(streaming, "resolve_voice", any_voice)
     app = _app()
     office, ws = _room(app, "office")
-    prompt = asyncio.create_task(office.prompt_dropin("The kitchen wants to drop in. Is that okay?"))
+    prompt = asyncio.create_task(office.prompt_dropin("The kitchen wants to drop in. Do you want to let them in?"))
     await asyncio.sleep(0.05)                    # the prompt's first sentence is synthesizing
     assert office.announce_block() == ("announcing", True)
     announcement = asyncio.create_task(office.announce("Reminder from the garage: the oven."))

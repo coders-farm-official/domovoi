@@ -99,7 +99,10 @@ MAX_PER_FRIEND = 4
 MAX_HANDSHAKING = 8
 MAX_PAIRING_HANDSHAKING = 4
 PINGS_PER_CONNECTION = 16  # a house pings once per check; more is closed
-PAIRING_PER_HOUR = 20      # requests that name an open friend file
+# Frames that ask nothing of us (a PONG we didn't ask for, "I'm back" again,
+# an ACCEPT_OK unasked): a few are harmless, a stream of them is closed.
+IDLE_FRAMES_PER_CONNECTION = 16
+PAIRING_PER_HOUR = 20      # requests that name one open friend file, per file
 MESSAGES_PER_HOUR = 60     # per friend (threat-model finding 32)
 EVENTS_PER_HOUR = 120      # per house: connected / I'm back / accepted (R6 FH-3)
 HANDSHAKE_DEADLINE_SEC = 20.0  # preface + handshake, all of it (R6 FH-9)
@@ -163,9 +166,11 @@ class State:
     _pairing_handshaking: deque = field(default_factory=deque)  # pairing.sock writers
     _per_friend: dict[bytes, int] = field(default_factory=dict)
     _event_times: dict[bytes, deque] = field(default_factory=dict)
-    _pairing_times: deque = field(default_factory=deque)
-    # invite id -> runs broken off after this house's nonce went out
+    _pairing_times: dict[bytes, deque] = field(default_factory=dict)
+    # invite id -> runs broken off after this house's nonce went out, plus
+    # runs still going (each holds its place until it ends)
     _abandoned: dict[bytes, int] = field(default_factory=dict)
+    _closed_said: set = field(default_factory=set)
     _message_times: dict[bytes, deque] = field(default_factory=dict)
     _caps_times: dict[bytes, deque] = field(default_factory=dict)
     # house -> (proto, slugs) of the last CAPS reported to core (L8)
@@ -272,14 +277,36 @@ class State:
         except (OSError, fs.SessionRefused):
             return None
 
-    def pairing_allowed(self) -> bool:
-        now = time.monotonic()
-        while self._pairing_times and now - self._pairing_times[0] > 3600:
-            self._pairing_times.popleft()
-        if len(self._pairing_times) >= PAIRING_PER_HOUR:
+    def pairing_allowed(self, invite_id: bytes) -> bool:
+        """Per friend file, so the holder of one file cannot spend the
+        budget of the others."""
+        return _within(self._pairing_times.setdefault(invite_id, deque()), PAIRING_PER_HOUR)
+
+    def start_try(self, invite_id: bytes) -> bool:
+        """Whether a run on this friend file may go on, holding its place
+        among the file's tries until it ends (:meth:`end_try`). Counted
+        before the nonce can go out, with no await between the check and
+        the count, so runs in parallel cannot each find a try left."""
+        if not (self.invite_open(invite_id) and self.pairing_allowed(invite_id)):
             return False
-        self._pairing_times.append(now)
+        self._abandoned[invite_id] = self._abandoned.get(invite_id, 0) + 1
         return True
+
+    def end_try(self, invite_id: bytes, *, counts: bool) -> bool:
+        """A run on ``invite_id`` ended. One that finished, or ended before
+        this house's nonce went out, gives its place back; one broken off
+        after it keeps it. True the first time the file runs out of tries."""
+        if not counts:
+            left = self._abandoned.get(invite_id, 1) - 1
+            if left > 0:
+                self._abandoned[invite_id] = left
+            else:
+                self._abandoned.pop(invite_id, None)
+            return False
+        if self._abandoned.get(invite_id, 0) >= fp.ABANDONED_MAX and invite_id not in self._closed_said:
+            self._closed_said.add(invite_id)
+            return True
+        return False
 
 
 def _admit(open_now: int, max_open: int, waiting: deque, max_waiting: int) -> bool:
@@ -404,6 +431,7 @@ async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, sta
         caps_seen = False
         refusals = [0]  # not_allowed refusals on this connection (L9)
         proto: int | None = None  # what the caller's CAPS said, on THIS connection
+        idle = 0
         while True:
             kind, body = await sess.recv()
             # The friend list is checked on every frame, not just at the
@@ -426,8 +454,8 @@ async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, sta
                 if pings > PINGS_PER_CONNECTION:
                     break
                 await sess.send(fs.Kind.PONG, body)
-            elif kind is fs.Kind.IM_BACK:
-                if not said_back and state.event_allowed(house_key):
+            elif kind is fs.Kind.IM_BACK and not said_back:
+                if state.event_allowed(house_key):
                     emit("im_back", house=house)
                 said_back = True  # once per connection
             elif kind is fs.Kind.CAPS:
@@ -457,7 +485,12 @@ async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, sta
                 emit("message", house=house, envelope=env.to_bytes().hex())
                 if await state.stored(env.msg_id):
                     await sess.send(fs.Kind.MESSAGE_ACK, env.msg_id)
-            # PONG without a PING of ours, ACCEPT_OK or MESSAGE_NACK unasked: ignored.
+            else:
+                # PONG without a PING of ours, "I'm back" again, ACCEPT_OK or
+                # MESSAGE_NACK unasked: ignored, up to a point.
+                idle += 1
+                if idle > IDLE_FRAMES_PER_CONNECTION:
+                    break
     except (fs.SessionRefused, fe.BadEnvelope, pw.BadCaps, asyncio.TimeoutError) as e:
         log.info("connection closed: %s", e)
     except Exception:  # noqa: BLE001 — one bad connection never stops the listener
@@ -518,6 +551,7 @@ async def handle_pairing(reader: asyncio.StreamReader, writer: asyncio.StreamWri
     state._open_pairing += 1
     state._pairing_handshaking.append(writer)
     revealed: list[bytes] = []
+    started: list[bytes] = []
     done = False
 
     def nonce_sent(invite_id: bytes) -> None:
@@ -528,7 +562,10 @@ async def handle_pairing(reader: asyncio.StreamReader, writer: asyncio.StreamWri
 
     try:
         async def invite_open(invite_id: bytes) -> bool:
-            return state.invite_open(invite_id) and state.pairing_allowed()
+            if started or not state.start_try(invite_id):
+                return False
+            started.append(invite_id)
+            return True
 
         req = await asyncio.wait_for(
             fp.answer(reader, writer, keys=state.keys, invite_open=invite_open,
@@ -546,12 +583,11 @@ async def handle_pairing(reader: asyncio.StreamReader, writer: asyncio.StreamWri
     finally:
         state._open_pairing -= 1
         _done_waiting(state._pairing_handshaking, writer)
-        if revealed and not done:
+        if started:
             # A run broken off after the nonce went out is one try at the
             # code: a file allows only a few, then it is closed.
-            invite_id = revealed[0]
-            state._abandoned[invite_id] = state._abandoned.get(invite_id, 0) + 1
-            if state._abandoned[invite_id] == fp.ABANDONED_MAX:
+            invite_id = started[0]
+            if state.end_try(invite_id, counts=bool(revealed) and not done):
                 emit("invite_closed", invite=invite_id.hex())
         writer.close()
 

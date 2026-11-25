@@ -398,10 +398,14 @@ class ProbeFailed(Exception):
 
 
 def parse_probe(doc: dict[str, Any]) -> ProbeResult:
-    fmt = doc.get("format") or {}
-    streams = doc.get("streams") or []
+    fmt = doc.get("format")
+    if not isinstance(fmt, dict):
+        fmt = {}
+    raw = doc.get("streams")
+    # A damaged or odd ffprobe answer: anything but a list of objects reads as no streams.
+    streams = [s for s in raw if isinstance(s, dict)] if isinstance(raw, list) else []
     video = next((s for s in streams if s.get("codec_type") == "video"
-                  and not (s.get("disposition") or {}).get("attached_pic")), None)
+                  and not (s.get("disposition") if isinstance(s.get("disposition"), dict) else {}).get("attached_pic")), None)
     audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
     dur = _num(fmt.get("duration"))
     if dur is None and video is not None:

@@ -9823,12 +9823,23 @@ class Satellite(pc_engine.SpareDeviceEngine):
             return True
         legacy = frozenset(h.url for h in rnd.legacy)
         if legacy and legacy != self._legacy_reported:
-            log.warning(
-                "found Domovoi server(s) at %s that cannot prove an approval (older "
-                "than 1.4.0). This device does not ask them: update that server, "
-                "or set its address in the setup portal to use it as it is",
-                ", ".join(sorted(legacy)),
-            )
+            # Only a server that proved an identity bound to its address is
+            # named with the "set its address" advice: anything else could
+            # be a host answering in its name.
+            named = sorted(h.url for h in rnd.legacy if h.identity == "proved")
+            if named:
+                log.warning(
+                    "found Domovoi server(s) at %s that cannot prove an approval (older "
+                    "than 1.4.0). This device does not ask them: update that server, "
+                    "or set its address in the setup portal to use it as it is",
+                    ", ".join(named),
+                )
+            if len(legacy) > len(named):
+                log.warning(
+                    "%d other host(s) answer as a Domovoi server without an identity "
+                    "for their address; this device does not ask them",
+                    len(legacy) - len(named),
+                )
         self._legacy_reported = legacy
         if rnd.budget_spent:
             if not self._budget_reported:

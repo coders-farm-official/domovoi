@@ -49,6 +49,7 @@ import json
 import logging
 import os
 import secrets
+import socket
 import sys
 import time
 import urllib.parse
@@ -726,6 +727,129 @@ def read_health_body(r: Any, *, timeout: float,
             raise IdentityError("the /v1/health answer took too long")
 
 
+class _DeadlineSocket(socket.socket):
+    """A socket whose every wait ends by one wall-clock deadline: each
+    receive, send and (as the TLS subclass below) handshake step is given
+    whatever is left of it, so an answer that arrives a byte at a time
+    stops when the deadline does, wherever it is in the answer."""
+
+    _deadline = 0.0
+    _per_op: float | None = None
+
+    def _arm(self) -> None:
+        left = self._deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError("the answer took too long")
+        per_op = self._per_op
+        socket.socket.settimeout(self, left if per_op is None else min(left, per_op))
+
+    def recv(self, *a: Any) -> bytes:
+        self._arm()
+        return super().recv(*a)
+
+    def recv_into(self, *a: Any) -> int:
+        self._arm()
+        return super().recv_into(*a)
+
+    def sendall(self, *a: Any) -> None:
+        self._arm()
+        return super().sendall(*a)
+
+
+def _deadline_tls_class(deadline: float, per_op: float) -> type:
+    import ssl
+
+    class _DeadlineTLS(ssl.SSLSocket):
+        _deadline = 0.0
+        _per_op: float | None = None
+        _arm = _DeadlineSocket._arm
+
+        def do_handshake(self, *a: Any) -> None:
+            self._arm()
+            return super().do_handshake(*a)
+
+        def read(self, *a: Any) -> Any:
+            self._arm()
+            return super().read(*a)
+
+        def recv(self, *a: Any) -> bytes:
+            self._arm()
+            return super().recv(*a)
+
+        def recv_into(self, *a: Any) -> int:
+            self._arm()
+            return super().recv_into(*a)
+
+        def sendall(self, *a: Any) -> None:
+            self._arm()
+            return super().sendall(*a)
+
+    _DeadlineTLS._deadline = deadline
+    _DeadlineTLS._per_op = per_op
+    return _DeadlineTLS
+
+
+def get_bounded(url: str, *, timeout: float, limit: int = HEALTH_BODY_MAX_BYTES) -> bytes:
+    """GET ``url`` (http or https) and return the body of a 2xx answer, the
+    WHOLE exchange under one deadline: ``timeout`` to connect, then at most
+    ``max(timeout, 1)`` more for the TLS handshake, status line, headers and
+    body together (each wait is still at most ``timeout``). A socket timeout
+    bounds one read, not an answer sent a byte at a time; this bounds the
+    answer. Any other status raises :class:`OSError`, as a transport
+    failure, the way ``urlopen`` raised one; past the deadline or ``limit``
+    raises too."""
+    import http.client
+
+    parts = urllib.parse.urlsplit(url)
+    https = parts.scheme == "https"
+    host = parts.hostname or ""
+    port = parts.port or (443 if https else 80)
+    path = parts.path or "/"
+    if parts.query:
+        path += "?" + parts.query
+    timeout = float(timeout)
+    deadline = time.monotonic() + timeout + max(timeout, 1.0)
+
+    def connect(address: Any, conn_timeout: Any = None, source_address: Any = None) -> socket.socket:
+        raw = socket.create_connection(address, timeout, source_address)
+        sock = _DeadlineSocket(raw.family, raw.type, raw.proto, fileno=raw.detach())
+        sock._deadline, sock._per_op = deadline, timeout
+        return sock
+
+    if https:
+        import ssl
+
+        ctx = getattr(ssl, "_create_default_https_context", ssl.create_default_context)()
+        ctx.sslsocket_class = _deadline_tls_class(deadline, timeout)
+        conn: http.client.HTTPConnection = http.client.HTTPSConnection(
+            host, port, timeout=timeout, context=ctx)
+    else:
+        conn = http.client.HTTPConnection(host, port, timeout=timeout)
+    conn._create_connection = connect  # type: ignore[attr-defined]
+    try:
+        conn.request("GET", path, headers={"Accept": "application/json"})
+        r = conn.getresponse()
+        if not 200 <= r.status < 300:
+            raise OSError(f"HTTP Error {r.status}: {r.reason}")
+        if r.status != 200:
+            raise IdentityError("the server did not answer /v1/health")
+        return read_health_body(r, timeout=max(timeout, 1.0), limit=limit)
+    finally:
+        conn.close()
+
+
+def health_body(url: str, *, timeout: float, opener=None) -> bytes:
+    """A /v1/health answer's body: through ``opener`` when one is given (a
+    seam, held to the size and body-time limits of :func:`read_health_body`),
+    else by :func:`get_bounded`, under one deadline for the whole answer."""
+    if opener is None:
+        return get_bounded(url, timeout=timeout)
+    with opener(url, timeout=timeout) as r:
+        if getattr(r, "status", 200) != 200:
+            raise IdentityError("the server did not answer /v1/health")
+        return read_health_body(r, timeout=timeout)
+
+
 def fetch_health(
     http_base: str, *, challenge: str, timeout: float = HTTP_TIMEOUT_SEC,
     opener=None, addr: str | None = None,
@@ -733,14 +857,10 @@ def fetch_health(
     """GET ``/v1/health?challenge=…[&addr=…]``. Both ride in the query so a
     core that predates them simply ignores what it does not know and
     answers as it always did."""
-    opener = opener or urllib.request.urlopen
     url = f"{http_base.rstrip('/')}/v1/health?challenge={challenge}"
     if addr is not None:
         url += "&addr=" + urllib.parse.quote(addr, safe="")
-    with opener(url, timeout=timeout) as r:
-        if getattr(r, "status", 200) != 200:
-            raise IdentityError("the server did not answer /v1/health")
-        return json.loads(read_health_body(r, timeout=timeout).decode("utf-8", "replace"))
+    return json.loads(health_body(url, timeout=timeout, opener=opener).decode("utf-8", "replace"))
 
 
 def verify_server(

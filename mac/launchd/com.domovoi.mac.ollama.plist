@@ -6,7 +6,8 @@
   double-braced NAME XML-escaped, keeps the ROLE section only when a role account
   runs the job (the system install), and checks the result parses.
   Ollama listens on the Mac's loopback only; the VM reaches it at
-  host.lima.internal. ProcessType Interactive: not throttled as a background
+  host.lima.internal. OLLAMA_NUM_PARALLEL: how many requests it answers at
+  once, from the Mac's memory (OllamaParallel). ProcessType Interactive: not throttled as a background
   job. launchd opens the log files as UserName, so the helper creates them,
   owned by that account, before it bootstraps the job.
 -->
@@ -27,6 +28,7 @@
     <key>OLLAMA_HOST</key><string>127.0.0.1:{{OLLAMA_PORT}}</string>
     <key>OLLAMA_MODELS</key><string>{{OLLAMA_MODELS}}</string>
     <key>HOME</key><string>{{JOB_HOME}}</string>
+    <key>OLLAMA_NUM_PARALLEL</key><string>{{OLLAMA_NUM_PARALLEL}}</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
