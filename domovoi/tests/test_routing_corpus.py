@@ -94,9 +94,12 @@ GATED = {
     # friend_houses never: friend names and friend text stay out of the
     # model (handlers/friend_houses.py); its fast paths are the whole surface.
     "friend_houses",
+    # house_facts never: its fast paths are whole questions answered from
+    # the house's state; its tool would be bait for every other question.
+    "house_facts",
 }
 # Never offered to the routing model.
-NEVER_OFFERED = {"help", "help_desk", "friend_houses"}
+NEVER_OFFERED = {"help", "help_desk", "friend_houses", "house_facts"}
 
 
 def _normalize(utterance: str) -> str:

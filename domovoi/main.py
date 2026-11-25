@@ -2953,6 +2953,9 @@ async def admin_snapshot() -> dict[str, Any]:
         "listenbrainz_fetch": _listenbrainz_status(),
         # Lyrics: the local scan and the LRCLIB fetch (status only, never a lyric).
         "lyrics": lyrics_status(),
+        # The settings the web's chat reads its house facts from
+        # (domovoi/house_facts.py): its own copy goes stale on a save.
+        "house_facts": _house_facts_settings(),
     }
 
 
@@ -9429,6 +9432,12 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+def _house_facts_settings() -> dict:
+    from domovoi.house_facts import settings_snapshot
+
+    return settings_snapshot()
 
 
 def _listenbrainz_status() -> dict:

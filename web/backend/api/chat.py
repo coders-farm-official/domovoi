@@ -101,7 +101,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-from domovoi import ai_features, chat_titles, egress, executors, image_safety, live_env, lookup_answer, uncertainty
+from domovoi import ai_features, chat_titles, egress, executors, house_facts, image_safety, live_env, lookup_answer, uncertainty
 from domovoi.admin_auth import require_device, require_device_read
 from domovoi.clients import ollama as ollama_client
 from domovoi.help_desk import answer as help_answer
@@ -118,7 +118,7 @@ from web.backend.api import chat_drafts as _drafts
 from web.backend.api import chat_videos as _videos
 from web.backend.api.devices import valid_device_id
 from web.backend.db import session_scope
-from web.backend.domovoi_client import auth_forward_headers, domovoi_url
+from web.backend.domovoi_client import auth_forward_headers, domovoi_url, get_cached_snapshot
 
 log = logging.getLogger(__name__)
 
@@ -945,6 +945,30 @@ async def _help_turn(
         return None
 
 
+async def _house_fact_reply(thread_id: int, content: str, user_row_id: int) -> str | None:
+    """The house's own answer to ``content`` (domovoi/house_facts.py), or
+    None. Settings come from the core's snapshot (this process's copy goes
+    stale on a save); one it doesn't hold is "unknown", never a guess.
+    Never fails the send."""
+
+    async def previous_assistant() -> dict[str, Any] | None:
+        async with session_scope() as s:
+            row = (await s.execute(text(
+                "SELECT stats FROM chat_messages WHERE thread_id = :t AND role = 'assistant' "
+                "AND id < :u ORDER BY id DESC LIMIT 1"
+            ), {"t": thread_id, "u": user_row_id})).first()
+        return None if row is None else {"stats": row[0] or {}}
+
+    try:
+        return await house_facts.chat_reply(
+            content, get_setting=house_facts.snapshot_setting(get_cached_snapshot()),
+            scope=session_scope, previous_assistant=previous_assistant,
+        )
+    except Exception as e:  # noqa: BLE001 — the chat answers as before
+        log.warning("chat: house facts failed: %s: %s", type(e).__name__, str(e)[:200])
+        return None
+
+
 @router.post("/threads/{thread_id}/messages", dependencies=SEND)
 async def send_message(thread_id: int, body: SendBody, request: Request) -> StreamingResponse:
     """Persist the user turn, stream the assistant reply as SSE, persist the
@@ -1045,6 +1069,14 @@ async def send_message(thread_id: int, body: SendBody, request: Request) -> Stre
             thread_id, await _videos.attach_reply(video_jobs, body.content),
             {"model_role": "video", "video_job": video_jobs[0]["job_id"]},
         )
+
+    if not images and not documents and body.revise_draft is None:
+        # A privacy or "can you …?" question this house answers from its
+        # own state (domovoi/house_facts.py), the same as by voice: said by
+        # the app, no model asked.
+        fact = await _house_fact_reply(thread_id, body.content, user_row_id)
+        if fact is not None:
+            return await _immediate_reply(thread_id, fact, {"model_role": "house_facts"})
 
     return await _answer(
         thread_id, thread.person_id, has_images=bool(images), override=body.model,
@@ -1385,6 +1417,19 @@ async def _answer(
                 fixed_reply = help_answer.not_covered_answer(help_turn)
     if plan is not None and plan.immediate is None:
         system["content"] += "\n\n" + plan.rules
+    if (refusal is None and plan is None and dturn is None and fixed_reply is None
+            and house_facts.wants_facts(question)):
+        # A privacy-worded question the closed set didn't take: the house's
+        # facts go with it, as data, with the one instruction to answer
+        # only from them (domovoi/house_facts.py).
+        try:
+            facts = await house_facts.read(
+                chat=True, get_setting=house_facts.snapshot_setting(get_cached_snapshot()),
+                scope=session_scope,
+            )
+            system["content"] += "\n\n" + house_facts.facts_block(facts)
+        except Exception as e:  # noqa: BLE001 — the question is still answered
+            log.warning("chat: house facts block failed: %s: %s", type(e).__name__, str(e)[:200])
     # A chat with videos (chat_videos.py): a plain text turn is told what
     # was heard and what the frames might show, and answers from that.
     video_rules: str | None = None
