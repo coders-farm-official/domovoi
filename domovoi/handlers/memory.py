@@ -112,6 +112,9 @@ LAST_SAVED_KEY = "last_memory_saved"
 FORGET_WHAT_KIND = "core.forget_what"
 _FORGET_WHAT_TTL_SEC = 120
 _SAVED_REPLY = "Got it — I'll remember that."
+# The last line of a memory list (G2): how to take one back. Voice and typed
+# chat (web/backend/api/chat_memory.py, via _list_memories) say the same.
+FORGET_HINT = 'Say "forget that …" to remove one.'
 _FORGET_WHAT_TEXT = 'Forget what? Tell me which thing, like "that I like jazz".'
 # A reply to "Forget what?" that drops the question.
 _NEVER_MIND_RE = re.compile(
@@ -744,7 +747,7 @@ class MemoryHandler(Handler):
         if len(bodies) > 5:
             suffix = f" And {len(bodies) - 5} more — check the web UI for the full list."
         return Response(
-            text="Here's what I remember: " + ". ".join(spoken) + "." + suffix,
+            text="Here's what I remember: " + ". ".join(spoken) + "." + suffix + " " + FORGET_HINT,
             session_id=ctx.session_id,
             matched_handler=self.name,
             data={"memories": [{"id": i, "body": b} for i, b, _t, _s in rows]},

@@ -60,7 +60,6 @@ STUB_CASES = [c for c in CASES if c.stub]
 # never changes the product to make a case pass). Expected failures here so
 # CI stays green; remove a line once fixed (it shows up as XPASS first).
 STUB_FINDINGS = {
-    "9.9": "the memory list doesn't say how to forget one (handlers/memory.py _list_memories)",
 }
 
 

@@ -276,7 +276,7 @@ def test_list_and_forget_touch_only_the_askers_memories(house, model) -> None:
         # "locker" matches Ben's too, but only Ana's is looked at.
         forgot, done = _send(c, t, "forget that my locker", house["dev"]["ana"])
         nothing, _ = _send(c, t, "forget that I like jazz", house["dev"]["ana"])
-    assert listed == "Here's what I remember: my locker is 12."
+    assert listed == "Here's what I remember: my locker is 12. " + mem_handler.FORGET_HINT
     assert forgot == "OK, forgotten: my locker is 12"
     assert done["stats"]["memory"]["action"] == "forgotten"
     assert nothing == 'I don\'t have anything saved about "I like jazz".'
