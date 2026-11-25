@@ -25,6 +25,17 @@ struct AdminPanel: View {
     private var shared: Bool { model.visibility.sharedScreen }
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            signInCard
+            // The phones blocked from queues or files, with unblock.
+            if !HouseholdLock.shared.roomModeActive, !ServerCredentials.isBlank(model.inputs.serverURL),
+               deletesAdminHeld(admin.state, sharedScreen: shared) {
+                BlockedPhonesCard(model: model)
+            }
+        }
+    }
+
+    private var signInCard: some View {
         PanelCard(title: AdminStrings.title, sub: AdminStrings.sub) {
             if shared {
                 muted(AdminStrings.shared)
@@ -158,5 +169,80 @@ struct AdminBadgeButton: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(AdminStrings.badgeAccessibility)
+    }
+}
+
+/// Settings → Admin on this phone: the blocked phones, each with unblock
+/// (no confirm, as the dashboard). The port of Android's
+/// `BlockedPhonesCard` (`AdminDeletes.kt`): read with the session; kept
+/// only, one tap reads them through Face ID.
+struct BlockedPhonesCard: View {
+
+    let model: ShellModel
+
+    @State private var zone: AdminDeletesModel?
+
+    private var live: Bool {
+        if case .signedIn = model.admin.state { return true }
+        return false
+    }
+
+    var body: some View {
+        PanelCard(title: AdminDeleteWords.blocksTitle, sub: AdminDeleteWords.blocksSub) {
+            VStack(alignment: .leading, spacing: 12) {
+                if let zone {
+                    if zone.queueBlocks == nil, !live {
+                        Button(AdminDeleteWords.unlock) {
+                            Task { @MainActor in await zone.loadBlocks(viaAct: true) }
+                        }
+                        .buttonStyle(InkOutlineButtonStyle())
+                        .disabled(zone.busy)
+                    }
+                    if let problem = zone.problem {
+                        Text(problem).font(.footnote).foregroundStyle(Color.warnInk)
+                    }
+                    if let q = zone.queueBlocks { section(zone, queue: true, q) }
+                    if let f = zone.filesBlocks { section(zone, queue: false, f) }
+                }
+            }
+        }
+        .task(id: live) {
+            if zone == nil { zone = AdminDeletesModel(admin: model.container.admin) }
+            if live { await zone?.loadBlocks(viaAct: false) }
+        }
+    }
+
+    private func section(_ zone: AdminDeletesModel, queue: Bool, _ list: [DeviceBlock]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(queue ? AdminDeleteWords.queueTitle : AdminDeleteWords.filesTitle)
+                .font(.subheadline.weight(.semibold))
+            if list.isEmpty {
+                Text(queue ? AdminDeleteWords.queueNone : AdminDeleteWords.filesNone)
+                    .font(.footnote)
+                    .foregroundStyle(Color.fgMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            ForEach(list) { b in
+                HStack(alignment: .center, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(verbatim: b.who).font(.body)
+                        let detail = blockDetail(b, queue: queue) { relTime($0, nowMs: Int64(Date().timeIntervalSince1970 * 1000)) }
+                        if !detail.isEmpty {
+                            Text(verbatim: detail)
+                                .font(.footnote)
+                                .foregroundStyle(Color.fgMuted)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    Spacer(minLength: 8)
+                    Button(AdminDeleteWords.unblock) {
+                        Task { @MainActor in model.showToast(await zone.lift(queue: queue, b)) }
+                    }
+                    .buttonStyle(InkOutlineButtonStyle())
+                    .disabled(zone.busy)
+                }
+                .frame(minHeight: 44)
+            }
+        }
     }
 }

@@ -52,7 +52,9 @@ final class AdminPanelTests: XCTestCase {
                 + "(Friend Houses → friends & connections), "
                 + "acknowledge or clear Health incidents (Settings → Health), "
                 + "install an update or restart the Domovoi server (Settings → About & updates), "
-                + "and rename or forget someone (People). "
+                + "rename or forget someone (People), "
+                + "delete a music track (its drawer), a file on the server (Files) or an audiobook (remove from server), "
+                + "and lift a phone's queue or Files block (below). "
                 + "Everything else is on the dashboard for now.",
             AdminStrings.jobs
         )

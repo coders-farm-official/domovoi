@@ -422,7 +422,8 @@ struct MusicView: View {
                         covers: covers,
                         lyrics: lyrics,
                         onAddToPlaylist: { openAddToPlaylist(track) },
-                        listContext: context
+                        listContext: context,
+                        shell: model
                     )
                 }
             case .playlist(let detail):
