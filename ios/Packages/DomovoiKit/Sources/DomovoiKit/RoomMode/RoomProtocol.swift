@@ -316,9 +316,10 @@ public enum RoomProtocol {
     }
 
     /// `ready.room` / the `room` frame's room: nil unless it names a room id
-    /// (``RoomEnrolmentParser/isRoomID(_:)``); a missing or blank name falls
-    /// back to the id, as the core's own `_room_info` does for a room it
-    /// cannot read (`RoomProtocol.place`).
+    /// (the one rule, ``RoomEnrolmentParser/isRoomID(_:)``). A missing, null
+    /// or blank name is no name (nil), never the id: the core sends null for
+    /// a room whose row it cannot read (satellite-fixtures.json
+    /// `rooms.name_about`, `RoomProtocol.place`).
     static func place(_ value: RoomJSON?) -> RoomPlace? {
         guard case .object(let o)? = value else { return nil }
         func s(_ k: String) -> String? {
@@ -331,7 +332,7 @@ public enum RoomProtocol {
         }
         guard let id = s("room_id"), RoomEnrolmentParser.isRoomID(id) else { return nil }
         let name = s("name")?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return RoomPlace(roomID: id, name: (name?.isEmpty ?? true) ? id : name!, shared: b("shared"), claim: b("claim"))
+        return RoomPlace(roomID: id, name: (name?.isEmpty ?? true) ? nil : name, shared: b("shared"), claim: b("claim"))
     }
 
     /// Only an http(s) URL with no whitespace or control characters is a

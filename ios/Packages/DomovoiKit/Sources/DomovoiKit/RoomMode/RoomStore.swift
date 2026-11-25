@@ -115,6 +115,8 @@ public final class RoomStore: RoomKeeping, @unchecked Sendable {
         static let requested = "requested_room"
         /// The room's name as the server last said it (1.5.0).
         static let roomName = "room_name"
+        /// The room id that name belongs to (1.5.0, `RoomStore.kt` K_ROOM_NAME_ID).
+        static let roomNameRoom = "room_name_room_id"
     }
 
     private let prefs: any RoomPreferences
@@ -193,9 +195,14 @@ public final class RoomStore: RoomKeeping, @unchecked Sendable {
         prefs.string(Keys.roomName).flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 }
     }
 
-    public func setRoomName(_ name: String) {
-        guard !name.trimmingCharacters(in: .whitespaces).isEmpty, name != roomName else { return }
-        prefs.setString(name, Keys.roomName)
+    public var roomNameRoom: String? {
+        prefs.string(Keys.roomNameRoom).flatMap { RoomEnrolmentParser.isRoomID($0) ? $0 : nil }
+    }
+
+    public func noteRoom(_ place: RoomPlace) {
+        guard let kept = RoomNameKeeping.nameToKeep(place, keptName: roomName, keptFor: roomNameRoom) else { return }
+        prefs.setString(kept.name, Keys.roomName)
+        prefs.setString(kept.roomID, Keys.roomNameRoom)
     }
 
     /// The Keychain item that keeps the seal (``seal``).
@@ -261,6 +268,7 @@ public final class RoomStore: RoomKeeping, @unchecked Sendable {
                 prefs.setString(nil, Keys.wakeWords)
                 prefs.setBool(false, Keys.approved)
                 prefs.setString(nil, Keys.roomName)
+                prefs.setString(nil, Keys.roomNameRoom)
             }
             prefs.setString(e.coreURL, Keys.core)
             prefs.setString(e.fingerprint, Keys.fingerprint)
@@ -270,8 +278,10 @@ public final class RoomStore: RoomKeeping, @unchecked Sendable {
             // each hello until the server accepts the phone.
             let asked = e.inRoom.flatMap { RoomEnrolmentParser.isRoomID($0) ? $0 : nil }
             prefs.setString(asked, Keys.requested)
-            if asked != nil, let name = e.inRoomName, !name.trimmingCharacters(in: .whitespaces).isEmpty {
-                prefs.setString(name, Keys.roomName)
+            // The room's name, kept with the room it names.
+            if let known = RoomNameKeeping.enrolled(e) {
+                prefs.setString(known.name, Keys.roomName)
+                prefs.setString(known.roomID, Keys.roomNameRoom)
             }
             return true
         }

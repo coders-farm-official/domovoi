@@ -104,14 +104,120 @@ final class RoomInARoomTests: XCTestCase {
         XCTAssertEqual("Kitchen", store.roomName)
         store.clearRequestedRoom()
         XCTAssertNil(store.requestedRoom)
-        store.setRoomName("Den")
-        store.setRoomName("  ")
+        XCTAssertEqual("kitchen", store.roomNameRoom, "kept with the room it names")
+        store.noteRoom(RoomPlace(roomID: "den", name: "Den", shared: false))
+        store.noteRoom(RoomPlace(roomID: "den", name: "  ", shared: false))
+        store.noteRoom(RoomPlace(roomID: "den", name: nil, shared: false))
         XCTAssertEqual("Den", store.roomName)
-        // A new room starts afresh: no room asked for, no name kept.
+        XCTAssertEqual("den", store.roomNameRoom)
+        // No name for another room overwrites nothing either.
+        store.noteRoom(RoomPlace(roomID: "hall", name: nil, shared: false))
+        XCTAssertEqual("Den", store.roomName)
+        XCTAssertEqual("den", store.roomNameRoom)
+        // A new room starts afresh: no room asked for, and only the name the
+        // code gives the room it makes, kept with that room.
         let porch = RoomEnrolment(coreURL: joining.coreURL, fingerprint: joining.fingerprint, roomID: "porch", roomLabel: "Porch")
         XCTAssertTrue(store.enrol(porch))
         XCTAssertNil(store.requestedRoom)
-        XCTAssertNil(store.roomName)
+        XCTAssertEqual("Porch", store.roomName)
+        XCTAssertEqual("porch", store.roomNameRoom)
+    }
+
+    func testNoNameNeverOverwritesTheKeptOne() {
+        let kitchen = RoomPlace(roomID: "kitchen", name: "Kitchen", shared: false)
+        XCTAssertTrue(RoomNameKeeping.nameToKeep(kitchen, keptName: nil, keptFor: nil).map { $0 == ("kitchen", "Kitchen") } ?? false)
+        XCTAssertTrue(RoomNameKeeping.nameToKeep(RoomPlace(roomID: "den", name: "Den", shared: false), keptName: "Kitchen", keptFor: "kitchen")
+            .map { $0 == ("den", "Den") } ?? false)
+        XCTAssertNil(RoomNameKeeping.nameToKeep(kitchen, keptName: "Kitchen", keptFor: "kitchen"))
+        XCTAssertTrue(RoomNameKeeping.nameToKeep(kitchen, keptName: "Kitchen", keptFor: nil).map { $0 == ("kitchen", "Kitchen") } ?? false)
+        XCTAssertNil(RoomNameKeeping.nameToKeep(RoomPlace(roomID: "kitchen", name: nil, shared: false), keptName: "Kitchen", keptFor: "kitchen"))
+        XCTAssertNil(RoomNameKeeping.nameToKeep(RoomPlace(roomID: "den", name: nil, shared: false), keptName: "Kitchen", keptFor: "kitchen"))
+        XCTAssertNil(RoomNameKeeping.nameToKeep(RoomPlace(roomID: "kitchen", name: " ", shared: false), keptName: "Kitchen", keptFor: "kitchen"))
+    }
+
+    /// The in-memory store keeps the name exactly as the real one does.
+    func testTheInMemoryStoreKeepsNamesLikeTheRealOne() {
+        let joining = RoomEnrolment(
+            coreURL: "http://192.168.1.20:6370", fingerprint: "SHA256:" + String(repeating: "A", count: 43),
+            roomID: "kitchen_2", roomLabel: "Kitchen 2", inRoom: "kitchen", inRoomName: "Kitchen"
+        )
+        let memory = InMemoryRoomStore(enrolment: joining)
+        XCTAssertEqual("Kitchen", memory.roomName)
+        XCTAssertEqual("kitchen", memory.roomNameRoom)
+        memory.noteRoom(RoomPlace(roomID: "den", name: nil, shared: false))
+        XCTAssertEqual("Kitchen", memory.roomName)
+        memory.noteRoom(RoomPlace(roomID: "den", name: "Den", shared: false))
+        XCTAssertEqual("Den", memory.roomName)
+        XCTAssertEqual("den", memory.roomNameRoom)
+    }
+
+    // MARK: - rooms (1.5.0): satellite-fixtures.json `rooms`
+
+    /// One room-id rule for an id from outside (`in=`, `requested_room`,
+    /// `ready.room.room_id`): the core's `in_room_rule`.
+    func testTheRoomIdRuleIsTheCoresInRoomRule() throws {
+        let rooms = try XCTUnwrap(try RoomTestKit.json("docs/uml/satellite-fixtures.json")["rooms"])
+        XCTAssertEqual(#"^[a-z0-9][a-z0-9_-]{0,31}\Z"#, rooms["in_room_rule"]?.stringValue)
+        guard case let .array(validJSON)? = rooms["in_room_valid"], case let .array(invalidJSON)? = rooms["in_room_invalid"] else {
+            return XCTFail("the fixture's lists")
+        }
+        let valid = validJSON.compactMap(\.stringValue)
+        let invalid = invalidJSON.compactMap(\.stringValue)
+        XCTAssertFalse(valid.isEmpty)
+        XCTAssertEqual(invalidJSON.count, invalid.count)
+        for id in valid {
+            XCTAssertTrue(RoomEnrolmentParser.isRoomID(id), id)
+            XCTAssertEqual(.string(id), hello(id)["requested_room"], id)
+            let frame = RoomJSON.object(["type": .string("room"), "room": .object(["room_id": .string(id), "name": .string("Den")])])
+            XCTAssertEqual(.room(RoomPlace(roomID: id, name: "Den", shared: false)), RoomProtocol.parse(frame.serialized), id)
+        }
+        for id in invalid {
+            XCTAssertFalse(RoomEnrolmentParser.isRoomID(id), id)
+            XCTAssertNil(hello(id)["requested_room"], id)
+            let frame = RoomJSON.object(["type": .string("room"), "room": .object(["room_id": .string(id), "name": .string("Den")])])
+            XCTAssertEqual(.room(nil), RoomProtocol.parse(frame.serialized), id)
+        }
+    }
+
+    /// The core could not read the room's row: `name` is null, never the id.
+    func testAnUnnamedRoomHasNoName() throws {
+        let rooms = try XCTUnwrap(try RoomTestKit.json("docs/uml/satellite-fixtures.json")["rooms"])
+        let ready = RoomJSON.object([
+            "type": .string("ready"), "satellite_id": .string("kitchen_2"), "room_id": .string("kitchen"),
+            "room": try XCTUnwrap(rooms["ready_room_unnamed"]),
+        ])
+        guard case let .ready(_, _, _, _, _, place) = RoomProtocol.parse(ready.serialized) else { return XCTFail() }
+        XCTAssertEqual(RoomPlace(roomID: "kitchen", name: nil, shared: false, claim: false), place)
+        XCTAssertEqual(
+            .room(RoomPlace(roomID: "den", name: nil, shared: false, claim: false)),
+            RoomProtocol.parse(try XCTUnwrap(rooms["room_move_unnamed"]).serialized)
+        )
+        XCTAssertEqual(
+            .room(RoomPlace(roomID: "den", name: "Den", shared: false, claim: false)),
+            RoomProtocol.parse(try XCTUnwrap(rooms["room_move"]).serialized)
+        )
+    }
+
+    func testAnUnnamedRoomKeepsTheLastNameForTheSameRoomOnly() {
+        let unnamed = RoomPlace(roomID: "kitchen", name: nil, shared: false)
+        XCTAssertEqual("Kitchen", RoomStatusText.roomName(status(place: unnamed), kept: "Kitchen", keptFor: "kitchen", label: "Kitchen 2"))
+        let den = RoomPlace(roomID: "den", name: nil, shared: false)
+        XCTAssertNil(RoomStatusText.roomName(status(place: den), kept: "Kitchen", keptFor: "kitchen", label: "Kitchen 2"))
+        XCTAssertNil(RoomStatusText.roomName(status(place: unnamed), kept: "Kitchen", keptFor: nil, label: "Kitchen 2"))
+        XCTAssertNil(RoomStatusText.roomName(status(place: unnamed), kept: nil, keptFor: nil, label: "Kitchen 2"))
+        XCTAssertEqual("This phone is in this room", RoomStatusText.whereLine(status(place: den), roomName: nil, approved: true))
+        XCTAssertEqual(
+            "This phone is in this room, with other devices",
+            RoomStatusText.whereLine(status(place: RoomPlace(roomID: "den", name: nil, shared: true)), roomName: nil, approved: true)
+        )
+        XCTAssertEqual(
+            "This phone will join this room",
+            RoomStatusText.whereLine(status(link: .awaitingApproval(code: "305117", removed: false)), roomName: nil, approved: false)
+        )
+        XCTAssertEqual("This room", RoomStatusText.title(nil))
+        XCTAssertEqual("Kitchen", RoomStatusText.title("Kitchen"))
+        XCTAssertEqual("this room", RoomStatusText.theRoom(nil))
+        XCTAssertEqual("this room", RoomStatusText.theRoom(" "))
     }
 
     // MARK: - the protocol (RoomProtocolTest)
@@ -167,11 +273,15 @@ final class RoomInARoomTests: XCTestCase {
             .room(RoomPlace(roomID: "den", name: "Den", shared: true, claim: true)),
             RoomProtocol.parse(#"{"type":"room","room":{"room_id":"den","name":"Den","shared":true,"claim":true}}"#)
         )
-        // `claim` is optional; a blank name is the id.
-        XCTAssertEqual(
-            .room(RoomPlace(roomID: "den", name: "den", shared: false)),
-            RoomProtocol.parse(#"{"type":"room","room":{"room_id":"den","name":" ","shared":false}}"#)
-        )
+        // `claim` is optional; a blank, null or missing name is no name,
+        // never the id.
+        for name in [#""name":" ","#, #""name":null,"#, ""] {
+            XCTAssertEqual(
+                .room(RoomPlace(roomID: "den", name: nil, shared: false)),
+                RoomProtocol.parse(#"{"type":"room","room":{"room_id":"den","# + name + #""shared":false}}"#),
+                name
+            )
+        }
         // No room, or no room id: nothing to carry on in.
         XCTAssertEqual(.room(nil), RoomProtocol.parse(#"{"type":"room"}"#))
         XCTAssertEqual(.room(nil), RoomProtocol.parse(#"{"type":"room","room":{"name":"Den"}}"#))
@@ -199,10 +309,11 @@ final class RoomInARoomTests: XCTestCase {
 
     func testTheScreenSaysTheRoomsNameNeverItsId() {
         // The server's name wins, then the kept one, then the room code's.
-        XCTAssertEqual("Kitchen", RoomStatusText.roomName(status(place: kitchen), kept: "Den", label: "Kitchen 2"))
-        XCTAssertEqual("Den", RoomStatusText.roomName(status(), kept: "Den", label: "Kitchen 2"))
-        XCTAssertEqual("Kitchen 2", RoomStatusText.roomName(nil, kept: nil, label: "Kitchen 2"))
-        XCTAssertEqual("Kitchen 2", RoomStatusText.roomName(nil, kept: " ", label: "Kitchen 2"))
+        XCTAssertEqual("Kitchen", RoomStatusText.roomName(status(place: kitchen), kept: "Den", keptFor: "den", label: "Kitchen 2"))
+        XCTAssertEqual("Den", RoomStatusText.roomName(status(), kept: "Den", keptFor: "den", label: "Kitchen 2"))
+        XCTAssertEqual("Kitchen 2", RoomStatusText.roomName(nil, kept: nil, keptFor: nil, label: "Kitchen 2"))
+        XCTAssertEqual("Kitchen 2", RoomStatusText.roomName(nil, kept: " ", keptFor: nil, label: "Kitchen 2"))
+        XCTAssertNil(RoomStatusText.roomName(nil, kept: nil, keptFor: nil, label: nil))
     }
 
     func testThisPhoneIsInTheKitchen() {
