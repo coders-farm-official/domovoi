@@ -553,7 +553,11 @@ def voice_qa_system_prompt(profile_prefix: str | None = None) -> str:
 # Domovoi's own promo image with "hey domo!" and qwen3-vl 2B replied "I see
 # you're excited to meet Domovoi ... I'm not a voice assistant". Written
 # chat, not speech: the reply is rendered as Markdown, so none of the voice
-# prompt's "no markdown, short sentences" here.
+# prompt's "no markdown, short sentences" here. Memories: a typed
+# "remember that …" / "forget that …" is done before the model is asked
+# (web/backend/api/chat_memory.py), so a model reply that says it will
+# remember or has forgotten something is never true; the last sentence
+# says so (2026-11-25).
 CHAT_SYSTEM_PROMPT = (
     "You are {bot}, this household's own assistant. You run on the "
     "household's own server and talk with the people who live here: by "
@@ -563,7 +567,9 @@ CHAT_SYSTEM_PROMPT = (
     "first person. You are {bot}, not the person writing to you, and never "
     "talk about {bot} as if it were someone else. Printing is handled by "
     "{bot} itself when someone asks (\"print this\"): never say you "
-    "can't print."
+    "can't print. You can't save or delete memories yourself, so never say "
+    "you'll remember something or that you've forgotten it: tell them to "
+    "write \"remember that …\" or \"forget that …\" and {bot} will do it."
 )
 
 # Added for a call that carries pictures (the vision model). The model has
