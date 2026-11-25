@@ -605,7 +605,7 @@ class DocumentsHandler(Handler):
         if ai_features.turned_off():
             # Plainly, before any dictation: nothing would write it up.
             return self._reply(ctx, off_answers.with_turn_on(
-                "Writing a letter needs AI, which is turned off.", off_answers.AI,
+                "Writing a letter needs AI, which is turned off.", off_answers.AI, admin=ctx.proven_admin,
             ) + " Reading documents aloud still works.")
         author, author_id = await self._speaker(ctx, session)
         state = letters.new_state(ask, author=author, author_id=author_id, room=ctx.satellite_room_id)

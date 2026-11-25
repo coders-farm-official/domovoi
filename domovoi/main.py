@@ -6406,13 +6406,22 @@ async def admin_voice_sample(body: _VoiceSampleBody) -> FastAPIResponse:
     )
 
 
-async def _admin_route_intent(transcript: str, room_id: str) -> Response:
+async def _admin_route_intent(
+    transcript: str, room_id: str, *, request: Request | None = None,
+) -> Response:
     """Re-enter the regular routing pipeline with a synthetic transcript.
 
     Goes through the same `intents_log` / `conversation_log` / handler
     dispatch as a voice turn — so a "play creep" admin call shows up
     in the audit trail just like the spoken version, and smart-skip
     / pending-confirmation / online gating all behave identically.
+
+    ``Context.proven_admin`` (N1, owner D2): the dashboard's play box
+    counts as a proven admin only when THIS request carries a live admin
+    sign-in (``admin_auth.request_is_proven_admin``: a live Bearer). The
+    routes here are device tier, and a transport control is open to a
+    guest in a playing room, so the route reaching this is no proof by
+    itself. Words only: the turn runs exactly as it would for a member.
     """
     probe: ConnectivityProbe = app.state.probe
     intent = Intent(transcript=transcript, room_id=room_id)
@@ -6422,6 +6431,7 @@ async def _admin_route_intent(transcript: str, room_id: str) -> Response:
         bot_name=settings.bot_name,
         app=app,
         answerable=False,
+        proven_admin=await admin_auth_mod.request_is_proven_admin(request),
     )
     async with session_scope() as s:
         return await route(intent, ctx, s)
@@ -6453,8 +6463,8 @@ async def _admin_dispatch_music(
     # Device tier: ordinary playback.
     dependencies=[Depends(require_device)],
 )
-async def admin_music_play(body: _AdminPlayBody) -> dict[str, Any]:
-    response = await _admin_route_intent(f"play {body.query}", body.room_id)
+async def admin_music_play(body: _AdminPlayBody, request: Request) -> dict[str, Any]:
+    response = await _admin_route_intent(f"play {body.query}", body.room_id, request=request)
     await _admin_dispatch_music(response, body.room_id)
     return _admin_response_dict(response)
 
@@ -8944,6 +8954,7 @@ def _music_failure_detail(failure: str, room_id: str, response: Response) -> str
 async def admin_music_action(
     action: str,
     room_id: str,
+    request: Request,
     scope: Literal["group", "room"] | None = Query(
         None,
         description=(
@@ -8979,7 +8990,7 @@ async def admin_music_action(
             status_code=400,
             detail=f"invalid action {action!r}; valid: {sorted(_MUSIC_ACTIONS)}",
         )
-    response = await _admin_route_intent(transcript, room_id)
+    response = await _admin_route_intent(transcript, room_id, request=request)
     await _admin_dispatch_music(response, room_id)
     failure = response.failure
     if failure is not None:

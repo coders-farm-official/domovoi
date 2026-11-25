@@ -139,10 +139,9 @@ _LYRIC_FIND_RE = re.compile(
 
 # What a lyric request says when it plays nothing (contract [V10]). Never
 # the words themselves: Domovoi does not say, show or log a lyric back.
+_LYRIC_OFF_LEAD = "Finding songs by their words is turned off."
 _LYRIC_NONE_TEXT = {
-    "disabled": off_answers.with_turn_on(
-        "Finding songs by their words is turned off.", off_answers.LYRICS_SEARCH
-    ),
+    "disabled": off_answers.with_turn_on(_LYRIC_OFF_LEAD, off_answers.LYRICS_SEARCH),
     "no_lyrics": "I don't have the words to your songs yet.",
     "too_short": "Tell me a few more of the words and I'll look.",
     "too_common": "A lot of your songs have those words. Tell me a few more of them.",
@@ -1366,6 +1365,10 @@ class MusicHandler(MusicRoomsMixin, MusicQueueMixin, MusicChoiceMixin, Handler):
                 streamed = await self._stream_lyric_request(phrase, artist, ctx, session)
                 if streamed is not None:
                     return streamed
+            if res.reason == "disabled":
+                # Where to turn it on: the steps for a proven admin (words only).
+                return self._reply(ctx, off_answers.with_turn_on(
+                    _LYRIC_OFF_LEAD, off_answers.LYRICS_SEARCH, admin=ctx.proven_admin))
             return self._reply(ctx, _LYRIC_NONE_TEXT.get(res.reason, _LYRIC_NOT_FOUND_TEXT))
         if mode == "identify":
             return await self.tell_lyric_match(res, phrase, ctx, session)

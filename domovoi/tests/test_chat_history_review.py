@@ -208,7 +208,7 @@ async def test_a_retry_dropped_before_its_first_byte_leaves_no_mark(monkeypatch)
     async with _web() as c:
         t = (await c.post("/api/chat/threads", json={})).json()["id"]
         await c.post(f"/api/chat/threads/{t}/messages", json={"content": "tell me a joke"})
-        dropped = await chat_api.retry_reply(t)
+        dropped = await chat_api.retry_reply(t, None)     # no request: a member (N1)
         assert dropped.status_code == 200
         del dropped                      # never read: no stream ran
         assert t not in chat_api._retrying

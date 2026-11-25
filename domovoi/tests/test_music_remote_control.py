@@ -540,7 +540,7 @@ def _routed(response: Response, monkeypatch) -> list:
     """admin_music_action with the router answering ``response``."""
     dispatched: list = []
 
-    async def _route(transcript: str, room_id: str) -> Response:
+    async def _route(transcript: str, room_id: str, *, request=None) -> Response:
         dispatched.append(("route", transcript, room_id))
         return response
 
@@ -567,7 +567,7 @@ async def test_the_admin_control_answers_non_2xx_on_a_failure(
     _routed(Response(text=text, matched_handler="music", failure=failure), monkeypatch)
 
     with pytest.raises(HTTPException) as e:
-        await core_main.admin_music_action("pause", "office")
+        await core_main.admin_music_action("pause", "office", None)
 
     assert e.value.status_code == status
     assert detail in e.value.detail
@@ -670,7 +670,7 @@ async def test_a_cast_with_no_satellite_ever_connected_names_the_satellite(monke
 async def test_a_control_that_happened_answers_ok(monkeypatch) -> None:
     calls = _routed(Response(text="Paused.", matched_handler="music"), monkeypatch)
 
-    body = await core_main.admin_music_action("pause", "office")
+    body = await core_main.admin_music_action("pause", "office", None)
 
     assert body["ok"] is True and body["text"] == "Paused."
     assert calls[0] == ("route", "pause the music", "office")
@@ -982,7 +982,7 @@ async def test_a_paused_cast_through_the_core_waits_paused(monkeypatch) -> None:
 async def test_stop_scope_picks_the_group_or_the_room(monkeypatch, scope, transcript) -> None:
     calls = _routed(Response(text="Stopped.", matched_handler="music"), monkeypatch)
 
-    await core_main.admin_music_action("stop", "office", scope=scope)
+    await core_main.admin_music_action("stop", "office", None, scope=scope)
 
     assert calls[0] == ("route", transcript, "office")
 
@@ -990,7 +990,7 @@ async def test_stop_scope_picks_the_group_or_the_room(monkeypatch, scope, transc
 async def test_scope_is_only_for_stop(monkeypatch) -> None:
     calls = _routed(Response(text="Paused.", matched_handler="music"), monkeypatch)
 
-    await core_main.admin_music_action("pause", "office", scope="room")
+    await core_main.admin_music_action("pause", "office", None, scope="room")
 
     assert calls[0] == ("route", "pause the music", "office")
 

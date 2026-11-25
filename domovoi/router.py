@@ -382,7 +382,7 @@ def ai_off_refusal(handler: Handler, fp: FastPath, ctx: Context) -> Response | N
         return None
     decl = ai_features.plugin_ai(getattr(handler, "plugin_slug", None))
     return Response(
-        text=ai_features.off_feature_line(decl.does if decl is not None else None),
+        text=ai_features.off_feature_line(decl.does if decl is not None else None, admin=ctx.proven_admin),
         session_id=ctx.session_id,
         matched_handler=handler.name,
         expect_followup=False,
@@ -1044,9 +1044,9 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
         asked = ai_features.known_capability_request(transcript, CAPABILITIES.names())
         response = Response(
             text=(
-                ai_features.off_feature_line(asked.does)
+                ai_features.off_feature_line(asked.does, admin=ctx.proven_admin)
                 if asked is not None
-                else ai_features.OFF_LOOKUP_LINE
+                else ai_features.off_lookup_line(admin=ctx.proven_admin)
                 if category is not None and category in VOLATILE_CATEGORIES
                 else ai_features.OFF_LINE
             ),

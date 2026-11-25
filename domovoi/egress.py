@@ -451,14 +451,16 @@ def spoken_offline_phrase() -> str:
     return "I don't have internet right now"
 
 
-def spoken_offline_reply(cant: str) -> str:
+def spoken_offline_reply(cant: str, *, admin: bool = False) -> str:
     """The whole spoken "no internet" reply: "<phrase>, so I can't
     <cant>." and, when the household set the internet answer to never,
-    who can change that and where (owner, Q2: domovoi/off_answers.py).
-    A dropped connection gets no such line: nothing was switched off."""
+    who can change that and where (owner, Q2: domovoi/off_answers.py);
+    the steps themselves when ``admin`` (the turn's
+    ``Context.proven_admin``). A dropped connection gets no such line:
+    nothing was switched off."""
     line = f"{spoken_offline_phrase()}, so I can't {cant}."
     if internet_turned_off():
-        line = off_answers.with_turn_on(line, off_answers.INTERNET)
+        line = off_answers.with_turn_on(line, off_answers.INTERNET, admin=admin)
     return line
 
 

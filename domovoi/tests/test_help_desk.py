@@ -135,8 +135,10 @@ def test_nothing_found_means_no_model_and_the_honest_line(index) -> None:
 
 
 def test_the_model_gets_only_the_passages_marked_as_data(index) -> None:
-    turn = answer.plan("how do I add a room", index)
-    model = FakeModel("From the manual's A Raspberry Pi room page: 1. Set up the Pi.")
+    # Not an admin's job ("how do I add a room" is: admin_tasks answers it
+    # with no model, test_proven_admin.py).
+    turn = answer.plan("how do I change the wake word", index)
+    model = FakeModel("From the manual's Wake word page: 1. Say it.")
     out = _run(answer.answer(turn, ai_on=True, ask_model=model))
     system = model.calls[0][0]["content"]
     marker = system.split("<<", 2)[1].split(">>")[0]
@@ -145,7 +147,7 @@ def test_the_model_gets_only_the_passages_marked_as_data(index) -> None:
     assert "The manual doesn't cover that." in system
     for h in turn.hits:
         assert h.passage.text in system
-    assert model.calls[0][-1] == {"role": "user", "content": "how do I add a room"}
+    assert model.calls[0][-1] == {"role": "user", "content": "how do I change the wake word"}
     # The sources under it are the code's: the sections actually given.
     assert "*From:*" in out.text
     for h in turn.hits:

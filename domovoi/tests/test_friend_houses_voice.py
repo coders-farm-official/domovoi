@@ -176,7 +176,8 @@ async def house(tmp_path, monkeypatch, db_session):
             statement_at=1, reach_public=b"\x01" * 32, reach_private=b"\x02" * 32,
             local_name="The Smiths", code="1234", added_by="t")
     yield SimpleNamespace(us=us, them=them, parked=parked, session=db_session,
-                          ctx=SimpleNamespace(session_id=uuid.uuid4(), room_id="kitchen", app=None))
+                          ctx=SimpleNamespace(session_id=uuid.uuid4(), room_id="kitchen", app=None,
+                                              proven_admin=False))
 
 
 async def _incoming(house, body: str, seq: int = 1) -> None:
