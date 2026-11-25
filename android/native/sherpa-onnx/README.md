@@ -166,7 +166,7 @@ Three things decide whether F-Droid's libraries match the committed ones:
   keeps the absolute path, and ThinLTO hashes that into the names of the
   local symbols it promotes (`name.llvm.<hash>`). Those are stripped, but
   they are in the file the build ID is hashed from. The script uses
-  `/work` unless `WORK` says otherwise (hence the `install -d` above), and
+  `/work` unless `SHERPA_WORK` says otherwise (hence the `install -d` above), and
   says so when it is elsewhere: the libraries then differ only in their
   20-byte build ID.
 

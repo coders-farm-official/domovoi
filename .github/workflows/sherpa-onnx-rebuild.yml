@@ -79,8 +79,8 @@ jobs:
           ABI: ${{ matrix.abi }}
         run: |
           mkdir -p "$RUNNER_TEMP/out"
-          PATH=/usr/bin:$PATH ABIS="$ABI" ANDROID_NDK="$NDK_DIR" WORK=/work \
-            OUT="$RUNNER_TEMP/out" bash android/native/sherpa-onnx/build-native.sh
+          PATH=/usr/bin:$PATH ABIS="$ABI" ANDROID_NDK="$NDK_DIR" SHERPA_WORK=/work \
+            SHERPA_OUT="$RUNNER_TEMP/out" bash android/native/sherpa-onnx/build-native.sh
       - name: Hash what it built
         env:
           ABI: ${{ matrix.abi }}

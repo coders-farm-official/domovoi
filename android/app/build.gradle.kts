@@ -386,6 +386,41 @@ val voiceAssets = tasks.register<VoiceAssetsTask>("voiceAssets") {
 }
 
 /**
+ * sherpa-onnx's JNI library is in android/native/sherpa-onnx/jniLibs for
+ * every ABI this build packages, or the build stops before anything is
+ * packaged. A build that makes the libraries itself (F-Droid runs
+ * build-native.sh, which writes them there unless SHERPA_OUT says otherwise)
+ * would otherwise ship an APK without speech recognition, and nothing would
+ * say so until an APK comparison much later.
+ */
+abstract class SherpaJniLibsCheck : DefaultTask() {
+    @get:Input
+    abstract val abis: ListProperty<String>
+
+    @get:Internal
+    abstract val jniLibs: DirectoryProperty
+
+    @TaskAction
+    fun check() {
+        val dir = jniLibs.get().asFile
+        val missing = abis.get().filter { abi -> File(dir, "$abi/libsherpa-onnx-jni.so").let { !it.isFile || it.length() == 0L } }
+        if (missing.isNotEmpty()) {
+            throw GradleException(
+                "sherpa-onnx's libsherpa-onnx-jni.so is missing from android/native/sherpa-onnx/jniLibs for " +
+                    "${missing.joinToString()}: run android/native/sherpa-onnx/build-native.sh (or build.sh) for them, " +
+                    "with SHERPA_OUT unset so it writes there",
+            )
+        }
+    }
+}
+
+val sherpaJniLibsCheck = tasks.register<SherpaJniLibsCheck>("checkSherpaJniLibs") {
+    abis.set(appAbis)
+    jniLibs.set(rootProject.layout.projectDirectory.dir("native/sherpa-onnx/jniLibs"))
+}
+tasks.matching { it.name == "preBuild" }.configureEach { dependsOn(sherpaJniLibsCheck) }
+
+/**
  * Every 64-bit native library in the built APKs loads on a phone with 16 KB
  * memory pages (Android 15+ phones may use them, Google Play requires it of
  * apps targeting Android 15 and later, and Android 16 runs an app that is not
