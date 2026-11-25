@@ -1125,7 +1125,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     WORKERS.mark_core_hook_done("core.letta_sync")
 
     # Tell the plugins just loaded about voice history deleted while the
-    # core was down (People -> delete person in the web process): SDK 1.17,
+    # core was down (People -> delete person in the web process): SDK 1.18,
     # core.voice_history_deleted. In the background; the hourly
     # voice-history tick retries (domovoi/voice_history.py).
     from domovoi import voice_history as _voice_history
@@ -1282,7 +1282,7 @@ from domovoi.music_groups_routes import router as music_groups_router  # noqa: E
 app.include_router(music_groups_router)
 
 # A room's player fetching a remote stream or file through the core (SDK
-# 1.16, domovoi/player_relay.py): open, the one-use token is the credential.
+# 1.17, domovoi/player_relay.py): open, the one-use token is the credential.
 from domovoi.player_relay import router as player_relay_router  # noqa: E402
 from domovoi.player_relay import redact as redact_relay  # noqa: E402
 
@@ -3788,7 +3788,7 @@ async def admin_satellite_display(body: _AdminSatelliteDisplayBody) -> dict[str,
     # service user.
     dependencies=[Depends(require_device_read)],
 )
-async def admin_version() -> dict[str, Any]:
+async def admin_version(request: Request) -> dict[str, Any]:
     """What this process is RUNNING, and what's checked out on disk.
 
     ``sha``/``running_sha`` is captured at boot, so it reflects the code
@@ -3837,7 +3837,25 @@ async def admin_version() -> dict[str, Any]:
     except Exception as e:  # noqa: BLE001 — the version card must still render
         log.warning("update notice state unreadable: %s", e)
         state["updates"] = None
+    # "Database schema: V086" (1.5.0, owner 2026-11-25): for an admin only
+    # (a live sign-in, or the dashboard cookie that renders), never for a
+    # member's device; absent when flyway_schema_history can't be read.
+    if await _admin_reads(request):
+        from domovoi import schema_version
+
+        found = schema_version.label(await schema_version.read())
+        if found is not None:
+            state["schema_version"] = found
     return state
+
+
+async def _admin_reads(request: Request) -> bool:
+    """An admin's read: a live Bearer, or the admin cookie (renders only).
+    Not "no admin set up yet". False when the check can't run."""
+    try:
+        return await admin_auth_mod.check_admin_request(request) in ("ok", "cookie-only")
+    except Exception:  # noqa: BLE001 — can't tell: not an admin
+        return False
 
 
 @app.post(
@@ -4762,7 +4780,7 @@ async def admin_friend_houses_unfriend(friend_id: str) -> dict[str, Any]:
     return {"removed": True}
 
 
-# ─── Apps with friends (SDK 1.18, plugin mail): the security tier ─────────
+# ─── Apps with friends (SDK 1.19, plugin mail): the security tier ─────────
 # "Apps with this friend" (design FRIEND-HOUSES-PLUGINS §6.11): an admin's
 # toggle per friend, then each plugin holding the permission allowed or not.
 # Reads and writes alike wear the security tier, here and at the dashboard.
@@ -9545,7 +9563,7 @@ async def admin_voice_history_delete_all() -> dict[str, Any]:
 )
 async def admin_voice_history_announce_forgets() -> dict[str, Any]:
     """Tell plugins now about voice history deleted outside this process
-    (SDK 1.17): the web's People -> delete person records the forget in
+    (SDK 1.18): the web's People -> delete person records the forget in
     its own transaction (``voice_history_forgets``, V079) and calls this
     after the commit. Emits ``core.voice_history_deleted`` once per
     recorded forget and drops it. Unreachable, the forget waits for the

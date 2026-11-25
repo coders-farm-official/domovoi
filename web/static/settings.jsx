@@ -2005,6 +2005,15 @@ const VersionSection = () => {
             </div>
           </React.Fragment>
         )}
+        {/* Admins only: the core adds schema_version to an admin's read
+            alone (the highest Flyway migration applied), and leaves it
+            out when it can't read it. Plain text, nothing to press. */}
+        {core && typeof core.schema_version === 'string' && core.schema_version && (
+          <React.Fragment>
+            <div className="label">database schema</div>
+            <div className="version-schema mono" style={{ userSelect: 'all' }}>{core.schema_version}</div>
+          </React.Fragment>
+        )}
         {core && core.last_watchdog_restart && core.last_watchdog_restart.at && (
           <React.Fragment>
             <div className="label">last freeze</div>
