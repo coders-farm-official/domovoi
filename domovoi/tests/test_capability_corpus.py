@@ -120,7 +120,7 @@ def test_the_list_is_covered() -> None:
     """Every group of the question list is in the corpus, the trust groups
     and DO IT concretely enough to check without a judge."""
     groups = {c.group for c in CASES}
-    assert groups == set(range(1, 14)) | set(range(15, 22))
+    assert groups == set(range(1, 14)) | set(range(15, 23))
     for g in (10, 16, 17, 18, 20):
         concrete = [c for c in CASES if c.group == g and not c.judge and not c.skip_reason]
         assert concrete, f"group {g} has no concrete case"

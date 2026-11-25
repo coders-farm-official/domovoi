@@ -3477,6 +3477,197 @@
         ]
       ],
       "stub": true
+    },
+    {
+      "id": "22.1",
+      "utterance": "is my data safe with Google?",
+      "where": "voice",
+      "house": "base",
+      "expect": "EXACT",
+      "kind": "question",
+      "must_not_include": [
+        "Settings → Privacy shows exactly",
+        "I can't check that right now"
+      ],
+      "stub": true,
+      "note": "privacy scope (1.4.1 523473e9): a general privacy question, not about this house. Must reach the model, NOT the fixed privacy_summary. In stub mode it reports needs_model; if the fixed answer fires, the must_not_include check fails."
+    },
+    {
+      "id": "22.2",
+      "utterance": "what is end-to-end encryption?",
+      "where": "voice",
+      "house": "base",
+      "expect": "EXACT",
+      "kind": "question",
+      "must_not_include": [
+        "Settings → Privacy shows exactly",
+        "I can't check that right now"
+      ],
+      "stub": true,
+      "note": "privacy scope (1.4.1 523473e9): a general privacy question, not about this house. Must reach the model, NOT the fixed privacy_summary. In stub mode it reports needs_model; if the fixed answer fires, the must_not_include check fails."
+    },
+    {
+      "id": "22.3",
+      "utterance": "how do I make my phone more private?",
+      "where": "voice",
+      "house": "base",
+      "expect": "EXACT",
+      "kind": "question",
+      "must_not_include": [
+        "Settings → Privacy shows exactly",
+        "I can't check that right now"
+      ],
+      "stub": true,
+      "note": "privacy scope (1.4.1 523473e9): a general privacy question, not about this house. Must reach the model, NOT the fixed privacy_summary. In stub mode it reports needs_model; if the fixed answer fires, the must_not_include check fails."
+    },
+    {
+      "id": "22.4",
+      "utterance": "how do I protect my privacy online?",
+      "where": "voice",
+      "house": "base",
+      "expect": "EXACT",
+      "kind": "question",
+      "must_not_include": [
+        "Settings → Privacy shows exactly",
+        "I can't check that right now"
+      ],
+      "stub": true,
+      "note": "privacy scope (1.4.1 523473e9): a general privacy question, not about this house. Must reach the model, NOT the fixed privacy_summary. In stub mode it reports needs_model; if the fixed answer fires, the must_not_include check fails."
+    },
+    {
+      "id": "22.5",
+      "utterance": "should I delete my voice history on Alexa?",
+      "where": "voice",
+      "house": "base",
+      "expect": "EXACT",
+      "kind": "question",
+      "must_not_include": [
+        "Settings → Privacy shows exactly",
+        "I can't check that right now"
+      ],
+      "stub": true,
+      "note": "privacy scope (1.4.1 523473e9): a general privacy question, not about this house. Must reach the model, NOT the fixed privacy_summary. In stub mode it reports needs_model; if the fixed answer fires, the must_not_include check fails."
+    },
+    {
+      "id": "22.6",
+      "utterance": "is Facebook spying on me?",
+      "where": "voice",
+      "house": "base",
+      "expect": "EXACT",
+      "kind": "question",
+      "must_not_include": [
+        "Settings → Privacy shows exactly",
+        "I can't check that right now"
+      ],
+      "stub": true,
+      "note": "privacy scope (1.4.1 523473e9): a general privacy question, not about this house. Must reach the model, NOT the fixed privacy_summary. In stub mode it reports needs_model; if the fixed answer fires, the must_not_include check fails."
+    },
+    {
+      "id": "22.7",
+      "utterance": "can you tell me if my phone is spying on me?",
+      "where": "voice",
+      "house": "base",
+      "expect": "EXACT",
+      "kind": "question",
+      "must_not_include": [
+        "Settings → Privacy shows exactly",
+        "I can't check that right now"
+      ],
+      "stub": true,
+      "note": "privacy scope (1.4.1 523473e9): a general privacy question, not about this house. Must reach the model, NOT the fixed privacy_summary. In stub mode it reports needs_model; if the fixed answer fires, the must_not_include check fails."
+    },
+    {
+      "id": "22.8",
+      "utterance": "is it creepy when apps track me?",
+      "where": "voice",
+      "house": "base",
+      "expect": "EXACT",
+      "kind": "question",
+      "must_not_include": [
+        "Settings → Privacy shows exactly",
+        "I can't check that right now"
+      ],
+      "stub": true,
+      "note": "privacy scope (1.4.1 523473e9): a general privacy question, not about this house. Must reach the model, NOT the fixed privacy_summary. In stub mode it reports needs_model; if the fixed answer fires, the must_not_include check fails."
+    },
+    {
+      "id": "22.9",
+      "utterance": "is my data safe with you?",
+      "where": "voice",
+      "house": "base",
+      "expect": "EXACT",
+      "kind": "question",
+      "must_include": [
+        "Settings → Privacy shows exactly what's kept and what goes online\\."
+      ],
+      "stub": true,
+      "note": "privacy scope (1.4.1 523473e9): about THIS house, so the fixed house_facts.privacy_summary answer, no model."
+    },
+    {
+      "id": "22.10",
+      "utterance": "do you sell my data?",
+      "where": "voice",
+      "house": "base",
+      "expect": "EXACT",
+      "kind": "question",
+      "must_include": [
+        "Settings → Privacy shows exactly what's kept and what goes online\\."
+      ],
+      "stub": true,
+      "note": "privacy scope (1.4.1 523473e9): about THIS house, so the fixed house_facts.privacy_summary answer, no model."
+    },
+    {
+      "id": "22.11",
+      "utterance": "is my privacy protected here?",
+      "where": "voice",
+      "house": "base",
+      "expect": "EXACT",
+      "kind": "question",
+      "must_include": [
+        "Settings → Privacy shows exactly what's kept and what goes online\\."
+      ],
+      "stub": true,
+      "note": "privacy scope (1.4.1 523473e9): about THIS house, so the fixed house_facts.privacy_summary answer, no model."
+    },
+    {
+      "id": "22.12",
+      "utterance": "is Domovoi private?",
+      "where": "voice",
+      "house": "base",
+      "expect": "EXACT",
+      "kind": "question",
+      "must_include": [
+        "Settings → Privacy shows exactly what's kept and what goes online\\."
+      ],
+      "stub": true,
+      "note": "privacy scope (1.4.1 523473e9): about THIS house, so the fixed house_facts.privacy_summary answer, no model."
+    },
+    {
+      "id": "22.13",
+      "utterance": "do you share my data with Google?",
+      "where": "voice",
+      "house": "base",
+      "expect": "EXACT",
+      "kind": "question",
+      "must_include": [
+        "Settings → Privacy shows exactly what's kept and what goes online\\."
+      ],
+      "stub": true,
+      "note": "privacy scope (1.4.1 523473e9): about THIS house, so the fixed house_facts.privacy_summary answer, no model."
+    },
+    {
+      "id": "22.14",
+      "utterance": "is my data safe with you?",
+      "where": "voice",
+      "house": "base",
+      "expect": "EXACT",
+      "kind": "question",
+      "must_include": [
+        "^I can't check that right now\\.",
+        "Settings → Privacy shows"
+      ],
+      "skip_reason": "needs a failing house-facts read in the sandbox (no fixture flag for it yet)",
+      "note": "privacy scope: when the facts read fails, 'I can't check that right now. Settings → Privacy shows…', with no guessing."
     }
   ]
 }
