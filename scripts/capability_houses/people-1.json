@@ -1,0 +1,10 @@
+{
+  "extends": "base",
+  "note": "One person on the People list.",
+  "people": [
+    {
+      "id": 1,
+      "name": "Alex"
+    }
+  ]
+}
