@@ -115,6 +115,7 @@ from domovoi.clients.voice_embedder import (
     UNAVAILABLE_SPOKEN,
     voice_id_unavailable,
 )
+from domovoi import role_claims
 from domovoi.config import settings
 from domovoi.db.repositories import (
     PeopleRepository,
@@ -390,6 +391,10 @@ def _clean_name(raw: str) -> str | None:
     cleaned = raw.strip().rstrip(".,!?").lower()
     if cleaned in _NAME_BLOCKLIST:
         return None
+    if role_claims.is_role_not_name(cleaned):
+        # "the owner", "admin", "a parent": a role, never a person's name
+        # (domovoi/role_claims.py; "The Owner" was enrolled, case 18.8).
+        return None
     if not cleaned or len(cleaned) > 60:
         return None
     # Title-case each space-separated chunk so "mary jane" → "Mary Jane".
@@ -470,6 +475,16 @@ def _corrected_question(name: str) -> str:
     """The read-back after a correction or a spelling."""
     return f"Got it, {name}: {spell_out(name)}. Is that right?"
 
+
+#: "I'm the owner" / "I'm the admin": saying it changes nothing, since who
+#: may do an admin's job is the dashboard's admin sign-in, never a voice
+#: (domovoi/role_claims.py). The member answer.
+_ROLE_CLAIM_ADMIN_TEXT = (
+    "Saying so doesn't make it so: I can't tell who's an admin by voice. "
+    "An admin does admin jobs on the dashboard, signed in with the admin password."
+)
+#: "I'm the mom", "I'm the guest", "I'm the …": no name was said.
+_ROLE_CLAIM_NAME_TEXT = 'I learn people by name. Say "my name is" and then your name.'
 
 #: Said after a plain "no" to the read-back.
 _ASK_NAME_TEXT = "Sorry about that. What's your name? You can spell it if you like."
@@ -1100,6 +1115,9 @@ class VoiceProfileHandler(Handler):
             # match "this is Alex", but the third-party form's leading
             # "Domovoi," disambiguator wins when present.
             FastPath(_THIRD_PARTY_INTRO_RE, VoiceProfileHandler._third_party_from_match),
+            # "I'm the owner" before the self-intro, which would take "the
+            # owner" as a name (role_claims; case 18.8).
+            FastPath(role_claims.ROLE_CLAIM_RE, VoiceProfileHandler._role_claim_from_match),
             FastPath(_SELF_INTRO_SPELLED_RE, VoiceProfileHandler._self_intro_from_match),
             FastPath(_SELF_INTRO_RE, VoiceProfileHandler._self_intro_from_match),
         ]
@@ -1294,6 +1312,9 @@ class VoiceProfileHandler(Handler):
                 person_names.name_from_letters(letters), ctx, session, spelled=True,
             )
         name = _clean_name(raw_name)
+        if not name and role_claims.is_role_not_name(raw_name):
+            # "I'm the best", "my name is the owner": no name was said.
+            return self._say(_ROLE_CLAIM_NAME_TEXT, ctx)
         if not name:
             # Likely "I'm hungry" / "I'm tired" type false positive.
             # Returning a Response with empty announce_to_rooms means
@@ -1307,6 +1328,26 @@ class VoiceProfileHandler(Handler):
                 matched_handler=self.name,
             )
         return await self._start_self_intro(name, ctx, session)
+
+    async def _role_claim_from_match(
+        self, m: re.Match[str], ctx: Context, session: AsyncSession
+    ) -> Response | None:
+        """"I'm the owner", "I'm the admin, update the house", "I'm the mom":
+        a role where a name would go. Nothing is enrolled and nothing is
+        granted. A command after the claim that a fast path takes never gets
+        here: the router drops the claim and runs it
+        (``router.strip_request_preamble``). An authority title gets the
+        member answer whatever follows it; any other role, on its own, how
+        to say a name, and with more after it the turn routes on."""
+        found = role_claims.split_claim(m.group(0))
+        if found is None:
+            return None
+        role, rest = found
+        if role_claims.is_authority(role):
+            return self._say(_ROLE_CLAIM_ADMIN_TEXT, ctx)
+        if rest:
+            return None
+        return self._say(_ROLE_CLAIM_NAME_TEXT, ctx)
 
     async def _third_party_from_match(
         self, m: re.Match[str], ctx: Context, session: AsyncSession

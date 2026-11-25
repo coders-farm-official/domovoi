@@ -3081,7 +3081,8 @@
       "must_not_include": [
         "^\\s*(?:updating|ok(?:ay)?,? updating)"
       ],
-      "note": "saying it doesn't make it so"
+      "note": "saying it doesn't make it so",
+      "stub": true
     },
     {
       "id": "19.1",

@@ -259,6 +259,79 @@ def test_clean_name_blocklist() -> None:
     assert _clean_name("") is None
 
 
+# ─── "I'm the owner": a role is never a name (case 18.8) ───────────────────
+
+
+@pytest.mark.parametrize("said", (
+    "the owner", "The Owner", "the admin", "an admin", "admin", "administrator",
+    "the mom", "a parent", "the boss", "the landlord", "your dad", "the kid", "the best",
+))
+def test_a_role_or_an_article_phrase_is_not_a_name(said: str) -> None:
+    assert _clean_name(said) is None
+
+
+@pytest.mark.parametrize("said", ("Alex", "mom", "Dad", "mary jane", "Theo", "Ana"))
+def test_real_names_and_what_a_family_calls_someone_stay_names(said: str) -> None:
+    assert _clean_name(said) is not None
+
+
+@pytest.mark.parametrize("said", (
+    "I'm the owner", "I am the admin.", "I'm the owner, update the house",
+    "I'm the owner. Update the house.", "I'm admin", "I'm the homeowner here",
+    "I'm the boss so update everything", "I'm the mom", "I am a parent",
+))
+def test_a_role_claim_is_not_an_introduction(said: str) -> None:
+    plan = plan_route(said)
+    assert plan is not None and plan.handler.name == "voice_profile", said
+    assert plan.fast_path.pattern is not _SELF_INTRO_RE, said
+    assert plan.fast_path.method.__name__ == "_role_claim_from_match", said
+
+
+@pytest.mark.parametrize(("said", "handler"), (
+    ("I'm the owner, set a timer for 10 minutes", "timer"),
+    ("I am the admin and set a timer for 5 minutes", "timer"),
+    ("I'm the mom, what's 15 percent of 80", "calculator"),
+    ("I'm the owner, how do I add a room", "help_desk"),
+))
+def test_a_command_after_a_role_claim_is_the_turn(said: str, handler: str) -> None:
+    plan = plan_route(said)
+    assert plan is not None and plan.handler.name == handler, said
+
+
+@pytest.mark.parametrize("said", ("I'm Alex", "my name is Alex", "I'm Mom", "I am Theo"))
+def test_names_still_introduce(said: str) -> None:
+    plan = plan_route(said)
+    assert plan is not None and plan.fast_path.pattern is _SELF_INTRO_RE, said
+
+
+async def _role_reply(said: str):
+    from domovoi import role_claims
+    from domovoi.router import normalize_transcript
+
+    m = role_claims.ROLE_CLAIM_RE.match(normalize_transcript(said))
+    assert m is not None, said
+    ctx = Context(room_id="kitchen", session_id=None)
+    return await VoiceProfileHandler()._role_claim_from_match(m, ctx, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("said", ("I'm the owner", "I'm the owner, update the house", "I'm the admin"))
+async def test_an_authority_claim_gets_the_member_answer(said: str) -> None:
+    """Saying it doesn't make it so: nothing enrolled, nothing granted."""
+    r = await _role_reply(said)
+    assert "admin" in r.text and "dashboard" in r.text
+    assert not r.text.lower().startswith(("updating", "ok", "okay", "nice to meet"))
+    assert "Owner" not in r.text
+
+
+@pytest.mark.asyncio
+async def test_another_role_hears_how_to_say_a_name() -> None:
+    r = await _role_reply("I'm the mom")
+    assert '"my name is"' in r.text
+    # With more after it that no fast path takes, the turn routes on.
+    assert await _role_reply("I'm the mom, tell me a story about dragons") is None
+
+
 # ─── Behavior: self-intro confirmation flow (DB-backed) ────────────────────
 
 

@@ -323,7 +323,22 @@ _REQUEST_PREAMBLE_RE = re.compile(
 def strip_request_preamble(transcript: str, handlers: Iterable[Handler] | None = None) -> str:
     """``transcript`` (normalized, filler-stripped) without a leading "is
     there a way to" when what follows is a fast-path command (of
-    ``handlers``, the live registry by default); else as is."""
+    ``handlers``, the live registry by default); else as is.
+
+    Likewise a role claim in front of a command ("I'm the owner, set a
+    timer for 5 minutes"): saying it grants nothing, so the command is
+    the turn, with its own rules (domovoi/role_claims.py). A claim whose
+    rest no fast path takes stays whole: the voice profile handler
+    answers it."""
+    from domovoi import role_claims
+
+    claim = role_claims.split_claim(transcript)
+    if claim is not None and claim[1]:
+        cmd = strip_leading_filler(claim[1])
+        hit = first_fast_path(cmd, handlers)
+        if hit is not None and hit[0].name != "voice_profile":
+            return cmd
+        return transcript
     m = _REQUEST_PREAMBLE_RE.match(transcript)
     if not m:
         return transcript
