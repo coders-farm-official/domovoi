@@ -2318,7 +2318,7 @@ async def invite(body: Invite):
 |---|---|
 | `await friends()` | `[FriendHouse(house_id, name, online, has_plugin)]`: friends with "Apps with this friend" on and your plugin allowed. `name` is a `FriendText`. `has_plugin` is true while their house's last word (within 6 hours) said it has your plugin too. Empty while Friend Houses is off or dark (nothing could reach them): hide your "play with a friend" control then, and say why. |
 | `await send_mail(house_id, payload, *, ttl_s=259200, replace_key=None)` | Queues `payload` (bytes, 1 to 16,384) for that friend; returns the mail's id. `ttl_s` 30 to 259,200 (3 days); time-sensitive mail (a move, a view) should use 600 or less. `replace_key` (up to 64 of `a-z 0-9 _ . : -`) replaces a mail with the same key that hasn't left yet (a newer view of the table); the new one gets a new id. Raises `NotAllowed`, `MailFull`, `TooLarge` or `RateLimited`. |
-| `await send_image(house_id, image, *, tag, ttl_s=259200, replace_key=None)` | Queues a picture: a `FriendImage` a friend sent you (passed on as the core's PNG) or your plugin's own PNG, JPEG or WebP bytes. `tag` (up to 64 of `a-z 0-9 _ . : -`) tells the friend's copy what it is ("monster:7"). The tag and image are at most 16,384 bytes together (`TooLarge`). Raises like `send_mail`. |
+| `await send_image(house_id, image, *, tag, ttl_s=259200, replace_key=None)` | Queues a picture: a `FriendImage` a friend sent you (passed on as the core's PNG) or your plugin's own PNG, JPEG or WebP bytes (any size up to 8 MiB and 4 megapixels). `tag` (up to 64 of `a-z 0-9 _ . : -`) tells the friend's copy what it is ("monster:7"). The tag and image are at most 16,384 bytes together, so the core rewrites the picture to fit (see **Picture sizes** below); one that doesn't fit even at 128 px raises `TooLarge`, bytes that aren't a picture `ValueError`. Raises like `send_mail`. |
 | `on_mail(handler, schema, *, images=False)` | The one handler for your plugin's mail and the schema your decoder's answers must match (the core's strict subset, §3 `[isolated]`; until you register one, mail waits). Every string in `value` arrives as a `FriendText`. With `images=True` the handler also gets friends' pictures: `value` is then a `FriendImage`; without it a friend's image is refused like a mail the schema refuses. |
 | `on_friends_changed(handler)` | `async handler()` runs shortly after `friends()` may answer differently: "Apps with this friend" or your plugin turned on or off for a friend, a friend removed or blocked, a friend's house saying which apps it has (`has_plugin`). Several changes together call it once; it gets 10 seconds. `online` changes don't call it: read `friends()` when you need it. |
 
@@ -2359,6 +2359,31 @@ it), `tag` a `FriendText`. Serve it from your route with
 Content-Security-Policy, never cached); store `image.png` in your own
 schema if you keep it. To show it to another friend, `send_image` the
 `FriendImage` itself.
+
+**Picture sizes.** An image mail holds 16,384 bytes with its tag, so
+`send_image` never sends your bytes as they are: the core opens them (as
+the friend's container would: PNG, JPEG or WebP, first frame, oriented,
+at most 768 px a side) and writes its own compact PNG, without metadata.
+Your call doesn't change. It takes the first of these that fits:
+
+1. the picture at its size, lossless: a picture of 256 colours or fewer
+   (most drawings: strokes on a plain background) as a palette of exactly
+   those colours, anything else as filtered truecolour, zlib level 9;
+2. the same with fewer colours: 256 for any picture, and 64 or 16 for one
+   of up to 16,384 colours (a drawing whose edges the browser smoothed);
+3. steps 1 and 2 again at 512, 384, 256, 192 and then 128 px on the long
+   side (aspect kept). A drawing of few colours keeps exactly its colours
+   when it is scaled, so strokes stay solid.
+
+Past 128 px it raises `TooLarge` ("doesn't fit … even at 128 px a side");
+catch it and tell the player. What to expect at 768 px: a sketch of a few
+solid colours, about 7 KB, sent full size; a busy drawing of a few colours,
+512 px; a drawing with smoothed edges (a browser canvas), 512 px with 64
+colours; a photo, about 256 px; random noise is refused. A `FriendImage`
+that already fits is sent unchanged; a bigger one goes through the same
+steps. The work is bounded (at most about 2 s of one core for the worst
+768 px picture) and runs off the event loop. To keep full size, offer a
+small set of solid colours and keep pictures at 768 px or less.
 
 **The forwarding rule.** Nothing a friend supplied is passed on as it
 came. Every payload you send is rebuilt from validated values; images
@@ -2407,7 +2432,9 @@ open routes, and the loader logs a warning for one.
 **Testing.** `make_stub_sdk()` gives a `friend_houses` with no database
 and no friend: set `stub.friend_houses.friends_list` to what `friends()`
 should answer; `send_mail` and `send_image` check their arguments as the
-core does and record each call in `stub.friend_houses.sent`. The core's
+core does and record each call in `stub.friend_houses.sent` (`send_image`
+writes the core's PNG too, so a picture that can't fit raises `TooLarge`
+there as well; the PNG it would send is the call's `options["png"]`). The core's
 test kit `domovoi.friend_houses.loopback.LoopbackPair` runs two houses over
 loopback with real sessions and the real listener (no Tor, no Docker):
 house B with the real plugin mail service (the test database) storing,

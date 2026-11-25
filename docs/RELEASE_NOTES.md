@@ -91,6 +91,23 @@ a way that would otherwise get reported as a bug.
   for satellites. Such an id that names no room is still refused (422);
   every other rooms route keeps refusing it.
 
+## 1.5.0 (unreleased) — Friend Houses: pictures fit an image mail
+
+- **What changed.** `send_image` now writes every picture as Domovoi's own
+  compact PNG before it is queued (exact palette for 256 colours or fewer,
+  PNG filtering, maximum compression): a plugin's own drawing and a
+  friend's picture passed on to another friend alike. A picture that still
+  doesn't fit the 16,384-byte image mail loses colours, then size (768,
+  512, 384, 256, 192, 128 px on the long side); one that doesn't fit even
+  at 128 px is refused with `TooLarge`. Pictures a plugin receives are
+  written the same way, losslessly, at their own size. A typical drawing
+  (a few colours on a plain background) goes at the full 768 px; a photo
+  arrives smaller, around 256 px.
+- **What to know.** Nothing changes on the receiving side or in the wire
+  format: it is still a plain PNG, opened only in the friend's decode-only
+  container. A plugin's own JPEG or WebP now leaves as a PNG, without its
+  metadata.
+
 ## 1.5.0 (unreleased) — Friend Houses: apps with friends, sending and the page
 
 - **What changed.** Plugins can now send as well as receive: SDK 1.18's
