@@ -11,7 +11,10 @@ can't share that." and where an admin manages it; "can I sign in as
 admin?" / "make me admin" / "am I admin?" get where the admin signs in,
 and the turn's real state (a voice is never an admin), never a claimed
 sign-in; "which plugins do you have?" lists them by name (the one
-answer that may: the person asked). The facts and the
+answer that may: the person asked); "who can approve this?" / "who's the
+admin?" / "who set this up?" / "who can change settings?" get who does an
+admin's job and where, never a name (Domovoi doesn't record who the admin
+is) and never an ownership joke. The facts and the
 wording live in :mod:`domovoi.house_facts`; this is only its voice. No
 model, ever.
 
@@ -62,6 +65,9 @@ class HouseFactsHandler(Handler):
             FastPath(house_facts.SECRET_RE, HouseFactsHandler._secret),
             FastPath(house_facts.ADMIN_QUESTION_RE, HouseFactsHandler._admin),
             FastPath(house_facts.PLUGINS_QUESTION_RE, HouseFactsHandler._plugins),
+            # "Who can approve this?" / "who's the admin?" / "who set this
+            # up?": facts, before voice_profile's ownership jokes (110).
+            FastPath(house_facts.ADMIN_WHO_RE, HouseFactsHandler._admin_who),
         ]
 
     def offers_tool(self, transcript: str) -> bool:
@@ -109,6 +115,15 @@ class HouseFactsHandler(Handler):
         # A spoken turn is never a proven admin; only the dashboard's play
         # box, with a live admin sign-in on its request, is.
         text = house_facts.admin_answer(kind, chat=False, admin=ctx.proven_admin)
+        return Response(text=text, session_id=ctx.session_id, matched_handler=self.name)
+
+    async def _admin_who(
+        self, m: re.Match[str], ctx: Context, session: AsyncSession
+    ) -> Response | None:
+        kind = house_facts.admin_who(m.group(0))
+        if kind is None:
+            return None
+        text = house_facts.admin_who_answer(kind, admin=ctx.proven_admin)
         return Response(text=text, session_id=ctx.session_id, matched_handler=self.name)
 
     async def _plugins(

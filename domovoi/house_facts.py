@@ -1261,6 +1261,80 @@ def admin_answer(kind: str, *, chat: bool, admin: bool | None) -> str:
     return ADMIN_SIGNIN_CHAT if chat else ADMIN_SIGNIN_VOICE
 
 
+# "Who can approve this?", "who's the admin?", "who set this up?", "who can
+# change settings?" (23.11-23.14): practical questions about who does an
+# admin's job. A fixed answer, never a joke (owner_easter_eggs.WHO_RE
+# leaves every one of these alone) and never the model. Domovoi doesn't
+# record WHO the admin is: whoever holds the admin password and signs in
+# with it on the dashboard is one, so no answer ever names a person.
+_WHO_IS = r"who(?:'s|s| is)"
+_WHO_CAN = r"who (?:can|could|may|should|will|would|has to|needs to|gets to|is allowed to|is able to)"
+_THIS = r"(?: (?:this|that|it|these|those|them|the request|requests|things|stuff|my request|it for me))?"
+_SETTINGS = r"(?:the |your |my |our |these |those |domovoi's |the house's )?(?:settings|setup|dashboard)"
+_HOUSE_TAIL = (r"(?: here| around here| in (?:this|the|our) house(?:hold)?| (?:of|for) (?:this|the|our) "
+               r"(?:house|household|home|place)| on (?:this|the) (?:server|dashboard))?")
+ADMIN_WHO_QUESTIONS: tuple[tuple[str, str], ...] = (
+    ("approve",
+     rf"{_WHO_CAN} (?:approve|okay|ok|sign off on|accept|allow){_THIS}"
+     rf"|who (?:approves|okays|accepts|allows){_THIS}"
+     rf"|who (?:do|should|can) (?:i|we) (?:ask|talk to|get) (?:for (?:an? )?(?:approval|ok|okay)"
+     rf"|to (?:approve|okay|accept|allow){_THIS})"
+     r"|who gives (?:the )?approval|who(?:'s| is) (?:the one )?approving(?: this| that| it)?"),
+    ("admin",
+     rf"{_WHO_IS} (?:the |an |your |our |my |this house's |the house's )?admin(?:istrator)?s?{_HOUSE_TAIL}"
+     rf"|who are (?:the |your |our )?admin(?:istrator)?s{_HOUSE_TAIL}"
+     rf"|who (?:has|holds|knows) (?:the )?admin(?:istrator)? (?:password|access|rights|account)"
+     rf"|who(?:'s| is) (?:signed|logged) in as (?:the |an )?admin"),
+    ("setup",
+     r"who (?:set|setup|installed|configured) (?:this|you|it|domovoi|this house|the house|this server"
+     r"|the server|this thing|everything|all this|this all)(?: up)?"
+     r"|who (?:set ?up|installed) domovoi(?: here)?"),
+    ("settings",
+     rf"{_WHO_CAN} (?:change|edit|manage|update|adjust|touch|set|control) {_SETTINGS}"
+     rf"|{_WHO_IS} (?:the one )?(?:in charge of|responsible for|allowed to change|able to change"
+     rf"|managing) {_SETTINGS}"
+     rf"|who (?:manages|controls|runs|handles|looks after|owns) {_SETTINGS}"
+     rf"|who (?:do|should|can) (?:i|we) (?:ask|talk to) (?:about|to change) {_SETTINGS}"),
+)
+ADMIN_WHO_RE = re.compile(
+    r"^(?:(?:so|and|ok|okay|hey|well|then)[,\s]+)?(?:"
+    + "|".join(f"(?P<adminwho_{k}>{rx})" for k, rx in ADMIN_WHO_QUESTIONS)
+    + r")(?:,? (?:then|anyway|please|here|now|right now))?\Z"
+)
+
+ADMIN_WHO_ANSWERS: dict[str, str] = {
+    "approve": "An admin approves that, on the dashboard.",
+    "admin": ("I don't keep track of who the admin is: the admin is whoever signs in on the "
+              "dashboard with the admin password."),
+    "setup": ("I don't keep a name for that. Whoever set up Domovoi chose the admin password, "
+              "and signs in with it on the dashboard."),
+    "settings": "An admin does that, on the dashboard, signed in with the admin password.",
+}
+#: Added for a PROVEN admin (the server's own check for this turn, never
+#: the words): a chat or play box with a live admin sign-in.
+ADMIN_WHO_YOU = "That's you, signed in here."
+
+
+def admin_who(transcript: str) -> str | None:
+    """"approve", "admin", "setup" or "settings" for a who-does-the-admin's-
+    job question (``transcript`` normalized), else None."""
+    m = ADMIN_WHO_RE.match(transcript or "")
+    if not m or m.lastgroup is None:
+        return None
+    return m.lastgroup[len("adminwho_"):]
+
+
+def admin_who_answer(kind: str, *, admin: bool | None = False) -> str:
+    """The fixed answer; never a person's name. ``admin``: the turn's real
+    admin state (``Context.proven_admin``, or in chat
+    ``request_is_proven_admin``) adds :data:`ADMIN_WHO_YOU`, except to
+    "who set this up?" (an admin need not be the one who did)."""
+    said = ADMIN_WHO_ANSWERS.get(kind, ADMIN_WHO_ANSWERS["settings"])
+    if admin and kind != "setup":
+        return f"{said} {ADMIN_WHO_YOU}"
+    return said
+
+
 # "Which plugins do you have?" (4.30): read from the plugins table and said
 # with help_desk.facts (the list the help desk renders), never guessed.
 # The one answer that names plugins: the person asked which (owner, N10).
@@ -1446,7 +1520,9 @@ async def chat_reply(
     # yourself?") stays the help turn's, as before.
     task = (_admin_tasks.request(t)
             if admin_kind is None and _admin_tasks.match(t) is None else None)
-    if admin_kind is not None or task is not None:
+    # "Who can approve this?" / "who's the admin?": who does an admin's job.
+    who_kind = admin_who(t) if admin_kind is None and task is None else None
+    if admin_kind is not None or task is not None or who_kind is not None:
         admin: bool | None = None
         if admin_check is not None:
             try:
@@ -1455,6 +1531,8 @@ async def chat_reply(
                 log.debug("house facts: the admin check failed: %s", e)
         if task is not None:
             return _admin_tasks.answer(task, admin=bool(admin))
+        if who_kind is not None:
+            return admin_who_answer(who_kind, admin=admin)
         return admin_answer(admin_kind, chat=True, admin=admin)
     if PLUGINS_QUESTION_RE.match(t):
         return await plugins_answer(scope=scope)
