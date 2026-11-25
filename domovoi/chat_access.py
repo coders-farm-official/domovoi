@@ -64,7 +64,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Request, params
 from sqlalchemy import text
 
 log = logging.getLogger(__name__)
@@ -357,6 +357,24 @@ async def chat_viewer(request: Request) -> Viewer:
 #: The enumeration test's marker: a route whose dependencies include a
 #: callable carrying it goes through this module.
 chat_viewer.__chat_access__ = True  # type: ignore[attr-defined]
+
+
+class _ViewerParam(params.Depends):
+    """``viewer: Viewer = VIEWER`` in a route: FastAPI resolves it with
+    :func:`chat_viewer`. When the route function is called directly (a
+    test, or server code calling a route's function), this default is
+    what arrives: it reads as :data:`SYSTEM` (trusted server code, no
+    caller to check)."""
+
+    device_id = None
+    admin = False
+    shared_screen = False
+    system = True
+    keyed = False
+
+
+#: The default every chat route's ``viewer`` parameter takes.
+VIEWER = _ViewerParam(chat_viewer)
 
 
 # ─── One thread ─────────────────────────────────────────────────────────

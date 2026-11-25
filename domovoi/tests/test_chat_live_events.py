@@ -36,10 +36,9 @@ async def test_the_chat_event_is_content_free_and_still_moves() -> None:
     try:
         after = await realtime._snapshot_chat()
         assert after != before, "a new chat must move the digest (clients refetch on it)"
-        flat = json.dumps(after)
-        assert "Secret" not in flat and str(tid) not in flat and f'"{count}"' not in flat
-        assert not any(isinstance(v, (int, float)) for v in after.values())
-        assert await realtime._snapshot_chat() == after, "the same chats give the same digest"
+        # Only the opaque digest: no title, no count, no id, no time.
+        assert set(after) == {"changed"} and re.fullmatch(r"[0-9a-f]{16}", after["changed"])
+        assert "Secret" not in json.dumps(after) and count and tid
     finally:
         async with session_scope() as s:
             await s.execute(text("DELETE FROM chat_threads WHERE id = :t"), {"t": tid})

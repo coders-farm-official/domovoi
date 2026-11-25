@@ -54,7 +54,7 @@ from sqlalchemy import text
 
 from domovoi import ai_features, chat_access, doc_extract
 from domovoi.admin_auth import require_device, require_device_read
-from domovoi.chat_access import Action, Viewer, chat_viewer
+from domovoi.chat_access import VIEWER, Action, Viewer
 from domovoi.doc_extract import runner
 from domovoi.doc_qa import answer as qa
 from domovoi.doc_qa import calc as qa_calc
@@ -332,7 +332,7 @@ async def extract_document(file: UploadFile = File(...)) -> Any:
 
 
 @router.get("/documents/{token}/parts", dependencies=READ)
-async def document_parts(token: str, viewer: Viewer = Depends(chat_viewer)) -> dict[str, Any]:
+async def document_parts(token: str, viewer: Viewer = VIEWER) -> dict[str, Any]:
     cache = load_cache(token)
     if cache is None or not await _token_readable(token, viewer):
         raise HTTPException(status_code=404, detail="document not found")
@@ -342,7 +342,7 @@ async def document_parts(token: str, viewer: Viewer = Depends(chat_viewer)) -> d
 
 
 @router.get("/documents/{token}/file", dependencies=READ)
-async def document_file(token: str, viewer: Viewer = Depends(chat_viewer)):
+async def document_file(token: str, viewer: Viewer = VIEWER):
     """The original file: a PDF inline (the dashboard opens it at
     ``#page=N``), anything else as a download. Household content, read on
     the same tier as the thread; an ``<a href>`` carries ``?device_token=``."""
@@ -392,7 +392,7 @@ async def thread_documents(thread_id: int, s: Any = None) -> list[dict[str, Any]
 
 
 @router.get("/threads/{thread_id}/documents", dependencies=READ)
-async def list_thread_documents(thread_id: int, viewer: Viewer = Depends(chat_viewer)) -> dict[str, Any]:
+async def list_thread_documents(thread_id: int, viewer: Viewer = VIEWER) -> dict[str, Any]:
     async with session_scope() as s:
         await chat_access.thread_for(s, thread_id, viewer, Action.READ)
         return {"documents": await thread_documents(thread_id, s)}
@@ -431,7 +431,7 @@ class FromDocument(BaseModel):
 
 
 @router.post("/threads/from-document", dependencies=SEND, responses=_REFUSALS)
-async def thread_from_document(body: FromDocument, viewer: Viewer = Depends(chat_viewer)) -> Any:
+async def thread_from_document(body: FromDocument, viewer: Viewer = VIEWER) -> Any:
     """"Ask about this document" on the Documents page: a new chat ("About
     lease.pdf") with the file attached, read through the Documents routes'
     own checks (inside the library, no secret-shaped names), copied into

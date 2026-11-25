@@ -1371,7 +1371,7 @@ async def phone_voice_turn(
     # False: the phone speaks the reply itself (its own voice pick), so no
     # audio is rendered for it. Default true, as before.
     speak: bool = Form(True),
-    viewer: Any = Depends(chat_access.chat_viewer),
+    viewer: Any = chat_access.VIEWER,
 ) -> Any:
     """One push-to-talk turn from the app's chat mic: speech-to-text, voice
     identification, the router satellites use, text-to-speech (unless

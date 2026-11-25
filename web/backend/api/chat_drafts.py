@@ -56,7 +56,7 @@ from sqlalchemy.exc import IntegrityError
 
 from domovoi import chat_access
 from domovoi.admin_auth import require_device, require_device_read
-from domovoi.chat_access import Action, Viewer, chat_viewer
+from domovoi.chat_access import VIEWER, Action, Viewer
 from domovoi.clients import ollama as ollama_client
 from domovoi.drafts import ats, blocks, diff, docx_file, kinds, pdf_file, phrases, prompts, templates
 from domovoi.drafts import store as draft_store
@@ -458,7 +458,7 @@ def guided_turn(thread_id: int, kind: str, template: str, title: str, request: s
 # ─── Routes ─────────────────────────────────────────────────────────────
 @router.get("/drafts", dependencies=READ)
 async def list_all_drafts(limit: int = Query(50, ge=1, le=200),
-                          viewer: Viewer = Depends(chat_viewer)) -> dict[str, Any]:
+                          viewer: Viewer = VIEWER) -> dict[str, Any]:
     """The drafts of every chat the caller can see, newest first (the Chat
     page lists them even with AI features off, so a draft can still be
     saved)."""
@@ -477,7 +477,7 @@ async def list_all_drafts(limit: int = Query(50, ge=1, le=200),
 
 
 @router.get("/threads/{thread_id}/drafts", dependencies=READ)
-async def list_thread_drafts(thread_id: int, viewer: Viewer = Depends(chat_viewer)) -> dict[str, Any]:
+async def list_thread_drafts(thread_id: int, viewer: Viewer = VIEWER) -> dict[str, Any]:
     async with session_scope() as s:
         await chat_access.thread_for(s, thread_id, viewer, Action.READ)
         rows = (await s.execute(text(
@@ -501,7 +501,7 @@ def _with_changes(versions: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 @router.get("/drafts/{draft_id}", dependencies=READ)
 async def get_draft(
-    draft_id: int, request: Request = None, viewer: Viewer = Depends(chat_viewer),  # type: ignore[assignment]
+    draft_id: int, request: Request = None, viewer: Viewer = VIEWER,  # type: ignore[assignment]
 ) -> dict[str, Any]:
     """The draft and every version (oldest first): its markdown, the plain
     text the changes view shows (``display``), and ``changes`` against the
@@ -544,7 +544,7 @@ def _stale(latest: int) -> Any:
 @router.post("/drafts/{draft_id}/versions", dependencies=DEVICE,
              responses={409: {"description": '{"detail", "code": "stale_version", "latest": n}'}})
 async def edit_draft(
-    draft_id: int, body: EditBody, request: Request = None, viewer: Viewer = Depends(chat_viewer),  # type: ignore[assignment]
+    draft_id: int, body: EditBody, request: Request = None, viewer: Viewer = VIEWER,  # type: ignore[assignment]
 ) -> Any:
     """A hand edit: saved as the next version, "edited by you" on the device
     that made it. Characters XML can't hold are taken out first. Two edits
@@ -664,7 +664,7 @@ def _write_into_chat_folder(name: str, data: bytes) -> str:
 
 @router.post("/drafts/{draft_id}/save", dependencies=DEVICE)
 async def save_draft(draft_id: int, body: SaveBody, request: Request,
-                     viewer: Viewer = Depends(chat_viewer)) -> dict[str, Any]:
+                     viewer: Viewer = VIEWER) -> dict[str, Any]:
     """Saves a version (the latest by default) as .docx or PDF (the kind's
     default by default) into Documents → From Chat, then checks the file:
     ``check`` is ``{ok, line}`` — ``text readable · single column`` when
@@ -695,7 +695,7 @@ async def save_draft(draft_id: int, body: SaveBody, request: Request,
 async def export_draft(draft_id: int, version: Optional[int] = Query(None, ge=1),
                        format: Optional[Literal["docx", "pdf"]] = Query(None),
                        template: Optional[str] = Query(None, max_length=40),
-                       viewer: Viewer = Depends(chat_viewer)) -> Response:
+                       viewer: Viewer = VIEWER) -> Response:
     """The version as a file to download; nothing is kept on the server."""
     async with session_scope() as s:
         d, v = await _target(s, draft_id, version, viewer, Action.READ)
@@ -729,14 +729,14 @@ async def _print(core_path: str, draft_id: int, body: PrintDraftBody, request: R
 
 @router.post("/drafts/{draft_id}/print/preview", dependencies=DEVICE)
 async def print_draft_preview(draft_id: int, body: PrintDraftBody, request: Request,
-                              viewer: Viewer = Depends(chat_viewer)):
+                              viewer: Viewer = VIEWER):
     """The print preview of a version's PDF (the Print dialog's)."""
     return await _print("/v1/print/preview", draft_id, body, request, viewer)
 
 
 @router.post("/drafts/{draft_id}/print/jobs", dependencies=DEVICE, status_code=202)
 async def print_draft(draft_id: int, body: PrintDraftBody, request: Request,
-                      viewer: Viewer = Depends(chat_viewer)):
+                      viewer: Viewer = VIEWER):
     """Prints a version's PDF on the home's printer (after its preview)."""
     return await _print("/v1/print/jobs", draft_id, body, request, viewer)
 
@@ -767,13 +767,13 @@ async def _print_attachment(core_path: str, token: str, body: PrintDraftBody, re
 
 @router.post("/attachments/{token}/print/preview", dependencies=DEVICE)
 async def print_attachment_preview(token: str, body: PrintDraftBody, request: Request,
-                                   viewer: Viewer = Depends(chat_viewer)):
+                                   viewer: Viewer = VIEWER):
     """The Print dialog's preview of a chat attachment (a picture or document)."""
     return await _print_attachment("/v1/print/preview", token, body, request, viewer)
 
 
 @router.post("/attachments/{token}/print/jobs", dependencies=DEVICE, status_code=202)
 async def print_attachment(token: str, body: PrintDraftBody, request: Request,
-                           viewer: Viewer = Depends(chat_viewer)):
+                           viewer: Viewer = VIEWER):
     """Prints a chat attachment on the home's printer (after its preview)."""
     return await _print_attachment("/v1/print/jobs", token, body, request, viewer)

@@ -51,7 +51,7 @@ from sqlalchemy import text
 
 from domovoi import ai_features, chat_access
 from domovoi.admin_auth import require_device, require_device_read
-from domovoi.chat_access import Action, Viewer, chat_viewer
+from domovoi.chat_access import VIEWER, Action, Viewer
 from domovoi.chat_video import context, limits, media, plan
 from domovoi.chat_video.runner import delete_files
 from web.backend.db import session_scope
@@ -448,7 +448,7 @@ async def _row(job_id: str, viewer: Viewer, action: Action = Action.READ) -> Any
 
 
 @router.get("/video-jobs/{job_id}", dependencies=READ)
-async def get_video_job(job_id: str, viewer: Viewer = Depends(chat_viewer)) -> dict[str, Any]:
+async def get_video_job(job_id: str, viewer: Viewer = VIEWER) -> dict[str, Any]:
     """One video's progress: ``state`` queued | running | done | failed |
     cancelled, ``line`` ("Watching your video… about 4 minutes left"),
     ``waiting_for_voice``, ``eta_s``, ``progress``, and once ended the
@@ -458,7 +458,7 @@ async def get_video_job(job_id: str, viewer: Viewer = Depends(chat_viewer)) -> d
 
 
 @router.get("/video-jobs/{job_id}/results", dependencies=READ)
-async def get_video_results(job_id: str, viewer: Viewer = Depends(chat_viewer)) -> dict[str, Any]:
+async def get_video_results(job_id: str, viewer: Viewer = VIEWER) -> dict[str, Any]:
     """What was kept from a watched video: the summary, the transcript
     pieces with their times, and the frame descriptions, each worded
     ``might_show`` (a small model's guess, never a fact)."""
@@ -481,7 +481,7 @@ async def get_video_results(job_id: str, viewer: Viewer = Depends(chat_viewer)) 
 
 
 @router.post("/video-jobs/{job_id}/cancel", dependencies=DEVICE)
-async def cancel_video_job(job_id: str, viewer: Viewer = Depends(chat_viewer)) -> dict[str, Any]:
+async def cancel_video_job(job_id: str, viewer: Viewer = VIEWER) -> dict[str, Any]:
     """Stop watching: a queued job ends now, a running one within about a
     second. The video, its frames and what was understood so far go."""
     await _row(job_id, viewer, Action.WRITE)

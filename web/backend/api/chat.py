@@ -105,7 +105,7 @@ from sqlalchemy import text
 
 from domovoi import ai_features, chat_access, chat_titles, egress, executors, image_safety, live_env, lookup_answer, uncertainty
 from domovoi.admin_auth import require_device, require_device_read
-from domovoi.chat_access import Action, Viewer, chat_viewer
+from domovoi.chat_access import VIEWER, Action, Viewer
 from domovoi.clients import ollama as ollama_client
 from domovoi.help_desk import answer as help_answer
 from domovoi.help_desk import delivery as help_delivery
@@ -234,7 +234,7 @@ async def list_threads(
         description="Search: threads whose title or any message contains this (case ignored), newest first, "
                     "at most 100, each with `match_snippet` (the words around the first match in a message).",
     ),
-    viewer: Viewer = Depends(chat_viewer),
+    viewer: Viewer = VIEWER,
 ) -> dict[str, Any]:
     query = (q or "").strip()
     where: list[str] = []
@@ -294,7 +294,7 @@ async def list_threads(
 
 
 @router.post("/threads", dependencies=DEVICE)
-async def create_thread(body: ThreadCreate, viewer: Viewer = Depends(chat_viewer)) -> dict[str, Any]:
+async def create_thread(body: ThreadCreate, viewer: Viewer = VIEWER) -> dict[str, Any]:
     title = chat_titles.plain_title(body.title) or None
     owner, shared = chat_access.new_thread(viewer)
     async with session_scope() as s:
@@ -327,7 +327,7 @@ async def create_thread(body: ThreadCreate, viewer: Viewer = Depends(chat_viewer
 
 
 @router.patch("/threads/{thread_id}", dependencies=DEVICE)
-async def patch_thread(thread_id: int, body: ThreadPatch, viewer: Viewer = Depends(chat_viewer)) -> dict[str, Any]:
+async def patch_thread(thread_id: int, body: ThreadPatch, viewer: Viewer = VIEWER) -> dict[str, Any]:
     """Rename and/or archive a thread. A title set here is the person's
     (``title_by_user``): the model's title job never writes over it. A
     blank title is refused (400)."""
@@ -364,7 +364,7 @@ async def patch_thread(thread_id: int, body: ThreadPatch, viewer: Viewer = Depen
 
 
 @router.delete("/threads/{thread_id}", dependencies=DEVICE)
-async def delete_thread(thread_id: int, viewer: Viewer = Depends(chat_viewer)) -> dict[str, Any]:
+async def delete_thread(thread_id: int, viewer: Viewer = VIEWER) -> dict[str, Any]:
     """Delete a thread and its messages (CASCADE). Upload files referenced by
     the thread are removed too when no other message references them."""
     async with session_scope() as s:
@@ -646,7 +646,7 @@ def _reply_stats(
 
 @router.get("/threads/{thread_id}/messages", dependencies=READ)
 async def list_messages(
-    thread_id: int, request: Request = None, viewer: Viewer = Depends(chat_viewer),  # type: ignore[assignment]
+    thread_id: int, request: Request = None, viewer: Viewer = VIEWER,  # type: ignore[assignment]
 ) -> dict[str, Any]:
     """The thread's messages, oldest first. No device ids: a user row says
     ``mine`` (sent from the ``X-Device-Id`` the caller names) and
@@ -984,7 +984,7 @@ async def _help_turn(
 
 @router.post("/threads/{thread_id}/messages", dependencies=SEND)
 async def send_message(
-    thread_id: int, body: SendBody, request: Request, viewer: Viewer = Depends(chat_viewer),
+    thread_id: int, body: SendBody, request: Request, viewer: Viewer = VIEWER,
 ) -> StreamingResponse:
     """Persist the user turn, stream the assistant reply as SSE, persist the
     assistant turn at stream end. Events:
@@ -1133,7 +1133,7 @@ def _retry_refused(code: str, detail: str) -> JSONResponse:
                                     "writer's reply, not the chat model's), `already_retried` (another try again "
                                     "on this reply is running, or has replaced it)"}},
 )
-async def retry_reply(thread_id: int, viewer: Viewer = Depends(chat_viewer)) -> StreamingResponse:
+async def retry_reply(thread_id: int, viewer: Viewer = VIEWER) -> StreamingResponse:
     """"Try again": a new reply to the thread's last question, in place of
     the reply it got. Streams as ``POST .../messages`` does; the old row is
     deleted and the new one written in one transaction once the new reply
@@ -1195,7 +1195,7 @@ class HeadsUpAnswer(BaseModel):
                                     "message followed the card), `bad_option` (not one of the card's options)"}},
 )
 async def answer_heads_up(
-    thread_id: int, body: HeadsUpAnswer, request: Request, viewer: Viewer = Depends(chat_viewer),
+    thread_id: int, body: HeadsUpAnswer, request: Request, viewer: Viewer = VIEWER,
 ) -> Any:
     """The person's pick on a heads-up card: the card row keeps it
     (``doc.heads_up.chosen``) and the question before it is answered that
@@ -2326,7 +2326,7 @@ async def decide_lookup(
     body: LookupDecision,
     thread_id: int = PathParam(..., ge=1, le=2**63 - 1),
     message_id: int = PathParam(..., ge=1, le=2**63 - 1),
-    viewer: Viewer = Depends(chat_viewer),
+    viewer: Viewer = VIEWER,
 ) -> StreamingResponse:
     """The person's answer to a permission card (``stats.lookup_card`` on
     assistant row ``message_id``): ``once`` / ``chat`` look it up and
@@ -2687,7 +2687,7 @@ async def send_voice(
     player: Optional[str] = Form(None, max_length=2048),
     # False: the phone speaks the reply itself, so the core renders none.
     speak: bool = Form(True),
-    viewer: Viewer = Depends(chat_viewer),
+    viewer: Viewer = VIEWER,
 ):
     """One push-to-talk turn from the app's chat mic, answered in this
     thread: forwarded with the caller's credentials to the core's
@@ -3046,7 +3046,7 @@ async def _picture_heads_up(thread_id: int, user_row_id: int | None, question: s
 
 
 @router.get("/uploads/{token}", dependencies=READ)
-async def get_upload(token: str, viewer: Viewer = Depends(chat_viewer)):
+async def get_upload(token: str, viewer: Viewer = VIEWER):
     """Serve a staged/persisted chat image inline (for rendering in the
     transcript). Token-addressed — the client never names paths. The token
     is unguessable, but the image is household content like the thread it
