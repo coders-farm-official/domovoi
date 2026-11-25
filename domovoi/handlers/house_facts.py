@@ -14,7 +14,9 @@ sign-in; "which plugins do you have?" lists them by name (the one
 answer that may: the person asked); "who can approve this?" / "who's the
 admin?" / "who set this up?" / "who can change settings?" get who does an
 admin's job and where, never a name (Domovoi doesn't record who the admin
-is) and never an ownership joke. The facts and the
+is) and never an ownership joke; "who's in this house?" / "who lives
+here?" / "who's home?" get who Domovoi knows (the People list), never who
+is home. The facts and the
 wording live in :mod:`domovoi.house_facts`; this is only its voice. No
 model, ever.
 
@@ -68,6 +70,9 @@ class HouseFactsHandler(Handler):
             # "Who can approve this?" / "who's the admin?" / "who set this
             # up?": facts, before voice_profile's ownership jokes (110).
             FastPath(house_facts.ADMIN_WHO_RE, HouseFactsHandler._admin_who),
+            # "Who's in this house?" / "who's home?": who Domovoi knows (the
+            # People list), never who is home (owner ruling, case 8.10).
+            FastPath(house_facts.HOUSEHOLD_RE, HouseFactsHandler._household),
         ]
 
     def offers_tool(self, transcript: str) -> bool:
@@ -124,6 +129,16 @@ class HouseFactsHandler(Handler):
         if kind is None:
             return None
         text = house_facts.admin_who_answer(kind, admin=ctx.proven_admin)
+        return Response(text=text, session_id=ctx.session_id, matched_handler=self.name)
+
+    async def _household(
+        self, m: re.Match[str], ctx: Context, session: AsyncSession
+    ) -> Response | None:
+        kind = house_facts.household_question(m.group(0))
+        if kind is None:
+            return None
+        text = await house_facts.household_reply(
+            kind, scope=session, guest=house_facts.voice_turn_is_guest(ctx))
         return Response(text=text, session_id=ctx.session_id, matched_handler=self.name)
 
     async def _plugins(

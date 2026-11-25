@@ -4,7 +4,9 @@
 :data:`CLAIM_LINES`; "who's the owner?" / "who's in charge here?" / "who
 runs this house?" gets one about the household's People list:
 :data:`WHO_LINES` with two or more people, :data:`ONE_PERSON_LINES` with
-one, :data:`NO_NAME_LINES` with none. Fixed lines, no model.
+one, :data:`NO_NAME_LINES` with none, and to a guest (who never hears the
+household's names: domovoi/house_facts.py, "Who is a guest"). Fixed
+lines, no model.
 
 A claim grants nothing: who may do an admin's job is the dashboard's
 admin sign-in (``Context.proven_admin``, N1), never what a voice says.
@@ -143,9 +145,17 @@ def is_who_question(text: str) -> bool:
     return bool(WHO_RE.match((text or "").strip()))
 
 
-def who_line(names: Iterable[str], key: Any = "", *, rng: Any = random) -> str:
-    """A line for "who's the owner?", from the People list's ``names``."""
-    people = list(dict.fromkeys(" ".join(str(n).split()) for n in names if str(n or "").strip()))
+def distinct_names(names: Iterable[str]) -> list[str]:
+    """``names`` with spacing tidied, blanks dropped and repeats counted
+    once, in order."""
+    return list(dict.fromkeys(" ".join(str(n).split()) for n in names if str(n or "").strip()))
+
+
+def who_line(names: Iterable[str], key: Any = "", *, rng: Any = random, guest: bool = False) -> str:
+    """A line for "who's the owner?", from the People list's ``names``.
+    A ``guest`` (domovoi/house_facts.py, "Who is a guest") hears a line
+    with no name, as "who lives here?" tells a guest nothing."""
+    people = [] if guest else distinct_names(names)
     if not people:
         return _pick(NO_NAME_LINES, f"who:{key}", rng)
     if len(people) == 1:
@@ -169,10 +179,14 @@ async def people_names(scope: Any) -> list[str]:
     return [str(r[0]) for r in rows if r[0]]
 
 
-async def chat_reply(message: str, *, scope: Any, key: Any = "") -> str | None:
+async def chat_reply(
+    message: str, *, scope: Any, key: Any = "", guest_check: Any = None,
+) -> str | None:
     """The typed chat's easter egg for ``message``, or None: a bare claim
     ("I'm the owner") or a who-question. A claim with more after it is the
-    chat's as before."""
+    chat's as before. ``guest_check``: an async callable giving whether
+    this request is a guest's (``admin_auth.request_is_guest``), asked only
+    for a who-question; none is the household's, a failed one a guest."""
     from domovoi import role_claims
 
     t = " ".join((message or "").lower().replace("’", "'").split()).rstrip(".!?").strip()
@@ -180,11 +194,19 @@ async def chat_reply(message: str, *, scope: Any, key: Any = "") -> str | None:
     if claim is not None and not claim[1] and role_claims.is_authority(claim[0]):
         return claim_line(key)
     if is_who_question(t):
+        guest = False
+        if guest_check is not None:
+            try:
+                guest = bool(await guest_check())
+            except Exception:  # noqa: BLE001 — can't tell: no names
+                guest = True
+        if guest:
+            return who_line([], key, guest=True)
         return who_line(await people_names(scope), key)
     return None
 
 
 __all__ = [
     "CLAIM_LINES", "NO_NAME_LINES", "ONE_PERSON_LINES", "WHO_LINES", "WHO_RE",
-    "chat_reply", "claim_line", "is_who_question", "people_names", "who_line",
+    "chat_reply", "claim_line", "distinct_names", "is_who_question", "people_names", "who_line",
 ]

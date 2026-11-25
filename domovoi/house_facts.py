@@ -1402,6 +1402,118 @@ FORGET_ALL_CHAT = (
 )
 
 
+# ─── Who's in this house (8.10, owner ruling 2026-11-25) ──────────────────
+#
+# "Who's in this house?", "who lives here?", "who do you know?" get the
+# People list (the ``people`` rows: the household's own, never a guest or
+# an unrecognised voice), worded as who Domovoi KNOWS, never who is home:
+# nothing here knows who is in the house right now. "Who's home?" / "is
+# anyone home?" says exactly that, then who it knows. A guest hears that
+# the house doesn't share who lives here. A fixed answer, no model.
+#
+# Who is a guest (the one rule, here):
+# * typed chat: ``admin_auth.request_is_guest`` — the room-queue guest rule
+#   (``admin_auth.check_queue_guest``): after setup, a caller presenting no
+#   household credential at all;
+# * voice: never (:func:`voice_turn_is_guest`). Every voice turn comes
+#   from a paired household device behind the household token — a room
+#   (satellite or room-mode phone), the app's mic, the dashboard's play
+#   box — and no rule in the house makes an unrecognised voice a guest:
+#   voice ID only names the voices it knows.
+_ANYONE = r"(?:anyone|anybody|someone|somebody|everyone|everybody)"
+_NOW = r"(?: (?:right now|now|today|tonight|at the moment|currently))?"
+_PEOPLE_LEAD = r"(?:(?:tell me|do you know|i want to know|i'd like to know) )?"
+_THIS_HOUSE = r"(?:this|the|our|my) (?:house|home|household|family|place)"
+HOUSEHOLD_QUESTIONS: tuple[tuple[str, str], ...] = (
+    ("home",
+     rf"{_WHO_IS} (?:all )?(?:still )?(?:at )?home{_NOW}"
+     rf"|{_WHO_IS} (?:here|around){_NOW}"
+     rf"|{_WHO_IS} in the house (?:right now|now|today|tonight|at the moment|currently)"
+     rf"|(?:is|are) {_ANYONE} (?:still )?(?:at )?home{_NOW}"
+     rf"|(?:is|are) {_ANYONE} (?:here|around|in the house){_NOW}"),
+    ("people",
+     rf"{_WHO_IS} (?:all )?in {_THIS_HOUSE}"
+     rf"|{_WHO_IS} (?:part of|on) (?:the people list|{_THIS_HOUSE})"
+     r"|who (?:all |else )?lives (?:here|in (?:this|the|our) (?:house|home|place))"
+     r"|who (?:all |else )?lives (?:here )?with (?:me|us)"
+     rf"|who (?:else )?do you know(?: here| in {_THIS_HOUSE})?"
+     r"|who (?:do you|does domovoi) (?:recogni[sz]e|have (?:a )?profiles? for)"
+     r"|who has (?:a )?profiles?(?: with you| here)?"
+     rf"|who (?:are|is) (?:the people|everyone|everybody|the members)"
+     rf"(?: (?:here|in {_THIS_HOUSE}|of {_THIS_HOUSE}|you know|living here|who live here))"
+     rf"|who are (?:the |your )?(?:people|household|family)(?: here| in {_THIS_HOUSE})?"
+     rf"|(?:list|name) (?:the |all the |everyone in the |everybody in the )?"
+     rf"(?:people|household|family|members|household members)"
+     rf"(?: (?:here|in {_THIS_HOUSE}|you know))?"),
+)
+HOUSEHOLD_RE = re.compile(
+    rf"^(?:(?:so|and|ok|okay|hey|well|then)[,\s]+)?{_PEOPLE_LEAD}(?:"
+    + "|".join(f"(?P<household_{k}>{rx})" for k, rx in HOUSEHOLD_QUESTIONS)
+    + r")(?:,? (?:then|anyway|please))?\Z"
+)
+
+KNOW_TAIL = "That's who has a profile with me; I can't tell who's home right now."
+NO_PROFILES = "No one has a profile with me yet."
+CANT_TELL_HOME = "I can't tell who's home."
+GUEST_PEOPLE = "I don't share who lives here."
+
+
+def voice_turn_is_guest(ctx: Any) -> bool:
+    """Never: a voice turn is a household member's (see the rule above)."""
+    return False
+
+
+def household_question(transcript: str) -> str | None:
+    """"people" (who's in this house / who lives here / who do you know)
+    or "home" (who's home / is anyone home) for ``transcript``
+    (normalized), else None."""
+    m = HOUSEHOLD_RE.match(transcript or "")
+    if not m or m.lastgroup is None:
+        return None
+    return m.lastgroup[len("household_"):]
+
+
+def spoken_names(names: list[str]) -> str:
+    """"Alex", "Alex and Sam", "Alex, Sam and Priya" (no Oxford comma)."""
+    if len(names) <= 1:
+        return "".join(names)
+    return f"{', '.join(names[:-1])} and {names[-1]}"
+
+
+def household_answer(kind: str, names: list[str] | None, *, guest: bool) -> str:
+    """The fixed answer. ``names``: the People list (None: it couldn't be
+    read); ``guest``: the caller is a guest (the rule above). Never says
+    anyone is home or here, and never a room."""
+    if guest:
+        return GUEST_PEOPLE
+    from domovoi.owner_easter_eggs import distinct_names
+
+    people = distinct_names(names or [])
+    if kind == "home":
+        return f"{CANT_TELL_HOME} I know {spoken_names(people)}." if people else CANT_TELL_HOME
+    if names is None:
+        return CANT_CHECK
+    if not people:
+        return NO_PROFILES
+    return f"I know {spoken_names(people)}. {KNOW_TAIL}"
+
+
+async def household_reply(kind: str, *, scope: Any, guest: bool) -> str:
+    """:func:`household_answer` with the People list read the way the
+    ownership easter egg reads it (``owner_easter_eggs.people_names``:
+    ``people`` rows only). A guest's answer reads nothing."""
+    if guest:
+        return GUEST_PEOPLE
+    from domovoi.owner_easter_eggs import people_names
+
+    try:
+        names: list[str] | None = await people_names(scope)
+    except Exception as e:  # noqa: BLE001 — an honest answer still
+        log.warning("house facts: the People list couldn't be read: %s", type(e).__name__)
+        names = None
+    return household_answer(kind, names, guest=False)
+
+
 # ─── The fallback: a fixed privacy answer, never a model's ────────────────
 
 _PRIVACY_WORDS_RE = re.compile(
@@ -1492,6 +1604,17 @@ async def privacy_fallback(transcript: str, ctx: Any) -> str | None:
 # ─── Chat ─────────────────────────────────────────────────────────────────
 
 
+async def _is_guest(guest_check: Callable[[], Any] | None) -> bool:
+    """``guest_check()``; no check is the household's, a failed one a guest."""
+    if guest_check is None:
+        return False
+    try:
+        return bool(await guest_check())
+    except Exception as e:  # noqa: BLE001 — can't tell: hold the names back
+        log.debug("house facts: the guest check failed: %s", type(e).__name__)
+        return True
+
+
 async def chat_reply(
     message: str,
     *,
@@ -1499,13 +1622,18 @@ async def chat_reply(
     scope: Any,
     previous_assistant: Callable[[], Any] | None = None,
     admin_check: Callable[[], Any] | None = None,
+    guest_check: Callable[[], Any] | None = None,
 ) -> str | None:
     """The deterministic reply to a typed chat message, or None (the chat
     answers as before). ``previous_assistant`` is an async callable giving
     the thread's last assistant row (``{"stats": ...}``) or None;
     ``admin_check`` an async callable giving whether THIS request carries
     a live admin sign-in (the server's own check), asked only for an
-    admin sign-in question; without it the state is unknown."""
+    admin sign-in question; without it the state is unknown.
+    ``guest_check`` an async callable giving whether THIS request is a
+    guest's (``admin_auth.request_is_guest``), asked only for "who lives
+    here?"; without it the caller is the household's, and a check that
+    fails is a guest (the answer holds names)."""
     t = normalize(message)
     if FORGET_ALL_RE.match(t):
         return FORGET_ALL_CHAT
@@ -1536,6 +1664,9 @@ async def chat_reply(
         return admin_answer(admin_kind, chat=True, admin=admin)
     if PLUGINS_QUESTION_RE.match(t):
         return await plugins_answer(scope=scope)
+    household = household_question(t)
+    if household is not None:
+        return await household_reply(household, scope=scope, guest=await _is_guest(guest_check))
     qid = question_id(t)
     if qid == "internet_for_that":
         prev = await previous_assistant() if previous_assistant is not None else None

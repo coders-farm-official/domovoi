@@ -1359,7 +1359,11 @@ class VoiceProfileHandler(Handler):
         except Exception as e:  # noqa: BLE001 — the no-names lines still answer
             log.warning("who's the owner: the People list couldn't be read: %s", type(e).__name__)
             names = []
-        return self._say(owner_easter_eggs.who_line(names, _egg_key(ctx)), ctx)
+        # A voice turn is never a guest's (house_facts.voice_turn_is_guest).
+        from domovoi import house_facts
+
+        guest = house_facts.voice_turn_is_guest(ctx)
+        return self._say(owner_easter_eggs.who_line(names, _egg_key(ctx), guest=guest), ctx)
 
     async def _role_claim_from_match(
         self, m: re.Match[str], ctx: Context, session: AsyncSession

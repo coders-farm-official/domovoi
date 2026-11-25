@@ -273,5 +273,81 @@ def test_the_chat_calls_it_before_the_model() -> None:
     src = (Path(__file__).resolve().parents[2] / "web" / "backend" / "api" / "chat.py").read_text(
         encoding="utf-8")
     assert "owner_easter_eggs.chat_reply(" in src
-    assert src.index("_owner_egg_reply(thread_id, body.content)") < src.index(
+    assert src.index("_owner_egg_reply(thread_id, body.content, request)") < src.index(
         "return await _answer(\n        thread_id, thread.person_id")
+    # A guest browser names no one (admin_auth.request_is_guest).
+    assert "guest_check=lambda: request_is_guest(request)" in src
+
+
+# ─── A guest never hears the household's names ────────────────────────────
+
+
+def test_a_guest_hears_only_no_name_lines() -> None:
+    for _ in range(50):
+        assert eggs.who_line(["Alex", "Sam"], "g1", guest=True) in eggs.NO_NAME_LINES
+        assert eggs.who_line(["Alex"], "g2", guest=True) in eggs.NO_NAME_LINES
+
+
+@pytest.mark.asyncio
+async def test_chat_guest_hears_no_names_and_the_list_is_not_read() -> None:
+    class _NoRead:
+        async def execute(self, stmt, params=None):
+            raise AssertionError("a guest's answer reads no People list")
+
+    async def guest() -> bool:
+        return True
+
+    for _ in range(20):
+        said = await eggs.chat_reply("Who's the owner?", scope=_NoRead(), key="g3", guest_check=guest)
+        assert said in eggs.NO_NAME_LINES
+
+
+@pytest.mark.asyncio
+async def test_chat_guest_check_that_fails_names_no_one() -> None:
+    async def broken() -> bool:
+        raise RuntimeError("db down")
+
+    said = await eggs.chat_reply("who's in charge here", scope=_People(["Alex"]), key="g4",
+                                 guest_check=broken)
+    assert said in eggs.NO_NAME_LINES
+
+
+@pytest.mark.asyncio
+async def test_chat_member_still_hears_names() -> None:
+    async def member() -> bool:
+        return False
+
+    said = await eggs.chat_reply("who's the boss", scope=_People(["Alex"]), key="g5", guest_check=member)
+    assert said in {line.format(name="Alex") for line in eggs.ONE_PERSON_LINES}
+
+
+@pytest.mark.asyncio
+async def test_chat_claim_never_asks_the_guest_check() -> None:
+    async def check() -> bool:
+        raise AssertionError("only a who-question asks")
+
+    assert await eggs.chat_reply("I'm the owner", scope=_People([]), key="g6",
+                                 guest_check=check) in eggs.CLAIM_LINES
+
+
+@pytest.mark.asyncio
+async def test_voice_is_never_a_guest() -> None:
+    """A voice turn is a household member's (house_facts.voice_turn_is_guest):
+    "who's the owner?" by voice still names people."""
+    from domovoi import house_facts
+    from domovoi.handlers.voice_profile import VoiceProfileHandler
+
+    ctx = Context(room_id="kitchen", session_id=None)
+    assert house_facts.voice_turn_is_guest(ctx) is False
+    r = await VoiceProfileHandler()._who_owner_from_match(eggs.WHO_RE.match("who's the owner"), ctx,
+                                                          _People(["Alex"]))
+    assert r.text in {line.format(name="Alex") for line in eggs.ONE_PERSON_LINES}
+
+
+def test_household_questions_are_not_who_questions() -> None:
+    """"Who lives here?" is house_facts' (the People list as facts), never a joke."""
+    for said in ("who's in this house", "who lives here", "who's home", "is anyone home",
+                 "who do you know"):
+        assert not eggs.is_who_question(said)
+        plan = plan_route(said)
+        assert plan is not None and plan.handler.name == "house_facts", said
